@@ -40,6 +40,23 @@ import {
   rowToProjectResourceLink,
 } from "../lib/project-resource-links.js";
 import {
+  assertProjectQuarantinePostimage,
+  assertProjectQuarantinePreconditions,
+  normalizedExpectedResourceLinkIds,
+  normalizedExpectedWorkspaceLocationIds,
+  parseProjectQuarantineSnapshot,
+  projectDigest,
+  projectQuarantinePatch,
+  projectQuarantinePreconditionDigest,
+  projectQuarantineRequestDigest,
+  projectQuarantineSnapshot,
+  projectQuarantineSnapshotJson,
+  PROJECT_QUARANTINE_EVENT,
+  PROJECT_QUARANTINE_ROLLBACK_EVENT,
+  restoreProjectPatch,
+  workspaceLocationsDigest,
+} from "../lib/project-quarantine.js";
+import {
   applyProjectResourceLinkMigrationTransition,
   assertProjectResourceLinkProducerAttestation,
   buildProjectResourceLinkMigrationPlan,
@@ -88,6 +105,11 @@ import type {
   ProjectResourceLinkRollbackRequest,
   ProjectResourceLinkRow,
   ProjectResourceLinkSnapshot,
+  ProjectQuarantineReadRequest,
+  ProjectQuarantineReadResult,
+  ProjectQuarantineRequest,
+  ProjectQuarantineResult,
+  ProjectQuarantineRollbackRequest,
   Recipe,
   RecipeRow,
   RecordWorkspaceEventInput,
@@ -99,6 +121,8 @@ import type {
   WorkspaceEvent,
   WorkspaceEventRow,
   WorkspaceIntegrations,
+  WorkspaceLocation,
+  WorkspaceLocationRow,
   WorkspaceKind,
   WorkspaceRow,
   WorkspaceStatus,
@@ -219,6 +243,15 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
     status: row.status as WorkspaceStatus,
     tags: parseJson<string[]>(row.tags, []),
     integrations: parseJson<WorkspaceIntegrations>(row.integrations, {}),
+    metadata: parseJson<JsonObject>(row.metadata, {}),
+  };
+}
+
+function rowToWorkspaceLocation(row: WorkspaceLocationRow): WorkspaceLocation {
+  return {
+    ...row,
+    is_primary: Boolean(row.is_primary),
+    exists_at_create: Boolean(row.exists_at_create),
     metadata: parseJson<JsonObject>(row.metadata, {}),
   };
 }
@@ -618,6 +651,82 @@ export class ProjectsPgStore {
     return rows.map(rowToProjectResourceLink);
   }
 
+  private async listWorkspaceLocationsBounded(
+    projectId: string,
+    maxItems: number,
+  ): Promise<WorkspaceLocation[]> {
+    if (!Number.isInteger(maxItems) || maxItems <= 0) {
+      throw new ValidationError("project quarantine workspace_location_max_items must be a positive integer");
+    }
+    const rows = await this.db.many<WorkspaceLocationRow>(
+      `SELECT * FROM workspace_locations
+       WHERE workspace_id = $1
+       ORDER BY is_primary DESC, created_at ASC, id ASC
+       LIMIT $2`,
+      [projectId, maxItems + 1],
+    );
+    if (rows.length > maxItems) {
+      throw new ValidationError(`project quarantine workspace-location collection exceeds max_items: more than ${maxItems}`);
+    }
+    return rows.map(rowToWorkspaceLocation);
+  }
+
+  private async replaceWorkspaceLocations(
+    projectId: string,
+    locations: readonly WorkspaceLocation[],
+  ): Promise<void> {
+    await this.db.execute("DELETE FROM workspace_locations WHERE workspace_id = $1", [projectId]);
+    for (const location of locations) {
+      await this.db.execute(
+        `INSERT INTO workspace_locations (
+          id, workspace_id, path, machine_id, label, kind, is_primary,
+          exists_at_create, metadata, created_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [
+          location.id,
+          projectId,
+          location.path,
+          location.machine_id,
+          location.label,
+          location.kind,
+          location.is_primary ? 1 : 0,
+          location.exists_at_create ? 1 : 0,
+          json(location.metadata),
+          location.created_at,
+        ],
+      );
+    }
+  }
+
+  private async replaceProjectResourceLinksExact(
+    projectId: string,
+    links: readonly ProjectResourceLink[],
+  ): Promise<void> {
+    await this.db.execute("DELETE FROM project_resource_links WHERE project_id = $1", [projectId]);
+    for (const link of links) {
+      await this.db.execute(
+        `INSERT INTO project_resource_links (
+          id, project_id, authority, service_instance, source_package, target_kind,
+          locator_kind, locator_value, scope, labels_json, created_at, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [
+          link.id,
+          projectId,
+          link.authority,
+          link.service_instance,
+          link.source_package,
+          link.target_kind,
+          link.locator.kind,
+          link.locator.value,
+          link.scope,
+          canonicalJson(link.labels),
+          link.created_at,
+          link.updated_at,
+        ],
+      );
+    }
+  }
+
   async readProjectResourceLinks(
     input: ProjectResourceLinkReadRequest,
     startedAtMs = Date.now(),
@@ -645,6 +754,35 @@ export class ProjectsPgStore {
     };
     assertProjectResourceLinkReadContractEquality(read);
     return withResponseControl(read, input, startedAtMs, "project resource link read");
+  }
+
+  async readDuplicateProjectQuarantinePreimage(
+    input: ProjectQuarantineReadRequest,
+    startedAtMs = Date.now(),
+  ): Promise<ProjectQuarantineReadResult> {
+    try {
+      assertCompleteStableProjectId(input.project_id);
+      assertPositiveBounds(input);
+    } catch (err) {
+      throw new ValidationError(err instanceof Error ? err.message : String(err));
+    }
+    const project = await this.requireWorkspace(input.project_id);
+    const links = await this.listProjectResourceLinks(input.project_id, input.resource_link_max_items);
+    const locations = await this.listWorkspaceLocationsBounded(
+      input.project_id,
+      input.workspace_location_max_items,
+    );
+    const snapshot = projectQuarantineSnapshot(project, links, locations);
+    return withResponseControl({
+      ok: true as const,
+      project_id: project.id,
+      current_revision: project.updated_at,
+      snapshot,
+      resource_link_count: links.length,
+      workspace_location_count: locations.length,
+      complete: true as const,
+      truncated: false as const,
+    }, input, startedAtMs, "project quarantine preimage read");
   }
 
   async requireWorkspace(idOrSlug: string): Promise<Workspace> {
@@ -951,7 +1089,12 @@ export class ProjectsPgStore {
     });
   }
 
-  private async guardedConditionalUpdate(id: string, patch: UpdateWorkspaceInput, expectedRevision: string): Promise<Workspace | null> {
+  private async guardedConditionalUpdate(
+    id: string,
+    patch: UpdateWorkspaceInput,
+    expectedRevision: string,
+    options: { preserveExactSlug?: boolean } = {},
+  ): Promise<Workspace | null> {
     const before = await this.requireWorkspace(id);
     const root = patch.root_id ? await this.getRoot(patch.root_id) : null;
     if (patch.root_id && !root) throw new ValidationError(`Root not found: ${patch.root_id}`);
@@ -968,7 +1111,14 @@ export class ProjectsPgStore {
       updates.push(`${col} = $${params.length}`);
     };
     if (patch.name !== undefined) set("name", patch.name);
-    if (patch.slug !== undefined) set("slug", await this.ensureUniqueSlug("workspaces", slugify(patch.slug), before.id));
+    if (patch.slug !== undefined) {
+      set(
+        "slug",
+        options.preserveExactSlug
+          ? patch.slug
+          : await this.ensureUniqueSlug("workspaces", slugify(patch.slug), before.id),
+      );
+    }
     if (patch.description !== undefined) set("description", patch.description);
     if (patch.kind !== undefined) set("kind", patch.kind);
     if (patch.status !== undefined) set("status", patch.status);
@@ -1407,6 +1557,512 @@ export class ProjectsPgStore {
         preserve_links: before.links,
       });
     });
+  }
+
+  async quarantineDuplicateProject(input: ProjectQuarantineRequest): Promise<ProjectQuarantineResult> {
+    return this.inTransaction("duplicate project quarantine", (store) =>
+      store.quarantineDuplicateProjectInCurrentTransaction(input));
+  }
+
+  private async quarantineDuplicateProjectInCurrentTransaction(
+    input: ProjectQuarantineRequest,
+  ): Promise<ProjectQuarantineResult> {
+    const started = Date.now();
+    try {
+      assertCompleteStableProjectId(input.project_id);
+      assertPositiveBounds(input);
+      normalizedExpectedResourceLinkIds(input);
+      normalizedExpectedWorkspaceLocationIds(input);
+    } catch (err) {
+      throw new ValidationError(err instanceof Error ? err.message : String(err));
+    }
+    const reqDigest = projectQuarantineRequestDigest(input);
+    const preDigest = projectQuarantinePreconditionDigest(input);
+    const idempotencyKey = deriveGuardedIdempotencyKey({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "forward",
+      target_id: input.project_id,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+    });
+    const beforeProject = await this.requireWorkspace(input.project_id);
+    const beforeLinks = await this.listProjectResourceLinks(input.project_id, input.resource_link_max_items);
+    const beforeLocations = await this.listWorkspaceLocationsBounded(
+      input.project_id,
+      input.workspace_location_max_items,
+    );
+    const before = projectQuarantineSnapshot(beforeProject, beforeLinks, beforeLocations);
+    const duplicate = await this.guardedAcceptedReceipt({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "forward",
+      idempotency_key: idempotencyKey,
+      target_id: input.project_id,
+    });
+    if (duplicate) {
+      const acceptedAfter = parseProjectQuarantineSnapshot(duplicate.after, "accepted after");
+      if (
+        beforeProject.updated_at !== duplicate.post_revision
+        || before.project_digest !== acceptedAfter.project_digest
+        || before.resource_link_collection_digest !== acceptedAfter.resource_link_collection_digest
+        || before.workspace_location_collection_digest !== acceptedAfter.workspace_location_collection_digest
+      ) {
+        throw new ValidationError("project quarantine retry refuses drift after the accepted receipt");
+      }
+      const receipt = await this.duplicateGuardedReceipt(
+        duplicate,
+        beforeProject,
+        projectQuarantineSnapshotJson(before),
+      );
+      return withResponseControl({
+        ok: true,
+        dry_run: false,
+        outcome: "duplicate_of_accepted" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: beforeProject.updated_at,
+        before,
+        after: acceptedAfter,
+        receipt,
+        rollback: {
+          accepted_receipt_id: duplicate.receipt_id,
+          expected_current_revision: duplicate.post_revision!,
+        },
+      }, input, started, "project quarantine");
+    }
+    const priorAccepted = await this.guardedAcceptedByStep({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "forward",
+      target_id: input.project_id,
+    });
+    if (priorAccepted) {
+      const receipt = await this.guardedTerminalNonacceptance({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction: "forward",
+        idempotency_key: idempotencyKey,
+        target_id: input.project_id,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        expected_revision: input.expected_revision,
+        reason: "changed_request_or_precondition_for_step",
+        before_snapshot: projectQuarantineSnapshotJson(before),
+      });
+      return withResponseControl({
+        ok: false,
+        dry_run: false,
+        outcome: "terminal_nonacceptance" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: beforeProject.updated_at,
+        before,
+        after: null,
+        receipt,
+        rollback: null,
+      }, input, started, "project quarantine");
+    }
+    let refusal: string | null;
+    try {
+      refusal = assertProjectQuarantinePreconditions(input, before);
+    } catch (err) {
+      throw new ValidationError(err instanceof Error ? err.message : String(err));
+    }
+    if (refusal) {
+      const receipt = await this.guardedTerminalNonacceptance({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction: "forward",
+        idempotency_key: idempotencyKey,
+        target_id: input.project_id,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        expected_revision: input.expected_revision,
+        reason: refusal,
+        before_snapshot: projectQuarantineSnapshotJson(before),
+      });
+      return withResponseControl({
+        ok: false,
+        dry_run: false,
+        outcome: "terminal_nonacceptance" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: beforeProject.updated_at,
+        before,
+        after: null,
+        receipt,
+        rollback: null,
+      }, input, started, "project quarantine");
+    }
+    const collision = await this.db.get<{ id: string }>(
+      "SELECT id FROM workspaces WHERE slug = $1 AND id <> $2",
+      [slugify(input.quarantine_slug), input.project_id],
+    );
+    if (collision) throw new ValidationError("project quarantine slug is already owned by another project");
+    const patch = projectQuarantinePatch(input, before);
+    const previewProject = {
+      ...beforeProject,
+      ...patch,
+      slug: slugify(input.quarantine_slug),
+      metadata: normalizeProjectMetadata(patch.metadata, beforeProject.metadata),
+    } as Workspace;
+    const preview = projectQuarantineSnapshot(previewProject, [], []);
+    assertProjectQuarantinePostimage(input, before, preview);
+    if (input.dry_run) {
+      return withResponseControl({
+        ok: true,
+        dry_run: true,
+        outcome: "planned" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: beforeProject.updated_at,
+        before,
+        after: preview,
+        receipt: null,
+        rollback: null,
+      }, input, started, "project quarantine");
+    }
+    if (timedOut(started, input.time_budget_ms)) {
+      throw new ValidationError("project quarantine time budget exceeded before write");
+    }
+    const afterProject = await this.guardedConditionalUpdate(
+      input.project_id,
+      {
+        ...patch,
+        agent_id: input.agent_id,
+        source: input.source ?? "mcp",
+        command: input.command,
+      },
+      input.expected_revision,
+      { preserveExactSlug: true },
+    );
+    if (!afterProject) {
+      const fresh = await this.requireWorkspace(input.project_id);
+      const freshLinks = await this.listProjectResourceLinks(input.project_id, input.resource_link_max_items);
+      const freshLocations = await this.listWorkspaceLocationsBounded(
+        input.project_id,
+        input.workspace_location_max_items,
+      );
+      const freshSnapshot = projectQuarantineSnapshot(fresh, freshLinks, freshLocations);
+      const receipt = await this.guardedTerminalNonacceptance({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction: "forward",
+        idempotency_key: idempotencyKey,
+        target_id: input.project_id,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        expected_revision: input.expected_revision,
+        reason: "stale_revision",
+        before_snapshot: projectQuarantineSnapshotJson(freshSnapshot),
+      });
+      return withResponseControl({
+        ok: false,
+        dry_run: false,
+        outcome: "terminal_nonacceptance" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: fresh.updated_at,
+        before: freshSnapshot,
+        after: null,
+        receipt,
+        rollback: null,
+      }, input, started, "project quarantine");
+    }
+    await this.replaceProjectResourceLinksExact(input.project_id, []);
+    await this.replaceWorkspaceLocations(input.project_id, []);
+    const after = projectQuarantineSnapshot(afterProject, [], []);
+    assertProjectQuarantinePostimage(input, before, after);
+    const receipt = await this.insertGuardedReceipt({
+      receipt_id: buildReceiptId({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction: "forward",
+        idempotency_key: idempotencyKey,
+        outcome: "accepted",
+        target_id: input.project_id,
+      }),
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "forward",
+      idempotency_key: idempotencyKey,
+      target_id: input.project_id,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+      expected_revision: input.expected_revision,
+      outcome: "accepted",
+      reason: null,
+      result_project_id: afterProject.id,
+      duplicate_of_receipt_id: null,
+      before: projectQuarantineSnapshotJson(before),
+      after: projectQuarantineSnapshotJson(after),
+      post_revision: afterProject.updated_at,
+    });
+    await this.recordEvent({
+      workspace_id: input.project_id,
+      agent_id: input.agent_id,
+      event_type: PROJECT_QUARANTINE_EVENT,
+      source: input.source ?? "mcp",
+      command: input.command,
+      before: projectQuarantineSnapshotJson(before),
+      after: projectQuarantineSnapshotJson(after),
+      metadata: { receipt_id: receipt.receipt_id, operation_id: input.operation_id, step_id: input.step_id },
+    });
+    return withResponseControl({
+      ok: true,
+      dry_run: false,
+      outcome: "accepted" as const,
+      idempotency_key: idempotencyKey,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+      project_id: input.project_id,
+      expected_revision: input.expected_revision,
+      current_revision: beforeProject.updated_at,
+      before,
+      after,
+      receipt,
+      rollback: { accepted_receipt_id: receipt.receipt_id, expected_current_revision: afterProject.updated_at },
+    }, input, started, "project quarantine");
+  }
+
+  async rollbackDuplicateProjectQuarantine(
+    input: ProjectQuarantineRollbackRequest,
+  ): Promise<ProjectQuarantineResult> {
+    return this.inTransaction("duplicate project quarantine rollback", (store) =>
+      store.rollbackDuplicateProjectQuarantineInCurrentTransaction(input));
+  }
+
+  private async rollbackDuplicateProjectQuarantineInCurrentTransaction(
+    input: ProjectQuarantineRollbackRequest,
+  ): Promise<ProjectQuarantineResult> {
+    const started = Date.now();
+    try {
+      assertCompleteStableProjectId(input.project_id);
+      assertPositiveBounds(input);
+    } catch (err) {
+      throw new ValidationError(err instanceof Error ? err.message : String(err));
+    }
+    const row = await this.db.get<GuardedProjectMutationReceiptRow>(
+      "SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = $1",
+      [input.accepted_receipt_id],
+    );
+    if (!row) throw new NotFoundError(`accepted quarantine receipt not found: ${input.accepted_receipt_id}`);
+    const accepted = rowToGuardedReceipt(row);
+    if (accepted.outcome !== "accepted" || accepted.direction !== "forward" || accepted.target_id !== input.project_id) {
+      throw new ValidationError("quarantine rollback requires a forward accepted receipt for the same project id");
+    }
+    if (accepted.post_revision !== input.expected_current_revision) {
+      throw new ValidationError("quarantine rollback expected_current_revision must equal the accepted receipt post_revision");
+    }
+    const acceptedBefore = parseProjectQuarantineSnapshot(accepted.before, "accepted before");
+    const acceptedAfter = parseProjectQuarantineSnapshot(accepted.after, "accepted after");
+    const reqDigest = sha256(canonicalJson({
+      route: "projects.duplicate-quarantine.rollback.v1",
+      accepted_receipt_id: accepted.receipt_id,
+      restore_project_digest: acceptedBefore.project_digest,
+      restore_resource_link_collection_digest: acceptedBefore.resource_link_collection_digest,
+      restore_workspace_location_collection_digest: acceptedBefore.workspace_location_collection_digest,
+    }));
+    const preDigest = preconditionDigest({
+      project_id: input.project_id,
+      expected_revision: input.expected_current_revision,
+    });
+    const idempotencyKey = deriveGuardedIdempotencyKey({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "inverse",
+      target_id: input.project_id,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+    });
+    const currentProject = await this.requireWorkspace(input.project_id);
+    const currentLinks = await this.listProjectResourceLinks(input.project_id, input.resource_link_max_items);
+    const currentLocations = await this.listWorkspaceLocationsBounded(
+      input.project_id,
+      input.workspace_location_max_items,
+    );
+    const current = projectQuarantineSnapshot(currentProject, currentLinks, currentLocations);
+    const duplicate = await this.guardedAcceptedReceipt({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "inverse",
+      idempotency_key: idempotencyKey,
+      target_id: input.project_id,
+    });
+    if (duplicate) {
+      const acceptedInverseAfter = parseProjectQuarantineSnapshot(duplicate.after, "accepted inverse after");
+      if (
+        currentProject.updated_at !== duplicate.post_revision
+        || current.project_digest !== acceptedInverseAfter.project_digest
+        || current.resource_link_collection_digest !== acceptedInverseAfter.resource_link_collection_digest
+        || current.workspace_location_collection_digest !== acceptedInverseAfter.workspace_location_collection_digest
+      ) {
+        throw new ValidationError("quarantine rollback retry refuses drift after the accepted inverse");
+      }
+      const receipt = await this.duplicateGuardedReceipt(
+        duplicate,
+        currentProject,
+        projectQuarantineSnapshotJson(current),
+      );
+      return withResponseControl({
+        ok: true,
+        dry_run: false,
+        outcome: "duplicate_of_accepted" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_current_revision,
+        current_revision: currentProject.updated_at,
+        before: current,
+        after: acceptedInverseAfter,
+        receipt,
+        rollback: null,
+      }, input, started, "project quarantine rollback");
+    }
+    const priorInverse = await this.guardedAcceptedByStep({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "inverse",
+      target_id: input.project_id,
+    });
+    if (priorInverse) {
+      const receipt = await this.guardedTerminalNonacceptance({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction: "inverse",
+        idempotency_key: idempotencyKey,
+        target_id: input.project_id,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        expected_revision: input.expected_current_revision,
+        reason: "changed_request_or_precondition_for_step",
+        before_snapshot: projectQuarantineSnapshotJson(current),
+      });
+      return withResponseControl({
+        ok: false,
+        dry_run: false,
+        outcome: "terminal_nonacceptance" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_current_revision,
+        current_revision: currentProject.updated_at,
+        before: current,
+        after: null,
+        receipt,
+        rollback: null,
+      }, input, started, "project quarantine rollback");
+    }
+    if (
+      currentProject.updated_at !== input.expected_current_revision
+      || current.project_digest !== acceptedAfter.project_digest
+      || current.resource_link_collection_digest !== acceptedAfter.resource_link_collection_digest
+      || current.workspace_location_collection_digest !== acceptedAfter.workspace_location_collection_digest
+    ) {
+      throw new ValidationError("quarantine rollback refuses current project, resource-link, or path-selector drift");
+    }
+    if (timedOut(started, input.time_budget_ms)) {
+      throw new ValidationError("project quarantine rollback time budget exceeded before write");
+    }
+    const afterProject = await this.guardedConditionalUpdate(
+      input.project_id,
+      {
+        ...restoreProjectPatch(acceptedBefore),
+        agent_id: input.agent_id,
+        source: input.source ?? "mcp",
+        command: input.command,
+      },
+      input.expected_current_revision,
+      { preserveExactSlug: true },
+    );
+    if (!afterProject) throw new ValidationError("quarantine rollback conditional update lost");
+    await this.replaceProjectResourceLinksExact(input.project_id, acceptedBefore.resource_links);
+    await this.replaceWorkspaceLocations(input.project_id, acceptedBefore.workspace_locations);
+    const after = projectQuarantineSnapshot(afterProject, acceptedBefore.resource_links, acceptedBefore.workspace_locations);
+    const normalizedAfter = {
+      ...after.project,
+      updated_at: acceptedBefore.project.updated_at,
+    };
+    if (
+      projectDigest(normalizedAfter, after.workspace_locations) !== acceptedBefore.project_digest
+      || after.resource_link_collection_digest !== acceptedBefore.resource_link_collection_digest
+      || after.workspace_location_collection_digest !== acceptedBefore.workspace_location_collection_digest
+    ) {
+      throw new ValidationError("quarantine rollback exact inverse readback mismatch");
+    }
+    const receipt = await this.insertGuardedReceipt({
+      receipt_id: buildReceiptId({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction: "inverse",
+        idempotency_key: idempotencyKey,
+        outcome: "accepted",
+        target_id: input.project_id,
+      }),
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "inverse",
+      idempotency_key: idempotencyKey,
+      target_id: input.project_id,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+      expected_revision: input.expected_current_revision,
+      outcome: "accepted",
+      reason: null,
+      result_project_id: afterProject.id,
+      duplicate_of_receipt_id: null,
+      before: projectQuarantineSnapshotJson(current),
+      after: projectQuarantineSnapshotJson(after),
+      post_revision: afterProject.updated_at,
+    });
+    await this.recordEvent({
+      workspace_id: input.project_id,
+      agent_id: input.agent_id,
+      event_type: PROJECT_QUARANTINE_ROLLBACK_EVENT,
+      source: input.source ?? "mcp",
+      command: input.command,
+      before: projectQuarantineSnapshotJson(current),
+      after: projectQuarantineSnapshotJson(after),
+      metadata: {
+        receipt_id: receipt.receipt_id,
+        accepted_receipt_id: accepted.receipt_id,
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+      },
+    });
+    return withResponseControl({
+      ok: true,
+      dry_run: false,
+      outcome: "accepted" as const,
+      idempotency_key: idempotencyKey,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+      project_id: input.project_id,
+      expected_revision: input.expected_current_revision,
+      current_revision: currentProject.updated_at,
+      before: current,
+      after,
+      receipt,
+      rollback: null,
+    }, input, started, "project quarantine rollback");
   }
 
   private async resourceLinkMigrationManifest(

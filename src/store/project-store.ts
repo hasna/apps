@@ -65,6 +65,9 @@ import {
   recordWorkspaceEvent as dbRecordWorkspaceEvent,
   releaseWorkspaceLock,
   rollbackGuardedWorkspaceMutation as dbRollbackGuardedWorkspaceMutation,
+  quarantineDuplicateProject as dbQuarantineDuplicateProject,
+  readDuplicateProjectQuarantinePreimage as dbReadDuplicateProjectQuarantinePreimage,
+  rollbackDuplicateProjectQuarantine as dbRollbackDuplicateProjectQuarantine,
   rollbackProjectResourceLinks as dbRollbackProjectResourceLinks,
   rollbackProjectResourceLinkMigration as dbRollbackProjectResourceLinkMigration,
   resolveWorkspace as dbResolveWorkspace,
@@ -178,6 +181,11 @@ import type {
   GuardedProjectMutationResult,
   GuardedProjectMutationRollbackRequest,
   JsonObject,
+  ProjectQuarantineRequest,
+  ProjectQuarantineReadRequest,
+  ProjectQuarantineReadResult,
+  ProjectQuarantineResult,
+  ProjectQuarantineRollbackRequest,
   ProjectResourceLinkMutationRequest,
   ProjectResourceLinkMutationResult,
   ProjectResourceLinkMigrationAdvanceRequest,
@@ -355,6 +363,9 @@ export interface ProjectStore {
   readProjectResourceLinks(input: ProjectResourceLinkReadRequest): Promise<ProjectResourceLinkReadResult>;
   mutateProjectResourceLinks(input: ProjectResourceLinkMutationRequest): Promise<ProjectResourceLinkMutationResult>;
   rollbackProjectResourceLinks(input: ProjectResourceLinkRollbackRequest): Promise<ProjectResourceLinkMutationResult>;
+  readDuplicateProjectQuarantinePreimage(input: ProjectQuarantineReadRequest): Promise<ProjectQuarantineReadResult>;
+  quarantineDuplicateProject(input: ProjectQuarantineRequest): Promise<ProjectQuarantineResult>;
+  rollbackDuplicateProjectQuarantine(input: ProjectQuarantineRollbackRequest): Promise<ProjectQuarantineResult>;
   planProjectResourceLinkMigration(input: ProjectResourceLinkMigrationPlanRequest): Promise<ProjectResourceLinkMigrationResult>;
   readProjectResourceLinkMigration(input: ProjectResourceLinkMigrationReadRequest): Promise<ProjectResourceLinkMigrationResult>;
   advanceProjectResourceLinkMigration(input: ProjectResourceLinkMigrationAdvanceRequest): Promise<ProjectResourceLinkMigrationResult>;
@@ -692,6 +703,22 @@ class LocalProjectStore implements ProjectStore {
   async rollbackProjectResourceLinks(input: ProjectResourceLinkRollbackRequest): Promise<ProjectResourceLinkMutationResult> {
     return withLock(input.project_id, { agentId: input.agent_id, source: input.source, command: input.command }, "project resource links rollback", () =>
       dbRollbackProjectResourceLinks(input),
+    );
+  }
+
+  async readDuplicateProjectQuarantinePreimage(input: ProjectQuarantineReadRequest): Promise<ProjectQuarantineReadResult> {
+    return dbReadDuplicateProjectQuarantinePreimage(input);
+  }
+
+  async quarantineDuplicateProject(input: ProjectQuarantineRequest): Promise<ProjectQuarantineResult> {
+    return withLock(input.project_id, { agentId: input.agent_id, source: input.source, command: input.command }, "duplicate project quarantine", () =>
+      dbQuarantineDuplicateProject(input),
+    );
+  }
+
+  async rollbackDuplicateProjectQuarantine(input: ProjectQuarantineRollbackRequest): Promise<ProjectQuarantineResult> {
+    return withLock(input.project_id, { agentId: input.agent_id, source: input.source, command: input.command }, "duplicate project quarantine rollback", () =>
+      dbRollbackDuplicateProjectQuarantine(input),
     );
   }
 
@@ -1295,6 +1322,37 @@ class ApiProjectStore implements ProjectStore {
   async rollbackProjectResourceLinks(input: ProjectResourceLinkRollbackRequest): Promise<ProjectResourceLinkMutationResult> {
     return this.client.transport.post<ProjectResourceLinkMutationResult>(
       `/projects/${encodeURIComponent(input.project_id)}/resource-links/rollback`,
+      input,
+      { timeoutMs: input.time_budget_ms },
+    );
+  }
+
+  async readDuplicateProjectQuarantinePreimage(input: ProjectQuarantineReadRequest): Promise<ProjectQuarantineReadResult> {
+    return this.client.transport.get<ProjectQuarantineReadResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/duplicate-quarantine`,
+      {
+        query: {
+          resource_link_max_items: input.resource_link_max_items,
+          workspace_location_max_items: input.workspace_location_max_items,
+          response_byte_limit: input.response_byte_limit,
+          time_budget_ms: input.time_budget_ms,
+        },
+        timeoutMs: input.time_budget_ms,
+      },
+    );
+  }
+
+  async quarantineDuplicateProject(input: ProjectQuarantineRequest): Promise<ProjectQuarantineResult> {
+    return this.client.transport.post<ProjectQuarantineResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/duplicate-quarantine`,
+      input,
+      { timeoutMs: input.time_budget_ms },
+    );
+  }
+
+  async rollbackDuplicateProjectQuarantine(input: ProjectQuarantineRollbackRequest): Promise<ProjectQuarantineResult> {
+    return this.client.transport.post<ProjectQuarantineResult>(
+      `/projects/${encodeURIComponent(input.project_id)}/duplicate-quarantine/rollback`,
       input,
       { timeoutMs: input.time_budget_ms },
     );

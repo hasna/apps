@@ -458,6 +458,7 @@ function parseFullRegistrationPayload(value: unknown): {
   project: FullProjectRegistrationProjectInput;
   target_path: string;
   goals_markdown: string;
+  worklog_markdown: string;
   response_byte_limit: number;
   time_budget_ms: number;
 } {
@@ -474,6 +475,7 @@ function parseFullRegistrationPayload(value: unknown): {
   }
   if (typeof payload.target_path !== "string") throw new Error("register-full target_path must be a string");
   if (typeof payload.goals_markdown !== "string") throw new Error("register-full goals_markdown must be a string");
+  if (typeof payload.worklog_markdown !== "string") throw new Error("register-full worklog_markdown must be a string");
   if (!payload.project || typeof payload.project !== "object" || Array.isArray(payload.project)) {
     throw new Error("register-full project must be a JSON object");
   }
@@ -493,6 +495,7 @@ function parseFullRegistrationPayload(value: unknown): {
     project: payload.project as FullProjectRegistrationProjectInput,
     target_path: payload.target_path,
     goals_markdown: payload.goals_markdown,
+    worklog_markdown: payload.worklog_markdown,
     response_byte_limit: payload.response_byte_limit ?? 512_000,
     time_budget_ms: payload.time_budget_ms ?? 30_000,
   };
@@ -1841,6 +1844,7 @@ function registerProjectCommands(program: Command): void {
           project: payload.project,
           target: ProjectRegistrationPathHandle.fromPath(payload.target_path),
           goals_markdown: payload.goals_markdown,
+          worklog_markdown: payload.worklog_markdown,
           response_byte_limit: payload.response_byte_limit,
           time_budget_ms: payload.time_budget_ms,
         }, {
@@ -2893,6 +2897,134 @@ function registerProjectCommands(program: Command): void {
         });
         if (wantsJson(opts)) { printObject(result, opts); return; }
         console.log(chalk.green(`✓ Typed resource links rollback ${result.outcome}: ${result.project_id}`));
+        if (result.receipt) console.log(`  ${chalk.dim("receipt:")} ${result.receipt.receipt_id}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("duplicate-quarantine-read <project-id>")
+    .description("Read the exact complete project, typed-link, and path-selector preimage for duplicate quarantine")
+    .option("--resource-link-max-items <n>", "Maximum complete typed resource-link collection size", "1000")
+    .option("--workspace-location-max-items <n>", "Maximum complete workspace-location collection size", "1000")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const result = await resolveProjectStore().readDuplicateProjectQuarantinePreimage({
+          project_id: projectId,
+          resource_link_max_items: parsePositiveInteger(opts.resourceLinkMaxItems, "--resource-link-max-items")!,
+          workspace_location_max_items: parsePositiveInteger(opts.workspaceLocationMaxItems, "--workspace-location-max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Duplicate quarantine preimage: ${result.project_id}`));
+        console.log(`  ${chalk.dim("revision:")} ${result.current_revision}`);
+        console.log(`  ${chalk.dim("project digest:")} ${result.snapshot.project_digest}`);
+        console.log(`  ${chalk.dim("resource links:")} ${result.resource_link_count}`);
+        console.log(`  ${chalk.dim("workspace locations:")} ${result.workspace_location_count}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("duplicate-quarantine <project-id>")
+    .description("Atomically retire duplicate selectors and links while retaining reversible provenance")
+    .requiredOption("--operation-id <id>", "Caller-stable quarantine operation id")
+    .requiredOption("--step-id <id>", "Caller-stable quarantine step id")
+    .requiredOption("--expected-revision <revision>", "Exact project revision from duplicate-quarantine-read")
+    .requiredOption("--expected-project-digest <digest>", "Exact full project and path-selector digest")
+    .requiredOption("--expected-resource-link-collection-digest <digest>", "Exact complete typed resource-link digest")
+    .requiredOption("--expected-resource-link-ids-json <json>", "Exact JSON array of resource-link ids")
+    .option("--resource-link-max-items <n>", "Maximum complete typed resource-link collection size", "1000")
+    .requiredOption("--expected-workspace-location-collection-digest <digest>", "Exact complete path-selector digest")
+    .requiredOption("--expected-workspace-location-ids-json <json>", "Exact JSON array of workspace-location ids")
+    .option("--workspace-location-max-items <n>", "Maximum complete workspace-location collection size", "1000")
+    .requiredOption("--quarantine-name <name>", "Provenance-only project name")
+    .requiredOption("--quarantine-slug <slug>", "Unowned canonical provenance-only slug")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("--dry-run", "Validate and preview without writing or persisting a receipt")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const result = await store.quarantineDuplicateProject({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          expected_revision: opts.expectedRevision,
+          expected_project_digest: opts.expectedProjectDigest,
+          expected_resource_link_collection_digest: opts.expectedResourceLinkCollectionDigest,
+          expected_resource_link_ids: parseJsonArray<string>(
+            opts.expectedResourceLinkIdsJson,
+            "--expected-resource-link-ids-json",
+          ) ?? [],
+          resource_link_max_items: parsePositiveInteger(opts.resourceLinkMaxItems, "--resource-link-max-items")!,
+          expected_workspace_location_collection_digest: opts.expectedWorkspaceLocationCollectionDigest,
+          expected_workspace_location_ids: parseJsonArray<string>(
+            opts.expectedWorkspaceLocationIdsJson,
+            "--expected-workspace-location-ids-json",
+          ) ?? [],
+          workspace_location_max_items: parsePositiveInteger(opts.workspaceLocationMaxItems, "--workspace-location-max-items")!,
+          quarantine_name: opts.quarantineName,
+          quarantine_slug: opts.quarantineSlug,
+          dry_run: Boolean(opts.dryRun),
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Duplicate quarantine ${result.outcome}: ${result.project_id}`));
+        if (result.receipt) console.log(`  ${chalk.dim("receipt:")} ${result.receipt.receipt_id}`);
+        if (result.rollback) console.log(`  ${chalk.dim("rollback revision:")} ${result.rollback.expected_current_revision}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("duplicate-quarantine-rollback <project-id>")
+    .description("Restore exact project metadata, typed links, and path selectors from an accepted quarantine receipt")
+    .requiredOption("--operation-id <id>", "Caller-stable rollback operation id")
+    .requiredOption("--step-id <id>", "Caller-stable rollback step id")
+    .requiredOption("--accepted-receipt-id <id>", "Forward accepted quarantine receipt id")
+    .requiredOption("--expected-current-revision <revision>", "Current revision matching the accepted receipt")
+    .option("--resource-link-max-items <n>", "Maximum complete typed resource-link collection size", "1000")
+    .option("--workspace-location-max-items <n>", "Maximum complete workspace-location collection size", "1000")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const result = await store.rollbackDuplicateProjectQuarantine({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          accepted_receipt_id: opts.acceptedReceiptId,
+          expected_current_revision: opts.expectedCurrentRevision,
+          resource_link_max_items: parsePositiveInteger(opts.resourceLinkMaxItems, "--resource-link-max-items")!,
+          workspace_location_max_items: parsePositiveInteger(opts.workspaceLocationMaxItems, "--workspace-location-max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Duplicate quarantine rollback ${result.outcome}: ${result.project_id}`));
         if (result.receipt) console.log(`  ${chalk.dim("receipt:")} ${result.receipt.receipt_id}`);
       } catch (err) {
         console.error(chalk.red(err instanceof Error ? err.message : String(err)));

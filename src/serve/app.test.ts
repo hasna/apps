@@ -347,6 +347,12 @@ describe("projects-serve probes", () => {
     expect(spec.paths["/v1/projects/{id}/resource-links/add"].post.operationId).toBe("addProjectResourceLinks");
     expect(spec.paths["/v1/projects/{id}/resource-links/reconcile"].post.operationId).toBe("reconcileProjectResourceLinks");
     expect(spec.paths["/v1/projects/{id}/resource-links/rollback"].post.operationId).toBe("rollbackProjectResourceLinks");
+    expect(spec.paths["/v1/projects/{id}/duplicate-quarantine"].get.operationId)
+      .toBe("readDuplicateProjectQuarantinePreimage");
+    expect(spec.paths["/v1/projects/{id}/duplicate-quarantine"].post.operationId)
+      .toBe("quarantineDuplicateProject");
+    expect(spec.paths["/v1/projects/{id}/duplicate-quarantine/rollback"].post.operationId)
+      .toBe("rollbackDuplicateProjectQuarantine");
     expect(spec.paths["/v1/projects/{id}/resource-link-migrations/plan"].post.operationId)
       .toBe("planProjectResourceLinkMigration");
     expect(spec.paths["/v1/projects/{id}/resource-link-migrations/{manifestId}"].get.operationId)
@@ -1197,6 +1203,150 @@ describe("projects-serve auth", () => {
         operation: "rollback",
         input: { ...rollbackBody, project_id: projectId },
       },
+    ]);
+  });
+
+  test("duplicate-quarantine routes preserve exact complete preimage, CAS inputs, and inverse receipt", async () => {
+    const projectId = "wks_httpquarantine0001";
+    const project = fakeWorkspace({
+      id: projectId,
+      slug: "http-quarantine",
+      name: "HTTP Quarantine",
+      primary_path: "/srv/http-quarantine",
+      updated_at: "2026-08-13 13:50:08.071",
+    });
+    const snapshot = {
+      project,
+      project_digest: "project-digest",
+      resource_links: [],
+      resource_link_collection_digest: "resource-link-digest",
+      workspace_locations: [],
+      workspace_location_collection_digest: "workspace-location-digest",
+    };
+    const calls: Array<{ operation: string; input: Record<string, unknown> }> = [];
+    const responseControl = {
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      response_bytes: 1,
+      elapsed_ms: 0,
+      complete: true,
+      truncated: false,
+    };
+    const result = (input: Record<string, unknown>) => ({
+      ok: true,
+      dry_run: false,
+      outcome: "accepted",
+      idempotency_key: "gpm_http_quarantine",
+      request_digest: "request",
+      precondition_digest: "precondition",
+      project_id: projectId,
+      expected_revision: input.expected_revision ?? input.expected_current_revision,
+      current_revision: project.updated_at,
+      before: snapshot,
+      after: snapshot,
+      receipt: { receipt_id: "gpmr_http_quarantine" },
+      rollback: null,
+      response_control: responseControl,
+    });
+    const store = {
+      ...fakeStore(),
+      async readDuplicateProjectQuarantinePreimage(input: Record<string, unknown>) {
+        calls.push({ operation: "read", input });
+        return {
+          ok: true,
+          project_id: projectId,
+          current_revision: project.updated_at,
+          snapshot,
+          resource_link_count: 0,
+          workspace_location_count: 0,
+          complete: true,
+          truncated: false,
+          response_control: responseControl,
+        };
+      },
+      async quarantineDuplicateProject(input: Record<string, unknown>) {
+        calls.push({ operation: "forward", input });
+        return result(input);
+      },
+      async rollbackDuplicateProjectQuarantine(input: Record<string, unknown>) {
+        calls.push({ operation: "inverse", input });
+        return result(input);
+      },
+    } as unknown as ProjectsPgStore;
+    const h = createFetchHandler({
+      store,
+      version: "9.9.9",
+      app: "projects",
+      signingSecret: SIGNING_SECRET,
+      allowUnregisteredKeys: true,
+    });
+    const headers = { "x-api-key": keyWith(["projects:read", "projects:write"]) };
+
+    const read = await h(new Request(
+      `http://x/v1/projects/${projectId}/duplicate-quarantine?resource_link_max_items=10&workspace_location_max_items=20&response_byte_limit=100000&time_budget_ms=5000`,
+      { headers },
+    ));
+    expect(read.status).toBe(200);
+    expect((await read.json()).snapshot.project_digest).toBe("project-digest");
+
+    const forwardBody = {
+      operation_id: "http-quarantine",
+      step_id: "retire-duplicate",
+      expected_revision: project.updated_at,
+      expected_project_digest: "project-digest",
+      expected_resource_link_collection_digest: "resource-link-digest",
+      expected_resource_link_ids: [],
+      resource_link_max_items: 10,
+      expected_workspace_location_collection_digest: "workspace-location-digest",
+      expected_workspace_location_ids: [],
+      workspace_location_max_items: 20,
+      quarantine_name: "HTTP Quarantine provenance",
+      quarantine_slug: "http-quarantine-provenance",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const forward = await h(new Request(
+      `http://x/v1/projects/${projectId}/duplicate-quarantine`,
+      {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify(forwardBody),
+      },
+    ));
+    expect(forward.status).toBe(200);
+
+    const inverseBody = {
+      operation_id: "http-quarantine-rollback",
+      step_id: "restore-duplicate",
+      accepted_receipt_id: "gpmr_http_quarantine",
+      expected_current_revision: "2026-08-13 13:50:09.071",
+      resource_link_max_items: 10,
+      workspace_location_max_items: 20,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const inverse = await h(new Request(
+      `http://x/v1/projects/${projectId}/duplicate-quarantine/rollback`,
+      {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify(inverseBody),
+      },
+    ));
+    expect(inverse.status).toBe(200);
+    expect(calls).toEqual([
+      {
+        operation: "read",
+        input: {
+          project_id: projectId,
+          resource_link_max_items: 10,
+          workspace_location_max_items: 20,
+          response_byte_limit: 100_000,
+          time_budget_ms: 5_000,
+        },
+      },
+      { operation: "forward", input: { ...forwardBody, project_id: projectId } },
+      { operation: "inverse", input: { ...inverseBody, project_id: projectId } },
     ]);
   });
 

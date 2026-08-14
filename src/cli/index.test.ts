@@ -325,6 +325,7 @@ describe("project-first CLI surface", () => {
       },
       target_path: targetPath,
       goals_markdown: "# Goals\n\n- Register safely.\n",
+      worklog_markdown: "# Worklog\n\n- Registration requested.\n",
       response_byte_limit: 512_000,
       time_budget_ms: 10_000,
     });
@@ -370,6 +371,7 @@ describe("project-first CLI surface", () => {
       },
       target_path: targetPath,
       goals_markdown: "# Goals\n\n- Register safely from one file.\n",
+      worklog_markdown: "# Worklog\n\n- Registration requested from one file.\n",
       response_byte_limit: 512_000,
       time_budget_ms: 10_000,
     });
@@ -419,6 +421,7 @@ describe("project-first CLI surface", () => {
       },
       target_path: targetPath,
       goals_markdown: "# Goals\n\n- Refuse ambiguous input.\n",
+      worklog_markdown: "# Worklog\n\n- Registration requested.\n",
     });
     writeFileSync(inputPath, makePayload("op-cli-register-full-file", filePayloadMarker), { mode: 0o600 });
     chmodSync(inputPath, 0o600);
@@ -583,6 +586,7 @@ describe("project-first CLI surface", () => {
       },
       target_path: targetPath,
       goals_markdown: "# Goals\n\n- Reconcile every authority safely.\n",
+      worklog_markdown: "# Worklog\n\n- Registration requested.\n",
       reconcile_existing: {
         conversations_channel: {
           source_operation_id: "op-cli-register-full",
@@ -670,6 +674,7 @@ describe("project-first CLI surface", () => {
       },
       target_path: targetPath,
       goals_markdown: "# Goals\n\n- Reconcile safely.\n",
+      worklog_markdown: "# Worklog\n\n- Registration requested.\n",
       reconcile_existing: {
         conversations_channel: {
           source_operation_id: "op-cli-register-full",
@@ -714,6 +719,7 @@ describe("project-first CLI surface", () => {
       },
       target_path: targetPath,
       goals_markdown: "# Goals\n\n- Reconcile safely.\n",
+      worklog_markdown: "# Worklog\n\n- Registration requested.\n",
       reconcile_existing: {
         conversations_channel: {
           source_operation_id: "op-cli-register-full",
@@ -765,6 +771,7 @@ describe("project-first CLI surface", () => {
       },
       target_path: targetPath,
       goals_markdown: "# Goals\n\n- Reconcile safely.\n",
+      worklog_markdown: "# Worklog\n\n- Registration requested.\n",
       reconcile_existing: {
         todos_project: {
           source_operation_id: "op-cli-register-full-source",
@@ -1404,7 +1411,7 @@ describe("project-first CLI surface", () => {
     }
   });
 
-  cliProcessTest("typed resource links add, retry, reconcile, read back, and roll back through the CLI", async () => {
+  cliProcessTest("typed resource links and duplicate quarantine execute and roll back through the CLI", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-resource-links-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const channelLink = {
@@ -1647,6 +1654,117 @@ describe("project-first CLI surface", () => {
         resource_link_count: number;
         resource_links: unknown[];
       }).toMatchObject({ resource_link_count: 4 });
+
+      const quarantineRead = await runWorkspaceCommandInProcess([
+        "duplicate-quarantine-read",
+        created.project.id,
+        "--resource-link-max-items",
+        "10",
+        "--workspace-location-max-items",
+        "10",
+        "--response-byte-limit",
+        "100000",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(quarantineRead.exitCode).toBe(0);
+      const preimage = JSON.parse(text(quarantineRead.stdout)) as {
+        current_revision: string;
+        resource_link_count: number;
+        workspace_location_count: number;
+        snapshot: {
+          project_digest: string;
+          resource_link_collection_digest: string;
+          resource_links: Array<{ id: string }>;
+          workspace_location_collection_digest: string;
+          workspace_locations: Array<{ id: string }>;
+        };
+      };
+      expect(preimage).toMatchObject({
+        resource_link_count: 4,
+        workspace_location_count: 1,
+      });
+
+      const quarantine = await runWorkspaceCommandInProcess([
+        "duplicate-quarantine",
+        created.project.id,
+        "--operation-id",
+        "cli-duplicate-quarantine",
+        "--step-id",
+        "retire-duplicate",
+        "--expected-revision",
+        preimage.current_revision,
+        "--expected-project-digest",
+        preimage.snapshot.project_digest,
+        "--expected-resource-link-collection-digest",
+        preimage.snapshot.resource_link_collection_digest,
+        "--expected-resource-link-ids-json",
+        JSON.stringify(preimage.snapshot.resource_links.map((link) => link.id)),
+        "--resource-link-max-items",
+        "10",
+        "--expected-workspace-location-collection-digest",
+        preimage.snapshot.workspace_location_collection_digest,
+        "--expected-workspace-location-ids-json",
+        JSON.stringify(preimage.snapshot.workspace_locations.map((location) => location.id)),
+        "--workspace-location-max-items",
+        "10",
+        "--quarantine-name",
+        "Typed Links duplicate provenance",
+        "--quarantine-slug",
+        "typed-links-duplicate-provenance",
+        "--response-byte-limit",
+        "100000",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(quarantine.exitCode).toBe(0);
+      const quarantined = JSON.parse(text(quarantine.stdout)) as {
+        outcome: string;
+        after: { project: { status: string; integrations: Record<string, string> }; resource_links: unknown[]; workspace_locations: unknown[] };
+        receipt: { receipt_id: string };
+        rollback: { expected_current_revision: string };
+      };
+      expect(quarantined).toMatchObject({
+        outcome: "accepted",
+        after: {
+          project: { status: "archived", integrations: {} },
+          resource_links: [],
+          workspace_locations: [],
+        },
+      });
+
+      const quarantineRollback = await runWorkspaceCommandInProcess([
+        "duplicate-quarantine-rollback",
+        created.project.id,
+        "--operation-id",
+        "cli-duplicate-quarantine-rollback",
+        "--step-id",
+        "restore-duplicate",
+        "--accepted-receipt-id",
+        quarantined.receipt.receipt_id,
+        "--expected-current-revision",
+        quarantined.rollback.expected_current_revision,
+        "--resource-link-max-items",
+        "10",
+        "--workspace-location-max-items",
+        "10",
+        "--response-byte-limit",
+        "100000",
+        "--time-budget-ms",
+        "5000",
+        "--json",
+      ], env);
+      expect(quarantineRollback.exitCode).toBe(0);
+      expect(JSON.parse(text(quarantineRollback.stdout))).toMatchObject({
+        outcome: "accepted",
+        after: {
+          project: { status: "active" },
+          resource_links: expect.arrayContaining([expect.objectContaining({ authority: "conversations" })]),
+          workspace_locations: expect.arrayContaining([expect.objectContaining({ is_primary: true })]),
+        },
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

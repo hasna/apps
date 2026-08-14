@@ -46,6 +46,21 @@ import {
   type ProjectResourceLinkProducerAttestation,
   type ProjectResourceLinkProducerEvidenceVerifier,
 } from "../lib/project-resource-link-migrations.js";
+import {
+  PROJECT_QUARANTINE_EVENT,
+  PROJECT_QUARANTINE_ROLLBACK_EVENT,
+  assertProjectQuarantinePostimage,
+  assertProjectQuarantinePreconditions,
+  normalizedExpectedResourceLinkIds,
+  parseProjectQuarantineSnapshot,
+  projectDigest,
+  projectQuarantinePatch,
+  projectQuarantinePreconditionDigest,
+  projectQuarantineRequestDigest,
+  projectQuarantineSnapshot,
+  projectQuarantineSnapshotJson,
+  restoreProjectPatch,
+} from "../lib/project-quarantine.js";
 import type {
   Agent,
   AgentRow,
@@ -84,6 +99,11 @@ import type {
   ProjectResourceLinkRollbackRequest,
   ProjectResourceLinkRow,
   ProjectResourceLinkSnapshot,
+  ProjectQuarantineRequest,
+  ProjectQuarantineReadRequest,
+  ProjectQuarantineReadResult,
+  ProjectQuarantineResult,
+  ProjectQuarantineRollbackRequest,
   Recipe,
   RecipeRow,
   RecordWorkspaceEventInput,
@@ -1402,6 +1422,99 @@ function replaceProjectResourceLinks(
   }
 }
 
+function listWorkspaceLocationsBounded(
+  workspaceId: string,
+  maxItems: number,
+  db: Database,
+): WorkspaceLocation[] {
+  if (!Number.isInteger(maxItems) || maxItems <= 0) {
+    throw new Error("project quarantine workspace_location_max_items must be a positive integer");
+  }
+  const rows = db.query(
+    `SELECT * FROM workspace_locations
+     WHERE workspace_id = ?
+     ORDER BY is_primary DESC, created_at ASC, id ASC
+     LIMIT ?`,
+  ).all(workspaceId, maxItems + 1) as WorkspaceLocationRow[];
+  if (rows.length > maxItems) {
+    throw new Error(`project quarantine workspace-location collection exceeds max_items: more than ${maxItems}`);
+  }
+  return rows.map(rowToLocation);
+}
+
+function replaceWorkspaceLocations(
+  workspaceId: string,
+  locations: readonly WorkspaceLocation[],
+  db: Database,
+): void {
+  db.run("DELETE FROM workspace_locations WHERE workspace_id = ?", [workspaceId]);
+  for (const location of locations) {
+    db.run(
+      `INSERT INTO workspace_locations (
+        id, workspace_id, path, machine_id, label, kind, is_primary,
+        exists_at_create, metadata, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        location.id,
+        workspaceId,
+        location.path,
+        location.machine_id,
+        location.label,
+        location.kind,
+        location.is_primary ? 1 : 0,
+        location.exists_at_create ? 1 : 0,
+        json(location.metadata),
+        location.created_at,
+      ],
+    );
+  }
+}
+
+function applyProjectQuarantineWorkspacePatch(
+  projectId: string,
+  patch: UpdateWorkspaceInput,
+  expectedRevision: string,
+  db: Database,
+): Workspace {
+  const before = getWorkspace(projectId, db);
+  if (!before) throw new Error(`Workspace not found: ${projectId}`);
+  if (before.updated_at !== expectedRevision) {
+    throw new Error("project quarantine conditional update lost");
+  }
+  const after = previewWorkspacePatch(before, patch);
+  const nextRevision = nextWorkspaceRevision(expectedRevision);
+  const result = db.run(
+    `UPDATE workspaces SET
+      name = ?, slug = ?, description = ?, kind = ?, status = ?, root_id = ?, recipe_id = ?,
+      canonical_machine = ?, primary_path = ?, git_remote = ?, s3_bucket = ?, s3_prefix = ?,
+      tags = ?, integrations = ?, metadata = ?, last_opened_at = ?, updated_at = ?
+     WHERE id = ? AND updated_at = ?`,
+    [
+      after.name,
+      after.slug,
+      after.description,
+      after.kind,
+      after.status,
+      after.root_id,
+      after.recipe_id,
+      after.canonical_machine,
+      after.primary_path,
+      after.git_remote,
+      after.s3_bucket,
+      after.s3_prefix,
+      json(after.tags),
+      json(after.integrations),
+      json(after.metadata),
+      after.last_opened_at,
+      nextRevision,
+      projectId,
+      expectedRevision,
+    ],
+  );
+  if (result.changes !== 1) throw new Error("project quarantine conditional update lost");
+  return getWorkspace(projectId, db)!;
+}
+
 function snapshotJson(snapshot: ProjectResourceLinkSnapshot): JsonObject {
   return snapshot as unknown as JsonObject;
 }
@@ -1745,6 +1858,487 @@ export function rollbackProjectResourceLinks(
     forced_integrations: before.project.integrations,
     preserve_links: before.links,
   });
+}
+
+export function readDuplicateProjectQuarantinePreimage(
+  input: ProjectQuarantineReadRequest,
+  db?: Database,
+): ProjectQuarantineReadResult {
+  const d = db || getDatabase();
+  const started = Date.now();
+  assertCompleteStableProjectId(input.project_id);
+  assertProjectResourceLinkMaxItems(input.resource_link_max_items);
+  const project = getWorkspace(input.project_id, d);
+  if (!project) throw new Error(`Workspace not found: ${input.project_id}`);
+  const links = listProjectResourceLinks(input.project_id, input.resource_link_max_items, d);
+  const locations = listWorkspaceLocationsBounded(
+    input.project_id,
+    input.workspace_location_max_items,
+    d,
+  );
+  const snapshot = projectQuarantineSnapshot(project, links, locations);
+  return withResponseControl({
+    ok: true as const,
+    project_id: project.id,
+    current_revision: project.updated_at,
+    snapshot,
+    resource_link_count: links.length,
+    workspace_location_count: locations.length,
+    complete: true as const,
+    truncated: false as const,
+  }, input, started, "project quarantine preimage read");
+}
+
+export function quarantineDuplicateProject(
+  input: ProjectQuarantineRequest,
+  db?: Database,
+): ProjectQuarantineResult {
+  const d = db || getDatabase();
+  const started = Date.now();
+  assertCompleteStableProjectId(input.project_id);
+  assertProjectResourceLinkMaxItems(input.resource_link_max_items);
+  if (!Number.isInteger(input.workspace_location_max_items) || input.workspace_location_max_items <= 0) {
+    throw new Error("project quarantine workspace_location_max_items must be a positive integer");
+  }
+  const expectedIds = normalizedExpectedResourceLinkIds(input);
+  const reqDigest = projectQuarantineRequestDigest(input);
+  const preDigest = projectQuarantinePreconditionDigest(input, expectedIds);
+  const idempotencyKey = deriveGuardedIdempotencyKey({
+    operation_id: input.operation_id,
+    step_id: input.step_id,
+    direction: "forward",
+    target_id: input.project_id,
+    request_digest: reqDigest,
+    precondition_digest: preDigest,
+  });
+
+  return d.transaction(() => {
+    const beforeProject = getWorkspace(input.project_id, d);
+    if (!beforeProject) throw new Error(`Workspace not found: ${input.project_id}`);
+    const beforeLinks = listProjectResourceLinks(input.project_id, input.resource_link_max_items, d);
+    const beforeLocations = listWorkspaceLocationsBounded(
+      input.project_id,
+      input.workspace_location_max_items,
+      d,
+    );
+    const before = projectQuarantineSnapshot(beforeProject, beforeLinks, beforeLocations);
+    const duplicate = findGuardedAcceptedReceipt({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "forward",
+      idempotency_key: idempotencyKey,
+      target_id: input.project_id,
+    }, d);
+    if (duplicate) {
+      const acceptedAfter = parseProjectQuarantineSnapshot(duplicate.after, "accepted after");
+      if (
+        before.project.updated_at !== duplicate.post_revision
+        || before.project_digest !== acceptedAfter.project_digest
+        || before.resource_link_collection_digest !== acceptedAfter.resource_link_collection_digest
+        || before.workspace_location_collection_digest !== acceptedAfter.workspace_location_collection_digest
+      ) {
+        throw new Error("project quarantine retry refuses drift after the accepted receipt");
+      }
+      const receipt = duplicateOfAcceptedReceipt(
+        duplicate,
+        beforeProject,
+        d,
+        projectQuarantineSnapshotJson(before),
+      );
+      return withResponseControl({
+        ok: true,
+        dry_run: false,
+        outcome: "duplicate_of_accepted" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: beforeProject.updated_at,
+        before,
+        after: acceptedAfter,
+        receipt,
+        rollback: {
+          accepted_receipt_id: duplicate.receipt_id,
+          expected_current_revision: duplicate.post_revision!,
+        },
+      }, input, started, "project quarantine");
+    }
+    const priorAccepted = findGuardedAcceptedByStep({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "forward",
+      target_id: input.project_id,
+    }, d);
+    if (priorAccepted) {
+      const receipt = terminalNonacceptanceReceipt({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction: "forward",
+        idempotency_key: idempotencyKey,
+        target_id: input.project_id,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        expected_revision: input.expected_revision,
+        reason: "changed_request_or_precondition_for_step",
+        before_snapshot: projectQuarantineSnapshotJson(before),
+      }, d);
+      return withResponseControl({
+        ok: false,
+        dry_run: false,
+        outcome: "terminal_nonacceptance" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: beforeProject.updated_at,
+        before,
+        after: null,
+        receipt,
+        rollback: null,
+      }, input, started, "project quarantine");
+    }
+    const refusal = assertProjectQuarantinePreconditions(input, before);
+    if (refusal) {
+      const receipt = terminalNonacceptanceReceipt({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction: "forward",
+        idempotency_key: idempotencyKey,
+        target_id: input.project_id,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        expected_revision: input.expected_revision,
+        reason: refusal,
+        before_snapshot: projectQuarantineSnapshotJson(before),
+      }, d);
+      return withResponseControl({
+        ok: false,
+        dry_run: false,
+        outcome: "terminal_nonacceptance" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: beforeProject.updated_at,
+        before,
+        after: null,
+        receipt,
+        rollback: null,
+      }, input, started, "project quarantine");
+    }
+    const conflictingSlug = d.query("SELECT id FROM workspaces WHERE slug = ? AND id <> ?")
+      .get(workspaceSlugify(input.quarantine_slug), input.project_id) as { id: string } | null;
+    if (conflictingSlug) throw new Error("project quarantine slug is already owned by another project");
+    const patch = projectQuarantinePatch(input, before);
+    const previewProject = previewWorkspacePatch(beforeProject, patch);
+    const preview = projectQuarantineSnapshot(previewProject, [], []);
+    assertProjectQuarantinePostimage(input, before, preview);
+    if (input.dry_run) {
+      return withResponseControl({
+        ok: true,
+        dry_run: true,
+        outcome: "planned" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_revision,
+        current_revision: beforeProject.updated_at,
+        before,
+        after: preview,
+        receipt: null,
+        rollback: null,
+      }, input, started, "project quarantine");
+    }
+    if (timedOut(started, input.time_budget_ms)) throw new Error("project quarantine time budget exceeded before write");
+
+    replaceProjectResourceLinks(input.project_id, [], d);
+    replaceWorkspaceLocations(input.project_id, [], d);
+    const afterProject = applyProjectQuarantineWorkspacePatch(
+      input.project_id,
+      patch,
+      input.expected_revision,
+      d,
+    );
+    const after = projectQuarantineSnapshot(
+      afterProject,
+      listProjectResourceLinks(input.project_id, input.resource_link_max_items, d),
+      listWorkspaceLocationsBounded(input.project_id, input.workspace_location_max_items, d),
+    );
+    assertProjectQuarantinePostimage(input, before, after);
+    const receipt = insertGuardedProjectMutationReceipt({
+      receipt_id: buildReceiptId({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction: "forward",
+        idempotency_key: idempotencyKey,
+        outcome: "accepted",
+        target_id: input.project_id,
+      }),
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "forward",
+      idempotency_key: idempotencyKey,
+      target_id: input.project_id,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+      expected_revision: input.expected_revision,
+      outcome: "accepted",
+      reason: null,
+      result_project_id: afterProject.id,
+      duplicate_of_receipt_id: null,
+      before: projectQuarantineSnapshotJson(before),
+      after: projectQuarantineSnapshotJson(after),
+      post_revision: afterProject.updated_at,
+    }, d);
+    recordWorkspaceEvent({
+      workspace_id: input.project_id,
+      agent_id: input.agent_id,
+      event_type: PROJECT_QUARANTINE_EVENT,
+      source: input.source ?? "cli",
+      command: input.command,
+      before: projectQuarantineSnapshotJson(before),
+      after: projectQuarantineSnapshotJson(after),
+      metadata: {
+        receipt_id: receipt.receipt_id,
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+      },
+    }, d);
+    return withResponseControl({
+      ok: true,
+      dry_run: false,
+      outcome: "accepted" as const,
+      idempotency_key: idempotencyKey,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+      project_id: input.project_id,
+      expected_revision: input.expected_revision,
+      current_revision: beforeProject.updated_at,
+      before,
+      after,
+      receipt,
+      rollback: {
+        accepted_receipt_id: receipt.receipt_id,
+        expected_current_revision: afterProject.updated_at,
+      },
+    }, input, started, "project quarantine");
+  })();
+}
+
+export function rollbackDuplicateProjectQuarantine(
+  input: ProjectQuarantineRollbackRequest,
+  db?: Database,
+): ProjectQuarantineResult {
+  const d = db || getDatabase();
+  const started = Date.now();
+  assertCompleteStableProjectId(input.project_id);
+  assertProjectResourceLinkMaxItems(input.resource_link_max_items);
+  if (!Number.isInteger(input.workspace_location_max_items) || input.workspace_location_max_items <= 0) {
+    throw new Error("project quarantine workspace_location_max_items must be a positive integer");
+  }
+  return d.transaction(() => {
+    const row = d.query("SELECT * FROM guarded_project_mutation_receipts WHERE receipt_id = ?")
+      .get(input.accepted_receipt_id) as GuardedProjectMutationReceiptRow | null;
+    if (!row) throw new Error(`accepted quarantine receipt not found: ${input.accepted_receipt_id}`);
+    const accepted = rowToGuardedReceipt(row);
+    if (accepted.outcome !== "accepted" || accepted.direction !== "forward" || accepted.target_id !== input.project_id) {
+      throw new Error("quarantine rollback requires a forward accepted receipt for the same project id");
+    }
+    if (accepted.post_revision !== input.expected_current_revision) {
+      throw new Error("quarantine rollback expected_current_revision must equal the accepted receipt post_revision");
+    }
+    const acceptedBefore = parseProjectQuarantineSnapshot(accepted.before, "accepted before");
+    const acceptedAfter = parseProjectQuarantineSnapshot(accepted.after, "accepted after");
+    const currentProject = getWorkspace(input.project_id, d);
+    if (!currentProject) throw new Error(`Workspace not found: ${input.project_id}`);
+    const current = projectQuarantineSnapshot(
+      currentProject,
+      listProjectResourceLinks(input.project_id, input.resource_link_max_items, d),
+      listWorkspaceLocationsBounded(input.project_id, input.workspace_location_max_items, d),
+    );
+    const reqDigest = sha256(canonicalJson({
+      route: "projects.duplicate-quarantine.rollback.v1",
+      accepted_receipt_id: accepted.receipt_id,
+      restore_project_digest: acceptedBefore.project_digest,
+      restore_resource_link_collection_digest: acceptedBefore.resource_link_collection_digest,
+      restore_workspace_location_collection_digest: acceptedBefore.workspace_location_collection_digest,
+    }));
+    const preDigest = preconditionDigest({
+      project_id: input.project_id,
+      expected_revision: input.expected_current_revision,
+    });
+    const idempotencyKey = deriveGuardedIdempotencyKey({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "inverse",
+      target_id: input.project_id,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+    });
+    const duplicate = findGuardedAcceptedReceipt({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "inverse",
+      idempotency_key: idempotencyKey,
+      target_id: input.project_id,
+    }, d);
+    if (duplicate) {
+      const acceptedInverseAfter = parseProjectQuarantineSnapshot(duplicate.after, "accepted inverse after");
+      if (
+        currentProject.updated_at !== duplicate.post_revision
+        || current.project_digest !== acceptedInverseAfter.project_digest
+        || current.resource_link_collection_digest !== acceptedInverseAfter.resource_link_collection_digest
+        || current.workspace_location_collection_digest !== acceptedInverseAfter.workspace_location_collection_digest
+      ) {
+        throw new Error("quarantine rollback retry refuses drift after the accepted inverse");
+      }
+      const receipt = duplicateOfAcceptedReceipt(
+        duplicate,
+        currentProject,
+        d,
+        projectQuarantineSnapshotJson(current),
+      );
+      return withResponseControl({
+        ok: true,
+        dry_run: false,
+        outcome: "duplicate_of_accepted" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_current_revision,
+        current_revision: currentProject.updated_at,
+        before: current,
+        after: acceptedInverseAfter,
+        receipt,
+        rollback: null,
+      }, input, started, "project quarantine rollback");
+    }
+    const priorInverse = findGuardedAcceptedByStep({
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "inverse",
+      target_id: input.project_id,
+    }, d);
+    if (priorInverse) {
+      const receipt = terminalNonacceptanceReceipt({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction: "inverse",
+        idempotency_key: idempotencyKey,
+        target_id: input.project_id,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        expected_revision: input.expected_current_revision,
+        reason: "changed_request_or_precondition_for_step",
+        before_snapshot: projectQuarantineSnapshotJson(current),
+      }, d);
+      return withResponseControl({
+        ok: false,
+        dry_run: false,
+        outcome: "terminal_nonacceptance" as const,
+        idempotency_key: idempotencyKey,
+        request_digest: reqDigest,
+        precondition_digest: preDigest,
+        project_id: input.project_id,
+        expected_revision: input.expected_current_revision,
+        current_revision: currentProject.updated_at,
+        before: current,
+        after: null,
+        receipt,
+        rollback: null,
+      }, input, started, "project quarantine rollback");
+    }
+    if (
+      currentProject.updated_at !== input.expected_current_revision
+      || current.project_digest !== acceptedAfter.project_digest
+      || current.resource_link_collection_digest !== acceptedAfter.resource_link_collection_digest
+      || current.workspace_location_collection_digest !== acceptedAfter.workspace_location_collection_digest
+    ) {
+      throw new Error("quarantine rollback refuses current project, resource-link, or path-selector drift");
+    }
+
+    replaceProjectResourceLinks(input.project_id, acceptedBefore.resource_links, d);
+    replaceWorkspaceLocations(input.project_id, acceptedBefore.workspace_locations, d);
+    const afterProject = applyProjectQuarantineWorkspacePatch(
+      input.project_id,
+      restoreProjectPatch(acceptedBefore),
+      input.expected_current_revision,
+      d,
+    );
+    const after = projectQuarantineSnapshot(
+      afterProject,
+      listProjectResourceLinks(input.project_id, input.resource_link_max_items, d),
+      listWorkspaceLocationsBounded(input.project_id, input.workspace_location_max_items, d),
+    );
+    const restoredProject = { ...after.project, updated_at: acceptedBefore.project.updated_at };
+    if (
+      projectDigest(restoredProject, after.workspace_locations) !== acceptedBefore.project_digest
+      || after.resource_link_collection_digest !== acceptedBefore.resource_link_collection_digest
+      || after.workspace_location_collection_digest !== acceptedBefore.workspace_location_collection_digest
+    ) {
+      throw new Error("quarantine rollback exact inverse readback mismatch");
+    }
+    const receipt = insertGuardedProjectMutationReceipt({
+      receipt_id: buildReceiptId({
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        direction: "inverse",
+        idempotency_key: idempotencyKey,
+        outcome: "accepted",
+        target_id: input.project_id,
+      }),
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      direction: "inverse",
+      idempotency_key: idempotencyKey,
+      target_id: input.project_id,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+      expected_revision: input.expected_current_revision,
+      outcome: "accepted",
+      reason: null,
+      result_project_id: afterProject.id,
+      duplicate_of_receipt_id: null,
+      before: projectQuarantineSnapshotJson(current),
+      after: projectQuarantineSnapshotJson(after),
+      post_revision: afterProject.updated_at,
+    }, d);
+    recordWorkspaceEvent({
+      workspace_id: input.project_id,
+      agent_id: input.agent_id,
+      event_type: PROJECT_QUARANTINE_ROLLBACK_EVENT,
+      source: input.source ?? "cli",
+      command: input.command,
+      before: projectQuarantineSnapshotJson(current),
+      after: projectQuarantineSnapshotJson(after),
+      metadata: {
+        receipt_id: receipt.receipt_id,
+        accepted_receipt_id: accepted.receipt_id,
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+      },
+    }, d);
+    return withResponseControl({
+      ok: true,
+      dry_run: false,
+      outcome: "accepted" as const,
+      idempotency_key: idempotencyKey,
+      request_digest: reqDigest,
+      precondition_digest: preDigest,
+      project_id: input.project_id,
+      expected_revision: input.expected_current_revision,
+      current_revision: currentProject.updated_at,
+      before: current,
+      after,
+      receipt,
+      rollback: null,
+    }, input, started, "project quarantine rollback");
+  })();
 }
 
 function getProjectResourceLinkMigrationManifest(

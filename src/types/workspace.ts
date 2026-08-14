@@ -571,6 +571,86 @@ export interface ProjectResourceLinkRollbackRequest extends GuardedProjectMutati
   command?: string;
 }
 
+export interface ProjectQuarantineSnapshot {
+  project: Workspace;
+  project_digest: string;
+  resource_links: ProjectResourceLink[];
+  resource_link_collection_digest: string;
+  workspace_locations: WorkspaceLocation[];
+  workspace_location_collection_digest: string;
+}
+
+export interface ProjectQuarantineReadRequest extends GuardedProjectMutationBounds {
+  project_id: string;
+  resource_link_max_items: number;
+  workspace_location_max_items: number;
+}
+
+export interface ProjectQuarantineReadResult {
+  ok: true;
+  project_id: string;
+  current_revision: string;
+  snapshot: ProjectQuarantineSnapshot;
+  resource_link_count: number;
+  workspace_location_count: number;
+  complete: true;
+  truncated: false;
+  response_control: GuardedProjectMutationControl;
+}
+
+export interface ProjectQuarantineRequest extends GuardedProjectMutationBounds {
+  project_id: string;
+  operation_id: string;
+  step_id: string;
+  expected_revision: string;
+  expected_project_digest: string;
+  expected_resource_link_collection_digest: string;
+  expected_resource_link_ids: string[];
+  resource_link_max_items: number;
+  expected_workspace_location_collection_digest: string;
+  expected_workspace_location_ids: string[];
+  workspace_location_max_items: number;
+  quarantine_name: string;
+  quarantine_slug: string;
+  dry_run?: boolean;
+  agent_id?: string;
+  source?: EventSource;
+  command?: string;
+}
+
+export interface ProjectQuarantineResult {
+  ok: boolean;
+  dry_run: boolean;
+  outcome: GuardedProjectMutationOutcome | "planned";
+  idempotency_key: string;
+  request_digest: string;
+  precondition_digest: string;
+  project_id: string;
+  expected_revision: string;
+  current_revision: string;
+  before: ProjectQuarantineSnapshot;
+  after: ProjectQuarantineSnapshot | null;
+  receipt: GuardedProjectMutationReceipt | null;
+  rollback: {
+    accepted_receipt_id: string;
+    expected_current_revision: string;
+  } | null;
+  response_control: GuardedProjectMutationControl;
+}
+
+export interface ProjectQuarantineRollbackRequest extends GuardedProjectMutationBounds {
+  project_id: string;
+  operation_id: string;
+  step_id: string;
+  accepted_receipt_id: string;
+  expected_current_revision: string;
+  resource_link_max_items: number;
+  workspace_location_max_items: number;
+  agent_id?: string;
+  source?: EventSource;
+  command?: string;
+}
+
 export const PROJECT_RESOURCE_LINK_MIGRATION_STATES = [
   "planned",
   "producer_applied",

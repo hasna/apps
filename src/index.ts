@@ -30,6 +30,12 @@ export type {
   Machine,
   MachineRole,
   ProjectAgentRole,
+  ProjectQuarantineReadRequest,
+  ProjectQuarantineReadResult,
+  ProjectQuarantineRequest,
+  ProjectQuarantineResult,
+  ProjectQuarantineRollbackRequest,
+  ProjectQuarantineSnapshot,
   ProjectResourceAuthority,
   ProjectResourceExternalUuidLocator,
   ProjectResourceLink,
@@ -74,6 +80,22 @@ export type {
   WorkspaceLock as ProjectLock,
   WorkspaceStatus as ProjectStatus,
 } from "./types/workspace.js";
+export {
+  PROJECT_QUARANTINE_EVENT,
+  PROJECT_QUARANTINE_METADATA_KEY,
+  PROJECT_QUARANTINE_ROLLBACK_EVENT,
+  PROJECT_QUARANTINE_ROUTE,
+  assertProjectQuarantinePostimage,
+  assertProjectQuarantinePreconditions,
+  parseProjectQuarantineSnapshot,
+  projectDigest,
+  projectQuarantinePatch,
+  projectQuarantinePreconditionDigest,
+  projectQuarantineRequestDigest,
+  projectQuarantineSnapshot,
+  restoreProjectPatch,
+  workspaceLocationsDigest,
+} from "./lib/project-quarantine.js";
 export {
   normalizeProjectResourceLink,
   normalizeProjectResourceLinks,
@@ -140,12 +162,15 @@ export type {
 export {
   listProjectResourceLinks,
   mutateProjectResourceLinks,
+  quarantineDuplicateProject,
+  readDuplicateProjectQuarantinePreimage,
   advanceProjectResourceLinkMigration,
   planProjectResourceLinkMigration,
   readProjectResourceLinkMigration,
   readProjectResourceLinks,
   rollbackProjectResourceLinkMigration,
   rollbackProjectResourceLinks,
+  rollbackDuplicateProjectQuarantine,
 } from "./db/workspaces.js";
 export { getDatabase } from "./db/database.js";
 export {
@@ -461,6 +486,7 @@ export type {
 export {
   PROJECT_REGISTRATION_DEPENDENCY_TASKS,
   PROJECT_REGISTRATION_GOALS_FILENAME,
+  PROJECT_REGISTRATION_WORKLOG_FILENAME,
   PROJECT_REGISTRATION_MAX_RECEIPTS,
   PROJECT_REGISTRATION_ROUTE,
   RETIRED_PROJECT_REGISTRATION_PREFIXES,

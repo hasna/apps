@@ -321,6 +321,40 @@ async function route(
       const result = await store.rollbackProjectResourceLinks({ ...body, project_id: id } as never);
       return guardedJsonResponse(result, bounds, started);
     }
+    if (sub === "duplicate-quarantine" && extra === undefined && method === "GET") {
+      const started = Date.now();
+      const bounds = {
+        response_byte_limit: Number(url.searchParams.get("response_byte_limit")),
+        time_budget_ms: Number(url.searchParams.get("time_budget_ms")),
+      };
+      const result = await store.readDuplicateProjectQuarantinePreimage({
+        project_id: id,
+        resource_link_max_items: Number(url.searchParams.get("resource_link_max_items")),
+        workspace_location_max_items: Number(url.searchParams.get("workspace_location_max_items")),
+        ...bounds,
+      }, started);
+      return guardedJsonResponse(result, bounds, started);
+    }
+    if (sub === "duplicate-quarantine" && extra === undefined && method === "POST") {
+      const started = Date.now();
+      const body = await readJsonBody(req);
+      const bounds = {
+        response_byte_limit: Number(body.response_byte_limit),
+        time_budget_ms: Number(body.time_budget_ms),
+      };
+      const result = await store.quarantineDuplicateProject({ ...body, project_id: id } as never);
+      return guardedJsonResponse(result, bounds, started);
+    }
+    if (sub === "duplicate-quarantine" && extra === "rollback" && method === "POST") {
+      const started = Date.now();
+      const body = await readJsonBody(req);
+      const bounds = {
+        response_byte_limit: Number(body.response_byte_limit),
+        time_budget_ms: Number(body.time_budget_ms),
+      };
+      const result = await store.rollbackDuplicateProjectQuarantine({ ...body, project_id: id } as never);
+      return guardedJsonResponse(result, bounds, started);
+    }
     if (sub === "resource-link-migrations" && extra === "plan" && action === undefined && method === "POST") {
       const started = Date.now();
       const body = await readJsonBody(req);

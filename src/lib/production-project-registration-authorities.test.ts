@@ -274,6 +274,7 @@ function registrationInput(root: string, operationId: string): FullProjectRegist
     },
     target: ProjectRegistrationPathHandle.fromPath(join(root, "project")),
     goals_markdown: "# Goals\n\n- Exercise every shipped registration authority.\n",
+    worklog_markdown: "# Worklog\n\n- Exercise every shipped registration authority.\n",
     response_byte_limit: 512_000,
     time_budget_ms: 10_000,
   };
