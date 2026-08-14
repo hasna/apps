@@ -68,7 +68,7 @@ function makeBundle(overrides: Partial<ProjectContextBundleV1> = {}): ProjectCon
     authority: {
       owner: "projects",
       mode: "api",
-      storage: "cloud",
+      storage: "api",
       availability: "available",
     },
     project: {
@@ -218,7 +218,7 @@ describe("project context bundle validation", () => {
     badHash.project.name = "Changed after hashing";
     expectCode(() => parseProjectContextBundle(JSON.stringify(badHash)), "PROJECT_CONTEXT_HASH_MISMATCH");
 
-    const badEnum = makeBundle({ authority: { owner: "projects", mode: "api", storage: "unknown" as "cloud", availability: "available" } });
+    const badEnum = makeBundle({ authority: { owner: "projects", mode: "api", storage: "unknown" as "api", availability: "available" } });
     badEnum.hash = computeProjectContextSourceHash(badEnum);
     expectCode(() => parseProjectContextBundle(JSON.stringify(badEnum)), "PROJECT_CONTEXT_INVALID");
 
@@ -326,7 +326,7 @@ describe("project context planning", () => {
     }));
     const bundle = makeBundle({
       freshness: "stale",
-      authority: { owner: "projects", mode: "api", storage: "cloud", availability: "unavailable" },
+      authority: { owner: "projects", mode: "api", storage: "api", availability: "unavailable" },
       project: {
         ...makeBundle().project,
         id: projectId,

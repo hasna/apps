@@ -31,7 +31,7 @@ function bundle(): ProjectContextBundleV1 {
     revision: "rev-9",
     freshness: "fresh",
     resolution: { source: "marker", conflict: false, create_allowed: false },
-    authority: { owner: "projects", mode: "api", storage: "cloud", availability: "available" },
+    authority: { owner: "projects", mode: "api", storage: "api", availability: "available" },
     project: {
       id: "wks_cli",
       slug: "cli-context",

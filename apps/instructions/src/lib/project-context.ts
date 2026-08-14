@@ -194,7 +194,7 @@ const projectContextBundleSchema = z.object({
   authority: z.object({
     owner: z.literal("projects"),
     mode: z.enum(["local", "api"]),
-    storage: z.enum(["sqlite", "cloud", "self-hosted"]),
+    storage: z.enum(["sqlite", "api"]),
     availability: z.enum(["available", "unavailable"]),
   }).strict(),
   project: z.object({
