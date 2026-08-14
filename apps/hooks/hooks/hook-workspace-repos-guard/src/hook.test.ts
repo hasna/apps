@@ -13,9 +13,7 @@ function preToolUse(tool_name: string, tool_input: Record<string, unknown>, cwd 
 function isBlocked(result: { output: { decision?: string; reason?: string } }): string | null {
   if (result.output.decision === "block") return result.output.reason ?? "blocked";
   return null;
-}
-
-describe("hook-workspace-repos-guard", () => {
+}describe("hook-workspace-repos-guard", () => {
   describe("resolveAllowedOrgs", () => {
     test("defaults to the four canonical GitHub orgs", () => {
       expect([...resolveAllowedOrgs({})].sort()).toEqual(["hasna", "hasna-internal", "hasna-products", "hasnaxyz"]);
@@ -68,6 +66,50 @@ describe("hook-workspace-repos-guard", () => {
         `touch ${join(REPOS, "hasna", "apps", "apps", "foo", "x.txt")}`,
         `git clone https://github.com/hasna/foo.git ${join(REPOS, "hasna", "foo")}`,
         `mkdir -p ${join(REPOS, "hasna-internal", "platform", "apps")}`,
+      ];
+      for (const command of commands) {
+        const result = evaluate(preToolUse("Bash", { command }));
+        expect(result.output.continue).toBe(true);
+      }
+    });
+
+    test("tilde/$HOME spellings of deep allowed-org writes continue", () => {
+      const commands = [
+        `touch ~/workspace/repos/hasna/apps/foo.md`,
+        `echo x > ~/workspace/repos/hasnaxyz/iapp-probe/notes.md`,
+        `mkdir -p "${HOME}/workspace/repos/hasna-internal/platform/apps"`,
+      ];
+      for (const command of commands) {
+        const result = evaluate(preToolUse("Bash", { command }));
+        expect(result.output.continue).toBe(true);
+      }
+    });
+
+    test("file-tool tilde/$HOME paths deep inside an allowed org continue", () => {
+      const results = [
+        evaluate(preToolUse("Write", { file_path: `~/workspace/repos/hasna/apps/src/x.ts` })),
+        evaluate(preToolUse("Edit", { file_path: `$HOME/workspace/repos/hasnaxyz/iapp-probe/n.ipynb` })),
+        evaluate(preToolUse("Write", { file_path: `"${HOME}/workspace/repos/hasna/apps/notes.md"` })),
+      ];
+      for (const result of results) {
+        expect(result.output.continue).toBe(true);
+      }
+    });
+
+    test("apply_patch Add/Update File deep inside an allowed org continues", () => {
+      const result = evaluate(
+        preToolUse("apply_patch", {
+          patch: `*** Begin Patch\n*** Add File: apps/hooks/src/lib/registry.ts\n+export const x = 1;\n*** End Patch`,
+        })
+      );
+      expect(result.output.continue).toBe(true);
+    });
+
+    test("non-mutating sed without -i, and interpreter without a path, continue", () => {
+      const commands = [
+        `sed 's/a/b/' ${join(REPOS, "hasna", "apps", "README.md")}`,
+        `node -e "console.log('no path here')"`,
+        `python3 -c "print('no path here')"`,
       ];
       for (const command of commands) {
         const result = evaluate(preToolUse("Bash", { command }));
@@ -158,6 +200,89 @@ describe("hook-workspace-repos-guard", () => {
     test("delete via git rm is blocked", () => {
       const result = evaluate(preToolUse("Bash", { command: `git -C ${join(REPOS, "hasna", "apps")} rm src/foo.ts` }));
       expect(isBlocked(result)).not.toBeNull();
+    });
+
+    test("tilde/$HOME spellings of the protected path are blocked", () => {
+      const commands = [
+        `rm -rf ~/workspace/repos`,
+        `rm -rf ~/workspace/repos/hasna/apps`,
+        `rm -rf $HOME/workspace/repos/hasna`,
+        `rm -rf "${HOME}/workspace/repos"`,
+        `touch ~/workspace/repos/stray.txt`,
+        `mkdir -p ~/workspace/repos/notanorg`,
+        `echo x > ~/workspace/repos/notanorg/f.ts`,
+        `mv /tmp/x ~/workspace/repos`,
+        `truncate -s 0 ~/workspace/repos/stray.log`,
+        `rsync -a /tmp/x ~/workspace/repos/`,
+        `scp f.txt ~/workspace/repos/`,
+      ];
+      for (const command of commands) {
+        const result = evaluate(preToolUse("Bash", { command }));
+        expect(isBlocked(result), `expected BLOCK for: ${command}`).not.toBeNull();
+      }
+    });
+
+    test("file-tool tilde/$HOME spellings are blocked", () => {
+      const results = [
+        evaluate(preToolUse("Write", { file_path: `~/workspace/repos/stray.txt` })),
+        evaluate(preToolUse("Write", { file_path: `$HOME/workspace/repos/notanorg/f.ts` })),
+        evaluate(preToolUse("Edit", { file_path: `~/workspace/repos/hasna` })),
+        evaluate(preToolUse("Write", { file_path: `~/workspace/repos` })),
+      ];
+      for (const result of results) {
+        expect(isBlocked(result)).not.toBeNull();
+      }
+    });
+
+    test("subshell-grouped cd + rm is blocked", () => {
+      const commands = [
+        `(cd ~/workspace/repos && rm -rf hasna)`,
+        `(cd ${REPOS} && rm -rf hasna)`,
+        `( cd ${REPOS} && touch stray.txt )`,
+      ];
+      for (const command of commands) {
+        const result = evaluate(preToolUse("Bash", { command }));
+        expect(isBlocked(result), `expected BLOCK for: ${command}`).not.toBeNull();
+      }
+    });
+
+    test("cwd-relative deletes without an explicit cd are blocked", () => {
+      const fromCheckout = evaluate(preToolUse("Bash", { command: `rm -rf ../` }, join(REPOS, "hasna", "apps")));
+      expect(isBlocked(fromCheckout)).not.toBeNull();
+      const fromRoot = evaluate(preToolUse("Bash", { command: `mkdir -p notanorg` }, REPOS));
+      expect(isBlocked(fromRoot)).not.toBeNull();
+      const bareRm = evaluate(preToolUse("Bash", { command: `rm -rf .` }, join(REPOS, "hasnaxyz")));
+      expect(isBlocked(bareRm)).not.toBeNull();
+    });
+
+    test("mutating verbs writing under the protected root are blocked", () => {
+      const commands = [
+        `sed -i 's/x/y/' ~/workspace/repos/stray.txt`,
+        `rsync -a ${join(REPOS, "hasna")} /tmp/out`,
+        `scp -r ${join(REPOS, "hasna")} other:/tmp/`,
+        `truncate -s 0 ${join(REPOS, "notanorg", "f.ts")}`,
+        `python3 -c "open('~/workspace/repos/stray.txt','w')"`,
+        `node -e "require('fs').writeFileSync('${join(REPOS, "notanorg", "f.ts")}','x')"`,
+      ];
+      for (const command of commands) {
+        const result = evaluate(preToolUse("Bash", { command }));
+        expect(isBlocked(result), `expected BLOCK for: ${command}`).not.toBeNull();
+      }
+    });
+
+    test("apply_patch Delete File and shallow Add File are blocked", () => {
+      const del = evaluate(
+        preToolUse("ApplyPatch", {
+          patch: `*** Begin Patch\n*** Delete File: src/foo.ts\n*** End Patch`,
+        })
+      );
+      expect(isBlocked(del)).not.toBeNull();
+      const shallow = evaluate(
+        preToolUse("functions.apply_patch", {
+          patch: `*** Begin Patch\n*** Add File: ../../stray.txt\n+x\n*** End Patch`,
+        })
+      );
+      expect(isBlocked(shallow)).not.toBeNull();
     });
   });
 

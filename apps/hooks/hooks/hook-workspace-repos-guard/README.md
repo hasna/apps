@@ -25,6 +25,12 @@ PreToolUse guard for the canonical workspace structure (knowledge
   duplicate the `worktree-guard` hook, which owns edits-in-shared-checkouts
   semantics.
 
+Home spellings (`~`, `$HOME`, `${HOME}`, quoted or not) are expanded before
+classification; `apply_patch` tools are inspected through their `Add File` /
+`Update File` / `Delete File` markers; Bash relative operands are resolved
+against the command's cwd when it sits under `repos/`; parenthesized command
+groups (`(cd ... && rm -rf ...)`) are unwrapped.
+
 ## Configuration
 
 Allowed orgs default to `hasna,hasnaxyz,hasna-internal,hasna-products` and
@@ -36,6 +42,18 @@ never hardcoded.
 
 Fail-open: on any parse or evaluation error the hook responds `continue` so a
 guard defect can never wedge the agent.
+
+## Known limitation
+
+The guard is a best-effort **structural** guard, not an execution sandbox.
+Variable indirection cannot be caught by pre-expansion inspection: a command
+that builds its target dynamically (`R=...; rm -rf $R`, loops over computed
+paths, scripts downloaded and executed at runtime) is undetectable at hook
+time. The hook inspects literal spellings of the protected path (`~/...`,
+`$HOME/...`, `${HOME}/...`, the resolved absolute home) and relative operands
+resolved from the command's cwd, so anything the shell would expand or
+indirect through a variable is outside its reach. Because it also fails open,
+it must never be relied on as the only protection layer.
 
 ## License
 

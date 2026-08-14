@@ -22,6 +22,14 @@
  *   - reads, always,
  *   - writes deeper inside an allowed org folder (repos/<org>/<repo>/...).
  *
+ * Home spellings (~, $HOME, ${HOME}, including quoted forms) are expanded
+ * before classification in Bash targets, file-tool paths, cd operands and
+ * apply_patch file markers. Bash relative operands (`.`, `..`, bare names)
+ * are resolved against the command's cwd when it sits under the repos root,
+ * and against an explicit `cd` into the root when one is present. apply_patch
+ * tools are inspected through their `*** Add File:` / `*** Update File:` /
+ * `*** Delete File:` markers. Parenthesized command groups are unwrapped.
+ *
  * Allowed orgs default to hasna,hasnaxyz,hasna-internal,hasna-products and are
  * overridable with the WORKSPACE_REPOS_GUARD_ORGS env var (comma-separated).
  * Home is resolved with os.homedir(); never hardcoded. Fail-open on any parse
@@ -39,15 +47,9 @@ import {
   type CodewithHookOutput,
 } from "../../codewith-native-common";
 
-const FILE_WRITE_TOOLS = new Set([
-  "Write",
-  "Edit",
-  "MultiEdit",
-  "NotebookEdit",
-  "apply_patch",
-  "ApplyPatch",
-  "functions.apply_patch",
-]);
+const FILE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+
+const PATCH_TOOLS = new Set(["apply_patch", "ApplyPatch", "functions.apply_patch"]);
 
 const DEFAULT_ORGS = ["hasna", "hasnaxyz", "hasna-internal", "hasna-products"];
 
@@ -121,7 +123,11 @@ const WRITE_FLAGS = /\b(?:-o|--output|-O|--output-document|-out)\b/;
 /**
  * Classify the operation of one command segment (a `&&`/`||`/`;`-delimited
  * unit). Git is handled by its subcommand: clean|rm delete, clone|init write,
- * everything else (status/pull/fetch/log/diff/...) is read.
+ * everything else (status/pull/fetch/log/diff/...) is read. Sed without an
+ * in-place flag is a stream filter (redirection is caught separately);
+ * rsync/scp/truncate and inline interpreters (python3 -c, node -e, bun -e)
+ * are treated as writes — conservative: they only matter when a path under
+ * the protected root is also present.
  */
 function segmentOperation(segment: string): Operation {
   const trimmed = segment.trim();
@@ -138,21 +144,51 @@ function segmentOperation(segment: string): Operation {
     if (WRITE_FLAGS.test(trimmed)) return "write";
     return "read";
   }
+  if (/\bsed\b/.test(trimmed)) {
+    if (/(?:^|\s)-i\S*(?:\s|$)|--in-place(?:\s|$)/.test(trimmed)) return "write";
+    // sed without -i is a filter; `>` redirection is caught by the check below.
+  } else if (/\b(?:rsync|scp|truncate)\b/.test(trimmed)) {
+    return "write";
+  } else if (/(?:^|\s)(?:python3?|node|bun)\b[^;&|]*\s+-[ce](?:\s|$)/.test(trimmed)) {
+    return "write";
+  }
   if (/(?:^|[;&|])\s*echo\b/.test(trimmed) || /[>&]/.test(trimmed)) return "write";
   return "read";
 }
 
-interface BashTarget {
+interface PathTarget {
   path: string;
   op: Operation;
 }
 
-function expandToken(token: string, home: string): string | null {
-  if (token.startsWith("~/")) return join(home, token.slice(2));
-  if (token.startsWith("$HOME/")) return join(home, token.slice(6));
-  if (token.startsWith("${HOME}/")) return join(home, token.slice(8));
-  if (token.startsWith(home)) return token;
-  return null;
+/**
+ * Expand one token's home spelling (`~`, `~/...`, `$HOME`, `$HOME/...`,
+ * `${HOME}`, `${HOME}/...`) to the resolved home, tolerating a single layer
+ * of wrapping single/double quotes. Non-home spellings are returned
+ * unchanged.
+ */
+export function expandHomeSpelling(token: string, home: string): string {
+  let body = token.trim();
+  const quoted = body.match(/^(['"])([\s\S]*)\1$/);
+  if (quoted) body = quoted[2];
+  if (body === "~") return home;
+  if (body.startsWith("~/")) return join(home, body.slice(2));
+  if (body === "$HOME" || body === "${HOME}") return home;
+  if (body.startsWith("$HOME/")) return join(home, body.slice("$HOME/".length));
+  if (body.startsWith("${HOME}/")) return join(home, body.slice("${HOME}/".length));
+  return token;
+}
+
+/**
+ * Strip one level of wrapping shell-group punctuation from a segment so a
+ * subshell group like `(cd ~/workspace/repos && rm -rf hasna)` is analysed as
+ * its parts after the `&&` split.
+ */
+function unwrapSegment(segment: string): string {
+  let s = segment.trim();
+  while (s.startsWith("(") || s.startsWith("{")) s = s.slice(1).trim();
+  while (s.endsWith(")") || s.endsWith("}")) s = s.slice(0, -1).trim();
+  return s;
 }
 
 function regexEscape(text: string): string {
@@ -161,25 +197,27 @@ function regexEscape(text: string): string {
 
 /**
  * Extract workspace-repos targets from a Bash command. Recognises explicit
- * `~/...`, `$HOME/...`, `${HOME}/...` and literal-home references, plus a
- * trailing relative operand (`.`, `..`, a bare name) when the command first
- * `cd`s into the repos root. Tokens outside the repos root are ignored; reads
- * are returned so callers can decide (they are never blocked).
+ * `~/...`, `$HOME/...`, `${HOME}/...` and literal-home references (expanded
+ * before classification), plus a trailing relative operand (`.`, `..`, a bare
+ * name) when the command `cd`s into the repos root or the command's cwd
+ * already sits under it. Tokens outside the repos root are ignored; reads are
+ * returned so callers can decide (they are never blocked).
  */
-export function bashTargets(command: string, home: string): BashTarget[] {
+export function bashTargets(command: string, home: string, cwd: string): PathTarget[] {
   if (!command) return [];
   const root = reposRoot(home);
-  const segments = command.split(/\s*&&\s*|\s*\|\|\s*|;/);
+  const segments = command.split(/\s*&&\s*|\s*\|\|\s*|;\s*|\n+/);
 
-  const targets: BashTarget[] = [];
+  const targets: PathTarget[] = [];
   let cwdUnderRepos: string | null = null;
 
-  for (const segment of segments) {
+  for (const rawSegment of segments) {
+    const segment = unwrapSegment(rawSegment);
     const op = segmentOperation(segment);
 
-    const cdMatch = segment.match(/(?:^|\s)cd(?:\s+[^\s"';&|<>()\x60]+)*\s+([^\s"';&|<>()\x60]+)/);
+    const cdMatch = segment.match(/(?:^|\s)cd(?:\s+(?:-[A-Za-z]+|--))*\s+([^\s;&|<>()\x60]+)/);
     if (cdMatch) {
-      const cdTarget = expandToken(cdMatch[1], home);
+      const cdTarget = expandHomeSpelling(cdMatch[1], home);
       if (cdTarget && (cdTarget === root || cdTarget.startsWith(`${root}${sep}`))) cwdUnderRepos = cdTarget;
     }
 
@@ -190,17 +228,39 @@ export function bashTargets(command: string, home: string): BashTarget[] {
     let foundExplicit = false;
     while ((m = re.exec(segment)) !== null) {
       foundExplicit = true;
-      targets.push({ path: normalize(m[0]).replace(/\/+$/, ""), op });
+      const expanded = expandHomeSpelling(m[0], home);
+      targets.push({ path: normalize(expanded).replace(/\/+$/, ""), op });
     }
 
-    if (!foundExplicit && (op === "delete" || op === "write") && cwdUnderRepos) {
-      const relMatch = segment.match(/(?:^|\s)(\.\.?|[^\s"';&|<>()\x60/]+(?:\/[^\s"';&|<>()\x60]*)?)\s*$/);
-      if (relMatch) {
-        targets.push({ path: normalize(resolve(cwdUnderRepos, relMatch[1])), op });
+    if (!foundExplicit && (op === "delete" || op === "write")) {
+      const base =
+        cwdUnderRepos ?? (cwd === root || cwd.startsWith(`${root}${sep}`) ? cwd : null);
+      if (base) {
+        const relMatch = segment.match(/(?:^|\s)(\.\.?|[^\s"';&|<>()\x60/]+(?:\/[^\s"';&|<>()\x60]*)?)\s*$/);
+        if (relMatch) {
+          targets.push({ path: normalize(resolve(base, relMatch[1])), op });
+        }
       }
     }
   }
 
+  return targets;
+}
+
+const PATCH_FILE_RE = /^\s*\*\*\*\s+(Add File|Update File|Delete File):\s+(\S+)\s*$/gm;
+
+/**
+ * Extract targets from an apply_patch payload: the `*** Add File:` /
+ * `*** Update File:` / `*** Delete File:` markers, resolved against cwd.
+ * Add/Update classify as write; Delete classifies as delete.
+ */
+export function patchTargets(patch: string, cwd: string): PathTarget[] {
+  const targets: PathTarget[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = PATCH_FILE_RE.exec(patch)) !== null) {
+    const op: Operation = m[1] === "Delete File" ? "delete" : "write";
+    targets.push({ path: normalize(resolve(cwd, m[2])), op });
+  }
   return targets;
 }
 
@@ -216,7 +276,24 @@ export function evaluate(input: CodewithHookInput): { output: CodewithHookOutput
   if (tool === "Bash") {
     const command = getCommand(input);
     if (!command) return { output: { continue: true }, warnings };
-    const targets = bashTargets(command, home);
+    const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+    const targets = bashTargets(command, home, cwd);
+    for (const target of targets) {
+      const verdict = classifyPath(target.path, root, orgs, target.op);
+      if (verdict.blocked) {
+        return { output: { decision: "block", reason: verdict.reason }, warnings };
+      }
+    }
+    return { output: { continue: true }, warnings };
+  }
+
+  const toolInput = input.tool_input ?? {};
+  const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+
+  if (PATCH_TOOLS.has(tool)) {
+    const patch = typeof toolInput.patch === "string" ? toolInput.patch : "";
+    if (!patch) return { output: { continue: true }, warnings };
+    const targets = patchTargets(patch, cwd);
     for (const target of targets) {
       const verdict = classifyPath(target.path, root, orgs, target.op);
       if (verdict.blocked) {
@@ -228,7 +305,6 @@ export function evaluate(input: CodewithHookInput): { output: CodewithHookOutput
 
   if (!FILE_WRITE_TOOLS.has(tool)) return { output: { continue: true }, warnings };
 
-  const toolInput = input.tool_input ?? {};
   const raw =
     typeof toolInput.file_path === "string"
       ? toolInput.file_path
@@ -239,8 +315,8 @@ export function evaluate(input: CodewithHookInput): { output: CodewithHookOutput
           : null;
   if (!raw) return { output: { continue: true }, warnings };
 
-  const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
-  const target = isAbsolute(raw) ? normalize(raw) : resolve(cwd, raw);
+  const expanded = expandHomeSpelling(raw, home);
+  const target = isAbsolute(expanded) ? normalize(expanded) : resolve(cwd, expanded);
   const verdict = classifyPath(target, root, orgs, "write");
   if (verdict.blocked) {
     return { output: { decision: "block", reason: verdict.reason }, warnings };
