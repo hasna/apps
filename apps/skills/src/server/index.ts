@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-import { resolveServerConfig } from "./config.js";
-import { resolveDatabaseTarget } from "./database-url.js";
-import { startSkillsServer } from "./app.js";
+// Thin adapter: the server is built and started through the SDK surface.
+import { resolveServerConfig, startSkillsServer } from "../sdk/server.js";
+import { resolveDatabaseTarget } from "../sdk/storage.js";
 
 const config = resolveServerConfig();
 const server = await startSkillsServer({ config });

@@ -45,7 +45,7 @@ const PRINCIPAL = {
 /** A migrated in-memory SQLite store with the org/user rows a run row references. */
 async function seededSqliteStore(): Promise<SqliteSkillsStore> {
   const store = new SqliteSkillsStore(":memory:");
-  await store.ensureBootstrapApiKey?.("sk_sdk_test", { principal: PRINCIPAL });
+  await store.ensureBootstrapApiKey?.("sk_sdk_test", PRINCIPAL);
   return store;
 }
 
@@ -63,18 +63,15 @@ describe("sdk surface", () => {
   });
 
   test("server seam: createServer returns a handler and registerRoutes composes in front of it", async () => {
-    const store = new SqliteSkillsStore(":memory:", {
-      migrationsDir: undefined,
-    });
     const handler = await createServer({
-      store,
-      config: { allowEphemeralStore: true, bootstrapApiKey: undefined },
+      store: await seededSqliteStore(),
+      config: { allowEphemeralStore: true },
     });
 
     const health = await handler(new Request("http://localhost/health"));
     expect(health.status).toBe(200);
 
-    const notFound = await handler(new Request("http://localhost/api/v1/does-not-exist"));
+    const notFound = await handler(new Request("http://localhost/nope"));
     expect(notFound.status).toBe(404);
 
     const composed = registerRoutes(handler, [

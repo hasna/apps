@@ -29,7 +29,6 @@
     "!dist/**/*.test.d.ts",
     "!dist/test-preload.d.ts",
     "!dist/platform",
-    "!dist/server",
     "bin/",
     "migrations/",
     "docs/skill-standard.md",
