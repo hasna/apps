@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { parseManifest, resolveScript } from "./manifest.js";
-import { SEMVER_PATTERN, isValidSemver } from "./semver.js";
+import { SEMVER_PATTERN, compareVersions, isValidSemver } from "./semver.js";
 import { installCustomSource } from "./custom-install.js";
 import { closeDb } from "../db/index.js";
 
@@ -56,6 +56,35 @@ describe("shared semver (P2-10)", () => {
       events: ["PostToolUse"],
       script: "x",
     }))).toThrow(/semver/);
+  });
+});
+
+describe("compareVersions precedence (bug 6e412e52)", () => {
+  test("core components compare numerically", () => {
+    expect(compareVersions("1.0.2", "1.0.1")).toBeGreaterThan(0);
+    expect(compareVersions("1.0.1", "1.0.2")).toBeLessThan(0);
+    expect(compareVersions("2.0.0", "1.9.9")).toBeGreaterThan(0);
+    expect(compareVersions("1.10.0", "1.9.0")).toBeGreaterThan(0);
+    expect(compareVersions("1.0.0", "1.0.0")).toBe(0);
+  });
+
+  test("a prerelease sorts before its release", () => {
+    expect(compareVersions("1.0.0-beta", "1.0.0")).toBeLessThan(0);
+    expect(compareVersions("1.0.0", "1.0.0-beta")).toBeGreaterThan(0);
+    expect(compareVersions("1.0.0-alpha", "1.0.0-beta")).toBeLessThan(0);
+  });
+
+  test("prerelease identifiers: numeric < alphanumeric, numeric compares numerically, fewer identifiers sort first", () => {
+    expect(compareVersions("1.0.0-beta.2", "1.0.0-beta.10")).toBeLessThan(0);
+    expect(compareVersions("1.0.0-beta.10", "1.0.0-beta.2")).toBeGreaterThan(0);
+    expect(compareVersions("1.0.0-beta.1", "1.0.0-beta.alpha")).toBeLessThan(0);
+    expect(compareVersions("1.0.0-beta", "1.0.0-beta.1")).toBeLessThan(0);
+  });
+
+  test("build metadata never participates in precedence", () => {
+    expect(compareVersions("1.0.0+meta.5", "1.0.0")).toBe(0);
+    expect(compareVersions("1.0.0", "1.0.0+meta.5")).toBe(0);
+    expect(compareVersions("1.0.1+build.9", "1.0.0+meta.5")).toBeGreaterThan(0);
   });
 });
 
@@ -159,5 +188,54 @@ describe("URL install refuses redirects (P2-14)", () => {
     } finally {
       server.stop(true);
     }
+  });
+});
+
+describe("strict semver numeric identifiers (reviewer P3)", () => {
+  test("leading-zero numeric identifiers are invalid (prerelease and core)", () => {
+    expect(isValidSemver("1.0.0-01")).toBe(false);
+    expect(isValidSemver("1.0.0-1.01")).toBe(false);
+    expect(isValidSemver("1.0.0-alpha.01")).toBe(false);
+    expect(isValidSemver("01.0.0")).toBe(false);
+    expect(isValidSemver("1.01.0")).toBe(false);
+    expect(isValidSemver("1.0.01")).toBe(false);
+    // Valid counterparts stay valid.
+    expect(isValidSemver("1.0.0-1")).toBe(true);
+    expect(isValidSemver("1.0.0-alpha.1")).toBe(true);
+    expect(isValidSemver("1.0.0-alpha.01b")).toBe(true);
+  });
+
+  test("numeric identifiers longer than 16 digits are invalid", () => {
+    expect(isValidSemver("1.0.0-12345678901234567")).toBe(false); // 17-digit prerelease
+    expect(isValidSemver("1.0.0-1234567890123456")).toBe(true); // 16-digit prerelease
+    expect(isValidSemver("1.0.12345678901234567")).toBe(false); // 17-digit patch
+    expect(isValidSemver("12345678901234567.0.0")).toBe(false); // 17-digit major
+  });
+
+  test("compareVersions is antisymmetric (P3-5)", () => {
+    for (const [a, b] of [
+      ["1.0.0-01", "1.0.0-1"], // the pair that compared >0 both ways
+      ["1.0.0-2", "1.0.0-10"],
+      ["1.0.0-alpha", "1.0.0-beta"],
+      ["1.0.0", "1.0.0-rc.1"],
+      ["2.0.0", "1.9.9"],
+      ["1.0.0-beta.2", "1.0.0-beta.10"],
+    ]) {
+      const ab = compareVersions(a, b);
+      const ba = compareVersions(b, a);
+      // sign(ab) + sign(ba) === 0 — handles the 0/-0 case Object.is would reject.
+      expect(Math.sign(ab) + Math.sign(ba), `${a} vs ${b} must be antisymmetric`).toBe(0);
+    }
+  });
+
+  test("large numeric identifiers compare precisely (BigInt, no Number precision loss)", () => {
+    // 9007199254740992 = MAX_SAFE_INTEGER + 1 — Number() cannot tell these apart.
+    expect(compareVersions("1.0.0-9007199254740992", "1.0.0-9007199254740991")).toBeGreaterThan(0);
+    expect(compareVersions("1.0.0-9007199254740991", "1.0.0-9007199254740992")).toBeLessThan(0);
+    expect(compareVersions("1.0.0-9999999999999999", "1.0.0-9999999999999998")).toBeGreaterThan(0);
+    expect(compareVersions("1.0.0-9999999999999999", "1.0.0-9999999999999999")).toBe(0);
+    // 17-digit numerics are rejected as invalid, but if one ever reaches the
+    // comparator it must still compare precisely rather than via Number().
+    expect(compareVersions("1.0.0-12345678901234567", "1.0.0-12345678901234566")).toBeGreaterThan(0);
   });
 });

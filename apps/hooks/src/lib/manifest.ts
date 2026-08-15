@@ -27,6 +27,15 @@ export const manifestSchema = z.object({
   script_kind: z.enum(["inline", "file"]).optional(),
   args: z.array(z.string()).optional(),
   timeout_ms: z.number().int().positive().optional(),
+  /**
+   * Per-hook environment passed to the hook child (reviewer efcad315).
+   * Every name is still filtered through the credential deny list and the
+   * interpreter-injection strip; `env.PATH` here is the documented way to
+   * override the sanitized default PATH — it is passed verbatim, bypassing
+   * PATH sanitization (the hook author declares the complete PATH the hook
+   * needs).
+   */
+  env: z.record(z.string(), z.string()).optional(),
 });
 
 export type HookManifest = z.infer<typeof manifestSchema>;

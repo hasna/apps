@@ -30,6 +30,40 @@ class FakeD1 {
    * existence check before either insert lands (P2-4 concurrent test).
    */
   yieldInsert = false;
+  /**
+   * Pointer-read barrier (reviewer P2 atomicity): when set, every pointer
+   * SELECT (advisory read in upsertLatestPointer) awaits the gate once, so a
+   * test can hold BOTH racing publishes at their reads before either writes.
+   */
+  pointerReadGate: Promise<void> | null = null;
+  pointerReadReachedResolve: (() => void) | null = null;
+  pointerReadReached: Promise<void> | null = null;
+  /**
+   * Heal-read barrier: when set, the heal's versions read awaits the gate
+   * once, so a test can interleave a concurrent pointer advance between the
+   * heal's read and its write.
+   */
+  healReadGate: Promise<void> | null = null;
+  healReadReachedResolve: (() => void) | null = null;
+  healReadReached: Promise<void> | null = null;
+
+  setPointerReadBarrier(): { reached: Promise<void>; release: () => void } {
+    let release!: () => void;
+    let reachedResolve!: () => void;
+    this.pointerReadGate = new Promise<void>((r) => (release = r));
+    this.pointerReadReached = new Promise<void>((r) => (reachedResolve = r));
+    this.pointerReadReachedResolve = reachedResolve;
+    return { reached: this.pointerReadReached, release };
+  }
+
+  setHealReadBarrier(): { reached: Promise<void>; release: () => void } {
+    let release!: () => void;
+    let reachedResolve!: () => void;
+    this.healReadGate = new Promise<void>((r) => (release = r));
+    this.healReadReached = new Promise<void>((r) => (reachedResolve = r));
+    this.healReadReachedResolve = reachedResolve;
+    return { reached: this.healReadReached, release };
+  }
 
   prepare(sql: string) {
     const self = this;
@@ -43,23 +77,39 @@ class FakeD1 {
         return self.queryFirst(sql, params);
       },
       async all() {
-        return { results: self.queryAll(sql, params), success: true };
+        return { results: await self.queryAll(sql, params), success: true };
       },
       async run() {
         if (self.yieldInsert && sql.includes("INSERT INTO hook_versions")) {
           await Bun.sleep(5);
         }
-        self.exec(sql, params);
-        return {};
+        return self.exec(sql, params);
       },
     };
   }
 
-  private queryFirst(sql: string, params: unknown[]): unknown {
+  /** batch() = the D1 transaction primitive: statements run sequentially and commit atomically. */
+  async batch(statements: Array<{ run(): Promise<unknown> }>) {
+    const out: unknown[] = [];
+    for (const stmt of statements) out.push(await stmt.run());
+    return out;
+  }
+
+  private async queryFirst(sql: string, params: unknown[]): Promise<unknown> {
     if (sql.includes("FROM hook_versions WHERE")) {
       const name = params[0];
       const version = params[1];
       return [...this.versions.values()].find((r) => r.name === name && r.version === version) ?? null;
+    }
+    if (sql.includes("SELECT version FROM hooks")) {
+      if (this.pointerReadGate) {
+        this.pointerReadReachedResolve?.();
+        await this.pointerReadGate;
+      }
+      // 6e412e52: the latest-pointer downgrade guard reads the current
+      // pointer before deciding whether to move it.
+      const row = this.hooks.get(String(params[0]));
+      return row ? { version: String(row.version) } : null;
     }
     if (sql.includes("FROM hooks WHERE name = ? AND version = ?")) {
       const version = params[1];
@@ -68,22 +118,27 @@ class FakeD1 {
     return null;
   }
 
-  private queryAll(sql: string, params: unknown[]): unknown[] {
+  private async queryAll(sql: string, params: unknown[]): Promise<unknown[]> {
     if (sql.includes("FROM hook_versions WHERE name = ?")) {
       const name = params[0];
       return [...this.versions.values()]
         .filter((r) => r.name === name)
         .sort((a, b) => String(a.published_at).localeCompare(String(b.published_at)));
     }
-    if (sql.includes("NOT EXISTS")) {
-      // P2-4 heal query: the newest published version per name.
-      return [...this.versions.values()]
-        .filter(
-          (r) => ![...this.versions.values()].some(
-            (o) => o.name === r.name && String(o.published_at) > String(r.published_at),
-          ),
-        )
-        .map((r) => ({ name: r.name, version: r.version, script_sha256: r.script_sha256, published_at: r.published_at }));
+    if (sql.includes("SELECT name, version, script_sha256, published_at FROM hook_versions")) {
+      if (this.healReadGate) {
+        this.healReadReachedResolve?.();
+        await this.healReadGate;
+      }
+      // 6e412e52 heal query: ALL published versions; the worker picks the
+      // highest SEMVER per name in JS (published_at is no longer a proxy for
+      // newest — an older-version republish carries a LATER timestamp).
+      return [...this.versions.values()].map((r) => ({
+        name: r.name,
+        version: r.version,
+        script_sha256: r.script_sha256,
+        published_at: r.published_at,
+      }));
     }
     if (sql.includes("FROM hooks WHERE enabled = 1")) {
       return [...this.hooks.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
@@ -91,7 +146,7 @@ class FakeD1 {
     return [];
   }
 
-  private exec(sql: string, params: unknown[]): void {
+  private exec(sql: string, params: unknown[]): { meta: { changes: number } } {
     if (sql.includes("INSERT INTO hook_versions")) {
       const key = `${params[0]}@${params[1]}`;
       // P2-4: a concurrent second INSERT of the same (name, version) hits the
@@ -105,23 +160,63 @@ class FakeD1 {
         artifact_key: params[4],
         published_at: params[5],
       });
-      return;
+      return { meta: { changes: 1 } };
     }
     if (sql.includes("DELETE FROM hook_versions")) {
       this.versions.delete(`${params[0]}@${params[1]}`);
-      return;
+      return { meta: { changes: 1 } };
     }
     if (sql.includes("INSERT INTO hooks")) {
-      this.hooks.set(String(params[0]), {
-        id: params[0],
-        name: params[1],
+      if (sql.includes("WHERE NOT EXISTS")) {
+        // Heal form: INSERT ... SELECT ... WHERE NOT EXISTS — the guard is
+        // evaluated in the same statement as the write (reviewer P2).
+        const id = String(params[0]);
+        if (this.hooks.has(id)) return { meta: { changes: 0 } };
+        this.hooks.set(id, {
+          id,
+          name: params[0],
+          version: params[2],
+          sha256: params[3],
+          source_type: "remote",
+          installed_at: params[4],
+          enabled: 1,
+        });
+        return { meta: { changes: 1 } };
+      }
+      const id = String(params[0]);
+      if (this.hooks.has(id)) {
+        // CAS form (reviewer P2): DO UPDATE ... WHERE hooks.version IS ? OR
+        // hooks.version = ? — params[5] is the IS-NULL token, params[6] the
+        // equality token. The update fires only when the pointer still equals
+        // what the caller read; a lost race leaves the row untouched. The
+        // pre-fix SQL (no WHERE clause) updates unconditionally.
+        if (sql.includes("WHERE hooks.version IS ?")) {
+          const guardIsNull = params[5] === null;
+          const guardEq = params[6];
+          const casPasses = guardIsNull ? false : String(this.hooks.get(id)!.version) === String(guardEq);
+          if (!casPasses) return { meta: { changes: 0 } };
+        }
+        this.hooks.set(id, {
+          ...this.hooks.get(id),
+          version: params[2],
+          sha256: params[3],
+          source_type: params[4],
+          last_verified_at: null,
+        });
+        return { meta: { changes: 1 } };
+      }
+      this.hooks.set(id, {
+        id,
+        name: params[0],
         version: params[2],
         sha256: params[3],
         source_type: params[4],
-        installed_at: params[6],
+        installed_at: params[4],
         enabled: 1,
       });
+      return { meta: { changes: 1 } };
     }
+    return { meta: { changes: 0 } };
   }
 }
 
@@ -334,5 +429,182 @@ describe("worker version retention (P1-4 / d3b4025c)", () => {
     expect(body.idempotent).toBe(true);
     expect(d1.hooks.has("gitguard")).toBe(true);
     expect(d1.hooks.get("gitguard")?.version).toBe("1.0.0");
+  });
+
+  test("publishing an OLDER version never moves the latest pointer down (6e412e52)", async () => {
+    const env = makeEnv();
+    expect((await worker.fetch(publishBody("1.0.2", SCRIPT_V2), env)).status).toBe(200);
+    expect((await worker.fetch(publishBody("1.0.1", SCRIPT_V1), env)).status).toBe(200);
+
+    const catalog = await (await worker.fetch(req("GET", "/api/v1/catalog", { "x-api-key": "secret-key" }), env)).json() as { hooks: Array<{ name: string; version: string; versions: string[] }> };
+    expect(catalog.hooks).toHaveLength(1);
+    expect(catalog.hooks[0].name).toBe("gitguard");
+    expect(catalog.hooks[0].version, "pointer must stay on the higher version").toBe("1.0.2");
+    expect(catalog.hooks[0].versions).toEqual(["1.0.2", "1.0.1"]);
+
+    // The older row IS stored and fetchable by exact pin — history grows.
+    const old = await worker.fetch(req("GET", "/api/v1/hooks/gitguard/1.0.1", { "x-api-key": "secret-key" }), env);
+    expect(old.status).toBe(200);
+    expect(old.headers.get("x-hook-sha256")).toBe(sha256Hex(SCRIPT_V1));
+
+    const lock = await (await worker.fetch(req("GET", "/api/v1/lock", { "x-api-key": "secret-key" }), env)).json() as { hooks: Record<string, { version: string; versions: string[] }> };
+    expect(lock.hooks.gitguard.version).toBe("1.0.2");
+    expect(lock.hooks.gitguard.versions).toEqual(["1.0.2", "1.0.1"]);
+  });
+
+  test("publishing a HIGHER version still moves the pointer forward (6e412e52)", async () => {
+    const env = makeEnv();
+    expect((await worker.fetch(publishBody("1.0.2", SCRIPT_V2), env)).status).toBe(200);
+    expect((await worker.fetch(publishBody("1.0.3", SCRIPT_V2), env)).status).toBe(200);
+
+    const catalog = await (await worker.fetch(req("GET", "/api/v1/catalog", { "x-api-key": "secret-key" }), env)).json() as { hooks: Array<{ version: string; versions: string[] }> };
+    expect(catalog.hooks[0].version).toBe("1.0.3");
+    expect(catalog.hooks[0].versions).toEqual(["1.0.2", "1.0.3"]);
+  });
+
+  test("a prerelease never displaces its own release as the pointer (6e412e52)", async () => {
+    const env = makeEnv();
+    expect((await worker.fetch(publishBody("1.0.0", SCRIPT_V1), env)).status).toBe(200);
+    expect((await worker.fetch(publishBody("1.0.0-beta.1", SCRIPT_V1), env)).status).toBe(200);
+
+    const catalog = await (await worker.fetch(req("GET", "/api/v1/catalog", { "x-api-key": "secret-key" }), env)).json() as { hooks: Array<{ version: string; versions: string[] }> };
+    expect(catalog.hooks[0].version).toBe("1.0.0");
+    expect(catalog.hooks[0].versions).toEqual(["1.0.0", "1.0.0-beta.1"]);
+  });
+
+  test("a same-version identical republish leaves the pointer unchanged (6e412e52)", async () => {
+    const env = makeEnv();
+    expect((await worker.fetch(publishBody("1.0.2", SCRIPT_V2), env)).status).toBe(200);
+    expect((await worker.fetch(publishBody("1.0.1", SCRIPT_V1), env)).status).toBe(200);
+    const d1 = env.HOOKS_D1 as unknown as FakeD1;
+    expect(d1.hooks.get("gitguard")?.version).toBe("1.0.2");
+
+    const again = await worker.fetch(publishBody("1.0.2", SCRIPT_V2), env);
+    expect(again.status).toBe(200);
+    expect((await again.json() as { idempotent?: boolean }).idempotent).toBe(true);
+    expect(d1.hooks.get("gitguard")?.version, "pointer must not move on an idempotent republish").toBe("1.0.2");
+  });
+
+  test("the heal path picks the highest SEMVER, never a later-published older version (6e412e52)", async () => {
+    const env = makeEnv();
+    const d1 = env.HOOKS_D1 as unknown as FakeD1;
+    const sha1 = sha256Hex(SCRIPT_V1);
+    const sha2 = sha256Hex(SCRIPT_V2);
+    // 1.0.2 published FIRST; the older 1.0.1 republished LATER. The crash
+    // window (no pointer row) must heal to 1.0.2 by semver, not to 1.0.1 by
+    // published_at — exactly the downgrade the old heal query performed.
+    d1.versions.set("gitguard@1.0.2", {
+      name: "gitguard",
+      version: "1.0.2",
+      manifest_json: JSON.stringify({ name: "gitguard", version: "1.0.2", events: ["PreToolUse"], script: "src/hook.ts" }),
+      script_sha256: sha2,
+      artifact_key: "hook_artifacts/gitguard/1.0.2.json",
+      published_at: "2026-08-15T00:00:00.000Z",
+    });
+    d1.versions.set("gitguard@1.0.1", {
+      name: "gitguard",
+      version: "1.0.1",
+      manifest_json: JSON.stringify({ name: "gitguard", version: "1.0.1", events: ["PreToolUse"], script: "src/hook.ts" }),
+      script_sha256: sha1,
+      artifact_key: "hook_artifacts/gitguard/1.0.1.json",
+      published_at: "2026-08-15T01:00:00.000Z",
+    });
+    (env.HOOKS_R2 as unknown as FakeR2).objects.set(
+      "hook_artifacts/gitguard/1.0.2.json",
+      JSON.stringify({ manifest: { name: "gitguard", version: "1.0.2", events: ["PreToolUse"], script: "src/hook.ts" }, script: SCRIPT_V2 }),
+    );
+    (env.HOOKS_R2 as unknown as FakeR2).objects.set(
+      "hook_artifacts/gitguard/1.0.1.json",
+      JSON.stringify({ manifest: { name: "gitguard", version: "1.0.1", events: ["PreToolUse"], script: "src/hook.ts" }, script: SCRIPT_V1 }),
+    );
+    expect(d1.hooks.has("gitguard")).toBe(false);
+
+    const catalog = await (await worker.fetch(req("GET", "/api/v1/catalog", { "x-api-key": "secret-key" }), env)).json() as { hooks: Array<{ version: string; sha256: string; versions: string[] }> };
+    expect(catalog.hooks).toHaveLength(1);
+    expect(catalog.hooks[0].version, "healed pointer must be the highest semver, not the latest published_at").toBe("1.0.2");
+    expect(catalog.hooks[0].sha256).toBe(sha2);
+    expect(catalog.hooks[0].versions).toEqual(["1.0.2", "1.0.1"]);
+    expect(d1.hooks.get("gitguard")?.version).toBe("1.0.2");
+
+    const lock = await (await worker.fetch(req("GET", "/api/v1/lock", { "x-api-key": "secret-key" }), env)).json() as { hooks: Record<string, { version: string }> };
+    expect(lock.hooks.gitguard.version).toBe("1.0.2");
+  });
+});
+
+describe("pointer atomicity under concurrency (reviewer P2)", () => {
+  test("racing publishes of older+newer: the pointer ends at the NEWER version regardless of landing order", async () => {
+    const env = makeEnv();
+    const d1 = env.HOOKS_D1 as unknown as FakeD1;
+    // Barrier: hold BOTH publishes at their pointer read before either
+    // writes, so the pre-fix read-then-write would let the older land last.
+    const { reached, release } = d1.setPointerReadBarrier();
+    // The NEWER publish is started FIRST, so on the old code its write lands
+    // FIRST and the OLDER lands LAST — the deterministic downgrade.
+    const pNew = worker.fetch(publishBody("1.0.2", SCRIPT_V2), env);
+    const pOld = worker.fetch(publishBody("1.0.1", SCRIPT_V1), env);
+    await reached;
+    // Give the sibling publish time to reach the same barrier (old code:
+    // both reads pass; fixed code: the CAS batch serializes so the second
+    // write can only re-read and skip/advance).
+    await Bun.sleep(25);
+    release();
+    const [rNew, rOld] = await Promise.all([pNew, pOld]);
+    expect([rNew.status, rOld.status].sort()).toEqual([200, 200]);
+    expect(d1.hooks.get("gitguard")?.version, "pointer must end at the higher version").toBe("1.0.2");
+    // The history still holds both rows and the catalog serves the winner.
+    const catalog = await (await worker.fetch(req("GET", "/api/v1/catalog", { "x-api-key": "secret-key" }), env)).json() as { hooks: Array<{ version: string; versions: string[] }> };
+    expect(catalog.hooks[0].version).toBe("1.0.2");
+    expect(catalog.hooks[0].versions).toEqual(["1.0.2", "1.0.1"]);
+  });
+
+  test("the heal cannot clobber a concurrently-advanced pointer (no downgrade)", async () => {
+    const env = makeEnv();
+    const d1 = env.HOOKS_D1 as unknown as FakeD1;
+    const sha1 = sha256Hex(SCRIPT_V1);
+    const sha3 = sha256Hex(SCRIPT_V2);
+    // Crash window: versions {1.0.1, 1.0.2} exist, the pointer row is gone.
+    d1.versions.set("gitguard@1.0.1", {
+      name: "gitguard",
+      version: "1.0.1",
+      manifest_json: JSON.stringify({ name: "gitguard", version: "1.0.1", events: ["PreToolUse"], script: "src/hook.ts" }),
+      script_sha256: sha1,
+      artifact_key: "hook_artifacts/gitguard/1.0.1.json",
+      published_at: "2026-08-15T00:00:00.000Z",
+    });
+    d1.versions.set("gitguard@1.0.2", {
+      name: "gitguard",
+      version: "1.0.2",
+      manifest_json: JSON.stringify({ name: "gitguard", version: "1.0.2", events: ["PreToolUse"], script: "src/hook.ts" }),
+      script_sha256: sha3,
+      artifact_key: "hook_artifacts/gitguard/1.0.2.json",
+      published_at: "2026-08-15T01:00:00.000Z",
+    });
+    (env.HOOKS_R2 as unknown as FakeR2).objects.set(
+      "hook_artifacts/gitguard/1.0.2.json",
+      JSON.stringify({ manifest: { name: "gitguard", version: "1.0.2", events: ["PreToolUse"], script: "src/hook.ts" }, script: SCRIPT_V2 }),
+    );
+    expect(d1.hooks.has("gitguard")).toBe(false);
+
+    // Barrier: hold the heal INSIDE its versions read, then advance the
+    // pointer concurrently (a publish of 1.0.3 committing between the heal's
+    // read and its write).
+    const { reached, release } = d1.setHealReadBarrier();
+    const catalogP = worker.fetch(req("GET", "/api/v1/catalog", { "x-api-key": "secret-key" }), env);
+    await reached;
+    d1.hooks.set("gitguard", {
+      id: "gitguard",
+      name: "gitguard",
+      version: "1.0.3",
+      sha256: sha3,
+      source_type: "remote",
+      installed_at: "2026-08-15T02:00:00.000Z",
+      enabled: 1,
+    });
+    release();
+    const catalog = await (await catalogP).json() as { hooks: Array<{ version: string }> };
+    expect(d1.hooks.get("gitguard")?.version, "the heal must never downgrade an advanced pointer").toBe("1.0.3");
+    if (catalog.hooks.length > 0) {
+      expect(catalog.hooks[0].version, "the served pointer must not be the stale heal value either").toBe("1.0.3");
+    }
   });
 });

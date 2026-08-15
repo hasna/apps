@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.8] - 2026-08-15
+
+### Security
+
+- **Bash exported functions can no longer be imported by hook children (reviewer P1, efcad315).** Bash imports exported functions from `BASH_FUNC_<name>%%` environment entries, where they shadow commands (`env`, `cat`, `git`, `node`) and run attacker code on the hook's first command — the strip set and the deny list both missed them. `buildHookEnv` now strips every `BASH_FUNC_*` entry from the parent env and caller extras. Aliases are deliberately not denied: bash cannot import aliases from the environment, only functions — the strip is exactly the `BASH_FUNC_` prefix.
+- **The same-class interpreter/TLS vectors are stripped (reviewer P2).** `GCONV_PATH`/`LOCPATH` (gconv/locale module injection), `PYTHONHOME` (stdlib hijack), the whole `GIT_CONFIG_*` family (code exec via git config), the TLS-trust MITM set — `NODE_EXTRA_CA_CERTS`, `NODE_TLS_REJECT_UNAUTHORIZED`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `AWS_CA_BUNDLE` (observed leaking live on old code) — and `PERL5OPT`/`RUBYOPT` are now stripped from parent env and extras.
+- **Hook PATH is rebuilt from a trusted baseline (reviewer P2).** A fake `node`/`git` in a writable directory used to execute on the hook's first command because PATH was allowlisted raw. The child PATH now starts from the system directories (plus `/opt/homebrew/bin` on macOS) and the runner's own `bun` directory, and drops every entry under `$HOME`, `/tmp`, `/var/tmp`, or a world-writable path, plus empty/relative entries. A manifest `env.PATH` is the documented explicit override, passed verbatim.
+
+### Fixed
+
+- **The registry latest-pointer upsert is atomic (reviewer P2).** The pointer compare-and-update was read-then-write: two concurrent publishes of the same name could both read the same pointer and the older landed last (downgrade), and the crash-window heal could clobber a concurrently-advanced pointer. The upsert is now a compare-and-swap inside a D1 `batch()` transaction (`DO UPDATE ... WHERE hooks.version IS ? OR hooks.version = ?` — D1 exposes no BEGIN/COMMIT; batch is the atomic transaction primitive), with a bounded re-read/retry on a lost race. The heal writes a single guarded statement (`INSERT ... WHERE NOT EXISTS`), so a pointer advanced between its read and write can never be clobbered.
+- **Semver numeric identifiers are strict (reviewer P3).** `1.0.0-01` vs `1.0.0-1` compared >0 in BOTH directions (Number("01") === Number("1") while the strings differ), and near-16-digit numeric identifiers lost precision to Number(). Numeric identifiers with leading zeroes and identifiers longer than 16 digits are now rejected as invalid semver everywhere (manifest, publish, artifact routes — one shared pattern), and `compareVersions` compares numerics as BigInt, so ordering is exact and antisymmetric at any length.
+- **Hook interpreters resolve independently of the child PATH.** The runner now spawns `process.execPath` (its own bun binary) instead of the bare `bun`, so a sanitized PATH or a per-hook PATH override can never break the spawn of a `.ts` hook.
+
+## [0.6.7] - 2026-08-15
+
+### Security
+
+- **Interpreter-injection variables are stripped from hook child environments (bug cf99cf76).** The P1-1 deny list stripped credential-shaped NAMES, but a credential can be re-imported from a FILE through interpreter machinery: `BASH_ENV` tells bash to source a file before every non-interactive run and `ENV` does the same for interactive shells, so a parent whose `BASH_ENV` points at e.g. hasna-cloud-env.sh handed the hook child a process that re-exported the fleet credential env after the deny list ran. `buildHookEnv` now strips the interpreter-injection set — `BASH_ENV`, `ENV`, `BASHOPTS`, `SHELLOPTS`, `NODE_OPTIONS`, `NODE_PATH`, `PYTHONSTARTUP`, `PYTHONINSPECT`, `PYTHONPATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH` — from both the parent env and caller extras, so no child interpreter can source or run code the hook did not ask for. The single shared `buildHookEnv` covers every run path (CLI, MCP, SDK).
+
+### Fixed
+
+- **The registry latest pointer never moves down (bug 6e412e52).** Publishing an OLDER version (1.0.1 after 1.0.2) previously moved the catalog/lock latest pointer DOWN. The pointer now compares by full semver precedence (shared `compareVersions`, semver.org §11) and only moves forward — equal or higher updates it, lower keeps the current pointer while the (name, version) row and artifact are still stored (history grows). The crash-window heal path (`ensureLatestRows`) picks the highest-semver version per name instead of the latest `published_at`, which had the same downgrade risk when an older version was republished later.
+
 ## [0.6.6] - 2026-08-15
 
 ### Security

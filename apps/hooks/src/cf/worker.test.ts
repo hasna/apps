@@ -28,12 +28,13 @@ function makeEnv(withKey: boolean): Env {
       bind: () => ({
         first: async () => (sql.includes("FROM hook_versions") ? null : rows[0]),
         all: async () => ({ results: rows, success: true }),
-        run: async () => ({}),
+        run: async () => ({ meta: { changes: 1 } }),
       }),
       first: async () => (sql.includes("FROM hook_versions") ? null : rows[0]),
       all: async () => ({ results: rows, success: true }),
-      run: async () => ({}),
+      run: async () => ({ meta: { changes: 1 } }),
     }),
+    batch: async (statements: Array<{ run(): Promise<unknown> }>) => Promise.all(statements.map((stmt) => stmt.run())),
   };
   const r2 = {
     get: async () => ({
