@@ -1623,18 +1623,38 @@ export function clearBillingRange(db: Database, provider: string, fromDate: stri
   db.prepare(`DELETE FROM billing_daily WHERE provider = ? AND date >= ? AND date <= ?`).run(provider, fromDate, toDate)
 }
 
-export function queryBillingSummary(db: Database, period: Period): { total_usd: number; by_provider: Record<string, number> } {
-  const where = period === 'today' ? `date = DATE('now')`
+/**
+ * Which `billing_daily` rows belong to a period. Shared by the total and the
+ * row count deliberately: a caller deciding whether a $0.00 total means "they
+ * agree" or "nothing was imported" is only safe while both reads select the
+ * same rows.
+ */
+function billingPeriodWhere(period: Period): string {
+  return period === 'today' ? `date = DATE('now')`
     : period === 'yesterday' ? `date = DATE('now', '-1 day')`
     : period === 'week' ? `date >= DATE('now', 'weekday 0', '-7 days')`
     : period === 'month' ? `date >= DATE('now', 'start of month')`
     : period === 'year' ? `date >= DATE('now', 'start of year')`
     : '1=1'
-  const rows = db.prepare(`SELECT provider, SUM(cost_usd) as cost FROM billing_daily WHERE ${where} GROUP BY provider`).all() as Array<{ provider: string; cost: number }>
+}
+
+export function queryBillingSummary(db: Database, period: Period): { total_usd: number; by_provider: Record<string, number> } {
+  const rows = db.prepare(`SELECT provider, SUM(cost_usd) as cost FROM billing_daily WHERE ${billingPeriodWhere(period)} GROUP BY provider`).all() as Array<{ provider: string; cost: number }>
   const by_provider: Record<string, number> = {}
   let total = 0
   for (const r of rows) { by_provider[r.provider] = r.cost; total += r.cost }
   return { total_usd: total, by_provider }
+}
+
+/**
+ * How many provider billing rows exist for a period. A $0.00 actual total is
+ * ambiguous on its own — it is produced both by "billing agrees with telemetry
+ * at zero" and by "billing was never imported" — and only this count separates
+ * them.
+ */
+export function countBillingRecords(db: Database, period: Period): number {
+  const row = db.prepare(`SELECT COUNT(*) as c FROM billing_daily WHERE ${billingPeriodWhere(period)}`).get() as { c: number }
+  return row?.c ?? 0
 }
 
 // ── Session detail ─────────────────────────────────────────────────────────

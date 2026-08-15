@@ -2,6 +2,39 @@
 
 All notable changes to this repository are tracked here. This project follows semantic versioning for published npm packages when practical.
 
+## @hasna/economy 0.3.9 - 2026-08-04
+
+Release-only bump. Four PRs merged after `0.3.8` and were never published, because
+this repo has no workflow that runs `npm publish` — the registry sat at `0.3.8`
+while `main` accumulated a contracts migration, a data-correctness fix and a
+metadata correction.
+
+**Breaking for server operators.** `HASNA_ECONOMY_STORAGE_MODE` (and the
+`ECONOMY_STORAGE_MODE` alias) are retired for server backend selection. They are
+now *rejected at startup with a migration hint* rather than normalized, so a
+half-migrated deployment fails loudly instead of quietly serving the wrong store.
+The server data backend is `sqlite | postgresql`, selected by the presence of
+`HASNA_ECONOMY_DATABASE_URL` alone. If you set `HASNA_ECONOMY_STORAGE_MODE=cloud`
+to reach Postgres, unset it and rely on the database URL.
+
+- **#27** `fix(client)` — hard-fail a half-applied cloud flip instead of silently
+  serving local data. An `API_URL` set *without* an `API_KEY` previously resolved
+  to `local` with no warning, byte-identical to an unconfigured host: the CLI
+  served the local SQLite store while the operator had pointed it at the cloud
+  API — a different dataset rendered as plausible spend numbers. It now reports
+  `misconfigured` and refuses. An unconfigured machine (neither variable set)
+  stays silently local; that negative control is covered by a test.
+- **#28** `fix(contracts)` — migrate `storage.mode` to `storage.backend` for
+  contract kit `0.9.0`; declare `hosting` and `serviceSurfaces` in
+  `hasna.contract.json`. Bumps `@hasna/contracts` `^0.4.2` -> `^0.9.0`.
+- **#29** `fix(server)` — make the runtime speak the `0.9.0` backend vocabulary it
+  declares; `isCloudMode()` is replaced by `resolveEconomyServerBackend()` and
+  `isPostgresBackend()` (both internal — neither was ever exported from the
+  package root).
+- **#30** `fix(package)` — describe Gemini CLI support as legacy rather than
+  active, and name the Gemini API billing ingest separately. Google retired the
+  Gemini CLI on 2026-06-18.
+
 ## @hasna/economy 0.3.7 - 2026-07-24
 
 Reconciliation release: `main` had diverged from the published npm line. The `0.3.x`

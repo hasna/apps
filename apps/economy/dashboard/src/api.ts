@@ -187,6 +187,8 @@ export interface BillingDiffRow {
   delta_pct: number
 }
 
+export type BillingDiffIncomparableReason = "no_billing_records" | "zero_actual_billing"
+
 export interface BillingDiffSummary {
   period: string
   estimated_usd: number
@@ -195,6 +197,9 @@ export interface BillingDiffSummary {
   delta_pct: number
   threshold_pct: number
   is_alert: boolean
+  /** False means `delta_pct` is not a measurement — never render it as agreement. */
+  comparable: boolean
+  incomparable_reason: BillingDiffIncomparableReason | null
   by_agent: BillingDiffRow[]
   by_provider: Record<string, number>
 }
