@@ -188,7 +188,6 @@ export async function runHook(name: string, input: HookInput, options: RunHookOp
       content,
       args: custom?.manifest.args ?? [],
       stdin: JSON.stringify(hookInput),
-      env: process.env,
       timeout: effectiveTimeout ?? undefined,
     }));
   } catch (err) {
