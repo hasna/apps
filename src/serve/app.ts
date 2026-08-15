@@ -453,6 +453,11 @@ async function route(
       const events = await store.listWorkspaceEvents(ws.id, limit ? Number(limit) : undefined);
       return jsonResponse({ events, count: events.length });
     }
+    if (sub === "locations" && method === "GET") {
+      const ws = await store.requireWorkspace(id);
+      const locations = await store.listWorkspaceLocations(ws.id);
+      return jsonResponse({ locations, count: locations.length });
+    }
     if (sub === "events" && method === "POST") {
       const ws = await store.requireWorkspace(id);
       const body = await readJsonBody(req);
@@ -543,6 +548,15 @@ async function route(
       const recipe = await store.getRecipe(id);
       if (!recipe) return errorResponse(`Recipe not found: ${id}`, 404);
       return jsonResponse(recipe);
+    }
+    return errorResponse("Method not allowed", 405);
+  }
+
+  if (resource === "machines") {
+    if (id) return errorResponse("Not found", 404);
+    if (method === "GET") {
+      const machines = await store.listMachines();
+      return jsonResponse({ machines, count: machines.length });
     }
     return errorResponse("Method not allowed", 405);
   }

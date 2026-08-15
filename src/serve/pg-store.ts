@@ -126,6 +126,8 @@ import type {
   WorkspaceKind,
   WorkspaceRow,
   WorkspaceStatus,
+  Machine,
+  MachineRow,
 } from "../types/workspace.js";
 
 type TransactionCapableClient = TypedQueryClient & {
@@ -649,6 +651,27 @@ export class ProjectsPgStore {
       throw new ValidationError(`project resource link collection exceeds max_items: more than ${maxItems}`);
     }
     return rows.map(rowToProjectResourceLink);
+  }
+
+  async listWorkspaceLocations(projectId: string): Promise<WorkspaceLocation[]> {
+    const rows = await this.db.many<WorkspaceLocationRow>(
+      `SELECT * FROM workspace_locations
+       WHERE workspace_id = $1
+       ORDER BY is_primary DESC, created_at ASC, id ASC`,
+      [projectId],
+    );
+    return rows.map(rowToWorkspaceLocation);
+  }
+
+  async listMachines(): Promise<Machine[]> {
+    const rows = await this.db.many<MachineRow>(
+      "SELECT * FROM machines ORDER BY slug ASC",
+    );
+    return rows.map((row) => ({
+      slug: row.slug,
+      status: row.status,
+      role: row.role as Machine["role"],
+    }));
   }
 
   private async listWorkspaceLocationsBounded(

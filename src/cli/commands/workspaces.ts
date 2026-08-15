@@ -84,6 +84,13 @@ import { projectTmuxStatus } from "../../lib/project-tmux-status.js";
 import { runProjectPrefixMigration } from "../../lib/project-prefix-migration.js";
 import { buildProjectDetailPayload, buildProjectListRender, buildProjectSessionsPayload, buildProjectStartBulkRender, buildRecentSessionsPayload, buildRecipesRender, buildRootsRender } from "../../lib/project-render.js";
 import {
+  buildProjectMachineAssignmentPlan,
+  buildProjectWhereResult,
+  DEFAULT_CANONICAL_MACHINE_POOL,
+  projectActivitySignals,
+  type ProjectWhereResult,
+} from "../../lib/project-machine-assignment.js";
+import {
   createContactsProjectMembershipAuthorityFromEnv,
 } from "../../lib/contacts-authority-adapter.js";
 import {
@@ -1827,7 +1834,105 @@ function registerProjectStartCommand(program: Command): void {
     });
 }
 
+function printProjectWhereForAgent(result: ProjectWhereResult): void {
+  console.log(`# Project location — ${result.project.slug}`);
+  console.log(`canonical_machine: ${result.canonical_machine ?? "unassigned"}`);
+  console.log(`canonical_path: ${result.canonical_path ?? "unset"}`);
+  console.log("mirrors:");
+  if (result.mirrors.length === 0) {
+    console.log("  none");
+    return;
+  }
+  for (const mirror of result.mirrors) {
+    console.log(`  - machine=${mirror.machine} path=${mirror.path} label=${mirror.label}`);
+  }
+}
+
 function registerProjectCommands(program: Command): void {
+  program
+    .command("where <target>")
+    .description("Show a project's canonical machine/path and registered mirror locations")
+    .option("--for-agent", "Output compact LLM-friendly text")
+    .option("-j, --json", "Output JSON")
+    .action(async (target, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(target);
+        const result = buildProjectWhereResult(project, await store.getProjectLocations(project.id));
+        if (wantsAgentText(opts)) {
+          printProjectWhereForAgent(result);
+          return;
+        }
+        if (wantsJson(opts)) {
+          printObject(result, opts);
+          return;
+        }
+        printRows(result.locations.map((location) => ({ ...location })), ["role", "machine", "path", "label"]);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("assign-machines")
+    .description("Balance active projects across canonical machines using recent activity")
+    .option("--pool <csv>", "Comma-separated canonical machine pool", DEFAULT_CANONICAL_MACHINE_POOL.join(","))
+    .option("--dry-run", "Print the proposed assignment map without writing")
+    .option("--force", "Also rebalance projects already assigned inside the pool")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const store = resolveProjectStore();
+        const pool = splitList(opts.pool);
+        const knownMachines = new Set((await store.listMachines()).map((machine) => machine.slug));
+        const unknown = pool.filter((machine) => !knownMachines.has(machine));
+        if (unknown.length > 0) {
+          throw new Error(`Unknown machine${unknown.length === 1 ? "" : "s"} in pool: ${unknown.join(", ")} (not in the machines registry)`);
+        }
+        const projects = await store.listProjects({ status: "active", limit: 10_000 });
+        const activity = await Promise.all(projects.map(async (project) => {
+          const [events, runs] = await Promise.all([
+            store.listEvents(project.id, 1_000),
+            store.listAgentRuns({ workspace_id: project.id, limit: 1_000 }),
+          ]);
+          return { project, activity: projectActivitySignals(project, events, runs) };
+        }));
+        const plan = buildProjectMachineAssignmentPlan(activity, pool, Boolean(opts.force));
+
+        if (!opts.dryRun) {
+          const agentId = mutationAgentId(store);
+          for (const assignment of plan.assignments) {
+            if (!assignment.changed) continue;
+            await store.updateProject(assignment.project_id, {
+              canonical_machine: assignment.canonical_machine,
+              agent_id: agentId,
+              source: "cli",
+              command: process.argv.join(" "),
+            });
+          }
+        }
+
+        const payload = { kind: "projects.machine_assignment", dry_run: Boolean(opts.dryRun), ...plan };
+        if (wantsJson(opts)) {
+          printObject(payload, opts);
+          return;
+        }
+        if (opts.dryRun) console.log(chalk.dim("[dry-run] Proposed canonical machine map:"));
+        printRows(plan.assignments.map((assignment) => ({
+          slug: assignment.slug,
+          previous: assignment.previous_machine ?? "",
+          machine: assignment.canonical_machine,
+          disposition: assignment.pinned ? "pinned" : assignment.changed ? "assign" : "unchanged",
+          activity: assignment.activity.latest_activity_at ?? "",
+        })), ["slug", "previous", "machine", "disposition", "activity"]);
+        console.log(chalk.dim(`Pool totals: ${Object.entries(plan.pool_counts).map(([machine, count]) => `${machine}=${count}`).join(", ")}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
   program
     .command("register-full")
     .description("Run bounded all-or-nothing project registration from stdin or a caller-owned mode-0600 file")
