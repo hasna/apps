@@ -94,6 +94,7 @@ describe("runDurableWorker", () => {
       broker,
       signal: controller.signal,
       reconcileMs: 60_000,
+      debounceMs: 60_000,
       onCycle: () => { cycles += 1; },
     });
     await waitFor(() => cycles === 1, 5_000);
