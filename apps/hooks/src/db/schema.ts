@@ -11,7 +11,7 @@ export const CREATE_HOOK_EVENTS_TABLE = `
     timestamp    TEXT NOT NULL,
     session_id   TEXT NOT NULL,
     hook_name    TEXT NOT NULL,
-    event_type   TEXT NOT NULL CHECK (event_type IN ('PreToolUse', 'PostToolUse', 'Stop', 'Notification', 'SessionStart', 'SessionEnd', 'UserPromptSubmit')),
+    event_type   TEXT NOT NULL CHECK (event_type IN ('PreToolUse', 'PostToolUse', 'Stop', 'Notification', 'SessionStart', 'SessionEnd', 'UserPromptSubmit', 'SubagentStart')),
     tool_name    TEXT,
     tool_input   TEXT,
     result       TEXT CHECK (result IN ('continue', 'block', NULL)),
@@ -35,7 +35,7 @@ export interface HookEventRow {
   timestamp: string;
   session_id: string;
   hook_name: string;
-  event_type: "PreToolUse" | "PostToolUse" | "Stop" | "Notification" | "SessionStart" | "SessionEnd" | "UserPromptSubmit";
+  event_type: "PreToolUse" | "PostToolUse" | "Stop" | "Notification" | "SessionStart" | "SessionEnd" | "UserPromptSubmit" | "SubagentStart";
   tool_name: string | null;
   tool_input: string | null;
   result: "continue" | "block" | null;
