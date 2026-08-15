@@ -55,6 +55,10 @@ export function getDb(): Database {
 
   instance = new Database(dbPath);
   instance.exec("PRAGMA journal_mode=WAL");
+  // Concurrent hook runs (e.g. several PreToolUse hooks at once) must wait
+  // for the writer instead of failing with SQLITE_BUSY (QA-4 bug 09094299:
+  // 6/10 parallel runs failed at the default 0ms busy timeout).
+  instance.exec("PRAGMA busy_timeout=5000");
   instance.exec("PRAGMA foreign_keys=ON");
   runMigrations(instance);
   runRetention(instance);

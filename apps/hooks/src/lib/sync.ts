@@ -75,6 +75,12 @@ async function fetchJson(base: string, path: string): Promise<unknown> {
   if (apiKey) headers["x-api-key"] = apiKey;
   const res = await fetch(`${base}${path}`, {
     headers,
+    // redirect:"error" is a security control, not a convenience: a 3xx would
+    // otherwise carry the x-api-key header to another origin (fetch strips
+    // Authorization/Cookie cross-origin but forwards custom headers — QA-3
+    // measured the live key following a 302). Any redirect refuses; the key
+    // never hops origins.
+    redirect: "error",
     signal: AbortSignal.timeout(15000),
   });
   if (res.status === 401) {
@@ -201,4 +207,76 @@ export async function syncHooks(options: { dryRun?: boolean } = {}): Promise<Syn
     });
   }
   return { apiUrl, dryRun: false, diff };
+}
+
+export interface PinnedHookInstall {
+  name: string;
+  version: string;
+  sha256: string;
+  source: string;
+  source_ref: string;
+  artifact: ArtifactResponse;
+  scriptPath: string;
+}
+
+/**
+ * Fetch one exact hook version from the remote registry, verify its sha
+ * against the remote lock, write it to the custom store, and pin it.
+ * Powers `hooks install <name>@<version>` / `hooks update <name>@<version>`
+ * (QA-2 finding: pinned-version install/update was unsupported).
+ *
+ * Requires an api_url (remote registry). The sha check is against the remote
+ * lock — the exact version named by the user, never a mutable latest.
+ */
+export async function fetchPinnedHook(
+  name: string,
+  version: string,
+  apiUrl: string,
+): Promise<PinnedHookInstall> {
+  const remoteLock = (await fetchJson(apiUrl, "/api/v1/lock")) as RemoteLock;
+  const entry = remoteLock.hooks?.[name];
+  if (!entry) {
+    throw new Error(`Hook '${name}' is not in the remote registry lock`);
+  }
+  if (entry.version !== version) {
+    throw new Error(
+      `Hook '${name}' version ${version} is not in the remote registry (available: ${entry.version})`,
+    );
+  }
+  const artifact = (await fetchJson(apiUrl, `/api/v1/hooks/${name}/${version}`)) as ArtifactResponse;
+  if (!artifact.manifest || typeof artifact.script !== "string") {
+    throw new Error(`artifact for '${name}@${version}' is malformed`);
+  }
+  const actualSha = sha256OfText(artifact.script);
+  if (actualSha !== entry.sha256) {
+    throw new Error(
+      `sha256 mismatch for '${name}@${version}': lock says ${entry.sha256}, artifact has ${actualSha}`,
+    );
+  }
+  const manifest = parseManifest(
+    JSON.stringify({ ...artifact.manifest, name: shortManifestName(artifact.manifest.name || name) }),
+  );
+  const scriptRel = artifact.manifest.script.includes("\n") ? "script.ts" : artifact.manifest.script;
+  writeCustomHook(name, manifest, artifact.script, scriptRel);
+  const scriptPath = resolveScriptPath(name)!;
+  const actual = await sha256File(scriptPath);
+  const db = getDb();
+  setPinnedHook(name, { version, sha256: actual, source: entry.source ?? "remote" });
+  upsertHookRecord(db, {
+    name,
+    version,
+    sha256: actual,
+    source_type: entry.source ?? "remote",
+    source_ref: apiUrl,
+    last_verified_at: new Date().toISOString(),
+  });
+  return {
+    name,
+    version,
+    sha256: actual,
+    source: entry.source ?? "remote",
+    source_ref: apiUrl,
+    artifact,
+    scriptPath,
+  };
 }

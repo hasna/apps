@@ -29,6 +29,7 @@ export {
   getRegisteredHooks,
   getRegisteredHooksForTarget,
   removeHook,
+  uninstallHook,
   hookExists,
   buildCodewithTomlFragment,
   getHookPath,
@@ -40,6 +41,7 @@ export {
   type ConcreteTarget,
   type Target,
   type CodewithInstallMode,
+  type UninstallResult,
 } from "./lib/installer.js";
 
 // ── Hook runtime types ────────────────────────────────────────────────────────
@@ -164,6 +166,7 @@ export async function runHook(name: string, input: HookInput, options: RunHookOp
   }
 
   const { executeVerifiedScript } = await import("./lib/run.js");
+  const started = Date.now();
   const { stdout: stdoutText, stderr: stderrText, exitCode } = await executeVerifiedScript({
     name,
     scriptPath: script,
@@ -173,6 +176,32 @@ export async function runHook(name: string, input: HookInput, options: RunHookOp
     env: process.env,
     timeout: custom?.manifest.timeout_ms,
   });
+  const durationMs = Date.now() - started;
+
+  // Every SDK run lands in hook_events so `hooks log` is never empty after a
+  // real fire (bug ef58dcb7).
+  try {
+    const { recordHookRun, resolveEventType } = await import("./lib/db-writer.js");
+    let outputJson: HookOutput = {};
+    try { outputJson = JSON.parse(stdoutText); } catch {}
+    const blocked = outputJson.decision === "block" || outputJson.continue === false;
+    recordHookRun({
+      hookName: name,
+      eventType: resolveEventType(input.hook_event_name, custom?.manifest.events[0] ?? "PostToolUse"),
+      version: custom?.manifest.version,
+      sha256: sha256Of(content),
+      sessionId: typeof input.session_id === "string" ? input.session_id : null,
+      toolName: typeof input.tool_name === "string" ? input.tool_name : null,
+      toolInput: input.tool_input,
+      result: blocked ? "block" : "continue",
+      error: exitCode !== 0 ? (stderrText || `hook exited with code ${exitCode}`).slice(0, 500) : null,
+      exitCode,
+      durationMs,
+      projectDir: process.cwd(),
+    });
+  } catch {
+    // Observability must never break execution.
+  }
 
   let output: HookOutput = {};
   try {
@@ -247,6 +276,8 @@ export {
   setPinnedHook,
   getPinnedHook,
   removePinnedHook,
+  pinInstalledHook,
+  removeHookFromStore,
   verifyScriptHash,
   checkScriptHash,
   retrustHook,
@@ -281,8 +312,9 @@ export type { CustomInstallResult, CustomSourceKind } from "./lib/custom-install
 export {
   planSync,
   syncHooks,
+  fetchPinnedHook,
 } from "./lib/sync.js";
-export type { SyncDiff, SyncPlan, ArtifactResponse } from "./lib/sync.js";
+export type { SyncDiff, SyncPlan, ArtifactResponse, PinnedHookInstall } from "./lib/sync.js";
 
 export {
   handleServeRequest,

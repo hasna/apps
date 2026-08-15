@@ -10,12 +10,14 @@
  * No files are copied. The settings entry points to `hooks run <name>`.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { getHook, getHookEvents, type HookEvent } from "./registry.js";
 import { resolveHookDir, resolveHookMeta } from "./resolve.js";
+import { readCustomManifest, customHookDir } from "./manifest.js";
+import { removeHookFromStore } from "./store.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOOKS_DIR = existsSync(join(__dirname, "..", "..", "hooks", "hook-gitguard"))
@@ -488,14 +490,13 @@ function removeHookFromAllEvents(settings: Record<string, any>, name: string): v
 }
 
 function unregisterHook(name: string, scope: Scope = "global", target: WritableJsonTarget = "claude"): void {
-  const meta = resolveHookMeta(name);
-  if (!meta) return;
-
   const settings = readSettings(scope, target);
   if (!settings.hooks) return;
 
-  // Remove by hook name across all event keys — works regardless of profile
-  // and regardless of which event the hook was bound to when installed.
+  // Remove by hook name across all event keys — works regardless of profile,
+  // regardless of which event the hook was bound to when installed, and
+  // regardless of whether the hook still has any resolvable meta (a stale
+  // registration must be removable; QA-1 BUG-A).
   removeHookFromAllEvents(settings, name);
 
   if (Object.keys(settings.hooks).length === 0) {
@@ -572,4 +573,73 @@ function removeHookForTarget(name: string, scope: Scope, target: WritableJsonTar
   }
   unregisterHook(name, scope, target);
   return true;
+}
+
+export interface UninstallResult {
+  name: string;
+  removed: boolean;
+  source: "custom" | "bundled" | "registered-only" | null;
+  settingsScopes: Scope[];
+  storeDirRemoved: boolean;
+  pinRemoved: boolean;
+  dbRecordRemoved: boolean;
+  error?: string;
+}
+
+/**
+ * Full uninstall — the settings registration, the store directory (custom
+ * hooks), the lock pin and the DB record are all removed. Bundled hooks keep
+ * their package files (they belong to the package, not the store).
+ *
+ * Resolves custom and registry-synced hooks, which live in the custom store
+ * dir, as well as bundled ones (QA-1 BUG-A / QA-4: remove was bundled-only
+ * and never cleaned the store/lock/DB).
+ */
+export function uninstallHook(
+  name: string,
+  scope: Scope = "global",
+  target: Target = "claude",
+): UninstallResult {
+  const shortName = shortHookName(name);
+
+  const custom = readCustomManifest(shortName);
+  const bundledMeta = custom ? undefined : getHook(shortName);
+  const registeredGlobal = getRegisteredHooksForTarget("global", target === "all" ? "claude" : (target as WritableJsonTarget)).includes(shortName);
+  const registeredProject = getRegisteredHooksForTarget("project", target === "all" ? "claude" : (target as WritableJsonTarget)).includes(shortName);
+
+  if (!custom && !bundledMeta && !registeredGlobal && !registeredProject) {
+    return { name: shortName, removed: false, source: null, settingsScopes: [], storeDirRemoved: false, pinRemoved: false, dbRecordRemoved: false, error: `Hook '${shortName}' not found` };
+  }
+
+  const scopes: Scope[] = [];
+  for (const s of (["global", "project"] as Scope[])) {
+    for (const t of (target === "all" ? (["claude", "gemini"] as const) : [target as WritableJsonTarget])) {
+      if (getRegisteredHooksForTarget(s, t).includes(shortName)) {
+        unregisterHook(shortName, s, t);
+        if (!scopes.includes(s)) scopes.push(s);
+      }
+    }
+  }
+
+  let storeDirRemoved = false;
+  if (custom) {
+    try {
+      rmSync(customHookDir(shortName), { recursive: true, force: true });
+      storeDirRemoved = true;
+    } catch {
+      // Report removal as best-effort; the registration is still gone.
+    }
+  }
+
+  const { removedPin, removedRecord } = removeHookFromStore(shortName);
+
+  return {
+    name: shortName,
+    removed: true,
+    source: custom ? "custom" : bundledMeta ? "bundled" : "registered-only",
+    settingsScopes: scopes,
+    storeDirRemoved,
+    pinRemoved: removedPin,
+    dbRecordRemoved: removedRecord,
+  };
 }
