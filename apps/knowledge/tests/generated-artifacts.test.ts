@@ -4,8 +4,8 @@
  * Licensed under the Apache License, Version 2.0
  */
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import {
@@ -42,6 +42,13 @@ const EXPECTED_BUNDLES = [
   'dist/storage.js',
 ].sort();
 
+function publicDeclarationModules(indexPath: string): string[] {
+  const source = readFileSync(indexPath, 'utf8');
+  return [...source.matchAll(/from\s+['"](\.\/[^'"]+\.js)['"]/g)].map((match) => (
+    join(dirname(indexPath), match[1].replace(/\.js$/, '.d.ts'))
+  ));
+}
+
 describe('generated artifact verification', () => {
   test('the gate covers whole generated directories, not a list that can drift', () => {
     expect(GENERATED_PATHS.length).toBeGreaterThan(0);
@@ -59,6 +66,27 @@ describe('generated artifact verification', () => {
     // And nothing outside the generated directories crept in.
     for (const file of files) {
       expect(GENERATED_PATHS.some((prefix) => file.startsWith(`${prefix}/`)), `${file} is outside ${GENERATED_PATHS.join(', ')}`).toBe(true);
+    }
+  });
+
+  test('every public declaration export exists and is tracked', () => {
+    const declarationIndexes = [
+      join(repoRoot, 'dist', 'index.d.ts'),
+      join(repoRoot, 'dist', 'generated', 'storage-kit', 'index.d.ts'),
+    ];
+    const declarations = declarationIndexes.flatMap(publicDeclarationModules);
+    expect(declarations.length).toBeGreaterThan(0);
+
+    for (const declaration of declarations) {
+      const packagePath = relative(repoRoot, declaration);
+      expect(existsSync(declaration), `${packagePath} is exported but missing`).toBe(true);
+      const tracked = Bun.spawnSync(['git', 'ls-files', '--error-unmatch', packagePath], {
+        cwd: repoRoot,
+        env: process.env,
+        stdout: 'ignore',
+        stderr: 'ignore',
+      });
+      expect(tracked.exitCode, `${packagePath} is exported but not tracked`).toBe(0);
     }
   });
 

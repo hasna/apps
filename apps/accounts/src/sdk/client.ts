@@ -4,7 +4,7 @@
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
 // Source: Accounts 1.0.0
 
-export interface HealthResponse { "status": "ok" | "degraded" | "unavailable"; "version": string; "mode": "local" | "cloud" }
+export interface HealthResponse { "status": "ok" | "degraded" | "unavailable"; "version": string; "backend": "postgresql" }
 
 export interface ReadyResponse { "ready": boolean; "reason"?: string }
 

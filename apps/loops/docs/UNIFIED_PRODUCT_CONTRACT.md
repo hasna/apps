@@ -9,7 +9,15 @@
 
 Loops is one product and one application contract. SQLite is its zero-configuration embedded-authority persistence; that embedded authority may be packaged or hosted without becoming the multi-tenant server role. PostgreSQL is the explicit persistence required by the network multi-tenant server role, including when that role runs on AWS. CLI, SDK, HTTP API, MCP, daemon/scheduler, runner, and server/admin are adapters or process roles over that one contract.
 
-There is no target public `local`, `self_hosted`, or `cloud` product-mode enum. Those terms may describe a deployment topology conversationally, but must not select product behavior, authority, or storage semantics. Existing legacy mode values are temporary compatibility inputs only; they are not a target configuration model and must be normalized or rejected at the boundary.
+Deployment modes are removed: there is no product-mode enum and no
+`HASNA_LOOPS_STORAGE_MODE` variable. `local` and `cloud` remain ordinary words
+(a location; the hosted SaaS product), and "self-hosted" survives only as plain
+English for a server someone runs. The only server-side switch is the data
+backend (`sqlite | postgresql`, selected by configuration such as
+`HASNA_LOOPS_DATABASE_URL`); clients connect via the local file or the
+control-plane API (`HASNA_LOOPS_API_URL` + `HASNA_LOOPS_API_KEY`). Legacy mode
+values are deleted and rejected at the boundary; they are not a compatibility
+input model.
 
 ### Scope
 
@@ -46,25 +54,27 @@ This record does not:
 
 ### Current versus target
 
-Current implementation has contradictory mode and authority behavior:
-
-- `src/lib/mode.ts`, `src/lib/cloud/mode.ts`, `src/lib/cloud/resolve.ts`, and `src/generated/storage-kit/mode.ts` disagree.
+Current implementation has contradictory mode and authority behavior: the
+former `src/lib/mode.ts`, `src/lib/cloud/mode.ts`, and `src/lib/cloud/resolve.ts`
+resolver chain disagreed with the generated storage kit. The 0.5.0 sweep
+removes mode resolution entirely: authority and persistence resolve from the
+storage/connection model (`storage: sqlite|postgresql`, `connection: file|api`).
 - `src/lib/store/index.ts` can let `getStore` silently choose SQLite for database-only configuration.
 - `ApiStore` getters can convert remote failures into apparent absence.
 - `src/daemon/index.ts` directly creates local authority.
 - `src/sdk/index.ts` and `src/sdk/http.ts` both export `LoopsClient`, while handwritten remote transport and generated SDK behavior diverge.
 - Business logic is duplicated or embedded across CLI, API, MCP, and runner. OpenAPI omits rename/history-prune request bodies and query parameters. MCP `run-now` schedules work while local execution can run inline.
 
-Target implementation removes behavior selection from product modes and routes every surface through one application contract with explicit authority, persistence, and role configuration.
+Target implementation routes every surface through one application contract with explicit authority, persistence, and role configuration; behavior selection by product modes is removed.
 
 ### Source-evidence anchors
 
 | Source | Evidence anchored here |
 | --- | --- |
 | `package.json` | Six declared binaries, 13 public export entries, and the public `./mode` compatibility surface. |
-| `hasna.contract.json` | Product metadata that currently declares modes and mode-shaped runtime metadata. |
+| `hasna.contract.json` | Product metadata that currently declares mode-shaped runtime metadata (transitional: the contracts schema still requires `serviceSurfaces.deploymentModes` until the hotfix). |
 | `src/index.ts` | Root export surface and compatibility exposure. |
-| `openapi/loops.json` | HTTP operation/generation contract, `Foundation.mode`, API status/version responses, and missing operation-shape coverage. |
+| `openapi/loops.json` | HTTP operation/generation contract, Foundation status/version responses (the former `Foundation.mode` property is removed), and missing operation-shape coverage. |
 | `src/api/index.ts` | Current HTTP adapter composition and application-boundary fragmentation. |
 | `src/mcp/index.ts` | Current MCP tool composition, including `run-now` behavior. |
 | `src/serve/index.ts` | Network server assembly, PostgreSQL runtime/auth/migrator separation, and signing/auth requirements. |
@@ -75,7 +85,7 @@ Target implementation removes behavior selection from product modes and routes e
 | `src/lib/migration.ts` | Current workflows/loops/runs migration bundle and explicit skipped running/orphan run behavior. |
 | `src/lib/storage/postgres-schema.ts` | PostgreSQL workflow-run provenance migration source. |
 | `src/lib/storage/postgres-loop-storage.test.ts` | Targeted PostgreSQL provenance atomicity, conflict, and rollback test source. |
-| `src/cli/index.test.ts` | Current mode, self-hosted/cloud command, migration, and compatibility expectations. |
+| `src/cli/index.test.ts` | Current storage/connection status, migration, and compatibility expectations. |
 
 This table is a compact traceability anchor, not proof that the target contract is already implemented. The binary/export counts and adapter-fragmentation findings remain subject to the evidence gates in this record.
 
@@ -114,7 +124,10 @@ This matrix is closed: an unlisted role or role/configuration combination is uns
 
 A PostgreSQL DSN never changes client authority. A remote transport, authentication, authorization, timeout, validation, or server failure is returned as a precise remote error and never falls back to SQLite or another local authority. The product makes no dual-authority, cache-and-spool, queued-write, or automatic reconciliation claim: one invocation has one selected authority.
 
-Legacy mode inputs may be accepted only by a bounded compatibility parser that maps unambiguously into one row of this matrix and the orthogonal axes. Ambiguous, conflicting, partial, or role-inapplicable legacy input is rejected before resource creation.
+Legacy mode inputs (`HASNA_LOOPS_STORAGE_MODE` and mode-shaped env values) are
+deleted; configuration is expressed only through the orthogonal axes.
+Ambiguous, conflicting, partial, or role-inapplicable configuration is rejected
+before resource creation.
 
 ## 4. One `LoopsApplication` capability contract
 
@@ -221,7 +234,7 @@ The following gaps are **RED**. They block any embedded/server parity, safe-cuto
 | Complete no-loss SQLite-to-PostgreSQL cutover | RED | lossless migration/cutover |
 | Broad remote error masking | RED | reliable remote absence/error semantics |
 
-The mode disagreement, silent database-only SQLite selection, direct daemon local authority creation, duplicated client exports, OpenAPI omissions, and adapter-level behavior divergence are also blocking architecture defects. They must be removed or contained behind tested compatibility boundaries before the target contract can be declared implemented.
+The former mode disagreement, silent database-only SQLite selection, direct daemon local authority creation, duplicated client exports, OpenAPI omissions, and adapter-level behavior divergence are also blocking architecture defects. They must be removed or contained behind tested compatibility boundaries before the target contract can be declared implemented.
 
 ## 8. Embedded single-user and server multi-tenant authentication
 
@@ -233,33 +246,40 @@ Network server authority is a multi-tenant contract. It requires explicit select
 
 Compatibility is boundary-only and time-bounded:
 
-- legacy mode values follow the exact mapping/refusal table below and otherwise fail closed;
+- legacy mode values are deleted and rejected at the boundary; there is no
+  legacy mode compatibility input;
 - all five published binaries follow the exhaustive binary disposition table below; the four non-canonical binaries begin as thin shims;
 - all 13 package exports follow the exhaustive export disposition table below; none is removed or internalized before its consumer-evidence gate;
 - compatibility shims must not preserve divergent stores, schedulers, transports, or lifecycle semantics.
 
 ### Legacy surface disposition
 
-Canonical status and version responses must emit orthogonal `authority`, `transport`, `persistence`, `processRole`, `authTenant`, `topology`, and `readiness` fields rather than a product mode. A legacy mode-shaped output may remain only as a bounded, explicitly deprecated compatibility field when removal would break a verified consumer; it must be derived from the canonical fields and must not control behavior.
+Canonical status and version responses emit orthogonal `storage`,
+`connection`, `authority`, `transport`, `persistence`, `processRole`,
+`authTenant`, `topology`, and `readiness` fields rather than a product mode.
 
-#### Exact legacy value mapping and refusal
+#### Legacy mode value removal
 
-| Legacy value | Accepted boundary and complete requirements | Target mapping | Mandatory refusal |
-| --- | --- | --- | --- |
-| `local` | Legacy embedded-capable CLI, SDK, MCP, or daemon boundary only, with no remote or PostgreSQL authority inputs | Explicit embedded client or embedded scheduler/daemon role plus SQLite | Reject with endpoint/credential, any PostgreSQL DSN, runner/server/admin role, or any conflicting explicit role |
-| `self_hosted` | Value alone is ambiguous and rejected. At a legacy remote-client boundary, accept only with complete endpoint plus credential. At an explicit network-server boundary, accept only with complete runtime/auth DSNs and signing/authentication inputs | Complete legacy remote-client input maps to remote client; complete explicit server input maps to network multi-tenant server | Reject incomplete input, every other boundary, and every conflict; never infer client versus server from the value |
-| `cloud` | Value alone is rejected. At a legacy remote-client boundary, accept only with complete endpoint plus credential | Remote client only; the value never selects a provider, topology, or persistence | Reject at embedded, network-server, admin/migrator, and runner boundaries, and on every conflict; a distinct complete explicit role plan does not authorize this value to alter that plan |
+The legacy mode values `local`, `self_hosted`, and `cloud` — and the
+`HASNA_LOOPS_STORAGE_MODE` variable that carried them — are deleted in 0.5.0.
+There is no mapping table because there is no compatibility input: any
+mode-shaped value is rejected before resource creation. Configuration is
+expressed only through the orthogonal axes, with the storage backend
+(`sqlite | postgresql`) and client connection (`file | api`) as the public
+surface.
 
-Canonical outputs never emit `local`, `self_hosted`, or `cloud` as behavioral state. A verified consumer may temporarily receive a derived, explicitly deprecated compatibility field; that field is output-only, cannot feed authority resolution, and is removed only after consumer evidence and its published deprecation gate.
+Canonical outputs never emit deployment-mode values as behavioral state;
+status reports `storage` and `connection`. The deleted mode surface is not
+reintroduced as a deprecated compatibility field.
 
 | Current surface | Compatibility input/output behavior | Target mapping | Owner/test | Removal gate |
 | --- | --- | --- | --- | --- |
-| `src/lib/mode.ts` enum/resolver | Accepts and emits mode-shaped values | Compatibility input follows the exact value table above; canonical resolver emits orthogonal fields only | Role resolver; closed matrix, value/refusal, partial/conflict, and output tests | No internal policy callers; verified consumers migrated; published deprecation and semver gates complete |
-| `hasna.contract.json` modes | Declares product modes and mode-shaped runtime metadata | Declare capabilities, authority/persistence support, roles, auth/tenant contract, topology compatibility, and readiness separately | Contract-schema validation | Downstream contract readers support orthogonal fields; legacy schema window complete |
-| `openapi/loops.json` `Foundation.mode` and API status/version responses | Emits mode-shaped service identity | Canonical response uses orthogonal fields; deprecated `mode` output only if a verified consumer requires it | OpenAPI validation, generation-drift check, generated SDK response tests | Generated clients and verified consumers no longer read `mode` |
-| CLI `mode`, `self-hosted`, and `cloud` commands plus `src/cli/index.test.ts` | Accepts legacy commands/config and emits mode-shaped status | Compatibility aliases dispatch only through the exact value table and canonical role subcommands; status is orthogonal | CLI value/refusal, resolver, status-output, and packed binary tests | Replacement commands documented; verified consumers migrated; published deprecation gate complete |
+| `src/lib/mode.ts` enum/resolver | Accepted and emitted mode-shaped values | Removed; mode exports renamed to the storage/connection model (breaking public export change in 0.5.0) | Resolver and status-output tests | Removal shipped in 0.5.0 |
+| `hasna.contract.json` modes | Declared product modes and mode-shaped runtime metadata (transitional: the contracts schema still requires `serviceSurfaces.deploymentModes` until the hotfix) | Declare capabilities, storage support, roles, auth/tenant contract, topology compatibility, and readiness separately | Contract-schema validation | Contracts hotfix ships; legacy schema window closed |
+| `openapi/loops.json` `Foundation.mode` and API status/version responses | Emitted mode-shaped service identity | `Foundation.mode` property removed; status/version responses carry storage/connection fields | OpenAPI validation, generation-drift check, generated SDK response tests | `mode` removed in 0.5.0; verified consumers migrated |
+| CLI `mode`, `self-hosted`, and `cloud` commands plus `src/cli/index.test.ts` | Accepted legacy commands/config and emitted mode-shaped status | `loops mode` and `loops cloud status` removed; `loops status` reports storage + connection; `migrate`/`push`/`pull` promoted to top level | CLI status-output and packed binary tests | Commands removed in 0.5.0; `loops status` documented |
 | SDK constructors/options | Embedded and remote clients can be selected through overlapping constructors/options | Explicit embedded and remote constructors/options feed one role resolver and one public SDK | SDK unit, generated-client, and resolver matrix tests | Ambiguous constructors removed only after typed migration path, verified consumer evidence, and deprecation gate |
-| Documentation and configuration environment inputs | Documents or accepts mode-shaped environment values | Document explicit role, authority, persistence, auth/tenant, and topology inputs; legacy env input follows the exact value table | Documentation examples plus configuration value/refusal matrix tests | Config migration guide shipped; verified consumers migrated; deprecated parser removal gate complete |
+| Documentation and configuration environment inputs | Documents or accepts mode-shaped environment values | Document explicit role, authority, persistence (storage backend), auth/tenant, and topology inputs; `HASNA_LOOPS_STORAGE_MODE` is deleted | Documentation examples plus configuration tests | Config migration guide shipped with 0.5.0 |
 
 The five published binary entries, the removed `loops-api` compatibility binary,
 and all 13 package export entries are exhaustively dispositioned below; their
@@ -271,7 +291,7 @@ inventory is not deferred.
 | --- | --- | --- | --- |
 | `loops` | Canonical executable and subcommand dispatcher; owns role resolution and adapter wiring | Packed invocation, help/version, role resolution, argument, exit-code, and error-contract tests | Canonical binary is retained; any future replacement requires verified consumer evidence and an explicit superseding contract |
 | `loops-daemon` | Thin forwarder to `loops daemon`; preserves supported arguments, signals, stdout/stderr, and exit status without owning scheduler policy | Packed shim versus `loops daemon` argument/config-error/signal/exit parity | Verified consumer inventory and migration, replacement available, deprecation window and semver gate complete |
-| `loops-api` | **Removed from the package bin map.** The `./api` export and packed `dist/api/*` runtime/types remain public | Packed package rejects the bin while importing and smoking `@hasna/loops/api`; `loops self-hosted status` covers operator status | Fleet caller survey found no invocation on reachable stations or registered runtime surfaces; removal ships as an explicit breaking PR with rollback to restore the bin and waiver together and revert the packed-boundary rejection |
+| `loops-api` | **Removed from the package bin map.** The `./api` export and packed `dist/api/*` runtime/types remain public | Packed package rejects the bin while importing and smoking `@hasna/loops/api`; `loops status` covers operator status | Fleet caller survey found no invocation on reachable stations or registered runtime surfaces; removal ships as an explicit breaking PR with rollback to restore the bin and waiver together and revert the packed-boundary rejection |
 | `loops-serve` | Thin forwarder to `loops server/admin`; contains no independent authority, migration, or auth policy | Packed shim versus canonical server/admin argument routing, startup refusal, signal, error, and exit parity | Verified server/admin consumers migrated, operational replacement rehearsed, deprecation window and semver gate complete |
 | `loops-runner` | Thin forwarder to `loops runner`; contains no claim, heartbeat, retry, or finalization policy | Packed shim versus canonical runner identity/config refusal, signal, error, and exit parity | Verified runner consumers migrated, replacement operationally proven, deprecation window and semver gate complete |
 | `loops-mcp` | Thin forwarder to `loops mcp`; preserves MCP transport framing while owning no tool semantics | Packed shim versus canonical MCP handshake, tool schema, framing, semantic error, and exit parity | Verified MCP consumers migrated, replacement compatibility proven, deprecation window and semver gate complete |
@@ -289,7 +309,7 @@ Raw storage and policy exports are compatibility debt and must not become the ne
 | `./mcp` | **Keep** as a thin public MCP adapter | Preserve MCP integration while routing every capability through `LoopsApplication` | MCP adapter owner; tool-schema, behavior parity, error, and packed import tests | No removal planned; any future removal requires verified consumer evidence and a replacement contract |
 | `./api` | **Keep** as a thin public HTTP adapter | Preserve supported server integration points while deriving behavior and schema from `LoopsApplication` and OpenAPI | HTTP adapter owner; OpenAPI integration, auth/error, generation-drift, and packed import tests | No removal planned; any future removal requires verified consumer evidence and a replacement contract |
 | `./runner` | **Deprecate**, then internalize behind `loops runner` | Forward programmatic entry points to canonical runner assembly; expose no claim/finalization policy | Runner adapter owner; identity/config refusal, claim/heartbeat/finalize delegation, and packed import tests | Verified programmatic consumers migrated, process replacement proven, deprecation window and semver gate complete |
-| `./mode` | **Deprecate**, then remove | Preserve only the exact legacy value mapping/refusal behavior; canonical output is orthogonal | Role resolver owner; value/refusal, conflict, output, type, and packed import tests | Verified consumers migrated, no internal behavioral callers, deprecation window and semver gate complete |
+| `./mode` | **Removed** in 0.5.0 | Mode exports renamed to storage/connection names (breaking public export change); canonical status is orthogonal | Role resolver owner; value/refusal, conflict, output, type, and packed import tests | Removal shipped in 0.5.0 |
 | `./storage` | **Deprecate**, then internalize | Compatibility facade may forward storage access needed by existing consumers, but it cannot define or expose new lifecycle policy | Application/storage-boundary owner; compatibility, no-policy-bypass, and packed import tests | Per-symbol consumer inventory complete, application replacements shipped, consumers migrated, deprecation and semver gates complete |
 | `./storage/contract` | **Deprecate**, then internalize the policy-rich contract | Existing types/methods remain compatibility-only while callers migrate to `LoopsApplication` and atomic persistence primitives | Application/storage-boundary owner; type compatibility, direct-call prohibition, and primitive contract tests | No external or internal policy-bearing callers, replacements proven on both backends, consumer/deprecation/semver gates complete |
 | `./storage/sqlite` | **Deprecate direct application use**, then internalize behind embedded authority | Preserve existing imports without adding policy; implementation serves only the atomic persistence boundary | SQLite persistence owner; shared backend suite, migration/restore, no-policy-bypass, and packed import tests | Verified direct consumers migrated, embedded application replacement complete, shared parity and deprecation/semver gates complete |
@@ -317,7 +337,7 @@ SQLite-to-PostgreSQL migration is a deliberate admin/migrator operation, not imp
 
 The current bundle handles workflows, loops, and runs only, and it explicitly permits counted skips for running and orphan run rows. Therefore the general no-loss claim remains **RED**. Migration eligibility requires a quiesced source, zero active daemon leases, an explicit disposal record for every expired daemon lease, zero skipped authoritative rows, per-entity source/destination counts and hashes, provenance checks, orphan/reference reports, migration ledger identity, and successful restore proof. Any active lease, unrecorded expired-lease disposal, nonzero authoritative skip, unmatched entity, unresolved orphan, missing category disposition, or unproved filesystem/object reference is a refusal.
 
-Rollback is defined before deprecation: retain a verified source backup, preserve ordered migration state, document the exact reversal boundary, and refuse destructive cutover steps when restoration proof is absent. Deprecate legacy modes, binaries, exports, and handwritten transport only after packed-shim, external-consumer, and migration evidence supports removal. External consumers remain **UNKNOWN** until independently inventoried.
+Rollback is defined before deprecation: retain a verified source backup, preserve ordered migration state, document the exact reversal boundary, and refuse destructive cutover steps when restoration proof is absent. The legacy mode values were removed in 0.5.0; binaries, exports, and handwritten transport are removed only after packed-shim, external-consumer, and migration evidence supports removal. External consumers remain **UNKNOWN** until independently inventoried.
 
 ## 10. Evidence gates and implementation sequence
 
@@ -344,7 +364,7 @@ No production cutover, parity announcement, or readiness statement is permitted 
 | Objective | State | Required proof |
 | --- | --- | --- |
 | One application contract owns lifecycle semantics | UNKNOWN | adapter routing and capability tests at an exact SHA |
-| No target public product-mode enum | RED | legacy inputs isolated; target configuration uses orthogonal axes |
+| No target public product-mode enum | DONE (0.5.0) | mode vocabulary removed; storage/connection model shipped; `HASNA_LOOPS_STORAGE_MODE` deleted |
 | Absent authority configuration defaults to SQLite only for explicit embedded-capable roles | UNKNOWN | closed resolver matrix tests before resource creation |
 | Remote clients require complete endpoint plus credential | UNKNOWN | closed resolver and remote integration tests |
 | Runner requires complete remote authority and runner identity | UNKNOWN | claim/heartbeat identity and role-rejection tests |

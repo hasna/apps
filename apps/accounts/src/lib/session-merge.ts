@@ -179,7 +179,7 @@ export interface SessionMergeOptions {
    * Profiles considered registered, and therefore eligible to be linked.
    *
    * Defaults to the on-box registry file, but this machine can be pointed at a
-   * self-hosted registry, in which case the on-box file is empty and every
+   * HTTP API registry, in which case the on-box file is empty and every
    * profile would be treated as unregistered — silently linking nothing. The
    * caller resolves the store it actually uses and passes it in.
    */

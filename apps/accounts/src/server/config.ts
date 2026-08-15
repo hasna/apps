@@ -1,9 +1,9 @@
-// Runtime configuration for the accounts cloud service.
+// Runtime configuration for the accounts server service.
 //
 // Resolves the app slug, API-key signing secret, and table names from the
 // environment. Never logs secret values. Follows the Hasna auth env convention:
 //   HASNA_ACCOUNTS_API_SIGNING_KEY (fallback HASNA_API_SIGNING_KEY)
-//   HASNA_ACCOUNTS_DATABASE_URL / HASNA_ACCOUNTS_STORAGE_MODE (kit-resolved)
+//   HASNA_ACCOUNTS_DATABASE_URL (kit-resolved: postgresql backend)
 
 export const APP_SLUG = "accounts";
 export const API_KEYS_TABLE = "api_keys";

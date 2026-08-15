@@ -436,7 +436,7 @@ function legacyItemHaystack(item: KnowledgeItem): string {
 }
 
 /** Pure lexical ranking over an in-memory knowledge-item corpus. Shared by the
- * on-box legacy JSON store path and the cloud (api-mode) item corpus so both
+ * on-box legacy JSON store path and the HTTP item corpus so both
  * transports rank identically. */
 function selectItems(items: KnowledgeItem[], terms: string[], limit: number): Array<{
   item: KnowledgeItem;
@@ -731,11 +731,11 @@ export async function hybridSearchLegacyStore(options: Omit<HybridSearchOptions,
 }
 
 /**
- * Lexical search over an in-memory knowledge-item corpus. In api (self_hosted /
- * cloud) mode the client has no local sqlite catalog; the shared corpus is the
- * cloud knowledge-items fetched through the item Store. Both `search` and `ask`
- * route their retrieval here so cloud mode is first-class instead of throwing.
- * Semantic ranking (vector index) lives only in the local sqlite catalog, so it
+ * Lexical search over an in-memory knowledge-item corpus. The HTTP client has
+ * no on-box sqlite catalog; the shared corpus is fetched through the item Store.
+ * Both `search` and `ask`
+ * route their retrieval here so the HTTP transport is first-class instead of throwing.
+ * Semantic ranking (vector index) lives only in the on-box sqlite catalog, so it
  * is reported as skipped rather than silently ignored.
  */
 export async function hybridSearchItems(

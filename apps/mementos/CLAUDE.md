@@ -142,9 +142,8 @@ claude mcp add --transport stdio --scope project mementos -- mementos-mcp --stdi
 | `MEMENTOS_DB_SCOPE` | `project` = use git root `.mementos/mementos.db` | global |
 | `PORT` | REST server port | `19428` |
 | `MEMENTOS_HOST` | Server bind address | `127.0.0.1` (localhost only) |
-| `HASNA_MEMENTOS_API_URL` / `HASNA_MEMENTOS_API_KEY` | Select authenticated client API mode when both exist | none |
-| `HASNA_MEMENTOS_STORAGE_MODE` | Server store: `local` or `cloud` | `local` |
-| `HASNA_MEMENTOS_DATABASE_URL` | Server-only PostgreSQL URL | none |
+| `HASNA_MEMENTOS_API_URL` / `HASNA_MEMENTOS_API_KEY` | Select the client HTTP API transport when both exist (exactly one set throws) | none |
+| `HASNA_MEMENTOS_DATABASE_URL` | Server-only PostgreSQL URL; presence selects the server postgresql backend | none |
 
 ## Profiles
 

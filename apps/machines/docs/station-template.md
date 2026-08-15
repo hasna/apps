@@ -46,7 +46,7 @@ Copy `templates/station/roster.example.json` to
 `applyMode` set to `manual` through the first kill drill. A manual pass is:
 
 ```bash
-HASNA_MACHINES_ALLOW_MUTATIONS=1 machines-agent roster reconcile \
+HASNA_MACHINES_ALLOW_MUTATIONS=1 machines-daemon roster reconcile \
   --config "$HOME/.hasna/machines/roster.json" --apply --drill-level tmux-kill
 ```
 

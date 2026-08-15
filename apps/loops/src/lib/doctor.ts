@@ -6,7 +6,8 @@ import { ensureDataDir } from "./paths.js";
 import { preflightTarget } from "./executor.js";
 import { workflowExecutionOrder } from "./workflow-spec.js";
 import { listOpenMachines } from "./machines.js";
-import { buildDeploymentStatus } from "./mode.js";
+import { resolveRuntimeConfig } from "./runtime-config.js";
+import { schedulerStateForConnection } from "./runtime-status.js";
 import { RESTART_INTERRUPTED_RUN_PREFIX } from "./health.js";
 
 export type DoctorSeverity = "ok" | "warn" | "fail";
@@ -55,7 +56,7 @@ function commandVersion(command: string): string | undefined {
 
 /**
  * Checks that describe THIS MACHINE's ability to execute a loop: data dir,
- * toolchain, machine topology, provider binaries, and the resolved deployment
+ * toolchain, machine topology, provider binaries, and the resolved connection
  * wiring. They are valid whether the client reads a local sqlite file or a
  * hosted control plane, because they answer "can work run here", not "what does
  * the scheduler hold".
@@ -145,21 +146,34 @@ export function runDoctor(store: Store): DoctorReport {
     });
   }
 
-  const deployment = buildDeploymentStatus();
-  const schedulerState = deployment.schedulerState;
-  checks.push({
-    id: "scheduler-state",
-    status: deployment.deploymentMode === "local" || deployment.controlPlane.configured ? "ok" : "warn",
-    message: `scheduler state authority=${schedulerState.authority} local=${schedulerState.localStore.role} remote=${schedulerState.remoteStore.backend}`,
-    detail: [
-      `route_state=${schedulerState.routeAdmission.stateStore}`,
-      `active_statuses=${schedulerState.routeAdmission.activeStatuses.join(",")}`,
-      `gates=${schedulerState.routeAdmission.gates.join(",")}`,
-      `artifacts=${schedulerState.localStore.runArtifacts}`,
-      `remote_artifacts=${schedulerState.remoteStore.objectArtifacts}`,
-      `remote_apply=${String(schedulerState.remoteStore.applySupported)}`,
-    ].join(" "),
-  });
+  let schedulerCheck: DoctorCheck;
+  try {
+    const config = resolveRuntimeConfig();
+    const schedulerState = schedulerStateForConnection(config);
+    schedulerCheck = {
+      id: "scheduler-state",
+      status: "ok",
+      message: `scheduler state storage=${config.storage} connection=${config.connection} remote_scheduler=${schedulerState.remoteStore.backend}`,
+      detail: [
+        `route_state=${schedulerState.routeAdmission.stateStore}`,
+        `active_statuses=${schedulerState.routeAdmission.activeStatuses.join(",")}`,
+        `gates=${schedulerState.routeAdmission.gates.join(",")}`,
+        `artifacts=${schedulerState.localStore.runArtifacts}`,
+        `remote_artifacts=${schedulerState.remoteStore.objectArtifacts}`,
+        `remote_apply=${String(schedulerState.remoteStore.applySupported)}`,
+      ].join(" "),
+    };
+  } catch (error) {
+    // A retired storage-mode env var or a partial API connection (URL without
+    // key or vice versa) never resolves; report it as a warning so the doctor
+    // stays advisory instead of crashing on a broken env.
+    schedulerCheck = {
+      id: "scheduler-state",
+      status: "warn",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  checks.push(schedulerCheck);
 
   for (const loop of store.listLoops({ status: "active" })) {
     try {

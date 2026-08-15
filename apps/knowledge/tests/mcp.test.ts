@@ -635,7 +635,7 @@ describe('knowledge MCP', () => {
         arguments: { scope: 'project' },
       }));
       expect(databaseStorage.service).toBe('knowledge');
-      expect(databaseStorage.mode).toBe('sqlite');
+      expect(databaseStorage.backend).toBe('sqlite');
       expect(databaseStorage.tables).toContain('sources');
       expect(databaseStorage.tables).not.toContain('chunks_fts');
 

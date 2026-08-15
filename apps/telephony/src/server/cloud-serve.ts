@@ -6,9 +6,9 @@
  * service). Requests are authenticated with @hasna/contracts API-key middleware.
  *
  * Public probes:
- *   GET  /health          liveness — { status, version, mode }
+ *   GET  /health          liveness — { status, version, backend }
  *   GET  /ready           readiness — pings the DB
- *   GET  /version         { status, version, mode }
+ *   GET  /version         { status, version, backend }
  *   GET  /openapi.json    OpenAPI 3 document (source for the SDK)
  *
  * Versioned API (all require an API key; scopes telephony:read / telephony:write,
@@ -33,7 +33,7 @@ import {
   type ApiKeyPrincipal,
 } from "@hasna/contracts/auth";
 import { createTelephonyCloudClient } from "../db/remote-storage.js";
-import type { PoolQueryClient, StorageMode, TypedQueryClient } from "../generated/storage-kit/index.js";
+import type { PoolQueryClient, ServerDataBackend, TypedQueryClient } from "../generated/storage-kit/index.js";
 import { getTwilioClient, hasTwilioConfig } from "../lib/twilio.js";
 import { fetchVoicesFromProvider, hasElevenLabsConfig } from "../lib/tts.js";
 
@@ -145,7 +145,7 @@ function clampLimit(raw: string | null, def = 50, max = 200): number {
  * The window after which an agent's held session is considered stale — matches
  * the local db/agents.ts default (30 min, overridable via
  * TELEPHONY_AGENT_TIMEOUT_MS) so registration takeover behaves identically in
- * local and cloud mode.
+ * either transport.
  */
 function agentActiveWindowMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env.TELEPHONY_AGENT_TIMEOUT_MS;
@@ -339,11 +339,11 @@ export interface ServeDeps {
 
 export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<Response> {
   const db: TypedQueryClient = deps.client;
-  // The serve process only ever runs on the `postgres` backend, so the value it
-  // reports on /health, /ready and /version is that backend name — the same
-  // vocabulary hasna.contract.json declares and the contract health shape
+  // The serve process only ever runs on the `postgresql` data backend, so the
+  // value it reports on /health, /ready and /version is that backend name — the
+  // same vocabulary hasna.contract.json declares and the contract health shape
   // validates. The removed placement words are never emitted.
-  const mode: StorageMode = "postgres";
+  const backend: ServerDataBackend = "postgresql";
 
   const authOrThrow = async (req: Request, requiredScopes: string[]): Promise<ApiKeyPrincipal> => {
     const url = new URL(req.url);
@@ -387,17 +387,17 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
     try {
       // ---- Public probes ----
       if (path === "/health" && method === "GET") {
-        return json({ status: "ok", version: deps.version, mode });
+        return json({ status: "ok", version: deps.version, backend });
       }
       if (path === "/version" && method === "GET") {
-        return json({ status: "ok", version: deps.version, mode });
+        return json({ status: "ok", version: deps.version, backend });
       }
       if (path === "/ready" && method === "GET") {
         try {
           await db.query("SELECT 1");
-          return json({ status: "ready", version: deps.version, mode });
+          return json({ status: "ready", version: deps.version, backend });
         } catch {
-          return json({ status: "unavailable", version: deps.version, mode }, 503);
+          return json({ status: "unavailable", version: deps.version, backend }, 503);
         }
       }
       if (path === "/openapi.json" && method === "GET") {
@@ -414,7 +414,7 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
           const params: unknown[] = [];
           const conds: string[] = [];
           // Parity with LocalStore.listContacts: agent_id/project_id are exact
-          // scoping filters. Dropping them in cloud mode over-exposed every
+          // scoping filters. Dropping them in HTTP API transport over-exposed every
           // agent's contacts across the shared fleet.
           for (const col of ["agent_id", "project_id"]) {
             const val = url.searchParams.get(col);
@@ -552,7 +552,7 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
           await authOrThrow(req, ["telephony:read"]);
           // Parity with LocalStore.listAgents: agent_id/project_id are exact
           // scoping filters served DB-side (they were silently dropped before,
-          // so `--project X` returned every agent in cloud mode).
+          // so `--project X` returned every agent in HTTP API transport).
           const where: string[] = [`status != 'archived'`];
           const params: unknown[] = [];
           for (const col of ["agent_id", "project_id"]) {
@@ -1762,7 +1762,7 @@ export async function startTelephonyServe(options: StartServeOptions = {}): Prom
   const verifier = verifyApiKey({
     app: TELEPHONY_SERVE_APP,
     signingSecret: resolveSigningSecret(env),
-    isRevoked: store.isRevoked,
+    keyStatus: store.keyStatus,
     audit: (e) => {
       if (e.outcome === "deny") {
         // Never log tokens/keys — kid + reason only.

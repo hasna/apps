@@ -348,6 +348,75 @@ describe("CLI", () => {
         restoreSettings();
       }
     });
+
+    test("doctor is healthy for a matcher-bearing custom hook wired as event + matcher fields", async () => {
+      backupSettings();
+      try {
+        const hookDir = join(TEST_HOME, ".hasna", "hooks", "hooks", "env-dump-guard");
+        mkdirSync(hookDir, { recursive: true });
+        writeFileSync(
+          join(hookDir, "manifest.json"),
+          JSON.stringify({
+            name: "env-dump-guard",
+            version: "1.0.0",
+            events: ["PreToolUse:Bash"],
+            script: "script.ts",
+          }),
+        );
+        writeFileSync(join(hookDir, "script.ts"), `console.log(JSON.stringify({ decision: "approve" }));`);
+        mkdirSync(join(TEST_HOME, ".claude"), { recursive: true });
+        writeFileSync(
+          SETTINGS_PATH,
+          JSON.stringify({
+            hooks: {
+              PreToolUse: [
+                { matcher: "Bash", hooks: [{ type: "command", command: "hooks run env-dump-guard" }] },
+              ],
+            },
+          }),
+        );
+        const data = await runJson("doctor");
+        expect(data.healthy).toBe(true);
+        expect(data.healthy_hooks).toContain("env-dump-guard");
+        expect(data.issues).toHaveLength(0);
+      } finally {
+        restoreSettings();
+      }
+    });
+
+    test("doctor flags a matcher-bearing custom hook wired under a non-matching matcher", async () => {
+      backupSettings();
+      try {
+        const hookDir = join(TEST_HOME, ".hasna", "hooks", "hooks", "env-dump-guard");
+        mkdirSync(hookDir, { recursive: true });
+        writeFileSync(
+          join(hookDir, "manifest.json"),
+          JSON.stringify({
+            name: "env-dump-guard",
+            version: "1.0.0",
+            events: ["PreToolUse:Bash"],
+            script: "script.ts",
+          }),
+        );
+        writeFileSync(join(hookDir, "script.ts"), `console.log(JSON.stringify({ decision: "approve" }));`);
+        mkdirSync(join(TEST_HOME, ".claude"), { recursive: true });
+        writeFileSync(
+          SETTINGS_PATH,
+          JSON.stringify({
+            hooks: {
+              PreToolUse: [
+                { matcher: "Write|Edit", hooks: [{ type: "command", command: "hooks run env-dump-guard" }] },
+              ],
+            },
+          }),
+        );
+        const data = await runJson("doctor");
+        expect(data.healthy).toBe(false);
+        expect(data.issues.some((i: any) => i.hook === "env-dump-guard" && i.severity === "error")).toBe(true);
+      } finally {
+        restoreSettings();
+      }
+    });
   });
 
   describe("hooks update", () => {

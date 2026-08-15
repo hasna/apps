@@ -82,8 +82,8 @@ CLI versions.
 
 ## Machine Registry
 
-Future registry rows should be stored in SQLite locally and can be synced to
-Postgres in hosted mode:
+Future registry rows should be stored in SQLite on box and can be synchronized
+through a PostgreSQL-backed server:
 
 ```text
 knowledge_machines
@@ -190,13 +190,13 @@ locally or in S3.
 
 ## Artifact Storage
 
-Local mode stores generated artifacts under:
+Default filesystem artifact storage writes under:
 
 ```text
 .hasna/knowledge/artifacts/
 ```
 
-Cloud mode may store generated artifacts under an S3-compatible prefix:
+S3 artifact storage writes under an S3-compatible prefix:
 
 ```text
 s3://<bucket>/<prefix>/.hasna/knowledge/
@@ -265,8 +265,8 @@ Semantic search state is derived but expensive. Local sync may copy vector rows
 when provider/model/dimensions/source hash match, but must be able to rebuild
 them from chunks and source refs.
 
-Hosted mode may replace local JSON vectors with pgvector or managed vector
-stores. CLI, SDK, and MCP should keep the same search/context result contracts.
+A PostgreSQL-backed server may replace on-box JSON vectors with pgvector or a
+managed vector store. CLI, SDK, and MCP keep the same result contracts.
 
 ## Acceptance Criteria
 
@@ -287,5 +287,5 @@ stores. CLI, SDK, and MCP should keep the same search/context result contracts.
 - Sync can pull/push SQLite catalog rows and generated artifacts without copying
   raw open-files bytes into knowledge.
 - Conflict records are inspectable before approval.
-- The same contract can run over LAN/Tailscale/SSH locally or a hosted API/S3
-  backend later.
+- The same contract can run over LAN/Tailscale/SSH or an HTTP API with S3
+  artifact storage.

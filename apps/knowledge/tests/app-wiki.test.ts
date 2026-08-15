@@ -8,14 +8,14 @@ import {
   createAppWikiScope,
   openProjectWiki,
 } from '../src/index';
-import { KNOWLEDGE_API_KEY_ENV_KEYS, KNOWLEDGE_API_URL_ENV_KEYS, KNOWLEDGE_MODE_ENV_KEYS } from '../src/knowledge-mode';
+import { KNOWLEDGE_API_KEY_ENV_KEYS, KNOWLEDGE_API_URL_ENV_KEYS, RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS } from '../src/client-transport';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = join(__dirname, '..', 'src', 'cli.ts');
 
 function runCli(args: string[], cwd: string, env: Record<string, string>) {
   const inherited = { ...process.env } as Record<string, string>;
-  for (const key of [...KNOWLEDGE_API_URL_ENV_KEYS, ...KNOWLEDGE_API_KEY_ENV_KEYS, ...KNOWLEDGE_MODE_ENV_KEYS]) {
+  for (const key of [...KNOWLEDGE_API_URL_ENV_KEYS, ...KNOWLEDGE_API_KEY_ENV_KEYS, ...RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS]) {
     delete inherited[key];
   }
   return spawnSync('bun', [CLI, ...args], {

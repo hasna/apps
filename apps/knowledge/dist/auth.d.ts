@@ -1,4 +1,3 @@
-import type { KnowledgeConfig } from './workspace';
 export interface KnowledgeAuthConfig {
     api_key: string;
     email?: string;
@@ -22,7 +21,7 @@ export interface KnowledgeAuthStatus {
 export declare const DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.md";
 export declare function normalizeKnowledgeApiOrigin(apiUrl: string): string;
 export declare function knowledgeAuthPath(env?: Record<string, string | undefined>): string;
-export declare function resolveKnowledgeApiUrl(config?: KnowledgeConfig, env?: Record<string, string | undefined>): string;
+export declare function resolveKnowledgeApiUrl(env?: Record<string, string | undefined>): string;
 export declare function getKnowledgeAuth(env?: Record<string, string | undefined>): KnowledgeAuthConfig | null;
 export declare function saveKnowledgeAuth(auth: Omit<KnowledgeAuthConfig, 'created_at'> & {
     created_at?: string;
@@ -32,4 +31,4 @@ export declare function getKnowledgeApiKey(env?: Record<string, string | undefin
     apiKey: string | null;
     source: KnowledgeAuthStatus['source'];
 };
-export declare function knowledgeAuthStatus(config?: KnowledgeConfig, env?: Record<string, string | undefined>): KnowledgeAuthStatus;
+export declare function knowledgeAuthStatus(env?: Record<string, string | undefined>): KnowledgeAuthStatus;

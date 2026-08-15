@@ -275,7 +275,7 @@ async function withLocalStore<T>(operation: string, fn: (store: Store) => T | Pr
   if (isCloudStore()) {
     throw new Error(
       `'${operation}' inspects this machine's local Loops runtime and is not available while flipped to the hosted Loops API. ` +
-        `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or set HASNA_LOOPS_STORAGE_MODE=local) to run it here.`,
+        `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (unset both to use the local file) to run it here.`,
     );
   }
   const store = new Store();
@@ -833,10 +833,11 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
         daemon: { running: boolean; stale: boolean; pid: number | undefined } | undefined;
         warning: string | undefined;
       }>(async (store) => {
-        if (store.transport === "cloud-http") {
-          // Flipped to cloud: marking due is a schedule mutation on the hosted
-          // loop record (set next_run_at=now) via the ApiStore; a self-hosted
-          // runner picks it up. There is no local daemon to report.
+        if (store.transport === "api") {
+          // Flipped to the hosted API: marking due is a schedule mutation on the
+          // hosted loop record (set next_run_at=now) via the ApiStore; a runner
+          // against the hosted control plane picks it up. There is no local
+          // daemon to report.
           const loop = await store.requireUniqueLoop(idOrName);
           if (loop.archivedAt) throw new LoopArchivedError(idOrName);
           const now = new Date().toISOString();
@@ -846,7 +847,7 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
             loop: publicLoop(updated),
             daemon: undefined,
             warning:
-              "loops is flipped to self_hosted: the loop is marked due on the hosted control plane; a self-hosted runner must execute it.",
+              "loops is flipped to the hosted API: the loop is marked due on the hosted control plane; a runner must execute it.",
           };
         }
         // Local: schedule via the shared runLoopNow (schedule mode) against this

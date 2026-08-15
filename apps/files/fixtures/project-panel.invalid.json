@@ -1,0 +1,20 @@
+{
+  "schema": "hasna.project_panel.v1",
+  "id": "files_panel_contract_fixture",
+  "createdAt": "2026-08-01T12:00:00.000Z",
+  "projectId": "contract-fixture",
+  "kind": "files",
+  "title": "Files",
+  "summary": "This fixture intentionally omits the required provider boundary.",
+  "state": "ready",
+  "generatedAt": "2026-08-01T12:00:00.000Z",
+  "freshness": "fresh",
+  "metrics": [
+    {
+      "id": "total_files",
+      "label": "Files",
+      "value": 1,
+      "status": "good"
+    }
+  ]
+}

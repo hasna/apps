@@ -340,9 +340,8 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at)`,
   `CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status)`,
 
-  // Knowledge catalog items (the CLI add/list/get catalog). In local mode this
-  // catalog lives in the JSON store (db.json); in cloud mode (PURE REMOTE,
-  // Amendment A1) it is durable here. Kept faithful to the KnowledgeItem shape.
+  // Knowledge catalog items (the CLI add/list/get catalog). On-box clients use
+  // the JSON store (db.json); the server persists the shared corpus here.
   `CREATE TABLE IF NOT EXISTS knowledge_items (
     id TEXT PRIMARY KEY,
     short_id TEXT,

@@ -1,22 +1,25 @@
 // machines-serve — the HTTP control-plane API for the machine registry.
 //
 // Surfaces:
-//   GET /health           liveness (no auth)         -> { status, version, mode }
+//   GET /health           liveness (no auth)         -> { status, version, backend }
 //   GET /ready            readiness (no auth)        -> reachable RDS + migrated
-//   GET /version          version (no auth)          -> { status, version, mode }
+//   GET /version          version (no auth)          -> { status, version, backend }
 //   GET /openapi.json     the OpenAPI document (no auth)
 //   /v1/machines[...]     registry CRUD (API-key auth, scopes machines:read/write)
 //   /v1/heartbeats        fleet heartbeats (API-key auth, machines:read)
 //
 // Auth is the @hasna/contracts API-key kit (stateless HMAC tokens + hashed-at-
-// rest revocation records). Amendment A1: every request reads/writes RDS
-// directly through the vendored storage kit — no cache, no local mirror.
+// rest revocation records). PURE REMOTE: every request reads/writes the
+// machines Postgres directly through the vendored storage kit — no cache, no
+// local mirror. The server data backend is `sqlite | postgresql` selected by
+// HASNA_MACHINES_DATABASE_URL presence; any set storage-mode variable throws.
 
 import { verifyApiKey, ApiKeyStore, type ApiKeyVerifier } from "@hasna/contracts/auth";
 import { getPackageVersion } from "../version.js";
-import { resolveStorageMode } from "../generated/storage-kit/mode.js";
+import { resolveServerDataBackend } from "../generated/storage-kit/backend.js";
 import { checkHealth } from "../generated/storage-kit/health.js";
 import { DEFAULT_MIGRATION_LEDGER_TABLE } from "../generated/storage-kit/migrations.js";
+import { assertNoLegacyStorageMode } from "../lib/retired-storage-mode.js";
 import { getServiceClient } from "./db.js";
 import { MachineRegistry, RegistryValidationError } from "./registry.js";
 import { allMigrations } from "./migrate.js";
@@ -62,11 +65,11 @@ function json(body: unknown, status = 200, extra: Record<string, string> = {}): 
   });
 }
 
-function resolveMode(): string {
+function resolveBackend(): string {
   try {
-    return resolveStorageMode(APP).mode;
+    return resolveServerDataBackend(APP).backend;
   } catch {
-    return process.env["HASNA_APP_MODE"] || "unknown";
+    return "unknown";
   }
 }
 
@@ -130,10 +133,10 @@ export function createHandler(deps: {
 
     // ---- unauthenticated operational probes --------------------------------
     if (path === "/health" && method === "GET") {
-      return json({ status: "ok", version: getPackageVersion(), mode: resolveMode() });
+      return json({ status: "ok", version: getPackageVersion(), backend: resolveBackend() });
     }
     if (path === "/version" && method === "GET") {
-      return json({ status: "ok", version: getPackageVersion(), mode: resolveMode() });
+      return json({ status: "ok", version: getPackageVersion(), backend: resolveBackend() });
     }
     if (path === "/openapi.json" && method === "GET") {
       return json(buildOpenApiDocument());
@@ -144,7 +147,7 @@ export function createHandler(deps: {
         const body = {
           status: ready.ok ? "ready" : "not_ready",
           version: getPackageVersion(),
-          mode: resolveMode(),
+          backend: resolveBackend(),
           pendingMigrations: ready.pending,
           latencyMs: ready.latencyMs,
           ...(ready.error ? { error: ready.error } : {}),
@@ -152,7 +155,7 @@ export function createHandler(deps: {
         return json(body, ready.ok ? 200 : 503);
       } catch (error) {
         return json(
-          { status: "not_ready", version: getPackageVersion(), mode: resolveMode(), error: String(error instanceof Error ? error.message : error) },
+          { status: "not_ready", version: getPackageVersion(), backend: resolveBackend(), error: String(error instanceof Error ? error.message : error) },
           503,
         );
       }
@@ -246,8 +249,12 @@ export function createHandler(deps: {
   };
 }
 
-/** Start the machines-serve HTTP server backed by RDS (Amendment A1). */
+/** Start the machines-serve HTTP server backed by Postgres (PURE REMOTE). */
 export function startServer(options: StartServerOptions = {}): MachinesServer {
+  // Fail loud before binding anything: a set storage-mode variable is an
+  // error, never a hint (deployment modes were removed, owner directive
+  // 2026-07-29).
+  assertNoLegacyStorageMode();
   const host = options.host || process.env["HOST"] || "0.0.0.0";
   const port = options.port ?? Number(process.env["PORT"] || 8080);
 
@@ -256,7 +263,7 @@ export function startServer(options: StartServerOptions = {}): MachinesServer {
   const verifier = verifyApiKey({
     app: APP,
     signingSecret,
-    isRevoked: store.isRevoked,
+    keyStatus: store.keyStatus,
     audit: (e) => {
       // Structured single-line audit trail (no secret material).
       console.log(JSON.stringify({ evt: "api_auth", ...e }));

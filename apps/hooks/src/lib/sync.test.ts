@@ -116,3 +116,86 @@ describe("sync from remote registry (API URL configured)", () => {
     }
   });
 });
+
+describe("sync client sends the API key to a locked registry", () => {
+  test("sends X-API-Key from env and syncs when the registry requires it", async () => {
+    let sawHeader = false;
+    const sha = createHash("sha256").update("console.log('locked');\n").digest("hex");
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (req.headers.get("x-api-key") !== "test-sentinel") {
+          return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
+        }
+        sawHeader = true;
+        if (url.pathname === "/api/v1/catalog") {
+          return Response.json({ hooks: [{ name: "locked-demo", version: "1.0.0", sha256: sha }] });
+        }
+        if (url.pathname === "/api/v1/lock") {
+          return Response.json({ hooks: { "locked-demo": { version: "1.0.0", sha256: sha, source: "remote" } } });
+        }
+        if (url.pathname === "/api/v1/hooks/locked-demo/1.0.0") {
+          return Response.json({
+            manifest: { name: "locked-demo", version: "1.0.0", events: ["PostToolUse"], script: "script.ts" },
+            script: "console.log('locked');\n",
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      process.env.HASNA_HOOKS_API_URL = base;
+      process.env.HASNA_HOOKS_API_KEY = "test-sentinel";
+      const plan = await syncHooks();
+      expect(plan.diff.added).toContain("locked-demo");
+      expect(sawHeader).toBe(true);
+    } finally {
+      delete process.env.HASNA_HOOKS_API_URL;
+      delete process.env.HASNA_HOOKS_API_KEY;
+      server.stop(true);
+    }
+  });
+
+  test("a 401 without a configured key fails with the clear registry-key error", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
+      },
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      process.env.HASNA_HOOKS_API_URL = base;
+      delete process.env.HASNA_HOOKS_API_KEY;
+      await expect(syncHooks()).rejects.toThrow(
+        /registry requires API key — set HASNA_HOOKS_API_KEY or HOOKS_API_KEY/,
+      );
+    } finally {
+      delete process.env.HASNA_HOOKS_API_URL;
+      server.stop(true);
+    }
+  });
+
+  test("a 401 with a wrong key fails with the same clear error", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
+      },
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      process.env.HASNA_HOOKS_API_URL = base;
+      process.env.HASNA_HOOKS_API_KEY = "wrong-sentinel";
+      await expect(syncHooks()).rejects.toThrow(
+        /registry requires API key — set HASNA_HOOKS_API_KEY or HOOKS_API_KEY/,
+      );
+    } finally {
+      delete process.env.HASNA_HOOKS_API_URL;
+      delete process.env.HASNA_HOOKS_API_KEY;
+      server.stop(true);
+    }
+  });
+});

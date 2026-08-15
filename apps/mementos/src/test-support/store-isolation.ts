@@ -51,12 +51,18 @@ import {
 } from "../db/api-mode.js";
 import type { StoreBackendReport } from "../db/store-backend.js";
 import { MEMENTOS_STORAGE_ENV, MEMENTOS_STORAGE_FALLBACK_ENV } from "../storage.js";
+import { LEGACY_STORAGE_MODE_KEYS } from "../lib/retired-storage-mode.js";
 
 /**
  * Every env var that can move the store off local SQLite, plus the store
  * credential. Derived from the resolver's own exported key lists rather than
  * retyped, so adding a selector in src/db/api-mode.ts or src/storage.ts
  * automatically widens what the harnesses neutralize.
+ *
+ * The retired storage-mode keys stay in the set even though the ratchet turns
+ * them into errors: a harness child that inherits a stale variable from the
+ * operator shell must have it DELETED (a blank value would still throw), and
+ * the preload must keep the suite runnable on a machine that still exports one.
  *
  * `MEMENTOS_DATABASE_PASSWORD` is not a selector but is the store credential;
  * removing it can only make the child more local, never less.
@@ -68,8 +74,7 @@ export const STORE_SELECTOR_ENV_KEYS: readonly string[] = Array.from(
     ...DATABASE_URL_ENV_KEYS,
     MEMENTOS_STORAGE_ENV.databaseUrl,
     MEMENTOS_STORAGE_FALLBACK_ENV.databaseUrl,
-    MEMENTOS_STORAGE_ENV.mode,
-    MEMENTOS_STORAGE_FALLBACK_ENV.mode,
+    ...LEGACY_STORAGE_MODE_KEYS,
     "MEMENTOS_DATABASE_PASSWORD",
   ]),
 );
@@ -249,11 +254,11 @@ export async function assertLocalStoreBackend(
       "store-isolation: REFUSING TO RUN — this suite drives the real CLI, and the child process did " +
         "NOT resolve to the local SQLite store. Running it would write test fixtures into the SHARED " +
         "PRODUCTION store, where they are indistinguishable from real memories.\n" +
-        `  backend     : ${report.backend}\n` +
-        `  api_mode    : ${report.api_mode}\n` +
-        `  selected_by : ${report.selected_by}\n` +
-        `  storage_mode: ${report.storage_mode}\n` +
-        `  db_path     : ${report.db_path}\n` +
+        `  backend        : ${report.backend}\n` +
+        `  api_mode       : ${report.api_mode}\n` +
+        `  selected_by    : ${report.selected_by}\n` +
+        `  server_backend : ${report.server_backend}\n` +
+        `  db_path        : ${report.db_path}\n` +
         "A store-selecting env var reached the child that STORE_SELECTOR_ENV_KEYS does not cover. " +
         "Add it to src/test-support/store-isolation.ts (and export it from the resolver that reads it).",
     );

@@ -15,6 +15,13 @@ storage kit is version `0.5.2`, established through PR #93 at commit
 `1456b852`, and its validation command is `bun run check:contracts`. PR #84 is
 not current normalization evidence and has its own disposition.
 
+Mode-removal correction (2026-08-14): the deployment-mode sweep removed
+`HASNA_<APP>_STORAGE_MODE` and mode vocabulary. Client transport resolves from
+API URL plus API key alone, status surfaces report storage
+(`sqlite|postgresql`) and connection (`file|api`), and the OpenLoops generated
+storage kit is regenerated on `@hasna/contracts` 0.10.6 (the kit's former
+`mode.ts` is replaced by `backend.ts`/`own.ts`).
+
 ## Summary
 
 The strongest extraction candidate is the generated Hasna storage kit. It is
@@ -47,7 +54,7 @@ Primary repo, writeable worktree:
 
 - `open-loops/package.json`
 - `open-loops/docs/AUTOMATION_RUNTIME_DESIGN.md`
-- `open-loops/docs/DEPLOYMENT_MODES.md`
+- `open-loops/docs/STORAGE-BACKENDS.md`
 - `open-loops/docs/RUNTIME_BOUNDARY.md`
 - `open-loops/docs/USAGE.md`
 - `open-loops/src/cli/index.ts`
@@ -233,12 +240,13 @@ package first.
 The generated storage kit deliberately excludes sync/cache logic, but several
 repos re-implement adjacent cloud transport or remote storage wrappers:
 
-- `open-loops/src/lib/cloud/transport.ts` resolves client mode and cloud HTTP
-  transport from `HASNA_<APP>_STORAGE_MODE`, API URL, and API key variables.
+- `open-loops/src/lib/cloud/transport.ts` resolves the client HTTP transport
+  from API URL and API key variables alone (`HASNA_<APP>_STORAGE_MODE` is
+  deleted).
 - `open-conversations/src/lib/cloud-store.ts` uses
-  `@hasna/contracts/client/storage` and adds app-specific implied
-  `self_hosted` mode when API URL and API key are present.
-- `open-logs/src/lib/cloud-store.ts` follows the same implied self-hosted
+  `@hasna/contracts/client/storage` and selects the API connection when API URL
+  and API key are present.
+- `open-logs/src/lib/cloud-store.ts` follows the same implied API-connection
   pattern and wraps a cloud store for logs resources.
 - `open-projects/src/db/remote-storage.ts` implements a local `PgAdapterAsync`
   with placeholder translation, undefined-to-null conversion, and TLS
@@ -345,7 +353,8 @@ evidence and has its own disposition.
 
 Responsibilities:
 
-- Storage mode/env resolution for local vs cloud/self-hosted semantics.
+- Storage/connection env resolution for local file vs control-plane API
+  semantics.
 - Postgres TLS handling that matches libpq `sslmode`.
 - `pg.Pool` factory and typed query helpers.
 - Migration ledger and checksum validation.

@@ -6,6 +6,7 @@ import { getDb } from "../db/database.js";
 import { getConfig, getWorkspaceRoots } from "./config.js";
 import { classifyCheckout } from "./checkout-health.js";
 import { sanitizeRemoteIdentity } from "./remote-identity.js";
+import { canonicalPath } from "./path-identity.js";
 import {
   upsertRepo,
   bulkInsertCommits,
@@ -13,6 +14,7 @@ import {
   bulkInsertTags,
   bulkInsertRemotes,
   isDerivedCheckoutPath,
+  mergeCanonicalDuplicateRepos,
 } from "../db/repos.js";
 import type { ScanResult } from "../types/index.js";
 
@@ -58,11 +60,16 @@ export function discoverRepos(rootDirs: string[], maxDepth?: number): string[] {
   const depth = maxDepth ?? cfg.scanDepth ?? 5;
   const excluded = new Set(cfg.excludedPaths ?? ["node_modules", "dist", "vendor", ".git"]);
   const repos: string[] = [];
+  // Keyed on canonical identity (realpath), not on the input spelling. On a
+  // case-insensitive filesystem the `~/workspace` and `~/Workspace` roots name
+  // the same directory; a string-keyed set walks it twice and hands every repo
+  // path to the indexer twice, which double-indexes each checkout (measured
+  // 2026-08-14: apps ids 160 and 206 for one directory).
   const visited = new Set<string>();
 
   function walk(dir: string, d: number) {
     if (d > depth) return;
-    const realDir = resolve(dir);
+    const realDir = canonicalPath(dir);
     if (visited.has(realDir)) return;
     visited.add(realDir);
 
@@ -348,6 +355,14 @@ export async function scanRepoPaths(
 ): Promise<ScanResult> {
   const start = Date.now();
   const { full = false, onProgress, workers: maxWorkers = 4 } = opts;
+  // Collapse registry rows that already describe the same directory under two
+  // spellings before anything is refreshed, so the upserts below land on the
+  // survivor and the index converges to one row per directory. Idempotent:
+  // with no duplicates this reads the rows, realpaths them, and writes nothing.
+  const merged = mergeCanonicalDuplicateRepos();
+  if (merged.duplicate_rows_removed > 0) {
+    onProgress?.(`Merged ${merged.duplicate_rows_removed} registry rows that name the same directory twice`);
+  }
   // scanRepoPaths is also called directly by the auto-index worker and repo
   // lifecycle, so enforce the same admission rule as discovery here rather
   // than relying on every caller to have gone through discoverRepos first.
@@ -403,6 +418,7 @@ export async function scanRepoPaths(
     commits_indexed,
     branches_indexed,
     tags_indexed,
+    duplicate_rows_merged: merged.duplicate_rows_removed,
     duration_ms: Date.now() - start,
   };
 }
@@ -434,8 +450,11 @@ export function watchRepos(
   const watchers: Array<ReturnType<typeof watch>> = [];
 
   const attachRepoWatcher = (repoPath: string) => {
-    if (watchedDirs.has(repoPath)) return;
-    watchedDirs.add(repoPath);
+    // Same canonical identity as discoverRepos: two spellings of one directory
+    // must not arm two watchers on the same tree.
+    const key = canonicalPath(repoPath);
+    if (watchedDirs.has(key)) return;
+    watchedDirs.add(key);
 
     try {
       const watcher = watch(repoPath, { recursive: true }, (_eventType, filename) => {
@@ -463,10 +482,11 @@ export function watchRepos(
         const gitMarkerIndex = normalized.indexOf("/.git");
         if (gitMarkerIndex === -1) return;
         const newRepoPath = resolve(root, normalized.slice(0, gitMarkerIndex));
-        if (existsSync(join(newRepoPath, ".git")) && !watchedDirs.has(newRepoPath)) {
-          opts.onProgress?.(`[new] Discovered new repo: ${basename(newRepoPath)}`);
-          attachRepoWatcher(newRepoPath);
-          const cb = opts.onRepoDiscovered?.(newRepoPath);
+        const discovered = canonicalPath(newRepoPath);
+        if (existsSync(join(discovered, ".git")) && !watchedDirs.has(discovered)) {
+          opts.onProgress?.(`[new] Discovered new repo: ${basename(discovered)}`);
+          attachRepoWatcher(discovered);
+          const cb = opts.onRepoDiscovered?.(discovered);
           if (cb instanceof Promise) cb.catch(() => {});
         }
       });

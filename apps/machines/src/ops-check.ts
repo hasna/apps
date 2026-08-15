@@ -652,7 +652,7 @@ function buildIssues(input: {
         classification: "machine-heartbeat-attention",
         summary: `${machine.machine_id} heartbeat is ${machine.heartbeat}`,
         evidence: [{ heartbeat: machine.heartbeat, warnings: machine.warnings }],
-        recommendation: "Collect a fresh machines-agent heartbeat or inspect the daemon; remediation should be routed through task-triggered workflows.",
+        recommendation: "Collect a fresh machines-daemon heartbeat or inspect the daemon; remediation should be routed through task-triggered workflows.",
         tags: [machine.machine_id],
         maxEvidenceItems: input.maxEvidenceItems,
       }));

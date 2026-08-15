@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { AgentTarget } from "../types.js";
 import { ValidationError } from "./errors.js";
 import {
+  buildControlPlaneMigrationPlan,
   buildImportMigrationPlan,
-  buildSelfHostedMigrationPlan,
   exportLoopsMigrationBundle,
   migrationHash,
   validateLoopsMigrationBundle,
@@ -38,7 +38,7 @@ describe("migration agent target validation", () => {
   });
 });
 
-describe("self-hosted control-plane request bounds", () => {
+describe("control-plane request bounds", () => {
   test("preview fails fast with a timeout instead of hanging when the control plane never responds", async () => {
     const store = new Store(":memory:");
     try {
@@ -53,8 +53,8 @@ describe("self-hosted control-plane request bounds", () => {
 
       const start = Date.now();
       await expect(
-        buildSelfHostedMigrationPlan(store, {
-          operation: "self-hosted-migrate",
+        buildControlPlaneMigrationPlan(store, {
+          operation: "migrate",
           apiUrl: "https://loops.example.test",
           apiKey: "test-token",
           timeoutMs: 100,
@@ -95,8 +95,8 @@ describe("self-hosted control-plane request bounds", () => {
         return Promise.resolve(Response.json({ ok: true, workflows: [], loops: [] }));
       }) as typeof fetch;
 
-      const plan = await buildSelfHostedMigrationPlan(store, {
-        operation: "self-hosted-migrate",
+      const plan = await buildControlPlaneMigrationPlan(store, {
+        operation: "migrate",
         apiUrl: "https://loops.example.test",
         apiKey: "test-token",
         fetchImpl,

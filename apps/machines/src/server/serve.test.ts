@@ -6,7 +6,14 @@ import type { MachineRegistry } from "./registry.js";
 const SIGNING_SECRET = "test-signing-secret-please-do-not-use-in-prod";
 
 function verifier() {
-  return verifyApiKey({ app: "machines", signingSecret: SIGNING_SECRET, isRevoked: () => false });
+  // 0.10.6 auth contract: keyStatus is required. "active" for every
+  // validly-signed token matches the previous `isRevoked: () => false`
+  // semantics — signature validation remains the gate in these tests.
+  return verifyApiKey({
+    app: "machines",
+    signingSecret: SIGNING_SECRET,
+    keyStatus: () => Promise.resolve("active" as const),
+  });
 }
 
 function keyFor(scopes: string[]): string {
@@ -54,13 +61,13 @@ function handler(reg = stubRegistry()) {
 }
 
 describe("machines-serve handler", () => {
-  test("GET /health is unauthenticated and returns status/version/mode", async () => {
+  test("GET /health is unauthenticated and returns status/version/backend", async () => {
     const res = await handler()(new Request("http://x/health"));
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.status).toBe("ok");
     expect(typeof body.version).toBe("string");
-    expect("mode" in body).toBe(true);
+    expect("backend" in body).toBe(true);
   });
 
   test("GET /version returns version payload without auth", async () => {

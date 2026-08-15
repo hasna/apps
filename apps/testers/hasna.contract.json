@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/@hasna/contracts/dist/hasna.contract.schema.json",
+  "schema": "hasna.service_contract.v1",
+  "name": "testers",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.1",
+  "description": "AI-powered QA testing platform — CLI, MCP, HTTP serve, and generated SDK. serve reads/writes cloud Postgres directly (Amendment A1).",
+  "bins": ["testers", "testers-mcp", "testers-serve"],
+  "storage": {
+    "mode": "cloud",
+    "envPrefix": "HASNA_TESTERS_",
+    "aliasEnvPrefix": "TESTERS_",
+    "databaseUrlSecretRef": "hasna/oss/testers/database-url",
+    "sqlitePath": "~/.hasna/testers/testers.db"
+  },
+  "metadata": {
+    "healthPath": "/health",
+    "readyPath": "/ready",
+    "versionPath": "/version",
+    "apiBasePath": "/v1",
+    "openapiPath": "/openapi.json",
+    "apiSigningEnv": "HASNA_TESTERS_API_SIGNING_KEY"
+  }
+}

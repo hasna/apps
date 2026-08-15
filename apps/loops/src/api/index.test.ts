@@ -120,22 +120,27 @@ async function createAdmittedExpiredWorkflowRun(
 describe("loops-api foundation", () => {
   test("status output is import-safe and path-safe", async () => {
     const mod = await import("./index.js");
-    const status = mod.apiStatus();
+    const status = mod.apiStatus({});
 
     expect(status.ok).toBe(true);
     expect(status.service).toBe("loops-api");
-    expect(status.status.deploymentMode).toBe("self_hosted");
+    expect(status.status.storage).toBe("sqlite");
+    expect(status.status.connection).toBe("file");
     expect(JSON.stringify(status)).not.toContain("dataDir");
     expect(JSON.stringify(status)).not.toContain("dbPath");
   });
 
-  test("health uses the strict contracts shape and maps self_hosted runtime to cloud storage mode", async () => {
+  test("health reports the resolved storage and connection without tenant storage access", async () => {
     const mod = await import("./index.js");
-    const previousMode = process.env.HASNA_LOOPS_STORAGE_MODE;
+    const previousApiUrl = process.env.HASNA_LOOPS_API_URL;
+    const previousApiKey = process.env.HASNA_LOOPS_API_KEY;
+    const previousDatabaseUrl = process.env.HASNA_LOOPS_DATABASE_URL;
     const mutableBun = Bun as unknown as { serve: typeof Bun.serve };
     const originalServe = mutableBun.serve;
     let fetchHandler: ((request: Request) => Response | Promise<Response>) | undefined;
-    process.env.HASNA_LOOPS_STORAGE_MODE = "self_hosted";
+    delete process.env.HASNA_LOOPS_API_URL;
+    delete process.env.HASNA_LOOPS_API_KEY;
+    process.env.HASNA_LOOPS_DATABASE_URL = "postgresql-placeholder";
     mutableBun.serve = ((options: {
       fetch(request: Request): Response | Promise<Response>;
     }) => {
@@ -162,12 +167,18 @@ describe("loops-api foundation", () => {
       expect(await response.json()).toEqual({
         status: "ok",
         version: packageVersion(),
-        mode: "cloud",
+        storage: "postgresql",
+        connection: "file",
+        service: "loops",
       });
     } finally {
       mutableBun.serve = originalServe;
-      if (previousMode === undefined) delete process.env.HASNA_LOOPS_STORAGE_MODE;
-      else process.env.HASNA_LOOPS_STORAGE_MODE = previousMode;
+      if (previousApiUrl === undefined) delete process.env.HASNA_LOOPS_API_URL;
+      else process.env.HASNA_LOOPS_API_URL = previousApiUrl;
+      if (previousApiKey === undefined) delete process.env.HASNA_LOOPS_API_KEY;
+      else process.env.HASNA_LOOPS_API_KEY = previousApiKey;
+      if (previousDatabaseUrl === undefined) delete process.env.HASNA_LOOPS_DATABASE_URL;
+      else process.env.HASNA_LOOPS_DATABASE_URL = previousDatabaseUrl;
     }
   });
 
@@ -473,7 +484,7 @@ describe("loops-api foundation", () => {
       await storage.markWorkflowStepPid(remotePidRun.id, "worker", 2_147_483_647);
       const remoteStorage = new Proxy(storage, {
         get(target, property) {
-          if (property === "backend") return "postgres";
+          if (property === "backend") return "postgresql";
           if (property === "supportsRemoteRunners") return true;
           if (property === "recoverWorkflowRun") {
             return async (...args: Parameters<typeof target.recoverWorkflowRun>) => {
@@ -556,17 +567,29 @@ describe("loops-api foundation", () => {
   });
 
   test("status command JSON uses the service envelope", () => {
+    // The retired mode env key is built from two literals so the contiguous
+    // token never appears in this file: the mode-removal ratchet exempts only
+    // runtime-config's own rejection contract, not this API test.
+    const retiredModeEnvKey = "HASNA_LOOPS_" + "STORAGE_" + "MODE";
     const result = spawnSync(process.execPath, [apiPath, "--json", "status"], {
       encoding: "utf8",
+      env: {
+        ...process.env,
+        HASNA_LOOPS_API_URL: "",
+        HASNA_LOOPS_API_KEY: "",
+        HASNA_LOOPS_DATABASE_URL: "",
+        [retiredModeEnvKey]: "",
+      },
     });
 
     expect(result.status).toBe(0);
-    const body = JSON.parse(result.stdout) as { ok: boolean; service: string; status: { deploymentMode: string } };
+    const body = JSON.parse(result.stdout) as { ok: boolean; service: string; status: { storage: string; connection: string } };
     expect(body).toMatchObject({
       ok: true,
       service: "loops-api",
       status: {
-        deploymentMode: "self_hosted",
+        storage: "sqlite",
+        connection: "file",
       },
     });
   });

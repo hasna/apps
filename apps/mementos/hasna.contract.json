@@ -4,8 +4,8 @@
   "name": "mementos",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.8.5",
-  "description": "Universal memory system for AI agents — CLI, MCP server, REST API, and TypeScript SDK over one SQLite or PostgreSQL store.",
+  "kitVersion": "0.10.6",
+  "description": "Universal memory system for AI agents — CLI, MCP server, REST API, and TypeScript SDK over one SQLite or PostgreSQL store. Clients use local SQLite or the HTTP API selected by HASNA_MEMENTOS_API_URL; mementos-serve reads PostgreSQL selected by HASNA_MEMENTOS_DATABASE_URL. The data backend is the only runtime switch.",
   "bins": [
     "mementos",
     "mementos-mcp",

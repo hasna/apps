@@ -39,6 +39,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { assertNoLegacyStorageMode } from "../lib/retired-storage-mode.js";
 
 export interface ApiConfig {
   baseUrl: string; // normalized, includes the /v1 (or /api) prefix, no trailing slash
@@ -212,6 +213,10 @@ export class MementosStoreConfigError extends Error {
  * production store.
  *
  * Precedence, highest first:
+ *  0. A retired storage-mode variable (HASNA_MEMENTOS_STORAGE_MODE or any of
+ *     its aliases) throws via `assertNoLegacyStorageMode`, even when blank.
+ *     Deployment modes no longer exist; a stale variable is an error, never a
+ *     selector. ENFORCED HERE, before anything else.
  *  1. An explicit SQLite path (`HASNA_MEMENTOS_DB_PATH` / `MEMENTOS_DB_PATH`) is
  *     the narrowest, most specific signal and selects LOCAL, so local dev,
  *     tooling and import/export keep working when a stray credential is exported
@@ -224,7 +229,11 @@ export class MementosStoreConfigError extends Error {
  *
  * Never reads, logs, or embeds a credential value — only variable NAMES.
  */
-export function assertUnambiguousStoreEnv(): void {
+export function assertUnambiguousStoreEnv(env: NodeJS.ProcessEnv = process.env): void {
+  // 0. The fail-loud ratchet: a retired storage-mode variable is an error,
+  //    never a hint. This must run BEFORE everything else so a stale variable
+  //    does not get rescued by a DB path, a DSN, or a complete API pair.
+  assertNoLegacyStorageMode(env);
   // 1. Explicit local path: unambiguous, so there is no error to raise. The
   // SELECTION itself happens in getApiConfig(); this return only skips the
   // half-configured check below, which would otherwise fire on a stray API URL.

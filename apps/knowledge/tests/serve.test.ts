@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mintApiKey } from '@hasna/contracts/auth';
 import { verifyApiKey } from '@hasna/contracts/auth';
 import { ApiKeyStore } from '@hasna/contracts/auth';
-import { createServeHandler, knowledgeOpenApi, normalizeCloudDatabaseUrl } from '../src/serve.ts';
+import { createServeHandler, knowledgeOpenApi, normalizePostgresDatabaseUrl } from '../src/serve.ts';
 import { KNOWLEDGE_BOUNDED_QUERY_CAPABILITY } from '../src/query-contract.ts';
 
 const SIGNING = 'test-signing-secret-not-a-real-key';
@@ -125,7 +125,7 @@ function keyFor(scopes: string[]): string {
 function buildHandler(trace: SqlTraceEntry[] = []) {
   const client = makeMemoryClient(trace);
   const store = new ApiKeyStore(client);
-  const verifier = verifyApiKey({ app: 'knowledge', signingSecret: SIGNING, isRevoked: store.isRevoked });
+  const verifier = verifyApiKey({ app: 'knowledge', signingSecret: SIGNING, keyStatus: () => Promise.resolve('active' as const) });
   return createServeHandler({ client, verifier, store, version: '9.9.9' });
 }
 
@@ -135,9 +135,9 @@ describe('knowledge-serve', () => {
     for (const path of ['/health', '/version', '/ready']) {
       const res = await h(new Request(`http://x${path}`));
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { status: string; version: string; mode: string };
+      const body = (await res.json()) as { status: string; version: string; backend: string };
       expect(body.version).toBe('9.9.9');
-      expect(body.mode).toBe('postgres');
+      expect(body.backend).toBe('postgresql');
       expect(typeof body.status).toBe('string');
     }
   });
@@ -256,7 +256,7 @@ describe('knowledge-serve', () => {
 
     // The stable id is now resolvable by that id — this GET returned 404 before
     // the fix, which is exactly why the upsert path created a fresh duplicate on
-    // every re-run in cloud mode.
+    // every server re-run.
     const got = await h(new Request('http://x/v1/notes/k_stable', { headers: { 'x-api-key': key } }));
     expect(got.status).toBe(200);
     expect(((await got.json()) as { title: string }).title).toBe('v1');
@@ -270,9 +270,9 @@ describe('knowledge-serve', () => {
     expect(((await after.json()) as { title: string }).title).toBe('v2');
   });
 
-  test('normalizeCloudDatabaseUrl appends libpq-compat for require', () => {
+  test('normalizePostgresDatabaseUrl appends libpq-compat for require', () => {
     const env: NodeJS.ProcessEnv = { HASNA_KNOWLEDGE_DATABASE_URL: 'postgres://u:p@h:5432/db?sslmode=require' };
-    const out = normalizeCloudDatabaseUrl(env);
+    const out = normalizePostgresDatabaseUrl(env);
     expect(out).toContain('uselibpqcompat=true');
     expect(env.HASNA_KNOWLEDGE_DATABASE_URL).toContain('uselibpqcompat=true');
   });

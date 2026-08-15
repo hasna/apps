@@ -10,7 +10,7 @@
 import { createHash } from "crypto";
 import { readFileSync } from "fs";
 import { HOOKS } from "./registry.js";
-import { resolveApiUrl } from "../config.js";
+import { resolveApiKey, resolveApiUrl } from "../config.js";
 import { getDb } from "../db/index.js";
 import {
   readLock,
@@ -70,10 +70,18 @@ function collectBundledCatalog(): Array<{ name: string; version: string; sha256:
 }
 
 async function fetchJson(base: string, path: string): Promise<unknown> {
+  const headers: Record<string, string> = { accept: "application/json" };
+  const apiKey = resolveApiKey();
+  if (apiKey) headers["x-api-key"] = apiKey;
   const res = await fetch(`${base}${path}`, {
-    headers: { accept: "application/json" },
+    headers,
     signal: AbortSignal.timeout(15000),
   });
+  if (res.status === 401) {
+    throw new Error(
+      "registry requires API key — set HASNA_HOOKS_API_KEY or HOOKS_API_KEY (vault-delivered, never stored)",
+    );
+  }
   if (!res.ok) {
     throw new Error(`GET ${path} failed with status ${res.status}`);
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EventEnvelope } from "@hasna/events";
@@ -189,23 +189,48 @@ describe("deliverCampaign real sends (mock adapters)", () => {
       },
     };
 
-    const result = await deliverCampaign(makeCampaign(), {
-      ledger,
-      adapters: { email: emailAdapter },
-      eventSink: async () => {},
-      // No `shortlinks` option on purpose: a real send must not default to
-      // the mock adapter whose links do not resolve.
-    });
+    // In the mono the optional peer @hasna/shortlinks resolves to the workspace
+    // member, so a real send takes the real-adapter path (the noop fallback
+    // only exists for absent packages). Give the real store an isolated
+    // fixture domain; SHORTLINKS_HOME/DB must both be pointed at the fixture
+    // or the store opens the ambient home DB and writes the real config.
+    const dbDir = mkdtempSync(join(tmpdir(), "announce-shortlinks-"));
+    const dbPath = join(dbDir, "shortlinks.db");
+    const prevHome = process.env.SHORTLINKS_HOME;
+    const prevDb = process.env.SHORTLINKS_DB;
+    process.env.SHORTLINKS_HOME = dbDir;
+    process.env.SHORTLINKS_DB = dbPath;
+    try {
+      const { ShortlinksStore } = await import("@hasna/shortlinks");
+      const store = new ShortlinksStore(dbPath);
+      store.addDomain({ hostname: "go.example", defaultDomain: true });
+      store.close();
 
-    expect(result.dryRun).toBe(false);
-    expect(delivered.length).toBeGreaterThan(0);
-    for (const message of result.rendered) {
-      for (const link of message.links) {
-        expect(link.shortUrl).not.toContain("go.hasna.example");
+      const result = await deliverCampaign(makeCampaign(), {
+        ledger,
+        adapters: { email: emailAdapter },
+        eventSink: async () => {},
+        // No `shortlinks` option on purpose: a real send must not default to
+        // the mock adapter whose links do not resolve.
+      });
+
+      expect(result.dryRun).toBe(false);
+      expect(delivered.length).toBeGreaterThan(0);
+      for (const message of result.rendered) {
+        for (const link of message.links) {
+          expect(link.shortUrl).not.toContain("go.hasna.example");
+          expect(link.shortUrl).toContain("go.example");
+        }
       }
-    }
-    for (const body of delivered) {
-      expect(body).not.toContain("go.hasna.example");
+      for (const body of delivered) {
+        expect(body).not.toContain("go.hasna.example");
+      }
+    } finally {
+      if (prevHome === undefined) delete process.env.SHORTLINKS_HOME;
+      else process.env.SHORTLINKS_HOME = prevHome;
+      if (prevDb === undefined) delete process.env.SHORTLINKS_DB;
+      else process.env.SHORTLINKS_DB = prevDb;
+      rmSync(dbDir, { recursive: true, force: true });
     }
   });
 

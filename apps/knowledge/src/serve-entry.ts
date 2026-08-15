@@ -2,8 +2,7 @@
 /**
  * @hasna/knowledge — knowledge-serve entrypoint.
  *
- * Boots the HTTP API. Requires postgres backend env:
- *   HASNA_KNOWLEDGE_STORAGE_MODE=postgres
+ * Boots the HTTP API. Requires the server PostgreSQL URL:
  *   HASNA_KNOWLEDGE_DATABASE_URL=postgres://...      (never logged)
  *   HASNA_KNOWLEDGE_API_SIGNING_KEY=...              (or API_KEY_SIGNING_SECRET)
  *   PORT=8080                                         (optional; default 8080)

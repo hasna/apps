@@ -45,7 +45,7 @@ afterEach(() => {
   // 195272ae): this exact gap is why `config-target-identity.test.ts` showed
   // 0 failures under plain `bun test` while failing 13/13 standalone — this
   // file's unrestored delete ran first in the shared process and silently
-  // laundered the ambient cloud-mode config away for every file after it.
+  // laundered the ambient HTTP API config away for every file after it.
   if (savedApiUrl !== undefined) process.env["HASNA_INSTRUCTIONS_API_URL"] = savedApiUrl;
   else delete process.env["HASNA_INSTRUCTIONS_API_URL"];
   if (savedApiKey !== undefined) process.env["HASNA_INSTRUCTIONS_API_KEY"] = savedApiKey;

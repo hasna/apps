@@ -511,7 +511,7 @@ function listPortableSkillsAcrossRoots(roots: string[]): ReturnType<typeof listP
       skills.push(skill);
     }
   }
-  return skills.sort((a, b) => a.name.localeCompare(b.name));
+  return skills.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
 function normalizeRequested(names: string[] | undefined): string[] | null {

@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "localOnly": true,
+  "integrations": [
+    {
+      "id": "vscode-tasks",
+      "surface": "cli",
+      "files": ["examples/editor-integrations/vscode/tasks.json"],
+      "commands": [
+        "todos --json ready",
+        "todos --json active",
+        "todos --json extract ${workspaceFolder} --dry-run --index",
+        "todos context-pack <task-id> --format markdown"
+      ]
+    },
+    {
+      "id": "jetbrains-external-tools",
+      "surface": "cli",
+      "files": ["examples/editor-integrations/jetbrains-external-tools.md"],
+      "commands": [
+        "todos ready --json",
+        "todos active --json",
+        "todos extract $ProjectFileDir$ --dry-run --index --json",
+        "todos blame $FilePath$",
+        "todos context-pack <task-id> --format markdown"
+      ]
+    },
+    {
+      "id": "neovim-json",
+      "surface": "cli",
+      "files": ["examples/editor-integrations/neovim/todos.lua"],
+      "commands": [
+        "todos --json ready",
+        "todos --json status",
+        "todos --json extract . --dry-run --index"
+      ]
+    },
+    {
+      "id": "mcp-agent-client",
+      "surface": "mcp",
+      "tools": [
+        "list_tasks",
+        "get_next_task",
+        "build_agent_context_pack",
+        "extract_todos",
+        "watch_source_todos"
+      ]
+    }
+  ]
+}

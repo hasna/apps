@@ -20,18 +20,17 @@ import {
   clearKnowledgeAuth,
   getKnowledgeApiKey,
   knowledgeAuthStatus,
-  normalizeKnowledgeApiOrigin,
   resolveKnowledgeApiUrl,
   saveKnowledgeAuth,
   type KnowledgeAuthStatus,
 } from './auth';
 import { runKnowledgePrompt, runKnowledgePromptOverItems, type KnowledgePromptOptions } from './agent';
 import {
-  isKnowledgeApiMode,
-  resolveKnowledgeCloudStore,
-  fetchAllCloudItems,
-  type KnowledgeCloudStore,
-} from './cloud-store';
+  usesKnowledgeHttpTransport,
+  resolveKnowledgeHttpStore,
+  fetchAllHttpItems,
+  type KnowledgeHttpStore,
+} from './http-store';
 import { buildKnowledgeAgentContextPack, type KnowledgeAgentContextPack, type KnowledgeAgentContextPackOptions } from './context-pack';
 import {
   proposeKnowledgeSyncConflictResolutionWithAi,
@@ -45,7 +44,7 @@ import {
   type EmbeddingSearchOptions,
 } from './embeddings';
 import { consumeOpenFilesOutbox } from './outbox-consume';
-import { assertLocalCatalogMode, getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
+import { assertSqliteClientTransport, getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { ingestOpenFilesManifest } from './manifest-ingest';
 import {
   discoverKnowledgeMachineTopology,
@@ -89,6 +88,7 @@ import {
   type HybridSearchResult,
 } from './search';
 import { recordAuditEvent, redactSecrets, resolveSafetyPolicy, type SafetyPolicy } from './safety';
+import { assertNoRetiredKnowledgeStorageSelector } from './client-transport';
 import { runProviderWebSearch, type WebSearchOptions } from './web-search';
 import {
   applyKnowledgeSyncBundle,
@@ -254,8 +254,6 @@ export interface KnowledgeInventoryResult {
 
 export interface KnowledgeSetupResult {
   ok: true;
-  mode: KnowledgeConfig['mode'];
-  api_url: string | null;
   storage_type: KnowledgeConfig['storage']['type'];
   artifact_uri_prefix: string;
   canonical_example: StorageContract['canonical_example'];
@@ -1644,19 +1642,11 @@ function assertRemoteSyncApplyResult(machine: string, value: unknown): asserts v
   }
 }
 
-function normalizeMode(value: string | undefined): KnowledgeConfig['mode'] | undefined {
-  if (!value) return undefined;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'local' || normalized === 'offline') return 'local';
-  if (normalized === 'hosted' || normalized === 'remote' || normalized === 'knowledge.md') return 'hosted';
-  throw new Error('Invalid setup mode. Use hosted or local.');
-}
-
 export class KnowledgeSemanticSearchUnavailableError extends Error {
   readonly code = 'semantic_query_unavailable';
 
   constructor() {
-    super('semantic_query_unavailable: the hosted Knowledge item store has no configured vector index.');
+    super('semantic_query_unavailable: the HTTP Knowledge item store has no configured vector index.');
     this.name = 'KnowledgeSemanticSearchUnavailableError';
   }
 }
@@ -1666,7 +1656,9 @@ export class KnowledgeService {
   private cachedConfig?: KnowledgeConfig;
   private cachedProjectLinksAuthority?: KnowledgeProjectLinksAuthority;
 
-  constructor(private readonly options: KnowledgeServiceOptions = {}) {}
+  constructor(private readonly options: KnowledgeServiceOptions = {}) {
+    assertNoRetiredKnowledgeStorageSelector(process.env);
+  }
 
   get scope(): string {
     return this.options.scope ?? 'global';
@@ -1688,7 +1680,7 @@ export class KnowledgeService {
   /**
    * The single knowledge-item Store for this scope. One interface, two
    * transports resolved from the environment: LocalItemStore (on-box db.json)
-   * in sqlite mode, ApiItemStore (HTTP `/v1` + bearer key) in postgres mode.
+   * on-box by default, ApiItemStore (HTTP `/v1` + bearer key) when selected.
    * EVERY item read/write — CLI, MCP, and SDK — routes through this one
    * surface, so no path touches sqlite or the raw HTTP client directly.
    */
@@ -1703,23 +1695,23 @@ export class KnowledgeService {
   /**
    * Package-owned Projects resource-link producer.
    *
-   * Local mode keeps aggregate membership and immutable receipts in the
+   * SQLite-backed operation keeps aggregate membership and immutable receipts in the
    * existing knowledge.db SQLite catalog while resolving item bodies through
-   * the same JSON ItemStore used by CLI/MCP/SDK. Postgres mode routes through
+   * the same JSON ItemStore used by CLI/MCP/SDK. Shared access routes through
    * the authenticated HTTP producer, never a local mirror.
    */
   projectLinksAuthority(): KnowledgeProjectLinksAuthority {
     if (this.options.projectLinksAuthority) return this.options.projectLinksAuthority;
     if (this.cachedProjectLinksAuthority) return this.cachedProjectLinksAuthority;
-    if (isKnowledgeApiMode()) {
+    if (usesKnowledgeHttpTransport()) {
       const { apiKey } = getKnowledgeApiKey(process.env);
       if (!apiKey) {
         throw new Error(
-          'Knowledge project links require the configured API credential in postgres mode.',
+          'Knowledge project links require the configured API credential when using HTTP.',
         );
       }
       this.cachedProjectLinksAuthority = createKnowledgeProjectLinksHttpClient({
-        baseUrl: resolveKnowledgeApiUrl(this.config(), process.env),
+        baseUrl: resolveKnowledgeApiUrl(process.env),
         apiKey,
       });
       return this.cachedProjectLinksAuthority;
@@ -1781,12 +1773,12 @@ export class KnowledgeService {
   }
 
   /**
-   * Unified inventory dispatch: the shared API knowledge-item corpus in
-   * postgres mode, the local sqlite/JSON catalog otherwise. CLI, MCP,
+   * Unified inventory dispatch: the server API knowledge-item corpus when the
+   * HTTP transport is selected, the on-box sqlite/JSON catalog otherwise. CLI, MCP,
    * and SDK all call this so no surface reads a divergent store.
    */
   async resolveInventory(options: KnowledgeInventoryOptions = {}): Promise<KnowledgeInventoryResult> {
-    if (this.isApiMode()) return this.cloudInventory(options);
+    if (this.usesHttpTransport()) return this.httpInventory(options);
     return this.inventory(options);
   }
 
@@ -1857,22 +1849,11 @@ export class KnowledgeService {
     return result;
   }
 
-  setup(options: { mode?: string; apiUrl?: string; canonicalExample?: boolean } = {}): KnowledgeSetupResult {
+  setup(options: { canonicalExample?: boolean } = {}): KnowledgeSetupResult {
     const workspace = this.ensureWorkspace();
     const current = this.config({ ensure: true });
-    const mode = normalizeMode(options.mode) ?? current.mode;
-    const apiUrl = options.apiUrl
-      ? normalizeKnowledgeApiOrigin(options.apiUrl)
-      : current.hosted?.api_url
-        ? normalizeKnowledgeApiOrigin(current.hosted.api_url)
-        : null;
     const nextConfig: KnowledgeConfig = {
       ...current,
-      mode,
-      hosted: {
-        ...(current.hosted ?? {}),
-        ...(apiUrl ? { api_url: apiUrl } : {}),
-      },
       storage: options.canonicalExample
         ? canonicalExampleKnowledgeStorage()
         : current.storage,
@@ -1882,21 +1863,17 @@ export class KnowledgeService {
     const storage = resolveStorageContract(nextConfig, workspace, this.scope);
     return {
       ok: true,
-      mode,
-      api_url: nextConfig.hosted?.api_url ?? null,
       storage_type: nextConfig.storage.type,
       artifact_uri_prefix: storage.artifact_store.uri_prefix,
       canonical_example: storage.canonical_example,
       config_path: workspace.configPath,
-      next: mode === 'hosted'
-        ? ['knowledge auth login --api-key <key>', 'knowledge storage status --json']
-        : ['knowledge search <query>', 'knowledge <prompt>'],
-      message: `Set knowledge mode to ${mode}`,
+      next: ['knowledge search <query>', 'knowledge <prompt>', 'knowledge transport --json'],
+      message: 'Knowledge workspace initialized',
     };
   }
 
   authStatus(env: Record<string, string | undefined> = process.env): KnowledgeAuthStatus {
-    return knowledgeAuthStatus(this.config(), env);
+    return knowledgeAuthStatus(env);
   }
 
   saveAuth(input: {
@@ -1907,7 +1884,7 @@ export class KnowledgeService {
     userId?: string;
     apiUrl?: string;
   }, env: Record<string, string | undefined> = process.env) {
-    const apiUrl = input.apiUrl ?? this.config().hosted?.api_url;
+    const apiUrl = input.apiUrl ?? resolveKnowledgeApiUrl(env);
     return saveKnowledgeAuth({
       api_key: input.apiKey,
       email: input.email,
@@ -1951,9 +1928,9 @@ export class KnowledgeService {
   }
 
   dbStats() {
-    // Refuse in api mode even when no local db exists yet, so `db stats` never
-    // reports the on-box catalog as authoritative while the cloud flip is active.
-    assertLocalCatalogMode('reading knowledge.db stats');
+    // Refuse over HTTP even when no local db exists yet, so `db stats` never
+    // reports the on-box catalog as authoritative while HTTP transport is active.
+    assertSqliteClientTransport('reading knowledge.db stats');
     const workspace = this.workspace;
     if (!existsSync(workspace.knowledgeDbPath)) return emptyKnowledgeDbStats();
     return getKnowledgeDbStats(workspace.knowledgeDbPath);
@@ -1993,7 +1970,7 @@ export class KnowledgeService {
 
   /**
    * Build a knowledge inventory from a bare item list (no local sqlite catalog).
-   * Shared by the local no-db path and the cloud path so both produce the exact
+   * Shared by the local no-db path and the HTTP path so both produce the exact
    * same KnowledgeInventoryResult shape with empty catalog sections.
    */
   private itemOnlyInventory(params: {
@@ -2044,9 +2021,9 @@ export class KnowledgeService {
       home: workspace.home,
       limit,
       // The `paths` block describes the real on-box workspace layout and MUST
-      // agree with the `paths` command regardless of item transport. In cloud
-      // (api) mode the items come from the cloud corpus, but json_store_path /
-      // knowledge_db_exists here still report the local filesystem — the cloud
+      // agree with the `paths` command regardless of item transport. With HTTP
+      // transport the items come from the server corpus, but json_store_path /
+      // knowledge_db_exists here still report the local filesystem — the HTTP
       // source is surfaced via `legacy_store` below. Reporting the transport URL
       // or a hardcoded db-missing flag here made `inventory` disagree with
       // `paths`.
@@ -2062,7 +2039,7 @@ export class KnowledgeService {
       },
       summary,
       // `legacy_store` describes where the item corpus was actually read from —
-      // the local db.json in local mode, or the cloud base URL in api mode.
+      // the SQLite db.json path or the HTTP API base URL.
       legacy_store: {
         path: storePath,
         exists: storeExists,
@@ -2093,21 +2070,21 @@ export class KnowledgeService {
   }
 
   /**
-   * Cloud (api mode) inventory: reports the shared cloud knowledge-item corpus.
+   * HTTP inventory reports the shared server knowledge-item corpus.
    * The RAG catalog (sources/chunks/wiki/sync/machines) lives only in the local
-   * sqlite pipeline and has no cloud counterpart, so those sections are empty —
-   * this routes through the same cloud item transport every item command uses,
+   * sqlite pipeline and has no HTTP counterpart, so those sections are empty —
+   * this routes through the same HTTP item transport every item command uses,
    * never the local db.json or sqlite catalog.
    */
-  async cloudInventory(options: KnowledgeInventoryOptions = {}): Promise<KnowledgeInventoryResult> {
+  async httpInventory(options: KnowledgeInventoryOptions = {}): Promise<KnowledgeInventoryResult> {
     const limit = inventoryLimit(options.limit);
-    const items = await this.fetchCloudItems();
-    const cloud = resolveKnowledgeCloudStore();
+    const items = await this.fetchHttpItems();
+    const http = resolveKnowledgeHttpStore();
     return this.itemOnlyInventory({
       items,
       limit,
       includeArchived: options.includeArchived ?? false,
-      storePath: cloud?.baseUrl ?? 'cloud',
+      storePath: http?.baseUrl ?? 'http',
       storeExists: true,
       storeReadError: null,
     });
@@ -2678,31 +2655,30 @@ export class KnowledgeService {
     });
   }
 
-  /** True when the client-flip resolves to the cloud HTTP transport. In api mode
-   * the shared corpus is the cloud knowledge-items, not a local sqlite catalog. */
-  private isApiMode(): boolean {
-    return isKnowledgeApiMode();
+  /** True when canonical client configuration resolves to HTTP transport. */
+  private usesHttpTransport(): boolean {
+    return usesKnowledgeHttpTransport();
   }
 
-  private cloudStore(): KnowledgeCloudStore {
-    const cloud = resolveKnowledgeCloudStore();
-    if (!cloud) {
+  private httpStore(): KnowledgeHttpStore {
+    const http = resolveKnowledgeHttpStore();
+    if (!http) {
       throw new Error(
-        'knowledge: cloud store requested but not resolvable '
+        'knowledge: HTTP store requested but not resolvable '
         + '(check HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY).',
       );
     }
-    return cloud;
+    return http;
   }
 
-  /** Fetch the entire shared knowledge-item corpus from the cloud (api mode). */
-  private async fetchCloudItems(): Promise<KnowledgeItem[]> {
-    return fetchAllCloudItems(this.cloudStore());
+  /** Fetch the entire shared knowledge-item corpus from the HTTP API. */
+  private async fetchHttpItems(): Promise<KnowledgeItem[]> {
+    return fetchAllHttpItems(this.httpStore());
   }
 
   async semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>) {
     const workspace = this.workspace;
-    if (this.isApiMode()) {
+    if (this.usesHttpTransport()) {
       throw new KnowledgeSemanticSearchUnavailableError();
     }
     if (!existsSync(workspace.knowledgeDbPath)) {
@@ -2723,11 +2699,11 @@ export class KnowledgeService {
 
   async search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>) {
     const workspace = this.workspace;
-    if (this.isApiMode()) {
+    if (this.usesHttpTransport()) {
       if (options.semantic === true || options.fake === true || Boolean(options.modelRef)) {
         throw new KnowledgeSemanticSearchUnavailableError();
       }
-      const producer = await this.cloudStore().search({
+      const producer = await this.httpStore().search({
         query: options.query,
         archive: 'active',
         limit: options.limit,
@@ -2760,7 +2736,7 @@ export class KnowledgeService {
 
   async retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>) {
     const workspace = this.workspace;
-    if (this.isApiMode()) {
+    if (this.usesHttpTransport()) {
       const search = await this.search(options);
       return retrieveKnowledgeContextFromSearch(search, {
         contextChars: options.contextChars,
@@ -2794,7 +2770,7 @@ export class KnowledgeService {
 
   async contextPack(options: Omit<KnowledgeAgentContextPackOptions, 'dbPath' | 'config' | 'safetyPolicy'>) {
     const workspace = this.workspace;
-    if (this.isApiMode()) {
+    if (this.usesHttpTransport()) {
       const query = (options.query ?? options.topic ?? '').trim();
       if (query && options.source !== 'loops' && options.source !== 'runs') {
         const search = await this.search({ ...options, query });
@@ -2830,11 +2806,11 @@ export class KnowledgeService {
   }
 
   async runPrompt(options: Omit<KnowledgePromptOptions, 'dbPath' | 'config'>) {
-    if (this.isApiMode()) {
+    if (this.usesHttpTransport()) {
       if (options.semantic === true || options.fake === true || Boolean(options.modelRef)) {
         throw new KnowledgeSemanticSearchUnavailableError();
       }
-      const producer = await this.cloudStore().search({
+      const producer = await this.httpStore().search({
         query: options.prompt,
         archive: 'active',
         limit: options.limit,
