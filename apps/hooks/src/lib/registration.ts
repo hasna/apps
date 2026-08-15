@@ -23,6 +23,26 @@ function safeMatcherTest(pattern: string, value: string): boolean {
  * or consistent with the hook's matcher (equal, or one regex matches the
  * other).
  */
+/**
+ * Count every raw hook entry wired in a settings file — including
+ * direct-path entries that never went through the CLI (`command` values that
+ * are not `hooks run <name>`). Doctor reports this count alongside the
+ * registered count so its "healthy" verdict names its bounds (P2-16b).
+ */
+export function countSettingsWiring(settings: Record<string, unknown>): number {
+  const hooks = (settings as any).hooks;
+  if (!hooks || typeof hooks !== "object") return 0;
+  let count = 0;
+  for (const eventKey of Object.keys(hooks)) {
+    const entries = hooks[eventKey];
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      if (Array.isArray(entry?.hooks)) count += entry.hooks.length;
+    }
+  }
+  return count;
+}
+
 export function hookRegisteredInSettings(
   settings: Record<string, unknown>,
   name: string,
