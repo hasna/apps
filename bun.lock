@@ -744,6 +744,35 @@
         "react-dom",
       ],
     },
+    "apps/economy": {
+      "name": "@hasna/economy",
+      "version": "0.3.9",
+      "bin": {
+        "economy": "dist/cli/index.js",
+        "economy-mcp": "dist/mcp/index.js",
+        "economy-serve": "dist/server/index.js",
+        "economy-otel": "dist/otel/index.js",
+      },
+      "dependencies": {
+        "@hasna/accounts": "0.2.23",
+        "@hasna/agent-registry": "^0.1.0",
+        "@hasna/contracts": "^0.9.0",
+        "@hasna/events": "^0.1.7",
+        "@hasna/mcp-harness": "^0.1.0",
+        "@hasna/projects": "0.1.95",
+        "@modelcontextprotocol/sdk": "^1.12.1",
+        "chalk": "^5.4.1",
+        "commander": "^13.1.0",
+        "pg": "8.13.1",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "@types/pg": "^8.20.0",
+        "bun-types": "latest",
+        "typescript": "^5.7.2",
+      },
+    },
     "apps/emails": {
       "name": "@hasna/emails",
       "version": "1.3.14",
@@ -1973,6 +2002,9 @@
       },
     },
   },
+  "trustedDependencies": [
+    "@hasna/projects",
+  ],
   "overrides": {
     "zod": "3.25.76",
   },
@@ -2377,6 +2409,8 @@
 
     "@hasna/draw": ["@hasna/draw@workspace:apps/draw"],
 
+    "@hasna/economy": ["@hasna/economy@workspace:apps/economy"],
+
     "@hasna/emails": ["@hasna/emails@workspace:apps/emails"],
 
     "@hasna/evals": ["@hasna/evals@workspace:apps/evals"],
@@ -2421,7 +2455,7 @@
 
     "@hasna/pixels": ["@hasna/pixels@workspace:apps/pixels"],
 
-    "@hasna/projects": ["@hasna/projects@0.1.130", "", { "dependencies": { "@hasna/contracts": "0.10.2", "@hasna/conversations": "0.5.41", "@hasna/events": "0.1.3", "@hasna/mementos": "0.14.81", "@hasna/todos": "0.15.19", "@json-render/core": "0.19.0", "@modelcontextprotocol/sdk": "^1.12.1", "@openrouter/ai-sdk-provider": "^2.9.0", "ai": "^6.0.197", "chalk": "^5.4.1", "commander": "^13.1.0", "nanoid": "^5.0.9", "pg": "^8.13.3", "zod": "3.25.76" }, "peerDependencies": { "@hasna/loops": ">=0.3.0" }, "optionalPeers": ["@hasna/loops"], "bin": { "projects": "dist/cli/index.js", "projects-mcp": "dist/mcp/index.js", "projects-serve": "dist/serve/index.js" } }, "sha512-0QpBMDNnt41Yg6VCPpqZtWa2U9O64MSiw0BUl3WpMZ5nt5iU0FK4BMxBOEEDxSGS9Mnty8c1EJaOhe3eaWebrw=="],
+    "@hasna/projects": ["@hasna/projects@0.1.95", "", { "dependencies": { "@hasna/contracts": "0.4.2", "@hasna/events": "0.1.3", "@json-render/core": "0.19.0", "@modelcontextprotocol/sdk": "^1.12.1", "@openrouter/ai-sdk-provider": "^2.9.0", "ai": "^6.0.197", "chalk": "^5.4.1", "commander": "^13.1.0", "nanoid": "^5.0.9", "pg": "^8.13.3", "zod": "3.25.76" }, "peerDependencies": { "@hasna/loops": ">=0.3.0" }, "optionalPeers": ["@hasna/loops"], "bin": { "projects": "dist/cli/index.js", "projects-mcp": "dist/mcp/index.js", "projects-serve": "dist/serve/index.js" } }, "sha512-mj7A5dwT8L1fhv44cG3gi8ps2FJn/u9BfM+DGMSsiFYayAQfkrh6aiaMDBWDwPcFaVUXtmPGgrCR5KW5zYtGAg=="],
 
     "@hasna/prompts": ["@hasna/prompts@workspace:apps/prompts"],
 
@@ -4621,6 +4655,16 @@
 
     "@hasna/draw/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
+    "@hasna/economy/@hasna/accounts": ["@hasna/accounts@0.2.23", "", { "dependencies": { "@hasna/contracts": "0.5.2", "@hasna/events": "^0.1.7", "chalk": "^5.4.1", "commander": "^13.1.0", "pg": "^8.13.1", "zod": "^3.24.2" }, "bin": { "accounts": "dist/cli.js", "accounts-mcp": "dist/mcp.js", "accounts-serve": "dist/server/index.js", "accounts-migrate": "dist/server/migrate.js" } }, "sha512-E+geg18ATPV0d/uvJ5dIvtMJPSyJXUrtBpv23egmaA3E4gmzqAleKAazo6wuM6VpRitjkOzaUWO5r3D3FY8ZaA=="],
+
+    "@hasna/economy/@hasna/contracts": ["@hasna/contracts@0.9.0", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-kmu16+2osOnW4yAbrN6JjWwcB/Jrv37YbS5JtRJCitg5WF3FwzGWdG7DU0ca/y9YEb6Xk+Xd8JYeoQNfnFGYtg=="],
+
+    "@hasna/economy/@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
+
+    "@hasna/economy/pg": ["pg@8.13.1", "", { "dependencies": { "pg-connection-string": "^2.7.0", "pg-pool": "^3.7.0", "pg-protocol": "^1.7.0", "pg-types": "^2.1.0", "pgpass": "1.x" }, "optionalDependencies": { "pg-cloudflare": "^1.1.1" }, "peerDependencies": { "pg-native": ">=3.0.1" }, "optionalPeers": ["pg-native"] }, "sha512-OUir1A0rPNZlX//c7ksiu7crsGZTKSOXJPgtNiHGIlC9H0lO+NC6ZDYksSgBYY/thSWhnSRBv8w1lieNNGATNQ=="],
+
+    "@hasna/economy/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
     "@hasna/emails/@aws-sdk/credential-provider-ini": ["@aws-sdk/credential-provider-ini@3.973.12", "", { "dependencies": { "@aws-sdk/core": "^3.977.6", "@aws-sdk/credential-provider-env": "^3.972.67", "@aws-sdk/credential-provider-http": "^3.972.69", "@aws-sdk/credential-provider-login": "^3.972.74", "@aws-sdk/credential-provider-process": "^3.972.67", "@aws-sdk/credential-provider-sso": "^3.973.11", "@aws-sdk/credential-provider-web-identity": "^3.972.73", "@aws-sdk/nested-clients": "^3.997.41", "@aws-sdk/types": "^3.974.2", "@smithy/core": "^3.31.1", "@smithy/credential-provider-imds": "^4.4.16", "@smithy/types": "^4.16.1", "tslib": "^2.6.2" } }, "sha512-pNEf/OeyN5X3VmLKlgSO6TqaWmW10CvI3TfwL1XhsuhYjSLT2VDaxFnCPHnOeQXSaFisMX4jNhpETriqN8DOmg=="],
 
     "@hasna/emails/@hasna/contracts": ["@hasna/contracts@0.8.4", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-a/flLzdu8cbCUrScNQT3VBMl2HgwbjUYWrmwQ45x19X6F8FPiOf2gbb43MT0vlKTLUPEonh5jSoEPdjp44nAGw=="],
@@ -4759,15 +4803,9 @@
 
     "@hasna/pixels/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
 
-    "@hasna/projects/@hasna/contracts": ["@hasna/contracts@0.10.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-RajMNOt1eHv3T0R/eO0F23K2DiA0j2e7f1ya+lSf3h3rMEFJehkRNXfotLTIRFbHNlJYsRmwg4l4Tv86VUyWXw=="],
-
-    "@hasna/projects/@hasna/conversations": ["@hasna/conversations@0.5.41", "", { "dependencies": { "@hasna/contracts": "^0.4.2", "@hasna/events": "^0.1.6", "@modelcontextprotocol/sdk": "^1.26.0", "chalk": "^5.3.0", "commander": "^12.1.0", "ink": "^5.0.1", "ink-select-input": "^6.0.0", "ink-text-input": "^6.0.0", "pg": "^8.20.0", "react": "^18.2.0", "zod": "^4.3.6" }, "bin": { "inbox": "bin/inbox", "conversations": "bin/index.js", "conversations-mcp": "bin/mcp.js", "conversations-hook": "bin/hook.js", "conversations-serve": "bin/serve.js" } }, "sha512-n9ZbXlB04IpBz8oyi4BqmalXZaU5ICSuCAa1wZ9E6mzGAM2m9g03gf4sG/RBC/8ajFM/WLjD77S6qZkEn8vtEw=="],
+    "@hasna/projects/@hasna/contracts": ["@hasna/contracts@0.4.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-xD7ZWQXR+AjYAJVpaMsQ+8V0SABiJSKVeI0B1WbPByYeGz6daDtgyZ6c3q0c2S6uzIEtUxlGHPundr675636ew=="],
 
     "@hasna/projects/@hasna/events": ["@hasna/events@0.1.3", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-0PgS0wSfLPg/kqxoDhzr/t00p8/H8LzfJAAlP4hhEByvTkM0UXGEzayFoZ1dOk7uqKtLuD5vrIDRdUoHwuVBkQ=="],
-
-    "@hasna/projects/@hasna/mementos": ["@hasna/mementos@0.14.81", "", { "dependencies": { "@ai-sdk/anthropic": "^3.0.82", "@ai-sdk/openai": "^3.0.69", "@ai-sdk/openai-compatible": "^2.0.48", "@hasna/contracts": "0.8.5", "@hasna/events": "^0.1.6", "@modelcontextprotocol/sdk": "^1.12.1", "ai": "^6.0.199", "chalk": "^5.4.1", "commander": "^13.1.0", "ink": "^5.2.0", "pdf-parse": "^1.1.1", "pg": "^8.13.3", "react": "^18.3.1", "tesseract.js": "^5.1.1", "zod": "^3.24.2" }, "bin": { "mementos": "dist/cli/index.js", "mementos-mcp": "dist/mcp/index.js", "mementos-serve": "dist/server/index.js" } }, "sha512-mLDMLC0rzc/xORSu3JF+lCSaM6k9kpQpF7mxwgdPaHKOmZJrgWx2QoPqqO9i/l/BVHRq5nO4R8RHpgOJOo8fjQ=="],
-
-    "@hasna/projects/@hasna/todos": ["@hasna/todos@0.15.19", "", { "dependencies": { "@hasna/contracts": "0.5.2", "@hasna/events": "^0.1.11", "@modelcontextprotocol/sdk": "^1.12.1", "chalk": "^5.4.1", "commander": "^13.1.0", "ink": "^5.2.0", "react": "^18.3.1", "zod": "^3.24.2" }, "bin": { "todos": "dist/cli/index.js", "todos-mcp": "dist/mcp/index.js", "todos-serve": "dist/server/index.js" } }, "sha512-E8SY2pDzplareDvsWmrJKs2tDAmW+zD6OJnSHW6Dt5J0j6d4S7YtHucN2bI2xfV7aa5KKqPyJW+LBEh2cVK72w=="],
 
     "@hasna/prompts/@hasna/contracts": ["@hasna/contracts@0.8.5", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-Iyk5srD6J3R7ci2g0gkyt+MCa6Da/lghPosGtgWBRgtJeGYCIAAnHF1yweoXnnqGAWZajFuDgJEWDVH11qpUhA=="],
 
@@ -4910,6 +4948,8 @@
     "@hasna/testers/@hasna/contracts": ["@hasna/contracts@0.4.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-xD7ZWQXR+AjYAJVpaMsQ+8V0SABiJSKVeI0B1WbPByYeGz6daDtgyZ6c3q0c2S6uzIEtUxlGHPundr675636ew=="],
 
     "@hasna/testers/@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
+
+    "@hasna/testers/@hasna/projects": ["@hasna/projects@0.1.130", "", { "dependencies": { "@hasna/contracts": "0.10.2", "@hasna/conversations": "0.5.41", "@hasna/events": "0.1.3", "@hasna/mementos": "0.14.81", "@hasna/todos": "0.15.19", "@json-render/core": "0.19.0", "@modelcontextprotocol/sdk": "^1.12.1", "@openrouter/ai-sdk-provider": "^2.9.0", "ai": "^6.0.197", "chalk": "^5.4.1", "commander": "^13.1.0", "nanoid": "^5.0.9", "pg": "^8.13.3", "zod": "3.25.76" }, "peerDependencies": { "@hasna/loops": ">=0.3.0" }, "optionalPeers": ["@hasna/loops"], "bin": { "projects": "dist/cli/index.js", "projects-mcp": "dist/mcp/index.js", "projects-serve": "dist/serve/index.js" } }, "sha512-0QpBMDNnt41Yg6VCPpqZtWa2U9O64MSiw0BUl3WpMZ5nt5iU0FK4BMxBOEEDxSGS9Mnty8c1EJaOhe3eaWebrw=="],
 
     "@hasna/testers/pg": ["pg@8.21.0", "", { "dependencies": { "pg-connection-string": "^2.13.0", "pg-pool": "^3.14.0", "pg-protocol": "^1.14.0", "pg-types": "2.2.0", "pgpass": "1.0.5" }, "optionalDependencies": { "pg-cloudflare": "^1.4.0" }, "peerDependencies": { "pg-native": ">=3.0.1" }, "optionalPeers": ["pg-native"] }, "sha512-AUP1EYJuHraQGsVoCQVIcM7TEJVGtDzxWtGFZd8rds9d+CCXlU5Js1rYgfLNvxy9iJrpHjGrRjoi/3BT9fRyiA=="],
 
@@ -5267,6 +5307,10 @@
 
     "@hasna/conversations/@hasna/events/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
 
+    "@hasna/economy/@hasna/accounts/@hasna/contracts": ["@hasna/contracts@0.5.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-R7NBm91oMOWQVnfIyh7QTEPuWbVycGaObzKFJd1je5RNjXsLuPASqCfr9heJ7nuugn9xxFBCCRQCxHg9/VeJrg=="],
+
+    "@hasna/economy/@hasna/accounts/pg": ["pg@8.22.0", "", { "dependencies": { "pg-connection-string": "^2.14.0", "pg-pool": "^3.14.0", "pg-protocol": "^1.15.0", "pg-types": "2.2.0", "pgpass": "1.0.5" }, "optionalDependencies": { "pg-cloudflare": "^1.4.0" }, "peerDependencies": { "pg-native": ">=3.0.1" }, "optionalPeers": ["pg-native"] }, "sha512-8wih1vVIBMxoUM2oB4soJsD9tDnDpLv4OXBJ+EJzFsvycD+lfyIreC2gGHq78f8jbLLt+bvlPTFdFZfJkOuzAA=="],
+
     "@hasna/emails/@hasna/contracts/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
 
     "@hasna/emails/@hasna/domains/@aws-sdk/credential-provider-ini": ["@aws-sdk/credential-provider-ini@3.972.53", "", { "dependencies": { "@aws-sdk/core": "^3.974.20", "@aws-sdk/credential-provider-env": "^3.972.46", "@aws-sdk/credential-provider-http": "^3.972.48", "@aws-sdk/credential-provider-login": "^3.972.52", "@aws-sdk/credential-provider-process": "^3.972.46", "@aws-sdk/credential-provider-sso": "^3.972.52", "@aws-sdk/credential-provider-web-identity": "^3.972.52", "@aws-sdk/nested-clients": "^3.997.20", "@aws-sdk/types": "^3.973.12", "@smithy/core": "^3.24.6", "@smithy/credential-provider-imds": "^4.3.7", "@smithy/types": "^4.14.3", "tslib": "^2.6.2" } }, "sha512-ZfdhIOR41q8TcWEnUac+gCOb+O2LBWdHLmjedXpXz4IEFW2ppNuFcm6p0sMTavpM+zD5TYfpH5Gp7guRyqSgsQ=="],
@@ -5315,20 +5359,6 @@
 
     "@hasna/orgs/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
-    "@hasna/projects/@hasna/conversations/@hasna/contracts": ["@hasna/contracts@0.4.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-xD7ZWQXR+AjYAJVpaMsQ+8V0SABiJSKVeI0B1WbPByYeGz6daDtgyZ6c3q0c2S6uzIEtUxlGHPundr675636ew=="],
-
-    "@hasna/projects/@hasna/conversations/@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
-
-    "@hasna/projects/@hasna/conversations/commander": ["commander@12.1.0", "", {}, "sha512-Vw8qHK3bZM9y/P10u3Vib8o/DdkvA2OtPtZvD871QKjy74Wj1WSKFILMPRPSdUSx5RFK1arlJzEtA4PkFgnbuA=="],
-
-    "@hasna/projects/@hasna/mementos/@hasna/contracts": ["@hasna/contracts@0.8.5", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-Iyk5srD6J3R7ci2g0gkyt+MCa6Da/lghPosGtgWBRgtJeGYCIAAnHF1yweoXnnqGAWZajFuDgJEWDVH11qpUhA=="],
-
-    "@hasna/projects/@hasna/mementos/@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
-
-    "@hasna/projects/@hasna/todos/@hasna/contracts": ["@hasna/contracts@0.5.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-R7NBm91oMOWQVnfIyh7QTEPuWbVycGaObzKFJd1je5RNjXsLuPASqCfr9heJ7nuugn9xxFBCCRQCxHg9/VeJrg=="],
-
-    "@hasna/projects/@hasna/todos/@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
-
     "@hasna/servers/ink/@alcalzone/ansi-tokenize": ["@alcalzone/ansi-tokenize@0.3.0", "", { "dependencies": { "ansi-styles": "^6.2.1", "is-fullwidth-code-point": "^5.0.0" } }, "sha512-p+CMKJ93HFmLkjXKlXiVGlMQEuRb6H0MokBSwUsX+S6BRX8eV5naFZpQJFfJHjRZY0Hmnqy1/r6UWl3x+19zYA=="],
 
     "@hasna/servers/ink/cli-boxes": ["cli-boxes@4.0.1", "", {}, "sha512-5IOn+jcCEHEraYolBPs/sT4BxYCe2nHg374OPiItB1O96KZFseS2gthU4twyYzeDcFew4DaUM/xwc5BQf08JJw=="],
@@ -5370,6 +5400,18 @@
     "@hasna/terminal/@anthropic-ai/sdk/@types/node": ["@types/node@18.19.130", "", { "dependencies": { "undici-types": "~5.26.4" } }, "sha512-GRaXQx6jGfL8sKfaIDD6OupbIHBr9jv7Jnaml9tB7l4v068PAOXqfcujMMo5PhbIs6ggR1XODELqahT2R8v0fg=="],
 
     "@hasna/terminal/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
+
+    "@hasna/testers/@hasna/projects/@hasna/contracts": ["@hasna/contracts@0.10.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-RajMNOt1eHv3T0R/eO0F23K2DiA0j2e7f1ya+lSf3h3rMEFJehkRNXfotLTIRFbHNlJYsRmwg4l4Tv86VUyWXw=="],
+
+    "@hasna/testers/@hasna/projects/@hasna/conversations": ["@hasna/conversations@0.5.41", "", { "dependencies": { "@hasna/contracts": "^0.4.2", "@hasna/events": "^0.1.6", "@modelcontextprotocol/sdk": "^1.26.0", "chalk": "^5.3.0", "commander": "^12.1.0", "ink": "^5.0.1", "ink-select-input": "^6.0.0", "ink-text-input": "^6.0.0", "pg": "^8.20.0", "react": "^18.2.0", "zod": "^4.3.6" }, "bin": { "inbox": "bin/inbox", "conversations": "bin/index.js", "conversations-mcp": "bin/mcp.js", "conversations-hook": "bin/hook.js", "conversations-serve": "bin/serve.js" } }, "sha512-n9ZbXlB04IpBz8oyi4BqmalXZaU5ICSuCAa1wZ9E6mzGAM2m9g03gf4sG/RBC/8ajFM/WLjD77S6qZkEn8vtEw=="],
+
+    "@hasna/testers/@hasna/projects/@hasna/events": ["@hasna/events@0.1.3", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-0PgS0wSfLPg/kqxoDhzr/t00p8/H8LzfJAAlP4hhEByvTkM0UXGEzayFoZ1dOk7uqKtLuD5vrIDRdUoHwuVBkQ=="],
+
+    "@hasna/testers/@hasna/projects/@hasna/mementos": ["@hasna/mementos@0.14.81", "", { "dependencies": { "@ai-sdk/anthropic": "^3.0.82", "@ai-sdk/openai": "^3.0.69", "@ai-sdk/openai-compatible": "^2.0.48", "@hasna/contracts": "0.8.5", "@hasna/events": "^0.1.6", "@modelcontextprotocol/sdk": "^1.12.1", "ai": "^6.0.199", "chalk": "^5.4.1", "commander": "^13.1.0", "ink": "^5.2.0", "pdf-parse": "^1.1.1", "pg": "^8.13.3", "react": "^18.3.1", "tesseract.js": "^5.1.1", "zod": "^3.24.2" }, "bin": { "mementos": "dist/cli/index.js", "mementos-mcp": "dist/mcp/index.js", "mementos-serve": "dist/server/index.js" } }, "sha512-mLDMLC0rzc/xORSu3JF+lCSaM6k9kpQpF7mxwgdPaHKOmZJrgWx2QoPqqO9i/l/BVHRq5nO4R8RHpgOJOo8fjQ=="],
+
+    "@hasna/testers/@hasna/projects/@hasna/todos": ["@hasna/todos@0.15.19", "", { "dependencies": { "@hasna/contracts": "0.5.2", "@hasna/events": "^0.1.11", "@modelcontextprotocol/sdk": "^1.12.1", "chalk": "^5.4.1", "commander": "^13.1.0", "ink": "^5.2.0", "react": "^18.3.1", "zod": "^3.24.2" }, "bin": { "todos": "dist/cli/index.js", "todos-mcp": "dist/mcp/index.js", "todos-serve": "dist/server/index.js" } }, "sha512-E8SY2pDzplareDvsWmrJKs2tDAmW+zD6OJnSHW6Dt5J0j6d4S7YtHucN2bI2xfV7aa5KKqPyJW+LBEh2cVK72w=="],
+
+    "@hasna/testers/@hasna/projects/pg": ["pg@8.22.0", "", { "dependencies": { "pg-connection-string": "^2.14.0", "pg-pool": "^3.14.0", "pg-protocol": "^1.15.0", "pg-types": "2.2.0", "pgpass": "1.0.5" }, "optionalDependencies": { "pg-cloudflare": "^1.4.0" }, "peerDependencies": { "pg-native": ">=3.0.1" }, "optionalPeers": ["pg-native"] }, "sha512-8wih1vVIBMxoUM2oB4soJsD9tDnDpLv4OXBJ+EJzFsvycD+lfyIreC2gGHq78f8jbLLt+bvlPTFdFZfJkOuzAA=="],
 
     "@linaria/react/minimatch/brace-expansion": ["brace-expansion@2.1.4", "", { "dependencies": { "balanced-match": "^1.0.0" } }, "sha512-hGfVzPxthbf3+2yjg/RBs60cB0FhqBS/zvdV/4wn4/BmN0bNMMHPc4V/BbFieqf1TKAGGAHnY4eSjajCl0f2Xg=="],
 
@@ -5537,10 +5579,6 @@
 
     "@hasna/files/@hasna/connectors/@hasna/events/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
 
-    "@hasna/projects/@hasna/conversations/@hasna/contracts/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
-
-    "@hasna/projects/@hasna/conversations/@hasna/events/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
-
     "@hasna/servers/ink/@alcalzone/ansi-tokenize/is-fullwidth-code-point": ["is-fullwidth-code-point@5.1.0", "", { "dependencies": { "get-east-asian-width": "^1.3.1" } }, "sha512-5XHYaSyiqADb4RnZ1Bdad6cPp8Toise4TzEjcOYDHZkTCbKgiUl7WTUCpNWHuxmDt91wnsZBc9xinNzopv3JMQ=="],
 
     "@hasna/servers/ink/slice-ansi/is-fullwidth-code-point": ["is-fullwidth-code-point@5.1.0", "", { "dependencies": { "get-east-asian-width": "^1.3.1" } }, "sha512-5XHYaSyiqADb4RnZ1Bdad6cPp8Toise4TzEjcOYDHZkTCbKgiUl7WTUCpNWHuxmDt91wnsZBc9xinNzopv3JMQ=="],
@@ -5601,6 +5639,20 @@
 
     "@hasna/terminal/@anthropic-ai/sdk/@types/node/undici-types": ["undici-types@5.26.5", "", {}, "sha512-JlCMO+ehdEIKqlFxk6IfVoAUVmgz7cU7zD/h9XZ0qzeosSHmUJVOzSQvvYSYWXkFXC+IfLKSIffhv0sVZup6pA=="],
 
+    "@hasna/testers/@hasna/projects/@hasna/conversations/@hasna/contracts": ["@hasna/contracts@0.4.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-xD7ZWQXR+AjYAJVpaMsQ+8V0SABiJSKVeI0B1WbPByYeGz6daDtgyZ6c3q0c2S6uzIEtUxlGHPundr675636ew=="],
+
+    "@hasna/testers/@hasna/projects/@hasna/conversations/@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
+
+    "@hasna/testers/@hasna/projects/@hasna/conversations/commander": ["commander@12.1.0", "", {}, "sha512-Vw8qHK3bZM9y/P10u3Vib8o/DdkvA2OtPtZvD871QKjy74Wj1WSKFILMPRPSdUSx5RFK1arlJzEtA4PkFgnbuA=="],
+
+    "@hasna/testers/@hasna/projects/@hasna/mementos/@hasna/contracts": ["@hasna/contracts@0.8.5", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-Iyk5srD6J3R7ci2g0gkyt+MCa6Da/lghPosGtgWBRgtJeGYCIAAnHF1yweoXnnqGAWZajFuDgJEWDVH11qpUhA=="],
+
+    "@hasna/testers/@hasna/projects/@hasna/mementos/@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
+
+    "@hasna/testers/@hasna/projects/@hasna/todos/@hasna/contracts": ["@hasna/contracts@0.5.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-R7NBm91oMOWQVnfIyh7QTEPuWbVycGaObzKFJd1je5RNjXsLuPASqCfr9heJ7nuugn9xxFBCCRQCxHg9/VeJrg=="],
+
+    "@hasna/testers/@hasna/projects/@hasna/todos/@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
+
     "@linaria/react/minimatch/brace-expansion/balanced-match": ["balanced-match@1.0.2", "", {}, "sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw=="],
 
     "@linaria/utils/find-up/locate-path/p-locate": ["p-locate@5.0.0", "", { "dependencies": { "p-limit": "^3.0.2" } }, "sha512-LaNjtRWUBY++zB5nE/NwcaoMylSPk+S+ZHNB1TzdbMJMny6dynpAGt7X/tl/QYq3TIeE6nxHppbo2LGymrG5Pw=="],
@@ -5636,6 +5688,10 @@
     "@hasna/browser/@hasna/sessions/ink/@alcalzone/ansi-tokenize/is-fullwidth-code-point": ["is-fullwidth-code-point@5.1.0", "", { "dependencies": { "get-east-asian-width": "^1.3.1" } }, "sha512-5XHYaSyiqADb4RnZ1Bdad6cPp8Toise4TzEjcOYDHZkTCbKgiUl7WTUCpNWHuxmDt91wnsZBc9xinNzopv3JMQ=="],
 
     "@hasna/browser/@hasna/sessions/ink/slice-ansi/is-fullwidth-code-point": ["is-fullwidth-code-point@5.1.0", "", { "dependencies": { "get-east-asian-width": "^1.3.1" } }, "sha512-5XHYaSyiqADb4RnZ1Bdad6cPp8Toise4TzEjcOYDHZkTCbKgiUl7WTUCpNWHuxmDt91wnsZBc9xinNzopv3JMQ=="],
+
+    "@hasna/testers/@hasna/projects/@hasna/conversations/@hasna/contracts/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
+
+    "@hasna/testers/@hasna/projects/@hasna/conversations/@hasna/events/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
 
     "@linaria/utils/find-up/locate-path/p-locate/p-limit": ["p-limit@3.1.0", "", { "dependencies": { "yocto-queue": "^0.1.0" } }, "sha512-TYOanM3wGwNGsZN2cVTYPArw454xnXj5qmWF1bEoAc4+cU/ol7GVh7odevjp1FNHduHc3KZMcFduxU5Xc6uJRQ=="],
 
