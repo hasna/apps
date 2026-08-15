@@ -10,9 +10,18 @@
  * Privacy lock-down: when HOOKS_API_KEY is set, every route except /health
  * requires the API key. Without the binding, reads stay open (OSS default) —
  * the behavior is config-driven.
+ *
+ * Version retention (P1-4, bug d3b4025c): D1 keeps a `hook_versions` table
+ * keyed (name, version) with the manifest, script sha256, artifact key and
+ * publish time; the `hooks` table is the LATEST pointer only. PUT never
+ * overwrites an existing (name, version) — a byte-identical republish is
+ * idempotent, anything else is a 409 conflict. GET /api/v1/hooks/:name/:version
+ * serves ANY published version (exact pin fetch), and the catalog and lock
+ * expose versions[].
  */
 
 import { secureEqual } from "../lib/secure-compare.js";
+import { SEMVER_PATTERN } from "../lib/semver.js";
 
 interface D1Result {
   results?: unknown[];
@@ -57,6 +66,15 @@ interface HookRow {
   last_verified_at: string | null;
 }
 
+interface HookVersionRow {
+  name: string;
+  version: string;
+  manifest_json: string;
+  script_sha256: string;
+  artifact_key: string;
+  published_at: string;
+}
+
 interface ArtifactJson {
   manifest: {
     name: string;
@@ -90,20 +108,55 @@ async function listRows(env: Env): Promise<HookRow[]> {
   return results as unknown as HookRow[];
 }
 
+async function versionsFor(env: Env, name: string): Promise<string[]> {
+  const { results } = await env.HOOKS_D1.prepare(
+    "SELECT version FROM hook_versions WHERE name = ? ORDER BY published_at ASC",
+  ).bind(name).all();
+  const rows = results as unknown as Array<{ version: string }>;
+  const versions = rows.map((row) => row.version);
+  // Back-compat: a pre-hook_versions row (latest only) still reports its
+  // own version as the sole published version.
+  return versions.length > 0 ? versions : [];
+}
+
+async function hookVersionRow(env: Env, name: string, version: string): Promise<HookVersionRow | null> {
+  const row = (await env.HOOKS_D1.prepare(
+    "SELECT name, version, manifest_json, script_sha256, artifact_key, published_at FROM hook_versions WHERE name = ? AND version = ?",
+  ).bind(name, version).first()) as HookVersionRow | null;
+  return row ?? null;
+}
+
 async function artifactFor(env: Env, name: string, version: string): Promise<{ payload: ArtifactJson; sha256: string } | null> {
-  const obj = await env.HOOKS_R2.get(`hook_artifacts/${name}/${version}.json`);
-  if (!obj) return null;
-  const payload = (await obj.json()) as ArtifactJson;
+  const versionRow = await hookVersionRow(env, name, version);
+  if (versionRow) {
+    const obj = await env.HOOKS_R2.get(versionRow.artifact_key);
+    if (!obj) return null;
+    const payload = (await obj.json()) as ArtifactJson;
+    return { payload, sha256: versionRow.script_sha256 };
+  }
+  // Pre-hook_versions fallback: the hooks row is the latest pointer.
   const row = (await env.HOOKS_D1.prepare(
     "SELECT sha256 FROM hooks WHERE name = ? AND version = ?",
   ).bind(name, version).first()) as { sha256: string } | null;
-  const sha256 = row?.sha256 ?? (await sha256Hex(payload.script));
-  return { payload, sha256 };
+  if (!row) return null;
+  const obj = await env.HOOKS_R2.get(`hook_artifacts/${name}/${version}.json`);
+  if (!obj) return null;
+  const payload = (await obj.json()) as ArtifactJson;
+  return { payload, sha256: row.sha256 };
 }
 
 async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Decode a URL path segment that the client percent-encoded. */
+function decodeSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
 }
 
 export default {
@@ -126,6 +179,7 @@ export default {
         rows.map(async (row) => {
           const artifact = await artifactFor(env, row.name, row.version);
           const events = artifact?.payload.manifest.events ?? [];
+          const versions = await versionsFor(env, row.name);
           return {
             name: row.name,
             version: row.version,
@@ -133,15 +187,26 @@ export default {
             events,
             description: artifact?.payload.manifest.description ?? "",
             source: row.source_type,
+            versions,
           };
         }),
       );
       return json({ hooks: catalog });
     }
 
-    const artifactMatch = /^\/api\/v1\/hooks\/([\w-]+)\/(\d+\.\d+\.\d+)$/.exec(url.pathname);
+    // P1-4: exact-version artifact route — accepts any published version
+    // (including prerelease/build-metadata pins), encoded as the client
+    // sends them (%2B for build metadata). The version segment is validated
+    // against the same semver the manifest validation accepts (P2-10),
+    // never a narrower pattern.
+    const artifactMatch = /^\/api\/v1\/hooks\/([\w-]+)\/([0-9A-Za-z.%+_-]+)$/.exec(url.pathname);
     if (artifactMatch && req.method === "GET") {
-      const [, name, version] = artifactMatch;
+      const [, rawName, rawVersion] = artifactMatch;
+      const name = decodeSegment(rawName);
+      const version = decodeSegment(rawVersion);
+      if (!SEMVER_PATTERN.test(version)) {
+        return json({ error: `invalid semver version '${version}'` }, 400);
+      }
       const artifact = await artifactFor(env, name, version);
       if (!artifact) return json({ error: `Hook '${name}@${version}' not found` }, 404);
       return json(artifact.payload, 200, { "x-hook-sha256": artifact.sha256 });
@@ -149,9 +214,14 @@ export default {
 
     if (url.pathname === "/api/v1/lock" && req.method === "GET") {
       const rows = await listRows(env);
-      const hooks: Record<string, { version: string; sha256: string; source: string }> = {};
+      const hooks: Record<string, { version: string; sha256: string; source: string; versions: string[] }> = {};
       for (const row of rows) {
-        hooks[row.name] = { version: row.version, sha256: row.sha256, source: row.source_type };
+        hooks[row.name] = {
+          version: row.version,
+          sha256: row.sha256,
+          source: row.source_type,
+          versions: await versionsFor(env, row.name),
+        };
       }
       return json({ hooks });
     }
@@ -167,9 +237,34 @@ export default {
       }
       const name = manifest.name;
       const version = manifest.version;
+      if (!SEMVER_PATTERN.test(version)) {
+        return json({ error: `invalid semver version '${version}'` }, 400);
+      }
       const sha256 = await sha256Hex(body.script);
-      await env.HOOKS_R2.put(`hook_artifacts/${name}/${version}.json`, JSON.stringify({ manifest, script: body.script }));
+      const manifestJson = JSON.stringify(manifest);
+
+      // P1-4 immutability: an existing (name, version) is never overwritten.
+      // A byte-identical republish (same script sha, same manifest
+      // serialization) is idempotent; anything else is a conflicting
+      // republish and is refused.
+      const existing = await hookVersionRow(env, name, version);
+      if (existing) {
+        if (existing.script_sha256 === sha256 && existing.manifest_json === manifestJson) {
+          return json({ ok: true, idempotent: true, hook: { name, version, sha256 } });
+        }
+        return json(
+          { error: `conflicting republish of '${name}@${version}': versions are immutable. Bump the version or publish the identical bytes.` },
+          409,
+        );
+      }
+
+      const artifactKey = `hook_artifacts/${name}/${version}.json`;
       const now = new Date().toISOString();
+      await env.HOOKS_R2.put(artifactKey, JSON.stringify({ manifest, script: body.script }));
+      await env.HOOKS_D1.prepare(
+        `INSERT INTO hook_versions (name, version, manifest_json, script_sha256, artifact_key, published_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).bind(name, version, manifestJson, sha256, artifactKey, now).run();
       await env.HOOKS_D1.prepare(
         `INSERT INTO hooks (id, name, version, sha256, source_type, source_ref, installed_at, enabled, last_verified_at)
          VALUES (?, ?, ?, ?, 'remote', NULL, ?, 1, NULL)
