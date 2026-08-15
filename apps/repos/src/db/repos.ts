@@ -16,7 +16,7 @@ import { sanitizeRemoteIdentity } from "../lib/remote-identity.js";
 import { resolvePullRequestOrigin } from "../lib/pr-identity.js";
 import { classifyCheckout } from "../lib/checkout-health.js";
 import { canonicalPath } from "../lib/path-identity.js";
-import { KNOWN_REPO_FK_TABLES } from "./registry-prune.js";
+import { KNOWN_REPO_FK_TABLES, classifyRegistryPath } from "./registry-prune.js";
 
 // ── Repos ──
 
@@ -217,6 +217,107 @@ function requireManagedRepoIdentity(repo: Repo): Repo {
   return repo;
 }
 
+// ── Canonical-remote resolution (pre-migration stale rows) ──
+
+/**
+ * Registry row names that belong to the retired pre-migration checkout layout
+ * (`open-<name>` under the old OSS tree, `iapp-<name>` under the old internal
+ * tree). A row carrying one of these prefixes alongside the canonical remote is
+ * a pre-migration row: the checkout it described moved into a monorepo or is
+ * gone, and only its remote (`github.com/hasna/<name>`) still names the real
+ * repository.
+ */
+const RETIRED_CHECKOUT_NAME_PREFIXES = ["open-", "iapp-"] as const;
+
+function stripRetiredCheckoutPrefix(name: string): string {
+  const lower = name.toLowerCase();
+  for (const prefix of RETIRED_CHECKOUT_NAME_PREFIXES) {
+    if (lower.startsWith(prefix)) return name.slice(prefix.length);
+  }
+  return name;
+}
+
+let repoLookupPathStateOverride: ((path: string) => "present" | "missing" | "undetermined") | null = null;
+
+/**
+ * Test seam for resolution path state, mirroring
+ * `setPrimaryRelocationCanonicalRootForTests` in db/primary-relocation.ts:
+ * unit tests seed registry rows with synthetic paths that never exist on the
+ * runner, so they must be able to declare a row's path present or missing
+ * without touching the filesystem.
+ */
+export function setRepoLookupPathStateForTests(
+  fn: ((path: string) => "present" | "missing" | "undetermined") | null,
+): void {
+  repoLookupPathStateOverride = fn;
+}
+
+/**
+ * Whether a registry row's stored path is on disk, for resolution purposes.
+ *
+ * Defaults to the errno-aware classifier the registry prune uses
+ * (`classifyRegistryPath` in db/registry-prune.ts), so an `EACCES`-blocked
+ * path never reads as "gone" and a live checkout under an unreadable parent is
+ * never treated as absent.
+ */
+export function repoLookupPathState(path: string): "present" | "missing" | "undetermined" {
+  return repoLookupPathStateOverride ? repoLookupPathStateOverride(path) : classifyRegistryPath(path);
+}
+
+/**
+ * Resolve a name to its canonical GitHub remote when the registry only carries
+ * pre-migration rows for it.
+ *
+ * The 2026 monorepo migration renamed and moved checkouts (`open-bench` →
+ * `hasna/bench`, `iapp-sandboxes` → `hasna/sandboxes`). A name that matches no
+ * registry row — the canonical name was never indexed, or its checkout has not
+ * landed yet — must still bind to the canonical identity (`github.com/hasna/bench`),
+ * or the CLI answers "Repo not found" and then suggests the dead pre-migration
+ * path, which is the reported instrument drift (todos 0251863c).
+ *
+ * Fires only when EVERY non-foreign row for the remote has a verifiably
+ * missing path:
+ *
+ * - a path still on disk — or merely unprobeable (`EACCES`, `ENAMETOOLONG`) —
+ *   under any row means a checkout of that remote exists under a different
+ *   name, and the existing refuse-and-suggest flow points at a usable path
+ *   (the `open-loops` class, todos c357a1f3) — keep it;
+ * - every row gone means the canonical identity is otherwise unreachable and a
+ *   suggestion would point at nothing — bind the name to the row so the caller
+ *   receives the health verdict instead of a dead-end suggestion.
+ *
+ * Accepts `github.com/org/name`, `org/name`, a supported remote URL, or a bare
+ * name (which resolves under the canonical `hasna` org). Returns null when
+ * nothing matches, the remote is only indexed by foreign scratch clones, or a
+ * present checkout keeps the refusal in force.
+ */
+export function getRepoByCanonicalRemote(name: string): Repo | null {
+  const candidate = name.includes("/") || name.includes(":")
+    ? sanitizeRemoteIdentity(name) ?? sanitizeRemoteIdentity(`github.com/${name}`)
+    : sanitizeRemoteIdentity(`github.com/hasna/${name}`);
+  if (!candidate) return null;
+
+  const db = getDb();
+  const rows = (db
+    .query("SELECT * FROM repos WHERE remote_url = ? COLLATE NOCASE ORDER BY id ASC")
+    .all(candidate) as Repo[]).filter((row) => !isForeignCheckoutPath(row.path));
+  if (rows.length === 0) return null;
+  if (rows.some((row) => repoLookupPathState(row.path) !== "missing")) return null;
+
+  // Every row for the remote is gone. Prefer rows that survive the
+  // managed-identity guard (a pre-migration `iapp-` path under `internalapp/`
+  // is a migration artifact, not evidence a different repo is registered),
+  // then rows whose name strips to the requested canonical name. Ties resolve
+  // by the earliest registry id, so the answer is deterministic.
+  const identityClean = rows.filter((row) => getManagedRepoIdentityMismatch(row) === null);
+  const candidates = identityClean.length > 0 ? identityClean : rows;
+  const named = candidates.filter(
+    (row) => stripRetiredCheckoutPrefix(row.name).toLowerCase() === name.toLowerCase(),
+  );
+  const pool = named.length > 0 ? named : candidates;
+  return sanitizeRepoForOutput(pool[0]!);
+}
+
 export function getRepo(idOrPath: string | number): Repo | null {
   const db = getDb();
   if (typeof idOrPath === "number") {
@@ -240,6 +341,8 @@ export function getRepo(idOrPath: string | number): Repo | null {
   }
   if (valid[0]) return valid[0];
   if (mismatches[0]) throw new RepoIdentityMismatchError(mismatches[0]);
+  const byCanonicalRemote = getRepoByCanonicalRemote(idOrPath);
+  if (byCanonicalRemote) return byCanonicalRemote;
   return null;
 }
 
