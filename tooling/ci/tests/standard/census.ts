@@ -1,21 +1,34 @@
 /**
  * Member census + exception registry for the standard-adherence suite.
  *
- * Measured 2026-08-14 against origin/main @ ce470e4ad; refreshed by the
- * integrator lane at the ci/test-suites merge ref (2026-08-14) for the
- * imports that landed after that base — connectors (#80), shield (#74),
- * terminal (#88). Refreshed again 2026-08-14 by the ci/test-suites
- * iterate-to-green fixer at the fresh merge of current main (a7d60a96,
- * todos import #105): files (#90) gained hasna.contract.json (contracts
- * conformance + kitVersion records added, task b0845699), instructions
- * kitVersion advanced to 0.10.6 by #111 (record added, task 8417a133),
- * and todos (#105) gained a pre-backend-schema-era manifest validated at
- * pinned 0.5.2 (conformance + kitVersion records added, task 0ad82b16).
- * The monitor (#97) and testers (#95) imports landed 2026-08-14: monitor
- * gained a conformance + NO_VALIDATOR_PIN record (bins_match_package —
- * package ships monitor-server/monitor-web the manifest does not declare;
- * task d2c6d20f) plus serve/sdk WARN records, testers gained an sdk WARN
- * record.
+ * DESIGN (f05fe292, 2026-08-15): the census exception records are a
+ * REPORTING lane — the hand-refresh loop is gone. New (unrecorded)
+ * violations auto-file a reconcile task keyed on a stable fingerprint and
+ * are reported; the suite passes while reporting them. The two-sided
+ * registry contract is UNCHANGED and load-bearing: a member IN the registry
+ * must actually FAIL today — a recorded exception whose member now passes
+ * (stale entry) still fails the suite until the entry is deleted — and a
+ * member NOT in the registry must PASS (its violations are the auto-filed
+ * reporting set). The contracts-manifest and kitVersion checks remain hard
+ * gates (recorded exceptions allowed, stale records still fail); the
+ * recorded-exception-must-still-fail direction fires in every lane.
+ *
+ * Historical record of the refresh loop this design replaces (kept for
+ * provenance, not as a procedure): measured 2026-08-14 against
+ * origin/main @ ce470e4ad; refreshed by the integrator lane at the
+ * ci/test-suites merge ref (2026-08-14) for the imports that landed after
+ * that base — connectors (#80), shield (#74), terminal (#88). Refreshed
+ * again 2026-08-14 by the ci/test-suites iterate-to-green fixer at the
+ * fresh merge of current main (a7d60a96, todos import #105): files (#90)
+ * gained hasna.contract.json (contracts conformance + kitVersion records
+ * added, task b0845699), instructions kitVersion advanced to 0.10.6 by
+ * #111 (record added, task 8417a133), and todos (#105) gained a
+ * pre-backend-schema-era manifest validated at pinned 0.5.2 (conformance +
+ * kitVersion records added, task 0ad82b16). The monitor (#97) and testers
+ * (#95) imports landed 2026-08-14: monitor gained a conformance +
+ * NO_VALIDATOR_PIN record (bins_match_package — package ships
+ * monitor-server/monitor-web the manifest does not declare; task d2c6d20f)
+ * plus serve/sdk WARN records, testers gained an sdk WARN record.
  * The telephony conformance record was REMOVED 2026-08-14 after CI
  * (clean environment, no HASNA_TELEPHONY_STORAGE_MODE) reported it as a
  * recorded exception that now passes: the mode_enum_compliance violation
@@ -27,8 +40,7 @@
  * deployment-modes vocabulary-removal family landed (#124 machines,
  * #123 telephony, #122 accounts): the machines conformance record was
  * REMOVED — #124 bumped @hasna/contracts to 0.10.6 and its manifest now
- * validates clean (the two-sided registry contract: a recorded exception
- * that passes fails the suite). Cause strings refreshed to exact current
+ * validates clean. Cause strings refreshed to exact current
  * failure text for calendar, catalog, emails, instructions, prompts and
  * shield. Locally on station01, machines and telephony still report
  * server_backend_configuration because the retired HASNA_*_STORAGE_MODE
@@ -36,6 +48,11 @@
  * same class as the telephony note above; machines cleanup is part of
  * todos 7abbf333, telephony 26ad6a16) — in CI's clean environment both
  * pass and neither has a registry entry.
+ * 2026-08-15 (this change): skills' SDK exception entry DELETED — the
+ * member now ships ./sdk, so the recorded exception that passes was a
+ * stale-entry failure under the two-sided contract; and the loops
+ * credential_seam_compliance violation (unrecorded at the 0.10.6
+ * validator) auto-files its reconcile task rather than failing the suite.
  * The exception registry is DATA, not prose: every entry
  * is keyed to a measured violation class and carries the reason and the
  * tracked remediation task. When a violation is fixed, DELETE its exception
@@ -150,6 +167,7 @@ export const LICENSE_EXCEPTIONS: Array<{ member: string; license: string; reason
 /** Four-surface WARN exceptions — members missing the <name>-mcp bin. */
 export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "automations", reason: "Daemon-shaped member (automations-daemon); no MCP surface declared." },
+  { member: "capacity", reason: "CLI-shaped member (capacity launcher bin); no MCP surface. Imported by #162; aggregate task (todos ee9fbb4d)." },
   { member: "contracts", reason: "Library-shaped (manifest validator kit); ships `contracts` + `contracts-cli` bins only." },
   { member: "docs", reason: "Docs/instruction renderer; library-shaped, no MCP surface." },
   { member: "draw", reason: "Library-shaped (canvas/design tokens); no MCP surface." },
@@ -173,6 +191,7 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "automations", reason: "Daemon-shaped (automations-daemon); no HTTP serve bin." },
   { member: "banking", reason: "Client-shaped (bank data access); no server surface." },
   { member: "bridge", reason: "Client-shaped (bridge to other tools); no server surface." },
+  { member: "capacity", reason: "CLI-shaped member (capacity launcher); no HTTP serve bin. Imported by #162; aggregate task (todos ee9fbb4d)." },
   { member: "catalog", reason: "Client-shaped; no server surface." },
   { member: "contracts", reason: "Library-shaped (manifest validator kit); no server surface." },
   { member: "datasets", reason: "CLI-only member; no server surface." },
@@ -212,6 +231,7 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "billing", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "brains", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "bridge", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
+  { member: "capacity", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #162." },
   { member: "catalog", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "changelog", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "computer", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -245,7 +265,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "servers", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "sheets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "signatures", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "skills", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "slides", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "snapshots", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "statusline", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -276,7 +295,7 @@ export const CLI_EXCEPTIONS: Array<{ member: string; reason: string; task: strin
 ];
 
 /** hasna.contract.json must exist for every publishable member. Members
- * measured without one (25 — 24 at the original census, connectors +
+ * measured without one (26 — 24 at the original census, connectors +
  * terminal added by the integrator lane for imports #80/#88, hooks removed
  * when #102 added its manifest on 2026-08-14) — each recorded with the
  * manifest lane pointer (aggregate task; see README). */
@@ -307,6 +326,7 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "ui", reason: "No hasna.contract.json; legacy mirror member; manifest lane (todos 41208cbe)." },
   { member: "connectors", reason: "No hasna.contract.json; imported by #80 after the original census; manifest lane (todos 41208cbe)." },
   { member: "terminal", reason: "No hasna.contract.json; imported by #88 after the original census; manifest lane (todos 41208cbe)." },
+  { member: "capacity", reason: "No hasna.contract.json; imported by #162 after the original census; manifest lane (todos 41208cbe)." },
 ];
 
 /** Contracts conformance exceptions — members whose manifest does not pass
@@ -483,4 +503,52 @@ export function classificationTable(): string {
     .join("\n");
   const header = `| member         | surfaces                                            |`;
   return `${header}\n${rows}`;
+}
+
+/** Todos project where standard-suite reconcile tasks are filed. Defaults to
+ * the release/versioning lane project (agent-ea, where every census
+ * remediation task lives); override with HASNA_TODOS_PROJECT. */
+export const RECONCILE_TASKS_PROJECT = process.env.HASNA_TODOS_PROJECT ?? "5e44770b-694c-46a3-864f-20a2b9ec1de2";
+
+/** Agent identity that created reconcile tasks carry. Defaults to agent-ea,
+ * the release/versioning lane seat the README documents as the tasks' owner
+ * (passing --assign/--assign-seat makes attribution independent of the
+ * ambient TODOS_AGENT_ID); override with HASNA_TODOS_AGENT. */
+export const RECONCILE_TASKS_AGENT = process.env.HASNA_TODOS_AGENT ?? "agent-ea";
+
+/** Find-or-create a reconcile task keyed on the exact fingerprint title
+ * (`todos task upsert --fingerprint <title>`). Returns the task id and
+ * whether it was created; null when the todos CLI is unavailable — the
+ * reporting lanes must never fail on a task-sync failure, they report
+ * NOT FILED and pass. */
+export async function ensureReconcileTask(title: string, description: string): Promise<{ id: string; created: boolean } | null> {
+  let proc: ReturnType<typeof Bun.spawn>;
+  try {
+    proc = Bun.spawn(
+      ["todos", "task", "upsert", "--fingerprint", title, "--title", title, "-d", description, "-p", "high", "--project", RECONCILE_TASKS_PROJECT, "--assign", RECONCILE_TASKS_AGENT, "--assign-seat", "--json"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+  } catch (err) {
+    // A missing `todos` executable throws at spawn time instead of exiting
+    // non-zero; the reporting lanes must never fail on a task-sync failure —
+    // report NOT FILED and pass (measured on CI runners without the CLI).
+    console.info(`[standard] reconcile task upsert unavailable for "${title}": ${(err as Error).message?.slice(0, 200)} — NOT FILED`);
+    return null;
+  }
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  if (exitCode !== 0) {
+    console.info(`[standard] reconcile task upsert failed for "${title}": ${stderr.trim().slice(0, 240)}`);
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(stdout.trim()) as { task?: { id?: string }; created?: boolean };
+    if (!parsed.task?.id) return null;
+    return { id: parsed.task.id, created: parsed.created === true };
+  } catch {
+    return null;
+  }
 }
