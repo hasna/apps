@@ -368,18 +368,8 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos ee9fbb4d (import row — clip)",
   },
   {
-    member: "telephony",
-    cause: "fail server_backend_configuration: HASNA_TELEPHONY_STORAGE_MODE was removed. Delete the storage-mode variable; set HASNA_TELEPHONY_DATABASE_URL to select the postgresql server backend, or leave it unset for sqlite. Pre-existing at main (measured 2026-08-15, pristine origin/main).",
-    task: "todos a5ed4c94 (standard-adherence drift)",
-  },
-  {
     member: "loops",
     cause: "fail credential_seam_compliance: src/lib/cloud/storage.ts + transport.ts vendored copies of the @hasna/contracts client seam (resolveStorageClient/resolveClientTransport/createHasnaHttpTransport/createClientTransport); import from @hasna/contracts/client instead. Pre-existing at main (measured 2026-08-15, pristine origin/main).",
-    task: "todos a5ed4c94 (standard-adherence drift)",
-  },
-  {
-    member: "machines",
-    cause: "fail server_backend_configuration: HASNA_MACHINES_STORAGE_MODE was removed. Delete the storage-mode variable; set HASNA_MACHINES_DATABASE_URL to select the postgresql server backend, or leave it unset for sqlite. Pre-existing at main (measured 2026-08-15, pristine origin/main).",
     task: "todos a5ed4c94 (standard-adherence drift)",
   },
   {
