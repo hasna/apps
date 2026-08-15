@@ -15,6 +15,12 @@ reported success about things it had not actually established.
 
 ### Fixed
 
+- Generated Bun package probes (`machines apps plan`/`apply`) now execute under
+  an explicit `bash -c` wrapper, so the probe script parses on macOS targets
+  whose remote login shell is zsh. Previously the multi-line bash probe was
+  parsed by the login shell directly and failed with `zsh:1: parse error near
+  'printf'`, so installs ran but verification always failed on macOS (bug task
+  e406620f; measured on station03). Linux targets are unaffected.
 - Custom app manifests can now declare separate exact install and probe
   commands, with optional expected-version matching. Incomplete or malformed
   probe contracts fail closed, while existing custom `packageName` entries and
