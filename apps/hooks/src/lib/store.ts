@@ -7,11 +7,12 @@
  */
 
 import { createHash } from "crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "fs";
 import { readFile } from "fs/promises";
 import type { Database } from "bun:sqlite";
 import { getDb } from "../db/index.js";
 import { getLockPath } from "../config.js";
+import { randomBytes } from "crypto";
 
 export interface HookRecord {
   id: string;
@@ -97,15 +98,69 @@ export function removeHookRecord(db: Database, name: string): boolean {
   return res.changes > 0;
 }
 
-export function readLock(): LockFile {
-  try {
-    const path = getLockPath();
-    if (!existsSync(path)) return { hooks: {} };
-    const parsed = JSON.parse(readFileSync(path, "utf-8")) as LockFile;
-    return { hooks: parsed.hooks ?? {} };
-  } catch {
-    return { hooks: {} };
+/**
+ * Raised when hooks.lock is present but malformed. P1-9: a malformed lock
+ * used to degrade to {hooks:{}} — a fail-open that would let the next sync
+ * re-trust hooks as if nothing had been pinned. It now fails hard with a
+ * repair message; no execution path treats a broken lock as an empty store.
+ */
+export class LockFileError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LockFileError";
   }
+}
+
+function assertLockShape(parsed: unknown, path: string): asserts parsed is LockFile {
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new LockFileError(
+      `hooks.lock (${path}) is malformed: expected a JSON object with a "hooks" map. ` +
+        `Repair: fix the file by hand, or if it is unrecoverable move it aside and run 'hooks sync' to rebuild it. ` +
+        `Nothing was trusted or rewritten — hooks are left in the refuse-to-run state until the lock is repaired.`,
+    );
+  }
+  const hooks = (parsed as { hooks?: unknown }).hooks;
+  if (hooks === null || typeof hooks !== "object" || Array.isArray(hooks)) {
+    throw new LockFileError(
+      `hooks.lock (${path}) is malformed: missing or invalid "hooks" map. ` +
+        `Repair: fix the file by hand, or if it is unrecoverable move it aside and run 'hooks sync' to rebuild it. ` +
+        `Nothing was trusted or rewritten — hooks are left in the refuse-to-run state until the lock is repaired.`,
+    );
+  }
+  for (const [name, entry] of Object.entries(hooks as Record<string, unknown>)) {
+    const e = entry as { version?: unknown; sha256?: unknown };
+    if (e === null || typeof e !== "object" || typeof e.version !== "string" || typeof e.sha256 !== "string") {
+      throw new LockFileError(
+        `hooks.lock (${path}) is malformed: entry for '${name}' is not a valid pin (version and sha256 strings required). ` +
+          `Repair: fix the file by hand, or if it is unrecoverable move it aside and run 'hooks sync' to rebuild it.`,
+      );
+    }
+  }
+}
+
+export function readLock(): LockFile {
+  const path = getLockPath();
+  if (!existsSync(path)) return { hooks: {} };
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch {
+    throw new LockFileError(
+      `hooks.lock (${path}) could not be read. Repair: fix permissions or move the file aside and run 'hooks sync'.`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new LockFileError(
+      `hooks.lock (${path}) is malformed: not valid JSON (${String((raw ?? "").slice(0, 80))}). ` +
+        `Repair: fix the file by hand, or if it is unrecoverable move it aside and run 'hooks sync' to rebuild it. ` +
+        `Nothing was trusted or rewritten — hooks are left in the refuse-to-run state until the lock is repaired.`,
+    );
+  }
+  assertLockShape(parsed, path);
+  return parsed;
 }
 
 export function writeLock(lock: LockFile): string {
@@ -115,7 +170,12 @@ export function writeLock(lock: LockFile): string {
   for (const name of Object.keys(lock.hooks).sort()) {
     sorted[name] = lock.hooks[name];
   }
-  writeFileSync(path, JSON.stringify({ hooks: sorted }, null, 2) + "\n", "utf-8");
+  // P1-9 atomic write: serialize to a temp file in the same directory, then
+  // rename over the target, so a crash or kill mid-write can never leave a
+  // truncated lock (which would read as malformed on the next read).
+  const tmp = `${path}.tmp-${randomBytes(8).toString("hex")}`;
+  writeFileSync(tmp, JSON.stringify({ hooks: sorted }, null, 2) + "\n", "utf-8");
+  renameSync(tmp, path);
   return path;
 }
 
