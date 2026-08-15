@@ -377,7 +377,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos e0ef3e32 (contracts task — emails)",
   },
   {
-  {
     member: "events",
     cause: "bins_match_package: package.json ships bin hasna-events (alias of events, npm parity with 0.1.15) that the manifest does not declare; hasna-events is not in CANONICAL_HASNA_BIN_ALIASES so it can never be allowlisted. Imported by #160.",
     task: "todos 9b78ba7e-d859-4928-a999-3184fa6baf97 (contracts task — events)",
@@ -386,7 +385,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "feedback",
     cause: "manifest_valid: cli-with-store repos must declare storage; the feedback manifest deliberately declares none (only backend is append-only JSONL; storage.mode admits sqlite|postgres only, so no schema-valid and true block exists — see manifest metadata.conformance.notes and docs/contract-conformance.md). Imported by #164.",
     task: "todos 5e31148b-6552-44ea-93ba-d7c4e1676079 (contracts task — feedback)",
-  },  },
+  },
   {
     member: "files",
     cause: "manifest_valid: service-class manifest declares no service surface (service repos must declare at least one). Imported by #90 after the original census; validated at pinned 0.5.2.",
