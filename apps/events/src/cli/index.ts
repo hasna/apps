@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EventsClient, JsonEventsStore, getEventsDataDir, getEventsStatus, sanitizeChannelForOutput, sanitizeChannelsForOutput, type ChannelConfig, type EventFilter, type TransportKind } from "../index.js";
+import { DurableEventsBroker } from "../durable.js";
+import { runDurableWorker } from "../durable-worker.js";
 import { parseFilterOptions } from "../filter-options.js";
 
 interface ParsedArgs {
@@ -146,9 +148,24 @@ Usage:
   ${name} [--dir <path>] [--json] events emit <type>${options.source ? "" : " --source <source>"} [options]
   ${name} [--dir <path>] [--json] events list [--limit <n>]
   ${name} [--dir <path>] [--json] events replay [--id <event-id>] [--cursor <cursor>] [--limit <n>] [--dry-run]
+  ${name} [--dir <path>] [--json] durable channel <url> [options]
+  ${name} [--dir <path>] [--json] durable enqueue <type> --source <source> [options]
+  ${name} [--dir <path>] [--json] durable import [--limit <n>]
+  ${name} [--dir <path>] [--json] durable drain [--limit <n>] [--lease-ms <ms>]
+  ${name} [--dir <path>] [--json] durable work [--limit <n>] [--lease-ms <ms>] [--reconcile-ms <ms>]
+  ${name} [--dir <path>] [--json] durable retry-dead [--event-id <id>] [--channel-id <id>] [--limit <n>]
+  ${name} [--dir <path>] [--json] durable status
+
+Global options (must precede the command group):
+  --dir <path>              Data directory
+  -j, --json               Print JSON output
+  -h, --help               Show help
+  -v, --version            Show version
 
 Environment:
-  HASNA_EVENTS_DIR or HASNA_EVENTS_HOME overrides the default ${getEventsDataDir()}`);
+  HASNA_EVENTS_DIR          Primary data-directory override
+  HASNA_EVENTS_HOME         Legacy data-directory fallback
+  Default directory         ${getEventsDataDir()}`);
 }
 
 function printChannelsHelp(options: RunEventsCliOptions = {}): void {
@@ -163,22 +180,24 @@ Usage:
   ${name} [--dir <path>] [--json] channels match <id>
   ${name} [--dir <path>] [--json] channels status
 
-Options:
-  --id <id>                 Channel id for add
-  --type <pattern>          Event type filter, supports wildcards
-  --source <source>         Event source filter
-  --subject <subject>       Event subject filter
-  --severity <severity>     Event severity filter
-  --data <path=value|path!=value> Event data field filter, repeatable; strings, dot paths, array-member matching, * segment wildcard, ** recursive wildcard
-  --metadata <path=value|path!=value> Event metadata field filter, repeatable; strings, dot paths, array-member matching, * segment wildcard, ** recursive wildcard
-  --data-json <path=json|path!=json> Event data field filter with typed JSON value
-  --metadata-json <path=json|path!=json> Event metadata field filter with typed JSON value
-  --honor-filters           On channels test, skip delivery when the sample event does not match filters
-  --transport <kind>        webhook or command
-  --secret <secret>         Webhook signing secret
-  --header <name=value>     Webhook header, repeatable
-  --redact <path>           Redaction path, repeatable
-  --no-deliver              Available on events emit`);
+Commands:
+  add                       Add or replace a channel
+  list                      List configured channels
+  remove                    Remove a channel
+  test                      Send a sample event to one channel
+  match                     Preview a sample event without delivery
+  status                    Show channel storage status
+
+Run '${name} channels add --help' for add options.
+
+Test and match options:
+  --source <source>         Event source (default: ${options.source ?? "hasna.events"})
+  --type <type>             Event type (default: events.test)
+  --subject <subject>       Event subject (default: channel id)
+  --message <message>       Event message
+  --data <json>             Event data object
+  --metadata <json>         Event metadata object
+  --honor-filters           Test only: skip delivery on a filter mismatch`);
 }
 
 function printChannelAddHelp(options: RunEventsCliOptions = {}): void {
@@ -190,23 +209,24 @@ Usage:
   ${name} [--dir <path>] [--json] channels add <command> --transport command [options] -- [command-args...]
 
 Options:
-  --id <id>                 Channel id
+  --id <id>                 Channel id (default: generated UUID)
   --name <name>             Display name
-  --transport <kind>        webhook or command
+  --transport <kind>        webhook or command (default: webhook)
   --type <pattern>          Event type filter, supports wildcards
+  --event-type <pattern>    Alias for --type
   --source <source>         Event source filter
   --subject <subject>       Event subject filter
   --severity <severity>     Event severity filter
-  --data <path=value|path!=value> Event data field filter, repeatable
-  --metadata <path=value|path!=value> Event metadata field filter, repeatable
-  --data-json <path=json|path!=json> Event data field filter with typed JSON value
-  --metadata-json <path=json|path!=json> Event metadata field filter with typed JSON value
+  --data <path=value>       String data filter; repeatable; != negates
+  --metadata <path=value>   String metadata filter; repeatable; != negates
+  --data-json <path=json>   Typed JSON data filter; repeatable; != negates
+  --metadata-json <path=json> Typed JSON metadata filter; repeatable; != negates
   --secret <secret>         Webhook signing secret
   --header <name=value>     Webhook header, repeatable
   --arg <arg>               Command argument, repeatable; values may begin with dashes
-  --timeout-ms <ms>         Transport timeout in milliseconds
-  --retry-attempts <n>      Maximum delivery attempts
-  --retry-backoff-ms <ms>   Initial retry backoff in milliseconds
+  --timeout-ms <ms>         Transport timeout (default: 15000)
+  --retry-attempts <n>      Maximum delivery attempts (default: 1)
+  --retry-backoff-ms <ms>   Initial retry backoff (default: 250)
   --redact <path>           Redaction path, repeatable
   --disabled                Create channel disabled
 
@@ -226,15 +246,25 @@ Usage:
   ${name} [--dir <path>] [--json] events list [--limit <n>]
   ${name} [--dir <path>] [--json] events replay [--id <event-id>] [--cursor <cursor>] [--limit <n>] [--dry-run]
 
-Options:
+Emit options:
   --source <source>         Event source${options.source ? ` (default: ${options.source})` : ""}
   --subject <subject>       Event subject
-  --severity <severity>     Event severity
+  --severity <severity>     debug|info|notice|warning|error|critical (default: info)
   --message <message>       Human-readable event message
   --dedupe-key <key>        Deduplicate repeated events
   --data <json>             JSON object payload
   --metadata <json>         JSON object metadata
   --no-deliver              Record without delivering channels
+
+List options:
+  --source <source>         Filter by exact source
+  --type <type>             Filter by exact type
+  --limit <n>               Most recent events; 0 or omitted lists all
+
+Replay options:
+  --id <event-id>           Filter by exact event id
+  --source <source>         Filter by exact source
+  --type <type>             Filter by exact type
   --cursor <cursor>         Opaque cursor returned by a previous replay page
   --limit <n>               Maximum events to replay
   --dry-run                 Preview replay matches without delivery`);
@@ -258,6 +288,20 @@ export async function runEventsCli(argv = process.argv.slice(2), options: RunEve
       console.log(`events ${status.counts.events} event(s), ${status.counts.channels} channel(s), ${status.counts.deliveries} delivery record(s)`);
       console.log(`dataDir: ${status.dataDir}`);
     });
+    return;
+  }
+
+  if (group === "durable") {
+    if (!command || command === "--help" || command === "-h" || tail.includes("--help") || tail.includes("-h")) {
+      printDurableHelp(options);
+      return;
+    }
+    const broker = new DurableEventsBroker({ dataDir: parsed.dir ?? getEventsDataDir() });
+    try {
+      await handleDurable(broker, command, tail, parsed);
+    } finally {
+      broker.close();
+    }
     return;
   }
 
@@ -293,6 +337,160 @@ export async function runEventsCli(argv = process.argv.slice(2), options: RunEve
     return;
   }
   throw new Error(`Unknown command group: ${group}`);
+}
+
+function printDurableHelp(options: RunEventsCliOptions = {}): void {
+  const name = commandName(options);
+  console.log(`${name} durable
+
+Usage:
+  ${name} [--dir <path>] [--json] durable channel <url> --id <id> --source <source> --type <type> --secret-ref <ref> [options]
+  ${name} [--dir <path>] [--json] durable enqueue <type> --source <source> [options]
+  ${name} [--dir <path>] [--json] durable import [--limit <n>]
+  ${name} [--dir <path>] [--json] durable drain [--limit <n>] [--lease-ms <ms>]
+  ${name} [--dir <path>] [--json] durable work [--limit <n>] [--lease-ms <ms>] [--reconcile-ms <ms>]
+  ${name} [--dir <path>] [--json] durable retry-dead [--event-id <id>] [--channel-id <id>] [--limit <n>]
+  ${name} [--dir <path>] [--json] durable status
+
+Channel options:
+  --id <id>                 Required stable channel id
+  --source <source>         Required exact source filter
+  --type <type>             Required exact event type filter
+  --secret-ref <ref>        Runtime secret reference, e.g. env:HASNA_WEBHOOK_SECRET
+  --timeout-ms <ms>         Webhook timeout (default: 15000)
+  --retry-attempts <n>      Maximum durable attempts (default: 1)
+  --retry-backoff-ms <ms>   Initial persisted backoff (default: 250)
+  --disabled                Persist the route disabled
+
+Enqueue options:
+  --id <id>                 Stable event id
+  --subject <subject>       Stable event subject
+  --time <iso-time>         Event occurrence time
+  --schema-version <value>  Envelope schema version
+  --dedupe-key <key>        Stable business idempotency key
+  --data <json>             Event data object
+  --metadata <json>         Event metadata object`);
+}
+
+async function handleDurable(
+  broker: DurableEventsBroker,
+  command: string,
+  tail: string[],
+  parsed: ParsedArgs,
+): Promise<void> {
+  if (command === "channel") {
+    const args = [...tail];
+    const target = args.shift();
+    if (!target) throw new Error("durable channel requires a webhook URL");
+    const id = takeOption(args, "--id");
+    const source = takeOption(args, "--source");
+    const type = takeOption(args, "--type");
+    if (!id || !source || !type) throw new Error("durable channel requires --id, --source, and --type");
+    if (source.includes("*") || type.includes("*")) throw new Error("durable channel source/type filters must be exact");
+    const secretRef = takeOption(args, "--secret-ref");
+    if (!secretRef) throw new Error("durable channel requires --secret-ref");
+    const timeoutMs = numberOption(takeOption(args, "--timeout-ms"));
+    const retryAttempts = numberOption(takeOption(args, "--retry-attempts"));
+    const retryBackoffMs = numberOption(takeOption(args, "--retry-backoff-ms"));
+    const channel = broker.addChannel({
+      id,
+      enabled: !takeFlag(args, "--disabled"),
+      transport: "webhook",
+      filters: [{ source, type }],
+      webhook: { url: target, secretRef, timeoutMs },
+      retry: retryAttempts || retryBackoffMs
+        ? { maxAttempts: retryAttempts, backoffMs: retryBackoffMs }
+        : undefined,
+    });
+    output(parsed, sanitizeChannelForOutput(channel), () => console.log(`Added durable webhook channel ${channel.id}`));
+    return;
+  }
+
+  if (command === "enqueue") {
+    const args = [...tail];
+    const type = args.shift();
+    if (!type) throw new Error("durable enqueue requires an event type");
+    const source = takeOption(args, "--source");
+    if (!source) throw new Error("durable enqueue requires --source");
+    const result = broker.enqueue({
+      id: takeOption(args, "--id"),
+      source,
+      type,
+      time: takeOption(args, "--time"),
+      subject: takeOption(args, "--subject"),
+      dedupeKey: takeOption(args, "--dedupe-key"),
+      schemaVersion: takeOption(args, "--schema-version"),
+      data: parseJsonOption(takeOption(args, "--data"), {}),
+      metadata: parseJsonOption(takeOption(args, "--metadata"), {}),
+    });
+    output(parsed, result, () => console.log(`${result.deduped ? "Deduped" : "Enqueued"} ${result.event.id} to ${result.queued} channel(s)`));
+    return;
+  }
+
+  if (command === "import") {
+    const args = [...tail];
+    const result = broker.importSpool({ limit: numberOption(takeOption(args, "--limit")) });
+    output(parsed, result, () => console.log(`Imported ${result.imported}, deduped ${result.deduped}, queued ${result.queued}`));
+    return;
+  }
+
+  if (command === "drain") {
+    const args = [...tail];
+    const limit = numberOption(takeOption(args, "--limit"));
+    const imported = broker.importSpool({ limit });
+    const drained = await broker.drain({
+      limit,
+      leaseMs: numberOption(takeOption(args, "--lease-ms")),
+      workerId: takeOption(args, "--worker-id"),
+    });
+    const result = { imported, drained };
+    output(parsed, result, () => console.log(`Claimed ${drained.claimed}, delivered ${drained.delivered}, retried ${drained.retried}, dead ${drained.dead}`));
+    return;
+  }
+
+  if (command === "work") {
+    const args = [...tail];
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    process.once("SIGTERM", stop);
+    process.once("SIGINT", stop);
+    try {
+      const result = await runDurableWorker({
+        broker,
+        signal: controller.signal,
+        limit: numberOption(takeOption(args, "--limit")),
+        leaseMs: numberOption(takeOption(args, "--lease-ms")),
+        workerId: takeOption(args, "--worker-id"),
+        debounceMs: numberOption(takeOption(args, "--debounce-ms")),
+        reconcileMs: numberOption(takeOption(args, "--reconcile-ms")),
+        watchRestartMs: numberOption(takeOption(args, "--watch-restart-ms")),
+      });
+      output(parsed, result, () => console.log(`Worker stopped after ${result.cycles} cycle(s), delivered ${result.delivered}`));
+    } finally {
+      process.removeListener("SIGTERM", stop);
+      process.removeListener("SIGINT", stop);
+    }
+    return;
+  }
+
+  if (command === "status") {
+    const result = broker.status();
+    output(parsed, result, () => console.log(`events durable: ${result.counts.pending} pending, ${result.counts.leased} leased, ${result.counts.dead} dead`));
+    return;
+  }
+
+  if (command === "retry-dead") {
+    const args = [...tail];
+    const result = broker.retryDead({
+      eventId: takeOption(args, "--event-id"),
+      channelId: takeOption(args, "--channel-id"),
+      limit: numberOption(takeOption(args, "--limit")),
+    });
+    output(parsed, result, () => console.log(`Requeued ${result.requeued} dead delivery job(s)`));
+    return;
+  }
+
+  throw new Error(`Unknown durable command: ${command}`);
 }
 
 async function handleChannels(client: EventsClient, command: string | undefined, tail: string[], parsed: ParsedArgs, options: RunEventsCliOptions): Promise<void> {

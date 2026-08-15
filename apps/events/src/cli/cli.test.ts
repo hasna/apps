@@ -67,17 +67,37 @@ afterEach(() => {
 
 describe("CLI smoke behavior", () => {
   test("prints nested group help", async () => {
+    const rootHelp = await runCliText(["--help"]);
+    expect(rootHelp.exitCode).toBe(0);
+    expect(rootHelp.stderr).toBe("");
+    expect(rootHelp.stdout).toContain("Global options (must precede the command group)");
+    expect(rootHelp.stdout).toContain("-v, --version");
+
     const webhooksHelp = await runCli(["channels", "--help"]);
     expect(webhooksHelp.exitCode).toBe(0);
     expect(webhooksHelp.stderr).toBe("");
     expect(webhooksHelp.stdout).toContain("events channels");
     expect(webhooksHelp.stdout).toContain("channels add");
+    expect(webhooksHelp.stdout).toContain("Test and match options:");
+    expect(webhooksHelp.stdout).toContain("--honor-filters");
 
     const eventsHelp = await runCli(["events", "--help"]);
     expect(eventsHelp.exitCode).toBe(0);
     expect(eventsHelp.stderr).toBe("");
     expect(eventsHelp.stdout).toContain("events events");
     expect(eventsHelp.stdout).toContain("events emit");
+    expect(eventsHelp.stdout).toContain("List options:");
+    expect(eventsHelp.stdout).toContain("Replay options:");
+    for (const option of ["--dedupe-key", "--no-deliver", "--id <event-id>", "--cursor <cursor>", "--dry-run"]) {
+      expect(eventsHelp.stdout).toContain(option);
+    }
+
+    const durableHelp = await runCli(["durable", "--help"]);
+    expect(durableHelp.exitCode).toBe(0);
+    expect(durableHelp.stderr).toBe("");
+    for (const command of ["durable channel", "durable enqueue", "durable drain", "durable work", "durable retry-dead"]) {
+      expect(durableHelp.stdout).toContain(command);
+    }
   });
 
   test("does not expose legacy webhooks command group", async () => {
@@ -96,6 +116,11 @@ describe("CLI smoke behavior", () => {
     expect(addHelp.stdout).toContain("--arg <arg>");
     expect(addHelp.stdout).toContain("--timeout-ms <ms>");
     expect(addHelp.stdout).toContain("--retry-attempts <n>");
+    expect(addHelp.stdout).toContain("--event-type <pattern>");
+    expect(addHelp.stdout).toContain("default: generated UUID");
+    expect(addHelp.stdout).toContain("default: webhook");
+    expect(addHelp.stdout).toContain("default: 15000");
+    expect(addHelp.stdout).toContain("--disabled");
     expect(addHelp.stdout).toContain("--arg=--json");
 
     const emitHelp = await runCli(["events", "emit", "--help"]);
@@ -240,6 +265,70 @@ describe("CLI smoke behavior", () => {
     expect(webhooksStatus).toMatchObject(status);
     expect(JSON.stringify(webhooksStatus)).not.toContain("top-secret-value");
     expect(JSON.stringify(webhooksStatus)).not.toContain("raw-token-value");
+  });
+
+  test("configures, enqueues, and drains an exact durable webhook route", async () => {
+    const previousSecret = process.env.HASNA_NOTES_WEBHOOK_SECRET;
+    process.env.HASNA_NOTES_WEBHOOK_SECRET = "test-runtime-signing-material";
+    let requests = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => {
+        requests += 1;
+        return new Response("durably queued", { status: 202 });
+      },
+    });
+    try {
+      const channel = await runCli([
+        "durable", "channel", `http://127.0.0.1:${server.port}`,
+        "--id", "notes-created",
+        "--source", "notes",
+        "--type", "note.created",
+        "--secret-ref", "env:HASNA_NOTES_WEBHOOK_SECRET",
+        "--retry-attempts", "3",
+      ]);
+      expect(channel.exitCode).toBe(0);
+      expect(JSON.parse(channel.stdout)).toMatchObject({
+        id: "notes-created",
+        enabled: true,
+        filters: [{ source: "notes", type: "note.created" }],
+        webhook: { secretRef: "env:HASNA_NOTES_WEBHOOK_SECRET" },
+      });
+
+      const enqueue = await runCli([
+        "durable", "enqueue", "note.created",
+        "--source", "notes",
+        "--id", "notes:note:cli:created",
+        "--dedupe-key", "notes:note:cli:created",
+        "--time", "2026-08-06T15:00:00.000Z",
+        "--schema-version", "notes.v1",
+        "--data", "{\"noteId\":\"cli\"}",
+      ]);
+      expect(enqueue.exitCode).toBe(0);
+      expect(JSON.parse(enqueue.stdout)).toMatchObject({ deduped: false, queued: 1 });
+
+      const drain = await runCli(["durable", "drain", "--limit", "10"]);
+      expect(drain.exitCode).toBe(0);
+      expect(JSON.parse(drain.stdout).drained).toMatchObject({ claimed: 1, delivered: 1 });
+      expect(requests).toBe(1);
+
+      const status = await runCli(["durable", "status"]);
+      expect(status.exitCode).toBe(0);
+      expect(JSON.parse(status.stdout)).toMatchObject({
+        storage: "local-sqlite",
+        counts: { delivered: 1, dead: 0 },
+        safety: {
+          statusOmitsEventPayloads: true,
+          databasePersistsEventEnvelopes: true,
+          includesResolvedSecrets: false,
+        },
+      });
+      expect(status.stdout).not.toContain("test-runtime-signing-material");
+    } finally {
+      server.stop(true);
+      if (previousSecret === undefined) delete process.env.HASNA_NOTES_WEBHOOK_SECRET;
+      else process.env.HASNA_NOTES_WEBHOOK_SECRET = previousSecret;
+    }
   });
 
   test("uses command transport --arg values without forwarding --arg to the process", async () => {

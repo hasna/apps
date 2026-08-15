@@ -1,0 +1,70 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "events",
+  "class": "library",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.5",
+  "description": "Shared event envelopes, local channels, replay, and delivery transports for Hasna open-source apps. Library class: SDK exports are the primary surface and the local `events` CLI is the operator seam. The default compatibility store remains user-owned JSON; opt-in durable delivery uses a Node-safe filesystem spool plus a Bun SQLite outbox under the same caller-selected data directory. The package provisions no remote infrastructure.",
+  "bins": [
+    "events"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "package-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "."
+    },
+    {
+      "name": "durable-spool-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "./durable-spool"
+    },
+    {
+      "name": "durable-delivery-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "./durable"
+    },
+    {
+      "name": "durable-worker-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "./durable-worker"
+    },
+    {
+      "name": "events-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "events",
+      "authMode": "local-only"
+    }
+  ],
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "artifact-scan"
+      }
+    },
+    "conformance": {
+      "waivedSurfaces": [
+        {
+          "kind": "api",
+          "reason": "Embedded library plus a local CLI; it owns no HTTP service boundary and ships no serve bin."
+        },
+        {
+          "kind": "mcp",
+          "reason": "Embedded library; MCP execution belongs to the applications that consume these envelopes."
+        }
+      ]
+    }
+  }
+}

@@ -19,7 +19,22 @@ export interface RegisterEventsCommandsOptions {
   createClient?: () => EventsClient;
   channelsCommandName?: string;
   eventsCommandName?: string;
+  /**
+   * Default row cap applied to `events list` when the caller does not pass an
+   * explicit `--limit`. Guards against dumping the entire event store (a
+   * usability/performance hazard for hosts with large stores). Pass `--limit 0`
+   * to opt out and list every recorded event. Defaults to
+   * {@link DEFAULT_EVENT_LIST_LIMIT}.
+   */
+  defaultEventListLimit?: number;
 }
+
+/**
+ * Sane default number of most-recent events returned by `events list` when the
+ * host does not configure {@link RegisterEventsCommandsOptions.defaultEventListLimit}
+ * and the user does not pass an explicit `--limit`.
+ */
+export const DEFAULT_EVENT_LIST_LIMIT = 100;
 
 function parseJsonObject(value: string | undefined, fallback: Record<string, unknown>): Record<string, unknown> {
   if (!value) return fallback;
@@ -49,6 +64,21 @@ function createClient(options: RegisterEventsCommandsOptions): EventsClient {
 function print(value: unknown, json: boolean, text: string): void {
   if (json) console.log(JSON.stringify(value, null, 2));
   else console.log(text);
+}
+
+/**
+ * Report an action failure without letting the error escape the commander
+ * action handler. Host programs that embed these commands may not wrap
+ * `parseAsync` in a try/catch (unlike the standalone `events` CLI), so an
+ * uncaught throw would surface as a raw stack trace and ignore `--json`.
+ * Emitting a clean `{ error }` payload here keeps not-found and other action
+ * failures consistent with the other channel commands (e.g. `channels remove`).
+ */
+function fail(error: unknown, json: boolean): void {
+  const message = error instanceof Error ? error.message : String(error);
+  if (json) console.log(JSON.stringify({ error: message }, null, 2));
+  else console.error(message);
+  process.exitCode = 1;
 }
 
 function hasJsonOption(options: {
@@ -201,15 +231,20 @@ export function registerChannelCommands(program: CommanderLike, options: Registe
     .option("--honor-filters", "Skip delivery when the sample event does not match channel filters", false)
     .option("-j, --json", "Print JSON output", false)
     .action(async (id: string, actionOptions: { source?: string; type: string; subject?: string; message: string; data?: string; metadata?: string; honorFilters?: boolean; json?: boolean }, command?: CommanderCommandLike) => {
-      const result = await createClient(options).testChannel(id, {
-        source: actionOptions.source ?? options.source,
-        type: actionOptions.type,
-        subject: actionOptions.subject ?? id,
-        message: actionOptions.message,
-        data: parseJsonObject(actionOptions.data, { test: true }),
-        metadata: parseJsonObject(actionOptions.metadata, {}),
-      }, { honorFilters: actionOptions.honorFilters });
-      print(result, wantsJson(actionOptions, command), `${result.status}: ${result.channelId}`);
+      const json = wantsJson(actionOptions, command);
+      try {
+        const result = await createClient(options).testChannel(id, {
+          source: actionOptions.source ?? options.source,
+          type: actionOptions.type,
+          subject: actionOptions.subject ?? id,
+          message: actionOptions.message,
+          data: parseJsonObject(actionOptions.data, { test: true }),
+          metadata: parseJsonObject(actionOptions.metadata, {}),
+        }, { honorFilters: actionOptions.honorFilters });
+        print(result, json, `${result.status}: ${result.channelId}`);
+      } catch (error) {
+        fail(error, json);
+      }
     });
 
   channels
@@ -224,15 +259,20 @@ export function registerChannelCommands(program: CommanderLike, options: Registe
     .option("--metadata <json>", "Event metadata JSON object")
     .option("-j, --json", "Print JSON output", false)
     .action(async (id: string, actionOptions: { source?: string; type: string; subject?: string; message: string; data?: string; metadata?: string; json?: boolean }, command?: CommanderCommandLike) => {
-      const result = await createClient(options).matchChannel(id, {
-        source: actionOptions.source ?? options.source,
-        type: actionOptions.type,
-        subject: actionOptions.subject ?? id,
-        message: actionOptions.message,
-        data: parseJsonObject(actionOptions.data, { test: true }),
-        metadata: parseJsonObject(actionOptions.metadata, {}),
-      });
-      print(result, wantsJson(actionOptions, command), `${result.matched ? "matched" : "skipped"}: ${result.channelId}`);
+      const json = wantsJson(actionOptions, command);
+      try {
+        const result = await createClient(options).matchChannel(id, {
+          source: actionOptions.source ?? options.source,
+          type: actionOptions.type,
+          subject: actionOptions.subject ?? id,
+          message: actionOptions.message,
+          data: parseJsonObject(actionOptions.data, { test: true }),
+          metadata: parseJsonObject(actionOptions.metadata, {}),
+        });
+        print(result, json, `${result.matched ? "matched" : "skipped"}: ${result.channelId}`);
+      } catch (error) {
+        fail(error, json);
+      }
     });
 
   return channels;
@@ -280,7 +320,8 @@ export function registerEventCommands(program: CommanderLike, options: RegisterE
       print(result, wantsJson(actionOptions, command), `${result.deduped ? "Deduped" : "Emitted"} ${result.event.id} to ${result.deliveries.length} channel(s)`);
     });
 
-  events.command("list").description("List recorded events").option("--source <source>", "Filter by source").option("--type <type>", "Filter by type").option("--limit <n>", "Limit results", parseNumber).option("-j, --json", "Print JSON output", false).action(async (actionOptions: { source?: string; type?: string; limit?: number; json?: boolean }, command?: CommanderCommandLike) => {
+  const defaultListLimit = options.defaultEventListLimit ?? DEFAULT_EVENT_LIST_LIMIT;
+  events.command("list").description("List recorded events").option("--source <source>", "Filter by source").option("--type <type>", "Filter by type").option("--limit <n>", `Limit to the most recent <n> events (default ${defaultListLimit}; use 0 for all)`, parseNumber, defaultListLimit).option("-j, --json", "Print JSON output", false).action(async (actionOptions: { source?: string; type?: string; limit?: number; json?: boolean }, command?: CommanderCommandLike) => {
     let rows = await createClient(options).listEvents();
     if (actionOptions.source) rows = rows.filter((event) => event.source === actionOptions.source);
     if (actionOptions.type) rows = rows.filter((event) => event.type === actionOptions.type);
