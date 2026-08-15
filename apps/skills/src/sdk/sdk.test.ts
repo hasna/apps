@@ -242,6 +242,7 @@ describe("sdk surface", () => {
         contentType: "text/plain",
         byteSize: 3,
         sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        visibility: "private",
       },
       { relativePath: "out.txt", bodyText: "abc", contentType: "text/plain" },
     );
