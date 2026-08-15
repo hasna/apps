@@ -1,0 +1,23 @@
+diff --git a/index.js b/index.js
+index b214fcb1fc72dd864a79b4a5397aee513bdb27d2..3550145a00b64f5142e14c9c3654705341bbb398 100644
+--- a/index.js
++++ b/index.js
+@@ -204,0 +205,4 @@
++// Captures the authority component (between "//" and the next "/", "?" or "#"),
++// with or without a scheme prefix, for the literal-backslash rejection below.
++const AUTHORITY_PREFIX = /^(?:[^#/:?]+:)?\/\/([^/?#]*)/
++
+@@ -250,0 +255,13 @@
++  // A literal backslash (U+005C) is not a valid RFC 3986 URI character and is
++  // not an authority delimiter. Reject it in the authority rather than
++  // rewriting it: normalizing "\\" -> "/" (WHATWG error recovery) could silently
++  // change the resource identified by an otherwise-invalid input, and lets "\\"
++  // act as a host delimiter here while Node's native URL parses a different
++  // host (SSRF / redirect / origin-allowlist bypass). Percent-encoded %5C is
++  // untouched and remains valid encoded data.
++  const authorityMatch = uri.match(AUTHORITY_PREFIX)
++  if (authorityMatch !== null && authorityMatch[1].indexOf('\\') !== -1) {
++    parsed.error = 'URI authority must not contain a literal backslash.'
++    malformedAuthorityOrPort = true
++  }
++
