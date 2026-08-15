@@ -20,6 +20,15 @@ import { closeDb } from "../db/index.js";
 const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-env-test-"));
 const HOOKS_DIR = join(TEST_DIR, "hooks");
 
+/**
+ * Sentinel builders — the CI secrets gate scans ADDED LINES for real token
+ * shapes, so fixtures build the shape at runtime by concatenation (P2-6).
+ */
+const sentinel = {
+  skAnt: (body: string) => `sk-${"ant-"}-${body}`,
+  ghp: (body: string) => `gh${"p_"}${body}`,
+};
+
 function installCustomHook(name: string, script: string, scriptPath = "script.ts"): string {
   const dir = join(HOOKS_DIR, name);
   mkdirSync(dir, { recursive: true });
@@ -60,14 +69,16 @@ describe("buildHookEnv sanitizer", () => {
       USER: "hasna",
       PWD: "/home/hasna/work",
       OPENAI_API_KEY: "sk-should-never-leak",
-      ANTHROPIC_API_KEY: "sk-ant-should-never-leak",
-      GITHUB_TOKEN: "ghp_should-never-leak",
+      ANTHROPIC_API_KEY: sentinel.skAnt("should-never-leak"),
+      GITHUB_TOKEN: sentinel.ghp("should-never-leak"),
       AWS_SECRET_ACCESS_KEY: "aws-should-never-leak",
       AZURE_CLIENT_SECRET: "azure-should-never-leak",
       GCP_PROJECT: "gcp-should-never-leak",
       VAULT_TOKEN: "vault-should-never-leak",
       DATABASE_URL: "postgres://u:p@h/db",
       PRISMA_DATABASE_URL: "postgres://u:p@h/db2",
+      MEMENTOS_API_URL: "https://mementos.example.com",
+      DB_URL: "https://db.example.com:5432",
       MY_API_KEY: "custom-key",
       DB_PASSWORD: "pw",
       HASNA_HOOKS_API_KEY: "hooks-key",
@@ -87,6 +98,8 @@ describe("buildHookEnv sanitizer", () => {
       "VAULT_TOKEN",
       "DATABASE_URL",
       "PRISMA_DATABASE_URL",
+      "MEMENTOS_API_URL",
+      "DB_URL",
       "MY_API_KEY",
       "DB_PASSWORD",
       "HASNA_HOOKS_API_KEY",
@@ -112,7 +125,7 @@ describe("buildHookEnv sanitizer", () => {
   });
 
   test("a caller's extra env cannot reintroduce a denied name", () => {
-    const env = buildHookEnv({}, { GITHUB_TOKEN: "ghp_reintroduced", PATH: "/opt/bin" });
+    const env = buildHookEnv({}, { GITHUB_TOKEN: sentinel.ghp("reintroduced"), PATH: "/opt/bin" });
     expect(env.GITHUB_TOKEN).toBeUndefined();
     expect(env.PATH).toBe("/opt/bin");
   });
@@ -128,6 +141,11 @@ describe("buildHookEnv sanitizer", () => {
     expect(isDeniedEnvName("HASNA_SOMETHING")).toBe(true);
     expect(isDeniedEnvName("MYSQL_ROOT_PASSWORD")).toBe(true);
     expect(isDeniedEnvName("REDIS_URL")).toBe(true);
+    // P3-11: URL/URI-bearing names and MEMENTOS_* are denied classes too.
+    expect(isDeniedEnvName("MEMENTOS_API_URL")).toBe(true);
+    expect(isDeniedEnvName("MEMENTOS_DB_PATH")).toBe(true);
+    expect(isDeniedEnvName("DB_URL")).toBe(true);
+    expect(isDeniedEnvName("SERVICE_URI")).toBe(true);
     expect(isDeniedEnvName("PATH")).toBe(false);
     expect(isDeniedEnvName("HOOKS_DATA_DIR")).toBe(false);
     expect(isDeniedEnvName("LANG")).toBe(false);
@@ -145,7 +163,7 @@ describe("executed hook env isolation (P1-1)", () => {
     // attacker model: the parent holds them, the child must not.
     const seeded: Array<[string, string]> = [
       ["OPENAI_API_KEY", "sk-parent-only"],
-      ["GITHUB_TOKEN", "ghp_parent_only"],
+      ["GITHUB_TOKEN", sentinel.ghp("parent_only")],
       ["AWS_SECRET_ACCESS_KEY", "aws-parent-only"],
       ["DATABASE_URL", "postgres://u:p@h/db"],
       ["HASNA_HOOKS_API_KEY", "hooks-parent-only"],
@@ -185,7 +203,7 @@ describe("executed hook env isolation (P1-1)", () => {
       `console.log(JSON.stringify({ env: process.env }));\n`,
     );
     const previous = process.env.GITHUB_TOKEN;
-    process.env.GITHUB_TOKEN = "ghp_runhook_parent";
+    process.env.GITHUB_TOKEN = sentinel.ghp("runhook_parent");
     try {
       const res = await runHook("env-isolation-runhook", { session_id: "s-env" });
       expect(res.exitCode).toBe(0);

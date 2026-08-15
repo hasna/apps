@@ -265,9 +265,22 @@ async function pushTable(db: Database, remote: PgAdapterAsync, table: StorageTab
     const rows = db.query(`SELECT * FROM ${quoteIdent(table)}`).all() as Row[];
     result.rowsRead = rows.length;
     if (rows.length === 0) return result;
+    // P2-3 (round 2): rows written before the 0.6.6 redactor hold verbatim
+    // tool_input/error/metadata; pull/read project them but push used to
+    // forward them unredacted into PG. Apply the SAME projection before the
+    // upsert so nothing sensitive flows to the remote store from either
+    // direction.
+    const projected = table === "hook_events"
+      ? rows.map((row) => ({
+          ...row,
+          tool_input: typeof row.tool_input === "string" ? redactEventPayload(row.tool_input) : row.tool_input,
+          error: typeof row.error === "string" ? redactEventPayload(row.error) : row.error,
+          metadata: typeof row.metadata === "string" ? redactEventPayload(row.metadata) : row.metadata,
+        }))
+      : rows;
     const remoteColumns = await getRemoteColumns(remote, table);
-    const columns = filterRemoteColumns(remoteColumns, Object.keys(rows[0]!));
-    result.rowsWritten = await upsertPg(remote, table, columns, rows, remoteColumns);
+    const columns = filterRemoteColumns(remoteColumns, Object.keys(projected[0]!));
+    result.rowsWritten = await upsertPg(remote, table, columns, projected, remoteColumns);
   } catch (error) {
     result.errors.push(error instanceof Error ? error.message : String(error));
   }

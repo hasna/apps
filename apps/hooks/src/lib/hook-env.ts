@@ -18,9 +18,10 @@
  * credential to leak, so the deny list is the documented prefix/suffix set
  * below. The deny list strips:
  *
- *   suffix:  KEY, TOKEN, SECRET, PASSWORD, PASSWD, CREDENTIAL, CREDENTIALS
+ *   suffix:  KEY, TOKEN, SECRET, PASSWORD, PASSWD, CREDENTIAL, CREDENTIALS,
+ *            URL, URI (a URL/URI-bearing variable can embed credentials)
  *   prefix:  HASNA_, AWS_, AZURE_, GCP_, VAULT_, GOOGLE_, OPENAI_,
- *            ANTHROPIC_, POSTGRES_, MYSQL_, REDIS_, MONGO_
+ *            ANTHROPIC_, POSTGRES_, MYSQL_, REDIS_, MONGO_, MEMENTOS_
  *   contains: DATABASE_URL (any variant)
  *
  * Names that merely resemble credentials (e.g. HOOKS_DATA_DIR) survive; a
@@ -29,7 +30,7 @@
 
 const ALLOWLIST = new Set(["PATH", "HOME", "LANG", "TZ", "SHELL", "TERM", "USER", "PWD"]);
 
-const DENY_SUFFIXES = ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "CREDENTIALS"];
+const DENY_SUFFIXES = ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "CREDENTIALS", "URL", "URI"];
 
 const DENY_PREFIXES = [
   "HASNA_",
@@ -44,6 +45,7 @@ const DENY_PREFIXES = [
   "MYSQL_",
   "REDIS_",
   "MONGO_",
+  "MEMENTOS_",
 ];
 
 const DENY_CONTAINS = ["DATABASE_URL"];

@@ -30,6 +30,13 @@ export interface LockEntry {
   version: string;
   sha256: string;
   source: string;
+  /**
+   * True when the pin came from an explicit `hooks install/update
+   * <name>@<version>` (P2-9): an explicit older pin is preserved across
+   * syncs instead of being silently bumped to the latest. Absent/undefined
+   * pins are ordinary sync-maintained pins and follow the latest.
+   */
+  pinned?: boolean;
 }
 
 export interface LockFile {

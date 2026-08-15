@@ -1,6 +1,6 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { createHash } from "crypto";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { planSync, syncHooks } from "./sync.js";
@@ -8,6 +8,7 @@ import { readLock, sha256File, setPinnedHook, getHookRecord } from "./store.js";
 import { resolveScriptPath } from "./resolve.js";
 import { getHook } from "./registry.js";
 import { closeDb, getDb } from "../db/index.js";
+import { handleServeRequest } from "../serve.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-sync-test-"));
 
@@ -245,6 +246,133 @@ describe("sync from remote registry (API URL configured)", () => {
       server.stop(true);
     }
   });
+
+  test("a one-line inline hook (script_kind) installs via registry sync and runs (P1-2)", async () => {
+    const script = "console.log(JSON.stringify({ continue: true }));";
+    const sha = createHash("sha256").update(script).digest("hex");
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/catalog") {
+          return Response.json({ hooks: [{ name: "inline-sync-demo", version: "1.0.0", sha256: sha }] });
+        }
+        if (url.pathname === "/api/v1/lock") {
+          return Response.json({ hooks: { "inline-sync-demo": { version: "1.0.0", sha256: sha, source: "remote" } } });
+        }
+        if (url.pathname === "/api/v1/hooks/inline-sync-demo/1.0.0") {
+          return Response.json({
+            manifest: { name: "inline-sync-demo", version: "1.0.0", events: ["PostToolUse"], script, script_kind: "inline" },
+            script,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      process.env.HASNA_HOOKS_API_URL = base;
+      const plan = await syncHooks();
+      expect(plan.diff.added).toContain("inline-sync-demo");
+      // The one-line inline body lands in script.ts — never a file named
+      // after the script content (the round-2A ENOENT repro).
+      const scriptPath = resolveScriptPath("inline-sync-demo")!;
+      expect(scriptPath.endsWith("script.ts")).toBe(true);
+      expect(existsSync(scriptPath)).toBe(true);
+      expect(readFileSync(scriptPath, "utf-8")).toBe(script);
+      expect(readLock().hooks["inline-sync-demo"]?.version).toBe("1.0.0");
+      const { runHook } = await import("../index.js");
+      const res = await runHook("inline-sync-demo", {
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "echo hi" },
+        session_id: "s-inline",
+      });
+      expect(res.exitCode).toBe(0);
+      expect((res.output as any).continue).toBe(true);
+    } finally {
+      delete process.env.HASNA_HOOKS_API_URL;
+      server.stop(true);
+    }
+  });
+
+  test("a remote artifact whose manifest version disagrees with the lock is refused (P3-13)", async () => {
+    const script = "console.log('version-lie');\n";
+    const sha = createHash("sha256").update(script).digest("hex");
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/catalog") {
+          return Response.json({ hooks: [{ name: "version-lie-demo", version: "1.0.0", sha256: sha }] });
+        }
+        if (url.pathname === "/api/v1/lock") {
+          return Response.json({ hooks: { "version-lie-demo": { version: "1.0.0", sha256: sha, source: "remote" } } });
+        }
+        if (url.pathname === "/api/v1/hooks/version-lie-demo/1.0.0") {
+          return Response.json({
+            manifest: { name: "version-lie-demo", version: "9.9.9", events: ["PostToolUse"], script: "script.ts" },
+            script,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    const lockBefore = JSON.stringify(readLock());
+    try {
+      process.env.HASNA_HOOKS_API_URL = base;
+      await expect(syncHooks()).rejects.toThrow(/declares a different version/);
+      expect(existsSync(join(TEST_DIR, "hooks", "version-lie-demo"))).toBe(false);
+      expect(JSON.stringify(readLock())).toBe(lockBefore);
+    } finally {
+      delete process.env.HASNA_HOOKS_API_URL;
+      server.stop(true);
+    }
+  });
+
+  test("a one-line inline hook installs via the serve registry (script_kind passthrough) (P1-2)", async () => {
+    const script = "console.log(JSON.stringify({ continue: true }));";
+    const name = "serve-inline-demo";
+    const dir = join(TEST_DIR, "hooks", name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify({
+      name,
+      version: "1.0.0",
+      events: ["PostToolUse"],
+      script,
+      script_kind: "inline",
+    }));
+    writeFileSync(join(dir, "script.ts"), script);
+    const sha = createHash("sha256").update(script).digest("hex");
+    setPinnedHook(name, { version: "1.0.0", sha256: sha, source: "custom" });
+
+    process.env.HASNA_HOOKS_API_KEY = "test-serve-key";
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        return handleServeRequest(req, "test-serve-key");
+      },
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      const { fetchPinnedHook } = await import("./sync.js");
+      const result = await fetchPinnedHook(name, "1.0.0", base);
+      expect(result.scriptPath).toContain("script.ts");
+      const { runHook } = await import("../index.js");
+      const res = await runHook(name, {
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "echo hi" },
+        session_id: "s-serve-inline",
+      });
+      expect(res.exitCode).toBe(0);
+      expect((res.output as any).continue).toBe(true);
+    } finally {
+      delete process.env.HASNA_HOOKS_API_KEY;
+      server.stop(true);
+    }
+  });
 });
 
 describe("fetchPinnedHook with a versioned registry (P1-4)", () => {
@@ -339,6 +467,97 @@ describe("fetchPinnedHook with a versioned registry (P1-4)", () => {
       const { fetchPinnedHook } = await import("./sync.js");
       await expect(fetchPinnedHook("pin-demo", "1.0.0", base)).rejects.toThrow(/sha256 header/);
     } finally {
+      server.stop(true);
+    }
+  });
+});
+
+describe("explicit older pins are preserved across sync (P2-9)", () => {
+  test("a 1.0.0 explicit pin survives a sync whose remote latest is 2.0.0; an explicit update moves it", async () => {
+    const scriptV1 = "console.log('pinned-v1');\n";
+    const scriptV2 = "console.log('pinned-v2');\n";
+    const shaV1 = createHash("sha256").update(scriptV1).digest("hex");
+    const shaV2 = createHash("sha256").update(scriptV2).digest("hex");
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/catalog") {
+          return Response.json({ hooks: [{ name: "pin-preserve-demo", version: "2.0.0", sha256: shaV2 }] });
+        }
+        if (url.pathname === "/api/v1/lock") {
+          return Response.json({
+            hooks: { "pin-preserve-demo": { version: "2.0.0", sha256: shaV2, source: "remote", versions: ["1.0.0", "2.0.0"] } },
+          });
+        }
+        if (url.pathname === "/api/v1/hooks/pin-preserve-demo/2.0.0") {
+          return Response.json({
+            manifest: { name: "pin-preserve-demo", version: "2.0.0", events: ["PostToolUse"], script: "script.ts" },
+            script: scriptV2,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      process.env.HASNA_HOOKS_API_URL = base;
+      // The user explicitly pinned 1.0.0 (fetchPinnedHook marks the lock
+      // entry pinned:true).
+      setPinnedHook("pin-preserve-demo", { version: "1.0.0", sha256: shaV1, source: "remote", pinned: true });
+      const plan = await syncHooks();
+      expect(plan.diff.unchanged).toContain("pin-preserve-demo");
+      expect(plan.diff.updated).not.toContain("pin-preserve-demo");
+      const lock = readLock();
+      expect(lock.hooks["pin-preserve-demo"]?.version).toBe("1.0.0");
+      expect(lock.hooks["pin-preserve-demo"]?.sha256).toBe(shaV1);
+      // An EXPLICIT update moves the pin to the latest.
+      const { fetchPinnedHook } = await import("./sync.js");
+      await fetchPinnedHook("pin-preserve-demo", "2.0.0", base);
+      expect(readLock().hooks["pin-preserve-demo"]?.version).toBe("2.0.0");
+      expect(readLock().hooks["pin-preserve-demo"]?.sha256).toBe(shaV2);
+    } finally {
+      delete process.env.HASNA_HOOKS_API_URL;
+      server.stop(true);
+    }
+  });
+
+  test("a sync-maintained (non-explicit) pin still follows the remote latest", async () => {
+    const scriptV1 = "console.log('pinned-v1');\n";
+    const scriptV2 = "console.log('pinned-v2');\n";
+    const shaV1 = createHash("sha256").update(scriptV1).digest("hex");
+    const shaV2 = createHash("sha256").update(scriptV2).digest("hex");
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/catalog") {
+          return Response.json({ hooks: [{ name: "pin-follow-demo", version: "2.0.0", sha256: shaV2 }] });
+        }
+        if (url.pathname === "/api/v1/lock") {
+          return Response.json({
+            hooks: { "pin-follow-demo": { version: "2.0.0", sha256: shaV2, source: "remote", versions: ["1.0.0", "2.0.0"] } },
+          });
+        }
+        if (url.pathname === "/api/v1/hooks/pin-follow-demo/2.0.0") {
+          return Response.json({
+            manifest: { name: "pin-follow-demo", version: "2.0.0", events: ["PostToolUse"], script: "script.ts" },
+            script: scriptV2,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      process.env.HASNA_HOOKS_API_URL = base;
+      // An ordinary (sync-maintained) stale pin is still updated.
+      setPinnedHook("pin-follow-demo", { version: "1.0.0", sha256: shaV1, source: "remote" });
+      const plan = await syncHooks();
+      expect(plan.diff.updated).toContain("pin-follow-demo");
+      expect(readLock().hooks["pin-follow-demo"]?.version).toBe("2.0.0");
+    } finally {
+      delete process.env.HASNA_HOOKS_API_URL;
       server.stop(true);
     }
   });

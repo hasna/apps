@@ -310,6 +310,46 @@ describe("storage synchronization", () => {
     await expect(storageSync({ tables: ["feedback"] })).rejects.toThrow(/Missing HASNA_HOOKS_DATABASE_URL/);
     expect(getSyncMetaAll()).toEqual([]);
   });
+
+  test("push projects unredacted legacy hook_events rows before forwarding to PG (P2-3)", async () => {
+    useTestDatabase();
+    process.env[HOOKS_STORAGE_ENV] = "postgres://example/hooks";
+    // A pre-0.6.6 row holding a verbatim credential: push must project it the
+    // same way pull/read do, never forward the raw bytes to PG.
+    const db = getDb();
+    db.run(
+      `INSERT INTO hook_events (id, timestamp, session_id, hook_name, event_type, tool_input, error, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        "legacy-push-row",
+        "2026-07-29T00:00:00.000Z",
+        "session-1",
+        "gitguard",
+        "PreToolUse",
+        JSON.stringify({ command: "curl", api_key: "sk-legacy-push-secret-abcdefghijklmnop" }),
+        "error: token=ghp-legacy-push-secret-abcdefghijklmnopqrstuvwxyz123456",
+        JSON.stringify({ secret: "legacy-push-metadata" }),
+      ],
+    );
+    const remoteColumns = ["id", "timestamp", "session_id", "hook_name", "event_type", "tool_input", "error", "metadata"];
+    const pg = mockPostgres({
+      all: async (sql) => sql.includes("information_schema.columns")
+        ? remoteColumns.map((column_name) => ({ column_name, data_type: "text" }))
+        : [],
+    });
+
+    const results = await storagePush({ tables: ["hook_events"] });
+
+    expect(results).toEqual([{ table: "hook_events", rowsRead: 1, rowsWritten: 1, errors: [] }]);
+    const insert = pg.run.mock.calls.find(([sql]) => sql.includes('INSERT INTO "hook_events"'));
+    const params = insert?.slice(1) as unknown[];
+    const toolInput = JSON.parse(params[5] as string);
+    expect(toolInput.api_key).toBe("[REDACTED]");
+    expect(params[6] as string).toContain("[REDACTED]");
+    expect(params[6] as string).not.toContain("legacy-push-secret");
+    const metadata = JSON.parse(params[7] as string);
+    expect(metadata.secret).toBe("[REDACTED]");
+  });
 });
 
 describe("sync metadata and status", () => {

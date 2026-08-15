@@ -82,6 +82,7 @@ interface ArtifactJson {
     description?: string;
     events: string[];
     script: string;
+    script_kind?: "inline" | "file";
     args?: string[];
     timeout_ms?: number;
   };
@@ -99,13 +100,6 @@ function authorized(req: Request, env: Env): boolean {
   const header = req.headers.get("authorization") ?? "";
   if (header.startsWith("Bearer ")) return secureEqual(header.slice("Bearer ".length), env.HOOKS_API_KEY);
   return secureEqual(req.headers.get("x-api-key") ?? "", env.HOOKS_API_KEY);
-}
-
-async function listRows(env: Env): Promise<HookRow[]> {
-  const { results } = await env.HOOKS_D1.prepare(
-    "SELECT id, name, version, sha256, source_type, source_ref, installed_at, enabled, last_verified_at FROM hooks WHERE enabled = 1 ORDER BY name",
-  ).all();
-  return results as unknown as HookRow[];
 }
 
 async function versionsFor(env: Env, name: string): Promise<string[]> {
@@ -159,6 +153,56 @@ function decodeSegment(segment: string): string {
   }
 }
 
+/**
+ * The hooks table is the LATEST pointer; hook_versions is the immutable
+ * history. A crash between the hook_versions INSERT and the latest-pointer
+ * upsert leaves a published version with no pointer — invisible to
+ * catalog/lock until republished. Every catalog/lock read heals that window
+ * (P2-4): the newest published version of any name missing from `hooks`
+ * becomes its pointer, so the next GET after a crash returns the hook.
+ */
+async function ensureLatestRows(env: Env): Promise<HookRow[]> {
+  const { results } = await env.HOOKS_D1.prepare(
+    "SELECT id, name, version, sha256, source_type, source_ref, installed_at, enabled, last_verified_at FROM hooks WHERE enabled = 1 ORDER BY name",
+  ).all();
+  const rows = results as unknown as HookRow[];
+  const present = new Set(rows.map((row) => row.name));
+  const { results: newest } = await env.HOOKS_D1.prepare(
+    "SELECT name, version, script_sha256, published_at FROM hook_versions v WHERE NOT EXISTS (SELECT 1 FROM hook_versions v2 WHERE v2.name = v.name AND v2.published_at > v.published_at)",
+  ).all();
+  const newestRows = newest as unknown as Array<{ name: string; version: string; script_sha256: string; published_at: string }>;
+  const healed: HookRow[] = [];
+  for (const versionRow of newestRows) {
+    if (present.has(versionRow.name)) continue;
+    await env.HOOKS_D1.prepare(
+      `INSERT INTO hooks (id, name, version, sha256, source_type, source_ref, installed_at, enabled, last_verified_at)
+       VALUES (?, ?, ?, ?, 'remote', NULL, ?, 1, NULL)
+       ON CONFLICT(id) DO UPDATE SET version = excluded.version, sha256 = excluded.sha256, source_type = excluded.source_type, last_verified_at = excluded.last_verified_at`,
+    ).bind(versionRow.name, versionRow.name, versionRow.version, versionRow.script_sha256, versionRow.published_at).run();
+    healed.push({
+      id: versionRow.name,
+      name: versionRow.name,
+      version: versionRow.version,
+      sha256: versionRow.script_sha256,
+      source_type: "remote",
+      source_ref: null,
+      installed_at: versionRow.published_at,
+      enabled: 1,
+      last_verified_at: null,
+    });
+  }
+  return [...rows, ...healed];
+}
+
+/** Upsert the hooks (latest-pointer) row for a just-published version. */
+async function upsertLatestPointer(env: Env, name: string, version: string, sha256: string, now: string): Promise<void> {
+  await env.HOOKS_D1.prepare(
+    `INSERT INTO hooks (id, name, version, sha256, source_type, source_ref, installed_at, enabled, last_verified_at)
+     VALUES (?, ?, ?, ?, 'remote', NULL, ?, 1, NULL)
+     ON CONFLICT(id) DO UPDATE SET version = excluded.version, sha256 = excluded.sha256, source_type = excluded.source_type, last_verified_at = excluded.last_verified_at`,
+  ).bind(name, name, version, sha256, now).run();
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
@@ -174,7 +218,7 @@ export default {
     }
 
     if (url.pathname === "/api/v1/catalog" && req.method === "GET") {
-      const rows = await listRows(env);
+      const rows = await ensureLatestRows(env);
       const catalog = await Promise.all(
         rows.map(async (row) => {
           const artifact = await artifactFor(env, row.name, row.version);
@@ -213,7 +257,7 @@ export default {
     }
 
     if (url.pathname === "/api/v1/lock" && req.method === "GET") {
-      const rows = await listRows(env);
+      const rows = await ensureLatestRows(env);
       const hooks: Record<string, { version: string; sha256: string; source: string; versions: string[] }> = {};
       for (const row of rows) {
         hooks[row.name] = {
@@ -250,6 +294,11 @@ export default {
       const existing = await hookVersionRow(env, name, version);
       if (existing) {
         if (existing.script_sha256 === sha256 && existing.manifest_json === manifestJson) {
+          // P2-4 healing: an idempotent republish also repairs a missing
+          // latest pointer (a crash between the version INSERT and the
+          // pointer upsert) so the hook is not left invisible in
+          // catalog/lock.
+          await upsertLatestPointer(env, name, version, sha256, new Date().toISOString());
           return json({ ok: true, idempotent: true, hook: { name, version, sha256 } });
         }
         return json(
@@ -260,16 +309,35 @@ export default {
 
       const artifactKey = `hook_artifacts/${name}/${version}.json`;
       const now = new Date().toISOString();
-      await env.HOOKS_R2.put(artifactKey, JSON.stringify({ manifest, script: body.script }));
-      await env.HOOKS_D1.prepare(
-        `INSERT INTO hook_versions (name, version, manifest_json, script_sha256, artifact_key, published_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      ).bind(name, version, manifestJson, sha256, artifactKey, now).run();
-      await env.HOOKS_D1.prepare(
-        `INSERT INTO hooks (id, name, version, sha256, source_type, source_ref, installed_at, enabled, last_verified_at)
-         VALUES (?, ?, ?, ?, 'remote', NULL, ?, 1, NULL)
-         ON CONFLICT(id) DO UPDATE SET version = excluded.version, sha256 = excluded.sha256, source_type = excluded.source_type, last_verified_at = excluded.last_verified_at`,
-      ).bind(name, name, version, sha256, now).run();
+      // P2-4 write order: the hook_versions INSERT comes FIRST, the R2 write
+      // second, the latest-pointer upsert last. A concurrent PUT of the same
+      // new (name, version) then loses on the version-row primary key (409)
+      // BEFORE touching R2, so the stored artifact always matches the
+      // recorded script_sha256; a failure between insert and upsert leaves a
+      // version row that catalog/lock reads heal on the next GET.
+      try {
+        await env.HOOKS_D1.prepare(
+          `INSERT INTO hook_versions (name, version, manifest_json, script_sha256, artifact_key, published_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        ).bind(name, version, manifestJson, sha256, artifactKey, now).run();
+      } catch {
+        // The concurrent loser hits the (name, version) primary key — the
+        // row now exists, so the publish is no longer a new version.
+        return json(
+          { error: `conflicting republish of '${name}@${version}': versions are immutable. Bump the version or publish the identical bytes.` },
+          409,
+        );
+      }
+      try {
+        await env.HOOKS_R2.put(artifactKey, JSON.stringify({ manifest, script: body.script }));
+      } catch (err) {
+        // Roll back the version row so no partial state survives: without
+        // the R2 object the artifact 404s forever (round-2B P3).
+        await env.HOOKS_D1.prepare("DELETE FROM hook_versions WHERE name = ? AND version = ?").bind(name, version).run();
+        const detail = err instanceof Error ? err.message : String(err);
+        return json({ error: `failed to store artifact: ${detail}` }, 500);
+      }
+      await upsertLatestPointer(env, name, version, sha256, now);
       return json({ ok: true, hook: { name, version, sha256 } });
     }
 

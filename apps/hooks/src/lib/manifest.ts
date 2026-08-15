@@ -124,6 +124,31 @@ export function assertContained(target: string, root: string, raw?: string): str
   return lexical;
 }
 
+export function isInlineScript(manifest: HookManifest): boolean {
+  return manifest.script_kind === "inline" || (manifest.script_kind === undefined && manifest.script.includes("\n"));
+}
+
+/**
+ * Resolve a manifest's script to its RELATIVE target path under the hook
+ * directory. Shared by every install path (P2-14 / P1-2 round 2): the explicit
+ * script_kind discriminator wins; without it the legacy heuristic applies (a
+ * value containing a newline is inline content, otherwise a relative path).
+ * This is the ONE decision point — registry sync, exact-pin fetch and custom
+ * installs all call it, so a one-line inline manifest can never be mistaken
+ * for a path again.
+ */
+export function scriptRelFor(manifest: HookManifest): string {
+  if (isInlineScript(manifest)) {
+    const ext = manifest.script.trim().startsWith("#!") ? ".sh" : ".ts";
+    return `script${ext}`;
+  }
+  const rel = normalize(manifest.script);
+  if (isAbsolute(rel)) {
+    throw new Error(`manifest script must be relative or inline, got absolute path '${manifest.script}'`);
+  }
+  return rel;
+}
+
 /**
  * Resolve a manifest's script to (relative path, content).
  * The explicit script_kind discriminator wins (P2-14); without it the
@@ -132,15 +157,8 @@ export function assertContained(target: string, root: string, raw?: string): str
  * directory.
  */
 export function resolveScript(manifest: HookManifest, manifestDir: string): { path: string; content: string } {
-  const inline = manifest.script_kind === "inline" || (manifest.script_kind === undefined && manifest.script.includes("\n"));
-  if (inline) {
-    const ext = manifest.script.trim().startsWith("#!") ? ".sh" : ".ts";
-    return { path: `script${ext}`, content: manifest.script };
-  }
-  const rel = normalize(manifest.script);
-  if (isAbsolute(rel)) {
-    throw new Error(`manifest script must be relative or inline, got absolute path '${manifest.script}'`);
-  }
+  if (isInlineScript(manifest)) return { path: scriptRelFor(manifest), content: manifest.script };
+  const rel = scriptRelFor(manifest);
   const resolved = assertContained(join(manifestDir, rel), manifestDir, manifest.script);
   if (!existsSync(resolved)) {
     throw new Error(`manifest script file not found: ${resolved}`);
@@ -159,7 +177,7 @@ export function readCustomManifest(name: string): ParsedManifest | undefined {
   try {
     const manifest = parseManifest(readFileSync(manifestPath, "utf-8"));
     const script = resolveScript(manifest, dir);
-    const scriptIsInline = manifest.script_kind === "inline" || (manifest.script_kind === undefined && manifest.script.includes("\n"));
+    const scriptIsInline = isInlineScript(manifest);
     return { manifest, scriptPath: join(dir, script.path), scriptContent: script.content, scriptIsInline };
   } catch (err) {
     // A containment violation is an attack, not a malformed manifest: surface

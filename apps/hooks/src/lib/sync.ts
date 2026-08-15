@@ -13,13 +13,14 @@ import { HOOKS } from "./registry.js";
 import { resolveApiKey, resolveApiUrl } from "../config.js";
 import { getDb } from "../db/index.js";
 import {
+  type LockEntry,
   readLock,
   setPinnedHook,
   sha256File,
   upsertHookRecord,
   writeLock,
 } from "./store.js";
-import { parseManifest, shortManifestName, writeCustomHook } from "./manifest.js";
+import { parseManifest, scriptRelFor, shortManifestName, writeCustomHook, type HookManifest } from "./manifest.js";
 import { resolveScriptPath } from "./resolve.js";
 
 export interface SyncDiff {
@@ -42,6 +43,7 @@ export interface ArtifactResponse {
     description?: string;
     events: string[];
     script: string;
+    script_kind?: "inline" | "file";
     args?: string[];
     timeout_ms?: number;
   };
@@ -118,6 +120,22 @@ async function fetchRemoteState(apiUrl: string): Promise<{
   return { catalog: catalog.hooks, remoteLock };
 }
 
+function classifyRemotePin(
+  pin: LockEntry | undefined,
+  remoteVersion: string,
+  remoteSha: string,
+): "added" | "updated" | "unchanged" {
+  const pinnedLocally = pin !== undefined && pin.version === remoteVersion && pin.sha256 === remoteSha;
+  if (pinnedLocally) return "unchanged";
+  // P2-9: an EXPLICIT pin (`hooks install/update <name>@<version>`) of an
+  // older version is preserved across syncs — only an explicit
+  // `hooks update <name>@<version>` moves it. Sync never silently bumps an
+  // explicit older pin to the latest; a same-version sha drift still heals.
+  if (pin !== undefined && pin.pinned === true && pin.version !== remoteVersion) return "unchanged";
+  if (pin !== undefined) return "updated";
+  return "added";
+}
+
 function computeDiff(catalog: Array<{ name: string; version: string; sha256: string }>, remoteLock: RemoteLock | null): SyncDiff {
   const local = readLock();
   const diff: SyncDiff = { added: [], updated: [], unchanged: [], skipped: [] };
@@ -140,23 +158,9 @@ function computeDiff(catalog: Array<{ name: string; version: string; sha256: str
             `Fix the registry (or its lock) before syncing — nothing was changed.`,
         );
       }
-      const pinnedLocally = pin && pin.version === remotePin.version && pin.sha256 === remotePin.sha256;
-      if (pinnedLocally) {
-        diff.unchanged.push(entry.name);
-      } else if (pin) {
-        diff.updated.push(entry.name);
-      } else {
-        diff.added.push(entry.name);
-      }
+      diff[classifyRemotePin(pin, remotePin.version, remotePin.sha256)].push(entry.name);
     } else {
-      const pinnedLocally = pin && pin.version === entry.version && pin.sha256 === entry.sha256;
-      if (pinnedLocally) {
-        diff.unchanged.push(entry.name);
-      } else if (pin) {
-        diff.updated.push(entry.name);
-      } else {
-        diff.added.push(entry.name);
-      }
+      diff[classifyRemotePin(pin, entry.version, entry.sha256)].push(entry.name);
     }
   }
   return diff;
@@ -239,7 +243,17 @@ export async function stageSyncArtifacts(
     const manifest = parseManifest(
       JSON.stringify({ ...artifact.manifest, name: shortManifestName(artifact.manifest.name || name) }),
     );
-    const scriptRel = artifact.manifest.script.includes("\n") ? "script.ts" : artifact.manifest.script;
+    // P3-13: the manifest's declared version must match the versioned row it
+    // was served from — integrity of identity, mirroring fetchPinnedHook.
+    if (manifest.version !== entry.version) {
+      throw new Error(
+        `artifact for '${name}@${entry.version}' declares a different version ('${manifest.version}')`,
+      );
+    }
+    // P1-2: script_kind is honored here — a one-line inline manifest is
+    // written to script.ts/script.sh, never to a file named after the
+    // script content.
+    const scriptRel = scriptRelFor(manifest);
     staged.push({
       name,
       version: entry.version,
@@ -395,7 +409,10 @@ export async function fetchPinnedHook(
   const manifest = parseManifest(
     JSON.stringify({ ...artifact.manifest, name: shortManifestName(artifact.manifest.name || name) }),
   );
-  const scriptRel = artifact.manifest.script.includes("\n") ? "script.ts" : artifact.manifest.script;
+  // P1-2: script_kind is honored here — a one-line inline manifest is
+  // written to script.ts/script.sh, never to a file named after the
+  // script content (round-2A P1).
+  const scriptRel = scriptRelFor(manifest);
   writeCustomHook(name, manifest, artifact.script, scriptRel);
   const scriptPath = resolveScriptPath(name)!;
   const actual = await sha256File(scriptPath);
@@ -405,7 +422,10 @@ export async function fetchPinnedHook(
     );
   }
   const db = getDb();
-  setPinnedHook(name, { version, sha256: expectedSha, source: entry.source ?? "remote" });
+  // P2-9: an exact-pin install/update marks the lock entry as an EXPLICIT
+  // pin, so a later sync preserves an older pinned version instead of
+  // silently bumping it to the latest.
+  setPinnedHook(name, { version, sha256: expectedSha, source: entry.source ?? "remote", pinned: true });
   upsertHookRecord(db, {
     name,
     version,

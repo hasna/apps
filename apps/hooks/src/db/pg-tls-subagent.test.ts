@@ -43,6 +43,20 @@ describe("PG TLS config (P1-5)", () => {
     expect(sslConfigFor("postgres://u@h/db?sslmode=verify-full")).toEqual({ rejectUnauthorized: true });
   });
 
+  test("sslmode/ssl are parsed from the query, not substring-scanned (P3-12)", () => {
+    delete process.env.HASNA_HOOKS_PG_INSECURE_TLS;
+    // Spaced separators, casing and reordered params were invisible to the
+    // old includes() scan and silently selected a plaintext connection.
+    expect(sslConfigFor("postgres://u@h/db?sslmode = require")).toEqual({ rejectUnauthorized: true });
+    expect(sslConfigFor("postgres://u@h/db?SSL = VERIFY-FULL")).toEqual({ rejectUnauthorized: true });
+    expect(sslConfigFor("postgres://u@h/db?application_name=x&sslmode=prefer")).toEqual({ rejectUnauthorized: true });
+    expect(sslConfigFor("postgres://u@h/db?ssl = true")).toEqual({ rejectUnauthorized: true });
+    // Disable/allow never enable TLS.
+    expect(sslConfigFor("postgres://u@h/db?sslmode=disable")).toBeUndefined();
+    expect(sslConfigFor("postgres://u@h/db?sslmode=allow")).toBeUndefined();
+    expect(sslConfigFor("postgres://u@h/db?ssl=false")).toBeUndefined();
+  });
+
   test("no ssl indicator means no ssl config", () => {
     delete process.env.HASNA_HOOKS_PG_INSECURE_TLS;
     expect(sslConfigFor("postgres://u@h/db")).toBeUndefined();

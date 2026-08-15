@@ -37,6 +37,7 @@ export interface ArtifactPayload {
     description?: string;
     events: string[];
     script: string;
+    script_kind?: "inline" | "file";
     args?: string[];
     timeout_ms?: number;
   };
@@ -86,7 +87,11 @@ async function artifactFor(name: string, version: string): Promise<ArtifactPaylo
     version: resolved.version,
     description: resolved.description,
     events: resolved.events,
+    // P1-2: the manifest's script_kind travels with the artifact. Without
+    // it the client falls back to the newline heuristic, so a one-line
+    // inline hook served here would install broken through serve→sync.
     script: custom ? custom.manifest.script : `src/hook.ts`,
+    script_kind: custom?.manifest.script_kind,
     args: custom?.manifest.args,
     timeout_ms: custom?.manifest.timeout_ms,
   };

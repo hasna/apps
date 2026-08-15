@@ -23,17 +23,15 @@ function normalizeParams(params: unknown[]): unknown[] {
  * silently disabling verification in prod would be the exact failure this
  * finding corrects.
  *
+ * P3-12: sslmode/ssl are parsed from the connection-string QUERY, not by
+ * substring scan — `sslmode = require` (spaces around the separator), other
+ * casings and non-URL DSN forms are all resolved from the parameter value.
+ *
  * Exported for tests; the connection-string forms are the documented
  * sslmode values the pg client understands.
  */
 export function sslConfigFor(connectionString: string): { rejectUnauthorized: boolean } | undefined {
-  const wantsSsl =
-    connectionString.includes("sslmode=require") ||
-    connectionString.includes("sslmode=verify-ca") ||
-    connectionString.includes("sslmode=verify-full") ||
-    connectionString.includes("sslmode=prefer") ||
-    connectionString.includes("ssl=true");
-
+  const wantsSsl = wantsSslFor(connectionString);
   if (!wantsSsl) return undefined;
 
   const insecure =
@@ -46,6 +44,36 @@ export function sslConfigFor(connectionString: string): { rejectUnauthorized: bo
   }
 
   return insecure ? { rejectUnauthorized: false } : { rejectUnauthorized: true };
+}
+
+/**
+ * Parse the connection string's query parameters (URL form) or key=value
+ * segments (DSN form) and decide whether the connection asks for TLS.
+ * `sslmode` wins when present; `ssl` is honored as a boolean-ish flag.
+ * Tolerant of spacing around the separator (`sslmode = require`),
+ * case, and percent-encoding.
+ */
+function wantsSslFor(connectionString: string): boolean {
+  let raw: string;
+  try {
+    raw = new URL(connectionString).search.replace(/^\?/, "");
+  } catch {
+    raw = connectionString;
+  }
+  try {
+    raw = decodeURIComponent(raw);
+  } catch {
+    // Keep the raw form; the parameter scan below still runs.
+  }
+  const paramValue = (name: string): string | undefined => {
+    const match = raw.match(new RegExp(`(?:^|[&\\s])${name}\\s*=\\s*([^&\\s]+)`, "i"));
+    return match ? match[1]!.toLowerCase() : undefined;
+  };
+  const sslmode = paramValue("sslmode");
+  if (sslmode !== undefined) return sslmode !== "disable" && sslmode !== "allow";
+  const ssl = paramValue("ssl");
+  if (ssl !== undefined) return ssl !== "false" && ssl !== "0" && ssl !== "no";
+  return false;
 }
 
 export class PgAdapterAsync {

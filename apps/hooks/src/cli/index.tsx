@@ -50,6 +50,7 @@ import {
 import { readCustomManifest, listCustomHooks } from "../lib/manifest.js";
 import { resolveHookMeta } from "../lib/resolve.js";
 import { getPinnedHook } from "../lib/store.js";
+import { SEMVER_PATTERN } from "../lib/semver.js";
 
 const program = new Command();
 
@@ -494,7 +495,10 @@ program
       const name = arg.slice(0, at);
       const version = arg.slice(at + 1);
       if (!HOOK_NAME_RE.test(name)) return null;
-      if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) return null;
+      // P2-8 (round 2): the SHARED semver pattern — the CLI previously
+      // duplicated a divergent regex that rejected prerelease+build
+      // combinations (1.2.3-beta.1+meta) the rest of the stack accepts.
+      if (!SEMVER_PATTERN.test(version)) return null;
       return { name, version };
     }
 
@@ -647,7 +651,9 @@ program
         target,
         applied: results.some((r) => r.applied),
       }));
-      if (results.length > 0 && results.every((r) => !r.success)) {
+      // P2-7 (round 2): ANY failed install is an error — exit nonzero even
+      // when some hooks succeeded, with the counts in the payload.
+      if (results.some((r) => !r.success)) {
         process.exitCode = 1;
       }
       return;
@@ -680,11 +686,17 @@ program
       }
     }
     // Fail-closed reporting: never claim "Registered" (and never exit 0)
-    // when nothing was registered (QA-3 P2 / QA-1 BUG-C / QA-4 #5).
+    // when nothing was registered (QA-3 P2 / QA-1 BUG-C / QA-4 #5) or when
+    // only some hooks registered (P2-7 round 2 — mixed installs must fail
+    // loudly, not read as a full success).
     if (results.length > 0 && successCount === 0) {
       console.log(chalk.red(`\n✗ Nothing was registered — all ${results.length} hook(s) failed.`));
       process.exitCode = 1;
       return;
+    }
+    if (successCount < results.length) {
+      console.log(chalk.red(`\n✗ ${results.length - successCount} of ${results.length} hook(s) failed to install.`));
+      process.exitCode = 1;
     }
     console.log(chalk.dim(`\nRegistered in ${settingsFile}`));
   });
@@ -1059,6 +1071,11 @@ program
     if (registered.length === 0) {
       console.log(chalk.dim("  No hooks registered."));
       console.log(chalk.dim("  Run: hooks install gitguard"));
+      // P3-10 (round 2): the verdict's bounds are printed in EVERY branch —
+      // with zero `hooks run` entries the bound is exactly what makes
+      // "checked 0 of N wiring entries" a meaningful statement instead of a
+      // bare "No hooks registered".
+      console.log(chalk.dim(`  (checked 0 registered \`hooks run\` entries of ${wiringCount} settings wiring entries; direct-path wiring outside the registered surface is not covered by this check)`));
       if (issues.length > 0) process.exitCode = 1;
       return;
     }
@@ -1134,7 +1151,10 @@ program
       const name = arg.slice(0, at);
       const version = arg.slice(at + 1);
       if (!HOOK_NAME_RE.test(name)) return null;
-      if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) return null;
+      // P2-8 (round 2): the SHARED semver pattern — the CLI previously
+      // duplicated a divergent regex that rejected prerelease+build
+      // combinations (1.2.3-beta.1+meta) the rest of the stack accepts.
+      if (!SEMVER_PATTERN.test(version)) return null;
       return { name, version };
     }
 

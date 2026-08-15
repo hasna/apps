@@ -29,11 +29,36 @@
 const REDACTED = "[REDACTED]";
 
 const SECRET_KEY_NAMES =
-  /^(key|keys|token|tokens|secret|secrets|password|passwd|api[_-]?key|apikey|access[_-]?key|private[_-]?key|client[_-]?secret|refresh[_-]?token|authorization|auth|cookie|credential|credentials|session[_-]?id|otp|mfa[_-]?code|two[_-]?fa[_-]?code|verification[_-]?code)$/i;
+  /^(key|keys|token|tokens|secret|secrets|password|passwd|api[_-]?key|apikey|access[_-]?key|private[_-]?key|client[_-]?secret|refresh[_-]?token|authorization|auth|cookie|credential|credentials|session[_-]?id|otp|mfa[_-]?code|two[_-]?fa[_-]?code|verification[_-]?code|database_url|db_url|connection_string|dsn)$/i;
 
+/**
+ * Credential shape patterns, run in order. Two ordering rules are load-bearing:
+ *
+ * 1. AUTH-SCHEME UNITS BEFORE key=value: `Authorization: Bearer <token>` must
+ *    be redacted as one unit. If the key=value pattern ran first it would
+ *    consume the single word "Bearer" and leave the token behind — the exact
+ *    leak the 0.6.6 redactor shipped with.
+ * 2. ANCHORED UNITS: every pattern consumes the WHOLE credential (the whole
+ *    key after the scheme, the whole quoted or unquoted value), never a prefix.
+ *
+ * Shape coverage (2026-08-15, verified against the CI secrets gate: none of
+ * these pattern lines match the gate's own scanners):
+ *   - OpenAI current formats: the project/service key forms (hyphen inside
+ *     the key), and the Anthropic key form — the legacy `sk-<alnum>{16,}`
+ *     form misses all three;
+ *   - Stripe tpe_ / rk_live_ / sk_live_;
+ *   - GitHub fine-grained PATs (github_pat_) and classic gh[pousr]_ tokens;
+ *   - Bearer (and Basic) tokens as one unit;
+ *   - URL userinfo (`scheme://user:pass@host`);
+ *   - key=value pairs with spaced separators, quoted values and values on the
+ *     line after the separator (multiline).
+ */
 const SECRET_SHAPES: Array<RegExp> = [
-  /sk-[A-Za-z0-9]{16,}/g,
-  /sk-ant-[A-Za-z0-9_-]{16,}/g,
+  /\bsk-(?:proj|svc|ant)-[A-Za-z0-9_-]{10,}/g,
+  /\bsk-[A-Za-z0-9]{16,}/g,
+  /\btpe_[A-Za-z0-9]{8,}/g,
+  /\b(?:rk|sk)_(?:live|test)_[A-Za-z0-9]{8,}/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
   /gh[pousr]_[A-Za-z0-9]{20,}/g,
   /xox[baprs]-[A-Za-z0-9-]{20,}/g,
   /AKIA[0-9A-Z]{16}/g,
@@ -41,7 +66,9 @@ const SECRET_SHAPES: Array<RegExp> = [
   /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
   /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/g,
   /-----BEGIN OPENSSH PRIVATE KEY-----/g,
-  /\b(?:password|passwd|pwd|token|api[_-]?key|secret|access[_-]?key|client[_-]?secret|authorization)\s*[:=]\s*[^\s,;"']{6,}/gi,
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{6,}/g,
+  /\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/gi,
+  /\b(?:password|passwd|pwd|token|api[_-]?key|secret|access[_-]?key|client[_-]?secret|authorization|auth|credential|database_url|db_url|connection_string|dsn)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;"']{6,})/gi,
 ];
 
 export function redactText(value: string): string {
