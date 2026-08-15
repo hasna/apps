@@ -12,7 +12,7 @@ export const PG_MIGRATIONS: string[] = [
     timestamp    TEXT NOT NULL,
     session_id   TEXT NOT NULL,
     hook_name    TEXT NOT NULL,
-    event_type   TEXT NOT NULL CHECK (event_type IN ('PreToolUse', 'PostToolUse', 'Stop', 'Notification', 'SessionStart', 'SessionEnd', 'UserPromptSubmit')),
+    event_type   TEXT NOT NULL CHECK (event_type IN ('PreToolUse', 'PostToolUse', 'Stop', 'Notification', 'SessionStart', 'SessionEnd', 'UserPromptSubmit', 'SubagentStart')),
     tool_name    TEXT,
     tool_input   TEXT,
     result       TEXT CHECK (result IN ('continue', 'block', NULL)),
@@ -60,4 +60,13 @@ export const PG_MIGRATIONS: string[] = [
   `ALTER TABLE hook_events DROP CONSTRAINT IF EXISTS hook_events_event_type_check`,
   `ALTER TABLE hook_events ADD CONSTRAINT hook_events_event_type_check
     CHECK (event_type IN ('PreToolUse', 'PostToolUse', 'Stop', 'Notification', 'SessionStart', 'SessionEnd', 'UserPromptSubmit'))`,
+
+  // SubagentStart (P1-6): Codewith exposes SubagentStart and runs can carry
+  // it; the SQLite schema (005_subagent_start_event) accepts it, the PG CHECK
+  // above does not, so push/pull rejected those rows. Appended AFTER the
+  // older pair so the final applied state includes SubagentStart and re-runs
+  // stay idempotent.
+  `ALTER TABLE hook_events DROP CONSTRAINT IF EXISTS hook_events_event_type_check`,
+  `ALTER TABLE hook_events ADD CONSTRAINT hook_events_event_type_check
+    CHECK (event_type IN ('PreToolUse', 'PostToolUse', 'Stop', 'Notification', 'SessionStart', 'SessionEnd', 'UserPromptSubmit', 'SubagentStart'))`,
 ];
