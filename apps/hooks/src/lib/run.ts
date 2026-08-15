@@ -16,6 +16,7 @@
 import { randomBytes } from "crypto";
 import { rmSync, writeFileSync } from "fs";
 import { basename, dirname, isAbsolute, join } from "path";
+import type { Subprocess } from "bun";
 
 export interface VerifiedRunOptions {
   /** Registered hook name (for error messages) */
@@ -39,6 +40,19 @@ export interface VerifiedRunResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+}
+
+/**
+ * Raised when a verified script exceeds its timeout. The whole process group
+ * was killed, so no descendant survives (see executeVerifiedScript).
+ */
+export class HookTimeoutError extends Error {
+  readonly timeoutMs: number;
+  constructor(timeoutMs: number) {
+    super(`Hook timed out after ${timeoutMs}ms (process group killed)`);
+    this.name = "HookTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
 }
 
 const BASH_EXTENSIONS = new Set(["sh", "bash"]);
@@ -103,33 +117,107 @@ function interpreterFor(name: string, scriptPath: string, content: Buffer): Inte
   );
 }
 
+/**
+ * Read a subprocess pipe to EOF with a deadline. A hook that backgrounds a
+ * child which inherits the pipe keeps it open forever; without the deadline
+ * the run would hang (the orphaned child holds the write end). On deadline we
+ * stop, cancel the reader and return what was collected — the caller then
+ * kills the process group.
+ */
+async function readPipeWithDeadline(stream: ReadableStream<Uint8Array>, deadlineMs: number): Promise<string> {
+  const reader = stream.getReader();
+  const chunks: string[] = [];
+  const deadline = Date.now() + deadlineMs;
+  try {
+    while (true) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      let result: { done: boolean; value?: Uint8Array };
+      try {
+        result = await Promise.race([
+          reader.read() as Promise<{ done: boolean; value?: Uint8Array }>,
+          new Promise<never>((_, reject) => {
+            const t = setTimeout(() => reject(new Error("pipe-drain-deadline")), remaining);
+            (t as any).unref?.();
+          }),
+        ]);
+      } catch {
+        break;
+      }
+      if (result.done) break;
+      chunks.push(new TextDecoder().decode(result.value));
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // Reader already released.
+    }
+  }
+  return chunks.join("");
+}
+
 export async function executeVerifiedScript(options: VerifiedRunOptions): Promise<VerifiedRunResult> {
   const scriptDir = dirname(options.scriptPath);
   const interpreter = interpreterFor(options.name, options.scriptPath, options.content);
   const tempPath = join(scriptDir, `.hooks-verified-${randomBytes(12).toString("hex")}.${interpreter.tempExt}`);
+  let proc: Subprocess | null = null;
+  let timedOut = false;
+  const timeoutTimer = options.timeout
+    ? setTimeout(() => {
+        timedOut = true;
+        // Kill the whole process group (detached spawn makes the child its
+        // own group leader), so children of the hook cannot outlive it.
+        killGroup(proc);
+      }, options.timeout)
+    : null;
   try {
     // "wx" refuses to overwrite; the name is unguessable, so a pre-existing
     // file with the same name is evidence of interference, not a collision.
     writeFileSync(tempPath, options.content, { flag: "wx", mode: 0o600 });
-    const proc = Bun.spawn([...interpreter.command, isAbsolute(tempPath) ? tempPath : `./${tempPath}`, ...(options.args ?? [])], {
+    proc = Bun.spawn([...interpreter.command, isAbsolute(tempPath) ? tempPath : `./${tempPath}`, ...(options.args ?? [])], {
       stdin: new Response(options.stdin),
       stdout: "pipe",
       stderr: "pipe",
       env: options.env ?? process.env,
-      ...(options.timeout ? { timeout: options.timeout } : {}),
+      // Detached spawn makes the child its own session/process-group leader,
+      // so a timeout can kill the group (kill(-pid)) instead of leaving
+      // grandchildren orphaned (bug 4d4c8f0b).
+      detached: true,
     });
-    const [stdoutText, stderrText, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
+    const exitCode = await proc.exited;
+    if (timedOut) {
+      throw new HookTimeoutError(options.timeout!);
+    }
+    // Drain with a bounded grace period: a backgrounded child that inherited
+    // the pipes would otherwise hold EOF forever. After the grace we kill the
+    // group and keep whatever output arrived.
+    const [stdoutText, stderrText] = await Promise.all([
+      readPipeWithDeadline(proc.stdout as ReadableStream<Uint8Array>, 750),
+      readPipeWithDeadline(proc.stderr as ReadableStream<Uint8Array>, 750),
     ]);
+    killGroup(proc);
     return { stdout: stdoutText, stderr: stderrText, exitCode };
   } finally {
+    if (timeoutTimer) clearTimeout(timeoutTimer);
     try {
       rmSync(tempPath, { force: true });
     } catch {
       // Best-effort cleanup; the file is 0600 and holds only the verified
       // hook content.
+    }
+  }
+}
+
+function killGroup(proc: Subprocess | null): void {
+  if (!proc) return;
+  try {
+    process.kill(-proc.pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(proc.pid, "SIGKILL");
+    } catch {
+      // Already exited.
     }
   }
 }

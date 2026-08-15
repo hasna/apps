@@ -9,6 +9,7 @@ import { up as migration001 } from "./001_initial";
 import { up as migration002 } from "./002_session_events";
 import { up as migration003 } from "./003_user_prompt_submit_event";
 import { up as migration004 } from "./004_hooks_table";
+import { up as migration005 } from "./005_subagent_start_event";
 
 interface Migration {
   version: string;
@@ -20,6 +21,7 @@ const MIGRATIONS: Migration[] = [
   { version: "002_session_events", up: migration002 },
   { version: "003_user_prompt_submit_event", up: migration003 },
   { version: "004_hooks_table", up: migration004 },
+  { version: "005_subagent_start_event", up: migration005 },
 ];
 
 function ensureMigrationsTable(db: Database): void {

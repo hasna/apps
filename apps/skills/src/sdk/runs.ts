@@ -25,6 +25,10 @@ import type {
   ServerRunStatus,
   SkillsProductStore,
 } from "../server/types.js";
+import type { OfflineGate } from "./offline.js";
+import type { RunEventEmitter } from "./events.js";
+import type { SpendService } from "./spend.js";
+import type { RunQuota } from "./governance.js";
 
 /** Wire version shared by every run payload this SDK produces or consumes. */
 export const RUN_PROTOCOL_VERSION = REMOTE_SKILL_RUN_CONTRACT_VERSION;
@@ -107,9 +111,9 @@ export function attemptIdOf(run: Pick<ServerRunRecord, "id">): AttemptId {
   return run.id;
 }
 
-/** The current engine keeps no lease-generation counter; the first claim is generation 0. */
-export function leaseGenerationOf(_run: Pick<ServerRunRecord, "id">): LeaseGeneration {
-  return 0;
+/** The current engine keeps the generation the claim actually stamped. */
+export function leaseGenerationOf(run: Pick<ServerRunRecord, "leaseGeneration">): LeaseGeneration {
+  return run.leaseGeneration;
 }
 
 /** One atomic status transition on a run. */
@@ -127,16 +131,72 @@ export interface RunService {
 
 export interface RunServiceOptions {
   store: SkillsProductStore;
+  /**
+   * Optional governance wiring. When present, admit() runs the full admission
+   * chain before a run enters the queue: the offline gate first (fail closed),
+   * then the spend ceilings (RUN_BUDGET_EXHAUSTED on refusal), then the run is
+   * created, reserved against, and announced. Absent, admit() is exactly what
+   * it always was - the embedder opts in to the controls.
+   */
+  governance?: RunServiceGovernance;
 }
 
-/** Current implementation: the store's own atomic transitions, unchanged. */
-export function createRunService({ store }: RunServiceOptions): RunService {
+export interface RunServiceGovernance {
+  offline?: OfflineGate;
+  spend?: SpendService;
+  events?: RunEventEmitter;
+  /** Resource envelope this run requests, checked against the org ceilings. */
+  quota?: RunQuota;
+  /** Estimated cost in cents, reserved before dispatch. */
+  estimatedCents?: number;
+}
+
+/** Current implementation: the store's own atomic transitions, plus the optional admission chain. */
+export function createRunService({ store, governance }: RunServiceOptions): RunService {
   return {
-    admit: (input) => store.createRun(input),
+    async admit(input) {
+      if (governance) {
+        await governance.offline?.assertCanRunLocal(input.slug);
+        await governance.spend?.admit({
+          principal: input.principal,
+          slug: input.slug,
+          quota: governance.quota,
+          estimatedCents: governance.estimatedCents,
+        });
+      }
+      const run = await store.createRun(input);
+      if (governance) {
+        if (governance.spend && governance.estimatedCents !== undefined) {
+          await governance.spend.reserve(run.orgId, run.id, governance.estimatedCents);
+        }
+        await governance.events?.emit("skills.run.admitted", run);
+      }
+      return run;
+    },
     leaseNext: (workerId) => store.claimNextRun({ workerId } satisfies ClaimRunInput),
     transition: (runId, patch) => store.updateRun(runId, patch),
     get: (principal, runId) => store.getRun(principal, runId),
   };
+}
+
+/**
+ * Settle a terminal run: reconcile its credit reservation against the actual
+ * cost and emit the terminal lifecycle event. The reservation is released
+ * (actual 0) or charged (actual > 0); unused reservations never linger.
+ */
+export async function settleRun(
+  store: SkillsProductStore,
+  options: { spend?: SpendService; events?: RunEventEmitter },
+  run: ServerRunRecord,
+  actualCents?: number,
+): Promise<void> {
+  if (options.spend) {
+    await options.spend.reconcile(run.orgId, run.id, actualCents ?? run.costCents);
+  }
+  if (options.events) {
+    const type = run.status === "cancelled" ? "skills.run.cancelled" : "skills.run.terminal";
+    await options.events.emit(type, run);
+  }
 }
 
 export { REMOTE_SKILL_RUN_CONTRACT_VERSION, normalizeRemoteSkillRunContract };

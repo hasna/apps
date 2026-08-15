@@ -82,7 +82,7 @@ function packageSelector(spec: DesiredPackage): string {
 function packageVersionProbeCommand(spec: DesiredPackage): string {
   const bin = shellQuote(spec.bin);
   const managerBin = shellQuote(spec.bin);
-  return [
+  const script = [
     `if bunBin=$(bun pm bin -g 2>/dev/null) && [ -n "$bunBin" ] && [ -x "$bunBin"/${managerBin} ]; then`,
     `managerPath="$bunBin"/${managerBin};`,
     `if output=$("$managerPath" --version 2>/dev/null); then`,
@@ -94,6 +94,7 @@ function packageVersionProbeCommand(spec: DesiredPackage): string {
     "else printf 'installed=0\\n'; fi",
     "else printf 'installed=0\\n'; fi",
   ].join(" ");
+  return `bash -c ${shellQuote(script)}`;
 }
 
 function readSelectedManifest(options: AppsManifestOptions): ReturnType<typeof readManifest> {

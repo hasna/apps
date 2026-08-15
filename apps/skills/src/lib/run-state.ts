@@ -28,6 +28,10 @@ export interface SkillRunRecord {
   args: string[];
   startedAt: string;
   completedAt?: string;
+  /** Exit code of the skill child process, when one was observed. */
+  exitCode?: number;
+  /** Wall time between startedAt and completedAt, in milliseconds. */
+  durationMs?: number;
   remote: boolean;
   remoteRunId?: string;
   costCents?: number;
@@ -99,13 +103,25 @@ export function createSkillRun(
 
 export function completeSkillRun(
   context: SkillRunContext,
-  patch: { status: SkillRunStatus; error?: string; remoteRunId?: string; costCents?: number },
+  patch: {
+    status: SkillRunStatus;
+    error?: string;
+    remoteRunId?: string;
+    costCents?: number;
+    exitCode?: number;
+  },
 ): SkillRunRecord {
   const artifacts = collectRunArtifacts(context);
+  const completedAt = new Date().toISOString();
+  const startedAtMs = Date.parse(context.record.startedAt);
   context.record = {
     ...context.record,
     status: patch.status,
-    completedAt: new Date().toISOString(),
+    completedAt,
+    ...(patch.exitCode !== undefined ? { exitCode: patch.exitCode } : {}),
+    ...(Number.isFinite(startedAtMs)
+      ? { durationMs: Math.max(0, Date.parse(completedAt) - startedAtMs) }
+      : {}),
     ...(patch.error ? { error: patch.error } : {}),
     ...(patch.remoteRunId ? { remoteRunId: patch.remoteRunId } : {}),
     ...(patch.costCents !== undefined ? { costCents: patch.costCents } : {}),
