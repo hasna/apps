@@ -1,0 +1,326 @@
+import { randomUUID } from "node:crypto";
+import type {
+  ChannelConfig,
+  DeliveryAttempt,
+  DeliveryResult,
+  EventAppendResult,
+  EmitOptions,
+  EmitResult,
+  EventEnvelope,
+  EventFilter,
+  EventPage,
+  EventPageOptions,
+  EventInput,
+  EventRedactor,
+  ReplayOptions,
+  ReplayResult,
+  RetryPolicy,
+} from "./types.js";
+import { channelMatchesEvent } from "./filter.js";
+import { decodeLocalJsonEventCursor, encodeLocalJsonEventCursor, JsonEventsStore, normalizeEventPageLimit, type EventsStore } from "./storage.js";
+import { createDeliveryResult, dispatchChannel, type TransportDispatchOptions } from "./transports.js";
+import { defaultEventTypeCatalog, type EventTypeCatalog } from "./catalog.js";
+import { redactPaths, redactSensitiveKeys, shouldRedactKey } from "./redaction.js";
+
+export * from "./types.js";
+export * from "./storage.js";
+export * from "./filter.js";
+export * from "./signing.js";
+export * from "./transports.js";
+export * from "./catalog.js";
+export * from "./app-event.js";
+export { redactPaths, redactSensitiveKeys } from "./redaction.js";
+
+export interface EventsClientOptions extends TransportDispatchOptions {
+  store?: EventsStore;
+  dataDir?: string;
+  redactors?: EventRedactor[];
+  /**
+   * Event type catalog used by the opt-in emit-time validator hook. Defaults
+   * to the shared `defaultEventTypeCatalog`.
+   */
+  catalog?: EventTypeCatalog;
+  /**
+   * Opt-in: when true, emitted events whose `type` is registered in the
+   * catalog are validated and rejected (with `EventValidationError`) before
+   * they are stored or delivered. Unregistered/free-form types always pass.
+   * Defaults to false, so existing emitters are untouched.
+   */
+  validateCatalogTypes?: boolean;
+}
+
+export interface ChannelMatchResult {
+  channelId: string;
+  matched: boolean;
+  event: EventEnvelope;
+  filters?: EventFilter[];
+  reason?: string;
+}
+
+export interface TestChannelOptions {
+  honorFilters?: boolean;
+}
+
+export function createEvent<TData extends Record<string, unknown>>(input: EventInput<TData>): EventEnvelope<TData> {
+  return {
+    id: input.id ?? randomUUID(),
+    source: input.source,
+    type: input.type,
+    time: normalizeTime(input.time),
+    subject: input.subject,
+    severity: input.severity ?? "info",
+    data: input.data ?? ({} as TData),
+    message: input.message,
+    dedupeKey: input.dedupeKey,
+    schemaVersion: input.schemaVersion ?? "1.0",
+    metadata: input.metadata ?? {},
+  };
+}
+
+export class EventsClient {
+  private store: EventsStore;
+  private redactors: EventRedactor[];
+  private transportOptions: TransportDispatchOptions;
+  private catalog: EventTypeCatalog;
+  private validateCatalogTypes: boolean;
+
+  constructor(options: EventsClientOptions = {}) {
+    this.store = options.store ?? new JsonEventsStore(options.dataDir);
+    this.redactors = options.redactors ?? [];
+    this.transportOptions = {
+      fetchImpl: options.fetchImpl,
+      secretResolver: options.secretResolver,
+      now: options.now,
+    };
+    this.catalog = options.catalog ?? defaultEventTypeCatalog;
+    this.validateCatalogTypes = options.validateCatalogTypes ?? false;
+  }
+
+  async addChannel(input: Omit<ChannelConfig, "createdAt" | "updatedAt"> & Partial<Pick<ChannelConfig, "createdAt" | "updatedAt">>): Promise<ChannelConfig> {
+    const timestamp = new Date().toISOString();
+    return this.store.addChannel({
+      ...input,
+      createdAt: input.createdAt ?? timestamp,
+      updatedAt: input.updatedAt ?? timestamp,
+    });
+  }
+
+  async listChannels(): Promise<ChannelConfig[]> {
+    return this.store.listChannels();
+  }
+
+  async removeChannel(id: string): Promise<boolean> {
+    return this.store.removeChannel(id);
+  }
+
+  async emit<TData extends Record<string, unknown>>(input: EventInput<TData>, options: EmitOptions = {}): Promise<EmitResult<TData>> {
+    const event = options.redactSensitiveData === false
+      ? createEvent(input)
+      : redactSensitiveKeys(createEvent(input));
+    if (options.validate ?? this.validateCatalogTypes) {
+      // Opt-in hook: throws EventValidationError for registered types with an
+      // invalid payload BEFORE the event is stored or delivered.
+      // Unregistered/free-form types always pass.
+      this.catalog.assertEventValid(event);
+    }
+    const append = await this.appendEvent(event, { dedupe: options.dedupe !== false });
+    if (append.deduped) {
+      return { event: append.event as EventEnvelope<TData>, deliveries: [], deduped: true };
+    }
+    const deliveries = options.deliver === false ? [] : await this.deliver(append.event);
+    return { event: append.event as EventEnvelope<TData>, deliveries, deduped: false };
+  }
+
+  async listEvents(options: EventPageOptions = {}): Promise<EventEnvelope[]> {
+    if (Object.keys(options).length === 0) return this.store.listEvents();
+    return queryClientEvents(await this.store.listEvents(), options);
+  }
+
+  async listEventsPage(options: EventPageOptions = {}): Promise<EventPage> {
+    if (this.store.listEventsPage) return this.store.listEventsPage(options);
+    const events = queryClientEvents(await this.store.listEvents(), {
+      eventId: options.eventId,
+      source: options.source,
+      type: options.type,
+    });
+    const offset = decodeLocalJsonEventCursor(options.cursor, options);
+    const limit = normalizeEventPageLimit(options.limit);
+    const pageEvents = events.slice(offset, offset + limit);
+    const nextOffset = offset + pageEvents.length;
+    const hasMore = nextOffset < events.length;
+    return {
+      events: pageEvents,
+      cursor: options.cursor,
+      nextCursor: hasMore ? encodeLocalJsonEventCursor(nextOffset, options) : undefined,
+      hasMore,
+    };
+  }
+
+  async listDeliveries(): Promise<DeliveryResult[]> {
+    return this.store.listDeliveries();
+  }
+
+  async deliver(event: EventEnvelope): Promise<DeliveryResult[]> {
+    const channels = await this.store.listChannels();
+    const selected = channels.filter((channel) => channelMatchesEvent(channel, event));
+    const deliveries: DeliveryResult[] = [];
+    for (const channel of selected) {
+      const eventForChannel = await this.applyRedaction(event, channel);
+      const result = await this.deliverWithRetry(eventForChannel, channel);
+      await this.store.appendDelivery(result);
+      deliveries.push(result);
+    }
+    return deliveries;
+  }
+
+  async matchChannel(id: string, input: Partial<EventInput> = {}): Promise<ChannelMatchResult> {
+    const channel = await this.store.getChannel(id);
+    if (!channel) throw new Error(`Channel not found: ${id}`);
+    const event = createEvent({
+      source: input.source ?? "hasna.events",
+      type: input.type ?? "events.test",
+      subject: input.subject ?? id,
+      severity: input.severity ?? "info",
+      data: input.data ?? { test: true },
+      message: input.message ?? "Hasna events test delivery",
+      dedupeKey: input.dedupeKey,
+      schemaVersion: input.schemaVersion,
+      metadata: input.metadata,
+      time: input.time,
+      id: input.id,
+    });
+    const matched = channelMatchesEvent(channel, event);
+    return {
+      channelId: channel.id,
+      matched,
+      event,
+      filters: channel.filters,
+      reason: matched ? undefined : channel.enabled ? "event did not match channel filters" : "channel is disabled",
+    };
+  }
+
+  async testChannel(id: string, input: Partial<EventInput> = {}, options: TestChannelOptions = {}): Promise<DeliveryResult> {
+    const channel = await this.store.getChannel(id);
+    if (!channel) throw new Error(`Channel not found: ${id}`);
+    const match = await this.matchChannel(id, input);
+    const event = match.event;
+    if (options.honorFilters && !match.matched) {
+      const timestamp = new Date().toISOString();
+      const result = createDeliveryResult(event, channel, [{
+        attempt: 1,
+        status: "skipped",
+        startedAt: timestamp,
+        completedAt: timestamp,
+        error: match.reason,
+      }]);
+      result.metadata = { reason: "filter_mismatch" };
+      await this.store.appendDelivery(result);
+      return result;
+    }
+    const eventForChannel = await this.applyRedaction(event, channel);
+    const result = await this.deliverWithRetry(eventForChannel, channel);
+    await this.store.appendDelivery(result);
+    return result;
+  }
+
+  async replay(options: ReplayOptions = {}): Promise<ReplayResult> {
+    const page: EventPage = options.cursor || options.limit !== undefined
+      ? await this.listEventsPage(options)
+      : { events: await this.listEvents(options), hasMore: false };
+    if (options.dryRun) return { events: page.events, deliveries: [], cursor: page.cursor, nextCursor: page.nextCursor, hasMore: page.hasMore };
+    const deliveries: DeliveryResult[] = [];
+    for (const event of page.events) {
+      deliveries.push(...await this.deliver(event));
+    }
+    return { events: page.events, deliveries, cursor: page.cursor, nextCursor: page.nextCursor, hasMore: page.hasMore };
+  }
+
+  private async appendEvent<TData extends Record<string, unknown>>(
+    event: EventEnvelope<TData>,
+    options: { dedupe: boolean },
+  ): Promise<EventAppendResult<TData>> {
+    if (this.store.appendEventOnce) {
+      return this.store.appendEventOnce(event, { dedupe: options.dedupe }) as Promise<EventAppendResult<TData>>;
+    }
+    if (options.dedupe) {
+      const existing = await this.store.findEventByIdentity({ id: event.id, dedupeKey: event.dedupeKey });
+      if (existing) {
+        return {
+          event: existing as EventEnvelope<TData>,
+          stored: false,
+          deduped: true,
+          identity: { id: existing.id, dedupeKey: existing.dedupeKey },
+        };
+      }
+    }
+    const stored = await this.store.appendEvent(event);
+    return {
+      event: stored as EventEnvelope<TData>,
+      stored: true,
+      deduped: false,
+      identity: { id: stored.id, dedupeKey: stored.dedupeKey },
+    };
+  }
+
+  private async applyRedaction(event: EventEnvelope, channel: ChannelConfig): Promise<EventEnvelope> {
+    let next = redactPaths(event, channel.redact?.paths ?? [], channel.redact?.replacement ?? "[REDACTED]");
+    for (const redactor of this.redactors) {
+      next = await redactor(next, channel);
+    }
+    return next;
+  }
+
+  private async deliverWithRetry(event: EventEnvelope, channel: ChannelConfig): Promise<DeliveryResult> {
+    const policy = normalizeRetryPolicy(channel.retry);
+    const attempts: DeliveryAttempt[] = [];
+    for (let index = 0; index < policy.maxAttempts; index += 1) {
+      const attempt = await dispatchChannel(event, channel, this.transportOptions);
+      attempt.attempt = index + 1;
+      if (attempt.status === "failed" && index + 1 < policy.maxAttempts) {
+        attempt.nextBackoffMs = Math.round(policy.backoffMs * policy.multiplier ** index);
+      }
+      attempts.push(attempt);
+      if (attempt.status !== "failed") break;
+      if (attempt.nextBackoffMs) await Bun.sleep(attempt.nextBackoffMs);
+    }
+    return createDeliveryResult(event, channel, attempts);
+  }
+}
+
+export function sanitizeChannelForOutput(channel: ChannelConfig): ChannelConfig {
+  const copy = structuredClone(channel);
+  if (copy.webhook?.secret) copy.webhook.secret = "[REDACTED]";
+  if (copy.command?.env) {
+    copy.command.env = Object.fromEntries(
+      Object.entries(copy.command.env).map(([key, value]) => [key, shouldRedactKey(key) ? "[REDACTED]" : value]),
+    );
+  }
+  return copy;
+}
+
+export function sanitizeChannelsForOutput(channels: ChannelConfig[]): ChannelConfig[] {
+  return channels.map(sanitizeChannelForOutput);
+}
+
+function queryClientEvents(events: EventEnvelope[], options: EventPageOptions): EventEnvelope[] {
+  let rows = events;
+  if (options.eventId) rows = rows.filter((event) => event.id === options.eventId);
+  if (options.source) rows = rows.filter((event) => event.source === options.source);
+  if (options.type) rows = rows.filter((event) => event.type === options.type);
+  if (options.cursor) rows = rows.slice(decodeLocalJsonEventCursor(options.cursor, options));
+  if (options.limit !== undefined) rows = rows.slice(0, normalizeEventPageLimit(options.limit));
+  return rows;
+}
+
+function normalizeTime(value?: string | Date): string {
+  if (!value) return new Date().toISOString();
+  return value instanceof Date ? value.toISOString() : value;
+}
+
+function normalizeRetryPolicy(policy: RetryPolicy | undefined): Required<RetryPolicy> {
+  return {
+    maxAttempts: Math.max(1, policy?.maxAttempts ?? 1),
+    backoffMs: Math.max(0, policy?.backoffMs ?? 250),
+    multiplier: Math.max(1, policy?.multiplier ?? 2),
+  };
+}
