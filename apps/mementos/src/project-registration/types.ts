@@ -42,6 +42,8 @@ export interface MementosProjectRegistrationCapability {
   tenant_id: string;
   corpus_id: string;
   supported_resources: ["project"];
+  supported_historical_lookup_identities:
+    MementosProjectRegistrationHistoricalLookupIdentity[];
   conditional_create: true;
   immutable_receipts: true;
   exact_terminal_lookup: true;
@@ -59,6 +61,32 @@ export interface MementosProjectRegistrationCapability {
   project_resource_kinds: ["project", "knowledge", "memory", "session"];
   stable_keyset_pagination: true;
   explicit_membership_only: true;
+}
+
+export interface MementosProjectRegistrationHistoricalLookupIdentity {
+  source: {
+    authority: "mementos";
+    authority_route: typeof MEMENTOS_PROJECT_REGISTRATION_ROUTE;
+    package_version: string;
+    authority_id: string;
+    tenant_id: string;
+    corpus_id: string;
+    operation_id: string;
+    step_id: string;
+    resource_kind: "project";
+    direction: "forward";
+    target_selector: string;
+    target_id: string;
+    idempotency_key: string;
+    receipt_id: string;
+  };
+  destination: {
+    authority_id: string;
+    tenant_id: string;
+    corpus_id: string;
+  };
+  lookup_only: true;
+  immutable_receipt: true;
 }
 
 export interface MementosProjectResourceAuthority {
