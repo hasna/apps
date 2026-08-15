@@ -390,11 +390,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos 19a40a26-94d1-4c13-aa8f-acb25dd24ae5 (suite-record reconcile — PR #68 landing lane)",
   },
   {
-    member: "machines",
-    cause: "server_backend_configuration: HASNA_MACHINES_STORAGE_MODE was removed. Delete the storage-mode variable; set HASNA_MACHINES_DATABASE_URL to select the postgresql server backend, or leave it unset for sqlite. Pre-existing on origin/main (7bb103c4), carried by the #68 base-sync.",
-    task: "todos 19a40a26-94d1-4c13-aa8f-acb25dd24ae5 (suite-record reconcile — PR #68 landing lane)",
-  },
-  {
     member: "mementos",
     cause: "surface_bindings: serviceSurfaces[1].generatedFrom is required for a supported service SDK.",
     task: "todos 5695459d (contracts task — mementos)",
@@ -428,11 +423,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "tables",
     cause: "kitVersion 0.1.0 predates repo-conformance; no @hasna/contracts dep pinned; validated at latest, manifest is pre-backend-schema era.",
     task: "todos daaa2841 (contracts task — tables)",
-  },
-  {
-    member: "telephony",
-    cause: "server_backend_configuration: HASNA_TELEPHONY_STORAGE_MODE was removed. Delete the storage-mode variable; set HASNA_TELEPHONY_DATABASE_URL to select the postgresql server backend, or leave it unset for sqlite. Pre-existing on origin/main (7bb103c4), carried by the #68 base-sync.",
-    task: "todos 19a40a26-94d1-4c13-aa8f-acb25dd24ae5 (suite-record reconcile — PR #68 landing lane)",
   },
   {
     member: "shield",
