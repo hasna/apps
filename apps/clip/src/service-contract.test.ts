@@ -40,7 +40,7 @@ describe("hasna.contract.json", () => {
     const parsed = manifest();
     expect(parsed.name).toBe("clip");
     expect(parsed.class).toBe("cli-with-store");
-    expect(parsed.storage?.mode).toBe("sqlite");
+    expect(parsed.storage?.backend).toBe("sqlite");
   });
 
   it("declares exactly the bins package.json publishes", () => {

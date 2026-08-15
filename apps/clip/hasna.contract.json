@@ -3,7 +3,7 @@
   "name": "clip",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.8.5",
+  "kitVersion": "0.8.7",
   "description": "Local and self-hosted screenshot and clipboard sharing with CLI, SDK, MCP, HTTP API, and a macOS menu bar app",
   "bins": [
     "clip",
@@ -14,7 +14,7 @@
     "user-hosted"
   ],
   "storage": {
-    "mode": "sqlite",
+    "backend": "sqlite",
     "envPrefix": "HASNA_CLIP_",
     "aliasEnvPrefix": "CLIP_",
     "sqlitePath": "~/.hasna/clip/clip.db"
