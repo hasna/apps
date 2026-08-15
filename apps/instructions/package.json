@@ -21,6 +21,7 @@
   "files": [
     "dist",
     "dashboard/dist",
+    "assets/skills/inbox/SKILL.md",
     "LICENSE",
     "README.md"
   ],
