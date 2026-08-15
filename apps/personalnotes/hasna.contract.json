@@ -1,0 +1,23 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "personalnotes",
+  "class": "library",
+  "contractVersion": "v1",
+  "kitVersion": "0.10.6",
+  "description": "Local-first personal notes CLI and MCP server with optional hosted PersonalNotes.ai cloud mode.",
+  "hosting": [
+    "user-hosted"
+  ],
+  "bins": [
+    "personalnotes"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "personalnotes-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "personalnotes",
+      "authMode": "local-only"
+    }
+  ]
+}
