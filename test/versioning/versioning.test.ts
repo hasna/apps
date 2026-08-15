@@ -35,14 +35,14 @@ const membersByName = new Map(members.map((member) => [member.name, member]));
 // still 0.5.0). accounts (0.2.44, heading 0.2.43), machines (0.2.26, heading
 // 0.2.25 — release bump #134 skipped the heading), mementos (0.14.84, heading
 // 0.14.83) and repos (0.1.48, heading 0.1.47) were unregistered. The machines
-// row is expected to be removed when the 0.2.27 release adds its heading.
+// row was removed by the 0.2.27 release PR, which added the 0.2.26 and 0.2.27
+// headings and reconciled the package to 0.2.27.
 const KNOWN_CHANGELOG_MISMATCHES = new Map([
   ["@hasna/accounts", { packageVersion: "0.2.44", changelogVersion: "0.2.43" }],
   ["@hasna/calendar", { packageVersion: "0.3.1", changelogVersion: "0.3.0" }],
   ["@hasna/conversations", { packageVersion: "0.6.2", changelogVersion: "0.6.0" }],
   ["@hasna/instructions", { packageVersion: "0.4.35", changelogVersion: "0.4.33" }],
   ["@hasna/loops", { packageVersion: "0.5.1", changelogVersion: "0.5.0" }],
-  ["@hasna/machines", { packageVersion: "0.2.26", changelogVersion: "0.2.25" }],
   ["@hasna/mementos", { packageVersion: "0.14.84", changelogVersion: "0.14.83" }],
   ["@hasna/repos", { packageVersion: "0.1.48", changelogVersion: "0.1.47" }],
   ["@hasna/secrets", { packageVersion: "0.2.22", changelogVersion: "0.2.21" }],
