@@ -51,6 +51,10 @@ All notable changes to `@hasna/emails` are documented here.
 - perf(cli): `emails domain warm-list` reads the sent-mail ledger **once per page** instead of once per row, via a new `getTodaySentCountsByDomain`. In self-hosted mode each read is a synchronous `curl` spawn over today's messages, so a default 20-row page cost 20 identical requests.
 - refactor(warming): ramp position (`current_day`, `total_days`, `progress_percent`, `today_limit`, `today_sent`) is computed once in `describeWarmingProgress` and shared by the CLI, the MCP tools, the local `GET /api/warming/:domain` route, and `formatWarmingStatus` — replacing four copies of the same date math, one of which had already drifted from the server. `formatWarmingStatus` and `describeWarmingProgress` accept precomputed inputs so a single command does not read the sent-mail ledger more than once.
 
+## 1.3.15 (2026-08-14)
+
+- Release-line reconciliation: main is bumped to the registry-latest 1.3.15 (published by the release lane 2026-08-14T11:48:46Z ahead of main; the release commit did not land on main). No functional changes to the tree; this entry records the version parity and clears the KNOWN_NPM_DRIFT record (reconcile task 78c66e3c).
+
 ## 1.3.14 (2026-08-09)
 
 - **fix(send): raise the self-hosted send attachment limits to carry ordinary scanned documents.** The send route now accepts up to five attachments, 10 MiB per file and 20 MiB total, with its JSON body budget derived from those limits while every other route retains the 1 MiB default. The combined MIME/base64 upper bound remains below the SESv2 40 MB ceiling.
