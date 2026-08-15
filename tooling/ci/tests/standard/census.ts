@@ -518,10 +518,19 @@ export const RECONCILE_TASKS_AGENT = process.env.HASNA_TODOS_AGENT ?? "agent-ea"
  * reporting lanes must never fail on a task-sync failure, they report
  * NOT FILED and pass. */
 export async function ensureReconcileTask(title: string, description: string): Promise<{ id: string; created: boolean } | null> {
-  const proc = Bun.spawn(
-    ["todos", "task", "upsert", "--fingerprint", title, "--title", title, "-d", description, "-p", "high", "--project", RECONCILE_TASKS_PROJECT, "--assign", RECONCILE_TASKS_AGENT, "--assign-seat", "--json"],
-    { stdout: "pipe", stderr: "pipe" },
-  );
+  let proc: ReturnType<typeof Bun.spawn>;
+  try {
+    proc = Bun.spawn(
+      ["todos", "task", "upsert", "--fingerprint", title, "--title", title, "-d", description, "-p", "high", "--project", RECONCILE_TASKS_PROJECT, "--assign", RECONCILE_TASKS_AGENT, "--assign-seat", "--json"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+  } catch (err) {
+    // A missing `todos` executable throws at spawn time instead of exiting
+    // non-zero; the reporting lanes must never fail on a task-sync failure —
+    // report NOT FILED and pass (measured on CI runners without the CLI).
+    console.info(`[standard] reconcile task upsert unavailable for "${title}": ${(err as Error).message?.slice(0, 200)} — NOT FILED`);
+    return null;
+  }
   const [exitCode, stdout, stderr] = await Promise.all([
     proc.exited,
     new Response(proc.stdout).text(),

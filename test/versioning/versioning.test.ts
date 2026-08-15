@@ -50,10 +50,19 @@ const RECONCILE_TASKS_PROJECT = process.env.VERSIONING_TODOS_PROJECT ?? "5e44770
 const RECONCILE_TASKS_AGENT = process.env.VERSIONING_TODOS_AGENT ?? "agent-ea";
 
 async function ensureReconcileTask(title: string, description: string): Promise<{ id: string; created: boolean } | null> {
-  const proc = Bun.spawn(
-    ["todos", "task", "upsert", "--fingerprint", title, "--title", title, "-d", description, "-p", "high", "--project", RECONCILE_TASKS_PROJECT, "--assign", RECONCILE_TASKS_AGENT, "--assign-seat", "--json"],
-    { stdout: "pipe", stderr: "pipe" },
-  );
+  let proc: ReturnType<typeof Bun.spawn>;
+  try {
+    proc = Bun.spawn(
+      ["todos", "task", "upsert", "--fingerprint", title, "--title", title, "-d", description, "-p", "high", "--project", RECONCILE_TASKS_PROJECT, "--assign", RECONCILE_TASKS_AGENT, "--assign-seat", "--json"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+  } catch (err) {
+    // A missing `todos` executable throws at spawn time instead of exiting
+    // non-zero; the reporting lane must never fail on a task-sync failure —
+    // report NOT FILED and pass (measured on CI runners without the CLI).
+    console.info(`[INFO versioning] reconcile task upsert unavailable for "${title}": ${(err as Error).message?.slice(0, 200)} — NOT FILED`);
+    return null;
+  }
   const [exitCode, stdout, stderr] = await Promise.all([
     proc.exited,
     new Response(proc.stdout).text(),
