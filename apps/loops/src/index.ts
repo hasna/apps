@@ -152,28 +152,36 @@ export type {
 } from "./lib/storage/index.js";
 
 // ---------------------------------------------------------------------------
-// Experimental: deployment mode contract
+// Experimental: runtime configuration (storage backend + connection transport)
 // ---------------------------------------------------------------------------
 export {
-  LOOP_DEPLOYMENT_MODES,
-  buildDeploymentStatus,
-  deploymentStatusLine,
+  ROUTE_ADMISSION_GATES,
+  displayControlPlaneUrl,
   loopControlPlaneConfig,
-  normalizeLoopDeploymentMode,
-  resolveLoopDeploymentMode,
-} from "./lib/mode.js";
+  resolveRuntimeConfig,
+  runtimeStorage,
+  runtimeStorageBackend,
+} from "./lib/runtime-config.js";
 export type {
   LoopControlPlaneConfig,
-  LoopDeploymentMode,
-  LoopDeploymentStatus,
-  LoopModeResolution,
+  LoopRouteAdmissionGate,
+  RuntimeConfig,
+  RuntimeConnection,
+  RuntimeStorage,
+  RuntimeStorageBackend,
+} from "./lib/runtime-config.js";
+export {
+  buildStorageConnectionReport,
+  schedulerStateForConnection,
+  storageConnectionReportLine,
+} from "./lib/runtime-status.js";
+export type {
   LoopRemoteArtifactStore,
   LoopRemoteSchedulerBackend,
-  LoopRouteAdmissionGate,
   LoopRouteAdmissionStateStore,
   LoopSchedulerStateStatus,
-  LoopSourceOfTruth,
-} from "./lib/mode.js";
+  StorageConnectionReport,
+} from "./lib/runtime-status.js";
 
 // ---------------------------------------------------------------------------
 // Experimental: execution and workflow engines
@@ -202,11 +210,11 @@ export {
   LOOPS_MIGRATION_SCHEMA,
   applyImportMigrationBundle,
   buildImportMigrationPlan,
-  buildSelfHostedMigrationPlan,
+  buildControlPlaneMigrationPlan,
   exportLoopsMigrationBundle,
   migrationHash,
   publicMigrationBundle,
-  selfHostedControlPlaneSummary,
+  controlPlaneSummary,
   validateLoopsMigrationBundle,
 } from "./lib/migration.js";
 export { runGoal } from "./lib/goal/runner.js";
@@ -260,5 +268,5 @@ export type {
   LoopsMigrationPlanRow,
   LoopsMigrationPlanSummary,
   LoopsMigrationResource,
-  SelfHostedPlanOptions,
+  ControlPlanePlanOptions,
 } from "./lib/migration.js";

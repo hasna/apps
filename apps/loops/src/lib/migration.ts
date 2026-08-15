@@ -4,13 +4,15 @@ import type { Loop, LoopRun, WorkflowSpec } from "../types.js";
 import { validateAgentTarget } from "./agent-adapter.js";
 import { ValidationError } from "./errors.js";
 import { publicLoop, publicRun, publicWorkflow } from "./format.js";
-import { loopControlPlaneConfig } from "./mode.js";
+import { loopControlPlaneConfig } from "./runtime-config.js";
 import { scrubSecretsDeep } from "./redact.js";
 import type { Store, StoreMigrationChecks } from "./store.js";
 import { packageVersion } from "./version.js";
 
 export const LOOPS_MIGRATION_SCHEMA = "open-loops.migration/v1";
-export const LOOPS_SELF_HOSTED_PUSH_MANIFEST_SCHEMA = "open-loops.self-hosted-push-manifest/v1";
+// Stable wire/archive identity: the historical name is preserved byte-identical
+// even though the CLI surface for the control-plane transport is now push/pull.
+export const LOOPS_CONTROL_PLANE_PUSH_MANIFEST_SCHEMA = "open-loops.self-hosted-push-manifest/v1";
 
 export type LoopsMigrationResource = "workflow" | "loop" | "run" | "remote";
 export type LoopsMigrationAction = "insert" | "update" | "skip" | "conflict" | "blocked";
@@ -77,14 +79,14 @@ export interface LoopsMigrationPlanSummary {
 
 export interface LoopsMigrationPlan {
   schema: typeof LOOPS_MIGRATION_SCHEMA;
-  operation: "import" | "self-hosted-push" | "self-hosted-pull" | "self-hosted-migrate";
+  operation: "import" | "push" | "pull" | "migrate";
   dryRun: boolean;
   replace: boolean;
   importable: boolean;
   summary: LoopsMigrationPlanSummary;
   rows: LoopsMigrationPlanRow[];
   warnings: string[];
-  manifest?: SelfHostedPushManifest;
+  manifest?: ControlPlanePushManifest;
 }
 
 export interface ApplyLoopsMigrationResult {
@@ -96,8 +98,8 @@ export interface ApplyLoopsMigrationResult {
   };
 }
 
-export interface SelfHostedPlanOptions {
-  operation: "self-hosted-push" | "self-hosted-pull" | "self-hosted-migrate";
+export interface ControlPlanePlanOptions {
+  operation: "push" | "pull" | "migrate";
   apiUrl?: string;
   apiKey?: string;
   timeoutMs?: number;
@@ -318,7 +320,7 @@ function remoteRepresentationRow(
     id: opts.id,
     name: opts.name,
     action: "skip",
-    reason: "remote id is represented; self-hosted list payload is public/redacted, so exact byte comparison is reserved for import apply",
+    reason: "remote id is represented; control-plane list payload is public/redacted, so exact byte comparison is reserved for import apply",
     incomingHash,
     currentHash: migrationHash(current),
   };
@@ -508,7 +510,7 @@ function envValue(env: NodeJS.ProcessEnv, keys: readonly string[]): string | und
   return undefined;
 }
 
-// Bounds every control-plane HTTP request so a slow/unreachable self-hosted host
+// Bounds every control-plane HTTP request so a slow/unreachable control-plane host
 // can never hang the CLI indefinitely. Override with HASNA_LOOPS_API_TIMEOUT_MS
 // or the `timeoutMs` option.
 const DEFAULT_CONTROL_PLANE_TIMEOUT_MS = 15_000;
@@ -607,7 +609,7 @@ async function fetchPagedRows(
     } catch (error) {
       if ((error as { status?: number }).status === 404) {
         opts.unsupported.push(path);
-        opts.warnings.push(`self-hosted control plane does not expose ${path}; exact ${key} comparison is unavailable`);
+        opts.warnings.push(`control-plane API does not expose ${path}; exact ${key} comparison is unavailable`);
         break;
       }
       throw error;
@@ -628,23 +630,23 @@ async function fetchOptionalCount(
   } catch (error) {
     if ((error as { status?: number }).status === 404) {
       opts.unsupported.push(path);
-      opts.warnings.push(`self-hosted control plane does not expose ${path}; count comparison is unavailable`);
+      opts.warnings.push(`control-plane API does not expose ${path}; count comparison is unavailable`);
       return undefined;
     }
     throw error;
   }
 }
 
-async function fetchRemotePreview(opts: SelfHostedPlanOptions): Promise<RemotePreview> {
+async function fetchRemotePreview(opts: ControlPlanePlanOptions): Promise<RemotePreview> {
   const config = resolveApiConfig(opts);
   const warnings: string[] = [];
   const unsupported: string[] = [];
   if (!config.apiUrl) {
-    warnings.push("HASNA_LOOPS_API_URL is required to inspect a self-hosted control plane");
+    warnings.push("HASNA_LOOPS_API_URL is required to inspect a control plane");
     return { workflows: [], loops: [], runs: [], counts: {}, unsupported, warnings };
   }
   if (!config.token) {
-    warnings.push("self-hosted APIs require HASNA_LOOPS_API_KEY");
+    warnings.push("control-plane APIs require HASNA_LOOPS_API_KEY");
     return { workflows: [], loops: [], runs: [], counts: {}, unsupported, warnings };
   }
   const fetchImpl = opts.fetchImpl ?? fetch;
@@ -654,8 +656,8 @@ async function fetchRemotePreview(opts: SelfHostedPlanOptions): Promise<RemotePr
   const loops = await fetchPagedRows(fetchImpl, api, "/v1/loops?includeArchived=true", "loops", requestOpts);
   // Never enumerate remote run bodies for a preview: on a busy host `/v1/runs`
   // with output is hundreds of MB across thousands of pages, which is what made
-  // `self-hosted migrate/pull/push --dry-run` hang. Run history is compared by
-  // count here; `self-hosted push --apply` streams runs id-preserving instead.
+  // `migrate/pull/push --dry-run` hang. Run history is compared by
+  // count here; `push --apply` streams runs id-preserving instead.
   const runs: unknown[] = [];
   return {
     workflows,
@@ -671,11 +673,11 @@ async function fetchRemotePreview(opts: SelfHostedPlanOptions): Promise<RemotePr
   };
 }
 
-function disabledWorkflowForSelfHostedImport(workflow: WorkflowSpec): WorkflowSpec {
+function disabledWorkflowForControlPlaneImport(workflow: WorkflowSpec): WorkflowSpec {
   return { ...workflow, status: "archived" };
 }
 
-function pausedLoopForSelfHostedImport(loop: Loop): Loop {
+function pausedLoopForControlPlaneImport(loop: Loop): Loop {
   return {
     ...loop,
     status: "paused",
@@ -684,12 +686,12 @@ function pausedLoopForSelfHostedImport(loop: Loop): Loop {
   };
 }
 
-function selfHostedDefinitionBundle(bundle: LoopsMigrationBundle): LoopsMigrationBundle {
+function controlPlaneDefinitionBundle(bundle: LoopsMigrationBundle): LoopsMigrationBundle {
   const body = {
     ...bundle,
     data: {
-      workflows: bundle.data.workflows.map(disabledWorkflowForSelfHostedImport),
-      loops: bundle.data.loops.map(pausedLoopForSelfHostedImport),
+      workflows: bundle.data.workflows.map(disabledWorkflowForControlPlaneImport),
+      loops: bundle.data.loops.map(pausedLoopForControlPlaneImport),
       runs: bundle.data.runs,
     },
   };
@@ -717,7 +719,7 @@ function existingRowIds(rows: LoopsMigrationPlanRow[], resource: LoopsMigrationR
   return rows.filter((row) => row.resource === resource && (row.action === "skip" || row.action === "update")).map((row) => row.id);
 }
 
-function buildSelfHostedManifest(args: {
+function buildControlPlaneManifest(args: {
   apiUrl?: string;
   dryRun: boolean;
   replace: boolean;
@@ -729,9 +731,9 @@ function buildSelfHostedManifest(args: {
   skipped?: { runningRuns: number; orphanRuns: number };
   requests?: number;
   remoteAfter?: { workflows?: number; loops?: number; runs?: number };
-}): SelfHostedPushManifest {
+}): ControlPlanePushManifest {
   return {
-    schema: LOOPS_SELF_HOSTED_PUSH_MANIFEST_SCHEMA,
+    schema: LOOPS_CONTROL_PLANE_PUSH_MANIFEST_SCHEMA,
     generatedAt: new Date().toISOString(),
     apiUrl: args.apiUrl,
     dryRun: args.dryRun,
@@ -770,24 +772,24 @@ function buildSelfHostedManifest(args: {
     },
     rollback: {
       notes: [
-        "self-hosted push imports through id-preserving upserts; no local loops are resumed or mutated",
+        "control-plane push imports through id-preserving upserts; no local loops are resumed or mutated",
         "imported loops are forced to paused with nextRunAt/retryScheduledFor cleared before upload",
         "imported workflows are forced to archived before upload",
-        "rollback is manual: archive or delete imported ids from the self-hosted control plane after reviewing this manifest",
+        "rollback is manual: archive or delete imported ids from the control plane after reviewing this manifest",
       ],
       commands: [
-        "loops self-hosted push --dry-run --no-runs --manifest-file <post-rollback-check.json>",
+        "loops push --dry-run --no-runs --manifest-file <post-rollback-check.json>",
       ],
     },
   };
 }
 
-export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHostedPlanOptions): Promise<LoopsMigrationPlan> {
+export async function buildControlPlaneMigrationPlan(store: Store, opts: ControlPlanePlanOptions): Promise<LoopsMigrationPlan> {
   const includeRuns = opts.includeRuns ?? true;
   // Definitions only: loading every run's stdout/stderr into memory (a full
   // `includeRuns: true` export) is what made the preview hang on a busy host.
   // Run history is summarised by count below instead of enumerated row by row.
-  const bundle = selfHostedDefinitionBundle(exportLoopsMigrationBundle(store, { includeRuns: false }));
+  const bundle = controlPlaneDefinitionBundle(exportLoopsMigrationBundle(store, { includeRuns: false }));
   const localRunCount = includeRuns ? store.countRuns() : 0;
   bundle.counts = { ...bundle.counts, runs: localRunCount };
   const remote = await fetchRemotePreview(opts);
@@ -795,17 +797,17 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
   const warnings = [
     ...bundle.warnings,
     ...remote.warnings,
-    "self-hosted push forces imported loops to paused and imported workflows to archived until activation is explicitly approved",
+    "control-plane push forces imported loops to paused and imported workflows to archived until activation is explicitly approved",
   ];
   const config = resolveApiConfig(opts);
   const apiUrl = config.apiUrl;
   if (!apiUrl) {
-    pushBlocker(rows, "remote", "self-hosted-api-url", "HASNA_LOOPS_API_URL is required to compare a self-hosted control plane");
+    pushBlocker(rows, "remote", "control-plane-api-url", "HASNA_LOOPS_API_URL is required to compare a control plane");
   } else if (!config.token) {
-    pushBlocker(rows, "remote", "self-hosted-api-key", "self-hosted APIs require HASNA_LOOPS_API_KEY");
+    pushBlocker(rows, "remote", "control-plane-api-key", "control-plane APIs require HASNA_LOOPS_API_KEY");
   }
   const replace = opts.replace ?? false;
-  if (opts.operation === "self-hosted-pull") {
+  if (opts.operation === "pull") {
     for (const entry of remote.loops) {
       const value = entry && typeof entry === "object" ? entry as { id?: unknown; name?: unknown } : {};
       const id = typeof value.id === "string" ? value.id : `remote-loop:${rows.length}`;
@@ -838,7 +840,7 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
     return {
       ...plan,
       importable: false,
-      manifest: buildSelfHostedManifest({
+      manifest: buildControlPlaneManifest({
         apiUrl,
         dryRun: true,
         replace,
@@ -862,7 +864,7 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
         id: workflow.id,
         name: workflow.name,
         action: "blocked",
-        reason: "self-hosted API does not expose workflow list/count endpoints for safe comparison",
+        reason: "control-plane API does not expose workflow list/count endpoints for safe comparison",
         incomingHash: migrationHash(workflow),
       });
       continue;
@@ -900,7 +902,7 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
     const remoteRunNote = typeof remote.counts.runs === "number" ? `, remote=${remote.counts.runs}` : "";
     warnings.push(
       `run history is compared by count for preview performance: local=${localRunCount}${remoteRunNote}; ` +
-        "`self-hosted push --apply` streams individual runs id-preserving",
+        "`push --apply` streams individual runs id-preserving",
     );
   }
 
@@ -916,7 +918,7 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
   plan = { ...plan, importable: plan.summary.blocked === 0 && plan.summary.conflict === 0 };
   return {
     ...plan,
-    manifest: buildSelfHostedManifest({
+    manifest: buildControlPlaneManifest({
       apiUrl,
       dryRun: true,
       replace,
@@ -928,7 +930,7 @@ export async function buildSelfHostedMigrationPlan(store: Store, opts: SelfHoste
   };
 }
 
-export interface SelfHostedPushOptions {
+export interface ControlPlanePushOptions {
   apiUrl?: string;
   apiKey?: string;
   timeoutMs?: number;
@@ -943,17 +945,17 @@ export interface SelfHostedPushOptions {
   onProgress?: (event: { phase: "workflows" | "loops" | "runs"; sent: number; requests: number }) => void;
 }
 
-export interface SelfHostedPushResult {
+export interface ControlPlanePushResult {
   ok: boolean;
   apiUrl: string;
   applied: { workflows: number; loops: number; runs: number };
   skipped: { runningRuns: number; orphanRuns: number };
   requests: number;
-  manifest: SelfHostedPushManifest;
+  manifest: ControlPlanePushManifest;
 }
 
-export interface SelfHostedPushManifest {
-  schema: typeof LOOPS_SELF_HOSTED_PUSH_MANIFEST_SCHEMA;
+export interface ControlPlanePushManifest {
+  schema: typeof LOOPS_CONTROL_PLANE_PUSH_MANIFEST_SCHEMA;
   generatedAt: string;
   apiUrl?: string;
   dryRun: boolean;
@@ -1008,26 +1010,26 @@ async function postImportBatch(
 }
 
 /**
- * Apply a local->self-hosted backfill through the control plane's id-preserving
+ * Apply a local-to-control-plane backfill through the control plane's id-preserving
  * `/v1/import` endpoint. Rows are pushed FK-safe (workflows, loops, then runs).
  * Runs are streamed in bounded pages so a busy host's multi-hundred-MB run
  * history never loads into memory at once; volatile `running` runs and orphan
  * runs (whose parent loop is absent) are dropped and counted. Idempotent: the
  * endpoint upserts by id, so re-running never duplicates rows.
  */
-export async function applySelfHostedPush(store: Store, opts: SelfHostedPushOptions): Promise<SelfHostedPushResult> {
+export async function applyControlPlanePush(store: Store, opts: ControlPlanePushOptions): Promise<ControlPlanePushResult> {
   const resolved = resolveApiConfig(opts);
-  if (!resolved.apiUrl) throw new ValidationError("HASNA_LOOPS_API_URL or --api-url is required for self-hosted push");
+  if (!resolved.apiUrl) throw new ValidationError("HASNA_LOOPS_API_URL or --api-url is required for control-plane push");
   if (!resolved.token) {
-    throw new ValidationError("self-hosted APIs require HASNA_LOOPS_API_KEY");
+    throw new ValidationError("control-plane APIs require HASNA_LOOPS_API_KEY");
   }
   const config = { apiUrl: resolved.apiUrl, token: resolved.token, timeoutMs: resolved.timeoutMs };
   const fetchImpl = opts.fetchImpl ?? fetch;
   const includeRuns = opts.includeRuns ?? true;
   const replace = opts.replace ?? false;
-  const plan = await buildSelfHostedMigrationPlan(store, { ...opts, operation: "self-hosted-push", includeRuns, replace });
+  const plan = await buildControlPlaneMigrationPlan(store, { ...opts, operation: "push", includeRuns, replace });
   if (plan.summary.blocked > 0 || plan.summary.conflict > 0 || !plan.importable) {
-    throw new ValidationError(`self-hosted push is not safe to apply: blocked=${plan.summary.blocked} conflict=${plan.summary.conflict}`);
+    throw new ValidationError(`control-plane push is not safe to apply: blocked=${plan.summary.blocked} conflict=${plan.summary.conflict}`);
   }
   const batchRows = Math.max(1, opts.batchRows ?? 200);
   const runBatchBytes = Math.max(64 * 1024, opts.runBatchBytes ?? 4 * 1024 * 1024);
@@ -1039,8 +1041,8 @@ export async function applySelfHostedPush(store: Store, opts: SelfHostedPushOpti
   // Definitions only: exportMigrationRows({includeRuns:false}) never loads run
   // output, so workflows+loops stay cheap even on a busy host.
   const base = store.exportMigrationRows({ includeRuns: false });
-  const workflows = base.workflows.map(disabledWorkflowForSelfHostedImport);
-  const loops = base.loops.map(pausedLoopForSelfHostedImport);
+  const workflows = base.workflows.map(disabledWorkflowForControlPlaneImport);
+  const loops = base.loops.map(pausedLoopForControlPlaneImport);
   const loopIds = new Set(base.loops.map((loop) => loop.id));
 
   for (let i = 0; i < workflows.length; i += batchRows) {
@@ -1094,8 +1096,8 @@ export async function applySelfHostedPush(store: Store, opts: SelfHostedPushOpti
     await flush();
   }
 
-  const remoteAfter = await fetchRemotePreview({ ...opts, operation: "self-hosted-push", includeRuns: false });
-  const bundle = selfHostedDefinitionBundle(exportLoopsMigrationBundle(store, { includeRuns }));
+  const remoteAfter = await fetchRemotePreview({ ...opts, operation: "push", includeRuns: false });
+  const bundle = controlPlaneDefinitionBundle(exportLoopsMigrationBundle(store, { includeRuns }));
   const remoteBefore: RemotePreview = plan.manifest
     ? {
         workflows: [],
@@ -1105,14 +1107,14 @@ export async function applySelfHostedPush(store: Store, opts: SelfHostedPushOpti
         unsupported: plan.manifest.unsafe.unsupported,
         warnings: [],
       }
-    : await fetchRemotePreview({ ...opts, operation: "self-hosted-push", includeRuns });
+    : await fetchRemotePreview({ ...opts, operation: "push", includeRuns });
   return {
     ok: true,
     apiUrl: config.apiUrl,
     applied,
     skipped,
     requests,
-    manifest: buildSelfHostedManifest({
+    manifest: buildControlPlaneManifest({
       apiUrl: config.apiUrl,
       dryRun: false,
       replace,
@@ -1139,7 +1141,7 @@ export function publicMigrationBundle(bundle: LoopsMigrationBundle): Record<stri
   };
 }
 
-export function selfHostedControlPlaneSummary(env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
+export function controlPlaneSummary(env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
   const config = loopControlPlaneConfig(env);
   return {
     apiUrl: config.apiUrl,

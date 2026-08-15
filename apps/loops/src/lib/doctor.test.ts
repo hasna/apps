@@ -23,14 +23,14 @@ describe("doctor", () => {
     for (const key of [
       "LOOPS_DATA_DIR",
       "HASNA_MACHINES_DIR",
-      "HASNA_LOOPS_STORAGE_MODE",
       "HASNA_LOOPS_API_URL",
+      "HASNA_LOOPS_API_KEY",
       "HASNA_LOOPS_DATABASE_URL",
     ]) savedEnv[key] = process.env[key];
     process.env.LOOPS_DATA_DIR = dataDir;
     process.env.HASNA_MACHINES_DIR = machinesDir;
-    process.env.HASNA_LOOPS_STORAGE_MODE = "";
     process.env.HASNA_LOOPS_API_URL = "";
+    process.env.HASNA_LOOPS_API_KEY = "";
     process.env.HASNA_LOOPS_DATABASE_URL = "";
   });
 
@@ -59,7 +59,7 @@ describe("doctor", () => {
       expect(check(report, "loop-runs")?.status).toBe("ok");
       expect(check(report, "scheduler-state")).toMatchObject({
         status: "ok",
-        message: "scheduler state authority=local_sqlite local=authoritative remote=none",
+        message: "scheduler state storage=sqlite connection=file remote_scheduler=none",
       });
       expect(check(report, "scheduler-state")?.detail).toContain("gates=max_dispatch,max_active,max_active_per_project,max_active_per_project_group,max_active_scope,max_per_profile");
       for (const provider of ["claude", "agent", "codewith", "aicopilot", "opencode", "codex"]) {
@@ -71,15 +71,15 @@ describe("doctor", () => {
     }
   });
 
-  test("warns when non-local scheduler state is selected without control-plane configuration", () => {
-    process.env.HASNA_LOOPS_STORAGE_MODE = "cloud";
+  test("warns when a partial API connection cannot resolve", () => {
+    process.env.HASNA_LOOPS_API_URL = "https://loops.example.test";
+    delete process.env.HASNA_LOOPS_API_KEY;
     const store = new Store(":memory:");
     try {
       const report = runDoctor(store);
       const scheduler = check(report, "scheduler-state");
       expect(scheduler?.status).toBe("warn");
-      expect(scheduler?.message).toBe("scheduler state authority=cloud_control_plane local=cache_and_spool remote=unconfigured");
-      expect(scheduler?.detail).toContain("remote_apply=false");
+      expect(scheduler?.message).toContain("HASNA_LOOPS_API_URL is set without HASNA_LOOPS_API_KEY");
       expect(report.ok).toBe(true);
     } finally {
       store.close();

@@ -25,7 +25,7 @@ interface MigrationLedgerRow extends Record<string, unknown> {
 }
 
 export class PostgresStorage implements SchemaMigrationStorage {
-  readonly backend = "postgres";
+  readonly backend = "postgresql";
   readonly migrations: readonly StorageMigration[];
 
   constructor(

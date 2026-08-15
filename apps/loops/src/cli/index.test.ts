@@ -7,9 +7,10 @@ import { fileURLToPath } from "node:url";
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { CLI_SPAWN_TIMEOUT_MS } from "../test-timeout-policy.js";
+import { executableExists, normalizeExecutionPath } from "../lib/env.js";
 import { Store } from "../lib/store.js";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
-import { applySelfHostedPush } from "../lib/migration.js";
+import { applyControlPlanePush } from "../lib/migration.js";
 import { RESTART_INTERRUPTED_RUN_PREFIX } from "../lib/health.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
@@ -60,7 +61,6 @@ function cliSpawnOptions(
   env: Record<string, string> = {},
 ) {
   const isolatedEnv = {
-    HASNA_LOOPS_STORAGE_MODE: "local",
     HASNA_LOOPS_API_URL: "",
     HASNA_LOOPS_API_KEY: "",
     LOOPS_MACHINE_ID: "cli-test-machine",
@@ -190,6 +190,22 @@ function workflowFile(dataDir: string, body: unknown): string {
 
 function futureAt(): string {
   return new Date(Date.now() + 60_000).toISOString();
+}
+
+/**
+ * Whether a provider binary resolves through the CLI subprocess's normalized
+ * execution PATH (subprocess env + home dirs + homebrew). The negative
+ * create-agent preflight test below pins that preflight fails closed BEFORE
+ * storing when the provider binary is missing — a premise only establishable
+ * on machines without that binary, because normalizeExecutionPath appends
+ * ~/.local/bin, ~/.bun/bin, and /opt/homebrew/bin to every execution PATH, so
+ * a machine that has the binary there cannot construct the negative case
+ * (preflight legitimately passes). Mirrors standaloneAgentResolvable in
+ * executor.test.ts.
+ */
+function providerBinaryResolvable(binary: string, env: Record<string, string>): boolean {
+  const subprocessEnv = { ...process.env, ...env };
+  return executableExists(binary, { ...subprocessEnv, PATH: normalizeExecutionPath(subprocessEnv) });
 }
 
 function git(repo: string, args: string[]): void {
@@ -402,84 +418,71 @@ describe("loops CLI", () => {
     expect(receipts.map((receipt) => receipt.run_id)).toEqual(["run-cli"]);
   });
 
-  test("reports local deployment mode by default", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-mode-local-"));
-    const mode = runCli(dataDir, ["--json", "mode"], undefined, {
-      HASNA_LOOPS_STORAGE_MODE: "",
+  test("reports the sqlite file connection by default", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-status-file-"));
+    const status = runCli(dataDir, ["--json", "status"], undefined, {
       HASNA_LOOPS_API_URL: "",
       HASNA_LOOPS_DATABASE_URL: "",
     });
 
-    expect(mode.status).toBe(0);
-    const value = JSON.parse(mode.stdout);
-    expect(value.deploymentMode).toBe("local");
-    expect(value.sourceOfTruth).toBe("local_sqlite");
-    expect(value.localStore.role).toBe("authoritative");
-    expect(value.schedulerState).toMatchObject({
-      authority: "local_sqlite",
-      localStore: { backend: "sqlite", role: "authoritative", runArtifacts: "local_files" },
-      remoteStore: { backend: "none", configured: false, applySupported: false, mutatesAws: false },
-      routeAdmission: { stateStore: "local_sqlite", activeStatuses: ["admitted", "running"] },
-    });
-    expect(mode.stdout).not.toContain("dataDir");
-    expect(mode.stdout).not.toContain("dbPath");
+    expect(status.status).toBe(0);
+    const value = JSON.parse(status.stdout);
+    expect(value.storage).toBe("sqlite");
+    expect(value.connection).toBe("file");
+    expect(value.configured).toBe(true);
+    expect(value.apiKeyPresent).toBe(false);
+    expect(value.databaseUrlPresent).toBe(false);
+    expect(value.warnings).toEqual([]);
+    expect(status.stdout).not.toContain("dataDir");
+    expect(status.stdout).not.toContain("dbPath");
+
+    const human = runCli(dataDir, ["status"]);
+    expect(human.status).toBe(0);
+    expect(human.stdout).toContain("storage=sqlite connection=file");
   });
 
-  test("reports self-hosted and cloud contract perspectives without exposing tokens", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-mode-cloud-"));
-    const selfHosted = runCli(dataDir, ["--json", "self-hosted", "status"], undefined, {
-      HASNA_LOOPS_STORAGE_MODE: "self_hosted",
+  test("reports api connection details without exposing tokens", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-status-api-"));
+    const api = runCli(dataDir, ["--json", "status"], undefined, {
       HASNA_LOOPS_API_URL: "http://127.0.0.1:8787",
       HASNA_LOOPS_API_KEY: "do-not-print-this-token",
     });
-    expect(selfHosted.status).toBe(0);
-    expect(selfHosted.stdout).not.toContain("do-not-print-this-token");
-    expect(JSON.parse(selfHosted.stdout)).toMatchObject({
-      deploymentMode: "self_hosted",
-      activeDeploymentMode: "self_hosted",
-      sourceOfTruth: "self_hosted_control_plane",
-      controlPlane: {
-        kind: "self_hosted",
-        configured: true,
-        apiUrl: "http://127.0.0.1:8787",
-        apiKeyPresent: true,
-      },
-      schedulerState: {
-        authority: "self_hosted_control_plane",
-        localStore: { backend: "sqlite", role: "cache_and_spool" },
-        remoteStore: { backend: "api_control_plane_contract", configured: true, applySupported: false },
-        routeAdmission: { stateStore: "control_plane_contract" },
-      },
+    expect(api.status).toBe(0);
+    expect(api.stdout).not.toContain("do-not-print-this-token");
+    expect(JSON.parse(api.stdout)).toMatchObject({
+      storage: "sqlite",
+      connection: "api",
+      apiUrl: "http://127.0.0.1:8787",
+      apiKeyPresent: true,
+      databaseUrlPresent: false,
+      configured: true,
     });
 
-    const cloud = runCli(dataDir, ["--json", "cloud", "status"], undefined, {
-      HASNA_LOOPS_STORAGE_MODE: "local",
+    const example = runCli(dataDir, ["--json", "status"], undefined, {
       HASNA_LOOPS_API_URL: "https://loops.example.test",
       HASNA_LOOPS_API_KEY: "do-not-print-this-cloud-token",
     });
-    expect(cloud.status).toBe(0);
-    expect(cloud.stdout).not.toContain("do-not-print-this-cloud-token");
-    const cloudValue = JSON.parse(cloud.stdout);
-    expect(cloudValue).toMatchObject({
-      deploymentMode: "cloud",
-      activeDeploymentMode: "local",
-      active: false,
-      sourceOfTruth: "cloud_control_plane",
-      controlPlane: {
-        kind: "cloud",
-        configured: true,
-        apiUrl: "https://loops.example.test",
-        apiKeyPresent: true,
-      },
-      schedulerState: {
-        authority: "cloud_control_plane",
-        remoteStore: { backend: "hosted_control_plane_contract", configured: true, applySupported: false, mutatesAws: false },
-        routeAdmission: { stateStore: "control_plane_contract" },
-      },
+    expect(example.status).toBe(0);
+    expect(example.stdout).not.toContain("do-not-print-this-cloud-token");
+    const exampleValue = JSON.parse(example.stdout);
+    expect(exampleValue).toMatchObject({
+      storage: "sqlite",
+      connection: "api",
+      apiUrl: "https://loops.example.test",
+      apiKeyPresent: true,
+      configured: true,
     });
-    expect(cloudValue.warnings.join(" ")).toContain("active deployment mode is local");
-    expect(cloud.stdout).not.toContain("dataDir");
-    expect(cloud.stdout).not.toContain("dbPath");
+    expect(exampleValue.warnings).toEqual([]);
+    expect(example.stdout).not.toContain("dataDir");
+    expect(example.stdout).not.toContain("dbPath");
+
+    const human = runCli(dataDir, ["status"], undefined, {
+      HASNA_LOOPS_API_URL: "https://loops.example.test",
+      HASNA_LOOPS_API_KEY: "do-not-print-this-cloud-token",
+    });
+    expect(human.status).toBe(0);
+    expect(human.stdout).toContain("storage=sqlite connection=api");
+    expect(human.stdout).not.toContain("do-not-print-this-cloud-token");
   });
 
   test("exports and imports id-preserving migration bundles idempotently", () => {
@@ -601,33 +604,33 @@ describe("loops CLI", () => {
     expect(missing.stderr).toContain("--file");
   });
 
-  test("self-hosted migrate preview reports blocked unsupported rows without tokens", () => {
-    const dataDir = freshDataDir("loops-cli-self-hosted-migrate-");
+  test("migrate preview reports blocked unsupported rows without tokens", () => {
+    const dataDir = freshDataDir("loops-cli-migrate-");
     const create = runCli(dataDir, ["create", "command", "remote-loop", "--at", futureAt(), "--cmd", "true"]);
     expect(create.status).toBe(0);
 
-    const preview = runCli(dataDir, ["--json", "self-hosted", "migrate", "--dry-run"], undefined, {
+    const preview = runCli(dataDir, ["--json", "migrate", "--dry-run"], undefined, {
       HASNA_LOOPS_API_KEY: "do-not-print-this-token",
     });
     expect(preview.status).toBe(0);
     expect(preview.stdout).not.toContain("do-not-print-this-token");
     const plan = JSON.parse(preview.stdout);
-    expect(plan.operation).toBe("self-hosted-migrate");
+    expect(plan.operation).toBe("migrate");
     expect(plan.dryRun).toBe(true);
     expect(plan.importable).toBe(false);
     expect(plan.summary.blocked).toBeGreaterThan(0);
     expect(plan.warnings.join(" ")).toContain("HASNA_LOOPS_API_URL");
 
     for (const command of ["push", "pull"]) {
-      const documented = runCli(dataDir, ["--json", "self-hosted", command, "--dry-run"]);
+      const documented = runCli(dataDir, ["--json", command, "--dry-run"]);
       expect(documented.status).toBe(0);
-      expect(JSON.parse(documented.stdout).operation).toBe(`self-hosted-${command}`);
+      expect(JSON.parse(documented.stdout).operation).toBe(command);
     }
   });
 
-  test("self-hosted push applies id-preserving definitions paused/disabled and writes a manifest", async () => {
+  test("control-plane push applies id-preserving definitions paused/disabled and writes a manifest", async () => {
     const mod = await import("../api/index.js");
-    const sourceDir = freshDataDir("loops-cli-self-hosted-push-source-");
+    const sourceDir = freshDataDir("loops-cli-push-source-");
     const remoteStorage = createSqliteLoopStorage(":memory:");
     const principal = {
       tenantId: "tenant-test", principalId: "principal-test", requestId: "request-test",
@@ -664,7 +667,7 @@ describe("loops CLI", () => {
 
     try {
       const source = new Store(join(sourceDir, "loops.db"));
-      const output = await applySelfHostedPush(source, {
+      const output = await applyControlPlanePush(source, {
         apiUrl: `http://${server.hostname}:${server.port}`,
         apiKey: "test-token",
         includeRuns: false,
@@ -1653,7 +1656,7 @@ describe("loops CLI", () => {
       "--env",
       "CONVERSATIONS_AGENT_ID=agent-chief-marketing",
       "--env",
-      "HASNA_KNOWLEDGE_STORAGE_MODE=cloud",
+      "HASNA_KNOWLEDGE_BACKEND=cloud",
     ]);
     expect(create.status).toBe(0);
     const value = JSON.parse(create.stdout);
@@ -1691,7 +1694,7 @@ describe("loops CLI", () => {
       const stored = store.getLoop(value.id);
       expect(stored?.target).toMatchObject({
         type: "agent",
-        env: { CONVERSATIONS_AGENT_ID: "agent-chief-marketing", HASNA_KNOWLEDGE_STORAGE_MODE: "cloud" },
+        env: { CONVERSATIONS_AGENT_ID: "agent-chief-marketing", HASNA_KNOWLEDGE_BACKEND: "cloud" },
       });
     } finally {
       store.close();
@@ -2305,44 +2308,48 @@ describe("loops CLI", () => {
     expect(JSON.parse(list.stdout)).toEqual([]);
   });
 
-  test("create agent --preflight fails before storing when provider binary is missing", () => {
-    const dataDir = freshDataDir("loops-cli-create-agent-preflight-fail-");
-    const home = mkdtempSync(join(tmpdir(), "loops-cli-create-agent-home-"));
-    const create = runCli(
-      dataDir,
-      [
-        "--json",
-        "create",
-        "agent",
-        "bad-agent-preflight",
-        "--provider",
-        "codewith",
-        "--prompt",
-        "run",
-        "--at",
-        futureAt(),
-        "--preflight",
-      ],
-      undefined,
-      { BUN_INSTALL: join(home, ".bun"), HOME: home, PATH: "/usr/bin:/bin" },
-    );
+  const home = mkdtempSync(join(tmpdir(), "loops-cli-create-agent-home-"));
 
-    expect(create.status).toBe(1);
-    expect(create.stderr).toBe("");
-    const value = JSON.parse(create.stdout);
-    expect(value).toMatchObject({
-      ok: false,
-      created: false,
-      type: "agent",
-      provider: "codewith",
-      name: "bad-agent-preflight",
-      preflight: { ok: false },
-    });
-    expect(value.preflight.error).toContain("Executable not found");
+  test.skipIf(providerBinaryResolvable("codewith", { BUN_INSTALL: join(home, ".bun"), HOME: home, PATH: "/usr/bin:/bin" }))(
+    "create agent --preflight fails before storing when provider binary is missing",
+    () => {
+      const dataDir = freshDataDir("loops-cli-create-agent-preflight-fail-");
+      const create = runCli(
+        dataDir,
+        [
+          "--json",
+          "create",
+          "agent",
+          "bad-agent-preflight",
+          "--provider",
+          "codewith",
+          "--prompt",
+          "run",
+          "--at",
+          futureAt(),
+          "--preflight",
+        ],
+        undefined,
+        { BUN_INSTALL: join(home, ".bun"), HOME: home, PATH: "/usr/bin:/bin" },
+      );
 
-    const list = runCli(dataDir, ["--json", "list"]);
-    expect(JSON.parse(list.stdout)).toEqual([]);
-  });
+      expect(create.status).toBe(1);
+      expect(create.stderr).toBe("");
+      const value = JSON.parse(create.stdout);
+      expect(value).toMatchObject({
+        ok: false,
+        created: false,
+        type: "agent",
+        provider: "codewith",
+        name: "bad-agent-preflight",
+        preflight: { ok: false },
+      });
+      expect(value.preflight.error).toContain("Executable not found");
+
+      const list = runCli(dataDir, ["--json", "list"]);
+      expect(JSON.parse(list.stdout)).toEqual([]);
+    },
+  );
 
   test("create agent --preflight validates provider-native Codewith auth profiles", () => {
     const dataDir = freshDataDir("loops-cli-create-agent-auth-preflight-");
@@ -10257,7 +10264,6 @@ describe("local-only guards under a cloud-flipped client", () => {
   // fail loudly instead of silently reading/writing the on-box island (the
   // split-brain we forbid). No HTTP is issued: the guard fires before any call.
   const CLOUD_ENV = {
-    HASNA_LOOPS_STORAGE_MODE: "",
     HASNA_LOOPS_API_URL: "https://loops.example.test",
     HASNA_LOOPS_API_KEY: "do-not-print-this-key",
   } as const;

@@ -67,7 +67,7 @@ describe("loops sdk", () => {
     });
 
     expect(urls[0]).toBe(
-      "http://127.0.0.1:8787/v1/loops?limit=10&offset=20&includeArchived=true&labels=browserplan%2Cnightly",
+      "http://127.0.0.1:8787/v1/loops?limit=10&offset=20&includeArchived=true&labels=browserplan&labels=nightly",
     );
     expect(urls[1]).toBe(
       "http://127.0.0.1:8787/v1/runs?limit=5&offset=15&showOutput=true&labels=browserplan",
@@ -427,8 +427,8 @@ describe("loops sdk", () => {
         }
         return Response.json({ ok: true, loops: [{ id: "remote-loop-1", name: "remote-loop" }] });
       };
-      const pull = await pullClient.planSelfHostedMigration({
-        operation: "self-hosted-pull",
+      const pull = await pullClient.planControlPlaneMigration({
+        operation: "pull",
         apiUrl: "http://127.0.0.1:8787",
         apiKey: "test-token",
         fetchImpl: fetchImpl as typeof fetch,

@@ -40,7 +40,7 @@
     },
     "apps/accounts": {
       "name": "@hasna/accounts",
-      "version": "0.2.43",
+      "version": "0.2.44",
       "bin": {
         "accounts": "dist/cli.js",
         "accounts-mcp": "dist/mcp.js",
@@ -544,7 +544,7 @@
     },
     "apps/conversations": {
       "name": "@hasna/conversations",
-      "version": "0.6.1",
+      "version": "0.6.2",
       "bin": {
         "conversations": "bin/index.js",
         "conversations-inbox": "bin/inbox",
@@ -1008,7 +1008,7 @@
     },
     "apps/knowledge": {
       "name": "@hasna/knowledge",
-      "version": "0.2.105",
+      "version": "0.2.106",
       "bin": {
         "knowledge": "bin/knowledge.js",
         "knowledge-mcp": "bin/knowledge-mcp.js",
@@ -1070,7 +1070,7 @@
     },
     "apps/loops": {
       "name": "@hasna/loops",
-      "version": "0.4.42",
+      "version": "0.5.0",
       "bin": {
         "loops": "dist/cli/index.js",
         "loops-daemon": "dist/daemon/index.js",
@@ -1080,7 +1080,7 @@
       },
       "dependencies": {
         "@aws-sdk/client-secrets-manager": "^3.1083.0",
-        "@hasna/contracts": "0.5.2",
+        "@hasna/contracts": "0.10.6",
         "@hasna/events": "^0.1.9",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "@openrouter/ai-sdk-provider": "2.9.1",
@@ -1101,7 +1101,7 @@
     },
     "apps/machines": {
       "name": "@hasna/machines",
-      "version": "0.2.25",
+      "version": "0.2.26",
       "bin": {
         "machines": "dist/cli/index.js",
         "machines-mcp": "dist/mcp/index.js",
@@ -1179,7 +1179,7 @@
     },
     "apps/mementos": {
       "name": "@hasna/mementos",
-      "version": "0.14.83",
+      "version": "0.14.84",
       "bin": {
         "mementos": "dist/cli/index.js",
         "mementos-mcp": "dist/mcp/index.js",
@@ -1742,7 +1742,7 @@
     },
     "apps/telephony": {
       "name": "@hasna/telephony",
-      "version": "0.2.8",
+      "version": "0.2.9",
       "bin": {
         "telephony": "dist/cli/index.js",
         "telephony-mcp": "dist/mcp/index.js",
@@ -4700,7 +4700,7 @@
 
     "@hasna/logs/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
-    "@hasna/loops/@hasna/contracts": ["@hasna/contracts@0.5.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-R7NBm91oMOWQVnfIyh7QTEPuWbVycGaObzKFJd1je5RNjXsLuPASqCfr9heJ7nuugn9xxFBCCRQCxHg9/VeJrg=="],
+    "@hasna/loops/@hasna/contracts": ["@hasna/contracts@0.10.6", "", { "dependencies": { "@hasna/secrets": "^0.2.22", "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-lHGwSjCAJof2868o3xAHbWbq8WR675MNQMnRVaRPHvX0LeSLsEWfV5nqE4KjhDJfDRhXhiSo4pmvI03AW4cMnQ=="],
 
     "@hasna/loops/@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
 
