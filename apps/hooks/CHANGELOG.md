@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.6] - 2026-08-15
+
+### Security
+
+- **Hook child processes get a sanitized environment (P1-1).** A hook previously inherited `process.env` wholesale, so third-party hook bytes could read every credential the agent session holds. Children now get a fixed non-secret allowlist (PATH, HOME, LANG, TZ, SHELL, TERM, USER, PWD), non-secret `HOOKS_*` projections of the parent's `HASNA_HOOKS_*` config, and caller extras — all filtered through a documented name-based deny list (`*KEY`, `*TOKEN`, `*SECRET`, `*PASSWORD`, `HASNA_*`, `AWS_*`, `AZURE_*`, `GCP_*`, `VAULT_*`, `DATABASE_URL` variants). The deny list applies even when a caller passes `process.env` explicitly.
+- **MCP SSE binds 127.0.0.1 by default (P1-2).** The SSE server previously bound without a hostname (wildcard) with no auth, so any reachable host could drive every hook tool. Non-loopback now requires an explicit opt-in host AND an auth token (`HASNA_HOOKS_MCP_TOKEN` / `HOOKS_MCP_TOKEN`, env-only) and is refused without one; with a token, every `/sse` and `/messages` request must present it.
+- **Hook event logs are redacted (P1-3).** `tool_input`, `error` and `metadata` were stored verbatim (truncated only) and returned by the MCP log tools and `hooks log`. A write-time projection now redacts secret-typed JSON keys and known credential shapes (`sk-…`, `ghp_…`, `AKIA…`, JWTs, private keys, `key=…` literals) before persistence, so nothing sensitive lands in `hook_events` or the remote sync store; a read-time projection scrubs rows stored by older versions (truncate-on-read; no destructive backfill command).
+- **Registry versions are immutable (P1-4, bug d3b4025c).** D1 keeps a new `hook_versions` table keyed (name, version); the `hooks` table is the latest pointer. PUT never overwrites an existing (name, version): a byte-identical republish is idempotent, a conflicting one is a 409. GET `/api/v1/hooks/:name/:version` serves any published version, and catalog + lock expose `versions[]`. `hooks install/update <name>@<version>` fetches the exact pinned version (older-than-latest included), verified against the registry's per-version sha header.
+- **PG TLS is verified by default (P1-5).** `sslmode=require`/`ssl=true` previously produced `rejectUnauthorized: false` — encryption with no verification. Verified TLS is now the default; `HASNA_HOOKS_PG_INSECURE_TLS` / `HOOKS_PG_INSECURE_TLS=1` is the only way to disable verification and is refused under `NODE_ENV=production`.
+- **MCP preview timeouts never approve (P1-7).** A timed-out `hooks_preview` returned `decision: "approve", timedOut: true` — a stalled guard was silently skipped. Timeouts now block with the timeout reason.
+- **`hooks serve` has no `--api-key` value flag (P1-8).** A secret on a CLI flag is visible in process listings and shell history; the publish key resolves from `HASNA_HOOKS_API_KEY` / `HOOKS_API_KEY` only. The vault-key-NAME reference option on `hooks init` is unchanged (a name, not a value).
+- **Malformed hooks.lock fails closed (P1-9).** A broken lock used to read as `{hooks:{}}`, so the next sync re-trusted everything. It now throws with a repair message and leaves hooks in the refuse-to-run state; lock writes are atomic (temp + rename).
+- **URL hook installs refuse redirects (P2-14).** Both the manifest fetch and the script fetch use `redirect: "error"` — a redirecting URL can end on an attacker-controlled origin serving different bytes than the URL named.
+
+### Changed
+
+- **`hooks sync` commits atomically (P1-9).** Artifacts are staged and fully validated first (network, sha, manifest, containment); the commit then writes all hook files, then all lock pins in ONE atomic write, then the DB records in one transaction. A mid-sync failure leaves the lock and DB untouched and new files unpinned — trust refuses until the sync completes.
+- **PG storage accepts `SubagentStart` (P1-6).** The PG `event_type` CHECK omitted the event the SQLite schema supports, so push/pull rejected those rows; an idempotent appended migration adds it (verified against a real local PostgreSQL).
+- **Shared semver across manifest, serve and worker routes (P2-10).** Pinned prerelease/build versions (`1.2.3-beta.1`, `2.0.0+meta.5`) validate and fetch everywhere — the routes previously 404'd what validation accepted.
+- **`hooks_setup` passes agent_type through to the installer target (P2-12).** A gemini setup registers hooks in the gemini settings, not the claude settings; unsupported types are rejected.
+- **CLI error exit codes (P2-13).** `install --category` with an unknown category, `info`/`docs` for an unknown hook, and `doctor` with error-severity findings all exit non-zero.
+- **`hooks doctor` reports the bounds of its verdict (P2-16b).** The bare "All hooks healthy!" claim is replaced by the checked counts: registered `hooks run` entries vs raw settings wiring entries, with direct-path wiring explicitly out of the covered surface.
+- **`hooks sync --dry-run` reports dryRun (P2-16a).** The dry-run path no longer hardcodes `dryRun: false` — `planSync` and the CLI output emit `dry_run: true` and never print "✓ Synced".
+- **Codewith uninstall resolves the operation's own scope (P2-15).** A project-scoped uninstall edits the project's `config.toml`; the global env override applies to the global scope only.
+- **Manifest `script_kind` discriminator (P2-14).** `script_kind: "inline" | "file"` removes newline-guessing; absent, the legacy newline heuristic still applies to older manifests.
+- **Package validation smoke-tests the extracted tarball (P3-17).** `validate:package` now runs the packed artifact: CLI `--help`, `serve /health`, an MCP stdio initialize handshake, a runtime SDK import and one bundled-hook run.
+
 ## [0.6.5] - 2026-08-15
 
 ### Fixed
