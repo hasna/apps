@@ -1,3 +1,4 @@
+import type { Database } from "bun:sqlite";
 import { getDb } from "./database.js";
 import type {
   Repo,
@@ -14,6 +15,8 @@ import type {
 import { sanitizeRemoteIdentity } from "../lib/remote-identity.js";
 import { resolvePullRequestOrigin } from "../lib/pr-identity.js";
 import { classifyCheckout } from "../lib/checkout-health.js";
+import { canonicalPath } from "../lib/path-identity.js";
+import { KNOWN_REPO_FK_TABLES } from "./registry-prune.js";
 
 // ── Repos ──
 
@@ -499,9 +502,42 @@ export function listReposByRemote(remote: string): Repo[] {
     .all(normalized) as Repo[]).map(sanitizeRepoForOutput);
 }
 
+/**
+ * A row whose stored path is the SAME directory as `canonical` under a
+ * different spelling. Only meaningful when the filesystem resolved both paths
+ * — two rows whose paths both fail realpath can never be the same directory
+ * (the resolve fallback is case-preserving), so this never false-merges.
+ */
+function findRepoRowByCanonicalPath(db: Database, canonical: string): { id: number; path: string } | null {
+  const rows = db.query("SELECT id, path FROM repos WHERE path IS NOT NULL AND path <> ''").all() as Array<{
+    id: number;
+    path: string;
+  }>;
+  for (const row of rows) {
+    if (canonicalPath(row.path) === canonical) return row;
+  }
+  return null;
+}
+
 export function upsertRepo(repo: Partial<Repo> & { path: string; name: string }): Repo {
   const db = getDb();
-  const existing = db.query("SELECT id FROM repos WHERE path = ?").get(repo.path) as { id: number } | null;
+  // Store the path as the filesystem resolves it. On a case-insensitive
+  // filesystem (macOS APFS) `~/workspace` and `~/Workspace` name the same
+  // directory, and realpath returns the on-disk spelling — so two scans that
+  // discovered the same checkout under different spellings converge on one
+  // stored string and one row. A path that does not exist resolves to itself.
+  const storedPath = canonicalPath(repo.path);
+  const exact = db.query("SELECT id FROM repos WHERE path = ?").get(storedPath) as { id: number } | null;
+  // No exact row: a row for the SAME directory may still exist under a
+  // different spelling (a twin created before canonical-identity landed, or
+  // by a caller that passed a non-canonical spelling). Updating that row —
+  // and converging its stored path onto the canonical spelling — is the
+  // prevention half of the double-index fix; the merge below repairs rows
+  // that already doubled.
+  const existing = exact ?? findRepoRowByCanonicalPath(db, storedPath);
+  if (existing && !exact) {
+    db.query("UPDATE repos SET path = ? WHERE id = ?").run(storedPath, existing.id);
+  }
   // Supplying `remote_url` is a claim about the repository's current remote, so
   // a value that fails sanitization still clears the stored identity rather
   // than leaving a contaminated or superseded one behind. Callers that merely
@@ -527,19 +563,185 @@ export function upsertRepo(repo: Partial<Repo> & { path: string; name: string })
       repo.default_branch ?? null, repo.description ?? null,
       repo.last_scanned ?? null, repo.commit_count ?? null,
       repo.branch_count ?? null, repo.tag_count ?? null,
-      repo.path
+      storedPath
     );
     return sanitizeRepoForOutput(db.query("SELECT * FROM repos WHERE id = ?").get(existing.id) as Repo);
   }
 
   db.query(`INSERT INTO repos (path, name, org, remote_url, default_branch, description, last_scanned, commit_count, branch_count, tag_count)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-    repo.path, repo.name, repo.org ?? null, safeRemote,
+    storedPath, repo.name, repo.org ?? null, safeRemote,
     repo.default_branch ?? "main", repo.description ?? null,
     repo.last_scanned ?? null, repo.commit_count ?? 0,
     repo.branch_count ?? 0, repo.tag_count ?? 0
   );
-  return sanitizeRepoForOutput(db.query("SELECT * FROM repos WHERE path = ?").get(repo.path) as Repo);
+  return sanitizeRepoForOutput(db.query("SELECT * FROM repos WHERE path = ?").get(storedPath) as Repo);
+}
+
+/**
+ * Tables whose rows are attached to a repo row and must be moved onto the
+ * surviving row when two repo rows describing one directory are merged.
+ * `worktree_leases` is deliberately excluded: it references repos through
+ * `repo_catalog_id` (not `repo_id`) and needs re-pointing, not moving.
+ */
+const MERGE_CHILD_TABLES = [...KNOWN_REPO_FK_TABLES].filter((table) => table !== "worktree_leases").sort();
+
+function tableColumnNames(db: Database, table: string): Set<string> {
+  const rows = db.query(`PRAGMA table_info("${table}")`).all() as Array<{ name: string }>;
+  return new Set(rows.map((row) => row.name));
+}
+
+/**
+ * Refuse when something now references `repos(id)` that the merge has not
+ * been taught to move or re-point. Same guard registry-prune applies for the
+ * same reason: the set of things attached to a repo row grows, and a delete
+ * that silently keeps up with it is a delete nobody is reviewing.
+ */
+function assertKnownMergeChildTables(db: Database): void {
+  const tables = (db
+    .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+    .all() as Array<{ name: string }>).map((row) => row.name);
+  const referencing: string[] = [];
+  for (const table of tables) {
+    const keys = db.query(`PRAGMA foreign_key_list("${table}")`).all() as Array<{ table: string }>;
+    if (keys.some((key) => key.table === "repos")) referencing.push(table);
+  }
+  const unknown = [...new Set(referencing)].filter((table) => !KNOWN_REPO_FK_TABLES.has(table)).sort();
+  if (unknown.length > 0) {
+    throw new Error(
+      `these tables reference repos(id) and the duplicate-row merge has not been reviewed against them: ${unknown.join(", ")}`,
+    );
+  }
+}
+
+/**
+ * Move one child table's rows from the removed repo row onto the survivor,
+ * keeping the survivor's own rows on conflict (INSERT OR IGNORE). Both rows
+ * describe the same directory, so their children are the same data; the
+ * survivor's copies win, the removed row's copies are ignored.
+ *
+ * The INSERT lists columns explicitly with `repo_id` remapped, because the
+ * unique constraints — UNIQUE(repo_id, sha), UNIQUE(repo_id, name, is_remote),
+ * UNIQUE(repo_id, name), UNIQUE(repo_id, number) — are repo-scoped and an
+ * unremapped copy would defeat the conflict semantics. Column lists are read
+ * from the live table so a migration that adds a column cannot silently drop
+ * it from the copy.
+ */
+function moveChildRows(db: Database, table: string, survivorId: number, dupId: number): void {
+  const columns = [...tableColumnNames(db, table)].filter((column) => column !== "id");
+  if (!columns.includes("repo_id")) {
+    throw new Error(`cannot merge duplicate repo rows: table '${table}' has no repo_id column`);
+  }
+  const select = columns.map((column) => (column === "repo_id" ? "?" : `"${column}"`)).join(", ");
+  db.query(
+    `INSERT OR IGNORE INTO "${table}" (${columns.map((column) => `"${column}"`).join(", ")}) `
+    + `SELECT ${select} FROM "${table}" WHERE repo_id = ?`,
+  ).run(survivorId, dupId);
+}
+
+/**
+ * Re-point worktree leases from the removed row to the survivor.
+ *
+ * `repo_catalog_id` is the foreign key to repos(id) — without this it would
+ * be SET NULL by the delete. `repo_path` records the parent checkout's stored
+ * path, which the merge normalizes onto the canonical spelling. `repo_id` is
+ * an identity LABEL (`github:org/name` or `path:<path>`), not a foreign key;
+ * the path-identity form is remapped too, guarded so the lease's unique claim
+ * key (repo_id, machine_id, task_id, run_id, base_ref) cannot collide with a
+ * lease the survivor already holds.
+ */
+function repointWorktreeLeases(db: Database, survivorId: number, survivorPath: string, dup: { id: number; path: string }): void {
+  db.query("UPDATE worktree_leases SET repo_catalog_id = ? WHERE repo_catalog_id = ?").run(survivorId, dup.id);
+  db.query("UPDATE worktree_leases SET repo_path = ? WHERE repo_path = ?").run(survivorPath, dup.path);
+  const dupIdentity = `path:${dup.path}`;
+  const survivorIdentity = `path:${survivorPath}`;
+  if (dupIdentity !== survivorIdentity) {
+    db.query(`
+      UPDATE worktree_leases SET repo_id = ?, repo_path = ?
+      WHERE repo_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM worktree_leases w2
+          WHERE w2.repo_id = ? AND w2.machine_id = worktree_leases.machine_id
+            AND w2.task_id = worktree_leases.task_id AND w2.run_id = worktree_leases.run_id
+            AND w2.base_ref = worktree_leases.base_ref
+        )`).run(survivorIdentity, survivorPath, dupIdentity, survivorIdentity);
+  }
+}
+
+export interface CanonicalDuplicateMergeResult {
+  /** Repo rows examined for canonical identity collisions. */
+  rows_examined: number;
+  /** Repo rows removed because another row named the same directory. */
+  duplicate_rows_removed: number;
+  /** One entry per collapsed collision: the survivor and the rows removed into it. */
+  groups: Array<{ survivor_id: number; path: string; removed_ids: number[] }>;
+}
+
+/**
+ * Repair rows that already doubled: on a case-insensitive filesystem two
+ * registry rows can hold two spellings of one directory (measured 2026-08-14:
+ * `repos scan` over both `~/workspace` and `~/Workspace` bootstrap roots
+ * indexed every checkout twice, and `repos repo <name>` then threw
+ * AmbiguousRepoNameError for the exact-name collision).
+ *
+ * Grouped by canonical filesystem identity (realpath), the LOWEST id survives
+ * ("keep the first"); each duplicate's child rows are moved onto the survivor
+ * with the survivor's copies winning, worktree leases are re-pointed, and the
+ * duplicate row is deleted. Idempotent: with no collisions it reads the rows
+ * and writes nothing. Runs at the start of every scan so the index converges
+ * to one row per directory before anything is refreshed.
+ */
+export function mergeCanonicalDuplicateRepos(opts: { db?: Database } = {}): CanonicalDuplicateMergeResult {
+  const db = opts.db ?? getDb();
+  const result: CanonicalDuplicateMergeResult = { rows_examined: 0, duplicate_rows_removed: 0, groups: [] };
+  const rows = db
+    .query("SELECT id, path FROM repos WHERE path IS NOT NULL AND path <> '' ORDER BY id ASC")
+    .all() as Array<{ id: number; path: string }>;
+  result.rows_examined = rows.length;
+
+  const groups = new Map<string, Array<{ id: number; path: string }>>();
+  for (const row of rows) {
+    const key = canonicalPath(row.path);
+    const group = groups.get(key);
+    if (group) group.push(row);
+    else groups.set(key, [row]);
+  }
+
+  const collisions: Array<{ survivor: { id: number; path: string }; removed: Array<{ id: number; path: string }> }> = [];
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const survivor = group[0]!;
+    const removed = group.slice(1);
+    collisions.push({ survivor, removed });
+  }
+  result.duplicate_rows_removed = collisions.reduce((count, collision) => count + collision.removed.length, 0);
+  if (collisions.length === 0) return result;
+
+  assertKnownMergeChildTables(db);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const { survivor, removed } of collisions) {
+      // Converge the survivor's stored spelling onto the on-disk spelling so
+      // every remaining row's path is the canonical one.
+      const survivorPath = canonicalPath(survivor.path);
+      if (survivor.path !== survivorPath) {
+        db.query("UPDATE repos SET path = ? WHERE id = ?").run(survivorPath, survivor.id);
+      }
+      for (const dup of removed) {
+        for (const table of MERGE_CHILD_TABLES) {
+          moveChildRows(db, table, survivor.id, dup.id);
+        }
+        repointWorktreeLeases(db, survivor.id, survivorPath, dup);
+        db.query("DELETE FROM repos WHERE id = ?").run(dup.id);
+      }
+      result.groups.push({ survivor_id: survivor.id, path: survivorPath, removed_ids: removed.map((row) => row.id) });
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return result;
 }
 
 export function deleteRepo(id: number): boolean {
