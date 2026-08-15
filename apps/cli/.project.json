@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "wks_ufYplWz8UcMCoiJN6jZXK",
+  "slug": "open-cli",
+  "name": "Hasna CLI",
+  "kind": "open-source",
+  "root_id": null,
+  "recipe_id": null,
+  "primary_path": "/home/hasna/workspace/hasna/opensource/open-cli",
+  "git_remote": "https://github.com/hasna/cli.git",
+  "tags": [],
+  "integrations": {
+    "github_repo": "hasna/cli",
+    "github_url": "https://github.com/hasna/cli"
+  },
+  "generated_at": "2026-07-16T15:28:30.000Z"
+}
