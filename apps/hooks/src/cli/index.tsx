@@ -465,17 +465,25 @@ program
     }
 
     const { isCustomSource, installCustomSource } = await import("../lib/custom-install.js");
-    const { readCustomManifest } = await import("../lib/manifest.js");
+    const { readCustomManifest, HOOK_NAME_RE } = await import("../lib/manifest.js");
     const { resolveApiUrl } = await import("../config.js");
     const { sha256Of, pinInstalledHook } = await import("../lib/store.js");
     const { readFileSync: readFileSyncFs } = await import("fs");
 
     // <name>@<version> pinned installs fetch the exact version from the
     // remote registry and verify its sha against the remote lock (QA-2).
+    // Only a BARE <name>@<version> is a pin: URLs (http://…, git@…:…,
+    // ssh://, file://) and local paths are custom sources, never pinned
+    // registry requests (general reviewer P2).
     function parseNameVersion(arg: string): { name: string; version: string } | null {
+      if (isCustomSource(arg)) return null;
       const at = arg.lastIndexOf("@");
       if (at <= 0 || at === arg.length - 1) return null;
-      return { name: arg.slice(0, at), version: arg.slice(at + 1) };
+      const name = arg.slice(0, at);
+      const version = arg.slice(at + 1);
+      if (!HOOK_NAME_RE.test(name)) return null;
+      if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) return null;
+      return { name, version };
     }
 
     const pinnedRequests = toInstall
@@ -773,7 +781,7 @@ program
         event: s.meta.event,
         events: s.meta.events,
         matcher: s.meta.matcher,
-        tags: [...s.meta.tags, s.source],
+        tags: [...new Set([...s.meta.tags, s.source])],
         source: s.source,
       }));
       console.log(JSON.stringify(result));
@@ -1080,11 +1088,20 @@ program
     const { sha256File, setPinnedHook, upsertHookRecord } = await import("../lib/store.js");
     const { getDb } = await import("../db/index.js");
     const { resolveApiUrl } = await import("../config.js");
+    const { isCustomSource } = await import("../lib/custom-install.js");
+    const { HOOK_NAME_RE } = await import("../lib/manifest.js");
 
+    // Only a BARE <name>@<version> is a pin; URLs and local paths are
+    // custom sources, never pinned registry requests (general reviewer P2).
     function parseNameVersion(arg: string): { name: string; version: string } | null {
+      if (isCustomSource(arg)) return null;
       const at = arg.lastIndexOf("@");
       if (at <= 0 || at === arg.length - 1) return null;
-      return { name: arg.slice(0, at), version: arg.slice(at + 1) };
+      const name = arg.slice(0, at);
+      const version = arg.slice(at + 1);
+      if (!HOOK_NAME_RE.test(name)) return null;
+      if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) return null;
+      return { name, version };
     }
 
     const results: any[] = [];
