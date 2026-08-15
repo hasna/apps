@@ -27,21 +27,55 @@ bun run test/versioning/run.ts --strict
 
 The runner rejects unknown options and forwards the exact test exit code.
 
-The suite keeps exact, measured baseline exceptions in the test source rather
-than weakening the comparison generally. The current exceptions are five
-changelog headings (calendar 0.3.1/0.3.0, instructions 0.4.35/0.4.33 —
-release-lane mismatch from #119, reconcile task 1bb8cf0a, loops 0.4.42/0.4.41,
-secrets 0.2.22/0.2.21, signatures 0.1.14/0.1.12), two literal runtime version
-exports (catalog 0.2.0/0.1.0, treasury 0.1.1/0.1.0), four npm/main drift
-records (the @hasna/loops release-lane drift, reconcile task
-69e8b5dd-15cd-4f45-8739-c0edf6720773, the @hasna/emails release-lane
-drift, reconcile task 78c66e3c-baba-4ba6-9295-99b4df7ebc25, the
-@hasna/contracts import drift 0.11.0/0.10.6, reconcile task
-48a6ef7f-0919-470d-99f4-59817a01c647, and the @hasna/secrets
-release-lane drift 0.3.0/0.2.22, reconcile task
-3ab02291-58b0-40c7-b96f-958ee1ef4a61), and five package
-names absent from the local Bun quarantine list. Any changed value or new
-exception fails the relevant gate. The pre-import drift census entries for
+## The changelog lane is STRICT (f05fe292 design, option b')
+
+`changelog release headings match package versions` asserts
+`expect(mismatches).toEqual([])` with no exception map. The release lane writes
+the CHANGELOG.md heading for the released version in the same commit that bumps
+`package.json`; import PRs fix any carried heading lag in the import commit.
+A fresh mismatch is therefore a defect in the landing commit — correctly red,
+and owned by the release lane, not by a record editor. The former
+`KNOWN_CHANGELOG_MISMATCHES` map is deleted: it was a debt ledger for a step the
+release lane did not perform, with a measured record half-life of ~2.5h against
+a longer review cycle.
+
+## The parity lane is a REPORTING lane (f05fe292 design, option a)
+
+The npm-parity keyspace has two independent writers (publishes from other repos
+vs imports into this one), so no commit in this repo can hold registry==main.
+On live drift the lane:
+
+1. finds-or-creates a reconcile task keyed on the exact fingerprint title
+   `Reconcile @hasna/<pkg> main <m> vs npm <r>` via
+   `todos task upsert --fingerprint <title> --title <title> ...` (idempotent:
+   a re-run files nothing new — the same fingerprint resolves to the same task);
+2. prints the two-sided report: package, main version, registry version, and
+   the reconcile task id;
+3. passes — drift never fails the lane.
+
+Reconcile tasks are filed in todos project
+`5e44770b-694c-46a3-864f-20a2b9ec1de2` (the release/versioning lane project;
+set `VERSIONING_TODOS_PROJECT` to override), assigned to `agent-ea`
+(`todos task upsert --assign agent-ea --assign-seat`, the lane's documented
+identity — attribution does not depend on an ambient `TODOS_AGENT_ID`; set
+`VERSIONING_TODOS_AGENT` to override). If the `todos` CLI is unavailable the
+lane reports the drift with `NOT FILED` and still passes — the report is the
+deliverable.
+The former `KNOWN_NPM_DRIFT` map is deleted: it was always stale within minutes
+(5 drifts recorded and 2 stale in one review cycle, measured 2026-08-14).
+
+The two-sided contract lives in the report, not the failure: both sides are
+printed for every drift, and the fingerprint embeds both versions, so a drift
+whose either side changed is re-filed under its own fingerprint rather than
+silently accepted.
+
+The suite keeps one exact, measured baseline in the test source: two literal
+runtime version exports (catalog 0.2.0/0.1.0, treasury 0.1.1/0.1.0,
+`KNOWN_RUNTIME_MISMATCHES`) — hand-written source constants, a different class
+from a release-lane ledger, verified still firing at this change. Any changed
+value or new runtime mismatch fails the gate. Five package
+names are absent from the local Bun quarantine list (informational by
+default). The pre-import drift census entries for
 apps/{economy,events,feedback,recordings} (non-members of this repo) and the
 @hasna/repos entry (registry == main) were pruned 2026-08-14. The
 @hasna/instructions and @hasna/hooks npm-drift records were removed

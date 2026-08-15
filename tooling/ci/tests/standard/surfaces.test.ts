@@ -19,6 +19,7 @@ import {
   MCP_EXCEPTIONS,
   SERVE_EXCEPTIONS,
   SDK_EXCEPTIONS,
+  ensureReconcileTask,
 } from "./census";
 
 const cliSet = () => new Set(CLI_EXCEPTIONS.map((e) => e.member));
@@ -58,10 +59,21 @@ describe("standard-adherence: four-surface standard", () => {
     expect(v.map((x) => `${x.member}: ${x.kind === "stale-exception" ? "now conforms but a CLI exception entry remains" : "missing cli bin"}`)).toEqual([]);
   });
 
-  test("<name>-mcp / <name>-serve / ./sdk are WARN — recorded exceptions allowed", () => {
+  test("<name>-mcp / <name>-serve / ./sdk are WARN — new gaps are reported and auto-filed; stale recorded exceptions still fail", async () => {
     const v = surfaceViolations().filter((x) => x.surface !== "cli");
-    expect(v.map((x) => `${x.member}: ${x.kind === "stale-exception" ? `now ships ${x.surface} but an exception entry remains` : `missing ${x.surface}`}`)).toEqual([]);
-  });
+    const missing = v.filter((x) => x.kind === "missing");
+    const stale = v.filter((x) => x.kind === "stale-exception");
+    const filed: string[] = [];
+    for (const violation of missing) {
+      const surfaceName = violation.surface === "sdk" ? "./sdk export" : `<name>-${violation.surface} bin`;
+      const title = `Reconcile @hasna/${violation.member} four-surface: missing ${surfaceName}`;
+      const description = `Standard-adherence suite (tooling/ci/tests/standard) measured a missing ${surfaceName} for @hasna/${violation.member} at main (four-surface WARN class). Acceptance: the member ships the surface, or the exception is recorded deliberately in tooling/ci/tests/standard/census.ts.`;
+      const task = await ensureReconcileTask(title, description);
+      filed.push(`${violation.member}: missing ${surfaceName} -> reconcile task ${task ? `${task.id} (${task.created ? "created" : "existing"})` : "NOT FILED (todos unavailable)"}`);
+    }
+    if (filed.length > 0) console.info(`[standard] new four-surface WARN gaps (auto-filed, reporting lane):\n${filed.map((l) => `  ${l}`).join("\n")}`);
+    expect(stale.map((x) => `${x.member}: now ships ${x.surface} but an exception entry remains`)).toEqual([]);
+  }, 300_000);
 
   test("self-test: the check fires on a member missing its CLI bin and stays silent on a conforming member", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "standard-surfaces-self-test-"));

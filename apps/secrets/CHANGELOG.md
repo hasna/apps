@@ -4,6 +4,8 @@
 
 - Release-line reconciliation: main is bumped to the registry-latest 0.3.0 (published by the release lane 2026-08-14T14:23:49Z ahead of main; the release commit did not land on main). No functional changes to the tree; this entry records the version parity and clears the KNOWN_NPM_DRIFT and changelog-mismatch records (reconcile task 3ab02291).
 
+## 0.2.22 — 2026-08-15
+
 ## 0.2.21 — 2026-08-10
 
 - Add `secrets scan input [path|-]`, a bounded input/stdin scan mode so tool

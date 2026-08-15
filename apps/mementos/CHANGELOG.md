@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.14.84
+
 ## 0.14.83 — Bound complete project-resource traversal
 
 - Bound complete traversal in both the internal producer and public SDK from

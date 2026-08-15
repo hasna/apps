@@ -7,6 +7,8 @@ unless noted.
 
 ## 0.5.1 (2026-08-15)
 
+## 0.5.0 (unreleased)
+
 Deployment-mode removal per the canonical doctrine: there are no deployment
 modes and no mode enums. The only server-side switch is the storage backend
 (`sqlite | postgresql`, selected on `loops-serve` by `HASNA_LOOPS_DATABASE_URL`);

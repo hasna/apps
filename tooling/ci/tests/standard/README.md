@@ -15,6 +15,28 @@ conform to the hasna/apps standards. Complements the repo's own gates
 | 4. license | `license.test.ts` | `license === "Apache-2.0"` | HARD, recorded exceptions |
 | 5. dist hygiene | `dist-hygiene.test.ts` | no `files` entry pulls in `node_modules` (negated exclusions fine) | HARD |
 
+## The census exception records are a REPORTING lane (f05fe292, 2026-08-15)
+
+The hand-refresh loop is gone. New (unrecorded) violations — contracts
+conformance failures, four-surface WARN gaps — **auto-file a reconcile task**
+keyed on a stable fingerprint title via `todos task upsert --fingerprint`
+(files in todos project `5e44770b-694c-46a3-864f-20a2b9ec1de2`, the
+release/versioning lane project; override with `HASNA_TODOS_PROJECT`), are
+reported with their task ids, and **the suite passes while reporting them**.
+Created tasks are assigned to `agent-ea` via `todos task upsert --assign
+agent-ea --assign-seat` (the lane's documented identity; override with
+`HASNA_TODOS_AGENT`), so attribution does not depend on an ambient
+`TODOS_AGENT_ID`.
+Idempotent by fingerprint: a re-run files nothing new. If the `todos` CLI is
+unavailable the violation is reported as `NOT FILED` and the suite still
+passes.
+
+**The two-sided registry contract is unchanged and load-bearing**: a recorded
+exception whose member now PASSES (stale entry) still fails the suite until
+the entry is deleted — a check that cannot fail is not a check. The
+contracts-manifest, kitVersion and no-cannot-run checks remain hard gates
+(recorded exceptions allowed, stale records still fail).
+
 Every check is two-sided (prove-it-can-fail): a seeded violation fires and a
 conforming member stays silent. The exception registries in `census.ts` are
 data measured 2026-08-14; each entry carries the reason and the remediation
