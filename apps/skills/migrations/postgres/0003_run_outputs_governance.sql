@@ -63,6 +63,13 @@ CREATE INDEX IF NOT EXISTS skills_credit_reservations_org_run_idx
 ALTER TABLE skills_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE skills_artifacts ENABLE ROW LEVEL SECURITY;
 
+-- FORCE closes the owner exemption: Postgres exempts a table's owner from RLS,
+-- and this instance runs migrations and the server as one role, so without
+-- FORCE the fence would not bind the app path. With FORCE the store's
+-- tenant/worker contexts apply to that role like any other.
+ALTER TABLE skills_runs FORCE ROW LEVEL SECURITY;
+ALTER TABLE skills_artifacts FORCE ROW LEVEL SECURITY;
+
 CREATE POLICY skills_runs_tenant_isolation ON skills_runs
   USING (
     org_id = current_setting('app.skills_org_id', true)

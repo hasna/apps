@@ -614,12 +614,27 @@ if (adminUrl) {
         try {
           await sql.unsafe(`INSERT INTO organizations (id, slug, name) VALUES ('org_a', 'org-a', 'Org A')`);
           await sql.unsafe(`INSERT INTO users (id, email, name) VALUES ('user_a', 'a@example.com', 'A')`);
-          // Seed one run as org_a under the tenant context.
-          await sql`SELECT set_config('app.skills_org_id', ${"org_a"}, true)`;
-          await sql.unsafe(
-            `INSERT INTO skills_runs (id, org_id, user_id, skill_slug, requested_slug, status, input_json, args_json, correlation_id)
-             VALUES ('run_rls_1', 'org_a', 'user_a', 'audio-transcript-pack', 'audio-transcript-pack', 'queued', '{}'::jsonb, '[]'::jsonb, 'corr_1')`,
-          );
+          // Seed one run as org_a under the tenant context. With FORCE ROW
+          // LEVEL SECURITY the owner is not exempt, and set_config(..., true)
+          // is transaction-scoped, so the context and the INSERT must share
+          // one transaction (the same shape as the tenant probe below).
+          await sql.begin(async (tx) => {
+            await tx`SELECT set_config('app.skills_org_id', ${"org_a"}, true)`;
+            await tx.unsafe(
+              `INSERT INTO skills_runs (id, org_id, user_id, skill_slug, requested_slug, status, input_json, args_json, correlation_id)
+               VALUES ('run_rls_1', 'org_a', 'user_a', 'audio-transcript-pack', 'audio-transcript-pack', 'queued', '{}'::jsonb, '[]'::jsonb, 'corr_1')`,
+            );
+          });
+          // FORCE row-level security: the table owner is not exempt, and the
+          // migration role IS the server role, so the owner is bound by the
+          // fence like any other role. Proven below via a NON-SUPERUSER owner
+          // (the postgres superuser that runs this test bypasses RLS by
+          // superuser status, so it can never prove or disprove FORCE): we
+          // transfer table ownership to the probe role — the production shape,
+          // one deploy role owning the tables and serving the app — and assert
+          // that owner reads nothing without context. Without FORCE the owner
+          // is exempt and this assertion fails: it is the regression that
+          // guards the migration's FORCE lines.
           // The probe runs as a NON-SUPERUSER role: superusers bypass RLS, so
           // a superuser connection can never prove the policy. TCP localhost is
           // trust-auth, so a freshly created login role connects without a password.
@@ -629,11 +644,20 @@ if (adminUrl) {
           await sql.unsafe(`GRANT USAGE ON SCHEMA public TO skills_rls_probe`);
           await sql.unsafe(`GRANT SELECT ON skills_runs, skills_artifacts TO skills_rls_probe`);
           await sql.unsafe(`GRANT SELECT ON organizations, users TO skills_rls_probe`);
+          // Production shape: one non-superuser deploy role owns the tenant
+          // tables and runs the server. Transfer ownership so the owner-
+          // exemption half of the FORCE claim is tested, not assumed.
+          await sql.unsafe(`ALTER TABLE skills_runs OWNER TO skills_rls_probe`);
+          await sql.unsafe(`ALTER TABLE skills_artifacts OWNER TO skills_rls_probe`);
         } finally {
           await sql.close?.();
         }
 
         // A fresh session with no context sees nothing — RLS is the fence, not the WHERE clause.
+        // This connection also IS the table owner (ownership was transferred
+        // above), so it simultaneously proves the FORCE half of the fix: the
+        // owner is not exempt. With ENABLE-only the owner exemption returns
+        // this row and the assertion fails.
         const noContext = new bunWithSql.SQL(withUser(url, "skills_rls_probe"), { max: 1 });
         try {
           await noContext`SELECT set_config('app.skills_org_id', ${""}, true)`;
