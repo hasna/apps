@@ -8,7 +8,8 @@
 // (these primitives) and ApiStore (the `<API_URL>/v1` HTTP client). Transport
 // selection is the presence of `HASNA_ACCOUNTS_API_URL` +
 // `HASNA_ACCOUNTS_API_KEY`; deployment modes no longer exist, and any retired
-// storage-mode variable throws via `assertNoLegacyStorageMode`.
+// storage-mode variable is scrubbed with an advisory warning via
+// `scrubLegacyStorageMode`.
 
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
@@ -16,7 +17,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { type Store, storeSchema, AccountsError, profileNameSchema } from "./types.js";
 import { writeFileAtomic } from "./lib/safe-path.js";
 import { crossProviderCollisions } from "./lib/name-invariant.js";
-import { assertNoLegacyStorageMode } from "./lib/retired-storage-mode.js";
+import { scrubLegacyStorageMode } from "./lib/retired-storage-mode.js";
 
 function validateEnvPath(value: string, label: string): string {
   const trimmed = value.trim();
@@ -246,9 +247,9 @@ export function saveStore(store: Store): void {
 /**
  * Deprecated source-compatibility shims for the pre-AccountsStore storage API.
  * They intentionally contain no cloud-provider implementation. Deployment-mode
- * vocabulary is dead: any retired STORAGE_MODE variable throws via
- * `assertNoLegacyStorageMode`, and the only transport switch is the presence
- * of `HASNA_ACCOUNTS_API_URL` + `HASNA_ACCOUNTS_API_KEY`.
+ * vocabulary is dead: any retired STORAGE_MODE variable is scrubbed with an
+ * advisory warning via `scrubLegacyStorageMode`, and the only transport switch
+ * is the presence of `HASNA_ACCOUNTS_API_URL` + `HASNA_ACCOUNTS_API_KEY`.
  */
 
 export type AccountsStorageTransport = "local" | "api";
@@ -304,7 +305,7 @@ function accountsTransport(env: NodeJS.ProcessEnv): AccountsStorageTransport {
 
 /** @deprecated Use resolveStore() and AccountsStore.transport. */
 export function getAccountsStorageConfig(env: NodeJS.ProcessEnv = process.env): AccountsStorageConfig {
-  assertNoLegacyStorageMode(env);
+  scrubLegacyStorageMode(env);
   return {
     transport: accountsTransport(env),
     machineId: env.HASNA_ACCOUNTS_MACHINE_ID || env.ACCOUNTS_MACHINE_ID || hostname(),

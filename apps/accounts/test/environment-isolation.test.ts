@@ -62,7 +62,8 @@ test("test preload replaces inherited machine and cloud state before app resolut
     expect(process.env[key]).toBeUndefined();
   }
   // Retired storage-mode variables are removed fleet-wide; the test env must
-  // not reintroduce them (any set value is now a fail-loud error).
+  // not reintroduce them (a set value is now scrubbed with a warning, but the
+  // test harness itself must stay silent).
   for (const key of [
     "HASNA_ACCOUNTS_STORAGE_MODE",
     "ACCOUNTS_STORAGE_MODE",

@@ -787,7 +787,8 @@ Registry access is selected through `AccountsStore`:
   presence of both `HASNA_ACCOUNTS_API_URL` and `HASNA_ACCOUNTS_API_KEY`.
 - Deployment modes no longer exist (owner directive 2026-07-29; knowledge
   k_ms5wv466_u0jidq). Any retired `*_STORAGE_MODE` / `*_MODE` variable still
-  set is a fail-loud error naming the variable, never a transport hint.
+  set is scrubbed with an advisory warning — never a crash (the legacy fleet
+  `environment.d` drop-in still exports one) and never a transport hint.
 
 ```ts
 import { resolveStore } from "@hasna/accounts";

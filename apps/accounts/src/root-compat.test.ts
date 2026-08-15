@@ -83,28 +83,33 @@ describe("root synchronous compatibility exports", () => {
   });
 
   // Deployment modes no longer exist (owner directive 2026-07-29; knowledge
-  // k_ms5wv466_u0jidq): any retired storage-mode variable, whatever its value,
-  // fails loud naming the variable, and no root export can route around it.
+  // k_ms5wv466_u0jidq): a retired storage-mode variable, whatever its value,
+  // is scrubbed with an advisory warning (the fleet accounts-cloud
+  // environment.d drop-in still exports one) and can neither route nor block
+  // any root export.
   test.each([
-    ["explicit cloud mode", { HASNA_ACCOUNTS_STORAGE_MODE: "cloud" }, /HASNA_ACCOUNTS_STORAGE_MODE was removed/],
-    ["explicit self-hosted mode", { HASNA_ACCOUNTS_STORAGE_MODE: "self_hosted" }, /HASNA_ACCOUNTS_STORAGE_MODE was removed/],
-    ["unknown mode", { HASNA_ACCOUNTS_STORAGE_MODE: "typo" }, /HASNA_ACCOUNTS_STORAGE_MODE was removed/],
-    ["retired alias", { HASNA_ACCOUNTS_STORAGE_MODE: "remote" }, /HASNA_ACCOUNTS_STORAGE_MODE was removed/],
+    ["explicit cloud mode", { HASNA_ACCOUNTS_STORAGE_MODE: "cloud" }],
+    ["explicit self-hosted mode", { HASNA_ACCOUNTS_STORAGE_MODE: "self_hosted" }],
+    ["unknown mode", { HASNA_ACCOUNTS_STORAGE_MODE: "typo" }],
+    ["retired alias", { HASNA_ACCOUNTS_STORAGE_MODE: "remote" }],
     [
       "retired alias before lower-priority mode",
       { HASNA_ACCOUNTS_STORAGE_MODE: "remote", ACCOUNTS_STORAGE_MODE: "typo" },
-      /HASNA_ACCOUNTS_STORAGE_MODE was removed/,
     ],
     [
       "mode alias key",
-      { HASNA_ACCOUNTS_MODE: "cloud", HASNA_ACCOUNTS_API_URL: "https://accounts.example.test", HASNA_ACCOUNTS_API_KEY: "fixture-authority" },
-      /HASNA_ACCOUNTS_MODE was removed/,
+      {
+        HASNA_ACCOUNTS_MODE: "cloud",
+        HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
+        HASNA_ACCOUNTS_API_KEY: "fixture-authority",
+      },
     ],
-  ])("propagates the retired storage-mode refusal for %s", (_label, env, error) => {
+  ])("scrubs the retired storage-mode variables for %s and reads proceed locally", (_label, env) => {
     Object.assign(process.env, env);
-    expect(() => listProfiles()).toThrow(error);
-    expect(() => addProfile({ name: "must-not-write" })).toThrow(error);
-    expect(existsSync(join(home, "accounts.json"))).toBe(false);
+    expect(() => listProfiles()).not.toThrow();
+    for (const key of ["HASNA_ACCOUNTS_STORAGE_MODE", "ACCOUNTS_STORAGE_MODE", "HASNA_ACCOUNTS_MODE", "ACCOUNTS_MODE"]) {
+      expect(process.env[key]).toBeUndefined();
+    }
   });
 
   test.each([
@@ -182,27 +187,25 @@ describe("root synchronous compatibility exports", () => {
         HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
         HASNA_ACCOUNTS_API_KEY: "fixture-authority",
       },
-      /HASNA_ACCOUNTS_MODE was removed/,
-    ],
-    [
-      "retired mode alone",
-      {
-        HASNA_ACCOUNTS_MODE: "cloud",
-      },
-      /HASNA_ACCOUNTS_MODE was removed/,
-    ],
-    [
-      "invalid explicit mode",
-      {
-        HASNA_ACCOUNTS_MODE: "typo",
-      },
-      /HASNA_ACCOUNTS_MODE was removed/,
+      /local-only compatibility/,
     ],
   ])("ensureProfileForLogin fails closed without local writes for %s", (_label, env, error) => {
     Object.assign(process.env, env);
     expect(() => ensureProfileForLogin("must-not-write")).toThrow(error);
     expect(existsSync(join(home, "accounts.json"))).toBe(false);
     expect(existsSync(join(home, "profiles"))).toBe(false);
+  });
+
+  test.each([
+    ["retired mode alone", { HASNA_ACCOUNTS_MODE: "cloud" }],
+    ["invalid explicit mode", { HASNA_ACCOUNTS_MODE: "typo" }],
+  ])("ensureProfileForLogin scrubs %s and writes locally", (_label, env) => {
+    Object.assign(process.env, env);
+    const profile = ensureProfileForLogin("login-legacy-mode");
+    expect(profile).toMatchObject({ name: "login-legacy-mode", tool: "claude" });
+    expect(process.env.HASNA_ACCOUNTS_MODE).toBeUndefined();
+    expect(existsSync(join(home, "accounts.json"))).toBe(true);
+    expect(existsSync(join(home, "profiles"))).toBe(true);
   });
 });
 

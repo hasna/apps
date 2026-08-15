@@ -59,7 +59,9 @@ describe("resolveAccountsCloud", () => {
 
   // Deployment modes no longer exist (owner directive 2026-07-29; knowledge
   // k_ms5wv466_u0jidq): any retired storage-mode variable, whatever its value,
-  // throws naming the variable instead of steering the transport.
+  // is scrubbed with an advisory warning — never a crash (the fleet
+  // accounts-cloud environment.d drop-in still exports one) and never a
+  // transport hint.
   for (const [key, value] of [
     ["HASNA_ACCOUNTS_STORAGE_MODE", "cloud"],
     ["HASNA_ACCOUNTS_STORAGE_MODE", "local"],
@@ -72,23 +74,29 @@ describe("resolveAccountsCloud", () => {
     ["HASNA_ACCOUNTS_MODE", "local"],
     ["ACCOUNTS_MODE", "cloud"],
   ] as const) {
-    test(`retired variable ${key}=${value} throws naming the variable`, () => {
-      expect(() => resolveAccountsCloud({ [key]: value } as NodeJS.ProcessEnv)).toThrow(
-        new RegExp(`${key} was removed`),
-      );
+    test(`retired variable ${key}=${value} is scrubbed and cannot steer the transport`, () => {
+      const env = { [key]: value } as NodeJS.ProcessEnv;
+      const result = resolveAccountsCloud(env);
+      expect(result.transport).toBe("local");
+      expect(env[key]).toBeUndefined();
     });
   }
 
-  test("retired variables throw even when URL+KEY are present", () => {
-    expect(() =>
-      resolveAccountsCloud({ ...cloudEnv, HASNA_ACCOUNTS_STORAGE_MODE: "cloud" } as NodeJS.ProcessEnv),
-    ).toThrow(/HASNA_ACCOUNTS_STORAGE_MODE was removed/);
+  test("retired variables are scrubbed even when URL+KEY are present (transport stays api)", () => {
+    const env = { ...cloudEnv, HASNA_ACCOUNTS_STORAGE_MODE: "cloud" } as NodeJS.ProcessEnv;
+    const result = resolveAccountsCloud(env);
+    expect(result.transport).toBe("cloud-http");
+    expect(env.HASNA_ACCOUNTS_STORAGE_MODE).toBeUndefined();
   });
 
-  test("retired variables throw even when ACCOUNTS_HOME is overridden", () => {
-    expect(() =>
-      resolveAccountsCloud({ ACCOUNTS_HOME: "/tmp/accounts-probe", HASNA_ACCOUNTS_STORAGE_MODE: "local" } as NodeJS.ProcessEnv),
-    ).toThrow(/HASNA_ACCOUNTS_STORAGE_MODE was removed/);
+  test("retired variables are scrubbed even when ACCOUNTS_HOME is overridden (transport stays local)", () => {
+    const env = {
+      ACCOUNTS_HOME: "/tmp/accounts-probe",
+      HASNA_ACCOUNTS_STORAGE_MODE: "local",
+    } as NodeJS.ProcessEnv;
+    const result = resolveAccountsCloud(env);
+    expect(result.transport).toBe("local");
+    expect(env.HASNA_ACCOUNTS_STORAGE_MODE).toBeUndefined();
   });
 
   test("list GETs /v1/accounts (with tool filter) and maps accounts->profiles", async () => {

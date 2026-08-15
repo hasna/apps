@@ -124,7 +124,8 @@ the machine-local applied pointer — never a registry record.
 
 The deprecated `ensureProfileForLogin` root export uses that same canonical
 authority resolver. Deployment modes no longer exist: any retired
-`*_STORAGE_MODE` / `*_MODE` variable is a fail-loud error naming the variable.
+`*_STORAGE_MODE` / `*_MODE` variable is scrubbed with an advisory warning —
+never a crash (the legacy fleet `environment.d` drop-in still exports one).
 Async v1 callers use `resolveStore()`; new callers use `@hasna/accounts/v2`.
 
 The additive v2 export also includes a migration sidecar/preflight contract.
