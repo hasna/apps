@@ -80,6 +80,7 @@ import {
 import { listPorts } from "../commands/ports.js";
 import { buildTmuxPaneDiedHookPlan, watchTmuxPane } from "../commands/runtime.js";
 import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
+import { probeStationLoader, probeStationLoaderWithBareControl, renderStationLoaderProbe, renderStationLoaderProbeSuite } from "../commands/station-loader.js";
 import {
   DEFAULT_MACHINE_EXEC_MAX_OUTPUT_CHARS,
   MACHINE_EXEC_MUTATION_OPERATION,
@@ -3238,6 +3239,27 @@ program
       return;
     }
     console.log(options.privateMetadata ? command ?? `${resolved.route}:${resolved.target}` : `${publicResolved.route}:${publicResolved.target ?? "unresolved"}`);
+  });
+
+program
+  .command("cloud-loader")
+  .description("Probe whether a station shell loads the Hasna cloud-env loader by CLI behavior")
+  .requiredOption("--machine <id>", "Machine identifier")
+  .option("--login-only", "Run only the login-shell probe; default runs login plus bare-control", false)
+  .option("--bare-control", "Run only the same probe in env -i HOME=$HOME PATH=$PATH bash -c; expected status is NOT-LOADED", false)
+  .option("--timeout-ms <ms>", "Probe timeout in milliseconds", "15000")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machine: string; loginOnly?: boolean; bareControl?: boolean; timeoutMs?: string; json?: boolean }, command: Command) => {
+    if (options.loginOnly && options.bareControl) throw new Error("--login-only and --bare-control are mutually exclusive");
+    const timeoutMs = options.timeoutMs ? parseIntegerOption(options.timeoutMs, "timeout-ms", { min: 1 }) : undefined;
+    const result = options.loginOnly || options.bareControl
+      ? probeStationLoader({ machineId: options.machine, shellMode: options.bareControl ? "bare" : "login", timeoutMs })
+      : probeStationLoaderWithBareControl({ machineId: options.machine, timeoutMs });
+    const rendered = "login" in result ? renderStationLoaderProbeSuite(result) : renderStationLoaderProbe(result);
+    printCommandResult(result, rendered, wantsCommandJson(options, command));
+    if (!result.assertionPassed) {
+      process.exitCode = result.status === "UNKNOWN" ? 2 : 1;
+    }
   });
 
 program
