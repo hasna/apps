@@ -2,8 +2,9 @@
  * The single data-backend switch (owner directive 2026-07-29, knowledge
  * k_ms3e6v41_zbe7m8): storage is either the local SQLite file or PostgreSQL.
  * The former deployment-mode axis (local / remote / self_hosted / cloud /
- * hybrid) is gone — legacy env tokens are normalized onto these two arms at the
- * parse boundary and nowhere else.
+ * hybrid) is gone — and since 2026-08-15 the storage-mode env variables are
+ * banned outright: their mere presence is a hard error. The backend is derived
+ * from HASNA_TODOS_DATABASE_URL: set selects postgresql, unset selects sqlite.
  */
 export type TodosStorageBackend = "sqlite" | "postgres";
 
@@ -52,7 +53,6 @@ export interface TodosStorageConfig {
 }
 
 export const TODOS_STORAGE_ENV = {
-  mode: "HASNA_TODOS_STORAGE_MODE",
   shadow: "HASNA_TODOS_SHADOW",
   databaseUrl: "HASNA_TODOS_DATABASE_URL",
   databaseSsl: "HASNA_TODOS_DATABASE_SSL",
@@ -70,7 +70,6 @@ export const TODOS_STORAGE_ENV = {
 } as const;
 
 export const TODOS_STORAGE_FALLBACK_ENV = {
-  mode: "TODOS_STORAGE_MODE",
   shadow: "TODOS_SHADOW",
   databaseUrl: "TODOS_DATABASE_URL",
   databaseSsl: "TODOS_DATABASE_SSL",
@@ -86,6 +85,19 @@ export const TODOS_STORAGE_FALLBACK_ENV = {
   syncBatchSize: "TODOS_SYNC_BATCH_SIZE",
   syncDryRun: "TODOS_SYNC_DRY_RUN",
 } as const;
+
+/**
+ * The retired storage-mode variables (owner directive 2026-08-15). Their mere
+ * presence — even blank — is a hard error on the server path, exactly as on the
+ * client: the backend is derived from HASNA_TODOS_DATABASE_URL, never selected
+ * by a mode variable.
+ */
+export const REMOVED_STORAGE_MODE_ENV_KEYS = [
+  "HASNA_TODOS_STORAGE_MODE",
+  "HASNA_TODOS_MODE",
+  "TODOS_STORAGE_MODE",
+  "TODOS_MODE",
+] as const;
 
 // Deployment-specific infrastructure identifiers (the managed database cluster
 // name and the secrets-manager path that holds the runtime database URL) are NOT
@@ -174,34 +186,29 @@ export function isTodosRemoteStorageEnabled(config: TodosStorageConfig): boolean
 export function assertTodosRemoteStorageConfig(config: TodosStorageConfig): void {
   if (!isTodosPostgresBackend(config)) return;
   if (!config.database?.url) {
-    throw new Error(`${TODOS_STORAGE_ENV.databaseUrl} is required when ${TODOS_STORAGE_ENV.mode}=${config.mode}`);
+    throw new Error(`${TODOS_STORAGE_ENV.databaseUrl} is required when the postgresql backend is selected`);
   }
 }
 
 /**
- * Legacy env tokens, normalized at the parse boundary and nowhere else. `local`
- * and `remote` remain silently accepted because the fleet sets them today; the
- * former deployment-mode tokens are tolerated only so an unmigrated environment
- * keeps working, and they must never appear in output or refusal text.
+ * Parse a data-backend token. The deployment-mode vocabulary is gone and its
+ * variables are banned (owner directive 2026-08-15), so only the two canonical
+ * backend tokens — plus the `postgresql` engine-name spelling — are accepted;
+ * every deployment-mode token is rejected as removed.
  */
-const LEGACY_BACKEND_TOKENS: Record<string, TodosStorageBackend> = {
-  local: "sqlite",
-  remote: "postgres",
-  postgresql: "postgres",
-  // Deprecated deployment-mode vocabulary (self_hosted/cloud/hybrid): the
-  // placement axis is dead; these all meant "the Postgres-backed dataset".
-  hybrid: "postgres",
-  self_hosted: "postgres",
-  cloud: "postgres",
-};
-
 export function parseStorageBackend(value: string | undefined): TodosStorageBackend {
   const normalized = clean(value)?.toLowerCase();
   if (!normalized) return "sqlite";
-  if (normalized === "sqlite" || normalized === "postgres") return normalized;
-  const legacy = LEGACY_BACKEND_TOKENS[normalized];
-  if (legacy) return legacy;
-  throw new Error(`${TODOS_STORAGE_ENV.mode} must be sqlite or postgres (legacy values local and remote are accepted)`);
+  if (normalized === "sqlite") return "sqlite";
+  if (normalized === "postgres" || normalized === "postgresql") return "postgres";
+  if (["local", "remote", "cloud", "hybrid", "self_hosted"].includes(normalized)) {
+    throw new Error(
+      `${TODOS_STORAGE_ENV.databaseUrl} selects the backend. Deployment modes no longer exist: ` +
+        `delete the storage-mode variable and set ${TODOS_STORAGE_ENV.databaseUrl} to select the ` +
+        `postgresql backend, or leave it unset for sqlite.`,
+    );
+  }
+  throw new Error(`Storage backend must be sqlite or postgres`);
 }
 
 /** @deprecated Renamed to {@link parseStorageBackend}; values collapsed to sqlite|postgres. */
@@ -209,8 +216,27 @@ export function parseStorageMode(value: string | undefined): TodosStorageBackend
   return parseStorageBackend(value);
 }
 
+/**
+ * Resolve the server data backend from the environment. The retired
+ * storage-mode variables are a hard error when present; otherwise the backend
+ * is derived from HASNA_TODOS_DATABASE_URL — set selects postgresql, unset
+ * selects the on-box SQLite file. One carve-out: a shadow mirror
+ * (HASNA_TODOS_SHADOW=1) keeps the SQLite file as the source of truth and
+ * treats the DSN as the mirror target, so the backend stays sqlite there.
+ */
 export function getTodosStorageBackend(env: TodosStorageEnv = process.env): TodosStorageBackend {
-  return parseStorageBackend(readStorageEnv(env, "mode").value);
+  for (const key of REMOVED_STORAGE_MODE_ENV_KEYS) {
+    if (Object.hasOwn(env, key) && env[key] !== undefined) {
+      throw new Error(
+        `${key} was removed. Deployment modes no longer exist: delete the storage-mode variable. ` +
+          `Set ${TODOS_STORAGE_ENV.databaseUrl} to select the postgresql backend, ` +
+          `or leave it unset for sqlite.`,
+      );
+    }
+  }
+  if (!getTodosStorageDatabaseUrl(env)) return "sqlite";
+  if (isTodosShadowEnabled(env)) return "sqlite";
+  return "postgres";
 }
 
 /** @deprecated Renamed to {@link getTodosStorageBackend}. */

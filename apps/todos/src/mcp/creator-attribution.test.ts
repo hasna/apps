@@ -81,9 +81,6 @@ beforeEach(() => {
     if (value !== undefined) originalRoutingEnv[key] = value;
     delete process.env[key];
   }
-  process.env["HASNA_TODOS_STORAGE_MODE"] = "local";
-  process.env["TODOS_STORAGE_MODE"] = "local";
-  resetConfig();
   process.env["TODOS_DB_PATH"] = ":memory:";
   homeDir = mkdtempSync(join(tmpdir(), "todos-mcp-identity-"));
   prevHome = process.env["HOME"];
@@ -209,8 +206,6 @@ describe("MCP create_task applies focus", () => {
     const explicitProject = createProject({ name: "Explicit remote project", path: "/tmp/explicit-remote-project" });
     registerAgent({ name: "cassius", session_id: "remote-focus-session", project_id: project.id });
     process.env["TODOS_AGENT_ID"] = "cassius";
-    process.env["HASNA_TODOS_STORAGE_MODE"] = "http";
-    process.env["TODOS_STORAGE_MODE"] = "http";
     process.env["HASNA_TODOS_API_URL"] = "https://todos.example.test";
     process.env["HASNA_TODOS_API_KEY"] = "nonsecret-test-value";
 

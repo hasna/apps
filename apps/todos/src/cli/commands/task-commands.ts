@@ -717,7 +717,7 @@ export function registerTaskCommands(program: Command) {
             : undefined;
           // This branch had no fallback at all while the local branch below falls
           // through to `autoProject`, and the fleet runs THIS one — every station
-          // sets HASNA_TODOS_API_URL/_API_KEY/_STORAGE_MODE. So a create that
+          // sets HASNA_TODOS_API_URL + HASNA_TODOS_API_KEY. So a create that
           // omitted --project stored NULL silently, which is the whole orphan
           // inflow. Deliberately still no git-root inference here: see the
           // working_dir note below for why that decision is not yet measurable.

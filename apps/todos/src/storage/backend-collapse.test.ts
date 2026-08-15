@@ -2,10 +2,11 @@
  * Storage-backend collapse conformance (owner directive 2026-07-29, knowledge
  * k_ms3e6v41_zbe7m8): the three deployment "modes" (local / self_hosted|remote /
  * hybrid / cloud) collapse into a single two-value data-backend switch —
- * `sqlite | postgres` — for the server-side/native storage tooling. Legacy env
- * tokens keep working (the fleet sets `remote`), but they normalize onto the two
- * arms at the parse boundary: there is no third arm, and no deployment-mode word
- * survives in the parsed model or in refusal text.
+ * `sqlite | postgres` — for the server-side/native storage tooling. Since
+ * 2026-08-15 the storage-mode variables are banned outright: their mere
+ * presence is a hard error, and the backend is derived from
+ * HASNA_TODOS_DATABASE_URL (set selects postgresql, unset selects sqlite).
+ * No deployment-mode word survives in the parsed model or in refusal text.
  */
 import { describe, expect, test } from "bun:test";
 import {
@@ -39,14 +40,9 @@ describe("storage backend collapse (sqlite|postgres)", () => {
     expect(parseStorageMode("postgresql")).toBe("postgres");
   });
 
-  test("legacy placement tokens normalize onto the two backends", () => {
-    expect(parseStorageMode("local")).toBe("sqlite");
-    expect(parseStorageMode("remote")).toBe("postgres");
-  });
-
-  test("deprecated deployment-mode tokens collapse to postgres — never a third arm", () => {
-    for (const legacy of ["hybrid", "self_hosted", "cloud"]) {
-      expect(parseStorageMode(legacy)).toBe("postgres");
+  test("deployment-mode tokens are rejected as removed, never normalized", () => {
+    for (const legacy of ["local", "remote", "hybrid", "self_hosted", "cloud"]) {
+      expect(() => parseStorageMode(legacy)).toThrow(/Deployment modes no longer exist/);
     }
   });
 
@@ -62,9 +58,8 @@ describe("storage backend collapse (sqlite|postgres)", () => {
     expect(message).not.toMatch(/hybrid|self_hosted|self-hosted/);
   });
 
-  test("the parsed config model carries the backend, not a placement", () => {
+  test("the parsed config model carries the backend derived from the DSN, not a placement", () => {
     const config = loadTodosStorageConfig({
-      [TODOS_STORAGE_ENV.mode]: "remote",
       [TODOS_STORAGE_ENV.databaseUrl]: DSN,
     });
     expect(config.mode).toBe("postgres");
@@ -74,10 +69,9 @@ describe("storage backend collapse (sqlite|postgres)", () => {
     expect(isTodosRemoteStorageEnabled(local)).toBe(false);
   });
 
-  test("the factory has exactly two arms: hybrid env selection yields the postgres adapter", () => {
+  test("the factory has exactly two arms: a DSN selects the postgres adapter", () => {
     const adapter = createTodosStorageAdapter({
       env: {
-        [TODOS_STORAGE_ENV.mode]: "hybrid",
         [TODOS_STORAGE_ENV.databaseUrl]: DSN,
       },
       postgresClient: fakePostgresClient(),
@@ -88,6 +82,15 @@ describe("storage backend collapse (sqlite|postgres)", () => {
     // constructor (createHybridTodosStorageAdapter) — never through the
     // backend switch.
     expect(adapter.capabilities.localPersistence).toBe(false);
+  });
+
+  test("a retired storage-mode variable is a hard error even with a complete DSN", () => {
+    expect(() =>
+      loadTodosStorageConfig({
+        [TODOS_STORAGE_ENV.databaseUrl]: DSN,
+        HASNA_TODOS_STORAGE_MODE: "postgres",
+      }),
+    ).toThrow(/Deployment modes no longer exist/);
   });
 
   test("the default arm is the local sqlite adapter", async () => {
@@ -113,10 +116,9 @@ describe("new backend API surface", () => {
     const isTodosPostgresBackend = mod["isTodosPostgresBackend"] as ((c: unknown) => boolean) | undefined;
     expect(typeof parseStorageBackend).toBe("function");
     expect(typeof isTodosPostgresBackend).toBe("function");
-    expect(parseStorageBackend!("remote")).toBe("postgres");
+    expect(parseStorageBackend!("postgres")).toBe("postgres");
     expect(parseStorageBackend!(undefined)).toBe("sqlite");
     const config = loadTodosStorageConfig({
-      [TODOS_STORAGE_ENV.mode]: "postgres",
       [TODOS_STORAGE_ENV.databaseUrl]: DSN,
     });
     expect(isTodosPostgresBackend!(config)).toBe(true);

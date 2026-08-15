@@ -63,11 +63,9 @@ import {
   cloudListProjectResources,
   cloudValidatePriorRegistrationAdoption,
   requireTodosRemoteAuthorityEnv,
-  serverStorageMode,
 } from "./cloud-router.js";
 
 const CLOUD_ENV = {
-  HASNA_TODOS_STORAGE_MODE: "self_hosted",
   HASNA_TODOS_API_URL: "https://todos.example.com",
   HASNA_TODOS_API_KEY: "hasna_todos_test_key",
 };
@@ -276,40 +274,44 @@ afterEach(() => {
   resetTodosCloudClient();
 });
 
-describe("todos client self_hosted resolver", () => {
+describe("todos client transport resolver (API pair, no storage modes)", () => {
   test("no env -> local (null client, isCloudRouting false)", () => {
     expect(getTodosCloudClient({})).toBeNull();
     expect(isCloudRouting({})).toBe(false);
   });
 
-  test("self_hosted + API_URL + API_KEY -> cloud-http client at /v1", () => {
+  test("API_URL + API_KEY -> cloud-http client at /v1", () => {
     const client = getTodosCloudClient(CLOUD_ENV);
     expect(client).not.toBeNull();
     expect(client!.baseUrl).toBe("https://todos.example.com/v1");
     expect(isCloudRouting(CLOUD_ENV)).toBe(true);
   });
 
-  test("API_URL + API_KEY WITHOUT a mode var -> local (flip-safety guard)", () => {
-    // contracts >=0.5.1 would resolve bare URL+KEY to cloud; the todos guard keeps
-    // it local so the flip is only ever armed by an explicit HASNA_TODOS_STORAGE_MODE.
-    const noMode = { HASNA_TODOS_API_URL: "https://todos.example.com", HASNA_TODOS_API_KEY: "k" } as never;
-    expect(getTodosCloudClient(noMode)).toBeNull();
-    expect(isCloudRouting(noMode)).toBe(false);
+  test("URL + KEY without any mode variable selects http (owner deprecation)", () => {
+    // The regression that shipped with the removal: the API pair is now the
+    // SOLE selector — a bare URL+KEY must never silently stay local.
+    const pairOnly = { HASNA_TODOS_API_URL: "https://todos.example.com", HASNA_TODOS_API_KEY: "k" } as never;
+    expect(getTodosCloudClient(pairOnly)).not.toBeNull();
+    expect(isCloudRouting(pairOnly)).toBe(true);
   });
 
-  test("mode=cloud + API_URL + API_KEY -> cloud-http client", () => {
-    const client = getTodosCloudClient({
+  test("any retired storage-mode variable throws, never selects a transport", () => {
+    expect(() => getTodosCloudClient({
       HASNA_TODOS_STORAGE_MODE: "cloud",
       HASNA_TODOS_API_URL: "https://todos.example.com",
       HASNA_TODOS_API_KEY: "hasna_todos_test_key",
-    } as never);
-    expect(client).not.toBeNull();
-    expect(client!.baseUrl).toBe("https://todos.example.com/v1");
+    } as never)).toThrow("REMOTE_STORAGE_MODE_REMOVED");
+    expect(() => resolveTodosCliStorageMode({ HASNA_TODOS_STORAGE_MODE: "remtoe" })).toThrow(
+      "REMOTE_STORAGE_MODE_REMOVED",
+    );
+    expect(() => resolveTodosCliStorageMode({
+      HASNA_TODOS_STORAGE_MODE: "local",
+      TODOS_STORAGE_MODE: "remote",
+    })).toThrow("REMOTE_STORAGE_MODE_REMOVED");
   });
 
-  test("mode=remote rejects an implicit default when HASNA_TODOS_API_URL is missing", () => {
+  test("KEY without URL refuses with the missing variable named, without local fallback", () => {
     expect(() => getTodosCloudClient({
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_KEY: "fixture-key",
       TODOS_URL: "https://todos.md",
     } as never)).toThrow(
@@ -317,29 +319,21 @@ describe("todos client self_hosted resolver", () => {
     );
   });
 
-  test("mode=self_hosted reports the exact missing API key without local fallback", () => {
+  test("URL without KEY reports the exact missing API key without local fallback", () => {
     expect(() =>
-      getTodosCloudClient({ HASNA_TODOS_STORAGE_MODE: "self_hosted", HASNA_TODOS_API_URL: "https://todos.example.com" }),
+      getTodosCloudClient({ HASNA_TODOS_API_URL: "https://todos.example.com" }),
     ).toThrow(
       "REMOTE_API_KEY_MISSING: remote Todos storage requires HASNA_TODOS_API_KEY",
     );
   });
 
-  test("blank canonical mode is invalid instead of masking a fallback selector", () => {
+  test("a blank retired storage-mode variable is still a hard error", () => {
     expect(() => resolveTodosCliStorageMode({
       HASNA_TODOS_STORAGE_MODE: "   ",
-      TODOS_STORAGE_MODE: "remote",
-    })).toThrow("REMOTE_STORAGE_MODE_INVALID");
-  });
-
-  test("invalid and conflicting selectors fail closed before local routing", () => {
-    expect(() => resolveTodosCliStorageMode({ HASNA_TODOS_STORAGE_MODE: "remtoe" })).toThrow(
-      "REMOTE_STORAGE_MODE_INVALID",
-    );
+    })).toThrow("REMOTE_STORAGE_MODE_REMOVED");
     expect(() => resolveTodosCliStorageMode({
-      HASNA_TODOS_STORAGE_MODE: "local",
-      TODOS_STORAGE_MODE: "remote",
-    })).toThrow("REMOTE_STORAGE_MODE_CONFLICT");
+      HASNA_TODOS_MODE: "",
+    })).toThrow("REMOTE_STORAGE_MODE_REMOVED");
   });
 
   test.each([
@@ -351,7 +345,6 @@ describe("todos client self_hosted resolver", () => {
     "http://todos.example",
   ])("rejects ambiguous or credential-unsafe authority URL %s", (apiUrl) => {
     expect(() => getTodosCloudClient({
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: apiUrl,
       HASNA_TODOS_API_KEY: "fixture-key",
     })).toThrow("REMOTE_API_URL_INVALID");
@@ -359,7 +352,6 @@ describe("todos client self_hosted resolver", () => {
 
   test("accepts exact /v1 and loopback HTTP without duplicating the route prefix", () => {
     const status = getTodosRemoteAuthorityConfigStatus({
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: "http://127.0.0.1:18881/v1",
       HASNA_TODOS_API_KEY: "fixture-key",
     });
@@ -369,20 +361,17 @@ describe("todos client self_hosted resolver", () => {
   test("never reuses a client across authority, mode, or API-key changes", async () => {
     const calls = installFetch(() => ({ body: { projects: [], count: 0 } }));
     const authorityA = getTodosCloudClient({
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: "https://authority-a.example",
       HASNA_TODOS_API_KEY: "fixture-key-a",
     })!;
     const authorityB = getTodosCloudClient({
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: "https://authority-b.example",
       HASNA_TODOS_API_KEY: "fixture-key-b",
     })!;
     expect(authorityA.baseUrl).toBe("https://authority-a.example/v1");
     expect(authorityB.baseUrl).toBe("https://authority-b.example/v1");
-    expect(getTodosCloudClient({ HASNA_TODOS_STORAGE_MODE: "local" })).toBeNull();
+    expect(getTodosCloudClient({})).toBeNull();
     const authorityAWithNewKey = getTodosCloudClient({
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: "https://authority-a.example",
       HASNA_TODOS_API_KEY: "fixture-key-a-rotated",
     })!;
@@ -398,7 +387,6 @@ describe("todos client self_hosted resolver", () => {
 
     expect(getTodosCloudClient({})).toBeNull();
     expect(getTodosCloudClient(CLOUD_ENV)?.baseUrl).toBe("https://todos.example.com/v1");
-    expect(getTodosCloudClient({ HASNA_TODOS_STORAGE_MODE: "local" })).toBeNull();
   });
 });
 
@@ -563,7 +551,6 @@ describe("remote authority compatibility diagnostics", () => {
       return { status: 200, body: { status: "ok", service: "platform-todos", mode: "oss" } };
     });
     const client = getTodosCloudClient({
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: "https://todos.md",
       HASNA_TODOS_API_KEY: "fixture-key",
     } as never)!;
@@ -701,12 +688,10 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
       return { body: { task: { id: "task-1", status: "completed" } } };
     });
     const clientA = getTodosCloudClient({
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: "https://authority-a.example",
       HASNA_TODOS_API_KEY: "fixture-a",
     })!;
     const clientB = getTodosCloudClient({
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: "https://authority-b.example",
       HASNA_TODOS_API_KEY: "fixture-b",
     })!;
@@ -1119,7 +1104,6 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     });
     const authorityA = getTodosCloudClient(CLOUD_ENV)!;
     const authorityB = getTodosCloudClient({
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: "https://authority-b.example",
       HASNA_TODOS_API_KEY: "fixture-b",
     })!;
@@ -2532,102 +2516,18 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
   });
 });
 
-// -- The injected storage mode is derived, not hardcoded -----------------------
-//
-// The storage-mode enum has already changed once and the two valid sets are
-// DISJOINT:
-//
-//   contracts <= 0.8.5   accepts cloud + the deprecated aliases self_hosted,
-//                        remote, hybrid; THROWS on postgres/sqlite
-//   post-removal         accepts ONLY sqlite/postgres; THROWS on everything
-//                        else, including cloud and self_hosted
-//
-// So a literal pinned in source is a bet on which side of that change a machine
-// is on, and the bet loses on one side or the other. In this repo specifically,
-// losing it means a todos CLI that cannot reach its own authority — which is how
-// the fleet loses the ability to coordinate its own recovery.
-//
-// `normalize` is injectable because only one contracts generation can be
-// installed at a time; without that seam, forward compatibility here would be an
-// assertion rather than a test.
-
-describe("serverStorageMode", () => {
-  const acceptOnly = (accepted: readonly string[]) => (value: string) => {
-    if (!accepted.includes(value)) throw new Error(`Unknown storage mode: ${value}`);
-    return value;
-  };
-
-  const PRE_REMOVAL = ["local", "cloud", "self_hosted", "remote", "hybrid"];
-  const POST_REMOVAL = ["sqlite", "postgres", "postgresql"];
-
-  test("derives cloud on the pre-removal contracts enum", () => {
-    expect(serverStorageMode(acceptOnly(PRE_REMOVAL))).toBe("cloud");
-  });
-
-  test("derives postgres on the post-removal contracts enum", () => {
-    // The whole point: after the bump `cloud` throws at the resolver, and this
-    // is the token that does not.
-    expect(serverStorageMode(acceptOnly(POST_REMOVAL))).toBe("postgres");
-  });
-
-  test("prefers the newest accepted token when several are valid", () => {
-    // A transitional release that still honours the old words must not pin us
-    // to the old generation.
-    expect(serverStorageMode(acceptOnly([...POST_REMOVAL, ...PRE_REMOVAL]))).toBe("postgres");
-  });
-
-  test("never prefers a deprecated alias over the canonical token of the same generation", () => {
-    // `self_hosted` and `cloud` are BOTH accepted pre-removal, and `self_hosted`
-    // is the deprecated one. Preferring it would silently move this repo onto a
-    // deprecated token — a live behaviour change dressed up as a refactor, which
-    // would pass any test that only asked "does it resolve".
-    expect(serverStorageMode(acceptOnly(["self_hosted", "cloud"]))).toBe("cloud");
-  });
-
-  test("still resolves when the alias is the only server token on offer", () => {
-    // Canonical-before-deprecated is a preference, not a refusal.
-    expect(serverStorageMode(acceptOnly(["self_hosted"]))).toBe("self_hosted");
-  });
-
-  test("throws an actionable REMOTE_STORAGE_MODE_UNSUPPORTED when the enum changes again", () => {
-    // Guessing is the defect class this derivation removes, so an unrecognised
-    // enum must fail loudly rather than route at the wrong dataset.
-    const rejectAll = acceptOnly([]);
-
-    expect(() => serverStorageMode(rejectAll)).toThrow("REMOTE_STORAGE_MODE_UNSUPPORTED");
-    expect(() => serverStorageMode(rejectAll)).toThrow(/SERVER_MODE_CANDIDATES/);
-    expect(() => serverStorageMode(rejectAll)).toThrow(/local SQLite fallback is disabled/);
-  });
-
-  test("an injected normalizer never poisons the cached default", () => {
-    // The cache is only read/written for the default normalizer. Without that
-    // guard the first injected probe would fix the value for the whole process —
-    // and every later real call would return it.
-    const real = serverStorageMode();
-
-    expect(serverStorageMode(acceptOnly(POST_REMOVAL))).toBe("postgres");
-    expect(serverStorageMode()).toBe(real);
-  });
-
-  test("agrees with the contracts version actually installed", () => {
-    // Not a tautology: this is the assertion that fails the day a dependency
-    // bump lands a generation the candidate list does not cover.
-    expect(["postgres", "cloud", "self_hosted"]).toContain(serverStorageMode());
-  });
-});
-
 describe("requireTodosRemoteAuthorityEnv", () => {
-  test("stamps the derived mode rather than a literal", () => {
+  test("no longer stamps any storage-mode variable", () => {
     const env = requireTodosRemoteAuthorityEnv(CLOUD_ENV);
 
-    expect(env.HASNA_TODOS_STORAGE_MODE).toBe(serverStorageMode());
+    expect("HASNA_TODOS_STORAGE_MODE" in env).toBe(false);
+    expect("TODOS_STORAGE_MODE" in env).toBe(false);
   });
 
   test("leaves the URL rewrite and the key trim untouched", () => {
-    // This function returns THREE keys and only the mode is this change's
-    // business. The `/v1` suffix must be stripped back off (the status object
-    // appends it and the client re-appends it, so a doubled suffix would point
-    // the CLI at /v1/v1), and the key must still be trimmed.
+    // The `/v1` suffix must be stripped back off (the status object appends it
+    // and the client re-appends it, so a doubled suffix would point the CLI at
+    // /v1/v1), and the key must still be trimmed.
     const env = requireTodosRemoteAuthorityEnv({
       ...CLOUD_ENV,
       HASNA_TODOS_API_KEY: `  ${CLOUD_ENV.HASNA_TODOS_API_KEY}  `,
@@ -2639,13 +2539,19 @@ describe("requireTodosRemoteAuthorityEnv", () => {
   });
 
   test("still refuses a half-configured authority", () => {
-    // Deriving the mode must not weaken the no-local-fallback guarantee.
+    // The no-local-fallback guarantee is unchanged: a partial API pair is a
+    // hard error naming the missing variable.
+    expect(() =>
+      requireTodosRemoteAuthorityEnv({
+        HASNA_TODOS_API_URL: "https://todos.example.com",
+      }),
+    ).toThrow(/REMOTE_API_KEY_MISSING/);
     expect(() =>
       requireTodosRemoteAuthorityEnv({
         HASNA_TODOS_STORAGE_MODE: "cloud",
         HASNA_TODOS_API_URL: "https://todos.example.com",
       }),
-    ).toThrow(/REMOTE_API_KEY_MISSING/);
+    ).toThrow(/REMOTE_STORAGE_MODE_REMOVED/);
   });
 
   test("passes every other variable through unchanged", () => {

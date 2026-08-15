@@ -27,7 +27,6 @@ async function runCli(args: string[], root: string, baseUrl: string) {
       LANG: "C.UTF-8",
       TODOS_DB_PATH: join(root, "todos.db"),
       TODOS_AUTO_PROJECT: "false",
-      HASNA_TODOS_STORAGE_MODE: "self_hosted",
       HASNA_TODOS_API_URL: baseUrl,
       HASNA_TODOS_API_KEY: TEST_API_KEY,
     },
