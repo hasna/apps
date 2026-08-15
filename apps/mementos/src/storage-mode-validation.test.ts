@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { assertNoLegacyStorageMode, LEGACY_STORAGE_MODE_KEYS } from "./lib/retired-storage-mode.js";
 import { getStorageBackend, getStorageConfig, getStorageStatus } from "./storage.js";
 import { isolatedStoreEnv } from "./test-support/store-isolation.js";
-import { getApiConfig, isApiMode } from "./db/api-mode.js";
+import { getApiConfig, isApiMode, API_URL_ENV_KEYS, API_KEY_ENV_KEYS } from "./db/api-mode.js";
 
 // ============================================================================
 // Regression: a retired storage-mode variable must fail LOUDLY.
@@ -46,7 +46,7 @@ describe("retired storage mode — ANY set variable fails loud (in-process)", ()
   const saved: Record<string, string | undefined> = {};
 
   test("POSITIVE CONTROL: no legacy variable set still resolves", () => {
-    for (const k of LEGACY_STORAGE_MODE_KEYS) {
+    for (const k of [...LEGACY_STORAGE_MODE_KEYS, ...API_URL_ENV_KEYS, ...API_KEY_ENV_KEYS]) {
       saved[k] = process.env[k];
       delete process.env[k];
     }
