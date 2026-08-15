@@ -69,13 +69,16 @@ function textArtifact(
       contentType,
       byteSize: bytes.byteLength,
       sha256: createHash("sha256").update(bytes).digest("hex"),
+      // Run outputs are private by default; a governed writer may widen this at
+      // write time, never at read time.
+      visibility: "private",
     },
     body: { relativePath, bodyText, contentType },
   };
 }
 
 async function completeRun(store: SkillsProductStore, run: ServerRunRecord, preview: string): Promise<ServerRunRecord> {
-  const next = await store.updateRun(run.id, {
+  const next = await fencedTransition(store, run, {
     status: "succeeded",
     outputType: "artifact_bundle",
     outputPreview: preview,
@@ -91,13 +94,35 @@ async function failRun(
   message: string,
 ): Promise<ServerRunRecord> {
   await store.appendLog(run.id, run.orgId, "error", message);
-  const next = await store.updateRun(run.id, {
+  const next = await fencedTransition(store, run, {
     status: "failed",
     errorCode: code,
     errorMessage: message,
     completedAt: new Date().toISOString(),
   });
   return next ?? run;
+}
+
+/**
+ * The worker's terminal transition, fenced by the claimed lease generation.
+ *
+ * A cancellation bumps lease_generation, so a worker that finishes after the
+ * cancel was issued no longer matches and its terminal write is refused - the
+ * run stays cancelled instead of being moved to succeeded/failed by a worker
+ * that no longer owns it. The refusal is visible: the run is logged as a late
+ * write rather than silently dropped.
+ */
+async function fencedTransition(
+  store: SkillsProductStore,
+  run: ServerRunRecord,
+  patch: Parameters<NonNullable<SkillsProductStore["transitionRun"]>>[1],
+): Promise<ServerRunRecord | null> {
+  if (!store.transitionRun) return store.updateRun(run.id, patch);
+  const next = await store.transitionRun(run.id, patch, run.leaseGeneration);
+  if (!next) {
+    await store.appendLog(run.id, run.orgId, "warn", `late write rejected: run no longer owned at lease_generation ${run.leaseGeneration}`);
+  }
+  return next;
 }
 
 function extractText(run: ServerRunRecord): string {
