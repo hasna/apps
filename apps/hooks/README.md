@@ -94,6 +94,8 @@ hooks install knowledge-context --target codewith --apply-codewith --codewith-co
 
 A hook is defined by a manifest — `{ name, version, description, events, script, args?, timeout_ms? }` — where `script` is a relative path or inline content. Hooks come from three sources: the bundled registry, a user custom directory, or a remote registry.
 
+`timeout_ms` is an optional positive integer (milliseconds). **Omit it for no timeout.** A timeout of 0 is never a real value: a manifest or MCP call that passes `0` (or a negative value) is rejected, and the SDK treats a non-positive option as not provided — falling back to the manifest value, or to no timeout when the manifest has none. So `timeout_ms: 0` can never mean "kill immediately"; either a positive bound applies or there is no bound at all.
+
 **Install custom hooks** from a local directory, a git URL, or a manifest URL:
 
 ```bash
