@@ -1,6 +1,6 @@
 import type { SqliteAdapter } from "./sqlite-adapter.js";
 import { getBrainsDbPath, getRawDb } from "./index.js";
-import { getStorageConfig, getStorageConnectionString } from "./storage-config.js";
+import { getStorageBackend, getStorageConnectionString } from "./storage-config.js";
 import { PgAdapterAsync } from "./remote-storage.js";
 import { PG_MIGRATIONS } from "./pg-migrations.js";
 
@@ -17,7 +17,7 @@ export interface StorageSyncResult {
 export type SyncResult = StorageSyncResult;
 
 export interface StorageStatus {
-  mode: string;
+  backend: "sqlite" | "postgresql";
   enabled: boolean;
   db_path: string;
   tables: Array<{ table: string; rows: number }>;
@@ -121,11 +121,11 @@ export async function runStorageMigrations(remote: PgAdapterAsync): Promise<void
 }
 
 export function getStorageStatus(db: SqliteAdapter = getRawDb()): StorageStatus {
-  const config = getStorageConfig();
+  const backend = getStorageBackend();
   try {
     return {
-      mode: config.mode,
-      enabled: config.mode === "hybrid" || config.mode === "remote",
+      backend,
+      enabled: backend === "postgresql",
       db_path: getBrainsDbPath(),
       tables: STORAGE_TABLES.map((table) => {
         try {

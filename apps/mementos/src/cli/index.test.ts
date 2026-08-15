@@ -183,30 +183,25 @@ describe("CLI", () => {
     const { stdout, exitCode } = await runCli("storage", "status", "--json");
     expect(exitCode).toBe(0);
     const parsed = JSON.parse(stdout) as {
-      mode: string;
+      backend: string;
       enabled: boolean;
       runtime: {
         runtime: {
           kind: string;
           local: { adapter: string; local_file_sync: { supported: boolean } };
-          remote: { adapter: string };
-          object_storage: { s3: { supported: boolean }; aws: { mutation_allowed: boolean } };
+          backend: { adapter: string };
         };
       };
       config: {
-        mode: string;
         rds: { password_configured: boolean };
       };
     };
-    expect(parsed.mode).toBe("local");
+    expect(parsed.backend).toBe("sqlite");
     expect(parsed.enabled).toBe(false);
-    expect(parsed.runtime.runtime.kind).toBe("local-sqlite");
+    expect(parsed.runtime.runtime.kind).toBe("sqlite");
     expect(parsed.runtime.runtime.local.adapter).toBe("sqlite");
     expect(parsed.runtime.runtime.local.local_file_sync.supported).toBe(false);
-    expect(parsed.runtime.runtime.remote.adapter).toBe("postgres");
-    expect(parsed.runtime.runtime.object_storage.s3.supported).toBe(false);
-    expect(parsed.runtime.runtime.object_storage.aws.mutation_allowed).toBe(false);
-    expect(parsed.config.mode).toBe("local");
+    expect(parsed.runtime.runtime.backend.adapter).toBe("postgres");
     expect(parsed.config.rds.password_configured).toBe(false);
   });
 

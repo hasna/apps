@@ -206,10 +206,8 @@ GET /api/activity?days=14                         -- same via REST
 | `HASNA_MEMENTOS_DB_PATH` / `MEMENTOS_DB_PATH` | Override DB path | `~/.hasna/mementos/mementos.db` |
 | `MEMENTOS_DB_SCOPE` | `project` = use git root DB | global |
 | `MEMENTOS_HOST` | Server bind address | `127.0.0.1` |
-| `HASNA_MEMENTOS_API_URL` | Client cloud API endpoint (requires key too) | none |
-| `HASNA_MEMENTOS_API_KEY` | Client cloud API key (requires URL too) | none |
-| `HASNA_MEMENTOS_STORAGE_MODE` | Server storage mode: `local` or `cloud` | `local` |
-| `HASNA_MEMENTOS_DATABASE_URL` | Server-only PostgreSQL URL | none |
+| `HASNA_MEMENTOS_API_URL` / `HASNA_MEMENTOS_API_KEY` | Select the client HTTP API transport when both exist (exactly one set throws) | none |
+| `HASNA_MEMENTOS_DATABASE_URL` | Server-only PostgreSQL URL; presence selects the server postgresql backend | none |
 
 ## Ports
 

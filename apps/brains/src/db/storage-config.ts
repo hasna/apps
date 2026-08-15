@@ -2,10 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export type StorageMode = "local" | "remote" | "hybrid";
-
 export interface StorageConfig {
-  mode: StorageMode;
   postgres: {
     host: string;
     port: number;
@@ -17,15 +14,21 @@ export interface StorageConfig {
 
 export const STORAGE_DATABASE_ENV = ["HASNA_BRAINS_DATABASE_URL", "BRAINS_DATABASE_URL"] as const;
 
-export const STORAGE_MODE_ENV = ["HASNA_BRAINS_STORAGE_MODE", "BRAINS_STORAGE_MODE"] as const;
+/**
+ * Retired storage-mode variables. Any of them being SET — even to a blank
+ * value — is an error, never a hint: silently ignoring it would keep the
+ * split-brain drift the mode vocabulary caused (owner directive 2026-07-29;
+ * knowledge k_ms5wv466_u0jidq).
+ */
+export const LEGACY_STORAGE_MODE_ENV = [
+  "HASNA_BRAINS_STORAGE_MODE",
+  "HASNA_BRAINS_MODE",
+  "BRAINS_STORAGE_MODE",
+  "BRAINS_MODE",
+] as const;
 
 const STORAGE_CONFIG_PATH = join(homedir(), ".hasna", "brains", "storage", "config.json");
-type RawStorageConfig = Partial<StorageConfig> & { mode?: StorageMode; rds?: StorageConfig["postgres"] };
-
-function normalizeMode(value: string | undefined): StorageMode | undefined {
-  if (value === "local" || value === "hybrid" || value === "remote") return value;
-  return undefined;
-}
+type RawStorageConfig = Partial<StorageConfig> & { rds?: StorageConfig["postgres"] };
 
 function firstEnv(names: readonly string[]): string | undefined {
   for (const name of names) {
@@ -35,13 +38,47 @@ function firstEnv(names: readonly string[]): string | undefined {
   return undefined;
 }
 
+function firstDefinedEnvKey(env: NodeJS.ProcessEnv, names: readonly string[]): string | null {
+  for (const name of names) {
+    if (Object.hasOwn(env, name) && env[name] !== undefined) return name;
+  }
+  return null;
+}
+
+/**
+ * Throw when a retired storage-mode variable is set. Naming the retired var
+ * and the supported switches makes the error actionable without accepting the
+ * value. Safe to call from any entry — it is a no-op when no legacy key is set.
+ */
+export function assertNoLegacyStorageMode(env: NodeJS.ProcessEnv = process.env): void {
+  const legacyKey = firstDefinedEnvKey(env, LEGACY_STORAGE_MODE_ENV);
+  if (!legacyKey) return;
+  throw new Error(
+    `${legacyKey} was removed. Deployment modes no longer exist: delete the storage-mode variable. ` +
+      `The client uses the local SQLite store, or the HTTP API selected by ` +
+      `HASNA_BRAINS_API_URL + HASNA_BRAINS_API_KEY. ` +
+      `On the server, set HASNA_BRAINS_DATABASE_URL to select the postgresql backend, ` +
+      `or leave it unset for sqlite.`,
+  );
+}
+
 export function getStorageDatabaseUrl(): string | undefined {
   return firstEnv(STORAGE_DATABASE_ENV);
 }
 
+/**
+ * The server data backend: `postgresql` when a DATABASE_URL is set, `sqlite`
+ * otherwise. Runs the fail-loud ratchet first. Deployment modes no longer
+ * exist; this presence switch is the only storage selection.
+ */
+export function getStorageBackend(): "sqlite" | "postgresql" {
+  assertNoLegacyStorageMode();
+  return getStorageDatabaseUrl() ? "postgresql" : "sqlite";
+}
+
 export function getStorageConfig(): StorageConfig {
+  assertNoLegacyStorageMode();
   const config: StorageConfig = {
-    mode: "local",
     postgres: {
       host: "",
       port: 5432,
@@ -54,25 +91,17 @@ export function getStorageConfig(): StorageConfig {
   if (existsSync(STORAGE_CONFIG_PATH)) {
     try {
       const raw = JSON.parse(readFileSync(STORAGE_CONFIG_PATH, "utf-8")) as RawStorageConfig;
-      config.mode = normalizeMode(raw.mode) ?? config.mode;
       config.postgres = { ...config.postgres, ...(raw.postgres ?? raw.rds ?? {}) };
     } catch {
-      // Ignore malformed storage config and keep local mode.
+      // Ignore malformed storage config.
     }
-  }
-
-  const modeOverride = firstEnv(STORAGE_MODE_ENV);
-  const normalizedMode = normalizeMode(modeOverride);
-  if (normalizedMode) {
-    config.mode = normalizedMode;
-  } else if (getStorageDatabaseUrl() && config.mode === "local") {
-    config.mode = "hybrid";
   }
 
   return config;
 }
 
 export function getStorageConnectionString(dbName = "brains"): string {
+  assertNoLegacyStorageMode();
   const direct = getStorageDatabaseUrl();
   if (direct) return direct;
 

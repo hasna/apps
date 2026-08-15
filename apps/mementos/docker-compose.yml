@@ -1,7 +1,8 @@
 # =============================================================================
-# Local self_hosted stack for @hasna/mementos.
-#   Postgres (pure-remote target) + the mementos-serve API.
-# For cloud, point DATABASE_URL at RDS and drop the `db` service.
+# Local stack for @hasna/mementos.
+#   Postgres (server postgresql backend) + the mementos-serve API.
+# The server backend is selected by HASNA_MEMENTOS_DATABASE_URL; for a remote
+# database, point that variable at the real DSN and drop the `db` service.
 # =============================================================================
 services:
   db:
@@ -26,8 +27,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: "postgres://mementos_owner:mementos_local@db:5432/mementos"
-      HASNA_MEMENTOS_STORAGE_MODE: cloud
+      HASNA_MEMENTOS_DATABASE_URL: "postgres://mementos_owner:mementos_local@db:5432/mementos"
     command: ["mementos", "storage", "migrate"]
 
   serve:
@@ -36,9 +36,8 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
-      DATABASE_URL: "postgres://mementos_owner:mementos_local@db:5432/mementos"
+      HASNA_MEMENTOS_DATABASE_URL: "postgres://mementos_owner:mementos_local@db:5432/mementos"
       API_KEY_SIGNING_SECRET: "${API_KEY_SIGNING_SECRET:-local-dev-signing-secret}"
-      HASNA_MEMENTOS_STORAGE_MODE: cloud
       PORT: "8080"
     ports:
       - "8080:8080"
