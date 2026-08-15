@@ -948,7 +948,7 @@
     },
     "apps/hooks": {
       "name": "@hasna/hooks",
-      "version": "0.6.4",
+      "version": "0.6.5",
       "bin": {
         "hooks": "bin/index.js",
         "hooks-serve": "bin/serve.js",
