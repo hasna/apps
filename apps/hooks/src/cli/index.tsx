@@ -333,20 +333,31 @@ program
 
     // Execute the verified bytes with bun, passing stdin through
     const { readCustomManifest } = await import("../lib/manifest.js");
-    const { executeVerifiedScript } = await import("../lib/run.js");
+    const { executeVerifiedScript, HookTimeoutError } = await import("../lib/run.js");
     const custom = readCustomManifest(hook);
     const args = custom?.manifest.args ?? [];
     const timeout = custom?.manifest.timeout_ms;
     const started = Date.now();
-    const { stdout, stderr, exitCode } = await executeVerifiedScript({
-      name: hook,
-      scriptPath: hookScript,
-      content,
-      args,
-      stdin: hookStdin,
-      env: process.env,
-      timeout,
-    });
+    let stdout = "";
+    let stderr = "";
+    let exitCode = 0;
+    try {
+      ({ stdout, stderr, exitCode } = await executeVerifiedScript({
+        name: hook,
+        scriptPath: hookScript,
+        content,
+        args,
+        stdin: hookStdin,
+        env: process.env,
+        timeout,
+      }));
+    } catch (err) {
+      if (err instanceof HookTimeoutError) {
+        console.error(JSON.stringify({ error: err.message, hook, timedOut: true, timeout_ms: timeout ?? null }));
+        process.exit(1);
+      }
+      throw err;
+    }
     const durationMs = Date.now() - started;
 
     // Every execution lands in hook_events so `hooks log` is never empty
