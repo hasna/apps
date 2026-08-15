@@ -64,7 +64,13 @@ export function resolveApiUrl(): string | undefined {
   return cfg.api_url ? cfg.api_url.replace(/\/+$/, "") : undefined;
 }
 
-export function resolveApiKey(flagKey?: string): string | undefined {
-  if (flagKey && flagKey.length > 0) return flagKey;
+/**
+ * P1-8: the registry API key resolves from the environment ONLY —
+ * HASNA_HOOKS_API_KEY / HOOKS_API_KEY. A secret-valued CLI flag is removed
+ * (a flag value is visible in process listings and shell history); the
+ * vault-key-NAME reference (config api_key_ref) is a name, not a value, and
+ * is untouched.
+ */
+export function resolveApiKey(): string | undefined {
   return process.env.HASNA_HOOKS_API_KEY ?? process.env.HOOKS_API_KEY;
 }

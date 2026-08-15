@@ -12,6 +12,7 @@ import { readLock, sha256File, retrustHook } from "./lib/store.js";
 import { resolveHook } from "./lib/resolve.js";
 import { resolveApiKey } from "./config.js";
 import { secureEqual } from "./lib/secure-compare.js";
+import { SEMVER_PATTERN } from "./lib/semver.js";
 
 // Distinct from the MCP SSE default (39427) so `hooks serve` and
 // `hooks mcp --sse` can run on the same machine without colliding.
@@ -26,6 +27,7 @@ export interface CatalogEntry {
   events: string[];
   description: string;
   source: string;
+  versions: string[];
 }
 
 export interface ArtifactPayload {
@@ -46,24 +48,29 @@ async function buildCatalog(): Promise<CatalogEntry[]> {
   for (const meta of HOOKS) {
     const scriptPath = resolveHook(meta.name)?.scriptPath;
     if (!scriptPath) continue;
+    const sha = await sha256File(scriptPath);
     byName.set(meta.name, {
       name: meta.name,
       version: meta.version,
-      sha256: await sha256File(scriptPath),
+      sha256: sha,
       events: meta.events && meta.events.length > 0 ? meta.events : [meta.event as HookEvent],
       description: meta.description,
       source: "bundled",
+      versions: [meta.version],
     });
   }
   for (const custom of listCustomHooks()) {
     const name = shortManifestName(custom.manifest.name);
+    const sha = await sha256File(custom.scriptPath);
+    const existing = byName.get(name);
     byName.set(name, {
       name,
       version: custom.manifest.version,
-      sha256: await sha256File(custom.scriptPath),
+      sha256: sha,
       events: custom.manifest.events,
       description: custom.manifest.description ?? "Custom hook",
-      source: byName.has(name) ? "custom-overrides-bundled" : "custom",
+      source: existing ? "custom-overrides-bundled" : "custom",
+      versions: existing ? [...new Set([...existing.versions, custom.manifest.version])] : [custom.manifest.version],
     });
   }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -113,12 +120,37 @@ export function handleServeRequest(req: Request, apiKey: string | undefined): Pr
   }
 
   if (url.pathname === "/api/v1/lock" && req.method === "GET") {
-    return Promise.resolve(json(readLock()));
+    // P1-4(e): the lock exposes versions alongside each latest pin, matching
+    // the worker's lock shape so clients can resolve exact pins.
+    return buildCatalog().then((catalog) => {
+      const lock = readLock();
+      const byVersion: Record<string, string[]> = {};
+      for (const entry of catalog) byVersion[entry.name] = entry.versions;
+      const hooks: Record<string, unknown> = {};
+      for (const [name, pin] of Object.entries(lock.hooks)) {
+        hooks[name] = { ...pin, versions: byVersion[name] ?? [pin.version] };
+      }
+      return json({ hooks });
+    });
   }
 
-  const artifactMatch = /^\/api\/v1\/hooks\/([\w-]+)\/(\d+\.\d+\.\d+)$/.exec(url.pathname);
+  // P2-10: the artifact route accepts the same semver the manifest
+  // validation accepts (prerelease/build pins included), with segments
+  // decoded the way the client encoded them.
+  const artifactMatch = /^\/api\/v1\/hooks\/([\w-]+)\/([0-9A-Za-z.%+_-]+)$/.exec(url.pathname);
   if (artifactMatch && req.method === "GET") {
-    const [, name, version] = artifactMatch;
+    const [, rawName, rawVersion] = artifactMatch;
+    let name: string;
+    let version: string;
+    try {
+      name = decodeURIComponent(rawName);
+      version = decodeURIComponent(rawVersion);
+    } catch {
+      return Promise.resolve(json({ error: "invalid URL encoding" }, 400));
+    }
+    if (!SEMVER_PATTERN.test(version)) {
+      return Promise.resolve(json({ error: `invalid semver version '${version}'` }, 400));
+    }
     return artifactFor(name, version).then(async (artifact) => {
       if (!artifact) return json({ error: `Hook '${name}@${version}' not found locally` }, 404);
       const resolved = resolveHook(name);
@@ -157,11 +189,11 @@ export function handleServeRequest(req: Request, apiKey: string | undefined): Pr
 export function startServeServer(options: {
   port?: number;
   host?: string;
-  apiKey?: string;
 }): ReturnType<typeof Bun.serve> {
   const port = options.port ?? DEFAULT_SERVE_PORT;
   const host = options.host ?? SERVE_HOST;
-  const apiKey = resolveApiKey(options.apiKey);
+  // P1-8: env-only resolution — never a CLI flag carrying the value.
+  const apiKey = resolveApiKey();
 
   const server = Bun.serve({
     hostname: host,
@@ -177,6 +209,18 @@ export function startServeServer(options: {
 
 // Direct execution — the `hooks-serve` bin. Starts the registry server with
 // environment-configured defaults (HASNA_HOOKS_API_KEY / HOOKS_API_KEY).
+// Supports --port/--host argv so scripts and packaging smoke tests can bind
+// an ephemeral port without colliding with the default.
 if (import.meta.main) {
-  startServeServer({});
+  const argv = process.argv.slice(2);
+  const flagValue = (name: string): string | undefined => {
+    const idx = argv.indexOf(name);
+    return idx >= 0 && argv[idx + 1] ? argv[idx + 1] : undefined;
+  };
+  const portArg = flagValue("--port");
+  const hostArg = flagValue("--host");
+  startServeServer({
+    port: portArg ? parseInt(portArg, 10) : undefined,
+    host: hostArg,
+  });
 }
