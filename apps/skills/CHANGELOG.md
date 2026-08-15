@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+- **The 9 fleet agent-workflow skills moved to the private per-station store**
+  (`fleet-package-rollout`, `goal-plan-coordination`, `inbox`, `inbox-monitor`,
+  `merge-pr`, `skill-goal-execute`, `skill-login`, `skill-project-create`,
+  `skill-publish`) per owner ruling 2026-08-15. They are for internal fleet use
+  only and now live in `hasna-internal/fleet-resources`, which hydrates each
+  station's skill cache (`~/.hasna/skills/skills/`); the public repo keeps only
+  the OSS executable corpus under `skills/` and a pointer README under
+  `agent-skills/`. The sync/registry code paths that serve agent-workflow
+  skills remain, reading them from the machine-local cache rather than the
+  repository.
+
 ## [0.1.63] - 2026-08-15
 
 ### Added

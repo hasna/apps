@@ -133,7 +133,7 @@ export function registerCreateSync(parent: Command) {
     .option("--all", "Sync every corpus skill (the default)", false)
     .option(
       "--source <path>",
-      "Canonical corpus source: a directory of skill folders, or a package root with skills/ and agent-skills/ (overrides $SKILLS_SOURCE)",
+      "Canonical corpus source: a directory of skill folders, or a package root with skills/ (overrides $SKILLS_SOURCE)",
     )
     .option("--dry-run", "Show what would be written without touching any agent folder", false)
     .option(

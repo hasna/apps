@@ -54,7 +54,7 @@ import { DATA_DIR_ENV } from "./lib/config.js";
  *    9.50s  unconfigured-...   no packed code file names a host outside APPROVED_CODE_HOSTS
  *    9.01s  cli.portable-...   new, list, show, validate, and run work against ~/.hasna/skills
  *    8.83s  cli.runtime        config unset apiUrl returns a project to running on this machine
- *    7.53s  agent-workflow     merge-pr guard passes its raw-fixture behavior suite
+ *    7.53s  agent-workflow     the moved skills are absent from the repo and the customer catalog
  *
  *   over 1s: 56 · over 2s: 37 · over 3s: 30 · over 5s: 14 · over 10s: 1 · over 15s: 0
  *

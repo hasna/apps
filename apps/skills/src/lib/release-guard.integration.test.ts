@@ -90,8 +90,8 @@ describe("release-guard end-to-end (S0 zero-corpus + S1 + S2 + S3)", () => {
   test("S0: passes when corpus files stay out of the package", () => {
     const dir = makePkg(["README.md"]);
     try {
-      addAgentSkill(dir, "fleet-package-rollout", {
-        "SKILL.md": "---\nname: fleet-package-rollout\n---\n\n# Fleet Package Rollout\n",
+      addAgentSkill(dir, "agent-workflow-demo", {
+        "SKILL.md": "---\nname: agent-workflow-demo\n---\n\n# Agent Workflow Demo\n",
       });
       const result = runGuard(dir);
       expect(result.exitCode, result.stderr).toBe(0);

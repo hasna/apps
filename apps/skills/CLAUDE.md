@@ -116,8 +116,13 @@ skills/                           # The catalog: bare-named directories, no skil
 ├── read-image/
 └── …
 
-agent-skills/                     # Instruction-only fleet workflow skills. NOT the public
-                                  # catalog, no registry entries, excluded from the package.
+agent-skills/                     # Private-store pointer only: the 9 fleet workflow skills
+                                  # (fleet-package-rollout, goal-plan-coordination, inbox,
+                                  # inbox-monitor, merge-pr, skill-goal-execute, skill-login,
+                                  # skill-project-create, skill-publish) moved to the private
+                                  # per-station store (hasna-internal/fleet-resources) per
+                                  # owner ruling 2026-08-15; the sync paths for them run from
+                                  # the machine-local skill cache, never from this repo.
 migrations/{postgres,sqlite}/     # One numbered migration per dialect, kept at parity
 docs/{architecture,product,release}/  # Design docs, several of them test-asserted
 scripts/                          # release-guard.ts + corpus/upstream drift checks
