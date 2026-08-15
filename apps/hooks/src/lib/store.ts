@@ -137,6 +137,43 @@ export function removePinnedHook(name: string): boolean {
   return true;
 }
 
+/**
+ * Pin a hook at install time — the ACTUAL installed version and sha, so the
+ * first run is trusted with real provenance instead of a 0.0.0 placeholder
+ * (QA-1 P3: install pinned 0.0.0 until trust).
+ */
+export function pinInstalledHook(
+  name: string,
+  version: string,
+  sha256: string,
+  source: string,
+  sourceRef?: string | null,
+): void {
+  const now = new Date().toISOString();
+  const db = getDb();
+  upsertHookRecord(db, {
+    name,
+    version,
+    sha256,
+    source_type: source,
+    source_ref: sourceRef ?? null,
+    last_verified_at: now,
+  });
+  setPinnedHook(name, { version, sha256, source });
+}
+
+/**
+ * Remove every store-side record of a hook: the lock pin and the DB row.
+ * Does not touch hook files on disk — callers decide whether the hook lives
+ * in the package (bundled, keep) or the custom store dir (remove).
+ */
+export function removeHookFromStore(name: string): { removedPin: boolean; removedRecord: boolean } {
+  const removedPin = removePinnedHook(name);
+  const db = getDb();
+  const removedRecord = removeHookRecord(db, name);
+  return { removedPin, removedRecord };
+}
+
 export interface TrustCheck {
   ok: boolean;
   pinned: boolean;
