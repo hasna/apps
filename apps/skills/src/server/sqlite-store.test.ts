@@ -47,6 +47,7 @@ async function seedRunWithArtifact(principal: ApiPrincipal) {
     sha256: "abc123",
     storageKind: "db",
     bodyText: "secret",
+    visibility: "private",
   });
   return { run, artifact };
 }
@@ -161,9 +162,11 @@ console.log(JSON.stringify({ mode, tables }));
     // full migrated schema. A single "database is locked" here is the bug.
     for (const result of results) {
       expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
-      // 12 since migration 0002 added skills_bundles. The count is asserted rather than
-      // ranged so that a migration silently failing to apply is a failure here.
-      expect(JSON.parse(result.stdout.split("\n").at(-1)!)).toEqual({ mode: "wal", tables: 12 });
+      // 14 since migration 0002 added skills_bundles and 0003 added the two
+      // governance tables (skills_lifecycle_receipts, skills_credit_reservations).
+      // The count is asserted rather than ranged so that a migration silently
+      // failing to apply is a failure here.
+      expect(JSON.parse(result.stdout.split("\n").at(-1)!)).toEqual({ mode: "wal", tables: 14 });
     }
   }, 60_000);
 

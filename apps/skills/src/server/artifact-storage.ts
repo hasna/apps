@@ -32,6 +32,30 @@ export class ArtifactStorage {
     return Boolean(this.bucket);
   }
 
+  /**
+   * Object key for a run artifact: `<prefix>/<tenantId>/<runId>/<relativePath>`.
+   * The tenant segment is structural, never optional - a bucket policy or a
+   * lifecycle rule can key on it, and two tenants can never share a key even
+   * when a run id were ever reused. `relativePath` is caller-supplied, so it is
+   * sanitised: leading slashes and `..` segments are removed, and anything that
+   * survives the sanitisation is what lands in the key.
+   */
+  objectKeyFor(tenantId: string, runId: string, relativePath: string): string {
+    const safeRelativePath = relativePath.replace(/^\/+/, "").replace(/\.\.(?:\/|$)/g, "");
+    return `${this.prefix}/${tenantId}/${runId}/${safeRelativePath}`;
+  }
+
+  /**
+   * Object key for a quarantined partial artifact: a sibling namespace under the
+   * same prefix, so one bucket policy covers both and the quarantine is visible
+   * in the object listing without any metadata join. Deliberately keyed by
+   * artifact id, not by the original relative path: the point of the move is
+   * that the artifact's original location no longer resolves.
+   */
+  quarantineKeyFor(tenantId: string, runId: string, artifactId: string): string {
+    return `${this.prefix}/quarantine/${tenantId}/${runId}/${artifactId}`;
+  }
+
   async materialize(
     run: ServerRunRecord,
     artifact: Omit<ServerArtifact, "createdAt" | "storageKind" | "storageKey" | "bodyText">,
@@ -45,7 +69,7 @@ export class ArtifactStorage {
       };
     }
 
-    const key = this.keyFor(run, body.relativePath);
+    const key = this.objectKeyFor(run.orgId, run.id, body.relativePath);
     await this.s3!.send(new PutObjectCommand({
       Bucket: this.bucket,
       Key: key,
@@ -137,9 +161,48 @@ export class ArtifactStorage {
     await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: this.bundleKeyFor(orgId, sha256) }));
   }
 
+  /**
+   * Remove an artifact object, if it had one.
+   *
+   * The counterpart of deleteBundle for run artifacts: the row deletion is the
+   * governance store's job, but an S3-backed artifact is only gone when the
+   * object is gone. A no-op when nothing is configured, which is why the caller
+   * can invoke it unconditionally.
+   */
+  async deleteObject(artifact: ServerArtifact): Promise<void> {
+    if (!this.bucket || !this.s3) return;
+    if (!artifact.storageKey) return;
+    await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: artifact.storageKey }));
+  }
+
+  /**
+   * Move an artifact's object into the quarantine namespace.
+   *
+   * Cancellation quarantines partial artifacts before the run is marked
+   * cancelled, so a cancelled run's half-written outputs are neither served
+   * nor silently deleted: they sit under `.../quarantine/<tenant>/<run>/<id>`
+   * and are recorded in a quarantine receipt.
+   *
+   * Returns the new key, or null for a database-backed artifact (its body has
+   * no object to move; the row is marked by the receipt alone). A no-op for
+   * an artifact that has no storage key at all.
+   */
+  async moveToQuarantine(artifact: ServerArtifact): Promise<string | null> {
+    if (!this.bucket || !this.s3 || !artifact.storageKey) return null;
+    const quarantineKey = this.quarantineKeyFor(artifact.orgId, artifact.runId, artifact.id);
+    const response = await this.s3.send(new GetObjectCommand({ Bucket: this.bucket, Key: artifact.storageKey }));
+    await this.s3.send(new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: quarantineKey,
+      Body: await bodyToBytes(response.Body),
+      ContentType: artifact.contentType,
+    }));
+    await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: artifact.storageKey }));
+    return quarantineKey;
+  }
+
   private keyFor(run: ServerRunRecord, relativePath: string): string {
-    const safeRelativePath = relativePath.replace(/^\/+/, "").replace(/\.\.(?:\/|$)/g, "");
-    return `${this.prefix}/${run.orgId}/${run.id}/${safeRelativePath}`;
+    return this.objectKeyFor(run.orgId, run.id, relativePath);
   }
 
   private bundleKeyFor(orgId: string, sha256: string): string {

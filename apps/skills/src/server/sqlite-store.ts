@@ -25,6 +25,7 @@ import type {
   ClaimRunInput,
   CreateRunInput,
   PublishSkillInput,
+  RunTransitionPatch,
   ServerArtifact,
   ServerRunLog,
   ServerRunRecord,
@@ -34,6 +35,7 @@ import type {
   StoreBackendInfo,
   UpdateSkillPatch,
 } from "./types.js";
+import { StaleLeaseGenerationError } from "./types.js";
 
 export interface SqliteStoreOptions {
   /** Apply pending migrations on open. Default true - it is what makes zero-config work. */
@@ -302,7 +304,8 @@ export class SqliteSkillsStore implements SkillsProductStore {
       const now = nowIso();
       const result = this.db.run(
         `UPDATE skills_runs
-         SET status = 'running', started_at = COALESCE(started_at, ?), locked_by = ?, locked_at = ?
+         SET status = 'running', started_at = COALESCE(started_at, ?), locked_by = ?, locked_at = ?,
+             lease_generation = lease_generation + 1
          WHERE id = ? AND status IN (${CLAIMABLE_STATUSES.map(() => "?").join(", ")})`,
         [now, workerId, now, id, ...CLAIMABLE_STATUSES],
       );
@@ -356,6 +359,46 @@ export class SqliteSkillsStore implements SkillsProductStore {
     return row ? rowToRun(row) : null;
   }
 
+  /**
+   * Generation-fenced transition: the WHERE re-asserts the caller's expected
+   * lease_generation, so a write from a worker whose claim was fenced (by a
+   * cancellation, or by a newer claim) reports zero rows and is refused.
+   *
+   * Unlike updateRun, the patch may also move lease_generation - that is how
+   * the cancel service fences the current worker. The fence bump and the
+   * status move land in the same statement, so there is no instant where the
+   * status says cancelled and the generation still admits the old worker.
+   */
+  async transitionRun(id: string, patch: RunTransitionPatch, expectedGeneration: number): Promise<ServerRunRecord | null> {
+    const current = this.get("SELECT * FROM skills_runs WHERE id = ? LIMIT 1", [id]);
+    if (!current) return null;
+    const stored = rowToRun(current);
+    if (stored.leaseGeneration !== expectedGeneration) {
+      throw new StaleLeaseGenerationError(id, expectedGeneration, stored.leaseGeneration, stored.status);
+    }
+    const run = { ...stored, ...patch };
+    const row = this.get(
+      `UPDATE skills_runs
+       SET status = ?, output_type = ?, output_preview = ?, error_code = ?, error_message = ?, started_at = ?, completed_at = ?,
+           lease_generation = ?
+       WHERE id = ? AND lease_generation = ?
+       RETURNING *`,
+      [
+        run.status,
+        run.outputType ?? null,
+        run.outputPreview ?? null,
+        run.errorCode ?? null,
+        run.errorMessage ?? null,
+        run.startedAt ?? null,
+        run.completedAt ?? null,
+        run.leaseGeneration,
+        id,
+        expectedGeneration,
+      ],
+    );
+    return row ? rowToRun(row) : null;
+  }
+
   async appendLog(id: string, orgId: string, level: ServerRunLog["level"], message: string): Promise<ServerRunLog> {
     // One statement rather than Postgres's MAX+1-then-INSERT pair: the subquery is
     // evaluated inside the INSERT's implicit transaction, so the sequence cannot be
@@ -381,8 +424,8 @@ export class SqliteSkillsStore implements SkillsProductStore {
 
   async addArtifact(artifact: Omit<ServerArtifact, "createdAt">): Promise<ServerArtifact> {
     const row = this.get(
-      `INSERT INTO skills_artifacts (id, run_id, org_id, file_name, relative_path, content_type, byte_size, sha256, storage_kind, storage_key, body_text, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO skills_artifacts (id, run_id, org_id, file_name, relative_path, content_type, byte_size, sha256, storage_kind, storage_key, body_text, visibility, expires_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING *`,
       [
         artifact.id,
@@ -396,6 +439,8 @@ export class SqliteSkillsStore implements SkillsProductStore {
         artifact.storageKind,
         artifact.storageKey ?? null,
         artifact.bodyText ?? null,
+        artifact.visibility,
+        artifact.expiresAt ?? null,
         nowIso(),
       ],
     );

@@ -56,6 +56,8 @@ const EXPECTED_TABLES = [
   "skills_artifacts",
   "skills_audit_events",
   "skills_bundles",
+  "skills_credit_reservations",
+  "skills_lifecycle_receipts",
   "skills_registry",
   "skills_run_logs",
   "skills_runs",
@@ -301,7 +303,8 @@ function parsePostgresSchema(rawSql: string): Record<string, TableShape> {
   const sql = stripSqlComments(rawSql);
   const shapes: Record<string, TableShape> = {};
 
-  // CREATE TABLE, DROP TABLE, and CREATE UNIQUE INDEX applied in document order.
+  // CREATE TABLE, DROP TABLE, CREATE UNIQUE INDEX, and ALTER TABLE ADD COLUMN applied
+  // in document order.
   //
   // Order became load-bearing the moment a second migration existed. The previous version
   // made two unordered passes - every CREATE TABLE, then every CREATE UNIQUE INDEX - which
@@ -309,7 +312,17 @@ function parsePostgresSchema(rawSql: string): Record<string, TableShape> {
   // table dropped by a later migration stayed in the result, and an index created in 0001
   // would have been attached to a same-named table recreated in 0002. The SQLite side is
   // executed, so it has always been ordered; this is the side that had to catch up.
-  const statementPattern = /(CREATE TABLE(?:\s+IF NOT EXISTS)?\s+(\w+)\s*\()|(DROP TABLE(?:\s+IF EXISTS)?\s+(\w+))|(CREATE\s+UNIQUE\s+INDEX(?:\s+IF NOT EXISTS)?\s+\w+\s+ON\s+(\w+)\s*\(([^)]*)\)([^;]*);)/gi;
+  //
+  // ALTER TABLE ADD COLUMN joined in 0003, which adds columns to skills_runs and
+  // skills_artifacts rather than rebuilding them (those tables hold tenant rows now, so
+  // the 0002 drop-and-recreate pattern would be data loss). Without the branch below the
+  // Postgres parse would silently lack the new columns while the executed SQLite side
+  // grew them, and the parity test would fail - correctly, but for the wrong reason:
+  // it would look like a drift between the files when the real drift was between the
+  // parser and the files. RLS statements (ALTER TABLE ... ENABLE/POLICY) are deliberately
+  // not matched: they are Postgres-only security DDL that the SQLite dialect cannot
+  // express, and they carry no column shape.
+  const statementPattern = /(CREATE TABLE(?:\s+IF NOT EXISTS)?\s+(\w+)\s*\()|(DROP TABLE(?:\s+IF EXISTS)?\s+(\w+))|(CREATE\s+UNIQUE\s+INDEX(?:\s+IF NOT EXISTS)?\s+\w+\s+ON\s+(\w+)\s*\(([^)]*)\)([^;]*);)|(ALTER\s+TABLE\s+(\w+)\s+ADD\s+(?:COLUMN\s+)?((?:[^;]*)))/gi;
   let match: RegExpExecArray | null;
   while ((match = statementPattern.exec(sql))) {
     if (match[3]) {
@@ -322,6 +335,24 @@ function parsePostgresSchema(rawSql: string): Record<string, TableShape> {
       if (!shape) throw new Error(`unique index references unknown table ${table}`);
       const indexColumns = match[7]!.split(",").map((column) => column.trim().replace(/\s+(ASC|DESC)$/i, ""));
       shape.unique = [...shape.unique, uniqueKey(indexColumns, /\bWHERE\b/i.test(match[8]!))].sort();
+      continue;
+    }
+    if (match[9]) {
+      const table = match[10]!;
+      const shape = shapes[table];
+      if (!shape) throw new Error(`ALTER TABLE ADD COLUMN references unknown table ${table}`);
+      applyColumnDef(shape, match[11]!);
+      // applyColumnDef appends to arrays that were sorted when the shape was
+      // built, so the additions land at the tail and order-sensitive toEqual
+      // comparisons would fail on the same column set. Re-sort every compared
+      // collection after the merge; multiple ALTERs on one table re-sort per
+      // statement, which is harmless.
+      shape.columns.sort();
+      shape.notNull = unique_(shape.notNull);
+      shape.primaryKey = unique_(shape.primaryKey);
+      shape.unique.sort();
+      shape.foreignKeys.sort();
+      shape.literalDefaults.sort();
       continue;
     }
 
@@ -368,16 +399,7 @@ function parsePostgresSchema(rawSql: string): Record<string, TableShape> {
       }
       if (upper.startsWith("CHECK") || upper.startsWith("EXCLUDE")) continue;
 
-      const name = text.split(/\s+/)[0]!;
-      columns.push(name);
-      if (/\bNOT\s+NULL\b/i.test(text)) notNull.push(name);
-      if (/\bPRIMARY\s+KEY\b/i.test(text)) primaryKey.push(name);
-      // Inline UNIQUE, but not the "UNIQUE (a, b)" table constraint handled above.
-      if (/\bUNIQUE\b(?!\s*\()/i.test(text)) uniques.push(uniqueKey([name], false));
-      const references = text.match(/\bREFERENCES\s+"?(\w+)"?/i);
-      if (references) foreignKeys.push(foreignKeyKey(name, references[1]!, onDeleteAction(text)));
-      const literalDefault = text.match(/\bDEFAULT\s+('(?:[^']|'')*'|-?\d+(?:\.\d+)?|true|false)/i);
-      if (literalDefault && isLiteralDefault(literalDefault[1]!)) defaults.push(`${name}=${normalizeLiteral(literalDefault[1]!)}`);
+      applyColumnDef({ columns, notNull, primaryKey, unique: uniques, foreignKeys, literalDefaults: defaults }, text);
     }
 
     shapes[table] = {
@@ -396,6 +418,30 @@ function parsePostgresSchema(rawSql: string): Record<string, TableShape> {
 /** Stable identity for a uniqueness constraint: its column set plus whether it is partial. */
 function uniqueKey(columns: string[], partial: boolean): string {
   return `${[...columns].sort().join(",")}${partial ? " [partial]" : ""}`;
+}
+
+/**
+ * Merge one column definition into a parsed table shape.
+ *
+ * Shared by CREATE TABLE fragments and ALTER TABLE ADD COLUMN statements so a
+ * column added by either route is compared by the same rules. Accepts a plain
+ * shape-like object because the CREATE TABLE branch builds its shape from local
+ * arrays that are only assembled at the end.
+ */
+function applyColumnDef(
+  shape: Pick<TableShape, "columns" | "notNull" | "primaryKey" | "unique" | "foreignKeys" | "literalDefaults">,
+  text: string,
+): void {
+  const name = text.split(/\s+/)[0]!;
+  shape.columns.push(name);
+  if (/\bNOT\s+NULL\b/i.test(text)) shape.notNull.push(name);
+  if (/\bPRIMARY\s+KEY\b/i.test(text)) shape.primaryKey.push(name);
+  // Inline UNIQUE, but not the "UNIQUE (a, b)" table constraint handled above.
+  if (/\bUNIQUE\b(?!\s*\()/i.test(text)) shape.unique.push(uniqueKey([name], false));
+  const references = text.match(/\bREFERENCES\s+"?(\w+)"?/i);
+  if (references) shape.foreignKeys.push(foreignKeyKey(name, references[1]!, onDeleteAction(text)));
+  const literalDefault = text.match(/\bDEFAULT\s+('(?:[^']|'')*'|-?\d+(?:\.\d+)?|true|false)/i);
+  if (literalDefault && isLiteralDefault(literalDefault[1]!)) shape.literalDefaults.push(`${name}=${normalizeLiteral(literalDefault[1]!)}`);
 }
 
 function columnList(clause: string): string[] {

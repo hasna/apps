@@ -62,6 +62,7 @@ export function rowToRun(row: Record<string, unknown>): ServerRunRecord {
     ...(typeof row.idempotency_key === "string" ? { idempotencyKey: row.idempotency_key } : {}),
     correlationId: String(row.correlation_id),
     costCents: Number(row.cost_cents ?? 0),
+    leaseGeneration: Number(row.lease_generation ?? 0),
     ...(typeof row.output_type === "string" ? { outputType: row.output_type } : {}),
     ...(typeof row.output_preview === "string" ? { outputPreview: row.output_preview } : {}),
     ...(typeof row.error_code === "string" ? { errorCode: row.error_code } : {}),
@@ -95,6 +96,8 @@ export function rowToArtifact(row: Record<string, unknown>): ServerArtifact {
     storageKind: String(row.storage_kind) as ServerArtifact["storageKind"],
     ...(typeof row.storage_key === "string" ? { storageKey: row.storage_key } : {}),
     ...(typeof row.body_text === "string" ? { bodyText: row.body_text } : {}),
+    visibility: String(row.visibility ?? "private") === "public" ? "public" : "private",
+    ...(row.expires_at ? { expiresAt: dateString(row.expires_at) } : {}),
     createdAt: dateString(row.created_at),
   };
 }

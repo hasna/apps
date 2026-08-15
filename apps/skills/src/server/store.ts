@@ -4,6 +4,7 @@ import type {
   ClaimRunInput,
   CreateRunInput,
   PublishSkillInput,
+  RunTransitionPatch,
   ServerArtifact,
   ServerRunLog,
   ServerRunRecord,
@@ -13,6 +14,7 @@ import type {
   StoreBackendInfo,
   UpdateSkillPatch,
 } from "./types.js";
+import { StaleLeaseGenerationError } from "./types.js";
 import { hashApiKey, publicPrincipal } from "./auth.js";
 import { resolveDatabaseTarget, type DatabaseTarget } from "./database-url.js";
 import { artifactId, nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToRun, rowToSkill, rowToSkillBundle, parseJsonArray, runId } from "./rows.js";
@@ -141,6 +143,7 @@ export class MemorySkillsStore implements SkillsProductStore {
       ...(idemKey ? { idempotencyKey: idemKey } : {}),
       correlationId: randomUUID(),
       costCents: 0,
+      leaseGeneration: 0,
       createdAt: now,
     };
     this.runs.set(run.id, run);
@@ -181,10 +184,24 @@ export class MemorySkillsStore implements SkillsProductStore {
       .filter((candidate) => candidate.status === "queued" || candidate.status === "retrying")
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
     if (!run) return null;
-    return this.patchRun(run.id, { status: "running", startedAt: run.startedAt ?? nowIso() });
+    return this.patchRun(run.id, { status: "running", startedAt: run.startedAt ?? nowIso(), leaseGeneration: run.leaseGeneration + 1 });
   }
 
   async updateRun(runId: string, patch: Partial<Pick<ServerRunRecord, "status" | "outputType" | "outputPreview" | "errorCode" | "errorMessage" | "startedAt" | "completedAt">>): Promise<ServerRunRecord | null> {
+    return this.patchRun(runId, patch);
+  }
+
+  /**
+   * Fenced transition. The memory store's exclusivity is one event-loop turn,
+   * which makes the read-then-check atomic by construction; the generation
+   * predicate is still re-asserted so the semantics match the SQL backends.
+   */
+  async transitionRun(runId: string, patch: RunTransitionPatch, expectedGeneration: number): Promise<ServerRunRecord | null> {
+    const run = this.runs.get(runId);
+    if (!run) return null;
+    if (run.leaseGeneration !== expectedGeneration) {
+      throw new StaleLeaseGenerationError(runId, expectedGeneration, run.leaseGeneration, run.status);
+    }
     return this.patchRun(runId, patch);
   }
 
@@ -208,7 +225,6 @@ export class MemorySkillsStore implements SkillsProductStore {
     this.artifacts.set(artifact.runId, artifacts);
     return next;
   }
-
   async listArtifacts(principal: ApiPrincipal, runId: string): Promise<ServerArtifact[]> {
     const run = await this.getRun(principal, runId);
     return run ? [...(this.artifacts.get(runId) ?? [])] : [];
@@ -431,6 +447,25 @@ export class PostgresSkillsStore implements SkillsProductStore {
     };
   }
 
+  /**
+   * Run a callback under an RLS tenant or worker context, on one pooled
+   * connection, for the duration of one transaction only.
+   *
+   * Migration 0003 arms RLS on skills_runs and skills_artifacts: a statement
+   * whose session has no `app.skills_org_id` and no `app.skills_claim_context`
+   * sees zero rows. SET LOCAL (the `true` third argument) confines the setting
+   * to this transaction, which is what keeps one pooled connection from
+   * carrying tenant A's context into tenant B's next request - a session-wide
+   * SET would be exactly the cross-tenant leak RLS exists to prevent.
+   */
+  private async withContext<T>(orgId: string | null, worker: boolean, fn: (tx: SqlTag) => Promise<T>): Promise<T> {
+    return this.sql.begin(async (tx) => {
+      await tx`SELECT set_config('app.skills_org_id', ${orgId ?? ""}, true)`;
+      await tx`SELECT set_config('app.skills_claim_context', ${worker ? "worker" : ""}, true)`;
+      return await fn(tx);
+    });
+  }
+
   async createRun(input: CreateRunInput): Promise<ServerRunRecord> {
     if (input.idempotencyKey) {
       const existing = await this.sql`
@@ -441,62 +476,106 @@ export class PostgresSkillsStore implements SkillsProductStore {
       if (existing[0]) return rowToRun(existing[0]);
     }
     const id = runId();
-    const rows = await this.sql`
-      INSERT INTO skills_runs (id, org_id, user_id, skill_slug, requested_slug, status, input_json, args_json, idempotency_key, correlation_id)
-      VALUES (${id}, ${input.principal.orgId}, ${input.principal.userId}, ${input.slug}, ${input.slug}, ${"queued"}, ${JSON.stringify(input.input)}::jsonb, ${JSON.stringify(input.args)}::jsonb, ${input.idempotencyKey ?? null}, ${randomUUID()})
-      RETURNING *
-    `;
-    return rowToRun(rows[0]);
+    return this.withContext(input.principal.orgId, false, async (tx) => {
+      const rows = await tx`
+        INSERT INTO skills_runs (id, org_id, user_id, skill_slug, requested_slug, status, input_json, args_json, idempotency_key, correlation_id)
+        VALUES (${id}, ${input.principal.orgId}, ${input.principal.userId}, ${input.slug}, ${input.slug}, ${"queued"}, ${JSON.stringify(input.input)}::jsonb, ${JSON.stringify(input.args)}::jsonb, ${input.idempotencyKey ?? null}, ${randomUUID()})
+        RETURNING *
+      `;
+      return rowToRun(rows[0]);
+    });
   }
 
   async listRuns(principal: ApiPrincipal, limit: number): Promise<ServerRunRecord[]> {
-    const rows = await this.sql`
-      SELECT * FROM skills_runs WHERE org_id = ${principal.orgId}
-      ORDER BY created_at DESC LIMIT ${normalizeLimit(limit)}
-    `;
-    return rows.map(rowToRun);
+    return this.withContext(principal.orgId, false, async (tx) => {
+      const rows = await tx`
+        SELECT * FROM skills_runs WHERE org_id = ${principal.orgId}
+        ORDER BY created_at DESC LIMIT ${normalizeLimit(limit)}
+      `;
+      return rows.map(rowToRun);
+    });
   }
 
   async getRun(principal: ApiPrincipal, runId: string): Promise<ServerRunRecord | null> {
-    const rows = await this.sql`
-      SELECT * FROM skills_runs WHERE id = ${runId} AND org_id = ${principal.orgId} LIMIT 1
-    `;
-    return rows[0] ? rowToRun(rows[0]) : null;
+    return this.withContext(principal.orgId, false, async (tx) => {
+      const rows = await tx`
+        SELECT * FROM skills_runs WHERE id = ${runId} AND org_id = ${principal.orgId} LIMIT 1
+      `;
+      return rows[0] ? rowToRun(rows[0]) : null;
+    });
   }
 
   async claimNextRun(input: ClaimRunInput): Promise<ServerRunRecord | null> {
-    const rows = await this.sql`
-      UPDATE skills_runs
-      SET status = ${"running"}, started_at = COALESCE(started_at, now()), locked_by = ${input.workerId}, locked_at = now()
-      WHERE id = (
-        SELECT id FROM skills_runs
-        WHERE status IN (${"queued"}, ${"retrying"})
-        ORDER BY created_at ASC
-        FOR UPDATE SKIP LOCKED
-        LIMIT 1
-      )
-      RETURNING *
-    `;
-    return rows[0] ? rowToRun(rows[0]) : null;
+    // The claim path is the deliberate cross-tenant exception (a worker serves
+    // every org), so it runs under the claim context, not a tenant context.
+    return this.withContext(null, true, async (tx) => {
+      const rows = await tx`
+        UPDATE skills_runs
+        SET status = ${"running"}, started_at = COALESCE(started_at, now()), locked_by = ${input.workerId}, locked_at = now(),
+            lease_generation = lease_generation + 1
+        WHERE id = (
+          SELECT id FROM skills_runs
+          WHERE status IN (${"queued"}, ${"retrying"})
+          ORDER BY created_at ASC
+          FOR UPDATE SKIP LOCKED
+          LIMIT 1
+        )
+        RETURNING *
+      `;
+      return rows[0] ? rowToRun(rows[0]) : null;
+    });
   }
 
   async updateRun(runId: string, patch: Partial<Pick<ServerRunRecord, "status" | "outputType" | "outputPreview" | "errorCode" | "errorMessage" | "startedAt" | "completedAt">>): Promise<ServerRunRecord | null> {
-    const current = await this.sql`SELECT * FROM skills_runs WHERE id = ${runId} LIMIT 1`;
-    if (!current[0]) return null;
-    const run = { ...rowToRun(current[0]), ...patch };
-    const rows = await this.sql`
-      UPDATE skills_runs
-      SET status = ${run.status},
-          output_type = ${run.outputType ?? null},
-          output_preview = ${run.outputPreview ?? null},
-          error_code = ${run.errorCode ?? null},
-          error_message = ${run.errorMessage ?? null},
-          started_at = ${run.startedAt ?? null},
-          completed_at = ${run.completedAt ?? null}
-      WHERE id = ${runId}
-      RETURNING *
-    `;
-    return rows[0] ? rowToRun(rows[0]) : null;
+    return this.withContext(null, true, async (tx) => {
+      const current = await tx`SELECT * FROM skills_runs WHERE id = ${runId} LIMIT 1`;
+      if (!current[0]) return null;
+      const run = { ...rowToRun(current[0]), ...patch };
+      const rows = await tx`
+        UPDATE skills_runs
+        SET status = ${run.status},
+            output_type = ${run.outputType ?? null},
+            output_preview = ${run.outputPreview ?? null},
+            error_code = ${run.errorCode ?? null},
+            error_message = ${run.errorMessage ?? null},
+            started_at = ${run.startedAt ?? null},
+            completed_at = ${run.completedAt ?? null}
+        WHERE id = ${runId}
+        RETURNING *
+      `;
+      return rows[0] ? rowToRun(rows[0]) : null;
+    });
+  }
+
+  /**
+   * Generation-fenced transition. Same semantics as the SQLite twin: the WHERE
+   * re-asserts lease_generation, and a stale worker gets StaleLeaseGenerationError
+   * instead of silently overwriting a cancelled or re-claimed run.
+   */
+  async transitionRun(runId: string, patch: RunTransitionPatch, expectedGeneration: number): Promise<ServerRunRecord | null> {
+    return this.withContext(null, true, async (tx) => {
+      const current = await tx`SELECT * FROM skills_runs WHERE id = ${runId} LIMIT 1`;
+      if (!current[0]) return null;
+      const stored = rowToRun(current[0]);
+      if (stored.leaseGeneration !== expectedGeneration) {
+        throw new StaleLeaseGenerationError(runId, expectedGeneration, stored.leaseGeneration, stored.status);
+      }
+      const run = { ...stored, ...patch };
+      const rows = await tx`
+        UPDATE skills_runs
+        SET status = ${run.status},
+            output_type = ${run.outputType ?? null},
+            output_preview = ${run.outputPreview ?? null},
+            error_code = ${run.errorCode ?? null},
+            error_message = ${run.errorMessage ?? null},
+            started_at = ${run.startedAt ?? null},
+            completed_at = ${run.completedAt ?? null},
+            lease_generation = ${run.leaseGeneration}
+        WHERE id = ${runId} AND lease_generation = ${expectedGeneration}
+        RETURNING *
+      `;
+      return rows[0] ? rowToRun(rows[0]) : null;
+    });
   }
 
   /**
@@ -517,17 +596,19 @@ export class PostgresSkillsStore implements SkillsProductStore {
     let lastError: unknown;
     for (let attempt = 0; attempt < LOG_SEQUENCE_ATTEMPTS; attempt += 1) {
       try {
-        const rows = await this.sql`
-          INSERT INTO skills_run_logs (run_id, org_id, sequence, level, message)
-          VALUES (
-            ${runId},
-            ${orgId},
-            (SELECT COALESCE(MAX(sequence), 0) + 1 FROM skills_run_logs WHERE run_id = ${runId}),
-            ${level},
-            ${message}
-          )
-          RETURNING *
-        `;
+        const rows = await this.withContext(orgId, true, async (tx) => {
+          return await tx`
+            INSERT INTO skills_run_logs (run_id, org_id, sequence, level, message)
+            VALUES (
+              ${runId},
+              ${orgId},
+              (SELECT COALESCE(MAX(sequence), 0) + 1 FROM skills_run_logs WHERE run_id = ${runId}),
+              ${level},
+              ${message}
+            )
+            RETURNING *
+          `;
+        });
         return rowToLog(rows[0]);
       } catch (error) {
         if (!isUniqueViolation(error)) throw error;
@@ -538,42 +619,50 @@ export class PostgresSkillsStore implements SkillsProductStore {
   }
 
   async listLogs(principal: ApiPrincipal, runId: string): Promise<ServerRunLog[]> {
-    const rows = await this.sql`
-      SELECT l.* FROM skills_run_logs l
-      JOIN skills_runs r ON r.id = l.run_id AND r.org_id = ${principal.orgId}
-      WHERE l.run_id = ${runId}
-      ORDER BY l.sequence ASC
-    `;
-    return rows.map(rowToLog);
+    return this.withContext(principal.orgId, false, async (tx) => {
+      const rows = await tx`
+        SELECT l.* FROM skills_run_logs l
+        JOIN skills_runs r ON r.id = l.run_id AND r.org_id = ${principal.orgId}
+        WHERE l.run_id = ${runId}
+        ORDER BY l.sequence ASC
+      `;
+      return rows.map(rowToLog);
+    });
   }
 
   async addArtifact(artifact: Omit<ServerArtifact, "createdAt">): Promise<ServerArtifact> {
-    const rows = await this.sql`
-      INSERT INTO skills_artifacts (id, run_id, org_id, file_name, relative_path, content_type, byte_size, sha256, storage_kind, storage_key, body_text)
-      VALUES (${artifact.id}, ${artifact.runId}, ${artifact.orgId}, ${artifact.fileName}, ${artifact.relativePath}, ${artifact.contentType}, ${artifact.byteSize}, ${artifact.sha256}, ${artifact.storageKind}, ${artifact.storageKey ?? null}, ${artifact.bodyText ?? null})
-      RETURNING *
-    `;
-    return rowToArtifact(rows[0]);
+    return this.withContext(artifact.orgId, true, async (tx) => {
+      const rows = await tx`
+        INSERT INTO skills_artifacts (id, run_id, org_id, file_name, relative_path, content_type, byte_size, sha256, storage_kind, storage_key, body_text, visibility, expires_at)
+        VALUES (${artifact.id}, ${artifact.runId}, ${artifact.orgId}, ${artifact.fileName}, ${artifact.relativePath}, ${artifact.contentType}, ${artifact.byteSize}, ${artifact.sha256}, ${artifact.storageKind}, ${artifact.storageKey ?? null}, ${artifact.bodyText ?? null}, ${artifact.visibility}, ${artifact.expiresAt ?? null})
+        RETURNING *
+      `;
+      return rowToArtifact(rows[0]);
+    });
   }
 
   async listArtifacts(principal: ApiPrincipal, runId: string): Promise<ServerArtifact[]> {
-    const rows = await this.sql`
-      SELECT a.* FROM skills_artifacts a
-      JOIN skills_runs r ON r.id = a.run_id AND r.org_id = ${principal.orgId}
-      WHERE a.run_id = ${runId}
-      ORDER BY a.created_at ASC
-    `;
-    return rows.map(rowToArtifact);
+    return this.withContext(principal.orgId, false, async (tx) => {
+      const rows = await tx`
+        SELECT a.* FROM skills_artifacts a
+        JOIN skills_runs r ON r.id = a.run_id AND r.org_id = ${principal.orgId}
+        WHERE a.run_id = ${runId}
+        ORDER BY a.created_at ASC
+      `;
+      return rows.map(rowToArtifact);
+    });
   }
 
   async getArtifact(principal: ApiPrincipal, runId: string, artifactId: string): Promise<ServerArtifact | null> {
-    const rows = await this.sql`
-      SELECT a.* FROM skills_artifacts a
-      JOIN skills_runs r ON r.id = a.run_id AND r.org_id = ${principal.orgId}
-      WHERE a.run_id = ${runId} AND a.id = ${artifactId}
-      LIMIT 1
-    `;
-    return rows[0] ? rowToArtifact(rows[0]) : null;
+    return this.withContext(principal.orgId, false, async (tx) => {
+      const rows = await tx`
+        SELECT a.* FROM skills_artifacts a
+        JOIN skills_runs r ON r.id = a.run_id AND r.org_id = ${principal.orgId}
+        WHERE a.run_id = ${runId} AND a.id = ${artifactId}
+        LIMIT 1
+      `;
+      return rows[0] ? rowToArtifact(rows[0]) : null;
+    });
   }
 
   async publishSkill(input: PublishSkillInput): Promise<ServerSkillRecord> {

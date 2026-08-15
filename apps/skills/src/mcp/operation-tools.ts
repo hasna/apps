@@ -352,6 +352,7 @@ export function registerOperationTools(server: McpServer): void {
     const localRun = completeSkillRun(runContext, {
       status: result.exitCode === 0 ? "completed" : "failed",
       error: result.error,
+      exitCode: result.exitCode,
     });
     const payload = { exitCode: result.exitCode, skill: skillName, stdout: result.stdout, stderr: result.stderr, run: localRun };
     if (result.error) {
