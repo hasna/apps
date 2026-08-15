@@ -50,7 +50,7 @@ const VALID_SKILL: Record<string, string> = {
       source_commit: "unknown",
       // Canonical SHA-256 over this exact fixture bundle (see docs/skill-standard.md).
       // Recompute with computeContentHash when fixture content changes.
-      content_hash: "6054b2d21a0596be95fe91fbcb6cc2ac3cc333767702dca2f475754c8a709f8a",
+      content_hash: "158deaf2161d8203d1320acf1f1592242170bc0280d4c5cfe4d04323e1f6673d",
     },
   }, null, 2),
   "AGENTS.md": "# Agent Build Instructions\n",

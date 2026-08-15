@@ -1,7 +1,9 @@
 /**
  * `skills sync` — the last mile: write skills from this machine's corpus
- * (~/.hasna/skills/installed/<name>/) into each coding agent's global skills directory,
- * per-tool adapted, so an agent auto-loads them.
+ * (the migrated owner-layout cache ~/.hasna/skills/skills/<name>/, or the
+ * legacy ~/.hasna/skills/installed/<name>/ when not migrated) into each coding
+ * agent's global skills directory, per-tool adapted, so an agent auto-loads
+ * them.
  *
  * This is the deliberate reversal of the old "pins, not installs" stub: agent skill
  * folders used to be left entirely unmanaged and every write path returned success:false.
@@ -28,8 +30,8 @@ import {
   listPortableSkills,
   normalizePortableSkillName,
   readPortableSkillManifest,
-  getPortableSkillsRoot,
 } from "./portable-skills.js";
+import { resolveCorpusRoot } from "./home-migration.js";
 import type { SkillKind } from "./registry-types.js";
 
 /**
@@ -185,7 +187,9 @@ interface SyncSource {
  *   1. `options.sourceDir`   - an explicit source: a corpus dir, or a package root
  *                              containing `skills/` and/or `agent-skills/`
  *   2. `$SKILLS_SOURCE`      - the ambient spelling of the same thing
- *   3. the installed cache   - `getPortableSkillsRoot()` (what `skills pull` writes)
+ *   3. the installed cache   - `getPortableSkillsRoot()` (what `skills pull` writes),
+ *      resolved through `resolveCorpusRoot` so a migrated owner layout
+ *      (~/.hasna/skills/skills/) is read in preference to `installed/`.
  *
  * A missing explicit source is an error, not a fallback to "nothing": the whole point
  * of zero-corpus is that sync must not silently sync an empty corpus because the
@@ -202,7 +206,7 @@ export function resolveSyncCorpus(options: SyncSkillsOptions = {}): { roots: str
     }
     return { roots, source: "source" };
   }
-  return { roots: [getPortableSkillsRoot({ rootDir: options.rootDir, homeDir: options.homeDir })], source: "corpus" };
+  return { roots: [resolveCorpusRoot({ rootDir: options.rootDir, homeDir: options.homeDir })], source: "corpus" };
 }
 
 /**

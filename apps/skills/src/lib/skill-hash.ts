@@ -104,7 +104,7 @@ export function collectBundleFiles(skillPath: string): BundleFile[] {
     if (statSync(absolute).isDirectory()) collectDirectory(files, absolute, entry);
     else collectFile(files, absolute, entry);
   }
-  return files.sort((a, b) => a.rel.localeCompare(b.rel));
+  return files.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 }
 
 function collectDirectory(files: BundleFile[], dir: string, rel: string): void {
@@ -196,4 +196,36 @@ export function skillFolderExists(skillPath: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Canonical SKILL.md document hash for home-vs-corpus comparison.
+ *
+ * The bundle-wide hash above covers a whole skill folder; agent home
+ * directories carry only a SKILL.md, so the home comparison hashes exactly
+ * that one document. The normalization is the canonical one: LF line endings
+ * (LF-invariant, so the same document hashes identically across platforms),
+ * with the single agent-adaptation delta removed — `user_invocable` frontmatter
+ * lines, which `sync` injects for Claude and strips for every other agent.
+ * Two copies that differ only in those two ways hash identically, so an
+ * unmarked home copy that matches the canonical SKILL.md modulo adaptation is
+ * recognised as an exact match.
+ */
+export function canonicalAgentSkillMarkdown(content: string): string {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  if (!match) return normalizeLineEndings(content);
+  const lines = match[1].split(/\r?\n/).filter((line) => !/^\s*user_invocable\s*:/i.test(line));
+  return `---\n${lines.join("\n")}\n---\n${normalizeLineEndings(content.slice(match[0].length))}`;
+}
+
+/** Canonical hash of a SKILL.md document (modulo LF endings and user_invocable). */
+export function hashSkillMarkdown(content: string): string {
+  const hash = createHash(CONTENT_HASH_ALGORITHM);
+  hash.update(canonicalAgentSkillMarkdown(content));
+  return hash.digest("hex");
+}
+
+/** Canonical hash of the SKILL.md at `path`. */
+export function hashSkillMarkdownFile(path: string): string {
+  return hashSkillMarkdown(readFileSync(path, "utf-8"));
 }

@@ -259,3 +259,70 @@ normalizes `skill.json`, `AGENTS.md`, `package.json`, `tsconfig.json`, and an
 entrypoint when they are missing. Missing contract fields (runtime defaults,
 provenance) are filled and the `content_hash` is recomputed over the ported
 bundle; unknown keys in an existing `skill.json` are preserved.
+
+## Machine Layout
+
+The skills app folder (`~/.hasna/skills/`, relocatable with
+`$HASNA_SKILLS_DIR`) hosts the owner layout:
+
+```text
+~/.hasna/skills/
+├── skills/     canonical corpus cache — the sync source
+├── logs/       run/sync logs (created lazily)
+├── outputs/    run outputs (created lazily)
+├── custom/     experiments, retained as-is
+├── config.json
+└── skills.db
+```
+
+`skills/` replaces the older `installed/` corpus home, and legacy flat skill
+dirs that predate `installed/` migrate into it. Both moves are opt-in and
+idempotent:
+
+```bash
+skills storage migrate            # installed/ + legacy dirs -> skills/, creates logs/ + outputs/
+skills storage migrate --dry-run  # show what would move, write nothing
+```
+
+Migration refuses to run against a non-empty `skills/` that carries no
+migration record (`skills/.layout-migration.json`), and never touches
+`custom/`. After a successful migration `skills sync` reads the corpus from
+the new cache automatically.
+
+### Unmarked-home adoption
+
+Agent homes are full of skill directories the CLI never wrote (the ad-hoc
+sed/scp/rsync era). Those carry no `.hasna-skills.json` marker and sync leaves
+them alone by design. Adoption is the migration mode for that population:
+
+```bash
+skills sync --adopt             # dry-run: hash unmarked home skills vs the corpus
+skills sync --adopt --apply     # write markers for exact matches; ledger the rest
+```
+
+Each unmarked home skill's `SKILL.md` is hashed (line endings normalized,
+`user_invocable` stripped) and compared against the canonical corpus cache:
+
+- exact match -> a marker is written and the dir is adopted;
+- content differs -> recorded in `~/.hasna/skills/conflicts.json` (home, skill,
+  hash, canonical hash, mtime) and skipped — an unmarked dir is never
+  overwritten;
+- no canonical entry -> reported as unknown and skipped.
+
+Every written marker is listed in a rollback record under
+`~/.hasna/skills/rollback/`. Nothing is ever deleted by adoption.
+
+### Home drift census
+
+```bash
+skills sync --check             # exits non-zero while drift exists
+```
+
+Compares each existing agent home against the canonical corpus and lists
+`missing-from-home`, `stray-in-home` (marked dir, no canonical entry), and
+`diverged` (marked dir whose hash differs). Unmarked dirs are adoption
+candidates, not drift. `skills diff <name>` and `skills outdated` use the same
+home-vs-canonical comparison; the pinned-skill version comparison remains as a
+subset. `skills sync --prune [--apply]` removes only marked-and-stray dirs,
+recording each removal in the rollback store before it happens.
+
