@@ -172,6 +172,23 @@ function parsePositiveInteger(value: string): number {
   return parsed;
 }
 
+type KillProcessFilter = "zombies" | "orphans" | "high_mem";
+
+function parseKillProcessFilter(value: string): KillProcessFilter {
+  if (value === "zombies" || value === "orphans" || value === "high_mem") {
+    return value;
+  }
+  throw new InvalidOptionArgumentError("kill filter must be 'zombies', 'orphans', or 'high_mem'");
+}
+
+function parsePidListOption(value: string): number[] {
+  const values = value.split(",").map((entry) => entry.trim());
+  if (values.length === 0 || values.some((entry) => !/^\d+$/.test(entry))) {
+    throw new InvalidOptionArgumentError("PIDs must be a comma-separated list of integers");
+  }
+  return [...new Set(values.map((entry) => Number.parseInt(entry, 10)))];
+}
+
 function collectOption(value: string, previous: string[] = []): string[] {
   return [...previous, value];
 }
@@ -1249,9 +1266,11 @@ program
 
 program
   .command("kill [pid]")
-  .description("Kill a process by PID or name/command regex")
+  .description("Kill a process by PID, PID list, process filter, or name/command regex")
   .option("-m, --machine <id>", "Machine ID", "local")
   .option("--name <pattern>", "Kill processes whose name or command matches a regex")
+  .option("--pids <pids>", "Comma-separated process IDs to kill in one batch", parsePidListOption)
+  .option("--filter <filter>", "Kill filter: zombies | orphans | high_mem", parseKillProcessFilter)
   .option("-f, --force", "Use SIGKILL instead of SIGTERM")
   .option("--dry-run", "Print what would happen without executing")
   .option("-y, --yes", "Skip confirmation when multiple processes match")
@@ -1277,8 +1296,79 @@ program
       );
     }
 
-    if ((pidStr && opts.name !== undefined) || (!pidStr && opts.name === undefined)) {
-      fail("Specify exactly one of PID or --name <pattern>");
+    const selectors = [
+      pidStr !== undefined,
+      opts.name !== undefined,
+      opts.pids !== undefined,
+      opts.filter !== undefined,
+    ];
+    if (selectors.filter(Boolean).length !== 1) {
+      fail("Specify exactly one of <pid>, --name <pattern>, --pids <pids>, or --filter <filter>");
+    }
+
+    if (opts.pids !== undefined || opts.filter !== undefined) {
+      let pids: number[];
+      let collector: ReturnType<typeof getCollectorForMachine> | undefined;
+
+      if (opts.pids !== undefined) {
+        pids = opts.pids;
+      } else {
+        try {
+          collector = getCollectorForMachine(machineId);
+        } catch (error) {
+          return fail(
+            `Error selecting machine: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+        const result = await collector.collect();
+        if (!result.ok) return fail(`Error collecting snapshot: ${result.error}`);
+
+        const rows = result.snapshot.processes.map((process) => processInfoToRow(process, machineId));
+        const report = new ProcessManager().analyse(rows);
+        const selected = opts.filter === "zombies"
+          ? report.zombies
+          : opts.filter === "orphans"
+            ? report.orphans
+            : report.highMem;
+        pids = selected.map((row) => row.pid);
+      }
+
+      const killMachineId = collector instanceof LocalCollector ? "local" : machineId;
+      const remoteCollector = collector instanceof LocalCollector ? undefined : collector;
+      const pm = new ProcessManager();
+      const actions: ProcessAction[] = [];
+
+      for (const pid of pids) {
+        if (opts.dryRun) {
+          actions.push({
+            pid,
+            name: `pid:${pid}`,
+            action: "skipped" as const,
+            reason: `dry-run: would send ${signal} on ${machineId}`,
+          });
+        } else {
+          actions.push(await pm.kill(pid, signal, killMachineId, remoteCollector));
+        }
+      }
+
+      if (opts.json) {
+        console.log(JSON.stringify(actions, null, 2));
+      } else {
+        for (const action of actions) {
+          if (opts.dryRun) {
+            console.log(chalk.yellow(`  [dry-run] Would send ${signal} to PID ${action.pid} on ${machineId}`));
+          } else if (action.action === "killed") {
+            console.log(chalk.green(`  Killed PID ${action.pid} — ${action.reason}`));
+          } else if (action.action === "error") {
+            console.error(chalk.red(`  Failed to kill PID ${action.pid}: ${action.error ?? action.reason}`));
+          } else {
+            console.log(chalk.yellow(`  Skipped PID ${action.pid} — ${action.reason}`));
+          }
+        }
+      }
+
+      if (actions.some((action) => action.action === "error")) process.exit(1);
+      return;
     }
 
     if (opts.name !== undefined) {
