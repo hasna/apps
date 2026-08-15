@@ -244,7 +244,13 @@ function killGroup(proc: Subprocess | null, options: { leaderAlive: boolean }): 
           .map((line) => line.trim().split(/\s+/))
           .filter((cols): cols is string[] => cols.length === 2 && cols[1] === String(pgid))
           .map((cols) => Number(cols[0]))
-          .filter((pid) => Number.isInteger(pid) && pid > 1);
+          .filter((pid) => Number.isInteger(pid) && pid > 1)
+          // A reaped leader's numeric pid must never be signaled again: the
+          // row could be a NEW process-group leader that reused the pid
+          // (reviewer P1-2, second pass). While the leader is alive its pid
+          // is its own identity (detached spawn: pid == pgid) and stays in
+          // the member list.
+          .filter((pid) => options.leaderAlive || pid !== proc.pid);
       }
     } catch {
       // Fall through.
