@@ -552,5 +552,14 @@ async function route(
     return errorResponse("Method not allowed", 405);
   }
 
+  if (resource === "machines") {
+    if (id) return errorResponse("Not found", 404);
+    if (method === "GET") {
+      const machines = await store.listMachines();
+      return jsonResponse({ machines, count: machines.length });
+    }
+    return errorResponse("Method not allowed", 405);
+  }
+
   return errorResponse("Not found", 404);
 }

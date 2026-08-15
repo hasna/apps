@@ -1885,6 +1885,11 @@ function registerProjectCommands(program: Command): void {
       try {
         const store = resolveProjectStore();
         const pool = splitList(opts.pool);
+        const knownMachines = new Set((await store.listMachines()).map((machine) => machine.slug));
+        const unknown = pool.filter((machine) => !knownMachines.has(machine));
+        if (unknown.length > 0) {
+          throw new Error(`Unknown machine${unknown.length === 1 ? "" : "s"} in pool: ${unknown.join(", ")} (not in the machines registry)`);
+        }
         const projects = await store.listProjects({ status: "active", limit: 10_000 });
         const activity = await Promise.all(projects.map(async (project) => {
           const [events, runs] = await Promise.all([

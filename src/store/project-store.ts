@@ -50,6 +50,7 @@ import {
   listWorkspaceAgents as dbListWorkspaceAgents,
   listWorkspaceEvents as dbListWorkspaceEvents,
   listWorkspaceLocations as dbListWorkspaceLocations,
+  listMachines as dbListMachines,
   listWorkspaceLocks as dbListWorkspaceLocks,
   listProjectResourceLinks as dbListProjectResourceLinks,
   lookupGuardedWorkspaceMutationReceipt as dbLookupGuardedWorkspaceMutationReceipt,
@@ -209,6 +210,7 @@ import type {
   WorkspaceEvent,
   WorkspaceLocation,
   WorkspaceLock,
+  Machine,
 } from "../types/workspace.js";
 
 const APP = "projects";
@@ -388,6 +390,8 @@ export interface ProjectStore {
   assignAgent(idOrSlug: string, input: AssignAgentInput): Promise<WorkspaceAgentAssignment>;
   /** Per-project registered locations. Readable from both registry transports. */
   getProjectLocations(id: string): Promise<WorkspaceLocation[]>;
+  /** Registry of canonical machines (roles: mirror-hub | assignable | avoid). */
+  listMachines(): Promise<Machine[]>;
   /** Register another on-disk location for a project. Local-only (throws in api mode). */
   addLocation(idOrSlug: string, input: AddLocationInput): Promise<AddLocationResult>;
 
@@ -841,6 +845,10 @@ class LocalProjectStore implements ProjectStore {
 
   async getProjectLocations(id: string): Promise<WorkspaceLocation[]> {
     return dbListWorkspaceLocations(id);
+  }
+
+  async listMachines(): Promise<Machine[]> {
+    return dbListMachines();
   }
 
   async addLocation(idOrSlug: string, input: AddLocationInput): Promise<AddLocationResult> {
@@ -1490,6 +1498,11 @@ class ApiProjectStore implements ProjectStore {
       `/projects/${encodeURIComponent(id)}/locations`,
     );
     return raw.locations ?? [];
+  }
+
+  async listMachines(): Promise<Machine[]> {
+    const raw = await this.client.transport.get<{ machines?: Machine[] }>("/machines");
+    return raw.machines ?? [];
   }
 
   async addLocation(): Promise<AddLocationResult> {

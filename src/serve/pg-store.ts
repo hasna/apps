@@ -126,6 +126,8 @@ import type {
   WorkspaceKind,
   WorkspaceRow,
   WorkspaceStatus,
+  Machine,
+  MachineRow,
 } from "../types/workspace.js";
 
 type TransactionCapableClient = TypedQueryClient & {
@@ -659,6 +661,17 @@ export class ProjectsPgStore {
       [projectId],
     );
     return rows.map(rowToWorkspaceLocation);
+  }
+
+  async listMachines(): Promise<Machine[]> {
+    const rows = await this.db.many<MachineRow>(
+      "SELECT * FROM machines ORDER BY slug ASC",
+    );
+    return rows.map((row) => ({
+      slug: row.slug,
+      status: row.status,
+      role: row.role as Machine["role"],
+    }));
   }
 
   private async listWorkspaceLocationsBounded(

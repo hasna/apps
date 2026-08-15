@@ -1417,6 +1417,39 @@ describe("project-first CLI surface", () => {
     }
   });
 
+  test("assign-machines rejects unknown pool machines before any write path", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-assign-machines-unknown-"));
+    const dbPath = join(root, "projects.db");
+    const env = { HASNA_PROJECTS_DB_PATH: dbPath };
+    const db = new Database(dbPath);
+    db.run("PRAGMA foreign_keys=ON");
+    runMigrations(db);
+    const project = createWorkspace({
+      name: "Machine Fixture Unknown",
+      slug: "machine-fixture-unknown",
+      primary_path: join(root, "project-unknown"),
+    }, db);
+    db.close();
+
+    try {
+      const dryRun = runProjects(["assign-machines", "--pool", "machine001,ghost,machine002", "--dry-run", "--json"], env);
+      expect(dryRun.exitCode).toBe(1);
+      expect(text(dryRun.stderr)).toContain("Unknown machine");
+      expect(text(dryRun.stderr)).toContain("ghost");
+
+      const apply = runProjects(["assign-machines", "--pool", "machine001,ghost,machine002", "--json"], env);
+      expect(apply.exitCode).toBe(1);
+      expect(text(apply.stderr)).toContain("Unknown machine");
+
+      const after = new Database(dbPath);
+      const row = after.query("SELECT canonical_machine FROM workspaces WHERE id = ?").get(project.id) as { canonical_machine: string | null };
+      after.close();
+      expect(row.canonical_machine).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   cliProcessTest("top-level create, list, and show use project-first JSON", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-surface-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
