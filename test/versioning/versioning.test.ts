@@ -29,11 +29,22 @@ const membersByName = new Map(members.map((member) => [member.name, member]));
 // imported tree carries package 0.6.1 (release #167) while its CHANGELOG heading
 // is 0.6.0 — a release-lane mismatch pre-existing in hasna/conversations, carried
 // into the mono by the import; reconcile task tracked on the import row.
+// Census 2026-08-15 (fix PR #152, machines zsh probe): the registry was stale in
+// two rows and short of four. conversations moved 0.6.1 -> 0.6.2 (release lane
+// ahead of main, heading still 0.6.0) and loops moved 0.4.42 -> 0.5.1 (heading
+// still 0.5.0). accounts (0.2.44, heading 0.2.43), machines (0.2.26, heading
+// 0.2.25 — release bump #134 skipped the heading), mementos (0.14.84, heading
+// 0.14.83) and repos (0.1.48, heading 0.1.47) were unregistered. The machines
+// row is expected to be removed when the 0.2.27 release adds its heading.
 const KNOWN_CHANGELOG_MISMATCHES = new Map([
+  ["@hasna/accounts", { packageVersion: "0.2.44", changelogVersion: "0.2.43" }],
   ["@hasna/calendar", { packageVersion: "0.3.1", changelogVersion: "0.3.0" }],
-  ["@hasna/conversations", { packageVersion: "0.6.1", changelogVersion: "0.6.0" }],
+  ["@hasna/conversations", { packageVersion: "0.6.2", changelogVersion: "0.6.0" }],
   ["@hasna/instructions", { packageVersion: "0.4.35", changelogVersion: "0.4.33" }],
-  ["@hasna/loops", { packageVersion: "0.4.42", changelogVersion: "0.4.41" }],
+  ["@hasna/loops", { packageVersion: "0.5.1", changelogVersion: "0.5.0" }],
+  ["@hasna/machines", { packageVersion: "0.2.26", changelogVersion: "0.2.25" }],
+  ["@hasna/mementos", { packageVersion: "0.14.84", changelogVersion: "0.14.83" }],
+  ["@hasna/repos", { packageVersion: "0.1.48", changelogVersion: "0.1.47" }],
   ["@hasna/secrets", { packageVersion: "0.2.22", changelogVersion: "0.2.21" }],
   ["@hasna/signatures", { packageVersion: "0.1.14", changelogVersion: "0.1.12" }],
 ]);

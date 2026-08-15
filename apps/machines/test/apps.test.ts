@@ -331,12 +331,21 @@ describe("apps", () => {
 
   test("generated Bun package probe parses and verifies under the macOS zsh login shell, not only sh/bash", () => {
     const { probeCommand } = createExactBunPackageFixture("0.2.21");
+    const verifiedShells: string[] = [];
     for (const shell of ["sh", "bash", "zsh"]) {
+      const available = spawnSync(shell, ["-c", "true"], { encoding: "utf8" });
+      if (available.error) {
+        console.log(`[SKIP ${shell}] ${shell} is not installed on this machine; probe leg not exercised here`);
+        continue;
+      }
       const result = runProbeCommandUnderShell(shell, probeCommand, "machines v0.2.21 (build 2026.08.13)");
       expect(result.status, `${shell}: exit code`).toBe(0);
       expect(result.stdout, `${shell}: stdout`).toBe("installed=1\nversion=0.2.21\n");
       expect(result.stderr, `${shell}: stderr`).toBe("");
+      verifiedShells.push(shell);
     }
+    expect(verifiedShells).toContain("sh");
+    expect(verifiedShells).toContain("bash");
   });
 
   test("keeps legacy custom packageName install and command-v probe semantics", () => {
