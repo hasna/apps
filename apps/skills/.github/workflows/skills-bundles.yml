@@ -38,7 +38,11 @@ jobs:
       - name: Build signed skill bundles
         working-directory: apps/skills
         env:
-          SKILLS_SIGNING_KEY: ${{ secrets.SKILLS_SIGNING_KEY }}
+          # Sign only on push to main. PR builds run the shared bundle build
+          # unsigned (the script warns and emits unsigned manifests); the signing
+          # key must never reach a pull_request run, which same-repo PRs would
+          # otherwise receive via the ambient secret.
+          SKILLS_SIGNING_KEY: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && secrets.SKILLS_SIGNING_KEY || '' }}
           SKILLS_SOURCE_COMMIT: ${{ github.sha }}
         run: bun run scripts/bundle-skills.ts
       - name: Upload bundle artifacts
@@ -49,13 +53,19 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Push bundles to the skills server
-        if: ${{ env.SKILLS_API_URL != '' && env.SKILLS_API_KEY != '' }}
+        # Production push is main-only: pull_request runs build + upload artifacts
+        # but never reach the server, even though same-repo PRs receive secrets.
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         env:
           SKILLS_API_URL: ${{ secrets.SKILLS_API_URL }}
           SKILLS_API_KEY: ${{ secrets.SKILLS_API_KEY }}
         working-directory: apps/skills
         run: |
           set -euo pipefail
+          if [[ -z "${SKILLS_API_URL:-}" || -z "${SKILLS_API_KEY:-}" ]]; then
+            echo "No skills server origin configured; skipping server push" >&2
+            exit 0
+          fi
           endpoint="${SKILLS_API_URL%/}/api/v1/skills"
           failed=0
           for manifest_file in dist/bundles/*.server.json; do

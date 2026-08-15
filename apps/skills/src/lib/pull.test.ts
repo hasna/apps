@@ -124,6 +124,59 @@ describe("pullSkills", () => {
     expect(existsSync(join(expected, "SKILL.md"))).toBe(true);
   });
 
+  test("writes into the migrated skills/ root when the layout-migration record exists", async () => {
+    // Interlock with the home-migration layout (PR #116): after `skills storage
+    // migrate`, sync reads the corpus from <app folder>/skills, so pull must write
+    // there too — otherwise pulled skills are invisible to sync.
+    const home = mkdtempSync(join(tmpdir(), "skills-pull-migrated-home-"));
+    try {
+      const appDir = join(home, ".hasna", "skills");
+      const cache = join(appDir, "skills");
+      mkdirSync(cache, { recursive: true });
+      writeFileSync(
+        join(cache, ".layout-migration.json"),
+        `${JSON.stringify({ version: 1, migratedAt: new Date().toISOString(), moved: ["installed"], note: "test" })}\n`,
+      );
+
+      const { results } = await pullSkills({
+        names: ["pulled-runbook"],
+        homeDir: home,
+        client: fakeClient({ "pulled-runbook": { md: INSTRUCTION_MD, meta: { kind: "instruction" } } }),
+      });
+      expect(results[0].success).toBe(true);
+      const expected = join(cache, "pulled-runbook");
+      expect(results[0].path).toBe(expected);
+      expect(existsSync(join(expected, "SKILL.md"))).toBe(true);
+      // Nothing lands in the pre-migration installed/ root.
+      expect(existsSync(join(appDir, "installed", "pulled-runbook"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("writes into installed/ when no layout-migration record exists", async () => {
+    // Negative control for the interlock: a hand-made skills/ dir without the
+    // migration record is not the corpus, and pull keeps using installed/.
+    const home = mkdtempSync(join(tmpdir(), "skills-pull-unmigrated-home-"));
+    try {
+      const appDir = join(home, ".hasna", "skills");
+      mkdirSync(join(appDir, "skills"), { recursive: true });
+
+      const { results } = await pullSkills({
+        names: ["pulled-runbook"],
+        homeDir: home,
+        client: fakeClient({ "pulled-runbook": { md: INSTRUCTION_MD, meta: { kind: "instruction" } } }),
+      });
+      expect(results[0].success).toBe(true);
+      const expected = join(appDir, "installed", "pulled-runbook");
+      expect(results[0].path).toBe(expected);
+      expect(existsSync(join(expected, "SKILL.md"))).toBe(true);
+      expect(existsSync(join(appDir, "skills", "pulled-runbook"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("a pulled skill is surfaced by loadRegistry (the CLI list --all / MCP list_skills path)", async () => {
     await pullSkills({
       names: ["pulled-runbook"],
@@ -186,7 +239,7 @@ describe("pullSkills", () => {
     const savedUrl = process.env.SKILLS_API_URL;
     const savedKey = process.env.SKILLS_API_KEY;
     delete process.env.SKILLS_API_URL;
-    process.env.SKILLS_API_KEY = "sk_test_key";
+    process.env.SKILLS_API_KEY = "dummy-key-not-a-secret-for-fail-closed-test";
     try {
       await expect(pullSkills({ names: ["pulled-runbook"] })).rejects.toBeInstanceOf(MissingApiUrlError);
     } finally {
