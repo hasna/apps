@@ -15,6 +15,32 @@ export const SERVER_RUN_STATUSES = [
 
 export type ServerRunStatus = (typeof SERVER_RUN_STATUSES)[number];
 
+/**
+ * A fenced transition was refused because the run's lease_generation moved on.
+ *
+ * The worker that throws this is writing against a run it no longer owns: a
+ * newer claim took it, or a cancellation fenced it. The run is not missing -
+ * that is the null return - it has simply left the writer behind.
+ */
+export class StaleLeaseGenerationError extends Error {
+  readonly runId: string;
+  readonly expectedGeneration: number;
+  readonly currentGeneration: number;
+  readonly status: ServerRunStatus;
+
+  constructor(runId: string, expectedGeneration: number, currentGeneration: number, status: ServerRunStatus) {
+    super(
+      `late transition rejected for run ${runId}: expected lease_generation ${expectedGeneration}, ` +
+        `current ${currentGeneration} (status ${status})`,
+    );
+    this.name = "StaleLeaseGenerationError";
+    this.runId = runId;
+    this.expectedGeneration = expectedGeneration;
+    this.currentGeneration = currentGeneration;
+    this.status = status;
+  }
+}
+
 export interface ApiPrincipal {
   apiKeyId: string;
   orgId: string;
@@ -38,6 +64,12 @@ export interface ServerRunRecord {
   idempotencyKey?: string;
   correlationId: string;
   costCents: number;
+  /**
+   * The cancellation fence. Bumped by every claim and by every cancellation; a
+   * worker that transitions a run while carrying an older generation is writing
+   * against a run it no longer owns and is rejected (see transitionRun).
+   */
+  leaseGeneration: number;
   outputType?: string;
   outputPreview?: string;
   errorCode?: string;
@@ -67,6 +99,19 @@ export interface ServerArtifact {
   storageKind: "db" | "s3";
   storageKey?: string;
   bodyText?: string;
+  /**
+   * Output visibility. Runs' outputs are PRIVATE by default: the value is set at
+   * write time from the governance default and persisted, never inferred at read
+   * time. "public" is the explicit opt-in for artifacts the tenant intends to
+   * share; it is not a default on any path.
+   */
+  visibility: "private" | "public";
+  /**
+   * Finite retention, set at write time as createdAt + configured TTL. Absent
+   * only when the writing path opted out explicitly; the expiry sweep deletes
+   * artifacts whose expiresAt is in the past and records a deletion receipt.
+   */
+  expiresAt?: string;
   createdAt: string;
 }
 
@@ -152,6 +197,16 @@ export interface ClaimRunInput {
 }
 
 /**
+ * Fields a fenced transition may write, plus the lease_generation the fence
+ * itself bumps on cancellation. Everything updateRun can write plus the
+ * generation counter; the worker never patches the generation, the cancel
+ * service does.
+ */
+export type RunTransitionPatch = Partial<
+  Pick<ServerRunRecord, "status" | "outputType" | "outputPreview" | "errorCode" | "errorMessage" | "startedAt" | "completedAt" | "leaseGeneration">
+>;
+
+/**
  * What a store is, in the only two dimensions the server needs at boot: which backend
  * it is (for logs and diagnostics) and whether it survives a restart.
  *
@@ -200,6 +255,21 @@ export interface SkillsProductStore {
   getRun(principal: ApiPrincipal, runId: string): Promise<ServerRunRecord | null>;
   claimNextRun(input: ClaimRunInput): Promise<ServerRunRecord | null>;
   updateRun(runId: string, patch: Partial<Pick<ServerRunRecord, "status" | "outputType" | "outputPreview" | "errorCode" | "errorMessage" | "startedAt" | "completedAt">>): Promise<ServerRunRecord | null>;
+  /**
+   * Generation-fenced transition, the cancellation gate.
+   *
+   * Optional so a third-party store implementing this seam keeps compiling; the
+   * cancel service requires it and refuses to run without it (FENCING_UNSUPPORTED)
+   * rather than cancelling unfenced. When present it is the ONLY transition the
+   * worker paths use: the UPDATE re-asserts `lease_generation = <expected>` and
+   * reports zero rows when the generation moved on (a newer claim, or a
+   * cancellation), so a late write from a stale worker never lands.
+   *
+   * Returns null when the run does not exist; throws StaleLeaseGenerationError
+   * when the generation no longer matches. The distinction matters: "nothing
+   * there" and "you lost the fence" are different facts.
+   */
+  transitionRun?(runId: string, patch: RunTransitionPatch, expectedGeneration: number): Promise<ServerRunRecord | null>;
   appendLog(runId: string, orgId: string, level: ServerRunLog["level"], message: string): Promise<ServerRunLog>;
   listLogs(principal: ApiPrincipal, runId: string): Promise<ServerRunLog[]>;
   addArtifact(artifact: Omit<ServerArtifact, "createdAt">): Promise<ServerArtifact>;
