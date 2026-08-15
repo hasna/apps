@@ -6,10 +6,8 @@ import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import pg from "pg";
 import type { Pool, PoolClient } from "pg";
-import {
-  DEPRECATED_STORAGE_MODE_ALIASES,
-  normalizeStorageMode as normalizeStorageModeContract,
-} from "./generated/storage-kit/mode.js";
+import { resolveServerDataBackend, resolveDatabaseUrl, type ServerDataBackend } from "./generated/storage-kit/backend.js";
+import { assertNoLegacyStorageMode } from "./lib/retired-storage-mode.js";
 
 // ============================================================================
 // Server-only DSN boundary (project CLAUDE.md §2, NON-NEGOTIABLE)
@@ -421,7 +419,7 @@ export class PgAdapter implements DbAdapter {
 
   exec(sql: string): void {
     // exec runs raw DDL/utility SQL (no `?` params). It is not used in cloud
-    // runtime paths (no local schema/migrations in cloud mode), but honor it.
+    // runtime paths (no local schema/migrations in the postgresql backend), but honor it.
     this.pool.query(sql, []);
   }
 
@@ -437,7 +435,7 @@ export class PgAdapter implements DbAdapter {
   /**
    * Bun-sqlite-style `query()` shim so the CLI/MCP/server call sites that do
    * `db.query(sql).get(...)` / `.all(...)` / `.run(...)` work unchanged against
-   * Postgres in cloud mode. Behaves like {@link prepare}.
+   * Postgres in the postgresql backend. Behaves like {@link prepare}.
    */
   query(sql: string): PreparedStatement {
     return this.prepare(sql);
@@ -525,33 +523,6 @@ export class PgAdapterAsync {
   }
 }
 
-/**
- * Canonical storage-mode axis (aligned with the shared cloud-runtime contract).
- *
- * - `local`  — SQLite on disk. Default. Unchanged behavior.
- * - `cloud`  — pure remote: reads AND writes go directly to cloud Postgres.
- *
- * The legacy values `remote` and `hybrid` are still accepted as INPUT (env or
- * config file) for backwards compatibility, but they are DEPRECATED aliases
- * that normalize to `cloud`. See {@link DeprecatedStorageMode}. The historical
- * local<->remote sync engine (the "hybrid sync path") is retained only for
- * back-compat and is explicitly NOT the fleet cutover path.
- */
-export type StorageMode = "local" | "cloud";
-
-/**
- * Deprecated storage-mode aliases accepted as input; all map to `cloud`.
- *
- * DERIVED from the vendored contract, never restated. A hand-written copy of
- * this list is exactly what let `self_hosted` — an alias the contract accepts —
- * fall through mementos' private normalizer as "unrecognised" and silently
- * resolve to `local`.
- */
-export type DeprecatedStorageMode = (typeof DEPRECATED_STORAGE_MODE_ALIASES)[number];
-
-/** Any value accepted from env/config for the storage mode. */
-export type StorageModeInput = StorageMode | DeprecatedStorageMode;
-
 export const MEMENTOS_STORAGE_TABLES = [
   "projects",
   "agents",
@@ -575,12 +546,10 @@ export type MementosStorageTable = (typeof MEMENTOS_STORAGE_TABLES)[number];
 
 export const MEMENTOS_STORAGE_ENV = {
   databaseUrl: "HASNA_MEMENTOS_DATABASE_URL",
-  mode: "HASNA_MEMENTOS_STORAGE_MODE",
 } as const;
 
 export const MEMENTOS_STORAGE_FALLBACK_ENV = {
   databaseUrl: "MEMENTOS_DATABASE_URL",
-  mode: "MEMENTOS_STORAGE_MODE",
 } as const;
 
 type MementosStorageEnvKey = keyof typeof MEMENTOS_STORAGE_ENV;
@@ -593,7 +562,6 @@ export interface StorageConfig {
     password_env: string;
     ssl: boolean;
   };
-  mode: StorageMode;
   auto_sync_interval_minutes: number;
   feedback_endpoint: string;
   sync: {
@@ -610,7 +578,6 @@ const DEFAULT_STORAGE_CONFIG: StorageConfig = {
     password_env: "MEMENTOS_DATABASE_PASSWORD",
     ssl: true,
   },
-  mode: "local",
   auto_sync_interval_minutes: 0,
   feedback_endpoint: "",
   sync: {
@@ -625,11 +592,6 @@ const DATABASE_ENV_NAMES = [
   { name: MEMENTOS_STORAGE_FALLBACK_ENV.databaseUrl, deprecated: false },
 ] as const;
 
-const MODE_ENV_NAMES = [
-  { name: MEMENTOS_STORAGE_ENV.mode, deprecated: false },
-  { name: MEMENTOS_STORAGE_FALLBACK_ENV.mode, deprecated: false },
-] as const;
-
 export interface StorageEnv {
   name: string;
   deprecated: boolean;
@@ -641,12 +603,11 @@ export interface StorageEnvStatus {
   configured: boolean;
 }
 
-export type StorageRuntimeKind =
-  | "local-sqlite"
-  | "cloud-postgres";
+/** The server data backend, from the shared storage kit: `sqlite | postgresql`. */
+export type StorageRuntimeKind = ServerDataBackend;
 
 export interface StorageRuntimeContract {
-  contract: "mementos-cloud-runtime-v1";
+  contract: "mementos-storage-runtime-v1";
   kind: StorageRuntimeKind;
   fail_closed: boolean;
   local: {
@@ -659,9 +620,8 @@ export interface StorageRuntimeContract {
       reason: string;
     };
   };
-  remote: {
-    adapter: "postgres";
-    purpose: "primary-runtime";
+  backend: {
+    adapter: "sqlite" | "postgres";
     requested: boolean;
     configured: boolean;
     source: "env" | "config-file" | "none";
@@ -670,17 +630,6 @@ export interface StorageRuntimeContract {
     rds_compatible: boolean;
     fail_closed: boolean;
     missing: string[];
-  };
-  object_storage: {
-    s3: {
-      supported: false;
-      mutation_allowed: false;
-      reason: string;
-    };
-    aws: {
-      mutation_allowed: false;
-      reason: string;
-    };
   };
   migrations: {
     target: "postgres-rds-compatible";
@@ -693,7 +642,6 @@ export interface StorageRuntimeContract {
 }
 
 export interface SafeStorageConfigSummary {
-  mode: StorageMode;
   auto_sync_interval_minutes: number;
   feedback_endpoint_configured: boolean;
   sync: StorageConfig["sync"];
@@ -710,9 +658,8 @@ export interface SafeStorageConfigSummary {
 export interface NativeStorageStatus {
   ok: boolean;
   service: "mementos";
-  mode: StorageMode;
+  backend: StorageRuntimeKind;
   local_default: boolean;
-  remote_enabled: boolean;
   runtime: StorageRuntimeContract;
   database: {
     configured: boolean;
@@ -724,7 +671,6 @@ export interface NativeStorageStatus {
   tables: readonly MementosStorageTable[];
   env: {
     databaseUrl: StorageEnvStatus;
-    mode: StorageEnvStatus;
   };
   issues: string[];
   warnings: string[];
@@ -734,65 +680,6 @@ export interface NativeStorageStatus {
 function readEnv(name: string): string | null {
   const value = process.env[name]?.trim();
   return value ? value : null;
-}
-
-const warnedDeprecatedModes = new Set<string>();
-
-/**
- * Emit a one-time deprecation warning (to stderr, never stdout) when a caller
- * uses a legacy `remote`/`hybrid` mode value. Deduped per process so JSON
- * output and hot paths are not spammed.
- */
-function warnDeprecatedStorageMode(alias: DeprecatedStorageMode): void {
-  if (warnedDeprecatedModes.has(alias)) return;
-  warnedDeprecatedModes.add(alias);
-  process.emitWarning(
-    `${MEMENTOS_STORAGE_ENV.mode}="${alias}" is deprecated; use "cloud". ` +
-      `"${alias}" now maps to pure-remote cloud storage. The local<->remote ` +
-      `sync path is deprecated and is not the fleet cutover path.`,
-    { type: "DeprecationWarning", code: "MEMENTOS_STORAGE_MODE_ALIAS" }
-  );
-}
-
-/**
- * Resolve a raw storage-mode string, failing CLOSED on anything unrecognised.
- *
- * `null` means "no mode was configured here" and NOTHING else. It is returned
- * only for an absent or blank value. This distinction is the whole fix: the
- * previous implementation also returned `null` for an *unrecognised* value, so
- * `getStorageModeOverride()` read a typo as "unset" and `getStorageConfig()`
- * fell through to the `local` default. A process launched with
- * `HASNA_MEMENTOS_STORAGE_MODE=wubbleflurp` therefore read and WROTE a local
- * SQLite store nobody else sees, successfully, at exit code 0. A mistyped or
- * renamed mode was indistinguishable from a correct one.
- *
- * The valid set is NOT restated here. It is delegated to the vendored storage
- * contract (`src/generated/storage-kit/mode.ts`), which already throws on an
- * unknown value — the same resolver `@hasna/knowledge` uses, which is why
- * knowledge already failed closed while mementos did not. Keeping a private
- * second copy of the enum is what let the two drift in the first place.
- *
- * @param source Operator-facing name of where the value came from — an env key
- *   or the config file path. It is interpolated into the error because
- *   `Unknown storage mode: hosted` alone leaves the reader guessing which of
- *   several variables (or the config file) to edit.
- */
-function normalizeStorageMode(
-  value: string | undefined,
-  source: string
-): StorageMode | null {
-  if (!value || !value.trim()) return null;
-  let normalized: ReturnType<typeof normalizeStorageModeContract>;
-  try {
-    normalized = normalizeStorageModeContract(value);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`mementos: ${source}=${value} is not a valid mode. ${detail}`);
-  }
-  if (normalized.deprecatedAlias) {
-    warnDeprecatedStorageMode(normalized.deprecatedAlias as DeprecatedStorageMode);
-  }
-  return normalized.mode;
 }
 
 function readConfigFile(): Partial<StorageConfig> {
@@ -836,21 +723,25 @@ export function getStorageDatabaseEnvName(): string {
   return getStorageEnvName("databaseUrl");
 }
 
-function getStorageModeOverride(): StorageMode | null {
-  for (const env of MODE_ENV_NAMES) {
-    // Named with the key it actually came from, so the failure points at the
-    // variable the operator set rather than at the canonical one they did not.
-    const value = normalizeStorageMode(readEnv(env.name) ?? undefined, env.name);
-    if (value) return value;
-  }
-  return null;
+/**
+ * The server data backend selected by the environment: `postgresql` when
+ * HASNA_MEMENTOS_DATABASE_URL is set, `sqlite` otherwise. Runs the fail-loud
+ * ratchet first, so a retired storage-mode variable throws here rather than
+ * being silently ignored. Delegated to the vendored storage kit so the key
+ * spec and the ratchet cannot drift from the shared contract.
+ */
+export function getStorageBackend(env: NodeJS.ProcessEnv = process.env): ServerDataBackend {
+  return resolveServerDataBackend("mementos", env).backend;
+}
+
+/** The database URL for the selected server backend, or `null` when sqlite. */
+export function getStorageBackendDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string | null {
+  return resolveDatabaseUrl("mementos", env);
 }
 
 export function getStorageConfig(): StorageConfig {
+  assertNoLegacyStorageMode();
   const fileConfig = readConfigFile();
-  const modeOverride = getStorageModeOverride();
-  const envConnectionString = getConfiguredConnectionString();
-  const fileMode = normalizeStorageMode(fileConfig.mode, `${STORAGE_CONFIG_PATH} "mode"`);
 
   const merged: StorageConfig = {
     ...DEFAULT_STORAGE_CONFIG,
@@ -863,22 +754,9 @@ export function getStorageConfig(): StorageConfig {
       ...DEFAULT_STORAGE_CONFIG.sync,
       ...(fileConfig.sync ?? {}),
     },
-    mode: fileMode ?? DEFAULT_STORAGE_CONFIG.mode,
   };
 
-  if (modeOverride) {
-    merged.mode = modeOverride;
-  } else if (envConnectionString && merged.mode === "local") {
-    // A configured database URL auto-promotes to cloud (pure remote) when no
-    // explicit mode is set. Previously this promoted to the deprecated "hybrid".
-    merged.mode = "cloud";
-  }
-
   return merged;
-}
-
-export function getStorageMode(): StorageMode {
-  return getStorageConfig().mode;
 }
 
 const SECRET_QUERY_PARAMS = new Set([
@@ -986,7 +864,7 @@ function storageEnvStatus(key: MementosStorageEnvKey): StorageEnvStatus {
   };
 }
 
-interface RemoteDatabaseConfigStatus {
+interface PostgresBackendStatus {
   configured: boolean;
   source: "env" | "config-file" | "none";
   env_name: string | null;
@@ -996,9 +874,7 @@ interface RemoteDatabaseConfigStatus {
   rds_compatible: boolean;
 }
 
-function remoteDatabaseConfigStatus(
-  config: StorageConfig
-): RemoteDatabaseConfigStatus {
+function postgresBackendStatus(config: StorageConfig): PostgresBackendStatus {
   const env = getStorageDatabaseEnv();
   const envUrl = env ? readEnv(env.name) : null;
   if (env && envUrl) {
@@ -1044,15 +920,10 @@ function remoteDatabaseConfigStatus(
   };
 }
 
-function runtimeKindFor(mode: StorageMode): StorageRuntimeKind {
-  return mode === "cloud" ? "cloud-postgres" : "local-sqlite";
-}
-
 export function getSafeStorageConfigSummary(
   config: StorageConfig = getStorageConfig()
 ): SafeStorageConfigSummary {
   return {
-    mode: config.mode,
     auto_sync_interval_minutes: config.auto_sync_interval_minutes,
     feedback_endpoint_configured: config.feedback_endpoint.trim() !== "",
     sync: { ...config.sync },
@@ -1068,37 +939,38 @@ export function getSafeStorageConfigSummary(
 }
 
 export function getStorageStatus(): NativeStorageStatus {
+  assertNoLegacyStorageMode();
   const config = getStorageConfig();
-  const mode = config.mode;
-  const remoteRequested = mode === "cloud";
-  const remote = remoteDatabaseConfigStatus(config);
+  const backend = getStorageBackend();
+  const postgresRequested = backend === "postgresql";
+  const postgres = postgresBackendStatus(config);
   const issues: string[] = [];
   const warnings: string[] = [];
 
-  if (remoteRequested && !remote.configured) {
+  if (postgresRequested && !postgres.configured) {
     issues.push(
-      `Cloud PostgreSQL/RDS storage is requested but not configured. ${remote.issues.join(" ")}`
+      `PostgreSQL is selected (HASNA_MEMENTOS_DATABASE_URL) but not configured. ${postgres.issues.join(" ")}`
     );
   }
-  if (mode === "local" && remote.issues.length > 0 && remote.source !== "none") {
+  if (!postgresRequested && postgres.issues.length > 0 && postgres.source !== "none") {
     warnings.push(
-      `Cloud PostgreSQL/RDS configuration is present but invalid; cloud runtime stays disabled until fixed. ${remote.issues.join(" ")}`
+      `PostgreSQL configuration is present but invalid; the postgresql backend stays disabled until fixed. ${postgres.issues.join(" ")}`
     );
   }
-  if (mode === "local" && remote.configured) {
+  if (!postgresRequested && postgres.configured) {
     warnings.push(
-      "Cloud PostgreSQL/RDS configuration is present, but storage mode is local; cloud runtime stays disabled until mode is cloud."
+      "PostgreSQL configuration is present, but the selected backend is sqlite; the postgresql backend stays disabled until HASNA_MEMENTOS_DATABASE_URL is set."
     );
   }
 
-  const failClosed = remoteRequested && !remote.configured;
+  const failClosed = postgresRequested && !postgres.configured;
   const runtime: StorageRuntimeContract = {
-    contract: "mementos-cloud-runtime-v1",
-    kind: runtimeKindFor(mode),
+    contract: "mementos-storage-runtime-v1",
+    kind: backend,
     fail_closed: failClosed,
     local: {
       adapter: "sqlite",
-      primary_runtime: mode === "local",
+      primary_runtime: backend === "sqlite",
       data_dir: LOCAL_DATA_DIR,
       config_path: STORAGE_CONFIG_PATH,
       local_file_sync: {
@@ -1106,34 +978,22 @@ export function getStorageStatus(): NativeStorageStatus {
         reason: "Mementos stores local state in SQLite; it does not sync raw local data files.",
       },
     },
-    remote: {
+    backend: {
       adapter: "postgres",
-      purpose: "primary-runtime",
-      requested: remoteRequested,
-      configured: remote.configured,
-      source: remote.source,
-      env_name: remote.env_name,
-      redacted_url: remote.redacted_url,
-      rds_compatible: remote.rds_compatible,
+      requested: postgresRequested,
+      configured: postgres.configured,
+      source: postgres.source,
+      env_name: postgres.env_name,
+      redacted_url: postgres.redacted_url,
+      rds_compatible: postgres.rds_compatible,
       fail_closed: failClosed,
-      missing: remote.missing,
-    },
-    object_storage: {
-      s3: {
-        supported: false,
-        mutation_allowed: false,
-        reason: "No S3 object-storage adapter is part of this runtime.",
-      },
-      aws: {
-        mutation_allowed: false,
-        reason: "Diagnostics do not store sensitive values, change AWS resources, deploy, or mutate production data.",
-      },
+      missing: postgres.missing,
     },
     migrations: {
       target: "postgres-rds-compatible",
       command: "mementos storage migrate",
       dry_run_command: "mementos storage migrate --dry-run",
-      configured: remote.configured,
+      configured: postgres.configured,
       mutates_remote_on_apply: true,
       requires_approval_for_live_run: true,
     },
@@ -1142,21 +1002,19 @@ export function getStorageStatus(): NativeStorageStatus {
   return {
     ok: issues.length === 0,
     service: "mementos",
-    mode,
-    local_default: mode === "local",
-    remote_enabled: remoteRequested,
+    backend,
+    local_default: backend === "sqlite",
     runtime,
     database: {
-      configured: remote.configured,
-      redacted_url: remote.redacted_url,
-      source: remote.source,
-      env_name: remote.env_name,
-      rds_compatible: remote.rds_compatible,
+      configured: postgres.configured,
+      redacted_url: postgres.redacted_url,
+      source: postgres.source,
+      env_name: postgres.env_name,
+      rds_compatible: postgres.rds_compatible,
     },
     tables: MEMENTOS_STORAGE_TABLES,
     env: {
       databaseUrl: storageEnvStatus("databaseUrl"),
-      mode: storageEnvStatus("mode"),
     },
     issues,
     warnings,
@@ -1176,14 +1034,15 @@ function getConfiguredConnectionString(): string | undefined {
 }
 
 export function getStorageConnectionString(dbName = "mementos"): string {
+  assertNoLegacyStorageMode();
   // Fail closed on clients: the raw RDS DSN is server-only (CLAUDE.md §2). A
   // client machine must use the HTTP API, never a Postgres DSN.
   if (!isServerContext()) {
     throw new Error(
       "Refusing to construct an RDS Postgres DSN outside the mementos-serve server. " +
         "The raw database DSN is NEVER distributed to client machines. " +
-        "Clients must use the self-hosted HTTP API: set HASNA_MEMENTOS_API_URL and " +
-        "HASNA_MEMENTOS_API_KEY (and unset HASNA_MEMENTOS_DATABASE_URL / HASNA_MEMENTOS_STORAGE_MODE)."
+        "Clients must use the HTTP API: set HASNA_MEMENTOS_API_URL and " +
+        "HASNA_MEMENTOS_API_KEY (and unset HASNA_MEMENTOS_DATABASE_URL)."
     );
   }
   const envConnectionString = getConfiguredConnectionString();

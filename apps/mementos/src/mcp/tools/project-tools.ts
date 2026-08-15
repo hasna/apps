@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getStorageConfig } from "../../storage.js";
+import { getStorageBackend } from "../../storage.js";
 import { z } from "zod";
 import {
   registerProject,
@@ -35,8 +35,10 @@ function formatError(error: unknown): string {
 }
 
 function storageSyncEnabled(): boolean {
-  const mode = getStorageConfig().mode;
-  return mode === "cloud";
+  // The postgresql server backend (HASNA_MEMENTOS_DATABASE_URL present) is
+  // what makes the local<->postgres sync engine meaningful. Deployment modes
+  // no longer exist; the server backend is the only switch.
+  return getStorageBackend() === "postgresql";
 }
 
 function syncMachinesTable(direction: "push" | "pull", currentMachineId?: string): void {

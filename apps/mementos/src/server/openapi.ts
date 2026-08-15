@@ -32,7 +32,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
                   properties: {
                     status: { type: "string" },
                     version: { type: "string" },
-                    mode: { type: "string", enum: ["local", "cloud"] },
+                    backend: { type: "string", enum: ["sqlite", "postgresql"] },
                   },
                 },
               },
@@ -106,7 +106,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     info: {
       title: "@hasna/mementos serve API",
       version,
-      description: "Universal memory system for AI agents — REST API (self_hosted).",
+      description: "Universal memory system for AI agents — REST API over the SQLite or PostgreSQL server backend.",
     },
     servers: [{ url: "/v1" }, { url: "/api" }],
     components: {
