@@ -93,6 +93,8 @@ reported success about things it had not actually established.
   than reached by deleting a check. Physical classes are untouched: `dgx-spark`
   keeps `tailscale:join` and gets no absence item.
 
+## [0.2.26] - 2026-08-15
+
 ## [0.2.25] - 2026-08-14
 
 ### Fixed

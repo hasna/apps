@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.3.1
+
 ## 0.3.0
 
 **Security + correctness hotfix. Two defects, both verified live against
