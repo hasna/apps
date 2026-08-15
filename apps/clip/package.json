@@ -28,6 +28,10 @@
     "./server": {
       "types": "./dist/server/server.d.ts",
       "import": "./dist/server/server.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk.d.ts",
+      "import": "./dist/sdk.js"
     }
   },
   "files": [
@@ -48,7 +52,7 @@
     "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target bun --packages external --splitting",
     "build:mcp": "bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external --splitting",
     "build:server": "bun build src/server/index.ts --outdir dist/server --target bun --packages external --splitting",
-    "build:lib": "bun build src/index.ts src/storage.ts src/server/server.ts --outdir dist --target bun --packages external --splitting",
+    "build:lib": "bun build src/index.ts src/sdk.ts src/storage.ts src/server/server.ts --outdir dist --target bun --packages external --splitting",
     "build:types": "tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",

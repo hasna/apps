@@ -245,7 +245,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "servers", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "sheets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "signatures", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "skills", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "slides", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "snapshots", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "statusline", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -362,6 +361,26 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "gateway",
     cause: "kitVersion 0.4.1 predates the manifest shape (deploymentModes/serviceSurfaces); validates clean at 0.5.2. kitVersion claim is stale; pinned dep 0.2.2 lacks repo-conformance.",
     task: "todos 9dc0ee28 (contracts task — gateway)",
+  },
+  {
+    member: "clip",
+    cause: "imported by #165; surface_matrix: api+sdk are deferred (not supported) and waivers are ineligible for cli-with-store shipping clip-serve without waiverProfile; service_api_topology: a supported API surface is required; self_host_artifact: service-class repo has no docker-compose.yml/Dockerfile; storage_capabilities: missing storage engines sqlite+postgresql and storage.pgTestGate (postgresql unwaivable while clip-serve ships; clip is sqlite-local). Validated at pinned 0.8.7.",
+    task: "todos ee9fbb4d (import row — clip)",
+  },
+  {
+    member: "telephony",
+    cause: "fail server_backend_configuration: HASNA_TELEPHONY_STORAGE_MODE was removed. Delete the storage-mode variable; set HASNA_TELEPHONY_DATABASE_URL to select the postgresql server backend, or leave it unset for sqlite. Pre-existing at main (measured 2026-08-15, pristine origin/main).",
+    task: "todos a5ed4c94 (standard-adherence drift)",
+  },
+  {
+    member: "loops",
+    cause: "fail credential_seam_compliance: src/lib/cloud/storage.ts + transport.ts vendored copies of the @hasna/contracts client seam (resolveStorageClient/resolveClientTransport/createHasnaHttpTransport/createClientTransport); import from @hasna/contracts/client instead. Pre-existing at main (measured 2026-08-15, pristine origin/main).",
+    task: "todos a5ed4c94 (standard-adherence drift)",
+  },
+  {
+    member: "machines",
+    cause: "fail server_backend_configuration: HASNA_MACHINES_STORAGE_MODE was removed. Delete the storage-mode variable; set HASNA_MACHINES_DATABASE_URL to select the postgresql server backend, or leave it unset for sqlite. Pre-existing at main (measured 2026-08-15, pristine origin/main).",
+    task: "todos a5ed4c94 (standard-adherence drift)",
   },
   {
     member: "hooks",
