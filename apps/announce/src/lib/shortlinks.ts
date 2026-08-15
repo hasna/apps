@@ -49,6 +49,7 @@ interface ShortlinksModuleLike {
       title?: string;
       metadata?: Record<string, unknown>;
     }): { slug: string; short_url?: string; hostname: string };
+    getDefaultDomain(): { hostname: string } | null;
     close(): void;
   };
 }
@@ -90,14 +91,24 @@ export class ShortlinksPackageAdapter implements ShortlinkAdapter {
 }
 
 /**
- * Resolve the best available adapter: `@hasna/shortlinks` when importable,
- * otherwise the pass-through adapter.
+ * Resolve the best available adapter: `@hasna/shortlinks` when importable and
+ * a default domain is configured, otherwise the pass-through adapter. A real
+ * send must never crash on a missing shortlink configuration.
  */
 export async function resolveShortlinkAdapter(): Promise<ShortlinkAdapter> {
   try {
     const adapter = new ShortlinksPackageAdapter();
-    // Probe the import only; do not create links yet.
-    await (adapter as unknown as { loadModule(): Promise<unknown> }).loadModule();
+    const { ShortlinksStore } = await (
+      adapter as unknown as { loadModule(): Promise<ShortlinksModuleLike> }
+    ).loadModule();
+    const store = new ShortlinksStore();
+    try {
+      if (store.getDefaultDomain() === null) {
+        return new NoopShortlinkAdapter();
+      }
+    } finally {
+      store.close();
+    }
     return adapter;
   } catch {
     return new NoopShortlinkAdapter();

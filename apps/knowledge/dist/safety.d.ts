@@ -2,7 +2,6 @@ import type { Database } from 'bun:sqlite';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
 export type SafetyDecision = 'allow' | 'deny' | 'requires_approval';
 export interface SafetyPolicy {
-    mode: 'local' | 'hosted';
     allowWriteRoots: string[];
     readOnlySourceAccess: boolean;
     network: {

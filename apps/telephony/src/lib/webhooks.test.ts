@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,6 +35,14 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
+
+function clearEnv(): void {
+  for (const name of cloudEnvNames) delete process.env[name];
+}
+
+beforeEach(() => {
+  clearEnv();
+});
 
 afterEach(() => {
   restoreEnv();
@@ -96,7 +104,6 @@ describe("dispatchWebhook", () => {
     try {
       tempRoot = mkdtempSync(join(tmpdir(), "telephony-webhook-dispatch-test-"));
       process.env.HASNA_TELEPHONY_DB_PATH = join(tempRoot, "telephony.db");
-      process.env.HASNA_TELEPHONY_STORAGE_MODE = "postgres";
       process.env.HASNA_TELEPHONY_API_URL = `http://127.0.0.1:${cloud.port}`;
       process.env[apiKeyEnvName] = ["synthetic", "api", "key"].join("-");
       resetStore();

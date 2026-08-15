@@ -1,6 +1,6 @@
-# Mementos cloud cutover runbook
+# Mementos cutover runbook
 
-This runbook moves `@hasna/mementos` from per-machine SQLite to the self-hosted
+This runbook moves `@hasna/mementos` from per-machine SQLite to the
 PostgreSQL-backed REST service implemented by the current branch.
 
 > Mementos flips last. Memory recall and prompt injection are on the hot path of
@@ -18,21 +18,23 @@ CLI / MCP / SDK client
                     | HTTPS /v1, bearer API key
                     v
               mementos-serve
-  HASNA_MEMENTOS_STORAGE_MODE=cloud
   HASNA_MEMENTOS_DATABASE_URL=postgres://...
                     |
                     v
              PostgreSQL / RDS
 ```
 
-- `local` is the default and uses SQLite.
-- `cloud` is pure remote on `mementos-serve`: reads and writes go directly to
-  PostgreSQL. There is no SQLite cache or merge layer.
-- `remote` and `hybrid` are deprecated input aliases for `cloud`.
+- There are no deployment modes (owner directive 2026-07-29; knowledge
+  k_ms5wv466_u0jidq). The server data backend is the only runtime switch:
+  `sqlite | postgresql`, selected by `HASNA_MEMENTOS_DATABASE_URL` presence.
+  Any retired storage-mode variable (`HASNA_MEMENTOS_STORAGE_MODE` or an
+  alias) is an error and must be deleted.
+- The `postgresql` backend is pure remote on `mementos-serve`: reads and
+  writes go directly to PostgreSQL. There is no SQLite cache or merge layer.
 - Raw database credentials are server/administrative secrets. Fleet clients
   must use the authenticated API and must not receive the DSN.
-- The compatibility `storage push`, `pull`, and `sync` paths are not the cutover
-  architecture.
+- The compatibility `storage push`, `pull`, and `sync` paths are not the
+  cutover architecture.
 
 ## 2. Prerequisites
 
@@ -115,14 +117,13 @@ curl -fsS https://mementos.example.com/ready
 curl -fsS https://mementos.example.com/health
 ```
 
-`/ready` must report `ready` in `cloud` mode before clients move.
+`/ready` must report `ready` with the `postgresql` backend before clients move.
 
 ## 5. Configure the server
 
 The service environment is:
 
 ```bash
-HASNA_MEMENTOS_STORAGE_MODE=cloud
 HASNA_MEMENTOS_DATABASE_URL=postgres://app-role:REDACTED@db.internal/mementos?sslmode=require
 API_KEY_SIGNING_SECRET=REDACTED
 MEMENTOS_HOST=0.0.0.0
@@ -134,12 +135,10 @@ the built-in server is HTTP. `MEMENTOS_CORS_ORIGIN` should name the one browser
 origin allowed to use the dashboard/API.
 
 Database URL precedence is `HASNA_MEMENTOS_DATABASE_URL`, then
-`MEMENTOS_DATABASE_URL`. Mode precedence is the matching `HASNA_...` variable,
-then the fallback, then `~/.hasna/mementos/storage/config.json`. A database URL
-without an explicit mode auto-promotes the server from local to cloud, but set
-the mode explicitly during a cutover.
+`MEMENTOS_DATABASE_URL`. The postgresql backend is selected by the URL's
+presence; without it the server uses SQLite.
 
-Cloud startup and requests fail closed when the URL is missing, malformed,
+Server startup and requests fail closed when the URL is missing, malformed,
 non-PostgreSQL, or unreachable. Status output redacts the URL.
 
 ## 6. Backfill existing memories
@@ -171,8 +170,8 @@ export HASNA_MEMENTOS_API_URL=https://mementos.example.com
 export HASNA_MEMENTOS_API_KEY=REDACTED
 ```
 
-Both API variables are required. A lingering database URL disables API mode,
-so validate before any write:
+Both API variables are required. A lingering database URL on a client is an
+error (the DSN is server-only), so validate before any write:
 
 ```bash
 mementos storage mode --json
@@ -184,6 +183,7 @@ Expected fields include:
 {
   "backend": "cloud-api",
   "api_mode": true,
+  "server_backend": "postgresql",
   "api_key_present": true
 }
 ```
@@ -221,21 +221,21 @@ There are two separate rollback decisions:
 
 1. **Client rollback:** remove the API URL/key and restore the client-local
    SQLite backup/path. This returns that client to its pre-cutover snapshot;
-   cloud writes made after cutover remain in PostgreSQL.
-2. **Service rollback:** deploy a known-good server version or switch its mode
-   to local only if the service has an intentionally provisioned authoritative
-   local database. Do not silently make an empty container-local SQLite file
-   authoritative.
+   postgres writes made after cutover remain in PostgreSQL.
+2. **Service rollback:** deploy a known-good server version or select the
+   sqlite backend by removing `HASNA_MEMENTOS_DATABASE_URL` only if the
+   service has an intentionally provisioned authoritative local database. Do
+   not silently make an empty container-local SQLite file authoritative.
 
 Keep the PostgreSQL data and pre-cutover backups until reconciliation is
-complete. Because pure-remote mode has no bidirectional cache, rollback never
-automatically merges post-cutover cloud writes into old local files.
+complete. Because the postgresql backend has no bidirectional cache, rollback
+never automatically merges post-cutover writes into old local files.
 
 ## 10. Final checklist
 
 - [ ] Schema migration reports no errors.
 - [ ] Readiness proof succeeds from the server network.
-- [ ] `/ready` reports `cloud` and `ready`.
+- [ ] `/ready` reports `ready` with the `postgresql` backend.
 - [ ] Authentication rejects missing/invalid credentials.
 - [ ] Backfill has zero rejected records.
 - [ ] Every client reports `backend: cloud-api` before writing.

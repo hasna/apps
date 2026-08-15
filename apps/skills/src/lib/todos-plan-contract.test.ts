@@ -82,6 +82,7 @@ describe("todos-plan production contract", () => {
         homeDir: home,
         names: ["todos-plan"],
         agents: ["codewith"],
+        sourceDir: join(import.meta.dir, "..", ".."),
         force: true,
       });
 

@@ -21,13 +21,14 @@ export interface RealtimeSession {
 
 const sessions = new Map<string, RealtimeSession>();
 
-export function isCloudMode(): boolean {
+/** True when a public webhook base URL is configured (required for Twilio Media Streams to reach this server). */
+export function hasWebhookBaseUrl(): boolean {
   const config = getConfig();
   return !!config.webhook_base_url;
 }
 
 export function createRealtimeSession(callSid: string): RealtimeSession {
-  if (!isCloudMode()) {
+  if (!hasWebhookBaseUrl()) {
     throw new Error("OpenAI Realtime streaming requires TELEPHONY_WEBHOOK_URL to be set");
   }
 

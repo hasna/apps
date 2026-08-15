@@ -75,8 +75,8 @@ export declare function retrieveKnowledgeContextFromSearch(search: HybridSearchR
 }): KnowledgeContextPack;
 export declare function retrieveKnowledgeContext(options: RetrievalOptions): Promise<KnowledgeContextPack>;
 /**
- * Retrieve context from an in-memory knowledge-item corpus (api / cloud mode).
+ * Retrieve context from an in-memory knowledge-item corpus fetched by HTTP.
  * No local sqlite catalog means no graph evidence — the shared corpus is the
- * cloud knowledge-items fetched through the item Store.
+ * knowledge-items fetched through the item Store.
  */
 export declare function retrieveKnowledgeContextFromItems(items: KnowledgeItem[], options: Omit<RetrievalOptions, 'dbPath' | 'legacyStorePath'>): Promise<KnowledgeContextPack>;

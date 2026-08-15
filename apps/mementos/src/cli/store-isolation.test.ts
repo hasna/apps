@@ -8,6 +8,7 @@ import {
   DATABASE_URL_ENV_KEYS,
 } from "../db/api-mode.js";
 import { MEMENTOS_STORAGE_ENV, MEMENTOS_STORAGE_FALLBACK_ENV } from "../storage.js";
+import { LEGACY_STORAGE_MODE_KEYS } from "../lib/retired-storage-mode.js";
 import {
   STORE_SELECTOR_ENV_KEYS,
   assertLocalStoreBackend,
@@ -96,17 +97,24 @@ describe("store-isolation guard", () => {
     // Blanking the DSN is deliberate and was load-bearing for the old defect: it
     // SATISFIES api mode's "no DATABASE_URL present" precondition, so nothing
     // else could have stopped the flip to cloud. Only precedence 1 does.
+    //
+    // The retired storage-mode keys are DELETED rather than blanked: since the
+    // deployment-mode removal, any STORAGE_MODE variable that is SET — even
+    // blank — throws the fail-loud ratchet, so leaving them in the fixture
+    // would test the ratchet instead of the precedence rule it exists to test.
     const preFixEnv: Record<string, string> = {
       ...(process.env as Record<string, string>),
       MEMENTOS_DB_PATH: DB_PATH,
       HASNA_MEMENTOS_DB_PATH: DB_PATH,
       HASNA_MEMENTOS_DATABASE_URL: "",
       MEMENTOS_DATABASE_URL: "",
-      HASNA_MEMENTOS_STORAGE_MODE: "",
-      MEMENTOS_STORAGE_MODE: "",
       HASNA_MEMENTOS_API_URL: UNREACHABLE_API_URL,
       HASNA_MEMENTOS_API_KEY: FAKE_API_KEY,
     };
+    delete preFixEnv["HASNA_MEMENTOS_STORAGE_MODE"];
+    delete preFixEnv["MEMENTOS_STORAGE_MODE"];
+    delete preFixEnv["HASNA_MEMENTOS_MODE"];
+    delete preFixEnv["MEMENTOS_MODE"];
 
     const report = await reportFor(preFixEnv);
     expect(report.api_mode).toBe(false);
@@ -208,8 +216,7 @@ describe("store-isolation guard", () => {
       ...API_URL_ENV_KEYS,
       ...API_KEY_ENV_KEYS,
       ...DATABASE_URL_ENV_KEYS,
-      MEMENTOS_STORAGE_ENV.mode,
-      MEMENTOS_STORAGE_FALLBACK_ENV.mode,
+      ...LEGACY_STORAGE_MODE_KEYS,
       MEMENTOS_STORAGE_ENV.databaseUrl,
       MEMENTOS_STORAGE_FALLBACK_ENV.databaseUrl,
     ];

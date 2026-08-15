@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.47
+
+Deduplicates registry rows by canonical path identity on case-insensitive
+filesystems (PR #140).
+
+- The registry index now dedupes rows keyed on the canonical path, fixing
+  duplicate rows for the same repository on case-insensitive filesystems such
+  as macOS.
+- Regression coverage added for case-insensitive duplicate detection.
+
 ## 0.1.46
 
 Fixes `repos status` credential-like remote counts treating repository names

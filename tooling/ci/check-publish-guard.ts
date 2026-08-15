@@ -156,12 +156,28 @@ function packFileNames(pkgDir: string): string[] {
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (e: any) {
-    const tail = String(e?.stderr ?? e?.message ?? "")
+    // npm's stderr tail is generic boilerplate ("command failed", "sh -c
+    // bun run verify:pack", "A complete log...") that names the failing
+    // prepack script but not the failure itself. The prepack's own error
+    // output is forwarded by npm into ITS stdout, so surface the captured
+    // stdout tail as well (Node attaches it to the error object) — otherwise
+    // the guard reports the mechanism without the cause and every prepack
+    // failure reads as "command failed".
+    const stdoutTail = String(e?.stdout ?? "")
       .trim()
       .split("\n")
-      .slice(-3)
+      .slice(-40)
       .join("\n");
-    throw new Error(`npm pack --dry-run --json failed in ${pkgDir}${tail ? ":\n  " + tail : ""}`);
+    const stderrTail = String(e?.stderr ?? "")
+      .trim()
+      .split("\n")
+      .slice(-5)
+      .join("\n");
+    throw new Error(
+      `npm pack --dry-run --json failed in ${pkgDir}` +
+        (stdoutTail ? `\n  prepack output tail:\n    ${stdoutTail}` : "") +
+        (stderrTail ? `\n  npm stderr tail:\n    ${stderrTail}` : ""),
+    );
   }
   const { files } = parsePackJson(out);
   return files.map((f) => f.path ?? "");
@@ -281,6 +297,10 @@ function selfTest(): number {
     check(
       "broken pack (prepack exit 1) FAILS the guard (rc=1, reported, not silent)",
       broken.rc === 1 && brokenOut.includes("PUBLISH-GUARD FAILED") && brokenOut.includes("self-test-broken"),
+    );
+    check(
+      "broken pack surfaces the prepack's own output tail (cause visible, not just npm boilerplate)",
+      broken.rc === 1 && brokenOut.includes("prepack output tail") && brokenOut.includes("broken-prepack-output"),
     );
 
     const blockedRoot = path.join(root, "blocked-root");

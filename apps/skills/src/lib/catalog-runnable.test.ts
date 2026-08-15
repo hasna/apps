@@ -176,15 +176,16 @@ describe("every catalog entry is runnable without a vendor service (R2)", () => 
   });
 });
 
-describe("the published package carries what the catalog promises", () => {
+describe("the published package carries what the catalog promises (zero corpus)", () => {
   const packed = getPackedFiles(REPO_ROOT);
   const packedSet = new Set(packed);
 
   test("packs a non-trivial file list", () => {
-    // 85 skills (19 instruction + 66 executable) plus _common, docs, migrations,
-    // README, and LICENSE pack to ~500 files. Floored well below the real count
-    // so it stays anti-vacuous without pinning an exact number.
-    expect(packed.length).toBeGreaterThan(200);
+    // migrations, docs, README, LICENSE, and package.json pack to well over 5
+    // files even before a build. Floored well below the real count so it stays
+    // anti-vacuous without pinning an exact number — and so an unbuilt local
+    // `bun test` does not fail on this test before CI's build-then-test order.
+    expect(packed.length).toBeGreaterThan(5);
   });
 
   // Inverts the retired "hosted src is excluded" guard. `files` is
@@ -197,17 +198,20 @@ describe("the published package carries what the catalog promises", () => {
     expect(files.filter((entry) => /^!skills\/.*\/src$/.test(entry))).toEqual([]);
   });
 
-  test("every executable skill's entry point actually ships", () => {
-    const missing = executableSkills.filter(
+  // The zero-corpus boundary, per skill: the catalog lives in the tree, never in
+  // the tarball. Every one of these assertions passes vacuously only if the whole
+  // packlist is empty — which the non-trivial-file-list test above prevents.
+  test("no executable skill's entry point ships in the package", () => {
+    const shipped = executableSkills.filter(
       (slug) =>
-        !packedSet.has(`skills/${slug}/src/index.ts`) && !packedSet.has(`skills/${slug}/src/index.js`),
+        packedSet.has(`skills/${slug}/src/index.ts`) || packedSet.has(`skills/${slug}/src/index.js`),
     );
-    expect(missing).toEqual([]);
+    expect(shipped).toEqual([]);
   });
 
-  test("every instruction skill's SKILL.md actually ships", () => {
-    const missing = instructionSkills.filter((slug) => !packedSet.has(`skills/${slug}/SKILL.md`));
-    expect(missing).toEqual([]);
+  test("no instruction skill's SKILL.md ships in the package", () => {
+    const shipped = instructionSkills.filter((slug) => packedSet.has(`skills/${slug}/SKILL.md`));
+    expect(shipped).toEqual([]);
   });
 });
 

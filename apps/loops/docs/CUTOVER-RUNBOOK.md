@@ -4,8 +4,10 @@ Status: **self-hosted control-plane backend landed; local daemon cutover is not
 complete.** Do not flip scheduled production execution away from local SQLite
 until the runner and migration follow-ups below are green.
 
-Deployment vocabulary: `self_hosted` is the Hasna-owned AWS/RDS control-plane
-deployment. `cloud` is the future hosted SaaS contract for outside users.
+Deployment vocabulary: there are no deployment modes. `loops-serve` is the
+control-plane server in this package; it selects PostgreSQL from
+`HASNA_LOOPS_DATABASE_URL`. Hasna's own AWS deployment is customer-zero of the
+user-hosted story, not a separate mode.
 
 ## What Shipped
 
@@ -155,9 +157,10 @@ Before step 1, satisfy and preserve evidence for these hard gates:
 9. Wire minimum alarms before cutover: ALB unhealthy hosts, ALB 5xx, ALB target
    latency, ECS running count below desired count, ECS task exits, RDS CPU,
    RDS connections, RDS free storage, and log error-rate/auth-anomaly signals.
-10. Start `loops-serve` with `HASNA_LOOPS_STORAGE_MODE=self_hosted`, separate
-   `HASNA_LOOPS_DATABASE_URL` and `HASNA_LOOPS_AUTH_DATABASE_URL` logins, and the API signing secret from the approved
-   vault item. The signing key must be at least 16 bytes. Do not log or copy the
+10. Start `loops-serve` with separate `HASNA_LOOPS_DATABASE_URL` and
+   `HASNA_LOOPS_AUTH_DATABASE_URL` logins and the API signing secret from the approved
+   vault item. There is no mode variable: the server selects PostgreSQL from
+   the configured DSN. The signing key must be at least 16 bytes. Do not log or copy the
    secret value into task evidence.
 11. Verify `/health`, `/ready`, `/version`, and `/openapi.json`.
 12. Verify an authenticated `/v1` read/write smoke against a throwaway loop and
@@ -176,7 +179,7 @@ Before step 1, satisfy and preserve evidence for these hard gates:
   work items, goals, and audit rows.
 - A full-history no-loss migration path from local SQLite into the self-hosted
   control plane. Current `loops export`/`loops import` and
-  `loops self-hosted push --apply` cover workflow specs and loop definitions
+  `loops push --apply` cover workflow specs and loop definitions
   with safe paused/archived defaults; they intentionally block unsupported live
   history.
 - Hosted SaaS integration outside this public package.
@@ -197,9 +200,9 @@ path, repoint the previous service revision's runtime/auth credentials and
 endpoint to that separate target, verify the restored migration ledger and
 expected row counts, then prove the previous image's `/ready`, authenticated
 loop CRUD, runner claim/finalize, and
-`loops self-hosted push --dry-run --no-runs`. Never attempt an in-place reverse
+`loops push --dry-run --no-runs`. Never attempt an in-place reverse
 migration or overwrite the enforced database during rollback.
 Local scheduled execution remains on SQLite unless operators explicitly
-configure a runner/control-plane cutover, so removing `HASNA_LOOPS_API_URL` and
-`HASNA_LOOPS_DATABASE_URL` returns the standalone CLI/daemon perspective to
-`local`.
+configure a runner/control-plane cutover, so unsetting `HASNA_LOOPS_API_URL`
+and `HASNA_LOOPS_API_KEY` returns the standalone CLI/daemon to the local file
+connection.

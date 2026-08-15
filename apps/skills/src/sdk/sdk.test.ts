@@ -13,6 +13,7 @@ useDefaultTestTimeout();
 import {
   ArtifactStorage,
   DispatcherNotImplementedError,
+  E2bDispatcher,
   EcsDispatcher,
   RUN_PROTOCOL_VERSION,
   SqliteSkillsStore,
@@ -30,6 +31,27 @@ import {
   runProtocolSchema,
   runTerminalSchema,
 } from "./index.js";
+import { MemoryRunExecutionStore } from "./execution/storage.js";
+import type { FrozenAdmission } from "./execution/types.js";
+
+function stubAdmission(): FrozenAdmission {
+  return {
+    contractVersion: RUN_PROTOCOL_VERSION,
+    runId: "run_1",
+    tenantId: "t",
+    skillId: "s",
+    skillVersion: "1.0.0",
+    bundleDigest: "sha256:" + "0".repeat(64),
+    runtimeImageDigest: "sha256:" + "0".repeat(64),
+    dependencyLayerTag: null,
+    inputDigest: "0".repeat(64),
+    runtime: "bun",
+    policy: { egress: "deny", egressAllowlist: [], networkByteCap: 0 },
+    limits: { maxDurationMs: 1, maxMemoryMb: 1, maxCpuUnits: 256, maxArtifactsBytes: 1, maxConcurrency: 1 },
+    idempotencyKey: "stub",
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+}
 
 const PRINCIPAL = {
   apiKeyId: "key_sdk_test",
@@ -200,11 +222,20 @@ describe("sdk surface", () => {
     expect(readBack?.status).toBe("succeeded");
   });
 
-  test("dispatcher interfaces exist; the ECS adapter fails closed until implemented", async () => {
-    const dispatcher = new EcsDispatcher();
-    expect(dispatcher).toBeDefined();
-    await expect(dispatcher.submit({ id: "run_1" } as never)).rejects.toThrow(DispatcherNotImplementedError);
-    await expect(dispatcher.cancel("run_1")).rejects.toThrow(DispatcherNotImplementedError);
+  test("dispatcher adapters: ECS requires a client + store; E2B fails closed until the infinity lane lands", async () => {
+    // The ECS adapter is implemented: a run with no admission record fails
+    // closed instead of pretending to launch.
+    const outcome = await new EcsDispatcher(
+      { cluster: "c", taskDefinition: "t", containerName: "n", subnets: [], securityGroups: [], region: "us-east-1" },
+      { runTask: async () => ({ taskArn: "arn:aws:ecs:us-east-1:mock-account:task/mock" }), listTasksByStartedBy: async () => [], describeTasks: async () => [], stopTask: async () => {} },
+      { store: new MemoryRunExecutionStore() },
+    ).launchAttempt("run_missing");
+    expect(outcome.kind).toBe("no-admission");
+
+    // The E2B lane is a typed stub: submit/cancel exist and fail closed.
+    const e2b = new E2bDispatcher();
+    expect((await e2b.submit(stubAdmission())).accepted).toBe(false);
+    expect((await e2b.cancel("run_1")).accepted).toBe(false);
     expect(new DispatcherNotImplementedError("EcsDispatcher", "submit").message).toContain("EcsDispatcher");
   });
 

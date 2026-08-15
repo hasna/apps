@@ -76,7 +76,7 @@ export function pgliteClient(db: PGlite): PoolQueryClient {
 
 /**
  * Apply the real deploy schema, in the same order and with the same pieces as
- * `scripts/apply-cloud-migrations.mjs`: the pgcrypto extension, every
+ * `scripts/apply-postgres-migrations.mjs`: the pgcrypto extension, every
  * PG_MIGRATIONS statement, then the api-keys ledger the serve auth middleware
  * reads.
  *

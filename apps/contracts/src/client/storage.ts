@@ -28,7 +28,6 @@
 import type { Env } from "../env-token.js";
 import {
   createClientTransport,
-  HasnaHttpError,
   type HasnaHttpTransport,
   type HasnaRequestOptions,
   type QueryParams,
@@ -152,6 +151,26 @@ function extractCursor(raw: unknown): string | null {
 }
 
 /**
+ * True when `error` is the transport's not-found error (status 404).
+ *
+ * The published package builds `./client` and `./client/storage` as SEPARATE
+ * bundle entries, so each bundle carries its own copy of the `HasnaHttpError`
+ * class and `instanceof` is always false across the boundary: the transport
+ * throws ITS copy while this module checks ITS copy, which silently disables
+ * the documented 404 -> null / 404 -> swallowed conversion. Match on the
+ * documented shape instead (error name + status), which holds for both the
+ * same-module and the cross-bundle case.
+ */
+function isNotFoundHttpError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: unknown }).name === "HasnaHttpError" &&
+    (error as { status?: unknown }).status === 404
+  );
+}
+
+/**
  * Wrap an HTTP transport with the resource CRUD storage interface. Use this when
  * you already have a transport (e.g. from `createClientTransport`).
  */
@@ -175,7 +194,7 @@ export function createHasnaStorageClient(name: string, transport: HasnaHttpTrans
       try {
         return await transport.get<T>(entityPath(resource, id), options);
       } catch (error) {
-        if (error instanceof HasnaHttpError && error.status === 404) return null;
+        if (isNotFoundHttpError(error)) return null;
         throw error;
       }
     },
@@ -199,7 +218,7 @@ export function createHasnaStorageClient(name: string, transport: HasnaHttpTrans
         await transport.del(entityPath(resource, id), undefined, options);
       } catch (error) {
         // Deleting an already-absent entity is not an error (idempotent delete).
-        if (error instanceof HasnaHttpError && error.status === 404) return;
+        if (isNotFoundHttpError(error)) return;
         throw error;
       }
     },

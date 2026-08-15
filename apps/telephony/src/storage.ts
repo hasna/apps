@@ -1,5 +1,5 @@
 /**
- * @hasna/telephony — cloud storage barrel (PURE REMOTE / Amendment A1).
+ * @hasna/telephony — server storage barrel.
  *
  * Re-exports the vendored storage kit primitives plus the telephony cloud
  * client and Postgres migrations, so the migration runner and serve import

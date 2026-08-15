@@ -503,13 +503,13 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
 
   server.tool(
     "machines_daemon_service_plan",
-    "Plan launchd/systemd lifecycle commands for the machines-agent daemon.",
+    "Plan launchd/systemd lifecycle commands for the machines-daemon daemon.",
     {
       action: z.enum(["install", "uninstall", "restart", "status", "logs"]).describe("Daemon lifecycle action"),
       platform: z.enum(["macos", "linux"]).optional().describe("Target service platform"),
       mode: z.enum(["user", "system"]).optional().describe("Service mode"),
       service_name: z.string().optional().describe("Service name/label"),
-      executable: z.string().optional().describe("machines-agent executable path"),
+      executable: z.string().optional().describe("machines-daemon executable path"),
       interval_ms: z.number().optional().describe("Heartbeat interval in milliseconds"),
       storage_push: z.boolean().optional().describe("Configure heartbeat storage push"),
       doctor_summary: z.boolean().optional().describe("Configure lightweight doctor summaries in heartbeat metadata"),

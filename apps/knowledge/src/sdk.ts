@@ -23,8 +23,8 @@ import type {
 /**
  * The unified knowledge-item Store surface, mirrored on the SDK so app code
  * routes item CRUD through the SAME Store as the CLI and MCP: sqlite uses the
- * local db.json store, postgres uses the HTTP API transport. No SDK item method
- * touches sqlite or the raw HTTP client directly — the mode is resolved from
+ * on-box db.json store, while the canonical API URL selects HTTP. No SDK item method
+ * touches sqlite or the raw HTTP client directly — transport is resolved from
  * the environment by the Store.
  */
 export interface KnowledgeItemsSdk {
@@ -167,14 +167,14 @@ export interface KnowledgeClient {
   };
   /**
    * Knowledge-item CRUD routed through the unified Store. Identical behavior to
-   * the `knowledge add/list/get/update/delete` CLI commands in every mode.
+   * the `knowledge add/list/get/update/delete` CLI commands over either transport.
    */
   readonly items: KnowledgeItemsSdk;
   /** Project collection registration, explicit membership, receipts, and complete resource enumeration. */
   readonly projectLinks: KnowledgeProjectLinksSdk;
   /**
    * Inventory of the knowledge corpus. Routes to the shared API item corpus in
-   * postgres mode and the local sqlite/JSON catalog otherwise, so the SDK never
+   * the HTTP API when selected and the on-box sqlite/JSON catalog otherwise, so the SDK never
    * diverges from the CLI/MCP. Always async.
    */
   readonly inventory: (options?: KnowledgeInventoryOptions) => ReturnType<KnowledgeService['resolveInventory']>;

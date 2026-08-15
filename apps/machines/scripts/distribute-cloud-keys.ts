@@ -29,7 +29,7 @@
  *      (the resolver auto-appends `/v1`; presence of URL+KEY => transport
  *      "cloud-http". NO DSN. NO STORAGE_MODE=remote. NO AWS creds. NO subnet
  *      router. This matches the LOCKED self-hosted architecture.)
- *   3. pushes that env file over tailscale ssh to `$HOME/.hasna/cloud/<app>.env`
+ *   3. pushes that env file over tailscale ssh to `$HOME/.hasna/fleet-env/<app>.env`
  *      on each REACHABLE target — the exact location the flipped MCP service
  *      sources via its systemd/launchd drop-in (`EnvironmentFile=`). The bearer
  *      value travels only over ssh STDIN (never argv/ps, never a spark01 temp
@@ -41,7 +41,7 @@
  * REVERSIBILITY
  * -------------
  * Every overwrite is backed up to `<app>.env.bak-<UTC-timestamp>` on the target.
- * To revert an app on a machine: remove (or empty) `$HOME/.hasna/cloud/<app>.env`
+ * To revert an app on a machine: remove (or empty) `$HOME/.hasna/fleet-env/<app>.env`
  * so HASNA_<APP>_API_URL / HASNA_<APP>_API_KEY are unset — the client resolver
  * falls straight back to the local store. No local DB is ever touched or deleted.
  *
@@ -308,7 +308,7 @@ function envFileContent(spec: AppSpec, key: string): string {
 // printf newline, written as "\\n" so bash receives a literal backslash-n.
 const REMOTE_INSTALLER = [
   "set -eu",
-  'DIR="$HOME/.hasna/cloud"',
+  'DIR="$HOME/.hasna/fleet-env"',
   'mkdir -p "$DIR"',
   'chmod 700 "$DIR" 2>/dev/null || true',
   'TS="$(date -u +%Y%m%dT%H%M%SZ)"',
@@ -531,7 +531,7 @@ async function main() {
       log(`  targets fully provisioned: ${okCount}/${pushResults.length}`);
     }
     log(`\n  Revert an app on a machine:`);
-    log(`    ssh <host> 'rm -f ~/.hasna/cloud/<app>.env'   # unsets URL+KEY -> client falls back to local`);
+    log(`    ssh <host> 'rm -f ~/.hasna/fleet-env/<app>.env'   # unsets URL+KEY -> client falls back to local`);
   }
 }
 

@@ -1,9 +1,9 @@
-// Migration set for the accounts cloud service.
+// Migration set for the accounts server service.
 //
 // Combines the app schema (SQL files under `migrations/`) with the shared
 // api-keys table migrations from `@hasna/contracts/auth`, and exposes them as
-// the vendored kit's `Migration[]` (checksum-guarded ledger). PURE REMOTE
-// (Amendment A1): these run against the cloud Postgres only.
+// the vendored kit's `Migration[]` (checksum-guarded ledger). These run
+// against the PostgreSQL backend only.
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";

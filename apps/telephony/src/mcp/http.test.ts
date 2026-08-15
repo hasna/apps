@@ -11,9 +11,9 @@ const repoRoot = new URL("../..", import.meta.url).pathname;
 const MCP_TRANSPORT_ENV_KEYS = new Set(["MCP_HTTP", "MCP_STDIO"]);
 
 /**
- * Client-flip env keys the in-process MCP server would otherwise inherit from
+ * API-pair env keys the in-process MCP server would otherwise inherit from
  * the operator's shell. These tools must read the on-box store here; a developer
- * exporting HASNA_TELEPHONY_STORAGE_MODE + an API key would otherwise route the
+ * exporting HASNA_TELEPHONY_API_URL + an API key would otherwise route the
  * assertions at a live service, which is not what this file is testing.
  */
 const CLIENT_FLIP_ENV_KEYS = [

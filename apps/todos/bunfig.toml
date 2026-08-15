@@ -1,0 +1,5 @@
+[test]
+# Runs before any test module is imported, so the SDK — which reads routing
+# variables at import time — cannot see the ambient hosted store. See
+# test/setup.ts for why this is structural rather than a convention.
+preload = ["./test/setup.ts"]

@@ -7,7 +7,6 @@
 FROM --platform=linux/arm64 oven/bun:1
 WORKDIR /app
 ENV NODE_ENV=production \
-    HASNA_MEMENTOS_STORAGE_MODE=cloud \
     MEMENTOS_HOST=0.0.0.0 \
     PORT=8080
 

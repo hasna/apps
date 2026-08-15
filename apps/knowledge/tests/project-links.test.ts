@@ -778,7 +778,7 @@ describe('Knowledge Projects resource-link producer', () => {
       .toEqual(itemResource);
   });
 
-  test('HTTP client rejects malformed success envelopes and maps generic hosted 404s', async () => {
+  test('HTTP client rejects malformed success envelopes and maps generic API 404s', async () => {
     const malformedPage = createKnowledgeProjectLinksHttpClient({
       baseUrl: 'https://knowledge.example.com',
       fetch: async () => Response.json({ ok: true }),
@@ -809,7 +809,7 @@ describe('Knowledge Projects resource-link producer', () => {
     });
   });
 
-  test('hosted CLI fails closed with a structured code on a malformed success envelope', async () => {
+  test('HTTP CLI fails closed with a structured code on a malformed success envelope', async () => {
     const server = Bun.serve({
       hostname: '127.0.0.1',
       port: 0,
@@ -817,17 +817,12 @@ describe('Knowledge Projects resource-link producer', () => {
     });
     const env = { ...process.env } as Record<string, string>;
     for (const name of [
-      'HASNA_KNOWLEDGE_STORAGE_MODE',
-      'KNOWLEDGE_STORAGE_MODE',
       'HASNA_KNOWLEDGE_API_URL',
-      'KNOWLEDGE_API_URL',
       'HASNA_KNOWLEDGE_API_KEY',
-      'KNOWLEDGE_API_KEY',
     ]) {
       delete env[name];
     }
     Object.assign(env, {
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
       HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_KNOWLEDGE_API_KEY: 'test-key-not-a-credential',
     });
@@ -867,7 +862,6 @@ describe('Knowledge Projects resource-link producer', () => {
         cwd: repoRoot,
         env: {
           ...process.env,
-          HASNA_KNOWLEDGE_STORAGE_MODE: 'sqlite',
           HASNA_KNOWLEDGE_PROJECT_AUTHORITY_ID: 'knowledge-cli-test',
           HASNA_KNOWLEDGE_PROJECT_TENANT_ID: 'tenant-cli-test',
           HASNA_KNOWLEDGE_PROJECT_CORPUS_ID: 'corpus-cli-test',

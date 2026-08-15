@@ -5,16 +5,12 @@
  *
  * ONE interface, two transports:
  *   - LocalItemStore  -> on-box JSON store (db.json) behind a file lock.
- *   - ApiItemStore    -> HTTP `/v1` + bearer key (postgres backend) via
+ *   - ApiItemStore    -> HTTP `/v1` + bearer key via
  *                        @hasna/contracts client transport.
  *
- * Mode resolver: an EXPLICIT mode var (`HASNA_KNOWLEDGE_STORAGE_MODE=postgres`)
- * selects the api transport; everything else
- * — including a machine whose shell exports HASNA_KNOWLEDGE_API_URL and
- * HASNA_KNOWLEDGE_API_KEY — is local. Presence of a URL or key is a pointer, not
- * a selection: it says where the API is, not that this process should write to
- * it. An explicit `--store` path override always pins to the local transport
- * (fully reversible).
+ * HASNA_KNOWLEDGE_API_URL plus HASNA_KNOWLEDGE_API_KEY selects the HTTP
+ * transport; without the canonical URL the client stays on-box. An explicit
+ * `--store` path override always pins to the on-box transport.
  *
  * EVERY knowledge-item CLI command routes through this Store. No item command
  * touches the JSON file or the HTTP client directly — that is the split-brain
@@ -34,10 +30,10 @@ import {
 } from './store';
 import {
   KnowledgeVersionConflictError,
-  resolveKnowledgeCloudStore,
-  fetchAllCloudItems,
-  type KnowledgeCloudStore,
-} from './cloud-store';
+  resolveKnowledgeHttpStore,
+  fetchAllHttpItems,
+  type KnowledgeHttpStore,
+} from './http-store';
 
 export { KnowledgeVersionConflictError };
 
@@ -83,7 +79,7 @@ export type ItemListSort = 'created' | 'title';
 export type ItemListDirection = 'asc' | 'desc';
 
 /**
- * Bounded list query shared by the local and hosted transports.
+ * Bounded list query shared by the SQLite and HTTP transports.
  *
  * `search` is deliberately a literal case-insensitive match over full id,
  * title, and content. Ranked full-text/semantic retrieval is a separate
@@ -122,8 +118,8 @@ export class VersionHistoryUnsupportedError extends Error {
     super(
       'Version history is not kept by the local JSON knowledge store '
         + `(${location}). It has no version line, so an empty history here would be a claim, not a measurement. `
-        + 'Entry versioning lives in the Postgres-backed store: point this CLI at it '
-        + '(HASNA_KNOWLEDGE_STORAGE_MODE=postgres plus the API url/key) and re-run.',
+        + 'Entry versioning lives behind the server API: set HASNA_KNOWLEDGE_API_URL '
+        + 'and HASNA_KNOWLEDGE_API_KEY, then re-run.',
     );
     this.name = 'VersionHistoryUnsupportedError';
   }
@@ -366,22 +362,22 @@ class ApiItemStore implements ItemStore {
   readonly kind = 'api' as const;
   readonly exists = true;
   readonly supportsVersions = true;
-  constructor(private readonly cloud: KnowledgeCloudStore) {}
+  constructor(private readonly http: KnowledgeHttpStore) {}
 
   async listVersions(idOrShort: string, options: { limit?: number; offset?: number } = {}) {
-    return this.cloud.listVersions(idOrShort, options);
+    return this.http.listVersions(idOrShort, options);
   }
 
   async getVersion(idOrShort: string, version: number) {
-    return this.cloud.getVersion(idOrShort, version);
+    return this.http.getVersion(idOrShort, version);
   }
 
   get location(): string {
-    return this.cloud.baseUrl;
+    return this.http.baseUrl;
   }
 
   async list(options: ItemListOptions = {}): Promise<ItemListResult> {
-    const result = await this.cloud.list({
+    const result = await this.http.list({
       search: options.search,
       tags: options.tags,
       archive: options.archive,
@@ -398,12 +394,12 @@ class ApiItemStore implements ItemStore {
   }
 
   async listAll(): Promise<ItemListResult> {
-    const items = await fetchAllCloudItems(this.cloud);
+    const items = await fetchAllHttpItems(this.http);
     return { items, total: items.length, exists: true };
   }
 
   async get(idOrShort: string): Promise<KnowledgeItem | null> {
-    return this.cloud.get(idOrShort);
+    return this.http.get(idOrShort);
   }
 
   async create(input: ItemCreateInput): Promise<KnowledgeItem> {
@@ -411,7 +407,7 @@ class ApiItemStore implements ItemStore {
     // on it, so `upsert --id <stable>` re-finds and updates the same row instead
     // of creating a duplicate — identical to the local store. When absent, the
     // server assigns the id.
-    return this.cloud.create({
+    return this.http.create({
       ...(input.id ? { id: input.id } : {}),
       title: input.title,
       content: input.content,
@@ -422,17 +418,17 @@ class ApiItemStore implements ItemStore {
   }
 
   async update(idOrShort: string, patch: ItemPatch, options: ItemUpdateOptions = {}): Promise<KnowledgeItem | null> {
-    return this.cloud.update(idOrShort, patch, { expectedVersion: options.expectedVersion });
+    return this.http.update(idOrShort, patch, { expectedVersion: options.expectedVersion });
   }
 
   async delete(idOrShort: string): Promise<boolean> {
-    return this.cloud.delete(idOrShort);
+    return this.http.delete(idOrShort);
   }
 
   async deleteMany(idsOrShorts: string[]): Promise<number> {
     let removed = 0;
     for (const id of idsOrShorts) {
-      if (await this.cloud.delete(id)) removed += 1;
+      if (await this.http.delete(id)) removed += 1;
     }
     return removed;
   }
@@ -447,12 +443,12 @@ export interface ResolveItemStoreOptions {
 
 /**
  * Resolve the single item Store for this invocation. Returns the ApiItemStore
- * only when the mode is explicitly postgres, otherwise the LocalItemStore. An
+ * when the canonical API URL and key are present, otherwise the LocalItemStore. An
  * explicit `--store` override always yields the local transport so the flip
  * stays fully reversible.
  */
 export function resolveItemStore(options: ResolveItemStoreOptions): ItemStore {
-  const cloud = options.storePathOverridden ? null : resolveKnowledgeCloudStore(options.env ?? process.env);
-  if (cloud) return new ApiItemStore(cloud);
+  const http = options.storePathOverridden ? null : resolveKnowledgeHttpStore(options.env ?? process.env);
+  if (http) return new ApiItemStore(http);
   return new LocalItemStore(options.storePath);
 }

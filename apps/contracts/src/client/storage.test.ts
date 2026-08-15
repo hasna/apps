@@ -3,6 +3,7 @@ import {
   appendQuery,
   createHasnaHttpTransport,
   HasnaHttpError,
+  type HasnaHttpTransport,
   type HasnaRequestOptions,
 } from "./transport.js";
 import { createHasnaStorageClient, resolveStorageClient } from "./storage.js";
@@ -120,6 +121,92 @@ describe("HasnaStorageClient CRUD mapping", () => {
     const { store, calls } = client(() => ({ status: 200, body: {} }));
     await store.get("notes", "a/b c");
     expect(calls[0]!.url).toBe("https://knowledge.your-deployment.example/v1/notes/a%2Fb%20c");
+  });
+});
+
+// The published package builds `./client` and `./client/storage` as SEPARATE
+// bundle entries, so each bundle carries its own copy of the `HasnaHttpError`
+// class and `instanceof` never matches across the boundary: the transport
+// throws ITS copy while the storage bundle checks ITS copy. These tests
+// simulate that boundary with a locally declared copy of the class — same
+// name, same shape, NOT instanceof the imported one — and assert the storage
+// client maps it by shape (name + status) instead.
+class ForeignBundleHasnaHttpError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`Hasna cloud request failed: TEST -> /v1/notes/1 -> ${status}`);
+    this.name = "HasnaHttpError";
+    this.status = status;
+  }
+}
+
+function throwingTransport(error: unknown): HasnaHttpTransport {
+  const throwIt = async () => {
+    throw error;
+  };
+  return {
+    baseUrl: "https://x/v1",
+    request: throwIt,
+    get: throwIt,
+    post: throwIt,
+    put: throwIt,
+    patch: throwIt,
+    del: throwIt,
+  };
+}
+
+describe("cross-bundle HasnaHttpError (404 -> null / swallowed)", () => {
+  const foreign404 = new ForeignBundleHasnaHttpError(404);
+
+  test("get: transport-thrown 404 from a foreign bundle copy resolves to null", async () => {
+    expect(foreign404).not.toBeInstanceOf(HasnaHttpError);
+    const store = createHasnaStorageClient("notes", throwingTransport(foreign404));
+    expect(await store.get("notes", "1")).toBeNull();
+  });
+
+  test("delete: transport-thrown 404 from a foreign bundle copy is swallowed", async () => {
+    const store = createHasnaStorageClient("notes", throwingTransport(foreign404));
+    await expect(store.delete("notes", "1")).resolves.toBeUndefined();
+  });
+
+  test("non-404 from a foreign bundle copy still rejects with status preserved", async () => {
+    const store = createHasnaStorageClient("notes", throwingTransport(new ForeignBundleHasnaHttpError(500)));
+    await expect(store.get("notes", "1")).rejects.toMatchObject({ name: "HasnaHttpError", status: 500 });
+    await expect(store.delete("notes", "1")).rejects.toMatchObject({ name: "HasnaHttpError", status: 500 });
+  });
+
+  test("a shaped 404 without the transport's error name is not swallowed", async () => {
+    const impostor = new Error("gone");
+    (impostor as { status?: number }).status = 404;
+    const store = createHasnaStorageClient("notes", throwingTransport(impostor));
+    await expect(store.get("notes", "1")).rejects.toThrow("gone");
+    await expect(store.delete("notes", "1")).rejects.toThrow("gone");
+  });
+
+  test("machines-style compensation still works (no double-handling)", async () => {
+    // machines' registry.get() wraps the storage client in its own 404 -> null
+    // compensation, and registry.remove() does get-then-delete. The storage
+    // client now maps the 404 itself, so the compensation sees no error to
+    // swallow (one conversion, not two) and the remove race resolves instead
+    // of surfacing HasnaHttpError(404).
+    const store = createHasnaStorageClient("notes", throwingTransport(foreign404));
+    const compensatedGet = async () => {
+      try {
+        return (await store.get("notes", "1")) ?? null;
+      } catch (error) {
+        if (error instanceof ForeignBundleHasnaHttpError && error.status === 404) return null;
+        throw error;
+      }
+    };
+    expect(await compensatedGet()).toBeNull();
+    const remove = async () => {
+      const existing = await compensatedGet();
+      if (!existing) return false;
+      await store.delete("notes", "1");
+      return true;
+    };
+    expect(await remove()).toBe(false);
+    await expect(store.delete("notes", "1")).resolves.toBeUndefined();
   });
 });
 

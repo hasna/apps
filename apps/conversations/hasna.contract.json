@@ -1,0 +1,89 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "conversations",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.10.6",
+  "description": "Real-time messaging + coordination for AI agents: channels, messages, projects, presence, tasks. CLI + MCP + HTTP API (conversations-serve) + generated SDK. Clients use local SQLite or the HTTP API selected by HASNA_CONVERSATIONS_API_URL; conversations-serve reads PostgreSQL selected by HASNA_CONVERSATIONS_DATABASE_URL. The data backend is the only runtime switch.",
+  "bins": [
+    "conversations",
+    "conversations-mcp",
+    "conversations-serve"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "conversations-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "conversations-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/v1/openapi.json"
+    },
+    {
+      "name": "conversations-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/v1/openapi.json"
+    },
+    {
+      "name": "conversations-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "conversations",
+      "authMode": "local-only"
+    },
+    {
+      "name": "conversations-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "conversations-mcp",
+      "authMode": "local-only"
+    }
+  ],
+  "storage": {
+    "backend": "postgresql",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "envPrefix": "HASNA_CONVERSATIONS_",
+    "aliasEnvPrefix": "CONVERSATIONS_",
+    "databaseUrlSecretRef": "hasna/oss/conversations/database-url",
+    "sqlitePath": "~/.hasna/conversations/conversations.db"
+  },
+  "metadata": {
+    "service": {
+      "port": 8080,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "openapiPath": "/v1/openapi.json",
+      "apiVersion": "v1",
+      "auth": "api-key",
+      "signingSecretSecretRef": "hasna/oss/conversations/api-key-signing-secret",
+      "databaseUrlOwnerSecretRef": "hasna/oss/conversations/database-url-owner"
+    },
+    "client": {
+      "apiUrlEnv": "HASNA_CONVERSATIONS_API_URL",
+      "apiKeyEnv": "HASNA_CONVERSATIONS_API_KEY"
+    }
+  }
+}

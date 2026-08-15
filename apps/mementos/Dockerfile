@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # =============================================================================
-# @hasna/mementos — self_hosted service image (ARM64 / Bun)
+# @hasna/mementos — service image (ARM64 / Bun)
 # =============================================================================
 FROM --platform=linux/arm64 oven/bun:1 AS build
 WORKDIR /app
@@ -18,7 +18,6 @@ RUN bun run build
 FROM --platform=linux/arm64 oven/bun:1 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
-    HASNA_MEMENTOS_STORAGE_MODE=cloud \
     MEMENTOS_HOST=0.0.0.0 \
     PORT=8080
 

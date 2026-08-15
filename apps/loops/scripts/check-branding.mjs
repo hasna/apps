@@ -25,6 +25,7 @@ const sharedKitHistoricalLines = new Set([
   `- ${legacyBrand} route-event migration.`,
   `1. ${legacyBrand} storage-kit normalization.`,
   `3. Events compatibility inventory for ${legacyBrand} route aliases.`,
+  `(\`sqlite|postgresql\`) and connection (\`file|api\`), and the ${legacyBrand} generated`,
 ]);
 const preservedLines = new Map([
   ["CHANGELOG.md", new Set([
@@ -47,6 +48,9 @@ const preservedLines = new Map([
   ])],
   ["src/lib/storage/postgres-loop-storage.test.ts", new Set([
     `    expect(loginRoleBootstrap.errorMessage).toContain("reserved ${legacyBrand} database role open_loops_runtime is LOGIN");`,
+  ])],
+  ["src/generated/storage-kit/migrations.ts", new Set([
+    `// ${lowerLegacyHyphenated}' storage ledger. Guarantees:`,
   ])],
 ]);
 

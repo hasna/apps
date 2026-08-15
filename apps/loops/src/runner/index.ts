@@ -16,7 +16,12 @@ import type {
 import { executeLoop } from "../lib/executor.js";
 import { classifyLoopExecutionResult } from "../lib/loop-result.js";
 import { executeLoopTarget, type WorkflowExecutionStore } from "../lib/workflow-runner.js";
-import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
+import { loopControlPlaneConfig, type RuntimeConfig } from "../lib/runtime-config.js";
+import {
+  buildStorageConnectionReport,
+  storageConnectionReportLine,
+  type StorageConnectionReport,
+} from "../lib/runtime-status.js";
 import { packageVersion } from "../lib/version.js";
 import {
   parseOperationAdmissionReceipt,
@@ -42,31 +47,56 @@ program
   .option("-j, --json", "print JSON");
 
 function configuredApiUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  // hasna-credential-seam-waiver: the loops runner needs the raw API-key VALUE for bearer-authenticated claim/poll/finalize fetches; loops' doctrine-clean client seam never exposes key values, and adopting the @hasna/contracts/client credential chain (disk tiers, profiles) would change the runner's connection semantics; seam adoption is a tracked cloud/-domain follow-up
   return env.HASNA_LOOPS_API_URL?.trim();
 }
 
 function configuredApiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  // hasna-credential-seam-waiver: the loops runner needs the raw API-key VALUE for bearer-authenticated claim/poll/finalize fetches; loops' doctrine-clean client seam never exposes key values, and adopting the @hasna/contracts/client credential chain (disk tiers, profiles) would change the runner's connection semantics; seam adoption is a tracked cloud/-domain follow-up
   return env.HASNA_LOOPS_API_KEY?.trim();
 }
 
-export function runnerStatus(machineId = process.env.LOOPS_RUNNER_MACHINE_ID || process.env.HASNA_MACHINE_ID) {
-  const deployment = buildDeploymentStatus();
-  const local = deployment.deploymentMode === "local";
-  const apiUrl = configuredApiUrl();
-  const token = configuredApiKey();
-  const apiReady = Boolean(apiUrl && token);
+/**
+ * Runner authority, derived from the client connection only. Deployment modes
+ * are removed: the runner is authoritative over the local file (the daemon),
+ * or ready when a fully configured API connection (URL + key) exists.
+ * Partial API configuration fails closed — the runner never claims work unless
+ * the whole API connection is configured.
+ */
+export type RunnerState = "file_authoritative" | "api_ready" | "missing_api_url" | "missing_api_key";
+
+export interface RunnerStatus {
+  ok: boolean;
+  service: "loops-runner";
+  machineId?: string;
+  state: RunnerState;
+  storageConnection: StorageConnectionReport;
+}
+
+export function runnerStatus(machineId = process.env.LOOPS_RUNNER_MACHINE_ID || process.env.HASNA_MACHINE_ID): RunnerStatus {
+  const controlPlane = loopControlPlaneConfig();
+  const apiReady = controlPlane.apiUrlPresent && controlPlane.apiKeyPresent;
+  const state: RunnerState = apiReady
+    ? "api_ready"
+    : controlPlane.apiUrlPresent
+      ? "missing_api_key"
+      : controlPlane.apiKeyPresent
+        ? "missing_api_url"
+        : "file_authoritative";
+  const config: RuntimeConfig = {
+    storage: controlPlane.databaseUrlPresent ? "postgresql" : "sqlite",
+    connection: apiReady ? "api" : "file",
+    apiUrl: controlPlane.apiUrl,
+    apiUrlPresent: controlPlane.apiUrlPresent,
+    apiKeyPresent: controlPlane.apiKeyPresent,
+    databaseUrlPresent: controlPlane.databaseUrlPresent,
+  };
   return {
-    ok: local || apiReady,
+    ok: state === "file_authoritative" || state === "api_ready",
     service: "loops-runner",
     machineId,
-    deployment,
-    state: local
-      ? "local_daemon_authoritative"
-      : apiReady
-        ? "control_plane_ready"
-        : apiUrl
-          ? "missing_control_plane_token"
-          : "missing_control_plane_api_url",
+    state,
+    storageConnection: buildStorageConnectionReport(config),
   };
 }
 
@@ -617,7 +647,7 @@ function wantsJson(opts?: { json?: boolean }): boolean {
 function printStatus(opts?: { json?: boolean }): void {
   const status = runnerStatus();
   if (wantsJson(opts)) console.log(JSON.stringify(status, null, 2));
-  else console.log(`${deploymentStatusLine(status.deployment)} runner=${status.state}${status.machineId ? ` machine=${status.machineId}` : ""}`);
+  else console.log(`${storageConnectionReportLine(status.storageConnection)} runner=${status.state}${status.machineId ? ` machine=${status.machineId}` : ""}`);
   if (!status.ok) process.exitCode = 1;
 }
 

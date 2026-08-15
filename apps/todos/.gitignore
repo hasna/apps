@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.tmp/
+*.db
+*.db-wal
+*.db-shm
+.todos/
+.env
+.DS_Store
+*.tgz
+*.png
+.playwright-mcp/
+.secrets/
+coverage/

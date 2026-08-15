@@ -25,7 +25,6 @@ async function runCli(
     env: {
       ...process.env,
       HOME: dataDir,
-      HASNA_LOOPS_STORAGE_MODE: "local",
       HASNA_LOOPS_API_URL: "",
       HASNA_LOOPS_API_KEY: "",
       LOOPS_DATA_DIR: dataDir,
@@ -222,7 +221,6 @@ describe("CLI P1 safety regressions", () => {
 
     try {
       const result = await runCli(dataDir, ["--json", "list"], {
-        HASNA_LOOPS_STORAGE_MODE: "self_hosted",
         HASNA_LOOPS_API_URL: `http://127.0.0.1:${server.port}`,
         HASNA_LOOPS_API_KEY: "test-hosted-key",
       });
@@ -255,7 +253,6 @@ describe("CLI P1 safety regressions", () => {
 
     try {
       const result = await runCli(dataDir, ["--json", "list"], {
-        HASNA_LOOPS_STORAGE_MODE: "self_hosted",
         HASNA_LOOPS_API_URL: `http://127.0.0.1:${server.port}`,
         HASNA_LOOPS_API_KEY: "test-hosted-key",
       });
@@ -291,7 +288,6 @@ describe("CLI P1 safety regressions", () => {
     }
     const env = {
       HOME: home,
-      HASNA_LOOPS_STORAGE_MODE: "self_hosted",
       HASNA_LOOPS_API_URL: "https://loops.example.test",
       HASNA_LOOPS_API_KEY: "test-hosted-key",
       LOOPS_DATA_DIR: dataDir,

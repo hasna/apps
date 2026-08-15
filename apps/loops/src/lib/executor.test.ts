@@ -5,8 +5,23 @@ import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 import type { AgentTarget } from "../types.js";
 import { Store } from "./store.js";
+import { executableExists, normalizeExecutionPath } from "./env.js";
 import { defaultAgentIdleTimeoutMs, executeLoop, executeTarget, isStaleWorktreeRegistration, preflightTarget, type SpawnedProcessInfo } from "./executor.js";
 import { openGate, waitUntil } from "../test-helpers.js";
+
+/**
+ * Whether a standalone `agent` binary resolves through the executor's
+ * normalized PATH (opts env + home dirs + homebrew). The two cursor-preflight
+ * failure tests pin that cursor REQUIRES the standalone `agent` binary — a
+ * premise only establishable on machines without one; the executor's
+ * normalizeExecutionPath appends ~/.local/bin and /opt/homebrew/bin to every
+ * execution PATH, so a machine that has `agent` there cannot construct the
+ * negative case (preflight legitimately passes).
+ */
+function standaloneAgentResolvable(): boolean {
+  const env = { ...process.env, PATH: normalizeExecutionPath(process.env) };
+  return executableExists("agent", env);
+}
 
 function gateWaitScript(gate: string): string {
   return `while [ ! -f ${JSON.stringify(gate)} ]; do sleep 0.02; done\n`;
@@ -1399,7 +1414,7 @@ describe("executeLoop", () => {
     }
   });
 
-  test("cursor preflight requires standalone agent binary, not only sh", () => {
+  test.skipIf(standaloneAgentResolvable())("cursor preflight requires standalone agent binary, not only sh", () => {
     const home = mkdtempSync(join(tmpdir(), "loops-cursor-preflight-"));
     const store = new Store(":memory:");
     try {
@@ -1422,7 +1437,7 @@ describe("executeLoop", () => {
     }
   });
 
-  test("cursor preflight does not accept cursor wrapper without standalone agent", () => {
+  test.skipIf(standaloneAgentResolvable())("cursor preflight does not accept cursor wrapper without standalone agent", () => {
     const home = mkdtempSync(join(tmpdir(), "loops-cursor-preflight-wrapper-"));
     const binDir = join(home, "bin");
     mkdirSync(binDir, { recursive: true });

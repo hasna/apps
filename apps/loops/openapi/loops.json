@@ -2,13 +2,13 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Loops",
-    "version": "0.4.40",
-    "description": "Loops self-hosted multi-tenant control-plane HTTP API. All non-probe operations require a tenant-bound API key with the declared scope, role, and token kind."
+    "version": "0.5.1",
+    "description": "Loops multi-tenant control-plane HTTP API. All non-probe operations require a tenant-bound API key with the declared scope, role, and token kind."
   },
   "servers": [
     {
       "url": "https://your-deployment.example",
-      "description": "Replace with your self-hosted Loops deployment's base URL."
+      "description": "Replace with your Loops deployment's base URL."
     }
   ],
   "paths": {
@@ -887,7 +887,7 @@
     "/v1/import": {
       "post": {
         "operationId": "importRows",
-        "summary": "Bulk id-preserving import (self-hosted backfill)",
+        "summary": "Bulk id-preserving import (control-plane backfill)",
         "description": "Upsert full workflow/loop/run rows by id (idempotent; ON CONFLICT(id) DO UPDATE). Preserves ids, definitions, and timestamps while applying safe defaults: imported workflows are archived, imported loops are paused, and nextRunAt/retryScheduledFor are cleared by default so backfills never schedule immediately. Set preserveWorkflowActivation=true or preserveLoopScheduling=true only for intentional activation. Applied FK-safe: workflows, then loops, then runs. Volatile running runs are skipped and reported.",
         "requestBody": {
           "required": true,
@@ -2610,6 +2610,16 @@
               }
             }
           },
+          "400": {
+            "description": "Malformed JSON request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidJsonResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Workflow run not found",
             "content": {
@@ -2617,16 +2627,6 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Malformed JSON request body",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InvalidJsonResponse"
                 }
               }
             }
@@ -4111,8 +4111,21 @@
           "version": {
             "type": "string"
           },
-          "mode": {
-            "type": "string"
+          "storage": {
+            "type": "string",
+            "enum": [
+              "sqlite",
+              "postgresql"
+            ],
+            "description": "Server-side storage backend resolved from the environment (HASNA_LOOPS_DATABASE_URL presence)."
+          },
+          "connection": {
+            "type": "string",
+            "enum": [
+              "file",
+              "api"
+            ],
+            "description": "Client connection transport resolved from the environment (HASNA_LOOPS_API_URL + HASNA_LOOPS_API_KEY presence)."
           },
           "service": {
             "type": "string"
@@ -4124,7 +4137,8 @@
         "required": [
           "status",
           "version",
-          "mode"
+          "storage",
+          "connection"
         ]
       },
       "Loop": {
@@ -5368,11 +5382,20 @@
         "properties": {
           "version": {
             "type": "integer",
-            "enum": [1]
+            "enum": [
+              1
+            ]
           },
           "provider": {
             "type": "string",
-            "enum": ["claude", "cursor", "codewith", "codex", "aicopilot", "opencode"]
+            "enum": [
+              "claude",
+              "cursor",
+              "codewith",
+              "codex",
+              "aicopilot",
+              "opencode"
+            ]
           },
           "model": {
             "type": "string"
@@ -5382,11 +5405,23 @@
           },
           "permissionMode": {
             "type": "string",
-            "enum": ["default", "plan", "auto", "bypass"]
+            "enum": [
+              "default",
+              "plan",
+              "auto",
+              "bypass"
+            ]
           },
           "sandbox": {
             "type": "string",
-            "enum": ["read-only", "workspace-write", "danger-full-access", "enabled", "disabled", "provider-default"]
+            "enum": [
+              "read-only",
+              "workspace-write",
+              "danger-full-access",
+              "enabled",
+              "disabled",
+              "provider-default"
+            ]
           },
           "manualBreakGlass": {
             "type": "boolean"
@@ -5395,13 +5430,33 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "projectPath": { "type": "string" },
-              "projectGroup": { "type": "string" },
-              "taskId": { "type": "string" },
-              "eventId": { "type": "string" },
-              "eventType": { "type": "string" },
-              "eventSource": { "type": "string" },
-              "role": { "type": "string", "enum": ["triage", "planner", "worker", "verifier"] }
+              "projectPath": {
+                "type": "string"
+              },
+              "projectGroup": {
+                "type": "string"
+              },
+              "taskId": {
+                "type": "string"
+              },
+              "eventId": {
+                "type": "string"
+              },
+              "eventType": {
+                "type": "string"
+              },
+              "eventSource": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "triage",
+                  "planner",
+                  "worker",
+                  "verifier"
+                ]
+              }
             }
           },
           "timeoutMs": {
@@ -5415,49 +5470,93 @@
             "properties": {
               "tools": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               },
               "commands": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               },
               "enforcement": {
                 "type": "string",
-                "enum": ["metadata_only"]
+                "enum": [
+                  "metadata_only"
+                ]
               },
               "providerEnforced": {
                 "type": "boolean",
-                "enum": [false]
+                "enum": [
+                  false
+                ]
               }
             },
-            "required": ["enforcement", "providerEnforced"]
+            "required": [
+              "enforcement",
+              "providerEnforced"
+            ]
           },
           "safetyReason": {
             "type": "string",
             "minLength": 1
           }
         },
-        "required": ["version", "provider", "permissionMode", "sandbox", "manualBreakGlass", "timeoutMs", "restrictions"]
+        "required": [
+          "version",
+          "provider",
+          "permissionMode",
+          "sandbox",
+          "manualBreakGlass",
+          "timeoutMs",
+          "restrictions"
+        ]
       },
       "AgentSessionContractEventInput": {
         "type": "object",
         "additionalProperties": false,
         "description": "Legacy runner compatibility request. New clients must not fabricate this event; the server derives it.",
         "properties": {
-          "claimToken": { "type": "string", "minLength": 1 },
-          "eventType": { "type": "string", "enum": ["agent_session_contract"] },
-          "stepId": { "type": "string", "minLength": 1 },
-          "payload": { "$ref": "#/components/schemas/AgentSessionContract" }
+          "claimToken": {
+            "type": "string",
+            "minLength": 1
+          },
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "agent_session_contract"
+            ]
+          },
+          "stepId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "payload": {
+            "$ref": "#/components/schemas/AgentSessionContract"
+          }
         },
-        "required": ["claimToken", "eventType", "stepId", "payload"]
+        "required": [
+          "claimToken",
+          "eventType",
+          "stepId",
+          "payload"
+        ]
       },
       "GenericWorkflowEvent": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "id": { "type": "string" },
-          "workflowRunId": { "type": "string" },
-          "sequence": { "type": "integer", "minimum": 1 },
+          "id": {
+            "type": "string"
+          },
+          "workflowRunId": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
           "eventType": {
             "type": "string",
             "enum": [
@@ -5481,67 +5580,159 @@
               "cancelled"
             ]
           },
-          "stepId": { "type": "string" },
-          "payload": { "type": "object", "additionalProperties": true },
-          "createdAt": { "type": "string", "format": "date-time" }
+          "stepId": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         },
-        "required": ["id", "workflowRunId", "sequence", "eventType", "createdAt"]
+        "required": [
+          "id",
+          "workflowRunId",
+          "sequence",
+          "eventType",
+          "createdAt"
+        ]
       },
       "AgentSessionContractWorkflowEvent": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "id": { "type": "string" },
-          "workflowRunId": { "type": "string" },
-          "sequence": { "type": "integer", "minimum": 1 },
-          "eventType": { "type": "string", "enum": ["agent_session_contract"] },
-          "stepId": { "type": "string", "minLength": 1 },
-          "payload": { "$ref": "#/components/schemas/AgentSessionContract" },
-          "createdAt": { "type": "string", "format": "date-time" }
+          "id": {
+            "type": "string"
+          },
+          "workflowRunId": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "agent_session_contract"
+            ]
+          },
+          "stepId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "payload": {
+            "$ref": "#/components/schemas/AgentSessionContract"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         },
-        "required": ["id", "workflowRunId", "sequence", "eventType", "stepId", "payload", "createdAt"]
+        "required": [
+          "id",
+          "workflowRunId",
+          "sequence",
+          "eventType",
+          "stepId",
+          "payload",
+          "createdAt"
+        ]
       },
       "CustomWorkflowEvent": {
         "type": "object",
         "additionalProperties": false,
         "description": "Sanitized backwards-compatible branch for historical or mixed-version custom workflow events.",
         "properties": {
-          "id": { "type": "string" },
-          "workflowRunId": { "type": "string" },
-          "sequence": { "type": "integer", "minimum": 1 },
-          "eventKind": { "type": "string", "enum": ["custom"] },
-          "eventType": { "type": "string", "minLength": 1 },
-          "stepId": { "type": "string" },
-          "payload": { "type": "object", "additionalProperties": true },
-          "createdAt": { "type": "string", "format": "date-time" }
+          "id": {
+            "type": "string"
+          },
+          "workflowRunId": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "eventKind": {
+            "type": "string",
+            "enum": [
+              "custom"
+            ]
+          },
+          "eventType": {
+            "type": "string",
+            "minLength": 1
+          },
+          "stepId": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         },
-        "required": ["id", "workflowRunId", "sequence", "eventKind", "eventType", "createdAt"]
+        "required": [
+          "id",
+          "workflowRunId",
+          "sequence",
+          "eventKind",
+          "eventType",
+          "createdAt"
+        ]
       },
       "WorkflowEvent": {
         "oneOf": [
-          { "$ref": "#/components/schemas/AgentSessionContractWorkflowEvent" },
-          { "$ref": "#/components/schemas/GenericWorkflowEvent" },
-          { "$ref": "#/components/schemas/CustomWorkflowEvent" }
+          {
+            "$ref": "#/components/schemas/AgentSessionContractWorkflowEvent"
+          },
+          {
+            "$ref": "#/components/schemas/GenericWorkflowEvent"
+          },
+          {
+            "$ref": "#/components/schemas/CustomWorkflowEvent"
+          }
         ]
       },
       "WorkflowEventResponse": {
         "type": "object",
         "properties": {
-          "ok": { "type": "boolean" },
-          "event": { "$ref": "#/components/schemas/WorkflowEvent" }
+          "ok": {
+            "type": "boolean"
+          },
+          "event": {
+            "$ref": "#/components/schemas/WorkflowEvent"
+          }
         },
-        "required": ["ok", "event"]
+        "required": [
+          "ok",
+          "event"
+        ]
       },
       "WorkflowEventListResponse": {
         "type": "object",
         "properties": {
-          "ok": { "type": "boolean" },
+          "ok": {
+            "type": "boolean"
+          },
           "events": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/WorkflowEvent" }
+            "items": {
+              "$ref": "#/components/schemas/WorkflowEvent"
+            }
           }
         },
-        "required": ["ok", "events"]
+        "required": [
+          "ok",
+          "events"
+        ]
       },
       "CountResponse": {
         "type": "object",

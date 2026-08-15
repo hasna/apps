@@ -27,9 +27,6 @@ function runHook(env: Record<string, string> = {}, extraArgs: string[] = []) {
       ...process.env,
       ACCOUNTS_HOME: home,
       ACCOUNTS_STORE_PATH: join(home, "accounts.json"),
-      HASNA_ACCOUNTS_MODE: "local",
-      HASNA_ACCOUNTS_STORAGE_MODE: "local",
-      ACCOUNTS_STORAGE_MODE: "local",
       ...env,
     },
   });
@@ -68,12 +65,14 @@ test("a failure before the hook brain runs still exits 0 AND says something", ()
   expect(systemMessage(result.stdout)).toMatch(/auto-switching is NOT running/i);
 });
 
-test("f70e8357: a launched, registry-stripped session (cloud mode, no API url/key) DECIDES rather than failing open", () => {
+test("f70e8357: a launched, registry-stripped session (stale mode vars, no API url/key) DECIDES rather than failing open", () => {
   // Reproduces the owner-hit case: `accounts launch` denies
-  // HASNA_ACCOUNTS_API_URL/KEY to the launched session (#126) while a `cloud`
-  // storage mode remains set. Before the fix, `resolveStore()` inside the hook
-  // threw and the session got "auto-switching is NOT running". The hook must
-  // now reach its brain from local state and NOT emit that fail-open notice.
+  // HASNA_ACCOUNTS_API_URL/KEY to the launched session (#126) while retired
+  // storage-mode variables remain set. Before the fix, `resolveStore()` inside
+  // the hook threw and the session got "auto-switching is NOT running". The
+  // hook must now reach its brain from local state (its resolver is the
+  // local-only `resolveLocalStore`, which deliberately never consults
+  // `assertNoLegacyStorageMode`) and NOT emit that fail-open notice.
   const result = runHook({
     HASNA_ACCOUNTS_MODE: "cloud",
     HASNA_ACCOUNTS_STORAGE_MODE: "cloud",

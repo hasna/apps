@@ -1,42 +1,50 @@
-// Cloud database access for the machines serve service (Amendment A1: PURE
-// REMOTE — all reads/writes hit the shared RDS `machines` database directly,
-// no local cache, no sync engine). Built on the vendored @hasna/contracts
-// storage kit so TLS, mode resolution, and pooling are the fleet-standard code.
+// Cloud database access for the machines serve service (PURE REMOTE — all
+// reads/writes hit the shared machines Postgres directly, no local cache, no
+// sync engine). Built on the vendored @hasna/contracts storage kit so TLS,
+// backend resolution, and pooling are the fleet-standard code.
+//
+// The server data backend is `sqlite | postgresql`, selected by the presence
+// of HASNA_MACHINES_DATABASE_URL (never by a storage-mode variable — a set
+// HASNA_MACHINES_STORAGE_MODE throws naming the variable).
 
-import { createCloudPoolFromEnv, type CloudPoolFromEnv } from "../generated/storage-kit/pool.js";
-import type { PoolQueryClient } from "../generated/storage-kit/query.js";
+import { createServerPoolFromEnv, type PoolQueryClient } from "../generated/storage-kit/index.js";
+import { assertNoLegacyStorageMode } from "../lib/retired-storage-mode.js";
 
 export const MACHINES_APP_NAME = "machines";
 
 /** Env var carrying the OWNER-role DSN used only for DDL / migrations. */
 export const OWNER_DATABASE_URL_ENV = "HASNA_MACHINES_DATABASE_URL_OWNER";
 
-let cached: CloudPoolFromEnv | null = null;
+let cached: PoolQueryClient | null = null;
 
 /**
- * Resolve the shared APP-role cloud client the serve process uses for every
- * request. Requires `HASNA_MACHINES_STORAGE_MODE=cloud` and
- * `HASNA_MACHINES_DATABASE_URL`. Throws a clear error otherwise — never a
- * silent no-op.
+ * Resolve the shared APP-role client the serve process uses for every request.
+ * Requires the `postgresql` data backend (HASNA_MACHINES_DATABASE_URL set).
+ * Throws a clear error otherwise — never a silent no-op — and any retired
+ * storage-mode variable throws naming the variable.
  */
 export function getServiceClient(): PoolQueryClient {
   if (!cached) {
-    cached = createCloudPoolFromEnv(MACHINES_APP_NAME, { applicationName: "machines-serve" });
+    assertNoLegacyStorageMode();
+    cached = createServerPoolFromEnv(MACHINES_APP_NAME, {
+      applicationName: "machines-serve",
+    }).client;
   }
-  return cached.client;
+  return cached;
 }
 
 /**
- * Build a one-off OWNER-role cloud client for migrations. Prefers the dedicated
+ * Build a one-off OWNER-role client for migrations. Prefers the dedicated
  * owner DSN (`HASNA_MACHINES_DATABASE_URL_OWNER`); falls back to the app DSN
  * when no separate owner secret is wired. Caller must `close()` it.
  */
 export function getOwnerClient(env: NodeJS.ProcessEnv = process.env): PoolQueryClient {
+  assertNoLegacyStorageMode(env);
   const ownerUrl = env[OWNER_DATABASE_URL_ENV]?.trim();
   const overlayEnv: NodeJS.ProcessEnv = ownerUrl
-    ? { ...env, HASNA_MACHINES_DATABASE_URL: ownerUrl, HASNA_MACHINES_STORAGE_MODE: "cloud" }
+    ? { ...env, HASNA_MACHINES_DATABASE_URL: ownerUrl }
     : env;
-  return createCloudPoolFromEnv(MACHINES_APP_NAME, {
+  return createServerPoolFromEnv(MACHINES_APP_NAME, {
     env: overlayEnv,
     applicationName: "machines-migrate",
   }).client;
@@ -45,7 +53,7 @@ export function getOwnerClient(env: NodeJS.ProcessEnv = process.env): PoolQueryC
 /** Close the cached service client (used by tests / graceful shutdown). */
 export async function closeServiceClient(): Promise<void> {
   if (cached) {
-    await cached.client.close();
+    await cached.close();
     cached = null;
   }
 }

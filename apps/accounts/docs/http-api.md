@@ -2,8 +2,8 @@
 
 The published package includes the Bun `accounts-serve` HTTP service and a
 generated TypeScript client at `@hasna/accounts/sdk`. This runtime backs
-`self_hosted` and `cloud` registry modes; it is separate from the default local
-JSON registry.
+the HTTP API transport selected by `HASNA_ACCOUNTS_API_URL` +
+`HASNA_ACCOUNTS_API_KEY`; it is separate from the default local JSON registry.
 
 ## Start the service
 
@@ -11,12 +11,10 @@ Run migrations as the schema-owning role, granting the separate DML-only runtime
 role, before serving traffic:
 
 ```bash
-HASNA_ACCOUNTS_STORAGE_MODE=cloud \
 HASNA_ACCOUNTS_DATABASE_URL=postgres://migration-owner@db/accounts \
 HASNA_ACCOUNTS_RUNTIME_ROLE=accounts_app \
 accounts-migrate
 
-HASNA_ACCOUNTS_STORAGE_MODE=cloud \
 HASNA_ACCOUNTS_DATABASE_URL=postgres://accounts_app@db/accounts \
 HASNA_ACCOUNTS_API_SIGNING_KEY=replace-me \
 accounts-serve --host 0.0.0.0 --port 8080

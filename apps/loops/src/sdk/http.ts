@@ -33,7 +33,7 @@ export interface StuckRunReconciliationOutcome { "runId": string; "outcome": "re
 
 export interface StuckRunReconciliationResponse { "ok": boolean; "reconciliation": { "outcomes": Array<StuckRunReconciliationOutcome> } }
 
-export interface Foundation { "status": string; "version": string; "mode": string; "service"?: string; "detail"?: string }
+export interface Foundation { "status": string; "version": string; "storage": "sqlite" | "postgresql"; "connection": "file" | "api"; "service"?: string; "detail"?: string }
 
 export interface Loop { "id": string; "name": string; "description"?: string | null; "labels": Array<string>; "status": "active" | "paused" | "stopped" | "expired"; "schedule"?: Record<string, unknown>; "target"?: Record<string, unknown>; "nextRunAt"?: string | null; "createdAt"?: string; "updatedAt"?: string }
 
@@ -157,7 +157,14 @@ export class LoopsClient {
     const url = new URL(this.baseUrl + path);
     if (opts.query) {
       for (const [key, value] of Object.entries(opts.query)) {
-        if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+        if (value === undefined || value === null) continue;
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item !== undefined && item !== null) url.searchParams.append(key, String(item));
+          }
+        } else {
+          url.searchParams.set(key, String(value));
+        }
       }
     }
     const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };
@@ -281,7 +288,7 @@ export class LoopsClient {
       });
     }
 
-    /** Bulk id-preserving import (self-hosted backfill) */
+    /** Bulk id-preserving import (control-plane backfill) */
     async importRows(body: ImportInput, init?: RequestInit): Promise<ImportResponse> {
       return this.request("POST", `/v1/import`, {
         body,

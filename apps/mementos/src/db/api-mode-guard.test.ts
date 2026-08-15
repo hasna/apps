@@ -75,7 +75,7 @@ describe("split-brain guard — getDatabase() fail-closed in API mode", () => {
     process.env[API_KEY] = "sk-test";
     process.env[DSN] = "postgres://u:p@127.0.0.1:1/db";
     expect(isApiMode()).toBe(false);
-    // With a DSN + no explicit mode, storage promotes to cloud; a client cloud
+    // With a DSN, the server backend is postgresql; a client-side postgres
     // open is refused by getCloudDatabase (server-only), NOT by the API guard.
     expect(() => getDatabase()).toThrow(/server-only|API mode/);
   });

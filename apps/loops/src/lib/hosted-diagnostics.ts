@@ -14,7 +14,8 @@ import {
 import { localRuntimeChecks, type DoctorCheck, type DoctorReport } from "./doctor.js";
 import { preflightTarget } from "./executor.js";
 import { workflowExecutionOrder } from "./workflow-spec.js";
-import { buildDeploymentStatus } from "./mode.js";
+import { displayControlPlaneUrl, resolveRuntimeConfig } from "./runtime-config.js";
+import { schedulerStateForConnection } from "./runtime-status.js";
 
 /**
  * Hosted-mode `loops health` and `loops doctor` (task e3b6f1d4).
@@ -32,7 +33,7 @@ import { buildDeploymentStatus } from "./mode.js";
  */
 
 export interface HostedBackend {
-  transport: "cloud-http";
+  transport: "api";
   /** Base URL of the hosted control plane. Never carries the API key. */
   apiUrl?: string;
 }
@@ -77,7 +78,7 @@ const EXECUTION_TRUTH_RUN_LIMIT = 10;
 const MIN_EXECUTION_TRUTH_FINISHED_RUNS = 3;
 
 export function hostedBackend(store: LoopStore): HostedBackend {
-  return { transport: "cloud-http", apiUrl: store instanceof ApiStore ? store.baseUrl : undefined };
+  return { transport: "api", apiUrl: store instanceof ApiStore ? store.baseUrl : undefined };
 }
 
 /**
@@ -364,14 +365,26 @@ export async function buildHostedDoctorReport(store: LoopStore): Promise<HostedD
     detail: "this is this machine's daemon, not the hosted scheduler; hosted run claiming is not observable from the client",
   });
 
-  const deployment = buildDeploymentStatus();
-  checks.push({
-    id: "scheduler-state",
-    scope: "machine",
-    status: deployment.controlPlane.configured ? "ok" : "warn",
-    message: `scheduler state authority=${deployment.schedulerState.authority} control_plane=${deployment.controlPlane.kind}`,
-    detail: deployment.controlPlane.apiUrl ? `api_url=${deployment.controlPlane.apiUrl}` : undefined,
-  });
+  let schedulerCheck: DoctorCheck;
+  try {
+    const config = resolveRuntimeConfig();
+    const schedulerState = schedulerStateForConnection(config);
+    schedulerCheck = {
+      id: "scheduler-state",
+      scope: "machine",
+      status: schedulerState.remoteStore.configured ? "ok" : "warn",
+      message: `scheduler state storage=${config.storage} connection=${config.connection} remote_scheduler=${schedulerState.remoteStore.backend}`,
+      detail: config.apiUrl ? `api_url=${displayControlPlaneUrl(config.apiUrl)}` : undefined,
+    };
+  } catch (error) {
+    schedulerCheck = {
+      id: "scheduler-state",
+      scope: "machine",
+      status: "fail",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  checks.push(schedulerCheck);
 
   const unchecked: UncheckedItem[] = [
     {

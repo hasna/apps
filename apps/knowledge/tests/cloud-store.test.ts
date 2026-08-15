@@ -4,8 +4,8 @@ import {
   KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
   KNOWLEDGE_RESOURCE,
   KnowledgeBoundedQueryCapabilityError,
-  resolveKnowledgeCloudStore,
-} from '../src/cloud-store';
+  resolveKnowledgeHttpStore,
+} from '../src/http-store';
 import type { KnowledgeItem } from '../src/store';
 
 const CLEAN_ENV = {} as NodeJS.ProcessEnv;
@@ -23,37 +23,26 @@ const OLD_SERVER_ITEM: KnowledgeItem = {
   updated_at: NOW,
 };
 
-describe('knowledge cloud-store resolver (postgres client flip)', () => {
+describe('knowledge HTTP store resolver', () => {
   test('resource + slug are the contract-stable values', () => {
     expect(KNOWLEDGE_APP_SLUG).toBe('knowledge');
     expect(KNOWLEDGE_RESOURCE).toBe('notes');
   });
 
-  test('returns null (local) when no env is set', () => {
-    expect(resolveKnowledgeCloudStore(CLEAN_ENV)).toBeNull();
+  test('returns null for the on-box transport when the canonical API URL is absent', () => {
+    expect(resolveKnowledgeHttpStore(CLEAN_ENV)).toBeNull();
   });
 
-  test('returns null (local) when mode=sqlite even with API url+key present', () => {
-    const store = resolveKnowledgeCloudStore({
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'sqlite',
-      HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
-      HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
-    } as NodeJS.ProcessEnv);
-    expect(store).toBeNull();
-  });
-
-  test('throws (never silent local drift) when postgres is requested but API key is missing', () => {
+  test('fails closed when the canonical API URL is present without its key', () => {
     expect(() =>
-      resolveKnowledgeCloudStore({
-        HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
+      resolveKnowledgeHttpStore({
         HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
       } as NodeJS.ProcessEnv),
-    ).toThrow();
+    ).toThrow(/HASNA_KNOWLEDGE_API_KEY/);
   });
 
-  test('resolves an http store pointed at the configured URL when postgres + url + key', () => {
-    const store = resolveKnowledgeCloudStore({
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
+  test('canonical API URL plus key selects the HTTP store', () => {
+    const store = resolveKnowledgeHttpStore({
       HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
       HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
     } as NodeJS.ProcessEnv);
@@ -61,62 +50,26 @@ describe('knowledge cloud-store resolver (postgres client flip)', () => {
     expect(store!.baseUrl).toBe('https://knowledge.md/v1');
   });
 
-  test('stays local when ONLY API url+key are set — presence is not a selection', () => {
-    // INVERTED, deliberately. This case used to route to cloud so that a fleet
-    // flip writing only the two pointer vars would take effect. That made the
-    // backend a function of ambient environment: those two variables exported in
-    // a login shell are inherited by every pane from the tmux server, so a test
-    // run believing it was isolated wrote to the live store, and it surfaced as
-    // 99 unrelated test failures rather than as "you are pointed at production".
-    //
-    // The flip must now write an explicit mode as well. That is a coordination
-    // cost paid once, against a class of silent production writes.
-    const store = resolveKnowledgeCloudStore({
-      HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
+  test('the unprefixed API URL alias is ignored', () => {
+    const store = resolveKnowledgeHttpStore({
+      KNOWLEDGE_API_URL: 'https://knowledge.md',
       HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
     } as NodeJS.ProcessEnv);
     expect(store).toBeNull();
   });
 
-  test('the same pointers WITH an explicit postgres backend do route to the API', () => {
-    // The other half of the inverted case above: nothing about reaching the
-    // cloud got harder, it just has to be asked for.
-    const store = resolveKnowledgeCloudStore({
+  test('retired selector variables fail loudly and name both replacements', () => {
+    expect(() => resolveKnowledgeHttpStore({
       HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
-      HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
-      HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
-    } as NodeJS.ProcessEnv);
-    expect(store).not.toBeNull();
-    expect(store!.baseUrl).toBe('https://knowledge.md/v1');
+    } as NodeJS.ProcessEnv)).toThrow(/HASNA_KNOWLEDGE_STORAGE_MODE.*HASNA_KNOWLEDGE_API_URL.*HASNA_KNOWLEDGE_DATABASE_URL/s);
   });
 
-  test('stays local when only the API url is set (key missing -> not both)', () => {
+  test('an API key without the canonical URL stays on-box', () => {
     expect(
-      resolveKnowledgeCloudStore({
-        HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
-      } as NodeJS.ProcessEnv),
-    ).toBeNull();
-  });
-
-  test('stays local when only the API key is set (url missing -> not both)', () => {
-    expect(
-      resolveKnowledgeCloudStore({
+      resolveKnowledgeHttpStore({
         HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
       } as NodeJS.ProcessEnv),
     ).toBeNull();
-  });
-
-  test('derives the base URL from the @hasna/contracts fleet domain when no API URL is set', () => {
-    // NOTE: this default is NOT sourced from this package's DEFAULT_KNOWLEDGE_API_URL.
-    // It comes from the @hasna/contracts dependency and now requires an explicit
-    // fleet domain instead of silently assuming Hasna's SaaS hostname.
-    const store = resolveKnowledgeCloudStore({
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
-      HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
-      HASNA_FLEET_API_DOMAIN: 'example.test',
-    } as NodeJS.ProcessEnv);
-    expect(store).not.toBeNull();
-    expect(store!.baseUrl).toBe('https://knowledge.example.test/v1');
   });
 
   test('list sends exactly one bounded producer request with repeated tags and uses producer total', async () => {
@@ -134,9 +87,8 @@ describe('knowledge cloud-store resolver (postgres client flip)', () => {
       },
     });
     try {
-      const store = resolveKnowledgeCloudStore({
+      const store = resolveKnowledgeHttpStore({
         NODE_ENV: 'test',
-        HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
         HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
         HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
       } as NodeJS.ProcessEnv)!;
@@ -181,9 +133,8 @@ describe('knowledge cloud-store resolver (postgres client flip)', () => {
       },
     });
     try {
-      const store = resolveKnowledgeCloudStore({
+      const store = resolveKnowledgeHttpStore({
         NODE_ENV: 'test',
-        HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
         HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
         HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
       } as NodeJS.ProcessEnv)!;
@@ -215,9 +166,8 @@ describe('knowledge cloud-store resolver (postgres client flip)', () => {
       },
     });
     try {
-      const store = resolveKnowledgeCloudStore({
+      const store = resolveKnowledgeHttpStore({
         NODE_ENV: 'test',
-        HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
         HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
         HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
       } as NodeJS.ProcessEnv)!;
@@ -240,7 +190,7 @@ describe('knowledge cloud-store resolver (postgres client flip)', () => {
 
   const unsupportedOldServerCases: Array<{
     name: string;
-    options: Parameters<NonNullable<ReturnType<typeof resolveKnowledgeCloudStore>>['list']>[0];
+    options: Parameters<NonNullable<ReturnType<typeof resolveKnowledgeHttpStore>>['list']>[0];
     field: string;
   }> = [
     { name: 'tags', options: { tags: ['required'] }, field: 'tags' },
@@ -260,9 +210,8 @@ describe('knowledge cloud-store resolver (postgres client flip)', () => {
         },
       });
       try {
-        const store = resolveKnowledgeCloudStore({
+        const store = resolveKnowledgeHttpStore({
           NODE_ENV: 'test',
-          HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
           HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
           HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
         } as NodeJS.ProcessEnv)!;
@@ -284,9 +233,8 @@ describe('knowledge cloud-store resolver (postgres client flip)', () => {
       },
     });
     try {
-      const store = resolveKnowledgeCloudStore({
+      const store = resolveKnowledgeHttpStore({
         NODE_ENV: 'test',
-        HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
         HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
         HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
       } as NodeJS.ProcessEnv)!;

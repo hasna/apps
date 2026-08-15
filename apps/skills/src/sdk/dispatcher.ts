@@ -1,12 +1,28 @@
 /**
  * Dispatcher adapter seam: how admitted runs leave this process.
  *
- * The interface is the contract — submit a run, cancel a run. The ECS adapter is typed
- * now and not implemented: the launch machinery (task definitions, run-task calls,
- * fencing) is built by the sibling dispatcher implementation task on top of these
- * interfaces. Nothing in this module launches anything.
+ * The interface is the contract — submit a run, cancel a run. The ECS adapter
+ * is the real implementation (execution/dispatchers/ecs.ts): CAS-claimed
+ * attempts, persisted launch intents, deterministic RunTask clientTokens, and
+ * lost-response reconciliation. The E2B lane is a typed stub pending the
+ * infinity integration.
+ *
+ * submit() takes the EXECUTION-domain admission (`FrozenAdmission`), whose
+ * `runId` (`run_<ts>_<hex>`) is the execution store's own key — NOT the
+ * server run record (`ServerRunRecord.id`, a UUID), which the execution store
+ * cannot resolve and would silently no-admit. Intended wiring: the
+ * POST /api/v1/runs handler creates a server run through `store.createRun`
+ * (billing/audit record, UUID id); the execution lane bridges it to this seam
+ * through `createSubmitRunService` (idempotent admission), which mints or
+ * returns the `FrozenAdmission`; then `dispatcher.submit(admission)` launches
+ * it. The bridge is mandatory — passing a server record here is a type error.
  */
-import type { ServerRunRecord } from "../server/types.js";
+import type { FrozenAdmission } from "./execution/types.js";
+
+import { EcsDispatcher, E2bDispatcher } from "./execution/index.js";
+
+export { EcsDispatcher, E2bDispatcher };
+export type { EcsDispatcherConfig, EcsDispatcherOptions, EcsRunTaskClient, EcsRunTaskInput, EcsRunTaskResult, EcsTaskState, LaunchOutcome } from "./execution/dispatchers/ecs.js";
 
 /** Outcome of a dispatch attempt. */
 export interface DispatchResult {
@@ -17,9 +33,9 @@ export interface DispatchResult {
   detail?: string;
 }
 
-/** A dispatcher takes runs out of the queue and puts them in front of an executor. */
+/** A dispatcher takes admitted execution runs and puts them in front of an executor. */
 export interface Dispatcher {
-  submit(run: ServerRunRecord): Promise<DispatchResult>;
+  submit(run: FrozenAdmission): Promise<DispatchResult>;
   cancel(runId: string): Promise<DispatchResult>;
 }
 
@@ -30,22 +46,5 @@ export class DispatcherNotImplementedError extends Error {
       `${adapter} does not implement ${capability} yet — the launch machinery is built by the sibling dispatcher task.`,
     );
     this.name = "DispatcherNotImplementedError";
-  }
-}
-
-/**
- * ECS launch adapter.
- *
- * Typed against the Dispatcher interface; the run-task launch machinery is a sibling
- * implementation task. Until then every call fails closed with a typed error rather
- * than pretending a run left the process.
- */
-export class EcsDispatcher implements Dispatcher {
-  async submit(_run: ServerRunRecord): Promise<DispatchResult> {
-    throw new DispatcherNotImplementedError("EcsDispatcher", "submit");
-  }
-
-  async cancel(_runId: string): Promise<DispatchResult> {
-    throw new DispatcherNotImplementedError("EcsDispatcher", "cancel");
   }
 }

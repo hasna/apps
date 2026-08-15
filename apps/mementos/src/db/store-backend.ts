@@ -1,19 +1,24 @@
 // ============================================================================
 // Resolved-store reporting — "which store am I about to hit?"
 //
-// mementos has TWO independent notions of "mode" that can disagree, which is
-// how a process ends up writing somewhere nobody intended:
+// A mementos process has exactly two transport notions, and both are resolved
+// from the environment alone:
 //
-//   - `getStorageMode()` (src/storage.ts) — local | cloud, from the storage
-//     config file plus HASNA_MEMENTOS_STORAGE_MODE. Governs the DIRECT Postgres
-//     path, which is server-only.
-//   - `isApiMode()` (src/db/api-mode.ts) — the HTTPS client transport, selected
-//     by the mere PRESENCE of an API URL + key. Governs every client read/write.
+//   - the CLIENT transport (`isApiMode()`, src/db/api-mode.ts) — local SQLite
+//     or the HTTP API, selected by the API URL + key pair; an incomplete pair
+//     throws naming the missing variable.
+//   - the SERVER backend (`getStorageBackend()`, src/storage.ts) — sqlite or
+//     postgresql, selected by HASNA_MEMENTOS_DATABASE_URL presence. The
+//     DIRECT Postgres path is server-only.
+//
+// There are no deployment modes (owner directive 2026-07-29; knowledge
+// k_ms5wv466_u0jidq). Any retired storage-mode variable throws via the
+// fail-loud ratchet before a backend is resolved.
 //
 // On a client, `isApiMode()` wins: the memory paths route to HTTP before
-// `getDatabase()` is ever consulted, so `getStorageMode()` can cheerfully report
-// `local` while every write goes to the shared cloud store. Reading either value
-// alone is therefore misleading — this module composes the single answer.
+// `getDatabase()` is ever consulted, so the server backend can report `sqlite`
+// while every write goes to the shared store. Reading either value alone is
+// therefore misleading — this module composes the single answer.
 //
 // It resolves from the environment ONLY: no SQLite file is opened, no HTTP
 // request is made, no credential value is read into the report. That makes it
@@ -24,13 +29,13 @@
 
 import { getDbPath } from "./database.js";
 import { getApiConfig, getApiModeEnvSources, getConfiguredApiEnv, isApiMode } from "./api-mode.js";
-import { MEMENTOS_STORAGE_ENV, MEMENTOS_STORAGE_FALLBACK_ENV, getStorageMode } from "../storage.js";
+import { getStorageBackend } from "../storage.js";
 
 /**
  * The transport that reads and writes will actually use.
  *
  * - `local-sqlite`   — the on-disk SQLite file at `db_path` is authoritative.
- * - `cloud-api`      — authed HTTPS to the self-hosted server (the shared store).
+ * - `cloud-api`      — authed HTTPS to the server (the shared store).
  * - `cloud-postgres` — a direct Postgres DSN; server-only, never a client.
  */
 export type StoreBackend = "local-sqlite" | "cloud-api" | "cloud-postgres";
@@ -41,8 +46,8 @@ export interface StoreBackendReport {
   backend: StoreBackend;
   /** True when the HTTPS client transport is engaged (client reads AND writes). */
   api_mode: boolean;
-  /** The `getStorageMode()` value — reported for diagnosis, NOT the answer. */
-  storage_mode: string;
+  /** The server data backend (sqlite | postgresql) — reported for diagnosis, NOT the client answer. */
+  server_backend: string;
   /** The SQLite path that WOULD be used. Meaningful only for `local-sqlite`. */
   db_path: string;
   /**
@@ -71,7 +76,7 @@ export interface StoreBackendReport {
 export function resolveStoreBackend(): StoreBackendReport {
   const apiMode = isApiMode();
   const apiConfig = getApiConfig();
-  const storageMode = getStorageMode();
+  const serverBackend = getStorageBackend();
   const sources = getApiModeEnvSources();
 
   // Since precedence 1 landed (2026-08-03), getApiConfig() returns null whenever
@@ -86,7 +91,7 @@ export function resolveStoreBackend(): StoreBackendReport {
 
   const backend: StoreBackend = apiMode
     ? "cloud-api"
-    : storageMode === "cloud"
+    : serverBackend === "postgresql"
       ? "cloud-postgres"
       : "local-sqlite";
 
@@ -103,18 +108,15 @@ export function resolveStoreBackend(): StoreBackendReport {
       ? `${configured.dbPathKey} (explicit local path, outranks the API selectors)`
       : `${configured.dbPathKey} (explicit local path)`;
   } else if (backend === "cloud-postgres") {
-    // An explicit mode env var, else the DSN auto-promoting, else the config file.
-    const modeKey = [MEMENTOS_STORAGE_ENV.mode, MEMENTOS_STORAGE_FALLBACK_ENV.mode].find((key) =>
-      process.env[key]?.trim(),
-    );
-    selectedBy = modeKey ?? sources.databaseUrlKey ?? "storage config file";
+    // The postgresql backend is selected by DATABASE_URL presence.
+    selectedBy = sources.databaseUrlKey ?? "storage config file";
   }
 
   return {
     schema: "mementos.store_backend.v1",
     backend,
     api_mode: apiMode,
-    storage_mode: storageMode,
+    server_backend: serverBackend,
     db_path: getDbPath(),
     api_endpoint: apiConfig?.baseUrl ?? configured.baseUrl,
     api_key_present: Boolean(apiConfig?.apiKey) || configured.apiKeyPresent,

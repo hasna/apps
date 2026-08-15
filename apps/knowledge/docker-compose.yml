@@ -1,14 +1,13 @@
 # @hasna/knowledge — local development stack.
 #
-# Provides a throwaway Postgres for exercising cloud mode (PURE REMOTE per
-# Amendment A1) against a local database instead of the shared RDS, plus the
+# Provides a throwaway PostgreSQL database for exercising the server API,
+# plus the
 # knowledge-serve HTTP API built from the Dockerfile.
 #
 #   # 1. bring up postgres and apply the schema
 #   docker compose up -d postgres
-#   HASNA_KNOWLEDGE_STORAGE_MODE=cloud \
-#     HASNA_KNOWLEDGE_DATABASE_URL=postgres://knowledge:knowledge@localhost:5432/knowledge \
-#     bun scripts/apply-cloud-migrations.mjs
+#   HASNA_KNOWLEDGE_DATABASE_URL=postgres://knowledge:knowledge@localhost:5432/knowledge \
+#     bun scripts/apply-postgres-migrations.mjs
 #   # 2. build + start the service
 #   docker compose up --build serve
 #
@@ -41,7 +40,6 @@ services:
         condition: service_healthy
     environment:
       PORT: "8080"
-      HASNA_KNOWLEDGE_STORAGE_MODE: cloud
       HASNA_KNOWLEDGE_DATABASE_URL: postgres://knowledge:knowledge@postgres:5432/knowledge?sslmode=disable
       # Local-only throwaway signing secret. Use a real secret in production.
       HASNA_KNOWLEDGE_API_SIGNING_KEY: local-dev-signing-secret-change-me

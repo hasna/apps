@@ -88,7 +88,7 @@ function installStorageSubcommands(storage: Command, program: Command): void {
         console.log(`Backend: ${label}`);
         console.log(`Selected by: ${report.selected_by}`);
         console.log(`API mode: ${report.api_mode ? "yes" : "no"}`);
-        console.log(`Storage mode: ${report.storage_mode}`);
+        console.log(`Server backend: ${report.server_backend}`);
         if (report.backend === "local-sqlite") {
           console.log(`Database: ${report.db_path}`);
           // Say out loud that live credentials were outranked. Staying silent
@@ -122,16 +122,15 @@ function installStorageSubcommands(storage: Command, program: Command): void {
         return;
       }
 
-      console.log(`Mode: ${status.mode}`);
+      console.log(`Backend: ${runtime.backend}`);
       console.log(`Enabled: ${status.enabled ? "yes" : "no"}`);
       console.log(`Runtime: ${runtime.runtime.kind}`);
       console.log(`Database: ${status.db_path}`);
       console.log(`Machine: ${status.current_machine_id ?? "(not registered)"}`);
       console.log(`Local SQLite: ${runtime.runtime.local.primary_runtime ? "primary runtime" : "disabled"}`);
       console.log(`Local file sync: unsupported`);
-      console.log(`Remote PostgreSQL/RDS: ${runtime.runtime.remote.configured ? "configured" : "not configured"}`);
-      console.log(`Remote source: ${runtime.runtime.remote.source}`);
-      console.log(`S3/AWS mutation: unsupported`);
+      console.log(`PostgreSQL: ${runtime.runtime.backend.configured ? "configured" : "not configured"}`);
+      console.log(`Postgres source: ${runtime.runtime.backend.source}`);
       console.log(`Generic sync tables: ${status.generic_sync_meta.length}`);
       console.log(`Memory sync tables: ${status.memory_sync_meta.length}`);
       for (const issue of runtime.issues) {

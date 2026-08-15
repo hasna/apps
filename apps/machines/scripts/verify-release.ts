@@ -6,7 +6,7 @@ import packageJson from "../package.json" assert { type: "json" };
 
 const PACKAGE_NAME = "@hasna/machines";
 const MAX_PACKAGE_BYTES = 4 * 1024 * 1024;
-const MACHINES_BIN_NAMES = ["machines", "machines-mcp", "machines-agent", "machines-serve"] as const;
+const MACHINES_BIN_NAMES = ["machines", "machines-mcp", "machines-daemon", "machines-serve"] as const;
 const DEPENDENCY_EVENT_BIN_NAMES = ["events", "hasna-events"] as const;
 const REQUIRED_FILES = [
   "package/package.json",
@@ -49,7 +49,17 @@ const FORBIDDEN_PATTERNS = [
 
 async function main(): Promise<void> {
   assertReleaseScripts();
-  await assertVersionIsPublishable();
+  // The unpublished-version gate is a PUBLISH decision, not a pack
+  // property: `npm pack --dry-run` (the repo's publish guard) and a local
+  // pack must verify the artifact for a version that already shipped, while
+  // `npm publish` must still refuse to re-publish it. npm_command cannot
+  // discriminate here: bun run overwrites it (and npm_lifecycle_event) with
+  // the invoked script's own values (measured on bun 1.3.14), so the stable
+  // discriminator is the entry script — verify:release runs on the publish
+  // path (prepublishOnly), verify:pack on the pack path (prepack/guard).
+  if (process.env.npm_lifecycle_event === "verify:release") {
+    await assertVersionIsPublishable();
+  }
   const tmp = mkdtempSync(join(tmpdir(), "machines-release-"));
   try {
     const packed = await pack(tmp);
@@ -137,15 +147,15 @@ async function smokeInstalledPackage(appDir: string): Promise<void> {
   await run(["bun", "-e", "import('@hasna/machines/consumer').then((m)=>{ if (!m.resolveMachineWorkspace || !m.MACHINES_CONSUMER_CONTRACT_VERSION) throw new Error('missing consumer exports') })"], { cwd: appDir, quiet: true });
   await run(["bun", "-e", "import('@hasna/machines/storage').then((m)=>{ if (!m.getStorageStatus || !m.storagePush) throw new Error('missing storage exports') })"], { cwd: appDir, quiet: true });
   await run(["bun", "-e", "import('@hasna/machines/storage').then((m)=>{ for (const name of ['getStoragePg','PgAdapterAsync']) if (name in m) throw new Error('raw storage export: '+name); })"], { cwd: appDir, quiet: true });
-  await run(["sh", "-lc", "command -v ./node_modules/.bin/machines ./node_modules/.bin/machines-mcp ./node_modules/.bin/machines-agent"], { cwd: appDir, quiet: true });
+  await run(["sh", "-lc", "command -v ./node_modules/.bin/machines ./node_modules/.bin/machines-mcp ./node_modules/.bin/machines-daemon"], { cwd: appDir, quiet: true });
   assertInstalledDependencyBinBoundary(appDir);
   await run(["./node_modules/.bin/machines", "--version"], { cwd: appDir, quiet: true, expect: packageJson.version });
   await run(["./node_modules/.bin/machines", "--help"], { cwd: appDir, quiet: true, expect: "Usage:" });
   await run(["./node_modules/.bin/machines", "self-test", "--json"], { cwd: appDir, quiet: true, expect: "\"checks\"" });
   await run(["./node_modules/.bin/machines-mcp", "--version"], { cwd: appDir, quiet: true, expect: packageJson.version });
   await run(["./node_modules/.bin/machines-mcp", "--help"], { cwd: appDir, quiet: true, expect: "Usage:" });
-  await run(["./node_modules/.bin/machines-agent", "--version"], { cwd: appDir, quiet: true, expect: packageJson.version });
-  await run(["./node_modules/.bin/machines-agent", "--help"], { cwd: appDir, quiet: true, expect: "Usage:" });
+  await run(["./node_modules/.bin/machines-daemon", "--version"], { cwd: appDir, quiet: true, expect: packageJson.version });
+  await run(["./node_modules/.bin/machines-daemon", "--help"], { cwd: appDir, quiet: true, expect: "Usage:" });
   await run([
       "bun",
       join(appDir, "node_modules", "@hasna", "machines", "scripts", "consumer-conformance.mjs"),

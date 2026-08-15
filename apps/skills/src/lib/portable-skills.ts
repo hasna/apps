@@ -19,6 +19,7 @@ import {
   type SkillValidationMessage,
   type SkillValidationResult,
 } from "./skill-validation.js";
+import { validatePortableManifestContract } from "./skill-contract.js";
 import {
   copySkillDirectory,
   createInstructionManifest,
@@ -30,9 +31,9 @@ import {
   normalizePortableSkillName,
   parseSkillKind,
   readPortableSkillManifest,
-  renderSkillJson,
   writeInstructionSkillTemplate,
   writePortableSkillTemplate,
+  writeSkillJsonWithHash,
 } from "./portable-skills-files.js";
 import type {
   BulkPortImportedEntry,
@@ -445,7 +446,7 @@ export function writeCorpusSkill(
     inputs: [],
     commands: [],
   };
-  writeFileSync(join(skillPath, "skill.json"), renderSkillJson(manifest));
+  writeSkillJsonWithHash(skillPath, manifest);
 
   return { name, path: skillPath, manifest, created };
 }
@@ -477,6 +478,28 @@ export function validatePortableSkillDirectory(name: string, skillPath: string):
       }
       if (!manifest.version.trim()) {
         add(issues, "portable.version_missing", "Portable manifest missing version");
+      }
+      // hasna.skill.v1 contract: schema fields, runtime contract, provenance,
+      // and the self-referencing content_hash. The contract is strict whenever
+      // a skill.json exists; SKILL.md-only legacy skills stay relaxed.
+      const contractIssues = validatePortableManifestContract(manifest, {
+        strict: existsSync(join(skillPath, "skill.json")),
+        skillPath,
+      });
+      for (const issue of contractIssues) add(issues, issue.code, issue.message);
+      // Consumer frontmatter is minimal (name + description), so `kind` lives
+      // in skill.json. When the manifest declares kind: instruction, drop the
+      // executable-only checks the frontmatter-derived base pass added.
+      if (manifest.kind === "instruction") {
+        const executableOnlyCodes = new Set([
+          "package.missing",
+          "package.bin_missing",
+          "skill.src_missing",
+          "skill.src_index_missing",
+        ]);
+        for (let i = issues.length - 1; i >= 0; i--) {
+          if (executableOnlyCodes.has(issues[i]!.code)) issues.splice(i, 1);
+        }
       }
       // Instruction skills are SKILL.md-primary: no inputs, commands, or AGENTS.md required.
       if (!isInstruction && (!Array.isArray(manifest.inputs) || manifest.inputs.length === 0)) {

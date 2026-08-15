@@ -1,0 +1,349 @@
+#compdef monitor
+# zsh completion for @hasna/monitor CLI
+# Install: source this file in ~/.zshrc or run `monitor completions install`
+
+_monitor() {
+  local context state line
+  typeset -A opt_args
+
+  local -a subcommands
+  subcommands=(
+    'status:Show current system snapshot (CPU, memory, disk, GPU)'
+    'health:Show metadata-only monitor health counts'
+    'machines:List all configured machines'
+    'add:Add a machine to monitor'
+    'doctor:Run health checks and show colored report'
+    'ps:Show process table'
+    'exec:Send a command to a tmux target or all panes'
+    'kill:Kill a process by PID'
+    'alerts:List alerts for a machine'
+    'apps:Show installed apps or compare them across machines'
+    'compare-apps:Compare installed apps across all configured machines'
+    'service:List or control system services and detected dev servers'
+    'containers:Show container status/resources or logs'
+    'ports:Show listening TCP and UDP ports'
+    'tailscale:Show Tailscale peer status and latency'
+    'temperature:Show CPU/GPU thermals, fan speeds, and alerts'
+    'loop-check:Run bounded loop-ready diagnostics'
+    'mcp-health:Inspect Claude MCP server status and dead tmux panes'
+    'mcp-status:Show MCP server health with matched process details'
+    'mcp-restart:Restart a matched MCP process and re-check health'
+    'report:Build or schedule fleet health reports'
+    'cron:Manage cron jobs'
+    'search:Full-text search across machines, alerts, and processes'
+    'migrate:Migrate config from legacy locations'
+    'retention:Downsample old metrics and prune stale rows'
+    'integrations:Manage open-* ecosystem integrations'
+    'serve:Start the REST API server'
+    'mcp:Start the MCP server (stdio transport)'
+    'sync:Sync local data with cloud PostgreSQL'
+    'completions:Generate shell completion scripts'
+    'help:Display help for a command'
+  )
+
+  _arguments -C \
+    '(-h --help)'{-h,--help}'[Show help]' \
+    '(-V --version)'{-V,--version}'[Show version]' \
+    '1: :->subcmd' \
+    '*:: :->args'
+
+  case $state in
+    subcmd)
+      _describe 'monitor commands' subcommands
+      ;;
+    args)
+      case $words[1] in
+        status)
+          _arguments \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::machine-id:_monitor_machine_ids'
+          ;;
+        health)
+          _arguments \
+            '(-j --json)'{-j,--json}'[Output metadata-only JSON]' \
+            '--probe-services[Probe managed services and include status counts]'
+          ;;
+        machines)
+          _arguments \
+            '(-n --limit)'{-n,--limit}'[Number of machines to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Include host/detail columns]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]'
+          ;;
+        add)
+          _arguments \
+            '--type[Machine type]:type:(local ssh ec2)' \
+            '--host[SSH hostname or IP]:host:_hosts' \
+            '--port[SSH port]:port:' \
+            '--key[SSH private key path]:key:_files' \
+            '--aws-region[AWS region]:region:' \
+            '--aws-instance-id[EC2 instance ID]:id:' \
+            '1:machine-name:'
+          ;;
+        doctor)
+          _arguments \
+            '(-n --limit)'{-n,--limit}'[Number of detail rows to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show full diagnostic messages]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::machine-id:_monitor_machine_ids'
+          ;;
+        ps)
+          _arguments \
+            '(-n --limit)'{-n,--limit}'[Number of processes to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Include command snippets]' \
+            '(-s --sort)'{-s,--sort}'[Sort by]:sort:(cpu mem)' \
+            '(-f --filter)'{-f,--filter}'[Filter]:filter:(all zombies orphans high_mem)' \
+            '--user[Filter by process owner]:name:' \
+            '--name[Filter command/name by substring or /regex/]:pattern:' \
+            '--tree[Render the parent/child process tree]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::machine-id:_monitor_machine_ids'
+          ;;
+        exec)
+          _arguments \
+            '(-m --machine)'{-m,--machine}'[Machine ID]:machine-id:_monitor_machine_ids' \
+            '(-a --all)'{-a,--all}'[Broadcast to every tmux pane]' \
+            '--no-enter[Type the command without pressing Enter]' \
+            '--timeout-ms[Command timeout in milliseconds]:milliseconds:' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::target:' \
+            '2:command:'
+          ;;
+        kill)
+          _arguments \
+            '(-m --machine)'{-m,--machine}'[Machine ID]:machine-id:_monitor_machine_ids' \
+            '--name[Match process name or command regex]:pattern:' \
+            '(-f --force)'[Use SIGKILL instead of SIGTERM] \
+            '--dry-run[Print what would happen without executing]' \
+            '(-y --yes)'{-y,--yes}'[Skip confirmation for multiple matches]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::pid:'
+          ;;
+        alerts)
+          _arguments \
+            '(-a --all)'{-a,--all}'[Show all alerts including resolved ones]' \
+            '(-n --limit)'{-n,--limit}'[Number of alerts to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show full alert messages]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::machine-id:_monitor_machine_ids'
+          ;;
+        apps)
+          _arguments \
+            '(-a --all)'{-a,--all}'[Inspect all configured machines]' \
+            '(-c --compare)'{-c,--compare}'[Compare installed apps across machines]' \
+            '(-n --limit)'{-n,--limit}'[Number of app rows to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show wider app columns]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::machine-id:_monitor_machine_ids'
+          ;;
+        compare-apps)
+          _arguments \
+            '(-n --limit)'{-n,--limit}'[Number of comparison rows to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show wider comparison detail]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]'
+          ;;
+        service)
+          _arguments \
+            '(-m --machine)'{-m,--machine}'[Machine ID]:machine-id:_monitor_machine_ids' \
+            '(-n --limit)'{-n,--limit}'[Number of services to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show service detail strings]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1:action:(list start stop restart)' \
+            '2::service-name:'
+          ;;
+        temperature)
+          _arguments \
+            '(-a --all)'{-a,--all}'[Inspect all configured machines]' \
+            '(-n --limit)'{-n,--limit}'[Number of readings to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show wider reading labels]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::machine-id:_monitor_machine_ids'
+          ;;
+        containers)
+          _arguments \
+            '(-a --all)'{-a,--all}'[Inspect all configured machines]' \
+            '(-l --logs)'{-l,--logs}'[Fetch logs for a specific container]:container:' \
+            '(-t --tail)'{-t,--tail}'[Number of log lines to fetch]:lines:' \
+            '(-n --limit)'{-n,--limit}'[Number of containers or log lines to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show wider container columns]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::machine-id:_monitor_machine_ids'
+          ;;
+        ports)
+          _arguments \
+            '(-a --all)'{-a,--all}'[Scan all configured machines]' \
+            '(-p --protocol)'{-p,--protocol}'[Filter by protocol]:protocol:(tcp udp)' \
+            '(-n --limit)'{-n,--limit}'[Number of ports to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show wider host/process columns]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::machine-id:_monitor_machine_ids'
+          ;;
+        tailscale)
+          _arguments \
+            '(-a --all)'{-a,--all}'[Inspect all configured machines]' \
+            '(-n --limit)'{-n,--limit}'[Number of peers to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show peer IPs/details]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::machine-id:_monitor_machine_ids'
+          ;;
+        mcp-health|mcp-status)
+          _arguments \
+            '(-a --all)'{-a,--all}'[Inspect all configured machines]' \
+            '(-n --limit)'{-n,--limit}'[Number of detail rows to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show full MCP detail]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::machine-id:_monitor_machine_ids'
+          ;;
+        mcp-restart)
+          _arguments \
+            '(-m --machine)'{-m,--machine}'[Machine ID]:machine-id:_monitor_machine_ids' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1:name:'
+          ;;
+        report)
+          _arguments \
+            '(-p --period)'{-p,--period}'[Report window]:period:(daily weekly)' \
+            '(-s --send)'{-s,--send}'[Send via configured conversations/emails integrations]' \
+            '--schedule[Create or update a scheduled report job]:period:(daily weekly)' \
+            '--allow-live-cloud-polling[Include EC2/cloud machines after explicit approval]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]'
+          ;;
+        loop-check)
+          _arguments \
+            '1:check:(listening-ports workspace-ports process-hygiene quarantine-retention)' \
+            '(-j --json)'{-j,--json}'[Output compact JSON]' \
+            '--evidence-dir[Directory for bounded JSON evidence]:path:_directories' \
+            '--no-evidence[Do not write an evidence file]' \
+            '--max-evidence-items[Maximum evidence entries per issue]:n:' \
+            '--max-task-seeds[Maximum task seeds emitted]:n:' \
+            '--upsert-tasks[Create deduped todos tasks]' \
+            '--todos-project[Todos project path]:path:' \
+            '--task-list[Todos task list ID]:id:' \
+            '--todos-bin[Todos executable]:path:_command_names' \
+            '--max-task-actions[Maximum task upsert actions]:n:' \
+            '--allow[Allowed exposed host and port]:host-port:' \
+            '--workspace[Workspace root to scan]:path:_directories' \
+            '--machine[Machine used for live scans]:machine-id:_monitor_machine_ids' \
+            '--max-repos[Maximum repositories to inspect]:n:' \
+            '--max-files[Maximum candidate files to inspect]:n:' \
+            '--high-mem-mb[High-memory threshold in MiB]:n:' \
+            '--stuck-hours[Long-running threshold in hours]:n:' \
+            '--root[Quarantine root]:path:_directories' \
+            '--max-gb[Retention trigger in GiB]:n:' \
+            '--target-gb[Retention target in GiB]:n:' \
+            '--apply[Delete eligible generated-cache payloads]'
+          ;;
+        cron)
+          local -a cron_subcommands
+          cron_subcommands=(
+            'list:List all cron jobs'
+            'add:Add a new cron job'
+            'run:Run a cron job immediately'
+          )
+          _arguments -C \
+            '1: :->cron_subcmd' \
+            '*:: :->cron_args'
+          case $state in
+            cron_subcmd)
+              _describe 'cron commands' cron_subcommands
+              ;;
+            cron_args)
+              case $words[1] in
+                list)
+                  _arguments \
+                    '(-m --machine)'{-m,--machine}'[Filter by machine ID]:machine-id:_monitor_machine_ids' \
+                    '(-n --limit)'{-n,--limit}'[Number of cron jobs to show]:n:' \
+                    '--cursor[Zero-based row offset]:cursor:' \
+                    '(-v --verbose)'{-v,--verbose}'[Show command snippets]' \
+                    '(-j --json)'{-j,--json}'[Output raw JSON]'
+                  ;;
+                add)
+                  _arguments \
+                    '(-m --machine)'{-m,--machine}'[Machine ID]:machine-id:_monitor_machine_ids' \
+                    '1:name:' \
+                    '2:schedule:' \
+                    '3:command:'
+                  ;;
+                run)
+                  _arguments '1:job-id:'
+                  ;;
+              esac
+              ;;
+          esac
+          ;;
+        search)
+          _arguments \
+            '(-t --tables)'{-t,--tables}'[Tables to search]:tables:' \
+            '(-n --limit)'{-n,--limit}'[Number of results to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show ranks and wider snippets]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1:query:'
+          ;;
+        retention)
+          _arguments \
+            '--full-res-hours[Keep full-resolution data for N hours]:hours:' \
+            '--hourly-days[Keep hourly rollups for N days]:days:' \
+            '--daily-days[Keep daily rollups for N days]:days:' \
+            '--dry-run[Show retention settings without deleting]'
+          ;;
+        integrations)
+          _arguments \
+            '1:action:(list test)' \
+            '2::integration:(todos conversations mementos emails)' \
+            '(-j --json)'{-j,--json}'[Output raw JSON for list]'
+          ;;
+        sync)
+          _arguments \
+            '1:action:(push pull status)' \
+            '(-t --tables)'{-t,--tables}'[Comma-separated table names]:tables:'
+          ;;
+        completions)
+          local -a completion_subcommands
+          completion_subcommands=(
+            'zsh:Generate zsh completion script'
+            'bash:Generate bash completion script'
+            'install:Install completions for your shell'
+          )
+          _arguments -C \
+            '1: :->comp_subcmd'
+          case $state in
+            comp_subcmd)
+              _describe 'completions commands' completion_subcommands
+              ;;
+          esac
+          ;;
+        serve)
+          _arguments \
+            '(-p --port)'{-p,--port}'[API port]:port:' \
+            '(-H --host)'{-H,--host}'[API host/interface]:host:'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_monitor_machine_ids() {
+  local -a machine_ids
+  # Try to get machine IDs from the CLI; fall back to common defaults
+  if command -v monitor &>/dev/null; then
+    machine_ids=($(monitor machines --json 2>/dev/null | grep '"id"' | sed 's/.*"id": *"\([^"]*\)".*/\1/' 2>/dev/null))
+  fi
+  if [[ ${#machine_ids[@]} -eq 0 ]]; then
+    machine_ids=(local)
+  fi
+  _values 'machine id' $machine_ids
+}
+
+_monitor "$@"

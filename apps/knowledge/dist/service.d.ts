@@ -113,8 +113,6 @@ export interface KnowledgeInventoryResult {
 }
 export interface KnowledgeSetupResult {
     ok: true;
-    mode: KnowledgeConfig['mode'];
-    api_url: string | null;
     storage_type: KnowledgeConfig['storage']['type'];
     artifact_uri_prefix: string;
     canonical_example: StorageContract['canonical_example'];
@@ -378,7 +376,7 @@ export declare class KnowledgeService {
     /**
      * The single knowledge-item Store for this scope. One interface, two
      * transports resolved from the environment: LocalItemStore (on-box db.json)
-     * in sqlite mode, ApiItemStore (HTTP `/v1` + bearer key) in postgres mode.
+     * on-box by default, ApiItemStore (HTTP `/v1` + bearer key) when selected.
      * EVERY item read/write — CLI, MCP, and SDK — routes through this one
      * surface, so no path touches sqlite or the raw HTTP client directly.
      */
@@ -386,9 +384,9 @@ export declare class KnowledgeService {
     /**
      * Package-owned Projects resource-link producer.
      *
-     * Local mode keeps aggregate membership and immutable receipts in the
+     * SQLite-backed operation keeps aggregate membership and immutable receipts in the
      * existing knowledge.db SQLite catalog while resolving item bodies through
-     * the same JSON ItemStore used by CLI/MCP/SDK. Postgres mode routes through
+     * the same JSON ItemStore used by CLI/MCP/SDK. Shared access routes through
      * the authenticated HTTP producer, never a local mirror.
      */
     projectLinksAuthority(): KnowledgeProjectLinksAuthority;
@@ -406,8 +404,8 @@ export declare class KnowledgeService {
     /** Delete many items by id/short id via the unified Store; returns the count. */
     deleteItems(idsOrShorts: string[]): Promise<number>;
     /**
-     * Unified inventory dispatch: the shared API knowledge-item corpus in
-     * postgres mode, the local sqlite/JSON catalog otherwise. CLI, MCP,
+     * Unified inventory dispatch: the server API knowledge-item corpus when the
+     * HTTP transport is selected, the on-box sqlite/JSON catalog otherwise. CLI, MCP,
      * and SDK all call this so no surface reads a divergent store.
      */
     resolveInventory(options?: KnowledgeInventoryOptions): Promise<KnowledgeInventoryResult>;
@@ -428,8 +426,6 @@ export declare class KnowledgeService {
         approvedBy?: string;
     }): KnowledgeLegacyWorkspaceMergeResult;
     setup(options?: {
-        mode?: string;
-        apiUrl?: string;
         canonicalExample?: boolean;
     }): KnowledgeSetupResult;
     authStatus(env?: Record<string, string | undefined>): KnowledgeAuthStatus;
@@ -479,18 +475,18 @@ export declare class KnowledgeService {
     }): DurableKnowledgeRecord[];
     /**
      * Build a knowledge inventory from a bare item list (no local sqlite catalog).
-     * Shared by the local no-db path and the cloud path so both produce the exact
+     * Shared by the local no-db path and the HTTP path so both produce the exact
      * same KnowledgeInventoryResult shape with empty catalog sections.
      */
     private itemOnlyInventory;
     /**
-     * Cloud (api mode) inventory: reports the shared cloud knowledge-item corpus.
+     * HTTP inventory reports the shared server knowledge-item corpus.
      * The RAG catalog (sources/chunks/wiki/sync/machines) lives only in the local
-     * sqlite pipeline and has no cloud counterpart, so those sections are empty —
-     * this routes through the same cloud item transport every item command uses,
+     * sqlite pipeline and has no HTTP counterpart, so those sections are empty —
+     * this routes through the same HTTP item transport every item command uses,
      * never the local db.json or sqlite catalog.
      */
-    cloudInventory(options?: KnowledgeInventoryOptions): Promise<KnowledgeInventoryResult>;
+    httpInventory(options?: KnowledgeInventoryOptions): Promise<KnowledgeInventoryResult>;
     inventory(options?: KnowledgeInventoryOptions): KnowledgeInventoryResult;
     private assertAppWikiWrite;
     initAppWiki(options?: KnowledgeAppWikiWriteOptions): Promise<KnowledgeAppWikiInitResult>;
@@ -535,12 +531,11 @@ export declare class KnowledgeService {
     modelRegistry(): ModelRegistryEntry[];
     embeddingStatus(): import("./embeddings").EmbeddingStatusResult;
     indexEmbeddings(options?: Omit<EmbeddingIndexOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").EmbeddingIndexResult>;
-    /** True when the client-flip resolves to the cloud HTTP transport. In api mode
-     * the shared corpus is the cloud knowledge-items, not a local sqlite catalog. */
-    private isApiMode;
-    private cloudStore;
-    /** Fetch the entire shared knowledge-item corpus from the cloud (api mode). */
-    private fetchCloudItems;
+    /** True when canonical client configuration resolves to HTTP transport. */
+    private usesHttpTransport;
+    private httpStore;
+    /** Fetch the entire shared knowledge-item corpus from the HTTP API. */
+    private fetchHttpItems;
     semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").SemanticSearchResult>;
     search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>): Promise<HybridSearchResult>;
     retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>): Promise<KnowledgeContextPack>;

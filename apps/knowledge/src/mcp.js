@@ -7,8 +7,8 @@ import pkg from '../package.json' with { type: 'json' };
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db.ts';
 import { defaultStorePath, itemMatchesSearch } from './store.ts';
 import { resolveItemStore } from './item-store.ts';
-import { isKnowledgeApiMode } from './cloud-store.ts';
-import { assertKnowledgeModeSelected } from './knowledge-mode.ts';
+import { usesKnowledgeHttpTransport } from './http-store.ts';
+import { assertNoRetiredKnowledgeStorageSelector } from './client-transport.ts';
 import { parseSourceRef } from './source-ref.ts';
 import { createKnowledgeService } from './service.ts';
 import { getStorageStatus as getDatabaseStorageStatus } from './storage.ts';
@@ -38,18 +38,15 @@ function resolveStorePath(storePath, scope) {
 
 /**
  * Resolve the unified knowledge-item Store for an MCP item tool. When no
- * explicit `store_path` is given and the client-flip resolves to the cloud HTTP
+ * explicit `store_path` is given and the canonical API URL selects HTTP
  * transport, item reads/writes route to the app API with the bearer key;
  * otherwise the on-box JSON store. An explicit `store_path` always pins local.
  * Every MCP item tool routes through this Store — never the JSON file directly.
  */
 function itemStoreFor(storePath, scope) {
-  // Same gate the CLI applies, and this surface needs it more: an agent calling
-  // an MCP item tool never sees a `knowledge mode` line, so a half-configured
-  // client hands it an empty result it reads as "the corpus is empty". Throwing
-  // here surfaces as an MCP tool error naming the variable rather than a
-  // plausible empty list. An explicit `store_path` is an explicit local choice.
-  assertKnowledgeModeSelected(process.env, { storePathOverridden: Boolean(storePath) });
+  // Same stale-selector ratchet the CLI applies. An explicit `store_path`
+  // remains an explicit on-box choice.
+  assertNoRetiredKnowledgeStorageSelector(process.env);
   const resolved = resolveStorePath(storePath, scope);
   return resolveItemStore({ storePath: resolved, storePathOverridden: Boolean(storePath) });
 }
@@ -496,16 +493,16 @@ function decisionSnapshot(id, service = projectService()) {
 async function getKnowledgeRecord(kind, id, options = {}) {
   const normalized = kind ?? 'auto';
   const service = createKnowledgeService({ scope: options.scope });
-  // In cloud/api mode the shared corpus is the cloud knowledge-items; the local
+  // With the HTTP API the shared corpus is the server knowledge-items; the local
   // sqlite catalog record kinds (source/wiki_page/run/index/decision) have no
   // cloud counterpart and would throw the local-catalog guard. Only the `item`
   // kind is cloud-backed, so restrict `auto` to it and refuse an explicit
   // catalog kind with a clear message rather than the raw sqlite refusal.
-  if (isKnowledgeApiMode()) {
+  if (usesKnowledgeHttpTransport()) {
     if (normalized !== 'auto' && normalized !== 'item') {
       throw new Error(
-        `knowledge: reading a '${normalized}' record targets the on-box sqlite RAG catalog, which is not available in cloud mode `
-          + `(HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY set). In cloud mode the shared corpus is the cloud knowledge-items; `
+        `knowledge: reading a '${normalized}' record targets the on-box sqlite RAG catalog, which is not available to the HTTP client `
+          + `(HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY set). The shared corpus is the server knowledge-items; `
           + `use kind 'item' (or 'auto'). Unset the API env to read the full local catalog.`,
       );
     }
@@ -778,6 +775,7 @@ function registerKnowledgeResources(server) {
 }
 
 export function buildServer() {
+  assertNoRetiredKnowledgeStorageSelector(process.env);
   const server = new McpServer({
     name: 'knowledge',
     version: pkg.version,
@@ -799,12 +797,12 @@ export function buildServer() {
   }, async ({ scope, limit, include_archived, store_path }) => {
     const service = createKnowledgeService({ scope });
     try {
-      // Single dispatch shared with the CLI + SDK: cloud item corpus in api
-      // mode via the cloud transport; local json + sqlite catalog otherwise.
+      // Single dispatch shared with the CLI + SDK: HTTP item corpus when configured
+      // through the HTTP transport; local json + sqlite catalog otherwise.
       const inventory = await service.resolveInventory({
         limit,
         includeArchived: include_archived,
-        storePath: isKnowledgeApiMode() ? undefined : store_path,
+        storePath: usesKnowledgeHttpTransport() ? undefined : store_path,
       });
       return jsonText(inventory);
     } catch (error) {
@@ -1473,7 +1471,7 @@ export function buildServer() {
     }
   });
 
-  registerTool(server, 'knowledge_storage', 'Knowledge storage contract', 'Inspect local/S3 artifact storage, source ownership, and hosted/SaaS boundary metadata', {
+  registerTool(server, 'knowledge_storage', 'Knowledge storage contract', 'Inspect filesystem/S3 artifact storage and source ownership', {
     scope: scopeField,
   }, async ({ scope }) => {
     const service = createKnowledgeService({ scope });

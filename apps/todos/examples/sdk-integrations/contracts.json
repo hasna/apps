@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "localOnly": true,
+  "noNetworkRequired": true,
+  "fixtureCommand": "todos sdk-fixtures --write .todos/sdk-integrations --json",
+  "examples": [
+    {
+      "id": "bun-sdk-local-server",
+      "surface": "sdk",
+      "file": "examples/sdk-integrations/bun-sdk.ts",
+      "consumes": ["tasks", "projects", "plans", "runs"]
+    },
+    {
+      "id": "cli-json-consumer",
+      "surface": "cli-json",
+      "file": "examples/sdk-integrations/cli-json-consumer.ts",
+      "consumes": ["task JSON", "snapshot JSON", "context pack JSON"]
+    },
+    {
+      "id": "mcp-stdio-client",
+      "surface": "mcp",
+      "file": "examples/sdk-integrations/mcp-client.ts",
+      "consumes": ["list_tasks", "get_local_snapshot", "build_agent_context_pack"]
+    },
+    {
+      "id": "agent-adapter-local-run",
+      "surface": "agent-adapter",
+      "file": "examples/sdk-integrations/agent-adapter.ts",
+      "consumes": ["ready tasks", "context packs", "verification evidence"]
+    }
+  ],
+  "stableJsonContracts": [
+    "task",
+    "project",
+    "context_pack",
+    "local_snapshot",
+    "local_bridge_bundle",
+    "sdk_integration_fixture_pack"
+  ]
+}

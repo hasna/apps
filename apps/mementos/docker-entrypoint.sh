@@ -3,10 +3,10 @@
 # mementos container entrypoint
 # -----------------------------------------------------------------------------
 # Bridges the hasna-app Terraform module's injected env (DATABASE_URL,
-# API_KEY_SIGNING_SECRET, PORT) to mementos' native env, forces pure-remote
-# cloud storage, and binds to all interfaces so the ALB target group is
-# reachable. Migrations run against the OWNER DSN (DDL); the long-running
-# service runs against the least-privilege APP DSN.
+# API_KEY_SIGNING_SECRET, PORT) to mementos' native env, and binds to all
+# interfaces so the ALB target group is reachable. Migrations run against the
+# OWNER DSN (DDL); the long-running service runs against the least-privilege
+# APP DSN.
 # =============================================================================
 set -e
 
@@ -14,7 +14,6 @@ set -e
 export MEMENTOS_HOST="${MEMENTOS_HOST:-0.0.0.0}"
 
 # Amendment A1 — serve/CLI read+write RDS directly.
-export HASNA_MEMENTOS_STORAGE_MODE="${HASNA_MEMENTOS_STORAGE_MODE:-cloud}"
 
 # Select the DSN by workload: migrations need the owner role (DDL); everything
 # else uses the app role. MIGRATION_DATABASE_URL is optional; falls back to
