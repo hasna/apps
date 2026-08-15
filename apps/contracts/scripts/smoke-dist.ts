@@ -34,6 +34,7 @@ const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"))
 const { CONTRACTS_PACKAGE_VERSION, ContractSchemaRegistry } = await import("../dist/schemas.js");
 const { scanNoCloudTarget } = await import("../dist/no-cloud.js");
 const { createHasnaHttpTransport, HasnaHttpError } = await import("../dist/client/transport.js");
+const { createHasnaStorageClient } = await import("../dist/client/storage.js");
 const todos = await import("../dist/todos/index.js");
 const { secureLocalStorePolicy } = await import("../dist/secure-local-store.js");
 
@@ -42,6 +43,9 @@ if (typeof scanNoCloudTarget !== "function") {
 }
 if (typeof createHasnaHttpTransport !== "function") {
   throw new Error("dist/client/transport.js did not export createHasnaHttpTransport");
+}
+if (typeof createHasnaStorageClient !== "function") {
+  throw new Error("dist/client/storage.js did not export createHasnaStorageClient");
 }
 if (typeof secureLocalStorePolicy !== "function") {
   throw new Error("dist/secure-local-store.js did not export secureLocalStorePolicy");
@@ -146,6 +150,52 @@ try {
   }
 } finally {
   rmSync(noCloudDir, { recursive: true, force: true });
+}
+
+// `./client` and `./client/storage` are separate bun bundle entries, so each
+// bundle carries its OWN copy of the HasnaHttpError class: the error thrown
+// here by the transport bundle is NOT instanceof the copy inlined inside the
+// storage bundle, which is exactly the boundary that made the documented
+// 404 -> null / 404 -> swallowed conversion dead code. The storage client must
+// still map it by shape (name + status), and must still surface non-404s.
+{
+  const boundaryTransport = {
+    baseUrl: "http://127.0.0.1:1",
+    request: async (): Promise<unknown> => {
+      throw new Error("unused");
+    },
+    get: async (path: string): Promise<unknown> => {
+      throw new HasnaHttpError("GET", path, path.endsWith("/oops") ? 500 : 404, {});
+    },
+    post: async (): Promise<unknown> => {
+      throw new Error("unused");
+    },
+    put: async (): Promise<unknown> => {
+      throw new Error("unused");
+    },
+    patch: async (): Promise<unknown> => {
+      throw new Error("unused");
+    },
+    del: async (): Promise<unknown> => {
+      throw new HasnaHttpError("DELETE", "/v1/notes/miss", 404, {});
+    },
+  } as unknown as Parameters<typeof createHasnaStorageClient>[1];
+  const boundaryStore = createHasnaStorageClient("dist-smoke", boundaryTransport);
+
+  if ((await boundaryStore.get("notes", "miss")) !== null) {
+    throw new Error("dist storage did not map a transport-thrown 404 to null across the bundle boundary");
+  }
+  await boundaryStore.delete("notes", "miss");
+
+  let boundaryNon404: unknown;
+  try {
+    await boundaryStore.get("notes", "oops");
+  } catch (error) {
+    boundaryNon404 = error;
+  }
+  if (!(boundaryNon404 instanceof HasnaHttpError) || boundaryNon404.status !== 500) {
+    throw new Error("dist storage swallowed a non-404 transport error across the bundle boundary");
+  }
 }
 
 const redirectTargetRequests: Array<{
