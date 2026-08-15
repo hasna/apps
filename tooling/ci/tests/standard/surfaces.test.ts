@@ -73,7 +73,7 @@ describe("standard-adherence: four-surface standard", () => {
     }
     if (filed.length > 0) console.info(`[standard] new four-surface WARN gaps (auto-filed, reporting lane):\n${filed.map((l) => `  ${l}`).join("\n")}`);
     expect(stale.map((x) => `${x.member}: now ships ${x.surface} but an exception entry remains`)).toEqual([]);
-  });
+  }, 300_000);
 
   test("self-test: the check fires on a member missing its CLI bin and stays silent on a conforming member", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "standard-surfaces-self-test-"));

@@ -506,6 +506,12 @@ export function classificationTable(): string {
  * remediation task lives); override with HASNA_TODOS_PROJECT. */
 export const RECONCILE_TASKS_PROJECT = process.env.HASNA_TODOS_PROJECT ?? "5e44770b-694c-46a3-864f-20a2b9ec1de2";
 
+/** Agent identity that created reconcile tasks carry. Defaults to agent-ea,
+ * the release/versioning lane seat the README documents as the tasks' owner
+ * (passing --assign/--assign-seat makes attribution independent of the
+ * ambient TODOS_AGENT_ID); override with HASNA_TODOS_AGENT. */
+export const RECONCILE_TASKS_AGENT = process.env.HASNA_TODOS_AGENT ?? "agent-ea";
+
 /** Find-or-create a reconcile task keyed on the exact fingerprint title
  * (`todos task upsert --fingerprint <title>`). Returns the task id and
  * whether it was created; null when the todos CLI is unavailable — the
@@ -513,7 +519,7 @@ export const RECONCILE_TASKS_PROJECT = process.env.HASNA_TODOS_PROJECT ?? "5e447
  * NOT FILED and pass. */
 export async function ensureReconcileTask(title: string, description: string): Promise<{ id: string; created: boolean } | null> {
   const proc = Bun.spawn(
-    ["todos", "task", "upsert", "--fingerprint", title, "--title", title, "-d", description, "-p", "high", "--project", RECONCILE_TASKS_PROJECT, "--json"],
+    ["todos", "task", "upsert", "--fingerprint", title, "--title", title, "-d", description, "-p", "high", "--project", RECONCILE_TASKS_PROJECT, "--assign", RECONCILE_TASKS_AGENT, "--assign-seat", "--json"],
     { stdout: "pipe", stderr: "pipe" },
   );
   const [exitCode, stdout, stderr] = await Promise.all([

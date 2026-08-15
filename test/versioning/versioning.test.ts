@@ -44,9 +44,14 @@ const KNOWN_RUNTIME_MISMATCHES = new Map([
 // in one review cycle, measured 2026-08-14).
 const RECONCILE_TASKS_PROJECT = process.env.VERSIONING_TODOS_PROJECT ?? "5e44770b-694c-46a3-864f-20a2b9ec1de2";
 
+// Created reconcile tasks carry the documented lane identity agent-ea via
+// --assign/--assign-seat (agent-ea is a durable seat), independent of the
+// ambient TODOS_AGENT_ID; override with VERSIONING_TODOS_AGENT.
+const RECONCILE_TASKS_AGENT = process.env.VERSIONING_TODOS_AGENT ?? "agent-ea";
+
 async function ensureReconcileTask(title: string, description: string): Promise<{ id: string; created: boolean } | null> {
   const proc = Bun.spawn(
-    ["todos", "task", "upsert", "--fingerprint", title, "--title", title, "-d", description, "-p", "high", "--project", RECONCILE_TASKS_PROJECT, "--json"],
+    ["todos", "task", "upsert", "--fingerprint", title, "--title", title, "-d", description, "-p", "high", "--project", RECONCILE_TASKS_PROJECT, "--assign", RECONCILE_TASKS_AGENT, "--assign-seat", "--json"],
     { stdout: "pipe", stderr: "pipe" },
   );
   const [exitCode, stdout, stderr] = await Promise.all([

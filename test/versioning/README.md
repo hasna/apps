@@ -55,9 +55,12 @@ On live drift the lane:
 
 Reconcile tasks are filed in todos project
 `5e44770b-694c-46a3-864f-20a2b9ec1de2` (the release/versioning lane project;
-set `VERSIONING_TODOS_PROJECT` to override). The tests run with
-`TODOS_AGENT_ID=agent-ea`. If the `todos` CLI is unavailable the lane reports
-the drift with `NOT FILED` and still passes — the report is the deliverable.
+set `VERSIONING_TODOS_PROJECT` to override), assigned to `agent-ea`
+(`todos task upsert --assign agent-ea --assign-seat`, the lane's documented
+identity — attribution does not depend on an ambient `TODOS_AGENT_ID`; set
+`VERSIONING_TODOS_AGENT` to override). If the `todos` CLI is unavailable the
+lane reports the drift with `NOT FILED` and still passes — the report is the
+deliverable.
 The former `KNOWN_NPM_DRIFT` map is deleted: it was always stale within minutes
 (5 drifts recorded and 2 stale in one review cycle, measured 2026-08-14).
 
