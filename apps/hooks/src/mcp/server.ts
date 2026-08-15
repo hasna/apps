@@ -55,6 +55,8 @@ import { readCustomManifest } from "../lib/manifest.js";
 import { resolveHookMeta } from "../lib/resolve.js";
 import { hookRegisteredInSettings } from "../lib/registration.js";
 import { sha256Of, checkScriptHash } from "../lib/store.js";
+import { projectEventRowForRead } from "../lib/redact.js";
+import { secureEqual } from "../lib/secure-compare.js";
 import {
   getStorageStatus,
   storagePull,
@@ -99,7 +101,7 @@ async function runVerifiedHook(
   const started = Date.now();
   let ran: { stdout: string; stderr: string; exitCode: number };
   try {
-    ran = await executeVerifiedScript({ name, scriptPath: hookScript, content, stdin, env: process.env, timeout: timeoutMs });
+    ran = await executeVerifiedScript({ name, scriptPath: hookScript, content, stdin, timeout: timeoutMs });
   } catch (err) {
     // Record the timeout as an event row too.
     try {
@@ -209,6 +211,16 @@ function compactEvent(row: any) {
     error: row.error ? truncateText(row.error, 180) : undefined,
     tool_input_preview: row.tool_input ? truncateText(row.tool_input, 180) : undefined,
   };
+}
+
+/**
+ * P1-3 truncate-on-read projection: every log row returned by the MCP log
+ * tools passes through the event-safe redaction, whether compact or full,
+ * so rows stored by older (unredacted) versions are scrubbed before a
+ * reader sees them.
+ */
+function projectLogRows(rows: any[]): any[] {
+  return rows.map((row) => projectEventRowForRead({ ...row }));
 }
 
 // --- in-memory agent registry ---
@@ -704,7 +716,16 @@ export function createHooksServer(): McpServer {
         } catch (err) {
           const { HookTimeoutError } = await import("../lib/run.js");
           if (err instanceof HookTimeoutError) {
-            return { name, decision: "approve", timedOut: true, timeout_ms: effectiveTimeout };
+            // P1-7 fail-closed: a timed-out preview must NEVER approve. The
+            // hook did not return a decision; simulating approve would let a
+            // stalled guard be silently skipped.
+            return {
+              name,
+              decision: "block",
+              timedOut: true,
+              timeout_ms: effectiveTimeout,
+              error: `hook timed out after ${effectiveTimeout}ms — preview blocked (never auto-approved)`,
+            };
           }
           // Trust refusal is fail-closed: a hook whose content cannot be
           // verified is never allowed to run, so the simulated decision
@@ -740,17 +761,34 @@ export function createHooksServer(): McpServer {
       scope: z.enum(["global", "project"]).default("global").describe("Install scope"),
     },
     async ({ agent_type, name, hooks, scope }: { agent_type: "claude" | "gemini" | "custom"; name?: string; hooks?: string[]; scope: Scope }) => {
+      // P2-12: the agent_type is passed through to the installer as its
+      // target — a gemini setup registers hooks in the gemini settings, not
+      // in the claude settings. "custom" has no dedicated settings surface;
+      // it installs to the generic JSON settings target (claude) and the
+      // profile still records the custom type. Unknown types are rejected by
+      // the zod enum; the defensive check below keeps an `as any` call from
+      // silently falling through to a wrong target.
+      if (agent_type !== "claude" && agent_type !== "gemini" && agent_type !== "custom") {
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({ error: `unsupported agent_type '${String(agent_type)}' (supported: claude, gemini, custom)` }),
+          }],
+          isError: true,
+        };
+      }
       const profile = createProfile({ agent_type, name });
+      const target = agent_type === "gemini" ? "gemini" : "claude";
       const toInstall = hooks && hooks.length > 0
         ? hooks
         : ["gitguard", "checkpoint", "checktests", "protectfiles"];
-      const results = toInstall.map((h) => installHook(h, { scope, overwrite: false, profile: profile.agent_id }));
+      const results = toInstall.map((h) => installHook(h, { scope, overwrite: false, profile: profile.agent_id, target }));
       const installed = results.filter((r) => r.success).map((r) => r.hook);
       const failed = results.filter((r) => !r.success).map((r) => ({ hook: r.hook, error: r.error }));
       return {
         content: [{
           type: "text" as const,
-          text: JSON.stringify({ profile, installed, failed, scope, run_with: `hooks run <name> --profile ${profile.agent_id}` }),
+          text: JSON.stringify({ profile, installed, failed, scope, target, run_with: `hooks run <name> --profile ${profile.agent_id}` }),
         }],
       };
     }
@@ -919,12 +957,13 @@ export function createHooksServer(): McpServer {
       params.push(maxRows);
 
       const rows = db.query(sql).all(...params) as any[];
+      const projected = projectLogRows(rows);
       return {
         content: [{
           type: "text",
           text: JSON.stringify({
-            events: compact ? rows.map(compactEvent) : rows,
-            count: rows.length,
+            events: compact ? projected.map(compactEvent) : projected,
+            count: projected.length,
             compact,
             hint: compact ? "Use compact:false for full tool_input/output fields." : undefined,
           }),
@@ -945,12 +984,13 @@ export function createHooksServer(): McpServer {
       const db = getDb();
       const maxRows = boundedLimit(n, 20, compact ? 100 : 500);
       const rows = db.query("SELECT * FROM hook_events ORDER BY timestamp DESC LIMIT ?").all(maxRows) as any[];
+      const projected = projectLogRows(rows);
       return {
         content: [{
           type: "text",
           text: JSON.stringify({
-            events: compact ? rows.map(compactEvent) : rows,
-            count: rows.length,
+            events: compact ? projected.map(compactEvent) : projected,
+            count: projected.length,
             compact,
             hint: compact ? "Use compact:false for full tool_input/output fields." : undefined,
           }),
@@ -984,12 +1024,13 @@ export function createHooksServer(): McpServer {
       const rows = db.query(
         "SELECT * FROM hook_events WHERE error IS NOT NULL AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?"
       ).all(ts, maxRows) as any[];
+      const projected = projectLogRows(rows);
       return {
         content: [{
           type: "text",
           text: JSON.stringify({
-            events: compact ? rows.map(compactEvent) : rows,
-            count: rows.length,
+            events: compact ? projected.map(compactEvent) : projected,
+            count: projected.length,
             compact,
             hint: compact ? "Use compact:false for full tool_input/output fields." : undefined,
           }),
@@ -1160,13 +1201,78 @@ export function createHooksServer(): McpServer {
 
 /**
  * Start the MCP server with SSE transport on the configured port
+ *
+ * P1-2: binds 127.0.0.1 by default. A non-loopback host is a wildcard bind
+ * with no auth — any reachable host could open /sse and drive every hook
+ * tool (run, install, publish). Non-loopback therefore requires BOTH an
+ * explicit opt-in host AND an auth token (env-only, never a flag): without
+ * the token the server refuses to start, and with it every /sse and
+ * /messages request must present it.
  */
-export async function startSSEServer(port: number = MCP_PORT): Promise<void> {
+
+export const MCP_SSE_HOST = "127.0.0.1";
+const MCP_SSE_AUTH_ENV = ["HASNA_HOOKS_MCP_TOKEN", "HOOKS_MCP_TOKEN"];
+
+export interface SSEServerOptions {
+  port?: number;
+  host?: string;
+  /**
+   * Optional auth token for the SSE endpoints. When absent, resolved from
+   * HASNA_HOOKS_MCP_TOKEN / HOOKS_MCP_TOKEN. Required for any non-loopback
+   * bind (refused otherwise). Never set from a CLI flag — env-only.
+   */
+  authToken?: string;
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === "" || host === "127.0.0.1" || host === "::1" || host === "localhost";
+}
+
+function sseAuthToken(explicit?: string): string | undefined {
+  if (explicit && explicit.length > 0) return explicit;
+  for (const name of MCP_SSE_AUTH_ENV) {
+    const value = process.env[name];
+    if (value && value.length > 0) return value;
+  }
+  return undefined;
+}
+export { sseAuthToken };
+
+export async function startSSEServer(options: SSEServerOptions = {}): Promise<void> {
+  const port = options.port ?? MCP_PORT;
+  const host = options.host ?? MCP_SSE_HOST;
+  const authToken = sseAuthToken(options.authToken);
+  const loopback = isLoopbackHost(host);
+
+  if (!loopback && !authToken) {
+    throw new Error(
+      `Refusing to serve MCP SSE on non-loopback host '${host}' without an auth token. ` +
+        `Set HASNA_HOOKS_MCP_TOKEN (or HOOKS_MCP_TOKEN) to authorize a non-loopback bind.`,
+    );
+  }
+
   const server = createHooksServer();
   const transports = new Map<string, SSEServerTransport>();
 
+  function authorized(headers: Record<string, string | string[] | undefined>): boolean {
+    if (!authToken) return false;
+    const rawAuth = headers["authorization"];
+    const header = (Array.isArray(rawAuth) ? rawAuth[0] : rawAuth) ?? "";
+    if (header.startsWith("Bearer ")) return secureEqual(header.slice("Bearer ".length), authToken);
+    const rawKey = headers["x-api-key"];
+    return secureEqual((Array.isArray(rawKey) ? rawKey[0] : rawKey) ?? "", authToken);
+  }
+
   const httpServer = createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://localhost:${port}`);
+
+    if (url.pathname === "/sse" || url.pathname === "/messages") {
+      if (authToken && !authorized(req.headers as Record<string, string | string[] | undefined>)) {
+        res.writeHead(401);
+        res.end("unauthorized: valid MCP token required");
+        return;
+      }
+    }
 
     if (url.pathname === "/sse") {
       const transport = new SSEServerTransport("/messages", res);
@@ -1190,9 +1296,9 @@ export async function startSSEServer(port: number = MCP_PORT): Promise<void> {
     }
   });
 
-  httpServer.listen(port, () => {
-    console.error(`@hasna/hooks MCP server running on http://localhost:${port}`);
-    console.error(`SSE endpoint: http://localhost:${port}/sse`);
+  httpServer.listen(port, host, () => {
+    console.error(`@hasna/hooks MCP server running on http://${host}:${port}`);
+    console.error(`SSE endpoint: http://${host}:${port}/sse`);
   });
 }
 

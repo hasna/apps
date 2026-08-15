@@ -37,7 +37,8 @@ import {
   type Scope,
   type Target,
 } from "../lib/installer.js";
-import { hookRegisteredInSettings } from "../lib/registration.js";
+import { hookRegisteredInSettings, countSettingsWiring } from "../lib/registration.js";
+import { projectEventRowForRead } from "../lib/redact.js";
 import {
   createProfile,
   getProfile,
@@ -49,6 +50,7 @@ import {
 import { readCustomManifest, listCustomHooks } from "../lib/manifest.js";
 import { resolveHookMeta } from "../lib/resolve.js";
 import { getPinnedHook } from "../lib/store.js";
+import { SEMVER_PATTERN } from "../lib/semver.js";
 
 const program = new Command();
 
@@ -95,6 +97,15 @@ function truncateText(value: string | undefined, max = 96): string {
   const text = (value ?? "").replace(/\s+/g, " ").trim();
   if (text.length <= max) return text;
   return `${text.slice(0, Math.max(0, max - 3))}...`;
+}
+
+/**
+ * P1-3 truncate-on-read projection for `hooks log` output: rows written by
+ * older versions stored tool_input/error/metadata verbatim; every read path
+ * projects them before display.
+ */
+function projectLogRows(rows: any[]): any[] {
+  return rows.map((row) => projectEventRowForRead({ ...row }));
 }
 
 function readToken(tokenFile: string | undefined): string | undefined {
@@ -444,6 +455,8 @@ program
           console.log(chalk.red(`Unknown category: ${options.category}`));
           console.log(chalk.dim(`Available: ${CATEGORIES.join(", ")}`));
         }
+        // P2-13: a failed install is an error — nonzero exit.
+        process.exitCode = 1;
         return;
       }
       toInstall = getHooksByCategory(category).map((h) => h.name);
@@ -482,7 +495,10 @@ program
       const name = arg.slice(0, at);
       const version = arg.slice(at + 1);
       if (!HOOK_NAME_RE.test(name)) return null;
-      if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) return null;
+      // P2-8 (round 2): the SHARED semver pattern — the CLI previously
+      // duplicated a divergent regex that rejected prerelease+build
+      // combinations (1.2.3-beta.1+meta) the rest of the stack accepts.
+      if (!SEMVER_PATTERN.test(version)) return null;
       return { name, version };
     }
 
@@ -635,7 +651,9 @@ program
         target,
         applied: results.some((r) => r.applied),
       }));
-      if (results.length > 0 && results.every((r) => !r.success)) {
+      // P2-7 (round 2): ANY failed install is an error — exit nonzero even
+      // when some hooks succeeded, with the counts in the payload.
+      if (results.some((r) => !r.success)) {
         process.exitCode = 1;
       }
       return;
@@ -668,11 +686,17 @@ program
       }
     }
     // Fail-closed reporting: never claim "Registered" (and never exit 0)
-    // when nothing was registered (QA-3 P2 / QA-1 BUG-C / QA-4 #5).
+    // when nothing was registered (QA-3 P2 / QA-1 BUG-C / QA-4 #5) or when
+    // only some hooks registered (P2-7 round 2 — mixed installs must fail
+    // loudly, not read as a full success).
     if (results.length > 0 && successCount === 0) {
       console.log(chalk.red(`\n✗ Nothing was registered — all ${results.length} hook(s) failed.`));
       process.exitCode = 1;
       return;
+    }
+    if (successCount < results.length) {
+      console.log(chalk.red(`\n✗ ${results.length - successCount} of ${results.length} hook(s) failed to install.`));
+      process.exitCode = 1;
     }
     console.log(chalk.dim(`\nRegistered in ${settingsFile}`));
   });
@@ -921,6 +945,8 @@ program
       } else {
         console.log(chalk.red(`Hook '${hook}' not found${hint}`));
       }
+      // P2-13: a not-found lookup is an error — nonzero exit.
+      process.exitCode = 1;
       return;
     }
 
@@ -980,6 +1006,15 @@ program
     }
 
     const registered = getRegisteredHooks(scope);
+    // P2-16b: the verdict is bounded — count the raw wiring entries too, so
+    // "all healthy" never reads as coverage of entries doctor cannot see.
+    let wiringCount = 0;
+    if (settingsExist) {
+      try {
+        const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+        wiringCount = countSettingsWiring(settings);
+      } catch {}
+    }
 
     for (const name of registered) {
       const custom = readCustomManifest(name);
@@ -1027,7 +1062,7 @@ program
     }
 
     if (options.json) {
-      console.log(JSON.stringify({ healthy: issues.length === 0, healthy_hooks: healthy, issues, registered, scope }));
+      console.log(JSON.stringify({ healthy: issues.length === 0, healthy_hooks: healthy, issues, registered, wiring_count: wiringCount, scope }));
       return;
     }
 
@@ -1036,6 +1071,12 @@ program
     if (registered.length === 0) {
       console.log(chalk.dim("  No hooks registered."));
       console.log(chalk.dim("  Run: hooks install gitguard"));
+      // P3-10 (round 2): the verdict's bounds are printed in EVERY branch —
+      // with zero `hooks run` entries the bound is exactly what makes
+      // "checked 0 of N wiring entries" a meaningful statement instead of a
+      // bare "No hooks registered".
+      console.log(chalk.dim(`  (checked 0 registered \`hooks run\` entries of ${wiringCount} settings wiring entries; direct-path wiring outside the registered surface is not covered by this check)`));
+      if (issues.length > 0) process.exitCode = 1;
       return;
     }
 
@@ -1046,6 +1087,14 @@ program
       }
     }
 
+    // P2-16b: the verdict names its bounds in BOTH cases — the count of
+    // `hooks run` registrations checked against the count of raw wiring
+    // entries in the settings file. Direct-path wiring outside the
+    // registered surface is reported, never claimed as covered.
+    if (registered.length > 0) {
+      console.log(chalk.dim(`  (checked ${registered.length} registered \`hooks run\` entries of ${wiringCount} settings wiring entries; direct-path wiring outside the registered surface is not covered by this check)`));
+    }
+
     if (issues.length > 0) {
       console.log();
       for (const issue of issues) {
@@ -1054,8 +1103,10 @@ program
       }
     }
 
-    if (issues.length === 0) {
-      console.log(chalk.green("\n  All hooks healthy!"));
+    if (issues.length === 0 && registered.length > 0) {
+      console.log(chalk.green(`\n  All ${healthy.length} registered hook(s) healthy`));
+    } else if (issues.some((i) => i.severity === "error")) {
+      process.exitCode = 1;
     }
 
     console.log();
@@ -1100,7 +1151,10 @@ program
       const name = arg.slice(0, at);
       const version = arg.slice(at + 1);
       if (!HOOK_NAME_RE.test(name)) return null;
-      if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) return null;
+      // P2-8 (round 2): the SHARED semver pattern — the CLI previously
+      // duplicated a divergent regex that rejected prerelease+build
+      // combinations (1.2.3-beta.1+meta) the rest of the stack accepts.
+      if (!SEMVER_PATTERN.test(version)) return null;
       return { name, version };
     }
 
@@ -1194,6 +1248,8 @@ program
         } else {
           console.log(chalk.red(`Hook '${hook}' not found`));
         }
+        // P2-13: a not-found docs lookup is an error — nonzero exit.
+        process.exitCode = 1;
         return;
       }
 
@@ -1482,12 +1538,13 @@ logCmd
     params.push(String(limit));
 
     const rows = db.query(sql).all(...params) as any[];
+    const projected = projectLogRows(rows);
 
-    if (options.json) { console.log(JSON.stringify(rows, null, 2)); return; }
-    if (rows.length === 0) { console.log(chalk.dim("No events found.")); return; }
+    if (options.json) { console.log(JSON.stringify(projected, null, 2)); return; }
+    if (projected.length === 0) { console.log(chalk.dim("No events found.")); return; }
 
-    console.log(chalk.bold(`\n  Hook Events (${rows.length})\n`));
-    for (const row of rows) {
+    console.log(chalk.bold(`\n  Hook Events (${projected.length})\n`));
+    for (const row of projected) {
       const ts = row.timestamp.slice(0, 19).replace("T", " ");
       const err = row.error ? chalk.red(` ERR: ${truncateText(row.error, 60)}`) : "";
       const tool = row.tool_name ? chalk.dim(` [${row.tool_name}]`) : "";
@@ -1509,12 +1566,13 @@ logCmd
     const rows = db.query(
       "SELECT * FROM hook_events WHERE tool_input LIKE ? OR error LIKE ? ORDER BY timestamp DESC LIMIT ?"
     ).all(q, q, limit) as any[];
+    const projected = projectLogRows(rows);
 
-    if (options.json) { console.log(JSON.stringify(rows, null, 2)); return; }
-    if (rows.length === 0) { console.log(chalk.dim(`No events matching "${text}".`)); return; }
+    if (options.json) { console.log(JSON.stringify(projected, null, 2)); return; }
+    if (projected.length === 0) { console.log(chalk.dim(`No events matching "${text}".`)); return; }
 
-    console.log(chalk.bold(`\n  Search results for "${text}" (${rows.length})\n`));
-    for (const row of rows) {
+    console.log(chalk.bold(`\n  Search results for "${text}" (${projected.length})\n`));
+    for (const row of projected) {
       const ts = row.timestamp.slice(0, 19).replace("T", " ");
       const snippet = truncateText(row.tool_input || row.error || "", 80);
       console.log(`  ${chalk.dim(ts)}  ${chalk.cyan(row.hook_name.padEnd(14))}  ${chalk.dim(snippet)}`);
@@ -1534,12 +1592,13 @@ logCmd
     const rows = db.query(
       "SELECT * FROM hook_events ORDER BY timestamp DESC LIMIT ?"
     ).all(limit) as any[];
+    const projected = projectLogRows(rows);
 
-    if (options.json) { console.log(JSON.stringify(rows, null, 2)); return; }
-    if (rows.length === 0) { console.log(chalk.dim("No events yet.")); return; }
+    if (options.json) { console.log(JSON.stringify(projected, null, 2)); return; }
+    if (projected.length === 0) { console.log(chalk.dim("No events yet.")); return; }
 
-    console.log(chalk.bold(`\n  Last ${rows.length} events\n`));
-    for (const row of rows) {
+    console.log(chalk.bold(`\n  Last ${projected.length} events\n`));
+    for (const row of projected) {
       const ts = row.timestamp.slice(0, 19).replace("T", " ");
       const err = row.error ? chalk.red(` ✗ ${truncateText(row.error, 60)}`) : "";
       const tool = row.tool_name ? chalk.dim(` [${row.tool_name}]`) : "";
@@ -1577,12 +1636,13 @@ logCmd
     const rows = db.query(
       "SELECT * FROM hook_events WHERE error IS NOT NULL AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?"
     ).all(since, limit) as any[];
+    const projected = projectLogRows(rows);
 
-    if (options.json) { console.log(JSON.stringify(rows, null, 2)); return; }
-    if (rows.length === 0) { console.log(chalk.dim(`No errors in the last ${options.since}.`)); return; }
+    if (options.json) { console.log(JSON.stringify(projected, null, 2)); return; }
+    if (projected.length === 0) { console.log(chalk.dim(`No errors in the last ${options.since}.`)); return; }
 
-    console.log(chalk.bold(`\n  Errors (last ${options.since}, ${rows.length} found)\n`));
-    for (const row of rows) {
+    console.log(chalk.bold(`\n  Errors (last ${options.since}, ${projected.length} found)\n`));
+    for (const row of projected) {
       const ts = row.timestamp.slice(0, 19).replace("T", " ");
       console.log(`  ${chalk.dim(ts)}  ${chalk.cyan(row.hook_name.padEnd(14))}  ${chalk.red(truncateText(row.error, 100))}`);
     }
@@ -1742,14 +1802,12 @@ program
   .command("serve")
   .option("-p, --port <port>", "Port (default 39428)")
   .option("--host <host>", "Host to bind (default 127.0.0.1)")
-  .option("--api-key <key>", "API key for publish (defaults to HASNA_HOOKS_API_KEY / HOOKS_API_KEY)")
-  .description("Serve the local hook registry over HTTP (catalog, artifacts, lock)")
-  .action(async (options: { port?: string; host?: string; apiKey?: string }) => {
+  .description("Serve the local hook registry over HTTP (catalog, artifacts, lock). The publish API key resolves from HASNA_HOOKS_API_KEY / HOOKS_API_KEY only — there is deliberately no --api-key flag (P1-8).")
+  .action(async (options: { port?: string; host?: string }) => {
     const { startServeServer } = await import("../serve.js");
     startServeServer({
       port: options.port ? parseInt(options.port, 10) : undefined,
       host: options.host,
-      apiKey: options.apiKey,
     });
   });
 
@@ -1762,7 +1820,10 @@ program
   .action(async (options: { dryRun: boolean; json: boolean }) => {
     const { syncHooks, planSync } = await import("../lib/sync.js");
     try {
-      const plan = options.dryRun ? await planSync() : await syncHooks();
+      // P2-16a: the dry-run path runs through syncHooks({dryRun:true}) so the
+      // returned plan carries dryRun:true — planSync alone used to hardcode
+      // false and the CLI then printed "✓ Synced" during a --dry-run.
+      const plan = options.dryRun ? await syncHooks({ dryRun: true }) : await syncHooks();
       const diff = plan.diff;
       if (options.json) {
         console.log(JSON.stringify({ dry_run: plan.dryRun, api_url: plan.apiUrl ?? null, diff }));
@@ -1866,7 +1927,10 @@ program
       await startStdioServer();
     } else if (options.sse) {
       const { startSSEServer } = await import("../mcp/server.js");
-      await startSSEServer(options.port ? parseInt(options.port) : 39427);
+      // P1-2: default bind is 127.0.0.1; non-loopback needs
+      // HASNA_HOOKS_MCP_TOKEN/HOOKS_MCP_TOKEN and startSSEServer refuses
+      // without one. No --host flag exists on purpose.
+      await startSSEServer({ port: options.port ? parseInt(options.port) : 39427 });
     } else {
       // Default: shared Streamable HTTP server (one process per MCP, many agents).
       const { createHooksServer } = await import("../mcp/server.js");

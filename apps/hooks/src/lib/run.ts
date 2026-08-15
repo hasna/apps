@@ -17,6 +17,7 @@ import { randomBytes } from "crypto";
 import { rmSync, writeFileSync } from "fs";
 import { basename, dirname, isAbsolute, join } from "path";
 import type { Subprocess } from "bun";
+import { buildHookEnv } from "./hook-env.js";
 
 export interface VerifiedRunOptions {
   /** Registered hook name (for error messages) */
@@ -179,7 +180,10 @@ export async function executeVerifiedScript(options: VerifiedRunOptions): Promis
       stdin: new Response(options.stdin),
       stdout: "pipe",
       stderr: "pipe",
-      env: options.env ?? process.env,
+      // P1-1 env isolation: the child never gets process.env wholesale. The
+      // allowlist + name-based deny list applies to the caller's extras too,
+      // so a caller cannot reintroduce a credential-bearing name.
+      env: buildHookEnv(process.env, options.env),
       // Detached spawn makes the child its own session/process-group leader,
       // so a timeout can kill the group (kill(-pid)) instead of leaving
       // grandchildren orphaned (bug 4d4c8f0b).

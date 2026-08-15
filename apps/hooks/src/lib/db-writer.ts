@@ -5,6 +5,7 @@
 
 import { getDb } from "../db";
 import type { HookEventRow } from "../db/schema";
+import { redactEventPayload } from "./redact.js";
 
 export type HookEventInput = Omit<HookEventRow, "id" | "timestamp"> & {
   timestamp?: string;
@@ -20,6 +21,13 @@ export function writeHookEvent(event: HookEventInput): void {
     const id = nanoid();
     const timestamp = event.timestamp ?? new Date().toISOString();
 
+    // P1-3 event-safe projection at WRITE time: tool_input, error and
+    // metadata are redacted before local persistence, so nothing sensitive
+    // ever lands in hook_events or flows to a remote sync store.
+    const toolInput = redactEventPayload(event.tool_input);
+    const error = redactEventPayload(event.error);
+    const metadata = redactEventPayload(event.metadata);
+
     db.run(
       `INSERT INTO hook_events
         (id, timestamp, session_id, hook_name, event_type, tool_name, tool_input, result, error, duration_ms, project_dir, metadata)
@@ -31,12 +39,12 @@ export function writeHookEvent(event: HookEventInput): void {
         event.hook_name,
         event.event_type,
         event.tool_name ?? null,
-        event.tool_input ? event.tool_input.slice(0, 500) : null,
+        toolInput ? toolInput.slice(0, 500) : null,
         event.result ?? null,
-        event.error ?? null,
+        error ?? null,
         event.duration_ms ?? null,
         event.project_dir ?? null,
-        event.metadata ?? null,
+        metadata ?? null,
       ]
     );
   } catch (err) {

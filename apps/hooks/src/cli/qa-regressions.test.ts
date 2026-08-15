@@ -413,3 +413,61 @@ describe("P3 #10 — hooks init --cloudflare writes api_key_ref (QA-3 deviation)
     expect(config.api_key_ref).toBe("someorg/hooks/live/other-key");
   });
 });
+
+describe("round-2 findings at the CLI level", () => {
+  test("P2-7: a mixed install (some succeed, some fail) exits non-zero with a clear count", async () => {
+    // gitguard is a real bundled hook (--overwrite so it succeeds even
+    // though an earlier test installed it); the second name is unknown.
+    const human = await run("install", "gitguard", "qa6-does-not-exist-xyz", "--overwrite");
+    expect(human.exitCode, human.stdout + human.stderr).toBe(1);
+    expect(human.stdout).toContain("1 of 2 hook(s) failed");
+
+    const json = await run("install", "gitguard", "qa6-does-not-exist-xyz", "--json", "--overwrite");
+    expect(json.exitCode, json.stdout + json.stderr).toBe(1);
+    const parsed = JSON.parse(json.stdout.trim().split("\n").pop()!);
+    expect(parsed.success).toBe(1);
+    expect(parsed.failed).toHaveLength(1);
+  });
+
+  test("P2-8: a prerelease+build pin (1.2.3-beta.1+meta) is parsed by the shared semver pattern and installs", async () => {
+    const VERSION = "1.2.3-beta.1+meta";
+    const SCRIPT = "#!/bin/bash\necho '{\"continue\":true}'\n";
+    const shaV = sha(SCRIPT);
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/lock") {
+          return Response.json({
+            hooks: {
+              "qa7-pre": { version: VERSION, sha256: shaV, source: "remote", versions: [VERSION] },
+            },
+          });
+        }
+        const m = url.pathname.match(/^\/api\/v1\/hooks\/qa7-pre\/(.+)$/);
+        if (m) {
+          const requested = decodeURIComponent(m[1]);
+          if (requested !== VERSION) return new Response("not found", { status: 404 });
+          return Response.json({
+            manifest: { name: "qa7-pre", version: VERSION, events: ["PreToolUse"], script: "script.sh" },
+            script: SCRIPT,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    process.env.HASNA_HOOKS_API_URL = `http://127.0.0.1:${server.port}`;
+    try {
+      const res = await run("install", `qa7-pre@${VERSION}`);
+      expect(res.exitCode, res.stdout + res.stderr).toBe(0);
+      expect(res.stdout).toContain("Installed 'qa7-pre'");
+      expect(res.stdout).toContain(VERSION);
+      const lock = JSON.parse(readFileSync(join(TEST_HOME, ".hasna", "hooks", "hooks.lock"), "utf-8"));
+      expect(lock.hooks["qa7-pre"].version).toBe(VERSION);
+      expect(lock.hooks["qa7-pre"].sha256).toBe(shaV);
+    } finally {
+      delete process.env.HASNA_HOOKS_API_URL;
+      server.stop(true);
+    }
+  });
+});

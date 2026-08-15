@@ -216,9 +216,10 @@ enforces the pin.
 ## 9. Secrets handling
 
 - The API key value lives only in the environment (`HASNA_HOOKS_API_KEY` /
-  `HOOKS_API_KEY`, or the Worker's `HOOKS_API_KEY` secret binding), or is
-  passed with `--api-key` on `hooks serve`. `config.json` stores the **key
-  name reference** (`api_key_ref`), never the value.
+  `HOOKS_API_KEY`, or the Worker's `HOOKS_API_KEY` secret binding). There is
+  deliberately no `--api-key` value flag on `hooks serve` — a secret on a CLI
+  flag is visible in process listings and shell history (P1-8). `config.json`
+  stores the **key name reference** (`api_key_ref`), never the value.
 - Never print, log, or commit an API key or token. See the operator guide's
   secrets hygiene section (`docs/cloudflare.md`).
 

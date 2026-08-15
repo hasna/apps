@@ -131,7 +131,10 @@ export interface InstallOptions {
 
 export function getSettingsPath(scope: Scope = "global", target: SingleTarget = "claude", codewithConfigPath?: string): string {
   if (target === "codewith" && codewithConfigPath) return codewithConfigPath;
-  if (target === "codewith" && process.env.HASNA_HOOKS_CODEWITH_CONFIG_PATH) {
+  // P2-15: the env override names the GLOBAL codewith config only; a
+  // project-scoped codewith config is always the cwd-relative one, or the
+  // two scopes would silently edit the same file.
+  if (target === "codewith" && scope === "global" && process.env.HASNA_HOOKS_CODEWITH_CONFIG_PATH) {
     return process.env.HASNA_HOOKS_CODEWITH_CONFIG_PATH;
   }
   const globalOverride = scope === "global" ? getGlobalSettingsPathOverride(target) : undefined;
@@ -655,8 +658,10 @@ function codewithHasHookEntryInText(configText: string, name: string): boolean {
   return new RegExp(`hooks run ${escapeRegExp(name)}(?:\\s+--profile\\s+[\\w-]+)?(?:$|\\s|")`).test(configText);
 }
 
-function codewithHasHookEntry(name: string): boolean {
-  const path = getSettingsPath("global", "codewith");
+function codewithHasHookEntry(name: string, scope: Scope = "global"): boolean {
+  // P2-15: the codewith config is resolved for the SAME scope the operation
+  // runs in — a project-scoped uninstall must not edit the global TOML.
+  const path = getSettingsPath(scope, "codewith");
   if (!existsSync(path)) return false;
   try {
     return codewithHasHookEntryInText(readFileSync(path, "utf-8"), name);
@@ -693,7 +698,7 @@ export function uninstallHook(
   // A hook registered only in the Codewith TOML must still resolve for
   // --target codewith / --target all (recheck P1: codewith-only hooks were
   // reported "not found").
-  const codewithOnly = (target === "codewith" || target === "all") && codewithHasHookEntry(shortName);
+  const codewithOnly = (target === "codewith" || target === "all") && codewithHasHookEntry(shortName, scope);
 
   if (!custom && !bundledMeta && !registeredGlobal && !registeredProject && !codewithOnly) {
     return { name: shortName, removed: false, source: null, settingsScopes: [], storeDirRemoved: false, pinRemoved: false, dbRecordRemoved: false, registrationsRemaining: [], error: `Hook '${shortName}' not found` };
@@ -716,7 +721,9 @@ export function uninstallHook(
   // silently dropped.
   const registrationsRemaining: string[] = [];
   if (target === "codewith" || target === "all") {
-    const codewithPath = getSettingsPath("global", "codewith");
+    // P2-15: resolve the config for the operation's own scope — never the
+    // hardcoded global path.
+    const codewithPath = getSettingsPath(scope, "codewith");
     if (existsSync(codewithPath)) {
       const before = readFileSync(codewithPath, "utf-8");
       const after = removeCodewithHookEntry(before, shortName);

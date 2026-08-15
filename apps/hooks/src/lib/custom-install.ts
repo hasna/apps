@@ -102,18 +102,22 @@ export async function installCustomSource(source: string): Promise<CustomInstall
 }
 
 async function installManifestUrl(url: string): Promise<CustomInstallResult> {
-  const res = await fetch(url, { redirect: "follow" });
+  // P2-14: refuse redirects on URL fetch. A manifest URL that redirects can
+  // end on an attacker-controlled origin serving different bytes than the
+  // URL the user named; the fetched content is the trusted install source.
+  const res = await fetch(url, { redirect: "error" });
   if (!res.ok) {
     throw new Error(`Failed to fetch manifest (${res.status}): ${url}`);
   }
   const manifest = parseManifest(await res.text());
   let script: { path: string; content: string };
-  if (manifest.script.includes("\n")) {
+  const inline = manifest.script_kind === "inline" || (manifest.script_kind === undefined && manifest.script.includes("\n"));
+  if (inline) {
     script = { path: "script.ts", content: manifest.script };
   } else {
     const base = url.substring(0, url.lastIndexOf("/"));
     const scriptUrl = `${base}/${manifest.script}`;
-    const scriptRes = await fetch(scriptUrl, { redirect: "follow" });
+    const scriptRes = await fetch(scriptUrl, { redirect: "error" });
     if (!scriptRes.ok) {
       throw new Error(`Failed to fetch script (${scriptRes.status}): ${scriptUrl}`);
     }

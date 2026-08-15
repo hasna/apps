@@ -24,13 +24,13 @@ function makeEnv(withKey: boolean): Env {
     },
   ];
   const d1 = {
-    prepare: () => ({
+    prepare: (sql: string) => ({
       bind: () => ({
-        first: async () => rows[0],
+        first: async () => (sql.includes("FROM hook_versions") ? null : rows[0]),
         all: async () => ({ results: rows, success: true }),
         run: async () => ({}),
       }),
-      first: async () => rows[0],
+      first: async () => (sql.includes("FROM hook_versions") ? null : rows[0]),
       all: async () => ({ results: rows, success: true }),
       run: async () => ({}),
     }),
