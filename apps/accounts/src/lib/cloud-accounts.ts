@@ -10,7 +10,9 @@
 // There are no deployment modes (owner directive 2026-07-29; knowledge
 // k_ms5wv466_u0jidq). Transport is selected by the API env pair alone: both
 // vars set selects the HTTP transport; an incomplete pair stays local; any
-// retired storage-mode variable throws via `assertNoLegacyStorageMode`.
+// retired storage-mode variable is scrubbed with an advisory warning via
+// `scrubLegacyStorageMode` — never a crash (the legacy fleet drop-in still
+// exports one) and never a transport hint.
 //
 // Registry vs local: the HTTP API is the source of truth for account metadata
 // (name, tool, email, displayName, identity, cardLast4, metadata, description,
@@ -24,7 +26,7 @@
 import type { Profile, ToolDef } from "../types.js";
 import { AccountsError, toolDefSchema } from "../types.js";
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts";
-import { assertNoLegacyStorageMode } from "./retired-storage-mode.js";
+import { scrubLegacyStorageMode } from "./retired-storage-mode.js";
 
 const APP_SLUG = "accounts";
 
@@ -132,14 +134,16 @@ function toProfile(account: CloudAccount): Profile {
  * `HASNA_ACCOUNTS_API_KEY` are set, `{ transport: 'local' }` when neither is
  * set, and throws when exactly one of the pair is set (no silent local drift,
  * mirroring the instructions app's `resolveCloudConfig`). Any retired
- * storage-mode variable throws first via `assertNoLegacyStorageMode`, so a
- * client never silently drifts between stores on stale mode vocabulary.
+ * storage-mode variable is scrubbed with an advisory warning via
+ * `scrubLegacyStorageMode`, so a client never silently drifts between stores
+ * on stale mode vocabulary — and never crashes on a machine that still
+ * exports it (the legacy fleet drop-in does).
  */
 export function resolveAccountsCloud(
   env: NodeJS.ProcessEnv = process.env,
   overrides?: Parameters<typeof resolveStorageClient>[2],
 ): ResolveAccountsCloudResult {
-  assertNoLegacyStorageMode(env);
+  scrubLegacyStorageMode(env);
   const url = env.HASNA_ACCOUNTS_API_URL || env.ACCOUNTS_API_URL;
   // hasna-credential-seam-waiver: the pinned @hasna/contracts 0.5.2 transport re-reads HASNA_ACCOUNTS_API_KEY from the environment itself when selecting the client; the seam migration (contracts client resolveCredential) requires a contracts runtime upgrade and is tracked as a follow-up.
   const key = env.HASNA_ACCOUNTS_API_KEY || env.ACCOUNTS_API_KEY;
