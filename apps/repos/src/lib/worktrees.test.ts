@@ -316,6 +316,39 @@ describe("addWorktree", () => {
     expect(result.lease.base_sha).toBe(advanced);
   });
 
+  test("resolves remote-qualified base refs to the same origin sha", () => {
+    // `git fetch origin -- origin/main` fails because `origin/main` is a LOCAL
+    // remote-tracking name, not a ref the remote holds — the literal refspec
+    // after `--` matches nothing on the remote. So `--base origin/main` and
+    // `--base refs/remotes/origin/main` must be rewritten to the underlying
+    // branch name before the fetch, and must pin the same sha as `--base
+    // refs/heads/main`.
+    const { seedPath, repoName } = seed();
+    const advanced = commit(seedPath, "SECOND.md", "advanced\n");
+    git(seedPath, ["push", "origin", "main"]);
+
+    const byHeads = addWorktree({ repo: repoName, task: "base-heads", base: "refs/heads/main" });
+    const byShorthand = addWorktree({ repo: repoName, task: "base-shorthand", base: "origin/main" });
+    const byRemoteRef = addWorktree({ repo: repoName, task: "base-remote-ref", base: "refs/remotes/origin/main" });
+
+    expect(byHeads.base.sha).toBe(advanced);
+    expect(byShorthand.base.sha).toBe(advanced);
+    expect(byShorthand.base.source).toBe("origin");
+    expect(byShorthand.base.ref).toBe("origin/main");
+    expect(byRemoteRef.base.sha).toBe(advanced);
+    expect(byRemoteRef.base.source).toBe("origin");
+    expect(byRemoteRef.base.ref).toBe("refs/remotes/origin/main");
+    for (const result of [byHeads, byShorthand, byRemoteRef]) {
+      expect(result.lease.base_sha).toBe(advanced);
+    }
+  });
+
+  test("rejects a base ref that exists nowhere with BASE_REF_UNRESOLVABLE", () => {
+    const { repoName } = seed();
+    expect(codeOf(() => addWorktree({ repo: repoName, task: "a321ba13", base: "no-such-branch" })))
+      .toBe("BASE_REF_UNRESOLVABLE");
+  });
+
   test("fails closed when the base cannot be fetched from origin", () => {
     // Silently branching off whatever is local is the degradation this refuses.
     const { clonePath, repoName } = seed();

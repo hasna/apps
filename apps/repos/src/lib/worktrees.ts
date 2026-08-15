@@ -554,10 +554,14 @@ function resolveBase(parent: ParentCheckout, baseRef: string): ResolvedBase {
     return { ref: baseRef, sha: local.stdout, source: "local" };
   }
 
-  const fetched = runGit(parent.path, ["fetch", "--quiet", "origin", "--", baseRef], {
-    allowFailure: true,
-    timeout: GIT_FETCH_TIMEOUT_MS,
-  });
+  const fetched = runGit(
+    parent.path,
+    ["fetch", "--quiet", "origin", "--", originFetchRef(baseRef)],
+    {
+      allowFailure: true,
+      timeout: GIT_FETCH_TIMEOUT_MS,
+    },
+  );
   if (!fetched.ok) {
     fail("BASE_REF_UNRESOLVABLE", `base ref '${baseRef}' could not be fetched from origin`, {
       base_ref: baseRef,
@@ -577,6 +581,27 @@ function resolveBase(parent: ParentCheckout, baseRef: string): ResolvedBase {
     });
   }
   return { ref: baseRef, sha: sha.stdout, source: "origin" };
+}
+
+/**
+ * The ref to ask origin for, when the caller spelled it as a LOCAL
+ * remote-tracking name.
+ *
+ * `git fetch origin -- origin/main` fails with "couldn't find remote ref
+ * origin/main": after `--` the refspec is literal, and `origin/main` /
+ * `refs/remotes/origin/main` exist only in the local ref namespace, never on
+ * the remote. Only the underlying branch name (`main`) is fetchable. The
+ * fully-qualified `refs/heads/main` and the bare `main` are passed through.
+ *
+ * This resolver pins from origin only, so the only remote-qualified prefix
+ * that can appear is `origin` — a ref qualified with any other remote cannot
+ * resolve here and keeps its spelling, so the fetch fails closed with
+ * `BASE_REF_UNRESOLVABLE` rather than silently fetching the wrong thing.
+ */
+function originFetchRef(baseRef: string): string {
+  if (baseRef.startsWith("refs/remotes/origin/")) return baseRef.slice("refs/remotes/origin/".length);
+  if (baseRef.startsWith("origin/")) return baseRef.slice("origin/".length);
+  return baseRef;
 }
 
 /**
