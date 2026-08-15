@@ -1,0 +1,21 @@
+# Runner-stage Bun configuration. Copied to /app/bunfig.toml, which is the
+# container's WORKDIR and therefore the directory Bun reads this from.
+#
+# The runner ships dist and nothing else — no node_modules, no package.json, no
+# bun.lock. Without this file, Bun treats any bare specifier left in the bundle
+# as an auto-install request and DOWNLOADS THAT PACKAGE FROM THE PUBLIC NPM
+# REGISTRY AT THE `latest` TAG on every container start, silently ignoring the
+# version bun.lock pinned at build time.
+#
+# That is not hypothetical. On 2026-08-01 the todos production container fetched
+# @hasna/contracts@0.8.7 instead of the locked 0.5.2 and failed to boot, because
+# the freshly published `latest` had dropped an export the bundle imported. The
+# same mechanism means an unrelated publish can change what production runs
+# without any change to this repository, and it bypasses the fleet's package
+# release-age quarantine entirely, since ~/.bunfig.toml is not in this image.
+#
+# Disabling auto-install makes the bundle's self-containment enforceable rather
+# than merely asserted: a specifier the image does not ship now fails at startup
+# with a module error instead of resolving to whatever the registry serves.
+[install]
+auto = "disable"

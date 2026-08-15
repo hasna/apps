@@ -23,7 +23,7 @@ function envFlag(name: string): boolean {
 }
 
 program
-  .name("machines-agent")
+  .name("machines-daemon")
   .description("Machine heartbeat agent and station roster controller")
   .version(getPackageVersion())
   .option("--once", "Write one heartbeat and exit", false)

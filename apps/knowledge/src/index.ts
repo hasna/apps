@@ -83,15 +83,15 @@ export {
   KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
   KNOWLEDGE_RESOURCE,
   KnowledgeBoundedQueryCapabilityError,
-  isKnowledgeApiMode,
-  resolveKnowledgeCloudStore,
-  type KnowledgeCloudStore,
-  type KnowledgeCloudCreateInput,
-  type KnowledgeCloudListOptions,
-  type KnowledgeCloudPatch,
-  type KnowledgeCloudSearchHit,
-  type KnowledgeCloudSearchOptions,
-} from './cloud-store.js';
+  usesKnowledgeHttpTransport,
+  resolveKnowledgeHttpStore,
+  type KnowledgeHttpStore,
+  type KnowledgeHttpCreateInput,
+  type KnowledgeHttpListOptions,
+  type KnowledgeHttpPatch,
+  type KnowledgeHttpSearchHit,
+  type KnowledgeHttpSearchOptions,
+} from './http-store.js';
 export {
   DEFAULT_KNOWLEDGE_GUARDED_LIMITS,
   KNOWLEDGE_GUARDED_WRITE_CONTRACT,
@@ -210,23 +210,18 @@ export {
   type KnowledgeGuardedCliPrivateResult,
 } from './guarded-cli.js';
 export {
+  KNOWLEDGE_API_KEY_ENV,
   KNOWLEDGE_API_KEY_ENV_KEYS,
+  KNOWLEDGE_API_URL_ENV,
   KNOWLEDGE_API_URL_ENV_KEYS,
-  KNOWLEDGE_MODE_ENV_KEYS,
-  LOCAL_MODE_CANDIDATES,
-  SERVER_MODE_CANDIDATES,
-  contractsStorageModeFor,
-  knowledgeModeReport,
-  localStorageMode,
-  pinnedTransportEnv,
-  resolveKnowledgeModeSelection,
-  serverStorageMode,
-  type KnowledgeMode,
-  type ModeNormalizer,
-  type KnowledgeModeReport,
-  type KnowledgeModeResolution,
-  type KnowledgeModeSource,
-} from './knowledge-mode.js';
+  KNOWLEDGE_DATABASE_URL_ENV,
+  RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS,
+  RetiredKnowledgeStorageSelectorError,
+  assertNoRetiredKnowledgeStorageSelector,
+  resolveKnowledgeClientTransport,
+  type KnowledgeClientTransport,
+  type KnowledgeClientTransportReport,
+} from './client-transport.js';
 export {
   NETWORK_GUARD_ENV,
   KnowledgeNetworkGuardError,
@@ -417,19 +412,14 @@ export {
   type StorageValidationResult,
 } from './storage-contract.js';
 export {
-  KNOWLEDGE_STORAGE_MODE_ENV,
-  KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_TABLES,
-  STORAGE_MODE_ENV,
   STORAGE_TABLES,
-  getStorageMode,
   getStorageStatus,
   getSyncMetaAll,
   parseStorageTables,
   resolveTables,
 } from './storage.js';
 export type {
-  StorageMode,
   StorageStatus,
   StorageStatusOptions,
   StorageSyncOptions,

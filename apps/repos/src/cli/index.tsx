@@ -456,6 +456,9 @@ program
     } else {
       console.log(chalk.green(`\n✓ Scan complete in ${(scan.duration_ms / 1000).toFixed(1)}s`));
       console.log(`  Repos found: ${scan.repos_found} (${scan.repos_new} new, ${scan.repos_updated} updated)`);
+      if (scan.duplicate_rows_merged) {
+        console.log(chalk.yellow(`  Duplicate rows merged: ${scan.duplicate_rows_merged} (same directory indexed under two path spellings)`));
+      }
       console.log(`  Commits indexed: ${scan.commits_indexed}`);
       console.log(`  Branches indexed: ${scan.branches_indexed}`);
       console.log(`  Tags indexed: ${scan.tags_indexed}`);

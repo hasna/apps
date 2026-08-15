@@ -203,9 +203,9 @@ export function registerDoctorCommand(program: Command): void {
         const activeProfile = getActiveProfile();
         const profiles = listProfiles();
         if (activeProfile) {
-          checks.push({ name: "Profile metadata", status: "ok", detail: `${activeProfile} active (${profiles.length} total); verify runtime DB with storage mode` });
+          checks.push({ name: "Profile metadata", status: "ok", detail: `${activeProfile} active (${profiles.length} total); verify runtime DB with the storage backend` });
         } else {
-          checks.push({ name: "Profile metadata", status: "ok", detail: `none active — ${profiles.length} profile(s) available; verify runtime DB with storage mode` });
+          checks.push({ name: "Profile metadata", status: "ok", detail: `none active — ${profiles.length} profile(s) available; verify runtime DB with the storage backend` });
         }
       } catch (e) {
         checks.push({ name: "Profile metadata", status: "warn", detail: e instanceof Error ? e.message : String(e) });
@@ -294,7 +294,7 @@ export function registerDoctorCommand(program: Command): void {
 interface CloudHealth {
   status?: string;
   version?: string;
-  mode?: string;
+  backend?: string;
   profile?: string;
   hostname?: string;
   memories?: { total?: number; expired?: number; pinned?: number };
@@ -303,7 +303,7 @@ interface CloudHealth {
 }
 
 /**
- * Cloud-aware doctor (API mode). Never opens local SQLite; checks the
+ * API-aware doctor (API transport). Never opens local SQLite; checks the
  * self-hosted HTTP API instead. Reuses the same output/exit-code contract as
  * the local doctor: any `fail` makes the command exit 1.
  */
@@ -314,10 +314,10 @@ async function runCloudDoctor(
   // 1. Version (local client package)
   checks.push({ name: "Version", status: "ok", detail: getPackageVersion() });
 
-  // 2. Storage mode + API endpoint (never print the key)
+  // 2. Server backend + API endpoint (never print the key)
   const cfg = getApiConfig();
   checks.push({
-    name: "Storage mode",
+    name: "Storage backend",
     status: "ok",
     detail: `self-hosted API (${cfg?.baseUrl ?? "unknown endpoint"})`,
   });

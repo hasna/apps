@@ -26,8 +26,8 @@ export interface ImportOptions {
  * Register an existing Claude (or tool) config directory as a profile.
  * Default source is the tool's default dir (e.g. ~/.claude).
  *
- * The registry write goes through the resolved Store, so in self_hosted/cloud
- * mode the imported profile lands in the cloud registry (visible to
+ * The registry write goes through the resolved Store, so in API transport the
+ * imported profile lands in the server registry (visible to
  * `accounts list`/other machines). The on-disk copy/snapshot work is
  * machine-local and stays local.
  */

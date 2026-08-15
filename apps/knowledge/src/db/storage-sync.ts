@@ -6,11 +6,9 @@ import { ensureKnowledgeWorkspace, resolveScopedWorkspace } from '../workspace';
  * Durable knowledge.db catalog tables. Retained as metadata for `db storage
  * status` and schema documentation.
  *
- * NOTE: the client-side Postgres sync engine (getStoragePg / storagePush /
- * storagePull / storageSync + the PgAdapterAsync DSN adapter) has been REMOVED.
- * That was a forbidden DSN-on-client path: it connected fleet machines straight
- * to the shared RDS from a HASNA_KNOWLEDGE_DATABASE_URL. Clients now reach the
- * shared store only through the HTTP ApiStore. This module keeps only local,
+ * The removed client-side PostgreSQL sync engine connected fleet machines
+ * directly to a database URL. Clients now reach the server only through the
+ * HTTP ApiStore. This module keeps only on-box,
  * read-only status helpers.
  */
 export const STORAGE_TABLES = [
@@ -43,15 +41,6 @@ export const KNOWLEDGE_STORAGE_TABLES = STORAGE_TABLES;
 
 type StorageTable = (typeof STORAGE_TABLES)[number];
 
-/**
- * Runtime storage backend:
- *   - `sqlite`: on-box SQLite knowledge.db is authoritative.
- *   - `postgres`: the shared store is reached through the HTTP ApiStore.
- * The removed runtime-placement words (`local`, `cloud`, `hybrid`, `remote`,
- * and `self_hosted`) are not accepted here.
- */
-export type StorageMode = 'sqlite' | 'postgres';
-
 export interface StorageSyncOptions {
   tables?: string[];
   scope?: string;
@@ -76,29 +65,13 @@ export interface SyncMeta {
   direction: 'push' | 'pull';
 }
 
-export const KNOWLEDGE_STORAGE_MODE_ENV = 'HASNA_KNOWLEDGE_STORAGE_MODE';
-export const KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV = 'KNOWLEDGE_STORAGE_MODE';
-export const STORAGE_MODE_ENV = [KNOWLEDGE_STORAGE_MODE_ENV, KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV] as const;
-
 export interface StorageStatus {
-  mode: StorageMode;
+  backend: 'sqlite';
   service: 'knowledge';
   scope: string;
   databasePath: string;
   tables: typeof STORAGE_TABLES;
   sync: SyncMeta[];
-}
-
-function readEnv(name: string): string | undefined {
-  const value = process.env[name]?.trim();
-  return value || undefined;
-}
-
-function normalizeStorageMode(value: string | undefined): StorageMode | undefined {
-  const normalized = value?.trim().toLowerCase().replace(/-/g, '_');
-  if (normalized === 'sqlite') return 'sqlite';
-  if (normalized === 'postgres' || normalized === 'postgresql') return 'postgres';
-  return undefined;
 }
 
 function openScopedDb(options: StorageStatusOptions = {}): { db: Database; path: string; scope: string } {
@@ -109,15 +82,6 @@ function openScopedDb(options: StorageStatusOptions = {}): { db: Database; path:
     path: workspace.knowledgeDbPath,
     scope: options.scope ?? 'global',
   };
-}
-
-export function getStorageMode(): StorageMode {
-  const mode = normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_ENV))
-    ?? normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
-  if (mode) return mode;
-  // Presence of a DATABASE_URL no longer selects a backend. Postgres must be
-  // requested explicitly; default is sqlite.
-  return 'sqlite';
 }
 
 export function getSyncMetaAll(options: StorageStatusOptions = {}): SyncMeta[] {
@@ -136,7 +100,7 @@ export function getStorageStatus(options: StorageStatusOptions = {}): StorageSta
     ensureSyncMetaTable(local.db);
     const sync = local.db.query('SELECT table_name, last_synced_at, direction FROM _knowledge_sync_meta ORDER BY table_name, direction').all() as SyncMeta[];
     return {
-      mode: getStorageMode(),
+      backend: 'sqlite',
       service: 'knowledge',
       scope: local.scope,
       databasePath: local.path,

@@ -6,18 +6,19 @@
 //
 //   • LocalStore — on-box SQLite. Wraps the local `Store` and awaits its
 //     synchronous methods so callers see one async surface.
-//   • ApiStore   — the self_hosted/cloud HTTP API at `<API_URL>/v1` with a bearer
+//   • ApiStore   — the control-plane HTTP API at `<API_URL>/v1` with a bearer
 //     key. Delegates to the vendored Hasna storage client / transport.
 //
-// `getStore()` resolves which transport to use from the client-flip env
-// (HASNA_LOOPS_API_URL + HASNA_LOOPS_API_KEY / HASNA_LOOPS_STORAGE_MODE) via
-// `resolveCloudStorage`. Callers NEVER branch on mode themselves and NEVER touch
-// sqlite or fetch directly — that per-command dual path was the split-brain bug
-// this module eliminates.
+// `getStore()` resolves which transport to use from the client connection env
+// (HASNA_LOOPS_API_URL + HASNA_LOOPS_API_KEY) via `resolveCloudStorage`.
+// Callers NEVER branch on connection themselves and NEVER touch sqlite or
+// fetch directly — that per-command dual path was the split-brain bug this
+// module eliminates.
 //
-// `self_hosted` and `cloud` are the SAME client code (ApiStore); only the URL and
-// key differ, and that distinction is server-side tenancy. `local` is
-// first-class and fully functional.
+// Both the file connection and the API connection are the SAME client code
+// (ApiStore/LocalStore behind one LoopStore surface); only the URL and key
+// differ, and that distinction is server-side tenancy. The local SQLite file
+// is first-class and fully functional.
 //
 // SAFETY: the API key never leaves the transport; it is never logged, returned,
 // or embedded in any value produced here. Only the HTTP transport ever holds it.
@@ -53,7 +54,7 @@ import { publicWorkflowEvents } from "../workflow-events.js";
 import { resolveCloudStorage } from "../cloud/resolve.js";
 import type { HasnaStorageClient } from "../cloud/storage.js";
 import { HasnaHttpError } from "../cloud/transport.js";
-import type { Env } from "../cloud/mode.js";
+import type { Env } from "../cloud/transport.js";
 import { Store } from "../store.js";
 import type {
   ExpiredRunLeaseCandidate,
@@ -62,7 +63,7 @@ import type {
 } from "../store.js";
 
 /** Which transport backs a resolved store (for banners/diagnostics only). */
-export type StoreTransport = "local" | "cloud-http";
+export type StoreTransport = "file" | "api";
 
 export interface StuckRunCandidate {
   runId: string;
@@ -99,16 +100,17 @@ function stuckRunSnapshotId(candidate: ExpiredRunLeaseCandidate): string {
 }
 
 /**
- * Thrown when a command routed through the cloud ApiStore hits an operation that
- * the hosted `/v1` API does not yet expose. Failing loudly here is deliberate:
- * the alternative (silently reading/writing the on-box sqlite island while the
- * machine is flipped to cloud) is exactly the split-brain bug we are removing.
+ * Thrown when a command routed through the API store hits an operation that
+ * the control-plane `/v1` API does not yet expose. Failing loudly here is
+ * deliberate: the alternative (silently reading/writing the on-box sqlite
+ * island while the machine is connected to a control plane) is exactly the
+ * split-brain bug we are removing.
  */
 export class CloudUnsupportedError extends Error {
   constructor(operation: string) {
     super(
-      `operation not supported over the hosted Loops API: ${operation}. ` +
-        `Run it on a machine using local storage, or unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY.`,
+      `operation not supported over the control-plane Loops API: ${operation}. ` +
+        `Run it on a machine using the local file connection, or unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY to use the local file store.`,
     );
     this.name = "CloudUnsupportedError";
   }
@@ -208,7 +210,7 @@ export interface LoopStore {
  * synchronous methods so callers see the async {@link LoopStore} surface.
  */
 export class LocalStore implements LoopStore {
-  readonly transport = "local" as const;
+  readonly transport = "file" as const;
   private readonly store: Store;
 
   constructor(store: Store = new Store()) {
@@ -220,8 +222,9 @@ export class LocalStore implements LoopStore {
    * local-runtime operations that cannot route over HTTP — the scheduler
    * (tick/run-now inline execution), migration import/export, and local
    * diagnostics (doctor/health/daemon status). Callers must gate on
-   * `transport === "local"` first; the hosted ApiStore has no `raw` store, so
-   * these operations fail loudly in cloud mode instead of touching an island.
+   * `transport === "file"` first; the hosted ApiStore has no `raw` store, so
+   * these operations fail loudly on the API connection instead of touching an
+   * island.
    */
   get raw(): Store {
     return this.store;
@@ -486,13 +489,13 @@ function pickObject<T>(raw: unknown, key: string): T | undefined {
 }
 
 /**
- * Self_hosted / cloud transport: routes every read+write through the hosted
- * `/v1` API. Loop/name resolution (requireLoop/requireUniqueLoop/find*) is done
- * client-side by listing and matching, mirroring the local Store behaviour, so a
- * server that ignores a name filter can never return the wrong row.
+ * API transport: routes every read+write through the hosted `/v1` API. Loop/name
+ * resolution (requireLoop/requireUniqueLoop/find*) is done client-side by
+ * listing and matching, mirroring the local Store behaviour, so a server that
+ * ignores a name filter can never return the wrong row.
  */
 export class ApiStore implements LoopStore {
-  readonly transport = "cloud-http" as const;
+  readonly transport = "api" as const;
   constructor(
     private readonly client: HasnaStorageClient,
     readonly baseUrl: string,
@@ -848,16 +851,17 @@ export class ApiStore implements LoopStore {
 
 /**
  * Resolve the client store for the current environment: an {@link ApiStore} when
- * the client-flip contract resolves to cloud-http (self_hosted/cloud), else a
- * {@link LocalStore}. Callers hold a {@link LoopStore} and never branch on mode.
+ * the connection contract resolves to the HTTP transport (API URL + API key
+ * set), else a {@link LocalStore}. Callers hold a {@link LoopStore} and never
+ * branch on connection.
  */
 export function getStore(env: Env = process.env): LoopStore {
   const resolution = resolveCloudStorage("loops", env as Record<string, string | undefined>);
-  if (resolution.transport === "cloud-http") return new ApiStore(resolution.client, resolution.baseUrl);
+  if (resolution.transport === "api") return new ApiStore(resolution.client, resolution.baseUrl);
   return new LocalStore();
 }
 
-/** True when the resolved store is the hosted HTTP transport (cloud/self_hosted). */
+/** True when the resolved store is the control-plane HTTP transport. */
 export function isCloudStore(env: Env = process.env): boolean {
-  return resolveCloudStorage("loops", env as Record<string, string | undefined>).transport === "cloud-http";
+  return resolveCloudStorage("loops", env as Record<string, string | undefined>).transport === "api";
 }

@@ -3,17 +3,15 @@
   "name": "knowledge",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.8.5",
-  "description": "Agent-friendly knowledge store. CLI + MCP + HTTP API (knowledge-serve) + generated SDK. SQLite backend uses ~/.hasna/knowledge/knowledge.db; postgres backend (HASNA_KNOWLEDGE_STORAGE_MODE=postgres) routes clients through the HTTP API and lets knowledge-serve read/write the shared Postgres directly, with API-key auth via @hasna/contracts.",
+  "kitVersion": "0.10.6",
+  "description": "Agent-friendly knowledge store. CLI + MCP + HTTP API (knowledge-serve) + generated SDK. Clients use local SQLite or the HTTP API selected by HASNA_KNOWLEDGE_API_URL; knowledge-serve reads PostgreSQL selected by HASNA_KNOWLEDGE_DATABASE_URL.",
   "bins": [
     "knowledge",
     "knowledge-mcp",
     "knowledge-serve"
   ],
   "storage": {
-    "mode": "sqlite",
     "envPrefix": "HASNA_KNOWLEDGE_",
-    "aliasEnvPrefix": "KNOWLEDGE_",
     "databaseUrlSecretRef": "hasna/oss/knowledge/database-url",
     "sqlitePath": "~/.hasna/knowledge/knowledge.db"
   },
@@ -29,13 +27,13 @@
       "signingSecretSecretRef": "hasna/oss/knowledge/api-key-signing-secret",
       "migrationCommand": [
         "bun",
-        "scripts/apply-cloud-migrations.mjs"
+        "scripts/apply-postgres-migrations.mjs"
       ],
       "ownerDatabaseUrlSecretRef": "hasna/oss/knowledge/database-url-owner"
     },
     "client": {
-      "apiUrlEnv": "KNOWLEDGE_API_URL",
-      "apiKeyEnv": "KNOWLEDGE_API_KEY"
+      "apiUrlEnv": "HASNA_KNOWLEDGE_API_URL",
+      "apiKeyEnv": "HASNA_KNOWLEDGE_API_KEY"
     }
   }
 }

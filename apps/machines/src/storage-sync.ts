@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { getDb } from "./db.js";
+import { assertNoLegacyStorageMode } from "./lib/retired-storage-mode.js";
 import { PG_MIGRATIONS } from "./pg-migrations.js";
 import { PgAdapterAsync } from "./remote-storage.js";
 
@@ -16,8 +17,9 @@ type Row = Record<string, unknown>;
 
 /**
  * Storage mode: `local` (on-box SQLite) or `cloud` (hosted HTTP API). There is
- * no third value; the retired deployment-mode words (`hybrid`, `remote`,
- * `self_hosted`) are rejected loudly (owner directive 2026-07-29).
+ * no third value, and no variable selects it anymore (owner directive
+ * 2026-07-29): any set storage-mode variable throws via
+ * `assertNoLegacyStorageMode`.
  */
 export type StorageMode = "local" | "cloud";
 
@@ -66,18 +68,6 @@ function readEnv(name: string): string | undefined {
   return value || undefined;
 }
 
-function normalizeStorageMode(value: string | undefined, envName: string): StorageMode | undefined {
-  const normalized = value?.trim().toLowerCase().replace(/-/g, "_");
-  if (!normalized) return undefined;
-  if (normalized === "local") return "local";
-  if (normalized === "cloud") return "cloud";
-  // Unknown values — including the retired deployment-mode words — fail loudly
-  // and name the variable. Falling through would silently pick a store.
-  throw new Error(
-    `machines: ${envName}=${value} is not a valid storage mode. Use local (on-box store) or cloud (hosted HTTP API).`,
-  );
-}
-
 export function getStorageDatabaseEnvName(): (typeof STORAGE_DATABASE_ENV)[number] | null {
   for (const name of STORAGE_DATABASE_ENV) {
     if (readEnv(name)) return name;
@@ -96,9 +86,9 @@ export function getStorageDatabaseUrl(): string | null {
 }
 
 export function getStorageMode(): StorageMode {
-  const mode = normalizeStorageMode(readEnv(MACHINES_STORAGE_MODE_ENV), MACHINES_STORAGE_MODE_ENV)
-    ?? normalizeStorageMode(readEnv(MACHINES_STORAGE_MODE_FALLBACK_ENV), MACHINES_STORAGE_MODE_FALLBACK_ENV);
-  if (mode) return mode;
+  // A set storage-mode variable is an error, never a mode selector: silently
+  // accepting it would keep the split-brain drift the mode vocabulary caused.
+  assertNoLegacyStorageMode();
   // A DSN in the environment is a pointer, not a mode: presence never selects
   // a backend (that inference was the deployment-mode axis). Default is local.
   return "local";

@@ -226,6 +226,7 @@ describe("goal-plan-coordination materialization", () => {
         agents: ["codewith", "claude"],
         rootDir: corpus,
         homeDir: home,
+        sourceDir: ROOT,
       });
       expect(result.actions).toHaveLength(2);
       expect(result.actions.every((action) => action.action === "create")).toBe(true);

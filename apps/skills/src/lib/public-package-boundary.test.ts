@@ -119,12 +119,13 @@ describe("public package boundary", () => {
 
 
 
-  test("does not strip shipped skill content from the packed public package", () => {
-    // The declarative-only catalog ships SKILL.md prose, not src/. Guard that the
-    // package.json files[] negations do not accidentally strip a shipped skill's
-    // deliverable. (catalog-runnable.test.ts covers every skill; this pins one.)
+  test("ships zero skill corpus in the packed public package", () => {
+    // The npm tarball carries no bundled corpus: distribution is CI-built signed
+    // bundles + `skills pull`, and the corpus in the repo is the canonical git source,
+    // not a package deliverable. (catalog-runnable.test.ts covers every skill against
+    // the TREE; this pins one against the PACKAGE file list.)
     const files = readPackedFiles();
-    expect(files).toContain("skills/brand-kit/SKILL.md");
+    expect(files).not.toContain("skills/brand-kit/SKILL.md");
   });
 
   test("keeps legacy service server and cloud scaffolds out of the public package", () => {

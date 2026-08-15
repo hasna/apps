@@ -218,12 +218,36 @@ export {
   type PortableSkillCommand,
   type PortableSkillInput,
   type PortableSkillManifest,
+  type PortableSkillProvenance,
   type PortableSkillRunOptions,
   type PortableSkillRunResult,
+  type PortableSkillRuntimeContract,
   type PortableSkillSummary,
   type SkillKind,
+  type SkillRuntimeName,
+  type SkillSandboxMode,
+  type SkillSystemDep,
   type WriteCorpusSkillInput,
 } from "./lib/portable-skills.js";
+
+export {
+  SKILL_RUNTIMES,
+  SKILL_SANDBOX_MODES,
+  SKILL_SYSTEM_DEPS_ALLOWLIST,
+} from "./lib/portable-skills-types.js";
+
+export {
+  canonicalizeManifest,
+  computeContentHash,
+  normalizeLineEndings,
+  verifyContentHash,
+  type ContentHashVerification,
+} from "./lib/skill-hash.js";
+
+export {
+  validatePortableManifestContract,
+  type PortableContractOptions,
+} from "./lib/skill-contract.js";
 
 export {
   pullSkills,

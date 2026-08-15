@@ -86,7 +86,7 @@ export function getApiKeyVerifier(): ApiKeyVerifier | null {
   _verifier = verifyApiKey({
     app: APP,
     signingSecret: secret,
-    isRevoked: _store ? _store.isRevoked : undefined,
+    keyStatus: _store ? _store.keyStatus : undefined,
     audit: (e) => {
       if (e.outcome === "deny") {
         console.warn(

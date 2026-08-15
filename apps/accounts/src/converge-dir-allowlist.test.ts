@@ -161,10 +161,9 @@ function serveHangingCloudRegistry(): string {
 }
 
 function configureCloudMode(url: string): void {
-  // Explicit cloud mode wins over the ACCOUNTS_HOME override (deriveEnv in
-  // cloud-accounts.ts), which is exactly the fleet shape: cloud registry,
-  // local files.
-  process.env.HASNA_ACCOUNTS_STORAGE_MODE = "cloud";
+  // API transport by URL+KEY presence (cloud-accounts.ts). ACCOUNTS_HOME is
+  // set in this suite, but the fleet shape is API registry + local files, so
+  // the API pair is what selects the transport.
   process.env.HASNA_ACCOUNTS_API_URL = url;
   process.env.HASNA_ACCOUNTS_API_KEY = "synthetic-test-key";
 }
@@ -181,7 +180,7 @@ async function errorMessageOf(fn: () => unknown): Promise<string> {
 
 // --- the defect: cloud-only dirs must converge ------------------------------
 
-test("cloud mode: a cloud-only profile dir converges (bug 2865f9f5)", async () => {
+test("API transport: a cloud-only profile dir converges (bug 2865f9f5)", async () => {
   const fresh: Cred = { accessToken: "at-fresh", refreshToken: "rt-fresh", expiresAt: Date.now() + 7 * HOUR };
   const cloudOnlyDir = makeDir(home, "cloud-only", UUID, fresh);
   // The LOCAL registry file does not exist → empty local registry. That is the
@@ -199,7 +198,7 @@ test("cloud mode: a cloud-only profile dir converges (bug 2865f9f5)", async () =
 
 // --- the guard: same registry, still a fence --------------------------------
 
-test("cloud mode: a dir in NEITHER registry is still refused, with the registry reachable", async () => {
+test("API transport: a dir in NEITHER registry is still refused, with the registry reachable", async () => {
   const fresh: Cred = { accessToken: "at-fresh", refreshToken: "rt-fresh", expiresAt: Date.now() + 7 * HOUR };
   const registeredDir = makeDir(home, "registered", UUID, fresh);
   const plantedDir = makeDir(home, "planted-unregistered", UUID, {
@@ -219,7 +218,7 @@ test("cloud mode: a dir in NEITHER registry is still refused, with the registry 
   expect(readFileSync(join(plantedDir, ".credentials.json"), "utf8")).toBe(before);
 });
 
-test("cloud mode: an unreachable registry is an error, never a silent local fallback", async () => {
+test("API transport: an unreachable registry is an error, never a silent local fallback", async () => {
   const fresh: Cred = { accessToken: "at-fresh", refreshToken: "rt-fresh", expiresAt: Date.now() + 7 * HOUR };
   const dir = makeDir(home, "cloud-only", UUID, fresh);
   // Reserved port 1: connection refused immediately, no server involved.
@@ -305,7 +304,7 @@ function writeLocalRegistry(rows: Array<{ name: string; dir: string }>): void {
   );
 }
 
-test("cloud mode: a LOCAL-ONLY dir still converges (the #123 regression)", async () => {
+test("API transport: a LOCAL-ONLY dir still converges (the #123 regression)", async () => {
   const fresh: Cred = { accessToken: "at-fresh", refreshToken: "rt-fresh", expiresAt: Date.now() + 7 * HOUR };
   const cloudOnlyDir = makeDir(home, "cloud-only", UUID, fresh);
   const localOnlyDir = makeDir(home, "local-only", UUID, fresh);
@@ -439,7 +438,7 @@ test("POSITIVE CONTROL for the gate: ACCOUNTS_HOOK_ENSURE_FRESH=1 spawns it", ()
 
 // --- local mode unchanged ---------------------------------------------------
 
-test("local mode: the local registry still governs the allowlist by default", async () => {
+test("local transport: the local registry still governs the allowlist by default", async () => {
   const fresh: Cred = { accessToken: "at-fresh", refreshToken: "rt-fresh", expiresAt: Date.now() + 7 * HOUR };
   const registeredDir = makeDir(home, "local-registered", UUID, fresh);
   const unregisteredDir = makeDir(home, "local-unregistered", UUID, fresh);

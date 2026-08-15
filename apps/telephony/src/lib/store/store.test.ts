@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { getStore, isCloudStore, resetStore, ApiStore, LocalStore } from "./index.js";
-import { HasnaHttpError } from "../../generated/storage-client/index.js";
+import { HasnaHttpError } from "@hasna/contracts";
 import type { Agent, AgentConflictError } from "../../types/index.js";
 
 const CLIENT_ENV = [
   "HASNA_TELEPHONY_STORAGE_MODE",
   "HASNA_TELEPHONY_MODE",
+  "TELEPHONY_STORAGE_MODE",
+  "TELEPHONY_MODE",
   "HASNA_TELEPHONY_API_URL",
   "HASNA_TELEPHONY_API_KEY",
   "TELEPHONY_API_URL",
@@ -28,34 +30,9 @@ describe("telephony Store resolver", () => {
     expect(isCloudStore()).toBe(false);
   });
 
-  it("stays on the on-box store for the sqlite backend even with URL + key", () => {
+  it("routes to the ApiStore when both API URL and API key are set", () => {
     clearEnv();
     const env = {
-      HASNA_TELEPHONY_STORAGE_MODE: "sqlite",
-      HASNA_TELEPHONY_API_URL: "https://telephony.hasna.xyz",
-      HASNA_TELEPHONY_API_KEY: "hasna_telephony_test_key",
-    } as Record<string, string>;
-    const store = getStore(env);
-    expect(store.transport).toBe("local");
-    expect(store).toBeInstanceOf(LocalStore);
-    expect(isCloudStore(env)).toBe(false);
-  });
-
-  it("stays local for the postgres backend without an API key (no silent drift)", () => {
-    clearEnv();
-    const env = {
-      HASNA_TELEPHONY_STORAGE_MODE: "postgres",
-      HASNA_TELEPHONY_API_URL: "https://telephony.hasna.xyz",
-    } as Record<string, string>;
-    // resolveStorageClient throws when the server backend is requested but
-    // misconfigured.
-    expect(() => getStore(env)).toThrow();
-  });
-
-  it("routes to the ApiStore for the postgres backend with URL + key", () => {
-    clearEnv();
-    const env = {
-      HASNA_TELEPHONY_STORAGE_MODE: "postgres",
       HASNA_TELEPHONY_API_URL: "https://telephony.hasna.xyz",
       HASNA_TELEPHONY_API_KEY: "hasna_telephony_test_key",
     } as Record<string, string>;
@@ -65,21 +42,52 @@ describe("telephony Store resolver", () => {
     expect(isCloudStore(env)).toBe(true);
   });
 
-  it("accepts postgresql as the long spelling of postgres", () => {
+  it("routes to the ApiStore when the alias API pair is set", () => {
     clearEnv();
     const env = {
-      HASNA_TELEPHONY_STORAGE_MODE: "postgresql",
-      HASNA_TELEPHONY_API_URL: "https://telephony.hasna.xyz",
-      HASNA_TELEPHONY_API_KEY: "hasna_telephony_test_key",
+      TELEPHONY_API_URL: "https://telephony.hasna.xyz",
+      TELEPHONY_API_KEY: "hasna_telephony_test_key",
     } as Record<string, string>;
     expect(getStore(env).transport).toBe("cloud-http");
   });
 
+  it("throws naming the missing variable when exactly one side of the API pair is set", () => {
+    clearEnv();
+    const missingKey = {
+      HASNA_TELEPHONY_API_URL: "https://telephony.hasna.xyz",
+    } as Record<string, string>;
+    expect(() => getStore(missingKey)).toThrow(/HASNA_TELEPHONY_API_KEY/);
+    const missingUrl = {
+      HASNA_TELEPHONY_API_KEY: "hasna_telephony_test_key",
+    } as Record<string, string>;
+    expect(() => getStore(missingUrl)).toThrow(/HASNA_TELEPHONY_API_URL/);
+  });
+
+  it("throws naming the retired variable when a storage-mode variable is still set", () => {
+    clearEnv();
+    for (const key of ["HASNA_TELEPHONY_STORAGE_MODE", "HASNA_TELEPHONY_MODE", "TELEPHONY_STORAGE_MODE", "TELEPHONY_MODE"]) {
+      const env = { [key]: "postgres" } as Record<string, string>;
+      expect(() => getStore(env)).toThrow(new RegExp(key));
+    }
+  });
+
+  it("throws on a retired storage-mode variable even when it looks redundant with a full API pair", () => {
+    clearEnv();
+    const env = {
+      HASNA_TELEPHONY_STORAGE_MODE: "postgres",
+      HASNA_TELEPHONY_API_URL: "https://telephony.hasna.xyz",
+      HASNA_TELEPHONY_API_KEY: "hasna_telephony_test_key",
+    } as Record<string, string>;
+    // The ratchet names the retired var; it is never a hint, so the pair does
+    // not rescue the config.
+    expect(() => getStore(env)).toThrow(/HASNA_TELEPHONY_STORAGE_MODE/);
+  });
+
   // The bug this file's suite exists to keep closed: hasna.contract.json
-  // advertises the sqlite|postgres data-backend switch, so the shipped client
-  // must accept exactly those two words. The vendored client used to accept only
-  // the removed placement vocabulary, which made every value the published
-  // manifest sanctions a hard startup error and every removed word a success.
+  // advertises the sqlite|postgresql data-backend switch, and the removed
+  // placement vocabulary must never come back as a transport selector. The
+  // client accepts no mode word at all — transport is the API pair — so any
+  // placement word set as a storage-mode variable is rejected by the ratchet.
   it("rejects the removed placement vocabulary the manifest no longer declares", () => {
     clearEnv();
     for (const removed of ["local", "cloud", "self_hosted", "remote", "hybrid"]) {
@@ -88,7 +96,7 @@ describe("telephony Store resolver", () => {
         HASNA_TELEPHONY_API_URL: "https://telephony.hasna.xyz",
         HASNA_TELEPHONY_API_KEY: "hasna_telephony_test_key",
       } as Record<string, string>;
-      expect(() => getStore(env)).toThrow(/Unknown storage mode/);
+      expect(() => getStore(env)).toThrow(/HASNA_TELEPHONY_STORAGE_MODE was removed/);
     }
   });
 });

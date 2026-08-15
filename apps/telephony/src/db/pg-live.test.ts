@@ -64,8 +64,9 @@ describeLive("live PostgreSQL storage engine", () => {
       savedEnv[key] = process.env[key];
     }
     // Drive the real shipped path: the data backend + DSN come from the
-    // canonical env contract, and the client is the one the serve process uses.
-    process.env.HASNA_TELEPHONY_STORAGE_MODE = "postgres";
+    // canonical env contract (DATABASE_URL presence selects postgresql; a
+    // retired storage-mode variable would throw), and the client is the one
+    // the serve process uses.
     process.env.HASNA_TELEPHONY_DATABASE_URL = scopedDsn(dsn, schema);
     client = createTelephonyCloudClient();
   });

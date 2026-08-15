@@ -55,6 +55,8 @@ describe("getPackedFiles", () => {
     expect(files.length).toBeGreaterThan(0);
     expect(files).toEqual([...files].sort());
     expect(files).toContain("package.json");
-    expect(files).toContain("agent-skills/fleet-package-rollout/SKILL.md");
+    // Zero-corpus: no bundled skill corpus may enter the tarball, even though the
+    // corpus exists in the repo tree.
+    expect(files.some((file) => file.startsWith("skills/") || file.startsWith("agent-skills/"))).toBe(false);
   });
 });

@@ -284,7 +284,7 @@ function sq(value: string): string {
 }
 
 export interface BuildScriptOptions {
-  /** Override the fleet env dir (default $HOME/.hasna/cloud). */
+  /** Override the fleet env dir (default $HOME/.hasna/fleet-env). */
   envDir?: string;
   /** Skip the service restart (env written but not activated). */
   skipRestart?: boolean;
@@ -300,7 +300,7 @@ export interface BuildScriptOptions {
  * are fully unset and the app falls back to its untouched local original.
  */
 export function buildFlipScript(spec: FlipAppSpec, mode: FlipMode, options: BuildScriptOptions = {}): string {
-  const envDir = options.envDir ?? "${HOME}/.hasna/cloud";
+  const envDir = options.envDir ?? "${HOME}/.hasna/fleet-env";
   const lines: string[] = [
     "set -euo pipefail",
     `APP=${sq(spec.app)}`,

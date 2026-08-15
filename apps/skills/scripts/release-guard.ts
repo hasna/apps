@@ -224,17 +224,6 @@ try {
 }
 
 const packedFileSet = new Set(packedFiles);
-const requiredAgentSkillFiles = collectFiles(join(repoRoot, "agent-skills"))
-  .map((file) => relative(repoRoot, file).replace(/\\/g, "/"))
-  .sort();
-const missingAgentSkillFiles = requiredAgentSkillFiles.filter((file) => !packedFileSet.has(file));
-if (missingAgentSkillFiles.length > 0) {
-  console.error("Release guard failed: repository-managed agent skill files are missing from the package:");
-  for (const missing of missingAgentSkillFiles) {
-    console.error(sanitizeForPublicLog(`  package-boundary: ${missing}`));
-  }
-  process.exit(1);
-}
 
 // S1 — public/private boundary: no private/PII skill may enter the package.
 const privateSlugs = listPrivateSkillSlugs(join(repoRoot, "skills"));
@@ -285,6 +274,27 @@ if (artifactFindings.length > 0) {
   console.error("  These look like the output of an actual run rather than authored fixtures.");
   console.error("  Delete them and gitignore the directory, or replace them with a small");
   console.error("  synthetic fixture under a stable, non-timestamped filename.");
+  process.exit(1);
+}
+
+// S0 — the zero-corpus boundary: the npm tarball ships NO skill corpus. The canonical
+// corpus stays in the repo (skills/ + agent-skills/) as the git source of truth; CI
+// builds signed bundles from it and the CLI reads it from a source/cache. If a single
+// corpus file re-enters the package file list, distribution has silently regressed to
+// "bundled" — which is exactly the state this guard exists to keep from coming back.
+// Checked AFTER the S1/S3 boundary guards so those checks keep their own (stronger,
+// more specific) failure messages on real regressions; S0 is the backstop that names
+// the distribution model itself.
+const corpusPacklistLeaks = packedFiles.filter(
+  (file) => file === "skills" || file === "agent-skills" || file.startsWith("skills/") || file.startsWith("agent-skills/"),
+);
+if (corpusPacklistLeaks.length > 0) {
+  console.error("Release guard failed: the published package must ship zero skill corpus, but it would include:");
+  for (const leaked of corpusPacklistLeaks) {
+    console.error(sanitizeForPublicLog(`  zero-corpus: ${leaked}`));
+  }
+  console.error("  The corpus is distributed as CI-built signed bundles and pulled by the CLI.");
+  console.error("  Remove the corpus dirs from the `files` list in package.json.");
   process.exit(1);
 }
 

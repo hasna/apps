@@ -128,7 +128,7 @@ export function deprioritizeStale(days: number, db?: Database): number {
   // `importance - 1 >= 1` already — no scalar floor is needed. We deliberately
   // avoid SQLite's two-arg scalar `MAX(x, 1)`: it is NOT portable to the cloud
   // Postgres backend (Postgres MAX is an aggregate; the scalar form is GREATEST),
-  // and this UPDATE runs server-side against Postgres in cloud mode.
+  // and this UPDATE runs server-side against the postgresql backend.
   const deprioWhere = `status = 'active' AND pinned = 0 AND importance > 1 AND COALESCE(accessed_at, updated_at) < ?`;
   // Count first — result.changes includes FTS5 trigger operations
   const count = (d

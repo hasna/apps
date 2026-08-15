@@ -37,6 +37,7 @@ import {
   type Scope,
   type Target,
 } from "../lib/installer.js";
+import { hookRegisteredInSettings } from "../lib/registration.js";
 import {
   createProfile,
   getProfile,
@@ -778,15 +779,9 @@ program
       if (meta && settingsExist) {
         try {
           const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-          const eventHooks = settings.hooks?.[meta.event] || [];
-          const found = eventHooks.some((entry: any) =>
-            entry.hooks?.some((h: any) => {
-              const match = h.command?.match(/^hooks run ([\w-]+)/);
-              return match && match[1] === name;
-            })
-          );
-          if (!found) {
-            issues.push({ hook: name, issue: `Not registered under correct event (${meta.event})`, severity: "error" });
+          if (!hookRegisteredInSettings(settings, name, meta.event, meta.matcher)) {
+            const eventName = meta.event.split(":")[0];
+            issues.push({ hook: name, issue: `Not registered under correct event (${eventName})`, severity: "error" });
             hookHealthy = false;
           }
         } catch {}

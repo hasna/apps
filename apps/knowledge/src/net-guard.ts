@@ -8,8 +8,8 @@
  * whose target is not loopback is refused before a socket is opened.
  *
  * SCOPE, stated precisely because a guard people believe covers more than it
- * does is worse than a narrow one. Covered: the cloud item transport
- * (cloud-store.ts, via the contracts client's `fetchImpl`) and web source-ref
+ * does is worse than a narrow one. Covered: the HTTP item transport
+ * (http-store.ts, via the contracts client's `fetchImpl`) and web source-ref
  * ingestion (source-ingest.ts). NOT covered: third-party SDK transports that
  * carry their own HTTP stacks — `@aws-sdk/client-s3` and the `ai` provider
  * clients. Those are credential-gated and the suite drives them with `--fake`,
@@ -17,7 +17,7 @@
  * injecting a fetch into each SDK and is deliberately left out of this change.
  *
  * It guards the EGRESS, not the environment, and that distinction is the whole
- * design. Clearing the selector variables at startup — a preload, a
+ * design. Clearing transport variables at startup — a preload, a
  * `beforeAll`, a wrapper script — cannot work: a test file that assigns those
  * variables at module scope runs AFTER any one-shot clear, `bun test` executes
  * many files in one process with one preload, so a single file's leak reaches
@@ -134,9 +134,9 @@ export function assertOutboundRequestAllowed(
   if (isLoopbackHostname(url.hostname)) return;
   throw new KnowledgeNetworkGuardError(
     `knowledge: refused a non-loopback ${url.protocol.replace(':', '')} request while ${NETWORK_GUARD_ENV}=test `
-      + '(target host withheld on purpose). This process resolved to the cloud backend under test, which means a '
-      + 'read or write was about to leave the machine and reach the live store. Select the mode explicitly '
-      + `(${'HASNA_KNOWLEDGE_STORAGE_MODE'}=sqlite) or point the API URL at 127.0.0.1 for a hermetic test.`,
+      + '(target host withheld on purpose). This process selected the HTTP API under test, which means a '
+      + 'read or write was about to leave the machine and reach the live store. Unset HASNA_KNOWLEDGE_API_URL '
+      + 'to use the on-box store, or point it at 127.0.0.1 for a hermetic test.',
     { scheme: url.protocol.replace(':', ''), port: url.port },
   );
 }

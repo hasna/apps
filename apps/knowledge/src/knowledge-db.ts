@@ -1,34 +1,25 @@
 import { Database } from 'bun:sqlite';
 import { ensureParentDir } from './workspace';
-import { isKnowledgeApiMode } from './cloud-store';
-import { KNOWLEDGE_MODE_ENV_KEYS } from './knowledge-mode.js';
+import { usesKnowledgeHttpTransport } from './http-store';
+import { KNOWLEDGE_API_URL_ENV } from './client-transport.js';
 
 /**
- * The single choke point for every client-side sqlite catalog open. In cloud mode
- * — selected explicitly, see knowledge-mode.ts — the on-box knowledge.db is NOT
+ * The single choke point for every client-side sqlite catalog open. With the
+ * HTTP transport selected, the on-box knowledge.db is NOT
  * the source of truth, and writing to it would be the split-brain the mission
  * forbids. Rather than silently touch local sqlite, we refuse loudly. Knowledge
- * items (notes) still flow to the shared cloud via the ApiStore; the local
- * catalog subsystem is first-class in local mode only.
- * The HTTP server (src/serve) never calls this — it reads the cloud Postgres
+ * items (notes) still flow through the server API; the local catalog subsystem
+ * belongs to the on-box transport.
+ * The HTTP server (src/serve) never calls this — it reads PostgreSQL
  * directly — so this guard applies to CLI/MCP/SDK clients only.
  */
-export function assertLocalCatalogMode(operation = 'catalog'): void {
-  if (isKnowledgeApiMode()) {
-    // Names the ONE variable to change. It used to say "unset the API env",
-    // which was the right advice only while presence of a URL + key selected the
-    // backend; now unsetting the pointers does not restore local mode and, with
-    // the mode var still set to cloud, produces a misconfiguration error instead.
-    // This is the message an operator actually hits, so it is also the message
-    // that has to name the current selector rather than the deleted one.
-    const modeKey = KNOWLEDGE_MODE_ENV_KEYS[0];
+export function assertSqliteClientTransport(operation = 'catalog'): void {
+  if (usesKnowledgeHttpTransport()) {
     throw new Error(
       `knowledge: ${operation} builds/reads the on-box sqlite RAG catalog (source ingestion, chunk embeddings, `
         + `wiki compilation, cross-machine sync, machine registry). That local indexing pipeline is not available in `
-        + `cloud mode. In cloud mode the shared corpus is the cloud knowledge-items: 'add/list/get/update/delete' item `
-        + `commands AND 'search/ask/build/context' over that shared corpus all route to the cloud. Set ${modeKey}=local `
-        + `(or unset it — local is the default) to use the full local catalog pipeline; run 'knowledge mode' to see `
-        + `which variable selected the current backend.`,
+        + `the HTTP client. Shared item commands route through the server API. Unset ${KNOWLEDGE_API_URL_ENV} `
+        + `to use the full on-box catalog pipeline; run 'knowledge transport' to inspect the current route.`,
     );
   }
 }
@@ -570,7 +561,7 @@ VALUES (10, datetime('now'));
 `;
 
 export function openKnowledgeDb(path: string): Database {
-  assertLocalCatalogMode('opening the local knowledge.db catalog');
+  assertSqliteClientTransport('opening the local knowledge.db catalog');
   ensureParentDir(path);
   const db = new Database(path);
   db.exec('PRAGMA foreign_keys = ON;');
@@ -579,14 +570,14 @@ export function openKnowledgeDb(path: string): Database {
 }
 
 /**
- * Read-only open of the on-box knowledge.db, gated by the same cloud-mode guard
+ * Read-only open of the on-box knowledge.db, gated by the same HTTP-transport guard
  * as {@link openKnowledgeDb}. This is the ONLY sanctioned read-only sqlite entry
  * point (used by the workspace-migration integrity/summary tooling) so that every
  * client-side `new Database(...)` lives in this module behind the gate — no path
- * can silently read the local catalog while the cloud API flip is active.
+ * can silently read the local catalog while HTTP transport is active.
  */
 export function openKnowledgeDbReadonly(path: string): Database {
-  assertLocalCatalogMode('reading the local knowledge.db catalog');
+  assertSqliteClientTransport('reading the local knowledge.db catalog');
   return new Database(path, { readonly: true });
 }
 

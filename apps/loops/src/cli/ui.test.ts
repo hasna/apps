@@ -15,7 +15,6 @@ function runCli(dataDir: string, args: string[]) {
     env: {
       ...process.env,
       LOOPS_DATA_DIR: dataDir,
-      HASNA_LOOPS_STORAGE_MODE: "local",
       HASNA_LOOPS_API_URL: "",
       HASNA_LOOPS_API_KEY: "",
     },

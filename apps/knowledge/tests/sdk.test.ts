@@ -310,8 +310,7 @@ describe('public knowledge sdk', () => {
     expect(normalizeDarwinPath(paths.home)).toBe(normalizeDarwinPath(join(dir, '.hasna', 'knowledge')));
     expect(paths.config.storage.type).toBe('local');
 
-    const setup = client.setup({ mode: 'hosted', canonicalExample: true });
-    expect(setup.mode).toBe('hosted');
+    const setup = client.setup({ canonicalExample: true });
     expect(setup.storage_type).toBe('s3');
     expect(setup.canonical_example.active).toBe(true);
 

@@ -2,7 +2,7 @@
 // DO NOT EDIT. Regenerate: bun scripts/generate-sdk.mjs
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Telephony 0.2.8
+// Source: Telephony 0.2.9
 
 export interface Contact { "id": string; "name": string; "phone": string; "email"?: string | null; "agent_id"?: string | null; "project_id"?: string | null; "notes"?: string | null; "tags": Array<string>; "metadata": Record<string, unknown>; "created_at": string; "updated_at": string }
 
@@ -88,7 +88,14 @@ export class TelephonyApiClient {
     const url = new URL(this.baseUrl + path);
     if (opts.query) {
       for (const [key, value] of Object.entries(opts.query)) {
-        if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+        if (value === undefined || value === null) continue;
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item !== undefined && item !== null) url.searchParams.append(key, String(item));
+          }
+        } else {
+          url.searchParams.set(key, String(value));
+        }
       }
     }
     const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };

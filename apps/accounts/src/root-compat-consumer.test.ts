@@ -4,12 +4,13 @@
  *
  * The hazard this file exists for, measured on the fleet before it was fixed:
  * `@hasna/economy`'s `resolveAccountForAgent` wraps EVERY root accounts call in
- * `try {} catch {}`, so making the read exports throw under hosted authority did
- * not produce the intended loud failure — it produced a silent `null`, zeroing
- * per-account cost attribution on every cloud-mode machine with no error, no log
- * and no alert. Reads therefore stay readable and announce themselves through
- * `process.emitWarning`, which a `catch` block cannot swallow; only writes fail
- * closed, because a synchronous root write under hosted authority would diverge
+ * `try {} catch {}`, so making the read exports throw under HTTP API authority
+ * did not produce the intended loud failure — it produced a silent `null`,
+ * zeroing per-account cost attribution on every API-mode machine with no error,
+ * no log and no alert. Reads therefore stay readable and announce themselves
+ * through `process.emitWarning`, which a `catch` block cannot swallow; only
+ * writes fail closed, because a synchronous root write under API authority
+ * would diverge
  * the local file from the authoritative registry.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -54,7 +55,6 @@ const AUTHORITY_KEYS = [
 ] as const;
 
 const HOSTED_AUTHORITY = {
-  HASNA_ACCOUNTS_STORAGE_MODE: "cloud",
   HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
   HASNA_ACCOUNTS_API_KEY: "fixture-authority",
 } as const;
@@ -256,7 +256,7 @@ describe("root compatibility exports under a swallowing consumer", () => {
     expect(() => listProfiles("claude")).toThrow(/local-only compatibility/);
     expect(() => appliedProfile("claude")).toThrow(/local-only compatibility/);
     expect(() => loadStore()).toThrow(/local-only compatibility/);
-    // The machine-local pointer is exempt in every mode.
+    // The machine-local pointer is exempt in every transport.
     expect(appliedProfileName("claude")).toBe("strict");
     // A swallowing consumer loses attribution here — that is the opt-in cost.
     expect(economyResolveAccount("claude", {})).toBeNull();

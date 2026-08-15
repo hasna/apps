@@ -5,7 +5,7 @@ import {
   SqliteAdapter,
   PgAdapter,
   MEMENTOS_STORAGE_TABLES,
-  getStorageConfig,
+  getStorageBackend,
   getStorageConnectionString,
   getStorageStatus,
   incrementalSyncPull,
@@ -48,7 +48,7 @@ export interface MemoryStorageSyncStats {
 
 export interface MementosStorageSyncResult {
   direction: "push" | "pull";
-  mode: string;
+  backend: string;
   current_machine_id: string | null;
   tables: MemoryStorageSyncStats[];
   total_synced: number;
@@ -57,7 +57,7 @@ export interface MementosStorageSyncResult {
 }
 
 export interface MementosStorageStatus {
-  mode: string;
+  backend: string;
   enabled: boolean;
   db_path: string;
   current_machine_id: string | null;
@@ -642,8 +642,8 @@ function runStorageSync(
   direction: "push" | "pull",
   options: RunStorageSyncOptions = {}
 ): MementosStorageSyncResult {
-  const config = getStorageConfig();
-  if (config.mode === "local" && !options.remote) {
+  const backend = getStorageBackend();
+  if (backend === "sqlite" && !options.remote) {
     throw new Error("Remote storage is not configured. Set HASNA_MEMENTOS_DATABASE_URL or configure ~/.hasna/mementos/storage/config.json.");
   }
 
@@ -667,7 +667,7 @@ function runStorageSync(
     const errors = stats.flatMap((stat) => stat.errors);
     return {
       direction,
-      mode: config.mode,
+      backend,
       current_machine_id: currentMachineId,
       tables: stats,
       total_synced: stats.reduce((sum, stat) => sum + stat.synced_rows, 0),
@@ -692,15 +692,15 @@ export function pullStorageChanges(
 export function getStorageSyncStatus(
   options: Pick<RunStorageSyncOptions, "local" | "current_machine_id"> = {}
 ): MementosStorageStatus {
-  const config = getStorageConfig();
+  const backend = getStorageBackend();
   const localOwned = !options.local;
   const local = options.local ?? new SqliteAdapter(getDbPath());
 
   try {
     const currentMachineId = resolveCurrentMachineId(local, options.current_machine_id);
     return {
-      mode: config.mode,
-      enabled: config.mode === "cloud",
+      backend,
+      enabled: backend === "postgresql",
       db_path: getDbPath(),
       current_machine_id: currentMachineId,
       runtime: getStorageStatus(),

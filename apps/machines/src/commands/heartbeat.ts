@@ -143,15 +143,15 @@ function canonicalCollectionMachineId(
 
 function heartbeatCommand(machineId: string, doctorSummary: boolean): string {
   const doctorArgs = doctorSummary
-    ? `if machines-agent --help 2>&1 | grep -q -- '--doctor-summary'; then doctor='--doctor-summary'; else doctor=''; fi`
+    ? `if machines-daemon --help 2>&1 | grep -q -- '--doctor-summary'; then doctor='--doctor-summary'; else doctor=''; fi`
     : "doctor=''";
   return [
     `PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"`,
     "unset HASNA_MACHINES_MACHINE_ID MACHINES_MACHINE_ID HASNA_MACHINES_PRIVATE_METADATA MACHINES_PRIVATE_METADATA",
     "export PATH",
-    "if ! command -v machines-agent >/dev/null 2>&1; then printf 'machines-agent not found\\n' >&2; exit 127; fi",
+    "if ! command -v machines-daemon >/dev/null 2>&1; then printf 'machines-daemon not found\\n' >&2; exit 127; fi",
     doctorArgs,
-    'machines-agent --once $doctor --json',
+    'machines-daemon --once $doctor --json',
   ].join("; ");
 }
 
@@ -171,7 +171,7 @@ function parseHeartbeatSnapshot(
   observedAt = new Date().toISOString(),
 ): HeartbeatSnapshot {
   const line = lastJsonLine(stdout);
-  if (!line) throw new Error("machines-agent did not emit a JSON heartbeat");
+  if (!line) throw new Error("machines-daemon did not emit a JSON heartbeat");
   const parsed = JSON.parse(line) as Partial<HeartbeatSnapshot> & {
     machineId?: string;
     updatedAt?: string;

@@ -1,4 +1,7 @@
 import { ApiKeyStore, type ApiKeyVerifier } from '@hasna/contracts/auth';
+export { createKnowledgeDatabaseClient } from './db/remote-storage.js';
+export { PG_MIGRATIONS } from './db/pg-migrations.js';
+export { MigrationLedger, defineMigration } from './generated/storage-kit/migrations.js';
 import { type KnowledgeItem, type KnowledgeItemVersion, type KnowledgeItemVersionList } from './store.js';
 import { type KnowledgeAuthorityBinding } from './guarded-write-contract.js';
 import type { PoolQueryClient } from './generated/storage-kit/index.js';
@@ -11,11 +14,11 @@ export declare const KNOWLEDGE_SERVE_APP = "knowledge";
  * as `verify-full`. Appends libpq-compat so `require`/`prefer` mean exactly what
  * the kit documents. Never logs the URL. Returns the (possibly) updated value.
  */
-export declare function normalizeCloudDatabaseUrl(env?: NodeJS.ProcessEnv): string | undefined;
+export declare function normalizePostgresDatabaseUrl(env?: NodeJS.ProcessEnv): string | undefined;
 export interface NoteInput {
     /** Optional caller-supplied stable id (upsert). When present, create is an
      * idempotent upsert on this id — matching the local db.json upsert semantics so
-     * `upsert --id <stable>` and data import/re-sync never duplicate in cloud mode. */
+     * `upsert --id <stable>` and data import/re-sync never duplicate through the server. */
     id?: string;
     title: string;
     content?: string;
@@ -165,7 +168,7 @@ export interface RunningServe {
 }
 export declare function resolveKnowledgeGuardedAuthority(env?: NodeJS.ProcessEnv): KnowledgeServeGuardedAuthority | undefined;
 /**
- * Start the knowledge HTTP service on Bun. Opens a PURE-REMOTE cloud pool and a
+ * Start the knowledge HTTP service on Bun. Opens the server PostgreSQL pool and a
  * contracts API-key verifier backed by the api_keys table (revocation).
  */
 export declare function startKnowledgeServe(options?: StartServeOptions): Promise<RunningServe>;

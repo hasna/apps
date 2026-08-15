@@ -86,7 +86,7 @@ const SAFE_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$/;
  * reason: the set of things attached to a repo row grows, and a delete that
  * silently keeps up with it is a delete nobody is reviewing.
  */
-const KNOWN_REPO_FK_TABLES = new Set([
+export const KNOWN_REPO_FK_TABLES = new Set([
   "commits",
   "branches",
   "tags",

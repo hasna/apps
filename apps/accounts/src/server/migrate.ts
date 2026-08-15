@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
-// accounts-migrate — apply the accounts cloud schema to Postgres.
+// accounts-migrate — apply the accounts server schema to Postgres.
 //
-// Uses the vendored kit's checksum-guarded MigrationLedger against the cloud
-// database resolved from HASNA_ACCOUNTS_DATABASE_URL. Idempotent. `--dry-run`
-// reports the plan without mutating. Intended for the ECS one-shot migration
-// task and local ops.
+// Uses the vendored kit's checksum-guarded MigrationLedger against the database
+// resolved from HASNA_ACCOUNTS_DATABASE_URL. Idempotent. `--dry-run` reports
+// the plan without mutating. Intended for the ECS one-shot migration task and
+// local ops.
 
-import { createCloudPoolFromEnv, MigrationLedger, resolveStorageMode } from "../generated/storage-kit/index.js";
+import { createServerPoolFromEnv, MigrationLedger, resolveServerDataBackend } from "../generated/storage-kit/index.js";
 import {
   accountsMigrations,
   assertMigrationStatusCompatible,
@@ -23,12 +23,12 @@ import {
 async function main(): Promise<void> {
   const dryRun = process.argv.includes("--dry-run");
   const restore = process.argv.includes("--restore-purge-archive");
-  const resolution = resolveStorageMode(APP_SLUG, process.env);
-  if (resolution.mode !== "cloud") {
-    console.error("accounts-migrate requires HASNA_ACCOUNTS_STORAGE_MODE=cloud and HASNA_ACCOUNTS_DATABASE_URL.");
+  const resolution = resolveServerDataBackend(APP_SLUG, process.env);
+  if (resolution.backend !== "postgresql") {
+    console.error("accounts-migrate requires HASNA_ACCOUNTS_DATABASE_URL (postgresql backend).");
     process.exit(1);
   }
-  const { client } = createCloudPoolFromEnv(APP_SLUG, { applicationName: "accounts-migrate", max: 2 });
+  const { client } = createServerPoolFromEnv(APP_SLUG, { applicationName: "accounts-migrate", max: 2 });
   try {
     // Recovery path for the destructive purge. Runs before any migration work
     // so a restore is possible even when the schema is otherwise up to date.

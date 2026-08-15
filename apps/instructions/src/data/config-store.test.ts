@@ -4,11 +4,12 @@ import {
   CloudHttpError,
   LocalConfigStore,
   formatCliError,
+  isApiTransport,
   isCloudAuthError,
-  isCloudMode,
   resolveCloudConfig,
   resolveConfigStore,
 } from "./config-store.js";
+import { assertNoLegacyStorageMode } from "../lib/retired-storage-mode.js";
 import type { MachineContext } from "../types/index.js";
 
 interface RecordedCall {
@@ -139,12 +140,12 @@ afterEach(() => {
 describe("resolveCloudConfig", () => {
   test("null when neither set", () => {
     expect(resolveCloudConfig({})).toBeNull();
-    expect(isCloudMode({})).toBe(false);
+    expect(isApiTransport({})).toBe(false);
   });
   test("config when both set", () => {
     const env = { HASNA_INSTRUCTIONS_API_URL: "https://x", HASNA_INSTRUCTIONS_API_KEY: "k" };
     expect(resolveCloudConfig(env)).toEqual({ apiUrl: "https://x", apiKey: "k" });
-    expect(isCloudMode(env)).toBe(true);
+    expect(isApiTransport(env)).toBe(true);
   });
   test("throws when only one set (no silent local drift)", () => {
     expect(() => resolveCloudConfig({ HASNA_INSTRUCTIONS_API_URL: "https://x" })).toThrow();
@@ -152,11 +153,36 @@ describe("resolveCloudConfig", () => {
   });
 });
 
+describe("retired storage-mode variables", () => {
+  test("STORAGE_MODE set fails loud naming the retired var", () => {
+    expect(() => assertNoLegacyStorageMode({ HASNA_INSTRUCTIONS_STORAGE_MODE: "cloud" })).toThrow(
+      /HASNA_INSTRUCTIONS_STORAGE_MODE was removed/,
+    );
+    expect(() => assertNoLegacyStorageMode({ HASNA_INSTRUCTIONS_STORAGE_MODE: "local" })).toThrow(
+      /HASNA_INSTRUCTIONS_STORAGE_MODE was removed/,
+    );
+    expect(() => assertNoLegacyStorageMode({ INSTRUCTIONS_STORAGE_MODE: "self_hosted" })).toThrow(
+      /INSTRUCTIONS_STORAGE_MODE was removed/,
+    );
+  });
+  test("retired var fails loud even when API env is set (no silent drift)", () => {
+    const env = {
+      HASNA_INSTRUCTIONS_API_URL: "https://x",
+      HASNA_INSTRUCTIONS_API_KEY: "k",
+      HASNA_INSTRUCTIONS_STORAGE_MODE: "cloud",
+    };
+    expect(() => resolveConfigStore(env)).toThrow(/HASNA_INSTRUCTIONS_STORAGE_MODE was removed/);
+  });
+  test("legacy key set to undefined is not a configured value", () => {
+    expect(() => assertNoLegacyStorageMode({ HASNA_INSTRUCTIONS_STORAGE_MODE: undefined })).not.toThrow();
+  });
+});
+
 describe("resolveConfigStore", () => {
   test("local when env unset", () => {
     expect(resolveConfigStore({})).toBeInstanceOf(LocalConfigStore);
   });
-  test("cloud when both env vars set", () => {
+  test("api transport when both env vars set", () => {
     const store = resolveConfigStore({
       HASNA_INSTRUCTIONS_API_URL: "https://instructions.hasna.xyz",
       HASNA_INSTRUCTIONS_API_KEY: "k",

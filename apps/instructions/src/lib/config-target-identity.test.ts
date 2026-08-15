@@ -9,14 +9,14 @@ import { tempRootPath } from "./test-temp-root";
 let tmpDir: string;
 
 // Isolation, per open defect b19d3d37 (also see create-config-target-guard.test.ts,
-// where this was first diagnosed): getDatabase()'s self_hosted-mode guard fires
+// where this was first diagnosed): getDatabase()'s HTTP-API-transport guard fires
 // whenever it is called with NO explicit path AND both HASNA_INSTRUCTIONS_API_URL /
 // HASNA_INSTRUCTIONS_API_KEY are set — it does not consult
 // HASNA_INSTRUCTIONS_DB_PATH at all before deciding to throw (database.ts:109).
 // Setting that env var, as this file previously did on its own, is therefore not
 // isolation: on a box with those two ambient (ordinary fleet state — ambient
 // config for the hosted service), every getDatabase() call in this file threw
-// "instructions is in self_hosted (cloud) mode", 13/13 tests failing standalone
+// "instructions is using the HTTP API transport", 13/13 tests failing standalone
 // and 222/593 fleet-wide under `bun test --isolate` (todos 195272ae, Finding 2).
 // Passing the path ARGUMENT is the documented bypass (database.ts:108, "Pass an
 // explicit path (e.g. tests) to bypass this guard") — do that instead of relying

@@ -1,0 +1,11 @@
+{
+  "name": "@hasna/testers-extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun run build.ts"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268"
+  }
+}

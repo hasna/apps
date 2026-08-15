@@ -2,14 +2,14 @@
  * @hasna/knowledge — HTTP serve surface (knowledge-serve).
  *
  * A real HTTP API wrapping the knowledge core library. PURE REMOTE per
- * Amendment A1: the service reads and writes the shared cloud Postgres directly
+ * Amendment A1: the service reads and writes its PostgreSQL backend directly
  * (no local cache, no sync engine in the service). Requests are authenticated
  * with @hasna/contracts API-key middleware.
  *
  * Surfaces:
- *   GET  /health          liveness — { status, version, mode }         (public)
+ *   GET  /health          liveness — { status, version, backend }      (public)
  *   GET  /ready           readiness — pings the DB                      (public)
- *   GET  /version         { status, version, mode }                    (public)
+ *   GET  /version         { status, version, backend }                 (public)
  *   GET  /openapi.json    OpenAPI 3 document (source for the SDK)       (public)
  *   GET  /v1/registry     knowledge registry contract                  (auth: knowledge:read)
  *   POST /v1/notes        create a knowledge item                      (auth: knowledge:write)
@@ -22,7 +22,10 @@
  */
 import { readFileSync } from 'node:fs';
 import { verifyApiKey, ApiKeyStore, type ApiKeyVerifier, type ApiKeyPrincipal } from '@hasna/contracts/auth';
-import { createKnowledgeCloudClient } from './db/remote-storage.js';
+import { createKnowledgeDatabaseClient } from './db/remote-storage.js';
+export { createKnowledgeDatabaseClient } from './db/remote-storage.js';
+export { PG_MIGRATIONS } from './db/pg-migrations.js';
+export { MigrationLedger, defineMigration } from './generated/storage-kit/migrations.js';
 import { knowledgeRegistryContract } from './registry-contract.js';
 import {
   makeId,
@@ -113,9 +116,9 @@ export const KNOWLEDGE_SERVE_APP = 'knowledge';
  * as `verify-full`. Appends libpq-compat so `require`/`prefer` mean exactly what
  * the kit documents. Never logs the URL. Returns the (possibly) updated value.
  */
-export function normalizeCloudDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
+export function normalizePostgresDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const key = 'HASNA_KNOWLEDGE_DATABASE_URL';
-  const url = env[key] ?? env.KNOWLEDGE_DATABASE_URL;
+  const url = env[key];
   if (!url) return url;
   const lower = url.toLowerCase();
   const needsCompat =
@@ -156,13 +159,13 @@ function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 // ---------------------------------------------------------------------------
-// Note repository — knowledge_items in the cloud Postgres (PURE REMOTE / A1).
+// Note repository — knowledge_items in the server PostgreSQL backend.
 // ---------------------------------------------------------------------------
 
 export interface NoteInput {
   /** Optional caller-supplied stable id (upsert). When present, create is an
    * idempotent upsert on this id — matching the local db.json upsert semantics so
-   * `upsert --id <stable>` and data import/re-sync never duplicate in cloud mode. */
+   * `upsert --id <stable>` and data import/re-sync never duplicate through the server. */
   id?: string;
   title: string;
   content?: string;
@@ -366,7 +369,7 @@ export class NoteRepo {
       }
       // Caller-supplied stable id => idempotent upsert (parity with the local
       // db.json store, where `upsert --id` persists that id so a later get()
-      // re-finds it). Without this, cloud create dropped the id and every
+      // re-finds it). Without this, HTTP create dropped the id and every
       // `upsert --id`/import re-invocation created a duplicate. id is the PK, so
       // ON CONFLICT is safe; short_id is only derived on first insert.
       // The DO UPDATE arm is an UPDATE, so the versioning trigger fires on it
@@ -4062,7 +4065,7 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
       },
     })
   );
-  const mode = 'postgres';
+  const backend = 'postgresql';
 
   const authOrThrow = async (
     req: Request,
@@ -4091,17 +4094,17 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
     try {
       // ---- Public probes ----
       if (path === '/health' && method === 'GET') {
-        return json({ status: 'ok', version: deps.version, mode });
+        return json({ status: 'ok', version: deps.version, backend });
       }
       if (path === '/version' && method === 'GET') {
-        return json({ status: 'ok', version: deps.version, mode });
+        return json({ status: 'ok', version: deps.version, backend });
       }
       if (path === '/ready' && method === 'GET') {
         try {
           await deps.client.query('SELECT 1');
-          return json({ status: 'ready', version: deps.version, mode });
+          return json({ status: 'ready', version: deps.version, backend });
         } catch {
-          return json({ status: 'unavailable', version: deps.version, mode }, 503);
+          return json({ status: 'unavailable', version: deps.version, backend }, 503);
         }
       }
       if (path === '/openapi.json' && method === 'GET') {
@@ -4113,7 +4116,6 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
         await authOrThrow(req, ['knowledge:read']);
         return json(
           knowledgeRegistryContract({
-            mode: 'hosted',
             sourceSchemes: ['open-files', 's3', 'web', 'file'],
             storageType: 's3',
             artifactUriPrefix: process.env.HASNA_KNOWLEDGE_S3_PREFIX ?? null,
@@ -4721,7 +4723,7 @@ export function resolveKnowledgeGuardedAuthority(
 }
 
 /**
- * Start the knowledge HTTP service on Bun. Opens a PURE-REMOTE cloud pool and a
+ * Start the knowledge HTTP service on Bun. Opens the server PostgreSQL pool and a
  * contracts API-key verifier backed by the api_keys table (revocation).
  */
 export async function startKnowledgeServe(options: StartServeOptions = {}): Promise<RunningServe> {
@@ -4730,17 +4732,17 @@ export async function startKnowledgeServe(options: StartServeOptions = {}): Prom
   const hostname = options.hostname ?? env.HOST ?? '0.0.0.0';
   const version = resolveVersion();
 
-  normalizeCloudDatabaseUrl(env);
-  const client = createKnowledgeCloudClient();
+  normalizePostgresDatabaseUrl(env);
+  const client = createKnowledgeDatabaseClient();
   const store = new ApiKeyStore(client);
   // DDL (the api_keys table) is owned by the migration task (run as the DB
   // owner role); the service connects with a DML-only app role per least
   // privilege, so it must NOT attempt CREATE TABLE here. The api_keys schema is
-  // a deploy prerequisite (bun scripts/apply-cloud-migrations.mjs).
+  // a deploy prerequisite (bun scripts/apply-postgres-migrations.mjs).
   const verifier = verifyApiKey({
     app: KNOWLEDGE_SERVE_APP,
     signingSecret: resolveSigningSecret(env),
-    isRevoked: store.isRevoked,
+    keyStatus: store.keyStatus,
     audit: (e) => {
       if (e.outcome === 'deny') {
         // Never log tokens/keys — kid + reason only.
@@ -4764,7 +4766,7 @@ export async function startKnowledgeServe(options: StartServeOptions = {}): Prom
     throw new Error('knowledge-serve requires the Bun runtime (Bun.serve unavailable).');
   }
   const server = BunGlobal.serve({ port, hostname, fetch: handler });
-  console.log(`[knowledge-serve] listening on http://${hostname}:${server.port} (mode=postgres, version=${version})`);
+  console.log(`[knowledge-serve] listening on http://${hostname}:${server.port} (backend=postgresql, version=${version})`);
 
   return {
     port: server.port,

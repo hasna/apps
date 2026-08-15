@@ -432,6 +432,41 @@ describe("MCP server", () => {
       }
     });
 
+    test("hooks_doctor is healthy for a matcher-bearing custom hook wired as event + matcher fields", async () => {
+      backupSettings();
+      try {
+        const hookDir = join(TEST_DATA_DIR, "hooks", "env-dump-guard");
+        mkdirSync(hookDir, { recursive: true });
+        writeFileSync(
+          join(hookDir, "manifest.json"),
+          JSON.stringify({
+            name: "env-dump-guard",
+            version: "1.0.0",
+            events: ["PreToolUse:Bash"],
+            script: "script.ts",
+          }),
+        );
+        writeFileSync(join(hookDir, "script.ts"), `console.log(JSON.stringify({ decision: "approve" }));`);
+        mkdirSync(join(TEST_HOME, ".claude"), { recursive: true });
+        writeFileSync(
+          SETTINGS_PATH,
+          JSON.stringify({
+            hooks: {
+              PreToolUse: [
+                { matcher: "Bash", hooks: [{ type: "command", command: "hooks run env-dump-guard" }] },
+              ],
+            },
+          }),
+        );
+        const data = parseResult(await client.callTool({ name: "hooks_doctor", arguments: {} }));
+        expect(data.healthy).toBe(true);
+        expect(data.healthy_hooks).toContain("env-dump-guard");
+        expect(data.issues).toHaveLength(0);
+      } finally {
+        restoreSettings();
+      }
+    });
+
     // --- hooks_categories ---
 
     test("hooks_categories returns all 5", async () => {

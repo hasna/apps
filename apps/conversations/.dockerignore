@@ -1,0 +1,14 @@
+node_modules
+dashboard
+dist
+bin
+.git
+.github
+.claude
+.codewith
+.takumi
+.scripts
+**/*.test.ts
+*.tgz
+docs
+examples

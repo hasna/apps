@@ -783,11 +783,10 @@ describe("accounts sessions CLI", () => {
       NO_COLOR: "1",
     };
     // The spawned CLI must resolve the sandboxed ACCOUNTS_HOME registry. On a
-    // machine configured for the cloud transport, inheriting these keys points
+    // machine configured for the HTTP transport, inheriting these keys points
     // the child at the real registry with a live API key instead, so they are
-    // dropped from the inherited environment and the mode is pinned local.
+    // dropped from the inherited environment.
     for (const key of REGISTRY_TRANSPORT_ENV_KEYS) delete env[key];
-    env.HASNA_ACCOUNTS_STORAGE_MODE = "local";
     return env;
   }
 
@@ -1097,10 +1096,9 @@ describe("accounts sessions CLI", () => {
     );
     try {
       // A synthetic black-hole endpoint with a dummy key stands in for the
-      // fleet's real cloud registry: if the harness leaked the ambient
+      // fleet's real API registry: if the harness leaked the ambient
       // configuration the child would resolve the HTTP transport and never
       // reach the sandboxed ACCOUNTS_HOME store.
-      process.env.HASNA_ACCOUNTS_STORAGE_MODE = "cloud";
       process.env.HASNA_ACCOUNTS_API_URL = "http://127.0.0.1:9";
       process.env.HASNA_ACCOUNTS_API_KEY = "synthetic-not-a-real-key";
       const result = runCli("sessions", "--json");

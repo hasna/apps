@@ -26,7 +26,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { KnowledgeVersionConflictError } from '../src/cloud-store';
+import { KnowledgeVersionConflictError } from '../src/http-store';
 import { resolveItemStore, type ItemStore } from '../src/item-store';
 
 const CLI = join(import.meta.dir, '..', 'src', 'cli.ts');
@@ -267,19 +267,18 @@ describe('knowledge update --if-version — CLI end to end against a real local 
 });
 
 describe('isolation: --store plus a poisoned cloud environment never reaches the network or the real store', () => {
-  test('an explicit --store wins even under a fully-selected postgres mode pointed at a guard-refused host, and the default local store stays untouched', async () => {
+  test('an explicit --store wins when the API URL points at a guard-refused host, and the default on-box store stays untouched', async () => {
     const home = freshDir('ok-cas-isolation-home-');
     const storePath = join(freshDir('ok-cas-isolation-store-'), 'db.json');
 
     // Simulate the exact ambient-shell hazard the fleet rule warns about: a
-    // fully-selected cloud mode (not just a pointer var) aimed at a
+    // selected HTTP transport aimed at a
     // non-loopback host, which @hasna/knowledge's own net-guard refuses
     // outright under NODE_ENV=test (set automatically by `bun test`, and
     // carried into the child by runCli's env copy) — this is deliberately
     // NOT loopback, so it cannot be mistaken for the hermetic
     // Bun.serve-on-127.0.0.1 pattern this repo's other tests use.
     const poisonedEnv = {
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
       HASNA_KNOWLEDGE_API_URL: 'https://example.invalid',
       HASNA_KNOWLEDGE_API_KEY: 'not-a-real-key',
     };
