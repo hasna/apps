@@ -70,12 +70,15 @@ const UNSAFE_PROVIDER_REQUEST_DEBUG_ENV_KEY_SET = new Set(
  *        cannot drift from what the resolver accepts.
  *
  * DELIBERATELY NOT DENIED: the retired storage-MODE keys. A launched session
- * that inherits a stale `HASNA_ACCOUNTS_STORAGE_MODE` (or alias) must FAIL
- * LOUDLY via `assertNoLegacyStorageMode` rather than silently read a different
- * store — stripping the variable would convert the loud failure into a silent
- * local fallback, which is the split-brain drift the mode vocabulary caused.
- * The usage-hook's local-only path (`resolveLocalStore`) deliberately does not
- * consult the resolver, so it never throws on a stale variable (f70e8357).
+ * that inherits a stale `HASNA_ACCOUNTS_STORAGE_MODE` (or alias) has it
+ * SCRUBBED with an advisory warning by `scrubLegacyStorageMode` at transport
+ * resolution — the package's own legacy fleet drop-in
+ * (`~/.config/environment.d/accounts-cloud.conf`) still exports it, so a hard
+ * throw would crash every CLI invocation on machines carrying the drop-in.
+ * Scrubbing keeps the stale value out of every resolver (no split-brain) and
+ * out of the child environment without ever routing on it. The usage-hook's
+ * local-only path (`resolveLocalStore`) deliberately does not consult the
+ * resolver, so it never warns on a stale variable (f70e8357).
  * Also not denied: PATH, proxy, TLS, Bedrock/Vertex and cloud-SDK environment,
  * which this module's existing policy keeps inside the caller's trust binding.
  */

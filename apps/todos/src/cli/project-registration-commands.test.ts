@@ -44,8 +44,6 @@ async function runCli(
       HOME: join(cwd, "home"),
       TODOS_DB_PATH: dbPath,
       TODOS_AUTO_PROJECT: "false",
-      HASNA_TODOS_STORAGE_MODE: remote ? "http" : "sqlite",
-      TODOS_STORAGE_MODE: remote ? "http" : "sqlite",
       HASNA_TODOS_API_URL: remote?.apiUrl,
       HASNA_TODOS_API_KEY: remote?.apiKey,
     }),

@@ -8,8 +8,8 @@
 // `HASNA_ACCOUNTS_API_KEY` are set (and `ACCOUNTS_HOME` is not overridden),
 // every registry read/write routes to the API ApiStore. Deployment modes no
 // longer exist: an unset pair defaults to local, and any retired
-// storage-mode variable throws via `assertNoLegacyStorageMode` before any
-// store is selected.
+// storage-mode variable is scrubbed with an advisory warning via
+// `scrubLegacyStorageMode` before any store is selected.
 //
 // SCOPE: the Store owns the shared registry — profiles, their metadata, and the
 // per-tool "current" selection. Genuinely machine-local state (a profile's
@@ -557,7 +557,7 @@ class HookLocalStore extends LocalStore {
  * The on-box profile view for the usage-hook, ALWAYS local, never the HTTP
  * API — and never a throw over retired storage-mode configuration.
  * `resolveStore()` consults the transport resolver (and, through it,
- * `assertNoLegacyStorageMode`), which is correct for operator commands but
+ * `scrubLegacyStorageMode`), which is correct for operator commands but
  * wrong for a caller that only ever touches local-machine state and must not
  * fail when the API variables are absent or stale.
  *

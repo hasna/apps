@@ -14,8 +14,8 @@ import { join } from "node:path";
  * THE CAUSE IS A MISSING ELSE-BRANCH ON ONE PATH. `todos add` has two branches.
  * The local one (task-commands.ts) falls back to `autoProject(globalOpts)` when
  * `--project` is absent; the CLOUD one had a bare ternary that fell to
- * `undefined`. The fleet runs cloud — HASNA_TODOS_API_URL / _API_KEY /
- * _STORAGE_MODE are all set on every station — so every fleet create took the
+ * `undefined`. The fleet runs cloud — HASNA_TODOS_API_URL + HASNA_TODOS_API_KEY
+ * are set on every station — so every fleet create took the
  * branch with no fallback and silently stored NULL. The `--project` flag's own
  * help text says "overrides auto-detect"; on the cloud path there was no
  * auto-detect to override.
@@ -108,7 +108,6 @@ async function runCli(args: string[], root: string, baseUrl: string, extraEnv: R
       LANG: "C.UTF-8",
       TODOS_DB_PATH: join(root, "todos.db"),
       TODOS_AUTO_PROJECT: "false",
-      HASNA_TODOS_STORAGE_MODE: "self_hosted",
       HASNA_TODOS_API_URL: baseUrl,
       HASNA_TODOS_API_KEY: TEST_API_KEY,
       // Pinned so the pre-existing ownerless warning cannot fire and be mistaken

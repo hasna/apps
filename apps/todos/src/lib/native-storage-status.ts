@@ -2,10 +2,10 @@ import {
   TODOS_STORAGE_ENV,
   assertTodosRemoteStorageConfig,
   getCanonicalTodosRdsConfig,
+  getTodosStorageBackend,
   getTodosStorageEnvName,
   isTodosPostgresBackend,
   loadTodosStorageConfig,
-  parseStorageBackend,
   postgresTodosSyncSchemaSql,
 } from "../storage/index.js";
 import type { CanonicalTodosRdsConfig, TodosStorageBackend, TodosStorageConfig, TodosStorageEnv } from "../storage/index.js";
@@ -94,7 +94,7 @@ export function getNativeStorageStatus(env: TodosStorageEnv = process.env): Nati
   const remoteEnabled = isTodosPostgresBackend(config);
   const remoteFieldsConfigured = Boolean(config.database || config.objectStorage);
   if (!remoteEnabled && remoteFieldsConfigured) {
-    warnings.push(`the sqlite backend (${TODOS_STORAGE_ENV.mode}) ignores configured remote storage fields`);
+    warnings.push(`the sqlite backend ignores configured remote storage fields`);
   }
   if (remoteEnabled && !config.objectStorage) {
     warnings.push(`${TODOS_STORAGE_ENV.s3Bucket} is not configured, so artifact sync will stay local`);
@@ -195,7 +195,7 @@ function storageEnvStatus(env: TodosStorageEnv): Record<keyof typeof TODOS_STORA
 function fallbackConfig(env: TodosStorageEnv): TodosStorageConfig {
   let mode: TodosStorageBackend;
   try {
-    mode = parseStorageBackend(clean(env[TODOS_STORAGE_ENV.mode]));
+    mode = getTodosStorageBackend(env);
   } catch {
     mode = "sqlite";
   }

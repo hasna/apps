@@ -64,10 +64,21 @@ export const SHARED_TODOS_STORE_ENV_KEYS = [
  * coverage assertion.
  */
 export const LOCAL_ONLY_TODOS_ENV_KEYS = [
-  "HASNA_TODOS_STORAGE_MODE",
-  "TODOS_STORAGE_MODE",
   "HASNA_TODOS_DB_PATH",
   "TODOS_DB_PATH",
+] as const;
+
+/**
+ * The retired storage-mode variables (owner directive 2026-08-15). They are
+ * banned: if any is present the resolver THROWS, so a test env must DELETE them,
+ * never blank them — a blank leftover is still a stale fragment. They are listed
+ * here so the scrub-coverage assertion treats them as handled.
+ */
+export const REMOVED_TODOS_ENV_KEYS = [
+  "HASNA_TODOS_STORAGE_MODE",
+  "HASNA_TODOS_MODE",
+  "TODOS_STORAGE_MODE",
+  "TODOS_MODE",
 ] as const;
 
 export type SharedTodosStoreEnvKey = (typeof SHARED_TODOS_STORE_ENV_KEYS)[number];
@@ -75,19 +86,20 @@ export type SharedTodosStoreEnvKey = (typeof SHARED_TODOS_STORE_ENV_KEYS)[number
 export type TodosTestEnv = Record<string, string | undefined>;
 
 /**
- * `process.env` with every shared-store pointer blanked and storage pinned to a local
- * SQLite file. Overrides are applied last, so a test that deliberately exercises the
+ * `process.env` with every shared-store pointer blanked and the retired
+ * storage-mode variables deleted, so the transport resolves to a local SQLite
+ * file. Overrides are applied last, so a test that deliberately exercises the
  * hosted transport against a throwaway server can still opt back in explicitly.
  *
- * Blank string, not `delete`: `resolveTodosCliStorageMode` treats a blank
- * `*_STORAGE_MODE` as invalid and throws rather than silently falling back, so a
- * half-configured child fails loudly instead of guessing.
+ * Blank string, not `delete`, for the shared-store pointers: a blanked URL/key
+ * is treated as absent, and there is no partial-config fallback. The retired
+ * `*_STORAGE_MODE` variables are DELETED, not blanked, because their mere
+ * presence is a hard error.
  */
 export function localTodosTestEnv(overrides: TodosTestEnv = {}): TodosTestEnv {
   const env: TodosTestEnv = { ...process.env };
   for (const key of SHARED_TODOS_STORE_ENV_KEYS) env[key] = "";
-  env["HASNA_TODOS_STORAGE_MODE"] = "local";
-  env["TODOS_STORAGE_MODE"] = "local";
+  for (const key of REMOVED_TODOS_ENV_KEYS) delete env[key];
   return { ...env, ...overrides };
 }
 
@@ -103,8 +115,7 @@ export function applyLocalTodosTestEnv(overrides: TodosTestEnv = {}): () => void
   const next = localTodosTestEnv(overrides);
   const touched = [
     ...SHARED_TODOS_STORE_ENV_KEYS,
-    "HASNA_TODOS_STORAGE_MODE",
-    "TODOS_STORAGE_MODE",
+    ...REMOVED_TODOS_ENV_KEYS,
     ...Object.keys(overrides),
   ];
   const previous = new Map<string, string | undefined>();

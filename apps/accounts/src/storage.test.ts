@@ -107,22 +107,25 @@ test("the legacy storage command group is a fail-explicit compatibility shim", (
 });
 
 // Deployment modes no longer exist (owner directive 2026-07-29; knowledge
-// k_ms5wv466_u0jidq): any retired storage-mode variable — whatever its value —
-// fails loud, naming the variable, instead of steering the transport.
+// k_ms5wv466_u0jidq): a retired storage-mode variable — whatever its value —
+// is scrubbed with an advisory warning instead of crashing the CLI (the fleet
+// accounts-cloud environment.d drop-in still exports one) and instead of
+// steering the transport.
 for (const legacy of ["remote", "hybrid", "s3", "cloud", "self_hosted", "local", "typo"]) {
-  test(`retired HASNA_ACCOUNTS_STORAGE_MODE=${legacy} fails loud on registry commands`, () => {
+  test(`retired HASNA_ACCOUNTS_STORAGE_MODE=${legacy} is ignored with a warning on registry commands`, () => {
     const result = runCli(
       { HASNA_ACCOUNTS_STORAGE_MODE: legacy, ACCOUNTS_STORAGE_MODE: legacy },
       "list",
       "--json",
     );
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("HASNA_ACCOUNTS_STORAGE_MODE was removed");
-    expect(existsSync(storePath())).toBe(false);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("HASNA_ACCOUNTS_STORAGE_MODE is retired and was ignored");
+    expect(result.stderr).not.toContain("was removed");
+    expect(JSON.parse(result.stdout)).toEqual([]);
   });
 }
 
-test("a retired mode variable fails loud even when the API pair is present", () => {
+test("a retired mode variable is ignored with a warning even when the API pair is present", () => {
   const result = runCli(
     {
       HASNA_ACCOUNTS_STORAGE_MODE: "cloud",
@@ -132,7 +135,9 @@ test("a retired mode variable fails loud even when the API pair is present", () 
     "list",
     "--json",
   );
-  expect(result.status).not.toBe(0);
-  expect(result.stderr).toContain("HASNA_ACCOUNTS_STORAGE_MODE was removed");
-  expect(existsSync(storePath())).toBe(false);
+  // The mode variable must not crash the CLI before transport selection and
+  // must not be reported as "removed"; the API transport then fails on the
+  // unreachable fixture URL, which is a transport error, not a mode error.
+  expect(result.stderr).toContain("HASNA_ACCOUNTS_STORAGE_MODE is retired and was ignored");
+  expect(result.stderr).not.toContain("was removed");
 });

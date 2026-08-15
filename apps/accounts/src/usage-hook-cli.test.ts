@@ -72,7 +72,7 @@ test("f70e8357: a launched, registry-stripped session (stale mode vars, no API u
   // the hook threw and the session got "auto-switching is NOT running". The
   // hook must now reach its brain from local state (its resolver is the
   // local-only `resolveLocalStore`, which deliberately never consults
-  // `assertNoLegacyStorageMode`) and NOT emit that fail-open notice.
+  // `scrubLegacyStorageMode`) and NOT emit that fail-open notice.
   const result = runHook({
     HASNA_ACCOUNTS_MODE: "cloud",
     HASNA_ACCOUNTS_STORAGE_MODE: "cloud",

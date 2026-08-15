@@ -20,10 +20,14 @@ time.
 
 | Env var | Meaning |
 | --- | --- |
-| `HASNA_TODOS_STORAGE_MODE` | `local` (default) \| `remote` \| `hybrid` |
-| `HASNA_TODOS_SHADOW` | `1` enables the dual-write shadow mirror (requires `MODE=local` + a DSN) |
-| `HASNA_TODOS_DATABASE_URL` | Postgres DSN for the shared store (from Secrets Manager) |
+| `HASNA_TODOS_API_URL` + `HASNA_TODOS_API_KEY` | selects the authenticated HTTP `/v1` authority (client) |
+| `HASNA_TODOS_SHADOW` | `1` enables the dual-write shadow mirror (requires a DSN; SQLite stays the source of truth) |
+| `HASNA_TODOS_DATABASE_URL` | Postgres DSN for the shared store (from Secrets Manager); its presence selects the postgresql backend |
 | `HASNA_TODOS_DATABASE_SSL` | boolean, defaults to `true` |
+
+> The storage-mode variables (`HASNA_TODOS_STORAGE_MODE`, `TODOS_STORAGE_MODE`,
+> `HASNA_TODOS_MODE`, `TODOS_MODE`) are RETIRED (owner directive 2026-08-15):
+> their mere presence is a hard error. Delete them from every machine.
 
 Local-development fallbacks without the `HASNA_` prefix are accepted
 (`TODOS_SHADOW`, `TODOS_DATABASE_URL`, ...).
@@ -75,7 +79,6 @@ fire-and-forget to the cloud with bounded retries and a divergence counter. It
 never reads from the cloud. Enable it per machine:
 
 ```
-HASNA_TODOS_STORAGE_MODE=local
 HASNA_TODOS_SHADOW=1
 HASNA_TODOS_DATABASE_URL=<DSN from the approved deployment secret>
 ```
@@ -128,7 +131,6 @@ Perform this as one coordinated operation across every fleet machine.
    machine:
 
    ```
-   HASNA_TODOS_STORAGE_MODE=remote
    HASNA_TODOS_DATABASE_URL=<DSN>
    # remove HASNA_TODOS_SHADOW (shadow is only valid in local mode)
    ```
@@ -138,7 +140,7 @@ Perform this as one coordinated operation across every fleet machine.
 5. **Back up local SQLite.** Rename each machine's local DB to a dated backup
    (e.g. `todos.sqlite.pre-cutover-YYYYMMDD`). Do not delete it.
 6. **Unfreeze.** Restart writers. All machines now read and write the shared
-   store; `todos storage status` shows `Mode: remote`, `Remote: enabled`.
+   store; `todos storage status` shows `Mode: postgres`, `Remote: enabled`.
 7. **Validate co-drain.** Confirm two machines can claim disjoint tasks from the
    shared queue without double-claim (claim-safety is enforced by the shared
    `route_state`/optimistic locking now that the store is shared).
@@ -154,7 +156,7 @@ Rollback is a flip back, accepting that rows written to the cloud during the
 3. Flip env back on all machines via config-sync:
 
    ```
-   HASNA_TODOS_STORAGE_MODE=local
+   # remove HASNA_TODOS_DATABASE_URL to restore the sqlite backend
    # optionally re-enable HASNA_TODOS_SHADOW=1 to resume mirroring
    ```
 

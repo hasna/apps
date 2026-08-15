@@ -32,7 +32,6 @@ import {
  * with no round trip — so the diagnosis can only ever attach to a short reference.
  */
 const CLOUD_ENV = {
-  HASNA_TODOS_STORAGE_MODE: "self_hosted",
   HASNA_TODOS_API_URL: "https://todos.example.com",
   HASNA_TODOS_API_KEY: "hasna_todos_test_key",
 };

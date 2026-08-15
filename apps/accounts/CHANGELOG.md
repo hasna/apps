@@ -6,6 +6,17 @@ All notable changes to `@hasna/accounts` are documented here. The format is base
 
 ## [Unreleased]
 
+### Fixed
+
+- **Legacy storage-mode variables no longer crash the CLI (todos f2612151).**
+  A retired `HASNA_ACCOUNTS_STORAGE_MODE` / `*_MODE` variable is now scrubbed
+  from the environment with an advisory warning instead of a hard throw. The
+  legacy fleet `environment.d` drop-in (`accounts-cloud.conf`) still exports
+  `HASNA_ACCOUNTS_STORAGE_MODE=cloud`, so the fail-loud guard made every
+  `accounts` invocation crash on machines carrying the drop-in. The value
+  never routes the transport (mode vocabulary stays removed) and is deleted
+  from `process.env` before any resolver reads it.
+
 ## [0.2.44] - 2026-08-15
 
 ## [0.2.43] - 2026-08-10

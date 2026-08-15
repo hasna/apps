@@ -77,7 +77,6 @@ describe("local-only commands with hosted routing configured", () => {
       LANG: "C.UTF-8",
       TODOS_DB_PATH: ":memory:",
       TODOS_AUTO_PROJECT: "false",
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "[REDACTED_SECRET]",
     };
