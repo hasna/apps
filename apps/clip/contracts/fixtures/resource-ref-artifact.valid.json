@@ -1,0 +1,11 @@
+{
+  "schema": "hasna.resource_ref.v1",
+  "id": "clip_artifact_fixture_screenshot",
+  "createdAt": "2026-07-05T20:30:31.400Z",
+  "kind": "artifact",
+  "name": "Focused window screenshot artifact",
+  "uri": "artifact://@hasna/clip/clips/fixture-screenshot",
+  "externalId": "fixture-screenshot",
+  "sourcePackage": "@hasna/clip",
+  "tags": ["clip", "screenshot", "artifact"]
+}

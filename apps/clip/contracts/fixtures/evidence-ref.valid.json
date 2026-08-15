@@ -1,0 +1,40 @@
+{
+  "schema": "hasna.evidence_ref.v1",
+  "id": "clip_evidence_fixture_screenshot",
+  "createdAt": "2026-07-05T20:30:31.400Z",
+  "kind": "screenshot",
+  "uri": "artifact://@hasna/clip/clips/fixture-screenshot",
+  "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "summary": "Focused window screenshot",
+  "contentType": "image/png",
+  "sizeBytes": 19,
+  "redaction": "unknown",
+  "resourceRefs": [
+    {
+      "kind": "artifact",
+      "id": "clip_artifact_fixture_screenshot",
+      "name": "Focused window screenshot artifact",
+      "uri": "artifact://@hasna/clip/clips/fixture-screenshot",
+      "externalId": "fixture-screenshot",
+      "sourcePackage": "@hasna/clip",
+      "tags": ["clip", "screenshot", "artifact"]
+    },
+    {
+      "kind": "url",
+      "id": "clip_share_url_fixture_screenshot",
+      "name": "Focused window screenshot share URL",
+      "uri": "http://127.0.0.1:3741/s/fixture-screenshot",
+      "externalId": "fixture-screenshot",
+      "sourcePackage": "@hasna/clip",
+      "tags": ["clip", "screenshot", "share-url"]
+    }
+  ],
+  "tags": ["clip", "screenshot", "evidence"],
+  "metadata": {
+    "slug": "fixture-screenshot",
+    "source": "capture:test",
+    "clipKind": "screenshot",
+    "hasLocalArtifact": true,
+    "hasShareUrl": true
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "clip",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.5",
+  "description": "Local and self-hosted screenshot and clipboard sharing with CLI, SDK, MCP, HTTP API, and a macOS menu bar app",
+  "bins": [
+    "clip",
+    "clip-mcp",
+    "clip-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "storage": {
+    "mode": "sqlite",
+    "envPrefix": "HASNA_CLIP_",
+    "aliasEnvPrefix": "CLIP_",
+    "sqlitePath": "~/.hasna/clip/clip.db"
+  },
+  "serviceSurfaces": [
+    {
+      "name": "clip-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "clip",
+      "authMode": "local-only"
+    },
+    {
+      "name": "clip-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "clip-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "clip-api",
+      "kind": "api",
+      "status": "deferred",
+      "authMode": "api-key",
+      "deferReason": "clip-serve exposes GET /health and the /api/* share endpoints, but the contract's GET /ready, GET /version and published OpenAPI document are not implemented yet."
+    },
+    {
+      "name": "clip-sdk",
+      "kind": "sdk",
+      "status": "deferred",
+      "authMode": "none",
+      "deferReason": "The package exports a hand-written TypeScript SDK; the contract's OpenAPI-generated service client is not implemented yet."
+    }
+  ],
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "artifact-scan"
+      }
+    }
+  }
+}

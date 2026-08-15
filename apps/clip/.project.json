@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "wks_4db29oqg0ygh",
+  "slug": "open-clip",
+  "name": "Open Clip",
+  "kind": "open-source",
+  "root_id": null,
+  "recipe_id": null,
+  "primary_path": "/home/hasna/workspace/hasna/opensource/open-clip",
+  "git_remote": null,
+  "tags": [],
+  "integrations": {},
+  "generated_at": "2026-07-02T13:24:46.651Z"
+}
