@@ -111,7 +111,7 @@ export function buildProjectMachineAssignmentPlan(
   if (!force) {
     for (const item of projects) {
       const machine = item.project.canonical_machine;
-      if (!machine) continue;
+      if (!machine || !stateByMachine.has(machine)) continue;
       assignmentById.set(item.project.id, {
         project_id: item.project.id,
         slug: item.project.slug,
@@ -125,7 +125,7 @@ export function buildProjectMachineAssignmentPlan(
   }
 
   const assignable = projects
-    .filter((item) => force || !item.project.canonical_machine)
+    .filter((item) => force || !item.project.canonical_machine || !stateByMachine.has(item.project.canonical_machine))
     .sort((a, b) => (
       b.activity.activity_weight - a.activity.activity_weight
       || a.project.slug.localeCompare(b.project.slug)

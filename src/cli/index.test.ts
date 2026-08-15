@@ -1386,9 +1386,12 @@ describe("project-first CLI surface", () => {
       });
       expect(plan.assignments.find((item) => item.slug === "machine-fixture-1")).toMatchObject({
         previous_machine: "spark02",
-        canonical_machine: "spark02",
-        pinned: true,
+        pinned: false,
+        changed: true,
       });
+      const fixture1 = plan.assignments.find((item) => item.slug === "machine-fixture-1");
+      expect(fixture1).toBeDefined();
+      expect(["machine001", "machine002", "machine003"]).toContain(fixture1!.canonical_machine);
       expect(plan.assignments.find((item) => item.slug === "machine-fixture-8")?.activity).toMatchObject({
         run_count: 1,
         last_opened_at: "2026-07-29 12:00:00",
@@ -1408,8 +1411,8 @@ describe("project-first CLI surface", () => {
       const rows = afterApply.query("SELECT slug, canonical_machine FROM workspaces ORDER BY slug").all() as Array<{ slug: string; canonical_machine: string | null }>;
       afterApply.close();
       expect(rows.find((row) => row.slug === "machine-fixture-0")?.canonical_machine).toBe("machine001");
-      expect(rows.find((row) => row.slug === "machine-fixture-1")?.canonical_machine).toBe("spark02");
-      expect(rows.filter((row) => row.slug !== "machine-fixture-1").every((row) => ["machine001", "machine002", "machine003"].includes(row.canonical_machine ?? ""))).toBe(true);
+      expect(rows.find((row) => row.slug === "machine-fixture-1")?.canonical_machine).not.toBe("spark02");
+      expect(rows.every((row) => ["machine001", "machine002", "machine003"].includes(row.canonical_machine ?? ""))).toBe(true);
       const appliedCounts = ["machine001", "machine002", "machine003"].map((machine) => rows.filter((row) => row.canonical_machine === machine).length);
       expect(Math.max(...appliedCounts) - Math.min(...appliedCounts)).toBeLessThanOrEqual(1);
     } finally {

@@ -1879,7 +1879,7 @@ function registerProjectCommands(program: Command): void {
     .description("Balance active projects across canonical machines using recent activity")
     .option("--pool <csv>", "Comma-separated canonical machine pool", DEFAULT_CANONICAL_MACHINE_POOL.join(","))
     .option("--dry-run", "Print the proposed assignment map without writing")
-    .option("--force", "Allow existing canonical machine assignments to be replaced")
+    .option("--force", "Also rebalance projects already assigned inside the pool")
     .option("-j, --json", "Output JSON")
     .action(async (opts) => {
       try {
