@@ -70,7 +70,6 @@ const KNOWN_NPM_DRIFT = new Map([
   ["@hasna/emails", { registryVersion: "1.3.15", mainVersion: "1.3.14", source: "release lane published 1.3.15 ahead of main (2026-08-14T11:48:46Z); reconcile task 78c66e3c-baba-4ba6-9295-99b4df7ebc25" }],
   ["@hasna/contracts", { registryVersion: "0.10.6", mainVersion: "0.11.0", source: "import #81 landed contracts 0.11.0 ahead of the registry; reconcile task 48a6ef7f-0919-470d-99f4-59817a01c647" }],
   ["@hasna/secrets", { registryVersion: "0.3.0", mainVersion: "0.2.22", source: "release lane published 0.3.0 ahead of main (2026-08-14); reconcile task 3ab02291-58b0-40c7-b96f-958ee1ef4a61" }],
-  ["@hasna/uptime", { registryVersion: "0.1.69", mainVersion: "0.1.70", source: "import #157 landed uptime 0.1.70 (carried from frozen old main) ahead of the registry — no 0.1.7x ever published; reconcile task c6e5bf9d-c400-4891-b816-d688f6591326" }],
 ]);
 
 describe("hasna/apps versioning integrity", () => {
