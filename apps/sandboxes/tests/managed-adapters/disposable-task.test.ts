@@ -556,7 +556,7 @@ describe("provider-neutral disposable task surface", () => {
       { authority_epoch: "0" },
       { lease_epoch: "9223372036854775808" },
       { run_id: "A".repeat(49) },
-      { signer_ref: "sk-secret-shaped" },
+      { signer_ref: "sk-placeholder" },
       { signature: "A".repeat(85) },
     ]) {
       const authority = new Authority()
