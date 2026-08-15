@@ -367,6 +367,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos 5698b7d3 (contracts task — draw)",
   },
   {
+    member: "economy",
+    cause: "manifest_valid: manifest (imported by #147) declares bin economy-otel, which is not in ALLOWED_BIN_SUFFIXES; npm @hasna/economy 0.3.9 ships the bin (faithful import), so the exception is recorded until the allowlist or the bin is reconciled.",
+    task: "todos 2a70ece0-d4af-4aae-bea8-4dff128a38ca (contracts task — economy)",
+  },
+  {
     member: "emails",
     cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. (The earlier no_cloud_guard cause no longer fires at main.)",
     task: "todos e0ef3e32 (contracts task — emails)",
