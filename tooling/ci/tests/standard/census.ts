@@ -149,6 +149,7 @@ export const LICENSE_EXCEPTIONS: Array<{ member: string; license: string; reason
 
 /** Four-surface WARN exceptions — members missing the <name>-mcp bin. */
 export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
+  { member: "cli", reason: "Unified dispatcher (bin hasna); no per-app MCP surface. Surfaces land with the unified CLI program (todos 846a3305)." },
   { member: "automations", reason: "Daemon-shaped member (automations-daemon); no MCP surface declared." },
   { member: "contracts", reason: "Library-shaped (manifest validator kit); ships `contracts` + `contracts-cli` bins only." },
   { member: "docs", reason: "Docs/instruction renderer; library-shaped, no MCP surface." },
@@ -170,6 +171,7 @@ export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
 export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "actions", reason: "Library-shaped (action contracts); no server surface." },
   { member: "announce", reason: "CLI-only member; no server surface." },
+  { member: "cli", reason: "Unified dispatcher (bin hasna); no serve surface. Surfaces land with the unified CLI program (todos 846a3305)." },
   { member: "automations", reason: "Daemon-shaped (automations-daemon); no HTTP serve bin." },
   { member: "banking", reason: "Client-shaped (bank data access); no server surface." },
   { member: "bridge", reason: "Client-shaped (bridge to other tools); no server surface." },
@@ -214,6 +216,7 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "bridge", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "catalog", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "changelog", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
+  { member: "cli", reason: "Unified dispatcher (bin hasna); no ./sdk export. Surfaces land with the unified CLI program (todos 846a3305)." },
   { member: "computer", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "consolidations", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "context", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -245,7 +248,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "servers", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "sheets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "signatures", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "skills", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "slides", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "snapshots", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "statusline", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -269,6 +271,11 @@ export const CLI_EXCEPTIONS: Array<{ member: string; reason: string; task: strin
     task: "todos 452b7a32 (router missing CLI bin)",
   },
   {
+    member: "cli",
+    reason: "Unified dispatcher ships bin `hasna` (owner ruling 2026-08-13); no `cli` bin by design. Surfaces land with the unified CLI program.",
+    task: "todos 846a3305 (unified CLI program)",
+  },
+  {
     member: "slides",
     reason: "Library-shaped member; no public `slides` CLI bin. Remediation task filed.",
     task: "todos 62ec9dbc (slides missing CLI bin)",
@@ -285,6 +292,7 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "brains", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "browser", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "changelog", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
+  { member: "cli", reason: "No hasna.contract.json; unified dispatcher (bin hasna) predates the manifest; imported by #168; manifest lane (todos 41208cbe)." },
   { member: "computer", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "computers", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "context", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
@@ -362,6 +370,21 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "gateway",
     cause: "kitVersion 0.4.1 predates the manifest shape (deploymentModes/serviceSurfaces); validates clean at 0.5.2. kitVersion claim is stale; pinned dep 0.2.2 lacks repo-conformance.",
     task: "todos 9dc0ee28 (contracts task — gateway)",
+  },
+  {
+    member: "telephony",
+    cause: "fail server_backend_configuration: HASNA_TELEPHONY_STORAGE_MODE was removed. Delete the storage-mode variable; set HASNA_TELEPHONY_DATABASE_URL to select the postgresql server backend, or leave it unset for sqlite. Pre-existing at main (measured 2026-08-15, pristine origin/main).",
+    task: "todos a5ed4c94 (standard-adherence drift)",
+  },
+  {
+    member: "loops",
+    cause: "fail credential_seam_compliance: src/lib/cloud/storage.ts + transport.ts vendored copies of the @hasna/contracts client seam (resolveStorageClient/resolveClientTransport/createHasnaHttpTransport/createClientTransport); import from @hasna/contracts/client instead. Pre-existing at main (measured 2026-08-15, pristine origin/main).",
+    task: "todos a5ed4c94 (standard-adherence drift)",
+  },
+  {
+    member: "machines",
+    cause: "fail server_backend_configuration: HASNA_MACHINES_STORAGE_MODE was removed. Delete the storage-mode variable; set HASNA_MACHINES_DATABASE_URL to select the postgresql server backend, or leave it unset for sqlite. Pre-existing at main (measured 2026-08-15, pristine origin/main).",
+    task: "todos a5ed4c94 (standard-adherence drift)",
   },
   {
     member: "hooks",
