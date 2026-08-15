@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { getDb } from "./index.js";
 import { PG_MIGRATIONS } from "./pg-migrations.js";
 import { PgAdapterAsync } from "./remote-storage.js";
+import { redactEventPayload } from "../lib/redact.js";
 
 export const STORAGE_TABLES = [
   "hook_events",
@@ -280,8 +281,18 @@ async function pullTable(remote: PgAdapterAsync, db: Database, table: StorageTab
     const rows = await remote.all(`SELECT * FROM ${quoteIdent(table)}`) as Row[];
     result.rowsRead = rows.length;
     if (rows.length === 0) return result;
-    const columns = filterLocalColumns(db, table, Object.keys(rows[0]!));
-    result.rowsWritten = upsertSqlite(db, table, columns, rows);
+    // P1-3: rows pushed by older versions may hold unredacted
+    // tool_input/error/metadata; project them before local persistence.
+    const projected = table === "hook_events"
+      ? rows.map((row) => ({
+          ...row,
+          tool_input: typeof row.tool_input === "string" ? redactEventPayload(row.tool_input) : row.tool_input,
+          error: typeof row.error === "string" ? redactEventPayload(row.error) : row.error,
+          metadata: typeof row.metadata === "string" ? redactEventPayload(row.metadata) : row.metadata,
+        }))
+      : rows;
+    const columns = filterLocalColumns(db, table, Object.keys(projected[0]!));
+    result.rowsWritten = upsertSqlite(db, table, columns, projected);
   } catch (error) {
     result.errors.push(error instanceof Error ? error.message : String(error));
   }
