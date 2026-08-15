@@ -307,7 +307,7 @@ metadata in JSON/MCP responses. CLI/MCP creation supports actor provenance
 (`actorType`, `actorName`) and machine attribution (`targetMachine`, plus a
 friendly display name). Machine details are available through `personalnotes machines
 list`, `personalnotes machines details <id>`, and MCP `machines_list` /
-`machines_details`; details combine open-machines fields with notes-derived
+`machines_details`; details combine machines fields with notes-derived
 fallback counts and activity timestamps.
 Markdown helpers are available in MCP as `markdown_commands`, `markdown_render`,
 `markdown_plain_text`, and `markdown_apply_command`.
