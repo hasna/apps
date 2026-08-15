@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from "bun:test";
+import { describe, it, expect, beforeEach, afterAll, afterEach } from "bun:test";
 import { getDb, closeDb } from "./database";
 import {
   listRepos,
@@ -22,6 +22,7 @@ import {
   searchAll,
   getRepoStats,
   getGlobalStats,
+  setRepoLookupPathStateForTests,
 } from "./repos";
 
 // Use in-memory DB for tests
@@ -88,6 +89,18 @@ describe("repos", () => {
   // match — and it reproduced identically on 5 of 5 packages tested live on
   // station01, on @hasna/repos 0.1.38 and still on 0.1.39.
   describe("factory scratch clones never win a bare-name lookup", () => {
+    beforeEach(() => {
+      // The seeded checkouts live at synthetic /home/u/ paths that do not
+      // exist on the test runner. Declare them present so the canonical-remote
+      // fallback (todos 0251863c) sees a live checkout and keeps the refusal
+      // these tests assert.
+      setRepoLookupPathStateForTests((path) =>
+        path.startsWith("/home/u/") ? "present" : "missing",
+      );
+    });
+
+    afterEach(() => setRepoLookupPathStateForTests(null));
+
     it("refuses a bare name whose only exact match is a factory scratch clone, even though the canonical checkout is indexed under a different name", () => {
       upsertRepo({
         path: "/home/u/workspace/hasna/opensource/open-loops",
@@ -182,6 +195,149 @@ describe("repos", () => {
       });
 
       expect(getRepo("shared-three-row")?.id).toBe(canonical.id);
+    });
+  });
+
+  // Regression for todos 0251863c: `repos repo bench --json` and
+  // `repos repo sandboxes --json` answered "Repo not found" and suggested the
+  // dead pre-migration paths (`open-bench`, `iapp-sandboxes`). The 2026
+  // monorepo migration renamed and moved those checkouts, so the canonical
+  // name matches no registry row; the lookup must still bind the name to the
+  // canonical remote identity (`github.com/hasna/bench`) when every row for
+  // that remote has a missing path, instead of failing with a dead suggestion.
+  describe("pre-migration rows resolve by canonical remote", () => {
+    beforeEach(() => {
+      setRepoLookupPathStateForTests(() => "missing");
+    });
+
+    afterEach(() => setRepoLookupPathStateForTests(null));
+
+    it("resolves a bare name to the canonical remote when the only row is a dead pre-migration row", () => {
+      upsertRepo({
+        path: "/home/u/workspace/hasna/opensource/open-bench",
+        name: "open-bench",
+        org: "hasna",
+        remote_url: "github.com/hasna/bench",
+      });
+
+      const repo = getRepo("bench");
+      expect(repo).toBeTruthy();
+      expect(repo!.remote_url).toBe("github.com/hasna/bench");
+      expect(repo!.name).toBe("open-bench");
+      expect(repo!.path).toBe("/home/u/workspace/hasna/opensource/open-bench");
+    });
+
+    it("resolves a qualified org/name form the same way", () => {
+      upsertRepo({
+        path: "/home/u/workspace/hasna/opensource/open-bench",
+        name: "open-bench",
+        org: "hasna",
+        remote_url: "github.com/hasna/bench",
+      });
+
+      const repo = getRepo("hasna/bench");
+      expect(repo).toBeTruthy();
+      expect(repo!.remote_url).toBe("github.com/hasna/bench");
+    });
+
+    it("picks the identity-clean row deterministically when two dead rows share the canonical remote", () => {
+      upsertRepo({
+        path: "/home/u/workspace/hasnaxyz/internalapp/iapp-sandboxes",
+        name: "iapp-sandboxes",
+        org: "hasna",
+        remote_url: "github.com/hasna/sandboxes",
+      });
+      upsertRepo({
+        path: "/home/u/workspace/hasna/opensource/open-sandboxes",
+        name: "open-sandboxes",
+        org: "hasna",
+        remote_url: "github.com/hasna/sandboxes",
+      });
+
+      const repo = getRepo("sandboxes");
+      expect(repo).toBeTruthy();
+      expect(repo!.remote_url).toBe("github.com/hasna/sandboxes");
+      expect(repo!.name).toBe("open-sandboxes");
+    });
+
+    it("qualified org/name selects the canonical-named row, not the earliest, among two dead identity-clean rows", () => {
+      upsertRepo({
+        path: "/home/u/workspace/hasna/other-bench",
+        name: "other-bench",
+        org: "hasna",
+        remote_url: "github.com/hasna/bench",
+      });
+      const canonical = upsertRepo({
+        path: "/home/u/workspace/hasna/opensource/open-bench",
+        name: "open-bench",
+        org: "hasna",
+        remote_url: "github.com/hasna/bench",
+      });
+
+      const repo = getRepo("hasna/bench");
+      expect(repo).toBeTruthy();
+      expect(repo!.id).toBe(canonical.id);
+      expect(repo!.name).toBe("open-bench");
+      expect(repo!.remote_url).toBe("github.com/hasna/bench");
+    });
+
+    it("bare name selects the canonical-named row, not the earliest, among two dead identity-clean rows", () => {
+      upsertRepo({
+        path: "/home/u/workspace/hasna/other-bench",
+        name: "other-bench",
+        org: "hasna",
+        remote_url: "github.com/hasna/bench",
+      });
+      const canonical = upsertRepo({
+        path: "/home/u/workspace/hasna/opensource/open-bench",
+        name: "open-bench",
+        org: "hasna",
+        remote_url: "github.com/hasna/bench",
+      });
+
+      const repo = getRepo("bench");
+      expect(repo).toBeTruthy();
+      expect(repo!.id).toBe(canonical.id);
+      expect(repo!.name).toBe("open-bench");
+      expect(repo!.remote_url).toBe("github.com/hasna/bench");
+    });
+
+    it("keeps refusing a bare name whose canonical remote has a present checkout under a different name", () => {
+      upsertRepo({
+        path: "/home/u/workspace/hasna/opensource/open-loops",
+        name: "open-loops",
+        org: "hasna",
+        remote_url: "github.com/hasna/loops",
+      });
+      setRepoLookupPathStateForTests(() => "present");
+
+      expect(getRepo("loops")).toBeNull();
+    });
+
+    it("declines when one of several rows for the remote is still on disk", () => {
+      upsertRepo({
+        path: "/home/u/workspace/hasna/opensource/open-sandboxes",
+        name: "open-sandboxes",
+        org: "hasna",
+        remote_url: "github.com/hasna/sandboxes",
+      });
+      upsertRepo({
+        path: "/home/u/workspace/hasnaxyz/internalapp/iapp-sandboxes",
+        name: "iapp-sandboxes",
+        org: "hasna",
+        remote_url: "github.com/hasna/sandboxes",
+      });
+      setRepoLookupPathStateForTests((path) =>
+        path.includes("open-sandboxes") ? "present" : "missing",
+      );
+
+      expect(getRepo("sandboxes")).toBeNull();
+    });
+
+    it("returns null when the canonical remote is not indexed at all", () => {
+      upsertRepo({ path: "/home/u/workspace/other", name: "other", org: "hasna" });
+
+      expect(getRepo("bench")).toBeNull();
     });
   });
 

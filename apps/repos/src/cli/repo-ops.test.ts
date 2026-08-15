@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { closeDb, getDb } from "../db/database";
+import { upsertRepo } from "../db/repos";
 
 let tempDir = "";
 
@@ -78,6 +80,71 @@ afterEach(() => {
 });
 
 describe("repo ops CLI commands", () => {
+  // Regression for todos 0251863c: `repos repo bench --json` answered "Repo
+  // not found" and suggested the dead pre-migration path (`open-bench`). The
+  // lookup must bind the bare name to the canonical remote identity even when
+  // the only registry row for it is a stale pre-migration row whose path is
+  // gone — and it must never suggest a path that no longer exists.
+  test("repo lookup resolves a bare name to the canonical remote of a dead pre-migration row", () => {
+    const dbPath = join(tempDir, "repos.db");
+    getDb(dbPath);
+    upsertRepo({
+      path: "/home/u/workspace/hasna/opensource/open-bench",
+      name: "open-bench",
+      org: "hasna",
+      remote_url: "github.com/hasna/bench",
+    });
+    closeDb();
+
+    const result = runCliWithEnv(["repo", "bench", "--json", "--allow-unusable-checkout"], {
+      HASNA_REPOS_DB_PATH: dbPath,
+    });
+    const stdout = new TextDecoder().decode(result.stdout);
+    const stderr = new TextDecoder().decode(result.stderr);
+
+    expect(result.exitCode, stderr).toBe(0);
+    expect(stderr).not.toContain("Repo not found");
+    expect(stderr).not.toContain("Did you mean");
+    const row = JSON.parse(stdout);
+    expect(row.name).toBe("open-bench");
+    expect(row.remote_url).toBe("github.com/hasna/bench");
+    expect(row.checkout_health.state).toBe("missing-path");
+  });
+
+  test("repo lookup resolves sandboxes deterministically and reports the unusable verdict", () => {
+    const dbPath = join(tempDir, "repos.db");
+    getDb(dbPath);
+    upsertRepo({
+      path: "/home/u/workspace/hasnaxyz/internalapp/iapp-sandboxes",
+      name: "iapp-sandboxes",
+      org: "hasna",
+      remote_url: "github.com/hasna/sandboxes",
+    });
+    upsertRepo({
+      path: "/home/u/workspace/hasna/opensource/open-sandboxes",
+      name: "open-sandboxes",
+      org: "hasna",
+      remote_url: "github.com/hasna/sandboxes",
+    });
+    closeDb();
+
+    const result = runCliWithEnv(["repo", "sandboxes", "--json"], {
+      HASNA_REPOS_DB_PATH: dbPath,
+    });
+    const stdout = new TextDecoder().decode(result.stdout);
+    const stderr = new TextDecoder().decode(result.stderr);
+
+    // Resolution succeeded — the non-zero exit is the honest unusable-checkout
+    // verdict, not the "Repo not found" instrument drift this fixes.
+    expect(result.exitCode, stderr).toBe(1);
+    expect(stderr).not.toContain("Repo not found");
+    expect(stderr).not.toContain("Did you mean");
+    const row = JSON.parse(stdout);
+    expect(row.name).toBe("open-sandboxes");
+    expect(row.remote_url).toBe("github.com/hasna/sandboxes");
+    expect(row.checkout_health.state).toBe("missing-path");
+  });
+
   test("package drift emits compact JSON by default", () => {
     const result = runCli(["package", "drift", tempDir]);
     const stderr = new TextDecoder().decode(result.stderr);
