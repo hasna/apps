@@ -3,12 +3,12 @@
  * bundle-skills — build signed, versioned bundles for the canonical skill corpus.
  *
  * The npm package ships zero corpus; this script is the CI-side producer that turns
- * the canonical corpus (the monorepo checkout: `skills/` + `agent-skills/`) into one
+ * the canonical corpus (the monorepo checkout: `skills/`) into one
  * tar.gz + manifest per skill, the format `skills pull` verifies and installs.
  *
  *   bun run scripts/bundle-skills.ts [--source <dir>] [--out <dir>] [--commit <sha>]
  *
- *   --source   canonical corpus: a package root with skills/ + agent-skills/, or a
+ *   --source   canonical corpus: a package root with skills/, or a
  *              flat corpus dir. Default: the package root of this checkout.
  *   --out      output directory for <name>-<version>.tar.gz + .manifest.json pairs.
  *              Default: dist/bundles (gitignored).
@@ -61,10 +61,15 @@ function parseArgs(argv: string[]): { source?: string; out?: string; commit?: st
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = resolve(__dirname, "..");
 
-/** The canonical corpus roots: package root's skills/ + agent-skills/, or a flat dir. */
+/**
+ * The canonical corpus roots: the package root's skills/ directory, or a flat dir.
+ * `agent-skills/` is not bundled: the fleet workflow skills there moved to the private
+ * per-station store (owner ruling 2026-08-15) and distribute to station caches through
+ * fleet-resources, not through the public `skills pull` bundles.
+ */
 function resolveSourceRoots(source: string): string[] {
   const roots: string[] = [];
-  for (const sub of ["skills", "agent-skills"]) {
+  for (const sub of ["skills"]) {
     const candidate = join(source, sub);
     try {
       if (statSync(candidate).isDirectory()) roots.push(candidate);

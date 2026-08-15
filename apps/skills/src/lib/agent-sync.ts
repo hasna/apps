@@ -162,8 +162,12 @@ export interface SyncSkillsOptions {
   rootDir?: string;
   /**
    * Explicit canonical-corpus source: a directory of skill folders, or the monorepo
-   * package root (which contains `skills/` and `agent-skills/`). Takes precedence over
+   * package root (which contains `skills/`). Takes precedence over
    * $SKILLS_SOURCE, which takes precedence over the installed corpus cache.
+   * Agent-workflow skills are NOT part of the public repo corpus anymore — they
+   * moved to the private per-station store (hasna-internal/fleet-resources) and
+   * reach sync through the installed cache — so a package root resolves to
+   * `skills/` only.
    */
   sourceDir?: string;
   /** Home directory override for agent skill dirs. Tests only. */
@@ -185,11 +189,13 @@ interface SyncSource {
  *
  * The package ships no bundled corpus. Precedence is explicit-over-ambient:
  *   1. `options.sourceDir`   - an explicit source: a corpus dir, or a package root
- *                              containing `skills/` and/or `agent-skills/`
+ *                              containing `skills/`
  *   2. `$SKILLS_SOURCE`      - the ambient spelling of the same thing
  *   3. the installed cache   - `getPortableSkillsRoot()` (what `skills pull` writes),
  *      resolved through `resolveCorpusRoot` so a migrated owner layout
- *      (~/.hasna/skills/skills/) is read in preference to `installed/`.
+ *      (~/.hasna/skills/skills/) is read in preference to `installed/`. This cache is
+ *      also where private agent-workflow skills arrive from the per-station store
+ *      (hasna-internal/fleet-resources) and get synced into agent folders.
  *
  * A missing explicit source is an error, not a fallback to "nothing": the whole point
  * of zero-corpus is that sync must not silently sync an empty corpus because the
@@ -201,7 +207,7 @@ export function resolveSyncCorpus(options: SyncSkillsOptions = {}): { roots: str
     const roots = packageSourceRoots(explicit);
     if (roots.length === 0) {
       throw new Error(
-        `SKILLS_SOURCE '${explicit}' contains no skills: expected a corpus directory or a package root with skills/ and/or agent-skills/`,
+        `SKILLS_SOURCE '${explicit}' contains no skills: expected a corpus directory or a package root with skills/`,
       );
     }
     return { roots, source: "source" };
@@ -210,11 +216,13 @@ export function resolveSyncCorpus(options: SyncSkillsOptions = {}): { roots: str
 }
 
 /**
- * A source that names the monorepo package root (`skills/` + `agent-skills/` below it)
- * resolves to those two corpus roots; a source that is itself a directory of skill
- * folders resolves to itself. Both spellings exist in the wild — the checkout is the
- * canonical corpus, and a CI-produced signed cache is a flat corpus dir — so both are
- * accepted, and the dirs are returned only when they actually exist.
+ * A source that names the monorepo package root (`skills/` below it) resolves to that
+ * corpus root; a source that is itself a directory of skill folders resolves to itself.
+ * Both spellings exist in the wild — the checkout is the canonical corpus, and a
+ * CI-produced signed cache is a flat corpus dir — so both are accepted, and the dir is
+ * returned only when it actually exists. `agent-skills/` is deliberately not a corpus
+ * root: the fleet workflow skills moved to the private per-station store (owner ruling
+ * 2026-08-15) and reach sync via the installed cache, not the repo.
  *
  * A directory that holds no skill folders is NOT a corpus: an explicit source that
  * resolves to nothing would make `skills sync` silently sync an empty set, which is the
@@ -223,7 +231,7 @@ export function resolveSyncCorpus(options: SyncSkillsOptions = {}): { roots: str
  */
 function packageSourceRoots(source: string): string[] {
   const roots: string[] = [];
-  for (const sub of ["skills", "agent-skills"]) {
+  for (const sub of ["skills"]) {
     const candidate = join(source, sub);
     if (existsSync(candidate) && isDirectory(candidate)) roots.push(candidate);
   }
@@ -501,9 +509,9 @@ function sourceSkillMd(
 
 /**
  * List the corpus as the union of one or more skill-directory roots, deduplicated by
- * name. When the same name exists in several roots (e.g. an `agent-skills/` workflow
- * shadowed by an `executable` in `skills/`), the FIRST root wins: `skills/` before
- * `agent-skills/`, explicit roots in the order given.
+ * name. When the same name exists in several roots, the FIRST root wins: explicit roots
+ * in the order given. (The old `agent-skills/` workflow root is gone — those skills are
+ * private and arrive through the installed cache, so there is no repo root to shadow.)
  */
 function listPortableSkillsAcrossRoots(roots: string[]): ReturnType<typeof listPortableSkills> {
   const seen = new Set<string>();

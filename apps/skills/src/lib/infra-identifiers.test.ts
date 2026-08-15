@@ -341,8 +341,9 @@ describe("R4: vendor infra identifiers live behind one indirection", () => {
   });
 
   test("does not fire inside a UUID", () => {
-    // `\b[0-9]{12}\b` matches the last group of every UUID. This repo has one
-    // at agent-skills/merge-pr/SKILL.md, so the naive pattern is not usable.
+    // `\b[0-9]{12}\b` matches the last group of every UUID. The fleet workflow skills
+    // (which used to carry one at agent-skills/merge-pr/SKILL.md) moved to the private
+    // per-station store, but the pattern hazard is generic and stays guarded.
     const line = '  --task-id "00000000-0000-4000-8000-000000000000" \\\n';
     expect(ruleIds(line, "agent-skills/merge-pr/SKILL.md")).toEqual([]);
   });
