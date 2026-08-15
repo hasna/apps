@@ -356,6 +356,13 @@
         "typescript": "^5.7.3",
       },
     },
+    "apps/cli": {
+      "name": "@hasna/cli",
+      "version": "1.0.0",
+      "bin": {
+        "hasna": "dist/cli/index.js",
+      },
+    },
     "apps/computer": {
       "name": "@hasna/computer",
       "version": "0.1.15",
@@ -2346,6 +2353,8 @@
     "@hasna/catalog": ["@hasna/catalog@workspace:apps/catalog"],
 
     "@hasna/changelog": ["@hasna/changelog@workspace:apps/changelog"],
+
+    "@hasna/cli": ["@hasna/cli@workspace:apps/cli"],
 
     "@hasna/computer": ["@hasna/computer@workspace:apps/computer"],
 
