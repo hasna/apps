@@ -32,9 +32,6 @@ const membersByName = new Map(members.map((member) => [member.name, member]));
 const KNOWN_CHANGELOG_MISMATCHES = new Map([
   ["@hasna/calendar", { packageVersion: "0.3.1", changelogVersion: "0.3.0" }],
   ["@hasna/conversations", { packageVersion: "0.6.1", changelogVersion: "0.6.0" }],
-  ["@hasna/instructions", { packageVersion: "0.4.35", changelogVersion: "0.4.33" }],
-  ["@hasna/loops", { packageVersion: "0.4.42", changelogVersion: "0.4.41" }],
-  ["@hasna/secrets", { packageVersion: "0.2.22", changelogVersion: "0.2.21" }],
   ["@hasna/signatures", { packageVersion: "0.1.14", changelogVersion: "0.1.12" }],
 ]);
 
@@ -65,11 +62,17 @@ const KNOWN_RUNTIME_MISMATCHES = new Map([
 // d1ee99b5 stay open for their remaining drift history), and @hasna/secrets gained a
 // release-lane drift (registry 0.3.0 vs main 0.2.22, reconcile task
 // 3ab02291-58b0-40c7-b96f-958ee1ef4a61).
+// Release-preparation lane refresh 2026-08-15 (task ee9fbb4d): the loops (0.5.1),
+// emails (1.3.15) and secrets (0.3.0) npm-drift records were cleared by version
+// parity — main bumped to the registry-latest and the changelog headings fixed so
+// package/heading/registry agree (reconcile tasks 69e8b5dd, 78c66e3c, 3ab02291;
+// loops/instructions/secrets changelog-mismatch records removed with them). The
+// contracts record stays live until the release lane publishes the absorbed 0.11.0
+// tree (registry still 0.10.6; reconcile task 48a6ef7f). Remaining changelog
+// records are owned by other lanes (calendar, signatures; conversations is tracked
+// on its import row).
 const KNOWN_NPM_DRIFT = new Map([
-  ["@hasna/loops", { registryVersion: "0.5.0", mainVersion: "0.4.42", source: "publish lane released 0.5.0 ahead of main; reconcile task 69e8b5dd-15cd-4f45-8739-c0edf6720773" }],
-  ["@hasna/emails", { registryVersion: "1.3.15", mainVersion: "1.3.14", source: "release lane published 1.3.15 ahead of main (2026-08-14T11:48:46Z); reconcile task 78c66e3c-baba-4ba6-9295-99b4df7ebc25" }],
   ["@hasna/contracts", { registryVersion: "0.10.6", mainVersion: "0.11.0", source: "import #81 landed contracts 0.11.0 ahead of the registry; reconcile task 48a6ef7f-0919-470d-99f4-59817a01c647" }],
-  ["@hasna/secrets", { registryVersion: "0.3.0", mainVersion: "0.2.22", source: "release lane published 0.3.0 ahead of main (2026-08-14); reconcile task 3ab02291-58b0-40c7-b96f-958ee1ef4a61" }],
 ]);
 
 describe("hasna/apps versioning integrity", () => {

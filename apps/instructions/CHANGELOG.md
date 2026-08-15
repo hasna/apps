@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.35
+
+Publishes merged PR #119, which releases the mode-removal content from PR #111
+(removing the deployment-mode vocabulary per the canonical doctrine). The
+release carries the exact merged main tree at `918cbc03`.
+
 ## 0.4.33
 
 Publishes merged PR #96, which restores legacy profile follow-up reads when
