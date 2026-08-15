@@ -583,7 +583,72 @@ export interface UninstallResult {
   storeDirRemoved: boolean;
   pinRemoved: boolean;
   dbRecordRemoved: boolean;
+  /** Targets whose config still registers the hook after removal (e.g. codewith TOML the caller must edit itself). */
+  registrationsRemaining: string[];
   error?: string;
+}
+
+/**
+ * Lossless removal of a `hooks run <name>` entry from a Codewith config.toml.
+ *
+ * Works on sections split by blank lines — the shape buildCodewithTomlFragment
+ * writes: a `[[hooks.EVENT]]` header section (with optional matcher), then one
+ * `[[hooks.EVENT.hooks]]` entry section per hook containing
+ * `command = "hooks run <name>"`. Only sections positively identified as this
+ * hook's entries are removed; the enclosing EVENT header is dropped only when
+ * every one of its entries belonged to this hook. Anything ambiguous is
+ * preserved verbatim.
+ */
+export function removeCodewithHookEntry(configText: string, name: string): { text: string; removed: boolean } {
+  const sections = configText.split(/\n\s*\n/);
+  const nameRe = new RegExp(`^command\\s*=\\s*"hooks run ${escapeRegExp(name)}(?:\\s+--profile\\s+[\\w-]+)?"$`);
+  const entryHeaderRe = /^\[\[hooks\.([\w]+)\.hooks\]\]$/;
+  const eventHeaderRe = /^\[\[hooks\.([\w]+)\]\]$/;
+
+  // First pass: classify sections and drop this hook's entry sections.
+  const eventsWithEntries = new Set<string>();
+  const kept: Array<{ text: string; eventHeaderFor?: string }> = [];
+  let removed = false;
+  for (const section of sections) {
+    const lines = section.split("\n");
+    const entryMatch = entryHeaderRe.exec(lines[0] ?? "");
+    if (entryMatch) {
+      const event = entryMatch[1];
+      eventsWithEntries.add(event);
+      if (lines.some((line) => nameRe.test(line.trim()))) {
+        removed = true;
+        continue; // drop this entry section
+      }
+      kept.push({ text: section });
+      continue;
+    }
+    const eventMatch = eventHeaderRe.exec(lines[0] ?? "");
+    kept.push({ text: section, eventHeaderFor: eventMatch ? eventMatch[1] : undefined });
+  }
+
+  // Second pass: drop an EVENT header section only when every one of its
+  // entry sections was consumed (no kept entry section for that event).
+  const keptEntriesByEvent = new Set<string>();
+  for (const item of kept) {
+    const m = entryHeaderRe.exec(item.text.split("\n")[0] ?? "");
+    if (m) keptEntriesByEvent.add(m[1]);
+  }
+  const finalSections = kept
+    .filter((item) => {
+      if (item.eventHeaderFor === undefined) return true;
+      if (!eventsWithEntries.has(item.eventHeaderFor)) return true; // header with no entries — not ours
+      return keptEntriesByEvent.has(item.eventHeaderFor);
+    })
+    .map((item) => item.text);
+
+  return {
+    text: finalSections.join("\n\n") + (configText.endsWith("\n") ? "\n" : ""),
+    removed,
+  };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**
@@ -604,15 +669,19 @@ export function uninstallHook(
 
   const custom = readCustomManifest(shortName);
   const bundledMeta = custom ? undefined : getHook(shortName);
-  const registeredGlobal = getRegisteredHooksForTarget("global", target === "all" ? "claude" : (target as WritableJsonTarget)).includes(shortName);
-  const registeredProject = getRegisteredHooksForTarget("project", target === "all" ? "claude" : (target as WritableJsonTarget)).includes(shortName);
+  const existsInTarget = (t: WritableJsonTarget) =>
+    getRegisteredHooksForTarget("global", t).includes(shortName) ||
+    getRegisteredHooksForTarget("project", t).includes(shortName);
+  const registeredClaudeOrGemini = target === "all" ? existsInTarget("claude") || existsInTarget("gemini") : false;
+  const registeredGlobal = registeredClaudeOrGemini || getRegisteredHooksForTarget("global", target === "all" ? "claude" : (target as WritableJsonTarget)).includes(shortName);
+  const registeredProject = registeredClaudeOrGemini || getRegisteredHooksForTarget("project", target === "all" ? "claude" : (target as WritableJsonTarget)).includes(shortName);
 
   if (!custom && !bundledMeta && !registeredGlobal && !registeredProject) {
-    return { name: shortName, removed: false, source: null, settingsScopes: [], storeDirRemoved: false, pinRemoved: false, dbRecordRemoved: false, error: `Hook '${shortName}' not found` };
+    return { name: shortName, removed: false, source: null, settingsScopes: [], storeDirRemoved: false, pinRemoved: false, dbRecordRemoved: false, registrationsRemaining: [], error: `Hook '${shortName}' not found` };
   }
 
-  const scopes: Scope[] = [];
   const writableTargets = target === "all" ? (["claude", "gemini"] as const) : target === "codewith" ? [] : [target as WritableJsonTarget];
+  const scopes: Scope[] = [];
   for (const s of (["global", "project"] as Scope[])) {
     for (const t of writableTargets) {
       if (getRegisteredHooksForTarget(s, t).includes(shortName)) {
@@ -621,16 +690,43 @@ export function uninstallHook(
       }
     }
   }
-  // Codewith registrations live in TOML, deliberately not edited lossily
-  // here (same policy as removeHook); the store side is still cleaned below.
 
-  let storeDirRemoved = false;
+  // Codewith registrations live in TOML; remove them losslessly when the
+  // target covers codewith. A TOML entry we cannot positively identify stays
+  // and is reported, never silently dropped.
+  const registrationsRemaining: string[] = [];
+  if (target === "codewith" || target === "all") {
+    const codewithPath = getSettingsPath("global", "codewith");
+    if (existsSync(codewithPath)) {
+      const before = readFileSync(codewithPath, "utf-8");
+      const after = removeCodewithHookEntry(before, shortName);
+      if (after.removed) {
+        writeFileSync(codewithPath, after.text, "utf-8");
+      } else if (new RegExp(`hooks run ${shortName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:$|\\s)`).test(before)) {
+        registrationsRemaining.push("codewith");
+      }
+    }
+  }
+
+  // Fail-closed store removal: the executable bytes must be gone before the
+  // trust records are erased. If the store dir cannot be removed, keep the
+  // pin and DB record intact and report a hard failure — otherwise the next
+  // run would self-trust the residual bytes (security reviewer P1-2).
   if (custom) {
     try {
       rmSync(customHookDir(shortName), { recursive: true, force: true });
-      storeDirRemoved = true;
     } catch {
-      // Report removal as best-effort; the registration is still gone.
+      return {
+        name: shortName,
+        removed: false,
+        source: "custom",
+        settingsScopes: scopes,
+        storeDirRemoved: false,
+        pinRemoved: false,
+        dbRecordRemoved: false,
+        registrationsRemaining,
+        error: `Hook '${shortName}' store directory could not be removed; trust records preserved (no fail-open)`,
+      };
     }
   }
 
@@ -641,8 +737,9 @@ export function uninstallHook(
     removed: true,
     source: custom ? "custom" : bundledMeta ? "bundled" : "registered-only",
     settingsScopes: scopes,
-    storeDirRemoved,
+    storeDirRemoved: custom ? true : false,
     pinRemoved: removedPin,
     dbRecordRemoved: removedRecord,
+    registrationsRemaining,
   };
 }

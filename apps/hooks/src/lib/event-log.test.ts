@@ -109,4 +109,72 @@ describe("hook run event logging (bug ef58dcb7)", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].event_type).toBe("PreToolUse");
   });
+
+  test("a SubagentStart run lands a row (event supported by Codewith)", async () => {
+    const { checkScriptHash, sha256Of } = await import("./store.js");
+    const scriptPath = customHook("subagent-demo", "1.0.0", `console.log("{\\"continue\\":true}");\n`);
+    const content = require("fs").readFileSync(scriptPath);
+    checkScriptHash("subagent-demo", sha256Of(content));
+
+    const res = await runHook("subagent-demo", { hook_event_name: "SubagentStart", tool_name: "Agent" });
+    expect(res.exitCode).toBe(0);
+    const rows = getDb().query("SELECT * FROM hook_events WHERE hook_name = 'subagent-demo'").all() as any[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].event_type).toBe("SubagentStart");
+  });
+
+  test("a timeout is recorded as an error row (CLI and SDK audit trail)", async () => {
+    const { checkScriptHash, sha256Of } = await import("./store.js");
+    const scriptPath = customHook(
+      "timeout-demo",
+      "1.0.0",
+      `console.log("{\\"continue\\":true}");\nprocess.exit(0);\n`,
+    );
+    const content = require("fs").readFileSync(scriptPath);
+    checkScriptHash("timeout-demo", sha256Of(content));
+
+    // SDK: explicit timeout option wins over the manifest; a 100ms bound on
+    // a 2s sleep must time out and still produce a row.
+    writeFileSync(join(TEST_DIR, "hooks", "timeout-demo", "manifest.json"), JSON.stringify({
+      name: "timeout-demo",
+      version: "1.0.0",
+      events: ["PreToolUse"],
+      script: "script.ts",
+      timeout_ms: 2000,
+    }));
+    writeFileSync(scriptPath, `await Bun.sleep(2000);\nconsole.log("{\\"continue\\":true}");\n`);
+    const { retrustHook } = await import("./store.js");
+    retrustHook("timeout-demo", scriptPath, "1.0.0", "custom");
+
+    const before = getDb().query("SELECT COUNT(*) AS n FROM hook_events WHERE hook_name = 'timeout-demo'").get() as { n: number };
+    await expect(runHook("timeout-demo", { hook_event_name: "PreToolUse" }, { timeout: 100 })).rejects.toThrow(/timed out/);
+    const after = getDb().query("SELECT * FROM hook_events WHERE hook_name = 'timeout-demo'").all() as any[];
+    expect(after.length).toBe(before.n + 1);
+    const row = after[after.length - 1];
+    expect(row.error).toContain("timed out");
+    expect(JSON.parse(row.metadata).exit_code).toBe(-1);
+
+    // CLI path: a real `hooks run` timeout exits 1 and records a row.
+    const CLI = join(import.meta.dir, "..", "..", "src", "cli", "index.tsx");
+    const cliDbPath = join(TEST_DIR, "cli-events.db");
+    const proc = Bun.spawn(["bun", "run", CLI, "run", "timeout-demo"], {
+      cwd: join(import.meta.dir, "..", ".."),
+      stdin: new Response(JSON.stringify({ hook_event_name: "PreToolUse" })),
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, HASNA_HOOKS_DATA_DIR: TEST_DIR, HASNA_HOOKS_DB_PATH: cliDbPath },
+    });
+    const [cliOut, cliErr] = await Promise.all([
+      new Response(proc.stdout as ReadableStream).text(),
+      new Response(proc.stderr as ReadableStream).text(),
+    ]);
+    const cliExit = await proc.exited;
+    expect(cliExit, cliErr).toBe(1);
+    expect(cliErr).toContain("timedOut");
+    const cliDb = new (require("bun:sqlite").Database)(cliDbPath);
+    const cliRows = cliDb.query("SELECT * FROM hook_events WHERE hook_name = 'timeout-demo'").all() as any[];
+    cliDb.close();
+    expect(cliRows.length).toBe(1);
+    expect(cliRows[0].error).toContain("timed out");
+  });
 });

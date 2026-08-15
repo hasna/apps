@@ -52,6 +52,7 @@ const ALLOWED_EVENT_TYPES = new Set([
   "SessionStart",
   "SessionEnd",
   "UserPromptSubmit",
+  "SubagentStart",
 ]);
 
 /** Normalize a hook_event_name from hook input to a value the schema accepts. */

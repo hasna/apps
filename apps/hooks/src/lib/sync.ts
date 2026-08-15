@@ -194,13 +194,20 @@ export async function syncHooks(options: { dryRun?: boolean } = {}): Promise<Syn
     );
     const scriptRel = artifact.manifest.script.includes("\n") ? "script.ts" : artifact.manifest.script;
     writeCustomHook(name, manifest, artifact.script, scriptRel);
+    // Pin the VERIFIED digest, never a re-read that could differ: the bytes
+    // written are exactly artifact.script (already matched entry.sha256), so
+    // a post-write re-read that disagrees is tampering — refuse instead of
+    // trusting it (security reviewer P1-1).
     const scriptPath = resolveScriptPath(name)!;
     const actual = await sha256File(scriptPath);
-    setPinnedHook(name, { version: entry.version, sha256: actual, source: entry.source ?? "remote" });
+    if (actual !== entry.sha256) {
+      throw new Error(`sha256 mismatch after write for '${name}@${entry.version}': lock says ${entry.sha256}, on disk ${actual}`);
+    }
+    setPinnedHook(name, { version: entry.version, sha256: entry.sha256, source: entry.source ?? "remote" });
     upsertHookRecord(db, {
       name,
       version: entry.version,
-      sha256: actual,
+      sha256: entry.sha256,
       source_type: entry.source ?? "remote",
       source_ref: apiUrl,
       last_verified_at: new Date().toISOString(),
@@ -247,6 +254,16 @@ export async function fetchPinnedHook(
   if (!artifact.manifest || typeof artifact.script !== "string") {
     throw new Error(`artifact for '${name}@${version}' is malformed`);
   }
+  // Manifest identity must match the requested name@version — a registry that
+  // serves the right script under the wrong identity is refused (general
+  // reviewer P2-1).
+  const manifestName = shortManifestName(artifact.manifest.name ?? name);
+  if (manifestName !== name) {
+    throw new Error(`artifact for '${name}@${version}' declares a different hook name ('${manifestName}')`);
+  }
+  if (artifact.manifest.version !== version) {
+    throw new Error(`artifact for '${name}@${version}' declares a different version ('${artifact.manifest.version}')`);
+  }
   const actualSha = sha256OfText(artifact.script);
   if (actualSha !== entry.sha256) {
     throw new Error(
@@ -260,12 +277,17 @@ export async function fetchPinnedHook(
   writeCustomHook(name, manifest, artifact.script, scriptRel);
   const scriptPath = resolveScriptPath(name)!;
   const actual = await sha256File(scriptPath);
+  if (actual !== entry.sha256) {
+    throw new Error(
+      `sha256 mismatch after write for '${name}@${version}': lock says ${entry.sha256}, on disk ${actual}`,
+    );
+  }
   const db = getDb();
-  setPinnedHook(name, { version, sha256: actual, source: entry.source ?? "remote" });
+  setPinnedHook(name, { version, sha256: entry.sha256, source: entry.source ?? "remote" });
   upsertHookRecord(db, {
     name,
     version,
-    sha256: actual,
+    sha256: entry.sha256,
     source_type: entry.source ?? "remote",
     source_ref: apiUrl,
     last_verified_at: new Date().toISOString(),
@@ -273,7 +295,7 @@ export async function fetchPinnedHook(
   return {
     name,
     version,
-    sha256: actual,
+    sha256: entry.sha256,
     source: entry.source ?? "remote",
     source_ref: apiUrl,
     artifact,

@@ -21,6 +21,10 @@ beforeAll(() => {
   process.env.HASNA_HOOKS_DB_PATH = ":memory:";
   process.env.HASNA_HOOKS_CLAUDE_SETTINGS_PATH = SETTINGS;
   process.env.HASNA_HOOKS_GEMINI_SETTINGS_PATH = join(TEST_DIR, ".gemini", "settings.json");
+  // getSettingsPath honors HASNA_HOOKS_CODEWITH_CONFIG_PATH for codewith —
+  // point it at the test TOML (homedir() is cached per process and cannot
+  // be redirected mid-suite).
+  process.env.HASNA_HOOKS_CODEWITH_CONFIG_PATH = join(TEST_DIR, ".codewith", "config.toml");
 });
 
 afterAll(() => {
@@ -28,6 +32,7 @@ afterAll(() => {
   delete process.env.HASNA_HOOKS_DB_PATH;
   delete process.env.HASNA_HOOKS_CLAUDE_SETTINGS_PATH;
   delete process.env.HASNA_HOOKS_GEMINI_SETTINGS_PATH;
+  delete process.env.HASNA_HOOKS_CODEWITH_CONFIG_PATH;
   closeDb();
   rmSync(TEST_DIR, { recursive: true, force: true });
 });
@@ -125,23 +130,65 @@ describe("uninstallHook — custom/registry/bundled/nonexistent (QA-1 BUG-A / QA
     expect(settings.hooks ?? {}).toEqual({});
   });
 
-  test("codewith target: store/lock/DB cleaned, TOML config never written", () => {
+  test("codewith target: store/lock/DB cleaned and the TOML registration removed losslessly", () => {
     const { dir } = writeCustomHookFixture("rm-codewith", "1.0.0");
     setPinnedHook("rm-codewith", { version: "1.0.0", sha256: "d".repeat(64), source: "custom" });
     const db = getDb();
     upsertHookRecord(db, { name: "rm-codewith", version: "1.0.0", sha256: "d".repeat(64), source_type: "custom" });
     const toml = join(TEST_DIR, ".codewith", "config.toml");
     mkdirSync(join(TEST_DIR, ".codewith"), { recursive: true });
-    writeFileSync(toml, '[[hooks.Stop]]\nhooks = [{ type = "command", command = "hooks run rm-codewith" }]\n');
+    // The exact fragment shape buildCodewithTomlFragment writes.
+    writeFileSync(toml, `[[hooks.Stop]]\n\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "hooks run rm-codewith"\ntimeout = 10\nstatusMessage = "Running rm-codewith"\n\n[[hooks.PreToolUse]]\n\n[[hooks.PreToolUse.hooks]]\ntype = "command"\ncommand = "hooks run other-hook"\ntimeout = 10\nstatusMessage = "Running other-hook"\n`);
 
     const result = uninstallHook("rm-codewith", "global", "codewith");
     expect(result.removed).toBe(true);
     expect(result.storeDirRemoved).toBe(true);
     expect(result.pinRemoved).toBe(true);
     expect(result.dbRecordRemoved).toBe(true);
-    // The TOML file must be untouched — removal never JSON-writes a TOML.
-    expect(require("fs").readFileSync(toml, "utf-8")).toContain("[[hooks.Stop]]");
+    expect(result.registrationsRemaining).toHaveLength(0);
+    const after = require("fs").readFileSync(toml, "utf-8");
+    expect(after).not.toContain("hooks run rm-codewith");
+    expect(after).not.toContain("[[hooks.Stop]]"); // consumed block dropped
+    expect(after).toContain("hooks run other-hook"); // unrelated entry preserved
     expect(existsSync(dir)).toBe(false);
+  });
+
+  test("codewith removal never touches unrelated config sections", () => {
+    const config = `[general]\nfoo = "bar"\n\n[[hooks.PreToolUse]]\n\n[[hooks.PreToolUse.hooks]]\ntype = "command"\ncommand = "hooks run gitguard"\ntimeout = 10\n\n[[hooks.Stop]]\n\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "hooks run fleet-comms"\ntimeout = 10\n\n[other]\nx = 1\n`;
+    const { removeCodewithHookEntry } = require("./installer.js");
+    const res = removeCodewithHookEntry(config, "gitguard");
+    expect(res.removed).toBe(true);
+    expect(res.text).not.toContain("hooks run gitguard");
+    expect(res.text).toContain("hooks run fleet-comms");
+    expect(res.text).toContain('[general]\nfoo = "bar"');
+    expect(res.text).toContain("[other]\nx = 1");
+  });
+
+  test("store dir that cannot be removed keeps trust records intact (fail-closed, no fail-open)", () => {
+    const { dir } = writeCustomHookFixture("rm-frozen", "1.0.0");
+    setPinnedHook("rm-frozen", { version: "1.0.0", sha256: "e".repeat(64), source: "custom" });
+    const db = getDb();
+    upsertHookRecord(db, { name: "rm-frozen", version: "1.0.0", sha256: "e".repeat(64), source_type: "custom" });
+    // Freeze a SUBDIRECTORY so the recursive removal must fail while the
+    // manifest itself stays readable (rmSync needs write access on the dir
+    // holding the entries it unlinks).
+    const sub = join(dir, "sub");
+    mkdirSync(sub);
+    writeFileSync(join(sub, "x"), "y");
+    const { chmodSync } = require("fs");
+    chmodSync(sub, 0o000);
+    try {
+      const result = uninstallHook("rm-frozen", "global", "claude");
+      expect(result.removed).toBe(false);
+      expect(result.error).toContain("could not be removed");
+      // Trust records must survive — the residual bytes never become
+      // self-trusted (security reviewer P1-2).
+      expect(getPinnedHook("rm-frozen")).toBeDefined();
+      expect(getHookRecord(getDb(), "rm-frozen")).not.toBeNull();
+      expect(existsSync(join(dir, "script.sh"))).toBe(true);
+    } finally {
+      chmodSync(sub, 0o755);
+    }
   });
 });
 

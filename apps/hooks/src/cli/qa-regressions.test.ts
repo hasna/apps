@@ -173,6 +173,69 @@ describe("P2 #7 — pinned version install/update (QA-2)", () => {
       server.stop(true);
     }
   });
+
+  test("hooks install <name>@<version> with a wrong lock sha refuses without writes", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/lock") {
+          // The lock claims a sha that does NOT match the artifact bytes.
+          return Response.json({ hooks: { "qa6-sham": { version: "1.0.0", sha256: "0".repeat(64), source: "remote" } } });
+        }
+        if (url.pathname === "/api/v1/hooks/qa6-sham/1.0.0") {
+          return Response.json({
+            manifest: { name: "qa6-sham", version: "1.0.0", events: ["PreToolUse"], script: "script.sh" },
+            script: SCRIPT_V1,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    process.env.HASNA_HOOKS_API_URL = `http://127.0.0.1:${server.port}`;
+    const lockPath = join(TEST_HOME, ".hasna", "hooks", "hooks.lock");
+    const before = existsSync(lockPath) ? readFileSync(lockPath, "utf-8") : null;
+    try {
+      const res = await run("install", "qa6-sham@1.0.0");
+      expect(res.exitCode).not.toBe(0);
+      expect(res.stdout).toContain("sha256 mismatch");
+      const after = existsSync(lockPath) ? readFileSync(lockPath, "utf-8") : null;
+      expect(after).toBe(before); // no state change
+      expect(existsSync(customHookDir("qa6-sham"))).toBe(false); // nothing written
+    } finally {
+      delete process.env.HASNA_HOOKS_API_URL;
+      server.stop(true);
+    }
+  });
+
+  test("hooks install <name>@<version> with a wrong manifest identity refuses", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/lock") {
+          return Response.json({ hooks: { "qa6-impersonator": { version: "1.0.0", sha256: sha(SCRIPT_V1), source: "remote" } } });
+        }
+        if (url.pathname === "/api/v1/hooks/qa6-impersonator/1.0.0") {
+          return Response.json({
+            manifest: { name: "someone-else", version: "1.0.0", events: ["PreToolUse"], script: "script.sh" },
+            script: SCRIPT_V1,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    process.env.HASNA_HOOKS_API_URL = `http://127.0.0.1:${server.port}`;
+    try {
+      const res = await run("install", "qa6-impersonator@1.0.0");
+      expect(res.exitCode).not.toBe(0);
+      expect(res.stdout).toContain("different hook name");
+      expect(existsSync(customHookDir("qa6-impersonator"))).toBe(false);
+    } finally {
+      delete process.env.HASNA_HOOKS_API_URL;
+      server.stop(true);
+    }
+  });
 });
 
 describe("P2 #8 — install pins the ACTUAL installed version+sha (QA-1 P3)", () => {
@@ -213,6 +276,27 @@ describe("P2 #9 — hooks list surfaces custom/registry hooks (QA-4 A1 / bug e84
     const installed = await run("list", "--installed", "--json");
     const parsedInstalled = JSON.parse(installed.stdout) as Array<{ name: string }>;
     expect(parsedInstalled.some((h) => h.name === "qa6-listed")).toBe(true);
+  });
+
+  test("a registry-synced hook is classified as registry in list output", async () => {
+    const { setPinnedHook, upsertHookRecord } = await import("../lib/store.js");
+    const { getDb, closeDb } = await import("../db/index.js");
+    closeDb();
+    writeCustomHook("qa6-remote-listed", "3.0.0");
+    setPinnedHook("qa6-remote-listed", { version: "3.0.0", sha256: "f".repeat(64), source: "remote" });
+    upsertHookRecord(getDb(), {
+      name: "qa6-remote-listed",
+      version: "3.0.0",
+      sha256: "f".repeat(64),
+      source_type: "remote",
+      source_ref: "https://registry.example.com",
+    });
+    const data = await run("list", "--json");
+    const parsed = JSON.parse(data.stdout);
+    const entry = (parsed["Custom / Registry"] as any[]).find((h: any) => h.name === "qa6-remote-listed");
+    expect(entry).toBeDefined();
+    expect(entry.source).toBe("registry");
+    expect(entry.version).toBe("3.0.0");
   });
 });
 

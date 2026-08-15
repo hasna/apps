@@ -527,7 +527,7 @@ export function createHooksServer(): McpServer {
       name: z.string().describe("Hook name (e.g. 'gitguard', 'checkpoint')"),
       input: z.record(z.string(), z.unknown()).default(() => ({})).describe("Hook input as JSON object (HookInput)"),
       profile: z.string().optional().describe("Agent profile ID to inject into hook input"),
-      timeout_ms: z.number().optional().describe("Timeout in milliseconds (default: the hook's manifest timeout_ms or 10000)"),
+      timeout_ms: z.number().int().positive().max(600000).optional().describe("Timeout in milliseconds (default: the hook's manifest timeout_ms or 10000)"),
     },
     async ({ name, input, profile, timeout_ms }) => {
       const { resolveHook } = await import("../lib/resolve.js");
@@ -676,7 +676,7 @@ export function createHooksServer(): McpServer {
       tool_name: z.string().describe("Tool name to simulate (e.g. 'Bash', 'Write', 'Edit')"),
       tool_input: z.record(z.string(), z.unknown()).default(() => ({})).describe("Tool input to pass to matching hooks"),
       scope: z.enum(["global", "project"]).default("global").describe("Scope to check"),
-      timeout_ms: z.number().optional().describe("Per-hook timeout in milliseconds (default: the hook's manifest timeout_ms or 5000)"),
+      timeout_ms: z.number().int().positive().max(600000).optional().describe("Per-hook timeout in milliseconds (default: the hook's manifest timeout_ms or 5000)"),
     },
     async ({ tool_name, tool_input, scope, timeout_ms }) => {
       const registered = getRegisteredHooks(scope);
@@ -764,7 +764,7 @@ export function createHooksServer(): McpServer {
         name: z.string().describe("Hook name"),
         input: z.record(z.string(), z.unknown()).default(() => ({})).describe("Hook input JSON"),
       })).describe("List of hooks to run with their inputs"),
-      timeout_ms: z.number().optional().describe("Per-hook timeout in milliseconds (default: the hook's manifest timeout_ms or 10000)"),
+      timeout_ms: z.number().int().positive().max(600000).optional().describe("Per-hook timeout in milliseconds (default: the hook's manifest timeout_ms or 10000)"),
     },
     async ({ hooks, timeout_ms }: { hooks: Array<{ name: string; input: Record<string, unknown> }>; timeout_ms?: number }) => {
       const results = await Promise.all(hooks.map(async ({ name, input }) => {

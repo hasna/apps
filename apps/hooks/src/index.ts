@@ -114,7 +114,11 @@ import { existsSync, readFileSync } from "fs";
 export interface RunHookOptions {
   /** Agent profile ID to inject into hook input */
   profile?: string;
-  /** Timeout in milliseconds (default: 10000) */
+  /**
+   * Timeout in milliseconds. Wins over the hook manifest's timeout_ms when
+   * set to a positive value; a non-positive value is ignored (the manifest
+   * timeout or no timeout applies).
+   */
   timeout?: number;
 }
 
@@ -165,17 +169,52 @@ export async function runHook(name: string, input: HookInput, options: RunHookOp
     }
   }
 
-  const { executeVerifiedScript } = await import("./lib/run.js");
+  const { executeVerifiedScript, HookTimeoutError } = await import("./lib/run.js");
+  // Caller-provided timeout wins over the manifest value; a non-positive
+  // explicit value is treated as "not provided" (never as "no timeout").
+  const manifestTimeout = custom?.manifest.timeout_ms ?? null;
+  const effectiveTimeout =
+    options.timeout !== undefined && options.timeout > 0
+      ? options.timeout
+      : manifestTimeout ?? null;
   const started = Date.now();
-  const { stdout: stdoutText, stderr: stderrText, exitCode } = await executeVerifiedScript({
-    name,
-    scriptPath: script,
-    content,
-    args: custom?.manifest.args ?? [],
-    stdin: JSON.stringify(hookInput),
-    env: process.env,
-    timeout: custom?.manifest.timeout_ms,
-  });
+  let stdoutText = "";
+  let stderrText = "";
+  let exitCode = 0;
+  try {
+    ({ stdout: stdoutText, stderr: stderrText, exitCode } = await executeVerifiedScript({
+      name,
+      scriptPath: script,
+      content,
+      args: custom?.manifest.args ?? [],
+      stdin: JSON.stringify(hookInput),
+      env: process.env,
+      timeout: effectiveTimeout ?? undefined,
+    }));
+  } catch (err) {
+    if (err instanceof HookTimeoutError) {
+      try {
+        const { recordHookRun, resolveEventType } = await import("./lib/db-writer.js");
+        recordHookRun({
+          hookName: name,
+          eventType: resolveEventType(input.hook_event_name, custom?.manifest.events[0] ?? "PostToolUse"),
+          version: custom?.manifest.version,
+          sha256: sha256Of(content),
+          sessionId: typeof input.session_id === "string" ? input.session_id : null,
+          toolName: typeof input.tool_name === "string" ? input.tool_name : null,
+          toolInput: input.tool_input,
+          error: err.message.slice(0, 500),
+          exitCode: -1,
+          durationMs: Date.now() - started,
+          projectDir: process.cwd(),
+        });
+      } catch {
+        // Observability must never mask the timeout.
+      }
+      throw err;
+    }
+    throw err;
+  }
   const durationMs = Date.now() - started;
 
   // Every SDK run lands in hook_events so `hooks log` is never empty after a

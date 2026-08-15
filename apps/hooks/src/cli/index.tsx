@@ -4,7 +4,7 @@ import React from "react";
 import { render } from "ink";
 import { Command } from "commander";
 import chalk from "chalk";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, rmSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { homedir } from "os";
@@ -353,6 +353,28 @@ program
       }));
     } catch (err) {
       if (err instanceof HookTimeoutError) {
+        // The timeout is itself an execution attempt — record it so the
+        // audit trail is never empty (general reviewer P1-3).
+        try {
+          const { recordHookRun, resolveEventType } = await import("../lib/db-writer.js");
+          let inputJson: Record<string, any> = {};
+          try { inputJson = JSON.parse(stdin); } catch {}
+          recordHookRun({
+            hookName: hook,
+            eventType: resolveEventType(inputJson.hook_event_name, resolved.events[0] ?? "PostToolUse"),
+            version: resolved.version,
+            sha256: sha,
+            sessionId: typeof inputJson.session_id === "string" ? inputJson.session_id : null,
+            toolName: typeof inputJson.tool_name === "string" ? inputJson.tool_name : null,
+            toolInput: inputJson.tool_input,
+            error: err.message.slice(0, 500),
+            exitCode: -1,
+            durationMs: Date.now() - started,
+            projectDir: process.cwd(),
+          });
+        } catch {
+          // Observability must never mask the timeout.
+        }
         console.error(JSON.stringify({ error: err.message, hook, timedOut: true, timeout_ms: timeout ?? null }));
         process.exit(1);
       }
@@ -505,12 +527,27 @@ program
     for (const source of customSources) {
       try {
         const custom = await installCustomSource(source);
-        installedCustom.push(custom.name);
         // Pin the ACTUAL installed version+sha at install time — the first
         // run is trusted with real provenance, never a 0.0.0 placeholder
-        // (QA-1 P3).
-        const scriptBytes = readFileSyncFs(custom.scriptPath);
-        pinInstalledHook(custom.name, custom.version, sha256Of(scriptBytes), "custom", source);
+        // (QA-1 P3). The name joins the registration set ONLY after the pin
+        // transaction succeeds; on pin failure the copied store dir is rolled
+        // back so the bytes never become runnable unrecorded (security
+        // reviewer P1-3).
+        try {
+          const scriptBytes = readFileSyncFs(custom.scriptPath);
+          pinInstalledHook(custom.name, custom.version, sha256Of(scriptBytes), "custom", source);
+        } catch (pinError) {
+          const { customHookDir } = await import("../lib/manifest.js");
+          const { removeHookFromStore } = await import("../lib/store.js");
+          try {
+            rmSync(customHookDir(custom.name), { recursive: true, force: true });
+          } catch {
+            // Best-effort rollback.
+          }
+          removeHookFromStore(custom.name);
+          throw pinError;
+        }
+        installedCustom.push(custom.name);
         if (options.json) {
           console.log(JSON.stringify({ custom: { source, name: custom.name, version: custom.version, pinned: true } }));
         } else {
@@ -804,6 +841,11 @@ program
     // lock pin and the DB record (QA-1 BUG-A / QA-4).
     const { uninstallHook } = await import("../lib/installer.js");
     const result = uninstallHook(hook, scope, target);
+    if (!result.removed) {
+      // Non-zero for BOTH output modes (JSON and plain) — the machine path
+      // must fail closed too (general reviewer P1-2).
+      process.exitCode = 1;
+    }
     if (options.json) {
       console.log(JSON.stringify({
         hook: result.name,
@@ -813,6 +855,7 @@ program
         store_dir_removed: result.storeDirRemoved,
         pin_removed: result.pinRemoved,
         db_record_removed: result.dbRecordRemoved,
+        registrations_remaining: result.registrationsRemaining,
         scope,
         target,
         ...(result.error ? { error: result.error } : {}),
@@ -822,11 +865,13 @@ program
       if (result.source === "custom" && result.storeDirRemoved) {
         console.log(chalk.dim(`  store dir removed; lock pin ${result.pinRemoved ? "removed" : "absent"}; DB record ${result.dbRecordRemoved ? "removed" : "absent"}`));
       }
+      if (result.registrationsRemaining && result.registrationsRemaining.length > 0) {
+        console.log(chalk.yellow(`  ⚠ registrations remaining: ${result.registrationsRemaining.join(", ")} — remove them in that target's own config`));
+      }
     } else {
       const suggestions = suggestHooks(hook);
       const hint = suggestions.length ? ` — did you mean: ${suggestions.join(", ")}?` : "";
       console.log(chalk.red(`✗ Hook '${hook}' not found${hint}`));
-      process.exitCode = 1;
     }
   });
 
@@ -1094,6 +1139,11 @@ program
         updated: results.filter((r) => r.success).map((r) => r.hook),
         failed: results.filter((r) => !r.success).map((r) => ({ hook: r.hook, error: r.error })),
       }));
+      // Fail closed for automation: any requested update that failed is a
+      // non-zero exit, in both output modes (general reviewer P2-6).
+      if (results.some((r) => !r.success)) {
+        process.exitCode = 1;
+      }
       return;
     }
 
@@ -1104,6 +1154,9 @@ program
       } else {
         console.log(chalk.red(`✗ ${result.hook}: ${result.error}`));
       }
+    }
+    if (results.some((r) => !r.success)) {
+      process.exitCode = 1;
     }
   });
 

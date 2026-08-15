@@ -109,15 +109,21 @@ describe("redirect handling (QA-3 P1 key-leak fix)", () => {
   });
 
   test("a same-origin redirect is refused too (fail-closed, never follow)", async () => {
+    let targetReached = false;
     const { base, stop } = startRegistry((_req, url) => {
-      if (url.pathname === "/api/v1/redirect") {
-        return Response.redirect(`${base}/api/v1/catalog`, 302);
+      if (url.pathname === "/api/v1/catalog") {
+        // The path syncHooks() actually requests redirects to another path
+        // on the SAME origin — must still refuse, and the target must never
+        // be reached.
+        return Response.redirect(`${base}/api/v1/other`, 302);
       }
+      targetReached = true;
       return new Response("not found", { status: 404 });
     });
     try {
       process.env.HASNA_HOOKS_API_URL = base;
       await expect(syncHooks()).rejects.toThrow();
+      expect(targetReached).toBe(false);
     } finally {
       delete process.env.HASNA_HOOKS_API_URL;
       stop();

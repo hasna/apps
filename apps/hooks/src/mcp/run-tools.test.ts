@@ -10,7 +10,7 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { Client } from "@modelcontextprotocol/sdk/client";
@@ -96,28 +96,64 @@ describe("MCP run tools (QA-4 bug 4d4c8f0b)", () => {
     expect(elapsed).toBeLessThan(1500); // did not wait out the sleep
   });
 
+  test("hooks_run writes a hook_events row per execution (bug ef58dcb7)", async () => {
+    customHook("qa4-logged", { name: "qa4-logged", version: "1.0.0" }, "#!/bin/bash\necho '{\"continue\":true}'\n");
+    const { getDb } = await import("../db/index.js");
+    await withClient(async (client) => {
+      const data = parseResult(await client.callTool({ name: "hooks_run", arguments: { name: "qa4-logged", input: { hook_event_name: "PreToolUse", tool_name: "Bash" } } }));
+      expect(data.exitCode).toBe(0);
+    });
+    const rows = getDb().query("SELECT * FROM hook_events WHERE hook_name = 'qa4-logged'").all() as any[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].event_type).toBe("PreToolUse");
+    expect(JSON.parse(rows[0].metadata).version).toBe("1.0.0");
+  });
+
+  test("timeout_ms: 0 / negative / over-max are rejected, never treated as 'no timeout'", async () => {
+    customHook("qa4-bound", { name: "qa4-bound", version: "1.0.0" }, "#!/bin/bash\nsleep 30\necho '{}'\n");
+    await withClient(async (client) => {
+      for (const bad of [0, -1, 999999999]) {
+        const result = await client.callTool({ name: "hooks_run", arguments: { name: "qa4-bound", input: {}, timeout_ms: bad } });
+        // Zod schema validation failure surfaces as a tool error.
+        expect(result.isError ?? false, `timeout_ms=${bad} should be rejected`).toBe(true);
+      }
+    });
+  });
+
   test("(c) timeout kills the whole process group — no orphaned child", async () => {
     // Foreground work exceeds the manifest timeout; a grandchild is
     // backgrounded in a subshell so it survives the direct child alone.
+    // The script records its own PID and process group so the test can
+    // assert on the exact processes, not a name pattern (the old behavior
+    // left `sleep 30` alive with PPID 1).
+    const pidFile = join(TEST_DIR, "orphan-pids.txt");
     customHook(
       "qa4-orphan",
       { name: "qa4-orphan", version: "1.0.0", timeout_ms: 200 },
-      "#!/bin/bash\n(sleep 30 &)\nsleep 0.5\necho '{\"continue\":true}'\n",
+      `#!/bin/bash\n(sleep 30 &)\necho "hookpid=\$\$ pgid=\$(ps -o pgid= -p \$\$ | tr -d ' ')" > ${pidFile}\nsleep 0.5\necho '{"continue":true}'\n`,
     );
     await withClient(async (client) => {
       const data = parseResult(await client.callTool({ name: "hooks_run", arguments: { name: "qa4-orphan", input: {} } }));
       expect(data.timedOut).toBe(true);
     });
-    // Give the kill a moment to settle, then assert no sleep survives in a
-    // fresh process group owned by this run (the old behavior left
-    // `sleep 30` alive with PPID 1).
-    await new Promise((r) => setTimeout(r, 500));
-    const ps = require("child_process").spawnSync("bash", ["-c", "ps -eo pid,ppid,comm | awk '$3 == \"sleep\" {print $1, $2}'"]);
-    const survivors = (ps.stdout.toString().trim().split("\n").filter(Boolean) as string[])
-      .filter((line) => line.includes("sleep"));
-    // A handful of unrelated sleep processes could exist on a busy machine,
-    // so match precisely: no sleep whose parent is 1 (orphaned by us).
-    const orphans = survivors.filter((line) => line.trim().endsWith(" 1") || line.trim().endsWith(" 0"));
-    expect(orphans).toHaveLength(0);
+    const recorded = readFileSync(pidFile, "utf-8").trim();
+    const pidMatch = /hookpid=(\d+) pgid=(\d+)/.exec(recorded);
+    expect(pidMatch).not.toBeNull();
+    const hookPid = Number(pidMatch![1]);
+    const pgid = Number(pidMatch![2]);
+    expect(pgid).toBe(hookPid); // detached spawn: the hook leads its own group
+
+    // Give the kill a moment to settle, then assert the exact hook process
+    // and its group are gone (the old direct-child-kill left the backgrounded
+    // sleep alive with PPID 1).
+    await new Promise((r) => setTimeout(r, 600));
+    const probe = require("child_process").spawnSync("bash", [
+      "-c",
+      `kill -0 ${hookPid} 2>/dev/null; echo hook_alive=$?; ps -eo pid,pgid,comm | awk -v g=${pgid} '$2 == g {print $1, $3}' | head -5; echo end`,
+    ]);
+    const probeOut = probe.stdout.toString();
+    expect(probeOut).toContain("hook_alive=1"); // kill -0 fails: process gone
+    const groupSurvivors = probeOut.split("\n").filter((line: string) => /^\d+ \d+ sleep$/.test(line.trim()));
+    expect(groupSurvivors).toHaveLength(0);
   });
 });
