@@ -651,6 +651,20 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function codewithHasHookEntryInText(configText: string, name: string): boolean {
+  return new RegExp(`hooks run ${escapeRegExp(name)}(?:\\s+--profile\\s+[\\w-]+)?(?:$|\\s|")`).test(configText);
+}
+
+function codewithHasHookEntry(name: string): boolean {
+  const path = getSettingsPath("global", "codewith");
+  if (!existsSync(path)) return false;
+  try {
+    return codewithHasHookEntryInText(readFileSync(path, "utf-8"), name);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Full uninstall — the settings registration, the store directory (custom
  * hooks), the lock pin and the DB record are all removed. Bundled hooks keep
@@ -676,7 +690,12 @@ export function uninstallHook(
   const registeredGlobal = registeredClaudeOrGemini || getRegisteredHooksForTarget("global", target === "all" ? "claude" : (target as WritableJsonTarget)).includes(shortName);
   const registeredProject = registeredClaudeOrGemini || getRegisteredHooksForTarget("project", target === "all" ? "claude" : (target as WritableJsonTarget)).includes(shortName);
 
-  if (!custom && !bundledMeta && !registeredGlobal && !registeredProject) {
+  // A hook registered only in the Codewith TOML must still resolve for
+  // --target codewith / --target all (recheck P1: codewith-only hooks were
+  // reported "not found").
+  const codewithOnly = (target === "codewith" || target === "all") && codewithHasHookEntry(shortName);
+
+  if (!custom && !bundledMeta && !registeredGlobal && !registeredProject && !codewithOnly) {
     return { name: shortName, removed: false, source: null, settingsScopes: [], storeDirRemoved: false, pinRemoved: false, dbRecordRemoved: false, registrationsRemaining: [], error: `Hook '${shortName}' not found` };
   }
 
@@ -692,8 +711,9 @@ export function uninstallHook(
   }
 
   // Codewith registrations live in TOML; remove them losslessly when the
-  // target covers codewith. A TOML entry we cannot positively identify stays
-  // and is reported, never silently dropped.
+  // target covers codewith. Any entry that remains after removal (an
+  // ambiguous form we cannot positively identify) is reported, never
+  // silently dropped.
   const registrationsRemaining: string[] = [];
   if (target === "codewith" || target === "all") {
     const codewithPath = getSettingsPath("global", "codewith");
@@ -702,7 +722,11 @@ export function uninstallHook(
       const after = removeCodewithHookEntry(before, shortName);
       if (after.removed) {
         writeFileSync(codewithPath, after.text, "utf-8");
-      } else if (new RegExp(`hooks run ${shortName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:$|\\s)`).test(before)) {
+      }
+      // Re-scan the (possibly modified) text: any `hooks run <name>` that
+      // survives — e.g. an inline-table entry our section remover cannot
+      // positively identify — is reported as remaining (recheck P1).
+      if (codewithHasHookEntryInText(after.removed ? after.text : before, shortName)) {
         registrationsRemaining.push("codewith");
       }
     }

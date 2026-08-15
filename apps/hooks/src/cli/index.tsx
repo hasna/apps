@@ -1072,6 +1072,7 @@ program
       } else {
         console.log(chalk.dim("No hooks installed to update."));
       }
+      process.exitCode = 1;
       return;
     }
 

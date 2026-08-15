@@ -153,7 +153,8 @@ describe("MCP run tools (QA-4 bug 4d4c8f0b)", () => {
     ]);
     const probeOut = probe.stdout.toString();
     expect(probeOut).toContain("hook_alive=1"); // kill -0 fails: process gone
-    const groupSurvivors = probeOut.split("\n").filter((line: string) => /^\d+ \d+ sleep$/.test(line.trim()));
+    // awk prints "pid comm" for every process still in the group.
+    const groupSurvivors = probeOut.split("\n").filter((line: string) => /^\d+ \w+$/.test(line.trim()));
     expect(groupSurvivors).toHaveLength(0);
   });
 });

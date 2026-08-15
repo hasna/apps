@@ -164,6 +164,34 @@ describe("uninstallHook — custom/registry/bundled/nonexistent (QA-1 BUG-A / QA
     expect(res.text).toContain("[other]\nx = 1");
   });
 
+  test("a codewith-only registered hook resolves for --target all and is removed from the TOML", () => {
+    const toml = join(TEST_DIR, ".codewith", "config.toml");
+    mkdirSync(join(TEST_DIR, ".codewith"), { recursive: true });
+    writeFileSync(toml, `[[hooks.Stop]]\n\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "hooks run orphan-only"\ntimeout = 10\n`);
+    // No store dir, no bundled meta, no claude/gemini registration.
+    const result = uninstallHook("orphan-only", "global", "all");
+    expect(result.removed).toBe(true);
+    expect(result.source).toBe("registered-only");
+    expect(result.registrationsRemaining).toHaveLength(0);
+    expect(require("fs").readFileSync(toml, "utf-8")).not.toContain("hooks run orphan-only");
+  });
+
+  test("an ambiguous inline codewith entry that survives removal is reported as remaining", () => {
+    const toml = join(TEST_DIR, ".codewith", "config.toml");
+    mkdirSync(join(TEST_DIR, ".codewith"), { recursive: true });
+    // One canonical entry (removable) + one inline-table entry (ambiguous —
+    // section remover cannot positively identify it).
+    writeFileSync(toml, `[[hooks.Stop]]\n\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "hooks run mix-demo"\ntimeout = 10\n\n[[hooks.PreToolUse]]\nhooks = [{ type = "command", command = "hooks run mix-demo" }]\n`);
+    const result = uninstallHook("mix-demo", "global", "codewith");
+    expect(result.removed).toBe(true);
+    expect(result.registrationsRemaining).toEqual(["codewith"]);
+    const after = require("fs").readFileSync(toml, "utf-8");
+    // Canonical entry block gone; the ambiguous inline entry survives and is
+    // reported as remaining (never silently dropped).
+    expect(after).not.toContain("[[hooks.Stop]]");
+    expect(after).toContain("[[hooks.PreToolUse]]");
+  });
+
   test("store dir that cannot be removed keeps trust records intact (fail-closed, no fail-open)", () => {
     const { dir } = writeCustomHookFixture("rm-frozen", "1.0.0");
     setPinnedHook("rm-frozen", { version: "1.0.0", sha256: "e".repeat(64), source: "custom" });
