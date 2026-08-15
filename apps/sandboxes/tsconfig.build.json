@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": true,
+    "declarationMap": false,
+    "emitDeclarationOnly": true,
+    "noEmit": false,
+    "outDir": "dist/types",
+    "rootDir": "src/adapters/managed",
+    "sourceMap": false,
+    "stripInternal": true
+  },
+  "include": ["src/adapters/managed/**/*.ts"],
+  "exclude": ["dist", "node_modules", "tests"]
+}
