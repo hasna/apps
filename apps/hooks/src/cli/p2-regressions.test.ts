@@ -169,6 +169,32 @@ describe("P2-13 CLI error exit codes", () => {
     expect(res.stdout).toMatch(/direct-path wiring outside the registered surface is not covered/);
     rmSync(SETTINGS_PATH, { force: true });
   });
+
+  test("doctor with ZERO registered hooks still reports the bounds line (P3-10)", async () => {
+    // Direct-path wiring exists but no `hooks run` entries are registered.
+    mkdirSync(TEST_HOME, { recursive: true });
+    writeFileSync(SETTINGS_PATH, JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "",
+            hooks: [
+              { type: "command", command: "python3 /custom/direct-wire.py" },
+            ],
+          },
+        ],
+      },
+    }), "utf-8");
+    const res = await run("doctor");
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toMatch(/No hooks registered/);
+    // P3-10: the checked/wiring bound is printed even when nothing is
+    // registered — "0 of N wiring entries" is the honest verdict.
+    expect(res.stdout).toMatch(/checked 0 registered/);
+    expect(res.stdout).toMatch(/1 settings wiring entries/);
+    expect(res.stdout).toMatch(/direct-path wiring outside the registered surface is not covered/);
+    rmSync(SETTINGS_PATH, { force: true });
+  });
 });
 
 describe("P2-16a sync --dry-run", () => {

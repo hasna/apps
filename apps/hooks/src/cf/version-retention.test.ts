@@ -24,6 +24,12 @@ function sha256Hex(text: string): string {
 class FakeD1 {
   hooks = new Map<string, Record<string, unknown>>();
   versions = new Map<string, Record<string, unknown>>();
+  /**
+   * When true, a hook_versions INSERT yields for 5ms first, so a sibling PUT
+   * racing the same new (name, version) deterministically passes its
+   * existence check before either insert lands (P2-4 concurrent test).
+   */
+  yieldInsert = false;
 
   prepare(sql: string) {
     const self = this;
@@ -40,6 +46,9 @@ class FakeD1 {
         return { results: self.queryAll(sql, params), success: true };
       },
       async run() {
+        if (self.yieldInsert && sql.includes("INSERT INTO hook_versions")) {
+          await Bun.sleep(5);
+        }
         self.exec(sql, params);
         return {};
       },
@@ -66,6 +75,16 @@ class FakeD1 {
         .filter((r) => r.name === name)
         .sort((a, b) => String(a.published_at).localeCompare(String(b.published_at)));
     }
+    if (sql.includes("NOT EXISTS")) {
+      // P2-4 heal query: the newest published version per name.
+      return [...this.versions.values()]
+        .filter(
+          (r) => ![...this.versions.values()].some(
+            (o) => o.name === r.name && String(o.published_at) > String(r.published_at),
+          ),
+        )
+        .map((r) => ({ name: r.name, version: r.version, script_sha256: r.script_sha256, published_at: r.published_at }));
+    }
     if (sql.includes("FROM hooks WHERE enabled = 1")) {
       return [...this.hooks.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
     }
@@ -74,7 +93,11 @@ class FakeD1 {
 
   private exec(sql: string, params: unknown[]): void {
     if (sql.includes("INSERT INTO hook_versions")) {
-      this.versions.set(`${params[0]}@${params[1]}`, {
+      const key = `${params[0]}@${params[1]}`;
+      // P2-4: a concurrent second INSERT of the same (name, version) hits the
+      // primary key exactly like D1 — the loser must fail, not overwrite.
+      if (this.versions.has(key)) throw new Error(`constraint failed: PRIMARY KEY (name, version)`);
+      this.versions.set(key, {
         name: params[0],
         version: params[1],
         manifest_json: params[2],
@@ -82,6 +105,10 @@ class FakeD1 {
         artifact_key: params[4],
         published_at: params[5],
       });
+      return;
+    }
+    if (sql.includes("DELETE FROM hook_versions")) {
+      this.versions.delete(`${params[0]}@${params[1]}`);
       return;
     }
     if (sql.includes("INSERT INTO hooks")) {
@@ -100,6 +127,7 @@ class FakeD1 {
 
 class FakeR2 {
   objects = new Map<string, string>();
+  failPuts = false;
 
   async get(key: string) {
     const raw = this.objects.get(key);
@@ -108,6 +136,7 @@ class FakeR2 {
   }
 
   async put(key: string, value: string) {
+    if (this.failPuts) throw new Error("r2 unavailable (injected)");
     this.objects.set(key, value);
   }
 }
@@ -221,5 +250,89 @@ describe("worker version retention (P1-4 / d3b4025c)", () => {
   test("SEMVER_PATTERN is shared with the manifest validation (P2-10)", () => {
     expect(SEMVER_PATTERN.test("1.2.3")).toBe(true);
     expect(SEMVER_PATTERN.test("1.2.3-beta.1")).toBe(true);
+  });
+
+  test("concurrent first-publish of the same new version: one succeeds, the loser 409s, no artifact mismatch (P2-4)", async () => {
+    const env = makeEnv();
+    const d1 = env.HOOKS_D1 as unknown as FakeD1;
+    // Force the race: both PUTs pass the existence check before either
+    // version row lands (the insert yields, the sibling catches up).
+    d1.yieldInsert = true;
+    const [r1, r2] = await Promise.all([
+      worker.fetch(publishBody("3.0.0", SCRIPT_V1), env),
+      worker.fetch(publishBody("3.0.0", SCRIPT_V2), env),
+    ]);
+    expect([r1.status, r2.status].sort()).toEqual([200, 409]);
+    // The recorded script_sha256 matches the R2 bytes that actually landed.
+    const versionRow = d1.versions.get("gitguard@3.0.0")!;
+    const recordedSha = String(versionRow.script_sha256);
+    const artifact = await (env.HOOKS_R2 as unknown as FakeR2).get("hook_artifacts/gitguard/3.0.0.json");
+    expect(artifact).not.toBeNull();
+    const payload = await artifact!.json() as { script: string };
+    expect(recordedSha).toBe(sha256Hex(payload.script));
+    // The catalog serves the artifact consistent with the version row.
+    const catalog = await (await worker.fetch(req("GET", "/api/v1/catalog", { "x-api-key": "secret-key" }), env)).json() as { hooks: Array<{ version: string; sha256: string }> };
+    expect(catalog.hooks).toHaveLength(1);
+    expect(catalog.hooks[0].sha256).toBe(recordedSha);
+  });
+
+  test("an R2 write failure rolls back the version row — no partial state survives (P2-4)", async () => {
+    const env = makeEnv();
+    const d1 = env.HOOKS_D1 as unknown as FakeD1;
+    const r2 = env.HOOKS_R2 as unknown as FakeR2;
+    r2.failPuts = true;
+    const res = await worker.fetch(publishBody("6.0.0", SCRIPT_V1), env);
+    expect(res.status).toBe(500);
+    expect(d1.versions.size).toBe(0);
+    expect(d1.hooks.size).toBe(0);
+    // The version is publishable again — no lingering row blocks it.
+    r2.failPuts = false;
+    expect((await worker.fetch(publishBody("6.0.0", SCRIPT_V1), env)).status).toBe(200);
+    expect(d1.versions.has("gitguard@6.0.0")).toBe(true);
+  });
+
+  test("a crash between the version INSERT and the latest-pointer upsert heals on the next catalog GET (P2-4)", async () => {
+    const env = makeEnv();
+    const d1 = env.HOOKS_D1 as unknown as FakeD1;
+    const sha = sha256Hex(SCRIPT_V1);
+    d1.versions.set("gitguard@5.0.0", {
+      name: "gitguard",
+      version: "5.0.0",
+      manifest_json: JSON.stringify({ name: "gitguard", version: "5.0.0", events: ["PreToolUse"], script: "src/hook.ts" }),
+      script_sha256: sha,
+      artifact_key: "hook_artifacts/gitguard/5.0.0.json",
+      published_at: "2026-08-15T00:00:00.000Z",
+    });
+    (env.HOOKS_R2 as unknown as FakeR2).objects.set(
+      "hook_artifacts/gitguard/5.0.0.json",
+      JSON.stringify({ manifest: { name: "gitguard", version: "5.0.0", events: ["PreToolUse"], script: "src/hook.ts" }, script: SCRIPT_V1 }),
+    );
+    // No hooks row: the crash window between INSERT and pointer upsert.
+    expect(d1.hooks.has("gitguard")).toBe(false);
+
+    const catalog = await (await worker.fetch(req("GET", "/api/v1/catalog", { "x-api-key": "secret-key" }), env)).json() as { hooks: Array<{ name: string; version: string; sha256: string; versions: string[] }> };
+    expect(catalog.hooks).toHaveLength(1);
+    expect(catalog.hooks[0].name).toBe("gitguard");
+    expect(catalog.hooks[0].version).toBe("5.0.0");
+    expect(catalog.hooks[0].sha256).toBe(sha);
+    expect(catalog.hooks[0].versions).toEqual(["5.0.0"]);
+    // The pointer row was healed, so the lock agrees on the next read.
+    expect(d1.hooks.get("gitguard")?.version).toBe("5.0.0");
+    const lock = await (await worker.fetch(req("GET", "/api/v1/lock", { "x-api-key": "secret-key" }), env)).json() as { hooks: Record<string, { version: string }> };
+    expect(lock.hooks.gitguard.version).toBe("5.0.0");
+  });
+
+  test("a byte-identical republish heals a missing latest pointer (P2-4)", async () => {
+    const env = makeEnv();
+    const d1 = env.HOOKS_D1 as unknown as FakeD1;
+    expect((await worker.fetch(publishBody("1.0.0", SCRIPT_V1), env)).status).toBe(200);
+    // Simulate the crash window: the version row exists, the pointer is gone.
+    d1.hooks.delete("gitguard");
+    const second = await worker.fetch(publishBody("1.0.0", SCRIPT_V1), env);
+    expect(second.status).toBe(200);
+    const body = await second.json() as { idempotent?: boolean };
+    expect(body.idempotent).toBe(true);
+    expect(d1.hooks.has("gitguard")).toBe(true);
+    expect(d1.hooks.get("gitguard")?.version).toBe("1.0.0");
   });
 });
