@@ -24,7 +24,6 @@
 
 import { createHash } from "node:crypto";
 import type { DispatchResult, Dispatcher } from "../../dispatcher.js";
-import type { ServerRunRecord } from "../../../server/types.js";
 import type { RunExecutionStore } from "../storage.js";
 import type { AttemptRecord, FrozenAdmission } from "../types.js";
 import { canonicalJson } from "../types.js";
@@ -141,9 +140,9 @@ export class EcsDispatcher implements Dispatcher {
     this.now = options.now ?? (() => new Date());
   }
 
-  /** sdk Dispatcher surface: submit a run to the launch machinery. */
-  async submit(run: ServerRunRecord): Promise<DispatchResult> {
-    const outcome = await this.launchAttempt(run.id);
+  /** sdk Dispatcher surface: submit an ADMITTED run (execution domain) to the launch machinery. */
+  async submit(run: FrozenAdmission): Promise<DispatchResult> {
+    const outcome = await this.launchAttempt(run.runId);
     switch (outcome.kind) {
       case "launched":
       case "already-launched":
@@ -211,6 +210,11 @@ export class EcsDispatcher implements Dispatcher {
     if (previous && previous.status !== "terminal" && !isProvenAbsentOrTerminal(previous.launchState)) {
       const reconciled = await this.reconcile(run.admission, previous);
       if (reconciled.kind === "already-launched" || reconciled.kind === "previous-terminal") {
+        return reconciled;
+      }
+      if (reconciled.kind === "ambiguous") {
+        // The reconcile probe failed: the launch is still unknown, and a new
+        // attempt with a different clientToken could start a second ECS task.
         return reconciled;
       }
       // Proven absent: fall through to mint a new attempt.

@@ -6,8 +6,18 @@
  * attempts, persisted launch intents, deterministic RunTask clientTokens, and
  * lost-response reconciliation. The E2B lane is a typed stub pending the
  * infinity integration.
+ *
+ * submit() takes the EXECUTION-domain admission (`FrozenAdmission`), whose
+ * `runId` (`run_<ts>_<hex>`) is the execution store's own key — NOT the
+ * server run record (`ServerRunRecord.id`, a UUID), which the execution store
+ * cannot resolve and would silently no-admit. Intended wiring: the
+ * POST /api/v1/runs handler creates a server run through `store.createRun`
+ * (billing/audit record, UUID id); the execution lane bridges it to this seam
+ * through `createSubmitRunService` (idempotent admission), which mints or
+ * returns the `FrozenAdmission`; then `dispatcher.submit(admission)` launches
+ * it. The bridge is mandatory — passing a server record here is a type error.
  */
-import type { ServerRunRecord } from "../server/types.js";
+import type { FrozenAdmission } from "./execution/types.js";
 
 import { EcsDispatcher, E2bDispatcher } from "./execution/index.js";
 
@@ -23,9 +33,9 @@ export interface DispatchResult {
   detail?: string;
 }
 
-/** A dispatcher takes runs out of the queue and puts them in front of an executor. */
+/** A dispatcher takes admitted execution runs and puts them in front of an executor. */
 export interface Dispatcher {
-  submit(run: ServerRunRecord): Promise<DispatchResult>;
+  submit(run: FrozenAdmission): Promise<DispatchResult>;
   cancel(runId: string): Promise<DispatchResult>;
 }
 

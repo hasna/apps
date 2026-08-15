@@ -6,6 +6,7 @@ useDefaultTestTimeout();
 import { createSubmitRunService } from "../admission.js";
 import { createImageProfileRegistry } from "../image-profile.js";
 import { MemoryRunExecutionStore } from "../storage.js";
+import type { FrozenAdmission } from "../types.js";
 import { EcsDispatcher, clientTokenFor, startedByFor, type EcsRunTaskClient, type EcsRunTaskInput, type EcsTaskState } from "./ecs.js";
 
 const PROFILES = createImageProfileRegistry({
@@ -55,7 +56,7 @@ class MockEcsClient implements EcsRunTaskClient {
   }
 }
 
-async function admittedRunId(store: MemoryRunExecutionStore, key: string): Promise<string> {
+async function admittedRun(store: MemoryRunExecutionStore, key: string): Promise<FrozenAdmission> {
   const service = createSubmitRunService({ store, imageProfiles: PROFILES });
   const { run } = await service.submit({
     tenantId: "tenant-ecs-test",
@@ -66,7 +67,11 @@ async function admittedRunId(store: MemoryRunExecutionStore, key: string): Promi
     idempotencyKey: key,
     runtime: "bun",
   });
-  return run.runId;
+  return run;
+}
+
+async function admittedRunId(store: MemoryRunExecutionStore, key: string): Promise<string> {
+  return (await admittedRun(store, key)).runId;
 }
 
 function makeDispatcher(store: MemoryRunExecutionStore, client: EcsRunTaskClient): EcsDispatcher {
@@ -176,6 +181,36 @@ describe("ecs dispatcher", () => {
     expect(client.runTaskCalls[0]!.clientToken).not.toBe(client.runTaskCalls[1]!.clientToken);
   });
 
+  test("lost RunTask response + failing reconcile probe returns ambiguous and never mints a new attempt", async () => {
+    const store = new MemoryRunExecutionStore();
+    // The task DID launch server-side, but the RunTask response is lost AND
+    // the reconcile probe fails: the previous launch stays unknown. A second
+    // attempt with a different clientToken would risk a second ECS task.
+    const client = new MockEcsClient(async (input) => {
+      const taskArn = `arn:aws:ecs:${CONFIG.region}:mock-account:task/${input.startedBy}`;
+      client.launchedTasks.set(taskArn, { taskArn, lastStatus: "RUNNING" });
+      throw new Error("socket hang up");
+    });
+    client.listTasksByStartedBy = async () => {
+      throw new Error("reconcile probe failed");
+    };
+    const dispatcher = makeDispatcher(store, client);
+    const runId = await admittedRunId(store, "ecs-lost-ambiguous");
+
+    // First call: response lost; the in-call reconcile probe also fails.
+    await dispatcher.launchAttempt(runId);
+    // Second call: the previous attempt is ambiguous; the probe fails again.
+    // The ambiguous result must be returned as-is — no fall-through mint.
+    const second = await dispatcher.launchAttempt(runId);
+    expect(second.kind).toBe("ambiguous");
+
+    expect(client.runTaskCalls).toHaveLength(1);
+    const attempts = await store.listAttempts(runId);
+    expect(attempts).toHaveLength(1);
+    // The unknown launch stays recorded as ambiguous, never silently absent.
+    expect(attempts[0]!.launchState).toBe("ambiguous");
+  });
+
   test("a previous launch proven TERMINAL blocks a new attempt", async () => {
     const store = new MemoryRunExecutionStore();
     const client = new MockEcsClient(async (input) => {
@@ -225,13 +260,12 @@ describe("ecs dispatcher", () => {
     const store = new MemoryRunExecutionStore();
     const client = new MockEcsClient();
     const dispatcher = makeDispatcher(store, client);
-    const runId = await admittedRunId(store, "ecs-submit");
-
-    const submitted = await dispatcher.submit({ id: runId } as never);
+    const run = await admittedRun(store, "ecs-submit");
+    const submitted = await dispatcher.submit(run);
     expect(submitted.accepted).toBe(true);
     expect(submitted.target).toBeTruthy();
 
-    const cancelled = await dispatcher.cancel(runId);
+    const cancelled = await dispatcher.cancel(run.runId);
     expect(cancelled.accepted).toBe(true);
   });
 

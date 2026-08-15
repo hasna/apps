@@ -9,13 +9,13 @@
  */
 
 import type { DispatchResult, Dispatcher } from "../../dispatcher.js";
-import type { ServerRunRecord } from "../../../server/types.js";
+import type { FrozenAdmission } from "../types.js";
 
 /** Marker so callers and tests can detect the unimplemented lane by type. */
 export const E2B_LANE_STATUS = "e2b-lane-todo-infinity" as const;
 
 export class E2bDispatcher implements Dispatcher {
-  async submit(_run: ServerRunRecord): Promise<DispatchResult> {
+  async submit(_run: FrozenAdmission): Promise<DispatchResult> {
     return {
       accepted: false,
       detail: `${E2B_LANE_STATUS}: E2B submit is not implemented — the infinity lane is a follow-up`,
