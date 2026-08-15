@@ -33,7 +33,7 @@
   "scripts": {
     "clean": "rm -rf dist dashboard/dist",
     "clean:core": "rm -rf dist",
-    "build": "bun run clean && cd dashboard && bun run build && cd .. && bun run build:bundles && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "bun run clean && cd dashboard && bun install --frozen-lockfile && bun run build && cd .. && bun run build:bundles && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "build:core": "bun run clean:core && bun run build:bundles && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "build:bundles": "bun run scripts/build-bundles.ts",
     "build:server": "rm -rf dist/server dist/sdk && bun run scripts/build-bundles.ts --server-only",
@@ -89,7 +89,8 @@
     "@types/pg": "^8.11.11",
     "@types/react": "^18.3.18",
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "bun-types": "1.3.14"
   },
   "overrides": {
     "fast-uri": "3.1.3"
