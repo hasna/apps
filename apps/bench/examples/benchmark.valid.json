@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "bench.manifest.v1",
+  "id": "example-fixture",
+  "manifestVersion": "1.0.0",
+  "name": "Example Fixture Benchmark",
+  "description": "A small manifest used to verify open-bench manifest validation.",
+  "category": "custom",
+  "homepageUrl": "https://example.com/benchmark",
+  "sources": [
+    {
+      "type": "website",
+      "url": "https://example.com/benchmark",
+      "verifiedAt": "2026-06-29"
+    }
+  ],
+  "license": {
+    "spdxId": "Apache-2.0",
+    "name": "Apache License 2.0",
+    "url": "https://spdx.org/licenses/Apache-2.0.html",
+    "status": "declared",
+    "requiresAttribution": false
+  },
+  "runner": {
+    "kind": "custom",
+    "capabilities": ["dry-run", "artifact-capture"],
+    "requiresNetwork": false,
+    "requiresSandbox": false,
+    "supportsDryRun": true,
+    "expectedArtifacts": ["results.json"]
+  },
+  "metrics": [
+    {
+      "id": "pass_rate",
+      "name": "Pass rate",
+      "unit": "ratio",
+      "direction": "higher-is-better"
+    }
+  ],
+  "adapter": {
+    "status": "candidate",
+    "notes": "Fixture-only adapter."
+  },
+  "safety": {
+    "class": "offline-safe",
+    "allowsNetwork": false,
+    "requiresSandbox": false,
+    "requiresSecrets": false,
+    "costRisk": "none"
+  },
+  "tags": ["fixture"],
+  "maintainers": ["open-bench"]
+}

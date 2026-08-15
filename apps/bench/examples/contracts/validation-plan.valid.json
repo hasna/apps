@@ -1,0 +1,33 @@
+{
+  "schema": "hasna.validation_plan.v1",
+  "id": "validation_lm_evaluation_harness_1_0_0",
+  "createdAt": "2026-07-07T10:00:00.000Z",
+  "objective": "Validate benchmark plan for EleutherAI lm-evaluation-harness",
+  "subject": {
+    "kind": "eval",
+    "id": "lm-evaluation-harness",
+    "externalId": "lm-evaluation-harness",
+    "sourcePackage": "@hasna/bench"
+  },
+  "checks": [
+    {
+      "id": "manifest-valid",
+      "kind": "manual",
+      "expected": "bench.manifest.v1 parses for lm-evaluation-harness@1.0.0",
+      "required": true
+    },
+    {
+      "id": "dry-run-command",
+      "kind": "command",
+      "command": "lm_eval --model example/model",
+      "expected": "dry-run command plan only",
+      "required": false
+    }
+  ],
+  "verifier": {
+    "kind": "service",
+    "id": "open-bench-safety-gate",
+    "provider": "@hasna/bench"
+  },
+  "requiredEvidenceKinds": ["command_output", "metric", "artifact"]
+}

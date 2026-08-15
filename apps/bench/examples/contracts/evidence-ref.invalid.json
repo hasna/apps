@@ -1,0 +1,8 @@
+{
+  "schema": "hasna.evidence_ref.v1",
+  "id": "ev_bench_segment_invalid",
+  "createdAt": "2026-07-07T10:00:00.000Z",
+  "kind": "artifact",
+  "uri": "ftp://bench/runs/run_bench_contract_invalid/results.jsonl",
+  "redaction": "partial"
+}

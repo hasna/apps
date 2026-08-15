@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "bench.manifest.v1",
+  "id": "Invalid Fixture",
+  "manifestVersion": "1",
+  "name": "Invalid Fixture Benchmark",
+  "category": "custom",
+  "sources": [],
+  "license": {
+    "name": "",
+    "status": "unknown"
+  },
+  "runner": {
+    "kind": "custom"
+  },
+  "metrics": [],
+  "adapter": {
+    "status": "candidate"
+  },
+  "safety": {
+    "class": "offline-safe"
+  }
+}

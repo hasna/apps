@@ -1,0 +1,14 @@
+node_modules/
+.bun-cache/
+dist/
+*.tgz
+.DS_Store
+.env
+.env.*
+!.env.example
+.secrets/
+.connect/
+.hasna/
+coverage/
+tmp/
+*.log

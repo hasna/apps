@@ -1,0 +1,21 @@
+{
+  "schema": "hasna.cost_estimate.v1",
+  "id": "cost_bench_contract_valid",
+  "createdAt": "2026-07-07T10:00:00.000Z",
+  "currency": "USD",
+  "amountMicros": 12000,
+  "provider": "example-provider",
+  "model": "example/model",
+  "promptTokens": 120,
+  "completionTokens": 34,
+  "totalTokens": 154,
+  "basis": "actual",
+  "resourceRefs": [
+    {
+      "kind": "run",
+      "id": "run_bench_contract_valid",
+      "externalId": "run_bench_contract_valid",
+      "sourcePackage": "@hasna/bench"
+    }
+  ]
+}
