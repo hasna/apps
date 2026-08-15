@@ -14,7 +14,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { runHook } from "../index.js";
 import { executeVerifiedScript } from "./run.js";
-import { buildHookEnv, isDeniedEnvName } from "./hook-env.js";
+import { buildHookEnv, isDeniedEnvName, isInterpreterInjectionEnvName } from "./hook-env.js";
 import { closeDb } from "../db/index.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-env-test-"));
@@ -153,6 +153,73 @@ describe("buildHookEnv sanitizer", () => {
   });
 });
 
+describe("interpreter-injection variables (bug cf99cf76)", () => {
+  test("isInterpreterInjectionEnvName covers the sourcing and interpreter-config set", () => {
+    for (const name of [
+      "BASH_ENV",
+      "ENV",
+      "BASHOPTS",
+      "SHELLOPTS",
+      "NODE_OPTIONS",
+      "NODE_PATH",
+      "PYTHONSTARTUP",
+      "PYTHONINSPECT",
+      "PYTHONPATH",
+      "LD_PRELOAD",
+      "LD_LIBRARY_PATH",
+    ]) {
+      expect(isInterpreterInjectionEnvName(name), `${name} must be flagged`).toBe(true);
+    }
+    // Non-interpreter names are not flagged by the injection predicate
+    // (they may still be denied as credential-shaped — separate predicate).
+    expect(isInterpreterInjectionEnvName("PATH")).toBe(false);
+    expect(isInterpreterInjectionEnvName("BASH_VERSION")).toBe(false);
+    expect(isInterpreterInjectionEnvName("HOOKS_DATA_DIR")).toBe(false);
+  });
+
+  test("buildHookEnv strips interpreter-injection names from source and from extras", () => {
+    const source: Record<string, string | undefined> = {
+      PATH: "/usr/bin:/bin",
+      BASH_ENV: "/home/hasna/.config/hasna-cloud-env.sh",
+      ENV: "/home/hasna/.config/hasna-cloud-env.sh",
+      BASHOPTS: "checkwinsize:cmdhist",
+      SHELLOPTS: "braceexpand:hashall",
+      NODE_OPTIONS: "--require /tmp/inject.js",
+      NODE_PATH: "/tmp/node_modules",
+      PYTHONSTARTUP: "/tmp/startup.py",
+      PYTHONINSPECT: "1",
+      PYTHONPATH: "/tmp/pylibs",
+      LD_PRELOAD: "/tmp/libinject.so",
+      LD_LIBRARY_PATH: "/tmp/libs",
+      CUSTOM_NON_SECRET_VAR: "keep-me",
+    };
+    const env = buildHookEnv(source);
+    for (const name of [
+      "BASH_ENV",
+      "ENV",
+      "BASHOPTS",
+      "SHELLOPTS",
+      "NODE_OPTIONS",
+      "NODE_PATH",
+      "PYTHONSTARTUP",
+      "PYTHONINSPECT",
+      "PYTHONPATH",
+      "LD_PRELOAD",
+      "LD_LIBRARY_PATH",
+    ]) {
+      expect(env[name], `expected ${name} to be stripped`).toBeUndefined();
+    }
+    expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.CUSTOM_NON_SECRET_VAR).toBe("keep-me");
+
+    // A caller's extras cannot reintroduce an interpreter-injection name.
+    const withExtra = buildHookEnv({}, { BASH_ENV: "/tmp/evil.sh", NODE_OPTIONS: "--require /tmp/evil.js", PATH: "/opt/bin" });
+    expect(withExtra.BASH_ENV).toBeUndefined();
+    expect(withExtra.NODE_OPTIONS).toBeUndefined();
+    expect(withExtra.PATH).toBe("/opt/bin");
+  });
+});
+
 describe("executed hook env isolation (P1-1)", () => {
   test("a real hook child sees no credential variables but keeps PATH and HOME", async () => {
     const scriptPath = installCustomHook(
@@ -213,6 +280,146 @@ describe("executed hook env isolation (P1-1)", () => {
     } finally {
       if (previous === undefined) delete process.env.GITHUB_TOKEN;
       else process.env.GITHUB_TOKEN = previous;
+    }
+  });
+});
+
+describe("BASH_ENV / interpreter-injection at the live child boundary (bug cf99cf76)", () => {
+  const CF_DIR = join(TEST_DIR, "cf99");
+  let sourcingFile: string;
+  let sourcingLog: string;
+
+  /**
+   * The file a maliciously-set BASH_ENV would point at: it exports a marker
+   * variable (a name the deny list does NOT catch — the whole point of the
+   * vector is that the credential is re-imported from the FILE, never from
+   * the parent env) and records that it ran. The marker value is built by
+   * concatenation so the CI secrets gate never sees a token-shaped literal.
+   */
+  function writeSourcingFile(): void {
+    mkdirSync(CF_DIR, { recursive: true });
+    sourcingLog = join(CF_DIR, "sourced.log");
+    sourcingFile = join(CF_DIR, "hasna-cloud-env.sh");
+    writeFileSync(
+      sourcingFile,
+      `# simulated fleet credential env, as BASH_ENV would source it\necho "sourced-ran" >> "${sourcingLog}"\nexport HOOKS_MARKER="marker-${"leak"}-${"sentinel"}"\n`,
+    );
+    writeFileSync(join(CF_DIR, "inject.js"), "// no-op: the interpreter must never be told to load this\n");
+  }
+
+  /** The bash hook: dumps its full child env to a scratch file named by $1. */
+  function envDumpSh(dumpPath: string): string {
+    return `env > "$1"\necho "hook-done"\n`;
+  }
+
+  function seedParent(previous: Map<string, string | undefined>): void {
+    for (const [name, value] of [
+      ["BASH_ENV", sourcingFile],
+      ["ENV", sourcingFile],
+      ["NODE_OPTIONS", `--require ${join(CF_DIR, "inject.js")}`],
+    ] as Array<[string, string]>) {
+      previous.set(name, process.env[name]);
+      process.env[name] = value;
+    }
+  }
+
+  function restoreParent(previous: Map<string, string | undefined>): void {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+
+  async function readDump(dumpPath: string): Promise<string> {
+    return (await Bun.file(dumpPath).exists())
+      ? Bun.file(dumpPath).text()
+      : "";
+  }
+
+  test("a .sh hook with BASH_ENV seeded: the file is never sourced and the child env has no marker and no sourcing vars", async () => {
+    writeSourcingFile();
+    const dumpPath = join(CF_DIR, "sh-env-dump.txt");
+    const hookPath = join(CF_DIR, "dump-env.sh");
+    writeFileSync(hookPath, envDumpSh(dumpPath), { mode: 0o600 });
+
+    const previous = new Map<string, string | undefined>();
+    seedParent(previous);
+    try {
+      const result = await executeVerifiedScript({
+        name: "cf99-bash-env",
+        scriptPath: hookPath,
+        content: await Bun.file(hookPath).arrayBuffer().then((b) => Buffer.from(b)),
+        args: [dumpPath],
+        stdin: "",
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("hook-done");
+
+      const dumped = await readDump(dumpPath);
+      expect(dumped, "child env dump must not contain the marker the sourcing file exports").not.toContain("HOOKS_MARKER=");
+      expect(dumped, "child env must carry no BASH_ENV entry at all").not.toContain("BASH_ENV=");
+      expect(dumped, "child env must carry no ENV entry at all").not.toMatch(/(^|\n)ENV=/);
+      expect(dumped, "child env must carry no NODE_OPTIONS entry at all").not.toContain("NODE_OPTIONS=");
+      expect(result.stdout).not.toContain("marker-leak-sentinel");
+
+      // The sourcing file must never have RUN: bash sources BASH_ENV before
+      // the script, so a surviving pointer would be visible here even if the
+      // marker export were filtered later.
+      expect(await Bun.file(sourcingLog).exists(), "the BASH_ENV file must never be sourced").toBe(false);
+    } finally {
+      restoreParent(previous);
+    }
+  });
+
+  test("a shebang-bash hook (.ts file, #!/bin/bash) is equally protected", async () => {
+    writeSourcingFile();
+    const dumpPath = join(CF_DIR, "shebang-env-dump.txt");
+    const hookPath = join(CF_DIR, "dump-env.shebang.ts");
+    writeFileSync(hookPath, `#!/bin/bash\n${envDumpSh(dumpPath)}`, { mode: 0o600 });
+
+    const previous = new Map<string, string | undefined>();
+    seedParent(previous);
+    try {
+      const result = await executeVerifiedScript({
+        name: "cf99-shebang",
+        scriptPath: hookPath,
+        content: await Bun.file(hookPath).arrayBuffer().then((b) => Buffer.from(b)),
+        args: [dumpPath],
+        stdin: "",
+      });
+      expect(result.exitCode).toBe(0);
+      const dumped = await readDump(dumpPath);
+      expect(dumped).not.toContain("HOOKS_MARKER=");
+      expect(dumped).not.toContain("BASH_ENV=");
+      expect(await Bun.file(sourcingLog).exists(), "the BASH_ENV file must never be sourced").toBe(false);
+    } finally {
+      restoreParent(previous);
+    }
+  });
+
+  test("a node/bun hook with NODE_OPTIONS seeded: the child env has no NODE_OPTIONS and no marker", async () => {
+    writeSourcingFile();
+    const hookPath = join(CF_DIR, "dump-env.ts");
+    writeFileSync(hookPath, `console.log(JSON.stringify({ env: process.env }));\n`);
+
+    const previous = new Map<string, string | undefined>();
+    seedParent(previous);
+    try {
+      const result = await executeVerifiedScript({
+        name: "cf99-node-options",
+        scriptPath: hookPath,
+        content: await Bun.file(hookPath).arrayBuffer().then((b) => Buffer.from(b)),
+        args: [],
+        stdin: "",
+      });
+      expect(result.exitCode).toBe(0);
+      const { env } = JSON.parse(result.stdout);
+      expect(env.NODE_OPTIONS, "child must not see NODE_OPTIONS").toBeUndefined();
+      expect(env.BASH_ENV, "child must not see BASH_ENV").toBeUndefined();
+      expect(env.HOOKS_MARKER, "child must not see the marker").toBeUndefined();
+      expect(await Bun.file(sourcingLog).exists(), "the BASH_ENV file must never be sourced").toBe(false);
+    } finally {
+      restoreParent(previous);
     }
   });
 });

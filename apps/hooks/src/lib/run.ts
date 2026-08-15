@@ -181,8 +181,10 @@ export async function executeVerifiedScript(options: VerifiedRunOptions): Promis
       stdout: "pipe",
       stderr: "pipe",
       // P1-1 env isolation: the child never gets process.env wholesale. The
-      // allowlist + name-based deny list applies to the caller's extras too,
-      // so a caller cannot reintroduce a credential-bearing name.
+      // allowlist + name-based deny list + interpreter-injection strip
+      // (cf99cf76: BASH_ENV/ENV/NODE_OPTIONS etc. can re-import credentials
+      // from files through the interpreter) applies to the caller's extras
+      // too, so a caller cannot reintroduce a credential-bearing name.
       env: buildHookEnv(process.env, options.env),
       // Detached spawn makes the child its own session/process-group leader,
       // so a timeout can kill the group (kill(-pid)) instead of leaving

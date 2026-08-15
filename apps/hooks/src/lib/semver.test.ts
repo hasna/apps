@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { parseManifest, resolveScript } from "./manifest.js";
-import { SEMVER_PATTERN, isValidSemver } from "./semver.js";
+import { SEMVER_PATTERN, compareVersions, isValidSemver } from "./semver.js";
 import { installCustomSource } from "./custom-install.js";
 import { closeDb } from "../db/index.js";
 
@@ -56,6 +56,35 @@ describe("shared semver (P2-10)", () => {
       events: ["PostToolUse"],
       script: "x",
     }))).toThrow(/semver/);
+  });
+});
+
+describe("compareVersions precedence (bug 6e412e52)", () => {
+  test("core components compare numerically", () => {
+    expect(compareVersions("1.0.2", "1.0.1")).toBeGreaterThan(0);
+    expect(compareVersions("1.0.1", "1.0.2")).toBeLessThan(0);
+    expect(compareVersions("2.0.0", "1.9.9")).toBeGreaterThan(0);
+    expect(compareVersions("1.10.0", "1.9.0")).toBeGreaterThan(0);
+    expect(compareVersions("1.0.0", "1.0.0")).toBe(0);
+  });
+
+  test("a prerelease sorts before its release", () => {
+    expect(compareVersions("1.0.0-beta", "1.0.0")).toBeLessThan(0);
+    expect(compareVersions("1.0.0", "1.0.0-beta")).toBeGreaterThan(0);
+    expect(compareVersions("1.0.0-alpha", "1.0.0-beta")).toBeLessThan(0);
+  });
+
+  test("prerelease identifiers: numeric < alphanumeric, numeric compares numerically, fewer identifiers sort first", () => {
+    expect(compareVersions("1.0.0-beta.2", "1.0.0-beta.10")).toBeLessThan(0);
+    expect(compareVersions("1.0.0-beta.10", "1.0.0-beta.2")).toBeGreaterThan(0);
+    expect(compareVersions("1.0.0-beta.1", "1.0.0-beta.alpha")).toBeLessThan(0);
+    expect(compareVersions("1.0.0-beta", "1.0.0-beta.1")).toBeLessThan(0);
+  });
+
+  test("build metadata never participates in precedence", () => {
+    expect(compareVersions("1.0.0+meta.5", "1.0.0")).toBe(0);
+    expect(compareVersions("1.0.0", "1.0.0+meta.5")).toBe(0);
+    expect(compareVersions("1.0.1+build.9", "1.0.0+meta.5")).toBeGreaterThan(0);
   });
 });
 

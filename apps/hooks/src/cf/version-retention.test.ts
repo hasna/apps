@@ -61,6 +61,12 @@ class FakeD1 {
       const version = params[1];
       return [...this.versions.values()].find((r) => r.name === name && r.version === version) ?? null;
     }
+    if (sql.includes("SELECT version FROM hooks")) {
+      // 6e412e52: the latest-pointer downgrade guard reads the current
+      // pointer before deciding whether to move it.
+      const row = this.hooks.get(String(params[0]));
+      return row ? { version: String(row.version) } : null;
+    }
     if (sql.includes("FROM hooks WHERE name = ? AND version = ?")) {
       const version = params[1];
       return [...this.hooks.values()].find((r) => r.version === version) ?? null;
@@ -75,15 +81,16 @@ class FakeD1 {
         .filter((r) => r.name === name)
         .sort((a, b) => String(a.published_at).localeCompare(String(b.published_at)));
     }
-    if (sql.includes("NOT EXISTS")) {
-      // P2-4 heal query: the newest published version per name.
-      return [...this.versions.values()]
-        .filter(
-          (r) => ![...this.versions.values()].some(
-            (o) => o.name === r.name && String(o.published_at) > String(r.published_at),
-          ),
-        )
-        .map((r) => ({ name: r.name, version: r.version, script_sha256: r.script_sha256, published_at: r.published_at }));
+    if (sql.includes("SELECT name, version, script_sha256, published_at FROM hook_versions")) {
+      // 6e412e52 heal query: ALL published versions; the worker picks the
+      // highest SEMVER per name in JS (published_at is no longer a proxy for
+      // newest — an older-version republish carries a LATER timestamp).
+      return [...this.versions.values()].map((r) => ({
+        name: r.name,
+        version: r.version,
+        script_sha256: r.script_sha256,
+        published_at: r.published_at,
+      }));
     }
     if (sql.includes("FROM hooks WHERE enabled = 1")) {
       return [...this.hooks.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
@@ -334,5 +341,104 @@ describe("worker version retention (P1-4 / d3b4025c)", () => {
     expect(body.idempotent).toBe(true);
     expect(d1.hooks.has("gitguard")).toBe(true);
     expect(d1.hooks.get("gitguard")?.version).toBe("1.0.0");
+  });
+
+  test("publishing an OLDER version never moves the latest pointer down (6e412e52)", async () => {
+    const env = makeEnv();
+    expect((await worker.fetch(publishBody("1.0.2", SCRIPT_V2), env)).status).toBe(200);
+    expect((await worker.fetch(publishBody("1.0.1", SCRIPT_V1), env)).status).toBe(200);
+
+    const catalog = await (await worker.fetch(req("GET", "/api/v1/catalog", { "x-api-key": "secret-key" }), env)).json() as { hooks: Array<{ name: string; version: string; versions: string[] }> };
+    expect(catalog.hooks).toHaveLength(1);
+    expect(catalog.hooks[0].name).toBe("gitguard");
+    expect(catalog.hooks[0].version, "pointer must stay on the higher version").toBe("1.0.2");
+    expect(catalog.hooks[0].versions).toEqual(["1.0.2", "1.0.1"]);
+
+    // The older row IS stored and fetchable by exact pin — history grows.
+    const old = await worker.fetch(req("GET", "/api/v1/hooks/gitguard/1.0.1", { "x-api-key": "secret-key" }), env);
+    expect(old.status).toBe(200);
+    expect(old.headers.get("x-hook-sha256")).toBe(sha256Hex(SCRIPT_V1));
+
+    const lock = await (await worker.fetch(req("GET", "/api/v1/lock", { "x-api-key": "secret-key" }), env)).json() as { hooks: Record<string, { version: string; versions: string[] }> };
+    expect(lock.hooks.gitguard.version).toBe("1.0.2");
+    expect(lock.hooks.gitguard.versions).toEqual(["1.0.2", "1.0.1"]);
+  });
+
+  test("publishing a HIGHER version still moves the pointer forward (6e412e52)", async () => {
+    const env = makeEnv();
+    expect((await worker.fetch(publishBody("1.0.2", SCRIPT_V2), env)).status).toBe(200);
+    expect((await worker.fetch(publishBody("1.0.3", SCRIPT_V2), env)).status).toBe(200);
+
+    const catalog = await (await worker.fetch(req("GET", "/api/v1/catalog", { "x-api-key": "secret-key" }), env)).json() as { hooks: Array<{ version: string; versions: string[] }> };
+    expect(catalog.hooks[0].version).toBe("1.0.3");
+    expect(catalog.hooks[0].versions).toEqual(["1.0.2", "1.0.3"]);
+  });
+
+  test("a prerelease never displaces its own release as the pointer (6e412e52)", async () => {
+    const env = makeEnv();
+    expect((await worker.fetch(publishBody("1.0.0", SCRIPT_V1), env)).status).toBe(200);
+    expect((await worker.fetch(publishBody("1.0.0-beta.1", SCRIPT_V1), env)).status).toBe(200);
+
+    const catalog = await (await worker.fetch(req("GET", "/api/v1/catalog", { "x-api-key": "secret-key" }), env)).json() as { hooks: Array<{ version: string; versions: string[] }> };
+    expect(catalog.hooks[0].version).toBe("1.0.0");
+    expect(catalog.hooks[0].versions).toEqual(["1.0.0", "1.0.0-beta.1"]);
+  });
+
+  test("a same-version identical republish leaves the pointer unchanged (6e412e52)", async () => {
+    const env = makeEnv();
+    expect((await worker.fetch(publishBody("1.0.2", SCRIPT_V2), env)).status).toBe(200);
+    expect((await worker.fetch(publishBody("1.0.1", SCRIPT_V1), env)).status).toBe(200);
+    const d1 = env.HOOKS_D1 as unknown as FakeD1;
+    expect(d1.hooks.get("gitguard")?.version).toBe("1.0.2");
+
+    const again = await worker.fetch(publishBody("1.0.2", SCRIPT_V2), env);
+    expect(again.status).toBe(200);
+    expect((await again.json() as { idempotent?: boolean }).idempotent).toBe(true);
+    expect(d1.hooks.get("gitguard")?.version, "pointer must not move on an idempotent republish").toBe("1.0.2");
+  });
+
+  test("the heal path picks the highest SEMVER, never a later-published older version (6e412e52)", async () => {
+    const env = makeEnv();
+    const d1 = env.HOOKS_D1 as unknown as FakeD1;
+    const sha1 = sha256Hex(SCRIPT_V1);
+    const sha2 = sha256Hex(SCRIPT_V2);
+    // 1.0.2 published FIRST; the older 1.0.1 republished LATER. The crash
+    // window (no pointer row) must heal to 1.0.2 by semver, not to 1.0.1 by
+    // published_at — exactly the downgrade the old heal query performed.
+    d1.versions.set("gitguard@1.0.2", {
+      name: "gitguard",
+      version: "1.0.2",
+      manifest_json: JSON.stringify({ name: "gitguard", version: "1.0.2", events: ["PreToolUse"], script: "src/hook.ts" }),
+      script_sha256: sha2,
+      artifact_key: "hook_artifacts/gitguard/1.0.2.json",
+      published_at: "2026-08-15T00:00:00.000Z",
+    });
+    d1.versions.set("gitguard@1.0.1", {
+      name: "gitguard",
+      version: "1.0.1",
+      manifest_json: JSON.stringify({ name: "gitguard", version: "1.0.1", events: ["PreToolUse"], script: "src/hook.ts" }),
+      script_sha256: sha1,
+      artifact_key: "hook_artifacts/gitguard/1.0.1.json",
+      published_at: "2026-08-15T01:00:00.000Z",
+    });
+    (env.HOOKS_R2 as unknown as FakeR2).objects.set(
+      "hook_artifacts/gitguard/1.0.2.json",
+      JSON.stringify({ manifest: { name: "gitguard", version: "1.0.2", events: ["PreToolUse"], script: "src/hook.ts" }, script: SCRIPT_V2 }),
+    );
+    (env.HOOKS_R2 as unknown as FakeR2).objects.set(
+      "hook_artifacts/gitguard/1.0.1.json",
+      JSON.stringify({ manifest: { name: "gitguard", version: "1.0.1", events: ["PreToolUse"], script: "src/hook.ts" }, script: SCRIPT_V1 }),
+    );
+    expect(d1.hooks.has("gitguard")).toBe(false);
+
+    const catalog = await (await worker.fetch(req("GET", "/api/v1/catalog", { "x-api-key": "secret-key" }), env)).json() as { hooks: Array<{ version: string; sha256: string; versions: string[] }> };
+    expect(catalog.hooks).toHaveLength(1);
+    expect(catalog.hooks[0].version, "healed pointer must be the highest semver, not the latest published_at").toBe("1.0.2");
+    expect(catalog.hooks[0].sha256).toBe(sha2);
+    expect(catalog.hooks[0].versions).toEqual(["1.0.2", "1.0.1"]);
+    expect(d1.hooks.get("gitguard")?.version).toBe("1.0.2");
+
+    const lock = await (await worker.fetch(req("GET", "/api/v1/lock", { "x-api-key": "secret-key" }), env)).json() as { hooks: Record<string, { version: string }> };
+    expect(lock.hooks.gitguard.version).toBe("1.0.2");
   });
 });

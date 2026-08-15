@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.7] - 2026-08-15
+
+### Security
+
+- **Interpreter-injection variables are stripped from hook child environments (bug cf99cf76).** The P1-1 deny list stripped credential-shaped NAMES, but a credential can be re-imported from a FILE through interpreter machinery: `BASH_ENV` tells bash to source a file before every non-interactive run and `ENV` does the same for interactive shells, so a parent whose `BASH_ENV` points at e.g. hasna-cloud-env.sh handed the hook child a process that re-exported the fleet credential env after the deny list ran. `buildHookEnv` now strips the interpreter-injection set — `BASH_ENV`, `ENV`, `BASHOPTS`, `SHELLOPTS`, `NODE_OPTIONS`, `NODE_PATH`, `PYTHONSTARTUP`, `PYTHONINSPECT`, `PYTHONPATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH` — from both the parent env and caller extras, so no child interpreter can source or run code the hook did not ask for. The single shared `buildHookEnv` covers every run path (CLI, MCP, SDK).
+
+### Fixed
+
+- **The registry latest pointer never moves down (bug 6e412e52).** Publishing an OLDER version (1.0.1 after 1.0.2) previously moved the catalog/lock latest pointer DOWN. The pointer now compares by full semver precedence (shared `compareVersions`, semver.org §11) and only moves forward — equal or higher updates it, lower keeps the current pointer while the (name, version) row and artifact are still stored (history grows). The crash-window heal path (`ensureLatestRows`) picks the highest-semver version per name instead of the latest `published_at`, which had the same downgrade risk when an older version was republished later.
+
 ## [0.6.6] - 2026-08-15
 
 ### Security

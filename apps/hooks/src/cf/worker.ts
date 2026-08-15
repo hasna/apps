@@ -15,13 +15,15 @@
  * keyed (name, version) with the manifest, script sha256, artifact key and
  * publish time; the `hooks` table is the LATEST pointer only. PUT never
  * overwrites an existing (name, version) — a byte-identical republish is
- * idempotent, anything else is a 409 conflict. GET /api/v1/hooks/:name/:version
+ * idempotent, anything else is a 409 conflict. The latest pointer only
+ * moves FORWARD by semver (bug 6e412e52): publishing an older version
+ * stores its row but never downgrades the pointer. GET /api/v1/hooks/:name/:version
  * serves ANY published version (exact pin fetch), and the catalog and lock
  * expose versions[].
  */
 
 import { secureEqual } from "../lib/secure-compare.js";
-import { SEMVER_PATTERN } from "../lib/semver.js";
+import { SEMVER_PATTERN, compareVersions } from "../lib/semver.js";
 
 interface D1Result {
   results?: unknown[];
@@ -158,8 +160,11 @@ function decodeSegment(segment: string): string {
  * history. A crash between the hook_versions INSERT and the latest-pointer
  * upsert leaves a published version with no pointer — invisible to
  * catalog/lock until republished. Every catalog/lock read heals that window
- * (P2-4): the newest published version of any name missing from `hooks`
- * becomes its pointer, so the next GET after a crash returns the hook.
+ * (P2-4): the highest-semver published version of any name missing from
+ * `hooks` becomes its pointer, so the next GET after a crash returns the
+ * hook. The heal compares by SEMVER (bug 6e412e52), never by published_at —
+ * an older-version republish carries a LATER timestamp and must not win the
+ * pointer just because it was published more recently.
  */
 async function ensureLatestRows(env: Env): Promise<HookRow[]> {
   const { results } = await env.HOOKS_D1.prepare(
@@ -167,12 +172,18 @@ async function ensureLatestRows(env: Env): Promise<HookRow[]> {
   ).all();
   const rows = results as unknown as HookRow[];
   const present = new Set(rows.map((row) => row.name));
-  const { results: newest } = await env.HOOKS_D1.prepare(
-    "SELECT name, version, script_sha256, published_at FROM hook_versions v WHERE NOT EXISTS (SELECT 1 FROM hook_versions v2 WHERE v2.name = v.name AND v2.published_at > v.published_at)",
+  const { results: allVersions } = await env.HOOKS_D1.prepare(
+    "SELECT name, version, script_sha256, published_at FROM hook_versions ORDER BY name, published_at",
   ).all();
-  const newestRows = newest as unknown as Array<{ name: string; version: string; script_sha256: string; published_at: string }>;
+  const versionRows = allVersions as unknown as Array<{ name: string; version: string; script_sha256: string; published_at: string }>;
+  // Highest semver per name — the ONLY ordering rule for the pointer.
+  const highest = new Map<string, { name: string; version: string; script_sha256: string; published_at: string }>();
+  for (const row of versionRows) {
+    const current = highest.get(row.name);
+    if (!current || compareVersions(row.version, current.version) > 0) highest.set(row.name, row);
+  }
   const healed: HookRow[] = [];
-  for (const versionRow of newestRows) {
+  for (const versionRow of highest.values()) {
     if (present.has(versionRow.name)) continue;
     await env.HOOKS_D1.prepare(
       `INSERT INTO hooks (id, name, version, sha256, source_type, source_ref, installed_at, enabled, last_verified_at)
@@ -194,8 +205,18 @@ async function ensureLatestRows(env: Env): Promise<HookRow[]> {
   return [...rows, ...healed];
 }
 
-/** Upsert the hooks (latest-pointer) row for a just-published version. */
+/**
+ * Upsert the hooks (latest-pointer) row for a just-published version.
+ *
+ * The pointer only moves FORWARD (bug 6e412e52): publishing an OLDER
+ * version still stores its (name, version) row and artifact — history
+ * grows — but the pointer is compared by semver and kept when the publish
+ * is lower than the current pointer. Equal or higher moves it; lower leaves
+ * the existing pointer untouched.
+ */
 async function upsertLatestPointer(env: Env, name: string, version: string, sha256: string, now: string): Promise<void> {
+  const current = (await env.HOOKS_D1.prepare("SELECT version FROM hooks WHERE id = ?").bind(name).first()) as { version: string } | null;
+  if (current && compareVersions(version, current.version) < 0) return;
   await env.HOOKS_D1.prepare(
     `INSERT INTO hooks (id, name, version, sha256, source_type, source_ref, installed_at, enabled, last_verified_at)
      VALUES (?, ?, ?, ?, 'remote', NULL, ?, 1, NULL)
