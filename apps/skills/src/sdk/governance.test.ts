@@ -200,9 +200,9 @@ describe("governance lifecycle events", () => {
     });
     const run = runLike();
     const event = buildRunLifecycleEvent("skills.run.terminal", { ...run, status: "succeeded" });
-    (event.data as Record<string, unknown>)["status"] = "npm_ABCDEF1234567890abcdef";
+    (event.data as Record<string, unknown>)["status"] = "npm_ABCDEF12345678";
     await expect(
-      emitter.emit("skills.run.terminal", { ...run, status: "npm_ABCDEF1234567890abcdef" } as unknown as ServerRunRecord),
+      emitter.emit("skills.run.terminal", { ...run, status: "npm_ABCDEF12345678" } as unknown as ServerRunRecord),
     ).rejects.toThrowError(GovernanceError);
     expect(emitted).toEqual([]);
   });
