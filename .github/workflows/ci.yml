@@ -115,6 +115,26 @@ jobs:
     name: build + test (affected)
     runs-on: ubuntu-latest
 
+    # apps/capacity's live PostgreSQL suite is a real gate in CI: with the URL
+    # absent the test FAILS (never skips), so the service is part of this job,
+    # not an optional extra. Same postgres:17-alpine image the capacity CI used
+    # in its old repo (pinned digest); ACCOUNTS_TEST_POSTGRES_URL is the
+    # variable apps/capacity/test/live-postgres-gate.ts reads.
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:af194ccf3e2d7fe367012c7b88ce8b816c5c889b18a5b316799a1f0d7eac746a
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: capacity_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d capacity_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -186,6 +206,7 @@ jobs:
         run: bunx turbo run test --affected --concurrency=1
         env:
           TURBO_SCM_BASE: ${{ steps.affected.outputs.base }}
+          ACCOUNTS_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/capacity_test?sslmode=disable
 
   # ---------------------------------------------------------------------------------
   publish-guard:
