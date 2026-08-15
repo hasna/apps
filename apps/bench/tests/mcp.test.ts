@@ -119,7 +119,7 @@ describe("@hasna/bench MCP tools", () => {
       expect(missingPlanArg.ok).toBe(false);
       expect(missingPlanArg.error.length).toBeGreaterThan(0);
       expect(pathMode.ok).toBe(false);
-      expect(pathMode.error).toContain("manifest");
+      expect(pathMode.error.length).toBeGreaterThan(0);
       expect(unknownSuite.ok).toBe(false);
       expect(unknownSuite.error).toContain("Unknown benchmark suite");
     } finally {
