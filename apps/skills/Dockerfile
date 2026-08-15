@@ -14,7 +14,9 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/bin ./bin
 COPY --from=build /app/dist ./dist
 COPY package.json ./
-COPY skills ./skills
+# Corpus-free by contract: the runtime image carries NO skill corpus
+# (neither ./skills nor ./agent-skills). Bundles are fetched by digest
+# from the registry at run time.
 COPY migrations ./migrations
 EXPOSE 8787
 CMD ["bun", "bin/server.js"]
