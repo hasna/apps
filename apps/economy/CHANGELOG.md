@@ -2,7 +2,7 @@
 
 All notable changes to this repository are tracked here. This project follows semantic versioning for published npm packages when practical.
 
-## @hasna/economy Unreleased
+## @hasna/economy 0.3.10 - 2026-08-15
 
 Two PRs merged after `0.3.9`; neither is published yet.
 
