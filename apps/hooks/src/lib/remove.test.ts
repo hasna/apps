@@ -124,6 +124,25 @@ describe("uninstallHook — custom/registry/bundled/nonexistent (QA-1 BUG-A / QA
     const settings = JSON.parse(require("fs").readFileSync(SETTINGS, "utf-8"));
     expect(settings.hooks ?? {}).toEqual({});
   });
+
+  test("codewith target: store/lock/DB cleaned, TOML config never written", () => {
+    const { dir } = writeCustomHookFixture("rm-codewith", "1.0.0");
+    setPinnedHook("rm-codewith", { version: "1.0.0", sha256: "d".repeat(64), source: "custom" });
+    const db = getDb();
+    upsertHookRecord(db, { name: "rm-codewith", version: "1.0.0", sha256: "d".repeat(64), source_type: "custom" });
+    const toml = join(TEST_DIR, ".codewith", "config.toml");
+    mkdirSync(join(TEST_DIR, ".codewith"), { recursive: true });
+    writeFileSync(toml, '[[hooks.Stop]]\nhooks = [{ type = "command", command = "hooks run rm-codewith" }]\n');
+
+    const result = uninstallHook("rm-codewith", "global", "codewith");
+    expect(result.removed).toBe(true);
+    expect(result.storeDirRemoved).toBe(true);
+    expect(result.pinRemoved).toBe(true);
+    expect(result.dbRecordRemoved).toBe(true);
+    // The TOML file must be untouched — removal never JSON-writes a TOML.
+    expect(require("fs").readFileSync(toml, "utf-8")).toContain("[[hooks.Stop]]");
+    expect(existsSync(dir)).toBe(false);
+  });
 });
 
 function getBundledVersion(): string {

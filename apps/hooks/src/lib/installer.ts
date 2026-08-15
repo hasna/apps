@@ -612,14 +612,17 @@ export function uninstallHook(
   }
 
   const scopes: Scope[] = [];
+  const writableTargets = target === "all" ? (["claude", "gemini"] as const) : target === "codewith" ? [] : [target as WritableJsonTarget];
   for (const s of (["global", "project"] as Scope[])) {
-    for (const t of (target === "all" ? (["claude", "gemini"] as const) : [target as WritableJsonTarget])) {
+    for (const t of writableTargets) {
       if (getRegisteredHooksForTarget(s, t).includes(shortName)) {
         unregisterHook(shortName, s, t);
         if (!scopes.includes(s)) scopes.push(s);
       }
     }
   }
+  // Codewith registrations live in TOML, deliberately not edited lossily
+  // here (same policy as removeHook); the store side is still cleaned below.
 
   let storeDirRemoved = false;
   if (custom) {
