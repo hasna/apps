@@ -377,6 +377,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos e0ef3e32 (contracts task — emails)",
   },
   {
+    member: "feedback",
+    cause: "manifest_valid: cli-with-store repos must declare storage; the feedback manifest deliberately declares none (only backend is append-only JSONL; storage.mode admits sqlite|postgres only, so no schema-valid and true block exists — see manifest metadata.conformance.notes and docs/contract-conformance.md). Imported by #164.",
+    task: "todos 5e31148b-6552-44ea-93ba-d7c4e1676079 (contracts task — feedback)",
+  },
+  {
     member: "files",
     cause: "manifest_valid: service-class manifest declares no service surface (service repos must declare at least one). Imported by #90 after the original census; validated at pinned 0.5.2.",
     task: "todos b0845699-4e54-49f7-817e-025d4f6ca270 (contracts task — files)",
