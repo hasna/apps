@@ -3,6 +3,7 @@ import {
   getTodosCloudClient,
   getTodosRemoteAuthorityConfigStatus,
   resolveTodosCliStorageMode,
+  type TodosCliStorageModeResolution,
   type TodosRemoteCommandCapability,
 } from "./cloud-router.js";
 
@@ -20,15 +21,19 @@ export type TodosCliCommandOwner = "diagnostic" | "remote-http" | "local-only";
  * mutating the caller's environment. The executable applies an admitted local
  * redaction decision before importing command modules so any later
  * `getTodosCloudClient()` call cannot reconstruct hosted routing from the
- * ambient selector.
+ * ambient API pair. The retired storage-mode variables are never written here —
+ * they are banned (owner directive 2026-08-15), and the HTTP selector is
+ * HASNA_TODOS_API_URL + HASNA_TODOS_API_KEY, which the redaction blanks.
  */
 export function applyTodosCliAuthorityEnvironment(
   authority: TodosCliAuthorityInitialization,
   env: Env = process.env as Env,
 ): void {
   if (authority.route !== "local" || authority.selected_by !== "local-only-command") return;
-  env.HASNA_TODOS_STORAGE_MODE = "sqlite";
-  env.TODOS_STORAGE_MODE = "sqlite";
+  env.HASNA_TODOS_API_URL = "";
+  env.HASNA_TODOS_API_KEY = "";
+  env.TODOS_API_URL = "";
+  env.TODOS_API_KEY = "";
 }
 
 const REGISTERED_CANONICAL_COMMANDS = [
@@ -583,7 +588,7 @@ function assertInvocationRoutable(invocation: ParsedInvocation): TodosCliCommand
     throw new Error(
       `UNKNOWN_COMMAND: \`${command}\` is not a built-in todos command on the /v1 route.${didYouMean} ` +
         "Run `todos --help` for the commands available here; verbs contributed by optional packages are local-only. " +
-        "(This is not a connectivity, storage-mode or credential problem.)",
+        "(This is not a connectivity or credential problem.)",
     );
   }
 
@@ -628,7 +633,24 @@ export function initializeTodosCliAuthority(
   args: string[] = process.argv.slice(2),
   env: Env = process.env as Env,
 ): TodosCliAuthorityInitialization {
-  const mode = resolveTodosCliStorageMode(env);
+  let mode: TodosCliStorageModeResolution;
+  try {
+    mode = resolveTodosCliStorageMode(env);
+  } catch (error) {
+    // A partial API pair (URL without KEY, or KEY without URL) is a hard error
+    // for real commands, but DIAGNOSTIC commands must still boot so they can
+    // report the misconfiguration through their own status surface. A retired
+    // storage-mode variable stays a hard error everywhere — the diagnostic
+    // route must not let a stale fragment boot a working session.
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("REMOTE_STORAGE_MODE_REMOVED")) throw error;
+    const invocation = parseInvocation(args);
+    if (isMetadataInvocation(args, invocation)) {
+      const status = getTodosRemoteAuthorityConfigStatus(env);
+      return { route: "remote-diagnostic", v1_base_url: status.v1_base_url };
+    }
+    throw error;
+  }
   if (!mode.selected) return { route: "local", v1_base_url: null };
 
   const invocation = parseInvocation(args);
@@ -645,7 +667,7 @@ export function initializeTodosCliAuthority(
   assertRemoteCommandSupported(invocation, owner);
   const client = getTodosCloudClient(env);
   if (!client) {
-    throw new Error("REMOTE_API_UNAVAILABLE: remote mode did not resolve an HTTP client; local SQLite fallback is disabled");
+    throw new Error("REMOTE_API_UNAVAILABLE: HTTP routing did not resolve an authenticated /v1 client; local SQLite fallback is disabled");
   }
   return { route: "remote-http", v1_base_url: client.baseUrl };
 }

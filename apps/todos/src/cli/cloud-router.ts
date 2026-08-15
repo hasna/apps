@@ -9,7 +9,6 @@
  * connection string, and the client never opens Postgres directly.
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
-import { normalizeStorageMode } from "@hasna/contracts/mode";
 import { randomUUID } from "node:crypto";
 import { resolve as resolvePath } from "node:path";
 import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, PlanProjectLinkResult, PlanProjectLinkRollbackResult, Project, ProjectTaskListEnsureResult, ProjectTaskListRollbackResult, RegisterAgentInput, StaleLockHandoffReceipt, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
@@ -58,24 +57,17 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /**
  * The OSS client seam has exactly TWO implementations (owner directive
  * 2026-07-29, knowledge k_ms3e6v41_zbe7m8): the local SQLite file or the hosted
- * HTTP `/v1` authority. The client never opens Postgres directly. Every accepted
- * selector token normalizes onto one of these transports at the parse boundary;
- * the former deployment-mode vocabulary does not survive past it.
+ * HTTP `/v1` authority. The client never opens Postgres directly.
+ *
+ * The transport is selected by the API env pair and nothing else (owner
+ * directive 2026-08-15: storage modes are no longer allowed): both
+ * HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY set selects the HTTP authority, an
+ * incomplete pair is a hard error, and neither set selects the on-box SQLite
+ * file. Any retired storage-mode variable is rejected by the fail-loud ratchet
+ * below — never accepted, never mapped, never used as a fallback.
  */
 export type TodosCliTransport = "sqlite" | "http";
 
-const TRANSPORT_TOKENS: Record<string, TodosCliTransport> = {
-  sqlite: "sqlite",
-  http: "http",
-  // Legacy placement tokens, silently accepted — the fleet sets these today.
-  local: "sqlite",
-  remote: "http",
-  // Deprecated deployment-mode tokens (dead axis); tolerated only so an
-  // unmigrated environment keeps routing. Never advertised in refusal text.
-  self_hosted: "http",
-  cloud: "http",
-  hybrid: "http",
-};
 const COMPLETION_EVIDENCE_FIELDS = [
   "attachment_ids",
   "files_changed",
@@ -121,67 +113,85 @@ export interface TodosRemoteAuthorityConfigStatus {
 }
 
 export interface TodosCliStorageModeResolution {
-  /** Canonical transport the selector resolved to (`sqlite` | `http`). */
+  /** Canonical transport the environment resolved to (`sqlite` | `http`). */
   mode: TodosCliTransport;
   /** Same value under its own name; prefer this in new code. */
   transport: TodosCliTransport;
   selected: boolean;
-  source: "HASNA_TODOS_STORAGE_MODE" | "TODOS_STORAGE_MODE" | "default";
-}
-
-function cleanMode(value: string | undefined): string | null {
-  const normalized = value?.trim().toLowerCase();
-  return normalized || null;
+  /** What selected the transport; `default` means the on-box SQLite file. */
+  source: "HASNA_TODOS_API_URL+HASNA_TODOS_API_KEY" | "default";
 }
 
 /**
- * Resolve the CLI transport selector without allowing an invalid or conflicting
- * environment to drift into SQLite. Empty canonical values do not mask the
- * legacy fallback; explicit canonical/fallback disagreement is rejected.
+ * The retired storage-mode variables. Any of them being SET — even to a blank
+ * value — is an error, never a hint: silently ignoring it would keep the
+ * split-brain drift the mode vocabulary caused (owner directive 2026-08-15).
+ * The key table matches the shared transport contract used by the other
+ * fleet CLIs, so a key renamed there reaches this ratchet in the same change.
+ */
+const LEGACY_STORAGE_MODE_KEYS = [
+  "HASNA_TODOS_STORAGE_MODE",
+  "HASNA_TODOS_MODE",
+  "TODOS_STORAGE_MODE",
+  "TODOS_MODE",
+] as const;
+
+/**
+ * Throw when a retired storage-mode variable is set. Naming the retired var and
+ * the supported switches makes the error actionable without accepting the
+ * value. Fires on SET, not on non-blank: a blank leftover variable is still a
+ * stale fragment that must be deleted.
+ */
+export function assertNoLegacyStorageMode(env: Env = process.env as Env): void {
+  for (const key of LEGACY_STORAGE_MODE_KEYS) {
+    if (Object.hasOwn(env, key) && env[key] !== undefined) {
+      throw new Error(
+        `REMOTE_STORAGE_MODE_REMOVED: ${key} was removed. Deployment modes no longer exist: delete the storage-mode variable. ` +
+          `The client uses the on-box SQLite store, or the HTTP API selected by ` +
+          `HASNA_TODOS_API_URL + HASNA_TODOS_API_KEY. ` +
+          `On the server, set HASNA_TODOS_DATABASE_URL to select the postgresql backend, ` +
+          `or leave it unset for sqlite.`,
+      );
+    }
+  }
+}
+
+/**
+ * Resolve the CLI transport from the environment. Never accepts a storage-mode
+ * variable, never maps a legacy value, and never falls back to SQLite from a
+ * partial cloud configuration: URL set without KEY (or KEY set without URL) is
+ * a hard error naming the missing variable.
  */
 export function resolveTodosCliStorageMode(env: Env = process.env as Env): TodosCliStorageModeResolution {
-  for (const source of ["HASNA_TODOS_STORAGE_MODE", "TODOS_STORAGE_MODE"] as const) {
-    if (env[source] !== undefined && env[source]!.trim() === "") {
-      throw new Error(
-        `REMOTE_STORAGE_MODE_INVALID: ${source} must not be blank; local SQLite fallback is disabled for invalid routing state`,
-      );
-    }
-  }
-  const canonical = cleanMode(env.HASNA_TODOS_STORAGE_MODE);
-  const fallback = cleanMode(env.TODOS_STORAGE_MODE);
+  // The fail-loud ratchet runs BEFORE anything else: a stale mode variable does
+  // not get rescued by a complete API pair or a local DB path.
+  assertNoLegacyStorageMode(env);
 
-  for (const [source, value] of [
-    ["HASNA_TODOS_STORAGE_MODE", canonical],
-    ["TODOS_STORAGE_MODE", fallback],
-  ] as const) {
-    if (value && !(value in TRANSPORT_TOKENS)) {
-      throw new Error(
-        `REMOTE_STORAGE_MODE_INVALID: ${source}=${value} must be sqlite (local file) or http (hosted /v1 authority); ` +
-          "legacy values local and remote are accepted; " +
-          "local SQLite fallback is disabled for invalid routing state",
-      );
-    }
+  const urlValue = env.HASNA_TODOS_API_URL?.trim();
+  const keyValue = env.HASNA_TODOS_API_KEY?.trim();
+  if (urlValue && keyValue) {
+    return {
+      mode: "http",
+      transport: "http",
+      selected: true,
+      source: "HASNA_TODOS_API_URL+HASNA_TODOS_API_KEY",
+    };
   }
-
-  const canonicalTransport = canonical ? TRANSPORT_TOKENS[canonical]! : null;
-  const fallbackTransport = fallback ? TRANSPORT_TOKENS[fallback]! : null;
-  if (canonicalTransport && fallbackTransport && canonicalTransport !== fallbackTransport) {
+  if (urlValue) {
     throw new Error(
-      `REMOTE_STORAGE_MODE_CONFLICT: HASNA_TODOS_STORAGE_MODE=${canonical} conflicts with ` +
-        `TODOS_STORAGE_MODE=${fallback}; local SQLite fallback is disabled`,
+      "REMOTE_API_KEY_MISSING: remote Todos storage requires HASNA_TODOS_API_KEY; local SQLite fallback is disabled",
     );
   }
-
-  const transport = canonicalTransport ?? fallbackTransport ?? "sqlite";
+  if (keyValue) {
+    throw new Error(
+      "REMOTE_API_URL_MISSING: remote Todos storage requires HASNA_TODOS_API_URL; local SQLite fallback is disabled",
+    );
+  }
   return {
-    mode: transport,
-    transport,
-    selected: transport === "http",
-    source: canonical
-      ? "HASNA_TODOS_STORAGE_MODE"
-      : fallback
-        ? "TODOS_STORAGE_MODE"
-        : "default",
+    mode: "sqlite",
+    transport: "sqlite",
+    selected: false,
+    source: "default",
   };
 }
 
@@ -242,7 +252,7 @@ export function getTodosRemoteAuthorityConfigStatus(
     return {
       selected: true,
       ok: false,
-      mode: cleanMode(env.HASNA_TODOS_STORAGE_MODE) ?? cleanMode(env.TODOS_STORAGE_MODE) ?? "invalid",
+      mode: "invalid",
       api_url_configured: Boolean(env.HASNA_TODOS_API_URL?.trim()),
       api_key_configured: Boolean(env.HASNA_TODOS_API_KEY?.trim()),
       v1_base_url: null,
@@ -296,95 +306,15 @@ export function getTodosRemoteAuthorityConfigStatus(
 }
 
 /**
- * Server-side tokens for the LIVE @hasna/contracts, in probe order:
- * newest generation first, then CANONICAL BEFORE DEPRECATED.
- *
- *   postgres     the current canonical server token
- *   cloud        the previous canonical server token — what this repo injects today
- *   self_hosted  a DEPRECATED alias of `cloud`, last resort only
- *
- * Both halves are load-bearing. Newest-first stops a transitional contracts
- * release — one that still honours the old words — from pinning us to the old
- * generation. Canonical-before-deprecated stops us pinning `self_hosted` on the
- * enum where `cloud` is the real answer: both are accepted there, but only one
- * is the token this repo already injects, and switching to the alias would be a
- * live behaviour change dressed up as a refactor.
- *
- * This list is DERIVED from what this repo injects on the installed generation,
- * NOT copied from a sibling repo. Sibling repos whose literal is `self_hosted`
- * correctly list it ahead of `cloud`; copying their array to here would
- * silently deprecate this one.
- */
-const SERVER_MODE_CANDIDATES = ["postgres", "cloud", "self_hosted"] as const;
-
-/** Accepts a mode token or throws. Injectable so both enum generations are testable. */
-export type ModeNormalizer = (value: string) => unknown;
-
-let cachedServerMode: string | null = null;
-
-/**
- * The token meaning "use the server" in the INSTALLED @hasna/contracts.
- *
- * This replaces a hardcoded `"cloud"` whose own comment said it "collapses when
- * contracts lands the no-modes shape" — this is that collapse, done by deriving
- * rather than by widening.
- *
- * Derived, never hardcoded, and that is load-bearing rather than tidy. The enum
- * has already changed once and the two valid sets are DISJOINT: contracts
- * <=0.8.5 accepts `cloud` plus the deprecated aliases and THROWS on
- * `postgres`/`sqlite`; contracts after the placement-axis removal accepts ONLY
- * `sqlite`/`postgres` and THROWS on everything else. A literal pinned here is a
- * bet on which side of that change a machine is on, and the bet loses on one
- * side or the other — and a todos CLI that cannot reach its own authority is
- * how the fleet loses the ability to coordinate its own recovery.
- *
- * Probing goes through the library's own `normalizeStorageMode`, so the answer
- * comes from the installed code rather than from our belief about it. It is the
- * right discriminator precisely because it THROWS rather than returning a
- * sentinel, which makes a try/catch probe exact instead of heuristic.
- *
- * SCOPE: this is the token handed to the contracts resolver. It is NOT the
- * operator vocabulary — `VALID_STORAGE_MODES` still governs what a person may
- * put in `HASNA_TODOS_STORAGE_MODE`, and that list is deliberately untouched
- * here (tracked separately as todos b856fa08).
- */
-export function serverStorageMode(normalize: ModeNormalizer = normalizeStorageMode): string {
-  // Only the default normalizer may use the cache: memoising an injected one
-  // would poison every later call, including the real one.
-  const useCache = normalize === (normalizeStorageMode as ModeNormalizer);
-  if (useCache && cachedServerMode !== null) return cachedServerMode;
-  for (const candidate of SERVER_MODE_CANDIDATES) {
-    try {
-      normalize(candidate);
-      if (useCache) cachedServerMode = candidate;
-      return candidate;
-    } catch {
-      // Not a token this generation of @hasna/contracts understands.
-    }
-  }
-  // Every candidate was rejected: the enum changed again and this list is stale.
-  // Fail loudly rather than guess — a wrong token routes this CLI at the wrong
-  // dataset, and silently reading the wrong todos store is worse than not
-  // starting at all.
-  throw new Error(
-    `REMOTE_STORAGE_MODE_UNSUPPORTED: no known server storage mode is accepted by the installed ` +
-      `@hasna/contracts (tried ${SERVER_MODE_CANDIDATES.join(", ")}); the storage-mode enum has changed. ` +
-      `Add the new server token to SERVER_MODE_CANDIDATES in src/cli/cloud-router.ts; ` +
-      `local SQLite fallback is disabled.`,
-  );
-}
-
-/**
  * The env handed to the contracts resolver once the authority is known good.
  *
- * THREE keys, and only the first is this migration's business:
- *   - the storage mode, now DERIVED rather than the literal `"cloud"`
- *   - the API URL, with the `/v1` suffix stripped back off (the status object
- *     appends it; the client re-appends it, so it must not be doubled)
- *   - the API key, trimmed
- * The URL rewrite and the key trim are orthogonal to the mode and are unchanged.
+ * The storage-mode stamp is GONE (owner directive 2026-08-15): the contracts
+ * resolver selects the HTTP transport from the API URL + API key pair alone,
+ * exactly like the other fleet CLIs. This function only rewrites the URL to the
+ * `/v1`-less authority root (the status object appends `/v1`; the client
+ * re-appends it, so it must not be doubled) and trims the API key.
  *
- * Exported so the derived stamp is directly testable, rather than only
+ * Exported so the derivation is directly testable, rather than only
  * observable through a constructed HTTP client.
  */
 export function requireTodosRemoteAuthorityEnv(env: Env): Env {
@@ -392,7 +322,6 @@ export function requireTodosRemoteAuthorityEnv(env: Env): Env {
   if (!status.ok) throw new Error(status.issues[0]);
   return {
     ...env,
-    HASNA_TODOS_STORAGE_MODE: serverStorageMode(),
     HASNA_TODOS_API_URL: status.v1_base_url!.replace(/\/v1$/, ""),
     HASNA_TODOS_API_KEY: env.HASNA_TODOS_API_KEY!.trim(),
   };
@@ -523,17 +452,27 @@ async function requiredRemoteRoute<T>(
 
 /**
  * Resolve the Todos HTTP storage client from the environment. Returns a ready
- * client for an explicit remote mode, or `null` for local mode. A selected
- * remote mode with a missing or invalid URL/key always throws.
+ * client when the API URL + API key pair selects the HTTP transport, or `null`
+ * for the on-box SQLite store. A selected pair with an invalid URL always
+ * throws; a partial pair (URL without KEY or KEY without URL) throws instead of
+ * falling back to SQLite.
  */
 export function getTodosCloudClient(env: Env = process.env as Env): HasnaStorageClient | null {
-  // Never route over HTTP from URL/key presence alone. The selector is the
-  // explicit authority switch; an absent selector preserves the local default.
+  // The selector is the API env pair: both set selects the HTTP authority, an
+  // incomplete pair is an error, and an absent pair preserves the local default.
   if (requestedTransport(env) !== "http") return null;
   const resolved = resolveStorageClient("todos", requireTodosRemoteAuthorityEnv(env), {
     fetchImpl: (input, init) => globalThis.fetch(input, { ...init, redirect: "manual" }),
   });
-  return resolved.transport === "cloud-http" ? protectRemoteClient(resolved.client) : null;
+  // `cloud-http` is the pinned @hasna/contracts generation's transport name;
+  // `http` is the post-removal generation's. Both mean "authenticated /v1".
+  if (resolved.transport === "cloud-http") return protectRemoteClient(resolved.client);
+  // The installed 0.5.2 typings declare only `cloud-http | local`, so the
+  // forward-compat arm is compared via a widened string; both generations
+  // construct the client alongside the http transport name.
+  const transportName: string = resolved.transport;
+  if (transportName === "http") return protectRemoteClient(resolved.client!);
+  return null;
 }
 
 /** True when the CLI should route task reads/writes to the cloud API. */

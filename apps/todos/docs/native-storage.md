@@ -20,12 +20,12 @@ exactly two arms on each side of the HTTP boundary:
 - **Server (`todos-serve`) / native storage tooling** — `sqlite` (no database
   URL configured) or `postgres` (a `HASNA_TODOS_DATABASE_URL` is present).
 
-`HASNA_TODOS_STORAGE_MODE` accepts the canonical tokens `sqlite` and `http`
-(client) / `postgres` (storage tooling). The legacy tokens `local` and `remote`
-remain accepted and normalize onto the same two arms; the retired
-deployment-mode tokens (`self_hosted`, `cloud`, `hybrid`) are tolerated for
-unmigrated environments only and also normalize (client: `http`; storage:
-`postgres`). No third arm exists.
+`HASNA_TODOS_API_URL` + `HASNA_TODOS_API_KEY` select the authenticated HTTP
+authority (client). `HASNA_TODOS_DATABASE_URL` selects the Postgres backend
+(server/native storage tooling). The storage-mode variables
+(`HASNA_TODOS_STORAGE_MODE` and their aliases) are RETIRED: their mere presence
+is a hard error (owner directive 2026-08-15), and no deployment-mode token is
+accepted. No third arm exists.
 
 Legacy hosted API toggles are not storage selectors. They must not change the
 local CLI default.
@@ -36,9 +36,12 @@ The open CLI remote route uses only these canonical settings:
 
 | Setting | Purpose |
 | --- | --- |
-| `HASNA_TODOS_STORAGE_MODE` | Set to `http` (legacy: `remote`) to select the authenticated HTTP authority. |
 | `HASNA_TODOS_API_URL` | Todos authority root, or the same root ending in `/v1`. |
 | `HASNA_TODOS_API_KEY` | API key supplied to the authority as a bearer credential. |
+
+Both must be set to select the HTTP authority. URL set without KEY (or KEY set
+without URL) is a hard error — the CLI never falls back to the on-box SQLite
+store from a partial cloud configuration.
 
 The URL must use HTTPS, except for loopback development authorities. Userinfo,
 query strings, fragments, redirects, `/api/v1`, and non-root custom paths are
@@ -91,7 +94,7 @@ repairs an integrity finding in any mode.
 - `HASNA_TODOS_SYNC_DRY_RUN`: boolean sync preview flag.
 
 Plain local-development fallbacks are accepted with the same names minus the
-`HASNA_` prefix, for example `TODOS_STORAGE_MODE`, `TODOS_DATABASE_URL`, and
+`HASNA_` prefix, for example `TODOS_DATABASE_URL`, and
 `TODOS_S3_BUCKET`. Public docs and wrappers should still prefer the canonical
 `HASNA_TODOS_*` names.
 
@@ -220,7 +223,7 @@ the CLI or an explicit migration task.
 `createHybridTodosStorageAdapter` builds a local-plus-remote adapter when the
 caller passes a Postgres-style query client or sync store. It is migration/sync
 machinery invoked explicitly — it is NOT an arm of the data-backend switch, and
-no `HASNA_TODOS_STORAGE_MODE` value selects it:
+no environment value selects it:
 
 - Local CRUD stays SQLite-backed and works offline.
 - `adapter.sync.exportSnapshot()` and `adapter.sync.importSnapshot()` move the
@@ -237,8 +240,8 @@ without changing the local default or depending on a shared cloud package.
 
 ## Postgres CRUD Shape
 
-`HASNA_TODOS_STORAGE_MODE=postgres` (legacy: `remote`) builds a pure Postgres
-adapter when the caller passes a Postgres-style query client to
+A present `HASNA_TODOS_DATABASE_URL` builds a pure Postgres adapter when the
+caller passes a Postgres-style query client to
 `createTodosStorageAdapter`:
 
 - CRUD uses the repo-owned `todos_sync_records` JSONB table rather than SaaS
@@ -246,9 +249,10 @@ adapter when the caller passes a Postgres-style query client to
 - The package does not import `pg`; wrappers or internal deployments provide
   the connected client.
 - `createPostgresTodosStorageAdapter` is also exported directly for callers
-  that want to bypass mode selection.
-- Local SQLite remains the default unless `HASNA_TODOS_STORAGE_MODE` is set
-  explicitly.
+  that want to bypass backend selection.
+- Local SQLite remains the default unless `HASNA_TODOS_DATABASE_URL` is set
+  explicitly (with the one carve-out that a shadow mirror
+  `HASNA_TODOS_SHADOW=1` keeps SQLite as the source of truth).
 
 ## S3 Artifact Sync
 

@@ -171,7 +171,6 @@ async function runRemote(args: string[], port: number, root: string): Promise<Cl
       TODOS_AUTO_PROJECT: "false",
       TODOS_AGENT_ID: "composition-agent",
       TODOS_DB_PATH: localDbPath,
-      HASNA_TODOS_STORAGE_MODE: "http",
       HASNA_TODOS_API_URL: `http://127.0.0.1:${port}`,
       HASNA_TODOS_API_KEY: TEST_AUTH_VALUE,
     },

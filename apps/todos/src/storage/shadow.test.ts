@@ -229,7 +229,6 @@ describe("dual-write shadow adapter", () => {
   test("factory builds a shadow adapter when HASNA_TODOS_SHADOW is enabled", async () => {
     const postgres = createMemoryPostgresClient();
     const config = loadTodosStorageConfig({
-      HASNA_TODOS_STORAGE_MODE: "local",
       HASNA_TODOS_SHADOW: "1",
       HASNA_TODOS_DATABASE_URL: "postgres://todos@rds.example/todos",
     });
@@ -245,7 +244,6 @@ describe("dual-write shadow adapter", () => {
 
   test("factory rejects shadow mode without a remote DSN", () => {
     const config = loadTodosStorageConfig({
-      HASNA_TODOS_STORAGE_MODE: "local",
       HASNA_TODOS_SHADOW: "1",
     });
     expect(() =>

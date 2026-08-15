@@ -13,7 +13,6 @@ import { cloudListTasks, getTodosCloudClient, resetTodosCloudClient } from "./cl
 import { initializeTodosCliAuthority } from "./stage-a.js";
 
 const HTTP_ENV = {
-  HASNA_TODOS_STORAGE_MODE: "remote",
   HASNA_TODOS_API_URL: "https://todos.example.test",
   HASNA_TODOS_API_KEY: "hasna_todos_test_key",
 };

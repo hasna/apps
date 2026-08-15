@@ -27,8 +27,6 @@ async function runCli(
       HOME: fakeHome,
       TODOS_DB_PATH: dbPath,
       TODOS_AUTO_PROJECT: "false",
-      HASNA_TODOS_STORAGE_MODE: "local",
-      TODOS_STORAGE_MODE: "local",
       HASNA_TODOS_API_URL: "",
       HASNA_TODOS_API_KEY: "",
       TODOS_API_URL: "",
@@ -115,48 +113,50 @@ describe("OSS local-first runtime defaults", () => {
     expect(calls).toEqual([]);
   });
 
-  // Safe-by-default boundary: self_hosted cloud routing only engages when an
-  // explicit mode var (HASNA_TODOS_STORAGE_MODE / _MODE) resolves to
-  // cloud/self_hosted. Having only API_URL + API_KEY present — with NO mode var
-  // — must NEVER silently drift the CLI onto the network. It stays local, and
-  // the remote endpoint is never touched. (Unset the mode -> local; this is the
-  // reverse half of the reversible-flip contract.)
-  test("API_URL+API_KEY without a mode var stays local (no accidental cloud drift)", async () => {
+  // Safe-by-default boundary after the storage-mode removal (owner directive
+  // 2026-08-15): the API pair (HASNA_TODOS_API_URL + HASNA_TODOS_API_KEY) is
+  // the SOLE http selector. Present together — with NO storage-mode variable —
+  // it MUST route to the authority; the previous "flip-safety guard" that kept
+  // a bare pair silently local was exactly the silent-drift defect the
+  // directive removed.
+  test("API_URL+API_KEY without any mode variable routes to the authority", async () => {
     let remoteCalls = 0;
     const server = Bun.serve({
       port: 0,
       fetch() {
         remoteCalls += 1;
-        return Response.json({ error: "remote should not be called" }, { status: 500 });
+        return Response.json({ error: "authority rejects" }, { status: 500 });
       },
     });
 
     try {
-      // Both HASNA_TODOS_* and bare TODOS_* forms of URL+KEY, but no mode var.
-      const noModeEnv = {
-        HASNA_TODOS_STORAGE_MODE: undefined,
-        TODOS_STORAGE_MODE: undefined,
+      const pairEnv = {
         HASNA_TODOS_API_URL: String(server.url).replace(/\/$/, ""),
         HASNA_TODOS_API_KEY: "remote-token",
-        TODOS_API_URL: String(server.url).replace(/\/$/, ""),
-        TODOS_API_KEY: "remote-token",
       };
-      const created = await runCli(["--json", "add", "Local CLI task"], noModeEnv);
-      expect(created.exitCode, created.stderr || created.stdout).toBe(0);
-      expect(JSON.parse(created.stdout).title).toBe("Local CLI task");
-
-      const listed = await runCli(["--json", "list"], noModeEnv);
-      expect(listed.exitCode).toBe(0);
-      expect(listed.stdout).toContain("Local CLI task");
-      expect(remoteCalls).toBe(0);
+      const created = await runCli(["--json", "add", "Remote CLI task"], pairEnv);
+      // The authority is reached and rejects: the CLI fails closed rather than
+      // silently writing a different dataset.
+      expect(remoteCalls).toBeGreaterThan(0);
+      expect(created.exitCode).not.toBe(0);
+      expect(created.stderr).toMatch(/local SQLite fallback is disabled/i);
     } finally {
       server.stop(true);
     }
-    // Two sequential cold CLI starts (`add`, then `list`). This file runs in the
-    // `test:no-cloud` release-guard lane, which deliberately has NO `--retry` —
-    // a boundary violation must not be retried into a pass — so the budget here
-    // is the only thing standing between a slow runner and a blocked merge.
-  }, cliSpawnBudgetMs(2));
+  }, cliSpawnBudgetMs(1));
+
+  // Regression for the exact failure class this removal fixes: a retired
+  // storage-mode variable must hard-error, never silently route to local.
+  test("a retired storage-mode variable refuses to boot, never routes", async () => {
+    const result = await runCli(["--json", "add", "Banned task"], {
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://todos.invalid",
+      HASNA_TODOS_API_KEY: "remote-token",
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("REMOTE_STORAGE_MODE_REMOVED");
+    expect(result.stderr).toContain("Deployment modes no longer exist");
+  }, cliSpawnBudgetMs(1));
 
   // Regression: `--project` is parsed onto the global program opts, so the add
   // command (which only read its local opts.project) silently dropped it and

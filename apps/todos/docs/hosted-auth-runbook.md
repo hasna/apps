@@ -60,9 +60,10 @@ Related hardening worth applying in the same revision (pre-existing, not fixed h
   Behind a proxy the limiter otherwise buckets every internet client on the proxy's
   address, so all callers share one `TODOS_RATE_LIMIT_MAX` bucket and an anonymous
   flood can `429` authenticated `/v1` traffic.
-- Decide deliberately about `HASNA_TODOS_STORAGE_MODE`. Selecting the http transport in
-  a hosted image puts the in-container MCP tools on the client authority-routing path; with
-  no matching API URL/key most `tools/call` invocations fail with an opaque error.
+- The http transport is selected by `HASNA_TODOS_API_URL` + `HASNA_TODOS_API_KEY`; the
+  storage-mode variables are retired and their presence is a hard error. A hosted image
+  without the API pair routes the in-container MCP tools to the local store; with no
+  matching API URL/key most `tools/call` invocations fail with an opaque error.
   **Do not "fix" that by supplying an API URL and key while `/api/*` + `/mcp` are
   anonymous** — that wires an anonymous plane into the real datastore.
 - Enable load-balancer access logs. Without them, "was this endpoint ever called?" is

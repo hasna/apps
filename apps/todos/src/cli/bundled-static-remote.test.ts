@@ -34,7 +34,6 @@ import { resetTodosCloudClient } from "./cloud-router.js";
  */
 
 const REMOTE_ENV = {
-  HASNA_TODOS_STORAGE_MODE: "remote",
   HASNA_TODOS_API_URL: "https://authority.invalid",
   HASNA_TODOS_API_KEY: "fixture-remote-key",
 } as const;

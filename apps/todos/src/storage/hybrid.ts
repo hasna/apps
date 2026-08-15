@@ -1,9 +1,11 @@
 /**
  * Explicit migration/sync machinery: a local-SQLite adapter that can push/pull
  * snapshots against the Postgres sync tables. This is NOT an arm of the
- * data-backend switch — no `HASNA_TODOS_STORAGE_MODE` value selects it; callers
- * construct it directly when they need a cross-store sync (e.g. cutover
- * tooling). The switch itself has exactly two arms: sqlite | postgres.
+ * data-backend switch — no environment value selects it; callers construct it
+ * directly when they need a cross-store sync (e.g. cutover tooling). The
+ * switch itself has exactly two arms, sqlite | postgres, derived from
+ * HASNA_TODOS_DATABASE_URL since the storage-mode variables were removed
+ * (owner directive 2026-08-15).
  */
 import {
   createPostgresTodosSyncStore,

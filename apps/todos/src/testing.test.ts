@@ -6,16 +6,16 @@ import {
   assertLocalTodosTestEnv,
   localTodosTestEnv,
   LOCAL_ONLY_TODOS_ENV_KEYS,
+  REMOVED_TODOS_ENV_KEYS,
   SHARED_TODOS_STORE_ENV_KEYS,
 } from "./testing.js";
 import { resolveTodosCliStorageMode } from "./cli/cloud-router.js";
 
 describe("localTodosTestEnv", () => {
-  test("blanks every shared-store pointer and pins storage local", () => {
+  test("blanks every shared-store pointer and deletes the retired storage-mode variables", () => {
     const env = localTodosTestEnv();
     for (const key of SHARED_TODOS_STORE_ENV_KEYS) expect(env[key]).toBe("");
-    expect(env["HASNA_TODOS_STORAGE_MODE"]).toBe("local");
-    expect(env["TODOS_STORAGE_MODE"]).toBe("local");
+    for (const key of REMOVED_TODOS_ENV_KEYS) expect(key in env).toBe(false);
   });
 
   test("the scrubbed env cannot resolve the hosted transport", () => {
@@ -30,8 +30,6 @@ describe("localTodosTestEnv", () => {
 
   test("still resolves http when a test opts back in explicitly", () => {
     const env = localTodosTestEnv({
-      HASNA_TODOS_STORAGE_MODE: "http",
-      TODOS_STORAGE_MODE: "http",
       HASNA_TODOS_API_URL: "http://127.0.0.1:3901",
       HASNA_TODOS_API_KEY: "throwaway",
     });
@@ -85,7 +83,11 @@ describe("scrub coverage against the resolver", () => {
     }
     expect(read.size).toBeGreaterThan(0);
 
-    const covered = new Set<string>([...SHARED_TODOS_STORE_ENV_KEYS, ...LOCAL_ONLY_TODOS_ENV_KEYS]);
+    const covered = new Set<string>([
+      ...SHARED_TODOS_STORE_ENV_KEYS,
+      ...LOCAL_ONLY_TODOS_ENV_KEYS,
+      ...REMOVED_TODOS_ENV_KEYS,
+    ]);
     const uncovered = [...read].filter((key) => !covered.has(key)).sort();
     expect(uncovered).toEqual([]);
   });
