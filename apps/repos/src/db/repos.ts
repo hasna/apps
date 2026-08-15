@@ -722,17 +722,23 @@ export function mergeCanonicalDuplicateRepos(opts: { db?: Database } = {}): Cano
   try {
     for (const { survivor, removed } of collisions) {
       // Converge the survivor's stored spelling onto the on-disk spelling so
-      // every remaining row's path is the canonical one.
+      // every remaining row's path is the canonical one. The UPDATE runs only
+      // AFTER the duplicate rows are deleted: when a duplicate holds the
+      // on-disk spelling, the converged survivor path equals that duplicate's
+      // stored path, and updating earlier violates UNIQUE(repos.path) and
+      // rolls the whole merge back (measured 2026-08-14: mirror-seeded
+      // fixture where the survivor holds the variant spelling and the
+      // duplicate holds the on-disk spelling threw at scan start).
       const survivorPath = canonicalPath(survivor.path);
-      if (survivor.path !== survivorPath) {
-        db.query("UPDATE repos SET path = ? WHERE id = ?").run(survivorPath, survivor.id);
-      }
       for (const dup of removed) {
         for (const table of MERGE_CHILD_TABLES) {
           moveChildRows(db, table, survivor.id, dup.id);
         }
         repointWorktreeLeases(db, survivor.id, survivorPath, dup);
         db.query("DELETE FROM repos WHERE id = ?").run(dup.id);
+      }
+      if (survivor.path !== survivorPath) {
+        db.query("UPDATE repos SET path = ? WHERE id = ?").run(survivorPath, survivor.id);
       }
       result.groups.push({ survivor_id: survivor.id, path: survivorPath, removed_ids: removed.map((row) => row.id) });
     }

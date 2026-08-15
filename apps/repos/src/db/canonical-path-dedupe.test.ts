@@ -174,6 +174,38 @@ describe("mergeCanonicalDuplicateRepos", () => {
     // The exact failure this bug produced: the by-name lookup must resolve.
     expect(getRepo("merge-target")?.id).toBe(survivorRow.id);
   });
+
+  test("merges cleanly when the SURVIVOR holds the variant spelling and the duplicate holds the on-disk spelling", () => {
+    const caseInsensitive = filesystemCaseInsensitive(TEST_DIR);
+    const dir = createGitRepo("merge-mirror");
+    const canonical = realpathSync(dir);
+    const variant = caseVariant(dir);
+    const db = getDb();
+    // Mirror of the first test's seeding: the LOWEST id (the survivor) holds
+    // the variant spelling, the duplicate holds the on-disk spelling. The
+    // survivor's converged path therefore equals the duplicate's stored
+    // path, which violated UNIQUE(repos.path) when the converge UPDATE ran
+    // before the duplicate row was deleted — the merge threw, the scan died
+    // at its start, and the rollback left both rows intact.
+    db.query("INSERT INTO repos (path, name) VALUES (?, ?)").run(variant, "merge-mirror");
+    db.query("INSERT INTO repos (path, name) VALUES (?, ?)").run(canonical, "merge-mirror");
+
+    const result = mergeCanonicalDuplicateRepos({ db });
+    const rowsAfter = db.query("SELECT id, path FROM repos ORDER BY id").all() as Array<{ id: number; path: string }>;
+
+    if (!caseInsensitive) {
+      // The variant is a genuinely different path (or does not exist): never
+      // merged, nothing moved, nothing deleted.
+      expect(result.duplicate_rows_removed).toBe(0);
+      expect(rowsAfter).toHaveLength(2);
+      return;
+    }
+
+    expect(result.duplicate_rows_removed).toBe(1);
+    expect(rowsAfter).toHaveLength(1);
+    expect(rowsAfter[0]!.path).toBe(canonical);
+    expect(getRepo("merge-mirror")?.id).toBe(rowsAfter[0]!.id);
+  });
 });
 
 describe("scan end-to-end", () => {
