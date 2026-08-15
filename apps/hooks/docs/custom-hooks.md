@@ -22,7 +22,8 @@ it declares. The manifest schema:
   "script": "guard.sh",             // relative path to the executable, or an
                                     // inline script string
   "args": ["--strict"],             // optional arguments passed to the script
-  "timeout_ms": 30000               // optional execution timeout
+  "timeout_ms": 30000,              // optional execution timeout
+  "env": { "PATH": "/usr/bin:/bin" } // optional per-hook environment
 }
 ```
 
@@ -35,6 +36,18 @@ it declares. The manifest schema:
 | `script` | string | yes | relative path, or an inline script |
 | `args` | string[] | no | arguments passed to the script at run time |
 | `timeout_ms` | number | no | positive integer; script timeout |
+| `env` | object | no | per-hook environment passed to the script's child process |
+
+**`env` and PATH.** Every hook child already receives a sanitized environment:
+credential-shaped names, interpreter-injection variables, and bash
+exported-function entries are stripped, and `PATH` is rebuilt from the system
+directories plus the runner's own `bun` directory, with every entry that
+lives under `$HOME`, `/tmp`, `/var/tmp`, or a world-writable path removed —
+a fake `node`/`git` planted in a writable directory must never execute on
+the hook's first command. The `env` field can add variables (all still
+filtered through the same strips), and `env.PATH` is the explicit override
+for hooks that need a different search path: it is passed **verbatim**, so
+include every directory the hook needs.
 
 A manifest that fails validation (missing field, invalid semver, name that
 does not match the pattern, unknown event, unresolvable script path) is

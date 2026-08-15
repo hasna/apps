@@ -97,7 +97,10 @@ interface InterpreterChoice {
  * interpreter and the runner honors it. Without a shebang, the extension
  * decides — .sh/.bash run under /bin/bash (bun's own parser is a partial bash
  * subset and rejects real bash like escaped-paren regexes), known JS/TS
- * extensions run under bun, and anything else is refused loudly rather than
+ * extensions run under the runner's own bun binary (process.execPath —
+ * resolved independently of the child env's PATH, so a per-hook PATH
+ * override cannot break the spawn, and a sanitized PATH that drops the bun
+ * dir cannot either), and anything else is refused loudly rather than
  * guessed.
  */
 function interpreterFor(name: string, scriptPath: string, content: Buffer): InterpreterChoice {
@@ -106,13 +109,13 @@ function interpreterFor(name: string, scriptPath: string, content: Buffer): Inte
   const interp = shebangInterpreter(firstLine);
   if (interp) {
     if (interp === "bash" || interp === "sh") return { command: ["/bin/bash"], tempExt: "sh" };
-    if (interp === "node" || interp === "bun") return { command: ["bun", "run"], tempExt: BUN_EXTENSIONS.has(ext) ? ext : "ts" };
+    if (interp === "node" || interp === "bun") return { command: [process.execPath, "run"], tempExt: BUN_EXTENSIONS.has(ext) ? ext : "ts" };
     throw new Error(
       `Refusing to run hook '${name}': shebang '${firstLine}' is not a recognized interpreter (supported: bash/sh, node/bun)`,
     );
   }
   if (BASH_EXTENSIONS.has(ext)) return { command: ["/bin/bash"], tempExt: "sh" };
-  if (BUN_EXTENSIONS.has(ext)) return { command: ["bun", "run"], tempExt: ext };
+  if (BUN_EXTENSIONS.has(ext)) return { command: [process.execPath, "run"], tempExt: ext };
   throw new Error(
     `Refusing to run hook '${name}': unsupported script extension '.${ext}' (supported: .sh .bash .ts .tsx .js .jsx .mjs .cjs .mts .cts, or a recognized shebang)`,
   );

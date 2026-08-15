@@ -28,10 +28,12 @@ import { SEMVER_PATTERN, compareVersions } from "../lib/semver.js";
 interface D1Result {
   results?: unknown[];
   success: boolean;
+  meta?: { changes?: number };
 }
 
 interface D1Database {
   prepare(sql: string): D1PreparedStatement;
+  batch(statements: D1PreparedStatement[]): Promise<D1Result[]>;
 }
 
 interface D1PreparedStatement {
@@ -87,6 +89,7 @@ interface ArtifactJson {
     script_kind?: "inline" | "file";
     args?: string[];
     timeout_ms?: number;
+    env?: Record<string, string>;
   };
   script: string;
 }
@@ -185,11 +188,22 @@ async function ensureLatestRows(env: Env): Promise<HookRow[]> {
   const healed: HookRow[] = [];
   for (const versionRow of highest.values()) {
     if (present.has(versionRow.name)) continue;
-    await env.HOOKS_D1.prepare(
+    // Single guarded statement (reviewer efcad315): INSERT ... WHERE NOT
+    // EXISTS — the existence guard is evaluated IN THE SAME STATEMENT as
+    // the write, so a pointer advanced concurrently (a publish committed
+    // between this heal's read and its write) cannot be clobbered: there is
+    // no read-then-write window. The JS-computed semver max is bound into
+    // the statement — SQL MAX(version) over TEXT is lexicographic
+    // ("1.0.10" < "1.0.2"), so the semver max cannot be expressed in SQL;
+    // the statement guard is what provides the atomicity. changes=0 means
+    // the pointer appeared before this heal's write — nothing was healed
+    // and nothing was clobbered.
+    const res = (await env.HOOKS_D1.prepare(
       `INSERT INTO hooks (id, name, version, sha256, source_type, source_ref, installed_at, enabled, last_verified_at)
-       VALUES (?, ?, ?, ?, 'remote', NULL, ?, 1, NULL)
-       ON CONFLICT(id) DO UPDATE SET version = excluded.version, sha256 = excluded.sha256, source_type = excluded.source_type, last_verified_at = excluded.last_verified_at`,
-    ).bind(versionRow.name, versionRow.name, versionRow.version, versionRow.script_sha256, versionRow.published_at).run();
+       SELECT ?, ?, ?, ?, 'remote', NULL, ?, 1, NULL
+       WHERE NOT EXISTS (SELECT 1 FROM hooks WHERE id = ?)`,
+    ).bind(versionRow.name, versionRow.name, versionRow.version, versionRow.script_sha256, versionRow.published_at, versionRow.name).run()) as { meta?: { changes?: number } };
+    if ((res?.meta?.changes ?? 0) === 0) continue;
     healed.push({
       id: versionRow.name,
       name: versionRow.name,
@@ -213,15 +227,36 @@ async function ensureLatestRows(env: Env): Promise<HookRow[]> {
  * grows — but the pointer is compared by semver and kept when the publish
  * is lower than the current pointer. Equal or higher moves it; lower leaves
  * the existing pointer untouched.
+ *
+ * The compare-and-update is ATOMIC (reviewer efcad315): a plain read-then-
+ * write lets two racing publishes both read the same pointer and have the
+ * OLDER land last (downgrade), and lets a heal clobber a concurrently
+ * advanced pointer. D1 exposes no BEGIN/COMMIT — batch() is the supported
+ * transaction primitive (its statements execute and commit atomically,
+ * SQLite-style writer serialization) — so the write carries a compare-and-
+ * swap guard evaluated INSIDE that transaction: DO UPDATE ... WHERE
+ * hooks.version IS ? OR hooks.version = ? fires only when the pointer still
+ * equals what this call read. A lost race returns changes=0 and the loop
+ * re-reads and re-decides; every successful write therefore sets the
+ * pointer to a semver-higher version than the one it replaced, never lower.
  */
 async function upsertLatestPointer(env: Env, name: string, version: string, sha256: string, now: string): Promise<void> {
-  const current = (await env.HOOKS_D1.prepare("SELECT version FROM hooks WHERE id = ?").bind(name).first()) as { version: string } | null;
-  if (current && compareVersions(version, current.version) < 0) return;
-  await env.HOOKS_D1.prepare(
-    `INSERT INTO hooks (id, name, version, sha256, source_type, source_ref, installed_at, enabled, last_verified_at)
-     VALUES (?, ?, ?, ?, 'remote', NULL, ?, 1, NULL)
-     ON CONFLICT(id) DO UPDATE SET version = excluded.version, sha256 = excluded.sha256, source_type = excluded.source_type, last_verified_at = excluded.last_verified_at`,
-  ).bind(name, name, version, sha256, now).run();
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const current = (await env.HOOKS_D1.prepare("SELECT version FROM hooks WHERE id = ?").bind(name).first()) as { version: string } | null;
+    if (current && compareVersions(version, current.version) < 0) return;
+    const guard = current?.version ?? null;
+    const [result] = (await env.HOOKS_D1.batch([
+      env.HOOKS_D1.prepare(
+        `INSERT INTO hooks (id, name, version, sha256, source_type, source_ref, installed_at, enabled, last_verified_at)
+         VALUES (?, ?, ?, ?, 'remote', NULL, ?, 1, NULL)
+         ON CONFLICT(id) DO UPDATE SET version = excluded.version, sha256 = excluded.sha256, source_type = excluded.source_type, last_verified_at = excluded.last_verified_at
+         WHERE hooks.version IS ? OR hooks.version = ?`,
+      ).bind(name, name, version, sha256, now, guard, guard),
+    ])) as Array<{ meta?: { changes?: number } }>;
+    if ((result?.meta?.changes ?? 0) > 0) return;
+    // Lost the race (the pointer moved between read and write): re-read and
+    // re-decide against the committed state.
+  }
 }
 
 export default {

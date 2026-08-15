@@ -9,12 +9,12 @@
  */
 
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
-import { join } from "path";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { dirname, join } from "path";
 import { tmpdir } from "os";
 import { runHook } from "../index.js";
 import { executeVerifiedScript } from "./run.js";
-import { buildHookEnv, isDeniedEnvName, isInterpreterInjectionEnvName } from "./hook-env.js";
+import { buildHookEnv, isBashFunctionEnvName, isDeniedEnvName, isInterpreterInjectionEnvName } from "./hook-env.js";
 import { closeDb } from "../db/index.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-env-test-"));
@@ -29,12 +29,12 @@ const sentinel = {
   ghp: (body: string) => `gh${"p_"}${body}`,
 };
 
-function installCustomHook(name: string, script: string, scriptPath = "script.ts"): string {
+function installCustomHook(name: string, script: string, scriptPath = "script.ts", env?: Record<string, string>): string {
   const dir = join(HOOKS_DIR, name);
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, "manifest.json"),
-    JSON.stringify({ name, version: "1.0.0", events: ["PostToolUse"], script: scriptPath }),
+    JSON.stringify({ name, version: "1.0.0", events: ["PostToolUse"], script: scriptPath, ...(env ? { env } : {}) }),
   );
   const scriptFile = join(dir, scriptPath);
   writeFileSync(scriptFile, script);
@@ -68,7 +68,7 @@ describe("buildHookEnv sanitizer", () => {
       TERM: "xterm-256color",
       USER: "hasna",
       PWD: "/home/hasna/work",
-      OPENAI_API_KEY: "sk-should-never-leak",
+      OPENAI_API_KEY: sentinel.skAnt("should-never-leak"),
       ANTHROPIC_API_KEY: sentinel.skAnt("should-never-leak"),
       GITHUB_TOKEN: sentinel.ghp("should-never-leak"),
       AWS_SECRET_ACCESS_KEY: "aws-should-never-leak",
@@ -109,8 +109,11 @@ describe("buildHookEnv sanitizer", () => {
     ]) {
       expect(env[denied], `expected ${denied} to be stripped`).toBeUndefined();
     }
-    // allowlist survives
-    expect(env.PATH).toBe("/usr/bin:/bin");
+    // allowlist survives — PATH rebuilt from the trusted baseline (the
+    // sanitizer appends the runner's own bun dir to the system dirs).
+    expect(env.PATH).toContain("/usr/bin");
+    expect(env.PATH).toContain("/bin");
+    expect(env.PATH).toContain(dirname(process.execPath));
     expect(env.HOME).toBe("/home/hasna");
     expect(env.LANG).toBe("en_US.UTF-8");
     expect(env.TZ).toBe("Europe/Bucharest");
@@ -209,7 +212,7 @@ describe("interpreter-injection variables (bug cf99cf76)", () => {
     ]) {
       expect(env[name], `expected ${name} to be stripped`).toBeUndefined();
     }
-    expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.PATH).toContain("/usr/bin");
     expect(env.CUSTOM_NON_SECRET_VAR).toBe("keep-me");
 
     // A caller's extras cannot reintroduce an interpreter-injection name.
@@ -421,5 +424,277 @@ describe("BASH_ENV / interpreter-injection at the live child boundary (bug cf99c
     } finally {
       restoreParent(previous);
     }
+  });
+});
+
+describe("bash exported-function env vectors — BASH_FUNC_* (reviewer P1)", () => {
+  test("isBashFunctionEnvName flags every BASH_FUNC_* form and nothing else", () => {
+    expect(isBashFunctionEnvName("BASH_FUNC_env%%")).toBe(true);
+    expect(isBashFunctionEnvName("BASH_FUNC_env%")).toBe(true);
+    expect(isBashFunctionEnvName("BASH_FUNC_env")).toBe(true);
+    expect(isBashFunctionEnvName("BASH_FUNC_cat%%")).toBe(true);
+    // Bash imports only FUNCTIONS from the environment. Aliases are NOT
+    // importable (BASH_ALIASES is an associative array, never exported), so
+    // they are deliberately not part of the strip.
+    expect(isBashFunctionEnvName("BASH_ALIASES")).toBe(false);
+    expect(isBashFunctionEnvName("BASH_ENV")).toBe(false);
+    expect(isBashFunctionEnvName("BASH_VERSION")).toBe(false);
+    expect(isBashFunctionEnvName("PATH")).toBe(false);
+  });
+
+  test("buildHookEnv strips every BASH_FUNC_* entry from source and from extras", () => {
+    const func = '() { echo "marker-leak-sentinel"; }';
+    const source: Record<string, string | undefined> = {
+      PATH: "/usr/bin:/bin",
+      "BASH_FUNC_env%%": func,
+      "BASH_FUNC_cat%%": func,
+      "BASH_FUNC_git%%": func,
+      "BASH_FUNC_node%%": func,
+      CUSTOM_NON_SECRET_VAR: "keep-me",
+    };
+    const env = buildHookEnv(source);
+    for (const name of ["BASH_FUNC_env%%", "BASH_FUNC_cat%%", "BASH_FUNC_git%%", "BASH_FUNC_node%%"]) {
+      expect(env[name], `${name} must be stripped`).toBeUndefined();
+    }
+    expect(env.CUSTOM_NON_SECRET_VAR).toBe("keep-me");
+    expect(env.PATH).toContain("/usr/bin");
+
+    // A caller's extras cannot reintroduce a function entry either.
+    const withExtra = buildHookEnv({ PATH: "/usr/bin:/bin" }, { "BASH_FUNC_env%%": func, CUSTOM_NON_SECRET_VAR: "x" });
+    expect(withExtra["BASH_FUNC_env%%"]).toBeUndefined();
+    expect(withExtra.CUSTOM_NON_SECRET_VAR).toBe("x");
+  });
+
+  test("a .sh hook child never imports BASH_FUNC_env%% — the real env command runs, no marker", async () => {
+    const dir = join(TEST_DIR, "bashfunc");
+    mkdirSync(dir, { recursive: true });
+    const dumpPath = join(dir, "env-dump.txt");
+    const hookPath = join(dir, "dump-env.sh");
+    writeFileSync(hookPath, `env > "$1"\necho "hook-done"\n`, { mode: 0o600 });
+    const previous = new Map<string, string | undefined>();
+    const func = '() { echo "marker-leak-sentinel"; }';
+    // The function REPLACES env/cat/git/node in a bash child that imports it:
+    // any of these shadowed means attacker code ran on the hook's first command.
+    for (const [name, value] of [
+      ["BASH_FUNC_env%%", func],
+      ["BASH_FUNC_cat%%", func],
+      ["BASH_FUNC_git%%", func],
+      ["BASH_FUNC_node%%", func],
+    ] as Array<[string, string]>) {
+      previous.set(name, process.env[name]);
+      process.env[name] = value;
+    }
+    try {
+      const result = await executeVerifiedScript({
+        name: "bashfunc-shadow",
+        scriptPath: hookPath,
+        content: await Bun.file(hookPath).arrayBuffer().then((b) => Buffer.from(b)),
+        args: [dumpPath],
+        stdin: "",
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("hook-done");
+      expect(result.stdout).not.toContain("marker-leak-sentinel");
+      const dumped = (await Bun.file(dumpPath).exists()) ? await Bun.file(dumpPath).text() : "";
+      // The REAL env command ran: its output carries the session variables.
+      expect(dumped, "child env dump must come from the real env binary").toContain("HOME=");
+      expect(dumped).toContain("PATH=");
+      // No function entry reached the child, and no marker was printed.
+      expect(dumped).not.toContain("BASH_FUNC_");
+      expect(dumped).not.toContain("marker-leak-sentinel");
+    } finally {
+      for (const [name, value] of previous) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+});
+
+describe("same-class interpreter / TLS-trust / git-config vectors (reviewer P2)", () => {
+  const SAME_CLASS_VECTORS = [
+    "GCONV_PATH", // glibc iconv module directory (gconv code injection)
+    "LOCPATH", // glibc locale data directory (locale code injection)
+    "PYTHONHOME", // python stdlib hijack
+    "GIT_CONFIG_GLOBAL", // git config override (code exec via config)
+    "GIT_CONFIG_SYSTEM",
+    "GIT_CONFIG_NOSYSTEM",
+    "GIT_CONFIG_COUNT",
+    "NODE_EXTRA_CA_CERTS", // TLS trust redirection (MITM)
+    "NODE_TLS_REJECT_UNAUTHORIZED", // TLS verification disable (MITM)
+    "SSL_CERT_FILE", // TLS trust redirection (MITM)
+    "SSL_CERT_DIR", // TLS trust redirection (MITM)
+    "CURL_CA_BUNDLE", // TLS trust redirection (MITM)
+    "GIT_SSL_CAINFO", // git TLS trust redirection (MITM)
+    "AWS_CA_BUNDLE", // AWS SDK TLS trust redirection (MITM)
+    "PERL5OPT", // perl option list (code injection, like NODE_OPTIONS)
+    "RUBYOPT", // ruby option list (code injection, like NODE_OPTIONS)
+  ];
+
+  test("isInterpreterInjectionEnvName flags the same-class vectors", () => {
+    for (const name of SAME_CLASS_VECTORS) {
+      expect(isInterpreterInjectionEnvName(name), `${name} must be flagged`).toBe(true);
+    }
+    expect(isInterpreterInjectionEnvName("GIT_DIR")).toBe(false);
+    expect(isInterpreterInjectionEnvName("CUSTOM_NON_SECRET_VAR")).toBe(false);
+  });
+
+  test("buildHookEnv strips the same-class vectors from source and from extras", () => {
+    const source: Record<string, string | undefined> = { PATH: "/usr/bin:/bin" };
+    for (const name of SAME_CLASS_VECTORS) source[name] = `value-${name}`;
+    source.CUSTOM_NON_SECRET_VAR = "keep-me";
+    const env = buildHookEnv(source);
+    for (const name of SAME_CLASS_VECTORS) {
+      expect(env[name], `${name} must be stripped`).toBeUndefined();
+    }
+    expect(env.CUSTOM_NON_SECRET_VAR).toBe("keep-me");
+    expect(env.PATH).toContain("/usr/bin");
+
+    const withExtra = buildHookEnv(
+      { PATH: "/usr/bin:/bin" },
+      { GCONV_PATH: "/tmp/gconv", PERL5OPT: "-Mevil", GIT_CONFIG_GLOBAL: "/tmp/gitconfig", NODE_EXTRA_CA_CERTS: "/tmp/ca.pem", RUBYOPT: "-revil" },
+    );
+    expect(withExtra.GCONV_PATH).toBeUndefined();
+    expect(withExtra.PERL5OPT).toBeUndefined();
+    expect(withExtra.GIT_CONFIG_GLOBAL).toBeUndefined();
+    expect(withExtra.NODE_EXTRA_CA_CERTS).toBeUndefined();
+    expect(withExtra.RUBYOPT).toBeUndefined();
+  });
+
+  test("a real hook child sees none of the same-class vectors (executed boundary)", async () => {
+    const scriptPath = installCustomHook(
+      "same-class-vectors",
+      `const input = JSON.parse(await Bun.stdin.text());\nconsole.log(JSON.stringify({ env: process.env, want: input.want }));\n`,
+    );
+    const previous = new Map<string, string | undefined>();
+    for (const name of SAME_CLASS_VECTORS) {
+      previous.set(name, process.env[name]);
+      process.env[name] = `value-${name}`;
+    }
+    try {
+      const result = await executeVerifiedScript({
+        name: "same-class-vectors",
+        scriptPath,
+        content: await Bun.file(scriptPath).arrayBuffer().then((b) => Buffer.from(b)),
+        args: [],
+        stdin: JSON.stringify({ want: [] }),
+      });
+      expect(result.exitCode).toBe(0);
+      const { env } = JSON.parse(result.stdout);
+      for (const name of SAME_CLASS_VECTORS) {
+        expect(env[name], `child must not see ${name}`).toBeUndefined();
+      }
+    } finally {
+      for (const [name, value] of previous) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+});
+
+describe("hook PATH sanitization (reviewer P2)", () => {
+  const FAKE_HOME = "/home/fake-hook-user";
+
+  test("buildHookEnv rebuilds PATH from the trusted baseline and drops unsafe entries", () => {
+    const dirty = `${FAKE_HOME}/bin:/tmp/fakebin:/var/tmp/x:/usr/bin:/bin:/usr/local/bin:/sbin:/usr/sbin`;
+    const env = buildHookEnv({ PATH: dirty, HOME: FAKE_HOME });
+    expect(env.PATH, "PATH must never keep the fake's dirs").not.toContain(FAKE_HOME);
+    expect(env.PATH).not.toContain("/tmp/fakebin");
+    expect(env.PATH).not.toContain("/var/tmp");
+    for (const systemDir of ["/usr/bin", "/bin", "/usr/local/bin", "/sbin", "/usr/sbin"]) {
+      expect(env.PATH, `${systemDir} must be in the hook PATH`).toContain(systemDir);
+    }
+    // The runner's own bun dir is always present — the interpreter the hook runs under.
+    expect(env.PATH).toContain(dirname(process.execPath));
+  });
+
+  test("empty and relative PATH entries are dropped (they resolve against the child's cwd)", () => {
+    const env = buildHookEnv({ PATH: "::relative/bin:/usr/bin:/bin", HOME: FAKE_HOME });
+    const parts = env.PATH!.split(":");
+    expect(parts).not.toContain("");
+    expect(parts).not.toContain("relative/bin");
+  });
+
+  test("a world-writable PATH entry is dropped even outside HOME and /tmp", () => {
+    const wwDir = "/dev/shm/hooks-ww-" + Math.random().toString(36).slice(2);
+    let created = false;
+    try {
+      mkdirSync(wwDir, { recursive: true });
+      chmodSync(wwDir, 0o777);
+      created = true;
+    } catch {
+      // /dev/shm unavailable on this machine — the world-writable arm is skipped.
+    }
+    if (created) {
+      try {
+        const env = buildHookEnv({ PATH: `${wwDir}:/usr/bin:/bin`, HOME: FAKE_HOME });
+        expect(env.PATH, "a world-writable dir must be dropped from the hook PATH").not.toContain(wwDir);
+      } finally {
+        rmSync(wwDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("an explicit per-hook env.PATH override wins verbatim (manifest override)", () => {
+    const env = buildHookEnv({ PATH: `${FAKE_HOME}/bin:/usr/bin:/bin`, HOME: FAKE_HOME }, { PATH: "/custom/only" });
+    expect(env.PATH).toBe("/custom/only");
+  });
+
+  test("a fake node planted in $HOME/bin and /tmp cannot hijack the hook's commands", async () => {
+    const fakeHome = join(TEST_DIR, "path-fake-home");
+    const fakeHomeBin = join(fakeHome, "bin");
+    const fakeTmp = join(tmpdir(), `hooks-fake-node-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(fakeHomeBin, { recursive: true });
+    mkdirSync(fakeTmp, { recursive: true });
+    const fakeNode = `#!/bin/sh\necho "fake-node-marker-${"leak"}-${"sentinel"}"\nexit 0\n`;
+    writeFileSync(join(fakeHomeBin, "node"), fakeNode, { mode: 0o755 });
+    writeFileSync(join(fakeTmp, "node"), fakeNode, { mode: 0o755 });
+    const hookPath = join(TEST_DIR, "path-guard.sh");
+    writeFileSync(
+      hookPath,
+      `#!/bin/bash\nresolved=$(command -v node || echo NODE_NOT_RESOLVED)\nversion=$(node --version 2>/dev/null || echo NO_VERSION)\necho "resolved=$resolved"\necho "version=$version"\necho "PATH=$PATH"\necho "hook-done"\n`,
+      { mode: 0o600 },
+    );
+    const prevHome = process.env.HOME;
+    const prevPath = process.env.PATH;
+    process.env.HOME = fakeHome;
+    process.env.PATH = `${fakeHomeBin}:${fakeTmp}:/usr/bin:/bin:/usr/local/bin:/sbin:/usr/sbin`;
+    try {
+      const result = await executeVerifiedScript({
+        name: "path-guard",
+        scriptPath: hookPath,
+        content: await Bun.file(hookPath).arrayBuffer().then((b) => Buffer.from(b)),
+        args: [],
+        stdin: "",
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("hook-done");
+      expect(result.stdout, "the fake node must never run").not.toContain("fake-node-marker");
+      expect(result.stdout).not.toContain("NODE_NOT_RESOLVED\nfake-node-marker");
+      const pathLine = result.stdout.split("\n").find((line) => line.startsWith("PATH=")) ?? "";
+      expect(pathLine, "the child PATH must not contain the fake node's dirs").not.toContain(fakeHomeBin);
+      expect(pathLine).not.toContain(fakeTmp);
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      if (prevPath === undefined) delete process.env.PATH;
+      else process.env.PATH = prevPath;
+      rmSync(fakeTmp, { recursive: true, force: true });
+    }
+  });
+
+  test("a manifest env.PATH override is honored at the live child boundary", async () => {
+    const scriptPath = installCustomHook(
+      "path-override",
+      `const input = JSON.parse(await Bun.stdin.text());\nconsole.log(JSON.stringify({ env: process.env, want: input.want }));\n`,
+      "script.ts",
+      { PATH: "/custom/only" },
+    );
+    const res = await runHook("path-override", { session_id: "s-path" });
+    expect(res.exitCode).toBe(0);
+    const env = (res.output as any).env ?? {};
+    expect(env.PATH, "the manifest PATH override must reach the child verbatim").toBe("/custom/only");
+    void scriptPath;
   });
 });

@@ -7,9 +7,23 @@
  * while the artifact routes demanded a bare `\d+\.\d+\.\d+` at the end of
  * the path, so a pinned prerelease install 404'd. This is the one pattern:
  * full semver with optional prerelease and build metadata.
+ *
+ * Numeric identifiers are STRICT (reviewer efcad315): per semver.org §2,
+ * numeric identifiers MUST NOT carry leading zeroes ("1.0.0-01" is not
+ * "1.0.0-1" — it is not semver at all), and identifiers longer than 16
+ * digits are rejected as invalid so no surface can ever store a version the
+ * comparator cannot order exactly (Number() precision ends at
+ * MAX_SAFE_INTEGER; the comparator itself uses BigInt, see compareVersions).
  */
 
-export const SEMVER_PATTERN = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
+const NUMERIC_ID = "(0|[1-9]\\d{0,15})";
+const ALNUM_ID = "\\d*[A-Za-z-][0-9A-Za-z-]*";
+
+export const SEMVER_PATTERN = new RegExp(
+  `^${NUMERIC_ID}\\.${NUMERIC_ID}\\.${NUMERIC_ID}` +
+    `(?:-(?:${NUMERIC_ID}|${ALNUM_ID})(?:\\.(?:${NUMERIC_ID}|${ALNUM_ID}))*)?` +
+    `(?:\\+[0-9A-Za-z.-]+)?$`,
+);
 
 /**
  * A version segment used inside a URL path. Prerelease and build metadata
@@ -27,7 +41,7 @@ export function semverError(value: string): string {
 }
 
 interface ParsedVersion {
-  core: [number, number, number];
+  core: [bigint, bigint, bigint];
   pre: string[];
 }
 
@@ -38,7 +52,7 @@ function parseVersion(value: string): ParsedVersion {
   const dash = coreAndPre.indexOf("-");
   const core = dash >= 0 ? coreAndPre.slice(0, dash) : coreAndPre;
   const pre = dash >= 0 ? coreAndPre.slice(dash + 1).split(".") : [];
-  const [major, minor, patch] = core.split(".").map(Number);
+  const [major, minor, patch] = core.split(".").map((part) => BigInt(part));
   return { core: [major, minor, patch], pre };
 }
 
@@ -51,6 +65,15 @@ function parseVersion(value: string): ParsedVersion {
  * Build metadata never participates. Prerelease identifiers compare by the
  * spec's rules: numeric identifiers numerically, numeric before alphanumeric,
  * fewer identifiers before more, release before any prerelease.
+ *
+ * Numeric identifiers compare as BigInt (reviewer efcad315): Number()
+ * loses precision past MAX_SAFE_INTEGER, which made near-16-digit numeric
+ * identifiers compare equal and made "1.0.0-01" vs "1.0.0-1" compare >0 in
+ * BOTH directions (Number("01") === Number("1") while the strings differ).
+ * BigInt keeps the comparison exact and antisymmetric at any length; the
+ * validation pattern rejects leading-zero and >16-digit identifiers as
+ * invalid, and this comparator stays correct even if an old invalid value
+ * ever reaches it.
  */
 export function compareVersions(a: string, b: string): number {
   const pa = parseVersion(a);
@@ -75,7 +98,12 @@ export function compareVersions(a: string, b: string): number {
     if (ai === bi) continue;
     const aNum = /^\d+$/.test(ai);
     const bNum = /^\d+$/.test(bi);
-    if (aNum && bNum) return Number(ai) < Number(bi) ? -1 : 1;
+    if (aNum && bNum) {
+      const aN = BigInt(ai);
+      const bN = BigInt(bi);
+      if (aN === bN) continue; // "01" and "1" compare equal — not >0 both ways
+      return aN < bN ? -1 : 1;
+    }
     if (aNum) return -1; // numeric identifiers sort before alphanumeric
     if (bNum) return 1;
     return ai < bi ? -1 : 1;

@@ -187,6 +187,7 @@ export async function runHook(name: string, input: HookInput, options: RunHookOp
       scriptPath: script,
       content,
       args: custom?.manifest.args ?? [],
+      env: custom?.manifest.env,
       stdin: JSON.stringify(hookInput),
       timeout: effectiveTimeout ?? undefined,
     }));

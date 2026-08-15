@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.8] - 2026-08-15
+
+### Security
+
+- **Bash exported functions can no longer be imported by hook children (reviewer P1, efcad315).** Bash imports exported functions from `BASH_FUNC_<name>%%` environment entries, where they shadow commands (`env`, `cat`, `git`, `node`) and run attacker code on the hook's first command — the strip set and the deny list both missed them. `buildHookEnv` now strips every `BASH_FUNC_*` entry from the parent env and caller extras. Aliases are deliberately not denied: bash cannot import aliases from the environment, only functions — the strip is exactly the `BASH_FUNC_` prefix.
+- **The same-class interpreter/TLS vectors are stripped (reviewer P2).** `GCONV_PATH`/`LOCPATH` (gconv/locale module injection), `PYTHONHOME` (stdlib hijack), the whole `GIT_CONFIG_*` family (code exec via git config), the TLS-trust MITM set — `NODE_EXTRA_CA_CERTS`, `NODE_TLS_REJECT_UNAUTHORIZED`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `AWS_CA_BUNDLE` (observed leaking live on old code) — and `PERL5OPT`/`RUBYOPT` are now stripped from parent env and extras.
+- **Hook PATH is rebuilt from a trusted baseline (reviewer P2).** A fake `node`/`git` in a writable directory used to execute on the hook's first command because PATH was allowlisted raw. The child PATH now starts from the system directories (plus `/opt/homebrew/bin` on macOS) and the runner's own `bun` directory, and drops every entry under `$HOME`, `/tmp`, `/var/tmp`, or a world-writable path, plus empty/relative entries. A manifest `env.PATH` is the documented explicit override, passed verbatim.
+
+### Fixed
+
+- **The registry latest-pointer upsert is atomic (reviewer P2).** The pointer compare-and-update was read-then-write: two concurrent publishes of the same name could both read the same pointer and the older landed last (downgrade), and the crash-window heal could clobber a concurrently-advanced pointer. The upsert is now a compare-and-swap inside a D1 `batch()` transaction (`DO UPDATE ... WHERE hooks.version IS ? OR hooks.version = ?` — D1 exposes no BEGIN/COMMIT; batch is the atomic transaction primitive), with a bounded re-read/retry on a lost race. The heal writes a single guarded statement (`INSERT ... WHERE NOT EXISTS`), so a pointer advanced between its read and write can never be clobbered.
+- **Semver numeric identifiers are strict (reviewer P3).** `1.0.0-01` vs `1.0.0-1` compared >0 in BOTH directions (Number("01") === Number("1") while the strings differ), and near-16-digit numeric identifiers lost precision to Number(). Numeric identifiers with leading zeroes and identifiers longer than 16 digits are now rejected as invalid semver everywhere (manifest, publish, artifact routes — one shared pattern), and `compareVersions` compares numerics as BigInt, so ordering is exact and antisymmetric at any length.
+- **Hook interpreters resolve independently of the child PATH.** The runner now spawns `process.execPath` (its own bun binary) instead of the bare `bun`, so a sanitized PATH or a per-hook PATH override can never break the spawn of a `.ts` hook.
+
 ## [0.6.7] - 2026-08-15
 
 ### Security
