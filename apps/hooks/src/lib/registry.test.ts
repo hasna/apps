@@ -13,8 +13,8 @@ import {
 
 describe("registry", () => {
   describe("HOOKS", () => {
-    test("contains 50 hooks", () => {
-      expect(HOOKS).toHaveLength(50);
+    test("contains 51 hooks", () => {
+      expect(HOOKS).toHaveLength(51);
     });
 
     test("every hook has required fields", () => {
@@ -131,7 +131,8 @@ describe("registry", () => {
 
     test("returns Observability hooks", () => {
       const hooks = getHooksByCategory("Observability");
-      expect(hooks).toHaveLength(4);
+      expect(hooks).toHaveLength(5);
+      expect(hooks.map((h) => h.name)).toContain("spiral-detector");
     });
 
     test("returns Agent Teams hooks", () => {
@@ -316,7 +317,7 @@ describe("registry", () => {
 
     test("correct count per event type", () => {
       expect(HOOKS.filter((h) => h.event === "PreToolUse")).toHaveLength(16);
-      expect(HOOKS.filter((h) => h.event === "PostToolUse")).toHaveLength(16);
+      expect(HOOKS.filter((h) => h.event === "PostToolUse")).toHaveLength(17);
       expect(HOOKS.filter((h) => h.event === "Stop")).toHaveLength(9);
       expect(HOOKS.filter((h) => h.event === "Notification")).toHaveLength(3);
       expect(HOOKS.filter((h) => h.event === "SessionStart")).toHaveLength(5);
