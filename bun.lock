@@ -971,7 +971,7 @@
     },
     "apps/hooks": {
       "name": "@hasna/hooks",
-      "version": "0.6.3",
+      "version": "0.6.4",
       "bin": {
         "hooks": "bin/index.js",
         "hooks-serve": "bin/serve.js",
@@ -1124,7 +1124,7 @@
     },
     "apps/machines": {
       "name": "@hasna/machines",
-      "version": "0.2.26",
+      "version": "0.2.27",
       "bin": {
         "machines": "dist/cli/index.js",
         "machines-mcp": "dist/mcp/index.js",
