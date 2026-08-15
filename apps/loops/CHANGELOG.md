@@ -5,6 +5,55 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.5.0 (unreleased)
+
+Deployment-mode removal per the canonical doctrine: there are no deployment
+modes and no mode enums. The only server-side switch is the storage backend
+(`sqlite | postgresql`, selected on `loops-serve` by `HASNA_LOOPS_DATABASE_URL`);
+clients connect via the local file or the control-plane HTTP API.
+
+### Removed
+
+- **`HASNA_LOOPS_STORAGE_MODE` is deleted.** The client connection is selected
+  by `HASNA_LOOPS_API_URL` plus `HASNA_LOOPS_API_KEY` alone; reverting a
+  flipped client is exactly unsetting those two variables.
+- **Mode vocabulary removed from documentation, deployment artifacts, and
+  status surfaces.** `loops mode` and `loops cloud status` are gone; status
+  surfaces now report `storage` (`sqlite`/`postgresql`) and `connection`
+  (`file`/`api`), and `loops status` reports the connection.
+- **Breaking public exports:** the `mode.ts` exports are renamed to the
+  storage/connection model (e.g. the `@hasna/loops/mode` surface); code
+  importing mode names must migrate.
+
+### Changed
+
+- **Storage kit regenerated on `@hasna/contracts` 0.10.6.** The generated
+  storage kit drops its former `mode.ts` (replaced by `backend.ts`/`own.ts`)
+  and resolves the backend/connection from the DSN and API env keys, not a
+  mode variable. The `Foundation` schema in `openapi/loops.json` no longer
+  carries a `mode` property.
+- **`loops status` plus top-level `loops migrate`, `loops push`, and
+  `loops pull` are the promoted control surfaces.** The mode-specific command
+  names are gone; `loops status` reports the storage backend and the client
+  connection.
+- **Backend literal normalized to `postgresql`.** Storage backend values are
+  exactly `sqlite | postgresql` everywhere (DSN-derived on the server, API
+  contract on clients); the former `postgres` literal alias is removed.
+
+### Fixed
+
+- **Daemon process-identity is timezone-independent by construction:** the BSD
+  daemon/store process-identity check now derives elapsed time from
+  `ps -o etime` instead of parsing `ps -o lstart` local wall time with
+  `Date.parse`, so the check no longer depends on the parsing runtime's
+  timezone handling.
+- **Test-stability fixes bundled with the mode-removal rebuild:** the agent
+  idle-window test now runs with a 1000ms idle timeout (was 150ms) so slow CI
+  machines stop flaking, and the cursor-preflight negative tests are skipped
+  on machines that resolve a standalone `agent` binary, where the negative
+  case cannot be constructed.
+
+## 0.4.41 (2026-08-09)
 ## 0.4.41 (2026-08-09)
 
 ### Fixed

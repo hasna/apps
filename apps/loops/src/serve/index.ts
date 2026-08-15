@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-// `loops-serve` — the self-hosted HTTP control-plane binary.
+// `loops-serve` — the HTTP control-plane binary (PostgreSQL-direct).
 //
-// The service reads and writes self-hosted RDS/Postgres directly. There is no
+// The service reads and writes RDS/Postgres directly (PostgreSQL-direct). There is no
 // local SQLite, no cache, and no sync engine in the
 // serve process. Storage is the generated @hasna/contracts kit pool wrapping the
 // real `PostgresLoopStorage` backend. Every authenticated request gets one
@@ -36,6 +36,7 @@ import {
   resolveProviderCredentialOptions,
 } from "../lib/storage/provider-credentials.js";
 import { packageVersion } from "../lib/version.js";
+import { runtimeStorage } from "../lib/runtime-config.js";
 
 function resolveDatabaseUrl(purpose: "runtime" | "auth" | "migrator"): string {
   const envName = purpose === "runtime"
@@ -934,7 +935,7 @@ async function runServe(opts: { host: string; port: number }): Promise<void> {
 const program = new Command();
 program
   .name("loops-serve")
-  .description("Loops self-hosted HTTP control-plane (RDS-direct, API-key auth)")
+  .description("Loops HTTP control-plane (PostgreSQL-direct, API-key auth)")
   .version(packageVersion());
 
 program
@@ -1026,8 +1027,8 @@ program
 
 program
   .command("version")
-  .description("print { status, version, mode }")
-  .action(() => console.log(JSON.stringify({ status: "ok", version: packageVersion(), mode: "self_hosted" })));
+  .description("print { status, version, storage }")
+  .action(() => console.log(JSON.stringify({ status: "ok", version: packageVersion(), storage: runtimeStorage() })));
 
 if (import.meta.main) {
   // Bare `loops-serve` (no subcommand) defaults to `serve`. Commander cannot

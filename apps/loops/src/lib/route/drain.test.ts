@@ -225,12 +225,10 @@ const SHARED_TODOS_STORE_ENV_KEYS = [
   "TODOS_API_KEY",
 ] as const;
 
-/** process.env with every shared-store pointer blanked and storage pinned local. */
+/** process.env with every shared-store pointer blanked so a routed child cannot reach a shared store. */
 function scrubbedTodosEnv(dbPathOverride: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of SHARED_TODOS_STORE_ENV_KEYS) env[key] = "";
-  env.HASNA_TODOS_STORAGE_MODE = "local";
-  env.TODOS_STORAGE_MODE = "local";
   env.HASNA_TODOS_DB_PATH = dbPathOverride;
   env.TODOS_DB_PATH = dbPathOverride;
   return env;
@@ -321,7 +319,6 @@ describe.serial("drainTodosTaskRoutes freshness close", () => {
     for (const key of SHARED_TODOS_STORE_ENV_KEYS) {
       expect(env[key] ?? "").toBe("");
     }
-    expect(env.HASNA_TODOS_STORAGE_MODE).toBe("local");
     expect(env.HASNA_TODOS_DB_PATH).toStartWith(tmpdir());
 
     // And PATH still resolves `todos` to the hermetic fixture, not the real CLI.

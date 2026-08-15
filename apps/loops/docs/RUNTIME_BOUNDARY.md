@@ -9,8 +9,8 @@ ownership, approvals, DLQ/replay, idempotency, and audit evidence live in
 Use this document when you need a single operator-facing boundary reference.
 For the planned upsert/DLQ/strict-mode contract, see
 [`AUTOMATION_RUNTIME_DESIGN.md`](./AUTOMATION_RUNTIME_DESIGN.md). For
-deployment-mode vocabulary (local vs self-hosted vs cloud), see
-[`DEPLOYMENT_MODES.md`](./DEPLOYMENT_MODES.md).
+storage backends and client connections (local SQLite file vs control-plane
+API), see [`STORAGE-BACKENDS.md`](./STORAGE-BACKENDS.md).
 
 ## Ownership Split
 
@@ -19,7 +19,7 @@ deployment-mode vocabulary (local vs self-hosted vs cloud), see
 | Automation specs and trigger materialization | `@hasna/automations` | None — do not store specs in Loops |
 | Product automation action queues, leases, DLQ, replay, idempotency, approvals, audit | `@hasna/automations` | Execute claimed actions; complete/fail by action id + runner id |
 | Action compilation and action-target rendering | `@hasna/actions` | Accept planned upsert handoff; do not write SQLite rows directly |
-| Scheduler, daemon, loop/workflow storage | Loops | Authoritative in `local` mode |
+| Scheduler, daemon, loop/workflow storage | Loops | Authoritative on the local SQLite file |
 | Workflow invocation, admission, execution, run manifests | Loops | After explicit handoff or todos-task route admission |
 | Provider routing, worktrees, run artifacts | Loops | Bounded by route and template policy |
 | Todos-task route drains (`auto:route`, `route_enabled`, `automation.allowed`) | Loops-native | Opt-in task/event routing — **not** OpenAutomations queue replacement |
@@ -198,6 +198,7 @@ Do **not**:
 - [`AUTOMATION_RUNTIME_DESIGN.md`](./AUTOMATION_RUNTIME_DESIGN.md) — planned
   upsert SDK, DLQ/replay, strict automation execution mode.
 - [`USAGE.md`](./USAGE.md) — templates, todos-task routes, provider pools.
-- [`DEPLOYMENT_MODES.md`](./DEPLOYMENT_MODES.md) — local/self-hosted/cloud;
-  deployment concerns are runtime placement, not automation product surface.
+- [`STORAGE-BACKENDS.md`](./STORAGE-BACKENDS.md) — storage backends and client
+  connections; deployment concerns are runtime placement, not automation
+  product surface.
 - README § OpenAutomations Runtime Binding — short summary and quick references.

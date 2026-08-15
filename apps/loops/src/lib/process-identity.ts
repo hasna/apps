@@ -50,6 +50,22 @@ export function procStatFields(path: string): string[] | undefined {
   }
 }
 
+/**
+ * Parse BSD `ps -o etime` elapsed time (`[[DD-]HH:]MM:SS`) into whole seconds.
+ * Returns undefined for any unparsable value. TZ-independent by construction:
+ * elapsed time has no wall-clock interpretation.
+ */
+function parseBsdElapsedSeconds(etime: string): number | undefined {
+  const match = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(etime.trim());
+  if (!match) return undefined;
+  const days = match[1] === undefined ? 0 : Number(match[1]);
+  const hours = match[2] === undefined ? 0 : Number(match[2]);
+  const minutes = Number(match[3]);
+  const seconds = Number(match[4]);
+  if (![days, hours, minutes, seconds].every((value) => Number.isFinite(value))) return undefined;
+  return ((days * 24 + hours) * 60 + minutes) * 60 + seconds;
+}
+
 export function processStartTimeMs(pid: number): number | undefined {
   if (!Number.isInteger(pid) || pid <= 0) return undefined;
   if (process.platform === "linux") {
@@ -62,10 +78,17 @@ export function processStartTimeMs(pid: number): number | undefined {
     }
   }
   try {
-    const run = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" });
+    // BSD (macOS) has no /proc. `ps -o lstart` prints LOCAL wall time, and
+    // `Date.parse` of a timezone-less string uses the PARSING RUNTIME's
+    // timezone (node: system TZ; bun: UTC) — so the same lstart string
+    // converts to different epochs under the two runtimes whenever the
+    // system TZ is not UTC, skewing daemon/store process-identity checks by
+    // the TZ offset. Elapsed time (`etime`) has no timezone at all: start =
+    // now - elapsed, in whichever epoch the caller already uses.
+    const run = spawnSync("ps", ["-o", "etime=", "-p", String(pid)], { encoding: "utf8" });
     if (run.status === 0) {
-      const parsed = Date.parse(run.stdout.trim());
-      if (Number.isFinite(parsed)) return parsed;
+      const elapsedSec = parseBsdElapsedSeconds(run.stdout.trim());
+      if (elapsedSec !== undefined) return Date.now() - elapsedSec * 1_000;
     }
   } catch {
     /* ignore */

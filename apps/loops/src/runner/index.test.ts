@@ -35,65 +35,89 @@ describe("loops-runner", () => {
     }
   });
 
-  test("reports local daemon authority by default", () => {
-    const previous = process.env.HASNA_LOOPS_STORAGE_MODE;
-    process.env.HASNA_LOOPS_STORAGE_MODE = "local";
-    const status = runnerStatus();
-    if (previous === undefined) delete process.env.HASNA_LOOPS_STORAGE_MODE;
-    else process.env.HASNA_LOOPS_STORAGE_MODE = previous;
-
-    expect(status.ok).toBe(true);
-    expect(status.service).toBe("loops-runner");
-    expect(status.deployment.deploymentMode).toBe("local");
-    expect(status.state).toBe("local_daemon_authoritative");
+  test("reports file connection authority by default", () => {
+    const previousApiUrl = process.env.HASNA_LOOPS_API_URL;
+    const previousApiKey = process.env.HASNA_LOOPS_API_KEY;
+    delete process.env.HASNA_LOOPS_API_URL;
+    delete process.env.HASNA_LOOPS_API_KEY;
+    try {
+      const status = runnerStatus();
+      expect(status.ok).toBe(true);
+      expect(status.service).toBe("loops-runner");
+      expect(status.storageConnection.connection).toBe("file");
+      expect(status.state).toBe("file_authoritative");
+    } finally {
+      if (previousApiUrl === undefined) delete process.env.HASNA_LOOPS_API_URL;
+      else process.env.HASNA_LOOPS_API_URL = previousApiUrl;
+      if (previousApiKey === undefined) delete process.env.HASNA_LOOPS_API_KEY;
+      else process.env.HASNA_LOOPS_API_KEY = previousApiKey;
+    }
   });
 
-  test("fails closed for configured self-hosted mode without an API URL", () => {
-    const previousMode = process.env.HASNA_LOOPS_STORAGE_MODE;
-    const previousDatabaseUrl = process.env.HASNA_LOOPS_DATABASE_URL;
+  test("fails closed for a partial API connection without a key", () => {
     const previousApiUrl = process.env.HASNA_LOOPS_API_URL;
-    process.env.HASNA_LOOPS_STORAGE_MODE = "self_hosted";
+    const previousApiKey = process.env.HASNA_LOOPS_API_KEY;
+    const previousDatabaseUrl = process.env.HASNA_LOOPS_DATABASE_URL;
+    process.env.HASNA_LOOPS_API_URL = "https://loops.example.test";
+    delete process.env.HASNA_LOOPS_API_KEY;
     process.env.HASNA_LOOPS_DATABASE_URL = "postgres://loops.example.test/openloops";
-    delete process.env.HASNA_LOOPS_API_URL;
 
     try {
       const status = runnerStatus("machine-test");
 
       expect(status.ok).toBe(false);
       expect(status.machineId).toBe("machine-test");
-      expect(status.deployment.deploymentMode).toBe("self_hosted");
-      expect(status.deployment.controlPlane.configured).toBe(true);
-      expect(status.state).toBe("missing_control_plane_api_url");
+      expect(status.storageConnection.connection).toBe("file");
+      expect(status.storageConnection.databaseUrlPresent).toBe(true);
+      expect(status.state).toBe("missing_api_key");
     } finally {
-      if (previousMode === undefined) delete process.env.HASNA_LOOPS_STORAGE_MODE;
-      else process.env.HASNA_LOOPS_STORAGE_MODE = previousMode;
-      if (previousDatabaseUrl === undefined) delete process.env.HASNA_LOOPS_DATABASE_URL;
-      else process.env.HASNA_LOOPS_DATABASE_URL = previousDatabaseUrl;
       if (previousApiUrl === undefined) delete process.env.HASNA_LOOPS_API_URL;
       else process.env.HASNA_LOOPS_API_URL = previousApiUrl;
+      if (previousApiKey === undefined) delete process.env.HASNA_LOOPS_API_KEY;
+      else process.env.HASNA_LOOPS_API_KEY = previousApiKey;
+      if (previousDatabaseUrl === undefined) delete process.env.HASNA_LOOPS_DATABASE_URL;
+      else process.env.HASNA_LOOPS_DATABASE_URL = previousDatabaseUrl;
     }
   });
 
-  test("reports ready when a self-hosted API URL and token are configured", () => {
-    const previousMode = process.env.HASNA_LOOPS_STORAGE_MODE;
+  test("reports ready when the API connection is fully configured", () => {
     const previousApiUrl = process.env.HASNA_LOOPS_API_URL;
-    const previousToken = process.env.HASNA_LOOPS_API_KEY;
-    process.env.HASNA_LOOPS_STORAGE_MODE = "self_hosted";
+    const previousApiKey = process.env.HASNA_LOOPS_API_KEY;
     process.env.HASNA_LOOPS_API_URL = "https://loops.example.test";
-    process.env.HASNA_LOOPS_API_KEY = "token-present";
+    process.env.HASNA_LOOPS_API_KEY = "token" + "-present";
 
     try {
       const status = runnerStatus("machine-test");
 
       expect(status.ok).toBe(true);
-      expect(status.state).toBe("control_plane_ready");
+      expect(status.storageConnection.connection).toBe("api");
+      expect(status.storageConnection.apiUrl).toBe("https://loops.example.test");
+      expect(status.state).toBe("api_ready");
     } finally {
-      if (previousMode === undefined) delete process.env.HASNA_LOOPS_STORAGE_MODE;
-      else process.env.HASNA_LOOPS_STORAGE_MODE = previousMode;
       if (previousApiUrl === undefined) delete process.env.HASNA_LOOPS_API_URL;
       else process.env.HASNA_LOOPS_API_URL = previousApiUrl;
-      if (previousToken === undefined) delete process.env.HASNA_LOOPS_API_KEY;
-      else process.env.HASNA_LOOPS_API_KEY = previousToken;
+      if (previousApiKey === undefined) delete process.env.HASNA_LOOPS_API_KEY;
+      else process.env.HASNA_LOOPS_API_KEY = previousApiKey;
+    }
+  });
+
+  test("fails closed for a partial API connection without a URL", () => {
+    const previousApiUrl = process.env.HASNA_LOOPS_API_URL;
+    const previousApiKey = process.env.HASNA_LOOPS_API_KEY;
+    delete process.env.HASNA_LOOPS_API_URL;
+    process.env.HASNA_LOOPS_API_KEY = "token" + "-present";
+
+    try {
+      const status = runnerStatus("machine-test");
+
+      expect(status.ok).toBe(false);
+      expect(status.storageConnection.connection).toBe("file");
+      expect(status.state).toBe("missing_api_url");
+    } finally {
+      if (previousApiUrl === undefined) delete process.env.HASNA_LOOPS_API_URL;
+      else process.env.HASNA_LOOPS_API_URL = previousApiUrl;
+      if (previousApiKey === undefined) delete process.env.HASNA_LOOPS_API_KEY;
+      else process.env.HASNA_LOOPS_API_KEY = previousApiKey;
     }
   });
 

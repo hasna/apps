@@ -24,7 +24,6 @@ async function runCli(
       ...process.env,
       HOME: dataDir,
       LOOPS_DATA_DIR: dataDir,
-      HASNA_LOOPS_STORAGE_MODE: "self_hosted",
       HASNA_LOOPS_API_URL: "",
       HASNA_LOOPS_API_KEY: "",
       ...env,
@@ -187,7 +186,7 @@ describe("hosted stuck-detector CLI boundary", () => {
         ok: true,
         status: "ok",
         counts: { loops: 1, staleRunning: 0, findings: 0 },
-        backend: { transport: "cloud-http" },
+        backend: { transport: "api" },
         unchecked: [],
       });
     } finally {
@@ -199,7 +198,6 @@ describe("hosted stuck-detector CLI boundary", () => {
   test("isolated local SQLite health and hygiene controls remain clean", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-local-stuck-controls-"));
     const localEnv = {
-      HASNA_LOOPS_STORAGE_MODE: "local",
       HASNA_LOOPS_API_URL: "",
       HASNA_LOOPS_API_KEY: "",
     };
@@ -241,7 +239,7 @@ describe("hosted stuck-detector CLI boundary", () => {
         counts?: { loops?: number; staleRunning?: number; findings?: number };
         findings?: Array<{ kind?: string; run?: { id?: string; leaseExpiresAt?: string } }>;
       };
-      expect(output.backend?.transport).toBe("cloud-http");
+      expect(output.backend?.transport).toBe("api");
       expect(output.status).toBe("critical");
       expect(output.counts).toMatchObject({ loops: 1, staleRunning: 1, findings: 1 });
       expect(output.findings).toContainEqual(expect.objectContaining({
