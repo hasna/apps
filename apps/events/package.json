@@ -1,0 +1,119 @@
+{
+  "name": "@hasna/events",
+  "version": "0.1.15",
+  "description": "Shared event envelopes, local channels, replay, and delivery transports for Hasna open-source apps",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./types/index.d.ts",
+  "bin": {
+    "events": "dist/cli/index.js",
+    "hasna-events": "dist/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./storage": {
+      "types": "./types/storage.d.ts",
+      "import": "./dist/storage.js"
+    },
+    "./durable": {
+      "types": "./types/durable.d.ts",
+      "import": "./dist/durable.js"
+    },
+    "./durable-spool": {
+      "types": "./types/durable-spool.d.ts",
+      "import": "./dist/durable-spool.js"
+    },
+    "./durable-worker": {
+      "types": "./types/durable-worker.d.ts",
+      "import": "./dist/durable-worker.js"
+    },
+    "./signing": {
+      "types": "./types/signing.d.ts",
+      "import": "./dist/signing.js"
+    },
+    "./filter": {
+      "types": "./types/filter.d.ts",
+      "import": "./dist/filter.js"
+    },
+    "./transports": {
+      "types": "./types/transports.d.ts",
+      "import": "./dist/transports.js"
+    },
+    "./catalog": {
+      "types": "./types/catalog.d.ts",
+      "import": "./dist/catalog.js"
+    },
+    "./app-event": {
+      "types": "./types/app-event.d.ts",
+      "import": "./dist/app-event.js"
+    },
+    "./schemas/hasna.app_event.v1.json": "./schemas/hasna.app_event.v1.json",
+    "./fixtures/hasna.app_event.v1.json": "./fixtures/hasna.app_event.v1.json",
+    "./commander": {
+      "types": "./types/commander.d.ts",
+      "import": "./dist/commander.js"
+    },
+    "./cli": {
+      "types": "./types/cli/index.d.ts",
+      "import": "./dist/cli/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "types",
+    "schemas",
+    "fixtures",
+    "README.md",
+    "LICENSE",
+    "hasna.contract.json"
+  ],
+  "scripts": {
+    "build": "bun run build:runtime && bun run build:types",
+    "build:runtime": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun && bun build src/index.ts src/storage.ts src/signing.ts src/filter.ts src/transports.ts src/types.ts src/commander.ts src/catalog.ts src/app-event.ts src/durable.ts src/durable-worker.ts --root src --outdir dist --target bun && bun build src/durable-spool.ts --root src --outdir dist --target node",
+    "build:types": "rm -rf types && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir types",
+    "generated-artifacts:check": "bun run build && test -z \"$(git status --porcelain --untracked-files=all -- dist types)\"",
+    "contract:check": "contracts repo-conformance .",
+    "artifact-scan": "bun scripts/artifact-scan.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "prepack": "bun run build && bun run artifact-scan",
+    "prepublishOnly": "bun run test && bun run build"
+  },
+  "keywords": [
+    "events",
+    "channels",
+    "cli",
+    "typescript",
+    "bun",
+    "hasna"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/events.git"
+  },
+  "homepage": "https://github.com/hasna/events",
+  "bugs": {
+    "url": "https://github.com/hasna/events/issues"
+  },
+  "engines": {
+    "bun": ">=1.0.0",
+    "node": ">=20.0.0"
+  },
+  "author": "Hasna",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@hasna/contracts": "0.8.5",
+    "@types/bun": "latest",
+    "typescript": "^5.7.3"
+  }
+}

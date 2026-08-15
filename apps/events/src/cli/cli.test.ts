@@ -1,0 +1,623 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+let dataDir = "";
+
+async function runCli(args: string[]) {
+  const child = Bun.spawn({
+    cmd: ["bun", "run", "src/cli/index.ts", "--dir", dataDir, "--json", ...args],
+    cwd: process.cwd(),
+    env: { ...process.env, HASNA_EVENTS_DIR: dataDir },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  return { stdout, stderr, exitCode };
+}
+
+async function runCliText(args: string[]) {
+  const child = Bun.spawn({
+    cmd: ["bun", "run", "src/cli/index.ts", "--dir", dataDir, ...args],
+    cwd: process.cwd(),
+    env: { ...process.env, HASNA_EVENTS_DIR: dataDir },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  return { stdout, stderr, exitCode };
+}
+
+async function runEmbeddedCli(args: string[]) {
+  const child = Bun.spawn({
+    cmd: [
+      "bun",
+      "-e",
+      `import { runEventsCli } from "./src/cli/index.ts"; await runEventsCli(["--dir", process.env.HASNA_EVENTS_DIR!, "--json", ...${JSON.stringify(args)}], { source: "embedded-test", programName: "embedded" });`,
+    ],
+    cwd: process.cwd(),
+    env: { ...process.env, HASNA_EVENTS_DIR: dataDir },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  return { stdout, stderr, exitCode };
+}
+
+beforeEach(() => {
+  dataDir = mkdtempSync(join(tmpdir(), "hasna-events-cli-"));
+});
+
+afterEach(() => {
+  rmSync(dataDir, { recursive: true, force: true });
+});
+
+describe("CLI smoke behavior", () => {
+  test("prints nested group help", async () => {
+    const rootHelp = await runCliText(["--help"]);
+    expect(rootHelp.exitCode).toBe(0);
+    expect(rootHelp.stderr).toBe("");
+    expect(rootHelp.stdout).toContain("Global options (must precede the command group)");
+    expect(rootHelp.stdout).toContain("-v, --version");
+
+    const webhooksHelp = await runCli(["channels", "--help"]);
+    expect(webhooksHelp.exitCode).toBe(0);
+    expect(webhooksHelp.stderr).toBe("");
+    expect(webhooksHelp.stdout).toContain("events channels");
+    expect(webhooksHelp.stdout).toContain("channels add");
+    expect(webhooksHelp.stdout).toContain("Test and match options:");
+    expect(webhooksHelp.stdout).toContain("--honor-filters");
+
+    const eventsHelp = await runCli(["events", "--help"]);
+    expect(eventsHelp.exitCode).toBe(0);
+    expect(eventsHelp.stderr).toBe("");
+    expect(eventsHelp.stdout).toContain("events events");
+    expect(eventsHelp.stdout).toContain("events emit");
+    expect(eventsHelp.stdout).toContain("List options:");
+    expect(eventsHelp.stdout).toContain("Replay options:");
+    for (const option of ["--dedupe-key", "--no-deliver", "--id <event-id>", "--cursor <cursor>", "--dry-run"]) {
+      expect(eventsHelp.stdout).toContain(option);
+    }
+
+    const durableHelp = await runCli(["durable", "--help"]);
+    expect(durableHelp.exitCode).toBe(0);
+    expect(durableHelp.stderr).toBe("");
+    for (const command of ["durable channel", "durable enqueue", "durable drain", "durable work", "durable retry-dead"]) {
+      expect(durableHelp.stdout).toContain(command);
+    }
+  });
+
+  test("does not expose legacy webhooks command group", async () => {
+    const legacy = await runCli(["webhooks", "list"]);
+
+    expect(legacy.exitCode).not.toBe(0);
+    expect(legacy.stderr).toBe("");
+    expect(JSON.parse(legacy.stdout).error).toBe("Unknown command group: webhooks");
+  });
+
+  test("prints nested command help without mutating channels or events", async () => {
+    const addHelp = await runCli(["channels", "add", "--help"]);
+    expect(addHelp.exitCode).toBe(0);
+    expect(addHelp.stderr).toBe("");
+    expect(addHelp.stdout).toContain("channels add");
+    expect(addHelp.stdout).toContain("--arg <arg>");
+    expect(addHelp.stdout).toContain("--timeout-ms <ms>");
+    expect(addHelp.stdout).toContain("--retry-attempts <n>");
+    expect(addHelp.stdout).toContain("--event-type <pattern>");
+    expect(addHelp.stdout).toContain("default: generated UUID");
+    expect(addHelp.stdout).toContain("default: webhook");
+    expect(addHelp.stdout).toContain("default: 15000");
+    expect(addHelp.stdout).toContain("--disabled");
+    expect(addHelp.stdout).toContain("--arg=--json");
+
+    const emitHelp = await runCli(["events", "emit", "--help"]);
+    expect(emitHelp.exitCode).toBe(0);
+    expect(emitHelp.stderr).toBe("");
+    expect(emitHelp.stdout).toContain("events emit");
+
+    const listHooks = await runCli(["channels", "list"]);
+    expect(JSON.parse(listHooks.stdout)).toEqual([]);
+
+    const listEvents = await runCli(["events", "list"]);
+    expect(JSON.parse(listEvents.stdout)).toEqual([]);
+  });
+
+  test("can be embedded with app name and default source", async () => {
+    const help = await runEmbeddedCli(["events", "--help"]);
+    expect(help.exitCode).toBe(0);
+    expect(help.stderr).toBe("");
+    expect(help.stdout).toContain("embedded events");
+    expect(help.stdout).toContain("default: embedded-test");
+
+    const emit = await runEmbeddedCli(["events", "emit", "embedded.created", "--no-deliver"]);
+    expect(emit.exitCode).toBe(0);
+    expect(JSON.parse(emit.stdout).event).toMatchObject({
+      source: "embedded-test",
+      type: "embedded.created",
+    });
+  });
+
+  test("adds, lists, tests, removes channels and emits, lists, replays events", async () => {
+    const requests: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (request) => {
+        requests.push(await request.text());
+        return new Response("ok");
+      },
+    });
+
+    try {
+      const add = await runCli(["channels", "add", `http://127.0.0.1:${server.port}`, "--id", "smoke", "--type", "smoke.*", "--secret", "secret"]);
+      expect(add.exitCode).toBe(0);
+      expect(JSON.parse(add.stdout)).toMatchObject({ id: "smoke", transport: "webhook", webhook: { secret: "[REDACTED]" } });
+
+      const listHooks = await runCli(["channels", "list"]);
+      expect(listHooks.exitCode).toBe(0);
+      expect(JSON.parse(listHooks.stdout)).toHaveLength(1);
+      expect(JSON.parse(listHooks.stdout)[0].webhook.secret).toBe("[REDACTED]");
+
+      const testHook = await runCli(["channels", "test", "smoke"]);
+      expect(testHook.exitCode).toBe(0);
+      expect(JSON.parse(testHook.stdout)).toMatchObject({ channelId: "smoke", status: "success" });
+
+      const emit = await runCli(["events", "emit", "smoke.created", "--source", "cli-test", "--data", "{\"ok\":true}"]);
+      expect(emit.exitCode).toBe(0);
+      const emitted = JSON.parse(emit.stdout);
+      expect(emitted.event).toMatchObject({ source: "cli-test", type: "smoke.created" });
+      expect(emitted.deliveries).toHaveLength(1);
+
+      const deduped = await runCli(["events", "emit", "smoke.created", "--source", "cli-test", "--dedupe-key", "smoke:created"]);
+      expect(deduped.exitCode).toBe(0);
+      const duplicate = await runCli(["events", "emit", "smoke.created", "--source", "cli-test", "--dedupe-key", "smoke:created"]);
+      expect(duplicate.exitCode).toBe(0);
+      expect(JSON.parse(duplicate.stdout).deduped).toBe(true);
+
+      const listEvents = await runCli(["events", "list", "--limit", "1"]);
+      expect(listEvents.exitCode).toBe(0);
+      expect(JSON.parse(listEvents.stdout)[0]).toMatchObject({ type: "smoke.created" });
+
+      const replay = await runCli(["events", "replay", "--dry-run"]);
+      expect(replay.exitCode).toBe(0);
+      expect(JSON.parse(replay.stdout).events.length).toBe(2);
+
+      const replayPage = await runCli(["events", "replay", "--dry-run", "--limit", "1"]);
+      expect(replayPage.exitCode).toBe(0);
+      const firstPage = JSON.parse(replayPage.stdout);
+      expect(firstPage.events).toHaveLength(1);
+      expect(firstPage.hasMore).toBe(true);
+      expect(typeof firstPage.nextCursor).toBe("string");
+
+      const replayNextPage = await runCli(["events", "replay", "--dry-run", "--cursor", firstPage.nextCursor, "--limit", "1"]);
+      expect(replayNextPage.exitCode).toBe(0);
+      const secondPage = JSON.parse(replayNextPage.stdout);
+      expect(secondPage.events).toHaveLength(1);
+      expect(secondPage.events[0].id).not.toBe(firstPage.events[0].id);
+      expect(secondPage.hasMore).toBe(false);
+
+      const replayHumanPage = await runCliText(["events", "replay", "--dry-run", "--limit", "1"]);
+      expect(replayHumanPage.exitCode).toBe(0);
+      expect(replayHumanPage.stdout).toContain("next cursor:");
+
+      const remove = await runCli(["channels", "remove", "smoke"]);
+      expect(remove.exitCode).toBe(0);
+      expect(JSON.parse(remove.stdout)).toEqual({ removed: true });
+      expect(requests.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("status reports metadata only without event payloads or webhook secrets", async () => {
+    const add = await runCli(["channels", "add", "https://example.com/hook", "--id", "ops", "--secret", "top-secret-value"]);
+    expect(add.exitCode).toBe(0);
+
+    const emit = await runCli([
+      "events",
+      "emit",
+      "fleet.status",
+      "--source",
+      "cli-test",
+      "--data",
+      "{\"token\":\"raw-token-value\"}",
+      "--no-deliver",
+    ]);
+    expect(emit.exitCode).toBe(0);
+
+    const statusResult = await runCli(["status"]);
+    expect(statusResult.exitCode).toBe(0);
+    const status = JSON.parse(statusResult.stdout);
+    expect(status).toMatchObject({
+      service: "events",
+      schemaVersion: "1.0",
+      counts: {
+        channels: 1,
+        enabledChannels: 1,
+        events: 1,
+        deliveries: 0,
+      },
+      safety: {
+        includesEventPayloads: false,
+        includesWebhookSecrets: false,
+        statusOutputIsMetadataOnly: true,
+      },
+    });
+    expect(status.files.events.records).toBe(1);
+    expect(JSON.stringify(status)).not.toContain("top-secret-value");
+    expect(JSON.stringify(status)).not.toContain("raw-token-value");
+
+    const webhooksStatusResult = await runCli(["channels", "status"]);
+    expect(webhooksStatusResult.exitCode).toBe(0);
+    const webhooksStatus = JSON.parse(webhooksStatusResult.stdout);
+    expect(webhooksStatus).toMatchObject(status);
+    expect(JSON.stringify(webhooksStatus)).not.toContain("top-secret-value");
+    expect(JSON.stringify(webhooksStatus)).not.toContain("raw-token-value");
+  });
+
+  test("configures, enqueues, and drains an exact durable webhook route", async () => {
+    const previousSecret = process.env.HASNA_NOTES_WEBHOOK_SECRET;
+    process.env.HASNA_NOTES_WEBHOOK_SECRET = "test-runtime-signing-material";
+    let requests = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => {
+        requests += 1;
+        return new Response("durably queued", { status: 202 });
+      },
+    });
+    try {
+      const channel = await runCli([
+        "durable", "channel", `http://127.0.0.1:${server.port}`,
+        "--id", "notes-created",
+        "--source", "notes",
+        "--type", "note.created",
+        "--secret-ref", "env:HASNA_NOTES_WEBHOOK_SECRET",
+        "--retry-attempts", "3",
+      ]);
+      expect(channel.exitCode).toBe(0);
+      expect(JSON.parse(channel.stdout)).toMatchObject({
+        id: "notes-created",
+        enabled: true,
+        filters: [{ source: "notes", type: "note.created" }],
+        webhook: { secretRef: "env:HASNA_NOTES_WEBHOOK_SECRET" },
+      });
+
+      const enqueue = await runCli([
+        "durable", "enqueue", "note.created",
+        "--source", "notes",
+        "--id", "notes:note:cli:created",
+        "--dedupe-key", "notes:note:cli:created",
+        "--time", "2026-08-06T15:00:00.000Z",
+        "--schema-version", "notes.v1",
+        "--data", "{\"noteId\":\"cli\"}",
+      ]);
+      expect(enqueue.exitCode).toBe(0);
+      expect(JSON.parse(enqueue.stdout)).toMatchObject({ deduped: false, queued: 1 });
+
+      const drain = await runCli(["durable", "drain", "--limit", "10"]);
+      expect(drain.exitCode).toBe(0);
+      expect(JSON.parse(drain.stdout).drained).toMatchObject({ claimed: 1, delivered: 1 });
+      expect(requests).toBe(1);
+
+      const status = await runCli(["durable", "status"]);
+      expect(status.exitCode).toBe(0);
+      expect(JSON.parse(status.stdout)).toMatchObject({
+        storage: "local-sqlite",
+        counts: { delivered: 1, dead: 0 },
+        safety: {
+          statusOmitsEventPayloads: true,
+          databasePersistsEventEnvelopes: true,
+          includesResolvedSecrets: false,
+        },
+      });
+      expect(status.stdout).not.toContain("test-runtime-signing-material");
+    } finally {
+      server.stop(true);
+      if (previousSecret === undefined) delete process.env.HASNA_NOTES_WEBHOOK_SECRET;
+      else process.env.HASNA_NOTES_WEBHOOK_SECRET = previousSecret;
+    }
+  });
+
+  test("uses command transport --arg values without forwarding --arg to the process", async () => {
+    const receiverPath = join(dataDir, "receiver.js");
+    const outputPath = join(dataDir, "received.jsonl");
+    writeFileSync(receiverPath, `const fs = require("node:fs"); fs.appendFileSync(${JSON.stringify(outputPath)}, process.env.HASNA_EVENT_JSON + "\\n");\n`);
+
+    const add = await runCli([
+      "channels",
+      "add",
+      "bun",
+      "--id",
+      "command-hook",
+      "--transport",
+      "command",
+      "--type",
+      "command.*",
+      "--arg",
+      receiverPath,
+    ]);
+    expect(add.exitCode).toBe(0);
+    expect(JSON.parse(add.stdout)).toMatchObject({
+      id: "command-hook",
+      command: { command: "bun", args: [receiverPath] },
+    });
+
+    const emit = await runCli(["events", "emit", "command.created", "--source", "cli-test"]);
+    expect(emit.exitCode).toBe(0);
+    expect(JSON.parse(emit.stdout).deliveries[0]).toMatchObject({ channelId: "command-hook", status: "success" });
+
+    expect(existsSync(outputPath)).toBe(true);
+    expect(JSON.parse(readFileSync(outputPath, "utf-8").trim())).toMatchObject({
+      source: "cli-test",
+      type: "command.created",
+    });
+  });
+
+  test("preserves command transport --arg values that begin with dashes", async () => {
+    const add = await runCli([
+      "channels",
+      "add",
+      "bun",
+      "--id",
+      "dash-arg",
+      "--transport",
+      "command",
+      "--arg",
+      "--json",
+    ]);
+
+    expect(add.exitCode).toBe(0);
+    expect(JSON.parse(add.stdout)).toMatchObject({
+      id: "dash-arg",
+      command: { command: "bun", args: ["--json"] },
+    });
+  });
+
+  test("preserves command transport --arg= values that begin with dashes", async () => {
+    const add = await runCli([
+      "channels",
+      "add",
+      "bun",
+      "--id",
+      "equals-dash-arg",
+      "--transport",
+      "command",
+      "--arg=--json",
+    ]);
+
+    expect(add.exitCode).toBe(0);
+    expect(JSON.parse(add.stdout)).toMatchObject({
+      id: "equals-dash-arg",
+      command: { command: "bun", args: ["--json"] },
+    });
+  });
+
+  test("preserves positional command transport child args", async () => {
+    const add = await runCli([
+      "channels",
+      "add",
+      "bun",
+      "--id",
+      "positional-command-args",
+      "--transport",
+      "command",
+      "run",
+      "./handler.ts",
+    ]);
+
+    expect(add.exitCode).toBe(0);
+    expect(JSON.parse(add.stdout)).toMatchObject({
+      id: "positional-command-args",
+      command: { command: "bun", args: ["run", "./handler.ts"] },
+    });
+  });
+
+  test("preserves command transport child args after explicit delimiter", async () => {
+    const add = await runCli([
+      "channels",
+      "add",
+      "bun",
+      "--id",
+      "delimited-command-args",
+      "--transport",
+      "command",
+      "--",
+      "run",
+      "./handler.ts",
+      "--json",
+    ]);
+
+    expect(add.exitCode).toBe(0);
+    expect(JSON.parse(add.stdout)).toMatchObject({
+      id: "delimited-command-args",
+      command: { command: "bun", args: ["run", "./handler.ts", "--json"] },
+    });
+  });
+
+  test("filters channels by data and metadata fields and previews matches", async () => {
+    const receiverPath = join(dataDir, "receiver.js");
+    const outputPath = join(dataDir, "filtered-events.jsonl");
+    writeFileSync(receiverPath, `const fs = require("node:fs"); fs.appendFileSync(${JSON.stringify(outputPath)}, process.env.HASNA_EVENT_JSON + "\\n");\n`);
+
+    const add = await runCli([
+      "channels",
+      "add",
+      "bun",
+      "--id",
+      "opensource-route",
+      "--transport",
+      "command",
+      "--source",
+      "todos",
+      "--type",
+      "task.created",
+      "--metadata",
+      "project_path=/home/hasna/workspace/hasna/opensource/*",
+      "--metadata-json",
+      "route_enabled=true",
+      "--metadata-json",
+      "automation.no_auto!=true",
+      "--data",
+      "priority=001",
+      "--data",
+      "tags=auto:*",
+      "--arg",
+      receiverPath,
+    ]);
+    expect(add.exitCode).toBe(0);
+    const saved = JSON.parse(add.stdout);
+    expect(saved.filters[0].metadata.project_path).toBe("/home/hasna/workspace/hasna/opensource/*");
+    expect(saved.filters[0].metadata.route_enabled).toBe(true);
+    expect(saved.filters[0].metadata["automation.no_auto"]).toEqual({ not: true });
+    expect(saved.filters[0].data.priority).toBe("001");
+    expect(saved.filters[0].data.tags).toBe("auto:*");
+
+    const match = await runCli([
+      "channels",
+      "match",
+      "opensource-route",
+      "--source",
+      "todos",
+      "--type",
+      "task.created",
+      "--data",
+      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:open-events\"]}",
+      "--metadata",
+      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/open-events\",\"route_enabled\":true,\"automation\":{\"no_auto\":false}}",
+    ]);
+    expect(match.exitCode).toBe(0);
+    expect(JSON.parse(match.stdout).matched).toBe(true);
+
+    const flatNoAutoDeny = await runCli([
+      "channels",
+      "match",
+      "opensource-route",
+      "--source",
+      "todos",
+      "--type",
+      "task.created",
+      "--data",
+      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:open-events\"]}",
+      "--metadata",
+      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/open-events\",\"route_enabled\":true,\"automation.no_auto\":true}",
+    ]);
+    expect(flatNoAutoDeny.exitCode).toBe(0);
+    expect(JSON.parse(flatNoAutoDeny.stdout).matched).toBe(false);
+
+    const nestedMatch = await runCli([
+      "channels",
+      "match",
+      "opensource-route",
+      "--source",
+      "todos",
+      "--type",
+      "task.created",
+      "--data",
+      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:open-codewith\"]}",
+      "--metadata",
+      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/open-codewith/.codewith/worktrees/macos\",\"route_enabled\":true}",
+    ]);
+    expect(nestedMatch.exitCode).toBe(0);
+    expect(JSON.parse(nestedMatch.stdout).matched).toBe(false);
+
+    const skippedTest = await runCli([
+      "channels",
+      "test",
+      "opensource-route",
+      "--honor-filters",
+      "--source",
+      "todos",
+      "--type",
+      "task.created",
+      "--data",
+      "{\"priority\":\"001\",\"tags\":[\"auto:route\"]}",
+      "--metadata",
+      "{\"project_path\":\"/home/hasna/workspace/hasna/private/app\",\"route_enabled\":true}",
+    ]);
+    expect(skippedTest.exitCode).toBe(0);
+    expect(JSON.parse(skippedTest.stdout).status).toBe("skipped");
+
+    const emitMatch = await runCli([
+      "events",
+      "emit",
+      "task.created",
+      "--source",
+      "todos",
+      "--dedupe-key",
+      "todos:task:open-events-contract",
+      "--data",
+      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:open-events\"]}",
+      "--metadata",
+      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/open-events\",\"route_enabled\":true,\"automation\":{\"no_auto\":false}}",
+    ]);
+    expect(emitMatch.exitCode).toBe(0);
+    expect(JSON.parse(emitMatch.stdout).deliveries).toHaveLength(1);
+
+    const emitDuplicate = await runCli([
+      "events",
+      "emit",
+      "task.created",
+      "--source",
+      "todos",
+      "--dedupe-key",
+      "todos:task:open-events-contract",
+      "--data",
+      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:open-events\"]}",
+      "--metadata",
+      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/open-events\",\"route_enabled\":true,\"automation\":{\"no_auto\":false}}",
+    ]);
+    expect(emitDuplicate.exitCode).toBe(0);
+    const duplicate = JSON.parse(emitDuplicate.stdout);
+    expect(duplicate.deduped).toBe(true);
+    expect(duplicate.deliveries).toHaveLength(0);
+
+    const emitNested = await runCli([
+      "events",
+      "emit",
+      "task.created",
+      "--source",
+      "todos",
+      "--data",
+      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:open-codewith\"]}",
+      "--metadata",
+      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/open-codewith/.codewith/worktrees/macos\",\"route_enabled\":true}",
+    ]);
+    expect(emitNested.exitCode).toBe(0);
+    expect(JSON.parse(emitNested.stdout).deliveries).toHaveLength(0);
+
+    const emitNoAuto = await runCli([
+      "events",
+      "emit",
+      "task.created",
+      "--source",
+      "todos",
+      "--data",
+      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:open-events\"]}",
+      "--metadata",
+      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/open-events\",\"route_enabled\":true,\"automation\":{\"no_auto\":true}}",
+    ]);
+    expect(emitNoAuto.exitCode).toBe(0);
+    expect(JSON.parse(emitNoAuto.stdout).deliveries).toHaveLength(0);
+
+    expect(existsSync(outputPath)).toBe(true);
+    expect(readFileSync(outputPath, "utf-8").trim().split("\n")).toHaveLength(1);
+
+    const replay = await runCli(["events", "replay", "--source", "todos", "--type", "task.created"]);
+    expect(replay.exitCode).toBe(0);
+    expect(JSON.parse(replay.stdout).deliveries).toHaveLength(1);
+    expect(readFileSync(outputPath, "utf-8").trim().split("\n")).toHaveLength(2);
+  });
+});

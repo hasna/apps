@@ -1,0 +1,704 @@
+#!/usr/bin/env bun
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { EventsClient, JsonEventsStore, getEventsDataDir, getEventsStatus, sanitizeChannelForOutput, sanitizeChannelsForOutput, type ChannelConfig, type EventFilter, type TransportKind } from "../index.js";
+import { DurableEventsBroker } from "../durable.js";
+import { runDurableWorker } from "../durable-worker.js";
+import { parseFilterOptions } from "../filter-options.js";
+
+interface ParsedArgs {
+  json: boolean;
+  dir?: string;
+  rest: string[];
+}
+
+export interface RunEventsCliOptions {
+  programName?: string;
+  source?: string;
+}
+
+function version(): string {
+  try {
+    const packagePath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
+    return JSON.parse(readFileSync(packagePath, "utf-8")).version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+function parseGlobalArgs(argv: string[]): ParsedArgs {
+  const rest: string[] = [];
+  let json = false;
+  let dir: string | undefined;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--") {
+      rest.push(...argv.slice(index + 1));
+      break;
+    }
+    if (!arg.startsWith("-")) {
+      rest.push(...argv.slice(index));
+      break;
+    }
+    if (arg === "--json" || arg === "-j") {
+      json = true;
+    } else if (arg.startsWith("--dir=")) {
+      dir = arg.slice("--dir=".length);
+    } else if (arg === "--dir") {
+      dir = argv[++index];
+    } else {
+      rest.push(...argv.slice(index));
+      break;
+    }
+  }
+  return { json, dir, rest };
+}
+
+function takeOption(args: string[], name: string): string | undefined {
+  const equalsPrefix = `${name}=`;
+  const equalsIndex = args.findIndex((arg) => arg.startsWith(equalsPrefix));
+  if (equalsIndex !== -1) {
+    const value = args[equalsIndex]?.slice(equalsPrefix.length);
+    args.splice(equalsIndex, 1);
+    return value;
+  }
+
+  const index = args.indexOf(name);
+  if (index === -1) return undefined;
+  const value = args[index + 1];
+  if (value === undefined) throw new Error(`${name} requires a value`);
+  args.splice(index, 2);
+  return value;
+}
+
+function takeFlag(args: string[], name: string): boolean {
+  const index = args.indexOf(name);
+  if (index === -1) return false;
+  args.splice(index, 1);
+  return true;
+}
+
+function takeMany(args: string[], name: string): string[] {
+  const values: string[] = [];
+  while (args.includes(name) || args.some((arg) => arg.startsWith(`${name}=`))) {
+    const value = takeOption(args, name);
+    if (value !== undefined) values.push(value);
+  }
+  return values;
+}
+
+function parseJsonOption(value: string | undefined, fallback: Record<string, unknown>): Record<string, unknown> {
+  if (!value) return fallback;
+  const parsed = JSON.parse(value);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Expected a JSON object");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseFilter(args: string[]): EventFilter[] | undefined {
+  return parseFilterOptions({
+    type: takeOption(args, "--type") ?? takeOption(args, "--event-type"),
+    source: takeOption(args, "--source"),
+    subject: takeOption(args, "--subject"),
+    severity: takeOption(args, "--severity"),
+    data: takeMany(args, "--data"),
+    metadata: takeMany(args, "--metadata"),
+    dataJson: takeMany(args, "--data-json"),
+    metadataJson: takeMany(args, "--metadata-json"),
+  });
+}
+
+function parseHeaders(values: string[]): Record<string, string> | undefined {
+  if (values.length === 0) return undefined;
+  const headers: Record<string, string> = {};
+  for (const value of values) {
+    const separator = value.indexOf("=");
+    if (separator === -1) throw new Error(`Invalid header, expected name=value: ${value}`);
+    headers[value.slice(0, separator)] = value.slice(separator + 1);
+  }
+  return headers;
+}
+
+function output(parsed: ParsedArgs, value: unknown, human: () => void): void {
+  if (parsed.json) {
+    console.log(JSON.stringify(value, null, 2));
+    return;
+  }
+  human();
+}
+
+function commandName(options: RunEventsCliOptions): string {
+  return options.programName ?? "events";
+}
+
+function printHelp(options: RunEventsCliOptions = {}): void {
+  const name = commandName(options);
+  console.log(`${name} ${version()}
+
+Usage:
+  ${name} [--dir <path>] [--json] channels add <url|command> [options]
+  ${name} [--dir <path>] [--json] channels list
+  ${name} [--dir <path>] [--json] channels remove <id>
+  ${name} [--dir <path>] [--json] channels test <id>
+  ${name} [--dir <path>] [--json] channels match <id>
+  ${name} [--dir <path>] [--json] channels status
+  ${name} [--dir <path>] [--json] status
+  ${name} [--dir <path>] [--json] events emit <type>${options.source ? "" : " --source <source>"} [options]
+  ${name} [--dir <path>] [--json] events list [--limit <n>]
+  ${name} [--dir <path>] [--json] events replay [--id <event-id>] [--cursor <cursor>] [--limit <n>] [--dry-run]
+  ${name} [--dir <path>] [--json] durable channel <url> [options]
+  ${name} [--dir <path>] [--json] durable enqueue <type> --source <source> [options]
+  ${name} [--dir <path>] [--json] durable import [--limit <n>]
+  ${name} [--dir <path>] [--json] durable drain [--limit <n>] [--lease-ms <ms>]
+  ${name} [--dir <path>] [--json] durable work [--limit <n>] [--lease-ms <ms>] [--reconcile-ms <ms>]
+  ${name} [--dir <path>] [--json] durable retry-dead [--event-id <id>] [--channel-id <id>] [--limit <n>]
+  ${name} [--dir <path>] [--json] durable status
+
+Global options (must precede the command group):
+  --dir <path>              Data directory
+  -j, --json               Print JSON output
+  -h, --help               Show help
+  -v, --version            Show version
+
+Environment:
+  HASNA_EVENTS_DIR          Primary data-directory override
+  HASNA_EVENTS_HOME         Legacy data-directory fallback
+  Default directory         ${getEventsDataDir()}`);
+}
+
+function printChannelsHelp(options: RunEventsCliOptions = {}): void {
+  const name = commandName(options);
+  console.log(`${name} channels
+
+Usage:
+  ${name} [--dir <path>] [--json] channels add <url|command> [options]
+  ${name} [--dir <path>] [--json] channels list
+  ${name} [--dir <path>] [--json] channels remove <id>
+  ${name} [--dir <path>] [--json] channels test <id>
+  ${name} [--dir <path>] [--json] channels match <id>
+  ${name} [--dir <path>] [--json] channels status
+
+Commands:
+  add                       Add or replace a channel
+  list                      List configured channels
+  remove                    Remove a channel
+  test                      Send a sample event to one channel
+  match                     Preview a sample event without delivery
+  status                    Show channel storage status
+
+Run '${name} channels add --help' for add options.
+
+Test and match options:
+  --source <source>         Event source (default: ${options.source ?? "hasna.events"})
+  --type <type>             Event type (default: events.test)
+  --subject <subject>       Event subject (default: channel id)
+  --message <message>       Event message
+  --data <json>             Event data object
+  --metadata <json>         Event metadata object
+  --honor-filters           Test only: skip delivery on a filter mismatch`);
+}
+
+function printChannelAddHelp(options: RunEventsCliOptions = {}): void {
+  const name = commandName(options);
+  console.log(`${name} channels add
+
+Usage:
+  ${name} [--dir <path>] [--json] channels add <url|command> [options]
+  ${name} [--dir <path>] [--json] channels add <command> --transport command [options] -- [command-args...]
+
+Options:
+  --id <id>                 Channel id (default: generated UUID)
+  --name <name>             Display name
+  --transport <kind>        webhook or command (default: webhook)
+  --type <pattern>          Event type filter, supports wildcards
+  --event-type <pattern>    Alias for --type
+  --source <source>         Event source filter
+  --subject <subject>       Event subject filter
+  --severity <severity>     Event severity filter
+  --data <path=value>       String data filter; repeatable; != negates
+  --metadata <path=value>   String metadata filter; repeatable; != negates
+  --data-json <path=json>   Typed JSON data filter; repeatable; != negates
+  --metadata-json <path=json> Typed JSON metadata filter; repeatable; != negates
+  --secret <secret>         Webhook signing secret
+  --header <name=value>     Webhook header, repeatable
+  --arg <arg>               Command argument, repeatable; values may begin with dashes
+  --timeout-ms <ms>         Transport timeout (default: 15000)
+  --retry-attempts <n>      Maximum delivery attempts (default: 1)
+  --retry-backoff-ms <ms>   Initial retry backoff (default: 250)
+  --redact <path>           Redaction path, repeatable
+  --disabled                Create channel disabled
+
+Examples:
+  ${name} channels add https://example.com/channels/hasna --id ops --retry-attempts 3 --retry-backoff-ms 500
+  ${name} channels add bun --id command-hook --transport command --arg run --arg ./handler.ts --arg --json
+  ${name} channels add bun --id command-hook --transport command --arg=--json
+  ${name} channels add bun --id command-hook --transport command -- run ./handler.ts --json`);
+}
+
+function printEventsHelp(options: RunEventsCliOptions = {}): void {
+  const name = commandName(options);
+  console.log(`${name} events
+
+Usage:
+  ${name} [--dir <path>] [--json] events emit <type>${options.source ? "" : " --source <source>"} [options]
+  ${name} [--dir <path>] [--json] events list [--limit <n>]
+  ${name} [--dir <path>] [--json] events replay [--id <event-id>] [--cursor <cursor>] [--limit <n>] [--dry-run]
+
+Emit options:
+  --source <source>         Event source${options.source ? ` (default: ${options.source})` : ""}
+  --subject <subject>       Event subject
+  --severity <severity>     debug|info|notice|warning|error|critical (default: info)
+  --message <message>       Human-readable event message
+  --dedupe-key <key>        Deduplicate repeated events
+  --data <json>             JSON object payload
+  --metadata <json>         JSON object metadata
+  --no-deliver              Record without delivering channels
+
+List options:
+  --source <source>         Filter by exact source
+  --type <type>             Filter by exact type
+  --limit <n>               Most recent events; 0 or omitted lists all
+
+Replay options:
+  --id <event-id>           Filter by exact event id
+  --source <source>         Filter by exact source
+  --type <type>             Filter by exact type
+  --cursor <cursor>         Opaque cursor returned by a previous replay page
+  --limit <n>               Maximum events to replay
+  --dry-run                 Preview replay matches without delivery`);
+}
+
+export async function runEventsCli(argv = process.argv.slice(2), options: RunEventsCliOptions = {}): Promise<void> {
+  const parsed = parseGlobalArgs(argv);
+  const [group, command, ...tail] = parsed.rest;
+  if (!group || group === "--help" || group === "-h") {
+    printHelp(options);
+    return;
+  }
+  if (group === "--version" || group === "-v") {
+    console.log(version());
+    return;
+  }
+
+  if (group === "status") {
+    const status = await getEventsStatus(parsed.dir);
+    output(parsed, status, () => {
+      console.log(`events ${status.counts.events} event(s), ${status.counts.channels} channel(s), ${status.counts.deliveries} delivery record(s)`);
+      console.log(`dataDir: ${status.dataDir}`);
+    });
+    return;
+  }
+
+  if (group === "durable") {
+    if (!command || command === "--help" || command === "-h" || tail.includes("--help") || tail.includes("-h")) {
+      printDurableHelp(options);
+      return;
+    }
+    const broker = new DurableEventsBroker({ dataDir: parsed.dir ?? getEventsDataDir() });
+    try {
+      await handleDurable(broker, command, tail, parsed);
+    } finally {
+      broker.close();
+    }
+    return;
+  }
+
+  const store = new JsonEventsStore(parsed.dir);
+  const client = new EventsClient({ store });
+
+  if (group === "channels") {
+    if (!command || command === "--help" || command === "-h") {
+      printChannelsHelp(options);
+      return;
+    }
+    if (command === "add" && (tail[0] === "--help" || tail[0] === "-h")) {
+      printChannelAddHelp(options);
+      return;
+    }
+    if (tail.includes("--help") || tail.includes("-h")) {
+      printChannelsHelp(options);
+      return;
+    }
+    await handleChannels(client, command, tail, parsed, options);
+    return;
+  }
+  if (group === "events") {
+    if (!command || command === "--help" || command === "-h") {
+      printEventsHelp(options);
+      return;
+    }
+    if (tail.includes("--help") || tail.includes("-h")) {
+      printEventsHelp(options);
+      return;
+    }
+    await handleEvents(client, command, tail, parsed, options);
+    return;
+  }
+  throw new Error(`Unknown command group: ${group}`);
+}
+
+function printDurableHelp(options: RunEventsCliOptions = {}): void {
+  const name = commandName(options);
+  console.log(`${name} durable
+
+Usage:
+  ${name} [--dir <path>] [--json] durable channel <url> --id <id> --source <source> --type <type> --secret-ref <ref> [options]
+  ${name} [--dir <path>] [--json] durable enqueue <type> --source <source> [options]
+  ${name} [--dir <path>] [--json] durable import [--limit <n>]
+  ${name} [--dir <path>] [--json] durable drain [--limit <n>] [--lease-ms <ms>]
+  ${name} [--dir <path>] [--json] durable work [--limit <n>] [--lease-ms <ms>] [--reconcile-ms <ms>]
+  ${name} [--dir <path>] [--json] durable retry-dead [--event-id <id>] [--channel-id <id>] [--limit <n>]
+  ${name} [--dir <path>] [--json] durable status
+
+Channel options:
+  --id <id>                 Required stable channel id
+  --source <source>         Required exact source filter
+  --type <type>             Required exact event type filter
+  --secret-ref <ref>        Runtime secret reference, e.g. env:HASNA_WEBHOOK_SECRET
+  --timeout-ms <ms>         Webhook timeout (default: 15000)
+  --retry-attempts <n>      Maximum durable attempts (default: 1)
+  --retry-backoff-ms <ms>   Initial persisted backoff (default: 250)
+  --disabled                Persist the route disabled
+
+Enqueue options:
+  --id <id>                 Stable event id
+  --subject <subject>       Stable event subject
+  --time <iso-time>         Event occurrence time
+  --schema-version <value>  Envelope schema version
+  --dedupe-key <key>        Stable business idempotency key
+  --data <json>             Event data object
+  --metadata <json>         Event metadata object`);
+}
+
+async function handleDurable(
+  broker: DurableEventsBroker,
+  command: string,
+  tail: string[],
+  parsed: ParsedArgs,
+): Promise<void> {
+  if (command === "channel") {
+    const args = [...tail];
+    const target = args.shift();
+    if (!target) throw new Error("durable channel requires a webhook URL");
+    const id = takeOption(args, "--id");
+    const source = takeOption(args, "--source");
+    const type = takeOption(args, "--type");
+    if (!id || !source || !type) throw new Error("durable channel requires --id, --source, and --type");
+    if (source.includes("*") || type.includes("*")) throw new Error("durable channel source/type filters must be exact");
+    const secretRef = takeOption(args, "--secret-ref");
+    if (!secretRef) throw new Error("durable channel requires --secret-ref");
+    const timeoutMs = numberOption(takeOption(args, "--timeout-ms"));
+    const retryAttempts = numberOption(takeOption(args, "--retry-attempts"));
+    const retryBackoffMs = numberOption(takeOption(args, "--retry-backoff-ms"));
+    const channel = broker.addChannel({
+      id,
+      enabled: !takeFlag(args, "--disabled"),
+      transport: "webhook",
+      filters: [{ source, type }],
+      webhook: { url: target, secretRef, timeoutMs },
+      retry: retryAttempts || retryBackoffMs
+        ? { maxAttempts: retryAttempts, backoffMs: retryBackoffMs }
+        : undefined,
+    });
+    output(parsed, sanitizeChannelForOutput(channel), () => console.log(`Added durable webhook channel ${channel.id}`));
+    return;
+  }
+
+  if (command === "enqueue") {
+    const args = [...tail];
+    const type = args.shift();
+    if (!type) throw new Error("durable enqueue requires an event type");
+    const source = takeOption(args, "--source");
+    if (!source) throw new Error("durable enqueue requires --source");
+    const result = broker.enqueue({
+      id: takeOption(args, "--id"),
+      source,
+      type,
+      time: takeOption(args, "--time"),
+      subject: takeOption(args, "--subject"),
+      dedupeKey: takeOption(args, "--dedupe-key"),
+      schemaVersion: takeOption(args, "--schema-version"),
+      data: parseJsonOption(takeOption(args, "--data"), {}),
+      metadata: parseJsonOption(takeOption(args, "--metadata"), {}),
+    });
+    output(parsed, result, () => console.log(`${result.deduped ? "Deduped" : "Enqueued"} ${result.event.id} to ${result.queued} channel(s)`));
+    return;
+  }
+
+  if (command === "import") {
+    const args = [...tail];
+    const result = broker.importSpool({ limit: numberOption(takeOption(args, "--limit")) });
+    output(parsed, result, () => console.log(`Imported ${result.imported}, deduped ${result.deduped}, queued ${result.queued}`));
+    return;
+  }
+
+  if (command === "drain") {
+    const args = [...tail];
+    const limit = numberOption(takeOption(args, "--limit"));
+    const imported = broker.importSpool({ limit });
+    const drained = await broker.drain({
+      limit,
+      leaseMs: numberOption(takeOption(args, "--lease-ms")),
+      workerId: takeOption(args, "--worker-id"),
+    });
+    const result = { imported, drained };
+    output(parsed, result, () => console.log(`Claimed ${drained.claimed}, delivered ${drained.delivered}, retried ${drained.retried}, dead ${drained.dead}`));
+    return;
+  }
+
+  if (command === "work") {
+    const args = [...tail];
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    process.once("SIGTERM", stop);
+    process.once("SIGINT", stop);
+    try {
+      const result = await runDurableWorker({
+        broker,
+        signal: controller.signal,
+        limit: numberOption(takeOption(args, "--limit")),
+        leaseMs: numberOption(takeOption(args, "--lease-ms")),
+        workerId: takeOption(args, "--worker-id"),
+        debounceMs: numberOption(takeOption(args, "--debounce-ms")),
+        reconcileMs: numberOption(takeOption(args, "--reconcile-ms")),
+        watchRestartMs: numberOption(takeOption(args, "--watch-restart-ms")),
+      });
+      output(parsed, result, () => console.log(`Worker stopped after ${result.cycles} cycle(s), delivered ${result.delivered}`));
+    } finally {
+      process.removeListener("SIGTERM", stop);
+      process.removeListener("SIGINT", stop);
+    }
+    return;
+  }
+
+  if (command === "status") {
+    const result = broker.status();
+    output(parsed, result, () => console.log(`events durable: ${result.counts.pending} pending, ${result.counts.leased} leased, ${result.counts.dead} dead`));
+    return;
+  }
+
+  if (command === "retry-dead") {
+    const args = [...tail];
+    const result = broker.retryDead({
+      eventId: takeOption(args, "--event-id"),
+      channelId: takeOption(args, "--channel-id"),
+      limit: numberOption(takeOption(args, "--limit")),
+    });
+    output(parsed, result, () => console.log(`Requeued ${result.requeued} dead delivery job(s)`));
+    return;
+  }
+
+  throw new Error(`Unknown durable command: ${command}`);
+}
+
+async function handleChannels(client: EventsClient, command: string | undefined, tail: string[], parsed: ParsedArgs, options: RunEventsCliOptions): Promise<void> {
+  if (command === "add") {
+    const { args, delimiterArgs } = splitDelimiter(tail);
+    const transport = (takeOption(args, "--transport") ?? "webhook") as TransportKind;
+    const id = takeOption(args, "--id") ?? crypto.randomUUID();
+    const name = takeOption(args, "--name");
+    const secret = takeOption(args, "--secret");
+    const timeoutMs = numberOption(takeOption(args, "--timeout-ms"));
+    const retryAttempts = numberOption(takeOption(args, "--retry-attempts"));
+    const retryBackoffMs = numberOption(takeOption(args, "--retry-backoff-ms"));
+    const disabled = takeFlag(args, "--disabled");
+    const headerValues = takeMany(args, "--header");
+    const commandArgs = takeMany(args, "--arg");
+    const redactions = takeMany(args, "--redact");
+    const filters = parseFilter(args);
+    const target = args[0];
+    if (!target) throw new Error("channels add requires a URL or command target");
+    const now = new Date().toISOString();
+    const channel: ChannelConfig = {
+      id,
+      name,
+      enabled: !disabled,
+      transport,
+      filters,
+      retry: retryAttempts || retryBackoffMs ? { maxAttempts: retryAttempts, backoffMs: retryBackoffMs } : undefined,
+      redact: redactions.length > 0 ? { paths: redactions } : undefined,
+      createdAt: now,
+      updatedAt: now,
+    };
+    if (transport === "webhook") {
+      channel.webhook = { url: target, secret, headers: parseHeaders(headerValues), timeoutMs };
+    } else if (transport === "command") {
+      channel.command = { command: target, args: [...args.slice(1), ...commandArgs, ...delimiterArgs], timeoutMs };
+    } else {
+      throw new Error(`Transport ${transport} is reserved for future use and cannot be added yet`);
+    }
+    const saved = await client.addChannel(channel);
+    output(parsed, sanitizeChannelForOutput(saved), () => console.log(`Added ${saved.transport} channel ${saved.id}`));
+    return;
+  }
+
+  if (command === "list") {
+    const channels = await client.listChannels();
+    output(parsed, sanitizeChannelsForOutput(channels), () => {
+      if (channels.length === 0) {
+        console.log("No channels configured.");
+        return;
+      }
+      for (const channel of channels) {
+        const target = channel.webhook?.url ?? channel.command?.command ?? channel.transport;
+        console.log(`${channel.id}\t${channel.enabled ? "enabled" : "disabled"}\t${channel.transport}\t${target}`);
+      }
+    });
+    return;
+  }
+
+  if (command === "status") {
+    const status = await getEventsStatus(parsed.dir);
+    output(parsed, status, () => {
+      console.log(`events dataDir: ${status.dataDir}`);
+      console.log(`${status.counts.enabledChannels}/${status.counts.channels} channel(s) enabled`);
+    });
+    return;
+  }
+
+  if (command === "remove") {
+    const id = tail[0];
+    if (!id) throw new Error("channels remove requires a channel id");
+    const removed = await client.removeChannel(id);
+    output(parsed, { removed }, () => console.log(removed ? `Removed ${id}` : `Channel not found: ${id}`));
+    return;
+  }
+
+  if (command === "test") {
+    const args = [...tail];
+    const id = args.shift();
+    if (!id) throw new Error("channels test requires a channel id");
+    const honorFilters = takeFlag(args, "--honor-filters");
+    const result = await client.testChannel(id, {
+      source: takeOption(args, "--source") ?? options.source ?? "hasna.events",
+      type: takeOption(args, "--type") ?? "events.test",
+      subject: takeOption(args, "--subject") ?? id,
+      message: takeOption(args, "--message") ?? "Hasna events test delivery",
+      data: parseJsonOption(takeOption(args, "--data"), { test: true }),
+      metadata: parseJsonOption(takeOption(args, "--metadata"), {}),
+    }, { honorFilters });
+    output(parsed, result, () => console.log(`${result.status}: ${result.channelId}`));
+    return;
+  }
+
+  if (command === "match") {
+    const args = [...tail];
+    const id = args.shift();
+    if (!id) throw new Error("channels match requires a channel id");
+    const result = await client.matchChannel(id, {
+      source: takeOption(args, "--source") ?? options.source ?? "hasna.events",
+      type: takeOption(args, "--type") ?? "events.test",
+      subject: takeOption(args, "--subject") ?? id,
+      message: takeOption(args, "--message") ?? "Hasna events match preview",
+      data: parseJsonOption(takeOption(args, "--data"), { test: true }),
+      metadata: parseJsonOption(takeOption(args, "--metadata"), {}),
+    });
+    output(parsed, result, () => console.log(`${result.matched ? "matched" : "skipped"}: ${result.channelId}`));
+    return;
+  }
+
+  throw new Error(`Unknown channels command: ${command ?? ""}`);
+}
+
+function splitDelimiter(values: string[]): { args: string[]; delimiterArgs: string[] } {
+  const delimiterIndex = values.indexOf("--");
+  if (delimiterIndex === -1) return { args: [...values], delimiterArgs: [] };
+  return {
+    args: values.slice(0, delimiterIndex),
+    delimiterArgs: values.slice(delimiterIndex + 1),
+  };
+}
+
+async function handleEvents(client: EventsClient, command: string | undefined, tail: string[], parsed: ParsedArgs, options: RunEventsCliOptions): Promise<void> {
+  if (command === "emit") {
+    const args = [...tail];
+    const type = args.shift();
+    if (!type) throw new Error("events emit requires an event type");
+    const source = takeOption(args, "--source") ?? options.source;
+    if (!source) throw new Error("events emit requires --source");
+    const noDeliver = takeFlag(args, "--no-deliver");
+    const result = await client.emit({
+      type,
+      source,
+      subject: takeOption(args, "--subject"),
+      severity: severityOption(takeOption(args, "--severity")),
+      message: takeOption(args, "--message"),
+      dedupeKey: takeOption(args, "--dedupe-key"),
+      data: parseJsonOption(takeOption(args, "--data"), {}),
+      metadata: parseJsonOption(takeOption(args, "--metadata"), {}),
+    }, { deliver: !noDeliver });
+    output(parsed, result, () => console.log(`${result.deduped ? "Deduped" : "Emitted"} ${result.event.id} to ${result.deliveries.length} channel(s)`));
+    return;
+  }
+
+  if (command === "list") {
+    const args = [...tail];
+    const limit = numberOption(takeOption(args, "--limit"));
+    const type = takeOption(args, "--type");
+    const source = takeOption(args, "--source");
+    let events = await client.listEvents();
+    if (type) events = events.filter((event) => event.type === type);
+    if (source) events = events.filter((event) => event.source === source);
+    if (limit) events = events.slice(-limit);
+    output(parsed, events, () => {
+      if (events.length === 0) {
+        console.log("No events recorded.");
+        return;
+      }
+      for (const event of events) {
+        console.log(`${event.time}\t${event.id}\t${event.source}\t${event.type}\t${event.severity}`);
+      }
+    });
+    return;
+  }
+
+  if (command === "replay") {
+    const args = [...tail];
+    const result = await client.replay({
+      eventId: takeOption(args, "--id"),
+      source: takeOption(args, "--source"),
+      type: takeOption(args, "--type"),
+      cursor: takeOption(args, "--cursor"),
+      limit: numberOption(takeOption(args, "--limit")),
+      dryRun: takeFlag(args, "--dry-run"),
+    });
+    output(parsed, result, () => console.log(replaySummary(result.events.length, result.deliveries.length, result.nextCursor)));
+    return;
+  }
+
+  throw new Error(`Unknown events command: ${command ?? ""}`);
+}
+
+function numberOption(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) throw new Error(`Expected a number, got ${value}`);
+  return parsed;
+}
+
+function severityOption(value: string | undefined) {
+  if (!value) return undefined;
+  const allowed = new Set(["debug", "info", "notice", "warning", "error", "critical"]);
+  if (!allowed.has(value)) throw new Error(`Invalid severity: ${value}`);
+  return value as "debug" | "info" | "notice" | "warning" | "error" | "critical";
+}
+
+function replaySummary(events: number, deliveries: number, nextCursor: string | undefined): string {
+  const suffix = nextCursor ? `, next cursor: ${nextCursor}` : "";
+  return `Replayed ${events} event(s), ${deliveries} delivery result(s)${suffix}`;
+}
+
+if (import.meta.main) {
+  runEventsCli().catch((error) => {
+    const parsed = parseGlobalArgs(process.argv.slice(2));
+    const message = error instanceof Error ? error.message : String(error);
+    if (parsed.json) {
+      console.log(JSON.stringify({ error: message }, null, 2));
+    } else {
+      console.error(message);
+    }
+    process.exit(1);
+  });
+}

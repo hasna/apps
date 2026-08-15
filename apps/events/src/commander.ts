@@ -1,0 +1,374 @@
+import {
+  EventsClient,
+  JsonEventsStore,
+  getEventsStatus,
+  sanitizeChannelForOutput,
+  sanitizeChannelsForOutput,
+  type ChannelConfig,
+  type EventInput,
+  type TransportKind,
+} from "./index.js";
+import { parseFilterOptions } from "./filter-options.js";
+
+type CommanderLike = any;
+type CommanderCommandLike = any;
+
+export interface RegisterEventsCommandsOptions {
+  source: string;
+  dataDir?: string;
+  createClient?: () => EventsClient;
+  channelsCommandName?: string;
+  eventsCommandName?: string;
+  /**
+   * Default row cap applied to `events list` when the caller does not pass an
+   * explicit `--limit`. Guards against dumping the entire event store (a
+   * usability/performance hazard for hosts with large stores). Pass `--limit 0`
+   * to opt out and list every recorded event. Defaults to
+   * {@link DEFAULT_EVENT_LIST_LIMIT}.
+   */
+  defaultEventListLimit?: number;
+}
+
+/**
+ * Sane default number of most-recent events returned by `events list` when the
+ * host does not configure {@link RegisterEventsCommandsOptions.defaultEventListLimit}
+ * and the user does not pass an explicit `--limit`.
+ */
+export const DEFAULT_EVENT_LIST_LIMIT = 100;
+
+function parseJsonObject(value: string | undefined, fallback: Record<string, unknown>): Record<string, unknown> {
+  if (!value) return fallback;
+  const parsed = JSON.parse(value);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Expected a JSON object");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseHeaders(values: string[] | undefined): Record<string, string> | undefined {
+  if (!values?.length) return undefined;
+  const headers: Record<string, string> = {};
+  for (const value of values) {
+    const separator = value.indexOf("=");
+    if (separator === -1) throw new Error(`Invalid header, expected name=value: ${value}`);
+    headers[value.slice(0, separator)] = value.slice(separator + 1);
+  }
+  return headers;
+}
+
+function createClient(options: RegisterEventsCommandsOptions): EventsClient {
+  if (options.createClient) return options.createClient();
+  return new EventsClient({ store: new JsonEventsStore(options.dataDir) });
+}
+
+function print(value: unknown, json: boolean, text: string): void {
+  if (json) console.log(JSON.stringify(value, null, 2));
+  else console.log(text);
+}
+
+/**
+ * Report an action failure without letting the error escape the commander
+ * action handler. Host programs that embed these commands may not wrap
+ * `parseAsync` in a try/catch (unlike the standalone `events` CLI), so an
+ * uncaught throw would surface as a raw stack trace and ignore `--json`.
+ * Emitting a clean `{ error }` payload here keeps not-found and other action
+ * failures consistent with the other channel commands (e.g. `channels remove`).
+ */
+function fail(error: unknown, json: boolean): void {
+  const message = error instanceof Error ? error.message : String(error);
+  if (json) console.log(JSON.stringify({ error: message }, null, 2));
+  else console.error(message);
+  process.exitCode = 1;
+}
+
+function hasJsonOption(options: {
+  json?: boolean;
+  opts?: () => { json?: boolean };
+  optsWithGlobals?: () => { json?: boolean };
+  parent?: {
+    opts?: () => { json?: boolean };
+    optsWithGlobals?: () => { json?: boolean };
+  };
+} | undefined): boolean {
+  return Boolean(
+    options?.json ||
+    options?.opts?.().json ||
+    options?.optsWithGlobals?.().json ||
+    options?.parent?.opts?.().json ||
+    options?.parent?.optsWithGlobals?.().json
+  );
+}
+
+function wantsJson(actionOptions: {
+  json?: boolean;
+  opts?: () => { json?: boolean };
+  optsWithGlobals?: () => { json?: boolean };
+  parent?: {
+    opts?: () => { json?: boolean };
+    optsWithGlobals?: () => { json?: boolean };
+  };
+}, command?: {
+  json?: boolean;
+  opts?: () => { json?: boolean };
+  optsWithGlobals?: () => { json?: boolean };
+  parent?: {
+    opts?: () => { json?: boolean };
+    optsWithGlobals?: () => { json?: boolean };
+  };
+}): boolean {
+  return hasJsonOption(actionOptions) || hasJsonOption(command);
+}
+
+export function registerChannelCommands(program: CommanderLike, options: RegisterEventsCommandsOptions): CommanderCommandLike {
+  const channels = program.command(options.channelsCommandName ?? "channels").description("Manage Hasna event channels");
+
+  channels
+    .command("add")
+    .description("Add or replace a channel")
+    .argument("<target>", "Webhook URL or command binary")
+    .requiredOption("--id <id>", "Channel identifier")
+    .option("--transport <kind>", "Transport kind: webhook or command", "webhook")
+    .option("--name <name>", "Display name")
+    .option("--type <pattern>", "Event type filter, e.g. todos.task.*")
+    .option("--source <pattern>", "Event source filter")
+    .option("--subject <pattern>", "Event subject filter")
+    .option("--severity <pattern>", "Event severity filter")
+    .option("--data <path=value...>", "Event data field filter; string values, path!=value negatives, array-member matching, dot paths, * segment wildcard, ** recursive wildcard", collectValues, [] as string[])
+    .option("--metadata <path=value...>", "Event metadata field filter; string values, path!=value negatives, array-member matching, dot paths, * segment wildcard, ** recursive wildcard", collectValues, [] as string[])
+    .option("--data-json <path=json...>", "Event data field filter with typed JSON value; path!=json negatives supported", collectValues, [] as string[])
+    .option("--metadata-json <path=json...>", "Event metadata field filter with typed JSON value; path!=json negatives supported", collectValues, [] as string[])
+    .option("--secret <secret>", "Webhook HMAC secret")
+    .option("--header <name=value...>", "Webhook header", collectValues, [] as string[])
+    .option("--arg <arg...>", "Command argument", collectValues, [] as string[])
+    .option("--timeout-ms <ms>", "Transport timeout in milliseconds", parseNumber)
+    .option("--retry-attempts <n>", "Maximum delivery attempts", parseNumber)
+    .option("--retry-backoff-ms <ms>", "Initial retry backoff in milliseconds", parseNumber)
+    .option("--redact <path...>", "Event field path to redact before delivery", collectValues, [] as string[])
+    .option("--disabled", "Create channel disabled", false)
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (target: string, actionOptions: {
+      id: string;
+      transport: TransportKind;
+      name?: string;
+      type?: string;
+      source?: string;
+      subject?: string;
+      severity?: string;
+      data?: string[];
+      metadata?: string[];
+      dataJson?: string[];
+      metadataJson?: string[];
+      secret?: string;
+      header?: string[];
+      arg?: string[];
+      timeoutMs?: number;
+      retryAttempts?: number;
+      retryBackoffMs?: number;
+      redact?: string[];
+      disabled?: boolean;
+      json?: boolean;
+    }, command?: CommanderCommandLike) => {
+      const timestamp = new Date().toISOString();
+      const channel: ChannelConfig = {
+        id: actionOptions.id,
+        name: actionOptions.name,
+        enabled: !actionOptions.disabled,
+        transport: actionOptions.transport,
+        filters: parseFilterOptions(actionOptions),
+        retry: actionOptions.retryAttempts || actionOptions.retryBackoffMs
+          ? { maxAttempts: actionOptions.retryAttempts, backoffMs: actionOptions.retryBackoffMs }
+          : undefined,
+        redact: actionOptions.redact?.length ? { paths: actionOptions.redact } : undefined,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      if (actionOptions.transport === "webhook") {
+        channel.webhook = { url: target, secret: actionOptions.secret, headers: parseHeaders(actionOptions.header), timeoutMs: actionOptions.timeoutMs };
+      } else if (actionOptions.transport === "command") {
+        channel.command = { command: target, args: actionOptions.arg ?? [], timeoutMs: actionOptions.timeoutMs };
+      } else {
+        throw new Error(`Transport ${actionOptions.transport} is reserved for future use and cannot be added yet`);
+      }
+      const saved = await createClient(options).addChannel(channel);
+      print(sanitizeChannelForOutput(saved), wantsJson(actionOptions, command), `Added ${saved.transport} channel ${saved.id}`);
+    });
+
+  channels.command("list").description("List configured channels").option("-j, --json", "Print JSON output", false).action(async (actionOptions: { json?: boolean }, command?: CommanderCommandLike) => {
+    const channels = await createClient(options).listChannels();
+    if (wantsJson(actionOptions, command)) {
+      console.log(JSON.stringify(sanitizeChannelsForOutput(channels), null, 2));
+      return;
+    }
+    if (!channels.length) {
+      console.log("No channels configured.");
+      return;
+    }
+    for (const channel of channels) {
+      console.log(`${channel.id}\t${channel.enabled ? "enabled" : "disabled"}\t${channel.transport}\t${channel.webhook?.url ?? channel.command?.command ?? channel.transport}`);
+    }
+  });
+
+  channels.command("status").description("Show events channel storage status").option("-j, --json", "Print JSON output", false).action(async (actionOptions: { json?: boolean }, command?: CommanderCommandLike) => {
+    const status = await getEventsStatus(options.dataDir);
+    print(status, wantsJson(actionOptions, command), `events dataDir: ${status.dataDir}`);
+  });
+
+  channels.command("remove").description("Remove a channel").argument("<id>", "Channel identifier").option("-j, --json", "Print JSON output", false).action(async (id: string, actionOptions: { json?: boolean }, command?: CommanderCommandLike) => {
+    const removed = await createClient(options).removeChannel(id);
+    print({ removed }, wantsJson(actionOptions, command), removed ? `Removed ${id}` : `Channel not found: ${id}`);
+  });
+
+  channels
+    .command("test")
+    .description("Send a test event to one channel")
+    .argument("<id>", "Channel identifier")
+    .option("--source <source>", "Event source override")
+    .option("--type <type>", "Event type", "events.test")
+    .option("--subject <subject>", "Event subject")
+    .option("--message <message>", "Event message", "Hasna events test delivery")
+    .option("--data <json>", "Event data JSON object")
+    .option("--metadata <json>", "Event metadata JSON object")
+    .option("--honor-filters", "Skip delivery when the sample event does not match channel filters", false)
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (id: string, actionOptions: { source?: string; type: string; subject?: string; message: string; data?: string; metadata?: string; honorFilters?: boolean; json?: boolean }, command?: CommanderCommandLike) => {
+      const json = wantsJson(actionOptions, command);
+      try {
+        const result = await createClient(options).testChannel(id, {
+          source: actionOptions.source ?? options.source,
+          type: actionOptions.type,
+          subject: actionOptions.subject ?? id,
+          message: actionOptions.message,
+          data: parseJsonObject(actionOptions.data, { test: true }),
+          metadata: parseJsonObject(actionOptions.metadata, {}),
+        }, { honorFilters: actionOptions.honorFilters });
+        print(result, json, `${result.status}: ${result.channelId}`);
+      } catch (error) {
+        fail(error, json);
+      }
+    });
+
+  channels
+    .command("match")
+    .description("Check whether a sample event matches one channel without delivering")
+    .argument("<id>", "Channel identifier")
+    .option("--source <source>", "Event source override")
+    .option("--type <type>", "Event type", "events.test")
+    .option("--subject <subject>", "Event subject")
+    .option("--message <message>", "Event message", "Hasna events match preview")
+    .option("--data <json>", "Event data JSON object")
+    .option("--metadata <json>", "Event metadata JSON object")
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (id: string, actionOptions: { source?: string; type: string; subject?: string; message: string; data?: string; metadata?: string; json?: boolean }, command?: CommanderCommandLike) => {
+      const json = wantsJson(actionOptions, command);
+      try {
+        const result = await createClient(options).matchChannel(id, {
+          source: actionOptions.source ?? options.source,
+          type: actionOptions.type,
+          subject: actionOptions.subject ?? id,
+          message: actionOptions.message,
+          data: parseJsonObject(actionOptions.data, { test: true }),
+          metadata: parseJsonObject(actionOptions.metadata, {}),
+        });
+        print(result, json, `${result.matched ? "matched" : "skipped"}: ${result.channelId}`);
+      } catch (error) {
+        fail(error, json);
+      }
+    });
+
+  return channels;
+}
+
+export function registerEventCommands(program: CommanderLike, options: RegisterEventsCommandsOptions): CommanderCommandLike {
+  const events = program.command(options.eventsCommandName ?? "events").description("Emit, list, and replay Hasna events");
+
+  events
+    .command("emit")
+    .description("Emit an event from this app")
+    .argument("<type>", "Event type")
+    .option("--source <source>", "Event source override")
+    .option("--subject <subject>", "Event subject")
+    .option("--severity <severity>", "Event severity", "info")
+    .option("--message <message>", "Event message")
+    .option("--dedupe-key <key>", "Dedupe key")
+    .option("--data <json>", "Event data JSON object")
+    .option("--metadata <json>", "Event metadata JSON object")
+    .option("--no-deliver", "Record without delivering")
+    .option("--no-dedupe", "Allow duplicate id/dedupeKey events")
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (type: string, actionOptions: {
+      source?: string;
+      subject?: string;
+      severity?: EventInput["severity"];
+      message?: string;
+      dedupeKey?: string;
+      data?: string;
+      metadata?: string;
+      deliver?: boolean;
+      dedupe?: boolean;
+      json?: boolean;
+    }, command?: CommanderCommandLike) => {
+      const result = await createClient(options).emit({
+        source: actionOptions.source ?? options.source,
+        type,
+        subject: actionOptions.subject,
+        severity: actionOptions.severity,
+        message: actionOptions.message,
+        dedupeKey: actionOptions.dedupeKey,
+        data: parseJsonObject(actionOptions.data, {}),
+        metadata: parseJsonObject(actionOptions.metadata, {}),
+      }, { deliver: actionOptions.deliver, dedupe: actionOptions.dedupe });
+      print(result, wantsJson(actionOptions, command), `${result.deduped ? "Deduped" : "Emitted"} ${result.event.id} to ${result.deliveries.length} channel(s)`);
+    });
+
+  const defaultListLimit = options.defaultEventListLimit ?? DEFAULT_EVENT_LIST_LIMIT;
+  events.command("list").description("List recorded events").option("--source <source>", "Filter by source").option("--type <type>", "Filter by type").option("--limit <n>", `Limit to the most recent <n> events (default ${defaultListLimit}; use 0 for all)`, parseNumber, defaultListLimit).option("-j, --json", "Print JSON output", false).action(async (actionOptions: { source?: string; type?: string; limit?: number; json?: boolean }, command?: CommanderCommandLike) => {
+    let rows = await createClient(options).listEvents();
+    if (actionOptions.source) rows = rows.filter((event) => event.source === actionOptions.source);
+    if (actionOptions.type) rows = rows.filter((event) => event.type === actionOptions.type);
+    if (actionOptions.limit) rows = rows.slice(-actionOptions.limit);
+    if (wantsJson(actionOptions, command)) {
+      console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+    if (!rows.length) {
+      console.log("No events recorded.");
+      return;
+    }
+    for (const event of rows) console.log(`${event.time}\t${event.id}\t${event.source}\t${event.type}\t${event.severity}`);
+  });
+
+  events.command("replay").description("Replay recorded events").option("--id <id>", "Replay one event id").option("--source <source>", "Filter by source").option("--type <type>", "Filter by type").option("--cursor <cursor>", "Opaque replay cursor from a previous page").option("--limit <n>", "Maximum events to replay", parseNumber).option("--dry-run", "Preview without delivery", false).option("-j, --json", "Print JSON output", false).action(async (actionOptions: { id?: string; source?: string; type?: string; cursor?: string; limit?: number; dryRun?: boolean; json?: boolean }, command?: CommanderCommandLike) => {
+    const result = await createClient(options).replay({
+      eventId: actionOptions.id,
+      source: actionOptions.source,
+      type: actionOptions.type,
+      cursor: actionOptions.cursor,
+      limit: actionOptions.limit,
+      dryRun: actionOptions.dryRun,
+    });
+    print(result, wantsJson(actionOptions, command), replaySummary(result.events.length, result.deliveries.length, result.nextCursor));
+  });
+
+  return events;
+}
+
+export function registerEventsCommands(program: CommanderLike, options: RegisterEventsCommandsOptions): void {
+  registerChannelCommands(program, options);
+  registerEventCommands(program, options);
+}
+
+function parseNumber(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) throw new Error(`Expected a number, got ${value}`);
+  return parsed;
+}
+
+function collectValues(value: string, previous: string[]): string[] {
+  previous.push(value);
+  return previous;
+}
+
+function replaySummary(events: number, deliveries: number, nextCursor: string | undefined): string {
+  const suffix = nextCursor ? `, next cursor: ${nextCursor}` : "";
+  return `Replayed ${events} event(s), ${deliveries} delivery result(s)${suffix}`;
+}
