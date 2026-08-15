@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getDb } from "../db/database.js";
-import { listAllRepos, nonDerivedCheckoutSql } from "../db/repos.js";
+import { listAllRepos, nonDerivedCheckoutSql, repoLookupPathState } from "../db/repos.js";
 
 function git(repoPath: string, args: string[], timeout = 10_000): string {
   try {
@@ -104,22 +104,32 @@ export function diffStats(days = 1): Array<{
  * useful sibling to suggest instead (see the diagnosis on todos c357a1f3: 45
  * of 45 factory scratch clones have a canonical sibling under a different
  * name), so excluding it here loses nothing.
+ *
+ * The same reasoning excludes rows whose path is verifiably no longer on disk
+ * (`repoLookupPathState`): a suggestion is only useful if following it lands
+ * somewhere real. The 2026 monorepo migration left pre-migration rows
+ * (`open-bench`, `iapp-sandboxes`) pointing at deleted checkouts, and
+ * suggesting one sent callers to a path that does not exist (todos 0251863c).
+ * Paths that merely cannot be probed (`EACCES`, `ENAMETOOLONG`) are not
+ * known-missing and keep the existing verdict machinery.
  */
 export function fuzzyFindRepo(query: string): { id: number; name: string; path: string } | null {
   const db = getDb();
   const nonDerived = nonDerivedCheckoutSql("path");
+  const notMissing = (row: { path: string } | null | undefined) =>
+    row !== null && row !== undefined && repoLookupPathState(row.path) !== "missing";
 
   // Exact match first
   const exact = db
     .query(`SELECT id, name, path FROM repos WHERE (name = ? OR path = ?) AND ${nonDerived}`)
     .get(query, query) as any;
-  if (exact) return exact;
+  if (notMissing(exact)) return exact;
 
   // Substring match
   const sub = db
     .query(`SELECT id, name, path FROM repos WHERE name LIKE ? AND ${nonDerived} ORDER BY LENGTH(name) ASC LIMIT 1`)
     .get(`%${query}%`) as any;
-  if (sub) return sub;
+  if (notMissing(sub)) return sub;
 
   // Abbreviated match (plat-alum → platform-alumia)
   const parts = query.split(/[-_]/);
@@ -128,7 +138,7 @@ export function fuzzyFindRepo(query: string): { id: number; name: string; path: 
     const abbrev = db
       .query(`SELECT id, name, path FROM repos WHERE name LIKE ? AND ${nonDerived} ORDER BY LENGTH(name) ASC LIMIT 1`)
       .get(pattern) as any;
-    if (abbrev) return abbrev;
+    if (notMissing(abbrev)) return abbrev;
   }
 
   // Levenshtein-ish: find closest by sorting all repos and picking best substring overlap
@@ -137,6 +147,7 @@ export function fuzzyFindRepo(query: string): { id: number; name: string; path: 
   let bestScore = 0;
 
   for (const repo of allRepos) {
+    if (!notMissing(repo)) continue;
     const score = commonSubstringLength(query.toLowerCase(), repo.name.toLowerCase());
     if (score > bestScore) {
       bestScore = score;

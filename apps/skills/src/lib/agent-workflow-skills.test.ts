@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
-import { spawnSync } from "node:child_process";
 import { SKILLS } from "./registry";
 import { parseSkillFrontmatter } from "./skill-validation";
 
@@ -11,6 +10,24 @@ useDefaultTestTimeout();
 
 const ROOT = process.cwd();
 const AGENT_SKILLS_DIR = join(ROOT, "agent-skills");
+
+/**
+ * The 9 fleet agent-workflow skills moved to the private per-station store
+ * (hasna-internal/fleet-resources) per owner ruling 2026-08-15. They are for
+ * internal fleet use only; the public repo must not carry them, and a
+ * re-introduction is a regression this suite exists to catch.
+ */
+const PRIVATE_WORKFLOW_SKILLS = [
+  "fleet-package-rollout",
+  "goal-plan-coordination",
+  "inbox",
+  "inbox-monitor",
+  "merge-pr",
+  "skill-goal-execute",
+  "skill-login",
+  "skill-project-create",
+  "skill-publish",
+] as const;
 
 function secretScanContractFailures(workflow: string): string[] {
   const start = workflow.indexOf("  secret-scan:\n");
@@ -104,16 +121,25 @@ function secretScanContractFailures(workflow: string): string[] {
   return failures;
 }
 
-function filesBelow(directory: string, prefix = ""): string[] {
-  return readdirSync(directory).flatMap((entry) => {
-    const absolute = join(directory, entry);
-    const relative = join(prefix, entry);
-    return statSync(absolute).isDirectory() ? filesBelow(absolute, relative) : [relative];
+describe("private fleet workflow skills", () => {
+  test("agent-skills/ carries no skill corpus in the public repo", () => {
+    // Only the pointer README remains; the fleet workflow skills live in the
+    // private per-station store (hasna-internal/fleet-resources), not here.
+    expect(readdirSync(AGENT_SKILLS_DIR).sort()).toEqual(["README.md"]);
   });
-}
 
-describe("repository-managed agent workflow skills", () => {
-  test("all agent skills have matching valid frontmatter", () => {
+  test("the moved skills are absent from the repo and the customer catalog", () => {
+    for (const name of PRIVATE_WORKFLOW_SKILLS) {
+      expect(SKILLS.some((skill) => skill.name === name)).toBe(false);
+      expect(existsSync(join(AGENT_SKILLS_DIR, name))).toBe(false);
+      expect(existsSync(join(ROOT, "skills", name))).toBe(false);
+      expect(existsSync(join(ROOT, "skills", `skill-${name}`))).toBe(false);
+    }
+  });
+
+  test("any agent-skills directory that appears later must carry valid frontmatter", () => {
+    // Future-proof guard: if a genuinely public skill is ever placed here again,
+    // its frontmatter must match its folder name exactly.
     const failures: string[] = [];
     for (const folder of readdirSync(AGENT_SKILLS_DIR)) {
       const directory = join(AGENT_SKILLS_DIR, folder);
@@ -130,118 +156,9 @@ describe("repository-managed agent workflow skills", () => {
     }
     expect(failures).toEqual([]);
   });
+});
 
-  test("merge-pr remains outside the customer skill catalog and public corpus", () => {
-    expect(SKILLS.some((skill) => skill.name === "merge-pr")).toBe(false);
-    expect(existsSync(join(ROOT, "skills", "merge-pr"))).toBe(false);
-    expect(existsSync(join(ROOT, "skills", "skill-merge-pr"))).toBe(false);
-  });
-
-  test("merge-pr contains only the canonical workflow and required resources", () => {
-    expect(filesBelow(join(AGENT_SKILLS_DIR, "merge-pr")).sort()).toEqual([
-      "SKILL.md",
-      "references/merge-safety.md",
-      "scripts/merge_pr_guard.py",
-      "scripts/test_merge_pr_guard.py",
-      "tests/fixtures/multi-commit-synthesized.json",
-      "tests/fixtures/trailer-free-provider.json",
-    ]);
-  });
-
-  test("skill-publish carries the worktree-safe npm provenance helper and regression", () => {
-    expect(filesBelow(join(AGENT_SKILLS_DIR, "skill-publish")).sort()).toEqual([
-      "SKILL.md",
-      "scripts/capture_registry.js",
-      "scripts/publish_with_git_head.sh",
-      "scripts/test_publish_with_git_head.sh",
-    ]);
-  });
-
-  test("skill-publish routes npm through the helper and verifies registry gitHead", () => {
-    const skill = readFileSync(join(AGENT_SKILLS_DIR, "skill-publish", "SKILL.md"), "utf8");
-    expect(skill).toContain("scripts/publish_with_git_head.sh");
-    expect(skill).toContain('secrets exec "$TOKEN_PATH" --as NODE_AUTH_TOKEN');
-    expect(skill).toContain(
-      "printf '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\\n' > \"$NPMRC\"",
-    );
-    expect(skill.match(/secrets exec "\$TOKEN_PATH" --as NODE_AUTH_TOKEN/g) ?? []).toHaveLength(2);
-    expect(skill).toContain(
-      String.raw`npm view "$PKG@$NEW_VERSION" gitHead --json \
-      --userconfig "$NPMRC"`,
-    );
-    expect(skill).toContain('--userconfig "$NPMRC"');
-    expect(skill).toContain("GITHEAD_VERIFIED:");
-    expect(skill).toContain('grep -iE "^\\\\+([^+].*)?($SECRET_PATTERN)"');
-    expect(skill).not.toContain('grep -iE "^\\\\+[^+].*($SECRET_PATTERN)"');
-    expect(skill).not.toContain("bun publish --access");
-    expect(skill).not.toContain("_authToken=[REDACTED_SECRET]");
-  });
-
-  test("skill-publish preserves npm gitHead and restores linked worktrees", () => {
-    const result = spawnSync(
-      "bash",
-      ["agent-skills/skill-publish/scripts/test_publish_with_git_head.sh"],
-      {
-        cwd: ROOT,
-        encoding: "utf8",
-      },
-    );
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-  });
-
-  test("inbox-monitor handles rotating machine identity without hiding same-name traffic", () => {
-    const result = spawnSync("bash", ["agent-skills/inbox-monitor/scripts/test_inbox_monitor.sh"], {
-      cwd: ROOT,
-      encoding: "utf8",
-    });
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-  });
-
-  test("inbox resolves registered sender IDs without hiding unsigned same-name traffic", () => {
-    const result = spawnSync("bash", ["agent-skills/inbox/tests/test_registered_sender_id.sh"], {
-      cwd: ROOT,
-      encoding: "utf8",
-    });
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-  });
-
-  test("fleet-package-rollout uses the executable manifest route and keeps SSH non-executing", () => {
-    const skillPath = join(AGENT_SKILLS_DIR, "fleet-package-rollout", "SKILL.md");
-    expect(existsSync(skillPath)).toBe(true);
-
-    const skill = readFileSync(skillPath, "utf8");
-    expect(skill).toContain("machines apps plan --machine <canary>");
-    expect(skill).toContain("machines apps apply --machine <canary> --yes");
-    expect(skill).toContain("machines apps status --machine <canary> --json");
-    expect(skill).toContain("Positive control (executable route)");
-    expect(skill).toContain("Negative control (non-executing route)");
-    expect(skill).toContain("machines ssh --machine <canary> --cmd 'printf rollout-probe'");
-    expect(skill).toContain("Never pass `--private-metadata`");
-    expect(skill).toContain("Never run raw `ssh`");
-    expect(skill).toMatch(
-      /`machines ssh` is a route resolver and command formatter\. It does not execute the\s+requested command\./,
-    );
-    expect(skill.match(/^machines ssh --machine <canary>/gm) ?? []).toHaveLength(1);
-    expect(skill).not.toContain(
-      "route one exact, non-interactive install command through `machines ssh`",
-    );
-    expect(skill).not.toMatch(/^\s*(?:ssh|scp)\s+/m);
-    expect(skill).not.toMatch(/^\s*machines ssh .*--private-metadata/m);
-  });
-
-  test("merge-pr guard passes its raw-fixture behavior suite", () => {
-    const result = spawnSync(
-      "python3",
-      ["-m", "unittest", "agent-skills/merge-pr/scripts/test_merge_pr_guard.py"],
-      {
-        cwd: ROOT,
-        encoding: "utf8",
-        env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
-      },
-    );
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-  });
-
+describe("CI secret-scan contract", () => {
   test("CI secret scan pins gitleaks and scans the exact PR or push range", () => {
     const workflow = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
     expect(secretScanContractFailures(workflow)).toEqual([]);

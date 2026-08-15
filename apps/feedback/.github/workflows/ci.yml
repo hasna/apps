@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun run build
+      - run: npm pack --dry-run
+      # `contract-check` exits 1 until the storage migration lands, so CI asserts
+      # the conformance gap has not MOVED rather than that it is closed. See the
+      # header of scripts/check-contract-gap.ts.
+      - run: bun run contract-gap

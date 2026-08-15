@@ -1,0 +1,104 @@
+{
+  "name": "@hasna/feedback",
+  "version": "0.3.0",
+  "description": "Reusable feedback collection API, SDK, CLI, and MCP server for Hasna-coded apps",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "feedback": "dist/cli/index.js",
+    "feedback-mcp": "dist/mcp/cli.js",
+    "feedback-serve": "dist/server/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    },
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "import": "./dist/storage.js"
+    },
+    "./events": {
+      "types": "./dist/events.d.ts",
+      "import": "./dist/events.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "import": "./dist/mcp/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "docs",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "hasna.contract.json"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "bun run clean && bun build src/index.ts src/api.ts src/browser.ts src/storage.ts src/events.ts --outdir dist --target bun && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts src/mcp/cli.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts src/server/cli.ts --outdir dist/server --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "contract-check": "contracts repo-conformance .",
+    "contract-gap": "bun scripts/check-contract-gap.ts",
+    "artifact-scan": "bun scripts/scan-artifact.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test --timeout 120000",
+    "dev:cli": "bun run src/cli/index.ts",
+    "dev:mcp": "bun run src/mcp/cli.ts",
+    "dev:serve": "bun run src/server/cli.ts",
+    "prepack": "bun run build && bun run artifact-scan",
+    "prepublishOnly": "bun run typecheck && bun test",
+    "postinstall": "mkdir -p $HOME/.hasna/feedback 2>/dev/null || true"
+  },
+  "keywords": [
+    "feedback",
+    "mcp",
+    "sdk",
+    "cli",
+    "api",
+    "hasna",
+    "product-feedback"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/feedback.git"
+  },
+  "homepage": "https://github.com/hasna/feedback",
+  "bugs": {
+    "url": "https://github.com/hasna/feedback/issues"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "author": "Hasna",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@hasna/events": "^0.1.13",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "commander": "^13.1.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@hasna/contracts": "0.8.5",
+    "@types/bun": "^1.2.4",
+    "typescript": "^5.7.3"
+  }
+}

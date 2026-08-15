@@ -1,41 +1,26 @@
-# Agent Workflow Skills (fleet)
+# Agent Workflow Skills (private per-station store)
 
-Canonical git source for Hasna **agent workflow skills** — instruction-first
-skills that tell coding agents how to run fleet workflows: session login,
-project creation, publishing, guarded merging, and so on.
+This directory is kept as the pointer for the Hasna **agent workflow skills** —
+instruction-first skills that tell coding agents how to run fleet workflows:
+session login, project creation, publishing, guarded merging, and so on.
 
-These are deliberately **not** part of the public `skills/` corpus:
+## The 9 fleet workflow skills moved to the private store (owner ruling 2026-08-15)
 
-- `skills/` entries are executable skill packages with registry entries,
-  validated by `src/lib/validation.test.ts` and guarded by
-  `scripts/check_skill_corpus_drift.sh`. Agent workflow skills have no
-  `package.json`/`src` and must not trip the corpus guard.
-- This directory is shipped in the npm package so named `skills sync` calls can
-  install repository-managed workflow skills and their required resources.
+`fleet-package-rollout`, `goal-plan-coordination`, `inbox`, `inbox-monitor`,
+`merge-pr`, `skill-goal-execute`, `skill-login`, `skill-project-create`, and
+`skill-publish` are **for internal fleet use only** and no longer live in this
+public repository. They moved to the private per-station store
+(`hasna-internal/fleet-resources`), which hydrates each station's skill cache
+(`~/.hasna/skills/skills/`). Edit them there, never here.
 
-## Layout
+The public `@hasna/skills` package keeps only the OSS executable corpus under
+`skills/`. The sync/registry code paths that serve agent-workflow skills remain
+for the machine-local caches, which is where those skills now come from — not
+from this repository.
 
-```text
-agent-skills/<skill-name>/
-├── SKILL.md
-├── scripts/       # optional deterministic helpers and focused tests
-├── references/    # optional progressively disclosed safety detail
-└── tests/         # optional raw, inert fixtures
-```
+## What may live here again
 
-Frontmatter follows the agent skill format (`name`, `description`). Older
-workflow skills may retain Claude's `user_invocable` compatibility field. Keep
-only resources required to make fragile behavior deterministic. The repository
-copy is canonical.
-
-## Distribution
-
-Live copies run from each tool's skill directory (`~/.claude/skills`,
-`~/.codewith/skills`, `~/.codex/skills`, `~/.config/opencode/skills`,
-`~/.cursor/skills`) on every fleet machine. After a change merges here,
-distribution happens via named `skills sync` calls: the complete skill
-directory is installed, with Claude's `user_invocable` field kept and the field
-stripped from non-Claude copies.
-
-Do not edit the live `~/.claude/skills` copies directly for these skills —
-change them here, merge, then sync.
+If a skill is genuinely public (no fleet-only content), it belongs in the OSS
+corpus under `skills/` with a registry entry — not in this directory. This
+directory is reserved for the private-store pointer and carries no skill
+corpus of its own.

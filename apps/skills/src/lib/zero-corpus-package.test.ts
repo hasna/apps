@@ -1,10 +1,13 @@
 /**
  * zero-corpus-package.test.ts — the published npm tarball must ship ZERO skill corpus.
  *
- * The canonical corpus stays in the repo (skills/ + agent-skills/) as git source of
- * truth; distribution is CI-built signed bundles + `skills pull`. If a single corpus
- * file re-enters the tarball, a fleet install silently regresses to "bundled
- * distribution" — the exact state this test exists to keep from coming back.
+ * The canonical corpus stays in the repo (skills/) as git source of truth; distribution
+ * is CI-built signed bundles + `skills pull`. The agent-workflow skills that used to
+ * live under agent-skills/ moved to the private per-station store (hasna-internal/
+ * fleet-resources, owner ruling 2026-08-15), so agent-skills/ holds only a pointer
+ * README. If a single corpus file re-enters the tarball, a fleet install silently
+ * regresses to "bundled distribution" — the exact state this test exists to keep from
+ * coming back.
  *
  * Two instruments, deliberately: the packer's own dry-run file list (what `files[]`
  * produces) AND a real packed tarball inspected with tar, because the dry run and the
@@ -36,7 +39,8 @@ describe("zero-corpus package", () => {
     const packed = getPackedFiles(PACKAGE_DIR);
     expect(packed.length).toBeGreaterThan(0);
     expect(corpusEntries(packed)).toEqual([]);
-    // The corpus still EXISTS in the repo — this is about the tarball, not the tree.
+    // The public corpus still EXISTS in the repo — this is about the tarball, not the
+    // tree. agent-skills/ exists as the private-store pointer; neither may ship.
     expect(existsSync(join(PACKAGE_DIR, "skills"))).toBe(true);
     expect(existsSync(join(PACKAGE_DIR, "agent-skills"))).toBe(true);
   });

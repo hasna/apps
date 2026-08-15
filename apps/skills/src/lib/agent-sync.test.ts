@@ -30,9 +30,11 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 useDefaultTestTimeout();
 
 /**
- * The repo package root: the canonical corpus source a checkout provides (skills/ +
- * agent-skills/ below it). Used by the tests that sync named repository-managed skills —
- * the npm package ships no bundled corpus, so the checkout is the source.
+ * The repo package root: the canonical public-corpus source a checkout provides
+ * (`skills/` below it). The npm package ships no bundled corpus, so the checkout is
+ * the source for public skills. The private agent-workflow skills are NOT exercised
+ * through the repo anymore — they moved to the private per-station store (owner ruling
+ * 2026-08-15) — so the tests that need a named workflow skill seed a temp corpus.
  */
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 
@@ -59,6 +61,18 @@ function seedCorpusSkill(
 
 const INSTRUCTION_MD =
   "---\nname: deploy-runbook\ndescription: The team deploy runbook\nkind: instruction\nuser_invocable: true\n---\n\n# Deploy Runbook\n\nStep one.\n";
+
+/** Seed a temp corpus with the `inbox` workflow skill shape (SKILL.md + helper). */
+function seedInboxCorpus(corpus: string): void {
+  seedCorpusSkill(corpus, "inbox", INBOX_MD, {
+    "skill.json": JSON.stringify({ standard: "hasna.skill.v1", name: "inbox", kind: "instruction" }),
+    "scripts/inbox": INBOX_HELPER_BYTES,
+  });
+}
+
+const INBOX_MD =
+  "---\nname: inbox\ndescription: Interactive Session Inbox\nkind: instruction\nuser_invocable: true\n---\n\n# inbox — Interactive Session Inbox\n\nSession-scoped inbox watch.\n";
+const INBOX_HELPER_BYTES = "SEED_INBOX_HELPER_BYTES\n";
 
 describe("adaptSkillMdForAgent", () => {
   test("Claude keeps user_invocable in frontmatter", () => {
@@ -203,6 +217,7 @@ describe("syncSkillsToAgents", () => {
       const corpus = tempDir("sync-corpus-");
       const home = tempDir("sync-home-");
       try {
+        seedInboxCorpus(corpus);
         const userDir = join(home, ".codewith", "skills", "inbox");
         const helperPath = join(userDir, "scripts", "inbox");
         mkdirSync(join(userDir, "scripts"), { recursive: true });
@@ -213,7 +228,6 @@ describe("syncSkillsToAgents", () => {
           homeDir: home,
           names: ["inbox"],
           agents: ["codewith"],
-          sourceDir: REPO_ROOT,
           force,
         });
 
@@ -238,6 +252,7 @@ describe("syncSkillsToAgents", () => {
     const corpus = tempDir("sync-corpus-");
     const home = tempDir("sync-home-");
     try {
+      seedInboxCorpus(corpus);
       const userDir = join(home, ".codewith", "skills", "inbox");
       const helperPath = join(userDir, "scripts", "inbox");
       mkdirSync(join(userDir, "scripts"), { recursive: true });
@@ -250,13 +265,13 @@ describe("syncSkillsToAgents", () => {
         homeDir: home,
         names: ["inbox"],
         agents: ["codewith"],
-        sourceDir: REPO_ROOT,
+        sourceDir: corpus,
         force: true,
       });
       expect(actions[0].action).toBe("update");
       expect(readFileSync(join(userDir, "SKILL.md"), "utf-8")).toContain("# inbox — Interactive Session Inbox");
       expect(readFileSync(helperPath, "utf-8")).toBe(
-        readFileSync(join(process.cwd(), "agent-skills", "inbox", "scripts", "inbox"), "utf-8"),
+        readFileSync(join(corpus, "inbox", "scripts", "inbox"), "utf-8"),
       );
       expect(existsSync(join(userDir, "obsolete.txt"))).toBe(false);
       expect(existsSync(join(userDir, SYNC_MARKER_FILE))).toBe(true);
@@ -286,16 +301,17 @@ describe("syncSkillsToAgents", () => {
     }
   });
 
-  test("a named repository-managed agent skill syncs its complete bundled directory", () => {
+  test("a named workflow skill syncs its complete bundled directory", () => {
     const corpus = tempDir("sync-corpus-");
     const home = tempDir("sync-home-");
     try {
+      seedInboxCorpus(corpus);
       const { actions } = syncSkillsToAgents({
         rootDir: corpus,
         homeDir: home,
         names: ["inbox"],
         agents: ["codewith"],
-        sourceDir: REPO_ROOT,
+        sourceDir: corpus,
       });
       const skillDir = join(home, ".codewith", "skills", "inbox");
       const skillPath = join(skillDir, "SKILL.md");
@@ -313,7 +329,7 @@ describe("syncSkillsToAgents", () => {
       expect(synced).not.toContain("user_invocable");
       expect(existsSync(helperPath)).toBe(true);
       expect(readFileSync(helperPath, "utf-8")).toBe(
-        readFileSync(join(process.cwd(), "agent-skills", "inbox", "scripts", "inbox"), "utf-8"),
+        readFileSync(join(corpus, "inbox", "scripts", "inbox"), "utf-8"),
       );
     } finally {
       rmSync(corpus, { recursive: true, force: true });
@@ -352,7 +368,7 @@ describe("syncSkillsToAgents", () => {
       })).toThrow("Invalid skill name");
       expect(() => syncSkillsToAgents({
         homeDir: home,
-        names: ["../agent-skills/fleet-package-rollout"],
+        names: ["../nested/skill-name"],
         agents: ["codewith"],
       })).toThrow("Invalid skill name");
 
@@ -480,12 +496,13 @@ describe("resolveSyncCorpus (zero-corpus source resolution)", () => {
     expect(roots[0]).toBe("/tmp/nonexistent-corpus-x");
   });
 
-  test("an explicit sourceDir pointing at a package root resolves skills/ + agent-skills/", () => {
+  test("an explicit sourceDir pointing at a package root resolves skills/", () => {
     const { roots, source } = resolveSyncCorpus({ sourceDir: REPO_ROOT });
     expect(source).toBe("source");
+    // `agent-skills/` is no longer a corpus root: the fleet workflow skills moved to
+    // the private per-station store and reach sync through the installed cache.
     expect(roots.map((root) => root.replace(/\\/g, "/").split("/").slice(-2).join("/"))).toEqual([
       "skills/skills",
-      "skills/agent-skills",
     ]);
   });
 

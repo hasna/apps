@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDb, getDb } from "../db/database";
-import { upsertRepo } from "../db/repos";
+import { upsertRepo, setRepoLookupPathStateForTests } from "../db/repos";
 import { findFile, fuzzyFindRepo } from "./utils";
 
 let testDir = "";
@@ -83,6 +83,18 @@ describe("utils", () => {
   // this exclusion, fuzzyFindRepo's own "exact match" query re-finds the very
   // row getRepo just refused and suggests it right back.
   describe("fuzzyFindRepo", () => {
+    beforeEach(() => {
+      // The seeded checkouts live at synthetic /home/u/ paths that do not
+      // exist on the test runner. Declare them present so the dead-path
+      // exclusion (todos 0251863c) does not silence the suggestions these
+      // tests assert.
+      setRepoLookupPathStateForTests((path) =>
+        path.startsWith("/home/u/") ? "present" : "missing",
+      );
+    });
+
+    afterEach(() => setRepoLookupPathStateForTests(null));
+
     it("does not suggest a factory scratch clone when a canonical checkout exists under a different name", () => {
       upsertRepo({
         path: "/home/u/workspace/hasna/opensource/open-loops",
@@ -133,6 +145,37 @@ describe("utils", () => {
         org: "hasna",
       });
       expect(fuzzyFindRepo("onlymirror")).toBeNull();
+    });
+
+    // Regression for todos 0251863c: the CLI suggested the dead pre-migration
+    // path (`open-bench`) for a bare name that failed exact resolution. A
+    // suggestion whose path no longer exists sends the caller to nowhere, so
+    // fuzzy matching must never surface a missing-path row.
+    it("never suggests a registry row whose path is gone (stale pre-migration rows)", () => {
+      upsertRepo({
+        path: "/home/u/workspace/hasna/opensource/open-bench",
+        name: "open-bench",
+        org: "hasna",
+        remote_url: "github.com/hasna/bench",
+      });
+      setRepoLookupPathStateForTests(() => "missing");
+
+      expect(fuzzyFindRepo("bench")).toBeNull();
+      expect(fuzzyFindRepo("open")).toBeNull();
+    });
+
+    it("still suggests a present pre-migration-named row when nothing better exists", () => {
+      upsertRepo({
+        path: "/home/u/workspace/hasna/opensource/open-bench",
+        name: "open-bench",
+        org: "hasna",
+        remote_url: "github.com/hasna/bench",
+      });
+      setRepoLookupPathStateForTests(() => "present");
+
+      const match = fuzzyFindRepo("bench");
+      expect(match).toBeTruthy();
+      expect(match!.name).toBe("open-bench");
     });
   });
 });
