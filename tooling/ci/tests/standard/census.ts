@@ -262,6 +262,7 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "servers", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "sheets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "signatures", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
+  { member: "search", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #68." },
   { member: "slides", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "snapshots", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "statusline", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -314,6 +315,7 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "repos", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "router", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "skills", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
+  { member: "search", reason: "No hasna.contract.json; manifest lane (todos 41208cbe). Imported by #68." },
   { member: "snapshots", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "statusline", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "styles", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
@@ -398,6 +400,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "logs",
     cause: "manifest_valid: service-class manifest declares no service surface (service repos must declare at least one). Validated at pinned 0.5.2.",
     task: "todos d166125e (contracts task — logs)",
+  },
+  {
+    member: "loops",
+    cause: "credential_seam_compliance: src/lib/cloud/storage.ts:218 resolveStorageClient and src/lib/cloud/transport.ts:89/241/358 are vendored copies of the @hasna/contracts client seam, not uses of it — a fork does not receive credential-resolution fixes. Import from @hasna/contracts/client instead. Pre-existing on origin/main (7bb103c4), carried by the #68 base-sync.",
+    task: "todos 19a40a26-94d1-4c13-aa8f-acb25dd24ae5 (suite-record reconcile — PR #68 landing lane)",
   },
   {
     member: "mementos",
