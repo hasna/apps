@@ -1,9 +1,9 @@
 # apps/ — member packages
 
-Each directory here is one public `@hasna/<name>` package. **This folder is
-intentionally empty** during the phase-0 skeleton: the 85 member repos are
-imported by dedicated lanes, each landing as its own PR, never by this
-bootstrap.
+Each directory here is one public `@hasna/<name>` package. **75 members are
+imported today**, each landed as its own PR from the public-estate import wave
+(todos `28ac4516`); the remaining repos in that census are tracked by the same
+wave and land PR-first, never by a bootstrap.
 
 ## The four surfaces (every member package)
 

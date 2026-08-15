@@ -19,16 +19,18 @@ apps/                  member packages (one dir per @hasna/<name>, four surfaces
 contracts/             contract manifests / schemas (tier-0, founder-owned; schema lane deferred)
 tooling/ci/            CI gate scripts (secret scan, name conformance, publish guard)
 .claude/               agent identities (fixer, publisher, reviewer) + repo laws
-.github/workflows/     one CI workflow: gates, build-test, publish-guard
+.github/workflows/     one CI workflow: gates, test-suites, build-test, publish-guard
 ```
 
-## Bootstrap status (2026-08-13)
+## Member status (2026-08-15)
 
-Phase-0 skeleton: workspaces, turbo, changesets (independent versions, public
-access), CI gates, agent rules. The member repos are **not imported yet** —
-that is the next lane's work; this tree intentionally holds no member packages.
-The initial `main` commit is the owner-approved bootstrap; everything after is
-PR-first.
+75 member packages are imported under `apps/`, each a public `@hasna/<name>`
+package with the four surfaces (CLI, MCP server bin, `-serve` server bin,
+`./sdk` import). The initial `main` commit was the owner-approved bootstrap;
+everything after is PR-first. The remaining public-estate repos are tracked by
+the import wave (todos `28ac4516`) and land PR-first; per-member gaps against
+the four-surface standard are tracked by the manifest lane (todos `41208cbe`)
+and the SDK lane (todos `c7ce8b75`).
 
 ## Developer commands
 

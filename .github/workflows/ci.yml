@@ -1,4 +1,4 @@
-# CI — the gate set for the phase-0 skeleton of hasna/apps.
+# CI — the gate set for hasna/apps.
 #
 # Three jobs, split by what they NEED rather than by what they check:
 #
