@@ -133,6 +133,10 @@ describe("standard-adherence: contracts conformance", () => {
     expect(cannotRun, `validator could not run: ${cannotRun.join(", ")}`).toEqual([]);
   });
 
+  // Auto-filing spawns one `todos task upsert` per violation; a full census
+  // can exceed bun's default 5000ms per-test timeout, so these two reporting
+  // lanes declare their own bound (the standard CI job runs the whole suite
+  // with this same bound).
   test("conformance: new violations are reported and auto-filed; each recorded exception must still fail", async () => {
     const unexpected = report.entries.filter((e) => e.verdict === "fail" && !CONTRACTS_EXCEPTION_MEMBERS.has(e.member));
     const filed: string[] = [];
@@ -151,7 +155,7 @@ describe("standard-adherence: contracts conformance", () => {
     // is stale and must fail the suite until removed.
     const stale = CONTRACTS_EXCEPTIONS.filter((e) => byMember.get(e.member)?.verdict === "ok").map((e) => e.member);
     expect(stale, `recorded contracts exceptions that now pass: ${stale.join(", ")}`).toEqual([]);
-  });
+  }, 300_000);
 
   test("every manifest-bearing member is either passing, a recorded exception, or auto-filed", async () => {
     const unclassified = report.entries.filter((e) => {
@@ -168,7 +172,7 @@ describe("standard-adherence: contracts conformance", () => {
       filed.push(`${memberName} (${entry.version}) -> reconcile task ${task ? `${task.id} (${task.created ? "created" : "existing"})` : "NOT FILED (todos unavailable)"}`);
     }
     if (filed.length > 0) console.info(`[standard] unclassified conformance members (auto-filed, reporting lane):\n${filed.map((l) => `  ${l}`).join("\n")}`);
-  });
+  }, 300_000);
 
   test("kitVersion matches the pinned @hasna/contracts version where present (recorded mismatches allowed)", () => {
     const mismatches: string[] = [];
