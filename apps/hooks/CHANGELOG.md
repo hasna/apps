@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2026-08-15
+
+### Security
+
+- **Registry fetches refuse redirects.** `fetchJson` now uses `redirect: "error"`, so the `x-api-key` header can never follow a 3xx to another origin (measured live: the key followed a 302). Same-origin and cross-origin redirects both refuse, fail-closed.
+- **Pinned-version integrity.** `hooks install/update <name>@<version>` verifies the artifact sha against the remote lock AND the manifest name/version against the request before writing; the pin and DB record always carry the VERIFIED digest — a post-write re-read that differs refuses instead of being trusted.
+- **Timeout bounds are real.** MCP `timeout_ms` is validated as a positive integer capped at 600000; `0`/negative/over-max are rejected, never interpreted as "no timeout". A manifest or SDK `timeout_ms: 0` is likewise never a real value (SDK treats non-positive options as not provided).
+
+### Fixed
+
+- **`hooks remove` is a full uninstall** (QA-1 BUG-A / QA-4): resolves custom, registry-synced and bundled hooks; removes the settings registration (claude + gemini), the Codewith TOML entry losslessly, the store dir, the lock pin and the DB record. A store dir that cannot be removed keeps the trust records intact and fails closed (no fail-open retrust). Nonexistent hooks exit non-zero in both output modes.
+- **`hooks log` works** (bug ef58dcb7): every execution — CLI run, SDK `runHook`, MCP run tools — writes a `hook_events` row with name, event, result, exit, timestamp and version+sha metadata; timeouts and `SubagentStart` runs are recorded too (schema + migration 005).
+- **SQLITE_BUSY under concurrent runs** (QA-4 bug 09094299): `PRAGMA busy_timeout=5000` is set immediately after open; 10 parallel runs all succeed.
+- **MCP run tools** (QA-4 bug 4d4c8f0b): reach custom/registry hooks (bundled-catalog gate removed); honor the manifest `timeout_ms`; spawn in a process group and kill the group on timeout — no orphaned children; bounded pipe drain so a backgrounded child cannot hang a run.
+- **Install fail-closed reporting** (QA-3 P2 / QA-1 BUG-C): `hooks install` exits non-zero with "Nothing was registered" and never claims "Registered in …" when every hook was refused.
+- **Version pin at install** (QA-1 P3): custom installs pin the actual installed version+sha immediately; a pin failure rolls back the copied store dir so bytes never become runnable unrecorded.
+- **`hooks list`** (QA-4 A1, bug e8461f89): surfaces custom/registry hooks with versions and sources alongside the bundled catalog; `-i/--installed` includes them.
+- **`hooks update`** fails closed: no installed hooks, or any requested update failing, exits non-zero in both output modes.
+
+### Changed
+
+- `hooks init --cloudflare` always writes `api_key_ref` (vault key NAME, default `hasna/hooks/live/api-key`) into config.json (QA-3 deviation).
+- `hooks install <name>@<version>` parses pins strictly: only bare names + semver are pins; URLs and local paths are always custom sources.
+
 ## [0.6.3] - 2026-08-14
 
 ### Fixed
