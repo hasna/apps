@@ -2261,7 +2261,6 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
 
     const status = await runCli(["storage", "status", "--json"], dbPath, {
-      HASNA_TODOS_STORAGE_MODE: "local",
       HASNA_TODOS_DATABASE_URL: "",
       HASNA_TODOS_DATABASE_SSL: "",
       HASNA_TODOS_DATABASE_SCHEMA: "",
@@ -2272,7 +2271,6 @@ describe("CLI integration", () => {
       HASNA_TODOS_S3_FORCE_PATH_STYLE: "",
       HASNA_TODOS_SYNC_BATCH_SIZE: "",
       HASNA_TODOS_SYNC_DRY_RUN: "",
-      TODOS_STORAGE_MODE: "local",
       TODOS_DATABASE_URL: "",
       TODOS_DATABASE_SSL: "",
       TODOS_DATABASE_SCHEMA: "",
@@ -2283,7 +2281,6 @@ describe("CLI integration", () => {
       TODOS_S3_FORCE_PATH_STYLE: "",
       TODOS_SYNC_BATCH_SIZE: "",
       TODOS_SYNC_DRY_RUN: "",
-      TODOS_MODE: "remote",
       TODOS_API_URL: "https://legacy.example.invalid",
       // Deployment identifiers come from the hosting layer via env; the package
       // ships no real cluster names or secrets-manager paths.
@@ -2309,20 +2306,19 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
-  it("should report missing HTTP authority settings without using native remote adapters", async () => {
+  it("should report a partial HTTP authority without using native remote adapters", async () => {
     const dbPath = "/tmp/test-cli-storage-remote.db";
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
     const status = await runCli(["storage", "status", "--json"], dbPath, {
-      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://todos.example.invalid",
       HASNA_TODOS_DATABASE_URL: "postgres://todo_user:super-secret@rds.example.invalid:5432/todos",
       HASNA_TODOS_DATABASE_SCHEMA: "opensource_todos_prod",
       HASNA_TODOS_S3_BUCKET: "hasna-opensource-todos-prod",
       HASNA_TODOS_S3_PREFIX: "todos/prod/",
       HASNA_TODOS_AWS_REGION: "us-east-1",
       HASNA_TODOS_SYNC_BATCH_SIZE: "25",
-      TODOS_STORAGE_MODE: "remote",
       TODOS_DATABASE_URL: "",
       TODOS_S3_BUCKET: "",
     });
@@ -2338,12 +2334,11 @@ describe("CLI integration", () => {
     expect(payload.remote_authority).toMatchObject({
       selected: true,
       ok: false,
-      api_url_configured: false,
+      api_url_configured: true,
       api_key_configured: false,
       local_fallback: false,
     });
     expect(payload.issues).toEqual(expect.arrayContaining([
-      expect.stringContaining("REMOTE_API_URL_MISSING"),
       expect.stringContaining("REMOTE_API_KEY_MISSING"),
     ]));
     expect(status.stdout).not.toContain("todo_user");
@@ -2353,17 +2348,17 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
-  it("should reject native storage sync planning in remote mode before local helpers", async () => {
+  it("should reject native storage sync planning on the HTTP route before local helpers", async () => {
     const dbPath = "/tmp/test-cli-storage-sync-plan.db";
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
     const plan = await runCli(["storage", "sync-plan", "--schema-sql", "--json"], dbPath, {
-      HASNA_TODOS_STORAGE_MODE: "hybrid",
+      HASNA_TODOS_API_URL: "https://todos.example.invalid",
+      HASNA_TODOS_API_KEY: "fixture-key",
       HASNA_TODOS_DATABASE_URL: "postgres://todo_user:super-secret@rds.example.invalid/todos",
       HASNA_TODOS_S3_BUCKET: "hasna-opensource-todos-prod",
       HASNA_TODOS_AWS_REGION: "us-east-1",
-      TODOS_STORAGE_MODE: "hybrid",
       TODOS_DATABASE_URL: "",
       TODOS_S3_BUCKET: "",
     });

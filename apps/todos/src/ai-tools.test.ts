@@ -235,7 +235,6 @@ describe("Todos AI read tools", () => {
     try {
       const source = createTodosAiToolSource({
         env: {
-          HASNA_TODOS_STORAGE_MODE: "http",
           HASNA_TODOS_API_URL: "https://todos.example.test",
           HASNA_TODOS_API_KEY: apiKeyFixture,
         },
@@ -976,7 +975,6 @@ describe("Todos AI control and update_task tools", () => {
       const runRequest = writeRequest("execute", "existing", [identity.ref]);
       const source = createTodosAiToolSource({
         env: {
-          HASNA_TODOS_STORAGE_MODE: "http",
           HASNA_TODOS_API_URL: "https://todos.example.test",
           HASNA_TODOS_API_KEY: apiKeyFixture,
         },
@@ -1050,7 +1048,6 @@ describe("Todos AI control and update_task tools", () => {
       const runRequest = writeRequest("execute", "existing", [identity.ref]);
       const source = createTodosAiToolSource({
         env: {
-          HASNA_TODOS_STORAGE_MODE: "http",
           HASNA_TODOS_API_URL: "https://todos.example.test",
           HASNA_TODOS_API_KEY: "fixture-http-key",
         },

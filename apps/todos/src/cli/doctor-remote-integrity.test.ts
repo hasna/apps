@@ -95,7 +95,6 @@ async function runRemoteCli(args: string[], port: number): Promise<CliResult> {
       LANG: "C.UTF-8",
       TODOS_AUTO_PROJECT: "false",
       TODOS_DB_PATH: join(testRoot, "must-not-exist", "todos.db"),
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: `http://127.0.0.1:${port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
     },

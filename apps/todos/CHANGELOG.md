@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.15.33] - 2026-08-14
+## [0.15.34] - 2026-08-15
+
+### Changed
+
+- **The deprecated storage-mode env selection is removed.** The client now
+  routes on `HASNA_TODOS_API_URL` + `HASNA_TODOS_API_KEY` alone; any
+  storage-mode var now hard-errors instead of silently selecting a backend.
+  Configurations still setting the deprecated var must drop it before
+  upgrading.
 
 ### Fixed
 

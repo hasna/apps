@@ -115,7 +115,6 @@ function runnerEnv(
     HOME: home,
     BUN_INSTALL_CACHE_DIR: cache,
     NODE_ENV: "production",
-    HASNA_TODOS_STORAGE_MODE: "remote",
     TODOS_NO_OPEN: "true",
     HOST: "127.0.0.1",
     PORT: "0",

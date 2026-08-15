@@ -95,7 +95,6 @@ function staleLockCapabilityEnv(authorityUrl: string): Record<string, string> {
     HOME: home,
     LANG: "C.UTF-8",
     TODOS_AUTO_PROJECT: "false",
-    HASNA_TODOS_STORAGE_MODE: "remote",
     HASNA_TODOS_API_URL: authorityUrl,
     HASNA_TODOS_API_KEY: "fixture-remote-key",
   };
@@ -301,7 +300,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       TMPDIR: root,
       LANG: "C.UTF-8",
       TODOS_DB_PATH: localDbPath,
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
     };
@@ -394,7 +392,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       TMPDIR: root,
       LANG: "C.UTF-8",
       TODOS_DB_PATH: localDbPath,
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
     };
@@ -626,7 +623,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       TMPDIR: root,
       LANG: "C.UTF-8",
       TODOS_DB_PATH: localDbPath,
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: remoteKey,
     };
@@ -738,7 +734,6 @@ describe("remote CLI entrypoint authority boundary", () => {
     const result: TodosCliAuthorityInitialization = initializeTodosCliAuthority(
       ["--json", "status"],
       {
-        HASNA_TODOS_STORAGE_MODE: "remote",
         HASNA_TODOS_API_URL: "https://authority.invalid",
         HASNA_TODOS_API_KEY: "fixture-remote-key",
       },
@@ -751,7 +746,6 @@ describe("remote CLI entrypoint authority boundary", () => {
     expect(() => initializeTodosCliAuthority(
       ["task", "--json", "upsert", "--fingerprint", "fixture", "--title", "Fixture"],
       {
-        HASNA_TODOS_STORAGE_MODE: "remote",
         HASNA_TODOS_API_URL: "https://authority.invalid",
         HASNA_TODOS_API_KEY: "fixture-remote-key",
       },
@@ -760,7 +754,6 @@ describe("remote CLI entrypoint authority boundary", () => {
     expect(() => initializeTodosCliAuthority(
       ["storage", "artifacts", "upload", "--run-id", "status"],
       {
-        HASNA_TODOS_STORAGE_MODE: "remote",
         HASNA_TODOS_API_URL: "https://authority.invalid",
         HASNA_TODOS_API_KEY: "fixture-remote-key",
       },
@@ -768,7 +761,6 @@ describe("remote CLI entrypoint authority boundary", () => {
     expect(() => initializeTodosCliAuthority(
       ["config", "--set", "danger=true"],
       {
-        HASNA_TODOS_STORAGE_MODE: "remote",
         HASNA_TODOS_API_URL: "https://authority.invalid",
         HASNA_TODOS_API_KEY: "fixture-remote-key",
       },
@@ -776,7 +768,6 @@ describe("remote CLI entrypoint authority boundary", () => {
     expect(() => initializeTodosCliAuthority(
       ["projects", "--add", "/workspace/example", "--dry-run"],
       {
-        HASNA_TODOS_STORAGE_MODE: "remote",
         HASNA_TODOS_API_URL: "https://authority.invalid",
         HASNA_TODOS_API_KEY: "fixture-remote-key",
       },
@@ -806,7 +797,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["plans", "--write-artifacts"],
     ]) {
       expect(() => initializeTodosCliAuthority(args, {
-        HASNA_TODOS_STORAGE_MODE: "remote",
         HASNA_TODOS_API_URL: "https://authority.invalid",
         HASNA_TODOS_API_KEY: "fixture-remote-key",
       })).toThrow("REMOTE_COMMAND_UNSUPPORTED");
@@ -869,7 +859,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["projects", "--deregister=fixture", "--dry-run"],
     ]) {
       expect(() => initializeTodosCliAuthority(args, {
-        HASNA_TODOS_STORAGE_MODE: "remote",
         HASNA_TODOS_API_URL: "https://authority.invalid",
         HASNA_TODOS_API_KEY: "fixture-remote-key",
       })).not.toThrow();
@@ -886,7 +875,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["completion", "fish"],
     ]) {
       const result = initializeTodosCliAuthority(args, {
-        HASNA_TODOS_STORAGE_MODE: "remote",
         HASNA_TODOS_API_URL: "https://authority.invalid",
         HASNA_TODOS_API_KEY: "fixture-remote-key",
       });
@@ -921,7 +909,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       TMPDIR: root,
       LANG: "C.UTF-8",
       TODOS_DB_PATH: localDbPath,
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
     };
@@ -1006,7 +993,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       LANG: "C.UTF-8",
       TODOS_AUTO_PROJECT: "false",
       TODOS_DB_PATH: localDbPath,
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
     };
@@ -1064,7 +1050,6 @@ describe("remote CLI entrypoint authority boundary", () => {
 
   test("only redaction configuration and scans select local transport under hosted configuration", () => {
     const hostedEnv = {
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: "https://authority.invalid",
       HASNA_TODOS_API_KEY: "fixture-remote-key",
     };
@@ -1077,7 +1062,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     for (const command of localOnly.filter((candidate) => candidate !== "redaction")) {
       const env = { ...hostedEnv };
       expect(() => initializeTodosCliAuthority([command], env)).toThrow(/REMOTE_COMMAND_UNSUPPORTED/);
-      expect(env.HASNA_TODOS_STORAGE_MODE).toBe("remote");
+      expect(env.HASNA_TODOS_API_KEY).toBe("fixture-remote-key");
       expect(getTodosCloudClient(env)?.baseUrl).toBe("https://authority.invalid/v1");
     }
 
@@ -1090,8 +1075,8 @@ describe("remote CLI entrypoint authority boundary", () => {
         selected_by: "local-only-command",
       });
       applyTodosCliAuthorityEnvironment(authority, env);
-      expect(env.HASNA_TODOS_STORAGE_MODE).toBe("sqlite");
-      expect(env.TODOS_STORAGE_MODE).toBe("sqlite");
+      expect(env.HASNA_TODOS_API_URL).toBe("");
+      expect(env.HASNA_TODOS_API_KEY).toBe("");
       expect(getTodosCloudClient(env)).toBeNull();
     }
 
@@ -1105,7 +1090,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
       HOME: createBunPackageIsolatedTempDir("todos-remote-help-"),
       LANG: "C.UTF-8",
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: "https://authority.invalid",
       HASNA_TODOS_API_KEY: "fixture-remote-key",
     };
@@ -1246,7 +1230,6 @@ describe("remote CLI entrypoint authority boundary", () => {
           LANG: "C.UTF-8",
           TODOS_AUTO_PROJECT: "false",
           TODOS_DB_PATH: localDbPath,
-          HASNA_TODOS_STORAGE_MODE: "remote",
           HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
           HASNA_TODOS_API_KEY: "fixture-remote-key",
       });
@@ -1272,7 +1255,6 @@ describe("remote CLI entrypoint authority boundary", () => {
           TMPDIR: root,
           LANG: "C.UTF-8",
           TODOS_DB_PATH: localDbPath,
-          HASNA_TODOS_STORAGE_MODE: "remote",
           HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
           HASNA_TODOS_API_KEY: "fixture-remote-key",
         });
@@ -1288,7 +1270,6 @@ describe("remote CLI entrypoint authority boundary", () => {
         TMPDIR: root,
         LANG: "C.UTF-8",
         TODOS_DB_PATH: localDbPath,
-        HASNA_TODOS_STORAGE_MODE: "remote",
         HASNA_TODOS_API_KEY: "fixture-remote-key",
       });
       expect(missingUrl.exitCode).toBe(1);
@@ -1302,7 +1283,6 @@ describe("remote CLI entrypoint authority boundary", () => {
         TMPDIR: root,
         LANG: "C.UTF-8",
         TODOS_DB_PATH: localDbPath,
-        HASNA_TODOS_STORAGE_MODE: "remote",
         HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       });
       expect(missingKey.exitCode).toBe(1);
@@ -1392,7 +1372,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       LANG: "C.UTF-8",
       TODOS_AUTO_PROJECT: "false",
       TODOS_DB_PATH: localDbPath,
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
     };
@@ -1603,7 +1582,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       LANG: "C.UTF-8",
       TODOS_AUTO_PROJECT: "false",
       TODOS_DB_PATH: localDbPath,
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
       TODOS_AGENT_ID: "fixture-agent",
@@ -1711,7 +1689,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       LANG: "C.UTF-8",
       TODOS_AUTO_PROJECT: "false",
       TODOS_DB_PATH: localDbPath,
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
     };
@@ -1821,7 +1798,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       TMPDIR: root,
       LANG: "C.UTF-8",
       TODOS_DB_PATH: localDbPath,
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
     };
@@ -1964,7 +1940,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       LANG: "C.UTF-8",
       TODOS_AUTO_PROJECT: "false",
       TODOS_DB_PATH: localDbPath,
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
     };
@@ -2245,7 +2220,6 @@ describe("remote CLI entrypoint authority boundary", () => {
       LANG: "C.UTF-8",
       TODOS_AUTO_PROJECT: "false",
       TODOS_DB_PATH: localDbPath,
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_TODOS_API_KEY: "fixture-remote-key",
     };
@@ -2399,30 +2373,22 @@ describe("remote CLI entrypoint authority boundary", () => {
       expect(requests.some((request) => request.startsWith("POST /v1/tasks/next/claim"))).toBe(true);
       expectNoLocalDatabase(root, localDbPath);
 
-      const invalidMode = await runCli(executable, ["--json", "projects"], {
+      const bannedMode = await runCli(executable, ["--json", "projects"], {
         ...env,
-        HASNA_TODOS_STORAGE_MODE: "remtoe",
+        HASNA_TODOS_STORAGE_MODE: "remote",
       }, cwd);
-      expect(invalidMode.exitCode).toBe(1);
-      expect(invalidMode.stderr).toContain("REMOTE_STORAGE_MODE_INVALID");
+      expect(bannedMode.exitCode).toBe(1);
+      expect(bannedMode.stderr).toContain("REMOTE_STORAGE_MODE_REMOVED");
+      expect(bannedMode.stderr).toContain("Deployment modes no longer exist");
       expectNoLocalDatabase(root, localDbPath);
 
-      const blankCanonical = await runCli(executable, ["--json", "projects"], {
+      const blankLegacyMode = await runCli(executable, ["--json", "projects"], {
         ...env,
-        HASNA_TODOS_STORAGE_MODE: "",
-        TODOS_STORAGE_MODE: "remote",
+        TODOS_STORAGE_MODE: "",
       }, cwd);
-      expect(blankCanonical.exitCode).toBe(1);
-      expect(blankCanonical.stderr).toContain("REMOTE_STORAGE_MODE_INVALID");
-      expectNoLocalDatabase(root, localDbPath);
-
-      const conflictingModes = await runCli(executable, ["--json", "projects"], {
-        ...env,
-        HASNA_TODOS_STORAGE_MODE: "local",
-        TODOS_STORAGE_MODE: "remote",
-      }, cwd);
-      expect(conflictingModes.exitCode).toBe(1);
-      expect(conflictingModes.stderr).toContain("REMOTE_STORAGE_MODE_CONFLICT");
+      expect(blankLegacyMode.exitCode).toBe(1);
+      expect(blankLegacyMode.stderr).toContain("REMOTE_STORAGE_MODE_REMOVED");
+      expect(blankLegacyMode.stderr).toContain("Deployment modes no longer exist");
       expectNoLocalDatabase(root, localDbPath);
 
       for (const unsupported of [

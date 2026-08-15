@@ -27,8 +27,11 @@ test.skipIf(!nested)(
     // shape of the dictionary, so the two cannot drift apart.
     expect(() => assertLocalTodosTestEnv()).not.toThrow();
 
-    // Storage must be pinned local, not merely un-pointed: an unset mode is a
-    // different failure that resolves by guessing.
-    expect(process.env["HASNA_TODOS_STORAGE_MODE"]).toBe("local");
+    // Storage must be local, not merely un-pointed: the retired storage-mode
+    // variables are banned, so their presence — even blank — is a hard error,
+    // and the preload must have DELETED them (a deleted key proves the preload
+    // ran; a leaked key would throw in any resolver).
+    expect("HASNA_TODOS_STORAGE_MODE" in process.env).toBe(false);
+    expect("TODOS_STORAGE_MODE" in process.env).toBe(false);
   },
 );

@@ -717,21 +717,18 @@ describe("storage adapter contracts", () => {
     }
   });
 
-  test("loads local storage by default and ignores legacy hosted env names", () => {
+  test("derives the postgresql backend from HASNA_TODOS_DATABASE_URL alone", () => {
     const config = loadTodosStorageConfig({
-      TODOS_MODE: "remote",
-      TODOS_API_URL: "https://todos.example.test/api",
-      HASNA_TODOS_DATABASE_URL: "postgres://remote/ignored-until-mode-is-explicit",
+      HASNA_TODOS_DATABASE_URL: "postgres://remote/backend-selected-by-dsn",
     });
 
-    expect(config.mode).toBe("sqlite");
-    expect(config.database?.url).toBe("postgres://remote/ignored-until-mode-is-explicit");
-    expect(createTodosStorageAdapter({ config, local: { db } }).kind).toBe("sqlite");
+    expect(config.mode).toBe("postgres");
+    expect(config.database?.url).toBe("postgres://remote/backend-selected-by-dsn");
+    expect(() => createTodosStorageAdapter({ config, local: { db } })).toThrow("postgres storage requires");
   });
 
   test("parses explicit native remote RDS and S3 config", () => {
     const config = loadTodosStorageConfig({
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_DATABASE_URL: "postgres://todos@rds.example/todos",
       HASNA_TODOS_DATABASE_SCHEMA: "todos_prod",
       HASNA_TODOS_S3_BUCKET: "hasna-xyz-opensource-todos-prod",
@@ -765,7 +762,6 @@ describe("storage adapter contracts", () => {
 
   test("supports plain todos storage fallbacks while keeping canonical names", () => {
     const env = {
-      TODOS_STORAGE_MODE: "hybrid",
       TODOS_DATABASE_URL: "postgres://todos@rds.example/fallback",
       TODOS_DATABASE_SCHEMA: "todos_fallback",
       TODOS_S3_BUCKET: "todos-artifacts",
@@ -825,7 +821,6 @@ describe("storage adapter contracts", () => {
 
   test("rejects remote mode when no remote adapter or Postgres client is supplied", () => {
     const config = loadTodosStorageConfig({
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_DATABASE_URL: "postgres://todos@rds.example/todos",
     });
 
@@ -836,7 +831,6 @@ describe("storage adapter contracts", () => {
   test("builds a pure remote Postgres adapter from native config and caller-provided client", async () => {
     const postgres = createMemoryPostgresClient();
     const config = loadTodosStorageConfig({
-      HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_DATABASE_URL: "postgres://todos@rds.example/todos",
     });
     const adapter = createTodosStorageAdapter({
@@ -2657,13 +2651,13 @@ describe("storage adapter contracts", () => {
     expect(calls.some((call) => call.values?.includes("apple06"))).toBe(true);
   });
 
-  test("rejects remote mode without the required Postgres database URL", () => {
-    const config = loadTodosStorageConfig({
-      HASNA_TODOS_STORAGE_MODE: "remote",
-      HASNA_TODOS_S3_BUCKET: "hasna-xyz-opensource-todos-prod",
-    });
-
-    expect(() => createTodosStorageAdapter({ config, local: { db } })).toThrow("HASNA_TODOS_DATABASE_URL is required");
+  test("rejects the retired storage-mode variables outright", () => {
+    expect(() =>
+      loadTodosStorageConfig({ HASNA_TODOS_STORAGE_MODE: "remote" }),
+    ).toThrow("Deployment modes no longer exist");
+    expect(() =>
+      loadTodosStorageConfig({ TODOS_STORAGE_MODE: "postgres", HASNA_TODOS_DATABASE_URL: "postgres://todos@rds.example/todos" }),
+    ).toThrow("Deployment modes no longer exist");
   });
 
   test("defines RDS-friendly Postgres sync schema without unsafe identifiers", () => {

@@ -94,8 +94,6 @@ beforeEach(() => {
     if (value !== undefined) originalRoutingEnv[key] = value;
     delete process.env[key];
   }
-  process.env["HASNA_TODOS_STORAGE_MODE"] = "local";
-  process.env["TODOS_STORAGE_MODE"] = "local";
   resetConfig();
   process.env["TODOS_DB_PATH"] = ":memory:";
   resetDatabase();

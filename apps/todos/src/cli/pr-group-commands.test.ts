@@ -17,8 +17,10 @@ function childEnv(): Record<string, string> {
   delete env["HASNA_TODOS_API_KEY"];
   delete env["TODOS_API_URL"];
   delete env["TODOS_API_KEY"];
-  env["HASNA_TODOS_STORAGE_MODE"] = "local";
-  env["TODOS_STORAGE_MODE"] = "local";
+  delete env["HASNA_TODOS_STORAGE_MODE"];
+  delete env["TODOS_STORAGE_MODE"];
+  delete env["HASNA_TODOS_MODE"];
+  delete env["TODOS_MODE"];
   env["HASNA_TODOS_DB_PATH"] = dbPath;
   return env;
 }
@@ -95,8 +97,6 @@ describe("PR-group CLI views", () => {
   test("remote failure exits explicitly and never creates shadow local state", async () => {
     const shadowPath = join(dir, "must-not-exist.db");
     const env = childEnv();
-    env["HASNA_TODOS_STORAGE_MODE"] = "remote";
-    env["TODOS_STORAGE_MODE"] = "remote";
     env["HASNA_TODOS_API_URL"] = "http://127.0.0.1:1";
     env["HASNA_TODOS_API_KEY"] = "opaque-test-key";
     env["HASNA_TODOS_DB_PATH"] = shadowPath;
@@ -119,8 +119,6 @@ describe("PR-group CLI views", () => {
     try {
       const shadowPath = join(dir, "malformed-must-not-exist.db");
       const env = childEnv();
-      env["HASNA_TODOS_STORAGE_MODE"] = "remote";
-      env["TODOS_STORAGE_MODE"] = "remote";
       env["HASNA_TODOS_API_URL"] = `http://127.0.0.1:${server.port}`;
       env["HASNA_TODOS_API_KEY"] = "opaque-test-key";
       env["HASNA_TODOS_DB_PATH"] = shadowPath;
