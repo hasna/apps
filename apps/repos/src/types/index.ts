@@ -117,6 +117,12 @@ export interface ScanResult {
   commits_indexed: number;
   branches_indexed: number;
   tags_indexed: number;
+  /**
+   * Registry rows collapsed during this scan because they name the same
+   * directory under different spellings on a case-insensitive filesystem.
+   * Optional so external ScanResult builders stay source-compatible.
+   */
+  duplicate_rows_merged?: number;
   duration_ms: number;
 }
 
