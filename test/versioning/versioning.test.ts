@@ -29,11 +29,23 @@ const membersByName = new Map(members.map((member) => [member.name, member]));
 // imported tree carries package 0.6.1 (release #167) while its CHANGELOG heading
 // is 0.6.0 — a release-lane mismatch pre-existing in hasna/conversations, carried
 // into the mono by the import; reconcile task tracked on the import row.
+// Refreshed 2026-08-15 at the fresh merge of current main (7bb103c4) by the
+// import/search landing lane (PR #68, base-sync): conversations moved to 0.6.2
+// and loops to 0.5.1 (records updated), and accounts (0.2.44), machines (0.2.26),
+// mementos (0.14.84) and repos (0.1.48) gained release-lane mismatches against
+// their changelog headings — reconcile task filed by the lane (search import row
+// ee9fbb4d); instructions/secrets/signatures/calendar records unchanged.
+// @hasna/search carries no CHANGELOG.md (null heading, never a mismatch); its
+// monorepo first-release changeset is .changeset/search-monorepo-first-release.md.
 const KNOWN_CHANGELOG_MISMATCHES = new Map([
+  ["@hasna/accounts", { packageVersion: "0.2.44", changelogVersion: "0.2.43" }],
   ["@hasna/calendar", { packageVersion: "0.3.1", changelogVersion: "0.3.0" }],
-  ["@hasna/conversations", { packageVersion: "0.6.1", changelogVersion: "0.6.0" }],
+  ["@hasna/conversations", { packageVersion: "0.6.2", changelogVersion: "0.6.0" }],
   ["@hasna/instructions", { packageVersion: "0.4.35", changelogVersion: "0.4.33" }],
-  ["@hasna/loops", { packageVersion: "0.4.42", changelogVersion: "0.4.41" }],
+  ["@hasna/loops", { packageVersion: "0.5.1", changelogVersion: "0.5.0" }],
+  ["@hasna/machines", { packageVersion: "0.2.26", changelogVersion: "0.2.25" }],
+  ["@hasna/mementos", { packageVersion: "0.14.84", changelogVersion: "0.14.83" }],
+  ["@hasna/repos", { packageVersion: "0.1.48", changelogVersion: "0.1.47" }],
   ["@hasna/secrets", { packageVersion: "0.2.22", changelogVersion: "0.2.21" }],
   ["@hasna/signatures", { packageVersion: "0.1.14", changelogVersion: "0.1.12" }],
 ]);
