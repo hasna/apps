@@ -1,0 +1,7 @@
+{
+  "schema": "hasna.resource_ref.v1",
+  "id": "clip_resource_without_locator",
+  "createdAt": "2026-07-05T20:30:31.400Z",
+  "kind": "artifact",
+  "tags": ["clip"]
+}

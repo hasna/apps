@@ -1,11 +1,20 @@
 import { existsSync, readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { Buffer } from "node:buffer";
+import {
+  createAccessProtection,
+  metadataWithAccessProtection,
+  readAccessProtection,
+  verifyAccessCredential,
+} from "../access.js";
+import type { AccessProtectionKind, AccessProtectionMetadata } from "../access.js";
 import { captureScreenshot } from "../capture/index.js";
+import { CaptureAnnotationError, parseCaptureAnnotations } from "../capture/annotate.js";
 import { shareClipboard } from "../clipboard.js";
+import { publicClipRecord, publicClipRecords, publicStorageStatus } from "../public.js";
 import { ClipStore } from "../storage.js";
-import type { CaptureMode, ClipboardKind, ClipClientOptions, ClipRecord, ClipStorageStatus } from "../types.js";
-import { extensionForMime, htmlEscape, isTextMime, normalizeLimit } from "../util.js";
+import type { CaptureMode, ClipboardKind, ClipClientOptions, ClipRecord } from "../types.js";
+import { extensionForMime, htmlEscape, normalizeLimit } from "../util.js";
 import { DEFAULT_PORT } from "../paths.js";
 import { resolveBaseUrl } from "../share.js";
 
@@ -22,21 +31,11 @@ const MIME_TYPES: Record<string, string> = {
   ".webp": "image/webp",
 };
 
-const LOCAL_PATH_METADATA_KEYS = new Set([
-  "artifactDir",
-  "artifactPath",
-  "dbPath",
-  "filePath",
-  "homeDir",
-  "localPath",
-  "outputPath",
-  "path",
-]);
-
 export interface ClipServerOptions {
   host?: string;
   port?: number;
   baseUrl?: string;
+  authToken?: string;
   clientOptions?: ClipClientOptions;
   log?: (message: string) => void;
 }
@@ -51,48 +50,103 @@ function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
-function looksLikeLocalPath(value: string): boolean {
-  return value.startsWith("/") || value.startsWith("file://") || /^[A-Za-z]:[\\/]/.test(value);
+function resolveAuthToken(options: ClipServerOptions): string | undefined {
+  return options.authToken ?? process.env["CLIP_AUTH_TOKEN"] ?? undefined;
 }
 
-function redactPublicMetadataValue(value: unknown): unknown {
-  if (typeof value === "string") return looksLikeLocalPath(value) ? "[redacted]" : value;
-  if (Array.isArray(value)) return value.map(redactPublicMetadataValue);
-  if (!value || typeof value !== "object") return value;
+function authorized(req: Request, options: ClipServerOptions): boolean {
+  const token = resolveAuthToken(options);
+  if (!token) return true;
+  const header = req.headers.get("authorization") ?? "";
+  return header === `Bearer ${token}`;
+}
 
-  const redacted: Record<string, unknown> = {};
-  for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
-    if (LOCAL_PATH_METADATA_KEYS.has(key)) continue;
-    redacted[key] = redactPublicMetadataValue(nestedValue);
+function parseCreateAccessProtection(body: Record<string, unknown>):
+  | { ok: true; protection?: AccessProtectionMetadata }
+  | { ok: false; response: Response } {
+  const hasAccessToken = body["accessToken"] !== undefined;
+  const hasPassword = body["password"] !== undefined;
+  if (hasAccessToken && hasPassword) {
+    return { ok: false, response: jsonResponse({ error: "Use either accessToken or password, not both" }, 400) };
   }
-  return redacted;
+  if (!hasAccessToken && !hasPassword) return { ok: true };
+
+  const kind: AccessProtectionKind = hasAccessToken ? "token" : "password";
+  const value = hasAccessToken ? body["accessToken"] : body["password"];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return { ok: false, response: jsonResponse({ error: `${hasAccessToken ? "accessToken" : "password"} must be a non-empty string` }, 400) };
+  }
+  return { ok: true, protection: createAccessProtection(kind, value) };
 }
 
-function publicMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
-  return redactPublicMetadataValue(metadata) as Record<string, unknown>;
+function firstQueryParam(url: URL, names: string[]): string | undefined {
+  for (const name of names) {
+    const value = url.searchParams.get(name);
+    if (value) return value;
+  }
+  return undefined;
 }
 
-function publicClipRecord(record: ClipRecord): Record<string, unknown> {
-  const { artifactPath: _artifactPath, metadata, ...rest } = record;
+function bearerCredential(req: Request): string | undefined {
+  const authorization = req.headers.get("authorization");
+  if (!authorization) return undefined;
+  const match = /^Bearer\s+(.+)$/i.exec(authorization);
+  return match?.[1];
+}
+
+function requestCredential(req: Request, url: URL, kind: AccessProtectionKind): string | undefined {
+  if (kind === "token") {
+    return req.headers.get("x-clip-access-token")
+      ?? bearerCredential(req)
+      ?? firstQueryParam(url, ["accessToken", "access_token", "token"]);
+  }
+  return req.headers.get("x-clip-password") ?? firstQueryParam(url, ["password"]);
+}
+
+function requireShareAccess(record: ClipRecord, req: Request, url: URL): Response | null {
+  const protection = readAccessProtection(record.metadata);
+  if (!protection) return null;
+  const credential = requestCredential(req, url, protection.kind);
+  if (credential && verifyAccessCredential(protection, credential)) return null;
+  return jsonResponse({ error: "Share access credential required" }, 401);
+}
+
+// Mime types that are safe to serve inline from the share origin. Anything
+// else (notably text/html and image/svg+xml) is forced to a download so an
+// uploaded artifact cannot run script in the server's origin. The stored mime
+// is never echoed back verbatim; only this normalized allowlisted value is.
+const INLINE_SAFE_MIME = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+  "image/apng",
+  "text/plain",
+  "text/markdown",
+  "application/json",
+  "application/pdf",
+  "video/mp4",
+  "video/webm",
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/wav",
+]);
+
+function normalizeInlineMime(mime: string): string | null {
+  const essence = mime.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (!/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(essence)) return null;
+  return INLINE_SAFE_MIME.has(essence) ? essence : null;
+}
+
+function rawContentHeaders(mime: string, filename: string): Record<string, string> {
+  const safeMime = normalizeInlineMime(mime);
+  const charset = safeMime && (safeMime.startsWith("text/") || safeMime === "application/json") ? "; charset=utf-8" : "";
   return {
-    ...rest,
-    hasArtifact: Boolean(record.artifactPath),
-    rawUrl: `/s/${encodeURIComponent(record.slug)}/raw`,
-    metadata: publicMetadata(metadata),
-  };
-}
-
-function publicClipRecords(records: ClipRecord[]): Record<string, unknown>[] {
-  return records.map(publicClipRecord);
-}
-
-function publicStorageStatus(status: ClipStorageStatus): Record<string, unknown> {
-  return {
-    totalActive: status.totalActive,
-    deleted: status.deleted,
-    database: "sqlite",
-    artifacts: "local",
-    localPathsRedacted: true,
+    "Content-Type": safeMime ? `${safeMime}${charset}` : "application/octet-stream",
+    "Content-Disposition": safeMime ? "inline" : `attachment; filename="${filename.replaceAll('"', "")}"`,
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "sandbox; default-src 'none'",
   };
 }
 
@@ -164,7 +218,7 @@ function previewHtml(record: ClipRecord): Response {
 function rawResponse(record: ClipRecord): Response {
   if (record.text !== null) {
     return new Response(record.text, {
-      headers: { "Content-Type": record.mimeType, "X-Content-Type-Options": "nosniff" },
+      headers: rawContentHeaders(record.mimeType, `${record.slug}.txt`),
     });
   }
   if (!record.artifactPath || !existsSync(record.artifactPath)) {
@@ -173,11 +227,7 @@ function rawResponse(record: ClipRecord): Response {
   const ext = extname(record.artifactPath);
   const mime = record.mimeType || MIME_TYPES[ext] || "application/octet-stream";
   return new Response(readFileSync(record.artifactPath), {
-    headers: {
-      "Content-Type": mime,
-      "Content-Disposition": isTextMime(mime) ? "inline" : `inline; filename="${record.slug}${ext}"`,
-      "X-Content-Type-Options": "nosniff",
-    },
+    headers: rawContentHeaders(mime, `${record.slug}${ext}`),
   });
 }
 
@@ -187,6 +237,11 @@ export async function handleClipHttpRequest(req: Request, options: ClipServerOpt
   const parts = path.split("/").filter(Boolean).map((part) => decodeURIComponent(part));
 
   try {
+    const isMutation = req.method === "POST" || req.method === "DELETE";
+    if (isMutation && !authorized(req, options)) {
+      return jsonResponse({ error: "Unauthorized" }, 401);
+    }
+
     if (req.method === "GET" && (path === "/" || path === "/health")) {
       return jsonResponse({ status: "ok", name: "clip", baseUrl: resolveBaseUrl(storeOptions(options)) });
     }
@@ -213,6 +268,8 @@ export async function handleClipHttpRequest(req: Request, options: ClipServerOpt
 
     if (req.method === "POST" && path === "/api/shares") {
       const body = await requestJson(req);
+      const accessProtection = parseCreateAccessProtection(body);
+      if (!accessProtection.ok) return accessProtection.response;
       const store = new ClipStore(storeOptions(options));
       try {
         if (typeof body["filePath"] === "string") {
@@ -233,17 +290,18 @@ export async function handleClipHttpRequest(req: Request, options: ClipServerOpt
             mimeType,
             source: "server:upload",
             extension: extensionForMime(mimeType),
-            metadata: { upload: true },
+            metadata: metadataWithAccessProtection({ upload: true }, accessProtection.protection),
             baseUrl: options.baseUrl,
-          })), 201);
+          }), { authorized: true }), 201);
         }
         if (typeof body["text"] === "string") {
           return jsonResponse(publicClipRecord(store.createTextClip({
             text: body["text"],
             title: typeof body["title"] === "string" ? body["title"] : undefined,
             source: "server:text",
+            metadata: metadataWithAccessProtection({}, accessProtection.protection),
             baseUrl: options.baseUrl,
-          })), 201);
+          }), { authorized: true }), 201);
         }
         return jsonResponse({ error: "Expected text or dataBase64" }, 400);
       } finally {
@@ -254,10 +312,25 @@ export async function handleClipHttpRequest(req: Request, options: ClipServerOpt
     if (req.method === "POST" && path === "/api/capture") {
       const body = await requestJson(req);
       const mode = typeof body["mode"] === "string" ? body["mode"] as CaptureMode : "full";
-      const record = await captureScreenshot(mode, {
-        ...storeOptions(options),
-        title: typeof body["title"] === "string" ? body["title"] : undefined,
-      });
+      let annotations;
+      try {
+        annotations = parseCaptureAnnotations(body["annotations"]);
+      } catch (error) {
+        return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      let record: ClipRecord;
+      try {
+        record = await captureScreenshot(mode, {
+          ...storeOptions(options),
+          title: typeof body["title"] === "string" ? body["title"] : undefined,
+          annotations,
+        });
+      } catch (error) {
+        if (error instanceof CaptureAnnotationError) {
+          return jsonResponse({ error: error.message }, 400);
+        }
+        throw error;
+      }
       return jsonResponse(publicClipRecord(record), 201);
     }
 
@@ -275,7 +348,10 @@ export async function handleClipHttpRequest(req: Request, options: ClipServerOpt
       const ref = parts[2];
       if (req.method === "GET") {
         const record = getRecord(ref, options);
-        return record ? jsonResponse(publicClipRecord(record)) : jsonResponse({ error: "Share not found" }, 404);
+        if (!record) return jsonResponse({ error: "Share not found" }, 404);
+        const denied = requireShareAccess(record, req, url);
+        if (denied) return denied;
+        return jsonResponse(publicClipRecord(record, { authorized: true }));
       }
       if (req.method === "DELETE") {
         const store = new ClipStore(storeOptions(options));
@@ -290,6 +366,8 @@ export async function handleClipHttpRequest(req: Request, options: ClipServerOpt
     if (parts[0] === "s" && parts[1]) {
       const record = getRecord(parts[1], options);
       if (!record) return jsonResponse({ error: "Share not found" }, 404);
+      const denied = requireShareAccess(record, req, url);
+      if (denied) return denied;
       if (parts[2] === "raw") return rawResponse(record);
       return previewHtml(record);
     }

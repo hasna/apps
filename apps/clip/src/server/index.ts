@@ -6,6 +6,7 @@ interface ServerArgs {
   host: string;
   port: number;
   baseUrl?: string;
+  authToken?: string;
   homeDir?: string;
   dbPath?: string;
   artifactDir?: string;
@@ -24,6 +25,7 @@ function parseArgs(args = process.argv.slice(2)): ServerArgs {
     host,
     port: Number.isInteger(parsedPort) && parsedPort > 0 ? parsedPort : DEFAULT_PORT,
     baseUrl: valueAfter(args, "--base-url") ?? process.env["CLIP_BASE_URL"],
+    authToken: valueAfter(args, "--auth-token") ?? process.env["CLIP_AUTH_TOKEN"],
     homeDir: valueAfter(args, "--home"),
     dbPath: valueAfter(args, "--db"),
     artifactDir: valueAfter(args, "--artifact-dir"),
@@ -37,6 +39,7 @@ Options:
   --host <host>          Bind host (default HOST or 127.0.0.1)
   --port <port>          Bind port (default PORT or 3741)
   --base-url <url>       Public/self-hosted share URL base
+  --auth-token <token>   Require Bearer token for mutating API routes (default CLIP_AUTH_TOKEN)
   --home <path>          Override local data directory
   --db <path>            Override SQLite database path
   --artifact-dir <path>  Override artifact directory`);
@@ -49,6 +52,7 @@ const server = startClipServer({
   host: parsed.host,
   port: parsed.port,
   baseUrl: parsed.baseUrl,
+  authToken: parsed.authToken,
   clientOptions: {
     homeDir: parsed.homeDir,
     dbPath: parsed.dbPath,

@@ -2,6 +2,47 @@ export type JsonObject = Record<string, unknown>;
 
 export type CaptureMode = "full" | "window" | "region";
 
+export interface CapturePoint {
+  x: number;
+  y: number;
+}
+
+export interface CaptureRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface CaptureCropAnnotation extends CaptureRect {
+  type: "crop";
+}
+
+export interface CaptureBoxAnnotation extends CaptureRect {
+  type: "box";
+  color?: string;
+  lineWidth?: number;
+}
+
+export interface CaptureBlurAnnotation extends CaptureRect {
+  type: "blur";
+  radius?: number;
+}
+
+export interface CaptureArrowAnnotation {
+  type: "arrow";
+  from: CapturePoint;
+  to: CapturePoint;
+  color?: string;
+  lineWidth?: number;
+}
+
+export type CaptureAnnotation =
+  | CaptureCropAnnotation
+  | CaptureBoxAnnotation
+  | CaptureBlurAnnotation
+  | CaptureArrowAnnotation;
+
 export type ClipboardKind = "auto" | "text" | "image" | "file";
 
 export type ClipboardHistoryKind = "clipboard-text" | "clipboard-image" | "clipboard-file";
@@ -38,6 +79,7 @@ export interface ClipRecord {
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
+  expiresAt: string | null;
   shareUrl?: string;
 }
 
@@ -63,6 +105,16 @@ export interface CreateClipMetadata {
   source?: string;
   metadata?: JsonObject;
   baseUrl?: string;
+  expiresAt?: string | Date | null;
+  ttl?: string | null;
+  ttlSeconds?: number | null;
+}
+
+export interface ShareExpiryOptions {
+  expiresAt?: string | Date | null;
+  ttl?: string | null;
+  ttlSeconds?: number | null;
+  now?: Date;
 }
 
 export interface ClipStorageStatus {
@@ -70,7 +122,34 @@ export interface ClipStorageStatus {
   dbPath: string;
   artifactDir: string;
   totalActive: number;
+  expired: number;
   deleted: number;
+}
+
+export type ClipPruneArtifactReason = "expired-share" | "orphaned";
+
+export interface ClipPrunedShare {
+  id: string;
+  slug: string;
+  artifactPath: string | null;
+  expiresAt: string;
+}
+
+export interface ClipPruneArtifact {
+  path: string;
+  reason: ClipPruneArtifactReason;
+  removed: boolean;
+  skippedReason?: string;
+  error?: string;
+}
+
+export interface ClipPruneResult {
+  dryRun: boolean;
+  now: string;
+  prunedShares: number;
+  removedArtifacts: number;
+  expiredShares: ClipPrunedShare[];
+  artifacts: ClipPruneArtifact[];
 }
 
 export interface CaptureCapabilities {

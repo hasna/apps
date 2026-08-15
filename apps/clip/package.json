@@ -1,6 +1,6 @@
 {
   "name": "@hasna/clip",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local and self-hosted screenshot and clipboard sharing with CLI, SDK, MCP, HTTP API, and a macOS menu bar app",
   "type": "module",
   "repository": {
@@ -36,6 +36,7 @@
     "scripts",
     "Sources",
     "Package.swift",
+    "hasna.contract.json",
     "LICENSE",
     "README.md",
     "SECURITY.md",
@@ -51,12 +52,17 @@
     "build:types": "tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "conformance": "contracts conformance contracts/fixtures",
+    "no-cloud:scan": "contracts no-cloud-scan . --json",
+    "verify": "bun test && bun run conformance",
+    "check": "bun run typecheck && bun test && bun run conformance && bun run build && bun run check:macos",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "check:macos": "bash scripts/check_macos_sources.sh",
-    "prepack": "bun run build",
-    "prepublishOnly": "bun test && bun run build",
+    "artifact-scan": "bun scripts/scan-artifact.ts",
+    "prepack": "bun run build && bun run artifact-scan",
+    "prepublishOnly": "bun run check",
     "postinstall": "mkdir -p $HOME/.hasna/clip $HOME/.hasna/clip/artifacts 2>/dev/null || true"
   },
   "keywords": [
@@ -79,12 +85,16 @@
   "author": "Hasna Inc.",
   "license": "Apache-2.0",
   "dependencies": {
+    "@hasna/contracts": "^0.8.5",
+    "@hasna/mcp-harness": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^15.0.0",
+    "qrcode": "^1.5.4",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",
+    "@types/qrcode": "^1.5.6",
     "typescript": "^6.0.3"
   }
 }

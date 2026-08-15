@@ -9,14 +9,30 @@ export interface ClipConfig extends JsonObject {
   port?: number;
 }
 
+function parseConfig(path: string): ClipConfig {
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("expected a JSON object");
+  return parsed as ClipConfig;
+}
+
 export function readConfig(options: ClipClientOptions = {}): ClipConfig {
   const path = resolveConfigPath(options);
   if (!existsSync(path)) return {};
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as ClipConfig : {};
+    return parseConfig(path);
   } catch {
     return {};
+  }
+}
+
+function readConfigForUpdate(options: ClipClientOptions): ClipConfig {
+  const path = resolveConfigPath(options);
+  if (!existsSync(path)) return {};
+  try {
+    return parseConfig(path);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Cannot update config at ${path}: ${reason}`);
   }
 }
 
@@ -28,7 +44,7 @@ export function writeConfig(config: ClipConfig, options: ClipClientOptions = {})
 }
 
 export function updateConfig(key: string, value: string, options: ClipClientOptions = {}): ClipConfig {
-  const config = readConfig(options);
+  const config = readConfigForUpdate(options);
   if (key === "port") {
     const port = Number.parseInt(value, 10);
     if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("port must be between 1 and 65535");

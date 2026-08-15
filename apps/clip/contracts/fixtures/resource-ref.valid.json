@@ -1,0 +1,11 @@
+{
+  "schema": "hasna.resource_ref.v1",
+  "id": "clip_share_url_fixture_screenshot",
+  "createdAt": "2026-07-05T20:30:31.400Z",
+  "kind": "url",
+  "name": "Focused window screenshot share URL",
+  "uri": "http://127.0.0.1:3741/s/fixture-screenshot",
+  "externalId": "fixture-screenshot",
+  "sourcePackage": "@hasna/clip",
+  "tags": ["clip", "screenshot", "share-url"]
+}

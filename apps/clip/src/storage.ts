@@ -1,10 +1,10 @@
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, extname, join, resolve, sep } from "node:path";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, extname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { Buffer } from "node:buffer";
-import { ensureClipHome, resolveArtifactDir, resolveDbPath, resolveHomeDir, isInMemoryDb } from "./paths.js";
+import { ensureClipHome, resolveArtifactDir, resolveConfigPath, resolveDbPath, resolveHomeDir, isInMemoryDb, userHome } from "./paths.js";
 import { buildShareUrl } from "./share.js";
-import type { ClipboardHistoryKind, ClipboardHistoryRecord, ClipClientOptions, ClipKind, ClipRecord, ClipStorageStatus, CreateClipMetadata, JsonObject } from "./types.js";
+import type { ClipboardHistoryKind, ClipboardHistoryRecord, ClipClientOptions, ClipKind, ClipPruneArtifact, ClipPruneResult, ClipRecord, ClipStorageStatus, CreateClipMetadata, JsonObject } from "./types.js";
 import { extensionForMime, generateSlug, inferMimeType, normalizeLimit, nowIso, parseJsonObject, sha256, stringifyJsonObject, textMimeType } from "./util.js";
 
 interface ClipRow {
@@ -22,6 +22,7 @@ interface ClipRow {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  expires_at: string | null;
 }
 
 interface ClipboardHistoryRow {
@@ -45,6 +46,7 @@ export interface CreateTextClipInput {
   source?: string;
   metadata?: JsonObject;
   baseUrl?: string;
+  expiresAt?: string | null;
 }
 
 export interface CreateBufferClipInput {
@@ -56,6 +58,7 @@ export interface CreateBufferClipInput {
   metadata?: JsonObject;
   extension?: string;
   baseUrl?: string;
+  expiresAt?: string | null;
 }
 
 export interface CreateFileClipInput {
@@ -66,6 +69,27 @@ export interface CreateFileClipInput {
   source?: string;
   metadata?: JsonObject;
   baseUrl?: string;
+  expiresAt?: string | null;
+}
+
+export interface PruneExpiredSharesOptions {
+  dryRun?: boolean;
+  now?: string | Date;
+}
+
+function hasColumn(db: Database, table: string, column: string): boolean {
+  const rows = db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return rows.some((row) => row.name === column);
+}
+
+function ensureColumn(db: Database, table: string, column: string, definition: string): void {
+  if (hasColumn(db, table, column)) return;
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.toLowerCase().includes("duplicate column")) throw error;
+  }
 }
 
 export interface AddClipboardHistoryInput {
@@ -79,6 +103,19 @@ export interface AddClipboardHistoryInput {
   metadata?: JsonObject;
   extension?: string;
   maxItems?: number;
+}
+
+export interface PurgeClipStoreResult {
+  homeDir: string;
+  dbPath: string;
+  artifactDir: string;
+  configPath: string;
+  removed: boolean;
+  homeRemoved: boolean;
+}
+
+export interface PurgeClipStoreOptions extends ClipClientOptions {
+  confirm?: boolean;
 }
 
 export function ensureSchema(db: Database): void {
@@ -97,10 +134,15 @@ export function ensureSchema(db: Database): void {
       metadata_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      deleted_at TEXT
+      deleted_at TEXT,
+      expires_at TEXT
     );
+  `);
+  ensureColumn(db, "clips", "expires_at", "expires_at TEXT");
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_clips_created_at ON clips(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_clips_deleted_at ON clips(deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_clips_expires_at ON clips(expires_at);
     CREATE INDEX IF NOT EXISTS idx_clips_kind ON clips(kind);
 
     CREATE TABLE IF NOT EXISTS clipboard_history (
@@ -152,6 +194,107 @@ function titleFromPath(path: string): string {
   return basename(path) || "clip";
 }
 
+function assertSafePurgeHome(homeDir: string): void {
+  const target = resolve(homeDir);
+  if (target === parse(target).root) throw new Error("Refusing to purge the filesystem root");
+
+  const home = resolve(userHome());
+  if (target === home) throw new Error("Refusing to purge the user home directory");
+
+  const hasnaRoot = resolve(home, ".hasna");
+  if (target === hasnaRoot) throw new Error("Refusing to purge the whole ~/.hasna directory");
+}
+
+function isChildPath(parent: string, child: string): boolean {
+  const fromParent = relative(resolve(parent), resolve(child));
+  return Boolean(fromParent) && !fromParent.startsWith("..") && !isAbsolute(fromParent);
+}
+
+function removePathIfPresent(path: string, recursive = false): boolean {
+  if (!existsSync(path)) return false;
+  rmSync(path, { recursive, force: true });
+  return true;
+}
+
+function assertPurgeTargetInHome(homeDir: string, targetPath: string, label: string): void {
+  if (!isChildPath(homeDir, targetPath)) throw new Error(`Refusing to purge ${label} outside clip home: ${targetPath}`);
+}
+
+export function purgeClipStore(options: PurgeClipStoreOptions = {}): PurgeClipStoreResult {
+  if (!options.confirm) throw new Error("Refusing to purge clip data without explicit confirmation");
+
+  const homeDir = resolveHomeDir(options);
+  const dbPath = resolveDbPath(options);
+  const artifactDir = resolveArtifactDir(options);
+  const configPath = resolveConfigPath(options);
+
+  assertSafePurgeHome(homeDir);
+  if (!isInMemoryDb(dbPath)) assertPurgeTargetInHome(homeDir, dbPath, "database path");
+  assertPurgeTargetInHome(homeDir, artifactDir, "artifact directory");
+
+  let removed = false;
+  if (existsSync(homeDir)) {
+    const stat = lstatSync(homeDir);
+    if (!stat.isDirectory()) throw new Error(`Clip home is not a directory: ${homeDir}`);
+  }
+
+  if (!isInMemoryDb(dbPath)) {
+    removed = removePathIfPresent(dbPath) || removed;
+    removed = removePathIfPresent(`${dbPath}-wal`) || removed;
+    removed = removePathIfPresent(`${dbPath}-shm`) || removed;
+  }
+  removed = removePathIfPresent(artifactDir, true) || removed;
+  removed = removePathIfPresent(configPath) || removed;
+
+  let homeRemoved = false;
+  if (existsSync(homeDir) && readdirSync(homeDir).length === 0) {
+    rmdirSync(homeDir);
+    removed = true;
+    homeRemoved = true;
+  }
+
+  return { homeDir, dbPath, artifactDir, configPath, removed, homeRemoved };
+}
+
+function normalizeExpiresAt(value: string | null | undefined): string | null {
+  if (value === undefined || value === null) return null;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new Error("expiresAt must be a valid date or ISO timestamp.");
+  return date.toISOString();
+}
+
+function normalizeDate(value: string | Date | undefined): string {
+  const date = value === undefined ? new Date() : value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new Error("Prune time must be a valid date or ISO timestamp.");
+  return date.toISOString();
+}
+
+function isPathInside(path: string, dir: string): boolean {
+  const relativePath = relative(resolve(dir), resolve(path));
+  return relativePath === "" || !relativePath.startsWith("..") && !isAbsolute(relativePath);
+}
+
+function artifactFiles(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  const files: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...artifactFiles(path));
+    } else if (entry.isFile() || entry.isSymbolicLink()) {
+      files.push(resolve(path));
+    }
+  }
+  return files;
+}
+
+function isGeneratedArtifactPath(path: string): boolean {
+  const name = basename(path);
+  const ext = extname(name);
+  const stem = ext ? name.slice(0, -ext.length) : name;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(stem);
+}
+
 export class ClipStore {
   readonly homeDir: string;
   readonly dbPath: string;
@@ -173,13 +316,20 @@ export class ClipStore {
   }
 
   status(): ClipStorageStatus {
-    const active = this.db.query("SELECT COUNT(*) AS count FROM clips WHERE deleted_at IS NULL").get() as { count: unknown } | null;
+    const now = nowIso();
+    const active = this.db
+      .query("SELECT COUNT(*) AS count FROM clips WHERE deleted_at IS NULL AND (expires_at IS NULL OR expires_at > ?)")
+      .get(now) as { count: unknown } | null;
+    const expired = this.db
+      .query("SELECT COUNT(*) AS count FROM clips WHERE deleted_at IS NULL AND expires_at IS NOT NULL AND expires_at <= ?")
+      .get(now) as { count: unknown } | null;
     const deleted = this.db.query("SELECT COUNT(*) AS count FROM clips WHERE deleted_at IS NOT NULL").get() as { count: unknown } | null;
     return {
       homeDir: this.homeDir,
       dbPath: this.dbPath,
       artifactDir: this.artifactDir,
       totalActive: countValue(active?.count),
+      expired: countValue(expired?.count),
       deleted: countValue(deleted?.count),
     };
   }
@@ -198,11 +348,13 @@ export class ClipStore {
       source: input.source ?? "local",
       metadata: input.metadata,
       baseUrl: input.baseUrl,
+      expiresAt: normalizeExpiresAt(input.expiresAt),
     });
   }
 
   createBufferClip(input: CreateBufferClipInput): ClipRecord {
     const data = Buffer.from(input.buffer);
+    const expiresAt = normalizeExpiresAt(input.expiresAt);
     const id = crypto.randomUUID();
     const extension = input.extension ?? extensionForMime(input.mimeType);
     const artifactPath = join(this.artifactDir, `${id}${extension}`);
@@ -220,6 +372,7 @@ export class ClipStore {
       source: input.source ?? "local",
       metadata: input.metadata,
       baseUrl: input.baseUrl,
+      expiresAt,
     });
   }
 
@@ -239,22 +392,29 @@ export class ClipStore {
       metadata: { path: input.path, ...(input.metadata ?? {}) },
       extension,
       baseUrl: input.baseUrl,
+      expiresAt: normalizeExpiresAt(input.expiresAt),
     });
   }
 
   listClips(options: { limit?: number; includeDeleted?: boolean; baseUrl?: string } = {}): ClipRecord[] {
     const limit = normalizeLimit(options.limit);
+    const now = nowIso();
     const rows = options.includeDeleted
       ? this.db.query("SELECT * FROM clips ORDER BY created_at DESC LIMIT ?").all(limit)
-      : this.db.query("SELECT * FROM clips WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ?").all(limit);
+      : this.db
+        .query("SELECT * FROM clips WHERE deleted_at IS NULL AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at DESC LIMIT ?")
+        .all(now, limit);
     return (rows as ClipRow[]).map((row) => this.rowToRecord(row, options.baseUrl));
   }
 
   getClip(ref: string, options: { includeDeleted?: boolean; baseUrl?: string } = {}): ClipRecord | null {
+    const now = nowIso();
     const sql = options.includeDeleted
       ? "SELECT * FROM clips WHERE id = ? OR slug = ? LIMIT 1"
-      : "SELECT * FROM clips WHERE (id = ? OR slug = ?) AND deleted_at IS NULL LIMIT 1";
-    const row = this.db.query(sql).get(ref, ref) as ClipRow | null;
+      : "SELECT * FROM clips WHERE (id = ? OR slug = ?) AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > ?) LIMIT 1";
+    const row = options.includeDeleted
+      ? this.db.query(sql).get(ref, ref) as ClipRow | null
+      : this.db.query(sql).get(ref, ref, now) as ClipRow | null;
     return row ? this.rowToRecord(row, options.baseUrl) : null;
   }
 
@@ -408,6 +568,105 @@ export class ClipStore {
     this.db.query(`DELETE FROM clipboard_history WHERE id IN (${placeholders})`).run(...deleteIds);
   }
 
+  pruneExpiredShares(options: PruneExpiredSharesOptions = {}): ClipPruneResult {
+    const dryRun = options.dryRun ?? true;
+    const now = normalizeDate(options.now);
+    const expiredRows = this.db
+      .query("SELECT * FROM clips WHERE deleted_at IS NULL AND expires_at IS NOT NULL AND expires_at <= ? ORDER BY expires_at ASC")
+      .all(now) as ClipRow[];
+    const artifacts = this.pruneArtifactCandidates(expiredRows, now);
+    let prunedShares = 0;
+
+    if (!dryRun) {
+      for (const row of expiredRows) {
+        const result = this.db
+          .query("UPDATE clips SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL")
+          .run(now, now, row.id);
+        prunedShares += Number(result.changes ?? 0);
+      }
+      for (const artifact of artifacts) this.removePruneArtifact(artifact);
+    }
+
+    return {
+      dryRun,
+      now,
+      prunedShares,
+      removedArtifacts: artifacts.filter((artifact) => artifact.removed).length,
+      expiredShares: expiredRows.map((row) => ({
+        id: row.id,
+        slug: row.slug,
+        artifactPath: row.artifact_path,
+        expiresAt: row.expires_at!,
+      })),
+      artifacts,
+    };
+  }
+
+  private pruneArtifactCandidates(expiredRows: ClipRow[], now: string): ClipPruneArtifact[] {
+    const retainedArtifactPaths = new Set<string>();
+    const retainedRows = this.db
+      .query("SELECT artifact_path FROM clips WHERE artifact_path IS NOT NULL AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > ?)")
+      .all(now) as Array<{ artifact_path: string | null }>;
+    for (const row of retainedRows) {
+      if (row.artifact_path && isPathInside(row.artifact_path, this.artifactDir)) {
+        retainedArtifactPaths.add(resolve(row.artifact_path));
+      }
+    }
+
+    const artifacts = new Map<string, ClipPruneArtifact>();
+    const addArtifact = (path: string, reason: ClipPruneArtifact["reason"]) => {
+      const resolvedPath = resolve(path);
+      if (!isPathInside(resolvedPath, this.artifactDir)) {
+        artifacts.set(resolvedPath, {
+          path: resolvedPath,
+          reason,
+          removed: false,
+          skippedReason: "outside artifact directory",
+        });
+        return;
+      }
+      if (retainedArtifactPaths.has(resolvedPath)) return;
+      const existing = artifacts.get(resolvedPath);
+      if (!existing) {
+        artifacts.set(resolvedPath, { path: resolvedPath, reason, removed: false });
+      } else if (existing.reason === "orphaned" && reason === "expired-share") {
+        existing.reason = "expired-share";
+      }
+    };
+
+    for (const row of expiredRows) {
+      if (row.artifact_path) addArtifact(row.artifact_path, "expired-share");
+    }
+    for (const path of artifactFiles(this.artifactDir)) {
+      if (!isGeneratedArtifactPath(path)) continue;
+      if (!retainedArtifactPaths.has(resolve(path))) addArtifact(path, "orphaned");
+    }
+    return [...artifacts.values()].sort((left, right) => left.path.localeCompare(right.path));
+  }
+
+  private removePruneArtifact(artifact: ClipPruneArtifact): void {
+    if (artifact.skippedReason) return;
+    try {
+      if (!existsSync(artifact.path)) {
+        artifact.skippedReason = "artifact not found";
+        return;
+      }
+      if (!isPathInside(artifact.path, this.artifactDir)) {
+        artifact.skippedReason = "outside artifact directory";
+        return;
+      }
+      const stat = lstatSync(artifact.path);
+      if (!stat.isFile() && !stat.isSymbolicLink()) {
+        artifact.skippedReason = "not a file";
+        return;
+      }
+      unlinkSync(artifact.path);
+      artifact.removed = true;
+    } catch (error) {
+      artifact.error = error instanceof Error ? error.message : String(error);
+    }
+  }
+
   private insertClip(input: {
     id?: string;
     kind: ClipKind;
@@ -420,6 +679,7 @@ export class ClipStore {
     source: string;
     metadata?: JsonObject;
     baseUrl?: string;
+    expiresAt: string | null;
   }): ClipRecord {
     const id = input.id ?? crypto.randomUUID();
     let slug = generateSlug();
@@ -433,8 +693,8 @@ export class ClipStore {
       .query(`
         INSERT INTO clips (
           id, slug, kind, title, mime_type, artifact_path, text_content,
-          size_bytes, sha256, source, metadata_json, created_at, updated_at, deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+          size_bytes, sha256, source, metadata_json, created_at, updated_at, deleted_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
       `)
       .run(
         id,
@@ -450,8 +710,9 @@ export class ClipStore {
         stringifyJsonObject(input.metadata),
         now,
         now,
+        input.expiresAt,
       );
-    const record = this.getClip(id, { baseUrl: input.baseUrl })!;
+    const record = this.getClip(id, { includeDeleted: true, baseUrl: input.baseUrl })!;
     return record;
   }
 
@@ -494,6 +755,7 @@ export class ClipStore {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       deletedAt: row.deleted_at,
+      expiresAt: row.expires_at,
     };
     return { ...record, shareUrl: buildShareUrl(record, { ...this.options, baseUrl: baseUrl ?? this.options.baseUrl }) };
   }
