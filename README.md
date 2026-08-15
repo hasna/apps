@@ -1,4 +1,4 @@
-# open-projects
+# @hasna/projects
 
 High-level project management CLI, MCP server, and SDK for AI coding agents. A project can be any repository, app, docs folder, scaffold, experiment, or remote-intended project in any folder. Projects tracks roots, recipes, agents, tmux profiles, immutable project events, and prompt-driven AI agent runs.
 
@@ -55,7 +55,7 @@ projects create --name "My App" --path /path/to/my-app --stage active --priority
 projects create --name "Planned App" --path /tmp/planned --mkdir --dry-run --json
 projects create --name "Store Work" --kind project --mkdir --marker --json  # defaults to $HASNA_PROJECTS_HOME/workspaces/<id>
 projects start                              # from inside a registered repo
-projects start open-notes                  # by slug/id/name/path
+projects start notes                  # by slug/id/name/path
 projects start --json                      # operational structured output
 projects start --render-spec               # validated JSON Render spec
 projects start my-app --agent codewith
@@ -372,7 +372,7 @@ Add to an MCP client config:
 ```json
 {
   "mcpServers": {
-    "open-projects": {
+    "projects": {
       "command": "projects-mcp"
     }
   }
