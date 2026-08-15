@@ -107,6 +107,17 @@ export class RemoteSkillsClient {
   async downloadSkillBundle(slug: string): Promise<Response> {
     return this.request(`/api/v1/skills/${encodeURIComponent(slug)}/bundle`, { method: "GET" });
   }
+
+  /**
+   * Bundle fetch for the verified-pull path. Returns the raw Response so the caller can
+   * read the X-Skill-Bundle-Sha256 / X-Skill-Bundle-Signature headers, or null when the
+   * instance serves no bundle for this skill (the metadata-only fallback path).
+   */
+  async getBundle(slug: string): Promise<Response | null> {
+    const response = await this.request(`/api/v1/skills/${encodeURIComponent(slug)}/bundle`, { method: "GET" });
+    if (response.status === 404) return null;
+    return response;
+  }
 }
 
 export function createRemoteSkillsClient(): RemoteSkillsClient | null {

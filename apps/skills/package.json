@@ -30,9 +30,6 @@
     "migrations/",
     "docs/skill-standard.md",
     "schemas/",
-    "skills/",
-    "!skills/**/node_modules",
-    "agent-skills/",
     "LICENSE",
     "README.md"
   ],

@@ -15,15 +15,21 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
-import { listPortableSkills, normalizePortableSkillName, readPortableSkillManifest } from "./portable-skills.js";
+import {
+  listPortableSkills,
+  normalizePortableSkillName,
+  readPortableSkillManifest,
+  getPortableSkillsRoot,
+} from "./portable-skills.js";
 import type { SkillKind } from "./registry-types.js";
 
 /**
@@ -35,8 +41,14 @@ import type { SkillKind } from "./registry-types.js";
 export type SyncAgent = "claude" | "codewith" | "codex" | "opencode" | "cursor";
 export const SYNC_AGENTS: readonly SyncAgent[] = ["claude", "codewith", "codex", "opencode", "cursor"] as const;
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const BUNDLED_SKILL_ROOTS = ["skills", "agent-skills"] as const;
+/**
+ * Environment variable naming an explicit canonical-corpus source for sync. The CLI
+ * `--source <path>` flag takes precedence; this is the ambient form, and it means the
+ * same thing: the npm package ships no corpus, so a machine that has not pulled from an
+ * instance (or that is not a checkout of the monorepo) must point sync at where the
+ * corpus actually is.
+ */
+export const SKILLS_SOURCE_ENV = "SKILLS_SOURCE";
 
 /**
  * Ownership marker written beside every SKILL.md this tool syncs. Its presence is how a
@@ -146,6 +158,12 @@ export interface SyncSkillsOptions {
   force?: boolean;
   /** Corpus root override. Tests only. */
   rootDir?: string;
+  /**
+   * Explicit canonical-corpus source: a directory of skill folders, or the monorepo
+   * package root (which contains `skills/` and `agent-skills/`). Takes precedence over
+   * $SKILLS_SOURCE, which takes precedence over the installed corpus cache.
+   */
+  sourceDir?: string;
   /** Home directory override for agent skill dirs. Tests only. */
   homeDir?: string;
 }
@@ -157,15 +175,87 @@ export interface SyncSkillsResult {
 interface SyncSource {
   name: string;
   path: string;
-  source: "bundled" | "corpus";
+  source: "source" | "corpus";
+}
+
+/**
+ * Resolve where sync reads the canonical corpus from.
+ *
+ * The package ships no bundled corpus. Precedence is explicit-over-ambient:
+ *   1. `options.sourceDir`   - an explicit source: a corpus dir, or a package root
+ *                              containing `skills/` and/or `agent-skills/`
+ *   2. `$SKILLS_SOURCE`      - the ambient spelling of the same thing
+ *   3. the installed cache   - `getPortableSkillsRoot()` (what `skills pull` writes)
+ *
+ * A missing explicit source is an error, not a fallback to "nothing": the whole point
+ * of zero-corpus is that sync must not silently sync an empty corpus because the
+ * package directory changed shape.
+ */
+export function resolveSyncCorpus(options: SyncSkillsOptions = {}): { roots: string[]; source: "source" | "corpus" } {
+  const explicit = options.sourceDir?.trim() || process.env[SKILLS_SOURCE_ENV]?.trim() || "";
+  if (explicit) {
+    const roots = packageSourceRoots(explicit);
+    if (roots.length === 0) {
+      throw new Error(
+        `SKILLS_SOURCE '${explicit}' contains no skills: expected a corpus directory or a package root with skills/ and/or agent-skills/`,
+      );
+    }
+    return { roots, source: "source" };
+  }
+  return { roots: [getPortableSkillsRoot({ rootDir: options.rootDir, homeDir: options.homeDir })], source: "corpus" };
+}
+
+/**
+ * A source that names the monorepo package root (`skills/` + `agent-skills/` below it)
+ * resolves to those two corpus roots; a source that is itself a directory of skill
+ * folders resolves to itself. Both spellings exist in the wild — the checkout is the
+ * canonical corpus, and a CI-produced signed cache is a flat corpus dir — so both are
+ * accepted, and the dirs are returned only when they actually exist.
+ *
+ * A directory that holds no skill folders is NOT a corpus: an explicit source that
+ * resolves to nothing would make `skills sync` silently sync an empty set, which is the
+ * exact failure zero-corpus exists to prevent. So an empty or file-shaped source
+ * resolves to no roots and the caller errors.
+ */
+function packageSourceRoots(source: string): string[] {
+  const roots: string[] = [];
+  for (const sub of ["skills", "agent-skills"]) {
+    const candidate = join(source, sub);
+    if (existsSync(candidate) && isDirectory(candidate)) roots.push(candidate);
+  }
+  if (roots.length > 0) return roots;
+  return isDirectory(source) && containsSkillDirectories(source) ? [source] : [];
+}
+
+/** True when a directory holds at least one child that looks like a skill folder. */
+function containsSkillDirectories(path: string): boolean {
+  let entries: string[];
+  try {
+    entries = readdirSync(path);
+  } catch {
+    return false;
+  }
+  return entries.some((entry) => {
+    const candidate = join(path, entry);
+    if (!isDirectory(candidate)) return false;
+    return existsSync(join(candidate, "SKILL.md")) || existsSync(join(candidate, "skill.json")) || existsSync(join(candidate, "package.json"));
+  });
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 export function syncSkillsToAgents(options: SyncSkillsOptions = {}): SyncSkillsResult {
   const requested = normalizeRequested(options.names);
   const agents = options.agents?.length ? options.agents : [...SYNC_AGENTS];
   const homeDir = options.homeDir ?? homedir();
-  const corpusOptions = corpusLocation(options);
-  const corpus = listPortableSkills(corpusOptions);
+  const { roots, source } = resolveSyncCorpus(options);
+  const corpus = listPortableSkillsAcrossRoots(roots);
   const byName = new Map(corpus.map((skill) => [skill.name, skill]));
 
   const actions: AgentSyncAction[] = [];
@@ -173,7 +263,7 @@ export function syncSkillsToAgents(options: SyncSkillsOptions = {}): SyncSkillsR
   let targets: SyncSource[] = corpus.map((skill) => ({
     name: skill.name,
     path: skill.path,
-    source: "corpus",
+    source,
   }));
   if (requested) {
     const present: SyncSource[] = [];
@@ -181,12 +271,10 @@ export function syncSkillsToAgents(options: SyncSkillsOptions = {}): SyncSkillsR
     for (const name of requested) {
       const portable = byName.get(name);
       if (portable) {
-        present.push({ name: portable.name, path: portable.path, source: "corpus" });
+        present.push({ name: portable.name, path: portable.path, source });
         continue;
       }
-      const bundled = findBundledSkillSource(name);
-      if (bundled) present.push(bundled);
-      else missing.push(name);
+      missing.push(name);
     }
     for (const name of missing) {
       for (const agent of agents) {
@@ -205,21 +293,21 @@ export function syncSkillsToAgents(options: SyncSkillsOptions = {}): SyncSkillsR
   for (const skill of targets) {
     const manifest = readPortableSkillManifest(skill.path, skill.name);
     const kind: SkillKind = manifest.kind ?? "executable";
-    const source = sourceSkillMd(
+    const sourceMd = sourceSkillMd(
       skill.path,
       skill.name,
       manifest.description,
       kind,
-      skill.source === "bundled",
+      source === "source",
     );
     for (const agent of agents) {
-      const adapted = adaptSkillMdForAgent(source, agent);
+      const adapted = adaptSkillMdForAgent(sourceMd, agent);
       actions.push(writeManagedAgentSkill({
         skill: skill.name,
         agent,
         skillMd: adapted,
-        source: skill.source,
-        resourceDir: skill.source === "bundled" ? skill.path : undefined,
+        source,
+        resourceDir: source === "source" ? skill.path : undefined,
         homeDir,
         dryRun: options.dryRun,
         force: options.force,
@@ -234,7 +322,7 @@ export interface WriteManagedAgentSkillParams {
   skill: string;
   agent: SyncAgent;
   skillMd: string;
-  source?: "bundled" | "corpus";
+  source?: "source" | "corpus";
   resourceDir?: string;
   homeDir?: string;
   dryRun?: boolean;
@@ -407,25 +495,23 @@ function sourceSkillMd(
   return pointerSkillMd(name, description);
 }
 
-function findBundledSkillSource(name: string): SyncSource | null {
-  let dir = __dirname;
-  for (let i = 0; i < 5; i += 1) {
-    for (const root of BUNDLED_SKILL_ROOTS) {
-      const path = join(dir, root, name);
-      if (existsSync(path) && existsSync(join(path, "SKILL.md"))) {
-        return { name, path, source: "bundled" };
-      }
+/**
+ * List the corpus as the union of one or more skill-directory roots, deduplicated by
+ * name. When the same name exists in several roots (e.g. an `agent-skills/` workflow
+ * shadowed by an `executable` in `skills/`), the FIRST root wins: `skills/` before
+ * `agent-skills/`, explicit roots in the order given.
+ */
+function listPortableSkillsAcrossRoots(roots: string[]): ReturnType<typeof listPortableSkills> {
+  const seen = new Set<string>();
+  const skills: ReturnType<typeof listPortableSkills> = [];
+  for (const root of roots) {
+    for (const skill of listPortableSkills({ rootDir: root })) {
+      if (seen.has(skill.name)) continue;
+      seen.add(skill.name);
+      skills.push(skill);
     }
-    dir = dirname(dir);
   }
-  return null;
-}
-
-function corpusLocation(options: SyncSkillsOptions): { rootDir?: string; homeDir?: string } {
-  const out: { rootDir?: string; homeDir?: string } = {};
-  if (options.rootDir) out.rootDir = options.rootDir;
-  else if (options.homeDir) out.homeDir = options.homeDir;
-  return out;
+  return skills.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
 function normalizeRequested(names: string[] | undefined): string[] | null {

@@ -189,9 +189,11 @@ Stable command shapes:
 
 ## Remote Registry
 
-Local bundled skills remain the default for discovery. This is not a mode you
-select: pointing browse/search commands at a server's registry is one fact, an
-API base URL being set. To set it:
+The npm package ships no bundled skill corpus. Discovery reads the local corpus
+cache (`~/.hasna/skills/installed`, filled by `skills pull`) and, when an API
+base URL is set, the server's registry. This is not a mode you select: pointing
+browse/search commands at a server's registry is one fact, an API base URL being
+set. To set it:
 
 ```bash
 export SKILLS_API_URL=https://your-server.example
@@ -432,9 +434,11 @@ checked.
 
 ## Project Runtime State
 
-Skills are discovered from the configured server registry or bundled OSS
-registry. Project folders and agent-native skill folders are never used as skill
-libraries.
+Skills are discovered from the configured server registry or the local corpus
+cache (`~/.hasna/skills/installed`, filled by `skills pull`; a checkout can be
+named explicitly with `skills sync --source <path>` or `$SKILLS_SOURCE`). The
+npm package ships no bundled corpus. Project folders and agent-native skill
+folders are never used as skill libraries.
 
 `.skills/` is runtime/output state only:
 

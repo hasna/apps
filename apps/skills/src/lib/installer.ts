@@ -123,7 +123,15 @@ export function installSkill(name: string, options: InstallOptions = {}): Instal
   const canonicalName = getCanonicalSkillName(name);
   const skillName = normalizeSkillName(canonicalName);
   if (!existsSync(getSkillPath(name))) {
-    return { skill: canonicalName, success: false, error: `Skill '${name}' not found`, mode: "pin" };
+    const knownOfficial = Boolean(getSkill(name));
+    return {
+      skill: canonicalName,
+      success: false,
+      error: knownOfficial
+        ? `Skill '${name}' is not in this machine's corpus. The package ships no bundled corpus — pull it first with \`skills pull ${skillName}\`, or sync from a checkout with \`skills sync --source <path>\`.`
+        : `Skill '${name}' not found`,
+      mode: "pin",
+    };
   }
   const existing = new Set(listPinnedSkills(targetDir));
   if (existing.has(skillName) && !overwrite) {
