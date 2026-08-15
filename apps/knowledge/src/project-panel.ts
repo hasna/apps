@@ -218,7 +218,7 @@ export async function createKnowledgeProjectPanel(projectRef: string, options: K
   const projectId = slugify(projectRef);
   const service = options.service ?? createKnowledgeService({ scope: options.scope ?? 'project', cwd: options.cwd });
   // Route through the unified inventory dispatch so the panel reflects the shared
-  // cloud corpus in api mode and the local catalog otherwise — never the local
+  // server corpus over HTTP and the local catalog otherwise — never the local
   // sqlite guard throw when the fleet flip is active on a box with a local db.
   const inventory = await service.resolveInventory({
     limit,

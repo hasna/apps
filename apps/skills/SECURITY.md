@@ -13,7 +13,7 @@ If you discover a security vulnerability, please report it responsibly.
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Instead, use [GitHub Security Advisories](https://github.com/hasna/skills/security/advisories/new) to report privately.
+Instead, use [GitHub Security Advisories](https://github.com/hasna/apps/security/advisories/new) to report privately.
 
 ### What to Include
 

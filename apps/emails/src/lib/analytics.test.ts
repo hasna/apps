@@ -541,7 +541,7 @@ describe("getAnalytics over the API store answers exactly as the local store doe
       // volume is, and neither of those is the event read claiming zero deliveries.
       expect(data.deliveryTrend).toEqual([]);
     } finally {
-      stub.stop();
+      await stub.stop();
     }
   });
 });

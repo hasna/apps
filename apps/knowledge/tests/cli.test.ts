@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CURRENT_SCHEMA_VERSION, migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
-import { KNOWLEDGE_API_KEY_ENV_KEYS, KNOWLEDGE_API_URL_ENV_KEYS, KNOWLEDGE_MODE_ENV_KEYS } from '../src/knowledge-mode';
+import { KNOWLEDGE_API_KEY_ENV_KEYS, KNOWLEDGE_API_URL_ENV_KEYS, RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS } from '../src/client-transport';
 import { createKnowledgeService } from '../src/service';
 import { parseSourceRef } from '../src/source-ref';
 import { recordStorageObjects } from '../src/storage-contract';
@@ -28,17 +28,16 @@ const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'
 };
 
 /**
- * The env every spawned CLI gets: the parent's, minus the knowledge mode and
- * pointer vars, plus the caller's overrides.
+ * The env every spawned CLI gets: the parent's, minus Knowledge routing vars,
+ * plus the caller's overrides.
  *
  * Those two variables are exported in a login shell on developer machines and
  * inherited by every pane from the tmux server, so a child that gets the parent
  * environment verbatim is configured differently from one run in CI. That is not
  * hypothetical: `auth whoami` reports `authenticated: true` purely from the
- * presence of an API key, and an old ambient storage mode can now be an
- * intentionally rejected placement word. Without this stripping, the suite
- * measures the developer's shell rather than the temp auth dir or mode it just
- * created.
+ * presence of an API key, and a retired selector is intentionally rejected.
+ * Without this stripping, the suite measures the developer's shell rather than
+ * the temp auth dir it just created.
  *
  * This is DEFENCE IN DEPTH, not the control. The control is the outbound request
  * guard in src/net-guard.ts, which refuses non-loopback traffic under
@@ -49,7 +48,7 @@ const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'
  */
 function childEnv(env?: Record<string, string>): Record<string, string> {
   const inherited = { ...process.env } as Record<string, string>;
-  for (const key of [...KNOWLEDGE_API_URL_ENV_KEYS, ...KNOWLEDGE_API_KEY_ENV_KEYS, ...KNOWLEDGE_MODE_ENV_KEYS]) delete inherited[key];
+  for (const key of [...KNOWLEDGE_API_URL_ENV_KEYS, ...KNOWLEDGE_API_KEY_ENV_KEYS, ...RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS]) delete inherited[key];
   return { ...inherited, ...(env ?? {}) };
 }
 
@@ -2340,7 +2339,6 @@ describe('knowledge cli', () => {
     const service = createKnowledgeService({ scope: 'project', cwd: dir });
     const workspace = service.ensureWorkspace();
     const config = defaultKnowledgeConfig();
-    config.mode = 'hosted';
     config.storage = {
       type: 's3',
       artifacts_root: 'artifacts',
@@ -2434,7 +2432,6 @@ describe('knowledge cli', () => {
     const service = createKnowledgeService({ scope: 'project', cwd: dir });
     const workspace = service.ensureWorkspace();
     const config = defaultKnowledgeConfig();
-    config.mode = 'hosted';
     config.storage = {
       type: 's3',
       artifacts_root: 'artifacts',
@@ -2504,7 +2501,6 @@ describe('knowledge cli', () => {
     const service = createKnowledgeService({ scope: 'project', cwd: dir });
     const workspace = service.ensureWorkspace();
     const config = defaultKnowledgeConfig();
-    config.mode = 'hosted';
     config.storage = {
       type: 's3',
       artifacts_root: 'artifacts',
@@ -2630,23 +2626,22 @@ describe('knowledge cli', () => {
     expect(existsSync(join(home, '.hasna', 'knowledge', 'db.json'))).toBe(false);
   });
 
-  test('setup and auth commands expose hosted-aware JSON contracts', () => {
+  test('setup and auth commands keep client transport out of workspace config', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-hosted-cli-'));
     const authDir = join(dir, 'auth');
     const env = { HASNA_KNOWLEDGE_AUTH_DIR: authDir };
 
-    const setup = runCli(['setup', '--mode', 'hosted', '--api-url', 'https://knowledge.example.com/api/v1', '--scope', 'project', '--json'], dir, env);
+    const setup = runCli(['setup', '--scope', 'project', '--json'], dir, env);
     expect(setup.exitCode).toBe(0);
     const setupOut = JSON.parse(new TextDecoder().decode(setup.stdout));
-    expect(setupOut.mode).toBe('hosted');
-    expect(setupOut.api_url).toBe('https://knowledge.example.com');
+    expect(setupOut.mode).toBeUndefined();
+    expect(setupOut.api_url).toBeUndefined();
     expect(setupOut.storage_type).toBe('local');
 
     const storage = runCli(['storage', 'status', '--scope', 'project', '--json'], dir, env);
     expect(storage.exitCode).toBe(0);
     const storageOut = JSON.parse(new TextDecoder().decode(storage.stdout));
-    expect(storageOut.hosted.enabled).toBe(true);
-    expect(storageOut.hosted.api_url).toBe('https://knowledge.example.com');
+    expect(storageOut.hosted).toBeUndefined();
     expect(storageOut.canonical_example.active).toBe(false);
 
     const before = runCli(['auth', 'whoami', '--scope', 'project', '--json'], dir, env);
@@ -2668,7 +2663,7 @@ describe('knowledge cli', () => {
   test('setup can opt into canonical example S3 artifact storage', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-canonical-storage-cli-'));
 
-    const setup = runCli(['setup', '--mode', 'hosted', '--canonical-example', '--scope', 'project', '--json'], dir);
+    const setup = runCli(['setup', '--canonical-example', '--scope', 'project', '--json'], dir);
     expect(setup.exitCode).toBe(0);
     const setupOut = JSON.parse(new TextDecoder().decode(setup.stdout));
     expect(setupOut.storage_type).toBe('s3');
@@ -2712,7 +2707,7 @@ describe('knowledge cli', () => {
     expect(storage.exitCode).toBe(0);
     const storageOut = JSON.parse(new TextDecoder().decode(storage.stdout));
     expect(storageOut.service).toBe('knowledge');
-    expect(storageOut.mode).toBe('sqlite');
+    expect(storageOut.backend).toBe('sqlite');
     expect(storageOut.tables).toContain('sources');
     expect(storageOut.tables).not.toContain('chunks_fts');
   });
@@ -3940,32 +3935,12 @@ describe('knowledge cli', () => {
   });
 });
 
-/**
- * The half-configured client, at the surface an operator actually touches.
- *
- * `knowledge mode` has reported this state correctly since the explicit-mode
- * work landed. Every other command stayed silent about it, which is the half
- * that matters: an agent runs `knowledge list --json`, gets
- * `{"ok": true, "total": 0, "items": []}` and exit 0, and concludes the corpus
- * is empty — on a machine whose HASNA_KNOWLEDGE_API_URL points at a store
- * holding 869 entries.
- *
- * These spawn the CLI rather than calling the resolver, because the defect is
- * the exit code and the stream contents, and only a real invocation measures
- * those.
- */
-describe('a half-configured CLI fails loudly instead of reading the wrong store', () => {
+describe('Knowledge CLI transport selection', () => {
   const decode = (buf: Uint8Array) => new TextDecoder().decode(buf);
 
-  /**
-   * The parent env minus BOTH pointer and mode vars, so the case under test is
-   * the one the overrides describe. `childEnv` only strips pointers, and this
-   * developer shell exports a mode var — inheriting it would silence the very
-   * error being asserted and the test would pass for the wrong reason.
-   */
-  function runCliNoMode(args: string[], env: Record<string, string>) {
+  function runCliWithCleanRoute(args: string[], env: Record<string, string>) {
     const inherited = { ...process.env } as Record<string, string>;
-    for (const key of [...KNOWLEDGE_API_URL_ENV_KEYS, ...KNOWLEDGE_API_KEY_ENV_KEYS, ...KNOWLEDGE_MODE_ENV_KEYS]) {
+    for (const key of [...KNOWLEDGE_API_URL_ENV_KEYS, ...KNOWLEDGE_API_KEY_ENV_KEYS, ...RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS]) {
       delete inherited[key];
     }
     return Bun.spawnSync(['bun', CLI, ...args], {
@@ -3975,124 +3950,49 @@ describe('a half-configured CLI fails loudly instead of reading the wrong store'
     });
   }
 
-  /** A syntactically valid pointer at nothing. The outbound guard blocks it regardless. */
-  const FAKE_API_URL = 'https://knowledge.invalid';
+  const API_URL = 'https://knowledge.invalid';
 
   function sandboxHome(): Record<string, string> {
-    const home = mkdtempSync(join(tmpdir(), 'knowledge-halfconf-'));
+    const home = mkdtempSync(join(tmpdir(), 'knowledge-transport-'));
     return { HOME: home, USERPROFILE: home };
   }
 
-  test('REGRESSION: `list --json` with an API URL and no mode var exits non-zero', () => {
-    const result = runCliNoMode(['list', '--json'], {
+  test('canonical API URL plus key selects HTTP and exits zero', () => {
+    const result = runCliWithCleanRoute(['transport', '--json'], {
       ...sandboxHome(),
-      HASNA_KNOWLEDGE_API_URL: FAKE_API_URL,
+      HASNA_KNOWLEDGE_API_URL: API_URL,
       HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
     });
-    const stdout = decode(result.stdout);
-    const stderr = decode(result.stderr);
-
-    // On 0.2.92 this was exit 0 with a successful-looking empty page.
-    expect(result.exitCode).not.toBe(0);
-    expect(stderr).toContain('HASNA_KNOWLEDGE_API_URL');
-    expect(stderr).toContain('HASNA_KNOWLEDGE_STORAGE_MODE');
-
-    // The JSON contract must report the failure too. A consumer parsing stdout
-    // sees `ok: false` rather than an empty page it would read as "no entries".
-    const payload = JSON.parse(stdout) as { ok: boolean; error?: string };
-    expect(payload.ok).toBe(false);
-    expect(payload.error).toContain('HASNA_KNOWLEDGE_STORAGE_MODE');
-    // Positive control on the defect itself: no empty success page anywhere.
-    expect(stdout).not.toContain('"total": 0');
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(decode(result.stdout))).toMatchObject({ ok: true, transport: 'http' });
   });
 
-  test('REGRESSION: the error names no pointer VALUE, only variable names', () => {
-    const secretish = 'k_super_secret_value';
-    const result = runCliNoMode(['list', '--json'], {
+  test('canonical API URL absent selects SQLite and exits zero', () => {
+    const result = runCliWithCleanRoute(['transport', '--json'], sandboxHome());
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(decode(result.stdout))).toMatchObject({ ok: true, transport: 'sqlite' });
+  });
+
+  test('retired selector fails loudly and names both replacements', () => {
+    const result = runCliWithCleanRoute(['transport', '--json'], {
       ...sandboxHome(),
-      HASNA_KNOWLEDGE_API_URL: FAKE_API_URL,
-      HASNA_KNOWLEDGE_API_KEY: secretish,
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
     });
+    expect(result.exitCode).not.toBe(0);
     const combined = decode(result.stdout) + decode(result.stderr);
-    expect(combined).not.toContain(secretish);
-    expect(combined).not.toContain(FAKE_API_URL);
+    expect(combined).toContain('HASNA_KNOWLEDGE_STORAGE_MODE');
+    expect(combined).toContain('HASNA_KNOWLEDGE_API_URL');
+    expect(combined).toContain('HASNA_KNOWLEDGE_DATABASE_URL');
   });
 
-  test('REGRESSION: a removed cloud mode names the unset migration path', () => {
-    const result = runCliNoMode(
-      ['list', '--tag', 'convention', '--limit', '40', '--sort', 'created', '--desc', '--json'],
-      {
-        ...sandboxHome(),
-        HASNA_KNOWLEDGE_STORAGE_MODE: 'cloud',
-      },
-    );
-    const stderr = decode(result.stderr);
-
+  test('canonical URL without key fails closed without rendering values', () => {
+    const result = runCliWithCleanRoute(['transport', '--json'], {
+      ...sandboxHome(),
+      HASNA_KNOWLEDGE_API_URL: API_URL,
+    });
     expect(result.exitCode).not.toBe(0);
-    expect(stderr).toContain('HASNA_KNOWLEDGE_STORAGE_MODE=cloud');
-    expect(stderr).toContain('Unset HASNA_KNOWLEDGE_STORAGE_MODE');
-  });
-
-  test('the exact convention read defaults to sqlite after the removed mode is absent', () => {
-    const args = ['list', '--tag', 'convention', '--limit', '40', '--sort', 'created', '--desc', '--json'];
-    const result = runCliNoMode(args, sandboxHome());
-    expect(result.exitCode).toBe(0);
-    expect((JSON.parse(decode(result.stdout)) as { ok: boolean }).ok).toBe(true);
-  });
-
-  test('the exact convention read still succeeds with explicit sqlite', () => {
-    const args = ['list', '--tag', 'convention', '--limit', '40', '--sort', 'created', '--desc', '--json'];
-    const result = runCliNoMode(args, {
-      ...sandboxHome(),
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'sqlite',
-    });
-    expect(result.exitCode).toBe(0);
-    expect((JSON.parse(decode(result.stdout)) as { ok: boolean }).ok).toBe(true);
-  });
-
-  test('`mode` still answers in the environment the guard rejects', () => {
-    // The command whose entire job is explaining this state must survive it,
-    // or the error message points at a diagnostic that also fails.
-    const result = runCliNoMode(['mode', '--json'], {
-      ...sandboxHome(),
-      HASNA_KNOWLEDGE_API_URL: FAKE_API_URL,
-    });
-    expect(result.exitCode).toBe(0);
-    const report = JSON.parse(decode(result.stdout)) as { ok: boolean; mode: string; pointer_ignored: boolean };
-    expect(report.ok).toBe(true);
-    expect(report.mode).toBe('sqlite');
-    expect(report.pointer_ignored).toBe(true);
-  });
-
-  test('an explicit sqlite mode alongside the URL still lists, and stays local', () => {
-    const result = runCliNoMode(['list', '--json'], {
-      ...sandboxHome(),
-      HASNA_KNOWLEDGE_API_URL: FAKE_API_URL,
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'sqlite',
-    });
-    expect(result.exitCode).toBe(0);
-    const payload = JSON.parse(decode(result.stdout)) as { ok: boolean; total: number };
-    expect(payload.ok).toBe(true);
-    expect(payload.total).toBe(0);
-  });
-
-  test('an explicit --store override is an explicit local choice and still lists', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'knowledge-halfconf-store-'));
-    const store = join(dir, 'db.json');
-    writeFileSync(store, JSON.stringify({ items: [] }));
-    const result = runCliNoMode(['list', '--store', store, '--json'], {
-      ...sandboxHome(),
-      HASNA_KNOWLEDGE_API_URL: FAKE_API_URL,
-    });
-    expect(result.exitCode).toBe(0);
-    expect((JSON.parse(decode(result.stdout)) as { ok: boolean }).ok).toBe(true);
-  });
-
-  test('a clean environment with no pointer at all is untouched', () => {
-    // Positive control: the guard must not fire on the ordinary local install,
-    // which is the overwhelming majority of invocations.
-    const result = runCliNoMode(['list', '--json'], sandboxHome());
-    expect(result.exitCode).toBe(0);
-    expect((JSON.parse(decode(result.stdout)) as { ok: boolean }).ok).toBe(true);
+    const combined = decode(result.stdout) + decode(result.stderr);
+    expect(combined).toContain('HASNA_KNOWLEDGE_API_KEY');
+    expect(combined).not.toContain(API_URL);
   });
 });

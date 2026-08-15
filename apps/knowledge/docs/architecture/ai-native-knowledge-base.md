@@ -40,8 +40,8 @@ The future hosted/SaaS wrapper owns:
 - Remote job orchestration for ingestion, embedding, web search, compile, lint,
   and sync runs.
 
-The OSS package must stay useful without a hosted account. Hosted mode should be
-an optional remote client over explicit API contracts.
+The OSS package stays useful without a SaaS account. Clients may instead use a
+server through explicit HTTP API contracts.
 
 The detailed hosted boundary is specified in
 [`hosted-wrapper-responsibilities.md`](./hosted-wrapper-responsibilities.md).
@@ -55,9 +55,8 @@ Multi-machine sync is specified in
 machine discovery optional through `@hasna/machines`, stores scalable sync state
 in SQLite/Postgres/object storage, and keeps raw source bytes in `open-files`.
 
-The local hosted-aware contract follows the `open-skills` pattern: `mode` is
-`local` by default, `setup --mode hosted` records `hosted.api_url`, env vars
-`KNOWLEDGE_API_URL` and `KNOWLEDGE_API_KEY` can override local config, and
+The client uses the on-box store by default. `HASNA_KNOWLEDGE_API_URL` plus
+`HASNA_KNOWLEDGE_API_KEY` selects the HTTP API, and
 credentials live outside project state in `~/.hasna/knowledge/auth.json`.
 `remote contracts` publishes the registry/search/ask/build/sync/status/logs and
 artifact endpoints that a SaaS wrapper can implement. Local use, local search,
@@ -143,16 +142,16 @@ records an audit event. It never returns raw bytes or storage credentials.
 allowed extracted text into redacted chunks with offsets, records hashes and
 revisions, and stores only derived knowledge records.
 
-In future hosted mode, the same result shape can be backed by a remote
+In a future SaaS deployment, the same result shape can be backed by a remote
 open-files resolver API. The local OSS package should keep using the shared
 service boundary so CLI, MCP, and SaaS wrappers do not grow separate permission
 logic.
 
-## Remote And S3 Mode
+## S3 Artifact Storage
 
-Local mode writes artifacts to `.hasna/knowledge`.
+On-box artifact storage writes to `.hasna/knowledge`.
 
-Remote/cloud mode can store generated knowledge artifacts in S3:
+Generated knowledge artifacts can instead be stored in S3:
 
 ```text
 s3://<knowledge-bucket>/<org>/<project>/knowledge/
@@ -174,7 +173,7 @@ s3://example-knowledge-prod/.hasna/knowledge/
 The app config can be materialized with:
 
 ```bash
-knowledge setup --mode hosted --canonical-example --scope project --json
+knowledge setup --canonical-example --scope project --json
 ```
 
 The canonical metadata-only secret paths are:
@@ -201,7 +200,7 @@ knowledge storage status --scope project --json
 That contract names the local app path, SQLite catalog, generated artifact
 classes, S3 bucket/prefix when configured, and the source ownership rule that
 raw source bytes stay in `open-files`. The `storage_objects` table catalogs
-generated artifacts by URI, kind, hash, size, and metadata so local mode and
+generated artifacts by URI, kind, hash, size, and metadata so on-box and
 remote/S3 mode share the same DB-facing shape.
 
 ## Wiki Model
@@ -263,8 +262,8 @@ Search is hybrid:
 5. Results are merged, deduped, reranked, permission-filtered, and returned with
    citations.
 
-Local mode should start with SQLite FTS and a local vector-index option. Hosted
-mode can use Postgres with pgvector or a managed vector index. Permission
+The on-box server starts with SQLite FTS and a local vector-index option. A
+PostgreSQL-backed server can use pgvector or a managed vector index. Permission
 filters must be applied before agent context is assembled.
 
 The first local semantic-search implementation indexes derived chunks with
@@ -298,8 +297,8 @@ ledgers, and storage/index metadata without exposing raw source bytes.
 Index freshness is explicit. `reindex_queue` tracks missing or stale embedding
 work, `knowledge reindex status|enqueue|embeddings` operates the local
 queue, and MCP exposes the same controls through `ok_reindex_status`,
-`ok_reindex_enqueue`, and `ok_reindex_embeddings`. Hosted mode can map the same
-contract to worker queues, S3/object artifact sync, Postgres/pgvector, or a
+`ok_reindex_enqueue`, and `ok_reindex_embeddings`. A SaaS wrapper can map the
+same contract to worker queues, S3 artifact sync, Postgres/pgvector, or a
 managed vector index while preserving the local command shape.
 
 ## Agent Workflow

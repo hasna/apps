@@ -151,9 +151,11 @@ describe("self-hosted parity: new migrations", () => {
   test("0025 appends provider-aware address uniqueness after 0024", () => {
     const list = emailsSelfHostedMigrations();
     const ids = list.map((migration) => migration.id);
-    expect(ids.at(-1)).toBe("0025_address_provider_binding");
     expect(ids.indexOf("0025_address_provider_binding")).toBeGreaterThan(
       ids.indexOf("0024_idp_principal_tenants_multi_grant"),
+    );
+    expect(ids.indexOf("0026_mailbox_filters")).toBeGreaterThan(
+      ids.indexOf("0025_address_provider_binding"),
     );
 
     const sql = list.find((migration) => migration.id === "0025_address_provider_binding")!.sql;
@@ -164,6 +166,36 @@ describe("self-hosted parity: new migrations", () => {
     expect(sql).toContain("addresses_tenant_unbound_email_uidx");
     expect(sql).toContain("ON addresses (tenant_id, email)");
     expect(sql).toContain("WHERE provider_id IS NULL");
+  });
+
+  test("0026 appends gmail-replay provenance after 0025", () => {
+    const list = emailsSelfHostedMigrations();
+    const ids = list.map((migration) => migration.id);
+    expect(ids.at(-1)).toBe("0026_legacy_gmail_replay_provenance");
+    expect(ids.indexOf("0026_legacy_gmail_replay_provenance")).toBeGreaterThan(
+      ids.indexOf("0025_address_provider_binding"),
+    );
+
+    const sql = list.find((migration) => migration.id === "0026_legacy_gmail_replay_provenance")!.sql;
+    expect(sql).toContain("established_via IN ('normal_ingest', 'canonical_replay', 'gmail_replay')");
+  });
+
+  test("0026 appends the priority sender rules table after 0025", () => {
+    const list = emailsSelfHostedMigrations();
+    const ids = list.map((migration) => migration.id);
+    expect(ids.indexOf("0026_priority_sender_rules")).toBeGreaterThan(
+      ids.indexOf("0025_address_provider_binding"),
+    );
+    expect(ids.indexOf("0026_priority_sender_rules")).toBeGreaterThan(
+      ids.indexOf("0026_mailbox_filters"),
+    );
+
+    const sql = list.find((migration) => migration.id === "0026_priority_sender_rules")!.sql;
+    expect(sql).toContain("CREATE TABLE IF NOT EXISTS priority_sender_rules");
+    expect(sql).toContain("CHECK (kind IN ('address', 'domain'))");
+    expect(sql).toContain("PRIMARY KEY (tenant_id, id)");
+    expect(sql).toContain("UNIQUE (tenant_id, kind, value)");
+    expect(sql).toContain("CREATE POLICY priority_sender_rules_tenant_isolation");
   });
 
   test("0009 seeds the three email agent settings rows and 0010 adds provisioning columns", () => {

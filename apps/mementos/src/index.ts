@@ -214,7 +214,8 @@ export {
   MEMENTOS_STORAGE_TABLES,
   STORAGE_TABLES,
   getStorageConfig,
-  getStorageMode,
+  getStorageBackend,
+  getStorageBackendDatabaseUrl,
   getStorageStatus,
   getMementosStorageStatus,
   saveStorageConfig,
@@ -227,12 +228,12 @@ export {
   type StorageConfig,
   type StorageEnv,
   type StorageEnvStatus,
-  type StorageMode,
   type NativeStorageStatus,
   type MementosStorageTable,
   type SyncMeta,
   type IncrementalSyncStats,
 } from "./storage.js";
+export { assertNoLegacyStorageMode, LEGACY_STORAGE_MODE_KEYS } from "./lib/retired-storage-mode.js";
 
 // Redaction
 export { redactSecrets, containsSecrets } from "./lib/redact.js";

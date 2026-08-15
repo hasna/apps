@@ -1,0 +1,82 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code when working with this repository.
+
+## Project Overview
+
+Snapchat Marketing API connector CLI - Organizations, ad accounts, campaigns, ads, creatives, audiences, and analytics
+
+## Build & Run Commands
+
+```bash
+# Install dependencies
+bun install
+
+# Run CLI in development
+bun run dev
+
+# Build for distribution
+bun run build
+
+# Type check
+bun run typecheck
+```
+
+## Code Style
+
+- TypeScript with strict mode
+- ESM modules (`type: module`)
+- Async/await for all async operations
+- Minimal dependencies: commander, chalk
+- Type annotations required everywhere
+
+## Project Structure
+
+```
+src/
+├── api/           # API client modules
+│   ├── client.ts  # HTTP client with authentication
+│   └── index.ts   # Main connector class
+├── cli/
+│   └── index.ts   # CLI commands
+├── types/
+│   └── index.ts   # TypeScript types
+├── utils/
+│   ├── config.ts  # Multi-profile configuration
+│   └── output.ts  # CLI output formatting
+└── index.ts       # Library exports
+```
+
+## API Notes (2026)
+
+Snapchat Marketing API (Ads API): `https://adsapi.snapchat.com/v1/`
+Auth: OAuth 2.0 (client credentials flow for server-to-server)
+Key resources: campaigns, ad_squads, ads, creatives, audiences, pixel, stats.
+
+## Authentication
+
+API Key authentication. Credentials can be set via:
+- Environment variable (see below)
+- Profile configuration: `connect-snap config set-key <key>`
+
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `SNAP_API_KEY` | API key |
+
+## Data Storage
+
+```
+~/.hasna/connectors/connect-snap/
+├── current_profile   # Active profile name
+└── profiles/
+    ├── default.json  # Default profile
+    └── {name}.json   # Named profiles
+```
+
+## Dependencies
+
+- commander: CLI framework
+- chalk: Terminal styling

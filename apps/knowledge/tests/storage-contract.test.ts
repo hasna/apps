@@ -63,7 +63,6 @@ describe('knowledge storage contract', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-storage-s3-'));
     const workspace = workspaceForHome(join(dir, '.hasna', 'knowledge'));
     const config = defaultKnowledgeConfig();
-    config.mode = 'hosted';
     config.storage = {
       type: 's3',
       artifacts_root: 'artifacts',
@@ -95,7 +94,6 @@ describe('knowledge storage contract', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-storage-hasna-s3-'));
     const workspace = workspaceForHome(join(dir, '.hasna', 'knowledge'));
     const config = defaultKnowledgeConfig();
-    config.mode = 'hosted';
     config.storage = canonicalExampleKnowledgeStorage();
 
     const contract = resolveStorageContract(config, workspace, 'project');

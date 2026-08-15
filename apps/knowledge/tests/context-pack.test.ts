@@ -47,7 +47,7 @@ describe('bounded knowledge agent context packs', () => {
   // which overshot maxChars by 2 (sliced maxChars-1 then appended a 3-char
   // ellipsis). The `length > 180`/`> 120` truncation branches could therefore
   // never satisfy their own threshold, so the while-loop spun forever and the
-  // whole `context pack` command hung in local mode. This test would never
+  // whole `context pack` command hung on the SQLite path. This test would never
   // return before the fix.
   test('fits packs with long previews without an infinite truncation loop', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-context-pack-fit-'));

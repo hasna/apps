@@ -350,6 +350,23 @@ describe("Emails self-hosted service", () => {
     expect((await list!.json()).domains.length).toBe(1);
   });
 
+  test("missing priority sender rule returns the declared 404 body for GET and DELETE", async () => {
+    // Regression: the serve's 404 text used to diverge from the generated
+    // contract ("priority sender rule not found" vs "priority-sender-rules
+    // not found"), so the SDK's strict 404-body validation made the client
+    // throw on a missing rule instead of returning null/false.
+    const d = deps();
+    const token = mintApiKey({ app: "emails", scopes: ["emails:*"], signingSecret: SIGNING_SECRET }).token;
+    for (const method of ["GET", "DELETE"]) {
+      const res = await handleSelfHostedRequest(
+        d,
+        req(method, "/v1/priority-sender-rules/priority:address:missing@example.com", { token }),
+      );
+      expect(res?.status).toBe(404);
+      expect(await res!.json()).toEqual({ error: "priority-sender-rules not found" });
+    }
+  });
+
   test("message counts are exposed through the authenticated self-hosted API", async () => {
     const d = deps();
     d.store.messageCounts = async () => ({

@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Package-manager secret guard
+        run: bun run check:package-secrets
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install dashboard dependencies
+        run: cd dashboard && bun install
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      # Build BEFORE Test: the MCP/CLI/server test suites spawn the compiled
+      # entrypoints (bin/mcp.js, bin/index.js) which are gitignored and only
+      # produced by `bun run build`. Running tests first (the previous order)
+      # made every spawned-binary test fail on a fresh checkout.
+      - name: Build
+        run: bun run build
+
+      - name: Test
+        run: bun test

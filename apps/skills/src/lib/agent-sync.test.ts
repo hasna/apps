@@ -17,6 +17,7 @@ import {
   agentGlobalSkillsDir,
   pointerSkillMd,
   resolveSyncAgents,
+  resolveSyncCorpus,
   SYNC_AGENTS,
   SYNC_MARKER_FILE,
   syncSkillsToAgents,
@@ -27,6 +28,13 @@ import {
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
+
+/**
+ * The repo package root: the canonical corpus source a checkout provides (skills/ +
+ * agent-skills/ below it). Used by the tests that sync named repository-managed skills —
+ * the npm package ships no bundled corpus, so the checkout is the source.
+ */
+const REPO_ROOT = join(import.meta.dir, "..", "..");
 
 function tempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -205,6 +213,7 @@ describe("syncSkillsToAgents", () => {
           homeDir: home,
           names: ["inbox"],
           agents: ["codewith"],
+          sourceDir: REPO_ROOT,
           force,
         });
 
@@ -241,6 +250,7 @@ describe("syncSkillsToAgents", () => {
         homeDir: home,
         names: ["inbox"],
         agents: ["codewith"],
+        sourceDir: REPO_ROOT,
         force: true,
       });
       expect(actions[0].action).toBe("update");
@@ -285,6 +295,7 @@ describe("syncSkillsToAgents", () => {
         homeDir: home,
         names: ["inbox"],
         agents: ["codewith"],
+        sourceDir: REPO_ROOT,
       });
       const skillDir = join(home, ".codewith", "skills", "inbox");
       const skillPath = join(skillDir, "SKILL.md");
@@ -457,6 +468,60 @@ describe("writeManagedSkillDir", () => {
       expect(readdirSync(root).filter((entry) => entry.startsWith(".hasna-skills-write-"))).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolveSyncCorpus (zero-corpus source resolution)", () => {
+  test("no explicit source resolves to the installed corpus cache", () => {
+    const { roots, source } = resolveSyncCorpus({ rootDir: "/tmp/nonexistent-corpus-x" });
+    expect(source).toBe("corpus");
+    expect(roots).toHaveLength(1);
+    expect(roots[0]).toBe("/tmp/nonexistent-corpus-x");
+  });
+
+  test("an explicit sourceDir pointing at a package root resolves skills/ + agent-skills/", () => {
+    const { roots, source } = resolveSyncCorpus({ sourceDir: REPO_ROOT });
+    expect(source).toBe("source");
+    expect(roots.map((root) => root.replace(/\\/g, "/").split("/").slice(-2).join("/"))).toEqual([
+      "skills/skills",
+      "skills/agent-skills",
+    ]);
+  });
+
+  test("$SKILLS_SOURCE is honoured as the ambient source", () => {
+    const saved = process.env.SKILLS_SOURCE;
+    process.env.SKILLS_SOURCE = REPO_ROOT;
+    try {
+      const { roots, source } = resolveSyncCorpus();
+      expect(source).toBe("source");
+      expect(roots.length).toBeGreaterThan(0);
+    } finally {
+      if (saved === undefined) delete process.env.SKILLS_SOURCE;
+      else process.env.SKILLS_SOURCE = saved;
+    }
+  });
+
+  test("a source that contains no skills is an error, not an empty sync", () => {
+    const empty = tempDir("sync-source-empty-");
+    try {
+      expect(() => resolveSyncCorpus({ sourceDir: empty })).toThrow(/contains no skills/);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  test("explicit sourceDir beats $SKILLS_SOURCE", () => {
+    const saved = process.env.SKILLS_SOURCE;
+    const other = tempDir("sync-source-other-");
+    try {
+      process.env.SKILLS_SOURCE = other;
+      const { source } = resolveSyncCorpus({ sourceDir: REPO_ROOT });
+      expect(source).toBe("source");
+    } finally {
+      if (saved === undefined) delete process.env.SKILLS_SOURCE;
+      else process.env.SKILLS_SOURCE = saved;
+      rmSync(other, { recursive: true, force: true });
     }
   });
 });

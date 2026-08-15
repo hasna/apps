@@ -38,8 +38,8 @@ beforeAll(async () => {
   });
 });
 
-afterAll(() => {
-  stub.stop();
+afterAll(async () => {
+  await stub.stop();
   attachmentInventoryServer.stop(true);
 });
 

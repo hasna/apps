@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Owner layout migration** — `skills storage migrate` moves `installed/` and
+  legacy flat skill dirs into `~/.hasna/skills/skills/` (the canonical corpus
+  cache that becomes the sync source), creates `logs/` and `outputs/` lazily,
+  keeps `custom/`, and records the move in
+  `skills/.layout-migration.json`. Idempotent; refuses a non-empty conflicting
+  destination. `skills sync` reads the migrated cache automatically.
+- **Unmarked-home adoption** — `skills sync --adopt` hashes unmarked agent-home
+  skills against the canonical corpus: exact matches get a marker (with
+  `--apply`), diverging copies land in `~/.hasna/skills/conflicts.json` and are
+  skipped, unknown skills are reported and skipped. Dry-run by default; never
+  overwrites or deletes anything.
+- **Home drift census** — `skills sync --check` exits non-zero listing
+  missing-from-home / stray-in-home / diverged drift. `skills diff` and
+  `skills outdated` are no longer pin-gated: they compare homes against the
+  canonical corpus, keeping the pin comparison as a subset.
+- **Rollback + prune** — adoption writes rollback records under
+  `~/.hasna/skills/rollback/`; `skills sync --prune [--apply]` removes only
+  marked-and-stray dirs after recording them.
+
 ## [0.1.62] - 2026-08-10
 
 ### Fixed

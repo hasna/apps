@@ -11,6 +11,7 @@ import pkg from "../../../package.json" with { type: "json" };
 import { getSkill } from "../../lib/registry.js";
 import { getSkillRequirements, getSkillDependencyStatus } from "../../lib/skillinfo.js";
 import { getInstallMeta, getInstalledSkills, getSkillPath, getAgentSkillsDir, AGENT_TARGETS, AGENT_LABELS } from "../../lib/installer.js";
+import { censusHomeDrift } from "../../lib/home-census.js";
 
 export function registerDiagnostic(parent: Command) {
   // Doctor
@@ -49,7 +50,7 @@ export function registerDiagnostic(parent: Command) {
   parent
     .command("outdated")
     .option("--json", "Output as JSON", false)
-    .description("Check for outdated pinned skills")
+    .description("Report home/corpus drift (diverged, stray, missing) and pinned-skill version differences")
     .action((options: { json: boolean }) => handleOutdated(options));
 }
 
@@ -209,10 +210,9 @@ function handleWhoami(options: { json: boolean }) {
 }
 
 function handleOutdated(options: { json: boolean }) {
+  // The pin comparison remains, as a subset of the home/corpus comparison.
   const installed = getInstalledSkills();
-  if (!installed.length) { console.log(options.json ? JSON.stringify([]) : chalk.dim("No pinned skills. Run: skills pin <name>")); return; }
-  const outdated: Array<{ skill: string; installedVersion: string; registryVersion: string }> = [];
-  const upToDate: string[] = [];
+  const pins: Array<{ skill: string; installedVersion: string; registryVersion: string }> = [];
   const meta = getInstallMeta();
   for (const name of installed) {
     const installedVersion = meta.skills[name]?.version ?? "unknown";
@@ -220,13 +220,35 @@ function handleOutdated(options: { json: boolean }) {
     const registryPkgPath = join(registryPath, "package.json");
     let registryVersion = "unknown";
     if (existsSync(registryPkgPath)) try { registryVersion = JSON.parse(readFileSync(registryPkgPath, "utf-8")).version || "unknown"; } catch {}
-    if (installedVersion !== registryVersion) outdated.push({ skill: name, installedVersion, registryVersion });
-    else upToDate.push(name);
+    if (installedVersion !== registryVersion) pins.push({ skill: name, installedVersion, registryVersion });
   }
-  if (options.json) { console.log(JSON.stringify(outdated, null, 2)); return; }
-  if (!outdated.length) { console.log(chalk.green(`\nAll ${installed.length} pinned skill(s) are up to date`)); return; }
-  console.log(chalk.bold(`\nOutdated pinned skills (${outdated.length}):\n`));
-  for (const entry of outdated) console.log(`  ${chalk.cyan(entry.skill)}  ${chalk.red(entry.installedVersion)} → ${chalk.green(entry.registryVersion)}`);
-  if (upToDate.length > 0) console.log(chalk.dim(`\n${upToDate.length} skill(s) up to date`));
-  console.log(chalk.dim(`\nRun ${chalk.bold("skills update")} to refresh outdated pins`));
+
+  const census = censusHomeDrift();
+  const homes = {
+    diverged: census.entries.filter((entry) => entry.kind === "diverged"),
+    stray: census.entries.filter((entry) => entry.kind === "stray-in-home"),
+    missing: census.entries.filter((entry) => entry.kind === "missing-from-home"),
+  };
+  const homeOutdated = census.entries.length > 0;
+
+  if (options.json) {
+    console.log(JSON.stringify({ homes, pins, unmarked: census.unmarked, managed: census.managed, homesChecked: census.homesChecked }, null, 2));
+    if (homeOutdated || pins.length > 0) process.exitCode = 1;
+    return;
+  }
+
+  if (!homeOutdated && pins.length === 0) {
+    console.log(chalk.green(`\nNo outdated skills: ${census.homesChecked} home(s) clean, ${census.managed} managed, ${census.unmarked} unmarked${installed.length ? `, ${installed.length} pin(s) up to date` : ""}`));
+    return;
+  }
+  console.log(chalk.bold(`\nOutdated home skills (${census.entries.length}):\n`));
+  for (const entry of census.entries) {
+    console.log(`  ${chalk.cyan(entry.skill)} → ${entry.agent}  ${chalk.red(entry.kind)}${entry.homeHash ? chalk.dim(` (${entry.homeHash.slice(0, 12)} ≠ ${entry.canonicalHash?.slice(0, 12)})`) : ""}`);
+  }
+  if (pins.length > 0) {
+    console.log(chalk.bold(`\nOutdated pins (${pins.length}):`));
+    for (const entry of pins) console.log(`  ${chalk.cyan(entry.skill)}  ${chalk.red(entry.installedVersion)} → ${chalk.green(entry.registryVersion)}`);
+  }
+  if (census.unmarked > 0) console.log(chalk.dim(`\n${census.unmarked} unmarked home dir(s) are adoption candidates; see: skills sync --adopt`));
+  if (homeOutdated || pins.length > 0) process.exitCode = 1;
 }

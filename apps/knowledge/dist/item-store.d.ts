@@ -1,5 +1,5 @@
 import { type KnowledgeItem, type KnowledgeItemVersion, type KnowledgeItemVersionList } from './store';
-import { KnowledgeVersionConflictError } from './cloud-store';
+import { KnowledgeVersionConflictError } from './http-store';
 export { KnowledgeVersionConflictError };
 export interface ItemCreateInput {
     /** Optional caller-supplied id (upsert/import). Both transports honor it: the
@@ -39,7 +39,7 @@ export type ItemArchiveFilter = 'active' | 'archived' | 'all';
 export type ItemListSort = 'created' | 'title';
 export type ItemListDirection = 'asc' | 'desc';
 /**
- * Bounded list query shared by the local and hosted transports.
+ * Bounded list query shared by the SQLite and HTTP transports.
  *
  * `search` is deliberately a literal case-insensitive match over full id,
  * title, and content. Ranked full-text/semantic retrieval is a separate
@@ -114,7 +114,7 @@ export interface ResolveItemStoreOptions {
 }
 /**
  * Resolve the single item Store for this invocation. Returns the ApiItemStore
- * only when the mode is explicitly postgres, otherwise the LocalItemStore. An
+ * when the canonical API URL and key are present, otherwise the LocalItemStore. An
  * explicit `--store` override always yields the local transport so the flip
  * stays fully reversible.
  */

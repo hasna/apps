@@ -1,0 +1,153 @@
+{
+  "fixture_id": "hasna.identities.agent-identity/v1/conformance/1",
+  "contract": "hasna.identities.agent-identity/v1",
+  "version": 1,
+  "lineage": {
+    "field_order": [
+      "source_authority",
+      "source_tenant_id",
+      "source_namespace",
+      "source_entity_type",
+      "source_record_id"
+    ],
+    "input": {
+      "source_authority": "GitHub.COM",
+      "source_tenant_id": " HASNA ",
+      "source_namespace": "Accounts",
+      "source_entity_type": "USER",
+      "source_record_id": " Actor-Case-Sensitive "
+    },
+    "normalized": {
+      "source_authority": "github.com",
+      "source_tenant_id": "hasna",
+      "source_namespace": "accounts",
+      "source_entity_type": "user",
+      "source_record_id": "Actor-Case-Sensitive"
+    },
+    "canonical_key": "[\"github.com\",\"hasna\",\"accounts\",\"user\",\"Actor-Case-Sensitive\"]"
+  },
+  "normalization": {
+    "trim": [
+      "source_authority",
+      "source_tenant_id",
+      "source_namespace",
+      "source_entity_type",
+      "source_record_id"
+    ],
+    "lowercase_locale_en_us": [
+      "source_authority",
+      "source_tenant_id",
+      "source_namespace",
+      "source_entity_type"
+    ],
+    "case_sensitive_after_trim": [
+      "source_record_id"
+    ],
+    "empty_values": "reject",
+    "key_encoding": "JSON array in lineage.field_order"
+  },
+  "trust": {
+    "identity_id": "authoritative",
+    "source_mappings": [
+      {
+        "mapping_kind": "authoritative",
+        "status": "active",
+        "trust": "authoritative"
+      },
+      {
+        "mapping_kind": "imported",
+        "status": "active",
+        "trust": "non_authoritative"
+      },
+      {
+        "mapping_kind": "authoritative",
+        "status": "retired",
+        "trust": "non_authoritative"
+      }
+    ],
+    "candidate_similarity": {
+      "status": "quarantined",
+      "trust": "denied",
+      "auto_bind": false
+    }
+  },
+  "ambiguity": {
+    "public_code": "IDENTITY_ALIAS_AMBIGUOUS",
+    "external_reference_kinds": [
+      "alias",
+      "display_name",
+      "source"
+    ],
+    "result": {
+      "status": "ambiguous",
+      "trust": "denied",
+      "identity_included": false
+    },
+    "internal_cause_may_vary": true
+  },
+  "lifecycle": {
+    "append_only": true,
+    "previous_identity_and_evidence_immutable": true,
+    "current_projection": "highest unique valid revision",
+    "ambiguous_latest_revision": "fail_closed",
+    "unchanged": {
+      "appends_revision": false,
+      "current_revision": 1
+    },
+    "revisions": [
+      {
+        "revision": 1,
+        "action": "create",
+        "identity_id": "identity-original",
+        "mapping_kind": "imported",
+        "status": "active",
+        "evidence": {
+          "observed_label": "Original label",
+          "evidence_id": "evidence-1"
+        }
+      },
+      {
+        "revision": 2,
+        "action": "promote",
+        "identity_id": "identity-original",
+        "mapping_kind": "authoritative",
+        "status": "active",
+        "evidence": {
+          "observed_label": "Original label",
+          "evidence_id": "evidence-1"
+        }
+      },
+      {
+        "revision": 3,
+        "action": "correct",
+        "identity_id": "identity-corrected",
+        "mapping_kind": "authoritative",
+        "status": "active",
+        "evidence": {
+          "observed_label": "Corrected label",
+          "evidence_id": "evidence-2"
+        }
+      },
+      {
+        "revision": 4,
+        "action": "retire",
+        "identity_id": "identity-corrected",
+        "mapping_kind": "authoritative",
+        "status": "retired",
+        "evidence": {
+          "observed_label": "Corrected label",
+          "evidence_id": "evidence-2"
+        }
+      }
+    ]
+  },
+  "read_preferences": {
+    "default": "canonical_first",
+    "canary": "canonical_first",
+    "rollback": "legacy_first"
+  },
+  "runtime_context": {
+    "runtime_field": "runtime_instance_id",
+    "lease_fence_authority": "external Runtime Coordination"
+  }
+}

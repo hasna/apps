@@ -1,5 +1,5 @@
 /**
- * Postgres synchronous-bridge worker (Amendment A1 — PURE REMOTE cloud store).
+ * Postgres synchronous-bridge worker (server postgresql backend).
  *
  * The mementos data layer is fully synchronous: every CLI/MCP/server call site
  * does `db.query(sql).get(...)`. node-postgres is async and its socket I/O is

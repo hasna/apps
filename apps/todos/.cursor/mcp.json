@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "todos": {
+      "command": "todos-mcp",
+      "args": ["--stdio"],
+      "env": {
+        "TODOS_PROFILE": "minimal"
+      }
+    }
+  }
+}

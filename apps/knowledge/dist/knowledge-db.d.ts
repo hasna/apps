@@ -1,15 +1,15 @@
 import { Database } from 'bun:sqlite';
 /**
- * The single choke point for every client-side sqlite catalog open. In cloud mode
- * — selected explicitly, see knowledge-mode.ts — the on-box knowledge.db is NOT
+ * The single choke point for every client-side sqlite catalog open. With the
+ * HTTP transport selected, the on-box knowledge.db is NOT
  * the source of truth, and writing to it would be the split-brain the mission
  * forbids. Rather than silently touch local sqlite, we refuse loudly. Knowledge
- * items (notes) still flow to the shared cloud via the ApiStore; the local
- * catalog subsystem is first-class in local mode only.
- * The HTTP server (src/serve) never calls this — it reads the cloud Postgres
+ * items (notes) still flow through the server API; the local catalog subsystem
+ * belongs to the on-box transport.
+ * The HTTP server (src/serve) never calls this — it reads PostgreSQL
  * directly — so this guard applies to CLI/MCP/SDK clients only.
  */
-export declare function assertLocalCatalogMode(operation?: string): void;
+export declare function assertSqliteClientTransport(operation?: string): void;
 export declare const CURRENT_SCHEMA_VERSION = 10;
 /**
  * FTS5 tokenizer for the chunk index. `porter` keeps English stemming; the
@@ -46,11 +46,11 @@ export interface KnowledgeDbStats {
 }
 export declare function openKnowledgeDb(path: string): Database;
 /**
- * Read-only open of the on-box knowledge.db, gated by the same cloud-mode guard
+ * Read-only open of the on-box knowledge.db, gated by the same HTTP-transport guard
  * as {@link openKnowledgeDb}. This is the ONLY sanctioned read-only sqlite entry
  * point (used by the workspace-migration integrity/summary tooling) so that every
  * client-side `new Database(...)` lives in this module behind the gate — no path
- * can silently read the local catalog while the cloud API flip is active.
+ * can silently read the local catalog while HTTP transport is active.
  */
 export declare function openKnowledgeDbReadonly(path: string): Database;
 export declare function migrateKnowledgeDb(path: string): {

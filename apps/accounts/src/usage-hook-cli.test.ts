@@ -1,0 +1,103 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+/**
+ * End-to-end guards for the hook's two non-negotiables, exercised through the
+ * real CLI rather than the injectable brain: it must ALWAYS exit 0, and it must
+ * never fail silently.
+ *
+ * The silent half is what these cover that the unit tests cannot. `runUsageHook`
+ * has its own catch, but anything thrown BEFORE it — resolving the tool, the
+ * store, or the session dir — lands in the CLI's outer catch, which used to log
+ * and print nothing. Measured against the shipped build, that made a
+ * misconfigured registry indistinguishable from a healthy session.
+ */
+
+let home: string;
+let dir: string;
+
+function runHook(env: Record<string, string> = {}, extraArgs: string[] = []) {
+  return spawnSync(process.execPath, ["run", "src/cli.ts", "usage-hook", "--dir", dir, ...extraArgs], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ACCOUNTS_HOME: home,
+      ACCOUNTS_STORE_PATH: join(home, "accounts.json"),
+      ...env,
+    },
+  });
+}
+
+function systemMessage(stdout: string): string | undefined {
+  const line = stdout.trim().split("\n").filter(Boolean).pop();
+  if (!line) return undefined;
+  return (JSON.parse(line) as { systemMessage?: string }).systemMessage;
+}
+
+beforeEach(() => {
+  home = mkdtempSync(join(tmpdir(), "accounts-hookcli-"));
+  dir = join(home, "session-dir");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, ".claude.json"),
+    JSON.stringify({ oauthAccount: { accountUuid: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" } }),
+  );
+});
+
+afterEach(() => {
+  rmSync(home, { recursive: true, force: true });
+});
+
+test("a failure before the hook brain runs still exits 0 AND says something", () => {
+  // Induce a pre-brain throw via an unknown tool id: `getTool` throws before
+  // the brain, so the error never reaches runUsageHook's own handler and must
+  // be caught by the CLI's outer catch. (The old inducer — a misconfigured
+  // cloud storage mode — no longer throws here, because the hook now resolves a
+  // LocalStore and never consults the cloud resolver; that is the f70e8357 fix,
+  // and the regression test directly below pins it.)
+  const result = runHook({}, ["--tool", "no-such-tool-xyz"]);
+
+  expect(result.status).toBe(0);
+  expect(systemMessage(result.stdout)).toMatch(/auto-switching is NOT running/i);
+});
+
+test("f70e8357: a launched, registry-stripped session (stale mode vars, no API url/key) DECIDES rather than failing open", () => {
+  // Reproduces the owner-hit case: `accounts launch` denies
+  // HASNA_ACCOUNTS_API_URL/KEY to the launched session (#126) while retired
+  // storage-mode variables remain set. Before the fix, `resolveStore()` inside
+  // the hook threw and the session got "auto-switching is NOT running". The
+  // hook must now reach its brain from local state (its resolver is the
+  // local-only `resolveLocalStore`, which deliberately never consults
+  // `assertNoLegacyStorageMode`) and NOT emit that fail-open notice.
+  const result = runHook({
+    HASNA_ACCOUNTS_MODE: "cloud",
+    HASNA_ACCOUNTS_STORAGE_MODE: "cloud",
+    ACCOUNTS_STORAGE_MODE: "cloud",
+    // The two registry-authority vars are ABSENT on purpose — this is exactly
+    // what the launched session inherits after the #126 strip.
+  });
+
+  expect(result.status).toBe(0);
+  expect(systemMessage(result.stdout) ?? "").not.toMatch(/auto-switching is NOT running/i);
+});
+
+test("POSITIVE CONTROL: the healthy path is silent, so the assertion above means something", () => {
+  // Same harness, no induced failure. If this also printed a message, the test
+  // above would pass no matter what the hook did.
+  const result = runHook();
+
+  expect(result.status).toBe(0);
+  // No usage cache exists, so this is the degraded no-measurement notice —
+  // visible by design — but it must NOT be the fail-open one.
+  expect(systemMessage(result.stdout) ?? "").not.toMatch(/auto-switching is NOT running/i);
+});
+
+test("an unparseable registry exits 0 rather than blocking the prompt", () => {
+  writeFileSync(join(home, "accounts.json"), "{{{ NOT JSON");
+  const result = runHook();
+  expect(result.status).toBe(0);
+});

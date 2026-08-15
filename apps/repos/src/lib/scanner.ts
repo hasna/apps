@@ -1,0 +1,509 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, realpathSync, statSync, watch } from "node:fs";
+import { basename, join, resolve } from "node:path";
+import cliProgress from "cli-progress";
+import { getDb } from "../db/database.js";
+import { getConfig, getWorkspaceRoots } from "./config.js";
+import { classifyCheckout } from "./checkout-health.js";
+import { sanitizeRemoteIdentity } from "./remote-identity.js";
+import { canonicalPath } from "./path-identity.js";
+import {
+  upsertRepo,
+  bulkInsertCommits,
+  replaceBranches,
+  bulkInsertTags,
+  bulkInsertRemotes,
+  isDerivedCheckoutPath,
+  mergeCanonicalDuplicateRepos,
+} from "../db/repos.js";
+import type { ScanResult } from "../types/index.js";
+
+function gitWithStatus(repoPath: string, args: string[]): { ok: boolean; output: string } {
+  try {
+    const output = execFileSync("git", ["-C", repoPath, ...args], {
+      encoding: "utf-8",
+      timeout: 30_000,
+      maxBuffer: 50 * 1024 * 1024,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    return { ok: true, output };
+  } catch {
+    return { ok: false, output: "" };
+  }
+}
+
+function git(repoPath: string, args: string[]): string {
+  return gitWithStatus(repoPath, args).output;
+}
+
+/**
+ * Is this directory a repository the index should hold a row for?
+ *
+ * This used to be `existsSync(dir + "/.git")`, which is how 65 hollow `.git`
+ * skeletons — directories retaining only `hooks/` and `worktrees/`, with no
+ * HEAD, no objects and no refs — became registry rows and kept being refreshed
+ * as if they were checkouts. It is also why the walk stopped at them: a hollow
+ * directory was accepted as a repository and never descended into.
+ *
+ * A path that cannot be *read* still counts. Skipping an unreadable checkout
+ * would silently drop a real repository out of the index on a permissions blip,
+ * which is a worse failure than carrying a row that later reports `unreadable`.
+ */
+function isGitRepo(dir: string): boolean {
+  if (!existsSync(join(dir, ".git"))) return false;
+  const health = classifyCheckout(dir);
+  return health.usable || health.state === "unreadable";
+}
+
+export function discoverRepos(rootDirs: string[], maxDepth?: number): string[] {
+  const cfg = getConfig();
+  const depth = maxDepth ?? cfg.scanDepth ?? 5;
+  const excluded = new Set(cfg.excludedPaths ?? ["node_modules", "dist", "vendor", ".git"]);
+  const repos: string[] = [];
+  // Keyed on canonical identity (realpath), not on the input spelling. On a
+  // case-insensitive filesystem the `~/workspace` and `~/Workspace` roots name
+  // the same directory; a string-keyed set walks it twice and hands every repo
+  // path to the indexer twice, which double-indexes each checkout (measured
+  // 2026-08-14: apps ids 160 and 206 for one directory).
+  const visited = new Set<string>();
+
+  function walk(dir: string, d: number) {
+    if (d > depth) return;
+    const realDir = canonicalPath(dir);
+    if (visited.has(realDir)) return;
+    visited.add(realDir);
+
+    // Worktrees and throwaway build copies are derived from a primary checkout.
+    // They must not acquire their own registry rows or be searched for nested
+    // repositories, even when a derived checkout is itself the scan root.
+    if (isDerivedCheckoutPath(realDir)) return;
+
+    if (isGitRepo(realDir)) {
+      repos.push(realDir);
+      return;
+    }
+
+    try {
+      const entries = readdirSync(realDir);
+      for (const entry of entries) {
+        if (entry.startsWith(".") || excluded.has(entry)) continue;
+        const full = join(realDir, entry);
+        try {
+          const stat = statSync(full);
+          if (stat.isDirectory()) walk(full, d + 1);
+        } catch { /* permission denied, broken symlink */ }
+      }
+    } catch { /* can't read directory */ }
+  }
+
+  for (const root of rootDirs) {
+    walk(root, 0);
+  }
+
+  return repos;
+}
+
+function extractOrg(remoteUrl: string | null): string | null {
+  if (!remoteUrl) return null;
+  return remoteUrl.split("/")[1] || null;
+}
+
+/**
+ * Read a repository's origin remote, separating "git told us nothing" from
+ * "git told us something we reject".
+ *
+ * A gutted, relocated or permission-denied .git directory makes the read fail
+ * outright. That is missing information, not evidence that the repository lost
+ * its remote, and it must not erase an identity the index already holds —
+ * otherwise a transiently unreadable checkout silently drops out of every
+ * remote-scoped query. Only a remote git actually reported is a claim about the
+ * repository, and an unsafe claim still clears the stored value.
+ */
+export function readRemoteIdentity(repoPath: string): { supplied: boolean; remoteUrl: string | null } {
+  // `git -C <path>` searches upwards. A directory with a gutted or partial .git
+  // therefore answers with its nearest ANCESTOR repository, which would stamp a
+  // parent project's identity onto an unrelated child directory. Only trust the
+  // answer when git considers this exact path the top of the working tree.
+  const toplevel = gitWithStatus(repoPath, ["rev-parse", "--show-toplevel"]);
+  if (!toplevel.ok || !isSamePath(toplevel.output, repoPath)) return { supplied: false, remoteUrl: null };
+
+  const result = gitWithStatus(repoPath, ["remote", "get-url", "origin"]);
+  if (!result.ok || result.output === "") return { supplied: false, remoteUrl: null };
+  return { supplied: true, remoteUrl: sanitizeRemoteIdentity(result.output) };
+}
+
+function isSamePath(left: string, right: string): boolean {
+  if (!left || !right) return false;
+  const canonical = (value: string): string => {
+    try {
+      return realpathSync(value);
+    } catch {
+      return resolve(value);
+    }
+  };
+  return canonical(left) === canonical(right);
+}
+
+function indexRepo(repoPath: string, full = false): {
+  commits: number;
+  branches: number;
+  tags: number;
+  isNew: boolean;
+} {
+  const db = getDb();
+  const name = basename(repoPath);
+
+  // Get remote URL and default branch
+  const remote = readRemoteIdentity(repoPath);
+  const remoteUrl = remote.remoteUrl;
+  const defaultBranch = git(repoPath, ["symbolic-ref", "--short", "HEAD"]) || "main";
+  const org = extractOrg(remoteUrl);
+
+  // Check if repo already exists
+  const existing = db.query("SELECT id, last_scanned FROM repos WHERE path = ?").get(repoPath) as { id: number; last_scanned: string | null } | null;
+  const isNew = !existing;
+
+  // Get commit count limit — full scan gets all, incremental gets last 100
+  const cfg = getConfig();
+  const commitLimit = full || isNew ? (cfg.commitLimit ?? 5000) : (cfg.incrementalCommitLimit ?? 100);
+  const sinceArgs = !full && existing?.last_scanned
+    ? [`--since=${existing.last_scanned}`]
+    : [];
+
+  // Upsert repo
+  const repo = upsertRepo({
+    path: repoPath,
+    name,
+    org,
+    // Omitted entirely when the remote could not be read, so upsertRepo leaves
+    // the previously indexed identity intact instead of nulling it.
+    ...(remote.supplied ? { remote_url: remoteUrl } : {}),
+    default_branch: defaultBranch,
+    last_scanned: new Date().toISOString(),
+  });
+
+  // Index commits
+  const commitLog = git(repoPath, [
+    "log",
+    "--format=%H|%an|%ae|%aI|%s",
+    "--shortstat",
+    ...sinceArgs,
+    "-n",
+    String(commitLimit),
+  ]);
+  const commitEntries: Array<{
+    sha: string; author_name: string; author_email: string;
+    date: string; message: string; files_changed: number;
+    insertions: number; deletions: number;
+  }> = [];
+
+  if (commitLog) {
+    const lines = commitLog.split("\n");
+    let current: any = null;
+
+    for (const line of lines) {
+      if (line.includes("|") && !line.startsWith(" ")) {
+        if (current) commitEntries.push(current);
+        const parts = line.split("|");
+        current = {
+          sha: parts[0] || "",
+          author_name: parts[1] || "",
+          author_email: parts[2] || "",
+          date: parts[3] || "",
+          message: parts.slice(4).join("|"),
+          files_changed: 0,
+          insertions: 0,
+          deletions: 0,
+        };
+      } else if (current && line.includes("file")) {
+        const filesMatch = line.match(/(\d+) files? changed/);
+        const insMatch = line.match(/(\d+) insertions?/);
+        const delMatch = line.match(/(\d+) deletions?/);
+        current.files_changed = filesMatch ? parseInt(filesMatch[1]!) : 0;
+        current.insertions = insMatch ? parseInt(insMatch[1]!) : 0;
+        current.deletions = delMatch ? parseInt(delMatch[1]!) : 0;
+      }
+    }
+    if (current) commitEntries.push(current);
+  }
+
+  const commitsInserted = bulkInsertCommits(
+    commitEntries.map((c) => ({ ...c, repo_id: repo.id }))
+  );
+
+  // Index branches
+  const branchResult = gitWithStatus(repoPath, [
+    "for-each-ref",
+    "--format=%(refname)%00%(symref)%00%(objectname:short)%00%(committerdate:iso8601)",
+    "refs/heads",
+    "refs/remotes",
+  ]);
+  const branchOutput = branchResult.output;
+  const branchEntries: Array<{
+    name: string; is_remote: boolean; last_commit_sha: string | null;
+    last_commit_date: string | null; ahead: number; behind: number;
+  }> = [];
+
+  if (branchOutput) {
+    for (const line of branchOutput.split(/\r?\n/)) {
+      const [refName, symref, commitSha, commitDate] = line.split("\0");
+      if (!refName || symref) continue;
+      const isRemote = refName.startsWith("refs/remotes/");
+      const prefix = isRemote ? "refs/remotes/" : "refs/heads/";
+      if (!refName.startsWith(prefix)) continue;
+      const branchName = refName.slice(prefix.length);
+      if (!branchName) continue;
+      let ahead = 0;
+      let behind = 0;
+
+      if (!isRemote) {
+        const trackingBranch = branchName === defaultBranch
+          ? `origin/${defaultBranch}`
+          : null;
+        if (trackingBranch) {
+          const revlist = git(repoPath, [
+            "rev-list",
+            "--left-right",
+            "--count",
+            `${branchName}...${trackingBranch}`,
+          ]);
+          if (revlist) {
+            const counts = revlist.split("\t");
+            ahead = parseInt(counts[0] ?? "0", 10) || 0;
+            behind = parseInt(counts[1] ?? "0", 10) || 0;
+          }
+        }
+      }
+
+      branchEntries.push({
+        name: branchName,
+        is_remote: isRemote,
+        last_commit_sha: commitSha || null,
+        last_commit_date: commitDate || null,
+        ahead,
+        behind,
+      });
+    }
+  }
+
+  const branchesInserted = branchResult.ok
+    ? replaceBranches(repo.id, branchEntries)
+    : 0;
+
+  // Index tags
+  const tagOutput = git(repoPath, [
+    "tag",
+    "-l",
+    "--format=%(refname:short)|%(objectname:short)|%(creatordate:iso8601)|%(subject)",
+  ]);
+  const tagEntries: Array<{ name: string; sha: string; date: string | null; message: string | null }> = [];
+
+  if (tagOutput) {
+    for (const line of tagOutput.split("\n")) {
+      const parts = line.replace(/'/g, "").split("|");
+      if (!parts[0]) continue;
+      tagEntries.push({
+        name: parts[0],
+        sha: parts[1] || "",
+        date: parts[2] || null,
+        message: parts[3] || null,
+      });
+    }
+  }
+
+  const tagsInserted = bulkInsertTags(
+    tagEntries.map((t) => ({ ...t, repo_id: repo.id }))
+  );
+
+  // Index remotes
+  const remoteOutput = git(repoPath, ["remote", "-v"]);
+  const remoteMap = new Map<string, { name: string; url: string; fetch_url: string | null }>();
+
+  if (remoteOutput) {
+    for (const line of remoteOutput.split("\n")) {
+      const match = line.match(/^(\S+)\s+(\S+)\s+\((\w+)\)/);
+      if (match) {
+        const rName = match[1]!;
+        const rUrl = match[2]!;
+        const type = match[3];
+        const existing = remoteMap.get(rName) || { name: rName, url: rUrl, fetch_url: null };
+        if (type === "fetch") existing.fetch_url = rUrl;
+        else existing.url = rUrl;
+        remoteMap.set(rName, existing);
+      }
+    }
+  }
+
+  bulkInsertRemotes(
+    Array.from(remoteMap.values()).map((r) => ({ ...r, repo_id: repo.id }))
+  );
+
+  // Update counts on repo
+  const commitCount = (db.query("SELECT COUNT(*) as c FROM commits WHERE repo_id = ?").get(repo.id) as any).c;
+  const branchCount = (db.query("SELECT COUNT(*) as c FROM branches WHERE repo_id = ?").get(repo.id) as any).c;
+  const tagCount = (db.query("SELECT COUNT(*) as c FROM tags WHERE repo_id = ?").get(repo.id) as any).c;
+
+  db.query("UPDATE repos SET commit_count = ?, branch_count = ?, tag_count = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(commitCount, branchCount, tagCount, repo.id);
+
+  return { commits: commitsInserted, branches: branchesInserted, tags: tagsInserted, isNew };
+}
+
+export async function scanRepoPaths(
+  repoPaths: string[],
+  opts: { full?: boolean; onProgress?: (msg: string) => void; workers?: number } = {}
+): Promise<ScanResult> {
+  const start = Date.now();
+  const { full = false, onProgress, workers: maxWorkers = 4 } = opts;
+  // Collapse registry rows that already describe the same directory under two
+  // spellings before anything is refreshed, so the upserts below land on the
+  // survivor and the index converges to one row per directory. Idempotent:
+  // with no duplicates this reads the rows, realpaths them, and writes nothing.
+  const merged = mergeCanonicalDuplicateRepos();
+  if (merged.duplicate_rows_removed > 0) {
+    onProgress?.(`Merged ${merged.duplicate_rows_removed} registry rows that name the same directory twice`);
+  }
+  // scanRepoPaths is also called directly by the auto-index worker and repo
+  // lifecycle, so enforce the same admission rule as discovery here rather
+  // than relying on every caller to have gone through discoverRepos first.
+  const admittedRepoPaths = repoPaths.filter((repoPath) =>
+    !isDerivedCheckoutPath(resolve(repoPath))
+  );
+
+  const progressBar = new cliProgress.SingleBar({
+    format: "  indexing [{bar}] {percentage}% | {value}/{total} | {filename}",
+    hideCursor: true,
+    noTTYOutput: !!onProgress,
+  });
+
+  if (admittedRepoPaths.length > 0) {
+    progressBar.start(admittedRepoPaths.length, 0, { filename: "" });
+  }
+
+  let repos_new = 0;
+  let repos_updated = 0;
+  let commits_indexed = 0;
+  let branches_indexed = 0;
+  let tags_indexed = 0;
+
+  const chunks: string[][] = [];
+  for (let i = 0; i < admittedRepoPaths.length; i += maxWorkers) {
+    chunks.push(admittedRepoPaths.slice(i, i + maxWorkers));
+  }
+
+  let completed = 0;
+  for (const chunk of chunks) {
+    const results = await Promise.allSettled(
+      chunk.map((repoPath) => indexRepo(repoPath, full))
+    );
+    for (const result of results) {
+      completed++;
+      if (result.status === "fulfilled") {
+        if (result.value.isNew) repos_new++;
+        else repos_updated++;
+        commits_indexed += result.value.commits;
+        branches_indexed += result.value.branches;
+        tags_indexed += result.value.tags;
+      }
+      progressBar.increment({ filename: basename(admittedRepoPaths[completed - 1]!) });
+    }
+  }
+
+  progressBar.stop();
+
+  return {
+    repos_found: admittedRepoPaths.length,
+    repos_new,
+    repos_updated,
+    commits_indexed,
+    branches_indexed,
+    tags_indexed,
+    duplicate_rows_merged: merged.duplicate_rows_removed,
+    duration_ms: Date.now() - start,
+  };
+}
+
+export async function scanRepos(
+  rootDirs?: string[],
+  opts: { full?: boolean; onProgress?: (msg: string) => void; workers?: number } = {},
+): Promise<ScanResult> {
+  const roots = getWorkspaceRoots(rootDirs);
+  opts.onProgress?.(`Discovering repos in: ${roots.join(", ")}`);
+  const repoPaths = discoverRepos(roots);
+  opts.onProgress?.(`Found ${repoPaths.length} repositories`);
+  return scanRepoPaths(repoPaths, opts);
+}
+
+export function watchRepos(
+  rootDirs?: string[],
+  opts: {
+    full?: boolean;
+    onProgress?: (msg: string) => void;
+    onRepoChanged?: (repoPath: string) => Promise<void> | void;
+    onRepoDiscovered?: (repoPath: string) => Promise<void> | void;
+  } = {}
+): { stop: () => void } {
+  const roots = getWorkspaceRoots(rootDirs);
+
+  const repoPaths = discoverRepos(roots);
+  const watchedDirs = new Set<string>();
+  const watchers: Array<ReturnType<typeof watch>> = [];
+
+  const attachRepoWatcher = (repoPath: string) => {
+    // Same canonical identity as discoverRepos: two spellings of one directory
+    // must not arm two watchers on the same tree.
+    const key = canonicalPath(repoPath);
+    if (watchedDirs.has(key)) return;
+    watchedDirs.add(key);
+
+    try {
+      const watcher = watch(repoPath, { recursive: true }, (_eventType, filename) => {
+        if (filename && !filename.includes(".git/objects")) {
+          opts.onProgress?.(`[change] ${filename} in ${basename(repoPath)}`);
+          const cb = opts.onRepoChanged?.(repoPath);
+          if (cb instanceof Promise) cb.catch(() => {});
+        }
+      });
+      watchers.push(watcher);
+    } catch (error) {
+      opts.onProgress?.(`[watch] Failed to watch ${repoPath}: ${(error as Error).message}`);
+    }
+  };
+
+  for (const repoPath of repoPaths) {
+    attachRepoWatcher(repoPath);
+  }
+
+  for (const root of roots) {
+    try {
+      const watcher = watch(root, { recursive: true }, (_eventType, filename) => {
+        if (!filename) return;
+        const normalized = filename.toString().replace(/\\/g, "/");
+        const gitMarkerIndex = normalized.indexOf("/.git");
+        if (gitMarkerIndex === -1) return;
+        const newRepoPath = resolve(root, normalized.slice(0, gitMarkerIndex));
+        const discovered = canonicalPath(newRepoPath);
+        if (existsSync(join(discovered, ".git")) && !watchedDirs.has(discovered)) {
+          opts.onProgress?.(`[new] Discovered new repo: ${basename(discovered)}`);
+          attachRepoWatcher(discovered);
+          const cb = opts.onRepoDiscovered?.(discovered);
+          if (cb instanceof Promise) cb.catch(() => {});
+        }
+      });
+      watchers.push(watcher);
+    } catch (error) {
+      opts.onProgress?.(`[watch] Failed to watch ${root}: ${(error as Error).message}`);
+    }
+  }
+
+  opts.onProgress?.(`Watching ${repoPaths.length} repos for changes...`);
+
+  return {
+    stop: () => {
+      for (const watcher of watchers) {
+        watcher.close();
+      }
+      opts.onProgress?.("Stopped watching repos");
+    },
+  };
+}

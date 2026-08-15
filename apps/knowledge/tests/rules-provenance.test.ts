@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getKnowledgeDbStats, openKnowledgeDb } from '../src/knowledge-db';
-import { KNOWLEDGE_API_KEY_ENV_KEYS, KNOWLEDGE_API_URL_ENV_KEYS, KNOWLEDGE_MODE_ENV_KEYS } from '../src/knowledge-mode';
+import { KNOWLEDGE_API_KEY_ENV_KEYS, KNOWLEDGE_API_URL_ENV_KEYS, RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS } from '../src/client-transport';
 import { importRulesProvenance } from '../src/rules-provenance';
 import { redactSecrets } from '../src/safety';
 import { createKnowledgeService } from '../src/service';
@@ -15,7 +15,7 @@ const CLI = join(__dirname, '..', 'src', 'cli.ts');
 
 function runCli(args: string[], cwd: string) {
   const env = { ...process.env, HOME: cwd, USERPROFILE: cwd };
-  for (const key of [...KNOWLEDGE_API_URL_ENV_KEYS, ...KNOWLEDGE_API_KEY_ENV_KEYS, ...KNOWLEDGE_MODE_ENV_KEYS]) {
+  for (const key of [...KNOWLEDGE_API_URL_ENV_KEYS, ...KNOWLEDGE_API_KEY_ENV_KEYS, ...RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS]) {
     delete env[key];
   }
   const result = spawnSync('bun', [CLI, ...args], {

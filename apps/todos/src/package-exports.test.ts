@@ -1,0 +1,196 @@
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import packageJson from "../package.json";
+import {
+  TODOS_CONTRACTS,
+  TODOS_ERROR_CODES,
+  createContractsManifest,
+} from "./contracts.js";
+import {
+  TODOS_MCP_MANIFEST,
+  createMcpManifest,
+  getMcpToolNames,
+} from "./mcp.js";
+import {
+  TODOS_PACKAGE_EXPORTS,
+  TODOS_REGISTRY,
+  createTodosRegistry,
+} from "./registry.js";
+
+const expectedExports = {
+  ".": {
+    types: "./dist/index.d.ts",
+    import: "./dist/index.js",
+  },
+  "./sdk": {
+    types: "./dist/sdk/index.d.ts",
+    import: "./dist/sdk/index.js",
+  },
+  "./mcp": {
+    types: "./dist/mcp.d.ts",
+    import: "./dist/mcp.js",
+  },
+  "./registry": {
+    types: "./dist/registry.d.ts",
+    import: "./dist/registry.js",
+  },
+  "./contracts": {
+    types: "./dist/contracts.d.ts",
+    import: "./dist/contracts.js",
+  },
+  "./storage": {
+    types: "./dist/storage.d.ts",
+    import: "./dist/storage.js",
+  },
+  "./testing": {
+    types: "./dist/testing.d.ts",
+    import: "./dist/testing.js",
+  },
+  "./project-registration": {
+    types: "./dist/project-registration.d.ts",
+    import: "./dist/project-registration.js",
+  },
+  "./task-manifest": {
+    types: "./dist/task-manifest.d.ts",
+    import: "./dist/task-manifest.js",
+  },
+};
+
+describe("package subpath exports", () => {
+  // Regression: ./testing shipped with `types: ./dist/testing.d.ts` while
+  // tsconfig.json's `include` did not list src/testing.ts, so `tsc --emitDeclarationOnly`
+  // silently produced no declaration and the published tarball would have had a subpath
+  // whose types resolve to nothing. `bun run typecheck` did not catch it (different
+  // tsconfig); only a real build did. This test catches it without a build.
+  test("every declared subpath has its source entry in the tsconfig include list", () => {
+    const tsconfig = readFileSync(join(import.meta.dir, "..", "tsconfig.json"), "utf8");
+    const include: string[] = JSON.parse(tsconfig.replace(/^\s*\/\/.*$/gm, "")).include;
+
+    for (const subpath of Object.keys(expectedExports)) {
+      const emitted = expectedExports[subpath as keyof typeof expectedExports].types;
+      // ./dist/foo.d.ts -> src/foo.ts ; ./dist/foo/index.d.ts -> src/foo/index.ts
+      const source = emitted.replace(/^\.\/dist\//, "src/").replace(/\.d\.ts$/, ".ts");
+      const covered = include.some(
+        (entry) => entry === source || (entry.includes("*") && source.startsWith(entry.split("*")[0]!)),
+      );
+      expect(covered ? source : `${source} (declared by "${subpath}") is missing from tsconfig include`).toBe(source);
+    }
+  });
+
+  test("declares every stable package subpath export", () => {
+    expect(packageJson.exports).toEqual(expectedExports);
+    expect(TODOS_PACKAGE_EXPORTS.map((entry) => entry.subpath)).toEqual(Object.keys(expectedExports));
+
+    for (const exported of TODOS_PACKAGE_EXPORTS) {
+      expect(packageJson.exports[exported.subpath]).toEqual({
+        types: exported.types,
+        import: exported.import,
+      });
+      expect(exported.stability).toBe("stable");
+      expect(exported.description.length).toBeGreaterThan(20);
+    }
+  });
+
+  test("provides side-effect-free MCP metadata and profile filtering", () => {
+    const manifest = createMcpManifest({
+      version: "1.2.3",
+      generatedAt: "2026-01-02T03:04:05.000Z",
+    });
+
+    expect(manifest).toMatchObject({
+      schemaVersion: 1,
+      generatedAt: "2026-01-02T03:04:05.000Z",
+      package: {
+        packageName: "@hasna/todos",
+        repository: "hasna/todos",
+        version: "1.2.3",
+      },
+      server: {
+        name: "todos",
+        binary: "todos-mcp",
+        transport: "stdio",
+      },
+    });
+    expect(manifest.tools.length).toBeGreaterThan(100);
+    expect(manifest.tools.find((tool) => tool.name === "create_task")).toMatchObject({
+      groups: ["core"],
+      profiles: expect.arrayContaining(["minimal", "standard"]),
+      core: true,
+      stability: "stable",
+    });
+    expect(getMcpToolNames({ profile: "minimal" })).toContain("create_task");
+    expect(getMcpToolNames({ profile: "minimal" })).not.toContain("bulk_update_tasks");
+    expect(getMcpToolNames({ profile: "full" })).toContain("bulk_update_tasks");
+    expect(TODOS_MCP_MANIFEST.generatedAt).toBe("1970-01-01T00:00:00.000Z");
+  });
+
+  test("provides API contracts, enum values, and generic error codes", () => {
+    const manifest = createContractsManifest({
+      version: "1.2.3",
+      generatedAt: "2026-01-02T03:04:05.000Z",
+    });
+
+    expect(manifest.values.taskStatuses).toEqual(["pending", "in_progress", "completed", "failed", "cancelled"]);
+    expect(manifest.values.taskPriorities).toEqual(["low", "medium", "high", "critical"]);
+    expect(manifest.apiRoutes.map((route) => `${route.method} ${route.path}`)).toEqual(
+      expect.arrayContaining([
+        "GET /api/health",
+        "GET /api/tasks",
+        "POST /api/tasks",
+        "GET /api/tasks/:id",
+        "PATCH /api/tasks/:id",
+        "POST /api/tasks/:id/complete",
+        "POST /api/tasks/claim",
+      ]),
+    );
+    expect(manifest.errorCodes.map((error) => error.code)).toEqual(
+      expect.arrayContaining(["TASK_NOT_FOUND", "VERSION_CONFLICT", "COMPLETION_BLOCKED"]),
+    );
+    expect(manifest.jsonOutputs.contracts.map((contract) => contract.id)).toEqual(
+      expect.arrayContaining(["task", "project", "agent", "template", "task_list", "comment", "checkpoint", "dispatch", "handoff", "audit_history", "status_summary", "structured_error", "api_error", "cli_mcp_parity_manifest", "project_bootstrap_result"]),
+    );
+    expect(manifest.jsonOutputs.generatedAt).toBe(manifest.generatedAt);
+    expect(TODOS_ERROR_CODES).toHaveLength(manifest.errorCodes.length);
+    expect(TODOS_CONTRACTS.generatedAt).toBe("1970-01-01T00:00:00.000Z");
+  });
+
+  test("combines exports, capabilities, contracts, and MCP metadata in the registry", () => {
+    const registry = createTodosRegistry({
+      version: "1.2.3",
+      generatedAt: "2026-01-02T03:04:05.000Z",
+    });
+
+    expect(registry).toMatchObject({
+      schemaVersion: 1,
+      generatedAt: "2026-01-02T03:04:05.000Z",
+      package: {
+        packageName: "@hasna/todos",
+        repository: "hasna/todos",
+        version: "1.2.3",
+      },
+    });
+    expect(registry.exports).toEqual(TODOS_PACKAGE_EXPORTS);
+    expect(registry.jsonContractDocsPath).toBe("docs/json-contracts.md");
+    expect(registry.capabilities.package.version).toBe("1.2.3");
+    expect(registry.contracts.package.version).toBe("1.2.3");
+    expect(registry.mcp.package.version).toBe("1.2.3");
+    expect(registry.cliMcpParity.package.version).toBe("1.2.3");
+    expect(registry.cliMcpParity.parity.map((entry) => entry.domain)).toEqual(
+      expect.arrayContaining(["tasks", "projects", "plans", "runs", "handoffs", "comments", "search", "imports", "exports"]),
+    );
+    expect(TODOS_REGISTRY.generatedAt).toBe("1970-01-01T00:00:00.000Z");
+  });
+
+  test("keeps exported integration contracts SaaS-neutral", () => {
+    const serialized = JSON.stringify({
+      mcp: TODOS_MCP_MANIFEST,
+      contracts: TODOS_CONTRACTS,
+      registry: TODOS_REGISTRY,
+    }).toLowerCase();
+
+    for (const forbidden of ["stripe", "billing", "tenant", "aws", "s3", "platform-todos", "saas"]) {
+      expect(serialized.includes(forbidden)).toBe(false);
+    }
+  });
+});

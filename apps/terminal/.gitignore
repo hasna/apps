@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.*
+.secrets
+.secrets/
+temp/
+.benchmark-artifacts/
+.connectors/
+.takumi/
+*.pem
+*.key
+*.tgz
+imported_modules.txt

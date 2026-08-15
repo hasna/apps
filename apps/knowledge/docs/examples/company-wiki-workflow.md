@@ -163,12 +163,12 @@ Agents should prefer stable tools such as `knowledge_search`, `knowledge_ask`,
 `knowledge://project/wiki/pages`, `knowledge://project/runs`, and
 `knowledge://project/open-files`.
 
-## 8. Optional Hosted And S3 Mode
+## 8. Optional HTTP And S3 Setup
 
-Hosted mode is only a remote client boundary:
+The HTTP API is an optional client boundary:
 
 ```bash
-knowledge setup --mode hosted --api-url https://knowledge.md --scope project --json
+knowledge setup --api-url https://knowledge.md --scope project --json
 knowledge remote contracts --scope project --json
 ```
 

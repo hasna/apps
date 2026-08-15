@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.106
+
+- Remove the deployment-mode storage vocabulary from the knowledge storage
+  surface: mode fields and mode branching are gone from stored contracts and
+  storage code, aligning knowledge with the owner directive that there are no
+  deployment modes (user-hosted and Hasna SaaS only).
+
 ## 0.2.105
 
 - Honor the canonical Knowledge API URL and fail closed with typed errors when

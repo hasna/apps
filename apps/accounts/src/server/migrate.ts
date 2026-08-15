@@ -1,0 +1,127 @@
+#!/usr/bin/env bun
+// accounts-migrate — apply the accounts server schema to Postgres.
+//
+// Uses the vendored kit's checksum-guarded MigrationLedger against the database
+// resolved from HASNA_ACCOUNTS_DATABASE_URL. Idempotent. `--dry-run` reports
+// the plan without mutating. Intended for the ECS one-shot migration task and
+// local ops.
+
+import { createServerPoolFromEnv, MigrationLedger, resolveServerDataBackend } from "../generated/storage-kit/index.js";
+import {
+  accountsMigrations,
+  assertMigrationStatusCompatible,
+  readMigrationStatus,
+} from "./migrations.js";
+import { APP_SLUG } from "./config.js";
+import { grantAccountsRuntimeRole } from "./runtime-role.js";
+import {
+  preflightDestructiveMigrations,
+  restorePurgeArchive,
+  PURGE_MIGRATION_ID,
+} from "./destructive-guard.js";
+
+async function main(): Promise<void> {
+  const dryRun = process.argv.includes("--dry-run");
+  const restore = process.argv.includes("--restore-purge-archive");
+  const resolution = resolveServerDataBackend(APP_SLUG, process.env);
+  if (resolution.backend !== "postgresql") {
+    console.error("accounts-migrate requires HASNA_ACCOUNTS_DATABASE_URL (postgresql backend).");
+    process.exit(1);
+  }
+  const { client } = createServerPoolFromEnv(APP_SLUG, { applicationName: "accounts-migrate", max: 2 });
+  try {
+    // Recovery path for the destructive purge. Runs before any migration work
+    // so a restore is possible even when the schema is otherwise up to date.
+    if (restore) {
+      const result = await restorePurgeArchive(client);
+      console.log(JSON.stringify({ evt: "purge_archive_restored", ...result }, null, 2));
+      return;
+    }
+    const migrations = accountsMigrations();
+    const runtimeRole = process.env.HASNA_ACCOUNTS_RUNTIME_ROLE?.trim();
+    if (!runtimeRole) {
+      throw new Error(
+        "accounts-migrate requires HASNA_ACCOUNTS_RUNTIME_ROLE for the DML-only accounts-serve role.",
+      );
+    }
+    // First, a privilege-safe status probe (no DDL). The migration owner still
+    // runs every migration task so a current-schema no-op can revalidate and
+    // reapply the runtime role's direct grants.
+    const status = await readMigrationStatus(client, migrations);
+    assertMigrationStatusCompatible(status);
+    // Destructive-migration gate, ARM 2. Deliberately placed BEFORE the dry-run
+    // branch so `accounts-migrate --dry-run` is the pre-deploy check and refuses
+    // without mutating anything. Throws when the pre-flight count is outside the
+    // expected envelope; returns the counts when the deploy may proceed.
+    const preflight = await preflightDestructiveMigrations(client, status, migrations);
+    if (preflight.purgePending) {
+      console.log(
+        JSON.stringify(
+          {
+            evt: "destructive_preflight",
+            migration: PURGE_MIGRATION_ID,
+            withinEnvelope: preflight.withinEnvelope,
+            acknowledged: preflight.acknowledged,
+            snapshotRefreshed: preflight.snapshotRefreshed,
+            counts: preflight.counts.map((count) => ({
+              table: count.table,
+              column: count.column,
+              matched: count.matched,
+              maxExpected: count.maxExpected,
+              tablePresent: count.tablePresent,
+            })),
+          },
+          null,
+          2,
+        ),
+      );
+    }
+    if (status.ledgerPresent && status.pending.length === 0) {
+      if (!dryRun) {
+        const grant = await grantAccountsRuntimeRole(client, runtimeRole);
+        console.log(JSON.stringify({ evt: "runtime_role_granted", ...grant }, null, 2));
+      }
+      console.log(JSON.stringify({ evt: "migrate_noop", dryRun, total: migrations.length, pending: [] }, null, 2));
+      return;
+    }
+    if (dryRun) {
+      console.log(
+        JSON.stringify(
+          {
+            evt: "migrate_plan",
+            dryRun,
+            total: migrations.length,
+            ledgerPresent: status.ledgerPresent,
+            pending: status.pending,
+            unknown: status.unknown,
+            checksumMismatches: status.checksumMismatches,
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+    // Pending work exists -> apply via the checksum-guarded ledger (owner role
+    // required for the CREATE/DDL).
+    const ledger = new MigrationLedger(client, migrations);
+    const result = await ledger.migrate({ dryRun: false });
+    const grant = await grantAccountsRuntimeRole(client, runtimeRole);
+    console.log(JSON.stringify({ evt: "runtime_role_granted", ...grant }, null, 2));
+    const appliedNow = result.plan.filter((p) => p.state === "pending").map((p) => p.migration.id);
+    console.log(
+      JSON.stringify(
+        { evt: "migrate_done", dryRun, total: result.plan.length, appliedNow, ledgerTotal: result.applied.length },
+        null,
+        2,
+      ),
+    );
+  } finally {
+    await client.close();
+  }
+}
+
+main().catch((err) => {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+});

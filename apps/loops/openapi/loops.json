@@ -1,0 +1,5773 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Loops",
+    "version": "0.5.1",
+    "description": "Loops multi-tenant control-plane HTTP API. All non-probe operations require a tenant-bound API key with the declared scope, role, and token kind."
+  },
+  "servers": [
+    {
+      "url": "https://your-deployment.example",
+      "description": "Replace with your Loops deployment's base URL."
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "healthCheck",
+        "summary": "Liveness probe",
+        "responses": {
+          "200": {
+            "description": "alive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Foundation"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/ready": {
+      "get": {
+        "operationId": "readyCheck",
+        "summary": "Readiness probe (storage reachable + migrated)",
+        "responses": {
+          "200": {
+            "description": "ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Foundation"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Foundation"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/version": {
+      "get": {
+        "operationId": "getVersion",
+        "summary": "Service version",
+        "responses": {
+          "200": {
+            "description": "version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Foundation"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/v1/loops": {
+      "get": {
+        "operationId": "listLoops",
+        "summary": "List loops",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "paused",
+                "stopped",
+                "expired"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "includeArchived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "labels",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated labels; all labels must match.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "loops",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopListResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      },
+      "post": {
+        "operationId": "createLoop",
+        "summary": "Create a loop",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateLoopInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed. Invalid agent extraArgs include bounded public details; other validation failures omit details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationFailureResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.create",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
+      }
+    },
+    "/v1/loops/count": {
+      "get": {
+        "operationId": "countLoops",
+        "summary": "Count loops (total-row verification)",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeArchived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CountResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.count",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/loops/{id}": {
+      "get": {
+        "operationId": "getLoop",
+        "summary": "Get a loop by id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "loop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      },
+      "patch": {
+        "operationId": "updateLoop",
+        "summary": "Update a loop (status / schedule fields)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateLoopInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "loop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The supplied loop status is not one of the canonical runtime states",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidLoopStatusResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.update",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
+      },
+      "delete": {
+        "operationId": "deleteLoop",
+        "summary": "Delete a loop",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.delete",
+        "x-required-scopes": [
+          "loops:delete"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "destructive"
+      }
+    },
+    "/v1/loops/{id}/mutations": {
+      "post": {
+        "operationId": "mutateLoop",
+        "summary": "Apply a full-id, tenant-bound loop mutation with CAS and exactly-once receipts",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Exact 32-character loop id. Names are rejected.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{32}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopMutationEnvelope"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Immutable admission and terminal receipts plus the public loop result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopMutationResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Revision, immutable binding, or lease conflict"
+          },
+          "422": {
+            "description": "Invalid, partial, or path-mismatched mutation envelope"
+          }
+        },
+        "x-authorization-operation": "loops.mutate",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
+      }
+    },
+    "/v1/loop-mutations/{operationId}/{stepId}": {
+      "get": {
+        "operationId": "getLoopMutation",
+        "summary": "Reconcile one exact tenant-bound loop mutation result under explicit lookup caps",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stepId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "maxCalls",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8,
+              "default": 2
+            }
+          },
+          {
+            "name": "maxRecords",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2,
+              "default": 2
+            }
+          },
+          {
+            "name": "maxBytes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048576,
+              "default": 65536
+            }
+          },
+          {
+            "name": "maxWallMs",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5000,
+              "default": 250
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Previously committed immutable mutation receipts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopMutationResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No mutation exists for this exact tenant, operation id, and step id"
+          },
+          "422": {
+            "description": "A reconciliation cap is invalid or exceeded"
+          }
+        },
+        "x-authorization-operation": "loopMutations.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/loops/{id}/archive": {
+      "post": {
+        "operationId": "archiveLoop",
+        "summary": "Archive a loop by id or name",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Exact loop id, or a name that uniquely selects an active unarchived loop. Exact ids are idempotent when already archived.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "loop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ambiguous loop name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AmbiguousNameResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.archive",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
+      }
+    },
+    "/v1/loops/{id}/unarchive": {
+      "post": {
+        "operationId": "unarchiveLoop",
+        "summary": "Unarchive a loop by id or name",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Exact loop id, or a name that uniquely selects an archived loop. Exact ids are idempotent when already active.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "loop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ambiguous loop name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AmbiguousNameResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.unarchive",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
+      }
+    },
+    "/v1/runs": {
+      "get": {
+        "operationId": "listRuns",
+        "summary": "List runs",
+        "parameters": [
+          {
+            "name": "loopId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "labels",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated current loop labels; all labels must match.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "showOutput",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunListResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/runs/count": {
+      "get": {
+        "operationId": "countRuns",
+        "summary": "Count runs (total-row verification)",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CountResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.count",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/runs/{id}": {
+      "get": {
+        "operationId": "getRun",
+        "summary": "Get a run by id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "showOutput",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/import": {
+      "post": {
+        "operationId": "importRows",
+        "summary": "Bulk id-preserving import (control-plane backfill)",
+        "description": "Upsert full workflow/loop/run rows by id (idempotent; ON CONFLICT(id) DO UPDATE). Preserves ids, definitions, and timestamps while applying safe defaults: imported workflows are archived, imported loops are paused, and nextRunAt/retryScheduledFor are cleared by default so backfills never schedule immediately. Set preserveWorkflowActivation=true or preserveLoopScheduling=true only for intentional activation. Applied FK-safe: workflows, then loops, then runs. Volatile running runs are skipped and reported.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "import counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed. Invalid imported agent extraArgs include bounded public details; other validation failures omit details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationFailureResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "tenant.import",
+        "x-required-scopes": [
+          "loops:import"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "destructive"
+      }
+    },
+    "/v1/workflows": {
+      "get": {
+        "operationId": "listWorkflows",
+        "summary": "List workflow specs",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "archived"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "workflow specs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowListResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflows.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      },
+      "post": {
+        "operationId": "createWorkflow",
+        "summary": "Create a workflow spec",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkflowInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflows.create",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
+      }
+    },
+    "/v1/workflows/count": {
+      "get": {
+        "operationId": "countWorkflows",
+        "summary": "Count workflow specs",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CountResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflows.count",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/workflows/{id}": {
+      "get": {
+        "operationId": "getWorkflow",
+        "summary": "Get a workflow spec by id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflows.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/invocations": {
+      "get": {
+        "operationId": "listWorkflowInvocations",
+        "summary": "List workflow route invocations",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "workflow invocations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowInvocationListResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "invocations.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      },
+      "post": {
+        "operationId": "createWorkflowInvocation",
+        "summary": "Create an id-preserving workflow route invocation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkflowInvocationInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "workflow invocation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowInvocationResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "invocations.create",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
+      }
+    },
+    "/v1/work-items": {
+      "get": {
+        "operationId": "listWorkflowWorkItems",
+        "summary": "List workflow route work items",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeKey",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "workflow work items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowWorkItemListResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workItems.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      },
+      "post": {
+        "operationId": "upsertWorkflowWorkItem",
+        "summary": "Upsert an id-preserving workflow route work item",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertWorkflowWorkItemInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "workflow work item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowWorkItemResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workItems.upsert",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
+      }
+    },
+    "/v1/receipts": {
+      "get": {
+        "operationId": "listRunReceipts",
+        "summary": "List run receipts",
+        "parameters": [
+          {
+            "name": "loopId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "taskId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "knowledgeId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "run receipts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunReceiptListResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "receipts.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      },
+      "post": {
+        "operationId": "writeRunReceipt",
+        "summary": "Write a run receipt",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WriteRunReceiptInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "run receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunReceiptResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "receipts.write",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
+      }
+    },
+    "/v1/receipts/{runId}": {
+      "get": {
+        "operationId": "getRunReceipt",
+        "summary": "Get a run receipt by run id",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "run receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunReceiptResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "receipts.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/status": {
+      "get": {
+        "operationId": "statusRead",
+        "summary": "status.read",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "status.read",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1": {
+      "get": {
+        "operationId": "apiRead",
+        "summary": "api.read",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "api.read",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "operationId": "apiStatus",
+        "summary": "api.status",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "api.status",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/loops/{id}/rename": {
+      "post": {
+        "operationId": "loopsRename",
+        "summary": "loops.rename",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.rename",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/runs/{id}/heartbeat": {
+      "post": {
+        "operationId": "runsHeartbeat",
+        "summary": "runs.heartbeat",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.heartbeat",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/finalize": {
+      "post": {
+        "operationId": "runsFinalize",
+        "summary": "runs.finalize",
+        "description": "Finalize a claimed run. The control-plane receipt time is authoritative for scheduling and updatedAt. A supplied finishedAt is retained only after clamping it between the run start and receipt time; when durationMs is omitted it is derived from the receipt time.",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The runner claim is stale, the run is no longer running, or both bounded loop-advancement attempts lost a concurrent scheduling transition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunFinalizeConflictResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The completion status is missing or skipped is not backed by an overlap-skip loop exiting with code 75",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunFinalizeValidationResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.finalize",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "claimToken": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "description": "skipped is accepted only for a non-workflow overlap-skip loop whose process exits with code 75.",
+                    "enum": [
+                      "succeeded",
+                      "failed",
+                      "timed_out",
+                      "skipped"
+                    ]
+                  },
+                  "finishedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Optional runner evidence timestamp; normalized into [startedAt, server receipt time] before persistence."
+                  },
+                  "durationMs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Optional runner-reported duration. When omitted, the server derives elapsed time from startedAt to receipt time."
+                  },
+                  "stdout": {
+                    "type": "string"
+                  },
+                  "stderr": {
+                    "type": "string"
+                  },
+                  "error": {
+                    "type": "string"
+                  },
+                  "exitCode": {
+                    "type": "integer"
+                  },
+                  "pid": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "claimToken",
+                  "status"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/evidence": {
+      "post": {
+        "operationId": "runsEvidence",
+        "summary": "runs.evidence",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.evidence",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/workflow-runs": {
+      "post": {
+        "operationId": "runsWorkflowRunsCreate",
+        "summary": "runs.workflowRuns.create",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.workflowRuns.create",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/workflow-runs/{workflowRunId}/get": {
+      "post": {
+        "operationId": "runsWorkflowRunsGet",
+        "summary": "runs.workflowRuns.get",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.workflowRuns.get",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workflowRunId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/workflow-runs/{workflowRunId}/steps": {
+      "post": {
+        "operationId": "runsWorkflowRunsSteps",
+        "summary": "runs.workflowRuns.steps",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.workflowRuns.steps",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workflowRunId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/workflow-runs/{workflowRunId}/events": {
+      "post": {
+        "operationId": "runsWorkflowRunsEvents",
+        "summary": "Validate a legacy runner-authored agent session contract",
+        "description": "Compatibility-only runner endpoint. New hosted runners do not call it: the control plane derives and persists agent_session_contract events from stored workflow steps. Non-agent steps, mismatches, duplicates, and fabricated contracts fail closed.",
+        "deprecated": true,
+        "responses": {
+          "200": {
+            "description": "Validated and persisted only when a compatible pre-change run is still missing its derived event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowEventResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Contract mismatch, duplicate, invalid stored workflow, or incompatible pre-change record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Event type is not allowed, the step is not an agent, or the stored step does not require a contract",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.workflowRuns.events",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workflowRunId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentSessionContractEventInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/workflow-runs/{workflowRunId}/recover": {
+      "post": {
+        "operationId": "runsWorkflowRunsRecover",
+        "summary": "runs.workflowRuns.recover",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.workflowRuns.recover",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workflowRunId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/workflow-runs/{workflowRunId}/finalize": {
+      "post": {
+        "operationId": "runsWorkflowRunsFinalize",
+        "summary": "runs.workflowRuns.finalize",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.workflowRuns.finalize",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workflowRunId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/workflow-runs/{workflowRunId}/steps/{stepId}/{action}": {
+      "post": {
+        "operationId": "runsWorkflowRunsStepAction",
+        "summary": "runs.workflowRuns.stepAction",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.workflowRuns.stepAction",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workflowRunId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stepId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "get",
+                "start",
+                "pid",
+                "progress",
+                "skip",
+                "finalize"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/recover": {
+      "post": {
+        "operationId": "runsRecover",
+        "summary": "runs.recover",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.recover",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/workflows/{id}/archive": {
+      "post": {
+        "operationId": "workflowsArchive",
+        "summary": "workflows.archive",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflows.archive",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/workflow-runs": {
+      "get": {
+        "operationId": "workflowRunsList",
+        "summary": "workflowRuns.list",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflowRuns.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/workflow-runs/{id}": {
+      "get": {
+        "operationId": "workflowRunsGet",
+        "summary": "workflowRuns.get",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflowRuns.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/workflow-runs/{id}/steps": {
+      "get": {
+        "operationId": "workflowRunsSteps",
+        "summary": "workflowRuns.steps",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflowRuns.steps",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/workflow-runs/{id}/events": {
+      "get": {
+        "operationId": "workflowRunsEvents",
+        "summary": "workflowRuns.events",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowEventListResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflowRuns.events",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/workflow-runs/{id}/recover": {
+      "post": {
+        "operationId": "workflowRunsRecover",
+        "summary": "workflowRuns.recover",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recovered workflow run and steps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidJsonResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Workflow run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Workflow run is not running, a step process is live, or remote ownership cannot be verified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRecoveryConflictResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Supplied request body is not JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnsupportedMediaTypeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Recovery request body is not a closed reason-only object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidWorkflowRecoveryBodyResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflowRuns.recover",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/work-items/{id}": {
+      "get": {
+        "operationId": "workItemsGet",
+        "summary": "workItems.get",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workItems.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/invocations/{id}": {
+      "get": {
+        "operationId": "invocationsGet",
+        "summary": "invocations.get",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "invocations.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/goals": {
+      "get": {
+        "operationId": "goalsList",
+        "summary": "goals.list",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "goals.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/goals/{id}": {
+      "get": {
+        "operationId": "goalsGet",
+        "summary": "goals.get",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "goals.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/goals/{id}/plan-nodes": {
+      "get": {
+        "operationId": "goalsPlanNodes",
+        "summary": "goals.planNodes",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "goals.planNodes",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/goal-runs": {
+      "get": {
+        "operationId": "goalRunsList",
+        "summary": "goalRuns.list",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "goalRuns.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/history/prune": {
+      "post": {
+        "operationId": "historyPrune",
+        "summary": "history.prune",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "history.prune",
+        "x-required-scopes": [
+          "loops:delete"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "destructive"
+      }
+    },
+    "/v1/runners/poll": {
+      "post": {
+        "operationId": "runnersPoll",
+        "summary": "runners.poll",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runners.poll",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runners/claim": {
+      "post": {
+        "operationId": "runnersClaim",
+        "summary": "runners.claim",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runners.claim",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/leases/stuck": {
+      "get": {
+        "operationId": "leasesStuck",
+        "summary": "Detect hosted runs whose leases are safely past the recovery grace period",
+        "parameters": [
+          {
+            "name": "expiredBefore",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded stuck-run report with opaque reconciliation snapshots",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StuckRunReportResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "leases.stuck",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/leases/reconcile": {
+      "post": {
+        "operationId": "leasesReconcile",
+        "summary": "Reconcile exact hosted stuck-run snapshots without blind effect replay",
+        "responses": {
+          "200": {
+            "description": "Per-candidate reconciliation outcomes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StuckRunReconciliationResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "leases.reconcile",
+        "x-required-scopes": [
+          "loops:delete"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "destructive",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StuckRunReconciliationInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/leases/recover": {
+      "post": {
+        "operationId": "leasesRecover",
+        "summary": "Legacy server-selected lease recovery",
+        "deprecated": true,
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "leases.recover",
+        "x-required-scopes": [
+          "loops:delete"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "destructive"
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "HealthzProbe",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "ReadyzProbe",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/v1/version": {
+      "get": {
+        "operationId": "V1VersionProbe",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "OpenapiJsonProbe",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/v1/runs/{id}/goals/find": {
+      "post": {
+        "operationId": "runsGoalsFind",
+        "summary": "runs.Goals.Find",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.goals.find",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/goals": {
+      "post": {
+        "operationId": "runsGoalsCreate",
+        "summary": "runs.Goals.Create",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.goals.create",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/goals/{goalId}/get": {
+      "post": {
+        "operationId": "runsGoalsGet",
+        "summary": "runs.Goals.Get",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.goals.get",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "goalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/goals/{goalId}/status": {
+      "post": {
+        "operationId": "runsGoalsStatus",
+        "summary": "runs.Goals.Status",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.goals.status",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "goalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/goals/{goalId}/events": {
+      "post": {
+        "operationId": "runsGoalsEvents",
+        "summary": "runs.Goals.Events",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.goals.events",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "goalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/goals/{goalId}/plan-nodes": {
+      "post": {
+        "operationId": "runsGoalsPlanNodesCreate",
+        "summary": "runs.Goals.Plan.Nodes.Create",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.goals.planNodes.create",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "goalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/goals/{goalId}/plan-nodes/list": {
+      "post": {
+        "operationId": "runsGoalsPlanNodesList",
+        "summary": "runs.Goals.Plan.Nodes.List",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.goals.planNodes.list",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "goalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{id}/goals/{goalId}/plan-nodes/{key}": {
+      "post": {
+        "operationId": "runsGoalsPlanNodesUpdate",
+        "summary": "runs.Goals.Plan.Nodes.Update",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "runs.goals.planNodes.update",
+        "x-required-scopes": [
+          "loops:runner"
+        ],
+        "x-tenant-roles": [
+          "worker",
+          "service"
+        ],
+        "x-token-kinds": [
+          "machine",
+          "service"
+        ],
+        "x-risk": "runner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "goalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "PublicValidationDetails": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Bounded public metadata emitted only for invalid agent extraArgs. Error messages and argument values are never exposed.",
+        "properties": {
+          "code": {
+            "type": "string",
+            "const": "agent_extra_args_invalid"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "not_array",
+              "invalid_array",
+              "invalid_item",
+              "option_not_allowed"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "description": "Sanitized structural path to extraArgs or the invalid indexed entry."
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "option": {
+            "type": "string",
+            "description": "Sanitized option name only; attached or following values are never included.",
+            "pattern": "^(?:--[A-Za-z0-9][A-Za-z0-9-]{0,63}|-[A-Za-z0-9])$"
+          }
+        },
+        "required": [
+          "code",
+          "reason",
+          "path"
+        ]
+      },
+      "ValidationFailureResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "validation_failed"
+          },
+          "details": {
+            "$ref": "#/components/schemas/PublicValidationDetails"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "InvalidLoopStatusResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "invalid_loop_status"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "AmbiguousNameResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "ambiguous_name"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "InvalidJsonResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "invalid_json"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "UnsupportedMediaTypeResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "unsupported_media_type"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "InvalidWorkflowRecoveryBodyResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "invalid_workflow_recovery_body"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "WorkflowRecoveryConflictResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "enum": [
+              "workflow_run_has_live_steps",
+              "workflow_run_step_ownership_unverifiable",
+              "workflow_run_not_running"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "RunFinalizeConflictResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "enum": [
+              "stale_claim",
+              "run_not_running",
+              "loop_advancement_conflict"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "RunFinalizeValidationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "enum": [
+              "status_required",
+              "skip_status_requires_overlap_skip_exit_75"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "StuckRunCandidate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "loopId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "snapshotId": {
+            "type": "string",
+            "pattern": "^stuck_[a-f0-9]{64}$"
+          }
+        },
+        "required": [
+          "runId",
+          "loopId",
+          "snapshotId"
+        ]
+      },
+      "StuckRunReportResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "report": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "clear",
+                  "stuck"
+                ]
+              },
+              "expiredBefore": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "candidates": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/StuckRunCandidate"
+                }
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "state",
+              "expiredBefore",
+              "candidates",
+              "truncated"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "report"
+        ]
+      },
+      "StuckRunReconciliationInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/StuckRunCandidate"
+            }
+          }
+        },
+        "required": [
+          "candidates"
+        ]
+      },
+      "StuckRunReconciliationOutcome": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "recovered",
+              "already_recovered",
+              "conflict",
+              "operation_reconciliation_required"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "outcome"
+        ]
+      },
+      "StuckRunReconciliationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "reconciliation": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "outcomes": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/StuckRunReconciliationOutcome"
+                }
+              }
+            },
+            "required": [
+              "outcomes"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "reconciliation"
+        ]
+      },
+      "Foundation": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "storage": {
+            "type": "string",
+            "enum": [
+              "sqlite",
+              "postgresql"
+            ],
+            "description": "Server-side storage backend resolved from the environment (HASNA_LOOPS_DATABASE_URL presence)."
+          },
+          "connection": {
+            "type": "string",
+            "enum": [
+              "file",
+              "api"
+            ],
+            "description": "Client connection transport resolved from the environment (HASNA_LOOPS_API_URL + HASNA_LOOPS_API_KEY presence)."
+          },
+          "service": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "version",
+          "storage",
+          "connection"
+        ]
+      },
+      "Loop": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "stopped",
+              "expired"
+            ]
+          },
+          "schedule": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "target": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "nextRunAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "labels",
+          "status"
+        ]
+      },
+      "CreateLoopInput": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32
+          },
+          "schedule": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "target": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "name",
+          "schedule",
+          "target"
+        ]
+      },
+      "UpdateLoopInput": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "stopped",
+              "expired"
+            ]
+          },
+          "nextRunAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "retryScheduledFor": {
+            "type": "string",
+            "nullable": true
+          },
+          "expiresAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "maxAttempts": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Retry budget for this loop: the scheduler admits a retry while attempt < maxAttempts, so 1 means a single transient failure retires the loop with no retry. Omit to leave the current budget unchanged."
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32
+          }
+        }
+      },
+      "LoopMutationEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "type": "string",
+            "const": "openloops.loop_mutation.v1"
+          },
+          "operationId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "stepId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "targetId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{32}$"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "resume",
+              "stop"
+            ]
+          },
+          "expectedRevision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "approvedPlanDigest": {
+            "type": "string",
+            "pattern": "^(sha256:)?[a-f0-9]{64}$"
+          },
+          "manifestDigest": {
+            "type": "string",
+            "pattern": "^(sha256:)?[a-f0-9]{64}$"
+          },
+          "descriptorRef": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 119,
+            "pattern": "^owner-operation-target:[A-Za-z0-9][A-Za-z0-9._-]{0,95}$",
+            "description": "Private request-only owner-operation-target reference. It is validated before mutation and never serialized in a response."
+          },
+          "descriptorDigest": {
+            "type": "string",
+            "pattern": "^(sha256:)?[a-f0-9]{64}$"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "schema",
+          "operationId",
+          "stepId",
+          "targetId",
+          "action",
+          "expectedRevision",
+          "approvedPlanDigest",
+          "manifestDigest",
+          "descriptorRef",
+          "descriptorDigest"
+        ]
+      },
+      "LoopMutationBinding": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Public mutation binding projection. The private descriptorRef is replaced by a SHA-256 commitment.",
+        "properties": {
+          "schema": {
+            "type": "string",
+            "const": "openloops.loop_mutation.v1"
+          },
+          "operationId": {
+            "type": "string"
+          },
+          "stepId": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{32}$"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "resume",
+              "stop"
+            ]
+          },
+          "expectedRevision": {
+            "type": "string"
+          },
+          "approvedPlanDigest": {
+            "type": "string"
+          },
+          "manifestDigest": {
+            "type": "string"
+          },
+          "descriptorCommitment": {
+            "type": "string",
+            "pattern": "^loop-mutation-descriptor-ref:sha256:[a-f0-9]{64}$"
+          },
+          "descriptorDigest": {
+            "type": "string"
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "authority": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "authorityId": {
+                "type": "string"
+              },
+              "tenantId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "authorityId",
+              "tenantId"
+            ]
+          },
+          "bindingDigest": {
+            "type": "string"
+          },
+          "leaseId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "operationId",
+          "stepId",
+          "targetId",
+          "action",
+          "expectedRevision",
+          "approvedPlanDigest",
+          "manifestDigest",
+          "descriptorCommitment",
+          "descriptorDigest",
+          "authority",
+          "bindingDigest",
+          "leaseId"
+        ]
+      },
+      "LoopMutationAdmissionReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "type": "string",
+            "const": "openloops.loop_mutation_receipt.v1"
+          },
+          "receiptId": {
+            "type": "string"
+          },
+          "receiptKind": {
+            "type": "string",
+            "const": "admission"
+          },
+          "state": {
+            "type": "string",
+            "const": "admitted"
+          },
+          "bindingDigest": {
+            "type": "string"
+          },
+          "operationId": {
+            "type": "string"
+          },
+          "stepId": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{32}$"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "resume",
+              "stop"
+            ]
+          },
+          "expectedRevision": {
+            "type": "string"
+          },
+          "authority": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "authorityId": {
+                "type": "string"
+              },
+              "tenantId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "authorityId",
+              "tenantId"
+            ]
+          },
+          "descriptorCommitment": {
+            "type": "string",
+            "pattern": "^loop-mutation-descriptor-ref:sha256:[a-f0-9]{64}$"
+          },
+          "descriptorDigest": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "schema",
+          "receiptId",
+          "receiptKind",
+          "operationId",
+          "stepId",
+          "targetId",
+          "action",
+          "expectedRevision",
+          "authority",
+          "state",
+          "bindingDigest",
+          "descriptorCommitment",
+          "descriptorDigest",
+          "createdAt"
+        ]
+      },
+      "LoopMutationTerminalReceipt": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "schema": {
+            "type": "string",
+            "const": "openloops.loop_mutation_receipt.v1"
+          },
+          "receiptId": {
+            "type": "string"
+          },
+          "receiptKind": {
+            "type": "string",
+            "const": "terminal"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "succeeded",
+              "dry_run"
+            ]
+          },
+          "bindingDigest": {
+            "type": "string"
+          },
+          "resultRevision": {
+            "type": "string"
+          },
+          "resultStatus": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "stopped",
+              "expired"
+            ]
+          }
+        },
+        "required": [
+          "schema",
+          "receiptId",
+          "receiptKind",
+          "state",
+          "bindingDigest",
+          "resultRevision",
+          "resultStatus"
+        ]
+      },
+      "LoopMutationResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "mutation": {
+            "type": "object",
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/LoopMutationBinding"
+              },
+              "admission": {
+                "$ref": "#/components/schemas/LoopMutationAdmissionReceipt"
+              },
+              "terminal": {
+                "$ref": "#/components/schemas/LoopMutationTerminalReceipt"
+              },
+              "loop": {
+                "$ref": "#/components/schemas/Loop"
+              },
+              "replayed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "binding",
+              "admission",
+              "terminal",
+              "loop",
+              "replayed"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "mutation"
+        ]
+      },
+      "Run": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "loopId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "scheduledFor": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "finishedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "loopId",
+          "status"
+        ]
+      },
+      "LoopResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "loop": {
+            "$ref": "#/components/schemas/Loop"
+          }
+        },
+        "required": [
+          "ok",
+          "loop"
+        ]
+      },
+      "LoopListResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "loops": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Loop"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "loops"
+        ]
+      },
+      "RunResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "run": {
+            "$ref": "#/components/schemas/Run"
+          }
+        },
+        "required": [
+          "ok",
+          "run"
+        ]
+      },
+      "RunListResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Run"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "runs"
+        ]
+      },
+      "DeleteResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "deleted"
+        ]
+      },
+      "RunReceiptMachine": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "additionalProperties": true
+          }
+        ]
+      },
+      "RunReceiptSummary": {
+        "type": "object",
+        "required": [
+          "stdout_bytes",
+          "stderr_bytes"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "stdout_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "stderr_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "stdout_excerpt": {
+            "type": "string"
+          },
+          "stderr_excerpt": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunReceipt": {
+        "type": "object",
+        "required": [
+          "loop_id",
+          "run_id",
+          "machine",
+          "repo",
+          "task_ids",
+          "knowledge_ids",
+          "digest_id",
+          "started_at",
+          "finished_at",
+          "status",
+          "exit_code",
+          "summary",
+          "evidence_paths",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "loop_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "machine": {
+            "$ref": "#/components/schemas/RunReceiptMachine"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "task_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "knowledge_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "digest_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "exit_code": {
+            "type": "integer",
+            "nullable": true
+          },
+          "summary": {
+            "$ref": "#/components/schemas/RunReceiptSummary"
+          },
+          "evidence_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WriteRunReceiptInput": {
+        "type": "object",
+        "required": [
+          "run_id"
+        ],
+        "properties": {
+          "loop_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "machine": {
+            "$ref": "#/components/schemas/RunReceiptMachine"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "task_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "knowledge_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "digest_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "exit_code": {
+            "type": "integer",
+            "nullable": true
+          },
+          "summary": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/RunReceiptSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "stdout": {
+            "type": "string"
+          },
+          "stderr": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunReceiptResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/RunReceipt"
+          }
+        },
+        "required": [
+          "ok",
+          "receipt"
+        ]
+      },
+      "RunReceiptListResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "receipts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunReceipt"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "receipts"
+        ]
+      },
+      "Workflow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "version": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "goal": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version",
+          "status",
+          "steps"
+        ]
+      },
+      "CreateWorkflowInput": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "goal": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "name",
+          "steps"
+        ]
+      },
+      "WorkflowResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/Workflow"
+          }
+        },
+        "required": [
+          "ok",
+          "workflow"
+        ]
+      },
+      "WorkflowListResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "workflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Workflow"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "workflows"
+        ]
+      },
+      "CreateWorkflowInvocationInput": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "workflowId": {
+            "type": "string"
+          },
+          "templateId": {
+            "type": "string"
+          },
+          "sourceRef": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "subjectRef": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "intent": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "outputPolicy": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "sourceRef",
+          "subjectRef",
+          "intent"
+        ]
+      },
+      "WorkflowInvocation": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CreateWorkflowInvocationInput"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "createdAt",
+              "updatedAt"
+            ]
+          }
+        ]
+      },
+      "WorkflowInvocationResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "invocation": {
+            "$ref": "#/components/schemas/WorkflowInvocation"
+          }
+        },
+        "required": [
+          "ok",
+          "invocation"
+        ]
+      },
+      "WorkflowInvocationListResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "invocations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowInvocation"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "invocations"
+        ]
+      },
+      "WorkflowWorkItem": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "routeKey": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "invocationId": {
+            "type": "string"
+          },
+          "sourceType": {
+            "type": "string"
+          },
+          "sourceRef": {
+            "type": "string"
+          },
+          "subjectRef": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "routeKey",
+          "idempotencyKey",
+          "invocationId",
+          "sourceType",
+          "sourceRef",
+          "subjectRef",
+          "status",
+          "priority"
+        ]
+      },
+      "UpsertWorkflowWorkItemInput": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "routeKey": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "invocationId": {
+            "type": "string"
+          },
+          "sourceType": {
+            "type": "string"
+          },
+          "sourceRef": {
+            "type": "string"
+          },
+          "subjectRef": {
+            "type": "string"
+          },
+          "projectKey": {
+            "type": "string"
+          },
+          "projectGroup": {
+            "type": "string"
+          },
+          "machineId": {
+            "type": "string"
+          },
+          "routeScope": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "deferred"
+            ]
+          },
+          "nextAttemptAt": {
+            "type": "string"
+          },
+          "lastReason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "routeKey",
+          "idempotencyKey",
+          "invocationId",
+          "sourceType",
+          "sourceRef",
+          "subjectRef"
+        ]
+      },
+      "WorkflowWorkItemResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "workItem": {
+            "$ref": "#/components/schemas/WorkflowWorkItem"
+          }
+        },
+        "required": [
+          "ok",
+          "workItem"
+        ]
+      },
+      "WorkflowWorkItemListResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "workItems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowWorkItem"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "workItems"
+        ]
+      },
+      "ImportInput": {
+        "type": "object",
+        "description": "Batches of full rows to upsert by id. Any array may be omitted.",
+        "properties": {
+          "workflows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "loops": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "replace": {
+            "type": "boolean",
+            "description": "Update existing rows whose id matches. Default safe imports may still archive/pause same-id workflows/loops when preserve flags are false."
+          },
+          "preserveLoopScheduling": {
+            "type": "boolean",
+            "description": "Default false. When false, imported loops are written paused with nextRunAt and retryScheduledFor cleared so backfills never schedule immediately."
+          },
+          "preserveWorkflowActivation": {
+            "type": "boolean",
+            "description": "Default false. When false, imported workflows are written archived, including same-id active rows, so backfills cannot activate workflow execution unless explicitly requested."
+          }
+        }
+      },
+      "ImportResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "imported": {
+            "type": "object",
+            "properties": {
+              "workflows": {
+                "type": "integer"
+              },
+              "loops": {
+                "type": "integer"
+              },
+              "runs": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "workflows",
+              "loops",
+              "runs"
+            ]
+          },
+          "skippedRunning": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ok",
+          "imported",
+          "skippedRunning"
+        ]
+      },
+      "AgentSessionContract": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Server-derived audit contract for an agent step inside a workflow run. Tool and command restrictions are advisory metadata and are not provider-enforced.",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "cursor",
+              "codewith",
+              "codex",
+              "aicopilot",
+              "opencode"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "permissionMode": {
+            "type": "string",
+            "enum": [
+              "default",
+              "plan",
+              "auto",
+              "bypass"
+            ]
+          },
+          "sandbox": {
+            "type": "string",
+            "enum": [
+              "read-only",
+              "workspace-write",
+              "danger-full-access",
+              "enabled",
+              "disabled",
+              "provider-default"
+            ]
+          },
+          "manualBreakGlass": {
+            "type": "boolean"
+          },
+          "routing": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "projectPath": {
+                "type": "string"
+              },
+              "projectGroup": {
+                "type": "string"
+              },
+              "taskId": {
+                "type": "string"
+              },
+              "eventId": {
+                "type": "string"
+              },
+              "eventType": {
+                "type": "string"
+              },
+              "eventSource": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "triage",
+                  "planner",
+                  "worker",
+                  "verifier"
+                ]
+              }
+            }
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 1
+          },
+          "restrictions": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "tools": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "commands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "enforcement": {
+                "type": "string",
+                "enum": [
+                  "metadata_only"
+                ]
+              },
+              "providerEnforced": {
+                "type": "boolean",
+                "enum": [
+                  false
+                ]
+              }
+            },
+            "required": [
+              "enforcement",
+              "providerEnforced"
+            ]
+          },
+          "safetyReason": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "version",
+          "provider",
+          "permissionMode",
+          "sandbox",
+          "manualBreakGlass",
+          "timeoutMs",
+          "restrictions"
+        ]
+      },
+      "AgentSessionContractEventInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Legacy runner compatibility request. New clients must not fabricate this event; the server derives it.",
+        "properties": {
+          "claimToken": {
+            "type": "string",
+            "minLength": 1
+          },
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "agent_session_contract"
+            ]
+          },
+          "stepId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "payload": {
+            "$ref": "#/components/schemas/AgentSessionContract"
+          }
+        },
+        "required": [
+          "claimToken",
+          "eventType",
+          "stepId",
+          "payload"
+        ]
+      },
+      "GenericWorkflowEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "workflowRunId": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "created",
+              "workflow_archived",
+              "todos_workflow_pointers_synced",
+              "todos_workflow_pointers_sync_failed",
+              "step_started",
+              "step_progress",
+              "recovered",
+              "step_pending",
+              "step_running",
+              "step_succeeded",
+              "step_failed",
+              "step_timed_out",
+              "step_skipped",
+              "step_cancelled",
+              "succeeded",
+              "failed",
+              "timed_out",
+              "cancelled"
+            ]
+          },
+          "stepId": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "workflowRunId",
+          "sequence",
+          "eventType",
+          "createdAt"
+        ]
+      },
+      "AgentSessionContractWorkflowEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "workflowRunId": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "agent_session_contract"
+            ]
+          },
+          "stepId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "payload": {
+            "$ref": "#/components/schemas/AgentSessionContract"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "workflowRunId",
+          "sequence",
+          "eventType",
+          "stepId",
+          "payload",
+          "createdAt"
+        ]
+      },
+      "CustomWorkflowEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Sanitized backwards-compatible branch for historical or mixed-version custom workflow events.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "workflowRunId": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "eventKind": {
+            "type": "string",
+            "enum": [
+              "custom"
+            ]
+          },
+          "eventType": {
+            "type": "string",
+            "minLength": 1
+          },
+          "stepId": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "workflowRunId",
+          "sequence",
+          "eventKind",
+          "eventType",
+          "createdAt"
+        ]
+      },
+      "WorkflowEvent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AgentSessionContractWorkflowEvent"
+          },
+          {
+            "$ref": "#/components/schemas/GenericWorkflowEvent"
+          },
+          {
+            "$ref": "#/components/schemas/CustomWorkflowEvent"
+          }
+        ]
+      },
+      "WorkflowEventResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "event": {
+            "$ref": "#/components/schemas/WorkflowEvent"
+          }
+        },
+        "required": [
+          "ok",
+          "event"
+        ]
+      },
+      "WorkflowEventListResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowEvent"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "events"
+        ]
+      },
+      "CountResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ok",
+          "count"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "apiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key"
+      },
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "security": [
+    {
+      "apiKey": []
+    },
+    {
+      "bearerAuth": []
+    }
+  ]
+}

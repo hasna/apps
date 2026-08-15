@@ -17,6 +17,13 @@ export interface SkillsServerConfig {
   artifactBucket?: string;
   artifactPrefix: string;
   inlineWorker: boolean;
+  /**
+   * HMAC key for signing served skill bundles. When set, the bundle endpoint adds
+   * X-Skill-Bundle-Signature so clients holding the same key can verify that the bytes
+   * they pulled are the bytes this server decided to serve. Read from
+   * HASNA_SKILLS_SIGNING_KEY; never logged or printed.
+   */
+  bundleSigningKey?: string;
   requestBodyLimitBytes: number;
   /**
    * Cap for a skill bundle upload, separate from requestBodyLimitBytes on purpose.
@@ -66,6 +73,7 @@ export function resolveServerConfig(env: Record<string, string | undefined> = pr
     artifactBucket: env.HASNA_SKILLS_S3_BUCKET || env.SKILLS_S3_BUCKET || undefined,
     artifactPrefix: normalizePrefix(env.HASNA_SKILLS_S3_PREFIX || env.SKILLS_S3_PREFIX || "skills/artifacts"),
     inlineWorker: env.HASNA_SKILLS_INLINE_WORKER === "1",
+    bundleSigningKey: env.HASNA_SKILLS_SIGNING_KEY || undefined,
     requestBodyLimitBytes: parsePositiveInt(env.HASNA_SKILLS_REQUEST_BODY_LIMIT_BYTES, 1_000_000),
     skillBundleLimitBytes: parsePositiveInt(env.HASNA_SKILLS_BUNDLE_LIMIT_BYTES, 25_000_000),
     // No vendor default: an operator's server advertises either the origin they

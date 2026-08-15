@@ -1,0 +1,2083 @@
+import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Profile } from "./types.js";
+import { addProfile } from "./lib/profiles.js";
+import { addCustomTool, getTool } from "./lib/tools.js";
+import {
+  configsPrelaunchCommand,
+  configsSessionToolFor,
+  profileIdentityExportHealth,
+  runConfigsPrelaunch,
+} from "./lib/configs-prelaunch.js";
+import { getConfigsPrelaunchSummary, readManifestSourceIds } from "./lib/configs-prelaunch-status.js";
+
+let home = "";
+
+function resetHome() {
+  if (home) rmSync(home, { recursive: true, force: true });
+  home = mkdtempSync(join(tmpdir(), "accounts-configs-prelaunch-"));
+  process.env.ACCOUNTS_HOME = home;
+  delete process.env.ACCOUNTS_STORE_PATH;
+}
+
+function cleanup() {
+  if (home) rmSync(home, { recursive: true, force: true });
+  home = "";
+  delete process.env.ACCOUNTS_HOME;
+}
+
+// Prelaunch only renders when it has something to render FROM, so the default
+// fixture carries an instruction export. Tests about the no-sources path opt out
+// with `identity: undefined` and assert the skip instead.
+const FIXTURE_EXPORT = join(mkdtempSync(join(tmpdir(), "accounts-prelaunch-export-")), "fixture.configs.json");
+writeFileSync(
+  FIXTURE_EXPORT,
+  JSON.stringify({
+    contract: "hasna.identities.configs-instructions/v1",
+    sources: [{ id: "global-codewith", layer: "global", content: "rules" }],
+  }) + "\n",
+);
+
+function profile(tool: string): Profile {
+  return {
+    name: `${tool}-profile`,
+    tool,
+    dir: `/tmp/accounts/${tool}-profile`,
+    identity: FIXTURE_EXPORT,
+    createdAt: "2026-07-01T00:00:00.000Z",
+  };
+}
+
+function profileInHome(tool: string, opts: Partial<Profile> = {}): Profile {
+  return {
+    ...profile(tool),
+    dir: join(home, `${tool}-profile`),
+    ...opts,
+  };
+}
+
+function hash(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function writeManifest(p: Profile, toolId = p.tool, sources: Array<{ id: string }> = [{ id: "global-codewith" }]) {
+  const hasnaDir = join(p.dir, ".hasna");
+  mkdirSync(hasnaDir, { recursive: true });
+  writeFileSync(
+    join(hasnaDir, "session-render-manifest.json"),
+    JSON.stringify(
+      {
+        schema: "hasna.configs.session-render/v1",
+        tool: toolId,
+        profile: p.name,
+        targetHome: p.dir,
+        generatedAt: "2026-07-01T00:00:00.000Z",
+        sources,
+        files: [],
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+}
+
+function writeManifestWithManagedFile(p: Profile, relativePath = "AGENTS.md", content = "Managed instructions\n") {
+  mkdirSync(p.dir, { recursive: true });
+  writeFileSync(join(p.dir, relativePath), content);
+  const hasnaDir = join(p.dir, ".hasna");
+  mkdirSync(hasnaDir, { recursive: true });
+  writeFileSync(
+    join(hasnaDir, "session-render-manifest.json"),
+    JSON.stringify(
+      {
+        schema: "hasna.configs.session-render/v1",
+        tool: p.tool,
+        profile: p.name,
+        targetHome: p.dir,
+        generatedAt: "2026-07-01T00:00:00.000Z",
+        sources: [{ id: "agent-marcus" }],
+        files: [{ path: join(p.dir, relativePath), relativePath, role: "config", sha256: hash(content), sourceIds: ["agent-marcus"] }],
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+}
+
+describe("configs prelaunch", () => {
+  test("maps Claude, Codex, and Codewith tools to configs session tools", () => {
+    expect(configsSessionToolFor(getTool("claude"))).toBe("claude");
+    expect(configsSessionToolFor(getTool("codex"))).toBe("codex");
+    expect(configsSessionToolFor(getTool("codex-app"))).toBe("codex");
+    expect(configsSessionToolFor(getTool("codewith"))).toBe("codewith");
+    expect(getTool("codewith").envVar).toBe("CODEWITH_HOME");
+  });
+
+  test("builds profile-scoped configs plan command for Codex", () => {
+    const p = profile("codex");
+    const command = configsPrelaunchCommand(p, getTool("codex"), { mode: "plan", configsBin: "configs-dev" });
+
+    expect(command).toEqual([
+      "configs-dev",
+      "session",
+      "plan",
+      "--tool",
+      "codex",
+      "--profile",
+      "codex-profile",
+      "--target-home",
+      "/tmp/accounts/codex-profile",
+      "--session-id",
+      "accounts:codex:codex-profile",
+    ]);
+  });
+
+  test("builds apply command for Claude using the profile dir as target home", () => {
+    const p = profile("claude");
+    const command = configsPrelaunchCommand(p, getTool("claude"));
+
+    expect(command[0]).toBe("configs");
+    expect(command.slice(1, 5)).toEqual(["session", "apply", "--tool", "claude"]);
+    expect(command).toContain("--target-home");
+    expect(command).toContain("/tmp/accounts/claude-profile");
+    expect(command).not.toContain("--allow-empty-sources");
+  });
+
+  test("passes OpenIdentities configs exports to the configs session command", () => {
+    const p = profile("codewith");
+    const command = configsPrelaunchCommand(p, getTool("codewith"), {
+      mode: "apply",
+      identityExports: ["/tmp/global-identities.json", "/tmp/account-agent.json"],
+    });
+
+    expect(command).toContain("--identity-export");
+    expect(command).not.toContain("--allow-empty-sources");
+    expect(command.slice(-4)).toEqual([
+      "--identity-export",
+      "/tmp/global-identities.json",
+      "--identity-export",
+      "/tmp/account-agent.json",
+    ]);
+  });
+
+  test("adds --allow-empty-sources only when the caller explicitly asks for an empty render", () => {
+    const p = profile("claude");
+
+    // Having no identity export is the normal state of a pooled accountNNN
+    // profile. Inferring "render nothing" from it disarmed the renderer's own
+    // guard and produced agent homes with zero operating rules.
+    const emptyImplicit = configsPrelaunchCommand(p, getTool("claude"));
+    expect(emptyImplicit).not.toContain("--allow-empty-sources");
+    expect(emptyImplicit).not.toContain("--identity-export");
+
+    const emptyExplicit = configsPrelaunchCommand(p, getTool("claude"), { identityExports: [] });
+    expect(emptyExplicit).not.toContain("--allow-empty-sources");
+
+    const deliberate = configsPrelaunchCommand(p, getTool("claude"), { allowEmptySources: true });
+    expect(deliberate).toContain("--allow-empty-sources");
+
+    const withSources = configsPrelaunchCommand(p, getTool("claude"), {
+      identityExports: ["/tmp/one.json"],
+    });
+    expect(withSources).toContain("--identity-export");
+    expect(withSources).not.toContain("--allow-empty-sources");
+  });
+
+  test("identity-less profiles skip the render instead of emptying the home or aborting the launch", () => {
+    // This assertion was inverted once already. It used to require prelaunch to
+    // request an EMPTY render for a profile with zero identity exports — which
+    // is every pooled accountNNN profile — so homes were stripped of their
+    // operating rules while `accounts health` reported configs: ok. The
+    // opposite extreme is just as bad: refusing outright makes bare
+    // `accounts launch accountNNN` abort, which is the 0.2.9 breakage. The
+    // renderer is simply not invoked, and the existing home survives.
+    resetHome();
+    try {
+      const p = profileInHome("codewith", { identity: undefined });
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("codewith"), {
+        runner: (bin, args) => {
+          calls.push([bin, ...args]);
+          writeManifest(p, "codewith", []);
+          return { status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") };
+        },
+      });
+
+      expect(calls).toHaveLength(0);
+      expect(result.skipped).toBe(true);
+      expect(result.result).toBe("skipped");
+      expect(result.identityExports).toEqual([]);
+      expect(result.prelaunch.status).not.toBe("ok");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("runs configs prelaunch and fails closed unless bypassed", () => {
+    const p = profile("codex");
+    const tool = getTool("codex");
+    const ok = runConfigsPrelaunch(p, tool, {
+      runner: () => {
+        writeManifest(p);
+        return { status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") };
+      },
+    });
+    expect(ok.skipped).toBe(false);
+    expect(ok.result).toBe("applied");
+    expect(ok.prelaunch.status).toBe("ok");
+
+    expect(() =>
+      runConfigsPrelaunch(p, tool, {
+        runner: () => ({ status: 2, stdout: Buffer.from(""), stderr: Buffer.from("bad config") }),
+      }),
+    ).toThrow("configs prelaunch apply failed");
+
+    const bypassed = runConfigsPrelaunch(p, tool, {
+      allowFailure: true,
+      runner: () => ({ status: 2, stdout: Buffer.from(""), stderr: Buffer.from("bad config") }),
+    });
+    expect(bypassed.status).toBe(2);
+    expect(bypassed.result).toBe("bypassed");
+    expect(bypassed.prelaunch.status).toBe("bypassed");
+  });
+
+  test("controlled prelaunch probes suppress inherited request-debug output", () => {
+    resetHome();
+    const p = profileInHome("codex");
+    const probe = join(home, "configs-probe");
+    const dummyCredential = "dummy-controlled-probe-credential";
+    const previous = {
+      BUN_CONFIG_VERBOSE_FETCH: process.env.BUN_CONFIG_VERBOSE_FETCH,
+      NODE_DEBUG: process.env.NODE_DEBUG,
+      NODE_DEBUG_NATIVE: process.env.NODE_DEBUG_NATIVE,
+    };
+    writeFileSync(
+      probe,
+      [
+        "#!/bin/sh",
+        'if [ -n "${BUN_CONFIG_VERBOSE_FETCH:-}${NODE_DEBUG:-}${NODE_DEBUG_NATIVE:-}" ]; then',
+        `  printf 'Authorization: Bearer %s\\n' ${JSON.stringify(dummyCredential)}`,
+        `  printf 'x-api-key=%s\\n' ${JSON.stringify(dummyCredential)} >&2`,
+        "fi",
+        "exit 2",
+      ].join("\n"),
+    );
+    chmodSync(probe, 0o755);
+
+    try {
+      process.env.BUN_CONFIG_VERBOSE_FETCH = "1";
+      process.env.NODE_DEBUG = "http,http2";
+      process.env.NODE_DEBUG_NATIVE = "http";
+      let message = "";
+      try {
+        runConfigsPrelaunch(p, getTool("codex"), { configsBin: probe });
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message).toContain("configs prelaunch apply failed");
+      expect(message).not.toContain(dummyCredential);
+    } finally {
+      for (const [name, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      cleanup();
+    }
+  });
+
+  test("prelaunch errors redact normalized and escaped credential keys end to end", () => {
+    const p = profile("codex");
+    const samples: Array<[string, (secret: string) => string]> = [
+      ["prelaunch-oauth-secret", (secret) => `oauth_token=${secret}`],
+      ["prelaunch-bearer-secret", (secret) => `bearer-token=${secret}`],
+      ["prelaunch-signing-secret", (secret) => `signing_secret=${secret}`],
+      ["prelaunch-consumer-secret", (secret) => `consumerSecret=${secret}`],
+      ["prelaunch-database-secret", (secret) => `database_password=${secret}`],
+      ["prelaunch-webhook-secret", (secret) => `webhookCredential=${secret}`],
+      [
+        "prelaunch-escaped-auth-secret",
+        (secret) => String.raw`{"Authoriz\u0061tion":"${secret}","status":401}`,
+      ],
+      [
+        "prelaunch-escaped-api-secret",
+        (secret) => String.raw`{"x-\u0061pi-key":"${secret}","message"="malformed"}`,
+      ],
+    ];
+
+    for (const [secret, render] of samples) {
+      const output = render(secret);
+      let message = "";
+      try {
+        runConfigsPrelaunch(p, getTool("codex"), {
+          runner: () => ({
+            status: 2,
+            stdout: Buffer.from(""),
+            stderr: Buffer.from(output),
+          }),
+        });
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+
+      expect(message).toContain("configs prelaunch apply failed");
+      expect(message).toContain("[REDACTED]");
+      expect(message).not.toContain(secret);
+    }
+  });
+
+  test("prelaunch captured command text redacts credential options without erasing diagnostics", () => {
+    const p = profile("codex");
+    const cases = [
+      {
+        output: "provider --api-key prelaunch-api-secret --verbose keep-api-diagnostic",
+        secret: "prelaunch-api-secret",
+        retained: "--verbose keep-api-diagnostic",
+      },
+      {
+        output: 'provider "--secret-key=prelaunch-secret-key-secret" status=keep-secret-key-status',
+        secret: "prelaunch-secret-key-secret",
+        retained: "status=keep-secret-key-status",
+      },
+      {
+        output: "provider --service-auth 'prelaunch service auth secret' --mode keep-service-mode",
+        secret: "prelaunch service auth secret",
+        retained: "--mode keep-service-mode",
+      },
+      {
+        output: "provider --credentials prelaunch-credentials\\ escaped --trace keep-credentials-trace",
+        secret: "prelaunch-credentials escaped",
+        retained: "--trace keep-credentials-trace",
+      },
+      {
+        output: "provider -k prelaunch-short-secret --color keep-short-color",
+        secret: "prelaunch-short-secret",
+        retained: "--color keep-short-color",
+      },
+      {
+        output:
+          'provider -- outer=(env=--api-key) "" ' +
+          "prelaunch-wrapper-split-secret keep-prelaunch-wrapper-split",
+        secret: "prelaunch-wrapper-split-secret",
+        retained: "keep-prelaunch-wrapper-split",
+      },
+    ];
+
+    for (const sample of cases) {
+      let message = "";
+      try {
+        runConfigsPrelaunch(p, getTool("codex"), {
+          runner: () => ({
+            status: 2,
+            stdout: Buffer.from(""),
+            stderr: Buffer.from(sample.output),
+          }),
+        });
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message).toContain("[REDACTED]");
+      expect(message).not.toContain(sample.secret);
+      expect(message).toContain(sample.retained);
+    }
+  });
+
+  test("prelaunch captured command text preserves structured authorization near misses", () => {
+    const p = profile("codex");
+    const output =
+      "provider -- url=urn:authorization:public keep-prelaunch-urn " +
+      "url=https://example.test/authorization:public keep-prelaunch-url";
+    let message = "";
+    try {
+      runConfigsPrelaunch(p, getTool("codex"), {
+        runner: () => ({
+          status: 2,
+          stdout: Buffer.from(""),
+          stderr: Buffer.from(output),
+        }),
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("url=urn:authorization:public");
+    expect(message).toContain("keep-prelaunch-urn");
+    expect(message).toContain(
+      "url=https://example.test/authorization:public",
+    );
+    expect(message).toContain("keep-prelaunch-url");
+  });
+
+  test("prelaunch AccountsError recovers credential syntax after unterminated quotes", () => {
+    const p = profile("codex");
+
+    for (const [lineIndex, lineEnding] of ["\n", "\r\n", "\r"].entries()) {
+      const cases = [
+        {
+          output:
+            `provider "unterminated --api-key prelaunch-unmatched-${lineIndex}-separate-secret ` +
+            "--trace keep-prelaunch-unmatched-separate",
+          secret: `prelaunch-unmatched-${lineIndex}-separate-secret`,
+          retained: "keep-prelaunch-unmatched-separate",
+        },
+        {
+          output:
+            `provider 'unterminated --client-key=prelaunch-unmatched-${lineIndex}-attached-secret` +
+            "|--mode keep-prelaunch-unmatched-attached",
+          secret: `prelaunch-unmatched-${lineIndex}-attached-secret`,
+          retained: "keep-prelaunch-unmatched-attached",
+        },
+        {
+          output:
+            `provider "unterminated tail\\${lineEnding}` +
+            `diagnostic/--master-key prelaunch-unmatched-${lineIndex}-continued-secret ` +
+            "--color keep-prelaunch-unmatched-continued",
+          secret: `prelaunch-unmatched-${lineIndex}-continued-secret`,
+          retained: "keep-prelaunch-unmatched-continued",
+        },
+      ];
+
+      for (const sample of cases) {
+        let message = "";
+        try {
+          runConfigsPrelaunch(p, getTool("codex"), {
+            runner: () => ({
+              status: 2,
+              stdout: Buffer.from(""),
+              stderr: Buffer.from(sample.output),
+            }),
+          });
+        } catch (error) {
+          message = error instanceof Error ? error.message : String(error);
+        }
+
+        expect(message, sample.output).toContain("configs prelaunch apply failed");
+        expect(message, sample.output).not.toContain(sample.secret);
+        expect(message, sample.output).toContain("[REDACTED]");
+        expect(message, sample.output).toContain(sample.retained);
+      }
+    }
+  });
+
+  test("prelaunch command redaction carries bound values across every physical line ending", () => {
+    const p = profile("codex");
+
+    for (const lineEnding of ["\n", "\r\n", "\r"]) {
+      const secrets = [
+        "prelaunch-multiline-plain-secret",
+        "--prelaunch-multiline-quoted-secret",
+        "--prelaunch-multiline-wrapper-secret",
+      ];
+      const cases = [
+        {
+          output: `provider --api-key${lineEnding}${secrets[0]}${lineEnding}status=keep-prelaunch-plain`,
+          secret: secrets[0]!,
+          retained: "status=keep-prelaunch-plain",
+        },
+        {
+          output: `provider --client-key${lineEnding}"${secrets[1]}"${lineEnding}message=keep-prelaunch-quoted`,
+          secret: secrets[1]!,
+          retained: "message=keep-prelaunch-quoted",
+        },
+        {
+          output: `provider --master-key${lineEnding}(\\"${secrets[2]}\\")${lineEnding}detail=keep-prelaunch-wrapper`,
+          secret: secrets[2]!,
+          retained: "detail=keep-prelaunch-wrapper",
+        },
+      ];
+
+      for (const sample of cases) {
+        let message = "";
+        try {
+          runConfigsPrelaunch(p, getTool("codex"), {
+            runner: () => ({
+              status: 2,
+              stdout: Buffer.from(""),
+              stderr: Buffer.from(sample.output),
+            }),
+          });
+        } catch (error) {
+          message = error instanceof Error ? error.message : String(error);
+        }
+        expect(message).toContain("[REDACTED]");
+        expect(message).not.toContain(sample.secret);
+        expect(message).toContain(sample.retained);
+      }
+    }
+  });
+
+  test("prelaunch command redaction keeps opaque and attached option-looking values private", () => {
+    const p = profile("codex");
+    const cases: Array<{
+      output: string;
+      secret: string;
+      retained: string;
+    }> = [];
+
+    for (const [lineIndex, lineEnding] of [" ", "\n", "\r\n", "\r"].entries()) {
+      for (const [variantIndex, value] of [
+        `--label/client-key/prelaunch-hidden-${lineIndex}-0`,
+        `"--label/client-key/prelaunch-hidden-${lineIndex}-1"`,
+        `\\--label/client-key/prelaunch-hidden-${lineIndex}-2`,
+        `－label/client-key/prelaunch-hidden-${lineIndex}-3`,
+        `(--label/client-key/prelaunch-hidden-${lineIndex}-4)`,
+        `|--label/client-key/prelaunch-hidden-${lineIndex}-5`,
+        `--label=opaque/--label=prelaunch-hidden-${lineIndex}-6`,
+        `--label=opaque|--label=prelaunch-hidden-${lineIndex}-7`,
+        `--label=opaque<--label=prelaunch-hidden-${lineIndex}-8`,
+        `(--label=opaque/--label=prelaunch-hidden-${lineIndex}-9)`,
+        `－label=opaque/－label=prelaunch-hidden-${lineIndex}-10`,
+        `"--label=opaque/--label=prelaunch-hidden-${lineIndex}-11"`,
+        `\\--label=opaque/--label=prelaunch-hidden-${lineIndex}-12`,
+      ].entries()) {
+        cases.push({
+          output:
+            `provider --api-key${lineEnding}${value} ` +
+            `status=keep-prelaunch-opaque-${lineIndex}-${variantIndex}`,
+          secret: `prelaunch-hidden-${lineIndex}-${variantIndex}`,
+          retained: `status=keep-prelaunch-opaque-${lineIndex}-${variantIndex}`,
+        });
+      }
+    }
+    cases.push(
+      {
+        output:
+          "provider --api-key=--client-key status=keep-prelaunch-attached-equals",
+        secret: "--client-key",
+        retained: "status=keep-prelaunch-attached-equals",
+      },
+      {
+        output:
+          "provider --api-key:--client-key status=keep-prelaunch-attached-colon",
+        secret: "--client-key",
+        retained: "status=keep-prelaunch-attached-colon",
+      },
+    );
+
+    for (const sample of cases) {
+      let message = "";
+      try {
+        runConfigsPrelaunch(p, getTool("codex"), {
+          runner: () => ({
+            status: 2,
+            stdout: Buffer.from(""),
+            stderr: Buffer.from(sample.output),
+          }),
+        });
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message, sample.output).toContain("[REDACTED]");
+      expect(message, sample.output).not.toContain(sample.secret);
+      expect(message, sample.output).toContain(sample.retained);
+    }
+  });
+
+  test("prelaunch errors keep malformed bare-option tokens bound across line endings", () => {
+    const p = profile("codex");
+    const variants = [
+      { render: (_secret: string) => "-", exposed: "-" },
+      { render: (_secret: string) => "---", exposed: "---" },
+      { render: (_secret: string) => "----", exposed: "----" },
+      { render: (_secret: string) => "--.", exposed: "--." },
+      { render: (_secret: string) => "--_", exposed: "--_" },
+      { render: (_secret: string) => "-.", exposed: "-." },
+      { render: (_secret: string) => "-_", exposed: "-_" },
+      {
+        render: (secret: string) => `---api-key=${secret}`,
+        exposed: "---api-key=",
+      },
+      {
+        render: (secret: string) => `--.client-key:${secret}`,
+        exposed: "--.client-key:",
+      },
+      {
+        render: (secret: string) => `--_master-key=${secret}`,
+        exposed: "--_master-key=",
+      },
+      {
+        render: (secret: string) => `－－－api-key=${secret}`,
+        exposed: "－－－api-key=",
+      },
+      {
+        render: (secret: string) => `−−−client-key:${secret}`,
+        exposed: "−−−client-key:",
+      },
+    ];
+
+    for (const [lineIndex, lineEnding] of [" ", "\n", "\r\n", "\r"].entries()) {
+      for (const [variantIndex, variant] of variants.entries()) {
+        const secret =
+          `prelaunch-malformed-option-secret-${lineIndex}-${variantIndex}`;
+        const retained =
+          `status=keep-prelaunch-malformed-${lineIndex}-${variantIndex}`;
+        let message = "";
+        try {
+          runConfigsPrelaunch(p, getTool("codex"), {
+            runner: () => ({
+              status: 2,
+              stdout: Buffer.from(""),
+              stderr: Buffer.from(
+                `provider --api-key${lineEnding}${variant.render(secret)} ${retained}`,
+              ),
+            }),
+          });
+        } catch (error) {
+          message = error instanceof Error ? error.message : String(error);
+        }
+
+        expect(message).toContain("[REDACTED]");
+        expect(message).not.toContain(secret);
+        expect(message).not.toContain(
+          `--api-key${lineEnding}${variant.exposed}`,
+        );
+        expect(message).toContain(retained);
+      }
+    }
+  });
+
+  test("prelaunch false end markers never expose later credential options", () => {
+    const p = profile("codex");
+    const falseMarkers = [
+      ...[
+        "\u2010",
+        "\u2011",
+        "\u2012",
+        "\u2013",
+        "\u2014",
+        "\u2015",
+        "\u2212",
+        "\uFE58",
+        "\uFE63",
+        "\uFF0D",
+      ].map((dash) => `${dash}${dash}`),
+      '"--"',
+      "'--'",
+      "\\--",
+      "\\-\\-",
+      "(--)",
+      "[--]",
+      "{--}",
+      "<-->",
+      "x|--",
+      "x/--",
+      "x:--",
+    ];
+
+    for (const [lineIndex, lineEnding] of ["\n", "\r\n", "\r"].entries()) {
+      for (const [markerIndex, marker] of falseMarkers.entries()) {
+        for (const pending of [false, true]) {
+          const secret =
+            `prelaunch-false-marker-${lineIndex}-${markerIndex}-${pending}-secret`;
+          const retained =
+            `keep-prelaunch-false-marker-${lineIndex}-${markerIndex}-${pending}`;
+          const output = pending
+            ? `provider --api-key${lineEnding}${marker} --client-key=${secret} --trace ${retained}`
+            : `provider${lineEnding}${marker} --client-key=${secret} --trace ${retained}`;
+          let message = "";
+          try {
+            runConfigsPrelaunch(p, getTool("codex"), {
+              runner: () => ({
+                status: 2,
+                stdout: Buffer.from(""),
+                stderr: Buffer.from(output),
+              }),
+            });
+          } catch (error) {
+            message = error instanceof Error ? error.message : String(error);
+          }
+
+          expect(message, output).not.toContain(secret);
+          expect(message, output).toContain("[REDACTED]");
+          expect(message, output).toContain(retained);
+        }
+      }
+    }
+  });
+
+  test("prelaunch command redaction covers logical values continued across lines", () => {
+    const p = profile("codex");
+
+    for (const lineEnding of ["\n", "\r\n", "\r"]) {
+      const cases = [
+        {
+          output: `provider --api-key \\${lineEnding}prelaunch-bare-continuation-secret${lineEnding}status=keep-prelaunch-bare-continuation`,
+          secret: "prelaunch-bare-continuation-secret",
+          retained: "status=keep-prelaunch-bare-continuation",
+        },
+        {
+          output: `provider --client-key first-fragment\\${lineEnding}prelaunch-fragment-continuation-secret${lineEnding}message=keep-prelaunch-fragment-continuation`,
+          secret: "prelaunch-fragment-continuation-secret",
+          retained: "message=keep-prelaunch-fragment-continuation",
+        },
+        {
+          output: `provider --master-key "quoted-first-fragment${lineEnding}prelaunch-quoted-continuation-secret"${lineEnding}detail=keep-prelaunch-quoted-continuation`,
+          secret: "prelaunch-quoted-continuation-secret",
+          retained: "detail=keep-prelaunch-quoted-continuation",
+        },
+      ];
+
+      for (const sample of cases) {
+        let message = "";
+        try {
+          runConfigsPrelaunch(p, getTool("codex"), {
+            runner: () => ({
+              status: 2,
+              stdout: Buffer.from(""),
+              stderr: Buffer.from(sample.output),
+            }),
+          });
+        } catch (error) {
+          message = error instanceof Error ? error.message : String(error);
+        }
+        expect(message).toContain("[REDACTED]");
+        expect(message).not.toContain(sample.secret);
+        expect(message).toContain(sample.retained);
+      }
+    }
+  });
+
+  test("prelaunch active logical values do not expose continuation suffixes", () => {
+    const p = profile("codex");
+
+    for (const [lineEndingIndex, lineEnding] of ["\n", "\r\n", "\r"].entries()) {
+      const cases = [
+        {
+          output:
+            `provider --api-key seed\\${lineEnding}` +
+            `tail/--label=prelaunch-active-${lineEndingIndex}-suffix-secret ` +
+            "--trace keep-prelaunch-active-escaped",
+          secrets: [`prelaunch-active-${lineEndingIndex}-suffix-secret`],
+          retained: "--trace keep-prelaunch-active-escaped",
+        },
+        {
+          output:
+            `provider --client-key="seed${lineEnding}tail"/-- ` +
+            `--master-key=prelaunch-active-${lineEndingIndex}-following-secret ` +
+            "--mode keep-prelaunch-active-quoted",
+          secrets: [`prelaunch-active-${lineEndingIndex}-following-secret`],
+          retained: "--mode keep-prelaunch-active-quoted",
+        },
+        {
+          output:
+            `provider -kseed\\${lineEnding}` +
+            `tail((/|<－－label:prelaunch-active-${lineEndingIndex}-layered-secret>)) ` +
+            "--color keep-prelaunch-active-short",
+          secrets: [`prelaunch-active-${lineEndingIndex}-layered-secret`],
+          retained: "--color keep-prelaunch-active-short",
+        },
+      ];
+
+      for (const sample of cases) {
+        let message = "";
+        try {
+          runConfigsPrelaunch(p, getTool("codex"), {
+            runner: () => ({
+              status: 2,
+              stdout: Buffer.from(""),
+              stderr: Buffer.from(sample.output),
+            }),
+          });
+        } catch (error) {
+          message = error instanceof Error ? error.message : String(error);
+        }
+        expect(message, sample.output).toContain("[REDACTED]");
+        for (const secret of sample.secrets) {
+          expect(message, sample.output).not.toContain(secret);
+        }
+        expect(message, sample.output).toContain(sample.retained);
+      }
+    }
+  });
+
+  test("prelaunch redacts attached multiline values without swallowing later options", () => {
+    const p = profile("codex");
+
+    for (const lineEnding of ["\n", "\r\n", "\r"]) {
+      const cases = [
+        {
+          output: `provider --api-key="first${lineEnding}prelaunch-attached-quoted-secret" --verbose keep-prelaunch-attached-quoted`,
+          secret: "prelaunch-attached-quoted-secret",
+          retained: "--verbose keep-prelaunch-attached-quoted",
+        },
+        {
+          output: `provider --client-key:first\\${lineEnding}prelaunch-attached-escaped-secret --mode keep-prelaunch-attached-escaped`,
+          secret: "prelaunch-attached-escaped-secret",
+          retained: "--mode keep-prelaunch-attached-escaped",
+        },
+        {
+          output: "provider x|--master-key=prelaunch-punctuation-secret|--trace keep-prelaunch-punctuation-suffix",
+          secret: "prelaunch-punctuation-secret",
+          retained: "|--trace keep-prelaunch-punctuation-suffix",
+        },
+        {
+          output: 'provider --api-key "prelaunch-separate-punctuation-secret"|--color keep-prelaunch-separate-punctuation',
+          secret: "prelaunch-separate-punctuation-secret",
+          retained: "keep-prelaunch-separate-punctuation",
+        },
+      ];
+
+      for (const sample of cases) {
+        let message = "";
+        try {
+          runConfigsPrelaunch(p, getTool("codex"), {
+            runner: () => ({
+              status: 2,
+              stdout: Buffer.from(""),
+              stderr: Buffer.from(sample.output),
+            }),
+          });
+        } catch (error) {
+          message = error instanceof Error ? error.message : String(error);
+        }
+        expect(message).not.toContain(sample.secret);
+        expect(message).toContain(sample.retained);
+      }
+    }
+  });
+
+  test("prelaunch command redaction recognizes safe punctuation boundaries", () => {
+    const p = profile("codex");
+    const safePrefixes = ["|", "/", "<", ">", "(", ")", "[", "]", "{", "}", ",", ";"];
+
+    for (const [index, prefix] of safePrefixes.entries()) {
+      const secret = `prelaunch-punctuation-secret-${index}`;
+      let message = "";
+      try {
+        runConfigsPrelaunch(p, getTool("codex"), {
+          runner: () => ({
+            status: 2,
+            stdout: Buffer.from(""),
+            stderr: Buffer.from(
+              `diagnostic${prefix}--api-key ${secret} --verbose keep-prelaunch-punctuation-${index}`,
+            ),
+          }),
+        });
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message).toContain("[REDACTED]");
+      expect(message).not.toContain(secret);
+      expect(message).toContain(`--verbose keep-prelaunch-punctuation-${index}`);
+    }
+
+    for (const nearMiss of [
+      "word--api-key keep-prelaunch-word-near-miss",
+      "https://example.invalid/--api-key keep-prelaunch-url-near-miss",
+      "https://example.invalid/?arg=--api-key keep-prelaunch-url-query-near-miss",
+      "https://example.invalid/path;--api-key keep-prelaunch-url-param-near-miss",
+      "mailto:person@example.invalid?subject=--api-key keep-prelaunch-mailto-near-miss",
+      "mailto:?subject=--api-key keep-prelaunch-empty-mailto-near-miss",
+      "person@--api-key keep-prelaunch-email-near-miss",
+      "1--api-key keep-prelaunch-arithmetic-near-miss",
+    ]) {
+      let message = "";
+      try {
+        runConfigsPrelaunch(p, getTool("codex"), {
+          runner: () => ({
+            status: 2,
+            stdout: Buffer.from(""),
+            stderr: Buffer.from(nearMiss),
+          }),
+        });
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message).toContain(nearMiss);
+    }
+  });
+
+  test("controlled prelaunch errors redact credential-shaped headers", () => {
+    resetHome();
+    const p = profileInHome("codex");
+    const probe = join(home, "configs-redaction-probe");
+    const credentialFragments = [
+      "controlled-cookie-alpha",
+      "controlled-cookie-beta",
+    ];
+    writeFileSync(
+      probe,
+      [
+        "#!/bin/sh",
+        "printf '%s\\n' 'Cookie: sid=controlled-cookie-alpha;' ' arbitrary=controlled-cookie-beta' 'stack=Error keep-stack' >&2",
+        "exit 2",
+      ].join("\n"),
+    );
+    chmodSync(probe, 0o755);
+
+    try {
+      let message = "";
+      try {
+        runConfigsPrelaunch(p, getTool("codex"), { configsBin: probe });
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message).toContain("[REDACTED]");
+      for (const fragment of credentialFragments) expect(message).not.toContain(fragment);
+      expect(message).toContain("stack=Error keep-stack");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("prelaunch error summaries keep stderr and stdout as separate records before redaction", () => {
+    resetHome();
+    const p = profileInHome("codex");
+    const fusedCredential = "controlled-fused-stream-credential";
+
+    try {
+      for (const stderrEnding of ["", "\n", "\r\n", "\r"]) {
+        let message = "";
+        try {
+          runConfigsPrelaunch(p, getTool("codex"), {
+            runner: () => ({
+              status: 2,
+              stderr: Buffer.from(`diagnostic-prefix${stderrEnding}`),
+              stdout: Buffer.from(`Authorization: Bearer ${fusedCredential}`),
+            }),
+          });
+        } catch (error) {
+          message = error instanceof Error ? error.message : String(error);
+        }
+        expect(message).toContain("diagnostic-prefix");
+        expect(message).toContain("[REDACTED]");
+        expect(message).not.toContain(fusedCredential);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("a missing stderr command value never consumes the independent stdout record", () => {
+    const p = profile("codex");
+
+    for (const stderrEnding of ["", "\n", "\r\n", "\r"]) {
+      let message = "";
+      try {
+        runConfigsPrelaunch(p, getTool("codex"), {
+          runner: () => ({
+            status: 2,
+            stderr: Buffer.from(`provider --api-key${stderrEnding}`),
+            stdout: Buffer.from("keep-independent-stdout-record"),
+          }),
+        });
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message).toContain("provider --api-key");
+      expect(message).toContain("keep-independent-stdout-record");
+      expect(message).not.toContain("[REDACTED]");
+    }
+  });
+
+  test("controlled prelaunch errors fail closed on hostile folded credential records", () => {
+    resetHome();
+    const p = profileInHome("codex");
+    const cases: Array<{ output: string; secret: string }> = [];
+
+    for (const lineEnding of ["\n", "\r\n", "\r"]) {
+      for (const header of [
+        "Authorization",
+        "Proxy-Authorization",
+        "Cookie",
+        "Set-Cookie",
+      ]) {
+        const label = header.toLowerCase().replaceAll("-", "_");
+        cases.push(
+          {
+            output: [
+              `${header}: seed=${label}_seed`,
+              " \t",
+              ` ${label}_blank_fold_fragment`,
+            ].join(lineEnding),
+            secret: `${label}_blank_fold_fragment`,
+          },
+          {
+            output: `${header}: "${label}_quoted", extension=${label}_quoted_tail`,
+            secret: `${label}_quoted_tail`,
+          },
+        );
+      }
+    }
+    cases.push({
+      output: 'x-api-key: "generic_quoted_\\"fragment", suffix=generic_quoted_tail',
+      secret: "generic_quoted_tail",
+    });
+
+    try {
+      expect(cases).toHaveLength(25);
+      for (const hostile of cases) {
+        let message = "";
+        try {
+          runConfigsPrelaunch(p, getTool("codex"), {
+            runner: () => ({
+              status: 2,
+              stderr: Buffer.from(hostile.output),
+              stdout: Buffer.from(""),
+            }),
+          });
+        } catch (error) {
+          message = error instanceof Error ? error.message : String(error);
+        }
+        expect(message).toContain("[REDACTED]");
+        expect(message).not.toContain(hostile.secret);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("prelaunch bounding preserves stream order without exposing truncated folds", () => {
+    resetHome();
+    const p = profileInHome("codex");
+    const truncatedSecret = "controlled-truncated-fold-fragment";
+    const orderedSecret = "controlled-ordered-header-fragment";
+
+    try {
+      for (const runner of [
+        () => ({
+          status: 2,
+          stderr: Buffer.from(`Authorization: Bearer ${orderedSecret}`),
+          stdout: Buffer.from("status=418 keep-stdout-record"),
+        }),
+        () => ({
+          status: 2,
+          stderr: Buffer.from("diagnostic-one\ndiagnostic-two"),
+          stdout: Buffer.from(
+            `Authorization: seed=bounded-seed,\n \t\n ${truncatedSecret}`,
+          ),
+        }),
+      ]) {
+        let message = "";
+        try {
+          runConfigsPrelaunch(p, getTool("codex"), { runner });
+        } catch (error) {
+          message = error instanceof Error ? error.message : String(error);
+        }
+        expect(message).toContain("[REDACTED]");
+        expect(message).not.toContain(orderedSecret);
+        expect(message).not.toContain(truncatedSecret);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("fails closed when apply succeeds without a fresh manifest unless bypassed", () => {
+    resetHome();
+    try {
+      const p = profileInHome("claude");
+      expect(() =>
+        runConfigsPrelaunch(p, getTool("claude"), {
+          runner: () => ({ status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") }),
+        }),
+      ).toThrow("session render manifest missing");
+
+      const bypassed = runConfigsPrelaunch(p, getTool("claude"), {
+        allowFailure: true,
+        runner: () => ({ status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") }),
+      });
+      expect(bypassed.result).toBe("bypassed");
+      expect(bypassed.prelaunch.status).toBe("bypassed");
+      expect(bypassed.prelaunch.manifest.drift).toBe("missing");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("reports stale managed files from the OpenConfigs manifest", () => {
+    resetHome();
+    try {
+      const p = profileInHome("codex");
+      writeManifestWithManagedFile(p, "AGENTS.md", "Original\n");
+      expect(getConfigsPrelaunchSummary(p, getTool("codex"), "codex").status).toBe("ok");
+
+      writeFileSync(join(p.dir, "AGENTS.md"), "Drifted\n");
+      const summary = getConfigsPrelaunchSummary(p, getTool("codex"), "codex");
+      expect(summary.status).toBe("stale");
+      expect(summary.manifest.reasons.join("\n")).toContain("managed file drifted: AGENTS.md");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("records explicit skip audit without requiring a manifest", () => {
+    resetHome();
+    try {
+      const p = profileInHome("codewith");
+      const result = runConfigsPrelaunch(p, getTool("codewith"), { mode: "skip", skipReason: "--skip-configs" });
+      expect(result.skipped).toBe(true);
+      expect(result.prelaunch.status).toBe("skipped");
+      expect(result.prelaunch.lastRun?.reason).toBe("--skip-configs");
+      expect(result.prelaunch.manifest.drift).toBe("missing");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("exports profile identity refs before running configs apply", () => {
+    resetHome();
+    try {
+      const p = profileInHome("claude", { identity: "agent:marcus" });
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        mode: "apply",
+        configsBin: "configs-dev",
+        identitiesBin: "identities-dev",
+        runner: (bin, args) => {
+          calls.push([bin, ...args]);
+          if (bin === "configs-dev") writeManifest(p, "claude");
+          return { status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") };
+        },
+      });
+
+      expect(calls[0]?.slice(0, 4)).toEqual(["identities-dev", "instructions", "export", result.identityExports?.[0]]);
+      expect(calls[0]).toContain("agent:marcus");
+      expect(calls[1]).toContain("--identity-export");
+      expect(calls[1]).toContain(result.identityExports?.[0] ?? "");
+      expect(result.identityExports?.[0]).toEndWith("agent-marcus.configs.json");
+      expect(existsSync(join(p.dir, ".hasna", "accounts", "identity-exports"))).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("uses profile identity paths as existing OpenIdentities configs exports", () => {
+    resetHome();
+    try {
+      const exportPath = join(home, "identity-export.json");
+      writeFileSync(exportPath, "{}\n");
+      const p = profileInHome("claude", { identity: exportPath });
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        runner: (bin, args) => {
+          calls.push([bin, ...args]);
+          if (bin === "configs") writeManifest(p, "claude");
+          return { status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") };
+        },
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toContain("--identity-export");
+      expect(calls[0]).toContain(exportPath);
+      expect(result.identityExports).toEqual([exportPath]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("classifies Windows backslash identities as paths instead of identity references", () => {
+    resetHome();
+    try {
+      const identity = "C:\\managed\\account006.configs.json";
+      const p = profileInHome("claude", { identity });
+      let called = false;
+
+      expect(profileIdentityExportHealth(p)).toMatchObject({
+        status: "missing-external",
+      });
+      expect(() =>
+        runConfigsPrelaunch(p, getTool("claude"), {
+          runner: () => {
+            called = true;
+            return { status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") };
+          },
+        }),
+      ).toThrow("profile identity export file not found");
+      expect(called).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("REGRESSION d994ad1e: materializes a missing managed profile identity export before launch", () => {
+    resetHome();
+    try {
+      const p = profileInHome("claude", {
+        name: "account006",
+        dir: join(home, "account006"),
+      });
+      const exportDir = join(p.dir, ".hasna", "accounts", "identity-exports");
+      const exportPath = join(exportDir, "account006.configs.json");
+      p.identity = exportPath;
+      mkdirSync(exportDir, { recursive: true });
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        configsBin: "configs-dev",
+        identitiesBin: "identities-dev",
+        runner: (bin, args) => {
+          calls.push([bin, ...args]);
+          if (bin === "identities-dev") {
+            writeFileSync(
+              exportPath,
+              JSON.stringify({
+                contract: "hasna.identities.configs-instructions/v1",
+                sources: [{ id: "global-codewith", layer: "global", content: "rules" }],
+              }) + "\n",
+            );
+          }
+          if (bin === "configs-dev") writeManifest(p, "claude");
+          return { status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") };
+        },
+      });
+
+      expect(calls[0]).toEqual([
+        "identities-dev",
+        "instructions",
+        "export",
+        exportPath,
+        "--canonical",
+      ]);
+      expect(calls[1]).toContain("--identity-export");
+      expect(calls[1]).toContain(exportPath);
+      expect(existsSync(exportPath)).toBe(true);
+      expect(result.result).toBe("applied");
+      expect(result.identityExports).toEqual([exportPath]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("rematerializes a managed export whose filename predates a supported profile rename", () => {
+    resetHome();
+    try {
+      const p = profileInHome("claude", {
+        name: "renamed-profile",
+        dir: join(home, "profiles", "claude", "original-profile"),
+      });
+      const exportDir = join(p.dir, ".hasna", "accounts", "identity-exports");
+      const exportPath = join(exportDir, "original-profile.configs.json");
+      p.identity = exportPath;
+      mkdirSync(exportDir, { recursive: true });
+
+      expect(profileIdentityExportHealth(p)).toEqual({
+        status: "missing-managed",
+        path: exportPath,
+      });
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        runner: (bin, args) => {
+          calls.push([bin, ...args]);
+          if (bin === "identities") {
+            writeFileSync(
+              exportPath,
+              JSON.stringify({
+                contract: "hasna.identities.configs-instructions/v1",
+                sources: [{ id: "global-codewith", layer: "global", content: "rules" }],
+              }) + "\n",
+            );
+          }
+          if (bin === "configs") writeManifest(p, "claude");
+          return { status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") };
+        },
+      });
+
+      expect(calls[0]).toEqual([
+        "identities",
+        "instructions",
+        "export",
+        exportPath,
+        "--canonical",
+      ]);
+      expect(result.result).toBe("applied");
+      expect(result.identityExports).toEqual([exportPath]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "refuses to materialize a managed identity export through a symlinked directory",
+    () => {
+      resetHome();
+      try {
+        const p = profileInHome("claude", {
+          name: "account006",
+          dir: join(home, "account006"),
+        });
+        const exportDir = join(p.dir, ".hasna", "accounts", "identity-exports");
+        const exportPath = join(exportDir, "account006.configs.json");
+        const outside = join(home, "outside");
+        p.identity = exportPath;
+        mkdirSync(join(p.dir, ".hasna", "accounts"), { recursive: true });
+        mkdirSync(outside, { recursive: true });
+        symlinkSync(outside, exportDir, "dir");
+
+        let called = false;
+        expect(() =>
+          runConfigsPrelaunch(p, getTool("claude"), {
+            runner: () => {
+              called = true;
+              return { status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") };
+            },
+          }),
+        ).toThrow("refusing to write under symlink directory");
+        expect(called).toBe(false);
+        expect(existsSync(join(outside, "account006.configs.json"))).toBe(false);
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test("does not reuse a stale generated identity export when export failure is bypassed", () => {
+    resetHome();
+    try {
+      const p = profileInHome("claude", { identity: "agent:marcus" });
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        allowFailure: true,
+        runner: (bin, args) => {
+          calls.push([bin, ...args]);
+          if (bin === "identities") return { status: 1, stdout: Buffer.from(""), stderr: Buffer.from("identity offline") };
+          writeManifest(p, "claude");
+          return { status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") };
+        },
+      });
+
+      expect(calls[0]?.slice(0, 3)).toEqual(["identities", "instructions", "export"]);
+      // The export failed, so there is nothing to render from. The renderer is
+      // never invoked — rendering here would have emptied the home — and the
+      // stale generated export is still not reused, which is what this test is for.
+      expect(calls).toHaveLength(1);
+      expect(result.identityExports).toEqual([]);
+      expect(result.result).toBe("bypassed");
+      expect(result.reason).toContain("identity instruction export failed");
+      expect(result.prelaunch.status).toBe("bypassed");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("fails safely for missing profile identity export paths unless explicitly bypassed", () => {
+    resetHome();
+    try {
+      const p = profileInHome("claude", { identity: join(home, "missing-identity.json") });
+      expect(() =>
+        runConfigsPrelaunch(p, getTool("claude"), {
+          runner: () => ({ status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") }),
+        }),
+      ).toThrow("profile identity export file not found");
+
+      const bypassed = runConfigsPrelaunch(p, getTool("claude"), {
+        allowFailure: true,
+        runner: (bin) => {
+          if (bin === "configs") writeManifest(p, "claude");
+          return { status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") };
+        },
+      });
+      expect(bypassed.result).toBe("bypassed");
+      expect(bypassed.reason).toContain("profile identity export file not found");
+      expect(bypassed.identityExports).toEqual([]);
+      expect(bypassed.prelaunch.status).toBe("bypassed");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("skips unsupported tools without failing", () => {
+    resetHome();
+    try {
+      addCustomTool({
+        id: "fakeagent",
+        label: "Fake Agent",
+        envVar: "FAKE_HOME",
+        defaultDir: join(home, "fake-default"),
+        bin: "fake",
+      });
+      const p = addProfile({ name: "fake", tool: "fakeagent" });
+      const result = runConfigsPrelaunch(p, getTool("fakeagent"));
+      expect(result.skipped).toBe(true);
+      expect(result.reason).toBe("unsupported tool fakeagent");
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+/**
+ * A prelaunch render must never REDUCE what a home already carries.
+ *
+ * Measured on station01 2026-08-01 (todos c461ce8a): 25 of 30 claude profile
+ * homes held a canonical 19-source render and a 12-source identity export.
+ * Prelaunch renders from the export, and `configs session apply` then DELETES
+ * the seven unmatched managed files as "stale managed file removed" — so a
+ * single launch silently strips seven doctrine rules from a governed home, at
+ * rc=0, recorded as `result: applied`.
+ *
+ * The shortfall guard that should have caught it could not: left unarmed its
+ * expected set is derived from the same export it is validating, so the
+ * comparison is tautological. These tests pin the floor to the home's OWN prior
+ * manifest, which is independent of the export by construction and needs no
+ * hardcoded rule list — accounts still does not own the canonical set.
+ */
+describe("configs prelaunch instruction preservation", () => {
+  const INCUMBENT_IDS = [
+    "global-adversarial-review-proportionality-system-prompt",
+    "global-fix-on-sight",
+    "global-credential-exposure-hygiene",
+    "hasna-agent-operating-rules",
+    "global-dispatch-survivability",
+    "global-report-taxonomy",
+    "global-mementos-discipline",
+  ];
+  // What the stale export declares: a strict subset, exactly the real shape.
+  const SUPPLIED_IDS = INCUMBENT_IDS.slice(0, 4);
+  const DROPPED_IDS = INCUMBENT_IDS.slice(4);
+
+  function writeExport(path: string, ids: string[]) {
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        contract: "hasna.identities.configs-instructions/v1",
+        sources: ids.map((id) => ({ id, layer: "global", content: `rules for ${id}` })),
+      }) + "\n",
+    );
+  }
+
+  /**
+   * Stands in for `configs session apply`: renders exactly the ids it was
+   * handed and prunes everything else, which is what the real command does.
+   */
+  function renderingRunner(p: Profile, toolId: string, ids: string[], calls: string[][]) {
+    return (bin: string, args: string[]) => {
+      calls.push([bin, ...args]);
+      writeManifest(p, toolId, ids.map((id) => ({ id })));
+      return { status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") };
+    };
+  }
+
+  test("REGRESSION c461ce8a: refuses to render when the export would drop sources the home already carries", () => {
+    resetHome();
+    try {
+      const exportPath = join(home, "stale-export.configs.json");
+      writeExport(exportPath, SUPPLIED_IDS);
+      const p = profileInHome("claude", { identity: exportPath });
+      // The home as the canonical render left it.
+      writeManifest(p, "claude", INCUMBENT_IDS.map((id) => ({ id })));
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        runner: renderingRunner(p, "claude", SUPPLIED_IDS, calls),
+      });
+
+      // The renderer must never have run: detecting the loss after writing it
+      // leaves the home already corrupted.
+      expect(calls).toHaveLength(0);
+      expect(result.result).not.toBe("applied");
+      expect(result.skipped).toBe(true);
+      // The operator has to be told WHICH rules were about to go.
+      for (const id of DROPPED_IDS) expect(result.reason).toContain(id);
+
+      // And the home still carries everything it started with.
+      const manifest = JSON.parse(
+        readFileSync(join(p.dir, ".hasna", "session-render-manifest.json"), "utf8"),
+      ) as { sources: Array<{ id: string }> };
+      expect(manifest.sources.map((s) => s.id).sort()).toEqual([...INCUMBENT_IDS].sort());
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("records EVERY dropped id in the audit, not just what fits in the prose reason", () => {
+    // The prose `reason` is capped at MAX_REASON_LENGTH (220). Measured on the
+    // real station01 fixture, an eight-id refusal produced a reason of exactly
+    // 220 characters naming two of them and cutting off mid-list — so the audit
+    // was least informative precisely where the most was being removed, while
+    // the changelog claimed the ids were named there. Bound by count, not by
+    // slicing the middle out of the payload.
+    resetHome();
+    try {
+      const longIncumbent = Array.from({ length: 9 }, (_, i) => `global-a-deliberately-long-instruction-source-id-number-${i}`);
+      const exportPath = join(home, "short-export.configs.json");
+      writeExport(exportPath, longIncumbent.slice(0, 2));
+      const p = profileInHome("claude", { identity: exportPath });
+      writeManifest(p, "claude", longIncumbent.map((id) => ({ id })));
+
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        runner: renderingRunner(p, "claude", longIncumbent.slice(0, 2), []),
+      });
+      expect(result.result).toBe("skipped");
+
+      const audit = JSON.parse(
+        readFileSync(join(p.dir, ".hasna", "accounts", "prelaunch-status.json"), "utf8"),
+      ) as { reason?: string; droppedSourceIds?: string[]; droppedSourceCount?: number };
+
+      // The prose really is truncated — this is the condition being defended
+      // against, so assert it rather than assume it.
+      expect(audit.reason!.length).toBe(220);
+      expect(audit.reason).not.toContain(longIncumbent[8]);
+
+      // …and the structured field carries all seven regardless.
+      expect(audit.droppedSourceCount).toBe(7);
+      expect(audit.droppedSourceIds).toEqual(longIncumbent.slice(2));
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("still renders when the export covers everything the home carries", () => {
+    // The must-not-over-block control. A guard that blocks every launch is its
+    // own outage, so the ordinary case has to be shown passing in the same run
+    // as the blocked one — otherwise the test above is satisfied by a function
+    // that always refuses.
+    resetHome();
+    try {
+      const grown = [...INCUMBENT_IDS, "global-corpus-coverage-bounded-by-axes"];
+      const exportPath = join(home, "current-export.configs.json");
+      writeExport(exportPath, grown);
+      const p = profileInHome("claude", { identity: exportPath });
+      writeManifest(p, "claude", INCUMBENT_IDS.map((id) => ({ id })));
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        runner: renderingRunner(p, "claude", grown, calls),
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(result.result).toBe("applied");
+      expect(result.skipped).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("renders freely into a home that has no manifest yet", () => {
+    // A fresh home has no incumbent set, so there is nothing to preserve and
+    // the floor must not be invented. Without this the first render of every
+    // new profile would be refused.
+    resetHome();
+    try {
+      const exportPath = join(home, "first-export.configs.json");
+      writeExport(exportPath, SUPPLIED_IDS);
+      const p = profileInHome("claude", { identity: exportPath });
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        runner: renderingRunner(p, "claude", SUPPLIED_IDS, calls),
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(result.result).toBe("applied");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("allows a deliberate reduction when the operator asks for one", () => {
+    // Rules do get retired. Without an escape hatch the incumbent floor would
+    // pin a home to a superseded set forever.
+    resetHome();
+    try {
+      const exportPath = join(home, "reduced-export.configs.json");
+      writeExport(exportPath, SUPPLIED_IDS);
+      const p = profileInHome("claude", { identity: exportPath });
+      writeManifest(p, "claude", INCUMBENT_IDS.map((id) => ({ id })));
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        allowSourceReduction: true,
+        runner: renderingRunner(p, "claude", SUPPLIED_IDS, calls),
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(result.result).toBe("applied");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("records that the preservation floor was available, so silence is never read as coverage", () => {
+    resetHome();
+    try {
+      const exportPath = join(home, "audited-export.configs.json");
+      writeExport(exportPath, INCUMBENT_IDS);
+      const p = profileInHome("claude", { identity: exportPath });
+      writeManifest(p, "claude", INCUMBENT_IDS.map((id) => ({ id })));
+
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        runner: renderingRunner(p, "claude", INCUMBENT_IDS, []),
+      });
+
+      expect(result.result).toBe("applied");
+      const audit = JSON.parse(
+        readFileSync(join(p.dir, ".hasna", "accounts", "prelaunch-status.json"), "utf8"),
+      ) as { shortfallGuard?: string };
+      // Unarmed no longer means unchecked: the prior manifest supplied a real,
+      // independent floor.
+      expect(audit.shortfallGuard).toBe("incumbent");
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+/**
+ * REGRESSION 8776dba9 — the floor's own input can be destroyed, and until this
+ * block existed that disarmed the floor silently.
+ *
+ * `readManifestSourceIds` returned a bare `string[]` and answered `[]` for four
+ * different conditions: no manifest, unparseable manifest, malformed `sources`,
+ * and a manifest legitimately declaring none. Only the last is a trustworthy
+ * zero. The caller read `[]` as "this home has nothing to protect", so ONE
+ * deleted or corrupted file re-armed the exact failure the preservation floor
+ * above was written to stop.
+ *
+ * Measured on station01 2026-08-01 against published 0.2.31, on a scratch
+ * profile: with the manifest corrupted, `renderIssued=1`, `result=applied`, and
+ * the home went from 7 sources to 4 with drift `ok` and every gate green.
+ * Identical outcome with the manifest deleted instead.
+ *
+ * These tests are written against the OUTCOME — was the render issued — rather
+ * than against the audit fields, because the audit was green in the failing case
+ * and would have been satisfied by the broken code.
+ */
+describe("configs prelaunch floor integrity", () => {
+  const INCUMBENT_IDS = [
+    "global-adversarial-review-proportionality-system-prompt",
+    "global-fix-on-sight",
+    "global-credential-exposure-hygiene",
+    "hasna-agent-operating-rules",
+    "global-dispatch-survivability",
+    "global-report-taxonomy",
+    "global-mementos-discipline",
+  ];
+  const SUPPLIED_IDS = INCUMBENT_IDS.slice(0, 4);
+  const DROPPED_IDS = INCUMBENT_IDS.slice(4);
+
+  function writeExport(path: string, ids: string[]) {
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        contract: "hasna.identities.configs-instructions/v1",
+        sources: ids.map((id) => ({ id, layer: "global", content: `rules for ${id}` })),
+      }) + "\n",
+    );
+  }
+
+  function renderingRunner(p: Profile, toolId: string, ids: string[], calls: string[][]) {
+    return (bin: string, args: string[]) => {
+      calls.push([bin, ...args]);
+      writeManifest(p, toolId, ids.map((id) => ({ id })));
+      return { status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") };
+    };
+  }
+
+  /**
+   * The record accounts itself writes on every prelaunch run. Any home that has
+   * ever been launched has one, which is what makes it usable as a fallback
+   * floor when the manifest is gone.
+   */
+  function writePriorAudit(p: Profile, toolId: string, ids: string[]) {
+    const dir = join(p.dir, ".hasna", "accounts");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "prelaunch-status.json"),
+      JSON.stringify(
+        {
+          schema: "hasna.accounts.configs-prelaunch/v1",
+          tool: toolId,
+          profile: p.name,
+          mode: "apply",
+          result: "applied",
+          allowFailure: false,
+          identityExportCount: 1,
+          updatedAt: "2026-07-01T00:00:00.000Z",
+          manifest: {
+            path: join(p.dir, ".hasna", "session-render-manifest.json"),
+            drift: "ok",
+            sourceCount: ids.length,
+            sourceIds: ids,
+            sourceIdsTruncated: false,
+          },
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+  }
+
+  function writeRenderedInstructionFiles(p: Profile, ids: string[]) {
+    const dir = join(p.dir, ".hasna", "instructions");
+    mkdirSync(dir, { recursive: true });
+    for (const id of ids) {
+      writeFileSync(join(dir, `${id}.md`), `# ${id}\n`);
+    }
+  }
+
+  function rewritePriorAudit(
+    p: Profile,
+    update: (audit: {
+      manifest: { sourceCount: number; sourceIds: string[]; sourceIdsTruncated: boolean };
+    }) => void,
+  ) {
+    const path = join(p.dir, ".hasna", "accounts", "prelaunch-status.json");
+    const audit = JSON.parse(readFileSync(path, "utf8")) as {
+      manifest: { sourceCount: number; sourceIds: string[]; sourceIdsTruncated: boolean };
+    };
+    update(audit);
+    writeFileSync(path, JSON.stringify(audit, null, 2) + "\n");
+  }
+
+  function sabotage(p: Profile, how: "corrupt" | "remove") {
+    const path = join(p.dir, ".hasna", "session-render-manifest.json");
+    if (how === "corrupt") writeFileSync(path, "{ not json");
+    else rmSync(path);
+  }
+
+  for (const how of ["corrupt", "remove"] as const) {
+    test(`REGRESSION 8776dba9: a ${how === "corrupt" ? "corrupted" : "removed"} manifest does not disarm the preservation floor`, () => {
+      resetHome();
+      try {
+        const exportPath = join(home, `stale-${how}.configs.json`);
+        writeExport(exportPath, SUPPLIED_IDS);
+        const p = profileInHome("claude", { identity: exportPath });
+        writeManifest(p, "claude", INCUMBENT_IDS.map((id) => ({ id })));
+        writePriorAudit(p, "claude", INCUMBENT_IDS);
+
+        sabotage(p, how);
+
+        const calls: string[][] = [];
+        const result = runConfigsPrelaunch(p, getTool("claude"), {
+          runner: renderingRunner(p, "claude", SUPPLIED_IDS, calls),
+        });
+
+        // Before the fix this was calls=1 / result="applied" for both variants.
+        expect(calls).toHaveLength(0);
+        expect(result.skipped).toBe(true);
+        expect(result.result).not.toBe("applied");
+        // The audit still remembers the set, so the operator gets the real
+        // message naming what was about to go — not a generic refusal.
+        for (const id of DROPPED_IDS) expect(result.reason).toContain(id);
+      } finally {
+        cleanup();
+      }
+    });
+  }
+
+  test("REGRESSION 8776dba9: refuses when BOTH records of the floor are gone", () => {
+    // No audit to fall back on. The manifest exists and cannot be read, which a
+    // never-rendered home can never look like — so this is a destroyed input,
+    // not an absent one, and guessing "absent" is what loses the rules.
+    resetHome();
+    try {
+      const exportPath = join(home, "no-audit.configs.json");
+      writeExport(exportPath, SUPPLIED_IDS);
+      const p = profileInHome("claude", { identity: exportPath });
+      writeManifest(p, "claude", INCUMBENT_IDS.map((id) => ({ id })));
+      sabotage(p, "corrupt");
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        runner: renderingRunner(p, "claude", SUPPLIED_IDS, calls),
+      });
+
+      expect(calls).toHaveLength(0);
+      expect(result.skipped).toBe(true);
+      expect(result.reason).toContain("cannot be read");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("REGRESSION review: a skipped run cannot erase the audit fallback before the next render", () => {
+    resetHome();
+    try {
+      const staleExport = join(home, "stale-after-skip.configs.json");
+      const p = profileInHome("claude");
+      writeManifest(p, "claude", INCUMBENT_IDS.map((id) => ({ id })));
+      writePriorAudit(p, "claude", INCUMBENT_IDS);
+
+      rmSync(join(p.dir, ".hasna", "session-render-manifest.json"));
+
+      // The first run has no readable identity input. It correctly skips, but
+      // recording that skip must not replace the only surviving copy of the
+      // incumbent floor with the currently missing manifest's empty summary.
+      const firstCalls: string[][] = [];
+      const first = runConfigsPrelaunch(p, getTool("claude"), {
+        identityExports: [join(home, "missing.configs.json")],
+        runner: renderingRunner(p, "claude", [], firstCalls),
+      });
+      expect(firstCalls).toHaveLength(0);
+      expect(first.result).toBe("skipped");
+      expect(first.prelaunch.lastRun?.manifest.drift).toBe("missing");
+      expect(first.prelaunch.lastRun?.preservationFloor?.sourceIds).toEqual(INCUMBENT_IDS);
+
+      writeExport(staleExport, SUPPLIED_IDS);
+      const secondCalls: string[][] = [];
+      const second = runConfigsPrelaunch(p, getTool("claude"), {
+        identityExports: [staleExport],
+        runner: renderingRunner(p, "claude", SUPPLIED_IDS, secondCalls),
+      });
+
+      // Before the review fix this was calls=1 / result="applied": the first
+      // skip had rewritten the audit to sourceCount=0, so this run called the
+      // missing manifest a fresh home and removed the three dropped sources.
+      expect(secondCalls).toHaveLength(0);
+      expect(second.result).toBe("skipped");
+      for (const id of DROPPED_IDS) expect(second.reason).toContain(id);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("REGRESSION 328064bc: stale account005 audit cannot call a 20-to-4 render safe", () => {
+    resetHome();
+    try {
+      const incumbentIds = Array.from({ length: 20 }, (_, index) =>
+        `account005-rule-${String(index + 1).padStart(2, "0")}`,
+      );
+      const suppliedIds = incumbentIds.slice(0, 4);
+      const exportPath = join(home, "account005.configs.json");
+      writeExport(exportPath, suppliedIds);
+      const p = profileInHome("claude", { identity: exportPath });
+
+      writeManifest(p, "claude", incumbentIds.map((id) => ({ id })));
+      writePriorAudit(p, "claude", incumbentIds.slice(0, 3));
+      writeRenderedInstructionFiles(p, incumbentIds);
+      sabotage(p, "remove");
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        runner: renderingRunner(p, "claude", suppliedIds, calls),
+      });
+
+      expect(calls).toHaveLength(0);
+      expect(result.skipped).toBe(true);
+      expect(result.result).not.toBe("applied");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("REGRESSION 328064bc: rendered files distinguish a stale-zero audit from a fresh home", () => {
+    resetHome();
+    try {
+      const incumbentIds = Array.from({ length: 20 }, (_, index) => `stale-zero-rule-${index + 1}`);
+      const suppliedIds = incumbentIds.slice(0, 4);
+      const exportPath = join(home, "stale-zero.configs.json");
+      writeExport(exportPath, suppliedIds);
+      const p = profileInHome("claude", { identity: exportPath });
+
+      writeManifest(p, "claude", incumbentIds.map((id) => ({ id })));
+      writePriorAudit(p, "claude", []);
+      writeRenderedInstructionFiles(p, incumbentIds);
+      sabotage(p, "remove");
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        runner: renderingRunner(p, "claude", suppliedIds, calls),
+      });
+
+      expect(calls).toHaveLength(0);
+      expect(result.skipped).toBe(true);
+      expect(result.reason).toContain("20 rendered instruction files");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("CONTROL 328064bc: an accurate account005 floor refuses and names dropped sources", () => {
+    resetHome();
+    try {
+      const incumbentIds = Array.from({ length: 20 }, (_, index) =>
+        `account005-rule-${String(index + 1).padStart(2, "0")}`,
+      );
+      const suppliedIds = incumbentIds.slice(0, 4);
+      const exportPath = join(home, "account005-accurate.configs.json");
+      writeExport(exportPath, suppliedIds);
+      const p = profileInHome("claude", { identity: exportPath });
+
+      writeManifest(p, "claude", incumbentIds.map((id) => ({ id })));
+      writePriorAudit(p, "claude", incumbentIds);
+      writeRenderedInstructionFiles(p, incumbentIds);
+      sabotage(p, "remove");
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        runner: renderingRunner(p, "claude", suppliedIds, calls),
+      });
+
+      expect(calls).toHaveLength(0);
+      expect(result.skipped).toBe(true);
+      expect(result.result).not.toBe("applied");
+      expect(result.reason).toContain("would remove 16 of them");
+      for (const id of incumbentIds.slice(4, 9)) expect(result.reason).toContain(id);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("REGRESSION 328064bc: a truncated legacy audit is not a preservation floor", () => {
+    resetHome();
+    try {
+      const incumbentIds = Array.from({ length: 25 }, (_, index) => `legacy-rule-${index + 1}`);
+      const recordedIds = incumbentIds.slice(0, 20);
+      const exportPath = join(home, "truncated.configs.json");
+      writeExport(exportPath, recordedIds);
+      const p = profileInHome("claude", { identity: exportPath });
+
+      writeManifest(p, "claude", incumbentIds.map((id) => ({ id })));
+      writePriorAudit(p, "claude", recordedIds);
+      rewritePriorAudit(p, (audit) => {
+        audit.manifest.sourceCount = incumbentIds.length;
+        audit.manifest.sourceIdsTruncated = true;
+      });
+      writeRenderedInstructionFiles(p, incumbentIds);
+      sabotage(p, "remove");
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        runner: renderingRunner(p, "claude", recordedIds, calls),
+      });
+
+      expect(calls).toHaveLength(0);
+      expect(result.skipped).toBe(true);
+      expect(result.reason).toContain("truncated");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("REGRESSION 328064bc: an audit count that exceeds its ids is not a preservation floor", () => {
+    resetHome();
+    try {
+      const incumbentIds = Array.from({ length: 20 }, (_, index) => `partial-rule-${index + 1}`);
+      const recordedIds = incumbentIds.slice(0, 3);
+      const exportPath = join(home, "partial.configs.json");
+      writeExport(exportPath, incumbentIds.slice(0, 4));
+      const p = profileInHome("claude", { identity: exportPath });
+
+      writeManifest(p, "claude", incumbentIds.map((id) => ({ id })));
+      writePriorAudit(p, "claude", recordedIds);
+      rewritePriorAudit(p, (audit) => {
+        audit.manifest.sourceCount = incumbentIds.length;
+      });
+      writeRenderedInstructionFiles(p, incumbentIds);
+      sabotage(p, "remove");
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        runner: renderingRunner(p, "claude", incumbentIds.slice(0, 4), calls),
+      });
+
+      expect(calls).toHaveLength(0);
+      expect(result.skipped).toBe(true);
+      expect(result.reason).toContain("names 3 of 20");
+    } finally {
+      cleanup();
+    }
+  });
+
+  // ---- must-not-over-block controls -------------------------------------
+  // A guard that refuses everything is its own outage, and it would satisfy
+  // every assertion above. Each control below has to pass in the same run.
+
+  test("CONTROL: a destroyed manifest still renders when the export covers the recorded floor", () => {
+    resetHome();
+    try {
+      const exportPath = join(home, "complete.configs.json");
+      writeExport(exportPath, INCUMBENT_IDS);
+      const p = profileInHome("claude", { identity: exportPath });
+      writeManifest(p, "claude", INCUMBENT_IDS.map((id) => ({ id })));
+      writePriorAudit(p, "claude", INCUMBENT_IDS);
+      sabotage(p, "corrupt");
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        runner: renderingRunner(p, "claude", INCUMBENT_IDS, calls),
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(result.result).toBe("applied");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("CONTROL: a first-ever render into a home with no manifest and no audit is not blocked", () => {
+    // The bootstrap path. `missing` manifest plus `missing` audit is the only
+    // state in which an empty floor is a true answer, and it must stay open or
+    // no new profile can ever be rendered.
+    resetHome();
+    try {
+      const exportPath = join(home, "first.configs.json");
+      writeExport(exportPath, SUPPLIED_IDS);
+      const p = profileInHome("claude", { identity: exportPath });
+      mkdirSync(join(p.dir, "sessions"), { recursive: true });
+      mkdirSync(join(p.dir, "skills", "example"), { recursive: true });
+      writeFileSync(join(p.dir, "history.jsonl"), '{"display":"operating home"}\n');
+      writeFileSync(join(p.dir, "skills", "example", "SKILL.md"), "# Existing skill\n");
+      expect(existsSync(join(p.dir, ".hasna", "instructions"))).toBe(false);
+      expect(existsSync(join(p.dir, "CLAUDE.md"))).toBe(false);
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        runner: renderingRunner(p, "claude", SUPPLIED_IDS, calls),
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(result.result).toBe("applied");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("CONTROL: --allow-instruction-reduction still renders through a destroyed manifest", () => {
+    // The escape hatch has to survive the new refusal, or an operator with a
+    // corrupt manifest is wedged out of their own launch with no way through.
+    resetHome();
+    try {
+      const exportPath = join(home, "reduce.configs.json");
+      writeExport(exportPath, SUPPLIED_IDS);
+      const p = profileInHome("claude", { identity: exportPath });
+      writeManifest(p, "claude", INCUMBENT_IDS.map((id) => ({ id })));
+      writePriorAudit(p, "claude", INCUMBENT_IDS);
+      sabotage(p, "corrupt");
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        allowSourceReduction: true,
+        runner: renderingRunner(p, "claude", SUPPLIED_IDS, calls),
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(result.result).toBe("applied");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("readManifestSourceIds reports WHY it returned nothing", () => {
+    // The unit-level statement of the defect: three of these used to be the
+    // same value, and the one that is a real zero is the only one that may
+    // disarm anything.
+    resetHome();
+    try {
+      const p = profileInHome("claude");
+
+      expect(readManifestSourceIds(p)).toEqual({ state: "missing", ids: [] });
+
+      writeManifest(p, "claude", INCUMBENT_IDS.map((id) => ({ id })));
+      expect(readManifestSourceIds(p)).toEqual({ state: "ok", ids: INCUMBENT_IDS });
+
+      writeManifest(p, "claude", []);
+      expect(readManifestSourceIds(p)).toEqual({ state: "ok", ids: [] });
+
+      const path = join(p.dir, ".hasna", "session-render-manifest.json");
+      writeFileSync(path, "{ not json");
+      expect(readManifestSourceIds(p)).toEqual({ state: "unreadable", ids: [] });
+
+      writeFileSync(path, JSON.stringify({ schema: "x", sources: "not-an-array" }));
+      expect(readManifestSourceIds(p)).toEqual({ state: "unreadable", ids: [] });
+    } finally {
+      cleanup();
+    }
+  });
+});

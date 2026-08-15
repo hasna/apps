@@ -26,7 +26,7 @@ different part of the retrieval problem.
 
 ## Local Indexes
 
-Local mode starts with SQLite:
+The on-box server starts with SQLite:
 
 - `chunks` stores source/wiki text segments and metadata.
 - `chunks_fts` provides keyword search.
@@ -69,9 +69,9 @@ lower-level vector-only command. MCP exposes the agent-facing path through
 tools for `ok_search`, embeddings, and reindexing. Deterministic `--fake`
 embeddings exist for tests and offline verification only.
 
-## Hosted Indexes
+## Server Indexes
 
-Hosted mode may use:
+A PostgreSQL-backed server may use:
 
 - Postgres plus pgvector for sources/chunks/wiki/runs.
 - Managed vector stores for large corpora.

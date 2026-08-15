@@ -2,14 +2,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { getDatabase, resetDatabase } from "./database.js";
 import { translateSql } from "../storage.js";
 
-const MODE_ENV = "HASNA_MEMENTOS_STORAGE_MODE";
+const MODE_ENV = "HASNA_MEMENTOS_DATABASE_URL";
 const URL_ENV = "HASNA_MEMENTOS_DATABASE_URL";
 
-describe("Amendment A1 — cloud-mode routing (getDatabase)", () => {
+describe("server backend — postgresql by DATABASE_URL presence (getDatabase)", () => {
   const saved: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    for (const k of [MODE_ENV, URL_ENV, "MEMENTOS_STORAGE_MODE", "MEMENTOS_DATABASE_URL"]) {
+    for (const k of [MODE_ENV, "MEMENTOS_STORAGE_MODE", "HASNA_MEMENTOS_STORAGE_MODE", "MEMENTOS_DATABASE_URL"]) {
       saved[k] = process.env[k];
       delete process.env[k];
     }
@@ -24,8 +24,7 @@ describe("Amendment A1 — cloud-mode routing (getDatabase)", () => {
     resetDatabase();
   });
 
-  test("explicit dbPath always uses local SQLite, even in cloud mode", () => {
-    process.env[MODE_ENV] = "cloud";
+  test("explicit dbPath always uses local SQLite, even when DATABASE_URL is present", () => {
     process.env[URL_ENV] = "postgres://u:p@127.0.0.1:1/db?sslmode=require";
     // An explicit path must never route to Postgres (tests/tooling/import-export).
     const db = getDatabase(":memory:");

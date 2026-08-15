@@ -5,17 +5,16 @@
  * Licensed under the Apache License, Version 2.0
  */
 import { defaultStorePath, ensureStore, importLegacyGlobalStore, itemMatchesSearch, type KnowledgeItem } from './store';
-import { resolveItemStore, type ItemStore } from './item-store';
-import { isKnowledgeApiMode, KnowledgeVersionConflictError } from './cloud-store';
+import { resolveItemStore, type ItemListDirection, type ItemListSort, type ItemStore } from './item-store';
+import { usesKnowledgeHttpTransport, KnowledgeVersionConflictError } from './http-store';
 import { diffEntries, formatEntryDiff, type EntrySnapshot } from './entry-diff';
 import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
-  KNOWLEDGE_MODE_ENV_KEYS,
-  assertKnowledgeModeSelected,
-  knowledgeModeReport,
-  type KnowledgeModeReport,
-} from './knowledge-mode';
+  assertNoRetiredKnowledgeStorageSelector,
+  resolveKnowledgeClientTransport,
+  type KnowledgeClientTransportReport,
+} from './client-transport';
 import { openKnowledgeDb } from './knowledge-db';
 import { createKnowledgeService } from './service';
 import { createKnowledgeProjectPanel, formatKnowledgeProjectPanel } from './project-panel';
@@ -170,7 +169,7 @@ interface ParseResult {
 }
 
 const EVENTS_COMMANDS = ['events', 'webhooks'];
-const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'versions', 'diff', 'export', 'prune', 'dedupe', 'stats', 'inventory', 'project-panel', 'project-registration', 'project-membership', 'project-resources', 'project-resource', 'paths', 'mode', 'guarded', 'setup', 'auth', 'storage', 'machines', 'sync', 'db', 'wiki', 'app-wiki', 'source', 'ingest', 'reindex', 'search', 'context', 'proposals', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help', ...EVENTS_COMMANDS];
+const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'versions', 'diff', 'export', 'prune', 'dedupe', 'stats', 'inventory', 'project-panel', 'project-registration', 'project-membership', 'project-resources', 'project-resource', 'paths', 'transport', 'guarded', 'setup', 'auth', 'storage', 'machines', 'sync', 'db', 'wiki', 'app-wiki', 'source', 'ingest', 'reindex', 'search', 'context', 'proposals', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help', ...EVENTS_COMMANDS];
 const COMMAND_ALIASES: Record<string, string> = {
   ls: 'list',
   rm: 'delete',
@@ -453,11 +452,11 @@ Commands:
   project-resources            Enumerate complete project/collection/item/taxonomy resources
   project-resource             Read one exact project resource
   paths                        Show resolved workspace/store paths
-  mode                         Report the resolved backend (local or cloud) and why
+  transport                    Report the selected client transport and why
   guarded capabilities         Report FCAME-1 private transport capability
   guarded execute-descriptor   Execute an opaque descriptor over inherited process IPC
-  setup                        Configure local, hosted, or canonical example S3 mode
-  auth login|whoami|logout     Manage hosted API credentials
+  setup                        Initialize config or canonical example S3 storage
+  auth login|whoami|logout     Manage HTTP API credentials
   storage status|validate|repair-artifact-keys|migrate-legacy-path|merge-legacy-path|import-legacy
                                Inspect, migrate, or repair local/S3 artifact storage metadata
   machines topology|preflight  Inspect optional machine topology/sync readiness
@@ -506,15 +505,15 @@ Global Options:
   --strategy <name>            Resolution strategy for sync conflicts
   --patch-uri <uri>            Proposed patch artifact URI for sync conflicts
   --provider <name>            Provider override for web search
-  --mode local|hosted          Configure OSS local or hosted-aware mode
+  --mode deterministic|ai      Sync-conflict resolution strategy
   --machine <id>               Machine id/SSH alias for preflight or peer sync
   --workspace <path>           Repo workspace path for machine preflight
-  --api-url <url>              Hosted API origin (or KNOWLEDGE_API_URL)
-  --api-key <key>              Hosted API key for auth login
-  --email <email>              Hosted account email metadata
-  --org <slug>                 Hosted organization slug metadata
-  --org-id <id>                Hosted organization id metadata
-  --user-id <id>               Hosted user id metadata
+  --api-url <url>              API origin to record for auth setup
+  --api-key <key>              HTTP API key for auth login
+  --email <email>              SaaS account email metadata
+  --org <slug>                 SaaS organization slug metadata
+  --org-id <id>                SaaS organization id metadata
+  --user-id <id>               SaaS user id metadata
   --owner <name>               Provenance owner for repository rule docs
   --domain <domain>            Restrict provider web search to a domain
   --file-results               File web snippets as web source refs
@@ -601,9 +600,9 @@ function printCommandHelp(command: string): void {
   if (command === 'project-resources') { console.log('Usage: knowledge project-resources <project-id> [--kind <project|collection|item|taxonomy>]... [--limit <n>] [--cursor <cursor>] [--all] [--json]'); return; }
   if (command === 'project-resource') { console.log('Usage: knowledge project-resource <project-id> <project|collection|item|taxonomy> <resource-id> [--json]'); return; }
   if (command === 'paths') { console.log('Usage: knowledge paths [--scope local|global|project] [--verbose] [--json]'); return; }
-  if (command === 'mode') { console.log(`Usage: knowledge mode [--json]\n  Reports which backend this process would use — sqlite (on-box store) or postgres (HTTP /v1) — and\n  which env var selected it. Reads the environment only: no store is opened, no config file is read,\n  and no request is made, so it is safe on a machine with no config and no network.\n  Selection is EXPLICIT-ONLY: set ${KNOWLEDGE_MODE_ENV_KEYS[0]}=sqlite|postgres. Setting only\n  ${KNOWLEDGE_API_URL_ENV_KEYS[0]} / ${KNOWLEDGE_API_KEY_ENV_KEYS[0]} does NOT switch backends;\n  those are reported as present-but-ignored pointers. Env var NAMES are printed, never values.`); return; }
+  if (command === 'transport') { console.log(`Usage: knowledge transport [--json]\n  Reports whether this process uses the on-box SQLite store or the server HTTP API.\n  ${KNOWLEDGE_API_URL_ENV_KEYS[0]} presence selects HTTP and requires ${KNOWLEDGE_API_KEY_ENV_KEYS[0]}.\n  Reads environment names and presence only; it never prints credential values.`); return; }
   if (command === 'guarded') { console.log('Usage:\n  knowledge guarded capabilities [--json]\n  knowledge guarded execute-descriptor --ipc [--json]\n\n  execute-descriptor is an internal package-owned worker. Private requests and results use the\n  runtime-owned child-process IPC channel, never argv, stdin, environment variables, files, stdout,\n  or stderr. Direct shell invocation has no IPC channel and fails closed. Use the exported opaque-\n  descriptor helpers rather than invoking this worker directly from a shell.'); return; }
-  if (command === 'setup') { console.log('Usage: knowledge setup --mode local|hosted [--api-url https://...] [--canonical-example] [--scope local|global|project] [--json]'); return; }
+  if (command === 'setup') { console.log('Usage: knowledge setup [--canonical-example] [--scope local|global|project] [--json]\nClient routing is controlled only by HASNA_KNOWLEDGE_API_URL presence.'); return; }
   if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
   if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys|migrate-legacy-path|merge-legacy-path [--approve-write --approved-by <name>] [--scope local|global|project] [--json]\n       knowledge storage import-legacy [--dry-run] [--scope global] [--json]'); return; }
   if (command === 'machines') { console.log('Usage: knowledge machines topology [--no-tailscale] | preflight [machine] [--workspace <repo>] [--scope local|global|project] [--verbose] [--json]'); return; }
@@ -666,25 +665,17 @@ function compactObjectFallback(data: unknown): string {
 }
 
 /**
- * Human rendering of `knowledge mode`. States the backend first, then the exact
- * env var that chose it, then any pointer vars that are present and ignored —
- * the configuration that used to switch backends silently. NAMES only: one of
- * those variables holds an API key and another holds a URL.
+ * Human rendering of `knowledge transport`. Values are never included.
  */
-function formatMode(report: KnowledgeModeReport): string {
-  const backend = report.mode === 'postgres' ? 'postgres (HTTP /v1 API)' : 'sqlite (on-box store)';
-  const chose = report.source.kind === 'env'
-    ? `selected by ${report.source.name}=${report.source.value}`
-    : `default (no mode var set; set ${KNOWLEDGE_MODE_ENV_KEYS[0]}=postgres to use the API)`;
-  const lines = [`Knowledge mode: ${backend}`, `  ${chose}`];
-  if (report.pointer_env_present.length > 0) {
-    const verb = report.pointer_ignored ? 'present but IGNORED for mode selection' : 'present';
-    lines.push(`  Pointer env ${verb}: ${report.pointer_env_present.join(', ')}`);
-  }
+function formatTransport(report: KnowledgeClientTransportReport): string {
+  const target = report.transport === 'http' ? 'HTTP /v1 API' : 'on-box SQLite';
+  const chose = report.source === 'default'
+    ? 'HASNA_KNOWLEDGE_API_URL is absent'
+    : 'selected by HASNA_KNOWLEDGE_API_URL presence';
+  const lines = [`Knowledge transport: ${report.transport} (${target})`, `  ${chose}`];
   if (report.network_guard_active) {
     lines.push('  Outbound guard: ACTIVE (NODE_ENV=test) — non-loopback requests are refused.');
   }
-  if (report.warning) lines.push(`  Note: ${report.warning}`);
   return lines.join('\n');
 }
 
@@ -947,7 +938,7 @@ function requireId(flags: Flags): asserts flags is Flags & { id: string } {
   if (!flags.id) throw new Error('Missing required --id. Example: knowledge get --id <id>');
 }
 
-function sortItems(items: KnowledgeItem[], flags: Flags): { sorted: KnowledgeItem[]; sort: string; direction: string } {
+function sortItems(items: KnowledgeItem[], flags: Flags): { sorted: KnowledgeItem[]; sort: ItemListSort; direction: ItemListDirection } {
   const sort = flags.sort ?? 'created';
   if (sort !== 'created' && sort !== 'title') {
     throw new Error("Invalid --sort value. Use 'created' or 'title'.");
@@ -961,6 +952,7 @@ function sortItems(items: KnowledgeItem[], flags: Flags): { sorted: KnowledgeIte
 }
 
 async function run(argv: string[]): Promise<void> {
+  assertNoRetiredKnowledgeStorageSelector(process.env);
   if (await runEventsCommand(argv)) return;
 
   const { positional, flags } = parseArgs(argv);
@@ -974,11 +966,23 @@ async function run(argv: string[]): Promise<void> {
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-    console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag versions diff delete export prune dedupe stats inventory project-panel project-registration project-membership project-resources project-resource paths mode guarded setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive --json --verbose --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --rev --to --format --completions --purpose --model --dimensions --semantic --context --max-tokens --max-items --from --since --topic --dedupe --generate --approve-write --provider --mode --machine --workspace --peer-workspace --api-url --canonical-example --api-key --email --org --org-id --user-id --owner --domain --file-results --full --dry-run --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived --project --operation-id --step-id --idempotency-key --slug --name --collection-id --collection-slug --collection-name --item-id --receipt-id --cursor --kind --all --contract --source-ref --allow-global" -- "$cur")); }; complete -F _knowledge knowledge`);
+    console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "${COMMANDS.join(' ')} --json --verbose --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --rev --to --format --completions --purpose --model --dimensions --semantic --context --max-tokens --max-items --from --since --topic --dedupe --generate --approve-write --provider --mode --machine --workspace --peer-workspace --api-url --canonical-example --api-key --email --org --org-id --user-id --owner --domain --file-results --full --dry-run --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived --project --operation-id --step-id --idempotency-key --slug --name --collection-id --collection-slug --collection-name --item-id --receipt-id --cursor --kind --all --contract --source-ref --allow-global" -- "$cur")); }; complete -F _knowledge knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag versions diff delete export prune dedupe stats inventory project-panel project-registration project-membership project-resources project-resource paths mode guarded setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive)" "(--json)--json" "(--verbose)--verbose" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--dedupe)--dedupe" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-example)--canonical-example" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(--all)--all" "(--contract)--contract" "(--allow-global)--allow-global" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(--search)--search[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--max-tokens)--max-tokens[token budget]:number:" "(--max-items)--max-items[item budget]:number:" "(--from)--from"\{search,loops,runs\}:" "(--to)--to[diff target: version number or current]:" "(--rev)--rev[entry version for diff]:number:" "(--since)--since[duration or ISO time]:" "(--topic)--topic[topic text]:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--owner)--owner[provenance owner]:" "(--domain)--domain[domain]:" "(--project)--project[project id/name/slug]:" "(--operation-id)--operation-id[registration operation id]:" "(--step-id)--step-id[registration step id]:" "(--idempotency-key)--idempotency-key[caller idempotency key]:" "(--slug)--slug[project slug]:" "(--name)--name[project name]:" "(--collection-id)--collection-id[exact collection id]:" "(--collection-slug)--collection-slug[collection slug]:" "(--collection-name)--collection-name[collection name]:" "(--item-id)--item-id[exact item id]:" "(--receipt-id)--receipt-id[exact receipt id]:" "(--cursor)--cursor[resource cursor]:" "(--kind)--kind[resource kind]:(project collection item taxonomy):" "(--source-ref)--source-ref[source ref]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
+      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(${COMMANDS.join(' ')})" "(--json)--json" "(--verbose)--verbose" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--dedupe)--dedupe" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-example)--canonical-example" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(--all)--all" "(--contract)--contract" "(--allow-global)--allow-global" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(--search)--search[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--max-tokens)--max-tokens[token budget]:number:" "(--max-items)--max-items[item budget]:number:" "(--from)--from"\{search,loops,runs\}:" "(--to)--to[diff target: version number or current]:" "(--rev)--rev[entry version for diff]:number:" "(--since)--since[duration or ISO time]:" "(--topic)--topic[topic text]:" "(--provider)--provider[provider]:" "(--mode)--mode"\{deterministic,ai\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[HTTP API URL]:" "(--api-key)--api-key[HTTP API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--owner)--owner[provenance owner]:" "(--domain)--domain[domain]:" "(--project)--project[project id/name/slug]:" "(--operation-id)--operation-id[registration operation id]:" "(--step-id)--step-id[registration step id]:" "(--idempotency-key)--idempotency-key[caller idempotency key]:" "(--slug)--slug[project slug]:" "(--name)--name[project name]:" "(--collection-id)--collection-id[exact collection id]:" "(--collection-slug)--collection-slug[collection slug]:" "(--collection-name)--collection-name[collection name]:" "(--item-id)--item-id[exact item id]:" "(--receipt-id)--receipt-id[exact receipt id]:" "(--cursor)--cursor[resource cursor]:" "(--kind)--kind[resource kind]:(project collection item taxonomy):" "(--source-ref)--source-ref[source ref]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
     } else if (shell === 'fish') {
-      console.log(`complete -c knowledge -f; complete -c knowledge -a "add list get update archive restore upsert untag versions diff delete export prune dedupe stats inventory project-panel project-registration project-membership project-resources project-resource paths mode guarded setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive"; complete -c knowledge -l json; complete -c knowledge -l verbose; complete -c knowledge -l yes -s y; complete -c knowledge -l help -s h; complete -c knowledge -l version -s v; complete -c knowledge -l desc; complete -c knowledge -l archived; complete -c knowledge -l include-archived; complete -c knowledge -l semantic; complete -c knowledge -l context; complete -c knowledge -l max-tokens; complete -c knowledge -l max-items; complete -c knowledge -l from -a "search loops runs"; complete -c knowledge -l to; complete -c knowledge -l rev; complete -c knowledge -l since; complete -c knowledge -l topic; complete -c knowledge -l dedupe; complete -c knowledge -l generate; complete -c knowledge -l approve-write; complete -c knowledge -l allow-global; complete -c knowledge -l canonical-example; complete -c knowledge -l provider; complete -c knowledge -l mode; complete -c knowledge -l machine; complete -c knowledge -l workspace; complete -c knowledge -l peer-workspace; complete -c knowledge -l api-url; complete -c knowledge -l api-key; complete -c knowledge -l email; complete -c knowledge -l org; complete -c knowledge -l org-id; complete -c knowledge -l user-id; complete -c knowledge -l owner; complete -c knowledge -l domain; complete -c knowledge -l project; complete -c knowledge -l operation-id; complete -c knowledge -l step-id; complete -c knowledge -l idempotency-key; complete -c knowledge -l slug; complete -c knowledge -l name; complete -c knowledge -l collection-id; complete -c knowledge -l collection-slug; complete -c knowledge -l collection-name; complete -c knowledge -l item-id; complete -c knowledge -l receipt-id; complete -c knowledge -l cursor; complete -c knowledge -l kind -a "project collection item taxonomy"; complete -c knowledge -l all; complete -c knowledge -l contract; complete -c knowledge -l source-ref; complete -c knowledge -l file-results; complete -c knowledge -l full; complete -c knowledge -l dry-run; complete -c knowledge -l fake; complete -c knowledge -l no-tailscale; complete -c knowledge -l no-artifact-content; complete -c knowledge -s p -l page; complete -c knowledge -s l -l limit; complete -c knowledge -s s -l search; complete -c knowledge -l sort; complete -c knowledge -l id; complete -c knowledge -l store; complete -c knowledge -l title; complete -c knowledge -l content; complete -c knowledge -l url; complete -c knowledge -s t -l tag; complete -c knowledge -l format; complete -c knowledge -l completions; complete -c knowledge -l purpose; complete -c knowledge -l model; complete -c knowledge -l dimensions; complete -c knowledge -l no-color; complete -c knowledge -l scope -a "local global project"; complete -c knowledge -l tables`);
+      const fishOptions = [
+        'json', 'verbose', 'yes', 'help', 'version', 'desc', 'archived', 'include-archived',
+        'semantic', 'context', 'max-tokens', 'max-items', 'from', 'to', 'rev', 'since', 'topic',
+        'dedupe', 'generate', 'approve-write', 'allow-global', 'canonical-example', 'provider',
+        'mode', 'machine', 'workspace', 'peer-workspace', 'api-url', 'api-key', 'email', 'org',
+        'org-id', 'user-id', 'owner', 'domain', 'project', 'operation-id', 'step-id',
+        'idempotency-key', 'slug', 'name', 'collection-id', 'collection-slug', 'collection-name',
+        'item-id', 'receipt-id', 'cursor', 'kind', 'all', 'contract', 'source-ref', 'file-results',
+        'full', 'dry-run', 'fake', 'no-tailscale', 'no-artifact-content', 'page', 'limit', 'search',
+        'sort', 'id', 'store', 'title', 'content', 'url', 'tag', 'format', 'completions', 'purpose',
+        'model', 'dimensions', 'no-color', 'scope', 'tables',
+      ];
+      console.log(`complete -c knowledge -f; complete -c knowledge -a "${COMMANDS.join(' ')}"; ${fishOptions.map((option) => `complete -c knowledge -l ${option}`).join('; ')}`);
     } else {
       throw new Error("Invalid --completions value. Use 'bash', 'zsh', or 'fish'.");
     }
@@ -1001,16 +1005,16 @@ async function run(argv: string[]): Promise<void> {
   }
 
   // Answered BEFORE the service is constructed, and deliberately so. The point
-  // of this command is to tell an operator which backend the CLI resolved
+  // of this command is to tell an operator which transport the CLI resolved
   // without changing anything on the way to the answer, and a diagnostic that
   // creates the store it is reporting on is worse than no diagnostic: in the
   // sibling mementos fix the equivalent command created a 720 KB database via a
   // pre-command hook, which then made an isolation assertion unfalsifiable
   // because the file it checked for already existed. Keep this above every
   // store, config, and db touch.
-  if (command === 'mode') {
-    const report = knowledgeModeReport(process.env);
-    output(flags.json || flags.verbose ? { ok: true, ...report } : formatMode(report), flags.json, flags);
+  if (command === 'transport') {
+    const report = resolveKnowledgeClientTransport(process.env);
+    output(flags.json || flags.verbose ? { ok: true, ...report } : formatTransport(report), flags.json, flags);
     return;
   }
 
@@ -1084,16 +1088,6 @@ async function run(argv: string[]): Promise<void> {
     return;
   }
 
-  // Refuse to guess. An API URL with no mode variable is a HALF-CONFIGURED
-  // client: the environment names a store and never says to use it, and every
-  // command below would answer from the on-box store with exit 0 — measured on
-  // station01 as 98 entries against the 869 in the store the URL names. A
-  // silent wrong answer is worse than no answer, so this stops here and names
-  // the variable. Placed AFTER `mode` on purpose: the diagnostic that explains
-  // this state has to keep working in it. `--store` is an explicit local
-  // choice and passes, exactly like an explicit mode=local.
-  assertKnowledgeModeSelected(process.env, { storePathOverridden: Boolean(flags.store) });
-
   const serviceScope = command === 'project-panel' || command === 'app-wiki' ? (flags.scope ?? 'project') : flags.scope;
   const service = createKnowledgeService({ scope: serviceScope });
   let standaloneProjectLinksAuthority: KnowledgeProjectLinksAuthority | undefined;
@@ -1137,14 +1131,10 @@ async function run(argv: string[]): Promise<void> {
       storePath = defaultStorePath();
     }
   }
-  // Single knowledge-item Store abstraction. When the mode is EXPLICITLY cloud
-  // (HASNA_KNOWLEDGE_STORAGE_MODE and its aliases — the API URL and key are
-  // pointers and never a selection, see knowledge-mode.ts) ALL item reads/writes
-  // go to the configured API's /v1 with the bearer key; otherwise the on-box JSON
-  // store, which is also what a pointer-only environment resolves to. An explicit --store
-  // override always pins to the local transport (fully reversible). Every item
-  // command below routes through `itemStore` — never the JSON file or HTTP
-  // client directly.
+  // Single knowledge-item Store abstraction. The canonical API URL and key
+  // select the server HTTP API; without the URL the on-box JSON store is used.
+  // An explicit --store override pins to the on-box store. Every item command
+  // below routes through `itemStore` — never the JSON file or HTTP client directly.
   const itemStore: ItemStore = resolveItemStore({ storePath, storePathOverridden });
 
   // Natural-language shorthand: when invoked as the `knowledge` bin, a prompt is
@@ -1156,17 +1146,17 @@ async function run(argv: string[]): Promise<void> {
     commandArgOffset = 0;
   }
 
-  // ask/build seed a local JSON store only in local mode. In cloud/api mode the
-  // prompt flow runs over the shared cloud item corpus, so touching a local file
+  // ask/build seed a local JSON store only for the on-box transport. With the
+  // HTTP API the prompt flow runs over the shared item corpus, so touching a local file
   // here would be an unnecessary local-side write while the flip is active. This
   // follows shorthand resolution so the read-only item identity check itself never
   // creates a store while deciding whether an unknown command should fail.
-  if (!storePathOverridden && (command === 'ask' || command === 'build') && !isKnowledgeApiMode()) {
+  if (!storePathOverridden && (command === 'ask' || command === 'build') && !usesKnowledgeHttpTransport()) {
     ensureStore(storePath);
   }
 
   const projectLinksAuthority = () => {
-    if (!storePathOverridden || isKnowledgeApiMode()) return service.projectLinksAuthority();
+    if (!storePathOverridden || usesKnowledgeHttpTransport()) return service.projectLinksAuthority();
     standaloneProjectLinksAuthority ??= createLocalKnowledgeProjectLinksAuthority({
       databasePath: join(dirname(storePath), 'knowledge.db'),
       itemStore,
@@ -1425,13 +1415,13 @@ async function run(argv: string[]): Promise<void> {
   }
 
   if (command === 'inventory') {
-    // Single dispatch shared with the MCP + SDK: the shared cloud item corpus in
-    // api mode (routes through the cloud transport), otherwise the full local
+    // Single dispatch shared with the MCP + SDK: the shared item corpus through
+    // HTTP when selected, otherwise the full on-box
     // inventory across json + sqlite. No surface reads a divergent store.
     const inventory = await service.resolveInventory({
       limit: flags.limit,
       includeArchived: flags.includeArchived || flags.archived,
-      storePath: isKnowledgeApiMode() ? undefined : storePath,
+      storePath: usesKnowledgeHttpTransport() ? undefined : storePath,
     });
     output(flags.json || flags.verbose ? inventory : formatInventory(inventory), flags.json, flags);
     return;
@@ -1443,7 +1433,7 @@ async function run(argv: string[]): Promise<void> {
     const panel = await createKnowledgeProjectPanel(projectRef, {
       service,
       limit: flags.limit,
-      storePath: isKnowledgeApiMode() ? undefined : storePath,
+      storePath: usesKnowledgeHttpTransport() ? undefined : storePath,
       includeArchived: flags.includeArchived || flags.archived,
     });
     output(flags.json || flags.contract ? panel : formatKnowledgeProjectPanel(panel), flags.json || flags.contract);
@@ -1457,11 +1447,7 @@ async function run(argv: string[]): Promise<void> {
   }
 
   if (command === 'setup') {
-    const result = service.setup({
-      mode: flags.mode,
-      apiUrl: flags.apiUrl,
-      canonicalExample: flags.canonicalExample,
-    });
+    const result = service.setup({ canonicalExample: flags.canonicalExample });
     output(result, flags.json, flags);
     return;
   }
@@ -1474,7 +1460,7 @@ async function run(argv: string[]): Promise<void> {
       return;
     }
     if (action === 'login') {
-      const apiKey = flags.apiKey ?? process.env.KNOWLEDGE_API_KEY ?? process.env.HASNA_KNOWLEDGE_API_KEY;
+      const apiKey = flags.apiKey ?? process.env.HASNA_KNOWLEDGE_API_KEY;
       if (!apiKey) throw new Error('Usage: knowledge auth login --api-key <key> [--email <email>]');
       const auth = service.saveAuth({
         apiKey,
@@ -1491,13 +1477,13 @@ async function run(argv: string[]): Promise<void> {
         org_slug: auth.org_slug ?? null,
         api_url: auth.api_url ?? service.authStatus(process.env).api_url,
         auth_path: service.authStatus(process.env).auth_path,
-        message: `Saved hosted credentials for ${auth.email ?? 'API key'}`,
+        message: `Saved API credentials for ${auth.email ?? 'API key'}`,
       }, flags.json, flags);
       return;
     }
     if (action === 'logout') {
       const removed = service.clearAuth(process.env);
-      output({ ok: true, removed, message: removed ? 'Removed hosted credentials' : 'No hosted credentials found' }, flags.json, flags);
+      output({ ok: true, removed, message: removed ? 'Removed API credentials' : 'No API credentials found' }, flags.json, flags);
       return;
     }
     throw new Error("Invalid auth action. Use 'login', 'whoami', or 'logout'.");
@@ -1759,7 +1745,7 @@ async function run(argv: string[]): Promise<void> {
           // from StorageStatus — a raw DB DSN is never a client concept — but missed this
           // call site, which kept reading `status.activeEnv` (always undefined, so the
           // ` via …` suffix had been dead since then). Message output is unchanged.
-          message: `knowledge.db storage mode ${status.mode}`,
+          message: `knowledge.db backend ${status.backend}`,
         }, flags.json, flags);
         return;
       }
@@ -1768,7 +1754,7 @@ async function run(argv: string[]): Promise<void> {
       // HTTP ApiStore (knowledge items) — not by syncing local sqlite to RDS.
       throw new Error(
         "Invalid db storage action. Only 'status' is supported. The 'push'/'pull'/'sync' "
-          + 'Postgres sync commands were removed (DSN-on-client is forbidden); use the cloud API flip instead.',
+          + 'Postgres sync commands were removed (DSN-on-client is forbidden); configure the canonical HTTP API URL and key instead.',
       );
     }
     throw new Error("Invalid db action. Use 'init', 'stats', or 'storage'.");
@@ -1931,14 +1917,13 @@ async function run(argv: string[]): Promise<void> {
       if (action === 'status') {
         output({
           ok: true,
-          mode: policy.mode,
           workspace: resolvedWorkspace.home,
           allow_write_roots: policy.allowWriteRoots,
           read_only_source_access: policy.readOnlySourceAccess,
           network: policy.network,
           redaction: policy.redaction,
           approvals: policy.approvals,
-          message: `Safety policy: ${policy.mode}`,
+          message: 'Safety policy loaded',
         }, flags.json, flags);
         return;
       }

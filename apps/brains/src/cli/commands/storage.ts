@@ -30,7 +30,7 @@ function installStorageSubcommands(storage: Command): void {
         printJson(status);
         return;
       }
-      console.log(`Mode: ${status.mode}`);
+      console.log(`Backend: ${status.backend}`);
       console.log(`Enabled: ${status.enabled ? "yes" : "no"}`);
       console.log(`Database: ${status.db_path}`);
       for (const table of status.tables) console.log(`  ${table.table}: ${table.rows}`);

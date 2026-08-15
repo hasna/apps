@@ -1,0 +1,86 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "telephony",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.10.6",
+  "description": "Telephony platform for AI agents with SMS, WhatsApp, voice calls, TTS/STT, and real-time streaming. The data backend is the only runtime switch: SQLite at ~/.hasna/telephony/telephony.db by default, or PostgreSQL when a database URL is configured, in which case the serve process reads and writes PostgreSQL directly.",
+  "bins": [
+    "telephony",
+    "telephony-mcp",
+    "telephony-serve"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "http",
+      "kind": "api",
+      "status": "supported",
+      "bin": "telephony-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": false
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "telephony-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": ".",
+      "generatedFrom": "/openapi.json",
+      "clientClassName": "TelephonyApiClient"
+    },
+    {
+      "name": "telephony-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "telephony",
+      "authMode": "local-only"
+    },
+    {
+      "name": "telephony-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "telephony-mcp",
+      "authMode": "local-only"
+    }
+  ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "envPrefix": "HASNA_TELEPHONY_",
+    "aliasEnvPrefix": "TELEPHONY_",
+    "sqlitePath": "~/.hasna/telephony/telephony.db",
+    "pgTestGate": {
+      "envVar": "HASNA_TELEPHONY_TEST_DATABASE_URL",
+      "command": "bun run test:pg"
+    }
+  },
+  "hosting": [
+    "user-hosted"
+  ],
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan-artifact"
+      }
+    }
+  }
+}

@@ -9,38 +9,37 @@ import {
   resolveKnowledgeApiUrl,
 } from '../src/auth';
 import { createKnowledgeService } from '../src/service';
+import { defaultKnowledgeConfig, writeKnowledgeConfig } from '../src/workspace';
 
-describe('hosted-aware config and remote contracts', () => {
-  test('normalizes hosted setup without requiring a hosted account for local use', () => {
+describe('API environment and server contracts', () => {
+  test('workspace setup persists neither a selector nor client API placement', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-hosted-config-'));
     const service = createKnowledgeService({ scope: 'project', cwd: dir });
 
-    const setup = service.setup({
-      mode: 'remote',
-      apiUrl: 'https://knowledge.example.com/api/v1',
-    });
-    expect(setup.mode).toBe('hosted');
-    expect(setup.api_url).toBe('https://knowledge.example.com');
+    const setup = service.setup();
     expect(setup.storage_type).toBe('local');
     expect(setup.canonical_example.active).toBe(false);
-    expect(setup.next).toContain('knowledge auth login --api-key <key>');
+    expect(setup.next).toContain('knowledge transport --json');
 
     const config = JSON.parse(readFileSync(join(dir, '.hasna', 'knowledge', 'config.json'), 'utf8'));
-    expect(config.mode).toBe('hosted');
-    expect(config.hosted.api_url).toBe('https://knowledge.example.com');
+    expect(config.mode).toBeUndefined();
+    expect(config.hosted).toBeUndefined();
 
     const storage = service.storageContract();
-    expect(storage.hosted).toMatchObject({
-      enabled: true,
-      api_url: 'https://knowledge.example.com',
-      api_url_env: 'KNOWLEDGE_API_URL',
-      api_key_env: 'KNOWLEDGE_API_KEY',
-      requires_hosted_account_for_local_use: false,
-    });
+    expect((storage as unknown as Record<string, unknown>).hosted).toBeUndefined();
+  });
 
-    const local = service.setup({ mode: 'local' });
-    expect(local.mode).toBe('local');
-    expect(service.config().mode).toBe('local');
+  test('config writes scrub retired placement fields', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-config-scrub-'));
+    const configPath = join(dir, 'config.json');
+    writeKnowledgeConfig(configPath, {
+      ...defaultKnowledgeConfig(),
+      mode: 'hosted',
+      hosted: { api_url: 'https://ignored.example.test' },
+    } as never);
+    const stored = JSON.parse(readFileSync(configPath, 'utf8'));
+    expect(stored.mode).toBeUndefined();
+    expect(stored.hosted).toBeUndefined();
   });
 
   test('can opt into canonical example S3 artifact storage', () => {
@@ -48,11 +47,9 @@ describe('hosted-aware config and remote contracts', () => {
     const service = createKnowledgeService({ scope: 'project', cwd: dir });
 
     const setup = service.setup({
-      mode: 'hosted',
       canonicalExample: true,
     });
 
-    expect(setup.mode).toBe('hosted');
     expect(setup.storage_type).toBe('s3');
     expect(setup.artifact_uri_prefix).toBe('s3://example-knowledge-prod/.hasna/knowledge/');
     expect(setup.canonical_example.active).toBe(true);
@@ -80,11 +77,12 @@ describe('hosted-aware config and remote contracts', () => {
     const authDir = join(dir, 'auth');
     const env = { HASNA_KNOWLEDGE_AUTH_DIR: authDir };
     const service = createKnowledgeService({ scope: 'project', cwd: dir });
-    service.setup({ mode: 'hosted', apiUrl: 'https://knowledge.example.com/api' });
+    service.setup();
 
-    expect(knowledgeAuthStatus(service.config(), env).authenticated).toBe(false);
+    expect(knowledgeAuthStatus(env).authenticated).toBe(false);
     const auth = service.saveAuth({
       apiKey: 'kh_test',
+      apiUrl: 'https://knowledge.example.com/api',
       email: 'agent@example.com',
       orgSlug: 'hasna',
       orgId: 'org_123',
@@ -102,7 +100,7 @@ describe('hosted-aware config and remote contracts', () => {
       api_url: 'https://knowledge.example.com',
     });
 
-    const envStatus = service.authStatus({ ...env, KNOWLEDGE_API_KEY: 'kh_env', KNOWLEDGE_API_URL: 'https://env.example.com/api/v1' });
+    const envStatus = service.authStatus({ ...env, HASNA_KNOWLEDGE_API_KEY: 'kh_env', HASNA_KNOWLEDGE_API_URL: 'https://env.example.com/api/v1' });
     expect(envStatus).toMatchObject({
       authenticated: true,
       source: 'env',
@@ -115,21 +113,22 @@ describe('hosted-aware config and remote contracts', () => {
     expect(service.authStatus(env).authenticated).toBe(false);
   });
 
-  test('normalizes hosted api origins to the bare https origin', () => {
+  test('normalizes API origins to the bare https origin', () => {
     expect(normalizeKnowledgeApiOrigin('https://knowledge.example.com/api/v1')).toBe('https://knowledge.example.com');
     expect(() => normalizeKnowledgeApiOrigin('ftp://knowledge.example.com')).toThrow('http or https');
   });
 
-  test('canonical HASNA API URL wins over the compatibility alias and config', () => {
-    expect(resolveKnowledgeApiUrl(
-      { hosted: { api_url: 'https://config.example.com' } } as never,
-      {
+  test('canonical HASNA API URL wins and the unprefixed alias is ignored', () => {
+    expect(resolveKnowledgeApiUrl({
         HASNA_KNOWLEDGE_API_URL: 'https://canonical.example.com/api/v1',
         KNOWLEDGE_API_URL: 'https://alias.example.com/api/v1',
-      },
-    )).toBe('https://canonical.example.com');
+    })).toBe('https://canonical.example.com');
 
-    expect(knowledgeAuthStatus(undefined, {
+    expect(resolveKnowledgeApiUrl({
+      KNOWLEDGE_API_URL: 'https://alias.example.com/api/v1',
+    })).toBe('https://knowledge.md');
+
+    expect(knowledgeAuthStatus({
       HASNA_KNOWLEDGE_API_URL: 'https://canonical.example.com/api',
       HASNA_KNOWLEDGE_API_KEY: 'present-but-never-emitted',
       HASNA_KNOWLEDGE_AUTH_DIR: join(mkdtempSync(join(tmpdir(), 'ok-hosted-env-')), 'auth'),

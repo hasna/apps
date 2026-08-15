@@ -238,7 +238,7 @@ function interleavingClient(
         const release = await locks.acquire(String(params[0]), lane, control);
         releases.push(release);
         return {
-          rows: [{ pg_advisory_xact_lock: null } as T],
+          rows: [{ pg_advisory_xact_lock: null } as unknown as T],
           rowCount: 1,
         };
       }

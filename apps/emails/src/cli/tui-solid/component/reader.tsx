@@ -36,7 +36,7 @@ export function ReaderRoute() {
       <Show when={emails.selectedBody()} fallback={<EmptyState title="No message selected" detail="Choose a message from the inbox." />}>
         {(body) => (
           <>
-            <box height={5} flexDirection="column" rowGap={0}>
+            <box height={6} flexDirection="column" rowGap={0}>
               <box flexDirection="row" justifyContent="space-between">
                 <text fg={theme.text} attributes={TextAttributes.BOLD}>{body().subject}</text>
                 <Button label="Back" onPress={() => emails.actions.backToList()} />
@@ -44,6 +44,9 @@ export function ReaderRoute() {
               <text fg={theme.textMuted}>From: {body().from}</text>
               <text fg={theme.textMuted}>To: {body().to}</text>
               <text fg={theme.textMuted}>Date: {formatDate(body().date)}</text>
+              <Show when={body().is_priority}>
+                <text fg={theme.warning} attributes={TextAttributes.BOLD}>★ PRIORITY SENDER</text>
+              </Show>
             </box>
 
             <Show when={body().attachments.length > 0}>
