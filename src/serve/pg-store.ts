@@ -651,6 +651,16 @@ export class ProjectsPgStore {
     return rows.map(rowToProjectResourceLink);
   }
 
+  async listWorkspaceLocations(projectId: string): Promise<WorkspaceLocation[]> {
+    const rows = await this.db.many<WorkspaceLocationRow>(
+      `SELECT * FROM workspace_locations
+       WHERE workspace_id = $1
+       ORDER BY is_primary DESC, created_at ASC, id ASC`,
+      [projectId],
+    );
+    return rows.map(rowToWorkspaceLocation);
+  }
+
   private async listWorkspaceLocationsBounded(
     projectId: string,
     maxItems: number,
