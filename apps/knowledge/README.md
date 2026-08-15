@@ -78,7 +78,7 @@ const knowledge = createKnowledgeClient({
   cwd: process.cwd(),
 });
 
-await knowledge.setup({ mode: 'hosted', canonicalExample: true });
+await knowledge.setup({ canonicalExample: true });
 await knowledge.ingest.source('file:///absolute/path/to/handbook.md', 'knowledge_index');
 
 const results = await knowledge.search({
@@ -107,10 +107,10 @@ The top-level SDK also exposes `knowledge.sync.status()`,
 `knowledge.sync.snapshot()`, `knowledge.sync.conflicts()`, and
 `knowledge.sync.machines()` for app-native sync inspection.
 
-The SDK uses the same `.hasna/knowledge` project workspace as the CLI. In
-local mode it writes the SQLite catalog and generated artifacts under that path.
-In hosted/canonical mode it can point generated artifacts at S3 while keeping
-raw source ownership outside knowledge. Source files remain referenced via
+The SDK uses the same `.hasna/knowledge` project workspace as the CLI. By
+default it writes the SQLite catalog and generated artifacts under that path.
+Artifact storage can instead point at S3 while keeping raw source ownership
+outside knowledge. Source files remain referenced via
 `open-files://`, `file://`, `s3://`, or web refs; knowledge stores derived
 chunks, citations, indexes, run logs, and generated wiki artifacts.
 
@@ -126,11 +126,11 @@ HASNA_KNOWLEDGE_AUTHORITY_ID=<stable authority id>
 ```
 
 `HASNA_KNOWLEDGE_AUTHORITY_CLASSIFICATION` is either `user_hosted` or
-`hasna_saas`; it classifies the authority and is not a storage/deployment mode.
+`hasna_saas`; it classifies the authority only.
 The server data backend remains the existing `sqlite | postgresql` choice, and
 the guarded route is available only on the authenticated PostgreSQL/API path.
 
-The client still resolves the existing authenticated postgres/API transport.
+The client resolves either its SQLite store or the authenticated HTTP API.
 Private item content is supplied as an opaque in-process descriptor. Its
 enumerable and JSON forms contain only the descriptor ID, hashes, bindings,
 operation/step IDs, precondition, and expiry; the payload is held in a
@@ -400,8 +400,8 @@ knowledge sync dry-run --peer-workspace /path/to/peer/repo --scope project --jso
 knowledge sync push --peer-workspace /path/to/peer/repo --scope project --json
 knowledge sync dry-run --machine linux-node-a --peer-workspace /workspace/open-knowledge --scope project --json
 
-# Configure optional hosted mode and inspect remote contracts
-knowledge setup --mode hosted --api-url https://knowledge.md --scope project --json
+# Inspect environment-selected client transport and remote contracts
+HASNA_KNOWLEDGE_API_URL=https://knowledge.md HASNA_KNOWLEDGE_API_KEY='<api-key>' knowledge transport --json
 knowledge auth whoami --scope project --json
 knowledge remote contracts --scope project --json
 
@@ -478,7 +478,7 @@ export records require an explicit machine-readable mode such as
 
 - [Company wiki workflow](docs/examples/company-wiki-workflow.md): an end-to-end
   local workflow for open-files manifests, search, prompt runs, cited wiki
-  pages, linting, reindexing, MCP, and optional hosted/S3 mode.
+  pages, linting, reindexing, MCP, and optional S3 artifact storage.
 - [App project wiki standard](docs/examples/app-project-wiki-standard.md):
   SDK/CLI workflow for scoped app notes, source refs, and guarded global writes.
 - [JSON to SQLite migration](docs/migration/json-to-sqlite.md): how legacy
@@ -487,10 +487,10 @@ export records require an explicit machine-readable mode such as
 - [AI-native architecture](docs/architecture/ai-native-knowledge-base.md):
   source boundaries, wiki model, search model, provider registry, and non-goals.
 - [Hybrid semantic search](docs/architecture/hybrid-semantic-search.md):
-  keyword/vector/search-context contracts and hosted index options.
+  keyword/vector/search-context contracts and server index options.
 - [Machine sync schema](docs/architecture/machine-sync-schema.md):
   optional open-machines topology, sync ledgers, conflict records, and
-  local/S3/hosted sync boundaries.
+  SQLite/S3/HTTP sync boundaries.
 - [Hosted wrapper responsibilities](docs/architecture/hosted-wrapper-responsibilities.md):
   what a future SaaS layer owns outside the OSS package.
 
@@ -743,29 +743,23 @@ knowledge paths [--scope global|project|local] [--verbose] [--json]
 Show compact resolved app paths by default. Use `--verbose` or `--json` for
 every path and the loaded config.
 
-### mode
+### transport
 ```bash
-knowledge mode [--json]
+knowledge transport [--json]
 ```
-Report which backend this process would use — `sqlite` (the on-box store) or
-`postgres` (the HTTP `/v1` API) — and which environment variable selected it.
-
-Selection is **explicit only**. Set `HASNA_KNOWLEDGE_STORAGE_MODE=sqlite|postgres`
-(aliases `HASNA_KNOWLEDGE_MODE`, `KNOWLEDGE_STORAGE_MODE`, `KNOWLEDGE_MODE`, in
-that precedence order). Setting `HASNA_KNOWLEDGE_API_URL` / `HASNA_KNOWLEDGE_API_KEY` alone
-does **not** switch backends — those are pointers saying where the API is and
-how to authenticate, and `mode` reports them as present-but-ignored so a machine
-that has them exported in its shell is not silently reading a different store
-than a machine that does not.
+Report whether this process uses the on-box SQLite store or the HTTP `/v1` API.
+`HASNA_KNOWLEDGE_API_URL` plus `HASNA_KNOWLEDGE_API_KEY` selects HTTP. Without
+the canonical API URL, the client uses SQLite. The unprefixed URL alias is not
+recognized.
 
 The command reads the environment only: no store is opened, no config file is
 read, and no request is made, so it answers correctly on a machine with no
 config and no network. Environment variable **names** are printed, never values.
 
 While `NODE_ENV=test`, every non-loopback outbound request from this package is
-refused before a socket is opened; `mode` reports that as
+refused before a socket is opened; `transport` reports that as
 `network_guard_active`. Point the API URL at `127.0.0.1` for a hermetic
-cloud-transport test.
+HTTP-transport test.
 
 ### storage
 ```bash
@@ -775,7 +769,7 @@ knowledge storage repair-artifact-keys [--approve-write --approved-by <name>] [-
 knowledge storage migrate-legacy-path [--approve-write --approved-by <name>] [--scope project] [--json]
 knowledge storage merge-legacy-path [--approve-write --approved-by <name>] [--scope project] [--json]
 ```
-Show the storage contract for local or S3-backed generated artifacts. Local mode
+Show the storage contract for filesystem or S3-backed generated artifacts. Filesystem storage
 uses `.hasna/knowledge` for config, SQLite, indexes, wiki artifacts, logs,
 runs, and exports. S3 mode stores generated artifacts under the configured
 knowledge bucket/prefix while `open-files` remains the source of truth for raw
@@ -833,7 +827,7 @@ workspace. DB URL rotation is intentionally a blocker for the package unless a
 secret authority owner approves live mutation and separate evidence shows the
 URL propagated to backups, exports, sync bundles, reports, or copied artifacts.
 
-The future hosted database path, if provisioned, is
+The future SaaS wrapper database path, if provisioned, is
 `example/knowledge/prod/rds`.
 
 ### machines
@@ -962,26 +956,22 @@ the remote repo root or remote `.hasna/knowledge` path.
 `knowledge sync` owns knowledge semantics and conflict visibility for
 peer/machine catalog transfer. It is distinct from `db storage status`, which is
 a read-only local catalog inspector. (The legacy `db storage sync`/`push`/`pull`
-Postgres-DSN commands were removed; cross-machine sharing uses the postgres
-backend through the HTTP API — `HASNA_KNOWLEDGE_STORAGE_MODE=postgres` plus
-`HASNA_KNOWLEDGE_API_URL` +
-`HASNA_KNOWLEDGE_API_KEY` — instead. The mode var is required: the two pointer
-vars on their own do not switch backends. See [`mode`](#mode).)
+Postgres-DSN commands were removed; cross-machine sharing uses the HTTP API —
+`HASNA_KNOWLEDGE_API_URL` plus `HASNA_KNOWLEDGE_API_KEY` — instead. See
+[`transport`](#transport).)
 
-### setup / auth / remote
+### setup / auth / server
 ```bash
-knowledge setup --mode local [--scope project] [--json]
-knowledge setup --mode hosted [--api-url https://knowledge.md] [--scope project] [--json]
-knowledge setup --mode hosted --canonical-example [--scope project] [--json]
+knowledge setup [--scope project] [--json]
+knowledge setup --canonical-example [--scope project] [--json]
 knowledge auth login --api-key <key> [--email you@example.com] [--org <slug>] [--scope project] [--json]
 knowledge auth whoami [--scope project] [--json]
 knowledge auth logout [--scope project] [--json]
 knowledge remote status [--scope project] [--json]
 knowledge remote contracts [--scope project] [--json]
 ```
-Hosted mode mirrors the `open-skills` open-core pattern: the OSS package stays
-local-first, while `hosted.api_url`, `KNOWLEDGE_API_URL`, and
-`KNOWLEDGE_API_KEY` define an optional remote client boundary. Credentials are
+The OSS package stays on-box by default, while `HASNA_KNOWLEDGE_API_URL` and
+`HASNA_KNOWLEDGE_API_KEY` select the HTTP client boundary. Credentials are
 stored locally in `~/.hasna/knowledge/auth.json` or supplied by env vars.
 `remote contracts` prints the typed registry/search/ask/build/sync/status/logs
 and artifact API contract that a future SaaS wrapper can implement.
@@ -996,16 +986,13 @@ knowledge db storage status [--scope project] [--json]
 Initialize or inspect the versioned SQLite catalog at
 `.hasna/knowledge/knowledge.db`.
 
-`db storage status` reports the local catalog: the resolved storage mode, the
+`db storage status` reports the on-box catalog: the database backend, the
 durable table list, and local sync history. It is read-only. The legacy
 `push`/`pull`/`sync` Postgres commands and the client `HASNA_KNOWLEDGE_DATABASE_URL`
 DSN were removed — a raw database DSN is never distributed to clients. To share
-knowledge across machines, use the postgres HTTP API backend instead: set
-`HASNA_KNOWLEDGE_STORAGE_MODE=postgres` **and** `HASNA_KNOWLEDGE_API_URL` +
-`HASNA_KNOWLEDGE_API_KEY` so every read/write routes through the HTTP API. The
-mode var is **not** optional and the pointer vars are **not** a substitute for
-it: presence of a URL and a key never switches backends on its own. Run
-[`knowledge mode`](#mode) to see what the current environment resolves to.
+knowledge across machines, set `HASNA_KNOWLEDGE_API_URL` and
+`HASNA_KNOWLEDGE_API_KEY` so every read/write routes through the HTTP API. Run
+[`knowledge transport`](#transport) to inspect the current client route.
 The durable table list excludes local derived FTS indexes such as `chunks_fts`.
 
 ### wiki
@@ -1263,7 +1250,7 @@ The stable agent-facing MCP tools are:
 - `knowledge_web_search`: run safety-gated provider-native web search.
 - `knowledge_lint`: lint generated wiki pages for citation/source issues.
 - `knowledge_run_status`: list recent runs or inspect one run ledger.
-- `knowledge_storage`: inspect the local/S3/hosted storage contract.
+- `knowledge_storage`: inspect the SQLite/S3 artifact storage contract.
 - `knowledge_resolve_source`: resolve indexed source chunks through the
   read-only source boundary.
 - `knowledge_app_wiki_init`, `knowledge_app_wiki_note_add`,
@@ -1354,7 +1341,7 @@ future semantic search and wiki compile flows tied back to `open-files` instead
 of detached Markdown.
 
 Semantic indexing stores generated vector rows and provenance only. It does not
-store raw S3 or local-file bytes in the knowledge app, so a future hosted/S3
+store raw S3 or local-file bytes in the knowledge app, so a future SaaS
 wrapper can move generated artifacts to object storage while source ownership
 and immutable object identity stay in `open-files`.
 
@@ -1365,8 +1352,8 @@ prompt, embedding, or agent command explicitly requests a model.
 
 Generated knowledge artifacts can be stored locally under
 `.hasna/knowledge/artifacts` or through the S3 artifact-store adapter.
-For example production, `knowledge setup --mode hosted
---canonical-example --scope project --json` configures generated artifacts
+For example production, `knowledge setup --canonical-example --scope project
+--json` configures generated artifacts
 under `s3://example-knowledge-prod/.hasna/knowledge/` and
 keeps `open-files` as the raw-source owner.
 

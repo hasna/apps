@@ -83,14 +83,31 @@ function assert(cond: unknown, msg: string) {
   if (!cond) throw new Error(`SMOKE FAIL: ${msg}`);
 }
 
+// The serve control plane runs against PostgreSQL; make the foundation probes
+// resolve that (they read the same env the binary would boot with).
+process.env.HASNA_LOOPS_DATABASE_URL = runtimeDsn;
+
 // Foundation probes (open)
+// The foundation envelope is { status, version, storage, connection }: the
+// server data backend (postgresql — serve is the PostgreSQL-direct control
+// plane) plus the client connection transport (file — the server has no
+// client-side API connection).
 const health = await (await fetch(`${base}/health`)).json();
-assert(health.status === "ok" && health.version && health.mode, "health {status,version,mode}");
+assert(
+  health.status === "ok" &&
+    health.version &&
+    health.storage === "postgresql" &&
+    health.connection === "file",
+  "health {status,version,storage,connection}",
+);
 const ready = await fetch(`${base}/ready`);
 const readyBody = await ready.json();
 assert(ready.status === 200 && readyBody.status === "ready", `ready -> ${ready.status} ${JSON.stringify(readyBody)}`);
 const version = await (await fetch(`${base}/version`)).json();
-assert(version.version && version.mode, "version {version,mode}");
+assert(
+  version.version && version.storage === "postgresql" && version.connection === "file",
+  "version {version,storage,connection}",
+);
 
 // Unauthenticated /v1 must be rejected
 const noauth = await fetch(`${base}/v1/loops`);

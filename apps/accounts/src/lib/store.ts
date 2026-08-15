@@ -2,15 +2,14 @@
 //
 // One `AccountsStore` interface, two transports behind it:
 //   - LocalStore: on-box JSON registry (`~/.hasna/accounts/accounts.json`).
-//   - ApiStore:   the self-hosted/cloud HTTP API at `<API_URL>/v1` + bearer key.
+//   - ApiStore:   the HTTP API at `<API_URL>/v1` + bearer key.
 //
-// `resolveStore()` is the mode resolver: when `HASNA_ACCOUNTS_API_URL` +
-// `HASNA_ACCOUNTS_API_KEY` are set (and mode is not explicitly `local`, and
-// `ACCOUNTS_HOME` is not overridden), every registry read/write routes to the
-// cloud ApiStore. Explicit API modes fail closed when either value is missing;
-// an unset mode defaults to local. Both `self_hosted` and `cloud` deployments
-// use the SAME ApiStore code — only the URL/key differ (server-side tenancy,
-// not client logic).
+// `resolveStore()` is the transport resolver: when `HASNA_ACCOUNTS_API_URL` +
+// `HASNA_ACCOUNTS_API_KEY` are set (and `ACCOUNTS_HOME` is not overridden),
+// every registry read/write routes to the API ApiStore. Deployment modes no
+// longer exist: an unset pair defaults to local, and any retired
+// storage-mode variable throws via `assertNoLegacyStorageMode` before any
+// store is selected.
 //
 // SCOPE: the Store owns the shared registry — profiles, their metadata, and the
 // per-tool "current" selection. Genuinely machine-local state (a profile's
@@ -449,9 +448,9 @@ function prepareProfileDirectory(dir: string, managed: boolean): boolean {
 }
 
 /**
- * Resolve the active registry store for this process. ApiStore when the
- * self-hosted API is configured (URL + key present, mode not forced local,
- * and no local `ACCOUNTS_HOME` override), else LocalStore.
+ * Resolve the active registry store for this process. ApiStore when the HTTP
+ * API is configured (URL + key present and no local `ACCOUNTS_HOME` override),
+ * else LocalStore. Any retired storage-mode variable throws first.
  */
 export function resolveStore(
   env: NodeJS.ProcessEnv = process.env,
@@ -468,7 +467,7 @@ export function resolveStore(
  * the local registry rows. Read-only for the registry; grants ZERO cloud
  * authority.
  *
- * Why the registry alone is not enough. In cloud mode the on-box
+ * Why the registry alone is not enough. In HTTP-API transport the on-box
  * `accounts.json` is a fraction of the machine — measured 2026-08-07 on
  * station01: 7 claude rows against 41 managed profile dirs and 26 central-auth
  * accounts. Every one of those 34 unregistered dirs has an on-box credential
@@ -555,20 +554,21 @@ class HookLocalStore extends LocalStore {
 }
 
 /**
- * The on-box profile view for the usage-hook, ALWAYS local, never the cloud
- * API — and never a throw over storage-mode configuration. `resolveStore()`
- * consults the cloud resolver, which is correct for operator commands but wrong
- * for a caller that only ever touches local-machine state and must not fail
- * when the cloud variables are absent.
+ * The on-box profile view for the usage-hook, ALWAYS local, never the HTTP
+ * API — and never a throw over retired storage-mode configuration.
+ * `resolveStore()` consults the transport resolver (and, through it,
+ * `assertNoLegacyStorageMode`), which is correct for operator commands but
+ * wrong for a caller that only ever touches local-machine state and must not
+ * fail when the API variables are absent or stale.
  *
  * The measured case: `accounts launch` strips `HASNA_ACCOUNTS_API_URL` /
  * `HASNA_ACCOUNTS_API_KEY` from the launched session (registry-authority
- * denial, #126) while leaving a `cloud` storage mode set, so `resolveStore()`
- * inside that session throws and the usage-hook fails open into "auto-switching
- * is NOT running". `HookLocalStore` grants ZERO registry authority, so using it
- * here does not reopen #126; it just stops the hook from depending on cloud
- * variables it was deliberately denied, and sources its profiles from what is
- * actually on the box (see the class doc for the disk-union rationale).
+ * denial, #126), so `resolveStore()` inside that session throws and the
+ * usage-hook fails open into "auto-switching is NOT running". `HookLocalStore`
+ * grants ZERO registry authority, so using it here does not reopen #126; it
+ * just stops the hook from depending on API variables it was deliberately
+ * denied, and sources its profiles from what is actually on the box (see the
+ * class doc for the disk-union rationale).
  */
 export function resolveLocalStore(): AccountsStore {
   clearCustomToolsCache();

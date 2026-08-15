@@ -11,46 +11,42 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 - `opencode run`
 - `codex exec`
 
-## Deployment Modes
+## Storage And Connections
 
-Loops defaults to `local`, where SQLite in `LOOPS_DATA_DIR` is
-authoritative and `loops-daemon` executes scheduled work. The package also
-defines `self_hosted` and `cloud` contracts for non-local control planes:
+Loops has no deployment modes. Storage defaults to SQLite (the local file in
+`LOOPS_DATA_DIR`, authoritative, executed by `loops-daemon`). The package also
+ships a control-plane server, `loops-serve`, backed by PostgreSQL and selected
+by `HASNA_LOOPS_DATABASE_URL`, with the embeddable `loops-api` contract shared
+by serve, SDK, and tests. This release exposes storage-backed `/v1` loop CRUD
+and run listing, runner claim/lease heartbeat/finalize foundations, and local
+migration previews. Durable runner registration is not exposed until the
+machine-record lifecycle is implemented. Control-plane clients require
+`HASNA_LOOPS_API_URL` plus `HASNA_LOOPS_API_KEY` before status can report
+ready.
 
-- `self_hosted`: the Hasna-owned AWS/RDS control-plane deployment, served by
-  `loops-serve` and backed by Postgres, with the embeddable `loops-api` contract
-  shared by serve, SDK, and tests. This release exposes storage-backed `/v1`
-  loop CRUD and run listing, runner claim/lease heartbeat/finalize foundations,
-  and local migration previews. Durable runner registration is not exposed
-  until the machine-record lifecycle is implemented.
-- `cloud`: hosted control-plane contract; this release exposes client/runner
-  status only, and requires `HASNA_LOOPS_API_URL` plus
-  `HASNA_LOOPS_API_KEY` before status can report ready.
-
-Scheduler state is explicit in status JSON. `schedulerState.localStore` is
-SQLite plus local run artifact files: authoritative in `local`, cache/spool in
-non-local modes. `schedulerState.remoteStore` names the non-local contract
+`loops status` reports the storage backend and the client connection
+(`storage=sqlite|postgresql`, `connection=file|api`). Scheduler state is
+explicit in status JSON: `schedulerState.localStore` is SQLite plus local run
+artifact files, authoritative on the file connection;
+`schedulerState.remoteStore` names the configured control-plane contract
 (`api_control_plane_contract`, `postgres_contract`, or
 `hosted_control_plane_contract`). The standalone `loops` CLI reports
-`applySupported=false` for non-local apply because it does not perform
+`applySupported=false` for control-plane apply because it does not perform
 id-preserving remote migration, S3/object storage mutation, AWS resource
-mutation, or hosted credential mutation. `loops-serve` mutates self-hosted
-Postgres for normal control-plane CRUD and runner protocol routes when it is
-explicitly configured. Route admission remains bounded by `max_dispatch`,
-`max_active`, `max_active_per_project`, `max_active_per_project_group`,
-`max_active_scope`, and `max_per_profile`.
+mutation, or hosted credential mutation. `loops-serve` mutates Postgres for
+normal control-plane CRUD and runner protocol routes when it is explicitly
+configured. Route admission remains bounded by `max_dispatch`, `max_active`,
+`max_active_per_project`, `max_active_per_project_group`, `max_active_scope`,
+and `max_per_profile`.
 
 Useful status and setup commands:
 
 ```bash
-loops mode
-loops --json mode
-loops self-hosted status
-loops self-hosted migrate --dry-run
-loops self-hosted push --dry-run
-loops self-hosted pull --dry-run
-loops cloud status
-loops self-hosted status
+loops status
+loops --json status
+loops migrate --dry-run
+loops push --dry-run
+loops pull --dry-run
 loops-serve version
 HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
 HASNA_LOOPS_DATABASE_URL=... HASNA_LOOPS_AUTH_DATABASE_URL=... loops-serve serve
@@ -91,10 +87,10 @@ Self-hosted sync commands compare local definitions with the control-plane API.
 `pull` remain preview/blocked for remote state that lacks a full export surface:
 
 ```bash
-loops self-hosted migrate --dry-run
-loops self-hosted push --dry-run
-loops self-hosted push --apply --manifest-file ./self-hosted-push.json
-loops self-hosted pull --dry-run
+loops migrate --dry-run
+loops push --dry-run
+loops push --apply --manifest-file ./self-hosted-push.json
+loops pull --dry-run
 ```
 
 Self-hosted push is safe by default: workflows are archived and loops are

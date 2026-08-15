@@ -106,41 +106,33 @@ test("the legacy storage command group is a fail-explicit compatibility shim", (
   }
 });
 
-// Regression: a machine still carrying a stale S3-era storage-mode word must not
-// crash — the legacy value is ignored and the client stays local.
-for (const legacy of ["remote", "hybrid", "s3"]) {
-  test(`stale HASNA_ACCOUNTS_STORAGE_MODE=${legacy} does not crash registry commands`, () => {
+// Deployment modes no longer exist (owner directive 2026-07-29; knowledge
+// k_ms5wv466_u0jidq): any retired storage-mode variable — whatever its value —
+// fails loud, naming the variable, instead of steering the transport.
+for (const legacy of ["remote", "hybrid", "s3", "cloud", "self_hosted", "local", "typo"]) {
+  test(`retired HASNA_ACCOUNTS_STORAGE_MODE=${legacy} fails loud on registry commands`, () => {
     const result = runCli(
       { HASNA_ACCOUNTS_STORAGE_MODE: legacy, ACCOUNTS_STORAGE_MODE: legacy },
       "list",
       "--json",
     );
-    expect(result.status).toBe(0);
-    expect(result.stderr).not.toContain("Unknown storage mode");
-    expect(result.stderr).not.toContain("misconfigured");
-  });
-}
-
-for (const mode of ["cloud", "self_hosted"]) {
-  test(`explicit ${mode} CLI mode fails closed without API configuration`, () => {
-    const result = runCli(
-      {
-        HASNA_ACCOUNTS_STORAGE_MODE: mode,
-        HASNA_ACCOUNTS_API_URL: "",
-        HASNA_ACCOUNTS_API_KEY: "",
-      },
-      "list",
-      "--json",
-    );
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(`${mode} storage mode requires HASNA_ACCOUNTS_API_URL and HASNA_ACCOUNTS_API_KEY`);
+    expect(result.stderr).toContain("HASNA_ACCOUNTS_STORAGE_MODE was removed");
     expect(existsSync(storePath())).toBe(false);
   });
 }
 
-test("unknown CLI storage modes fail validation instead of falling back", () => {
-  const result = runCli({ HASNA_ACCOUNTS_STORAGE_MODE: "typo" }, "list", "--json");
+test("a retired mode variable fails loud even when the API pair is present", () => {
+  const result = runCli(
+    {
+      HASNA_ACCOUNTS_STORAGE_MODE: "cloud",
+      HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
+      HASNA_ACCOUNTS_API_KEY: "fixture-authority",
+    },
+    "list",
+    "--json",
+  );
   expect(result.status).not.toBe(0);
-  expect(result.stderr).toContain("invalid accounts storage mode");
+  expect(result.stderr).toContain("HASNA_ACCOUNTS_STORAGE_MODE was removed");
   expect(existsSync(storePath())).toBe(false);
 });

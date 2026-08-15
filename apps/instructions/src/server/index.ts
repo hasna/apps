@@ -5,7 +5,7 @@ import { getPackageVersion } from "../lib/package-version.js";
 import { handleV1Request } from "./v1.js";
 import {
   getHonoAuthMiddleware,
-  isCloudModeEnabled,
+  isPostgresBackendEnabled,
   pingCloud,
   resolveCloudDatabaseUrl,
   ensureCloudSchema,
@@ -42,25 +42,25 @@ const app = new Hono();
 app.use("*", cors());
 
 // ── Service surface probes (unauthenticated): /health /ready /version ─────────
-function serviceMode(): "cloud" | "local" {
-  return isCloudModeEnabled() ? "cloud" : "local";
+function serviceBackend(): "postgresql" | "sqlite" {
+  return isPostgresBackendEnabled() ? "postgresql" : "sqlite";
 }
 
-app.get("/health", (c) => c.json({ status: "ok", version: getPackageVersion(), mode: serviceMode(), name: "instructions" }));
+app.get("/health", (c) => c.json({ status: "ok", version: getPackageVersion(), backend: serviceBackend(), name: "instructions" }));
 
-app.get("/version", (c) => c.json({ status: "ok", version: getPackageVersion(), mode: serviceMode(), name: "instructions" }));
+app.get("/version", (c) => c.json({ status: "ok", version: getPackageVersion(), backend: serviceBackend(), name: "instructions" }));
 
 app.get("/ready", async (c) => {
   const version = getPackageVersion();
-  const mode = serviceMode();
-  if (mode === "cloud") {
+  const backend = serviceBackend();
+  if (backend === "postgresql") {
     try {
       await pingCloud();
     } catch (e) {
-      return c.json({ status: "unavailable", version, mode, error: (e as Error).message }, 503);
+      return c.json({ status: "unavailable", version, backend, error: (e as Error).message }, 503);
     }
   }
-  return c.json({ status: "ready", version, mode });
+  return c.json({ status: "ready", version, backend });
 });
 
 // ── OpenAPI document (unauthenticated; the SDK's source of truth) ─────────────
@@ -142,5 +142,5 @@ if (dashDir) {
 }
 
 const HOST = process.env["HOST"] ?? process.env["INSTRUCTIONS_HOST"] ?? "localhost";
-console.log(`instructions-serve listening on http://${HOST}:${PORT} (mode: ${serviceMode()})${dashDir ? " (dashboard: /)" : " (no dashboard)"}`);
+console.log(`instructions-serve listening on http://${HOST}:${PORT} (backend: ${serviceBackend()})${dashDir ? " (dashboard: /)" : " (no dashboard)"}`);
 export default { port: PORT, hostname: HOST, fetch: app.fetch };

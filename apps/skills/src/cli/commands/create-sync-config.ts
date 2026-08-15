@@ -16,6 +16,11 @@ import {
   syncSkillsToAgents,
   type AgentSyncAction,
 } from "../../lib/agent-sync.js";
+import {
+  adoptUnmarkedHomes,
+  pruneStrayHomes,
+} from "../../lib/home-adoption.js";
+import { censusHomeDrift, type DriftCensus } from "../../lib/home-census.js";
 
 export function registerCreateSync(parent: Command) {
   // Config
@@ -117,18 +122,41 @@ export function registerCreateSync(parent: Command) {
     .action((name: string, options: any) => handleCreate(name, options));
 
   // Sync — the last mile: corpus -> each agent's global skills folder.
+  // The package ships no bundled corpus, so the corpus is the installed cache
+  // (~/.hasna/skills/installed, what `skills pull` writes), or an explicit canonical
+  // source — `--source <path>` or $SKILLS_SOURCE, typically the monorepo checkout.
   parent
     .command("sync")
     .alias("render")
     .argument("[names...]", "Skills to sync (default: every skill in this machine's corpus)")
     .option("--for <agent>", `Target one agent (${SYNC_AGENTS.join(", ")}, or all)`, "all")
     .option("--all", "Sync every corpus skill (the default)", false)
+    .option(
+      "--source <path>",
+      "Canonical corpus source: a directory of skill folders, or a package root with skills/ and agent-skills/ (overrides $SKILLS_SOURCE)",
+    )
     .option("--dry-run", "Show what would be written without touching any agent folder", false)
     .option(
       "--force",
       "Adopt an unmanaged skill that already has SKILL.md; other unmarked directories are never overwritten",
       false,
     )
+    .option(
+      "--check",
+      "Home drift census (missing-from-home / stray-in-home / diverged); exits non-zero on drift, writes nothing",
+      false,
+    )
+    .option(
+      "--adopt",
+      "Unmarked-home adoption mode: hash unmarked home skills against the corpus; exact matches are marked (dry-run by default)",
+      false,
+    )
+    .option(
+      "--prune",
+      "Prune mode: list (or with --apply, remove) marked home skill dirs that have no canonical corpus entry",
+      false,
+    )
+    .option("--apply", "Write adoption markers / conflicts ledger, or perform prune removals", false)
     .option("--json", "Output as JSON", false)
     .description("Write corpus skills into each coding agent's global skills folder, per-tool adapted")
     .action((names: string[], options) => handleSync(names, options));
@@ -173,8 +201,29 @@ function handleCreate(name: string, options: { category: string; description?: s
 
 function handleSync(
   names: string[],
-  options: { for: string; all: boolean; dryRun: boolean; force: boolean; json: boolean },
+  options: { for: string; all: boolean; source?: string; dryRun: boolean; force: boolean; check: boolean; adopt: boolean; prune: boolean; apply: boolean; json: boolean },
 ) {
+  const modes = [options.check, options.adopt, options.prune].filter(Boolean).length;
+  if (modes > 1) {
+    const message = "--check, --adopt, and --prune are mutually exclusive";
+    if (options.json) console.log(JSON.stringify({ error: message }));
+    else console.error(chalk.red(message));
+    process.exitCode = 1;
+    return;
+  }
+  if (options.check) {
+    handleSyncCheck(options.json);
+    return;
+  }
+  if (options.adopt) {
+    handleSyncAdopt(options.apply, options.json);
+    return;
+  }
+  if (options.prune) {
+    handleSyncPrune(options.apply, options.json);
+    return;
+  }
+
   let agents;
   try {
     agents = resolveSyncAgents(options.for);
@@ -185,13 +234,22 @@ function handleSync(
     return;
   }
 
-  const { actions } = syncSkillsToAgents({
-    ...(names.length ? { names } : {}),
-    all: options.all,
-    agents,
-    dryRun: options.dryRun,
-    force: options.force,
-  });
+  let actions;
+  try {
+    ({ actions } = syncSkillsToAgents({
+      ...(names.length ? { names } : {}),
+      all: options.all,
+      agents,
+      sourceDir: options.source,
+      dryRun: options.dryRun,
+      force: options.force,
+    }));
+  } catch (error) {
+    if (options.json) console.log(JSON.stringify({ error: (error as Error).message }));
+    else console.error(chalk.red((error as Error).message));
+    process.exitCode = 1;
+    return;
+  }
 
   if (options.json) {
     console.log(JSON.stringify({ dryRun: options.dryRun, actions }, null, 2));
@@ -203,6 +261,75 @@ function handleSync(
   if (actions.some((action) => action.action === "skip" && action.reason?.includes("not found"))) {
     process.exitCode = 1;
   }
+}
+
+function handleSyncCheck(json: boolean): void {
+  const census = censusHomeDrift();
+  if (json) {
+    console.log(JSON.stringify(census, null, 2));
+  } else {
+    printCensusHuman(census);
+  }
+  if (!census.clean) process.exitCode = 1;
+}
+
+function handleSyncAdopt(apply: boolean, json: boolean): void {
+  const result = adoptUnmarkedHomes({ apply });
+  if (json) {
+    console.log(JSON.stringify({ dryRun: !apply, ...result }, null, 2));
+  } else {
+    const verb = apply ? "Adopted" : "Would adopt";
+    console.log(chalk.bold(`\nUnmarked-home adoption (${apply ? "apply" : "dry-run"}):\n`));
+    for (const entry of result.adoptable) {
+      console.log(`${apply ? chalk.green("✓") : chalk.dim("[dry-run]")} ${chalk.bold(entry.skill)} → ${entry.agent} (${entry.path})`);
+    }
+    for (const conflict of result.conflicts) {
+      console.log(`${chalk.yellow("• conflict")} ${chalk.bold(conflict.skill)} → ${conflict.agent} (content differs from canonical; recorded, skipped)`);
+    }
+    for (const entry of result.unknown) {
+      console.log(`${chalk.dim("• unknown")} ${chalk.bold(entry.skill)} → ${entry.agent} (no canonical corpus entry; skipped)`);
+    }
+    console.log(
+      chalk.dim(`\n${apply ? "Adopted" : "Would adopt"} ${result.adoptable.length}, ${result.conflicts.length} conflict(s), ${result.unknown.length} unknown, ${result.managed} already managed`),
+    );
+    if (apply && result.rollbackFile) console.log(chalk.dim(`Rollback record: ${result.rollbackFile}`));
+    if (!apply) console.log(chalk.dim(`\nPass --apply to write markers${result.conflicts.length ? " and the conflicts ledger" : ""}.`));
+  }
+}
+
+function handleSyncPrune(apply: boolean, json: boolean): void {
+  const result = pruneStrayHomes({ apply });
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    const verb = apply ? "Pruned" : "Would prune";
+    console.log(chalk.bold(`\nMarked-and-stray prune (${apply ? "apply" : "dry-run"}):\n`));
+    for (const candidate of result.candidates) {
+      console.log(`${apply ? chalk.red("✗") : chalk.dim("[dry-run]")} ${chalk.bold(candidate.skill)} → ${candidate.agent} (${candidate.path})`);
+    }
+    console.log(chalk.dim(`\n${verb} ${result.pruned} of ${result.candidates.length} marked-and-stray dirs (unmarked dirs are never touched).`));
+    if (apply && result.rollbackFile) console.log(chalk.dim(`Rollback record: ${result.rollbackFile}`));
+    if (!apply) console.log(chalk.dim(`\nPass --apply to remove them (recorded in the rollback store first).`));
+  }
+}
+
+function printCensusHuman(census: DriftCensus): void {
+  const counts: Record<string, number> = {};
+  for (const entry of census.entries) counts[entry.kind] = (counts[entry.kind] ?? 0) + 1;
+  if (census.clean) {
+    console.log(chalk.green(`Home drift census: clean (${census.homesChecked} home(s) checked, ${census.managed} managed, ${census.unmarked} unmarked)`));
+    return;
+  }
+  console.log(chalk.bold(`\nHome drift census: ${census.entries.length} drift entr${census.entries.length === 1 ? "y" : "ies"} across ${census.homesChecked} home(s)\n`));
+  for (const entry of census.entries) {
+    const kind = entry.kind === "missing-from-home"
+      ? chalk.red("missing-from-home")
+      : entry.kind === "stray-in-home"
+        ? chalk.yellow("stray-in-home")
+        : chalk.yellow("diverged");
+    console.log(`  ${kind}  ${chalk.bold(entry.skill)} → ${entry.agent}  ${chalk.dim(entry.path)}`);
+  }
+  console.log(chalk.dim(`\n${census.managed} managed, ${census.unmarked} unmarked (adoption candidates). Exit code is non-zero while drift exists.`));
 }
 
 function printSyncHuman(actions: AgentSyncAction[], dryRun?: boolean): void {

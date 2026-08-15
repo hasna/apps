@@ -6,7 +6,12 @@ Mementos has three effective backends:
 | --- | --- | --- |
 | `local-sqlite` | Default local environment | SQLite file on this machine |
 | `cloud-api` | API URL and API key on a client | Authenticated HTTP service |
-| `cloud-postgres` | Cloud storage mode inside `mementos-serve` | PostgreSQL/RDS-compatible database |
+| `cloud-postgres` | `HASNA_MEMENTOS_DATABASE_URL` inside `mementos-serve` | PostgreSQL/RDS-compatible database |
+
+There are no deployment modes (owner directive 2026-07-29; knowledge
+k_ms5wv466_u0jidq). The client transport is selected by the API URL + key pair;
+the server data backend by `HASNA_MEMENTOS_DATABASE_URL` presence. Any retired
+storage-mode variable (`HASNA_MEMENTOS_STORAGE_MODE` or an alias) throws.
 
 Run this before a write when there is any doubt:
 
@@ -14,7 +19,7 @@ Run this before a write when there is any doubt:
 mementos storage mode --json
 ```
 
-The mode probe uses environment/config resolution only. It does not open
+The transport probe uses environment/config resolution only. It does not open
 SQLite, contact HTTP/PostgreSQL, or print a secret value.
 
 ## Local SQLite
@@ -41,7 +46,7 @@ directory is copied to the new location before resolving the default database.
 | --- | --- |
 | `~/.hasna/mementos/mementos.db` | Default SQLite store |
 | `~/.hasna/mementos/config.json` | Domain defaults, active-profile metadata, active model |
-| `~/.hasna/mementos/storage/config.json` | Storage mode and PostgreSQL connection fields |
+| `~/.hasna/mementos/storage/config.json` | PostgreSQL connection fallback fields |
 | `~/.hasna/mementos/profiles/*.db` | Named profile database files |
 | `~/.hasna/mementos/backups/*.db` | CLI backups |
 | `~/.hasna/mementos/training/*.jsonl` | `brains gather` output |
@@ -104,10 +109,10 @@ mementos config path
 `MEMENTOS_DEFAULT_IMPORTANCE` override the three corresponding defaults after
 the file is loaded. Invalid values are ignored.
 
-## Client cloud API mode
+## Client HTTP API transport
 
-Clients select authenticated HTTP mode only when both an endpoint and a key are
-present:
+Clients select the authenticated HTTP transport only when both an endpoint and
+a key are present:
 
 | Canonical variable | Fallback alias | Purpose |
 | --- | --- | --- |
@@ -115,12 +120,15 @@ present:
 | `HASNA_MEMENTOS_API_KEY` | `MEMENTOS_API_KEY` | Bearer/API key |
 | `HASNA_MEMENTOS_API_TIMEOUT` | — | curl timeout in seconds; default 45 |
 
-A base URL without `/v1` or `/api` is normalized by appending `/v1`. If either
-URL or key is missing, API mode is off and local resolution continues.
+A base URL without `/v1` or `/api` is normalized by appending `/v1`. Exactly one
+of URL/key present is an ERROR naming the missing variable — the client never
+silently falls back to a different dataset. Neither present selects local
+SQLite.
 
 If `HASNA_MEMENTOS_DATABASE_URL` or `MEMENTOS_DATABASE_URL` is also present,
 API mode deliberately refuses to engage. Client and database transports are
-mutually exclusive; remove the database URL from the client environment.
+mutually exclusive; remove the database URL from the client environment (the
+DSN is server-only).
 
 The synchronous CLI/domain API sends cloud requests by spawning `curl`
 directly. The key is passed to curl on stdin, not argv or the child environment.
@@ -131,32 +139,31 @@ In `NODE_ENV=test`, non-loopback API requests are rejected unless
 `MEMENTOS_ALLOW_REMOTE_API_IN_TESTS` is explicitly set. Repository tests should
 use the store-isolation helpers rather than that escape hatch.
 
-## Server PostgreSQL mode
+## Server PostgreSQL backend
 
 Only `mementos-serve` calls `markServerContext()` and may construct/use a raw
 PostgreSQL DSN for runtime reads and writes. Configure its environment with:
 
 ```bash
-HASNA_MEMENTOS_STORAGE_MODE=cloud
-HASNA_MEMENTOS_DATABASE_URL=postgres://user:password@host:5432/mementos?sslmode=require
+HASNA_MEMENTOS_DATABASE_URL=postgres://user:REDACTED@host:5432/mementos?sslmode=require
 mementos-serve
 ```
 
-Fallback names `MEMENTOS_STORAGE_MODE` and `MEMENTOS_DATABASE_URL` are accepted.
-Canonical `HASNA_...` variables win. A configured database URL with no explicit
-mode promotes `local` to `cloud`. Input values `remote` and `hybrid` remain
-deprecated aliases for `cloud` and emit a one-time warning to stderr.
+The postgresql backend is selected by the URL's presence; fallback name
+`MEMENTOS_DATABASE_URL` is accepted, with the canonical `HASNA_...` variable
+winning. Without a URL the server uses SQLite. The retired storage-mode
+variables (`HASNA_MEMENTOS_STORAGE_MODE`, `HASNA_MEMENTOS_MODE`,
+`MEMENTOS_STORAGE_MODE`, `MEMENTOS_MODE`) are errors and must be deleted.
 
-Cloud mode is pure remote: server reads and writes go directly to PostgreSQL;
-there is no local SQLite cache and no raw-file synchronization. Missing or
-invalid PostgreSQL configuration fails closed. Supported URLs use
+The postgresql backend is pure remote: server reads and writes go directly to
+PostgreSQL; there is no local SQLite cache and no raw-file synchronization.
+Missing or invalid PostgreSQL configuration fails closed. Supported URLs use
 `postgres://` or `postgresql://` and include a host.
 
 Alternatively, `~/.hasna/mementos/storage/config.json` can provide:
 
 ```json
 {
-  "mode": "cloud",
   "rds": {
     "host": "db.internal",
     "port": 5432,
@@ -191,14 +198,14 @@ Dry-run validates and redacts without a network call:
 
 ```bash
 mementos storage migrate --dry-run --connection-string \
-  'postgres://user:password@db.example/mementos?sslmode=require' --json
+  'postgres://user:REDACTED@db.example/mementos?sslmode=require' --json
 ```
 
 A live run changes the remote database and is an administrative action:
 
 ```bash
 mementos storage migrate --connection-string \
-  'postgres://user:password@db.example/mementos?sslmode=require'
+  'postgres://user:REDACTED@db.example/mementos?sslmode=require'
 ```
 
 The explicit `--connection-string` path is the migration command's
@@ -209,8 +216,8 @@ diagnostics through `mementos_storage_migrate_dry_run`; `migrate_pg` can perform
 a live run and must be treated as a privileged mutation.
 
 `storage push`, `storage pull`, and `storage sync` (and matching MCP tools) are
-retained legacy row-copy paths. They are not used by pure-remote cloud mode and
-are not the fleet cutover mechanism.
+retained legacy row-copy paths. They are not used by the postgresql server
+backend and are not the fleet cutover mechanism.
 
 ## Service, MCP, and integration variables
 

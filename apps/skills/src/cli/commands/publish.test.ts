@@ -19,7 +19,7 @@ import { createSkillsFetchHandler } from "../../server/app.js";
 import { MemorySkillsStore } from "../../server/store.js";
 import { PushSkillError, pushSkill } from "./publish.js";
 
-const TOKEN = "sk_test_push";
+const pushAuth = "test-push-token";
 const PRINCIPAL = { orgId: "org_push", orgSlug: "org-push", orgName: "Push Org", userId: "user_push", email: "push@example.com", apiKeyId: "key_push" };
 const OTHER = { orgId: "org_other", orgSlug: "org-other", orgName: "Other", userId: "user_other", email: "other@example.com", apiKeyId: "key_other" };
 
@@ -36,6 +36,22 @@ const VALID_SKILL: Record<string, string> = {
     tags: ["custom", "release"],
     inputs: [{ name: "args", type: "string[]", required: false }],
     commands: [{ name: "release-notes", entry: "src/index.ts" }],
+    runtime: {
+      runtime: "bun",
+      entrypoint: "src/index.ts",
+      timeout: 900,
+      needs_network: false,
+      env: [],
+      sandbox: "readonly-fs",
+      system_deps: [],
+      artifacts: [],
+    },
+    provenance: {
+      source_commit: "unknown",
+      // Canonical SHA-256 over this exact fixture bundle (see docs/skill-standard.md).
+      // Recompute with computeContentHash when fixture content changes.
+      content_hash: "158deaf2161d8203d1320acf1f1592242170bc0280d4c5cfe4d04323e1f6673d",
+    },
   }, null, 2),
   "AGENTS.md": "# Agent Build Instructions\n",
   "package.json": JSON.stringify({ name: "release-notes", version: "2.1.0", type: "module", bin: { "release-notes": "src/index.ts" } }, null, 2),
@@ -57,8 +73,8 @@ function makeCorpus(skills: Record<string, Record<string, string>>): string {
 
 async function withServer(fn: (ctx: { baseUrl: string; store: MemorySkillsStore }) => Promise<void>): Promise<void> {
   const store = new MemorySkillsStore();
-  await store.ensureBootstrapApiKey(TOKEN, PRINCIPAL);
-  await store.ensureBootstrapApiKey("sk_test_other", OTHER);
+  await store.ensureBootstrapApiKey(pushAuth, PRINCIPAL);
+  await store.ensureBootstrapApiKey("test-other-token", OTHER);
   const fetchHandler = await createSkillsFetchHandler({ store, config: { inlineWorker: false, allowEphemeralStore: true } });
   const server = Bun.serve({ port: 0, fetch: fetchHandler });
   try {
@@ -75,7 +91,7 @@ describe("skills push", () => {
       await withServer(async (ctx) => {
         const result = await pushSkill("release-notes", {
           rootDir: root,
-          client: new RemoteSkillsClient(TOKEN, ctx.baseUrl),
+          client: new RemoteSkillsClient(pushAuth, ctx.baseUrl),
         });
         expect(result.published).toBe(true);
         expect(result.status).toBe(201);
@@ -92,7 +108,7 @@ describe("skills push", () => {
 
         // A FRESH client, constructed after the push, with no shared state beyond the
         // server: this is the "another machine sees it" claim.
-        const reader = new RemoteSkillsClient(TOKEN, ctx.baseUrl);
+        const reader = new RemoteSkillsClient(pushAuth, ctx.baseUrl);
         const listed = await reader.listSkills();
         const found = listed.find((skill) => skill.name === "release-notes");
         expect(found).toMatchObject({
@@ -124,8 +140,8 @@ describe("skills push", () => {
     const root = makeCorpus({ "release-notes": VALID_SKILL });
     try {
       await withServer(async (ctx) => {
-        await pushSkill("release-notes", { rootDir: root, client: new RemoteSkillsClient(TOKEN, ctx.baseUrl) });
-        const stranger = new RemoteSkillsClient("sk_test_other", ctx.baseUrl);
+        await pushSkill("release-notes", { rootDir: root, client: new RemoteSkillsClient(pushAuth, ctx.baseUrl) });
+        const stranger = new RemoteSkillsClient("test-other-token", ctx.baseUrl);
         expect((await stranger.listSkills()).some((skill) => skill.name === "release-notes")).toBe(false);
         expect(await stranger.getSkill("release-notes")).toBeNull();
         expect((await stranger.downloadSkillBundle("release-notes")).status).toBe(404);
@@ -139,7 +155,7 @@ describe("skills push", () => {
     const root = makeCorpus({ "release-notes": VALID_SKILL });
     try {
       await withServer(async (ctx) => {
-        const client = new RemoteSkillsClient(TOKEN, ctx.baseUrl);
+        const client = new RemoteSkillsClient(pushAuth, ctx.baseUrl);
         const first = await pushSkill("release-notes", { rootDir: root, client });
         const second = await pushSkill("release-notes", { rootDir: root, client });
         expect(second.sha256).toBe(first.sha256);
@@ -163,7 +179,7 @@ describe("skills push", () => {
     });
     try {
       await withServer(async (ctx) => {
-        const client = new RemoteSkillsClient(TOKEN, ctx.baseUrl);
+        const client = new RemoteSkillsClient(pushAuth, ctx.baseUrl);
         await expect(pushSkill("broken", { rootDir: root, client })).rejects.toThrow(/is not valid and was not published/);
         // Nothing reached the server.
         expect((await client.listSkills()).some((skill) => skill.name === "broken")).toBe(false);
@@ -175,11 +191,11 @@ describe("skills push", () => {
 
   test("a top-level .env stops the push outright, at the validation layer", async () => {
     const root = makeCorpus({
-      "release-notes": { ...VALID_SKILL, ".env": "OPENAI_API_KEY=would-have-leaked\n" },
+      "release-notes": { ...VALID_SKILL, ".env": "FAKE_CRED=fixture-sentinel\n" },
     });
     try {
       await withServer(async (ctx) => {
-        const client = new RemoteSkillsClient(TOKEN, ctx.baseUrl);
+        const client = new RemoteSkillsClient(pushAuth, ctx.baseUrl);
         const error = await pushSkill("release-notes", { rootDir: root, client }).catch((e) => e);
         expect(error).toBeInstanceOf(PushSkillError);
         expect((error as PushSkillError).detail?.join(" ")).toMatch(/Reserved file '\.env'/);
@@ -198,16 +214,16 @@ describe("skills push", () => {
     const root = makeCorpus({
       "release-notes": {
         ...VALID_SKILL,
-        ".env.local": "OPENAI_API_KEY=local-would-have-leaked\n",
-        ".env.production": "STRIPE_SECRET=prod-would-have-leaked\n",
-        "references/.env": "NESTED_TOKEN=nested-would-have-leaked\n",
+        ".env.local": "FAKE_CRED_LOCAL=fixture-sentinel\n",
+        ".env.production": "FAKE_SECRET_PROD=fixture-sentinel\n",
+        "references/.env": "FAKE_TOKEN_NESTED=fixture-sentinel\n",
         "references/.npmrc": "//registry.npmjs.org/:_authToken=npmrc-would-have-leaked\n",
         ".env.example": "OPENAI_API_KEY=\n",
       },
     });
     try {
       await withServer(async (ctx) => {
-        const client = new RemoteSkillsClient(TOKEN, ctx.baseUrl);
+        const client = new RemoteSkillsClient(pushAuth, ctx.baseUrl);
         const result = await pushSkill("release-notes", { rootDir: root, client });
         expect(result.published).toBe(true);
         expect(result.paths).toContain(".env.example");
@@ -220,7 +236,7 @@ describe("skills push", () => {
         // satisfy a path-only assertion.
         const entries = unpackSkillBundle(new Uint8Array(await (await client.downloadSkillBundle("release-notes")).arrayBuffer()));
         const stored = entries.map((entry) => new TextDecoder().decode(entry.bytes)).join("\n");
-        for (const secret of ["local-would-have-leaked", "prod-would-have-leaked", "nested-would-have-leaked", "npmrc-would-have-leaked"]) {
+        for (const secret of ["fixture-sentinel", "fixture-sentinel", "fixture-sentinel", "fixture-sentinel"]) {
           expect(stored).not.toContain(secret);
         }
         // Anti-vacuity: the bundle is not empty and does contain the real content, so the
@@ -237,7 +253,7 @@ describe("skills push", () => {
     const root = makeCorpus({ "release-notes": VALID_SKILL });
     try {
       await withServer(async (ctx) => {
-        const client = new RemoteSkillsClient(TOKEN, ctx.baseUrl);
+        const client = new RemoteSkillsClient(pushAuth, ctx.baseUrl);
         const result = await pushSkill("release-notes", { rootDir: root, client, dryRun: true });
         expect(result.published).toBe(false);
         expect(result.sha256).toMatch(/^[0-9a-f]{64}$/);

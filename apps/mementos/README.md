@@ -121,7 +121,7 @@ GET /openapi.json
 API routes use bearer/API-key authentication when configured. See the
 [REST API reference](docs/REST-API.md).
 
-## Storage modes
+## Storage
 
 ### Local clients
 
@@ -135,15 +135,16 @@ SQLite is authoritative by default. Database selection order is:
 Legacy `~/.mementos` data is copied to `~/.hasna/mementos` when the new directory
 does not yet exist.
 
-### Self-hosted cloud
+### Server backend and HTTP clients
 
-Raw PostgreSQL credentials are server-only. Configure `mementos-serve` with
-`HASNA_MEMENTOS_STORAGE_MODE=cloud` and `HASNA_MEMENTOS_DATABASE_URL`. Configure
-CLI and MCP clients with the HTTPS API endpoint and API key instead:
+There are no deployment modes. The only runtime switch is the server data
+backend: `sqlite | postgresql`, selected by `HASNA_MEMENTOS_DATABASE_URL`
+presence. Raw PostgreSQL credentials are server-only — configure
+`mementos-serve` with `HASNA_MEMENTOS_DATABASE_URL`; configure CLI and MCP
+clients with the HTTPS API endpoint and API key instead:
 
 ```bash
 # mementos-serve environment
-HASNA_MEMENTOS_STORAGE_MODE=cloud
 HASNA_MEMENTOS_DATABASE_URL=postgres://...
 
 # client environment; do not distribute the database URL to clients
@@ -151,12 +152,14 @@ HASNA_MEMENTOS_API_URL=https://mementos.example.com
 HASNA_MEMENTOS_API_KEY=...
 ```
 
-Both API variables must be present to select client API mode, and a database URL
-on the same client disables API mode. `mementos storage mode` reports the chosen
-backend without opening a database or making a network request.
+Both API variables must be present to select the HTTP client transport, and
+exactly one of them set is an error naming the missing variable.
+`mementos storage mode` reports the chosen transport without opening a
+database or making a network request. Any retired storage-mode variable
+(`HASNA_MEMENTOS_STORAGE_MODE` or an alias) is an error: delete it.
 
 The old `storage push`, `pull`, and `sync` commands remain for compatibility;
-they are not the cloud cutover architecture. See [Configuration and
+they are not the cutover architecture. See [Configuration and
 storage](docs/CONFIGURATION.md) and the [cloud cutover runbook](docs/CUTOVER-RUNBOOK.md).
 
 ## TypeScript APIs

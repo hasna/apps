@@ -1,4 +1,5 @@
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
+import { signBundleBytes } from "../lib/skill-bundles.js";
 import { ArtifactStorage } from "./artifact-storage.js";
 import { authenticateRequest } from "./auth.js";
 import { resolveServerConfig, type SkillsServerConfig } from "./config.js";
@@ -180,17 +181,22 @@ async function handleApiV1(
 
     if (request.method === "GET" && id && subresource === "bundle") {
       const { record, bytes } = await readPublishedBundle(store, artifactStorage, principal, id);
-      return new Response(bytes, {
-        headers: {
-          "Content-Type": "application/gzip",
-          "Content-Length": String(bytes.byteLength),
-          "Content-Disposition": `attachment; filename="${record.slug}.tar.gz"`,
-          // The digest a client should verify against, so an intermediary cannot swap the
-          // body without the client being able to notice.
-          "X-Skill-Bundle-Sha256": record.bundleSha256 ?? "",
-          "Cache-Control": "no-store",
-        },
-      });
+      const headers: Record<string, string> = {
+        "Content-Type": "application/gzip",
+        "Content-Length": String(bytes.byteLength),
+        "Content-Disposition": `attachment; filename="${record.slug}.tar.gz"`,
+        // The digest a client should verify against, so an intermediary cannot swap the
+        // body without the client being able to notice.
+        "X-Skill-Bundle-Sha256": record.bundleSha256 ?? "",
+        "Cache-Control": "no-store",
+      };
+      // Sign the exact bytes being served so a client holding the same key can tell this
+      // server's bundle from anything else, even if the digest header is stripped in
+      // transit. The key is never echoed anywhere.
+      if (config.bundleSigningKey) {
+        headers["X-Skill-Bundle-Signature"] = signBundleBytes(bytes, config.bundleSigningKey);
+      }
+      return new Response(bytes, { headers });
     }
 
     if (request.method === "GET" && id && !subresource) {

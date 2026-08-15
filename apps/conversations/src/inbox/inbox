@@ -1,0 +1,1224 @@
+#!/usr/bin/env bash
+# conversations-inbox — one agent inbox over the conversations + todos CLIs.
+#
+# Verbs:  (bare)=check  check  watch  subscribe  unsubscribe  status  install
+#
+# COST IS A FEATURE HERE. Rule 29 makes an inbox monitor mandatory for every
+# interactive session, so this runs ~19x concurrently on one box. Every backing
+# CLI invocation is a bun runtime start costing ~34 clone syscalls (measured
+# 2026-07-30). Integrity takes precedence over a stale low call count: every
+# cursor-bearing poll refreshes the complete subscription union before reading
+# messages, and a quiet time-window read gets one bounded ascending-id probe so
+# old messages cannot remain invisible indefinitely. `todos` stays staggered.
+#
+# Design rules, each one a measured failure this must not repeat:
+#
+#   * Never conflate "nothing new" with "could not look". Backing calls are
+#     checked on their unpiped exit code AND output shape; failure degrades
+#     loudly (exit 3), never silently.
+#
+#   * Own the cursor. `conversations notifications --mark-read` is a silent
+#     no-op (measured: `unread` stays true and rows repeat forever), so position
+#     is a message-id high-water mark kept here.
+#
+#   * Report the GAP, not just the failure. `since` is a time window; if its
+#     unseen ids are not a contiguous prefix after our cursor, messages fell
+#     outside that window. A bounded ascending id page recovers them without
+#     stepping over the first discontinuity.
+#
+#   * Never drop a task on ambiguous authorship. Filtering "assigned by me" on
+#     `agent_id` dropped 76% of live assigned tasks (486 of 636) while exiting
+#     0 — blindness wearing a green light. Only an explicit `assigned_by` that
+#     equals us suppresses a task; anything unknown is REPORTED.
+#
+#   * Exit codes are a contract: 0 ok, 2 usage/environment, 3 degraded,
+#     4 operation failed, 130 interrupted, 143 terminated. Nothing else.
+#
+#   * A monitor must be stoppable. INT/TERM clean up and exit with the
+#     documented code; a trap without an exit made watch immortal.
+#
+#   * Full content, never a preview. `conversations notifications` previews
+#     replace "-" and "_" with spaces, so `agent-chief-staff` reads as
+#     `agent chief staff`. `since` carries real content.
+
+set -uo pipefail
+
+VERSION="1.4.3"
+PROG="conversations-inbox"
+
+# Tunables (all overridable by env; all documented in --help)
+LIMIT="${INBOX_LIMIT:-500}"            # rows per bounded message read (hard max 500)
+# Bounded recovery separates the store's page limit from the work allowed in
+# one inbox check. A gap may span many 500-row store pages, so one invocation
+# walks several pages while remaining capped by BOTH a row budget and a hard
+# page-call budget. The defaults are derived after --limit is parsed.
+BACKFILL_MAX="${INBOX_BACKFILL_MAX:-}"     # hard cap on recovered rows per invocation
+BACKFILL_CHUNK="${INBOX_BACKFILL_CHUNK:-}" # rows per bounded recovery page
+BACKFILL_PAGE_BUDGET=20                    # hard cap on backing reads per invocation
+TODO_LIMIT="${INBOX_TODO_LIMIT:-1000}" # rows per todos poll
+TODO_EVERY="${INBOX_TODO_EVERY:-4}"    # poll todos every Nth cycle
+CALL_TIMEOUT="${INBOX_TIMEOUT:-30}"    # hard cap per backing CLI call, seconds
+
+err() { printf '[%s] %s\n' "$PROG" "$*" >&2; }
+out() { printf '%s\n' "$*"; }
+
+EX_OK=0; EX_USAGE=2; EX_DEGRADED=3; EX_FAILED=4; EX_INT=130; EX_TERM=143
+
+# ----------------------------------------------------------------------------
+# identity
+# ----------------------------------------------------------------------------
+AGENT=""; AGENT_SOURCE=""; INHERITED=0
+SEAT_KEY="${INBOX_SEAT:-}"
+SIGNATURE="${INBOX_SIGNATURE:-}"
+INSTALL_TARGET="${INBOX_INSTALL_TARGET:-$HOME/.hasna/bin/conversations-inbox}"
+
+resolve_agent() {
+  if [ -n "$AGENT" ]; then AGENT_SOURCE="--as"; return 0; fi
+  if [ -n "${INBOX_AGENT:-}" ]; then AGENT="$INBOX_AGENT"; AGENT_SOURCE="\$INBOX_AGENT"; return 0; fi
+  local who rc
+  who="$(conversations whoami --json 2>/dev/null)"; rc=$?
+  if [ $rc -ne 0 ] || [ -z "$who" ]; then
+    err "cannot resolve an agent identity."
+    err "pass --as <agent> or export INBOX_AGENT=<agent>. Refusing to run blind."
+    return 1
+  fi
+  AGENT="$(printf '%s' "$who" | jq -r '.agent // .name // empty' 2>/dev/null)"
+  if [ -z "$AGENT" ]; then
+    err "conversations whoami returned no agent name."
+    err "pass --as <agent> or export INBOX_AGENT=<agent>. Refusing to run blind."
+    return 1
+  fi
+  AGENT_SOURCE="conversations whoami (machine-global file)"
+  # An inherited identity is a GUESS, and a bare `conversations-inbox` is the thing people
+  # type by reflex. Reporting under a guess is fine; advancing another seat's
+  # cursor or task ledger under one is not -- it silently moves a high-water
+  # mark that seat depends on. So an inherited identity is forced read-only.
+  PEEK=1; INHERITED=1
+  err "WARNING: identity '$AGENT' was inherited from the machine-global agent-id"
+  err "         file, which every session on this box shares. Running READ-ONLY"
+  err "         (--peek) so no cursor of theirs moves. Set INBOX_AGENT=<agent>"
+  err "         or pass --as <agent> for a normal run."
+  return 0
+}
+
+# ----------------------------------------------------------------------------
+# MULTIPLE IDENTITIES PER SEAT
+# ----------------------------------------------------------------------------
+# A seat commonly answers to BOTH an agent name (e.g. fabricius) and a seat slug
+# (e.g. agent-chief-staff), and a peer addresses whichever one the convention in
+# front of it names. v1.2.0 matched DMs with a SINGLE SCALAR --
+# select(.to_agent == $me) -- so every DM sent to the seat's other name failed
+# both arms of the filter and was dropped at rc=0, which is indistinguishable
+# from a quiet inbox.
+#
+# Measured on station01, 2026-08-02, one seat, one 6h window of
+# `conversations since`: 27 DMs addressed to `fabricius` and 1 to
+# `agent-chief-staff`; over 24h the split was 27+ vs 14+. The todos arm had the
+# same hole and it was larger: 46 open tasks assigned to `fabricius`, 71 open
+# tasks assigned to `agent-chief-staff`, and the INTERSECTION WAS ZERO. The cost
+# was measured too -- three coordination messages from a dispatched worker, all
+# addressed to the slug, none received, and the worker publicly mischaracterised
+# on the strength of not having received them.
+#
+# THE FIRST IDENTITY remains the writer for REMOTE subscribe/unsubscribe calls.
+# Local state is different: its key is the sorted, case-normalized identity set,
+# or an explicit --seat key. Reordering aliases must never fork a cursor.
+AGENTS=(); AGENTS_JSON='[]'; AGENTS_LC_JSON='[]'; AGENTS_TXT=""
+split_identities() {
+  local raw="$AGENT" tok a seen
+  AGENTS=()
+  local oldifs="$IFS"; IFS=','
+  for tok in $raw; do
+    IFS="$oldifs"
+    tok="${tok#"${tok%%[![:space:]]*}"}"; tok="${tok%"${tok##*[![:space:]]}"}"
+    if [ -n "$tok" ]; then
+      seen=0
+      for a in ${AGENTS[@]+"${AGENTS[@]}"}; do
+        [ "${a,,}" = "${tok,,}" ] && seen=1
+      done
+      [ $seen -eq 1 ] || AGENTS+=("$tok")
+    fi
+    IFS=','
+  done
+  IFS="$oldifs"
+  if [ ${#AGENTS[@]} -eq 0 ]; then
+    err "no usable identity in '$raw' -- pass --as <agent>[,<agent>...]"
+    return 1
+  fi
+  AGENT="${AGENTS[0]}"
+  AGENTS_TXT="${AGENTS[*]}"
+  AGENTS_JSON="$(printf '%s\n' "${AGENTS[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))' 2>/dev/null)"
+  # Identity case is NOT meaningful. Matched exactly, a watcher armed as
+  # `Silvanus` sees none of the DMs addressed to `silvanus` -- measured 54 of 54
+  # missed on this box.
+  AGENTS_LC_JSON="$(printf '%s' "$AGENTS_JSON" | jq -c 'map(ascii_downcase)' 2>/dev/null)"
+  # A broken identity array silently empties every filter below, which reads as
+  # a quiet inbox. Refuse instead.
+  if [ -z "$AGENTS_JSON" ] || [ "$AGENTS_JSON" = "[]" ]; then
+    err "could not encode identities [$AGENTS_TXT] as JSON -- refusing to run blind."
+    return 1
+  fi
+  return 0
+}
+
+STATE_ROOT=""; STATE_KEY=""; STATE_DIR=""
+state_dir() { printf '%s' "$STATE_DIR"; }
+
+# Identity matching is case-insensitive everywhere else, so legacy state
+# discovery must use the same comparison. Exact-path lookup would fork
+# `CaseSeat` and `caseseat` into independent cursors.
+state_dirs_for_identity() {
+  local want="${1,,}" candidate name
+  [ -d "$STATE_ROOT" ] || return 0
+  for candidate in "$STATE_ROOT"/*; do
+    [ -d "$candidate" ] || continue
+    name="${candidate##*/}"
+    [ "${name,,}" = "$want" ] && printf '%s\n' "$candidate"
+  done
+}
+
+resolve_state_dir() {
+  local canonical candidate
+  local matches=()
+  STATE_ROOT="${INBOX_STATE_DIR:-$HOME/.hasna/inbox}"
+  if [ -n "$SEAT_KEY" ]; then
+    canonical="$(printf '%s' "$SEAT_KEY" | tr '[:upper:]' '[:lower:]')"
+    case "$canonical" in
+      ''|*[!a-z0-9._-]*)
+        err "seat key '$SEAT_KEY' is invalid -- use letters, numbers, dot, underscore or dash."
+        return 1 ;;
+    esac
+    STATE_KEY="seat-$canonical"
+  elif [ ${#AGENTS[@]} -gt 1 ]; then
+    canonical="$(printf '%s' "$AGENTS_LC_JSON" | jq -r 'unique | sort | join("+")' 2>/dev/null)"
+    case "$canonical" in
+      ''|*[!a-z0-9._+-]*)
+        err "could not derive a safe state key from identities [$AGENTS_TXT]."
+        return 1 ;;
+    esac
+    STATE_KEY="seat-$canonical"
+  else
+    # Preserve the pre-package path contract while matching existing state with
+    # the same case-insensitive identity semantics used for messages and tasks.
+    case "$AGENT" in
+      ''|*[!A-Za-z0-9._-]*)
+        err "identity '$AGENT' cannot be used as a safe state directory."
+        return 1 ;;
+    esac
+    while IFS= read -r candidate; do
+      [ -n "$candidate" ] && matches+=("$candidate")
+    done < <(state_dirs_for_identity "$AGENT")
+    if [ ${#matches[@]} -gt 1 ]; then
+      err "multiple legacy state directories match identity '$AGENT' case-insensitively -- refusing to choose a cursor."
+      return 1
+    fi
+    if [ ${#matches[@]} -eq 1 ]; then
+      STATE_DIR="${matches[0]}"
+      STATE_KEY="${STATE_DIR##*/}"
+      return 0
+    fi
+    STATE_KEY="$AGENT"
+  fi
+  STATE_DIR="$STATE_ROOT/$STATE_KEY"
+  return 0
+}
+
+# Multi-handle state used to live under whichever --as value came first. Build
+# one new canonical directory from every seeded legacy alias, choosing the
+# lowest valid cursor so migration cannot step over work. Legacy directories are
+# read but never modified, and the directory rename is the commit point.
+merge_new_seat_aliases() {
+  local known new updated_ids ids_tmp seen_tmp legacy a v min="" found=0 line
+  known="$(jq -c -e 'select(type == "array" and all(.[]; type == "string"))' "$STATE_DIR/identities.json" 2>/dev/null)" || {
+    err "canonical identity ledger $STATE_DIR/identities.json is missing or corrupt -- refusing to guess."
+    return $EX_USAGE
+  }
+  new="$(jq -cn --argjson current "$AGENTS_JSON" --argjson known "$known" '
+    ($known | map(ascii_downcase)) as $known_lc
+    | [$current[]
+       | . as $candidate
+       | select(($known_lc | index($candidate | ascii_downcase)) == null)]
+  ')" || return $EX_USAGE
+  [ "$(printf '%s' "$new" | jq -r 'length' 2>/dev/null)" -gt 0 ] || return 0
+  updated_ids="$(jq -cn --argjson known "$known" --argjson new "$new" '$known + $new | unique')" || return $EX_USAGE
+
+  if [ -f "$STATE_DIR/.seeded" ]; then
+    if ! cursor_get last-msg; then
+      err "canonical cursor cannot absorb a new alias: $CURSOR_ERROR"
+      return $EX_USAGE
+    fi
+    min="$CURSOR"
+  fi
+  seen_tmp="$STATE_DIR/.seen-tasks.alias.$$.new"
+  if [ -r "$STATE_DIR/seen-tasks" ]; then
+    cp -p "$STATE_DIR/seen-tasks" "$seen_tmp" 2>/dev/null || {
+      err "cannot stage the canonical task ledger before alias expansion."
+      return $EX_USAGE
+    }
+  else
+    : > "$seen_tmp" || return $EX_USAGE
+  fi
+
+  while IFS= read -r a; do
+    [ -n "$a" ] || continue
+    while IFS= read -r legacy; do
+      [ -f "$legacy/.seeded" ] || continue
+      found=$((found + 1))
+      if [ ! -r "$legacy/last-msg" ] || ! IFS= read -r v < "$legacy/last-msg"; then
+        rm -f "$seen_tmp"
+        err "seeded legacy cursor $legacy/last-msg is unreadable -- refusing alias expansion."
+        return $EX_USAGE
+      fi
+      case "$v" in
+        ''|*[!0-9]*)
+          rm -f "$seen_tmp"
+          err "seeded legacy cursor $legacy/last-msg is corrupt -- refusing alias expansion."
+          return $EX_USAGE ;;
+      esac
+      if [ -z "$min" ] || [ "$v" -lt "$min" ]; then min="$v"; fi
+      if [ -r "$legacy/seen-tasks" ]; then
+        while IFS= read -r line; do
+          [ -n "$line" ] && printf '%s\n' "$line" >> "$seen_tmp"
+        done < "$legacy/seen-tasks"
+      fi
+    done < <(state_dirs_for_identity "$a")
+  done < <(printf '%s' "$new" | jq -r '.[]')
+
+  if [ -s "$seen_tmp" ]; then sort -u "$seen_tmp" -o "$seen_tmp"; fi
+  chmod 600 "$seen_tmp" || { rm -f "$seen_tmp"; return $EX_USAGE; }
+  if [ "$found" -gt 0 ]; then
+    cursor_set last-msg "$min" || { rm -f "$seen_tmp"; return $EX_USAGE; }
+  fi
+  mv "$seen_tmp" "$STATE_DIR/seen-tasks" || { rm -f "$seen_tmp"; return $EX_USAGE; }
+  if [ "$found" -gt 0 ] && [ ! -f "$STATE_DIR/.seeded" ]; then
+    touch "$STATE_DIR/.seeded" || return $EX_USAGE
+  fi
+  ids_tmp="$STATE_DIR/.identities.$$.new"
+  if ! printf '%s\n' "$updated_ids" > "$ids_tmp" ||
+     ! chmod 600 "$ids_tmp" ||
+     ! mv "$ids_tmp" "$STATE_DIR/identities.json"; then
+    rm -f "$ids_tmp"
+    err "could not atomically record the expanded identity set."
+    return $EX_USAGE
+  fi
+  out "[$PROG] folded ${found} seeded legacy state(s) into $STATE_DIR for newly added aliases"
+  return 0
+}
+
+migrate_legacy_state() {
+  [ "${PEEK:-0}" = 1 ] && return 0
+  { [ ${#AGENTS[@]} -gt 1 ] || [ -n "$SEAT_KEY" ]; } || return 0
+  if [ -f "$STATE_DIR/.identity-migrated-v1" ]; then
+    [ -n "$SEAT_KEY" ] || return 0
+    merge_new_seat_aliases
+    return $?
+  fi
+  if [ -e "$STATE_DIR" ]; then
+    err "canonical state $STATE_DIR exists without a migration marker -- refusing to guess."
+    return $EX_USAGE
+  fi
+
+  mkdir -p "$STATE_ROOT" 2>/dev/null || {
+    err "cannot create state root $STATE_ROOT."
+    return $EX_USAGE
+  }
+
+  local tmp legacy a v min="" found=0 line
+  tmp="$(mktemp -d "$STATE_ROOT/.${STATE_KEY}.migrate.XXXXXX" 2>/dev/null)" || {
+    err "cannot create an atomic migration directory under $STATE_ROOT."
+    return $EX_USAGE
+  }
+  : > "$tmp/seen-tasks"
+
+  for a in "${AGENTS[@]}"; do
+    while IFS= read -r legacy; do
+      [ -f "$legacy/.seeded" ] || continue
+      found=$((found + 1))
+      if [ ! -r "$legacy/last-msg" ] || ! IFS= read -r v < "$legacy/last-msg"; then
+        err "seeded legacy cursor $legacy/last-msg is unreadable -- refusing migration."
+        rm -rf "$tmp"
+        return $EX_USAGE
+      fi
+      case "$v" in
+        ''|*[!0-9]*)
+          err "seeded legacy cursor $legacy/last-msg is corrupt -- refusing migration."
+          rm -rf "$tmp"
+          return $EX_USAGE ;;
+      esac
+      if [ -z "$min" ] || [ "$v" -lt "$min" ]; then min="$v"; fi
+      if [ -r "$legacy/seen-tasks" ]; then
+        while IFS= read -r line; do
+          [ -n "$line" ] && printf '%s\n' "$line" >> "$tmp/seen-tasks"
+        done < "$legacy/seen-tasks"
+      fi
+    done < <(state_dirs_for_identity "$a")
+  done
+
+  if [ -s "$tmp/seen-tasks" ]; then
+    sort -u "$tmp/seen-tasks" -o "$tmp/seen-tasks"
+  fi
+  printf '%s\n' "$AGENTS_JSON" > "$tmp/identities.json"
+  touch "$tmp/.identity-migrated-v1"
+  if [ "$found" -gt 0 ]; then
+    printf '%s\n' "$min" > "$tmp/last-msg"
+    touch "$tmp/.seeded"
+  fi
+  chmod 700 "$tmp"
+  chmod 600 "$tmp"/* "$tmp"/.[!.]* 2>/dev/null || true
+  # -T makes an already-created destination a collision, not a directory into
+  # which mv silently nests our candidate. A concurrent winner with the same
+  # marker is safe to adopt; any other destination remains a hard refusal.
+  if ! mv -T "$tmp" "$STATE_DIR" 2>/dev/null; then
+    if [ -f "$STATE_DIR/.identity-migrated-v1" ]; then
+      rm -rf "$tmp"
+      STATE_MKDIR_DONE=1
+      return 0
+    fi
+    rm -rf "$tmp"
+    err "could not atomically install canonical state $STATE_DIR."
+    return $EX_USAGE
+  fi
+  STATE_MKDIR_DONE=1
+  if [ "$found" -gt 0 ]; then
+    out "[$PROG] migrated $found legacy identity state(s) to $STATE_DIR at conservative cursor $min"
+  fi
+  return 0
+}
+
+# Sets CURSOR rather than echoing, so callers need no $( ) subshell, and reads
+# with the `read` builtin rather than cat. Two forks per poll removed.
+CURSOR=0; CURSOR_ERROR=""
+cursor_get() {
+  local v=""
+  # `2>/dev/null` cannot suppress a REDIRECTION failure -- the shell reports it
+  # before the redirect applies. Same trap as the write probe below; guard with
+  # a readability test rather than a subshell, which would lose the assignment.
+  CURSOR_ERROR=""
+  if [ ! -r "$STATE_DIR/$1" ] || ! IFS= read -r v < "$STATE_DIR/$1" 2>/dev/null; then
+    CURSOR_ERROR="$STATE_DIR/$1 is missing or unreadable"
+    return 1
+  fi
+  case "$v" in
+    ''|*[!0-9]*) CURSOR_ERROR="$STATE_DIR/$1 is corrupt (expected a non-negative integer)"; return 1 ;;
+    *) CURSOR="$v"; return 0 ;;
+  esac
+}
+STATE_MKDIR_DONE=0
+ensure_state_dir() {
+  [ "$STATE_MKDIR_DONE" = 1 ] && return 0
+  mkdir -p "$STATE_DIR" 2>/dev/null
+  STATE_MKDIR_DONE=1
+}
+cursor_set() {
+  [ "${PEEK:-0}" = 1 ] && return 0
+  ensure_state_dir
+  local tmp="$STATE_DIR/.$1.$$.new"
+  case "$2" in ''|*[!0-9]*) err "refusing to write invalid cursor '$2'"; return 1 ;; esac
+  if ! printf '%s\n' "$2" > "$tmp" || ! chmod 600 "$tmp" || ! mv "$tmp" "$STATE_DIR/$1"; then
+    rm -f "$tmp"
+    err "could not atomically write cursor $STATE_DIR/$1"
+    return 1
+  fi
+  return 0
+}
+
+# ----------------------------------------------------------------------------
+# degradation — recorded in a FILE, never a shell array
+# ----------------------------------------------------------------------------
+# run_json is always called inside $( ), which is a subshell, so an array append
+# there is made to a copy and lost. v1 did exactly that and every backing-CLI
+# failure returned success with no message.
+DEGRADE_LOG="${TMPDIR:-/tmp}/.inbox-degrade.$$"
+INSTALL_TMP=""
+cleanup() {
+  rm -f "$DEGRADE_LOG"
+  [ -z "$INSTALL_TMP" ] || rm -f "$INSTALL_TMP"
+}
+
+# A WATCH THAT STOPS WATCHING MUST SAY SO. `conversations-inbox watch` was reported dying
+# after ~15 minutes with a bare exit 1 -- a code outside this tool's contract,
+# with no message. That is the false-green this tool exists to detect, landing
+# inside the instrument itself: whatever supervises a monitor cannot tell "died"
+# from "quiet", because both produce no further output.
+#
+# The cause was not reproducible here (two traced runs, 45s and 5s cadence,
+# survived 30+ minutes), so rather than guess, ANY exit from watch mode is now
+# announced on stdout -- the notification stream -- and stderr, naming the tool
+# and the code. `set -u` alone can exit 1 on an unbound variable in a rare
+# branch; that class of death is now loud instead of silent.
+WATCHING=0
+on_exit() {
+  local rc=$?
+  cleanup
+  if [ "$WATCHING" = 1 ] && [ "$rc" -ne "$EX_INT" ] && [ "$rc" -ne "$EX_TERM" ]; then
+    out "[$PROG] FATAL: watch exited with code $rc — the monitor is DEAD, not quiet. Re-arm it."
+    err "FATAL: watch exited with code $rc — the monitor is DEAD, not quiet. Re-arm it."
+  fi
+}
+trap 'on_exit' EXIT
+trap 'cleanup; err "interrupted (SIGINT)"; exit $EX_INT' INT
+trap 'cleanup; err "terminated (SIGTERM)"; exit $EX_TERM' TERM
+
+DEGRADE_N=0; DEGRADE_TXT=""
+degrade_reset()   { : > "$DEGRADE_LOG"; DEGRADE_N=0; DEGRADE_TXT=""; }
+degrade_add()     { printf '%s\n' "$*" >> "$DEGRADE_LOG"; }
+# Reads the log into globals using only builtins. Called DIRECTLY, never as
+# $(...), so it costs no fork -- this runs on every poll of every session.
+degrade_load() {
+  DEGRADE_N=0; DEGRADE_TXT=""
+  local l
+  while IFS= read -r l; do
+    DEGRADE_N=$((DEGRADE_N + 1))
+    DEGRADE_TXT="${DEGRADE_TXT:+$DEGRADE_TXT; }$l"
+  done < "$DEGRADE_LOG" 2>/dev/null
+  [ -n "$DEGRADE_TXT" ] || DEGRADE_TXT="unknown"
+}
+
+run_json() {
+  local label="$1"; shift
+  local shape="array" output normalized rc
+  if [ "${1:-}" = "--message-envelope" ]; then
+    shape="message-envelope"
+    shift
+  fi
+  # A HANG IS A FAILURE. Without this cap a stalled backing CLI (DB lock, hosted
+  # API stall) freezes the whole watch loop inside its first poll: fails never
+  # increments, the 3-failure self-report never fires, and the monitor emits
+  # nothing at all -- silence that looks exactly like a calm inbox.
+  output="$(timeout -k 5 "$CALL_TIMEOUT" "$@" 2>/dev/null)"; rc=$?
+  if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then
+    degrade_add "$label: $1 TIMED OUT after ${CALL_TIMEOUT}s"; return 1
+  fi
+  if [ $rc -ne 0 ]; then degrade_add "$label: exit $rc from $1"; return 1; fi
+  if [ "$shape" = "message-envelope" ]; then
+    normalized="$(printf '%s' "$output" | jq -ce '
+      if type == "array" then .
+      elif type == "object" and (.messages | type) == "array" then .messages
+      else error("expected an array or an object with a messages array")
+      end
+    ' 2>/dev/null)" || {
+      degrade_add "$label: $1 returned no usable JSON array"; return 1
+    }
+  elif ! normalized="$(printf '%s' "$output" | jq -ce 'select(type == "array")' 2>/dev/null)"; then
+    degrade_add "$label: $1 returned no usable JSON array"; return 1
+  fi
+  printf '%s' "$normalized"; return 0
+}
+
+channel_exists() {
+  local want="$1" list
+  list="$(conversations channel list --json 2>/dev/null)" || return 2
+  printf '%s' "$list" | jq -e --arg c "$want" 'any(.[]?; (.name // "") == $c)' >/dev/null 2>&1
+}
+
+# Subscribed channels. The complete union is refreshed before every
+# cursor-bearing message read. A partial union cannot distinguish an irrelevant
+# channel from one subscribed through the failed alias, so it must never license
+# a cursor advance.
+SUBS_JSON='[]'
+SUBS_N=0
+refresh_subs() {
+  # UNION across every identity: a channel the slug subscribed to and the name
+  # did not is still this seat's channel.
+  local a s acc='[]' got=0 failed=0
+  for a in "${AGENTS[@]}"; do
+    if s="$(run_json "subscriptions[$a]" conversations channel subscriptions --from "$a" --json)"; then
+      got=$((got + 1))
+      acc="$(printf '%s\n%s' "$acc" "$s" | jq -sc '(.[0] + [.[1][]?.channel]) | map(select(. != null and . != "")) | unique' 2>/dev/null || printf '%s' "$acc")"
+    else
+      failed=$((failed + 1))
+    fi
+  done
+  # Keep the previous complete union on any failure, but tell the caller not to
+  # read messages or commit a cursor in this poll. run_json already recorded
+  # which alias was unavailable.
+  [ $failed -eq 0 ] && [ $got -eq ${#AGENTS[@]} ] || return 1
+  SUBS_JSON="$acc"
+  SUBS_N="$(printf '%s' "$SUBS_JSON" | jq -r 'length' 2>/dev/null || echo 0)"
+  # Zero subscriptions is the likeliest real cause of a permanently quiet
+  # inbox -- never made, or dropped when the identity was released. It must
+  # not be indistinguishable from calm.
+  [ "$SUBS_N" -eq 0 ] && degrade_add "subscriptions: none of [$AGENTS_TXT] is subscribed to ANY channel — channel traffic cannot reach you (conversations-inbox subscribe <channel>)"
+  return 0
+}
+
+# Tasks assigned to ANY identity, merged and de-duplicated by id. Returns
+# non-zero only when EVERY identity's fetch failed; a partial failure still
+# reports what it got, because a silent zero is the failure mode this tool
+# exists to prevent (run_json has already recorded the degrade).
+todos_fetch() {
+  local a t acc='[]' got=0
+  for a in "${AGENTS[@]}"; do
+    if [ $# -gt 0 ]; then
+      t="$(run_json todos todos list --assigned "$a" "$@" --format json --sort created --limit "$TODO_LIMIT")"
+    else
+      t="$(run_json todos todos list --assigned "$a" --format json --sort created --limit "$TODO_LIMIT")"
+    fi
+    if [ $? -eq 0 ]; then
+      got=1
+      acc="$(printf '%s\n%s' "$acc" "$t" | jq -sc 'add | unique_by(.id // "")' 2>/dev/null || printf '%s' "$acc")"
+    fi
+  done
+  [ $got -eq 1 ] || return 1
+  printf '%s' "$acc"; return 0
+}
+
+# ----------------------------------------------------------------------------
+# seeding — first contact records position WITHOUT reporting history
+# ----------------------------------------------------------------------------
+seed_if_new() {
+  local dir="$STATE_DIR"
+  [ -f "$dir/.seeded" ] && return 0
+  if [ "${PEEK:-0}" = 1 ]; then
+    err "no seed state yet and --peek is read-only; run '$PROG check' once to seed."
+    return 0
+  fi
+  mkdir -p "$dir" 2>/dev/null
+  STATE_MKDIR_DONE=1
+  # mkdir -p SUCCEEDS on an existing dir whatever its permissions, so presence
+  # is not writability. Prove we can actually write before trusting any state.
+  # Redirection failure is reported by the shell BEFORE the command's own
+  # stderr redirect applies, so the probe runs in a subshell to keep the raw
+  # "Permission denied" out of the agent's output.
+  if ! ( : > "$dir/.wtest" ) 2>/dev/null; then
+    err "state dir $dir is not writable — refusing to run with unsaveable cursors."
+    return $EX_USAGE
+  fi
+  rm -f "$dir/.wtest"
+  local msgs tasks t=0 n=0 failed=0
+  local msg_tmp="$dir/.last-msg.seed.$$.new"
+  local tasks_tmp="$dir/.seen-tasks.seed.$$.new"
+  if msgs="$(run_json seed-read --message-envelope conversations read --limit 1 --json)"; then
+    n="$(printf '%s' "$msgs" | jq -r '[.[]?.id // 0] | max // 0' 2>/dev/null || echo 0)"
+  else failed=1; fi
+  if [ "${WANT_TODOS:-1}" = 1 ]; then
+    if tasks="$(todos_fetch --all)"; then :; else failed=1; fi
+  else
+    tasks='[]'
+  fi
+  if [ $failed -eq 1 ]; then
+    # Do NOT mark seeded on a partial seed: the next successful run must retry,
+    # otherwise it replays the whole backlog as new.
+    degrade_load
+    err "WARNING: seeding incomplete ($DEGRADE_TXT) — will retry next run, nothing marked seeded."
+    err "this is a BACKING-CLI outage, not a config error — treat as DEGRADED."
+    rm -f "$msg_tmp" "$tasks_tmp"
+    degrade_reset
+    return $EX_DEGRADED
+  fi
+  case "$n" in ''|*[!0-9]*) err "seed returned an invalid message cursor"; return $EX_DEGRADED ;; esac
+  if ! printf '%s\n' "$n" > "$msg_tmp" ||
+     ! printf '%s' "$tasks" | jq -r '.[]?.id // empty' > "$tasks_tmp" 2>/dev/null ||
+     ! chmod 600 "$msg_tmp" "$tasks_tmp"; then
+    rm -f "$msg_tmp" "$tasks_tmp"
+    err "could not stage atomic seed state in $dir."
+    return $EX_USAGE
+  fi
+  t="$(wc -l < "$tasks_tmp" | tr -d ' ')"
+  if ! mv "$msg_tmp" "$dir/last-msg" ||
+     ! mv "$tasks_tmp" "$dir/seen-tasks" ||
+     ! touch "$dir/.seeded"; then
+    rm -f "$msg_tmp" "$tasks_tmp"
+    err "could not commit atomic seed state in $dir."
+    return $EX_USAGE
+  fi
+  out "[$PROG] seeded for [$AGENTS_TXT] — history up to message $n and $t existing task(s) will not be reported as new"
+}
+
+render_messages() {
+  local json="$1" last="$2"
+  printf '%s' "$json" | jq -r --arg me "$AGENT" --arg signature "$SIGNATURE" --argjson lmes "$AGENTS_LC_JSON" --argjson subs "$SUBS_JSON" --argjson last "$last" '
+    [ .[]?
+      | select((.id // 0) > $last)
+      # A display name alone is not a sender identity: another session can use
+      # the same name. A signature alone is not identity either: a peer can
+      # quote it. Suppress only when BOTH match the declared seat identity
+      # union and its unique content signature. With no signature configured,
+      # retain the safe legacy behavior and tolerate surplus self traffic.
+      | select((
+          ($signature != "")
+          and ((((.from_agent // "") | ascii_downcase) as $f | $lmes | index($f)) != null)
+          and (((.content // .message // .body // .preview // "") | tostring) | contains($signature))
+        ) | not)
+      | select( ((.channel // "") != "" and (((.channel // "") as $c | $subs | index($c)) != null))
+                or ((((.to_agent // "") | ascii_downcase) as $t | $lmes | index($t)) != null) )
+    ] | sort_by(.id) | .[]
+    | (if (.blocking == true or .blocking == 1) then "[BLOCKING] " else "" end)
+      + (if ((.channel // "") == "")
+         then (if (((.to_agent // "") | ascii_downcase) == ($me | ascii_downcase)) then "[dm] " else "[dm→\(.to_agent // "?")] " end)
+         else "[msg] #\(.channel) " end)
+      + "\(.from_agent // "?"): \((.content // .message // .body // .preview // "") | tostring | gsub("\\s+"; " ") | .[0:220])  (id \(.id // "?"))"
+  ' 2>/dev/null
+}
+
+# Scan a fetched window RELATIVE TO a cursor, without refetching. Sets:
+#   WIN_CNT  rows on the page (saturation check)
+#   WIN_MIN  lowest / WIN_MAX highest id above the cursor
+#   WIN_GAP  the first id above the cursor that is NOT contiguous with its
+#            predecessor, i.e. the exclusive upper bound of the nearest hole;
+#            0 when the page runs unbroken from cursor+1.
+# Called once per poll and again after every recovered chunk, so the loop below
+# re-reads its own progress from the page it already has in hand.
+WIN_CNT=0; WIN_MIN=0; WIN_MAX=0; WIN_GAP=0
+window_scan() {
+  local json="$1" from="$2" meta
+  meta="$(printf '%s' "$json" | jq -r --argjson last "$from" '
+    . as $rows
+    | ([$rows[]? | (.id // 0) | select(. > $last)] | unique | sort) as $ids
+    | (reduce $ids[] as $id ({prev: $last, stop: 0};
+        if .stop != 0 then .
+        elif $id == (.prev + 1) then .prev = $id
+        else .stop = $id
+        end)) as $scan
+    | [
+        ($rows | length),
+        ($ids | if length == 0 then 0 else min end),
+        ($ids | if length == 0 then 0 else max end),
+        $scan.stop
+      ] | @tsv' 2>/dev/null)"
+  IFS=$'\t' read -r WIN_CNT WIN_MIN WIN_MAX WIN_GAP <<< "$meta"
+  case "$WIN_CNT$WIN_MIN$WIN_MAX$WIN_GAP" in
+    ''|*[!0-9]*)
+      # Fail OPEN: an underivable frontier must never look like "no gap" and
+      # must never license a cursor move.
+      WIN_CNT=0; WIN_MIN=0; WIN_MAX="$from"; WIN_GAP=0; return 1 ;;
+  esac
+  return 0
+}
+
+# Read and commit only the contiguous ascending-id prefix after a cursor. An
+# optional stop is exclusive and comes from the time-window gap detector. Each
+# backing read stays within the store page maximum; the loop is independently
+# capped by BACKFILL_MAX rows and BACKFILL_PAGE_BUDGET calls. Every committed
+# page contains only rows already rendered in this invocation, so a later page
+# failure preserves restartable progress without stepping over unseen rows.
+recover_id_prefix() {
+  local last="$1" requested_stop="${2:-0}" reason="${3:-window-gap}"
+  local current="$last" recovered=0 pages=0 announced=0
+  local backfill page stop="$requested_stop" range range_meta
+  local range_cnt range_max next_id frontier rendered line
+  local page_limit remaining
+
+  while [ "$recovered" -lt "$BACKFILL_MAX" ] &&
+        [ "$pages" -lt "$BACKFILL_PAGE_BUDGET" ]; do
+    remaining=$((BACKFILL_MAX - recovered))
+    page_limit="$BACKFILL_LIMIT"
+    [ "$page_limit" -gt "$remaining" ] && page_limit="$remaining"
+    pages=$((pages + 1))
+
+    if ! backfill="$(run_json backfill --message-envelope conversations read --since-id "$current" --limit "$page_limit" --json)"; then
+      return 1
+    fi
+    if ! page="$(printf '%s' "$backfill" | jq -c --argjson cap "$page_limit" '.[:$cap]' 2>/dev/null)"; then
+      degrade_add "backfill: could not enforce the configured page bound"
+      return 1
+    fi
+    if ! window_scan "$page" "$current"; then
+      degrade_add "backfill: could not derive a numeric page frontier"
+      return 1
+    fi
+
+    if [ "$reason" = "window-quiet" ] && [ "$announced" -eq 0 ] &&
+       [ "$WIN_MAX" -gt "$current" ] 2>/dev/null; then
+      degrade_add "since: GAP — time window omitted stored ids above cursor $current; running bounded id backfill"
+      announced=1
+    fi
+    if [ "$WIN_GAP" -gt 0 ] 2>/dev/null &&
+       { [ "$stop" -eq 0 ] 2>/dev/null || [ "$WIN_GAP" -lt "$stop" ] 2>/dev/null; }; then
+      stop="$WIN_GAP"
+    fi
+
+    if [ "$stop" -gt 0 ] 2>/dev/null; then
+      range="$(printf '%s' "$page" | jq -c --argjson last "$current" --argjson stop "$stop" \
+        '[.[]? | select((.id // 0) > $last and (.id // 0) < $stop)] | sort_by(.id)' 2>/dev/null)"
+    else
+      range="$(printf '%s' "$page" | jq -c --argjson last "$current" \
+        '[.[]? | select((.id // 0) > $last)] | sort_by(.id)' 2>/dev/null)"
+    fi
+    range_meta="$(printf '%s' "$range" | jq -r '[length, ([.[]?.id // 0] | max // 0)] | @tsv' 2>/dev/null)"
+    IFS=$'\t' read -r range_cnt range_max <<< "$range_meta"
+    case "$range_cnt$range_max" in
+      ''|*[!0-9]*)
+        degrade_add "backfill: could not derive a numeric contiguous frontier"
+        return 1 ;;
+    esac
+
+    if [ "$range_cnt" -gt 0 ]; then
+      rendered="$(render_messages "$range" "$current")"
+      while IFS= read -r line; do [ -n "$line" ] && out "$line"; done <<< "$rendered"
+      if ! cursor_set last-msg "$range_max"; then
+        degrade_add "backfill: cursor commit failed"
+        return 1
+      fi
+      recovered=$((recovered + range_cnt))
+      current="$range_max"
+      if [ "$stop" -gt 0 ] 2>/dev/null &&
+         [ "$current" -ge $((stop - 1)) ] 2>/dev/null; then
+        return 0
+      fi
+      continue
+    fi
+
+    next_id="$(printf '%s' "$page" | jq -r --argjson last "$current" '[.[]? | (.id // 0) | select(. > $last)] | min // 0' 2>/dev/null || echo 0)"
+    case "$next_id" in ''|*[!0-9]*) next_id=0 ;; esac
+    if [ "$stop" -gt 0 ] 2>/dev/null && [ "$next_id" -ge "$stop" ] 2>/dev/null; then
+      # The ordered cursor read proved no stored row exists in the numeric hole.
+      # Stop before the first post-gap row so the next poll still emits it.
+      frontier=$((stop - 1))
+      if ! cursor_set last-msg "$frontier"; then
+        degrade_add "backfill: empty-range frontier commit failed"
+        return 1
+      fi
+    elif [ "$next_id" -ne 0 ]; then
+      degrade_add "backfill: returned no usable contiguous row above cursor $current; cursor unchanged"
+    elif [ "$requested_stop" -gt 0 ] 2>/dev/null; then
+      degrade_add "backfill: returned no usable row below $requested_stop; cursor unchanged"
+    fi
+    return 0
+  done
+
+  if [ "$recovered" -ge "$BACKFILL_MAX" ]; then
+    degrade_add "backfill: per-invocation row cap $BACKFILL_MAX reached at cursor $current"
+  elif [ "$pages" -ge "$BACKFILL_PAGE_BUDGET" ]; then
+    degrade_add "backfill: per-invocation page cap $BACKFILL_PAGE_BUDGET reached at cursor $current"
+  fi
+  return 0
+}
+
+# ----------------------------------------------------------------------------
+# one pass
+# ----------------------------------------------------------------------------
+POLL=0
+do_check() {
+  degrade_reset
+  POLL=$((POLL + 1))
+
+  # ---- messages: channels + DMs + blocking ----------------------------------
+  if [ "${WANT_MSGS:-1}" = 1 ]; then
+    local win winm msgs meta rendered line cnt minid maxid last gap_stop
+    if ! refresh_subs; then
+      # A partial subscription union cannot safely filter channel messages.
+      # Leave the cursor untouched and let the recorded backing failure make
+      # this poll DEGRADED.
+      :
+    elif ! cursor_get last-msg; then
+      degrade_add "cursor: $CURSOR_ERROR -- refusing message reads and cursor writes"
+    else
+      last="$CURSOR"
+      # The time window is only the fast path and gap detector. Recovery never
+      # widens it: an ascending id-cursor page walks the missing range instead.
+      win="${INBOX_WINDOW:-$(( ${INTERVAL:-45} * 3 ))}"; [ "$win" -lt 120 ] && win=120
+      winm=$(( (win + 59) / 60 )); [ "$winm" -lt 2 ] && winm=2
+      if msgs="$(run_json since --message-envelope conversations since "${winm}m" --limit "$LIMIT" --json)"; then
+        meta="$(printf '%s' "$msgs" | jq -r --argjson last "$last" '
+          . as $rows
+          | ([$rows[]? | (.id // 0) | select(. > $last)] | unique | sort) as $ids
+          | (reduce $ids[] as $id ({prev: $last, stop: 0};
+              if .stop != 0 then .
+              elif $id == (.prev + 1) then .prev = $id
+              else .stop = $id
+              end)) as $scan
+          | [
+              ($rows | length),
+              ($ids | if length == 0 then 0 else min end),
+              ($ids | if length == 0 then 0 else max end),
+              $scan.stop
+            ] | @tsv' 2>/dev/null)"
+        IFS=$'\t' read -r cnt minid maxid gap_stop <<< "$meta"
+        case "$cnt$minid$maxid$gap_stop" in
+          *[!0-9]*) degrade_add "since: could not derive a numeric page frontier"; cnt=0; minid=0; maxid="$last"; gap_stop=0 ;;
+        esac
+        [ "$cnt" -ge "$LIMIT" ] && degrade_add "since: full bounded page ($cnt of $LIMIT)"
+
+        if [ "$gap_stop" -gt 0 ] 2>/dev/null; then
+          degrade_add "since: GAP — window ids are discontinuous before $gap_stop above cursor $last; running bounded id backfill"
+          recover_id_prefix "$last" "$gap_stop" window-gap
+        else
+          rendered="$(render_messages "$msgs" "$last")"
+          while IFS= read -r line; do [ -n "$line" ] && out "$line"; done <<< "$rendered"
+          if [ "$maxid" -gt "$last" ] 2>/dev/null; then
+            cursor_set last-msg "$maxid" || degrade_add "since: cursor commit failed"
+          else
+            # A time window is not an ID frontier. Probe the bounded ascending
+            # prefix so an old stored row cannot remain invisible forever.
+            recover_id_prefix "$last" 0 window-quiet
+          fi
+        fi
+      fi
+    fi
+  fi
+
+  # ---- tasks assigned to me, staggered ------------------------------------
+  if [ "${WANT_TODOS:-1}" = 1 ] && { [ "$TODO_EVERY" -le 1 ] || [ $((POLL % TODO_EVERY)) -eq 1 ]; }; then
+    local dir="$STATE_DIR" ledger tasks parsed line first cnt id prio title
+    ledger="$dir/seen-tasks"
+    # --peek must not create the state dir or the ledger. v1.1.0 guarded the
+    # writes but not these two, so a peek on a fresh identity still left a
+    # directory and an empty ledger behind.
+    if [ "${PEEK:-0}" != 1 ]; then
+      ensure_state_dir; [ -f "$ledger" ] || : > "$ledger"
+    fi
+    if tasks="$(todos_fetch)"; then
+      parsed="$(printf '%s' "$tasks" | jq -r --argjson mes "$AGENTS_JSON" '
+        "META\t\(length)",
+        ( .[]?
+          | select((.status // "") as $s | $s != "completed" and $s != "cancelled" and $s != "archived")
+          | select( (((.assigned_by // "") | ascii_downcase) as $ab | ($mes | map(ascii_downcase) | index($ab))) == null )
+          | [(.id // ""), (.priority // "normal"), ((.title // "") | gsub("\\s+"; " ") | .[0:160]), (.assigned_to // "")] | @tsv )' 2>/dev/null)"
+      cnt=0; first=1
+      while IFS= read -r line; do
+        if [ "$first" = 1 ]; then first=0; IFS=$'\t' read -r _ cnt <<< "$line"; continue; fi
+        [ -n "$line" ] || continue
+        IFS=$'\t' read -r id prio title asg <<< "$line"
+        [ -n "$id" ] || continue
+        grep -qxF -- "$id" "$ledger" 2>/dev/null && continue
+        [ "${PEEK:-0}" = 1 ] || printf '%s\n' "$id" >> "$ledger"
+        # Name the queue when it is not the primary one, so a seat can see which
+        # of its identities the work actually landed on.
+        if [ -n "$asg" ] && [ "${asg,,}" != "${AGENT,,}" ]; then
+          out "[task→$asg] $prio — $title  (id ${id:0:8})"
+        else
+          out "[task] $prio — $title  (id ${id:0:8})"
+        fi
+      done <<< "$parsed"
+      case "$cnt" in ''|*[!0-9]*) cnt=0 ;; esac
+      [ "$cnt" -ge "$TODO_LIMIT" ] && degrade_add "todos: full page ($cnt) — raise INBOX_TODO_LIMIT"
+      # Prune the ledger to ids still live. Without this the ledger is
+      # append-only and a task that is completed and later REOPENED never
+      # notifies again.
+      if [ "${PEEK:-0}" != 1 ] && [ -s "$ledger" ]; then
+        printf '%s' "$tasks" | jq -r '.[]?.id // empty' 2>/dev/null | sort -u > "$ledger.live" 2>/dev/null
+        if [ -s "$ledger.live" ]; then
+          sort -u "$ledger" 2>/dev/null | comm -12 - "$ledger.live" > "$ledger.new" 2>/dev/null && mv -f "$ledger.new" "$ledger" 2>/dev/null
+        fi
+        rm -f "$ledger.live" "$ledger.new" 2>/dev/null
+      fi
+    fi
+  fi
+
+  degrade_load
+  [ "$DEGRADE_N" -eq 0 ] && return 0
+  return $EX_DEGRADED
+}
+
+# ----------------------------------------------------------------------------
+# verbs
+# ----------------------------------------------------------------------------
+# Forced read-only covers LOCAL state; subscribe/unsubscribe write REMOTELY, so
+# a guessed identity must not reach them at all. Otherwise a bare
+# `conversations-inbox subscribe X` subscribes whoever owns the machine-global id file while
+# the same run prints "Running READ-ONLY" -- a banner that would be false.
+refuse_if_inherited() {
+  [ "$INHERITED" = 1 ] || return 0
+  err "refusing to $1 as '$AGENT': that identity was GUESSED from the"
+  err "machine-global agent-id file, and this would write to their account."
+  err "Pass --as <agent> or export INBOX_AGENT=<agent>."
+  return $EX_USAGE
+}
+
+cmd_subscribe() {
+  refuse_if_inherited subscribe || return $EX_USAGE
+  [ $# -gt 0 ] || { err "usage: $PROG subscribe <channel>..."; return $EX_USAGE; }
+  local ok=0 bad=0 ch rc
+  for ch in "$@"; do
+    ch="${ch#\#}"
+    channel_exists "$ch"; rc=$?
+    if [ $rc -ne 0 ]; then
+      case $rc in
+        2) err "cannot reach conversations to validate '#$ch' — not subscribing." ;;
+        *) err "no such channel: #$ch — not subscribing. (see: conversations channel list)" ;;
+      esac
+      bad=$((bad + 1)); continue
+    fi
+    if conversations channel subscribe "$ch" --from "$AGENT" >/dev/null 2>&1; then
+      out "subscribed  #$ch"; ok=$((ok + 1))
+    else
+      err "subscribe failed for #$ch"; bad=$((bad + 1))
+    fi
+  done
+  seed_if_new || return $?
+  { [ $bad -eq 0 ] && [ $ok -gt 0 ]; } || return $EX_FAILED
+  return $EX_OK
+}
+
+cmd_unsubscribe() {
+  refuse_if_inherited unsubscribe || return $EX_USAGE
+  [ $# -gt 0 ] || { err "usage: $PROG unsubscribe <channel>..."; return $EX_USAGE; }
+  local bad=0 ch
+  for ch in "$@"; do
+    ch="${ch#\#}"
+    if conversations channel unsubscribe "$ch" --from "$AGENT" >/dev/null 2>&1; then
+      out "unsubscribed  #$ch"
+    else err "unsubscribe failed for #$ch"; bad=$((bad + 1)); fi
+  done
+  [ $bad -eq 0 ] || return $EX_FAILED
+}
+
+cmd_status() {
+  degrade_reset
+  refresh_subs
+  degrade_load
+  if [ "$DEGRADE_N" -ne 0 ] && [ "$SUBS_JSON" = "[]" ]; then
+    err "DEGRADED: $DEGRADE_TXT"; return $EX_DEGRADED
+  fi
+  degrade_reset
+  if [ "${JSON_OUT:-0}" = 1 ]; then
+    if ! cursor_get last-msg; then
+      err "DEGRADED: cursor: $CURSOR_ERROR"
+      return $EX_DEGRADED
+    fi
+    printf '%s' "$SUBS_JSON" | jq --arg a "$AGENT" --argjson ag "$AGENTS_JSON" \
+      --arg s "$AGENT_SOURCE" --arg d "$STATE_DIR" --arg c "$CURSOR" \
+      '{agent:$a, agents:$ag, identity_source:$s, state_dir:$d, cursor:$c, channels:.}'
+    return $EX_OK
+  fi
+  out "identity   $AGENT   (from $AGENT_SOURCE)"
+  [ ${#AGENTS[@]} -gt 1 ] && out "also       ${AGENTS[*]:1}   (read scopes; canonical seat state is order-independent)"
+  if ! cursor_get last-msg; then
+    err "DEGRADED: cursor: $CURSOR_ERROR"
+    return $EX_DEGRADED
+  fi
+  out "state      $STATE_DIR"
+  out "cursor     message $CURSOR"
+  out "channels   $SUBS_N subscribed (union across all identities)"
+  printf '%s' "$SUBS_JSON" | jq -r '.[]? | "  #\(.)"' 2>/dev/null
+  out "todos      tasks assigned to any of [$AGENTS_TXT] (never subscribed to; always watched)"
+}
+
+cmd_check() {
+  # The seed's return value used to be DISCARDED, so an unwritable state dir
+  # printed "refusing to run" and then ran anyway, exiting 0. A refusal must
+  # actually refuse.
+  seed_if_new || return $?
+  do_check; local rc=$?
+  if [ $rc -eq $EX_DEGRADED ]; then
+    degrade_load; err "DEGRADED: $DEGRADE_TXT"
+    err "this check could NOT see part of your inbox — do not read it as quiet."
+    return $EX_DEGRADED
+  fi
+  return $EX_OK
+}
+
+cmd_watch() {
+  local interval="${INTERVAL:-45}"
+  seed_if_new || return $?
+  WATCHING=1
+  local self_filter="off"
+  [ -z "$SIGNATURE" ] || self_filter="signature"
+  out "[$PROG] armed — identities=[$AGENTS_TXT] interval=${interval}s self-filter=${self_filter} (todos every ${TODO_EVERY} polls)"
+  local fails=0 secs span
+  while true; do
+    do_check          # check FIRST, so arming is not followed by silent dead air
+    degrade_load
+    if [ "$DEGRADE_N" -ne 0 ]; then
+      fails=$((fails + 1))
+      if [ $fails -eq 3 ] || [ $((fails % 10)) -eq 0 ]; then
+        secs=$((fails * interval))
+        if [ $secs -ge 60 ]; then span="~$((secs / 60))m"; else span="~${secs}s"; fi
+        out "[$PROG] DEGRADED for $span ($fails failed polls) — $DEGRADE_TXT — treat this watch as partially blind."
+      fi
+    elif [ $fails -gt 0 ]; then
+      out "[$PROG] RECOVERED after $fails failed poll(s) — inbox visible again."
+      fails=0
+    fi
+    # Backgrounded so a signal is handled immediately. A foreground sleep
+    # deferred the trap for up to a full interval (45s default), long enough for
+    # a supervisor to escalate to SIGKILL and produce a 137 outside the contract.
+    sleep "$interval" & wait $! 2>/dev/null
+  done
+}
+
+cmd_install() {
+  local source="${BASH_SOURCE[0]}" target="$INSTALL_TARGET" target_dir backup stamp
+  [ $# -eq 0 ] || { err "usage: $PROG install [--target <path>]"; return $EX_USAGE; }
+  target_dir="$(dirname "$target")"
+  mkdir -p "$target_dir" 2>/dev/null || {
+    err "cannot create install directory $target_dir"
+    return $EX_USAGE
+  }
+
+  backup=""
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    stamp="$(date -u '+%Y%m%dT%H%M%SZ')"
+    backup="$target.bak-$stamp-$$"
+    if ! cp -p "$target" "$backup"; then
+      err "could not preserve $target before install; target unchanged."
+      return $EX_FAILED
+    fi
+  fi
+
+  INSTALL_TMP="$(mktemp "$target_dir/.inbox.install.XXXXXX" 2>/dev/null)" || {
+    err "cannot create an atomic install candidate beside $target; target unchanged."
+    return $EX_FAILED
+  }
+  if ! cp -p "$source" "$INSTALL_TMP" ||
+     ! chmod 755 "$INSTALL_TMP" ||
+     ! bash -n "$INSTALL_TMP"; then
+    rm -f "$INSTALL_TMP"
+    INSTALL_TMP=""
+    err "could not build and validate the install candidate; target unchanged."
+    return $EX_FAILED
+  fi
+  if ! mv -f "$INSTALL_TMP" "$target"; then
+    rm -f "$INSTALL_TMP"
+    INSTALL_TMP=""
+    err "atomic rename to $target failed; previous target remains available at ${backup:-<not created>}."
+    return $EX_FAILED
+  fi
+  INSTALL_TMP=""
+  if ! cmp -s "$source" "$target"; then
+    err "installed target $target does not match the package artefact."
+    return $EX_FAILED
+  fi
+  out "installed  $target"
+  [ -z "$backup" ] || out "rollback   cp -p $backup $target"
+  return $EX_OK
+}
+
+usage() {
+  cat <<EOF
+$PROG $VERSION — one agent inbox over conversations + todos
+
+  $PROG                            same as 'check'
+  $PROG check                      one pass: channels, DMs, blocking, new tasks
+  $PROG watch                      the same pass on a loop, self-reporting
+  $PROG subscribe <channel>...     validate, then subscribe
+  $PROG unsubscribe <channel>...   stop notifications for channels
+  $PROG status                     identity, cursor, subscribed channels
+  $PROG install                    atomically install this package artefact
+
+You subscribe to CHANNELS. Tasks assigned to you are always watched — there is
+nothing to subscribe to for todos.
+
+Options
+  --as <agent>[,...] identity (else \$INBOX_AGENT, else whoami + loud warning).
+                     REPEATABLE, and accepts a comma-separated list. A seat that
+                     answers to both an agent name and a seat slug MUST pass
+                     both, or every DM and task addressed to the other one is
+                     dropped silently: --as fabricius,agent-chief-staff
+                     The FIRST owns remote subscribe/unsubscribe writes. Local
+                     state is keyed by the sorted identity set.
+  --seat <key>       stable state key when a seat's alias membership may change
+  --target <path>    install target (install only; default $HOME/.hasna/bin/conversations-inbox)
+  --interval <s>     watch poll interval, default 45
+  --limit <n>        rows per bounded message read, default $LIMIT
+  --todo-limit <n>   rows per todos poll, default $TODO_LIMIT
+  --todo-every <n>   poll todos every Nth cycle, default $TODO_EVERY
+  --window <s>       message look-back window, default 3x interval (min 120)
+  --peek             report without advancing cursors or the task ledger
+  --json             machine-readable output (status only)
+  --no-todos         drop the task feed
+  --no-messages      drop the channel/DM/blocking feed
+  -h, --help         this text        --version
+
+Environment
+  INBOX_AGENT  INBOX_SEAT  INBOX_SIGNATURE  INBOX_STATE_DIR  INBOX_LIMIT
+  INBOX_TODO_LIMIT
+  INBOX_TODO_EVERY  INBOX_BACKFILL_MAX  INBOX_BACKFILL_CHUNK
+  INBOX_WINDOW  INBOX_TIMEOUT
+
+Exit codes
+  0    ok
+  2    usage or environment error
+  3    DEGRADED — could not see part of the inbox; NOT a quiet inbox
+  4    operation failed (subscribe/unsubscribe)
+  130  interrupted (SIGINT)
+  143  terminated (SIGTERM)
+
+Examples
+  export INBOX_AGENT=augustus
+  export INBOX_SIGNATURE="[inbox:station:seat:unique]"
+  $PROG subscribe announcements incidents agent-ceo
+  $PROG
+  $PROG watch --interval 60
+EOF
+}
+
+# ----------------------------------------------------------------------------
+# argv
+# ----------------------------------------------------------------------------
+command -v jq >/dev/null 2>&1 || { err "jq is required and not on PATH."; exit $EX_USAGE; }
+
+# A flag that takes a value MUST be given one. v1 used `shift 2`, which fails
+# silently when only the flag remains, leaving $1 unchanged — an infinite,
+# CPU-spinning argv loop that also ignored SIGTERM.
+need_val() {
+  [ $# -ge 2 ] && [ -n "${2:-}" ] && return 0
+  err "option $1 requires a value"; exit $EX_USAGE
+}
+
+CMD=""; ARGS=()
+case "${1:-}" in
+  # Bare `conversations-inbox` runs a check. It is the most natural thing to type and is
+  # documented that way in every skill home; help is -h/--help.
+  "") CMD="check" ;;
+  -h|--help|help) usage; exit $EX_OK ;;
+  --version|version) out "$PROG $VERSION"; exit $EX_OK ;;
+  check|watch|subscribe|unsubscribe|status|install) CMD="$1"; shift ;;
+  list) CMD="status"; shift ;;   # v1 name, kept so existing references resolve
+  -*) CMD="check" ;;             # bare flags: treat as check
+  *)  err "unknown command: $1"; usage >&2; exit $EX_USAGE ;;
+esac
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    # Repeatable, and each value may itself be a comma-separated list, so
+    # `--as a --as b` and `--as a,b` are the same thing.
+    --as)          need_val "$@"; AGENT="${AGENT:+$AGENT,}$2"; shift 2 ;;
+    --seat)        need_val "$@"; SEAT_KEY="$2"; shift 2 ;;
+    --target)      need_val "$@"; INSTALL_TARGET="$2"; shift 2 ;;
+    --interval)    need_val "$@"; INTERVAL="$2"; shift 2 ;;
+    --limit)       need_val "$@"; LIMIT="$2"; shift 2 ;;
+    --todo-limit)  need_val "$@"; TODO_LIMIT="$2"; shift 2 ;;
+    --todo-every)  need_val "$@"; TODO_EVERY="$2"; shift 2 ;;
+    --window)      need_val "$@"; INBOX_WINDOW="$2"; shift 2 ;;
+    --peek)        PEEK=1; shift ;;
+    --json|-j)     JSON_OUT=1; shift ;;
+    --no-todos)    WANT_TODOS=0; shift ;;
+    --no-messages) WANT_MSGS=0; shift ;;
+    -h|--help)     usage; exit $EX_OK ;;
+    --)            shift; while [ $# -gt 0 ]; do ARGS+=("$1"); shift; done ;;
+    -*)            err "unknown option: $1"; usage >&2; exit $EX_USAGE ;;
+    *)             ARGS+=("$1"); shift ;;
+  esac
+done
+
+if [ "$CMD" = "install" ]; then
+  cmd_install "${ARGS[@]+"${ARGS[@]}"}"
+  exit $?
+fi
+
+case "$LIMIT" in ''|*[!0-9]*|0) err "--limit must be a positive integer"; exit $EX_USAGE ;; esac
+if [ "$LIMIT" -gt 500 ]; then
+  err "WARNING: requested message limit $LIMIT exceeds the store page maximum; clamped to 500."
+  LIMIT=500
+fi
+# By default a gap may consume twenty store-sized pages in one check. This is
+# enough to clear the measured fleet gap while keeping the worst case finite.
+# Operators may lower the row cap; the non-configurable page budget remains the
+# final guard against an accidental enormous value or a tiny chunk size.
+: "${BACKFILL_MAX:=$((LIMIT * BACKFILL_PAGE_BUDGET))}"
+: "${BACKFILL_CHUNK:=$LIMIT}"
+case "$BACKFILL_MAX"   in ''|*[!0-9]*|0) err "INBOX_BACKFILL_MAX must be a positive integer";   exit $EX_USAGE ;; esac
+case "$BACKFILL_CHUNK" in ''|*[!0-9]*|0) err "INBOX_BACKFILL_CHUNK must be a positive integer"; exit $EX_USAGE ;; esac
+# One recovery page can never exceed one store page or the remaining row
+# ceiling. recover_id_prefix applies the latter to each page as the budget
+# shrinks.
+[ "$BACKFILL_CHUNK" -gt "$LIMIT" ] && BACKFILL_CHUNK="$LIMIT"
+[ "$BACKFILL_CHUNK" -gt "$BACKFILL_MAX" ] && BACKFILL_CHUNK="$BACKFILL_MAX"
+BACKFILL_LIMIT="$BACKFILL_CHUNK"
+resolve_agent || exit $EX_USAGE
+split_identities || exit $EX_USAGE
+resolve_state_dir || exit $EX_USAGE
+case "$CMD" in
+  check|watch|subscribe) migrate_legacy_state || exit $? ;;
+esac
+
+case "$CMD" in
+  subscribe)   cmd_subscribe "${ARGS[@]+"${ARGS[@]}"}" ;;
+  unsubscribe) cmd_unsubscribe "${ARGS[@]+"${ARGS[@]}"}" ;;
+  status)      cmd_status ;;
+  check)       cmd_check ;;
+  watch)       cmd_watch ;;
+esac
+exit $?

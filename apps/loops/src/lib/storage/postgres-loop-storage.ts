@@ -226,7 +226,7 @@ function bindTenantClient(client: PoolQueryClient, context: TenantStorageContext
 }
 
 export class PostgresLoopStorage implements LoopStorageContract {
-  readonly backend = "postgres";
+  readonly backend = "postgresql";
   readonly supportsRemoteRunners = true;
 
   readonly tenantId: string;

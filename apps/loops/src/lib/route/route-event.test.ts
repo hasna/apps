@@ -908,7 +908,6 @@ describe("routeTodosTaskEvent operator-authoritative project-group admission", (
         env: {
           ...process.env,
           LOOPS_DATA_DIR: env.dataDir,
-          HASNA_LOOPS_STORAGE_MODE: "local",
           HASNA_LOOPS_API_URL: "",
           HASNA_LOOPS_API_KEY: "",
           PATH: `${binDir}:${process.env.PATH ?? ""}`,

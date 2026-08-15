@@ -34,7 +34,7 @@ import {
   type ProjectContextRuntime,
 } from "../lib/project-context.js";
 import { getConfigsStatus } from "../status.js";
-import { resolveConfigStore, isCloudMode, formatCliError, type ConfigStore } from "../data/config-store.js";
+import { resolveConfigStore, isApiTransport, formatCliError, type ConfigStore } from "../data/config-store.js";
 import { DEFAULT_LIST_LIMIT, paginate, parseLimit, truncateMiddle, truncateText } from "../lib/compact-output.js";
 import type { Config, ConfigAgent, ConfigCategory, ConfigFormat, ConfigKind, Profile, ProfileSelector, ProfileVariables } from "../types/index.js";
 
@@ -972,12 +972,12 @@ program
   .description("Show setup summary")
   .action(async () => {
     const store = resolveConfigStore();
-    const dbPath = isCloudMode()
-      ? `${process.env["HASNA_INSTRUCTIONS_API_URL"]}/v1 (self_hosted)`
+    const dbPath = isApiTransport()
+      ? `${process.env["HASNA_INSTRUCTIONS_API_URL"]}/v1`
       : process.env["HASNA_INSTRUCTIONS_DB_PATH"] || join(homedir(), ".hasna", "instructions", "instructions.db");
     const stats = await store.getConfigStats();
     console.log(chalk.bold("@hasna/instructions") + chalk.dim(" v" + pkg.version));
-    console.log(chalk.cyan(isCloudMode() ? "API:" : "DB:") + " " + dbPath);
+    console.log(chalk.cyan(isApiTransport() ? "API:" : "DB:") + " " + dbPath);
     console.log(chalk.cyan("Total configs:") + " " + (stats["total"] || 0));
     console.log();
     console.log(chalk.bold("By category:"));
@@ -1915,10 +1915,10 @@ program
     for (const [key, count] of Object.entries(stats)) {
       if (count > 0) console.log(`  ${key.padEnd(18)} ${count}`);
     }
-    const location = isCloudMode()
-      ? `${process.env["HASNA_INSTRUCTIONS_API_URL"]}/v1 (self_hosted)`
+    const location = isApiTransport()
+      ? `${process.env["HASNA_INSTRUCTIONS_API_URL"]}/v1`
       : process.env["HASNA_INSTRUCTIONS_DB_PATH"] || join(homedir(), ".hasna", "instructions", "instructions.db");
-    console.log(chalk.dim(`\n${isCloudMode() ? "API" : "DB"}: ${location}`));
+    console.log(chalk.dim(`\n${isApiTransport() ? "API" : "DB"}: ${location}`));
   });
 
 // ── status ────────────────────────────────────────────────────────────────────

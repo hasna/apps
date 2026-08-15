@@ -134,7 +134,7 @@ describe("loops-serve database bootstrap", () => {
     const statements: string[] = [];
     const schema = {
       migrate: async () => ({
-        backend: "postgres" as const,
+        backend: "postgresql" as const,
         dryRun: true,
         applied: [],
         plan: [{
@@ -154,7 +154,7 @@ describe("loops-serve database bootstrap", () => {
     const statements: string[] = [];
     const schema = {
       migrate: async () => ({
-        backend: "postgres" as const,
+        backend: "postgresql" as const,
         dryRun: true,
         applied: [],
         plan: [{

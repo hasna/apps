@@ -56,7 +56,7 @@ describe('knowledge project panel provider', () => {
   // Regression: a knowledge item whose `url` used a scheme outside the contract
   // allow-list (e.g. s3://) was copied verbatim into evidenceRefs[].uri, so
   // parseContract rejected the whole panel with a ContractValidationError. This
-  // surfaced in cloud mode where the shared corpus carries such URLs. The panel
+  // surfaced through the HTTP API where the shared corpus carries such URLs. The panel
   // must now drop the unsupported URI from evidenceRefs and stay contract-valid.
   test('drops evidence URIs with unsupported schemes instead of failing validation', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'knowledge-project-panel-uri-'));

@@ -1,6 +1,6 @@
 import type { Store } from "../store.js";
 
-export type LoopStorageBackend = "sqlite" | "postgres";
+export type LoopStorageBackend = "sqlite" | "postgresql";
 
 export type LoopStorageMethodName =
   | "createLoop"

@@ -1,0 +1,470 @@
+import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerAgentTools } from "./agents";
+import { closeDb, getDataDir } from "../../lib/db";
+import { getAutoName, readPersistedIdentity, _resetAutoName } from "../../lib/identity";
+import { getSessionAgent, setSessionAgent } from "../channel";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+
+const TEST_DB = join(tmpdir(), `conversations-test-agents-mcp-${Date.now()}.db`);
+
+describe("agent MCP tools", () => {
+  let client: Client;
+  let server: McpServer;
+  let agentFocus: Map<string, { project_id: string | null }>;
+  const getAgentFocus = async (agentId: string) => agentFocus.get(agentId)?.project_id ?? null;
+
+  beforeAll(async () => {
+    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+    delete process.env.CONVERSATIONS_AGENT_ID;
+    closeDb();
+
+    server = new McpServer({ name: "test-agents-mcp", version: "0.0.1" });
+    agentFocus = new Map();
+    registerAgentTools(server, agentFocus, getAgentFocus);
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    client = new Client({ name: "test-client", version: "1.0.0" });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+  });
+
+  afterAll(async () => {
+    delete process.env.CONVERSATIONS_DB_PATH;
+    closeDb();
+    try { unlinkSync(TEST_DB); } catch {}
+    try { unlinkSync(TEST_DB + "-wal"); } catch {}
+    try { unlinkSync(TEST_DB + "-shm"); } catch {}
+    await client.close();
+  });
+
+  function parseResult(result: { content: unknown[] }): unknown {
+    const text = (result.content[0] as { type: string; text: string }).text;
+    try { return JSON.parse(text); } catch { return text; }
+  }
+
+  describe("register_agent", () => {
+    test("registers agent with name and auto-detects session_id", async () => {
+      const result = parseResult(await client.callTool({
+        name: "register_agent",
+        arguments: { name: "test-reg-agent" },
+      }) as any) as any;
+      expect(result.agent.agent).toBe("test-reg-agent");
+    });
+
+    test("accepts agent_name alias", async () => {
+      const result = parseResult(await client.callTool({
+        name: "register_agent",
+        arguments: { agent_name: "test-reg-agent2" },
+      }) as any) as any;
+      expect(result.agent.agent).toBe("test-reg-agent2");
+    });
+
+    test("accepts agent_id alias", async () => {
+      const result = parseResult(await client.callTool({
+        name: "register_agent",
+        arguments: { agent_id: "test-reg-agent3" },
+      }) as any) as any;
+      expect(result.agent.agent).toBe("test-reg-agent3");
+    });
+
+    test("returns error when name is missing", async () => {
+      const result = await client.callTool({
+        name: "register_agent",
+        arguments: {},
+      });
+      expect((result as any).isError).toBe(true);
+    });
+
+    test("includes role and project_id when provided", async () => {
+      const result = parseResult(await client.callTool({
+        name: "register_agent",
+        arguments: { name: "test-reg-with-meta", role: "QA", project_id: "proj-1" },
+      }) as any) as any;
+      expect(result.agent.role).toBe("QA");
+      expect(result.agent.project_id).toBe("proj-1");
+    });
+  });
+
+  describe("heartbeat", () => {
+    test("heartbeat with explicit from", async () => {
+      const result = parseResult(await client.callTool({
+        name: "heartbeat",
+        arguments: { from: "heartbeat-explicit" },
+      }) as any) as any;
+      expect(result.agent).toBe("heartbeat-explicit");
+      expect(result.heartbeat).toBe(true);
+    });
+
+    test("heartbeat with name alias", async () => {
+      const result = parseResult(await client.callTool({
+        name: "heartbeat",
+        arguments: { name: "heartbeat-name" },
+      }) as any) as any;
+      expect(result.agent).toBe("heartbeat-name");
+    });
+
+    test("heartbeat with agent_name alias", async () => {
+      const result = parseResult(await client.callTool({
+        name: "heartbeat",
+        arguments: { agent_name: "heartbeat-alias" },
+      }) as any) as any;
+      expect(result.agent).toBe("heartbeat-alias");
+    });
+
+    test("heartbeat with custom status", async () => {
+      const result = parseResult(await client.callTool({
+        name: "heartbeat",
+        arguments: { from: "status-agent", status: "busy" },
+      }) as any) as any;
+      expect(result.status).toBe("busy");
+    });
+
+    test("heartbeat defaults to online status", async () => {
+      const result = parseResult(await client.callTool({
+        name: "heartbeat",
+        arguments: { from: "status-default" },
+      }) as any) as any;
+      expect(result.status).toBe("online");
+    });
+  });
+
+  describe("list_agents", () => {
+    test("lists all agents", async () => {
+      await client.callTool({ name: "heartbeat", arguments: { from: "list-agent-1" } });
+      await client.callTool({ name: "heartbeat", arguments: { from: "list-agent-2" } });
+
+      const result = parseResult(await client.callTool({
+        name: "list_agents",
+        arguments: {},
+      }) as any) as any;
+      expect(Array.isArray(result.agents)).toBe(true);
+      expect(result.agents.length).toBeGreaterThanOrEqual(2);
+      expect(result.compact).toBe(true);
+    });
+
+    test("filters to online_only", async () => {
+      const result = parseResult(await client.callTool({
+        name: "list_agents",
+        arguments: { online_only: true },
+      }) as any) as any;
+      expect(Array.isArray(result.agents)).toBe(true);
+    });
+  });
+
+  describe("remove_agent", () => {
+    test("removes agent by name", async () => {
+      await client.callTool({ name: "heartbeat", arguments: { from: "remove-explicit" } });
+      const result = parseResult(await client.callTool({
+        name: "remove_agent",
+        arguments: { agent: "remove-explicit" },
+      }) as any) as any;
+      expect(result.removed).toBe(true);
+      expect(result.agent).toBe("remove-explicit");
+    });
+
+    test("removes self when no agent specified", async () => {
+      await client.callTool({ name: "heartbeat", arguments: { from: "remove-self" } });
+      const result = parseResult(await client.callTool({
+        name: "remove_agent",
+        arguments: { from: "remove-self" },
+      }) as any) as any;
+      expect(result.removed).toBe(true);
+    });
+
+    test("returns error for nonexistent agent", async () => {
+      const result = await client.callTool({
+        name: "remove_agent",
+        arguments: { agent: "ghost-agent-xyz" },
+      });
+      expect((result as any).isError).toBe(true);
+    });
+  });
+
+  describe("rename_agent", () => {
+    test("renames agent", async () => {
+      await client.callTool({ name: "heartbeat", arguments: { from: "rename-old" } });
+      const result = parseResult(await client.callTool({
+        name: "rename_agent",
+        arguments: { from: "rename-old", new_name: "rename-new" },
+      }) as any) as any;
+      expect(result.renamed).toBe(true);
+      expect(result.old_name).toBe("rename-old");
+      expect(result.new_name).toBe("rename-new");
+    });
+
+    test("returns error when agent not found", async () => {
+      const result = await client.callTool({
+        name: "rename_agent",
+        arguments: { from: "nonexistent", new_name: "whatever" },
+      });
+      expect((result as any).isError).toBe(true);
+    });
+
+    test("returns error for empty new name", async () => {
+      const result = await client.callTool({
+        name: "rename_agent",
+        arguments: { from: "test-rename-empty", new_name: "" },
+      });
+      expect((result as any).isError).toBe(true);
+    });
+  });
+
+  describe("focus mode tools", () => {
+    test("set_focus sets agent focus", async () => {
+      const result = parseResult(await client.callTool({
+        name: "set_focus",
+        arguments: { from: "focus-agent", project_id: "proj-focus-1" },
+      }) as any) as any;
+      expect(result.focused).toBe(true);
+      expect(result.project_id).toBe("proj-focus-1");
+      expect(result.agent).toBe("focus-agent");
+
+      // Verify focus is persisted in the map
+      expect(agentFocus.get("focus-agent")?.project_id).toBe("proj-focus-1");
+    });
+
+    test("get_focus returns session focus", async () => {
+      await client.callTool({
+        name: "set_focus",
+        arguments: { from: "focus-get", project_id: "proj-get-1" },
+      });
+      const result = parseResult(await client.callTool({
+        name: "get_focus",
+        arguments: { from: "focus-get" },
+      }) as any) as any;
+      expect(result.session_focus).toBe("proj-get-1");
+      expect(result.effective_project_id).toBe("proj-get-1");
+    });
+
+    test("get_focus returns null when no focus set", async () => {
+      const result = parseResult(await client.callTool({
+        name: "get_focus",
+        arguments: { from: "focus-none" },
+      }) as any) as any;
+      expect(result.session_focus).toBeNull();
+    });
+
+    test("unfocus clears agent focus", async () => {
+      await client.callTool({
+        name: "set_focus",
+        arguments: { from: "focus-unfocus", project_id: "proj-unfocus" },
+      });
+      const result = parseResult(await client.callTool({
+        name: "unfocus",
+        arguments: { from: "focus-unfocus" },
+      }) as any) as any;
+      expect(result.focused).toBe(false);
+      expect(result.project_id).toBeNull();
+
+      // Verify focus is cleared from the map
+      expect(agentFocus.has("focus-unfocus")).toBe(false);
+    });
+  });
+
+  describe("get_session_activity", () => {
+    test("returns error for nonexistent session", async () => {
+      const result = await client.callTool({
+        name: "get_session_activity",
+        arguments: { session_id: "nonexistent-session" },
+      });
+      expect((result as any).isError).toBe(true);
+    });
+  });
+
+  describe("get_blockers", () => {
+    test("returns empty blockers for agent with no blocking messages", async () => {
+      const result = parseResult(await client.callTool({
+        name: "get_blockers",
+        arguments: { from: "blocker-agent" },
+      }) as any) as any;
+      expect(Array.isArray(result.messages)).toBe(true);
+      expect(result.compact).toBe(true);
+    });
+
+    test("returns blocking messages when they exist", async () => {
+      // Send a blocking message to our agent
+      const { sendMessage: sendMsg } = await import("../../lib/messages");
+      sendMsg({
+        from: "blocker-sender",
+        to: "blocker-target",
+        content: "BLOCK: fix this now",
+        priority: "urgent",
+        blocking: true,
+      });
+
+      const result = parseResult(await client.callTool({
+        name: "get_blockers",
+        arguments: { from: "blocker-target" },
+      }) as any) as any;
+      expect(Array.isArray(result.messages)).toBe(true);
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].preview).toContain("BLOCK");
+    });
+  });
+
+  /**
+   * The MCP server is a long-lived daemon, so its identity behaviour cannot be
+   * checked from a subprocess CLI test: every CLI process starts with an empty
+   * cache, where getAutoName() and readPersistedIdentity() agree by construction.
+   * These tests run in-process, against a throwaway HOME, and deliberately let
+   * the cache go stale — which is the only state in which the two disagree.
+   */
+  describe("identity and attribution", () => {
+    let savedHome: string | undefined;
+    let savedUserProfile: string | undefined;
+    let tempHome: string;
+
+    function writeIdentity(name: string): void {
+      mkdirSync(getDataDir(), { recursive: true });
+      writeFileSync(join(getDataDir(), "agent-id"), name + "\n", "utf-8");
+    }
+
+    beforeEach(() => {
+      savedHome = process.env.HOME;
+      savedUserProfile = process.env.USERPROFILE;
+      tempHome = mkdtempSync(join(tmpdir(), "conversations-mcp-identity-"));
+      process.env.HOME = tempHome;
+      process.env.USERPROFILE = tempHome;
+      delete process.env.CONVERSATIONS_AGENT_ID;
+      // These tests are specifically about the machine identity FILE, which is
+      // no longer consulted unless the process says it owns the box's identity.
+      process.env.CONVERSATIONS_USE_MACHINE_IDENTITY = "1";
+      _resetAutoName();
+      setSessionAgent(server, "");
+    });
+
+    afterEach(() => {
+      delete process.env.CONVERSATIONS_USE_MACHINE_IDENTITY;
+      if (savedHome !== undefined) process.env.HOME = savedHome;
+      else delete process.env.HOME;
+      if (savedUserProfile !== undefined) process.env.USERPROFILE = savedUserProfile;
+      else delete process.env.USERPROFILE;
+      try { rmSync(tempHome, { recursive: true, force: true }); } catch {}
+      _resetAutoName();
+      setSessionAgent(server, "");
+    });
+
+    test("rename_agent adopts the identity named by the file, not by a stale cache", async () => {
+      writeIdentity("mcp-cached");
+      expect(getAutoName()).toBe("mcp-cached");
+
+      // A deliberate `agents register --identity` elsewhere on the box moves the
+      // machine identity. This daemon's cache does not notice.
+      writeIdentity("mcp-current");
+      expect(getAutoName()).toBe("mcp-cached");
+
+      await client.callTool({ name: "heartbeat", arguments: { from: "mcp-current" } });
+      const result = parseResult(await client.callTool({
+        name: "rename_agent",
+        arguments: { from: "mcp-current", new_name: "mcp-current-renamed" },
+      }) as any) as any;
+
+      expect(result.renamed).toBe(true);
+      expect(result.identity_adopted).toBe(true);
+      expect(readPersistedIdentity()).toBe("mcp-current-renamed");
+    });
+
+    test("rename_agent leaves the identity alone when only the stale cache names the renamed agent", async () => {
+      writeIdentity("mcp-cached-2");
+      expect(getAutoName()).toBe("mcp-cached-2");
+      writeIdentity("mcp-current-2");
+
+      await client.callTool({ name: "heartbeat", arguments: { from: "mcp-cached-2" } });
+      const result = parseResult(await client.callTool({
+        name: "rename_agent",
+        arguments: { from: "mcp-cached-2", new_name: "mcp-cached-2-moved" },
+      }) as any) as any;
+
+      expect(result.renamed).toBe(true);
+      expect(result.identity_adopted).toBe(false);
+      // Acting on the cache here would overwrite the identity a different
+      // session had just claimed.
+      expect(readPersistedIdentity()).toBe("mcp-current-2");
+    });
+
+    test("implicit attribution follows the registered agent, not the machine identity", async () => {
+      writeIdentity("machine-identity");
+
+      await client.callTool({ name: "register_agent", arguments: { name: "Nova-Owl" } });
+      expect(getSessionAgent(server)).toBe("nova-owl");
+
+      // get_focus resolves its agent implicitly — the same path send_message and
+      // every other messaging tool takes when no `from` is passed.
+      const focus = parseResult(await client.callTool({
+        name: "get_focus",
+        arguments: {},
+      }) as any) as any;
+      expect(focus.agent).toBe("nova-owl");
+
+      // Registering must not repoint the box: the machine identity already
+      // belongs to someone, and last-writer-wins on it is the hijack this
+      // module stopped doing.
+      expect(readPersistedIdentity()).toBe("machine-identity");
+    });
+
+    test("register_agent seeds the machine identity on a box that has none", async () => {
+      // Fresh HOME: this box has no identity at all.
+      expect(readPersistedIdentity()).toBeNull();
+
+      await client.callTool({ name: "register_agent", arguments: { name: "Atlas-MCP" } });
+
+      // Without this, the box splits in two: this connection speaks as
+      // "atlas-mcp" while every CLI process and `conversations-hook` falls
+      // through to getAutoName(), invents a pool name, persists it, and then
+      // polls blockers addressed to an agent that does not exist.
+      expect(readPersistedIdentity()).toBe("atlas-mcp");
+
+      const focus = parseResult(await client.callTool({
+        name: "get_focus",
+        arguments: {},
+      }) as any) as any;
+      expect(focus.agent).toBe("atlas-mcp");
+    });
+
+    test("register_agent does not overwrite a machine identity that already exists", async () => {
+      writeIdentity("already-claimed");
+
+      await client.callTool({ name: "register_agent", arguments: { name: "late-arrival" } });
+
+      // Seed-if-absent, never last-writer-wins.
+      expect(readPersistedIdentity()).toBe("already-claimed");
+    });
+
+    test("rename_agent moves this session's attribution to the new name", async () => {
+      await client.callTool({ name: "register_agent", arguments: { name: "mcp-speaker" } });
+      expect(getSessionAgent(server)).toBe("mcp-speaker");
+
+      await client.callTool({
+        name: "rename_agent",
+        arguments: { new_name: "mcp-speaker-renamed" },
+      });
+
+      expect(getSessionAgent(server)).toBe("mcp-speaker-renamed");
+      const focus = parseResult(await client.callTool({
+        name: "get_focus",
+        arguments: {},
+      }) as any) as any;
+      expect(focus.agent).toBe("mcp-speaker-renamed");
+    });
+
+    test("CONVERSATIONS_AGENT_ID still outranks this session's agent", async () => {
+      await client.callTool({ name: "register_agent", arguments: { name: "session-agent" } });
+      process.env.CONVERSATIONS_AGENT_ID = "pinned-agent";
+
+      try {
+        const focus = parseResult(await client.callTool({
+          name: "get_focus",
+          arguments: {},
+        }) as any) as any;
+        expect(focus.agent).toBe("pinned-agent");
+      } finally {
+        delete process.env.CONVERSATIONS_AGENT_ID;
+      }
+    });
+  });
+});

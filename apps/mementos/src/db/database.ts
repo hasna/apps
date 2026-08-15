@@ -1,7 +1,7 @@
 import {
   SqliteAdapter as Database,
   PgAdapter,
-  getStorageMode,
+  getStorageBackend,
   getStorageConnectionString,
   isServerContext,
 } from "../storage.js";
@@ -97,29 +97,30 @@ let _dbPath: string | null = null;
 let _pg: Database | null = null;
 
 /**
- * Amendment A1 — PURE REMOTE cloud store.
+ * Amendment A1 — PURE REMOTE server backend.
  *
- * When `HASNA_MEMENTOS_STORAGE_MODE=cloud` (aliases `remote`/`hybrid` also map
- * to `cloud`), ALL runtime paths (CLI, MCP, serve) read AND write directly to
- * cloud Postgres. No SQLite database is ever opened in cloud mode: no PRAGMAs,
- * no local migrations, no local schema/DDL. The cloud schema is applied
- * out-of-band (migration runbook). This is fail-closed: if no connection string
- * is configured, {@link getStorageConnectionString} throws rather than silently
- * falling back to SQLite.
+ * The server data backend is selected by HASNA_MEMENTOS_DATABASE_URL presence:
+ * set -> PostgreSQL, unset -> SQLite. When PostgreSQL is selected, ALL runtime
+ * paths (CLI, MCP, serve) in the SERVER process read AND write directly to
+ * PostgreSQL. No SQLite database is ever opened in the postgresql backend: no
+ * PRAGMAs, no local migrations, no local schema/DDL. The cloud schema is
+ * applied out-of-band (migration runbook). This is fail-closed: if no
+ * connection string is configured, {@link getStorageConnectionString} throws
+ * rather than silently falling back to SQLite.
  *
  * An explicit `dbPath` argument (tests, tooling, import/export against a file)
- * always uses local SQLite regardless of mode.
+ * always uses local SQLite regardless of backend.
  */
 function getCloudDatabase(): Database {
   if (_pg) return _pg;
   // Server-only. A client CLI/MCP/SDK process must never open a direct Postgres
-  // connection — it routes to the self-hosted HTTP API instead (CLAUDE.md §2).
+  // connection — it routes to the HTTP API instead (CLAUDE.md §2).
   if (!isServerContext()) {
     throw new Error(
-      "Direct Postgres (cloud) storage is server-only. A client must use the " +
-        "self-hosted HTTP API (HASNA_MEMENTOS_API_URL + HASNA_MEMENTOS_API_KEY), " +
-        "never a database DSN. Unset HASNA_MEMENTOS_DATABASE_URL / HASNA_MEMENTOS_STORAGE_MODE " +
-        "on this machine to use local SQLite, or configure the API client to reach the cloud."
+      "Direct PostgreSQL storage is server-only. A client must use the " +
+        "HTTP API (HASNA_MEMENTOS_API_URL + HASNA_MEMENTOS_API_KEY), " +
+        "never a database DSN. Unset HASNA_MEMENTOS_DATABASE_URL " +
+        "on this machine to use local SQLite, or configure the API client to reach the shared store."
     );
   }
   const connectionString = getStorageConnectionString();
@@ -153,7 +154,7 @@ export function getDatabase(dbPath?: string): Database {
           "instead, unset HASNA_MEMENTOS_API_URL / HASNA_MEMENTOS_API_KEY."
       );
     }
-    if (getStorageMode() === "cloud") {
+    if (getStorageBackend() === "postgresql") {
       return getCloudDatabase();
     }
     // ── Unpinned-test-open guard (fail-closed) ──────────────────────────────

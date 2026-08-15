@@ -43,6 +43,8 @@ export interface PushSkillResult {
   slug: string;
   path: string;
   sha256: string;
+  /** Canonical content hash — identical to sha256; named for parity with the bundle manifests. */
+  contentHash: string;
   fileCount: number;
   bundleByteSize: number;
   unpackedByteSize: number;
@@ -122,6 +124,7 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
     slug: skill.name,
     path: skill.path,
     sha256: packed.sha256,
+    contentHash: packed.sha256,
     fileCount: packed.fileCount,
     bundleByteSize: packed.bytes.byteLength,
     unpackedByteSize: packed.unpackedByteSize,
@@ -150,8 +153,11 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
       version: options.version ?? manifest.version,
       source: "custom",
       // Declared so the server can reject a body that did not arrive intact, rather than
-      // storing a truncated tarball under a digest computed from the truncation.
+      // storing a truncated tarball under a digest computed from the truncation. The
+      // contentHash is the same canonical digest — named for parity with the CI bundle
+      // manifests, so a bundle pushed by hand and one built by CI agree by construction.
       bundleSha256: packed.sha256,
+      contentHash: packed.sha256,
       ...(skillMd ? { skillMd } : {}),
     },
     packed.bytes,

@@ -17,15 +17,15 @@ import type { LoopMutationAction, LoopMutationEnvelope, PublicLoopMutationResult
 import { buildHealthReport, buildHealthScan, type BuildHealthScanOptions, type LoopsHealthReport, type LoopsHealthScan } from "../lib/health.js";
 import {
   applyImportMigrationBundle,
+  buildControlPlaneMigrationPlan,
   buildImportMigrationPlan,
-  buildSelfHostedMigrationPlan,
   exportLoopsMigrationBundle,
   type ApplyLoopsMigrationResult,
+  type ControlPlanePlanOptions,
   type ExportLoopsMigrationOptions,
   type ImportLoopsMigrationOptions,
   type LoopsMigrationBundle,
   type LoopsMigrationPlan,
-  type SelfHostedPlanOptions,
 } from "../lib/migration.js";
 import { computeNextAfter } from "../lib/recurrence.js";
 import { runLoopNow, tick } from "../lib/scheduler.js";
@@ -36,14 +36,15 @@ export { runGoal } from "../lib/goal/runner.js";
 export {
   LOOPS_MIGRATION_SCHEMA,
   applyImportMigrationBundle,
+  buildControlPlaneMigrationPlan,
   buildImportMigrationPlan,
-  buildSelfHostedMigrationPlan,
   exportLoopsMigrationBundle,
   migrationHash,
   validateLoopsMigrationBundle,
 } from "../lib/migration.js";
 export type {
   ApplyLoopsMigrationResult,
+  ControlPlanePlanOptions,
   ExportLoopsMigrationOptions,
   ImportLoopsMigrationOptions,
   LoopsMigrationAction,
@@ -52,7 +53,6 @@ export type {
   LoopsMigrationPlanRow,
   LoopsMigrationPlanSummary,
   LoopsMigrationResource,
-  SelfHostedPlanOptions,
 } from "../lib/migration.js";
 
 export interface LoopsClientOptions {
@@ -61,8 +61,8 @@ export interface LoopsClientOptions {
    * runtimes). When provided, both data and local-runtime operations run against
    * it. When omitted, the data store is resolved from the client-flip env via
    * {@link getStore} — the local sqlite store OR the hosted `/v1` API when
-   * HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or HASNA_LOOPS_STORAGE_MODE) select
-   * it — so every data method routes through the one Store abstraction.
+   * HASNA_LOOPS_API_URL and HASNA_LOOPS_API_KEY are set — so every data method
+   * routes through the one Store abstraction.
    */
   store?: Store;
   /**
@@ -114,7 +114,7 @@ export class LoopsClient {
   /**
    * The resolved data store: an on-box {@link LocalStore} (sqlite) or the hosted
    * {@link ApiStore} (`/v1` + bearer key). EVERY data method routes through here,
-   * so nothing silently touches the on-box island while flipped to the cloud API.
+   * so nothing silently touches the on-box island while connected to the hosted API.
    */
   readonly store: LoopStore;
   private readonly ownStore: boolean;
@@ -134,10 +134,10 @@ export class LoopsClient {
    * hitting the on-box island when the client is flipped to the hosted API.
    */
   private localRuntime(operation: string): Store {
-    if (this.store.transport !== "local") {
+    if (this.store.transport !== "file") {
       throw new Error(
-        `loops SDK ${operation} operates on this machine's local runtime and is not available while flipped to the hosted Loops API. ` +
-          `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or set HASNA_LOOPS_STORAGE_MODE=local) to run it here.`,
+        `loops SDK ${operation} operates on this machine's local runtime and is not available while connected to the hosted Loops API. ` +
+          `Unset HASNA_LOOPS_API_URL and HASNA_LOOPS_API_KEY to run it here.`,
       );
     }
     return (this.store as LocalStore).raw;
@@ -171,7 +171,7 @@ export class LoopsClient {
     options?: LoopMutationOptions,
   ): Promise<PublicLoopMutationResult | Loop> {
     if (!options) {
-      if (this.store.transport !== "local") {
+      if (this.store.transport !== "file") {
         throw new ValidationError("hosted loop mutation options are required");
       }
       const loop = await this.store.requireUniqueLoop(targetId);
@@ -283,7 +283,7 @@ export class LoopsClient {
   // ── Local-runtime helpers (on-box sqlite + scheduler only) ───────────────────
   // doctor/health/tick/run-now/migration act on this machine's runtime and are
   // meaningless over the hosted API, so they route through localRuntime() which
-  // fails loudly in cloud mode rather than touching a local island.
+  // fails loudly when connected to the hosted API rather than touching a local island.
 
   doctor(): DoctorReport {
     return runDoctor(this.localRuntime("doctor()"));
@@ -324,8 +324,8 @@ export class LoopsClient {
     return applyImportMigrationBundle(this.localRuntime("importBundle()"), bundle, opts);
   }
 
-  planSelfHostedMigration(opts: Omit<SelfHostedPlanOptions, "operation"> & { operation?: SelfHostedPlanOptions["operation"] } = {}): Promise<LoopsMigrationPlan> {
-    return buildSelfHostedMigrationPlan(this.localRuntime("planSelfHostedMigration()"), { ...opts, operation: opts.operation ?? "self-hosted-migrate" });
+  planControlPlaneMigration(opts: Omit<ControlPlanePlanOptions, "operation"> & { operation?: ControlPlanePlanOptions["operation"] } = {}): Promise<LoopsMigrationPlan> {
+    return buildControlPlaneMigrationPlan(this.localRuntime("planControlPlaneMigration()"), { ...opts, operation: opts.operation ?? "migrate" });
   }
 
   async close(): Promise<void> {

@@ -22,7 +22,6 @@ async function runCli(
     env: {
       ...process.env,
       HOME: dataDir,
-      HASNA_LOOPS_STORAGE_MODE: "local",
       HASNA_LOOPS_API_URL: "",
       HASNA_LOOPS_API_KEY: "",
       LOOPS_DATA_DIR: dataDir,
@@ -113,7 +112,6 @@ function serveHosted(loops: Loop[], runsByLoop: Record<string, LoopRun[]>) {
 
 function hostedEnv(port: number | undefined): Record<string, string> {
   return {
-    HASNA_LOOPS_STORAGE_MODE: "self_hosted",
     HASNA_LOOPS_API_URL: `http://127.0.0.1:${port}`,
     HASNA_LOOPS_API_KEY: "test-hosted-key",
   };
@@ -156,7 +154,7 @@ describe("hosted-mode diagnostics (e3b6f1d4)", () => {
         }>;
         unchecked?: Array<{ id: string }>;
       };
-      expect(report.backend?.transport).toBe("cloud-http");
+      expect(report.backend?.transport).toBe("api");
       expect(report.report?.summary?.loops).toBe(2);
       expect(report.report?.summary?.healthy).toBe(1);
       expect(report.report?.summary?.unhealthy).toBe(1);
@@ -544,7 +542,7 @@ describe("hosted-mode diagnostics (e3b6f1d4)", () => {
         report?: { checks?: Array<{ id: string; scope?: string; status: string }> };
         unchecked?: Array<{ id: string }>;
       };
-      expect(report.backend?.transport).toBe("cloud-http");
+      expect(report.backend?.transport).toBe("api");
       const checks = report.report?.checks ?? [];
       expect(checks.length).toBeGreaterThan(0);
       // Every check states whether it looked at this machine or at the hosted

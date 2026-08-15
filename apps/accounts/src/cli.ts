@@ -183,7 +183,7 @@ function formatHttpError(err: { status: number; body?: unknown; message?: string
   const detail =
     typeof serverMsg === "string" && serverMsg.length > 0 ? serverMsg : (err.message || "request failed");
   if (err.status === 404) {
-    return `${detail} — the self-hosted accounts API returned 404 for this endpoint. The server is likely running an older build; redeploy accounts-serve to enable it.`;
+    return `${detail} — the accounts API returned 404 for this endpoint. The server is likely running an older build; redeploy accounts-serve to enable it.`;
   }
   return `${detail} (HTTP ${err.status})`;
 }
@@ -1478,14 +1478,14 @@ program
       // OPEN — any error lets the message through, exit 0 always.
       try {
         const tool = getTool(opts.tool);
-        // ALWAYS local, never the cloud registry. This hook runs inside a
+        // ALWAYS local, never the HTTP API. This hook runs inside a
         // launched session that had HASNA_ACCOUNTS_API_URL/KEY stripped (#126);
-        // `resolveStore()` there throws over the now-orphaned cloud mode and the
-        // hook fails open into "auto-switching is NOT running" (task f70e8357).
-        // Everything the hook touches is local-machine state — the warmer-fed
-        // usage cache, the uuid->dir map, and the credential symlink a switch
-        // repoints — so a LocalStore is both sufficient and the only store that
-        // does not depend on cloud variables this session was denied. It also
+        // `resolveStore()` there throws and the hook fails open into
+        // "auto-switching is NOT running" (task f70e8357). Everything the hook
+        // touches is local-machine state — the warmer-fed usage cache, the
+        // uuid->dir map, and the credential symlink a switch repoints — so a
+        // LocalStore is both sufficient and the only store that does not depend
+        // on API variables this session was denied. It also
         // makes the switch-candidate set identical to what is actually present
         // on this box: a profile the local registry does not carry has no
         // on-box credential to switch to anyway.
@@ -2642,7 +2642,7 @@ storage
       const status = getAccountsStorageStatus();
       if (opts.json) console.log(JSON.stringify(status, null, 2));
       else {
-        console.log(`mode: ${status.mode}`);
+        console.log(`transport: ${status.transport}`);
         console.log(`local store: ${status.local.storePath}`);
         console.log(chalk.yellow("legacy provider-backed sync is retired; use the Accounts API"));
       }

@@ -1,14 +1,13 @@
 // Single Store abstraction for the instructions app.
 //
-// LOCKED architecture (client -> AWS API only): when HASNA_INSTRUCTIONS_API_URL
-// and HASNA_INSTRUCTIONS_API_KEY are both set the app runs in `api` transport
-// (self_hosted OR cloud — the client code is identical; only URL/key differ and
-// the self_hosted/cloud distinction is enforced server-side by tenancy). In api
-// mode ALL config/profile/snapshot/machine reads and writes route to
-// `https://<host>/v1` with a bearer key — no local SQLite, no DSN on the client.
-// With the env unset the app uses the local SQLite store (LocalConfigStore),
-// which stays fully first-class. Setting exactly one var throws (no silent
-// local drift).
+// LOCKED architecture (client -> HTTP API only): when HASNA_INSTRUCTIONS_API_URL
+// and HASNA_INSTRUCTIONS_API_KEY are both set the app uses the HTTP `/v1` API
+// transport. In that transport ALL config/profile/snapshot/machine reads and
+// writes route to `https://<host>/v1` with a bearer key — no local SQLite, no
+// DSN on the client. With the env unset the app uses the local SQLite store
+// (LocalConfigStore), which stays fully first-class. Setting exactly one var
+// throws (no silent local drift), and any retired storage-mode variable throws
+// via `assertNoLegacyStorageMode` (deployment modes no longer exist).
 //
 // EVERY CLI command, MCP tool, and SDK method routes through this interface.
 // No consumer may import `../db/*` or call `fetch` directly.
@@ -75,6 +74,7 @@ import type {
 } from "../types/index.js";
 import { boundedReadPage, normalizeBoundedReadOptions } from "../lib/bounded-read.js";
 import { legacyProfileConfigBinding } from "../lib/instruction-graph.js";
+import { assertNoLegacyStorageMode } from "../lib/retired-storage-mode.js";
 
 export interface CloudConfig {
   apiUrl: string;
@@ -189,27 +189,28 @@ export function formatCliError(err: unknown, env: NodeJS.ProcessEnv = process.en
 }
 
 /**
- * Resolve cloud config from the environment.
- * - both vars set   -> config (api transport: self_hosted / cloud)
+ * Resolve the HTTP API config from the environment.
+ * - both vars set   -> config (HTTP `/v1` API transport)
  * - neither set     -> null (local SQLite)
  * - exactly one set -> throws (no silent local drift)
  */
 export function resolveCloudConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig | null {
+  assertNoLegacyStorageMode(env);
   const apiUrl = env[API_URL_ENV]?.trim();
   const apiKey = env[API_KEY_ENV]?.trim();
   if (!apiUrl && !apiKey) return null;
   if (!apiUrl || !apiKey) {
     throw new Error(
       `API mode requires BOTH ${API_URL_ENV} and ${API_KEY_ENV}; only ` +
-        `${apiUrl ? API_URL_ENV : API_KEY_ENV} is set. Set both to use the cloud API, ` +
+        `${apiUrl ? API_URL_ENV : API_KEY_ENV} is set. Set both to use the HTTP API, ` +
         `or unset both to use the local store.`,
     );
   }
   return { apiUrl, apiKey };
 }
 
-/** True when api (self_hosted/cloud) mode is active. */
-export function isCloudMode(env: NodeJS.ProcessEnv = process.env): boolean {
+/** True when the HTTP API transport is active (`HASNA_INSTRUCTIONS_API_URL` set). */
+export function isApiTransport(env: NodeJS.ProcessEnv = process.env): boolean {
   return resolveCloudConfig(env) !== null;
 }
 

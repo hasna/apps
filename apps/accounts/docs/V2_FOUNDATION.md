@@ -86,8 +86,8 @@ including those fields nested inside a metadata envelope. The existing v1 API
 may retain those legacy fields only inside its isolated compatibility contract.
 
 Synchronous profile functions exported from the package root are now explicit
-local-only compatibility. They can never select the async hosted registry, so
-under hosted/self-hosted authority they are not answering for the store of
+local-only compatibility. They can never select the async HTTP API registry, so
+under API authority they are not answering for the store of
 record — but writes and reads get different treatment, because the two hazards
 are different.
 
@@ -123,11 +123,9 @@ gets them, and how the fleet will be flipped once `@hasna/economy` migrates.
 the machine-local applied pointer — never a registry record.
 
 The deprecated `ensureProfileForLogin` root export uses that same canonical
-authority resolver, including `HASNA_ACCOUNTS_MODE`, rather than maintaining a
-separate mode policy. Retired `remote`, `hybrid`, and `s3` words are skipped as
-absent authority and cannot mask a canonical value from a lower-precedence
-compatibility key. Async v1 callers use `resolveStore()`; new callers use
-`@hasna/accounts/v2`.
+authority resolver. Deployment modes no longer exist: any retired
+`*_STORAGE_MODE` / `*_MODE` variable is a fail-loud error naming the variable.
+Async v1 callers use `resolveStore()`; new callers use `@hasna/accounts/v2`.
 
 The additive v2 export also includes a migration sidecar/preflight contract.
 It freezes a redacted census, stable identity allocation, quarantine and alias

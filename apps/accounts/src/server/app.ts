@@ -1,18 +1,20 @@
 // HTTP application for accounts-serve.
 //
 // Framework-agnostic request handler (a `(Request) => Promise<Response>`) plus a
-// context builder that wires the vendored storage kit (cloud Postgres, PURE
-// REMOTE per Amendment A1) and API-key auth from @hasna/contracts. Health/ready/
-// version are public; every /v1 route requires a valid API key with the right
-// scope (accounts:read for GET, accounts:write for mutations).
+// context builder that wires the vendored storage kit (postgresql server
+// backend, selected by HASNA_ACCOUNTS_DATABASE_URL) and API-key auth from
+// @hasna/contracts. Health/ready/version are public; every /v1 route requires a
+// valid API key with the right scope (accounts:read for GET, accounts:write for
+// mutations).
 
 import { ApiKeyStore, verifyApiKey, type ApiKeyVerifier } from "@hasna/contracts/auth";
 import {
-  createCloudPoolFromEnv,
-  resolveStorageMode,
+  createServerPoolFromEnv,
+  resolveServerDataBackend,
   checkHealth,
 } from "../generated/storage-kit/index.js";
 import { AccountsError } from "../types.js";
+import { buildOpenApiDoc } from "./openapi.js";
 import { BUILTIN_TOOLS, isBuiltinTool } from "../lib/tools.js";
 import { AccountsRepo, type AccountsStore } from "./repo.js";
 import { accountsMigrations, readMigrationStatus } from "./migrations.js";
@@ -40,7 +42,7 @@ export interface ServiceContext {
   verifier: ApiKeyVerifier;
   health: () => Promise<HealthProbe>;
   ready: () => Promise<ReadyProbe>;
-  mode: "local" | "cloud";
+  backend: "postgresql";
   version: string;
   close: () => Promise<void>;
 }
@@ -49,13 +51,13 @@ export interface BuildContextOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-/** Build the live service context from the environment (cloud Postgres + auth). */
+/** Build the live service context from the environment (postgresql backend + auth). */
 export function buildServiceContext(options: BuildContextOptions = {}): ServiceContext {
   const env = options.env ?? process.env;
-  const resolution = resolveStorageMode(APP_SLUG, env);
-  if (resolution.mode !== "cloud") {
+  const resolution = resolveServerDataBackend(APP_SLUG, env);
+  if (resolution.backend !== "postgresql") {
     throw new AccountsError(
-      "accounts-serve requires cloud storage. Set HASNA_ACCOUNTS_STORAGE_MODE=cloud and HASNA_ACCOUNTS_DATABASE_URL.",
+      "accounts-serve requires the postgresql server backend. Set HASNA_ACCOUNTS_DATABASE_URL.",
     );
   }
   const signingSecret = resolveSigningSecret(env);
@@ -64,7 +66,7 @@ export function buildServiceContext(options: BuildContextOptions = {}): ServiceC
       "accounts-serve requires an API-key signing secret. Set HASNA_ACCOUNTS_API_SIGNING_KEY (or HASNA_API_SIGNING_KEY).",
     );
   }
-  const { client } = createCloudPoolFromEnv(APP_SLUG, {
+  const { client } = createServerPoolFromEnv(APP_SLUG, {
     env,
     applicationName: "accounts-serve",
     max: 5,
@@ -104,7 +106,7 @@ export function buildServiceContext(options: BuildContextOptions = {}): ServiceC
       if (status.pending.length > 0) return { ready: false, reason: `pending migrations: ${status.pending.join(", ")}` };
       return { ready: true };
     },
-    mode: "cloud",
+    backend: "postgresql",
     version: packageVersion(),
     close: () => client.close(),
   };
@@ -158,7 +160,7 @@ export function createHandler(ctx: ServiceContext): (req: Request) => Promise<Re
       if (pathname === "/health" && method === "GET") {
         const health = await ctx.health();
         const status = health.ok ? "ok" : "unavailable";
-        return json({ status, version: ctx.version, mode: ctx.mode }, health.ok ? 200 : 503);
+        return json({ status, version: ctx.version, backend: ctx.backend }, health.ok ? 200 : 503);
       }
       if (pathname === "/ready" && method === "GET") {
         const ready = await ctx.ready();
@@ -167,8 +169,11 @@ export function createHandler(ctx: ServiceContext): (req: Request) => Promise<Re
       if (pathname === "/version" && method === "GET") {
         return json({ version: ctx.version }, 200);
       }
+      if (pathname === "/openapi.json" && method === "GET") {
+        return json(buildOpenApiDoc(ctx.version), 200);
+      }
       if ((pathname === "/" || pathname === "") && method === "GET") {
-        return json({ service: "accounts-serve", version: ctx.version, mode: ctx.mode }, 200);
+        return json({ service: "accounts-serve", version: ctx.version, backend: ctx.backend }, 200);
       }
 
       // --- /v1 (authenticated) ---
@@ -272,7 +277,7 @@ export function createHandler(ctx: ServiceContext): (req: Request) => Promise<Re
         const denied = await authorize(req, url, SCOPES.read);
         if (denied) return denied;
         const custom = await ctx.repo.listCustomTools();
-        // Built-ins are static code; custom tools live in the cloud registry.
+        // Built-ins are static code; custom tools live in the server registry.
         // Return full ToolDefs (with a `builtin` flag) so clients can resolve
         // and cache them for machine-local launch.
         const byId = new Map<string, Record<string, unknown>>();

@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { pullSkills, PullSkillError, type SkillPullClient } from "./pull.js";
+import { pullSkills, PullSkillError, type SkillPullClient, BUNDLE_DIGEST_HEADER, BUNDLE_SIGNATURE_HEADER, installBundleAtomically, verifyBundleResponseBytes } from "./pull.js";
 import { getPortableSkillsRoot } from "./portable-skills.js";
 import { clearRegistryCache, loadRegistryProfile } from "./registry.js";
 import { MissingApiUrlError } from "./api-url.js";
+import { packSkillBundle, sha256Hex, unpackSkillBundle } from "./skill-bundle.js";
+import { signBundleBytes } from "./skill-bundles.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -18,7 +20,7 @@ useDefaultTestTimeout();
  * network or an origin. The real HTTP path is exercised end-to-end in pull.e2e.test.ts.
  */
 function fakeClient(
-  skills: Record<string, { md: string | null; meta?: Record<string, unknown> }>,
+  skills: Record<string, { md: string | null; meta?: Record<string, unknown>; bundle?: Uint8Array; bundleHeaders?: Record<string, string> }>,
   listing?: unknown[],
 ): SkillPullClient {
   return {
@@ -30,6 +32,11 @@ function fakeClient(
     },
     async getSkillMd(slug: string) {
       return skills[slug]?.md ?? null;
+    },
+    async getBundle(slug: string) {
+      const bundle = skills[slug]?.bundle;
+      if (!bundle) return null;
+      return new Response(bundle.buffer as ArrayBuffer, { headers: skills[slug]?.bundleHeaders ?? {} });
     },
   };
 }
@@ -117,6 +124,59 @@ describe("pullSkills", () => {
     expect(existsSync(join(expected, "SKILL.md"))).toBe(true);
   });
 
+  test("writes into the migrated skills/ root when the layout-migration record exists", async () => {
+    // Interlock with the home-migration layout (PR #116): after `skills storage
+    // migrate`, sync reads the corpus from <app folder>/skills, so pull must write
+    // there too — otherwise pulled skills are invisible to sync.
+    const home = mkdtempSync(join(tmpdir(), "skills-pull-migrated-home-"));
+    try {
+      const appDir = join(home, ".hasna", "skills");
+      const cache = join(appDir, "skills");
+      mkdirSync(cache, { recursive: true });
+      writeFileSync(
+        join(cache, ".layout-migration.json"),
+        `${JSON.stringify({ version: 1, migratedAt: new Date().toISOString(), moved: ["installed"], note: "test" })}\n`,
+      );
+
+      const { results } = await pullSkills({
+        names: ["pulled-runbook"],
+        homeDir: home,
+        client: fakeClient({ "pulled-runbook": { md: INSTRUCTION_MD, meta: { kind: "instruction" } } }),
+      });
+      expect(results[0].success).toBe(true);
+      const expected = join(cache, "pulled-runbook");
+      expect(results[0].path).toBe(expected);
+      expect(existsSync(join(expected, "SKILL.md"))).toBe(true);
+      // Nothing lands in the pre-migration installed/ root.
+      expect(existsSync(join(appDir, "installed", "pulled-runbook"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("writes into installed/ when no layout-migration record exists", async () => {
+    // Negative control for the interlock: a hand-made skills/ dir without the
+    // migration record is not the corpus, and pull keeps using installed/.
+    const home = mkdtempSync(join(tmpdir(), "skills-pull-unmigrated-home-"));
+    try {
+      const appDir = join(home, ".hasna", "skills");
+      mkdirSync(join(appDir, "skills"), { recursive: true });
+
+      const { results } = await pullSkills({
+        names: ["pulled-runbook"],
+        homeDir: home,
+        client: fakeClient({ "pulled-runbook": { md: INSTRUCTION_MD, meta: { kind: "instruction" } } }),
+      });
+      expect(results[0].success).toBe(true);
+      const expected = join(appDir, "installed", "pulled-runbook");
+      expect(results[0].path).toBe(expected);
+      expect(existsSync(join(expected, "SKILL.md"))).toBe(true);
+      expect(existsSync(join(appDir, "skills", "pulled-runbook"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("a pulled skill is surfaced by loadRegistry (the CLI list --all / MCP list_skills path)", async () => {
     await pullSkills({
       names: ["pulled-runbook"],
@@ -179,7 +239,7 @@ describe("pullSkills", () => {
     const savedUrl = process.env.SKILLS_API_URL;
     const savedKey = process.env.SKILLS_API_KEY;
     delete process.env.SKILLS_API_URL;
-    process.env.SKILLS_API_KEY = "sk_test_key";
+    process.env.SKILLS_API_KEY = "dummy-key-not-a-secret-for-fail-closed-test";
     try {
       await expect(pullSkills({ names: ["pulled-runbook"] })).rejects.toBeInstanceOf(MissingApiUrlError);
     } finally {
@@ -193,5 +253,213 @@ describe("pullSkills", () => {
   test("errors clearly when no API key is available to reach the instance", async () => {
     // client: null models createRemoteSkillsClient() finding no credential.
     await expect(pullSkills({ names: ["x"], client: null })).rejects.toBeInstanceOf(PullSkillError);
+  });
+});
+
+/** Build a real canonical bundle for a one-file skill directory. */
+function makeBundleSkill(name: string, content: string, extra: Record<string, string> = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "skills-bundle-src-"));
+  const files: Record<string, string> = { "SKILL.md": content, ...extra };
+  for (const [path, bytes] of Object.entries(files)) {
+    const full = join(dir, path);
+    mkdirSync(full.slice(0, full.lastIndexOf("/")), { recursive: true });
+    writeFileSync(full, bytes);
+  }
+  return { dir, packed: packSkillBundle(dir), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+const BUNDLED_MD =
+  "---\nname: bundled-skill\ndescription: A bundled executable skill\nkind: executable\n---\n\n# Bundled\n";
+
+describe("pullSkills — verified bundle path", () => {
+  test("installs a verified bundle atomically and records version/hash/commit in the marker", async () => {
+    const root = tempRoot();
+    const source = makeBundleSkill("bundled-skill", BUNDLED_MD, {
+      "scripts/run.ts": "console.log('run')",
+      "skill.json": JSON.stringify({ standard: "hasna.skill.v1", name: "bundled-skill", version: "1.2.3", kind: "executable", source_commit: "abc123" }),
+    });
+    try {
+      const { results } = await pullSkills({
+        names: ["bundled-skill"],
+        rootDir: root,
+        client: fakeClient({
+          "bundled-skill": {
+            md: BUNDLED_MD,
+            meta: { kind: "executable", version: "1.2.3" },
+            bundle: source.packed.bytes,
+            bundleHeaders: { [BUNDLE_DIGEST_HEADER]: source.packed.sha256 },
+          },
+        }),
+      });
+      const [result] = results;
+      expect(result.success).toBe(true);
+      expect(result.created).toBe(true);
+      expect(result.version).toBe("1.2.3");
+      expect(result.contentHash).toBe(source.packed.sha256);
+
+      const skillDir = join(root, "bundled-skill");
+      expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).toBe(BUNDLED_MD);
+      expect(readFileSync(join(skillDir, "scripts", "run.ts"), "utf-8")).toBe("console.log('run')");
+
+      const marker = JSON.parse(readFileSync(join(skillDir, ".hasna-skills.json"), "utf-8"));
+      expect(marker.managedBy).toBe("@hasna/skills");
+      expect(marker.source).toBe("pull");
+      expect(marker.version).toBe("1.2.3");
+      expect(marker.contentHash).toBe(source.packed.sha256);
+      expect(marker.sourceCommit).toBe("abc123");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      source.cleanup();
+    }
+  });
+
+  test("re-pulling the same bundle replaces the entry atomically (idempotent, created=false)", async () => {
+    const root = tempRoot();
+    const source = makeBundleSkill("bundled-skill", BUNDLED_MD);
+    try {
+      const client = fakeClient({
+        "bundled-skill": { md: BUNDLED_MD, bundle: source.packed.bytes, bundleHeaders: { [BUNDLE_DIGEST_HEADER]: source.packed.sha256 } },
+      });
+      const first = await pullSkills({ names: ["bundled-skill"], rootDir: root, client });
+      const second = await pullSkills({ names: ["bundled-skill"], rootDir: root, client });
+      expect(first.results[0].created).toBe(true);
+      expect(second.results[0].created).toBe(false);
+      expect(second.results[0].success).toBe(true);
+      expect(readFileSync(join(root, "bundled-skill", "SKILL.md"), "utf-8")).toBe(BUNDLED_MD);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      source.cleanup();
+    }
+  });
+
+  test("rejects a bundle whose digest header does not match its bytes, and installs nothing", async () => {
+    const root = tempRoot();
+    const source = makeBundleSkill("bundled-skill", BUNDLED_MD);
+    try {
+      const { results } = await pullSkills({
+        names: ["bundled-skill"],
+        rootDir: root,
+        client: fakeClient({
+          "bundled-skill": {
+            md: BUNDLED_MD,
+            bundle: source.packed.bytes,
+            bundleHeaders: { [BUNDLE_DIGEST_HEADER]: "0".repeat(64) },
+          },
+        }),
+      });
+      expect(results[0].success).toBe(false);
+      expect(results[0].error).toContain("digest mismatch");
+      expect(existsSync(join(root, "bundled-skill"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      source.cleanup();
+    }
+  });
+
+  test("rejects a bundle whose signature does not verify against the configured key", async () => {
+    const root = tempRoot();
+    const source = makeBundleSkill("bundled-skill", BUNDLED_MD);
+    try {
+      const { results } = await pullSkills({
+        names: ["bundled-skill"],
+        rootDir: root,
+        signingKey: "correct-key",
+        client: fakeClient({
+          "bundled-skill": {
+            md: BUNDLED_MD,
+            bundle: source.packed.bytes,
+            bundleHeaders: {
+              [BUNDLE_DIGEST_HEADER]: source.packed.sha256,
+              [BUNDLE_SIGNATURE_HEADER]: signBundleBytes(source.packed.bytes, "wrong-key"),
+            },
+          },
+        }),
+      });
+      expect(results[0].success).toBe(false);
+      expect(results[0].error).toContain("signature mismatch");
+      expect(existsSync(join(root, "bundled-skill"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      source.cleanup();
+    }
+  });
+
+  test("accepts a bundle whose signature verifies against the configured key", async () => {
+    const root = tempRoot();
+    const source = makeBundleSkill("bundled-skill", BUNDLED_MD);
+    try {
+      const { results } = await pullSkills({
+        names: ["bundled-skill"],
+        rootDir: root,
+        signingKey: "correct-key",
+        client: fakeClient({
+          "bundled-skill": {
+            md: BUNDLED_MD,
+            bundle: source.packed.bytes,
+            bundleHeaders: {
+              [BUNDLE_DIGEST_HEADER]: source.packed.sha256,
+              [BUNDLE_SIGNATURE_HEADER]: signBundleBytes(source.packed.bytes, "correct-key"),
+            },
+          },
+        }),
+      });
+      expect(results[0].success).toBe(true);
+      const marker = JSON.parse(readFileSync(join(root, "bundled-skill", ".hasna-skills.json"), "utf-8"));
+      expect(marker.signature).toContain("hmac-sha256:");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      source.cleanup();
+    }
+  });
+});
+
+describe("verifyBundleResponseBytes", () => {
+  const bytes = new Uint8Array([1, 2, 3, 4]);
+  const hash = sha256Hex(bytes);
+
+  test("accepts a matching digest header", () => {
+    const response = new Response(bytes, { headers: { [BUNDLE_DIGEST_HEADER]: sha256Hex(bytes) } });
+    const verified = verifyBundleResponseBytes(bytes.buffer.slice(0), response);
+    expect(verified.contentHash).toBe(sha256Hex(bytes));
+    expect(verified.serverHash).toBe(sha256Hex(bytes));
+  });
+
+  test("rejects a mismatching digest header", () => {
+    const response = new Response(bytes, { headers: { [BUNDLE_DIGEST_HEADER]: "0".repeat(64) } });
+    expect(() => verifyBundleResponseBytes(bytes.buffer.slice(0), response)).toThrow(PullSkillError);
+  });
+
+  test("rejects a malformed signature string", () => {
+    const response = new Response(bytes, {
+      headers: { [BUNDLE_SIGNATURE_HEADER]: "not-a-signature" },
+    });
+    expect(() => verifyBundleResponseBytes(bytes.buffer.slice(0), response, { signingKey: "key" })).toThrow(PullSkillError);
+  });
+});
+
+describe("installBundleAtomically", () => {
+  test("writes entries, marker, and swaps over an existing entry without partial state", () => {
+    const root = tempRoot();
+    try {
+      const first = installBundleAtomically("demo", [
+        { path: "SKILL.md", bytes: new Uint8Array(new TextEncoder().encode("v1")), mode: 0o644 },
+      ], { rootDir: root }, { version: "1.0.0", contentHash: "aaa" });
+      expect(first.created).toBe(true);
+      expect(readFileSync(join(first.path, "SKILL.md"), "utf-8")).toBe("v1");
+
+      const second = installBundleAtomically("demo", [
+        { path: "SKILL.md", bytes: new Uint8Array(new TextEncoder().encode("v2")), mode: 0o644 },
+      ], { rootDir: root }, { version: "2.0.0", contentHash: "bbb" });
+      expect(second.created).toBe(false);
+      expect(readFileSync(join(second.path, "SKILL.md"), "utf-8")).toBe("v2");
+      const marker = JSON.parse(readFileSync(join(second.path, ".hasna-skills.json"), "utf-8"));
+      expect(marker.version).toBe("2.0.0");
+      expect(marker.contentHash).toBe("bbb");
+      // No staging or backup leftovers in the corpus root.
+      const leftovers = readdirSync(root).filter((entry) => entry.startsWith(".pull-"));
+      expect(leftovers).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

@@ -6,7 +6,6 @@ import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
 export type SafetyDecision = 'allow' | 'deny' | 'requires_approval';
 
 export interface SafetyPolicy {
-  mode: 'local' | 'hosted';
   allowWriteRoots: string[];
   readOnlySourceAccess: boolean;
   network: {
@@ -74,7 +73,6 @@ export function resolveSafetyPolicy(config: KnowledgeConfig, workspace: Knowledg
     }
   }
   return {
-    mode: config.mode,
     allowWriteRoots: [
       workspace.home,
       workspace.artifactsDir,

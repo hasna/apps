@@ -61,12 +61,15 @@ test("test preload replaces inherited machine and cloud state before app resolut
   ]) {
     expect(process.env[key]).toBeUndefined();
   }
+  // Retired storage-mode variables are removed fleet-wide; the test env must
+  // not reintroduce them (any set value is now a fail-loud error).
   for (const key of [
     "HASNA_ACCOUNTS_STORAGE_MODE",
     "ACCOUNTS_STORAGE_MODE",
     "HASNA_ACCOUNTS_MODE",
+    "ACCOUNTS_MODE",
   ]) {
-    expect(process.env[key]).toBe("local");
+    expect(process.env[key]).toBeUndefined();
   }
 
   expect(accountsHome()).toBe(process.env.ACCOUNTS_HOME!);

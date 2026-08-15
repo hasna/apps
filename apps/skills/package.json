@@ -32,9 +32,7 @@
     "bin/",
     "migrations/",
     "docs/skill-standard.md",
-    "skills/",
-    "!skills/**/node_modules",
-    "agent-skills/",
+    "schemas/",
     "LICENSE",
     "README.md"
   ],

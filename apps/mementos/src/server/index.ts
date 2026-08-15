@@ -14,7 +14,7 @@ import { loadWebhooksFromDb } from "../lib/built-in-hooks.js";
 import { startSessionQueueWorker } from "../lib/session-queue.js";
 import { startTaskRunner } from "../lib/task-runner.js";
 
-import { getStorageMode, markServerContext } from "../storage.js";
+import { getStorageBackend, markServerContext } from "../storage.js";
 
 // This is the mementos-serve server process — the ONLY process permitted to open
 // a direct RDS Postgres connection (CLAUDE.md §2). Opt in before any DB access.
@@ -167,23 +167,23 @@ export function startServer(port: number): void {
       }
 
       // ----------------------------------------------------------------------
-      // Unauthenticated operational probes: {status, version, mode}
+      // Unauthenticated operational probes: {status, version, backend}
       // ----------------------------------------------------------------------
-      const mode = getStorageMode();
+      const backend = getStorageBackend();
 
       // Version — cheap, no DB.
       if (pathname === "/version" || pathname === "/api/version" || pathname === "/v1/version") {
-        return json({ status: "ok", version: pkgVersion(), mode });
+        return json({ status: "ok", version: pkgVersion(), backend });
       }
 
       // Readiness — verifies backing-store connectivity.
       if (pathname === "/ready" || pathname === "/api/ready" || pathname === "/v1/ready") {
         try {
           getDatabase().query("SELECT 1 AS ok").get();
-          return json({ status: "ready", version: pkgVersion(), mode });
+          return json({ status: "ready", version: pkgVersion(), backend });
         } catch (e) {
           return json(
-            { status: "not_ready", version: pkgVersion(), mode, error: e instanceof Error ? e.message : String(e) },
+            { status: "not_ready", version: pkgVersion(), backend, error: e instanceof Error ? e.message : String(e) },
             503
           );
         }
@@ -200,9 +200,9 @@ export function startServer(port: number): void {
           const agents = (db.query("SELECT COUNT(*) as c FROM agents").get() as { c: number }).c;
           const projects = (db.query("SELECT COUNT(*) as c FROM projects").get() as { c: number }).c;
           const status = expired > 50 ? "warn" : "ok";
-          return json({ status, version: pkgVersion(), mode, profile: profile ?? "default", db_path: getDbPath(), hostname, memories: { total, expired, pinned }, agents, projects });
+          return json({ status, version: pkgVersion(), backend, profile: profile ?? "default", db_path: getDbPath(), hostname, memories: { total, expired, pinned }, agents, projects });
         } catch (e) {
-          return json({ status: "error", version: pkgVersion(), mode, error: e instanceof Error ? e.message : String(e) }, 503);
+          return json({ status: "error", version: pkgVersion(), backend, error: e instanceof Error ? e.message : String(e) }, 503);
         }
       }
 

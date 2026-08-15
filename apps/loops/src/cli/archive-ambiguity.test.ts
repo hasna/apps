@@ -12,7 +12,6 @@ function runCli(dataDir: string, args: string[]) {
   return spawnSync(process.execPath, [cliPath, ...args], {
     env: {
       ...process.env,
-      HASNA_LOOPS_STORAGE_MODE: "local",
       HASNA_LOOPS_API_URL: "",
       HASNA_LOOPS_API_KEY: "",
       LOOPS_DATA_DIR: dataDir,

@@ -1,8 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { clearConfigCache, getConfig, getDefaultWorkspaceRoots, getFilterAlias } from "./config";
+import { clearConfigCache, getConfig, getDefaultWorkspaceRoots, getFilterAlias, getWorkspaceRoots } from "./config";
+
+/** True when the filesystem resolves both spellings to the same directory. */
+function sameDirectory(left: string, right: string): boolean {
+  try {
+    return realpathSync(left) === realpathSync(right);
+  } catch {
+    return false;
+  }
+}
 
 let testDir = "";
 let configPath = "";
@@ -125,6 +134,52 @@ describe("config", () => {
     it("should fall back to lowercase workspace when no directory exists", () => {
       const roots = getDefaultWorkspaceRoots("/tmp/test-home", () => false);
       expect(roots).toEqual([resolve("/tmp/test-home/workspace")]);
+    });
+
+    it("returns one root when both spellings of the home workspace are the same directory", () => {
+      const home = join(testDir, "home");
+      mkdirSync(join(home, "workspace"), { recursive: true });
+      // On a case-insensitive filesystem (macOS APFS) both candidates exist
+      // and are one directory; on a case-sensitive one only the lowercase
+      // candidate exists. Either way exactly one root must come back, or the
+      // scanner walks (and indexes) every checkout twice.
+      const roots = getDefaultWorkspaceRoots(home, existsSync);
+      expect(roots).toEqual([resolve(join(home, "workspace"))]);
+    });
+
+    it("keeps distinct directories distinct when the filesystem is case-sensitive", () => {
+      const home = join(testDir, "home-cs");
+      mkdirSync(join(home, "workspace"), { recursive: true });
+      const roots = getDefaultWorkspaceRoots(home, (path) =>
+        path === join(home, "workspace") || path === join(home, "Workspace"),
+      );
+      // The dedupe answers from the filesystem, not from the injected
+      // predicate: when the two spellings are genuinely one directory they
+      // collapse; when the second is a different path (or does not resolve)
+      // both survive.
+      if (sameDirectory(join(home, "workspace"), join(home, "Workspace"))) {
+        expect(roots).toEqual([resolve(join(home, "workspace"))]);
+      } else {
+        expect(roots).toEqual([resolve(join(home, "workspace")), resolve(join(home, "Workspace"))]);
+      }
+    });
+  });
+
+  describe("getWorkspaceRoots", () => {
+    it("dedupes case-variant roots of one directory by canonical identity", () => {
+      const root = join(testDir, "root");
+      const lowercase = join(root, "workspace");
+      mkdirSync(lowercase, { recursive: true });
+      const uppercase = join(root, "Workspace");
+      const roots = getWorkspaceRoots([lowercase, uppercase]);
+      if (sameDirectory(lowercase, uppercase)) {
+        expect(roots).toHaveLength(1);
+        expect(roots[0]).toBe(lowercase);
+      } else {
+        // Case-sensitive FS: the uppercase spelling is not the same
+        // directory, so both roots survive — behavior unchanged.
+        expect(roots).toEqual([resolve(lowercase), resolve(uppercase)]);
+      }
     });
   });
 });

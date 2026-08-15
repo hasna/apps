@@ -19,8 +19,8 @@ describe("daemon service lifecycle planning", () => {
     const plan = buildDaemonInstallPlan({
       platform: "macos",
       mode: "user",
-      serviceName: "machines-agent.fixture",
-      executable: "/opt/fixture/bin/machines-agent",
+      serviceName: "machines-daemon.fixture",
+      executable: "/opt/fixture/bin/machines-daemon",
       intervalMs: 45000,
       storagePush: true,
       doctorSummary: true,
@@ -31,17 +31,17 @@ describe("daemon service lifecycle planning", () => {
     expect(plan.mode).toBe("user");
     expect(plan.action).toBe("install");
     expect(plan.files).toHaveLength(1);
-    expect(plan.files[0]?.path).toBe("$HOME/Library/LaunchAgents/machines-agent.fixture.plist");
+    expect(plan.files[0]?.path).toBe("$HOME/Library/LaunchAgents/machines-daemon.fixture.plist");
     expect(plan.files[0]?.content).toContain("<key>Label</key>");
-    expect(plan.files[0]?.content).toContain("<string>machines-agent.fixture</string>");
-    expect(plan.files[0]?.content).toContain("<string>/opt/fixture/bin/machines-agent</string>");
+    expect(plan.files[0]?.content).toContain("<string>machines-daemon.fixture</string>");
+    expect(plan.files[0]?.content).toContain("<string>/opt/fixture/bin/machines-daemon</string>");
     expect(plan.files[0]?.content).toContain("<string>--interval-ms</string>");
     expect(plan.files[0]?.content).toContain("<string>45000</string>");
     expect(plan.files[0]?.content).toContain("<key>HASNA_MACHINES_DATABASE_URL</key>");
     expect(plan.files[0]?.content).toContain("&lt;set:HASNA_MACHINES_DATABASE_URL&gt;");
     expect(plan.files[0]?.content).toContain("<key>HASNA_MACHINES_AGENT_STORAGE_PUSH_RETRIES</key>");
     expect(plan.files[0]?.content).toContain("<string>2</string>");
-    expect(plan.files[0]?.content).toContain(`<string>${process.env["HOME"] ?? "/tmp"}/Library/Logs/machines-agent.fixture.out.log</string>`);
+    expect(plan.files[0]?.content).toContain(`<string>${process.env["HOME"] ?? "/tmp"}/Library/Logs/machines-daemon.fixture.out.log</string>`);
     expect(plan.files[0]?.content).not.toContain("<string>$HOME/Library/Logs/");
     expect(plan.files[0]?.content).toContain("<key>HASNA_MACHINES_AGENT_DOCTOR_SUMMARY</key>");
     expect(plan.files[0]?.content).toContain("<key>HASNA_MACHINES_PRIVATE_METADATA</key>");
@@ -52,7 +52,7 @@ describe("daemon service lifecycle planning", () => {
       "launchd-enable",
       "launchd-kickstart",
     ]);
-    expect(plan.commands[1]?.args).toEqual(["bootstrap", "gui/$UID", "$HOME/Library/LaunchAgents/machines-agent.fixture.plist"]);
+    expect(plan.commands[1]?.args).toEqual(["bootstrap", "gui/$UID", "$HOME/Library/LaunchAgents/machines-daemon.fixture.plist"]);
     expect(JSON.stringify(plan)).not.toContain("postgres://");
     expect(JSON.stringify(plan)).not.toContain("raw-secret");
   });
@@ -61,30 +61,30 @@ describe("daemon service lifecycle planning", () => {
     const userPlan = buildDaemonInstallPlan({
       platform: "linux",
       mode: "user",
-      serviceName: "machines-agent-fixture",
-      executable: "/opt/fixture/bin/machines-agent",
+      serviceName: "machines-daemon-fixture",
+      executable: "/opt/fixture/bin/machines-daemon",
       intervalMs: 10000,
       env: ["HASNA_MACHINES_MANIFEST_PATH"],
     });
     const systemPlan = buildDaemonInstallPlan({
       platform: "linux",
       mode: "system",
-      serviceName: "machines-agent-fixture",
-      executable: "/opt/fixture/bin/machines-agent",
+      serviceName: "machines-daemon-fixture",
+      executable: "/opt/fixture/bin/machines-daemon",
     });
 
-    expect(userPlan.files[0]?.path).toBe("$HOME/.config/systemd/user/machines-agent-fixture.service");
-    expect(userPlan.files[0]?.content).toContain("ExecStart=/opt/fixture/bin/machines-agent --interval-ms 10000");
+    expect(userPlan.files[0]?.path).toBe("$HOME/.config/systemd/user/machines-daemon-fixture.service");
+    expect(userPlan.files[0]?.content).toContain("ExecStart=/opt/fixture/bin/machines-daemon --interval-ms 10000");
     expect(userPlan.files[0]?.content).toContain('Environment="HASNA_MACHINES_MANIFEST_PATH=<set:HASNA_MACHINES_MANIFEST_PATH>"');
     expect(userPlan.files[0]?.content).toContain("WantedBy=default.target");
     expect(userPlan.commands[0]?.args).toEqual(["--user", "daemon-reload"]);
-    expect(userPlan.commands[1]?.args).toEqual(["--user", "enable", "--now", "machines-agent-fixture.service"]);
+    expect(userPlan.commands[1]?.args).toEqual(["--user", "enable", "--now", "machines-daemon-fixture.service"]);
     expect(userPlan.commands.every((cmd) => cmd.sudo === false)).toBe(true);
 
-    expect(systemPlan.files[0]?.path).toBe("/etc/systemd/system/machines-agent-fixture.service");
+    expect(systemPlan.files[0]?.path).toBe("/etc/systemd/system/machines-daemon-fixture.service");
     expect(systemPlan.files[0]?.content).toContain("WantedBy=multi-user.target");
     expect(systemPlan.commands[0]?.args).toEqual(["daemon-reload"]);
-    expect(systemPlan.commands[1]?.args).toEqual(["enable", "--now", "machines-agent-fixture.service"]);
+    expect(systemPlan.commands[1]?.args).toEqual(["enable", "--now", "machines-daemon-fixture.service"]);
     expect(systemPlan.commands.every((cmd) => cmd.sudo === true)).toBe(true);
   });
 
@@ -92,8 +92,8 @@ describe("daemon service lifecycle planning", () => {
     const plan = buildDaemonInstallPlan({
       platform: "linux",
       mode: "user",
-      serviceName: "machines-agent-fixture",
-      executable: "/home/operator/.bun/bin/machines-agent",
+      serviceName: "machines-daemon-fixture",
+      executable: "/home/operator/.bun/bin/machines-daemon",
     });
 
     expect(plan.files[0]?.content).toContain('Environment="PATH=/home/operator/.bun/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"');
@@ -102,7 +102,7 @@ describe("daemon service lifecycle planning", () => {
   test("launchd invokes sibling bun runtime for Bun shims", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-daemon-bun-shim-"));
     const bun = join(dir, "bun");
-    const agent = join(dir, "machines-agent");
+    const agent = join(dir, "machines-daemon");
     writeFileSync(bun, "#!/bin/sh\n", "utf8");
     writeFileSync(agent, "#!/usr/bin/env bun\n", "utf8");
     chmodSync(bun, 0o755);
@@ -122,7 +122,7 @@ describe("daemon service lifecycle planning", () => {
   test("systemd invokes sibling bun runtime for Bun shims", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-daemon-bun-shim-systemd-"));
     const bun = join(dir, "bun");
-    const agent = join(dir, "machines-agent");
+    const agent = join(dir, "machines-daemon");
     writeFileSync(bun, "#!/bin/sh\n", "utf8");
     writeFileSync(agent, "#!/usr/bin/env bun\n", "utf8");
     chmodSync(bun, 0o755);
@@ -146,7 +146,7 @@ describe("daemon service lifecycle planning", () => {
     mkdirSync(runtimeDir, { recursive: true });
     mkdirSync(agentDir, { recursive: true });
     const bun = join(runtimeDir, "bun");
-    const agent = join(agentDir, "machines-agent");
+    const agent = join(agentDir, "machines-daemon");
     writeFileSync(bun, "#!/bin/sh\n", "utf8");
     writeFileSync(agent, "#!/usr/bin/env bun\n", "utf8");
     chmodSync(bun, 0o755);
@@ -170,7 +170,7 @@ describe("daemon service lifecycle planning", () => {
   test("does not invoke sibling bun for non-Bun executables", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-daemon-not-bun-shim-"));
     const bun = join(dir, "bun");
-    const agent = join(dir, "machines-agent");
+    const agent = join(dir, "machines-daemon");
     writeFileSync(bun, "#!/bin/sh\n", "utf8");
     writeFileSync(agent, "#!/bin/sh\nexec node \"$0\" \"$@\"\n", "utf8");
     chmodSync(bun, 0o755);
@@ -190,8 +190,8 @@ describe("daemon service lifecycle planning", () => {
     const base = {
       platform: "linux" as const,
       mode: "user" as const,
-      serviceName: "machines-agent-fixture",
-      executable: "/opt/fixture/bin/machines-agent",
+      serviceName: "machines-daemon-fixture",
+      executable: "/opt/fixture/bin/machines-daemon",
     };
 
     const uninstall = buildDaemonUninstallPlan(base);
@@ -211,30 +211,30 @@ describe("daemon service lifecycle planning", () => {
         id: "systemd-restart",
         description: "Restart the systemd service.",
         program: "systemctl",
-        args: ["--user", "restart", "machines-agent-fixture.service"],
+        args: ["--user", "restart", "machines-daemon-fixture.service"],
         sudo: false,
         mutates: true,
       },
     ]);
     expect(status.commands[0]?.mutates).toBe(false);
-    expect(status.commands[0]?.args).toEqual(["--user", "status", "machines-agent-fixture.service", "--no-pager"]);
+    expect(status.commands[0]?.args).toEqual(["--user", "status", "machines-daemon-fixture.service", "--no-pager"]);
     expect(logs.commands[0]?.mutates).toBe(false);
     expect(logs.commands[0]?.program).toBe("journalctl");
   });
 
   test("render helpers produce platform-specific service content", () => {
     expect(renderLaunchdPlist({
-      serviceName: "machines-agent-render",
-      executable: "/opt/render/bin/machines-agent",
+      serviceName: "machines-daemon-render",
+      executable: "/opt/render/bin/machines-daemon",
       intervalMs: 12000,
-    })).toContain("<string>machines-agent-render</string>");
+    })).toContain("<string>machines-daemon-render</string>");
 
     expect(renderSystemdUnit({
       mode: "system",
-      serviceName: "machines-agent-render",
-      executable: "/opt/render/bin/machines-agent",
+      serviceName: "machines-daemon-render",
+      executable: "/opt/render/bin/machines-daemon",
       intervalMs: 12000,
-    })).toContain("ExecStart=/opt/render/bin/machines-agent --interval-ms 12000");
+    })).toContain("ExecStart=/opt/render/bin/machines-daemon --interval-ms 12000");
   });
 
   test("uses safe placeholders for requested private env names", () => {
@@ -254,7 +254,7 @@ describe("daemon service lifecycle planning", () => {
     const plan = buildDaemonStatusPlan({
       platform: "linux",
       mode: "user",
-      serviceName: "machines-agent-fixture",
+      serviceName: "machines-daemon-fixture",
     });
     const result = runDaemonServicePlan(plan, { apply: true, yes: false });
     expect(result.mode).toBe("plan");
@@ -267,8 +267,8 @@ describe("daemon service lifecycle planning", () => {
     const plan = buildDaemonInstallPlan({
       platform: "macos",
       mode: "user",
-      serviceName: "machines-agent-fixture",
-      executable: "/opt/fixture/bin/machines-agent",
+      serviceName: "machines-daemon-fixture",
+      executable: "/opt/fixture/bin/machines-daemon",
     });
     const result = runDaemonServicePlan(plan, { apply: true, yes: false });
 
@@ -285,8 +285,8 @@ describe("daemon service lifecycle planning", () => {
       const plan = buildDaemonInstallPlan({
         platform: "linux",
         mode: "user",
-        serviceName: "machines-agent-fixture",
-        executable: "/opt/fixture/bin/machines-agent",
+        serviceName: "machines-daemon-fixture",
+        executable: "/opt/fixture/bin/machines-daemon",
         storagePush: true,
       });
       const result = runDaemonServicePlan(plan, { apply: true, yes: true });
@@ -308,11 +308,11 @@ describe("daemon service lifecycle planning", () => {
       const plan = buildDaemonInstallPlan({
         platform: "linux",
         mode: "user",
-        serviceName: "machines-agent-fixture",
-        executable: "/opt/fixture/bin/machines-agent",
+        serviceName: "machines-daemon-fixture",
+        executable: "/opt/fixture/bin/machines-daemon",
         storagePush: true,
       });
-      const filePath = join(dir, "machines-agent-fixture.service");
+      const filePath = join(dir, "machines-daemon-fixture.service");
       const safePlan: DaemonServicePlan = {
         ...plan,
         files: [{ ...plan.files[0]!, path: filePath }],
@@ -335,8 +335,8 @@ describe("daemon service lifecycle planning", () => {
       const plan = buildDaemonInstallPlan({
         platform: "linux",
         mode: "user",
-        serviceName: "machines-agent-fixture",
-        executable: "/opt/fixture/bin/machines-agent",
+        serviceName: "machines-daemon-fixture",
+        executable: "/opt/fixture/bin/machines-daemon",
         storagePush: true,
       });
       const result = runDaemonServicePlan(plan, { apply: true, yes: true });

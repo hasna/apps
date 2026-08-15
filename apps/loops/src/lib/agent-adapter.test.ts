@@ -966,7 +966,10 @@ describe("agent adapters", () => {
           provider: "codewith",
           prompt: "say ok",
           cwd: ".",
-          idleTimeoutMs: 150,
+          // Long enough to absorb process-spawn latency under load (observed
+          // 300-600ms on a loaded box) yet far below the 5s fake stall, so the
+          // generic watchdog — not the spawn — is what reaps the run.
+          idleTimeoutMs: 1_000,
           configIsolation: "safe",
         },
       });
@@ -982,7 +985,7 @@ describe("agent adapters", () => {
         },
       });
       expect(result.status).toBe("timed_out");
-      expect(result.error).toContain("idle timed out after 150ms without stdout/stderr");
+      expect(result.error).toContain("idle timed out after 1000ms without stdout/stderr");
       expect(codewithInvocations(invocationsFile).some((args) => args.includes("exec"))).toBe(true);
     } finally {
       store.close();

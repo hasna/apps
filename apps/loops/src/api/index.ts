@@ -52,11 +52,11 @@ import {
   publicWorkflowStepRun,
   publicWorkflowWorkItem,
 } from "../lib/format.js";
+import { resolveRuntimeConfig, type Env } from "../lib/runtime-config.js";
 import {
-  buildDeploymentStatus,
-  deploymentStatusLine,
-  resolveLoopDeploymentMode,
-} from "../lib/mode.js";
+  buildStorageConnectionReport,
+  storageConnectionReportLine,
+} from "../lib/runtime-status.js";
 import { dueSlots } from "../lib/recurrence.js";
 import {
   loopAdvancementPatchMatchesCurrent,
@@ -111,9 +111,9 @@ function wantsJson(opts?: { json?: boolean }): boolean {
 }
 
 function printStatus(opts?: { json?: boolean }): void {
-  const status = buildDeploymentStatus({ perspective: "self_hosted" });
+  const report = buildStorageConnectionReport(resolveRuntimeConfig());
   if (wantsJson(opts)) console.log(JSON.stringify(apiStatus(), null, 2));
-  else console.log(deploymentStatusLine(status));
+  else console.log(storageConnectionReportLine(report));
 }
 
 function ok(payload: Record<string, unknown> = {}, init?: ResponseInit): Response {
@@ -124,11 +124,11 @@ function fail(error: string, status: number, details?: Record<string, unknown>):
   return Response.json({ ok: false, error, ...details }, { status });
 }
 
-export function apiStatus() {
+export function apiStatus(env: Env = process.env) {
   return {
     ok: true,
     service: "loops-api",
-    status: buildDeploymentStatus({ perspective: "self_hosted" }),
+    status: buildStorageConnectionReport(resolveRuntimeConfig(env)),
   };
 }
 
@@ -171,11 +171,6 @@ export interface LoopsApiServerOptions {
   }>;
 }
 
-/** Deployment mode for the general foundation envelopes. */
-function foundationMode(): string {
-  return buildDeploymentStatus({}).activeDeploymentMode;
-}
-
 /**
  * Capabilities an already-deployed control plane advertises on the open
  * `/version` probe, so a runner can tell an enforcing server from one that will
@@ -185,28 +180,37 @@ function foundationMode(): string {
  */
 const API_CAPABILITIES = ["runner.claimScope"] as const;
 
-/** Shared { status, version, mode } envelope for /health, /ready, /version. */
+/** Shared { status, version, storage, connection } envelope for /health, /ready, /version. */
 function foundationEnvelope(
   status: string,
   extra: Record<string, unknown> = {},
 ): Record<string, unknown> {
+  const config = resolveRuntimeConfig();
   return {
     status,
     version: packageVersion(),
-    mode: foundationMode(),
+    storage: config.storage,
+    connection: config.connection,
     service: "loops",
     ...extra,
   };
 }
 
+/**
+ * Strict health payload for the @hasna/contracts 0.10.6 `HealthResponseSchema`
+ * ({ status, version, backend } — extra keys are rejected). This is the
+ * conformance sample, not the wire envelope: the runtime /health probe serves
+ * the richer foundationEnvelope ({ status, version, storage, connection }).
+ * `backend` maps 1:1 from the runtime storage backend (sqlite | postgresql).
+ */
 export function contractHealthResponse(
-  env: Record<string, string | undefined> = process.env,
-): { status: "ok"; version: string; mode: "local" | "cloud" } {
-  const runtimeMode = resolveLoopDeploymentMode(env).deploymentMode;
+  env: Env = process.env,
+): { status: "ok"; version: string; backend: "sqlite" | "postgresql" } {
+  const report = buildStorageConnectionReport(resolveRuntimeConfig(env));
   return {
     status: "ok",
-    version: packageVersion(),
-    mode: runtimeMode === "local" ? "local" : "cloud",
+    version: report.packageVersion,
+    backend: report.storage,
   };
 }
 
@@ -244,9 +248,9 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
     idleTimeout: 60,
     async fetch(request) {
       const url = new URL(request.url);
-      // ── Open foundation probes ({ status, version, mode }) ───────────────
+      // ── Open foundation probes ({ status, version, storage, connection }) ──
       if (request.method === "GET" && (url.pathname === "/health" || url.pathname === "/healthz")) {
-        return Response.json(contractHealthResponse());
+        return Response.json(foundationEnvelope("ok"));
       }
       if (request.method === "GET" && (url.pathname === "/version" || url.pathname === "/v1/version")) {
         return Response.json(foundationEnvelope("ok", { capabilities: [...API_CAPABILITIES] }));

@@ -7,7 +7,7 @@ export {
   CloudConfigStore,
   CloudHttpError,
   LocalConfigStore,
-  isCloudMode,
+  isApiTransport,
   resolveCloudConfig,
   resolveConfigStore,
 } from "./data/config-store.js";

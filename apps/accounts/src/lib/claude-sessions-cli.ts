@@ -341,7 +341,7 @@ async function runMerge(options: SessionsMergeCliOptions): Promise<void> {
     }
   }
   // The same store the rest of this command group reads: on a machine pointed
-  // at a self-hosted registry the on-box file is empty, and every profile would
+  // at the HTTP API registry the on-box file is empty, and every profile would
   // otherwise be treated as unregistered and silently never linked.
   const profiles = await resolveStore().listProfiles("claude");
   const report = mergeClaudeSessions({

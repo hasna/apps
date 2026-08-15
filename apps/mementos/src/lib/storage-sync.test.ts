@@ -5,12 +5,11 @@ import {
   MEMENTOS_STORAGE_FALLBACK_ENV,
   MEMENTOS_STORAGE_TABLES,
   STORAGE_TABLES,
-  getStorageConfig,
+  getStorageBackend,
   getStorageConnectionString,
   getStorageDatabaseEnv,
   getStorageDatabaseEnvName,
   getStorageDatabaseUrl,
-  getStorageMode,
   getStorageStatus,
   redactDatabaseUrl,
   shouldUsePgSsl,
@@ -95,8 +94,7 @@ describe("mementos storage configuration", () => {
     expect(getStorageDatabaseEnvName()).toBe("HASNA_MEMENTOS_DATABASE_URL");
     expect(getStorageDatabaseUrl()).toBe("postgres://canonical");
     expect(getStorageConnectionString()).toBe("postgres://canonical");
-    expect(getStorageConfig().mode).toBe("cloud");
-    expect(getStorageMode()).toBe("cloud");
+    expect(getStorageBackend()).toBe("postgresql");
   });
 
   it("uses the shorter storage database env as fallback", () => {
@@ -110,38 +108,21 @@ describe("mementos storage configuration", () => {
     expect(getStorageDatabaseUrl()).toBe("postgres://fallback");
   });
 
-  it("uses storage mode overrides", () => {
-    expect(getStorageConfig().mode).toBe("local");
+  it("selects the server backend by DATABASE_URL presence", () => {
+    expect(getStorageBackend()).toBe("sqlite");
 
     process.env["MEMENTOS_DATABASE_URL"] = "postgres://remote";
-    expect(getStorageConfig().mode).toBe("cloud");
+    expect(getStorageBackend()).toBe("postgresql");
 
-    process.env["HASNA_MEMENTOS_STORAGE_MODE"] = "remote";
-    expect(getStorageConfig().mode).toBe("cloud");
-  });
-
-  it("treats cloud as canonical and remote/hybrid as deprecated aliases", () => {
     process.env["HASNA_MEMENTOS_STORAGE_MODE"] = "cloud";
-    expect(getStorageConfig().mode).toBe("cloud");
-    expect(getStorageMode()).toBe("cloud");
-
-    process.env["HASNA_MEMENTOS_STORAGE_MODE"] = "hybrid";
-    expect(getStorageConfig().mode).toBe("cloud");
-
-    process.env["HASNA_MEMENTOS_STORAGE_MODE"] = "remote";
-    expect(getStorageConfig().mode).toBe("cloud");
-
-    process.env["HASNA_MEMENTOS_STORAGE_MODE"] = "local";
-    expect(getStorageConfig().mode).toBe("local");
+    expect(() => getStorageBackend()).toThrow(/HASNA_MEMENTOS_STORAGE_MODE/);
   });
 
-  it("prefers the Hasna namespaced storage mode over fallback mode", () => {
-    process.env["MEMENTOS_DATABASE_URL"] = "postgres://fallback";
-    process.env["MEMENTOS_STORAGE_MODE"] = "remote";
-    process.env["HASNA_MEMENTOS_STORAGE_MODE"] = "local";
-
-    expect(getStorageConfig().mode).toBe("local");
-    expect(getStorageMode()).toBe("local");
+  it("rejects any retired storage-mode variable instead of treating it as a selector", () => {
+    for (const stale of ["cloud", "hybrid", "remote", "local"]) {
+      process.env["HASNA_MEMENTOS_STORAGE_MODE"] = stale;
+      expect(() => getStorageBackend()).toThrow(/HASNA_MEMENTOS_STORAGE_MODE/);
+    }
   });
 
   it("publishes stable storage tables, env constants, and redacted status", () => {
@@ -159,12 +140,11 @@ describe("mementos storage configuration", () => {
     expect(status.database.redacted_url).toBe(
       "postgres://user:***@example.test/mementos?sslmode=require&password=***&access_token=***&client_secret=***&aws_secret_access_key=***"
     );
-    expect(status.runtime.kind).toBe("cloud-postgres");
+    expect(status.backend).toBe("postgresql");
+    expect(status.runtime.kind).toBe("postgresql");
     expect(status.runtime.local.adapter).toBe("sqlite");
-    expect(status.runtime.remote.adapter).toBe("postgres");
-    expect(status.runtime.remote.source).toBe("env");
-    expect(status.runtime.object_storage.s3.supported).toBe(false);
-    expect(status.runtime.object_storage.aws.mutation_allowed).toBe(false);
+    expect(status.runtime.backend.adapter).toBe("postgres");
+    expect(status.runtime.backend.source).toBe("env");
     expect(JSON.stringify(status)).not.toContain("access-secret");
     expect(JSON.stringify(status)).not.toContain("client-secret");
     expect(JSON.stringify(status)).not.toContain("aws-secret");
@@ -172,8 +152,7 @@ describe("mementos storage configuration", () => {
     expect(JSON.stringify(status)).not.toContain(":secret");
   });
 
-  it("fails closed when remote mode uses a non-PostgreSQL URL", () => {
-    process.env["HASNA_MEMENTOS_STORAGE_MODE"] = "remote";
+  it("fails closed when the postgresql backend is selected with a non-PostgreSQL URL", () => {
     process.env["HASNA_MEMENTOS_DATABASE_URL"] =
       "sqlite:///tmp/mementos.db?access_token=local-secret";
 
@@ -183,24 +162,30 @@ describe("mementos storage configuration", () => {
     expect(status.database.configured).toBe(false);
     expect(status.database.rds_compatible).toBe(false);
     expect(status.database.redacted_url).toBe("sqlite:///tmp/mementos.db?access_token=***");
-    expect(status.runtime.remote.rds_compatible).toBe(false);
-    expect(status.runtime.remote.fail_closed).toBe(true);
+    expect(status.runtime.backend.rds_compatible).toBe(false);
+    expect(status.runtime.backend.fail_closed).toBe(true);
     expect(status.issues.join("\n")).toContain("postgres:// or postgresql://");
     expect(JSON.stringify(status)).not.toContain("local-secret");
   });
 
-  it("fails closed when remote storage is requested without PostgreSQL config", () => {
-    process.env["HASNA_MEMENTOS_STORAGE_MODE"] = "remote";
+  it("a valid DATABASE_URL selects and configures the postgresql backend", () => {
+    process.env["HASNA_MEMENTOS_DATABASE_URL"] = "postgres://u:p@127.0.0.1:1/db";
 
     const status = getStorageStatus();
 
-    expect(status.ok).toBe(false);
-    expect(status.remote_enabled).toBe(true);
-    expect(status.database.configured).toBe(false);
-    expect(status.runtime.fail_closed).toBe(true);
-    expect(status.runtime.remote.fail_closed).toBe(true);
-    expect(status.runtime.remote.missing).toContain("storage.rds.host");
-    expect(status.issues.join("\n")).toContain("Cloud PostgreSQL/RDS storage is requested");
+    expect(status.ok).toBe(true);
+    expect(status.backend).toBe("postgresql");
+    expect(status.runtime.backend.configured).toBe(true);
+    expect(status.database.configured).toBe(true);
+  });
+
+  it("with no DATABASE_URL the backend is sqlite and nothing is requested", () => {
+    const status = getStorageStatus();
+
+    expect(status.ok).toBe(true);
+    expect(status.backend).toBe("sqlite");
+    expect(status.runtime.backend.requested).toBe(false);
+    expect(status.runtime.backend.configured).toBe(false);
   });
 
   it("reports safe PostgreSQL/RDS migration diagnostics without networking", () => {

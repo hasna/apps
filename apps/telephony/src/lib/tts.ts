@@ -18,7 +18,7 @@ export function hasElevenLabsConfig(): boolean {
  * Raw ElevenLabs voices fetch using THIS process's credential. Used by the
  * LocalStore (local machine calls ElevenLabs directly) and by the cloud
  * server's `/v1/voices` proxy (server credential from Secrets Manager). Clients
- * in cloud mode never call this — they route through {@link listVoices}.
+ * on the HTTP API transport never call this — they route through {@link listVoices}.
  */
 export async function fetchVoicesFromProvider(): Promise<Voice[]> {
   const apiKey = requireConfig("elevenlabs_api_key");
@@ -38,9 +38,9 @@ export async function fetchVoicesFromProvider(): Promise<Voice[]> {
 }
 
 // ElevenLabs voices passthrough is routed through the Store so it obeys the
-// 3-mode standard (parity with `searchAvailableNumbers`/`listTwilioNumbers`):
-// cloud/self_hosted mode goes through the server-side `/v1/voices` proxy
-// (credential stays on the server), local mode calls ElevenLabs directly.
+// transport selection (parity with `searchAvailableNumbers`/`listTwilioNumbers`):
+// HTTP API transport goes through the server-side `/v1/voices` proxy
+// (credential stays on the server), local transport calls ElevenLabs directly.
 export async function listVoices(): Promise<Voice[]> {
   return getStore().listVoices();
 }

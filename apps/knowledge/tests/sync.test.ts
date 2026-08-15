@@ -65,7 +65,6 @@ function configureS3Service(service: ReturnType<typeof createKnowledgeService>, 
 } = {}) {
   const workspace = service.ensureWorkspace();
   const config = defaultKnowledgeConfig();
-  config.mode = 'hosted';
   config.storage = {
     type: 's3',
     artifacts_root: 'artifacts',

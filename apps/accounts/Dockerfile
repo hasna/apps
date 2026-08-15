@@ -1,4 +1,4 @@
-# @hasna/accounts — accounts-serve cloud API (PURE REMOTE, cloud Postgres).
+# @hasna/accounts — accounts-serve HTTP API (postgresql server backend).
 # ARM64 / Bun. Multi-stage: build with dev deps, run a lean prod image.
 #
 # syntax=docker/dockerfile:1
@@ -35,8 +35,7 @@ COPY docker/rds-global-bundle.pem /app/rds-global-bundle.pem
 # Cloud service defaults. The DSN + signing secret are injected at runtime
 # (injected by the runtime environment). The database CA bundle lets TLS
 # verify the shared RDS certificate chain.
-ENV HASNA_ACCOUNTS_STORAGE_MODE=cloud \
-    NODE_EXTRA_CA_CERTS=/app/rds-global-bundle.pem \
+ENV NODE_EXTRA_CA_CERTS=/app/rds-global-bundle.pem \
     PORT=8080
 
 EXPOSE 8080
