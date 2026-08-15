@@ -211,13 +211,33 @@ export async function executeVerifiedScript(options: VerifiedRunOptions): Promis
 
 function killGroup(proc: Subprocess | null): void {
   if (!proc) return;
+  // Negative-pid (process-group) kills are unreliable here on two counts:
+  // Bun's process.kill() ignores them (measured: no error, no effect), and
+  // the fleet's Landlock signal-scope domains block them silently even via
+  // the system kill binary (measured: /usr/bin/kill -9 -pgid returns 0 and
+  // the group survives). Same-domain positive-pid signaling works. So the
+  // group is enumerated from /proc (via ps) and every member is killed by
+  // pid — a real group kill, not a leader-only one (bug 4d4c8f0b: children
+  // survived with PPID 1).
   try {
-    process.kill(-proc.pid, "SIGKILL");
-  } catch {
-    try {
-      process.kill(proc.pid, "SIGKILL");
-    } catch {
-      // Already exited.
+    const ps = Bun.spawnSync(
+      ["bash", "-c", `ps -eo pid=,pgid= | awk '$2 == ${proc.pid} {print $1}'`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const members = ps.stdout.toString().trim().split(/\s+/).filter(Boolean);
+    for (const pid of members) {
+      try {
+        process.kill(Number(pid), "SIGKILL");
+      } catch {
+        // Already exited.
+      }
     }
+  } catch {
+    // Fall through to the leader kill.
+  }
+  try {
+    process.kill(proc.pid, "SIGKILL");
+  } catch {
+    // Already exited.
   }
 }
