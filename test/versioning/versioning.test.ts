@@ -37,8 +37,13 @@ const membersByName = new Map(members.map((member) => [member.name, member]));
 // 0.14.83) and repos (0.1.48, heading 0.1.47) were unregistered. The machines
 // row was removed by the 0.2.27 release PR, which added the 0.2.26 and 0.2.27
 // headings and reconciled the package to 0.2.27.
+// contacts gained a record at import #149 (2026-08-15): the imported tree
+// carries package 0.6.35 while its CHANGELOG heading is still 0.1.0 — the old
+// repo stopped updating release headings after 0.1.0; pre-existing condition,
+// documented absorption (reconcile on the import row).
 const KNOWN_CHANGELOG_MISMATCHES = new Map([
   ["@hasna/accounts", { packageVersion: "0.2.44", changelogVersion: "0.2.43" }],
+  ["@hasna/contacts", { packageVersion: "0.6.35", changelogVersion: "0.1.0" }],
   ["@hasna/calendar", { packageVersion: "0.3.1", changelogVersion: "0.3.0" }],
   ["@hasna/conversations", { packageVersion: "0.6.2", changelogVersion: "0.6.0" }],
   ["@hasna/instructions", { packageVersion: "0.4.35", changelogVersion: "0.4.33" }],

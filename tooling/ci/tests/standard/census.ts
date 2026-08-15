@@ -245,7 +245,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "servers", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "sheets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "signatures", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "skills", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "slides", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "snapshots", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "statusline", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -334,6 +333,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos e4d8cd62 (contracts task — catalog)",
   },
   {
+    member: "contacts",
+    cause: "manifest_valid: service-class manifest declares no service surface (service repos must declare at least one). Imported by #149; validated at pinned 0.5.2 (kitVersion 0.4.2; pin ^0.5.2 — ^0.5.1 resolves to 0.5.2, the literal 0.5.1 does not exist on npm).",
+    task: "todos ee9fbb4d (import row — contacts; add serviceSurfaces or modernize the manifest)",
+  },
+  {
     member: "conversations",
     cause: "bins_match_package: package.json ships bins conversations-inbox and conversations-hook that the manifest does not declare (manifest declares conversations, conversations-mcp, conversations-serve only). Imported by #100 after the original census; validated at pinned ^0.4.2 (kitVersion 0.4.2).",
     task: "todos ee9fbb4d (import row — conversations; reconcile the two bins against the manifest or extend the manifest's bins)",
@@ -377,6 +381,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "knowledge",
     cause: "manifest_valid: service-class manifest declares no service surface (service repos must declare at least one).",
     task: "todos a8c97621 (contracts task — knowledge)",
+  },
+  {
+    member: "loops",
+    cause: "credential_seam_compliance at validator 0.10.6: src/lib/cloud/storage.ts:218 resolveStorageClient and src/lib/cloud/transport.ts:89/241/358 (resolveClientTransport/createHasnaHttpTransport/createClientTransport) are vendored copies of the @hasna/contracts client seam — a fork does not receive credential-resolution fixes; import from @hasna/contracts/client instead. Main-gate break caused by the 0.10.6 validator (todos ee9fbb4d).",
+    task: "todos ee9fbb4d (main-gate break — loops; replace vendored contracts client seam with @hasna/contracts/client imports)",
   },
   {
     member: "logs",
@@ -435,6 +444,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
 export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string; pinned: string }> = [
   { member: "accounts", kitVersion: "0.10.6", pinned: "0.5.2" },
   { member: "calendar", kitVersion: "0.8.4", pinned: "0.4.2" },
+  { member: "contacts", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "domains", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "files", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "gateway", kitVersion: "0.4.1", pinned: "0.2.2" },
