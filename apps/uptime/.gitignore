@@ -1,0 +1,17 @@
+node_modules/
+dist/
+bun.lockb
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+.project.json
+.hasna/
+.codewith/
+.takumi/
+coverage/
+.terraform/
+*.tfplan
+*.tfstate
+*.tfstate.*

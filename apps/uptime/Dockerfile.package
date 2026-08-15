@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+
+FROM public.ecr.aws/docker/library/node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS bun
+
+RUN npm install -g bun@1.3.13
+
+FROM public.ecr.aws/docker/library/alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce AS runtime
+ENV NODE_ENV=production \
+    HASNA_UPTIME_MODE=hosted
+WORKDIR /app
+
+RUN apk add --no-cache ca-certificates libgcc libstdc++ \
+  && addgroup -g 10001 -S uptime \
+  && adduser -S -D -H -u 10001 -G uptime uptime
+
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=bun /usr/local/lib/node_modules/bun /usr/local/lib/node_modules/bun
+
+COPY package.json bun.lock ./
+COPY dist ./dist
+
+RUN bun install --production --frozen-lockfile \
+  && printf '#!/bin/sh\nexec bun /app/dist/cli/index.js "$@"\n' > /usr/local/bin/uptimemon \
+  && chmod +x /usr/local/bin/uptimemon \
+  && printf '#!/bin/sh\nexec bun /app/dist/cli/deprecated-uptime.js "$@"\n' > /usr/local/bin/uptime \
+  && chmod +x /usr/local/bin/uptime \
+  && chown -R uptime:uptime /app
+
+USER uptime
+EXPOSE 3899
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD bun -e "const r = await fetch('http://127.0.0.1:3899/health'); process.exit(r.ok ? 0 : 1)"
+
+CMD ["bun", "dist/cli/index.js", "serve", "--mode", "hosted", "--host", "0.0.0.0", "--port", "3899"]

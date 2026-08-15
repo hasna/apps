@@ -1,0 +1,13 @@
+.git
+.gitignore
+.project.json
+node_modules
+coverage
+*.tgz
+*.log
+.env
+.env.*
+.hasna
+infra/**/.terraform
+infra/**/*.tfstate
+infra/**/*.tfstate.*

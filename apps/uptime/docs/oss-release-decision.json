@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-08-01",
+  "repository": "hasna/uptime",
+  "package": "@hasna/uptime",
+  "releaseVersion": "0.1.70",
+  "decision": "HOLD",
+  "explicitPublicApproval": false,
+  "releaseCandidateCommit": "be1cb1e2f15c3a8d2d98258bc7ea51134ad227c7",
+  "observed": {
+    "githubVisibility": "PRIVATE",
+    "npmPackagePublic": true,
+    "npmRepositoryUrl": null
+  },
+  "legal": {
+    "status": "PASS",
+    "license": "Apache-2.0",
+    "noticeReviewed": true,
+    "thirdPartyNoticesReviewed": true
+  },
+  "provenance": {
+    "status": "VERIFIED",
+    "npmAttestations": false,
+    "npmGitHead": null,
+    "alternateEvidence": null,
+    "registryIntegrity": "sha512-FNyHtGkAPcNJbeYdwWBnCrqhcyJpPnkK+/KUpl/grhWMOiiGCa3riwM3rM1cp6206MtS7N1NVeSwflHoOJE+RA==",
+    "registrySignature": true
+  },
+  "secretScan": {
+    "status": "PASS",
+    "scope": "tracked worktree and full local Git history",
+    "scanner": "built-in high-confidence credential patterns plus Gitleaks 8.30.1",
+    "reviewedAt": "2026-08-01"
+  },
+  "blockers": [
+    "No explicit approval to make hasna/uptime public is recorded.",
+    "The public npm package metadata points to a GitHub repository that is still private."
+  ]
+}

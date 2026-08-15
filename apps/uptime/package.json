@@ -1,0 +1,130 @@
+{
+  "name": "@hasna/uptime",
+  "version": "0.1.70",
+  "description": "Local-first uptime and downtime monitoring service with CLI, MCP, SDK, SQLite persistence, and a dashboard.",
+  "license": "Apache-2.0",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "readmeFilename": "README.md",
+  "keywords": [
+    "uptime",
+    "monitoring",
+    "pingdom",
+    "mcp",
+    "hasna"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "Dockerfile",
+    "Dockerfile.package",
+    ".dockerignore",
+    "bun.lock",
+    "docs/*.md",
+    "docs/*.json",
+    "infra/aws/README.md",
+    "infra/aws/.terraform.lock.hcl",
+    "infra/aws/*.tf",
+    "infra/aws/terraform.tfvars.example",
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md"
+  ],
+  "bin": {
+    "uptimemon": "dist/cli/index.js",
+    "uptime": "dist/cli/deprecated-uptime.js",
+    "uptime-mcp": "dist/mcp/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
+    },
+    "./storage": {
+      "types": "./dist/store.d.ts",
+      "import": "./dist/store.js"
+    },
+    "./probes": {
+      "types": "./dist/probes.d.ts",
+      "import": "./dist/probes.js"
+    },
+    "./cloud-plan": {
+      "types": "./dist/cloud-plan.d.ts",
+      "import": "./dist/cloud-plan.js"
+    },
+    "./postgres-plan": {
+      "types": "./dist/postgres-plan.d.ts",
+      "import": "./dist/postgres-plan.js"
+    },
+    "./postgres": {
+      "types": "./dist/postgres.d.ts",
+      "import": "./dist/postgres.js"
+    },
+    "./postgres-runtime": {
+      "types": "./dist/postgres-runtime.d.ts",
+      "import": "./dist/postgres-runtime.js"
+    },
+    "./postgres-report-runtime": {
+      "types": "./dist/postgres-report-runtime.d.ts",
+      "import": "./dist/postgres-report-runtime.js"
+    },
+    "./workers": {
+      "types": "./dist/workers.d.ts",
+      "import": "./dist/workers.js"
+    },
+    "./worker-metrics": {
+      "types": "./dist/worker-metrics.d.ts",
+      "import": "./dist/worker-metrics.js"
+    },
+    "./edge-smoke": {
+      "types": "./dist/edge-smoke.d.ts",
+      "import": "./dist/edge-smoke.js"
+    },
+    "./evidence-sanitizer": {
+      "types": "./dist/evidence-sanitizer.d.ts",
+      "import": "./dist/evidence-sanitizer.js"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/cli/deprecated-uptime.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/index.ts src/api.ts src/service.ts src/store.ts src/checks.ts src/imports.ts src/report.ts src/probes.ts src/cloud-plan.ts src/postgres-plan.ts src/postgres.ts src/postgres-runtime.ts src/postgres-report-runtime.ts src/workers.ts src/worker-metrics.ts src/edge-smoke.ts src/evidence-sanitizer.ts src/types.ts src/paths.ts src/dashboard.ts src/version.ts --root src --outdir dist --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist && chmod +x dist/cli/index.js dist/cli/deprecated-uptime.js dist/mcp/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "bun run build && bun test ./tests",
+    "release:oss:audit": "node scripts/oss-release-gate.mjs --verify-recorded-state",
+    "release:oss:check": "node scripts/oss-release-gate.mjs",
+    "release:oss:verify": "node scripts/oss-release-gate.mjs --verify-published",
+    "dev:cli": "bun run src/cli/index.ts",
+    "dev:mcp": "bun run src/mcp/index.ts",
+    "dev:server": "bun run src/cli/index.ts serve",
+    "prepublishOnly": "node scripts/oss-release-gate.mjs && bun run build && bun run typecheck && bun test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "chalk": "^5.6.2",
+    "commander": "^13.1.0",
+    "pg": "^8.20.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.15.6",
+    "typescript": "^5.9.3"
+  }
+}

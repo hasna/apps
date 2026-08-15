@@ -1,0 +1,1631 @@
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { dashboardHtml } from "./dashboard.js";
+import { sanitizeEvidenceInput } from "./evidence-sanitizer.js";
+import { sanitizePostgresReportRuntimeError, type ListPostgresReportRunsOptions, type PostgresReportRunRecord, type PostgresReportScheduleRecord } from "./postgres-report-runtime.js";
+import { sanitizePostgresRuntimeError } from "./postgres-runtime.js";
+import { probePublicKeyFingerprint, probeResultPayloadHash, verifyProbeResultSignature } from "./probes.js";
+import { UptimeService, type UptimeServiceOptions } from "./service.js";
+import { resolveRuntimeMode, type UptimeRuntimeMode } from "./store.js";
+import type {
+  ClaimPostgresCheckJobInput,
+  PostgresAuditEventRecord,
+  PostgresCheckJobRecord,
+  PostgresCheckResultRecord,
+  PostgresMonitorMutationAuditInput,
+  PostgresMonitorMutationResult,
+  PostgresMonitorTombstoneResult,
+  PostgresMonitorRecord,
+  PostgresCheckJobMutationResult,
+  PostgresProbeIdentityRecord,
+  PostgresProbeIdentityMutationResult,
+  PostgresProbeMutationAuditInput,
+  PostgresProbeSubmissionRecord,
+  PostgresSyncTombstoneRecord,
+  RecordPostgresAuditEventInput,
+  SubmitPostgresProbeCheckResult,
+  SubmitPostgresProbeCheckResultMutationResult,
+  SubmitPostgresProbeCheckResultInput,
+  TombstonePostgresResourceInput,
+  UpsertPostgresProbeIdentityInput,
+  UpsertPostgresMonitorInput,
+} from "./postgres-runtime.js";
+import type { AuditEvent, CheckResult, ListAuditEventsOptions, ProbeCheckJob, ProbeIdentity, ProbeResultSubmission, ProbeSubmissionReceipt, RecordAuditEventInput, ReportRun, ReportSchedule, SchedulerHandle, Monitor, UptimeSummary } from "./types.js";
+
+export interface ServeOptions extends UptimeServiceOptions {
+  host?: string;
+  port?: number;
+  check?: boolean;
+  service?: UptimeService;
+  apiToken?: string;
+  hostedToken?: string;
+  hostedTokens?: HostedToken[];
+  hostedAllowedOrigins?: string[];
+  hostedPostgresRuntime?: HostedPostgresMonitorRuntime;
+  hostedPostgresProbeRuntime?: HostedPostgresProbeRuntime;
+  hostedPostgresReportRuntime?: HostedPostgresReportRuntime;
+  allowUnsafeRemoteMutations?: boolean;
+}
+
+export interface CreateApiHandlerOptions {
+  apiToken?: string;
+  hostedToken?: string;
+  hostedTokens?: HostedToken[];
+  hostedAllowedOrigins?: string[];
+  hostedPostgresRuntime?: HostedPostgresMonitorRuntime;
+  hostedPostgresProbeRuntime?: HostedPostgresProbeRuntime;
+  hostedPostgresReportRuntime?: HostedPostgresReportRuntime;
+  allowUnsafeRemoteMutations?: boolean;
+  fetchImpl?: typeof fetch;
+  trustedLoopback?: boolean;
+  mode?: UptimeRuntimeMode;
+}
+
+export type HostedScope = "uptime:read" | "uptime:write" | "uptime:probe" | "uptime:report" | "uptime:admin";
+
+export interface HostedToken {
+  token: string;
+  scopes: HostedScope[];
+  workspaceId?: string;
+  actor?: string;
+  probeId?: string;
+}
+
+interface HostedActor {
+  scopes: Set<HostedScope>;
+  workspaceId: string;
+  actor: string;
+  probeId?: string;
+}
+
+export interface HostedPostgresMonitorRuntime {
+  upsertMonitor(input: UpsertPostgresMonitorInput): Promise<PostgresMonitorRecord>;
+  upsertMonitorWithAudit(input: UpsertPostgresMonitorInput, audit: PostgresMonitorMutationAuditInput): Promise<PostgresMonitorMutationResult>;
+  listMonitors(options?: { workspaceId?: string; includeDisabled?: boolean; limit?: number; offset?: number }): Promise<PostgresMonitorRecord[]>;
+  getMonitor(input: { workspaceId?: string; id: string }): Promise<PostgresMonitorRecord | null>;
+  tombstoneResource(input: TombstonePostgresResourceInput & { resourceType: "monitor" }): Promise<PostgresSyncTombstoneRecord>;
+  tombstoneMonitorWithAudit(input: TombstonePostgresResourceInput & { resourceType: "monitor" }, audit: PostgresMonitorMutationAuditInput): Promise<PostgresMonitorTombstoneResult>;
+  recordAuditEvent(input: RecordPostgresAuditEventInput): Promise<PostgresAuditEventRecord>;
+}
+
+export interface HostedPostgresProbeRuntime {
+  upsertProbeIdentity(input: UpsertPostgresProbeIdentityInput): Promise<PostgresProbeIdentityRecord>;
+  upsertProbeIdentityWithAudit(input: UpsertPostgresProbeIdentityInput, audit: PostgresProbeMutationAuditInput): Promise<PostgresProbeIdentityMutationResult>;
+  getProbeIdentity(input: { workspaceId?: string; id: string }): Promise<PostgresProbeIdentityRecord | null>;
+  claimCheckJob(input: ClaimPostgresCheckJobInput): Promise<PostgresCheckJobRecord | null>;
+  claimCheckJobWithAudit(input: ClaimPostgresCheckJobInput, audit: PostgresProbeMutationAuditInput): Promise<PostgresCheckJobMutationResult | null>;
+  submitProbeCheckResult(input: SubmitPostgresProbeCheckResultInput): Promise<SubmitPostgresProbeCheckResult>;
+  submitProbeCheckResultWithAudit(input: SubmitPostgresProbeCheckResultInput, audit: PostgresProbeMutationAuditInput): Promise<SubmitPostgresProbeCheckResultMutationResult>;
+  recordAuditEvent(input: RecordPostgresAuditEventInput): Promise<PostgresAuditEventRecord>;
+}
+
+type HostedReportScheduleAuditInput = {
+  workspaceId?: string;
+  action: "report_schedule.create" | "report_schedule.update" | "report_schedule.delete";
+  resourceType: "report_schedule";
+  resourceId?: string | null;
+  actor?: string | null;
+  origin?: string | null;
+  idempotencyKey?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export interface HostedPostgresReportRuntime {
+  createReportSchedule(input: {
+    id?: string;
+    workspaceId?: string;
+    name: string;
+    intervalSeconds: number;
+    nextRunAt?: string;
+    enabled?: boolean;
+    subject?: string | null;
+    channels: ReportSchedule["channels"];
+    actor?: string | null;
+    origin?: string | null;
+    idempotencyKey?: string | null;
+  }): Promise<PostgresReportScheduleRecord>;
+  createReportScheduleWithAudit(input: Parameters<HostedPostgresReportRuntime["createReportSchedule"]>[0], audit: HostedReportScheduleAuditInput): Promise<{ schedule: PostgresReportScheduleRecord; audit: AuditEvent }>;
+  listReportSchedules(options?: { workspaceId?: string; includeDisabled?: boolean; limit?: number; offset?: number }): Promise<PostgresReportScheduleRecord[]>;
+  getReportSchedule(input: { workspaceId?: string; idOrName: string }): Promise<PostgresReportScheduleRecord | null>;
+  updateReportSchedule(input: {
+    workspaceId?: string;
+    idOrName: string;
+    name?: string;
+    intervalSeconds?: number;
+    nextRunAt?: string;
+    enabled?: boolean;
+    subject?: string | null;
+    channels?: ReportSchedule["channels"];
+    actor?: string | null;
+    origin?: string | null;
+    idempotencyKey?: string | null;
+    expectedRevision?: number | null;
+  }): Promise<PostgresReportScheduleRecord>;
+  updateReportScheduleWithAudit(input: Parameters<HostedPostgresReportRuntime["updateReportSchedule"]>[0], audit: HostedReportScheduleAuditInput): Promise<{ schedule: PostgresReportScheduleRecord; audit: AuditEvent }>;
+  tombstoneReportSchedule(input: {
+    workspaceId?: string;
+    idOrName: string;
+    actor?: string | null;
+    origin?: string | null;
+    idempotencyKey?: string | null;
+    expectedRevision?: number | null;
+    deletedAt?: string;
+  }): Promise<PostgresReportScheduleRecord | null>;
+  tombstoneReportScheduleWithAudit(input: Parameters<HostedPostgresReportRuntime["tombstoneReportSchedule"]>[0], audit: HostedReportScheduleAuditInput): Promise<{ schedule: PostgresReportScheduleRecord | null; audit: AuditEvent | null }>;
+  listReportRuns(options?: ListPostgresReportRunsOptions): Promise<PostgresReportRunRecord[]>;
+  recordAuditEvent(input: RecordAuditEventInput): Promise<AuditEvent>;
+  listAuditEvents(options?: ListAuditEventsOptions & { offset?: number }): Promise<AuditEvent[]>;
+}
+
+export function createApiHandler(service: UptimeService, options: CreateApiHandlerOptions = {}): (request: Request) => Promise<Response> {
+  const mode = options.mode ? resolveRuntimeMode(options.mode) : service.store.mode;
+  if (mode !== service.store.mode) {
+    throw new Error(`API mode ${mode} does not match store mode ${service.store.mode}`);
+  }
+  return async (request: Request) => {
+    const url = new URL(request.url);
+    try {
+      if (request.method === "GET" && url.pathname === "/health") {
+        return json({ ok: true, service: "uptime", mode, dataMode: service.store.dataMode });
+      }
+      if (request.method === "GET" && url.pathname === "/ready") {
+        if (mode === "hosted") requireHostedActor(request, url, options, "uptime:read");
+        const readiness = service.readiness();
+        return json({
+          service: "uptime",
+          ...readiness,
+          auth: mode === "hosted" ? { configured: true, checked: true } : { configured: false, checked: false },
+        }, readiness.ok ? 200 : 503);
+      }
+      if (mode === "hosted") {
+        return await handleHostedRequest(service, request, url, options);
+      } else {
+        validateLocalMutationRequest(request, url, options);
+      }
+      if (request.method === "GET" && url.pathname === "/") {
+        return html(dashboardHtml());
+      }
+      return await handleApiRoute(service, request, url, url.pathname, options, false);
+    } catch (error) {
+      return json(
+        { error: sanitizeApiError(error, options) },
+        error instanceof ApiError ? error.status : 400,
+      );
+    }
+  };
+}
+
+export function serveUptime(options: ServeOptions = {}): { server: ReturnType<typeof Bun.serve>; service: UptimeService; scheduler?: SchedulerHandle } {
+  const requestedMode = options.mode ? resolveRuntimeMode(options.mode) : options.service?.store.mode ?? "local";
+  if (requestedMode === "hosted" && resolveHostedTokens(options).length === 0) {
+    throw new Error("hosted mode requires HASNA_UPTIME_HOSTED_TOKEN or --hosted-token");
+  }
+  const service = options.service ?? new UptimeService(options);
+  const mode = service.store.mode;
+  if (mode !== requestedMode) {
+    throw new Error(`serve mode ${requestedMode} does not match store mode ${mode}`);
+  }
+  if (mode === "hosted" && options.check) {
+    throw new Error("hosted scheduler requires check_jobs and probes");
+  }
+  const scheduler = options.check ? service.startScheduler() : undefined;
+  const server = Bun.serve({
+    hostname: options.host ?? "127.0.0.1",
+    port: options.port ?? 3899,
+    fetch: createApiHandler(service, {
+      apiToken: options.apiToken,
+      hostedToken: options.hostedToken,
+      hostedTokens: options.hostedTokens,
+      hostedAllowedOrigins: options.hostedAllowedOrigins,
+      hostedPostgresRuntime: options.hostedPostgresRuntime,
+      hostedPostgresProbeRuntime: options.hostedPostgresProbeRuntime,
+      hostedPostgresReportRuntime: options.hostedPostgresReportRuntime,
+      allowUnsafeRemoteMutations: options.allowUnsafeRemoteMutations,
+      trustedLoopback: isLoopbackHost(options.host ?? "127.0.0.1"),
+      mode,
+    }),
+  });
+  return { server, service, scheduler };
+}
+
+function json(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value, null, 2), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
+}
+
+function html(value: string): Response {
+  return new Response(value, {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
+}
+
+function numericParam(url: URL, name: string, fallback: number): number {
+  const raw = url.searchParams.get(name);
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function validateLocalMutationRequest(request: Request, url: URL, options: CreateApiHandlerOptions): void {
+  if (!["POST", "PATCH", "DELETE"].includes(request.method)) return;
+  const apiToken = resolveApiToken(options.apiToken);
+  const hasToken = apiToken ? hasValidApiToken(request, apiToken) : false;
+  const allowUnsafeRemote = options.allowUnsafeRemoteMutations || process.env.HASNA_UPTIME_ALLOW_REMOTE_MUTATIONS === "1";
+  const trustedLoopback = options.trustedLoopback ?? isLoopbackHost(url.hostname);
+  if (!allowUnsafeRemote && !hasToken && (!trustedLoopback || !isLoopbackHost(url.hostname))) {
+    throw new ApiError("non-loopback host rejected for local mutation", 403);
+  }
+  const origin = request.headers.get("origin");
+  if (origin && origin !== `${url.protocol}//${url.host}`) {
+    throw new ApiError("cross-origin mutation rejected", 403);
+  }
+}
+
+async function handleHostedRequest(service: UptimeService, request: Request, url: URL, options: CreateApiHandlerOptions): Promise<Response> {
+  if (url.pathname === "/") {
+    requireHostedActor(request, url, options, "uptime:read");
+    throw new ApiError("hosted dashboard requires the cloud dashboard shell", 501);
+  }
+  if (!url.pathname.startsWith("/api/v1/")) {
+    requireHostedActor(request, url, options, "uptime:read");
+    return json({ error: "not found" }, 404);
+  }
+  const apiPath = `/api${url.pathname.slice("/api/v1".length)}`;
+  const scope = hostedScopeFor(request.method, apiPath);
+  const actor = requireHostedActor(request, url, options, scope);
+  if (["POST", "PATCH", "DELETE"].includes(request.method)) {
+    validateHostedMutationOrigin(request, url, options);
+  }
+  return handleApiRoute(service, request, url, apiPath, options, true, actor);
+}
+
+function validateHostedMutationOrigin(request: Request, url: URL, options: CreateApiHandlerOptions): void {
+  const rawOrigin = request.headers.get("origin");
+  const origin = normalizeOrigin(rawOrigin);
+  if (rawOrigin && !origin) {
+    throw new ApiError("cross-origin mutation rejected", 403);
+  }
+  if (!origin) return;
+  const allowedOrigins = new Set([`${url.protocol}//${url.host}`, ...resolveHostedAllowedOrigins(options)]);
+  if (!allowedOrigins.has(origin)) {
+    throw new ApiError("cross-origin mutation rejected", 403);
+  }
+}
+
+async function handleApiRoute(
+  service: UptimeService,
+  request: Request,
+  url: URL,
+  apiPath: string,
+  options: CreateApiHandlerOptions,
+  hosted: boolean,
+  actor?: HostedActor,
+): Promise<Response> {
+  if (request.method === "GET" && apiPath === "/api/summary") {
+    if (hosted && actor && options.hostedPostgresRuntime) {
+      return json(await hostedPostgresSummary(options.hostedPostgresRuntime, actor.workspaceId));
+    }
+    return json(service.summary({ workspaceId: actor?.workspaceId }));
+  }
+  if (request.method === "GET" && apiPath === "/api/report") {
+    if (hosted && options.hostedPostgresRuntime) {
+      throw new ApiError("hosted report reads require Postgres report storage", 501);
+    }
+    return json(service.buildReport({ workspaceId: actor?.workspaceId }));
+  }
+  if (request.method === "POST" && apiPath === "/api/report") {
+    if (hosted) throw new ApiError("hosted report delivery requires configured channel refs", 501);
+    const input = await jsonBody(request);
+    return json(await service.sendReport({ ...input, fetchImpl: options.fetchImpl }));
+  }
+  if (hosted && (apiPath.startsWith("/api/report-schedules") || apiPath.startsWith("/api/report-runs") || apiPath.startsWith("/api/audit-events"))) {
+    if (!actor) throw new ApiError("hosted actor is required", 500);
+    if (!options.hostedPostgresReportRuntime) {
+      throw new ApiError("hosted report schedules require Postgres report storage", 501);
+    }
+    return await handleHostedReportRoute(request, url, apiPath, options.hostedPostgresReportRuntime, actor);
+  }
+  if (hosted && apiPath.startsWith("/api/probes")) {
+    if (!actor) throw new ApiError("hosted actor is required", 500);
+    const runtime = resolveHostedPostgresProbeRuntime(options);
+    if (!runtime) {
+      throw new ApiError("hosted probe APIs require cloud check_jobs, workspace stores, and audit logging", 501);
+    }
+    return await handleHostedProbeRoute(request, url, apiPath, runtime, actor);
+  }
+  if (request.method === "GET" && apiPath === "/api/report-schedules") {
+    return json(service.listReportSchedules({ includeDisabled: url.searchParams.get("includeDisabled") === "true" }));
+  }
+  if (request.method === "POST" && apiPath === "/api/report-schedules") {
+    return json(service.createReportSchedule(await jsonBody(request)), 201);
+  }
+  if (request.method === "POST" && apiPath === "/api/report-schedules/run-due") {
+    const input = await jsonBody(request);
+    const now = input.now ? new Date(input.now) : new Date();
+    return json(await service.runDueReportSchedules(now, { fetchImpl: options.fetchImpl }));
+  }
+  const reportScheduleRunMatch = apiPath.match(/^\/api\/report-schedules\/([^/]+)\/run$/);
+  if (request.method === "POST" && reportScheduleRunMatch) {
+    return json(await service.runReportSchedule(decodeURIComponent(reportScheduleRunMatch[1]), { fetchImpl: options.fetchImpl }));
+  }
+  const reportScheduleMatch = apiPath.match(/^\/api\/report-schedules\/([^/]+)$/);
+  if (reportScheduleMatch) {
+    const id = decodeURIComponent(reportScheduleMatch[1]);
+    if (request.method === "GET") {
+      const schedule = service.getReportSchedule(id);
+      return schedule ? json(schedule) : json({ error: "not found" }, 404);
+    }
+    if (request.method === "PATCH") {
+      return json(service.updateReportSchedule(id, await jsonBody(request)));
+    }
+    if (request.method === "DELETE") {
+      return json({ deleted: service.deleteReportSchedule(id) });
+    }
+  }
+  if (request.method === "GET" && apiPath === "/api/report-runs") {
+    return json(service.listReportRuns({
+      scheduleId: url.searchParams.get("scheduleId") ?? undefined,
+      limit: numericParam(url, "limit", 50),
+    }));
+  }
+  if (request.method === "GET" && apiPath === "/api/audit-events") {
+    return json(service.listAuditEvents({
+      resourceType: url.searchParams.get("resourceType") ?? undefined,
+      resourceId: url.searchParams.get("resourceId") ?? undefined,
+      limit: numericParam(url, "limit", 50),
+    }));
+  }
+  if (request.method === "GET" && apiPath === "/api/monitors") {
+    if (hosted && actor && options.hostedPostgresRuntime) {
+      const monitors = await options.hostedPostgresRuntime.listMonitors({
+        workspaceId: actor.workspaceId,
+        includeDisabled: url.searchParams.get("includeDisabled") === "true",
+        limit: numericParam(url, "limit", 250),
+        offset: numericParam(url, "offset", 0),
+      });
+      return json(monitors.map(postgresMonitorToMonitor));
+    }
+    return json(service.listMonitors({ includeDisabled: url.searchParams.get("includeDisabled") === "true", workspaceId: actor?.workspaceId }));
+  }
+  if (request.method === "POST" && apiPath === "/api/monitors") {
+    if (hosted && actor && options.hostedPostgresRuntime) {
+      const input = await jsonBody(request);
+      const idempotencyKey = request.headers.get("idempotency-key") ?? undefined;
+      const monitorId = hostedMonitorCreateId(actor.workspaceId, idempotencyKey);
+      if (idempotencyKey?.trim()) {
+        const existing = await options.hostedPostgresRuntime.getMonitor({ workspaceId: actor.workspaceId, id: monitorId });
+        if (existing) {
+          if (!hostedMonitorCreateReplayMatches(existing, input)) throw new ApiError("idempotency key conflict", 409);
+          return json(postgresMonitorToMonitor(existing), 201);
+        }
+      }
+      const { monitor } = await upsertHostedPostgresMonitorWithAudit(options.hostedPostgresRuntime, {
+        id: monitorId,
+        workspaceId: actor.workspaceId,
+        name: input.name,
+        kind: input.kind,
+        url: input.url,
+        host: input.host,
+        port: input.port,
+        method: input.method,
+        expectedStatus: input.expectedStatus,
+        intervalSeconds: input.intervalSeconds,
+        timeoutMs: input.timeoutMs,
+        retryCount: input.retryCount,
+        enabled: input.enabled,
+        actor: actor.actor,
+        origin: "hosted-api",
+        idempotencyKey,
+      }, hostedPostgresMonitorAuditInput(actor, "monitor.create", idempotencyKey, {
+        method: request.method,
+        apiPath,
+      }));
+      return json(postgresMonitorToMonitor(monitor), 201);
+    }
+    const monitor = service.createMonitor(await jsonBody(request), { workspaceId: actor?.workspaceId });
+    if (hosted && actor) recordHostedMonitorAudit(service, actor, "monitor.create", monitor, { method: request.method, apiPath });
+    return json(monitor, 201);
+  }
+  if (request.method === "GET" && apiPath === "/api/incidents") {
+    if (hosted && options.hostedPostgresRuntime) {
+      throw new ApiError("hosted incidents require Postgres incident storage", 501);
+    }
+    const status = url.searchParams.get("status");
+    return json(service.listIncidents({
+      status: status === "open" || status === "closed" ? status : undefined,
+      monitorId: url.searchParams.get("monitorId") ?? undefined,
+      workspaceId: actor?.workspaceId,
+      limit: numericParam(url, "limit", 50),
+    }));
+  }
+  if (request.method === "GET" && apiPath === "/api/results") {
+    if (hosted && options.hostedPostgresRuntime) {
+      throw new ApiError("hosted results require Postgres result storage", 501);
+    }
+    return json(service.listResults({
+      monitorId: url.searchParams.get("monitorId") ?? undefined,
+      workspaceId: actor?.workspaceId,
+      limit: numericParam(url, "limit", 50),
+    }));
+  }
+  if (request.method === "GET" && apiPath === "/api/probes") {
+    return json(service.listProbes({ includeDisabled: url.searchParams.get("includeDisabled") === "true" }));
+  }
+  if (request.method === "POST" && apiPath === "/api/probes") {
+    const input = await jsonBody(request);
+    if (!input.publicKeyPem) throw new ApiError("API probe creation requires publicKeyPem; generate keys in the probe agent or CLI", 400);
+    return json(service.createProbe(input), 201);
+  }
+  if (request.method === "POST" && apiPath === "/api/probes/jobs") {
+    return json(service.createProbeCheckJob(await jsonBody(request)), 201);
+  }
+  const probeJobMatch = apiPath.match(/^\/api\/probes\/jobs\/([^/]+)$/);
+  if (probeJobMatch) {
+    const jobId = decodeURIComponent(probeJobMatch[1]);
+    if (request.method === "GET") {
+      const job = service.getProbeCheckJob(jobId);
+      return job ? json({ ...job, fencingToken: null }) : json({ error: "not found" }, 404);
+    }
+  }
+  const probeJobClaimMatch = apiPath.match(/^\/api\/probes\/jobs\/([^/]+)\/claim$/);
+  if (request.method === "POST" && probeJobClaimMatch) {
+    const input = await jsonBody(request);
+    return json(service.claimProbeCheckJob({
+      jobId: decodeURIComponent(probeJobClaimMatch[1]),
+      probeId: input.probeId,
+      leaseTtlMs: input.leaseTtlMs,
+    }));
+  }
+  if (request.method === "POST" && apiPath === "/api/probes/results") {
+    return json(service.submitProbeResult(await jsonBody(request)), 201);
+  }
+  if (request.method === "POST" && apiPath === "/api/imports/preview") {
+    if (hosted && options.hostedPostgresRuntime) {
+      throw new ApiError("hosted import preview requires Postgres provenance storage", 501);
+    }
+    return json(service.previewImport(await jsonBody(request), { workspaceId: actor?.workspaceId }));
+  }
+  if (request.method === "POST" && apiPath === "/api/imports/apply") {
+    if (hosted) throw new ApiError("hosted import apply requires cloud import_batches and audit", 501);
+    return json(service.applyImport(await jsonBody(request)), 201);
+  }
+  const importRollbackMatch = apiPath.match(/^\/api\/imports\/([^/]+)\/rollback$/);
+  if (request.method === "POST" && importRollbackMatch) {
+    if (hosted) throw new ApiError("hosted import rollback requires cloud import_batches and audit", 501);
+    return json(service.rollbackImport(decodeURIComponent(importRollbackMatch[1])));
+  }
+  if (request.method === "POST" && apiPath === "/api/check-all") {
+    if (hosted) throw new ApiError("hosted checks require check_jobs and probes", 501);
+    return json(await service.checkAll());
+  }
+  const monitorMatch = apiPath.match(/^\/api\/monitors\/([^/]+)(?:\/(check))?$/);
+  if (monitorMatch) {
+    const id = decodeURIComponent(monitorMatch[1]);
+    if (request.method === "GET" && !monitorMatch[2]) {
+      if (hosted && actor && options.hostedPostgresRuntime) {
+        const monitor = await options.hostedPostgresRuntime.getMonitor({ workspaceId: actor.workspaceId, id });
+        return monitor ? json(postgresMonitorToMonitor(monitor)) : json({ error: "not found" }, 404);
+      }
+      const monitor = service.getMonitor(id, { workspaceId: actor?.workspaceId });
+      return monitor ? json(monitor) : json({ error: "not found" }, 404);
+    }
+    if (request.method === "PATCH" && !monitorMatch[2]) {
+      if (hosted && actor && options.hostedPostgresRuntime) {
+        const before = await options.hostedPostgresRuntime.getMonitor({ workspaceId: actor.workspaceId, id });
+        if (!before) return json({ error: "not found" }, 404);
+        const input = await jsonBody(request);
+        const idempotencyKey = request.headers.get("idempotency-key") ?? undefined;
+        const targetChanged = postgresMonitorDefinitionChanged(before, input);
+        const nextEnabled = input.enabled ?? before.enabled;
+        const updateInput: UpsertPostgresMonitorInput = {
+          id: before.id,
+          workspaceId: actor.workspaceId,
+          name: input.name ?? before.name,
+          kind: input.kind ?? before.kind,
+          url: input.url === undefined ? before.url : input.url,
+          host: input.host === undefined ? before.host : input.host,
+          port: input.port === undefined ? before.port : input.port,
+          method: input.method ?? before.method,
+          expectedStatus: input.expectedStatus === undefined ? before.expectedStatus : input.expectedStatus,
+          intervalSeconds: input.intervalSeconds ?? before.intervalSeconds,
+          timeoutMs: input.timeoutMs ?? before.timeoutMs,
+          retryCount: input.retryCount ?? before.retryCount,
+          enabled: nextEnabled,
+          status: nextEnabled ? targetChanged || !before.enabled ? "unknown" : before.status : "paused",
+          lastCheckedAt: targetChanged ? null : before.lastCheckedAt,
+          actor: actor.actor,
+          origin: "hosted-api",
+          expectedRevision: before.revision,
+        };
+        const { monitor } = await upsertHostedPostgresMonitorWithAudit(options.hostedPostgresRuntime, updateInput, hostedPostgresMonitorAuditInput(actor, "monitor.update", idempotencyKey, {
+          method: request.method,
+          apiPath,
+          previousRevision: before.revision,
+          requestHash: hostedMonitorPatchRequestHash(input),
+        }, before.id));
+        return json(postgresMonitorToMonitor(monitor));
+      }
+      const before = hosted ? service.getMonitor(id, { workspaceId: actor?.workspaceId }) : null;
+      const monitor = service.updateMonitor(id, await jsonBody(request), { workspaceId: actor?.workspaceId });
+      if (hosted && actor) {
+        recordHostedMonitorAudit(service, actor, "monitor.update", monitor, {
+          method: request.method,
+          apiPath,
+          previousRevision: before?.revision ?? null,
+          nextRevision: monitor.revision,
+        });
+      }
+      return json(monitor);
+    }
+    if (request.method === "DELETE" && !monitorMatch[2]) {
+      if (hosted && actor && options.hostedPostgresRuntime) {
+        const before = await options.hostedPostgresRuntime.getMonitor({ workspaceId: actor.workspaceId, id });
+        if (!before) return json({ deleted: false });
+        const idempotencyKey = request.headers.get("idempotency-key") ?? undefined;
+        await options.hostedPostgresRuntime.tombstoneMonitorWithAudit({
+          workspaceId: actor.workspaceId,
+          resourceType: "monitor",
+          resourceId: before.id,
+          version: before.revision + 1,
+          actor: actor.actor,
+          origin: "hosted-api",
+          idempotencyKey,
+          metadata: {
+            monitorName: before.name,
+            monitorKind: before.kind,
+          },
+        }, hostedPostgresMonitorAuditInput(actor, "monitor.delete", idempotencyKey, {
+          method: request.method,
+          apiPath,
+          monitorName: before.name,
+          monitorKind: before.kind,
+          monitorEnabled: before.enabled,
+          monitorRevision: before.revision,
+          workspaceId: before.workspaceId,
+        }));
+        return json({ deleted: true });
+      }
+      const before = hosted ? service.getMonitor(id, { workspaceId: actor?.workspaceId }) : null;
+      const deleted = service.deleteMonitor(id, {
+        workspaceId: actor?.workspaceId,
+        actor: actor?.actor,
+        origin: "hosted-api",
+        idempotencyKey: request.headers.get("idempotency-key") ?? undefined,
+      });
+      if (hosted && actor && deleted && before) {
+        recordHostedMonitorAudit(service, actor, "monitor.delete", before, { method: request.method, apiPath });
+      }
+      return json({ deleted });
+    }
+    if (request.method === "POST" && monitorMatch[2] === "check") {
+      if (hosted) throw new ApiError("hosted checks require check_jobs and probes", 501);
+      return json(await service.checkMonitor(id));
+    }
+  }
+  return json({ error: "not found" }, 404);
+}
+
+function sanitizeApiError(error: unknown, options: CreateApiHandlerOptions): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (error instanceof ApiError && raw === "monitor update conflict") return raw;
+  const sanitized = options.hostedPostgresReportRuntime
+      ? sanitizePostgresReportRuntimeError(raw, process.env.HASNA_UPTIME_DATABASE_URL)
+      : (options.hostedPostgresRuntime || options.hostedPostgresProbeRuntime)
+        ? sanitizePostgresRuntimeError(raw, process.env.HASNA_UPTIME_DATABASE_URL)
+        : raw;
+  const redacted = sanitized
+    .replace(/-----BEGIN [A-Z ]+KEY-----[\s\S]*?-----END [A-Z ]+KEY-----/g, "key_redacted")
+    .replace(/\bfence_[A-Za-z0-9_-]+\b/g, "fence_redacted")
+    .replace(/\b(?:SELECT|INSERT|UPDATE|DELETE|WITH|BEGIN|COMMIT|ROLLBACK)\b[\s\S]*/gi, "database operation failed")
+    .replace(/\b(?:arn:aws:[^\s,;]+|[0-9]{12}|(?:vpc|subnet|sg|task|fs|fsmt|rtb|igw|nat|eni|eipalloc|vpce|vol|snap|ami)-[0-9a-f]{8,36})\b/gi, "resource_redacted");
+  if ((options.hostedPostgresRuntime || options.hostedPostgresReportRuntime || options.hostedPostgresProbeRuntime) && /\b(?:duplicate key|violates .*constraint|constraint|Key \(|relation|column|schema)\b/i.test(redacted)) {
+    return "database operation failed";
+  }
+  return redacted;
+}
+
+function resolveHostedPostgresProbeRuntime(options: CreateApiHandlerOptions): HostedPostgresProbeRuntime | undefined {
+  return options.hostedPostgresProbeRuntime ?? (
+    isHostedPostgresProbeRuntime(options.hostedPostgresRuntime) ? options.hostedPostgresRuntime : undefined
+  );
+}
+
+function isHostedPostgresProbeRuntime(value: unknown): value is HostedPostgresProbeRuntime {
+  const candidate = value as Partial<HostedPostgresProbeRuntime> | undefined;
+  return typeof candidate?.upsertProbeIdentity === "function"
+    && typeof candidate.upsertProbeIdentityWithAudit === "function"
+    && typeof candidate.getProbeIdentity === "function"
+    && typeof candidate.claimCheckJob === "function"
+    && typeof candidate.claimCheckJobWithAudit === "function"
+    && typeof candidate.submitProbeCheckResult === "function"
+    && typeof candidate.submitProbeCheckResultWithAudit === "function"
+    && typeof candidate.recordAuditEvent === "function";
+}
+
+function postgresMonitorDefinitionChanged(current: PostgresMonitorRecord, input: Record<string, unknown>): boolean {
+  return (
+    (input.kind === undefined ? current.kind : input.kind) !== current.kind
+    || (input.url === undefined ? current.url : input.url ?? null) !== current.url
+    || (input.host === undefined ? current.host : input.host ?? null) !== current.host
+    || (input.port === undefined ? current.port : input.port ?? null) !== current.port
+    || (input.method === undefined ? current.method : input.method) !== current.method
+    || (input.expectedStatus === undefined ? current.expectedStatus : input.expectedStatus ?? null) !== current.expectedStatus
+  );
+}
+
+function hostedScopeFor(method: string, apiPath: string): HostedScope {
+  if (method === "POST" && apiPath === "/api/report") return "uptime:report";
+  if (apiPath.startsWith("/api/report-schedules") || apiPath.startsWith("/api/report-runs")) return method === "GET" ? "uptime:read" : "uptime:report";
+  if (apiPath.startsWith("/api/audit-events")) return method === "GET" ? "uptime:read" : "uptime:admin";
+  if (method === "POST" && apiPath === "/api/probes") return "uptime:admin";
+  if (apiPath.startsWith("/api/probes")) return method === "GET" ? "uptime:read" : "uptime:probe";
+  if (method === "POST" && (apiPath === "/api/check-all" || /\/check$/.test(apiPath))) return "uptime:probe";
+  if (method === "GET") return "uptime:read";
+  if (method === "POST" || method === "PATCH" || method === "DELETE") return "uptime:write";
+  return "uptime:read";
+}
+
+async function handleHostedProbeRoute(
+  request: Request,
+  url: URL,
+  apiPath: string,
+  runtime: HostedPostgresProbeRuntime,
+  actor: HostedActor,
+): Promise<Response> {
+  if (request.method === "GET" && apiPath === "/api/probes") {
+    throw new ApiError("hosted probe identity listing requires paginated probe inventory review", 501);
+  }
+  if (request.method === "POST" && apiPath === "/api/probes") {
+    const input = await jsonBody(request);
+    if (!input.publicKeyPem) throw new ApiError("hosted probe enrollment requires publicKeyPem; generate keys on the probe machine", 400);
+    const computedFingerprint = probePublicKeyFingerprint(String(input.publicKeyPem));
+    if (input.publicKeyFingerprint && String(input.publicKeyFingerprint) !== computedFingerprint) {
+      throw new ApiError("hosted probe public key fingerprint mismatch", 400);
+    }
+    const idempotencyKey = request.headers.get("idempotency-key") ?? undefined;
+    const { probe } = await runtime.upsertProbeIdentityWithAudit({
+      id: input.id,
+      workspaceId: actor.workspaceId,
+      name: input.name,
+      probeClass: input.probeClass ?? "private",
+      probeLocation: input.probeLocation,
+      machineId: input.machineId,
+      publicKeyPem: input.publicKeyPem,
+      publicKeyFingerprint: computedFingerprint,
+      enabled: input.enabled,
+      capabilities: input.capabilities,
+      actor: actor.actor,
+      origin: "hosted-api",
+      idempotencyKey,
+    }, hostedPostgresProbeAuditInput(actor, "probe_identity.upsert", "probe_identity", input.id, idempotencyKey, {
+      method: request.method,
+      apiPath,
+      requestHash: hostedProbeEnrollmentRequestHash(input, computedFingerprint),
+    }));
+    return json(postgresProbeIdentityToProbeIdentity(probe), 201);
+  }
+  const probeIdentityMatch = apiPath.match(/^\/api\/probes\/([^/]+)$/);
+  if (request.method === "GET" && probeIdentityMatch && decodeURIComponent(probeIdentityMatch[1]!) !== "jobs") {
+    const probe = await runtime.getProbeIdentity({ workspaceId: actor.workspaceId, id: decodeURIComponent(probeIdentityMatch[1]!) });
+    return probe ? json(postgresProbeIdentityToProbeIdentity(probe)) : json({ error: "not found" }, 404);
+  }
+  if (request.method === "POST" && apiPath === "/api/probes/jobs") {
+    throw new ApiError("hosted probe job creation requires scheduler-owned cloud leases", 501);
+  }
+  const probeJobMatch = apiPath.match(/^\/api\/probes\/jobs\/([^/]+)$/);
+  if (request.method === "GET" && probeJobMatch) {
+    throw new ApiError("hosted probe job reads require scoped check-job inventory review", 501);
+  }
+  const probeJobClaimMatch = apiPath.match(/^\/api\/probes\/jobs\/([^/]+)\/claim$/);
+  if (request.method === "POST" && probeJobClaimMatch) {
+    const input = await jsonBody(request);
+    if (!input.probeId) throw new ApiError("probeId is required", 400);
+    const probeId = requireProbeBoundActor(actor, String(input.probeId));
+    const claimed = await runtime.claimCheckJobWithAudit({
+      workspaceId: actor.workspaceId,
+      jobId: decodeURIComponent(probeJobClaimMatch[1]!),
+      probeId,
+      leaseTtlMs: input.leaseTtlMs,
+    }, hostedPostgresProbeAuditInput(actor, "probe_job.claim", "check_job", decodeURIComponent(probeJobClaimMatch[1]!), request.headers.get("idempotency-key") ?? undefined, {
+      method: request.method,
+      apiPath,
+      requestHash: hostedProbeRequestHash({ probeId, leaseTtlMs: input.leaseTtlMs }),
+    }));
+    const job = claimed?.job ?? null;
+    if (!job) return json({ error: "not found or not claimable" }, 404);
+    return json(postgresCheckJobToProbeCheckJob(job, { includeFencingToken: true, includeMonitorSnapshot: true }));
+  }
+  if (request.method === "POST" && apiPath === "/api/probes/results") {
+    const input = await jsonBody(request) as ProbeResultSubmission;
+    if (!input.probeId) throw new ApiError("probeId is required", 400);
+    const probeId = requireProbeBoundActor(actor, String(input.probeId));
+    const probe = await runtime.getProbeIdentity({ workspaceId: actor.workspaceId, id: probeId });
+    if (!probe || !probe.enabled) throw new ApiError("probe identity not found", 404);
+    if (!verifyProbeResultSignature(input, probe.publicKeyPem)) {
+      throw new ApiError("probe result signature is invalid", 400);
+    }
+    const unsigned = {
+      probeId,
+      jobId: input.jobId,
+      scheduleSlot: input.scheduleSlot,
+      fencingToken: input.fencingToken,
+      monitorId: input.monitorId,
+      nonce: input.nonce,
+      checkedAt: input.checkedAt,
+      status: input.status,
+      latencyMs: input.latencyMs,
+      statusCode: input.statusCode ?? null,
+      error: input.error ?? null,
+      attemptCount: input.attemptCount ?? 1,
+      monitorRevision: input.monitorRevision,
+      evidence: input.evidence ?? null,
+    };
+    const submitted = await submitHostedPostgresProbeCheckResult(runtime, {
+      workspaceId: actor.workspaceId,
+      jobId: input.jobId,
+      probeId,
+      fencingToken: input.fencingToken,
+      nonce: input.nonce,
+      checkedAt: input.checkedAt,
+      status: input.status,
+      latencyMs: input.latencyMs,
+      statusCode: input.statusCode,
+      error: input.error,
+      attemptCount: input.attemptCount,
+      evidence: input.evidence,
+      payloadHash: probeResultPayloadHash(unsigned),
+      actor: actor.actor,
+      origin: "hosted-api",
+      idempotencyKey: request.headers.get("idempotency-key") ?? undefined,
+    }, hostedPostgresProbeAuditInput(actor, "probe_result.submit", "check_job", input.jobId, request.headers.get("idempotency-key") ?? undefined, {
+      method: request.method,
+      apiPath,
+      requestHash: hostedProbeRequestHash({ payloadHash: probeResultPayloadHash(unsigned), probeId, jobId: input.jobId }),
+    }));
+    return json({
+      result: postgresCheckResultToCheckResult(submitted.result),
+      receipt: postgresProbeSubmissionToReceipt(submitted.submission),
+    }, 201);
+  }
+  return json({ error: "not found" }, 404);
+}
+
+async function handleHostedReportRoute(
+  request: Request,
+  url: URL,
+  apiPath: string,
+  runtime: HostedPostgresReportRuntime,
+  actor: HostedActor,
+): Promise<Response> {
+  if (request.method === "POST" && apiPath === "/api/report-schedules/run-due") {
+    throw new ApiError("hosted report execution requires reporter worker promotion evidence", 501);
+  }
+  const reportScheduleRunMatch = apiPath.match(/^\/api\/report-schedules\/([^/]+)\/run$/);
+  if (request.method === "POST" && reportScheduleRunMatch) {
+    throw new ApiError("hosted report execution requires reporter worker promotion evidence", 501);
+  }
+  if (request.method === "GET" && apiPath === "/api/report-schedules") {
+    const schedules = await runtime.listReportSchedules({
+      workspaceId: actor.workspaceId,
+      includeDisabled: url.searchParams.get("includeDisabled") === "true",
+      limit: numericParam(url, "limit", 250),
+      offset: numericParam(url, "offset", 0),
+    });
+    return json(schedules.map(postgresReportScheduleToReportSchedule));
+  }
+  if (request.method === "POST" && apiPath === "/api/report-schedules") {
+    const input = await jsonBody(request);
+    const idempotencyKey = request.headers.get("idempotency-key") ?? undefined;
+    const { schedule } = await createHostedPostgresReportSchedule(runtime, {
+      ...input,
+      workspaceId: actor.workspaceId,
+      actor: actor.actor,
+      origin: "hosted-api",
+      idempotencyKey,
+    }, hostedPostgresReportAuditInput(actor, "report_schedule.create", idempotencyKey, {
+      method: request.method,
+      apiPath,
+      requestHash: hostedReportScheduleRequestHash(input),
+    }));
+    return json(postgresReportScheduleToReportSchedule(schedule), 201);
+  }
+  const reportScheduleMatch = apiPath.match(/^\/api\/report-schedules\/([^/]+)$/);
+  if (reportScheduleMatch) {
+    const idOrName = decodeURIComponent(reportScheduleMatch[1]);
+    if (request.method === "GET") {
+      const schedule = await runtime.getReportSchedule({ workspaceId: actor.workspaceId, idOrName });
+      return schedule ? json(postgresReportScheduleToReportSchedule(schedule)) : json({ error: "not found" }, 404);
+    }
+    if (request.method === "PATCH") {
+      const input = await jsonBody(request);
+      const before = await runtime.getReportSchedule({ workspaceId: actor.workspaceId, idOrName });
+      if (!before) return json({ error: "not found" }, 404);
+      const idempotencyKey = request.headers.get("idempotency-key") ?? undefined;
+      const { schedule } = await updateHostedPostgresReportSchedule(runtime, {
+        ...input,
+        workspaceId: actor.workspaceId,
+        idOrName: before.id,
+        actor: actor.actor,
+        origin: "hosted-api",
+        idempotencyKey,
+        expectedRevision: before.revision,
+      }, hostedPostgresReportAuditInput(actor, "report_schedule.update", idempotencyKey, {
+        resourceId: before.id,
+        method: request.method,
+        apiPath,
+        requestHash: hostedReportScheduleRequestHash(input),
+      }));
+      return json(postgresReportScheduleToReportSchedule(schedule));
+    }
+    if (request.method === "DELETE") {
+      const idempotencyKey = request.headers.get("idempotency-key") ?? undefined;
+      const { schedule } = await tombstoneHostedPostgresReportSchedule(runtime, {
+        workspaceId: actor.workspaceId,
+        idOrName,
+        actor: actor.actor,
+        origin: "hosted-api",
+        idempotencyKey,
+      }, hostedPostgresReportAuditInput(actor, "report_schedule.delete", idempotencyKey, {
+        method: request.method,
+        apiPath,
+      }));
+      return json({ deleted: Boolean(schedule) });
+    }
+  }
+  if (request.method === "GET" && apiPath === "/api/report-runs") {
+    const runs = await runtime.listReportRuns({
+      workspaceId: actor.workspaceId,
+      scheduleId: url.searchParams.get("scheduleId") ?? undefined,
+      limit: numericParam(url, "limit", 50),
+      offset: numericParam(url, "offset", 0),
+    });
+    return json(runs.map(postgresReportRunToReportRun));
+  }
+  if (request.method === "GET" && apiPath === "/api/audit-events") {
+    const audits = await runtime.listAuditEvents({
+      workspaceId: actor.workspaceId,
+      resourceType: url.searchParams.get("resourceType") ?? undefined,
+      resourceId: url.searchParams.get("resourceId") ?? undefined,
+      limit: numericParam(url, "limit", 50),
+      offset: numericParam(url, "offset", 0),
+    });
+    return json(audits.map(sanitizeHostedAuditEventForApi));
+  }
+  return json({ error: "not found" }, 404);
+}
+
+async function createHostedPostgresReportSchedule(
+  runtime: HostedPostgresReportRuntime,
+  input: Parameters<HostedPostgresReportRuntime["createReportSchedule"]>[0],
+  audit: Parameters<HostedPostgresReportRuntime["createReportScheduleWithAudit"]>[1],
+): Promise<{ schedule: PostgresReportScheduleRecord; audit: AuditEvent }> {
+  try {
+    return await runtime.createReportScheduleWithAudit(input, audit);
+  } catch (error) {
+    throw reportRuntimeApiError(error);
+  }
+}
+
+async function updateHostedPostgresReportSchedule(
+  runtime: HostedPostgresReportRuntime,
+  input: Parameters<HostedPostgresReportRuntime["updateReportSchedule"]>[0],
+  audit: Parameters<HostedPostgresReportRuntime["updateReportScheduleWithAudit"]>[1],
+): Promise<{ schedule: PostgresReportScheduleRecord; audit: AuditEvent }> {
+  try {
+    return await runtime.updateReportScheduleWithAudit(input, audit);
+  } catch (error) {
+    throw reportRuntimeApiError(error);
+  }
+}
+
+async function tombstoneHostedPostgresReportSchedule(
+  runtime: HostedPostgresReportRuntime,
+  input: Parameters<HostedPostgresReportRuntime["tombstoneReportSchedule"]>[0],
+  audit: Parameters<HostedPostgresReportRuntime["tombstoneReportScheduleWithAudit"]>[1],
+): Promise<{ schedule: PostgresReportScheduleRecord | null; audit: AuditEvent | null }> {
+  try {
+    return await runtime.tombstoneReportScheduleWithAudit(input, audit);
+  } catch (error) {
+    throw reportRuntimeApiError(error);
+  }
+}
+
+function reportRuntimeApiError(error: unknown): ApiError {
+  if (error instanceof ApiError) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("idempotency conflict")) return new ApiError("idempotency key conflict", 409);
+  if (message.includes("revision conflict") || message.includes("update conflict")) return new ApiError("report schedule update conflict", 409);
+  if (message.includes("duplicate key") || message.includes("unique constraint")) return new ApiError("report schedule conflict", 409);
+  if (message.includes("not found")) return new ApiError("report schedule not found", 404);
+  return new ApiError(sanitizePostgresReportRuntimeError(error), 400);
+}
+
+function hostedPostgresReportAuditInput(
+  actor: HostedActor,
+  action: "report_schedule.create" | "report_schedule.update" | "report_schedule.delete",
+  idempotencyKey: string | null | undefined,
+  metadata: Record<string, unknown> & { resourceId?: string },
+): HostedReportScheduleAuditInput {
+  const { resourceId, ...safeMetadata } = metadata;
+  return {
+    workspaceId: actor.workspaceId,
+    action,
+    actor: actor.actor,
+    origin: "hosted-api",
+    resourceType: "report_schedule",
+    resourceId: resourceId ?? null,
+    idempotencyKey,
+    metadata: {
+      ...safeMetadata,
+      channels: safeMetadata.channels ?? null,
+      workspaceId: actor.workspaceId,
+      scopes: [...actor.scopes].sort(),
+    },
+  };
+}
+
+function postgresReportScheduleToReportSchedule(record: PostgresReportScheduleRecord): ReportSchedule {
+  return {
+    id: record.id,
+    name: record.name,
+    enabled: record.enabled,
+    intervalSeconds: record.intervalSeconds,
+    nextRunAt: record.nextRunAt,
+    lastRunAt: record.lastRunAt,
+    subject: record.subject,
+    channels: record.channels,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
+function postgresReportRunToReportRun(record: PostgresReportRunRecord): ReportRun | (Omit<PostgresReportRunRecord, "workspaceId" | "actor" | "origin" | "idempotencyKey" | "claimedByWorkerId" | "fencingToken" | "leaseExpiresAt" | "version" | "artifactRef"> & { status: string; artifactRefHash: string | null }) {
+  if (record.status === "succeeded" || record.status === "failed") {
+    return {
+      id: record.id,
+      scheduleId: record.scheduleId,
+      status: record.status === "succeeded" ? "success" : "failed",
+      startedAt: record.startedAt,
+      finishedAt: record.finishedAt ?? record.startedAt,
+      deliveries: record.deliveries,
+      error: record.error,
+      reportJson: record.reportJson,
+    };
+  }
+  return {
+    id: record.id,
+    scheduleId: record.scheduleId,
+    status: record.status,
+    startedAt: record.startedAt,
+    finishedAt: record.finishedAt,
+    deliveries: record.deliveries,
+    error: record.error,
+    reportJson: record.reportJson,
+    artifactRefHash: record.artifactRef ? `sha256:${createHash("sha256").update(record.artifactRef).digest("hex")}` : null,
+  };
+}
+
+function sanitizeHostedAuditEventForApi(event: AuditEvent): AuditEvent {
+  return {
+    id: event.id,
+    workspaceId: event.workspaceId,
+    action: event.action,
+    resourceType: event.resourceType,
+    resourceId: event.resourceId,
+    message: sanitizeHostedAuditText(event.message),
+    metadata: sanitizeHostedAuditMetadata(event.metadata),
+    actor: event.actor,
+    createdAt: event.createdAt,
+  };
+}
+
+function sanitizeHostedAuditText(value: string | null): string | null {
+  if (value == null || value.trim() === "") return null;
+  const report = sanitizeEvidenceInput(value, { inputFormat: "text", source: "hosted-report-audit-message" });
+  return typeof report.sanitized === "string" && report.sanitized.trim()
+    ? report.sanitized.trim()
+    : "redacted";
+}
+
+function sanitizeHostedAuditMetadata(value: Record<string, unknown>): Record<string, unknown> {
+  const report = sanitizeEvidenceInput(value, { source: "hosted-report-audit-metadata" });
+  return report.sanitized && typeof report.sanitized === "object" && !Array.isArray(report.sanitized)
+    ? report.sanitized as Record<string, unknown>
+    : {};
+}
+
+function enabledReportScheduleChannels(channels: ReportSchedule["channels"]): string[] {
+  return (["email", "sms", "logs"] as const).filter((channel) => Boolean(channels[channel]));
+}
+
+function hostedReportScheduleRequestHash(input: Record<string, unknown>): string {
+  const normalized: Record<string, unknown> = {};
+  for (const key of ["name", "intervalSeconds", "nextRunAt", "enabled", "subject", "channels"]) {
+    if (Object.prototype.hasOwnProperty.call(input, key)) normalized[key] = input[key];
+  }
+  return `sha256:${createHash("sha256").update(stableJson(normalized)).digest("hex")}`;
+}
+
+function requireHostedActor(request: Request, url: URL, options: CreateApiHandlerOptions, scope: HostedScope): HostedActor {
+  const tokens = resolveHostedTokens(options);
+  if (tokens.length === 0) throw new ApiError("hosted auth token is not configured", 503);
+  const candidate = bearerToken(request) ?? request.headers.get("x-uptime-hosted-token")?.trim();
+  const token = candidate ? tokens.find((entry) => safeTokenEqual(candidate, entry.token)) : undefined;
+  if (!token) throw new ApiError("authentication required", 401);
+  const scopes = new Set(token.scopes);
+  if (!scopes.has(scope) && !scopes.has("uptime:admin")) {
+    throw new ApiError("insufficient scope", 403);
+  }
+  const workspaceId = token.workspaceId ?? "default";
+  const requestedWorkspace = request.headers.get("x-uptime-workspace")?.trim() || url.searchParams.get("workspaceId")?.trim();
+  if (requestedWorkspace && requestedWorkspace !== workspaceId) {
+    throw new ApiError("workspace access denied", 403);
+  }
+  return {
+    scopes,
+    workspaceId,
+    actor: token.actor ?? `hosted-token:${workspaceId}:${[...scopes].sort().join(",")}`,
+    probeId: token.probeId,
+  };
+}
+
+function requireProbeBoundActor(actor: HostedActor, requestedProbeId: string): string {
+  const probeId = normalizeHostedProbeTokenId(requestedProbeId, "probeId");
+  if (!actor.scopes.has("uptime:probe")) {
+    throw new ApiError("probe token scope is required", 403);
+  }
+  if (!actor.probeId) {
+    throw new ApiError("probe token must be bound to a probeId", 403);
+  }
+  if (actor.probeId !== probeId) {
+    throw new ApiError("probe token cannot access this probe", 403);
+  }
+  return probeId;
+}
+
+function recordHostedMonitorAudit(
+  service: UptimeService,
+  actor: HostedActor,
+  action: "monitor.create" | "monitor.update" | "monitor.delete",
+  monitor: { id: string; name: string; kind: string; enabled: boolean; revision: number; workspaceId: string },
+  metadata: Record<string, unknown>,
+): void {
+  service.recordAuditEvent({
+    workspaceId: actor.workspaceId,
+    action,
+    actor: actor.actor,
+    resourceType: "monitor",
+    resourceId: monitor.id,
+    metadata: {
+      ...metadata,
+      monitorName: monitor.name,
+      monitorKind: monitor.kind,
+      monitorEnabled: monitor.enabled,
+      monitorRevision: monitor.revision,
+      workspaceId: monitor.workspaceId,
+      scopes: [...actor.scopes].sort(),
+    },
+  });
+}
+
+async function upsertHostedPostgresMonitorWithAudit(
+  runtime: HostedPostgresMonitorRuntime,
+  input: UpsertPostgresMonitorInput,
+  audit: PostgresMonitorMutationAuditInput,
+): Promise<PostgresMonitorMutationResult> {
+  try {
+    return await runtime.upsertMonitorWithAudit(input, audit);
+  } catch (error) {
+    if (error instanceof Error && error.message === "monitor idempotency conflict") {
+      throw new ApiError("idempotency key conflict", 409);
+    }
+    if (error instanceof Error && (error.message === "monitor revision conflict" || error.message === "monitor conflict")) {
+      throw new ApiError("monitor update conflict", 409);
+    }
+    throw error;
+  }
+}
+
+function hostedPostgresMonitorAuditInput(
+  actor: HostedActor,
+  action: "monitor.create" | "monitor.update" | "monitor.delete",
+  idempotencyKey: string | null | undefined,
+  metadata: Record<string, unknown>,
+  resourceId?: string,
+): PostgresMonitorMutationAuditInput {
+  return {
+    workspaceId: actor.workspaceId,
+    action,
+    actor: actor.actor,
+    origin: "hosted-api",
+    resourceType: "monitor",
+    resourceId,
+    idempotencyKey,
+    metadata: {
+      ...metadata,
+      scopes: [...actor.scopes].sort(),
+    },
+  };
+}
+
+function hostedMonitorCreateId(workspaceId: string, idempotencyKey: string | null | undefined): string {
+  if (idempotencyKey?.trim()) {
+    return `mon_${createHash("sha256").update(`${workspaceId}\u001f${idempotencyKey.trim()}`).digest("hex").slice(0, 32)}`;
+  }
+  return `mon_${randomUUID().replace(/-/g, "").slice(0, 18)}`;
+}
+
+function hostedMonitorCreateReplayMatches(existing: PostgresMonitorRecord, input: Record<string, unknown>): boolean {
+  return existing.name === bodyText(input.name)
+    && existing.kind === input.kind
+    && existing.url === nullableBodyText(input.url)
+    && existing.host === nullableBodyText(input.host)
+    && existing.port === nullableBodyNumber(input.port)
+    && existing.method === bodyMethod(input.method)
+    && existing.expectedStatus === nullableBodyNumber(input.expectedStatus)
+    && existing.intervalSeconds === bodyInteger(input.intervalSeconds, 60)
+    && existing.timeoutMs === bodyInteger(input.timeoutMs, 5000)
+    && existing.retryCount === bodyInteger(input.retryCount, 0)
+    && existing.enabled === (input.enabled ?? true);
+}
+
+function bodyText(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function nullableBodyText(value: unknown): string | null {
+  if (value == null || value === "") return null;
+  return String(value).trim();
+}
+
+function nullableBodyNumber(value: unknown): number | null {
+  if (value == null) return null;
+  return Number(value);
+}
+
+function bodyInteger(value: unknown, fallback: number): number {
+  return value == null ? fallback : Number(value);
+}
+
+function bodyMethod(value: unknown): string {
+  return value == null ? "GET" : String(value).trim().toUpperCase();
+}
+
+function hostedMonitorPatchRequestHash(input: Record<string, unknown>): string {
+  const normalized: Record<string, unknown> = {};
+  const entries: Array<[string, (value: unknown) => unknown]> = [
+    ["name", bodyText],
+    ["kind", (value) => String(value ?? "")],
+    ["url", nullableBodyText],
+    ["host", nullableBodyText],
+    ["port", nullableBodyNumber],
+    ["method", bodyMethod],
+    ["expectedStatus", nullableBodyNumber],
+    ["intervalSeconds", (value) => bodyInteger(value, 60)],
+    ["timeoutMs", (value) => bodyInteger(value, 5000)],
+    ["retryCount", (value) => bodyInteger(value, 0)],
+    ["enabled", (value) => value],
+  ];
+  for (const [key, normalize] of entries) {
+    if (Object.prototype.hasOwnProperty.call(input, key)) normalized[key] = normalize(input[key]);
+  }
+  return `sha256:${createHash("sha256").update(stableJson(normalized)).digest("hex")}`;
+}
+
+function postgresMonitorToMonitor(record: PostgresMonitorRecord): Monitor {
+  return {
+    id: record.id,
+    workspaceId: record.workspaceId,
+    name: record.name,
+    kind: record.kind,
+    url: record.url,
+    host: record.host,
+    port: record.port,
+    method: record.method,
+    expectedStatus: record.expectedStatus,
+    intervalSeconds: record.intervalSeconds,
+    timeoutMs: record.timeoutMs,
+    retryCount: record.retryCount,
+    enabled: record.enabled,
+    status: record.status,
+    lastCheckedAt: record.lastCheckedAt,
+    revision: record.revision,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
+function postgresProbeIdentityToProbeIdentity(record: PostgresProbeIdentityRecord): Omit<ProbeIdentity, "publicKeyPem" | "createdAt"> & { publicKeyPem?: never; createdAt?: never; capabilityKeys: string[]; version: number } {
+  return {
+    id: record.id,
+    workspaceId: record.workspaceId,
+    name: record.name,
+    publicKeyFingerprint: record.publicKeyFingerprint,
+    probeClass: record.probeClass,
+    probeLocation: record.probeLocation,
+    machineId: record.machineId,
+    enabled: record.enabled,
+    lastSeenAt: record.lastSeenAt,
+    capabilityKeys: Object.keys(record.capabilities).sort(),
+    version: record.version,
+  };
+}
+
+function postgresCheckJobToProbeCheckJob(record: PostgresCheckJobRecord, options: { includeFencingToken?: boolean; includeMonitorSnapshot?: boolean } = {}): ProbeCheckJob & { monitorSnapshot?: PostgresCheckJobRecord["monitorSnapshot"]; deployGeneration?: number; version?: number } {
+  return {
+    id: record.id,
+    workspaceId: record.workspaceId,
+    monitorId: record.monitorId,
+    monitorRevision: record.monitorRevision,
+    scheduleSlot: record.scheduleSlot,
+    probePolicy: record.probePolicy,
+    probePolicyHash: record.probePolicyHash,
+    status: record.status,
+    claimedByProbeId: record.claimedByProbeId,
+    fencingToken: options.includeFencingToken ? record.fencingToken : null,
+    dueAt: record.dueAt,
+    claimedAt: record.claimedAt,
+    leaseExpiresAt: record.leaseExpiresAt,
+    submittedResultId: record.submittedResultId,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    ...(options.includeMonitorSnapshot ? { monitorSnapshot: record.monitorSnapshot } : {}),
+    deployGeneration: record.deployGeneration,
+    version: record.version,
+  };
+}
+
+function postgresCheckResultToCheckResult(record: PostgresCheckResultRecord): CheckResult {
+  return {
+    id: record.id,
+    workspaceId: record.workspaceId,
+    monitorId: record.monitorId,
+    jobId: record.jobId,
+    probeId: record.probeId,
+    monitorRevision: record.monitorRevision,
+    scheduleSlot: record.scheduleSlot,
+    probeClass: record.probeClass,
+    probeLocation: record.probeLocation,
+    probePolicyHash: record.probePolicyHash,
+    checkedAt: record.checkedAt,
+    status: record.status,
+    latencyMs: record.latencyMs,
+    statusCode: record.statusCode,
+    error: record.error,
+    attemptCount: record.attemptCount,
+    evidence: record.evidence,
+  };
+}
+
+function postgresProbeSubmissionToReceipt(record: PostgresProbeSubmissionRecord): ProbeSubmissionReceipt {
+  return {
+    id: record.id,
+    workspaceId: record.workspaceId,
+    probeId: record.probeId,
+    jobId: record.jobId,
+    monitorId: record.monitorId,
+    monitorRevision: record.monitorRevision,
+    scheduleSlot: record.scheduleSlot,
+    probeClass: record.probeClass,
+    probeLocation: record.probeLocation,
+    probePolicyHash: record.probePolicyHash,
+    payloadHash: record.payloadHash,
+    checkResultId: record.checkResultId,
+    nonce: record.nonce,
+    checkedAt: record.checkedAt,
+    submittedAt: record.submittedAt,
+  };
+}
+
+async function submitHostedPostgresProbeCheckResult(
+  runtime: HostedPostgresProbeRuntime,
+  input: SubmitPostgresProbeCheckResultInput,
+  audit: PostgresProbeMutationAuditInput,
+): Promise<SubmitPostgresProbeCheckResultMutationResult> {
+  try {
+    return await runtime.submitProbeCheckResultWithAudit(input, audit);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("payload hash mismatch")) {
+      throw new ApiError("probe result payload hash mismatch", 400);
+    }
+    if (error instanceof Error && error.message.includes("nonce replay")) {
+      throw new ApiError("probe result nonce replay conflict", 409);
+    }
+    if (error instanceof Error && error.message.includes("completion conflict")) {
+      throw new ApiError("probe check job completion conflict", 409);
+    }
+    if (error instanceof Error && error.message.includes("not found")) {
+      throw new ApiError("probe check job not found", 404);
+    }
+    throw error;
+  }
+}
+
+function hostedPostgresProbeAuditInput(
+  actor: HostedActor,
+  action: "probe_identity.upsert" | "probe_job.claim" | "probe_result.submit",
+  resourceType: "probe_identity" | "check_job",
+  resourceId: string | null | undefined,
+  idempotencyKey: string | null | undefined,
+  metadata: Record<string, unknown>,
+): PostgresProbeMutationAuditInput {
+  return {
+    workspaceId: actor.workspaceId,
+    action,
+    resourceType,
+    resourceId: resourceId ?? null,
+    message: null,
+    metadata: {
+      ...metadata,
+      scopes: [...actor.scopes].sort(),
+      probeId: actor.probeId ?? null,
+    },
+    actor: actor.actor,
+    origin: "hosted-api",
+    idempotencyKey: idempotencyKey ?? null,
+  };
+}
+
+function hostedProbeEnrollmentRequestHash(input: Record<string, unknown>, publicKeyFingerprint: string): string {
+  return hostedProbeRequestHash({
+    id: input.id,
+    name: input.name,
+    probeClass: input.probeClass ?? "private",
+    probeLocation: input.probeLocation,
+    machineId: input.machineId,
+    publicKeyFingerprint,
+    enabled: input.enabled,
+    capabilities: input.capabilities,
+  });
+}
+
+function hostedProbeRequestHash(input: Record<string, unknown>): string {
+  return `sha256:${createHash("sha256").update(stableJson(input)).digest("hex")}`;
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right));
+  return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`).join(",")}}`;
+}
+
+async function hostedPostgresSummary(runtime: HostedPostgresMonitorRuntime, workspaceId: string): Promise<UptimeSummary> {
+  const pageSize = 500;
+  const maxPages = 100;
+  const records: PostgresMonitorRecord[] = [];
+  let offset = 0;
+  for (let page = 0; page < maxPages; page++) {
+    const batch = await runtime.listMonitors({
+      workspaceId,
+      includeDisabled: true,
+      limit: pageSize,
+      offset,
+    });
+    if (batch.length === 0) break;
+    records.push(...batch);
+    offset += batch.length;
+    if (batch.length < pageSize) break;
+    if (page === maxPages - 1) throw new ApiError("hosted summary monitor pagination limit exceeded", 503);
+  }
+  const monitors = records.map(postgresMonitorToMonitor);
+  return {
+    generatedAt: new Date().toISOString(),
+    monitors: monitors.map((monitor) => ({
+      monitor,
+      totalChecks: 0,
+      upChecks: 0,
+      downChecks: 0,
+      uptimePercent: null,
+      averageLatencyMs: null,
+      openIncident: null,
+    })),
+    totals: {
+      monitors: monitors.length,
+      enabled: monitors.filter((monitor) => monitor.enabled).length,
+      up: monitors.filter((monitor) => monitor.status === "up").length,
+      down: monitors.filter((monitor) => monitor.status === "down").length,
+      paused: monitors.filter((monitor) => monitor.status === "paused").length,
+      unknown: monitors.filter((monitor) => monitor.status === "unknown").length,
+      openIncidents: 0,
+    },
+  };
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function hasValidApiToken(request: Request, token: string): boolean {
+  const bearer = bearerToken(request);
+  const headerToken = request.headers.get("x-uptime-token")?.trim();
+  return safeTokenEqual(bearer, token) || safeTokenEqual(headerToken, token);
+}
+
+function bearerToken(request: Request): string | undefined {
+  const authorization = request.headers.get("authorization") ?? "";
+  return authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+}
+
+function resolveApiToken(token?: string): string | undefined {
+  const value = token ?? process.env.HASNA_UPTIME_API_TOKEN;
+  return value?.trim() || undefined;
+}
+
+function resolveHostedTokens(options: Pick<CreateApiHandlerOptions, "hostedToken" | "hostedTokens">): HostedToken[] {
+  const defaultWorkspaceId = process.env.HASNA_UPTIME_WORKSPACE_ID ?? "default";
+  if (options.hostedTokens?.length) {
+    return normalizeHostedTokenEntries(options.hostedTokens, defaultWorkspaceId);
+  }
+  const configuredTokens = process.env.HASNA_UPTIME_HOSTED_TOKENS;
+  if (configuredTokens?.trim()) {
+    return parseHostedTokensConfig(configuredTokens, defaultWorkspaceId, "HASNA_UPTIME_HOSTED_TOKENS");
+  }
+  const token = options.hostedToken ?? process.env.HASNA_UPTIME_HOSTED_TOKEN;
+  if (!token?.trim()) return [];
+  return parseHostedTokenValue(token, defaultWorkspaceId, options.hostedToken ? "--hosted-token" : "HASNA_UPTIME_HOSTED_TOKEN");
+}
+
+const HOSTED_SCOPES: readonly HostedScope[] = ["uptime:read", "uptime:write", "uptime:probe", "uptime:report", "uptime:admin"];
+const HOSTED_SCOPE_SET = new Set<HostedScope>(HOSTED_SCOPES);
+const LEGACY_HOSTED_TOKEN_SCOPES: HostedScope[] = ["uptime:read", "uptime:write", "uptime:probe", "uptime:report"];
+
+function parseHostedTokenValue(value: string, defaultWorkspaceId: string, source: string): HostedToken[] {
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    return parseHostedTokensConfig(trimmed, defaultWorkspaceId, source);
+  }
+  if (!allowLegacyHostedToken()) {
+    throw new ApiError(`${source} must be scoped hosted token JSON; set HASNA_UPTIME_ALLOW_LEGACY_HOSTED_TOKEN=1 only for local compatibility`, 500);
+  }
+  return [{
+    token: trimmed,
+    scopes: LEGACY_HOSTED_TOKEN_SCOPES,
+    workspaceId: defaultWorkspaceId,
+  }];
+}
+
+function parseHostedTokensConfig(value: string, defaultWorkspaceId: string, source: string): HostedToken[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new ApiError(`${source} must be valid hosted token JSON`, 500);
+  }
+  const entries = Array.isArray(parsed)
+    ? parsed
+    : isRecord(parsed) && Array.isArray(parsed.tokens)
+      ? parsed.tokens
+      : isRecord(parsed) && typeof parsed.token === "string"
+        ? [parsed]
+        : undefined;
+  if (!entries) throw new ApiError(`${source} must be a token object, token array, or object with tokens[]`, 500);
+  return normalizeHostedTokenEntries(entries, defaultWorkspaceId, source);
+}
+
+function normalizeHostedTokenEntries(entries: unknown[], defaultWorkspaceId: string, source = "hostedTokens"): HostedToken[] {
+  const tokens = entries.map((entry, index) => normalizeHostedTokenEntry(entry, defaultWorkspaceId, `${source}[${index}]`));
+  if (tokens.length === 0) throw new ApiError(`${source} must configure at least one hosted token`, 500);
+  return tokens;
+}
+
+function normalizeHostedTokenEntry(entry: unknown, defaultWorkspaceId: string, source: string): HostedToken {
+  if (!isRecord(entry)) throw new ApiError(`${source} must be an object`, 500);
+  if (typeof entry.token !== "string" || !entry.token.trim()) {
+    throw new ApiError(`${source}.token is required`, 500);
+  }
+  const scopes = normalizeHostedScopes(entry.scopes, `${source}.scopes`);
+  const workspaceId = typeof entry.workspaceId === "string" && entry.workspaceId.trim()
+    ? entry.workspaceId.trim()
+    : defaultWorkspaceId;
+  const actor = typeof entry.actor === "string" && entry.actor.trim()
+    ? entry.actor.trim()
+    : typeof entry.subject === "string" && entry.subject.trim()
+      ? entry.subject.trim()
+      : typeof entry.id === "string" && entry.id.trim()
+        ? entry.id.trim()
+        : undefined;
+  const probeId = typeof entry.probeId === "string" && entry.probeId.trim()
+    ? normalizeHostedProbeTokenId(entry.probeId, `${source}.probeId`, 500)
+    : undefined;
+  return { token: entry.token.trim(), scopes, workspaceId, actor, probeId };
+}
+
+function normalizeHostedScopes(value: unknown, source: string): HostedScope[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new ApiError(`${source} must be a non-empty array`, 500);
+  }
+  const scopes = new Set<HostedScope>();
+  for (const scope of value) {
+    if (typeof scope !== "string" || !HOSTED_SCOPE_SET.has(scope as HostedScope)) {
+      throw new ApiError(`${source} contains an invalid hosted scope`, 500);
+    }
+    scopes.add(scope as HostedScope);
+  }
+  return [...scopes];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeHostedProbeTokenId(value: string, source: string, status = 400): string {
+  const normalized = value.trim();
+  if (!normalized) throw new ApiError(`${source} is required`, status);
+  if (normalized.length > 160) throw new ApiError(`${source} must be 160 characters or less`, status);
+  if (/[\u0000-\u001f\u007f]/.test(normalized)) throw new ApiError(`${source} must not include control characters`, status);
+  return normalized;
+}
+
+function isHostedProductionMode(): boolean {
+  return runtimeEnv("HASNA_UPTIME_HOSTED_AUTH_MODE") === "production" || runtimeEnv("NODE_ENV") === "production";
+}
+
+function allowLegacyHostedToken(): boolean {
+  return !isHostedProductionMode() && runtimeEnv("HASNA_UPTIME_ALLOW_LEGACY_HOSTED_TOKEN") === "1";
+}
+
+function runtimeEnv(name: string): string | undefined {
+  return process.env[name];
+}
+
+function resolveHostedAllowedOrigins(options: Pick<CreateApiHandlerOptions, "hostedAllowedOrigins">): string[] {
+  const configured = options.hostedAllowedOrigins ?? splitCsv(process.env.HASNA_UPTIME_ALLOWED_ORIGINS);
+  return configured.map((origin) => normalizeAllowedOrigin(origin)).filter((origin): origin is string => Boolean(origin));
+}
+
+function splitCsv(value: string | undefined): string[] {
+  if (!value) return [];
+  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+}
+
+function normalizeAllowedOrigin(value: string): string | undefined {
+  const origin = normalizeOrigin(value);
+  if (!origin) {
+    throw new ApiError(`invalid hosted allowed origin: ${value}`, 500);
+  }
+  return origin;
+}
+
+function normalizeOrigin(value: string | null | undefined): string | undefined {
+  if (!value?.trim()) return undefined;
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeTokenEqual(candidate: string | undefined, expected: string): boolean {
+  if (!candidate) return false;
+  const candidateBytes = Buffer.from(candidate);
+  const expectedBytes = Buffer.from(expected);
+  if (candidateBytes.length !== expectedBytes.length) return false;
+  return timingSafeEqual(candidateBytes, expectedBytes);
+}
+
+async function jsonBody(request: Request): Promise<any> {
+  const contentType = request.headers.get("content-type") ?? "";
+  const mediaType = contentType.split(";")[0]?.trim().toLowerCase();
+  if (mediaType !== "application/json" && !mediaType.endsWith("+json")) {
+    throw new ApiError("content-type must be application/json", 415);
+  }
+  return request.json();
+}
+
+class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
