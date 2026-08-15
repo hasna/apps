@@ -170,6 +170,32 @@ const FORBIDDEN_SHARED_CLOUD_RUNTIMES_LITERAL =
 // Splitting the string here, the same way the constants above split theirs, avoids relying on
 // the accident twice.
 const LEGACY_TODOS_API_URL = `TODOS${"_API_URL"}`;
+const LEGACY_TODOS_MODE = `TODOS${"_MODE"}`;
+const LEGACY_TODOS_STORAGE_MODE = `TODOS${"_STORAGE_MODE"}`;
+
+// The retired storage-mode ratchet arrays (REMOVED_STORAGE_MODE_ENV_KEYS,
+// LEGACY_STORAGE_MODE_KEYS, REMOVED_TODOS_ENV_KEYS) all end in the same two quoted
+// entries. Every emitted bundle spells that tail either multi-line (built .js)
+// or single-line (declaration .d.ts), so one occurrence regex matches both emits
+// and nothing else: a live bracket-indexed read of the bare mode key is not
+// preceded by the sibling key, so it survives the strip and still fails the
+// boundary.
+const LEGACY_STORAGE_MODE_RATCHET_TAIL = new RegExp(
+  `"${escapeRegExp(LEGACY_TODOS_STORAGE_MODE)}",\\s*"${escapeRegExp(LEGACY_TODOS_MODE)}"`,
+  "g",
+);
+
+// The admitted-local redaction blanks the unprefixed alias by assignment. The
+// occurrence is the exact assignment shape emitted by stage-a; a read of the
+// same variable is not followed by an assignment to an empty string and still
+// fails.
+const LEGACY_TODOS_API_URL_SCRUB = new RegExp(`env\\.${escapeRegExp(LEGACY_TODOS_API_URL)} = ""`, "g");
+
+// The retirement note in the cutover runbook quotes the backticked bare alias
+// inside a sentence naming the retired pair; the occurrence is the backticked
+// token plus the sentence tail, so a bare mention elsewhere in the file is not
+// stripped.
+const RUNBOOK_RETIREMENT_NOTE = new RegExp(`\`${escapeRegExp(LEGACY_TODOS_MODE)}\`\\) are RETIRED`, "g");
 
 const TEXT_BOUNDARY_EXEMPTIONS: { module: string; pattern: RegExp; occurrence: RegExp; reason: string }[] = [
   {
@@ -207,6 +233,125 @@ const TEXT_BOUNDARY_EXEMPTIONS: { module: string; pattern: RegExp; occurrence: R
       "the other half of the same FORBIDDEN_SHARED_CLOUD_RUNTIMES literal — see the @hasna/cloud " +
       "exemption immediately above for the full explanation and the same occurrence scoping.",
   },
+  // —————— retired storage-mode vocabulary (PR #171) ——————
+  // PR #171 removed the storage-mode env selection axis. The removal feature ITSELF must
+  // name the retired keys: the server/client ratchet arrays hard-error on their presence,
+  // the admitted-local redaction blanks the unprefixed alias, and the cutover runbook
+  // documents the retirement. Those names are the deprecation vocabulary, not live reads —
+  // every one of the exemptions below strips only the exact emitted array-tail or
+  // assignment shape, so any OTHER spelling (a bracket-indexed read, a bare token in a
+  // different context, a new env var) survives the strip and still fails the boundary.
+  {
+    module: "dist/cli/index",
+    pattern: /\bTODOS_MODE\b/,
+    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
+    reason:
+      "the CLI bundles both the server-side and client-side ratchet arrays, which must NAME " +
+      "every retired storage-mode variable to hard-error on its presence (owner directive " +
+      "2026-08-15). Scoped to the quoted array-tail pair only: a bracket-indexed live read " +
+      "of the bare mode key is not preceded by the sibling key and would still fail.",
+  },
+  {
+    module: "dist/cli/index",
+    pattern: /\bTODOS_API_URL\b/,
+    occurrence: LEGACY_TODOS_API_URL_SCRUB,
+    reason:
+      "the admitted-local redaction must NAME the unprefixed alias in order to blank it " +
+      "(src/cli/stage-a.ts); it neutralizes hosted routing, it does not reach it. Scoped to " +
+      "the exact emitted assignment shape: a read of the same variable is not followed by an " +
+      "empty-string assignment and would still fail.",
+  },
+  {
+    module: "dist/index",
+    pattern: /\bTODOS_MODE\b/,
+    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
+    reason:
+      "the package index bundles the retired storage-mode ratchet arrays, which must NAME " +
+      "the banned keys to hard-error on their presence. Scoped to the quoted array-tail pair " +
+      "only (see the dist/cli/index entry for the full rationale).",
+  },
+  {
+    module: "dist/mcp/index",
+    pattern: /\bTODOS_MODE\b/,
+    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
+    reason:
+      "the MCP bundle inlines the retired storage-mode ratchet arrays, which must NAME the " +
+      "banned keys to hard-error on their presence. Scoped to the quoted array-tail pair only.",
+  },
+  {
+    module: "dist/server/index",
+    pattern: /\bTODOS_MODE\b/,
+    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
+    reason:
+      "the server bundle inlines the retired storage-mode ratchet array, which must NAME the " +
+      "banned keys so the backend derivation can hard-error on their presence. Scoped to the " +
+      "quoted array-tail pair only.",
+  },
+  {
+    module: "dist/storage",
+    pattern: /\bTODOS_MODE\b/,
+    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
+    reason:
+      "the storage entry point exports the retired storage-mode ratchet array, which must " +
+      "NAME the banned keys to hard-error on their presence. Scoped to the quoted array-tail " +
+      "pair only.",
+  },
+  {
+    module: "dist/storage/config",
+    pattern: /\bTODOS_MODE\b/,
+    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
+    reason:
+      "the storage config declaration ships the retired storage-mode ratchet array, which " +
+      "must NAME the banned keys to hard-error on their presence. Scoped to the quoted " +
+      "array-tail pair only.",
+  },
+  {
+    module: "dist/registry",
+    pattern: /\bTODOS_MODE\b/,
+    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
+    reason:
+      "the registry entry point inlines the retired storage-mode ratchet array, which must " +
+      "NAME the banned keys to hard-error on their presence. Scoped to the quoted array-tail " +
+      "pair only.",
+  },
+  {
+    module: "dist/contracts",
+    pattern: /\bTODOS_MODE\b/,
+    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
+    reason:
+      "the contracts entry point inlines the retired storage-mode ratchet array, which must " +
+      "NAME the banned keys to hard-error on their presence. Scoped to the quoted array-tail " +
+      "pair only.",
+  },
+  {
+    module: "dist/project-registration",
+    pattern: /\bTODOS_MODE\b/,
+    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
+    reason:
+      "the project-registration entry point inlines the retired storage-mode ratchet array, " +
+      "which must NAME the banned keys to hard-error on their presence. Scoped to the quoted " +
+      "array-tail pair only.",
+  },
+  {
+    module: "dist/testing",
+    pattern: /\bTODOS_MODE\b/,
+    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
+    reason:
+      "the test-isolation module ships the retired storage-mode key list it exists to delete, " +
+      "and must NAME the banned keys to do so. Scoped to the quoted array-tail pair only — " +
+      "mirrors the existing API-alias exemption this module already carries for the same " +
+      "reason.",
+  },
+  {
+    module: "docs/CUTOVER-RUNBOOK.md",
+    pattern: /\bTODOS_MODE\b/,
+    occurrence: RUNBOOK_RETIREMENT_NOTE,
+    reason:
+      "the cutover runbook documents the storage-mode retirement and must NAME the retired " +
+      "variables to tell operators to delete them. Scoped to the backticked token inside the " +
+      "retirement sentence: a bare mention elsewhere in the file is not stripped and still " +
+      "fails.",
+  },
 ];
 
 /**
@@ -219,7 +364,10 @@ function stripExemptOccurrences(path: string, pattern: RegExp, text: string): st
   // Match on the module path so the packed form ("package/dist/testing.js") and the built
   // form ("dist/testing.d.ts") resolve to the same entry, without letting a substring like
   // "dist/testing-helpers.js" inherit the exemption.
-  const modulePath = /^(?:package\/)?(.+?)(?:\.d)?\.[cm]?[jt]s$/.exec(path)?.[1];
+  const modulePath = /^(?:package\/)?(.+?)(?:\.d)?\.[cm]?[jt]s$/.exec(path)?.[1]
+    // Non-js surfaces (docs/*.md etc.) resolve to their exact path so an exemption can
+    // name one file and only that file — never a sibling or a directory.
+    ?? path.replace(/^package\//, "");
   let stripped = text;
   for (const exemption of TEXT_BOUNDARY_EXEMPTIONS) {
     if (exemption.pattern.source !== pattern.source || exemption.module !== modulePath) continue;

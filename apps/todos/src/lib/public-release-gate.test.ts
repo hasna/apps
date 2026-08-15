@@ -312,6 +312,74 @@ describe("public release gate", () => {
     expect(failures.map((failure) => failure.check)).toContain("pack-env");
   });
 
+  test("the bundled storage-mode ratchet vocabulary (PR #171) is exempt per exact emitted occurrence", () => {
+    // PR #171 removed the storage-mode env axis. The removal feature itself must NAME the
+    // retired keys: the ratchet arrays hard-error on their presence, the admitted-local
+    // redaction blanks the unprefixed alias, and the cutover runbook documents the
+    // retirement. The exemptions strip ONLY the exact emitted array-tail / assignment /
+    // retirement-sentence shapes — any other spelling (a bracket-indexed read, a bare token
+    // in a different context, a live assignment with a value) survives and still fails.
+    // Mirrors the source-level exemptions src/no-cloud-boundary.test.ts carries for the
+    // same vocabulary.
+    const boundaryFailures = (files: { path: string; text: string }[]) =>
+      validatePublicTextSurfaces(files).filter((failure) => failure.check === "public-text-boundary");
+
+    // The emitted ratchet arrays end in the sibling-key pair on adjacent lines (.js emit)
+    // or a single line (.d.ts emit); both must pass on every module that bundles them.
+    const ratchetJs = 'const R = [\n  "HASNA_TODOS_STORAGE_MODE",\n  "HASNA_TODOS_MODE",\n  "TODOS_STORAGE_MODE",\n  "TODOS_MODE",\n];';
+    const ratchetDts = 'export const R: readonly string[] = ["HASNA_TODOS_STORAGE_MODE", "HASNA_TODOS_MODE", "TODOS_STORAGE_MODE", "TODOS_MODE"];';
+    for (const module of [
+      "dist/cli/index",
+      "dist/index",
+      "dist/mcp/index",
+      "dist/server/index",
+      "dist/storage",
+      "dist/storage/config",
+      "dist/registry",
+      "dist/contracts",
+      "dist/project-registration",
+      "dist/testing",
+    ]) {
+      for (const path of [`package/${module}.js`, `package/${module}.d.ts`, `${module}.js`]) {
+        expect(boundaryFailures([{ path, text: ratchetJs }])).toEqual([]);
+        expect(boundaryFailures([{ path, text: ratchetDts }])).toEqual([]);
+      }
+    }
+
+    // The admitted-local redaction assignment shape (src/cli/stage-a.ts emit) passes only
+    // in the module that bundles it, and only in that exact shape.
+    expect(
+      boundaryFailures([{ path: "package/dist/cli/index.js", text: 'env.TODOS_API_URL = "";' }]),
+    ).toEqual([]);
+
+    // The runbook retirement sentence passes as a docs surface.
+    expect(
+      boundaryFailures([{
+        path: "docs/CUTOVER-RUNBOOK.md",
+        text: "> `HASNA_TODOS_MODE`, `TODOS_MODE`) are RETIRED (owner directive 2026-08-15):",
+      }]),
+    ).toEqual([]);
+
+    // Negative controls: a live bracket-indexed read in an exempted module still fails...
+    const liveRead = boundaryFailures([
+      { path: "package/dist/cli/index.js", text: 'const m = env["TODOS_MODE"];' },
+      { path: "package/dist/cli/index.js", text: 'const url = env["TODOS_API_URL"];' },
+    ]);
+    expect(liveRead.map((failure) => failure.check)).toContain("public-text-boundary");
+
+    // ...a module that does NOT bundle the ratchet still fails on the same literal...
+    const unbundled = boundaryFailures([
+      { path: "package/dist/capabilities.js", text: ratchetJs },
+    ]);
+    expect(unbundled.length).toBeGreaterThan(0);
+
+    // ...and a bare mention in the runbook OUTSIDE the retirement sentence still fails.
+    const runbookBare = boundaryFailures([
+      { path: "docs/CUTOVER-RUNBOOK.md", text: "export TODOS_MODE=remote" },
+    ]);
+    expect(runbookBare.map((failure) => failure.check)).toContain("public-text-boundary");
+  });
+
   test("derives every packed entrypoint recursively from main, types, bin, and exports", () => {
     const packageJson: PackageJson = {
       ...rootPackage,
