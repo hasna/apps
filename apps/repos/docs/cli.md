@@ -98,8 +98,8 @@ set with a plan hash and write audit receipts when applied.
 | Command | Required and optional flags |
 |---|---|
 | `repos registry health` | `--org`, `--state`, `--unusable`, `-n/--limit`, `--json`; the summary always counts all rows |
-| `repos registry prune` | Dry run by default. Apply requires `--apply`, `--expected-database`, `--expected-plan-hash`, `--actor`, and `--idempotency-key`; optional `-n/--limit`, `--json` |
-| `repos registry relocate-primary` | Requires `--repo-id`, `--expected-current-path`, `--expected-source-revision`, `--target-repo-id`, `--target-path`, `--expected-target-revision`, `--expected-remote`, `--expected-head`, `--actor`, `--idempotency-key`; `--apply` additionally requires `--expected-plan-hash`; optional `--preserve-divergent-branches-under`, `--dry-run`, `--json` |
+| `repos registry prune` | Dry run by default. Apply requires `--apply`, `--expected-database`, `--expected-plan-hash`, `--actor`, and `--idempotency-key`; optional `--match <prefix>` (only rows whose registry name starts with the prefix), `--status <missing\|undetermined>` (only rows whose path classifies as this state; default `missing`), `-n/--limit`, `--json` |
+| `repos registry relocate-primary` | Requires `--repo-id`, `--expected-current-path`, `--expected-source-revision`, `--target-repo-id`, `--target-path` (worktree store or any existing canonical checkout), `--expected-target-revision`, `--expected-remote`, `--expected-head`, `--actor`, `--idempotency-key`; `--apply` additionally requires `--expected-plan-hash`; optional `--preserve-divergent-branches-under`, `--dry-run`, `--json` |
 | `repos registry adjudicate-branches` | Requires `--spec <path>`; actor and idempotency key may come from the spec or `--actor`/`--idempotency-key`; apply requires `--apply --expected-plan-hash`; optional `--dry-run`, `--json` |
 
 `adjudicate-branches` only supports exact `reclassify-local` rows in its JSON

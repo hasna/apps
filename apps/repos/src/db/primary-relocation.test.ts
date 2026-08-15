@@ -819,7 +819,7 @@ describe("primary relocation v2 reconciliation", () => {
     expectCode(() => relocatePrimaryRepo({ ...request, expectedCurrentPath: join(root, "stale") }), "STALE_LEGACY_ROW");
   });
 
-  it("rejects target remote, HEAD, dirty state, symlink aliases, and path escapes", () => {
+  it("rejects target remote, HEAD, dirty state, and symlink aliases", () => {
     const pair = seedPair();
     git(pair.path, "remote", "set-url", "origin", "https://github.com/hasna/wrong.git");
     expectCode(() => relocatePrimaryRepo(requestFor(pair)), "REMOTE_MISMATCH");
@@ -836,17 +836,63 @@ describe("primary relocation v2 reconciliation", () => {
     symlinkSync(pair.path, alias, "dir");
     getDb().query("UPDATE repos SET path = ? WHERE id = ?").run(alias, pair.targetId);
     expectCode(() => relocatePrimaryRepo(requestFor({ ...pair, path: alias })), "TARGET_NOT_CANONICAL");
+  });
 
-    const escaped = join(root, "outside-checkout");
+  it("accepts an existing canonical checkout outside the worktree store as a target", () => {
+    // THE FILED GAP. relocate-primary refused every target outside
+    // ~/.hasna/repos/worktrees with TARGET_OUTSIDE_ROOT, which blocked a
+    // legitimate path fix: a row whose real checkout lives at a canonical
+    // workspace path could not be absorbed. The guard exists to protect the
+    // worktree store's Git authority, so it must bound the *authority*, not the
+    // checkout's location: a real, clean, self-contained checkout outside the
+    // store is now a valid target, and every authority containment check runs
+    // against the checkout directory itself.
+    const pair = seedPair({ name: "outside-target" });
+    const escaped = join(root, "workspace", "repos", "hasna", pair.name);
     mkdirSync(escaped, { recursive: true });
     git(escaped, "init", "-b", "main");
     git(escaped, "config", "user.email", "repos-test@invalid.example");
     git(escaped, "config", "user.name", "Repos Test");
     git(escaped, "remote", "add", "origin", `https://github.com/hasna/${pair.name}.git`);
-    writeFileSync(join(escaped, "README.md"), "# escaped\n");
+    writeFileSync(join(escaped, "README.md"), "# outside\n");
     git(escaped, "add", "README.md");
-    git(escaped, "commit", "-m", "escaped");
+    git(escaped, "commit", "-m", "outside");
+    const head = git(escaped, "rev-parse", "HEAD");
     getDb().query("UPDATE repos SET path = ? WHERE id = ?").run(escaped, pair.targetId);
+
+    const dry = relocatePrimaryRepo(requestFor({ ...pair, path: escaped, head }));
+    expect(dry.plan.can_apply).toBe(true);
+    expect(dry.after.path).toBe(escaped);
+
+    const applied = relocatePrimaryRepo({
+      ...requestFor({ ...pair, path: escaped, head }),
+      apply: true,
+      expectedPlanHash: dry.plan.plan_hash,
+    });
+    expect(applied.applied).toBe(true);
+    const row = getDb().query("SELECT path FROM repos WHERE id = ?").get(pair.legacyId) as { path: string };
+    expect(row.path).toBe(escaped);
+  });
+
+  it("still rejects a Git directory that escapes from a checkout outside the store", () => {
+    // The boundary moves with the checkout; it does not disappear. A target
+    // outside the store whose Git directory points elsewhere is still refused.
+    const pair = seedPair({ name: "outside-gitfile" });
+    const escaped = join(root, "workspace", "repos", "hasna", pair.name);
+    mkdirSync(escaped, { recursive: true });
+    git(escaped, "init", "-b", "main");
+    git(escaped, "config", "user.email", "repos-test@invalid.example");
+    git(escaped, "config", "user.name", "Repos Test");
+    git(escaped, "remote", "add", "origin", `https://github.com/hasna/${pair.name}.git`);
+    writeFileSync(join(escaped, "README.md"), "# outside\n");
+    git(escaped, "add", "README.md");
+    git(escaped, "commit", "-m", "outside");
+    const externalGitDir = join(root, "external-gitdirs", `${pair.name}.git`);
+    mkdirSync(join(root, "external-gitdirs"), { recursive: true });
+    renameSync(join(escaped, ".git"), externalGitDir);
+    writeFileSync(join(escaped, ".git"), `gitdir: ${externalGitDir}\n`);
+    getDb().query("UPDATE repos SET path = ? WHERE id = ?").run(escaped, pair.targetId);
+
     expectCode(() => relocatePrimaryRepo(requestFor({ ...pair, path: escaped, head: git(escaped, "rev-parse", "HEAD") })), "TARGET_OUTSIDE_ROOT");
   });
 

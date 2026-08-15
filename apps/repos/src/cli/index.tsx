@@ -671,7 +671,7 @@ registry
   .requiredOption("--expected-current-path <path>", "Expected path stored on the legacy row")
   .requiredOption("--expected-source-revision <revision>", "Exact legacy row updated_at revision")
   .requiredOption("--target-repo-id <id>", "Registered canonical target repo row ID to absorb")
-  .requiredOption("--target-path <path>", "Expected canonical target Git checkout/worktree path")
+  .requiredOption("--target-path <path>", "Expected canonical target Git checkout path (worktree store or any existing canonical checkout)")
   .requiredOption("--expected-target-revision <revision>", "Exact target row updated_at revision")
   .requiredOption("--expected-remote <host/owner/name>", "Credential-free expected remote identity")
   .requiredOption("--expected-head <sha>", "Exact lowercase target HEAD object ID")
@@ -844,6 +844,12 @@ registry
  * Only missing paths. Rows for gutted-but-present checkouts are left alone —
  * some of those directories hold the only surviving copy of a deleted repository,
  * and removing the row destroys the record of where that data is.
+ *
+ * Row selection: `--match <prefix>` scopes the plan to one class of rows (a
+ * retired prefix, a decommissioned line) instead of every missing-path row, and
+ * `--status missing|undetermined` picks the path-state class to report. The
+ * default, no filter, is exactly the historical behaviour: every missing-path
+ * row, with unclassifiable rows surfaced and never deleted.
  */
 registry
   .command("prune")
@@ -853,6 +859,8 @@ registry
   .option("--expected-plan-hash <sha256>", "Exact plan hash emitted by the dry run")
   .option("--actor <actor>", "Auditable operator or workflow identity")
   .option("--idempotency-key <key>", "Stable unique key for this logical prune")
+  .option("--match <prefix>", "Only rows whose registry name starts with this prefix (class-scoped retirement)")
+  .option("--status <missing|undetermined>", "Only rows whose path classifies as this state (default: missing)")
   .option("-n, --limit <n>", "Prune at most N rows")
   .option("--json", "Output the versioned JSON result")
   .action((opts) => {
@@ -865,6 +873,8 @@ registry
         actor: opts.actor,
         idempotencyKey: opts.idempotencyKey,
         limit: opts.limit === undefined ? undefined : intFlag(String(opts.limit), "--limit", 1),
+        matchPrefix: opts.match,
+        status: opts.status,
       });
       if (json) {
         printJson(result);
@@ -881,6 +891,12 @@ registry
         return;
       }
       console.log(chalk.bold(`Registry prune dry run — ${plan.database}`));
+      if (opts.match || opts.status) {
+        const filters = [opts.match && `--match ${opts.match}`, opts.status && `--status ${opts.status}`]
+          .filter(Boolean)
+          .join(" ");
+        console.log(chalk.dim(`  selected with: ${filters}`));
+      }
       console.log(`  ${plan.row_count} row(s) point at a path that no longer exists.`);
       for (const [table, count] of Object.entries(plan.cascade_totals).sort()) {
         console.log(chalk.dim(`    cascades: ${count} ${table} row(s)`));

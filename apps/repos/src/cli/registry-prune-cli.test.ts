@@ -107,4 +107,49 @@ describe("repos registry prune", () => {
     expect(human.stdout).toContain("--idempotency-key");
     expect(human.stdout).toContain("Nothing on disk is touched");
   });
+
+  test("--match scopes the plan to one class, on dry run and on apply", () => {
+    // THE FILED GAP, end to end: class-scoped retirement was inexpressible.
+    const { dbPath, live } = seed();
+    const db = getDb(dbPath);
+    db.query("INSERT INTO repos (path, name, remote_url, default_branch) VALUES (?, 'platform-gone', 'github.com/hasna/platform', 'main')")
+      .run(join(tempDir, "gone", "platform-gone"));
+    closeDb();
+
+    const dry = JSON.parse(runCli(dbPath, ["registry", "prune", "--match", "platform-", "--json"]).stdout) as {
+      plan: { row_count: number; plan_hash: string; database: string };
+    };
+    expect(dry.plan.row_count).toBe(1);
+
+    const result = runCli(dbPath, [
+      "registry", "prune", "--apply", "--match", "platform-", "--json",
+      "--expected-database", dry.plan.database,
+      "--expected-plan-hash", dry.plan.plan_hash,
+      "--actor", "cli-test", "--idempotency-key", "cli-key-match",
+    ]);
+    expect(result.code).toBe(0);
+    const body = JSON.parse(result.stdout) as { applied: boolean; receipt: { row_count: number } };
+    expect(body.applied).toBe(true);
+    expect(body.receipt.row_count).toBe(1);
+
+    const remaining = JSON.parse(runCli(dbPath, ["repos", "--json", "-n", "10"]).stdout) as Array<{ name: string }>;
+    expect(remaining.map((row) => row.name).sort()).toEqual(["open-gone", "open-live"]);
+    expect(existsSync(live)).toBe(true);
+  });
+
+  test("--status undetermined is accepted and plans nothing prunable", () => {
+    const { dbPath } = seed();
+    const result = runCli(dbPath, ["registry", "prune", "--status", "undetermined", "--json"]);
+    expect(result.code).toBe(0);
+    const body = JSON.parse(result.stdout) as { applied: boolean; plan: { row_count: number } };
+    expect(body.applied).toBe(false);
+    expect(body.plan.row_count).toBe(0);
+  });
+
+  test("an unknown --status is refused before anything is planned", () => {
+    const { dbPath } = seed();
+    const result = runCli(dbPath, ["registry", "prune", "--status", "bogus", "--json"]);
+    expect(result.code).toBe(1);
+    expect((JSON.parse(result.stdout) as { error: { code: string } }).error.code).toBe("INVALID_REQUEST");
+  });
 });
