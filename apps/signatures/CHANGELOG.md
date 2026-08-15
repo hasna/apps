@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.1.14
+
 ## 0.1.12
 
 - Migrated global package-owned files, render cache, and database fallback from legacy `~/.signatures` to `~/.hasna/signatures` while preserving repo-local `.signatures` databases.

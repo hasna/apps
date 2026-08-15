@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.63] - 2026-08-15
+
 ### Added
 - **Owner layout migration** — `skills storage migrate` moves `installed/` and
   legacy flat skill dirs into `~/.hasna/skills/skills/` (the canonical corpus

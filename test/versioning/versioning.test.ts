@@ -18,73 +18,68 @@ import {
 const members = discoverMembers();
 const membersByName = new Map(members.map((member) => [member.name, member]));
 
-// These are measured import/release-line mismatches on the 2026-08-14 main base.
-// They are exceptions, not a general relaxation: a different value remains a failure.
-// Refreshed 2026-08-14 at the fresh merge of current main (a7d60a96) by the
-// ci/test-suites iterate-to-green fixer: hooks went clean (package 0.6.3 now
-// matches its changelog heading after #117/#121 landed on main — record removed),
-// and instructions gained a release-lane mismatch (package 0.4.35 from release
-// #119, changelog heading still 0.4.33; reconcile task 1bb8cf0a).
-// conversations gained a record at import #100 (landing lane, 2026-08-15): the
-// imported tree carries package 0.6.1 (release #167) while its CHANGELOG heading
-// is 0.6.0 — a release-lane mismatch pre-existing in hasna/conversations, carried
-// into the mono by the import; reconcile task tracked on the import row.
-// Census 2026-08-15 (merged at the import/search base-sync, PR #68): the
-// registry was stale in two rows and short of four. conversations moved
-// 0.6.1 -> 0.6.2 (release lane ahead of main, heading still 0.6.0) and loops
-// moved 0.4.42 -> 0.5.1 (heading still 0.5.0). accounts (0.2.44, heading
-// 0.2.43), machines (0.2.26, heading 0.2.25 — release bump #134 skipped the
-// heading), mementos (0.14.84, heading 0.14.83) and repos (0.1.48, heading
-// 0.1.47) were unregistered. The machines row was removed by the 0.2.27
-// release PR (#153), which added the 0.2.26 and 0.2.27 headings and
-// reconciled the package to 0.2.27.
-// @hasna/search carries no CHANGELOG.md (null heading, never a mismatch); its
-// monorepo first-release changeset is .changeset/search-monorepo-first-release.md.
-const KNOWN_CHANGELOG_MISMATCHES = new Map([
-  ["@hasna/accounts", { packageVersion: "0.2.44", changelogVersion: "0.2.43" }],
-  ["@hasna/calendar", { packageVersion: "0.3.1", changelogVersion: "0.3.0" }],
-  ["@hasna/conversations", { packageVersion: "0.6.2", changelogVersion: "0.6.0" }],
-  ["@hasna/instructions", { packageVersion: "0.4.35", changelogVersion: "0.4.33" }],
-  ["@hasna/loops", { packageVersion: "0.5.1", changelogVersion: "0.5.0" }],
-  ["@hasna/mementos", { packageVersion: "0.14.84", changelogVersion: "0.14.83" }],
-  ["@hasna/repos", { packageVersion: "0.1.48", changelogVersion: "0.1.47" }],
-  ["@hasna/secrets", { packageVersion: "0.2.22", changelogVersion: "0.2.21" }],
-  ["@hasna/signatures", { packageVersion: "0.1.14", changelogVersion: "0.1.12" }],
-]);
+// The changelog lane is STRICT (f05fe292 design, option b'): the release lane writes
+// the CHANGELOG.md heading in the same commit as the version bump, so a mismatch here
+// is a defect in the landing commit, not a record to be maintained. The former
+// KNOWN_CHANGELOG_MISMATCHES exception map is DELETED — it existed only as a ledger
+// for the release lane's missing heading step and could never converge on a moving
+// main (measured: record half-life ~2.5h, review cycle > 2.5h).
 
+// Literal runtime version exports are a different class: a hand-written constant in
+// source, not a release-lane ledger. Verified live at this change (2026-08-15,
+// main 5957da4ee): catalog 0.2.0/0.1.0 and treasury 0.1.1/0.1.0 still fire and both
+// records still match, so the map is kept.
 const KNOWN_RUNTIME_MISMATCHES = new Map([
   ["@hasna/catalog", { packageVersion: "0.2.0", runtimeVersion: "0.1.0" }],
   ["@hasna/treasury", { packageVersion: "0.1.1", runtimeVersion: "0.1.0" }],
 ]);
 
-// The pre-import census entries for apps/{economy,events,feedback,recordings} were
-// pruned 2026-08-14 (reviewer P2): those packages are not members of this repo, so the
-// entries could never fire. The @hasna/repos entry was pruned as inert: registry 0.1.46
-// now equals main. Measured live, 2026-08-14 (complete 57-member registry census):
-// npm view @hasna/loops version --json -> "0.5.0"; npm view @hasna/emails version --json
-// -> "1.3.15" (published 2026-08-14T11:48:46Z, after the previous census). Successor
-// fixer re-ran the complete 65-member census at the merged head 2026-08-14: exactly the
-// three recorded drifts below, no fourth drift (instructions 0.4.34/0.4.33 recorded
-// 2026-08-14T12:41:38Z publish; reconcile task 8f8063c9-33af-4af7-b0d1-bdb25c481791).
-// Cycle-2 fixer re-ran the complete census at the fresh merge of current main
-// (8e19eaadf) 2026-08-14: exactly the five recorded drifts below, no sixth drift
-// (contracts 0.11.0 imported in-tree by #81 while the registry still holds 0.10.6,
-// reconcile task 48a6ef7f-0919-470d-99f4-59817a01c647; hooks 0.6.0 published
-// 2026-08-14T13:26:52Z ahead of main 0.5.0, reconcile task
-// d1ee99b5-5ba5-46a5-acdd-bb27fec9058f).
-// Iterate-to-green fixer re-ran the complete member census at the fresh merge of
-// current main (a7d60a96) 2026-08-14: exactly the four drifts below, no fifth drift —
-// instructions (0.4.35) and hooks (0.6.3) registry versions now equal main after
-// #119/#117/#121 merged, so their records were removed (reconcile tasks 8f8063c9 and
-// d1ee99b5 stay open for their remaining drift history), and @hasna/secrets gained a
-// release-lane drift (registry 0.3.0 vs main 0.2.22, reconcile task
-// 3ab02291-58b0-40c7-b96f-958ee1ef4a61).
-const KNOWN_NPM_DRIFT = new Map([
-  ["@hasna/loops", { registryVersion: "0.5.0", mainVersion: "0.4.42", source: "publish lane released 0.5.0 ahead of main; reconcile task 69e8b5dd-15cd-4f45-8739-c0edf6720773" }],
-  ["@hasna/emails", { registryVersion: "1.3.15", mainVersion: "1.3.14", source: "release lane published 1.3.15 ahead of main (2026-08-14T11:48:46Z); reconcile task 78c66e3c-baba-4ba6-9295-99b4df7ebc25" }],
-  ["@hasna/contracts", { registryVersion: "0.10.6", mainVersion: "0.11.0", source: "import #81 landed contracts 0.11.0 ahead of the registry; reconcile task 48a6ef7f-0919-470d-99f4-59817a01c647" }],
-  ["@hasna/secrets", { registryVersion: "0.3.0", mainVersion: "0.2.22", source: "release lane published 0.3.0 ahead of main (2026-08-14); reconcile task 3ab02291-58b0-40c7-b96f-958ee1ef4a61" }],
-]);
+// The npm-parity keyspace is a REPORTING lane (f05fe292 design, option (a)): registry
+// and main are two independent writers (publishes from other repos vs imports into
+// this one), so no commit in this repo can hold the invariant. Live drift auto-files
+// a reconcile task keyed on the exact fingerprint title "Reconcile @hasna/<pkg> main
+// <m> vs npm <r>" (find-or-create via `todos task upsert`, deduped by fingerprint),
+// prints the two-sided report, and never fails the lane. The former KNOWN_NPM_DRIFT
+// map is DELETED: it was always stale within minutes (5 drifts recorded and 2 stale
+// in one review cycle, measured 2026-08-14).
+const RECONCILE_TASKS_PROJECT = process.env.VERSIONING_TODOS_PROJECT ?? "5e44770b-694c-46a3-864f-20a2b9ec1de2";
+
+// Created reconcile tasks carry the documented lane identity agent-ea via
+// --assign/--assign-seat (agent-ea is a durable seat), independent of the
+// ambient TODOS_AGENT_ID; override with VERSIONING_TODOS_AGENT.
+const RECONCILE_TASKS_AGENT = process.env.VERSIONING_TODOS_AGENT ?? "agent-ea";
+
+async function ensureReconcileTask(title: string, description: string): Promise<{ id: string; created: boolean } | null> {
+  let proc: ReturnType<typeof Bun.spawn>;
+  try {
+    proc = Bun.spawn(
+      ["todos", "task", "upsert", "--fingerprint", title, "--title", title, "-d", description, "-p", "high", "--project", RECONCILE_TASKS_PROJECT, "--assign", RECONCILE_TASKS_AGENT, "--assign-seat", "--json"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+  } catch (err) {
+    // A missing `todos` executable throws at spawn time instead of exiting
+    // non-zero; the reporting lane must never fail on a task-sync failure —
+    // report NOT FILED and pass (measured on CI runners without the CLI).
+    console.info(`[INFO versioning] reconcile task upsert unavailable for "${title}": ${(err as Error).message?.slice(0, 200)} — NOT FILED`);
+    return null;
+  }
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  if (exitCode !== 0) {
+    console.info(`[INFO versioning] reconcile task upsert failed for "${title}": ${stderr.trim().slice(0, 240)}`);
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(stdout.trim()) as { task?: { id?: string }; created?: boolean };
+    if (!parsed.task?.id) return null;
+    return { id: parsed.task.id, created: parsed.created === true };
+  } catch {
+    return null;
+  }
+}
 
 describe("hasna/apps versioning integrity", () => {
   test("discovers every direct publishable member with a semver package version", () => {
@@ -138,17 +133,13 @@ describe("hasna/apps versioning integrity", () => {
     expect(rewriteWorkspaceRange("workspace:~", "1.2.3")).toBe("~1.2.3");
   });
 
-  test("changelog release headings match package versions", () => {
+  test("changelog release headings match package versions (strict)", () => {
     const mismatches = members.flatMap((member) => {
       const changelogVersion = readLatestChangelogVersion(member);
       return changelogVersion && changelogVersion !== member.version ? [{ name: member.name, packageVersion: member.version, changelogVersion }] : [];
     });
-    const unexpected = mismatches.filter((mismatch) => {
-      const known = KNOWN_CHANGELOG_MISMATCHES.get(mismatch.name);
-      return !known || known.packageVersion !== mismatch.packageVersion || known.changelogVersion !== mismatch.changelogVersion;
-    });
-    if (mismatches.length > 0) console.info(`[INFO versioning] known changelog mismatches: ${JSON.stringify(mismatches)}`);
-    expect(unexpected).toEqual([]);
+    if (mismatches.length > 0) console.info(`[INFO versioning] changelog mismatches: ${JSON.stringify(mismatches)}`);
+    expect(mismatches).toEqual([]);
   });
 
   test("literal runtime version exports match package versions", () => {
@@ -173,7 +164,7 @@ describe("hasna/apps versioning integrity", () => {
   });
 });
 
-describe("npm latest parity (opt-in network lane)", () => {
+describe("npm latest parity (opt-in network reporting lane)", () => {
   const enabled = process.env.VERSIONING_NPM_PARITY === "1";
   const sample = (process.env.VERSIONING_NPM_SAMPLE ?? "")
     .split(",")
@@ -181,12 +172,12 @@ describe("npm latest parity (opt-in network lane)", () => {
     .filter(Boolean);
   const selected = sample.length > 0 ? members.filter((member) => sample.includes(member.name)) : members;
 
-  test.skipIf(!enabled)("reports npm latest drift against main versions", async () => {
+  test.skipIf(!enabled)("reports npm latest drift against main versions and auto-files reconcile tasks", async () => {
     const unknownSample = sample.filter((name) => !membersByName.has(name));
     expect(unknownSample, "VERSIONING_NPM_SAMPLE contains unknown member names").toEqual([]);
     expect(selected.length, "VERSIONING_NPM_SAMPLE selected no members").toBeGreaterThan(0);
-    const exceptions: Array<Record<string, string>> = [];
-    const failures: Array<Record<string, string>> = [];
+    const drifts: Array<{ name: string; registry: string; main: string; taskId: string | null; created: boolean | null }> = [];
+    const anomalies: Array<{ name: string; error: string }> = [];
     for (const member of selected) {
       const proc = Bun.spawn(["npm", "view", member.name, "version", "--json", "--fetch-timeout=5000", "--fetch-retries=0"], {
         cwd: REPOSITORY_ROOT,
@@ -204,19 +195,27 @@ describe("npm latest parity (opt-in network lane)", () => {
           console.info(`[SKIP versioning] npm parity unavailable for ${member.name}; offline/network route`);
           return;
         }
-        failures.push({ name: member.name, error: stderr.trim().slice(0, 240) });
+        anomalies.push({ name: member.name, error: stderr.trim().slice(0, 240) });
         continue;
       }
       const registryVersion = JSON.parse(stdout.trim()) as unknown;
       if (registryVersion === member.version) continue;
-      const known = KNOWN_NPM_DRIFT.get(member.name);
-      if (known && known.registryVersion === registryVersion && known.mainVersion === member.version) {
-        exceptions.push({ name: member.name, registry: String(registryVersion), main: member.version, source: known.source });
-      } else {
-        failures.push({ name: member.name, registry: String(registryVersion), main: member.version });
-      }
+      const fingerprintTitle = `Reconcile @hasna/${member.name.replace(/^@hasna\//, "")} main ${member.version} vs npm ${String(registryVersion)}`;
+      const description = `Parity lane (test/versioning, VERSIONING_NPM_PARITY=1) measured registry ${String(registryVersion)} vs main ${member.version}. Acceptance: the sides converge (main catches up to the registry, or the registry is corrected), then this lane reports no drift for this fingerprint; the task closes once the lane re-runs clean.`;
+      const task = await ensureReconcileTask(fingerprintTitle, description);
+      drifts.push({
+        name: member.name,
+        registry: String(registryVersion),
+        main: member.version,
+        taskId: task?.id ?? null,
+        created: task ? task.created : null,
+      });
     }
-    if (exceptions.length > 0) console.info(`[INFO versioning] allowed npm/main drift: ${JSON.stringify(exceptions)}`);
-    expect(failures).toEqual([]);
+    const driftLines = drifts.map((d) => `  ${d.name}: main ${d.main} vs npm ${d.registry} -> reconcile task ${d.taskId ?? "NOT FILED (todos unavailable)"} (${d.created === null ? "n/a" : d.created ? "created" : "existing"})`);
+    const anomalyLines = anomalies.map((a) => `  ${a.name}: npm view failed (${a.error})`);
+    console.info(
+      `[INFO versioning] npm/main parity report: ${drifts.length} drift(s), ${anomalies.length} instrument anomaly(ies)\n${driftLines.join("\n")}\n${anomalyLines.join("\n")}`,
+    );
+    if (drifts.length === 0 && anomalies.length === 0) console.info("[INFO versioning] npm/main parity report: clean — no drift, no anomalies");
   });
 });
