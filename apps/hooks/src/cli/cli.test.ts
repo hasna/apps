@@ -671,14 +671,17 @@ describe("CLI", () => {
       }
     });
 
-    test("all-hooks list has all 5 categories as keys", async () => {
+    test("all-hooks list has all 5 categories as keys plus the Custom / Registry surface", async () => {
       const data = await runJson("list");
-      expect(Object.keys(data)).toHaveLength(10);
+      // 10 bundled categories + the Custom / Registry key for store hooks
+      // (QA-4 A1 / bug e8461f89).
+      expect(Object.keys(data)).toHaveLength(11);
       expect(data).toHaveProperty("Git Safety");
       expect(data).toHaveProperty("Code Quality");
       expect(data).toHaveProperty("Security");
       expect(data).toHaveProperty("Notifications");
       expect(data).toHaveProperty("Context Management");
+      expect(data).toHaveProperty("Custom / Registry");
     });
   });
 
@@ -859,9 +862,12 @@ describe("CLI", () => {
         for (const name of allNames) {
           await runJson("remove", name);
         }
-        // Verify all are removed
+        // Verify all removed hooks are gone (custom hooks created by earlier
+        // doctor tests may remain in the store and are listed by design —
+        // bug e8461f89: list -i shows store hooks too).
         const afterRemove = await runJson("list", "--installed");
-        expect(afterRemove).toHaveLength(0);
+        const leftoverInstalled = (afterRemove as Array<{ name: string }>).filter((entry) => allNames.includes(entry.name));
+        expect(leftoverInstalled).toHaveLength(0);
       } finally {
         restoreSettings();
       }
