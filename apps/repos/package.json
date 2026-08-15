@@ -1,7 +1,7 @@
 {
   "name": "@hasna/repos",
-  "version": "0.1.47",
-  "description": "Local repo intelligence platform for AI agents — track all repos, search commits, PRs, branches across your machine. CLI + MCP + Web dashboard.",
+  "version": "0.1.48",
+  "description": "Local repo intelligence platform for AI agents \u2014 track all repos, search commits, PRs, branches across your machine. CLI + MCP + Web dashboard.",
   "type": "module",
   "workspaces": [
     "dashboard"
