@@ -2,7 +2,7 @@
 // Regenerate: bun run sdk:generate
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: ConversationsClient 0.6.1
+// Source: ConversationsClient 0.6.2
 
 export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "created_at"?: string }
 
@@ -100,7 +100,14 @@ export class ConversationsClient {
     const url = new URL(this.baseUrl + path);
     if (opts.query) {
       for (const [key, value] of Object.entries(opts.query)) {
-        if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+        if (value === undefined || value === null) continue;
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item !== undefined && item !== null) url.searchParams.append(key, String(item));
+          }
+        } else {
+          url.searchParams.set(key, String(value));
+        }
       }
     }
     const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };
