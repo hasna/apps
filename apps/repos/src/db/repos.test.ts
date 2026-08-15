@@ -260,6 +260,48 @@ describe("repos", () => {
       expect(repo!.name).toBe("open-sandboxes");
     });
 
+    it("qualified org/name selects the canonical-named row, not the earliest, among two dead identity-clean rows", () => {
+      upsertRepo({
+        path: "/home/u/workspace/hasna/other-bench",
+        name: "other-bench",
+        org: "hasna",
+        remote_url: "github.com/hasna/bench",
+      });
+      const canonical = upsertRepo({
+        path: "/home/u/workspace/hasna/opensource/open-bench",
+        name: "open-bench",
+        org: "hasna",
+        remote_url: "github.com/hasna/bench",
+      });
+
+      const repo = getRepo("hasna/bench");
+      expect(repo).toBeTruthy();
+      expect(repo!.id).toBe(canonical.id);
+      expect(repo!.name).toBe("open-bench");
+      expect(repo!.remote_url).toBe("github.com/hasna/bench");
+    });
+
+    it("bare name selects the canonical-named row, not the earliest, among two dead identity-clean rows", () => {
+      upsertRepo({
+        path: "/home/u/workspace/hasna/other-bench",
+        name: "other-bench",
+        org: "hasna",
+        remote_url: "github.com/hasna/bench",
+      });
+      const canonical = upsertRepo({
+        path: "/home/u/workspace/hasna/opensource/open-bench",
+        name: "open-bench",
+        org: "hasna",
+        remote_url: "github.com/hasna/bench",
+      });
+
+      const repo = getRepo("bench");
+      expect(repo).toBeTruthy();
+      expect(repo!.id).toBe(canonical.id);
+      expect(repo!.name).toBe("open-bench");
+      expect(repo!.remote_url).toBe("github.com/hasna/bench");
+    });
+
     it("keeps refusing a bare name whose canonical remote has a present checkout under a different name", () => {
       upsertRepo({
         path: "/home/u/workspace/hasna/opensource/open-loops",

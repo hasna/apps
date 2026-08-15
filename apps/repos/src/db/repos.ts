@@ -307,12 +307,17 @@ export function getRepoByCanonicalRemote(name: string): Repo | null {
   // Every row for the remote is gone. Prefer rows that survive the
   // managed-identity guard (a pre-migration `iapp-` path under `internalapp/`
   // is a migration artifact, not evidence a different repo is registered),
-  // then rows whose name strips to the requested canonical name. Ties resolve
-  // by the earliest registry id, so the answer is deterministic.
+  // then rows whose name strips to the requested canonical name. The
+  // canonical name is the repository segment of the normalized remote
+  // (`github.com/hasna/bench` → `bench`), so the tie-break fires for every
+  // accepted input form — bare `bench`, qualified `hasna/bench`, and the full
+  // remote identity alike. Ties resolve by the earliest registry id, so the
+  // answer is deterministic.
   const identityClean = rows.filter((row) => getManagedRepoIdentityMismatch(row) === null);
   const candidates = identityClean.length > 0 ? identityClean : rows;
+  const canonicalName = candidate.split("/").pop()?.toLowerCase() ?? "";
   const named = candidates.filter(
-    (row) => stripRetiredCheckoutPrefix(row.name).toLowerCase() === name.toLowerCase(),
+    (row) => stripRetiredCheckoutPrefix(row.name).toLowerCase() === canonicalName,
   );
   const pool = named.length > 0 ? named : candidates;
   return sanitizeRepoForOutput(pool[0]!);
