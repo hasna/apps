@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.4.35
+
 ## 0.4.33
 
 Publishes merged PR #96, which restores legacy profile follow-up reads when

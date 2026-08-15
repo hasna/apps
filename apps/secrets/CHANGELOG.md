@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.22 — 2026-08-15
+
 ## 0.2.21 — 2026-08-10
 
 - Add `secrets scan input [path|-]`, a bounded input/stdin scan mode so tool
