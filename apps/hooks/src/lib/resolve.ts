@@ -19,6 +19,8 @@ export interface ResolvedHook {
   description: string;
   scriptPath: string;
   meta: HookMeta;
+  /** The hook's own declared timeout (manifest timeout_ms), or null. */
+  timeoutMs: number | null;
 }
 
 /**
@@ -87,6 +89,7 @@ export function resolveHook(name: string): ResolvedHook | undefined {
       description: custom.manifest.description ?? "Custom hook",
       scriptPath: custom.scriptPath,
       meta,
+      timeoutMs: custom.manifest.timeout_ms ?? null,
     };
   }
   const meta = getHook(shortManifestName(name));
@@ -100,5 +103,6 @@ export function resolveHook(name: string): ResolvedHook | undefined {
     description: meta.description,
     scriptPath,
     meta,
+    timeoutMs: null,
   };
 }

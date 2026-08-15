@@ -69,22 +69,89 @@ export const MCP_PORT = 39427;
  * as runHook: read the script bytes once, check their hash against the trust
  * store, and execute exactly those verified bytes (never re-open the path).
  * Throws on trust refusal so callers can fail closed.
+ *
+ * Resolution covers bundled AND custom/registry hooks (QA-4 bug 4d4c8f0b:
+ * hooks_run only reached the bundled catalog). The timeout is enforced inside
+ * the runner as a process-group kill, so a timed-out hook cannot orphan its
+ * children.
  */
 async function runVerifiedHook(
   name: string,
-  scriptPath: string,
   stdin: string,
   timeoutMs: number,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const content = readFileSync(scriptPath);
-  const check = checkScriptHash(name, sha256Of(content));
+  const { resolveHook, resolveScriptPath } = await import("../lib/resolve.js");
+  const resolved = resolveHook(name);
+  const hookScript = resolveScriptPath(name);
+  if (!resolved || !hookScript || !existsSync(hookScript)) {
+    throw new Error(`Hook '${name}' not found`);
+  }
+
+  const content = readFileSync(hookScript);
+  const sha = sha256Of(content);
+  const check = checkScriptHash(name, sha);
   if (!check.ok) {
     throw new Error(
       `Hook '${name}' script changed since it was trusted (sha256 ${check.expected} != ${check.actual}). Run 'hooks trust ${name}' to trust the new content.`,
     );
   }
-  const { executeVerifiedScript } = await import("../lib/run.js");
-  return executeVerifiedScript({ name, scriptPath, content, stdin, env: process.env, timeout: timeoutMs });
+  const { executeVerifiedScript, HookTimeoutError } = await import("../lib/run.js");
+  const started = Date.now();
+  let ran: { stdout: string; stderr: string; exitCode: number };
+  try {
+    ran = await executeVerifiedScript({ name, scriptPath: hookScript, content, stdin, env: process.env, timeout: timeoutMs });
+  } catch (err) {
+    // Record the timeout as an event row too.
+    try {
+      const { recordHookRun, resolveEventType } = await import("../lib/db-writer.js");
+      let inputJson: Record<string, any> = {};
+      try { inputJson = JSON.parse(stdin); } catch {}
+      recordHookRun({
+        hookName: name,
+        eventType: resolveEventType(inputJson.hook_event_name, resolved.events[0] ?? "PostToolUse"),
+        version: resolved.version,
+        sha256: sha,
+        sessionId: typeof inputJson.session_id === "string" ? inputJson.session_id : null,
+        toolName: typeof inputJson.tool_name === "string" ? inputJson.tool_name : null,
+        toolInput: inputJson.tool_input,
+        error: err instanceof Error ? err.message.slice(0, 500) : String(err),
+        exitCode: -1,
+        durationMs: Date.now() - started,
+        projectDir: process.cwd(),
+      });
+    } catch {
+      // Observability must never break execution.
+    }
+    if (err instanceof HookTimeoutError) throw err;
+    throw err;
+  }
+
+  const durationMs = Date.now() - started;
+  try {
+    const { recordHookRun, resolveEventType } = await import("../lib/db-writer.js");
+    let inputJson: Record<string, any> = {};
+    try { inputJson = JSON.parse(stdin); } catch {}
+    let outputJson: Record<string, any> = {};
+    try { outputJson = JSON.parse(ran.stdout); } catch {}
+    const blocked = outputJson.decision === "block" || outputJson.continue === false;
+    recordHookRun({
+      hookName: name,
+      eventType: resolveEventType(inputJson.hook_event_name, resolved.events[0] ?? "PostToolUse"),
+      version: resolved.version,
+      sha256: sha,
+      sessionId: typeof inputJson.session_id === "string" ? inputJson.session_id : null,
+      toolName: typeof inputJson.tool_name === "string" ? inputJson.tool_name : null,
+      toolInput: inputJson.tool_input,
+      result: blocked ? "block" : "continue",
+      error: ran.exitCode !== 0 ? (ran.stderr || `hook exited with code ${ran.exitCode}`).slice(0, 500) : null,
+      exitCode: ran.exitCode,
+      durationMs,
+      projectDir: process.cwd(),
+    });
+  } catch {
+    // Observability must never break execution.
+  }
+  return ran;
 }
 
 function formatInstallResults(results: InstallResult[], extra?: Record<string, any>) {
@@ -460,19 +527,18 @@ export function createHooksServer(): McpServer {
       name: z.string().describe("Hook name (e.g. 'gitguard', 'checkpoint')"),
       input: z.record(z.string(), z.unknown()).default(() => ({})).describe("Hook input as JSON object (HookInput)"),
       profile: z.string().optional().describe("Agent profile ID to inject into hook input"),
-      timeout_ms: z.number().default(10000).describe("Timeout in milliseconds (default: 10000)"),
+      timeout_ms: z.number().int().positive().max(600000).optional().describe("Timeout in milliseconds (default: the hook's manifest timeout_ms or 10000)"),
     },
     async ({ name, input, profile, timeout_ms }) => {
-      const meta = getHook(name);
-      if (!meta) {
+      const { resolveHook } = await import("../lib/resolve.js");
+      const resolved = resolveHook(name);
+      if (!resolved) {
         return { content: [{ type: "text", text: JSON.stringify({ error: `Hook '${name}' not found` }) }] };
       }
 
-      const hookDir = getHookPath(name);
-      const hookScript = join(hookDir, "src", "hook.ts");
-      if (!existsSync(hookScript)) {
-        return { content: [{ type: "text", text: JSON.stringify({ error: `Hook script not found: ${hookScript}` }) }] };
-      }
+      // Caller-provided timeout wins; otherwise honor the hook's own
+      // manifest timeout_ms (QA-4 bug 4d4c8f0b: manifest timeout ignored).
+      const effectiveTimeout = timeout_ms ?? resolved.timeoutMs ?? 10000;
 
       let hookInput = { ...input };
       if (profile) {
@@ -487,13 +553,36 @@ export function createHooksServer(): McpServer {
         }
       }
 
-      let ran: { stdout: string; stderr: string; exitCode: number } | null = null;
       try {
-        ran = await Promise.race([
-          runVerifiedHook(name, hookScript, JSON.stringify(hookInput), timeout_ms),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), timeout_ms)),
-        ]);
+        const ran = await runVerifiedHook(name, JSON.stringify(hookInput), effectiveTimeout);
+        const stdoutText = ran.stdout;
+        const stderrText = ran.stderr;
+
+        let output: unknown = {};
+        try { output = JSON.parse(stdoutText); } catch { output = stdoutText ? { raw: stdoutText } : {}; }
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              hook: name,
+              output,
+              stderr: stderrText || undefined,
+              exitCode: ran.exitCode,
+              timeout_ms: effectiveTimeout,
+            }),
+          }],
+        };
       } catch (err) {
+        const { HookTimeoutError } = await import("../lib/run.js");
+        if (err instanceof HookTimeoutError) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify({ hook: name, timedOut: true, timeout_ms: effectiveTimeout, error: err.message }),
+            }],
+          };
+        }
         return {
           content: [{
             type: "text" as const,
@@ -501,26 +590,6 @@ export function createHooksServer(): McpServer {
           }],
         };
       }
-
-      const timedOut = ran === null;
-      const stdoutText = ran?.stdout ?? "";
-      const stderrText = ran?.stderr ?? "";
-
-      let output: unknown = {};
-      try { output = JSON.parse(stdoutText); } catch { output = stdoutText ? { raw: stdoutText } : {}; }
-
-      return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({
-            hook: name,
-            output,
-            stderr: stderrText || undefined,
-            exitCode: ran?.exitCode ?? -1,
-            ...(timedOut ? { timedOut: true, timeout_ms } : {}),
-          }),
-        }],
-      };
     }
   );
 
@@ -607,12 +676,12 @@ export function createHooksServer(): McpServer {
       tool_name: z.string().describe("Tool name to simulate (e.g. 'Bash', 'Write', 'Edit')"),
       tool_input: z.record(z.string(), z.unknown()).default(() => ({})).describe("Tool input to pass to matching hooks"),
       scope: z.enum(["global", "project"]).default("global").describe("Scope to check"),
-      timeout_ms: z.number().default(5000).describe("Per-hook timeout in milliseconds"),
+      timeout_ms: z.number().int().positive().max(600000).optional().describe("Per-hook timeout in milliseconds (default: the hook's manifest timeout_ms or 5000)"),
     },
     async ({ tool_name, tool_input, scope, timeout_ms }) => {
       const registered = getRegisteredHooks(scope);
       const matchingHooks = registered.filter((name) => {
-        const meta = getHook(name);
+        const meta = resolveHookMeta(name) ?? getHook(name);
         if (!meta || meta.event !== "PreToolUse") return false;
         if (!meta.matcher) return true;
         try { return new RegExp(meta.matcher).test(tool_name); } catch { return false; }
@@ -624,27 +693,24 @@ export function createHooksServer(): McpServer {
 
       const input = { tool_name, tool_input };
       const results = await Promise.all(matchingHooks.map(async (name) => {
-        const hookDir = getHookPath(name);
-        const hookScript = join(hookDir, "src", "hook.ts");
-        if (!existsSync(hookScript)) return { name, decision: "approve", error: "script not found" };
-
-        let ran: { stdout: string; stderr: string; exitCode: number } | null = null;
+        const { resolveHook } = await import("../lib/resolve.js");
+        const resolved = resolveHook(name);
+        const effectiveTimeout = timeout_ms ?? resolved?.timeoutMs ?? 5000;
         try {
-          ran = await Promise.race([
-            runVerifiedHook(name, hookScript, JSON.stringify(input), timeout_ms),
-            new Promise<null>((r) => setTimeout(() => r(null), timeout_ms)),
-          ]);
+          const ran = await runVerifiedHook(name, JSON.stringify(input), effectiveTimeout);
+          let output: any = {};
+          try { output = JSON.parse(ran.stdout); } catch {}
+          return { name, decision: output.decision ?? "approve", reason: output.reason, raw: output };
         } catch (err) {
+          const { HookTimeoutError } = await import("../lib/run.js");
+          if (err instanceof HookTimeoutError) {
+            return { name, decision: "approve", timedOut: true, timeout_ms: effectiveTimeout };
+          }
           // Trust refusal is fail-closed: a hook whose content cannot be
           // verified is never allowed to run, so the simulated decision
           // blocks instead of approving.
           return { name, decision: "block", error: err instanceof Error ? err.message : String(err) };
         }
-
-        if (ran === null) return { name, decision: "approve", timedOut: true };
-        let output: any = {};
-        try { output = JSON.parse(ran.stdout); } catch {}
-        return { name, decision: output.decision ?? "approve", reason: output.reason, raw: output };
       }));
 
       const blocked = results.find((r) => r.decision === "block");
@@ -698,30 +764,28 @@ export function createHooksServer(): McpServer {
         name: z.string().describe("Hook name"),
         input: z.record(z.string(), z.unknown()).default(() => ({})).describe("Hook input JSON"),
       })).describe("List of hooks to run with their inputs"),
-      timeout_ms: z.number().default(10000).describe("Per-hook timeout in milliseconds"),
+      timeout_ms: z.number().int().positive().max(600000).optional().describe("Per-hook timeout in milliseconds (default: the hook's manifest timeout_ms or 10000)"),
     },
-    async ({ hooks, timeout_ms }: { hooks: Array<{ name: string; input: Record<string, unknown> }>; timeout_ms: number }) => {
+    async ({ hooks, timeout_ms }: { hooks: Array<{ name: string; input: Record<string, unknown> }>; timeout_ms?: number }) => {
       const results = await Promise.all(hooks.map(async ({ name, input }) => {
-        const meta = getHook(name);
-        if (!meta) return { name, error: `Hook '${name}' not found` };
-        const hookScript = join(getHookPath(name), "src", "hook.ts");
-        if (!existsSync(hookScript)) return { name, error: "script not found" };
+        const { resolveHook } = await import("../lib/resolve.js");
+        const resolved = resolveHook(name);
+        if (!resolved) return { name, error: `Hook '${name}' not found` };
+        const effectiveTimeout = timeout_ms ?? resolved.timeoutMs ?? 10000;
 
-        let ran: { stdout: string; stderr: string; exitCode: number } | null = null;
         try {
-          ran = await Promise.race([
-            runVerifiedHook(name, hookScript, JSON.stringify(input), timeout_ms),
-            new Promise<null>((r) => setTimeout(() => r(null), timeout_ms)),
-          ]);
+          const ran = await runVerifiedHook(name, JSON.stringify(input), effectiveTimeout);
+          const stdoutText = ran.stdout;
+          let output: any = {};
+          try { output = JSON.parse(stdoutText); } catch { output = stdoutText ? { raw: stdoutText } : {}; }
+          return { name, output, exitCode: ran.exitCode, timeout_ms: effectiveTimeout };
         } catch (err) {
+          const { HookTimeoutError } = await import("../lib/run.js");
+          if (err instanceof HookTimeoutError) {
+            return { name, error: err.message, timedOut: true, timeout_ms: effectiveTimeout };
+          }
           return { name, error: err instanceof Error ? err.message : String(err) };
         }
-
-        const stdoutText = ran?.stdout ?? "";
-        const timedOut = ran === null;
-        let output: any = {};
-        try { output = JSON.parse(stdoutText); } catch { output = stdoutText ? { raw: stdoutText } : {}; }
-        return { name, output, exitCode: ran?.exitCode ?? -1, ...(timedOut ? { timedOut: true } : {}) };
       }));
 
       return { content: [{ type: "text", text: JSON.stringify({ results, count: results.length }) }] };

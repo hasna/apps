@@ -4,7 +4,7 @@ import React from "react";
 import { render } from "ink";
 import { Command } from "commander";
 import chalk from "chalk";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, rmSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { homedir } from "os";
@@ -46,8 +46,9 @@ import {
   exportProfiles,
   importProfiles,
 } from "../lib/profiles.js";
-import { readCustomManifest } from "../lib/manifest.js";
+import { readCustomManifest, listCustomHooks } from "../lib/manifest.js";
 import { resolveHookMeta } from "../lib/resolve.js";
+import { getPinnedHook } from "../lib/store.js";
 
 const program = new Command();
 
@@ -126,6 +127,28 @@ function hookSummaryLine(hook: HookMeta, options: { verbose?: boolean } = {}): s
   return `  ${chalk.cyan(hook.name.padEnd(17))} ${chalk.dim(`[${hook.event}${matcher}]`)} ${chalk.dim(hook.category)}${description}`;
 }
 
+/**
+ * Custom/registry hooks present in the store — bundled catalog + these is the
+ * full list surface `hooks list` must show (QA-4 A1 / bug e8461f89).
+ * Version comes from the lock pin when present (registry sync), else the
+ * manifest's own version.
+ */
+function listStoreHooks(): Array<{ meta: HookMeta; source: "custom" | "registry" }> {
+  const out: Array<{ meta: HookMeta; source: "custom" | "registry" }> = [];
+  for (const parsed of listCustomHooks()) {
+    const name = parsed.manifest.name;
+    const pin = getPinnedHook(name);
+    const source = pin?.source === "remote" || pin?.source === "registry" ? "registry" : "custom";
+    const meta = resolveHookMeta(name);
+    if (!meta) continue;
+    out.push({
+      meta: { ...meta, version: pin?.version ?? meta.version },
+      source,
+    });
+  }
+  return out.sort((a, b) => a.meta.name.localeCompare(b.meta.name));
+}
+
 function printDisclosureHint(hidden: number, detailCommand: string, options: { includeAll?: boolean } = {}): void {
   const rowControls = options.includeAll ? "--limit, --all, --verbose" : "--limit, --verbose";
   if (hidden > 0) {
@@ -192,22 +215,24 @@ program
         else console.log(chalk.red(message));
         return;
       }
-      const config = { api_url: options.apiUrl.replace(/\/+$/, ""), api_key_ref: options.apiKey };
+      // api_key_ref names the vault key (never the value). Default to the
+      // documented live key so config.json always carries the reference
+      // (QA-3 deviation: v0.6.3 wrote api_url only).
+      const apiKeyRef = options.apiKey ?? "hasna/hooks/live/api-key";
+      const config = { api_url: options.apiUrl.replace(/\/+$/, ""), api_key_ref: apiKeyRef };
       const path = writeConfig(config);
       if (options.json) {
-        console.log(JSON.stringify({ ok: true, api_url: config.api_url, api_key_ref: config.api_key_ref ?? null, config_path: path }));
+        console.log(JSON.stringify({ ok: true, api_url: config.api_url, api_key_ref: config.api_key_ref, config_path: path }));
         return;
       }
       console.log(chalk.green(`\n✓ Remote registry configured\n`));
       console.log(`  ${chalk.dim("API URL:")}    ${config.api_url}`);
-      console.log(`  ${chalk.dim("API key ref:")} ${config.api_key_ref ?? "(none; serve will refuse publishes)"}`);
+      console.log(`  ${chalk.dim("API key ref:")} ${config.api_key_ref}`);
       console.log(`  ${chalk.dim("Config:")}      ${path}`);
       console.log();
       console.log(chalk.dim("  Presence of an API URL selects the remote registry; absence means local."));
-      if (config.api_key_ref) {
-        console.log(chalk.dim(`  Run the server with the key resolved from the vault, never the value:`));
-        console.log(`    secrets exec ${config.api_key_ref} --as HASNA_HOOKS_API_KEY -- hooks serve`);
-      }
+      console.log(chalk.dim(`  Run the server with the key resolved from the vault, never the value:`));
+      console.log(`    secrets exec ${config.api_key_ref} --as HASNA_HOOKS_API_KEY -- hooks serve`);
       console.log();
       return;
     }
@@ -252,6 +277,7 @@ program
   .action(async (hook: string, options: { profile?: string }) => {
     const { resolveHook, resolveScriptPath } = await import("../lib/resolve.js");
     const { sha256Of, checkScriptHash } = await import("../lib/store.js");
+    const { recordHookRun, resolveEventType } = await import("../lib/db-writer.js");
     const resolved = resolveHook(hook);
     if (!resolved) {
       console.error(JSON.stringify({ error: `Hook '${hook}' not found` }));
@@ -267,7 +293,8 @@ program
     // Read the bytes ONCE. The verified bytes are the executed bytes: the
     // path is never re-opened for execution after the trust check (TOCTOU).
     const content = readFileSync(hookScript);
-    const check = checkScriptHash(hook, sha256Of(content));
+    const sha = sha256Of(content);
+    const check = checkScriptHash(hook, sha);
     if (!check.ok) {
       console.error(
         JSON.stringify({
@@ -306,18 +333,75 @@ program
 
     // Execute the verified bytes with bun, passing stdin through
     const { readCustomManifest } = await import("../lib/manifest.js");
-    const { executeVerifiedScript } = await import("../lib/run.js");
+    const { executeVerifiedScript, HookTimeoutError } = await import("../lib/run.js");
     const custom = readCustomManifest(hook);
     const args = custom?.manifest.args ?? [];
     const timeout = custom?.manifest.timeout_ms;
-    const { stdout, stderr, exitCode } = await executeVerifiedScript({
-      name: hook,
-      scriptPath: hookScript,
-      content,
-      args,
-      stdin: hookStdin,
-      env: process.env,
-      timeout,
+    const started = Date.now();
+    let stdout = "";
+    let stderr = "";
+    let exitCode = 0;
+    try {
+      ({ stdout, stderr, exitCode } = await executeVerifiedScript({
+        name: hook,
+        scriptPath: hookScript,
+        content,
+        args,
+        stdin: hookStdin,
+        env: process.env,
+        timeout,
+      }));
+    } catch (err) {
+      if (err instanceof HookTimeoutError) {
+        // The timeout is itself an execution attempt — record it so the
+        // audit trail is never empty (general reviewer P1-3).
+        try {
+          const { recordHookRun, resolveEventType } = await import("../lib/db-writer.js");
+          let inputJson: Record<string, any> = {};
+          try { inputJson = JSON.parse(stdin); } catch {}
+          recordHookRun({
+            hookName: hook,
+            eventType: resolveEventType(inputJson.hook_event_name, resolved.events[0] ?? "PostToolUse"),
+            version: resolved.version,
+            sha256: sha,
+            sessionId: typeof inputJson.session_id === "string" ? inputJson.session_id : null,
+            toolName: typeof inputJson.tool_name === "string" ? inputJson.tool_name : null,
+            toolInput: inputJson.tool_input,
+            error: err.message.slice(0, 500),
+            exitCode: -1,
+            durationMs: Date.now() - started,
+            projectDir: process.cwd(),
+          });
+        } catch {
+          // Observability must never mask the timeout.
+        }
+        console.error(JSON.stringify({ error: err.message, hook, timedOut: true, timeout_ms: timeout ?? null }));
+        process.exit(1);
+      }
+      throw err;
+    }
+    const durationMs = Date.now() - started;
+
+    // Every execution lands in hook_events so `hooks log` is never empty
+    // after a real fire (bug ef58dcb7).
+    let inputJson: Record<string, any> = {};
+    try { inputJson = JSON.parse(stdin); } catch {}
+    let outputJson: Record<string, any> = {};
+    try { outputJson = JSON.parse(stdout); } catch {}
+    const blocked = outputJson.decision === "block" || outputJson.continue === false;
+    recordHookRun({
+      hookName: hook,
+      eventType: resolveEventType(inputJson.hook_event_name, resolved.events[0] ?? "PostToolUse"),
+      version: resolved.version,
+      sha256: sha,
+      sessionId: typeof inputJson.session_id === "string" ? inputJson.session_id : null,
+      toolName: typeof inputJson.tool_name === "string" ? inputJson.tool_name : null,
+      toolInput: inputJson.tool_input,
+      result: blocked ? "block" : "continue",
+      error: exitCode !== 0 ? (stderr || `hook exited with code ${exitCode}`).slice(0, 500) : null,
+      exitCode,
+      durationMs,
+      projectDir: process.cwd(),
     });
 
     if (stdout) process.stdout.write(stdout);
@@ -341,7 +425,7 @@ program
   .option("--apply-codewith", "Explicitly append Codewith TOML to a config file (prefer open-configs for managed configs)", false)
   .option("--codewith-config <path>", "Explicit Codewith config path required with --apply-codewith")
   .option("-j, --json", "Output as JSON", false)
-  .description("Install one or more hooks (registry names, local paths, git URLs, or manifest URLs)")
+  .description("Install one or more hooks (registry names, local paths, git URLs, manifest URLs, or <name>@<version> pinned installs)")
   .action(async (hooks: string[], options) => {
     const scope = resolveScope(options);
     const target = resolveTarget(options);
@@ -381,17 +465,35 @@ program
     }
 
     const { isCustomSource, installCustomSource } = await import("../lib/custom-install.js");
+    const { readCustomManifest } = await import("../lib/manifest.js");
+    const { resolveApiUrl } = await import("../config.js");
+    const { sha256Of, pinInstalledHook } = await import("../lib/store.js");
+    const { readFileSync: readFileSyncFs } = await import("fs");
+
+    // <name>@<version> pinned installs fetch the exact version from the
+    // remote registry and verify its sha against the remote lock (QA-2).
+    function parseNameVersion(arg: string): { name: string; version: string } | null {
+      const at = arg.lastIndexOf("@");
+      if (at <= 0 || at === arg.length - 1) return null;
+      return { name: arg.slice(0, at), version: arg.slice(at + 1) };
+    }
+
+    const pinnedRequests = toInstall
+      .map((arg) => ({ arg, pinned: parseNameVersion(arg) }))
+      .filter((x): x is { arg: string; pinned: { name: string; version: string } } => x.pinned !== null);
+
     const customSources = toInstall.filter((n) => !getHook(n) && isCustomSource(n));
 
     // Dry-run: preview what would be installed
     if (options.dryRun) {
       const known = toInstall.filter((n) => getHook(n));
-      const unknown = toInstall.filter((n) => !getHook(n) && !isCustomSource(n));
+      const unknown = toInstall.filter((n) => !getHook(n) && !isCustomSource(n) && !parseNameVersion(n) && !readCustomManifest(n));
       if (options.json) {
         console.log(JSON.stringify({
           dryRun: true,
           would_install: known,
           custom_sources: customSources,
+          pinned: pinnedRequests.map((p) => `${p.pinned.name}@${p.pinned.version}`),
           unknown,
           scope,
           target,
@@ -406,6 +508,9 @@ program
       }
       for (const source of customSources) {
         console.log(chalk.cyan(`  ${source}`) + chalk.dim(" [custom source: would fetch and install]"));
+      }
+      for (const p of pinnedRequests) {
+        console.log(chalk.cyan(`  ${p.pinned.name}@${p.pinned.version}`) + chalk.dim(" [pinned registry install]"));
       }
       if (unknown.length > 0) {
         console.log();
@@ -422,9 +527,29 @@ program
     for (const source of customSources) {
       try {
         const custom = await installCustomSource(source);
+        // Pin the ACTUAL installed version+sha at install time — the first
+        // run is trusted with real provenance, never a 0.0.0 placeholder
+        // (QA-1 P3). The name joins the registration set ONLY after the pin
+        // transaction succeeds; on pin failure the copied store dir is rolled
+        // back so the bytes never become runnable unrecorded (security
+        // reviewer P1-3).
+        try {
+          const scriptBytes = readFileSyncFs(custom.scriptPath);
+          pinInstalledHook(custom.name, custom.version, sha256Of(scriptBytes), "custom", source);
+        } catch (pinError) {
+          const { customHookDir } = await import("../lib/manifest.js");
+          const { removeHookFromStore } = await import("../lib/store.js");
+          try {
+            rmSync(customHookDir(custom.name), { recursive: true, force: true });
+          } catch {
+            // Best-effort rollback.
+          }
+          removeHookFromStore(custom.name);
+          throw pinError;
+        }
         installedCustom.push(custom.name);
         if (options.json) {
-          console.log(JSON.stringify({ custom: { source, name: custom.name, version: custom.version } }));
+          console.log(JSON.stringify({ custom: { source, name: custom.name, version: custom.version, pinned: true } }));
         } else {
           console.log(chalk.green(`✓ Installed custom hook '${custom.name}' v${custom.version} from ${source}`));
         }
@@ -438,11 +563,43 @@ program
         }
       }
     }
-    const namesToRegister = [...new Set([...toInstall.filter((n) => !isCustomSource(n)), ...installedCustom])];
+
+    // Pinned registry installs: fetch the exact version, verify the sha
+    // against the remote lock, then register in settings.
+    const installedPinned: string[] = [];
+    for (const { arg, pinned } of pinnedRequests) {
+      try {
+        const apiUrl = resolveApiUrl();
+        if (!apiUrl) throw new Error(`Cannot install '${arg}': no remote registry configured (set api_url or HASNA_HOOKS_API_URL)`);
+        const { fetchPinnedHook } = await import("../lib/sync.js");
+        const pinnedInstall = await fetchPinnedHook(pinned.name, pinned.version, apiUrl);
+        installedPinned.push(pinnedInstall.name);
+        if (options.json) {
+          console.log(JSON.stringify({ pinned: { request: arg, name: pinnedInstall.name, version: pinnedInstall.version, sha256: pinnedInstall.sha256, source: pinnedInstall.source } }));
+        } else {
+          console.log(chalk.green(`✓ Installed '${pinnedInstall.name}' v${pinnedInstall.version} from registry (sha256 ${pinnedInstall.sha256.slice(0, 12)}…)`));
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        results.push({ hook: arg, success: false, error: message });
+        if (options.json) {
+          console.log(JSON.stringify({ error: `Pinned install failed for ${arg}: ${message}` }));
+        } else {
+          console.log(chalk.red(`✗ ${message}`));
+        }
+      }
+    }
+
+    const namesToRegister = [...new Set([
+      ...toInstall.filter((n) => !isCustomSource(n) && !parseNameVersion(n)),
+      ...installedCustom,
+      ...installedPinned,
+    ])];
 
     for (const name of namesToRegister) {
-      // Did-you-mean for unknown hooks
-      if (!getHook(name) && !installedCustom.includes(name)) {
+      // Did-you-mean for unknown hooks — a synced registry/custom hook that
+      // already exists in the store resolves here too (QA-4 A1).
+      if (!getHook(name) && !installedCustom.includes(name) && !installedPinned.includes(name) && !readCustomManifest(name)) {
         const suggestions = suggestHooks(name);
         const hint = suggestions.length ? ` — did you mean: ${suggestions.join(", ")}?` : "";
         results.push({ hook: name, success: false, error: `Hook '${name}' not found${hint}` });
@@ -470,9 +627,13 @@ program
         target,
         applied: results.some((r) => r.applied),
       }));
+      if (results.length > 0 && results.every((r) => !r.success)) {
+        process.exitCode = 1;
+      }
       return;
     }
 
+    const successCount = results.filter((r) => r.success).length;
     const settingsFile = target === "codewith"
       ? (options.applyCodewith ? options.codewithConfig : "TOML fragment only (open-configs should apply)")
       : scope === "project" ? ".claude/settings.json" : "~/.claude/settings.json";
@@ -498,6 +659,13 @@ program
         console.log(chalk.red(`✗ ${result.hook}: ${result.error}`));
       }
     }
+    // Fail-closed reporting: never claim "Registered" (and never exit 0)
+    // when nothing was registered (QA-3 P2 / QA-1 BUG-C / QA-4 #5).
+    if (results.length > 0 && successCount === 0) {
+      console.log(chalk.red(`\n✗ Nothing was registered — all ${results.length} hook(s) failed.`));
+      process.exitCode = 1;
+      return;
+    }
     console.log(chalk.dim(`\nRegistered in ${settingsFile}`));
   });
 
@@ -515,33 +683,53 @@ program
   .option("-n, --limit <n>", "Max rows to show in compact output", "20")
   .option("--verbose", "Show descriptions and full detail columns", false)
   .option("-j, --json", "Output as JSON", false)
-  .description("List available or installed hooks")
+  .description("List available or installed hooks (bundled + custom/registry)")
   .action((options) => {
     const scope = resolveScope(options);
     const limit = options.all ? Number.MAX_SAFE_INTEGER : parseLimit(options.limit, 20, 200);
+    const storeHooks = listStoreHooks();
 
     if (options.registered || options.installed) {
       const target = (options.target === "gemini" ? "gemini" : options.target === "codewith" ? "codewith" : "claude") as "claude" | "gemini" | "codewith";
       const registered = getRegisteredHooksForTarget(scope, target);
+      const installed = [...new Set([...registered, ...storeHooks.map((s) => s.meta.name)])];
+      const shown = options.registered ? registered : installed;
       if (options.json) {
-        console.log(JSON.stringify(registered.map((name) => {
-          const meta = getHook(name);
-          return { name, event: meta?.event, version: meta?.version, description: meta?.description, scope, target };
+        console.log(JSON.stringify(shown.map((name) => {
+          const store = storeHooks.find((s) => s.meta.name === name);
+          const meta = store?.meta ?? getHook(name);
+          return {
+            name,
+            event: meta?.event,
+            version: meta?.version,
+            description: meta?.description,
+            source: store?.source ?? (store ? "custom" : undefined),
+            scope,
+            target,
+          };
         })));
         return;
       }
-      if (registered.length === 0) {
-        console.log(chalk.dim(`No hooks registered (${scope}, ${target})`));
+      if (shown.length === 0) {
+        console.log(chalk.dim(`No hooks ${options.registered ? "registered" : "installed"} (${scope}, ${target})`));
         return;
       }
-      const visible = registered.slice(0, limit);
-      console.log(chalk.bold(`\nRegistered hooks — ${scope}/${target} (${registered.length}, showing ${visible.length}):\n`));
+      const label = options.registered ? "Registered" : "Installed";
+      const visible = shown.slice(0, limit);
+      console.log(chalk.bold(`\n${label} hooks — ${scope}/${target} (${shown.length}, showing ${visible.length}):\n`));
       for (const name of visible) {
-        const meta = getHook(name);
-        if (meta) console.log(hookSummaryLine(meta, { verbose: options.verbose }));
-        else console.log(`  ${chalk.cyan(name)} ${chalk.dim("[unknown]")}`);
+        const store = storeHooks.find((s) => s.meta.name === name);
+        const meta = store?.meta ?? getHook(name);
+        if (meta) {
+          console.log(
+            hookSummaryLine(meta, { verbose: options.verbose }) +
+            (store ? chalk.dim(` (${store.source})`) : ""),
+          );
+        } else {
+          console.log(`  ${chalk.cyan(name)} ${chalk.dim("[unknown]")}`);
+        }
       }
-      printDisclosureHint(registered.length - visible.length, "hooks info <name>", { includeAll: true });
+      printDisclosureHint(shown.length - visible.length, "hooks info <name>", { includeAll: true });
       return;
     }
 
@@ -570,12 +758,24 @@ program
       return;
     }
 
-    // Show all by category
+    // Show all by category, plus custom/registry hooks from the store
     if (options.json) {
       const result: Record<string, any[]> = {};
       for (const category of CATEGORIES) {
         result[category] = getHooksByCategory(category);
       }
+      result["Custom / Registry"] = storeHooks.map((s) => ({
+        name: s.meta.name,
+        displayName: s.meta.displayName,
+        description: s.meta.description,
+        version: s.meta.version,
+        category: "Custom / Registry",
+        event: s.meta.event,
+        events: s.meta.events,
+        matcher: s.meta.matcher,
+        tags: [...s.meta.tags, s.source],
+        source: s.source,
+      }));
       console.log(JSON.stringify(result));
       return;
     }
@@ -584,6 +784,17 @@ program
     console.log(chalk.bold(`\nAvailable hooks (${HOOKS.length}, showing ${visible.length}):\n`));
     for (const h of visible) console.log(hookSummaryLine(h, { verbose: options.verbose }));
     printDisclosureHint(HOOKS.length - visible.length, "hooks info <name>", { includeAll: true });
+    if (storeHooks.length > 0) {
+      const storeVisible = storeHooks.slice(0, limit);
+      console.log(chalk.bold(`\nCustom / Registry hooks (${storeHooks.length}, showing ${storeVisible.length}):\n`));
+      for (const s of storeVisible) {
+        console.log(
+          hookSummaryLine(s.meta, { verbose: options.verbose }) +
+          chalk.dim(` (${s.source})`),
+        );
+      }
+      printDisclosureHint(storeHooks.length - storeVisible.length, "hooks info <name>", { includeAll: true });
+    }
   });
 
 // Search command
@@ -620,32 +831,47 @@ program
   .option("-p, --project", "Remove from project settings", false)
   .option("-t, --target <target>", "Agent target: claude, gemini, codewith, all (default: claude)", "claude")
   .option("-j, --json", "Output as JSON", false)
-  .description("Remove an installed hook")
-  .action((hook: string, options: { global?: boolean; project?: boolean; target?: string; json: boolean }) => {
+  .description("Remove an installed hook (settings registration + store + lock + DB)")
+  .action(async (hook: string, options: { global?: boolean; project?: boolean; target?: string; json: boolean }) => {
     const scope = resolveScope(options);
     const target = resolveTarget(options);
 
-    // Did-you-mean for unknown hook names
-    if (!getHook(hook)) {
+    // Full uninstall — resolves custom, registry-synced and bundled hooks;
+    // removes the settings registration, the store dir (custom hooks), the
+    // lock pin and the DB record (QA-1 BUG-A / QA-4).
+    const { uninstallHook } = await import("../lib/installer.js");
+    const result = uninstallHook(hook, scope, target);
+    if (!result.removed) {
+      // Non-zero for BOTH output modes (JSON and plain) — the machine path
+      // must fail closed too (general reviewer P1-2).
+      process.exitCode = 1;
+    }
+    if (options.json) {
+      console.log(JSON.stringify({
+        hook: result.name,
+        removed: result.removed,
+        source: result.source,
+        settings_scopes: result.settingsScopes,
+        store_dir_removed: result.storeDirRemoved,
+        pin_removed: result.pinRemoved,
+        db_record_removed: result.dbRecordRemoved,
+        registrations_remaining: result.registrationsRemaining,
+        scope,
+        target,
+        ...(result.error ? { error: result.error } : {}),
+      }));
+    } else if (result.removed) {
+      console.log(chalk.green(`✓ Removed ${result.name} (${scope}, ${target})`));
+      if (result.source === "custom" && result.storeDirRemoved) {
+        console.log(chalk.dim(`  store dir removed; lock pin ${result.pinRemoved ? "removed" : "absent"}; DB record ${result.dbRecordRemoved ? "removed" : "absent"}`));
+      }
+      if (result.registrationsRemaining && result.registrationsRemaining.length > 0) {
+        console.log(chalk.yellow(`  ⚠ registrations remaining: ${result.registrationsRemaining.join(", ")} — remove them in that target's own config`));
+      }
+    } else {
       const suggestions = suggestHooks(hook);
       const hint = suggestions.length ? ` — did you mean: ${suggestions.join(", ")}?` : "";
-      if (options.json) {
-        console.log(JSON.stringify({ hook, removed: false, scope, target, error: `Hook '${hook}' not found${hint}`, suggestions }));
-      } else {
-        console.log(chalk.red(`✗ Hook '${hook}' not found${hint}`));
-      }
-      return;
-    }
-
-    const removed = removeHook(hook, scope, target);
-    if (options.json) {
-      console.log(JSON.stringify({ hook, removed, scope, target }));
-      return;
-    }
-    if (removed) {
-      console.log(chalk.green(`✓ Removed ${hook} (${scope}, ${target})`));
-    } else {
-      console.log(chalk.red(`✗ ${hook} is not installed (${scope}, ${target})`));
+      console.log(chalk.red(`✗ Hook '${hook}' not found${hint}`));
     }
   });
 
@@ -834,7 +1060,7 @@ program
   .option("-g, --global", "Update global hooks", false)
   .option("-p, --project", "Update project hooks", false)
   .option("-j, --json", "Output as JSON", false)
-  .description("Re-register hooks (picks up new package version) and refresh the lock pins")
+  .description("Re-register hooks (picks up new package version), refresh lock pins, or install a pinned registry version (<name>@<version>)")
   .action(async (hooks: string[], options: { global?: boolean; project?: boolean; json: boolean }) => {
     const scope = resolveScope(options);
     const installed = getInstalledHooks(scope);
@@ -846,21 +1072,53 @@ program
       } else {
         console.log(chalk.dim("No hooks installed to update."));
       }
+      process.exitCode = 1;
       return;
     }
 
     const { resolveHook } = await import("../lib/resolve.js");
     const { sha256File, setPinnedHook, upsertHookRecord } = await import("../lib/store.js");
     const { getDb } = await import("../db/index.js");
+    const { resolveApiUrl } = await import("../config.js");
+
+    function parseNameVersion(arg: string): { name: string; version: string } | null {
+      const at = arg.lastIndexOf("@");
+      if (at <= 0 || at === arg.length - 1) return null;
+      return { name: arg.slice(0, at), version: arg.slice(at + 1) };
+    }
 
     const results: any[] = [];
-    for (const name of toUpdate) {
-      if (!installed.includes(name)) {
-        results.push({ hook: name, success: false, error: "Not installed" });
+    for (const arg of toUpdate) {
+      const pinned = parseNameVersion(arg);
+      if (pinned) {
+        // Pinned-version update: fetch the exact version from the remote
+        // registry, verify sha, pin, then re-register in settings (QA-2).
+        try {
+          const apiUrl = resolveApiUrl();
+          if (!apiUrl) throw new Error(`Cannot update '${arg}': no remote registry configured (set api_url or HASNA_HOOKS_API_URL)`);
+          const { fetchPinnedHook } = await import("../lib/sync.js");
+          const pinnedInstall = await fetchPinnedHook(pinned.name, pinned.version, apiUrl);
+          const registered = installHook(pinnedInstall.name, { scope, overwrite: true });
+          if (!registered.success) {
+            results.push({ hook: arg, success: false, error: registered.error ?? "registration failed" });
+            continue;
+          }
+          results.push({
+            hook: pinnedInstall.name,
+            success: true,
+            pinned: { version: pinnedInstall.version, sha256: pinnedInstall.sha256, source: pinnedInstall.source },
+          });
+        } catch (error) {
+          results.push({ hook: arg, success: false, error: error instanceof Error ? error.message : String(error) });
+        }
         continue;
       }
-      const result = installHook(name, { scope, overwrite: true });
-      const resolved = resolveHook(name);
+      if (!installed.includes(arg)) {
+        results.push({ hook: arg, success: false, error: "Not installed" });
+        continue;
+      }
+      const result = installHook(arg, { scope, overwrite: true });
+      const resolved = resolveHook(arg);
       if (result.success && resolved) {
         const hash = await sha256File(resolved.scriptPath);
         setPinnedHook(resolved.name, { version: resolved.version, sha256: hash, source: resolved.source });
@@ -882,6 +1140,11 @@ program
         updated: results.filter((r) => r.success).map((r) => r.hook),
         failed: results.filter((r) => !r.success).map((r) => ({ hook: r.hook, error: r.error })),
       }));
+      // Fail closed for automation: any requested update that failed is a
+      // non-zero exit, in both output modes (general reviewer P2-6).
+      if (results.some((r) => !r.success)) {
+        process.exitCode = 1;
+      }
       return;
     }
 
@@ -892,6 +1155,9 @@ program
       } else {
         console.log(chalk.red(`✗ ${result.hook}: ${result.error}`));
       }
+    }
+    if (results.some((r) => !r.success)) {
+      process.exitCode = 1;
     }
   });
 
