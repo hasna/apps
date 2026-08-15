@@ -19,12 +19,13 @@ apps/                  member packages (one dir per @hasna/<name>, four surfaces
 contracts/             contract manifests / schemas (tier-0, founder-owned; schema lane deferred)
 tooling/ci/            CI gate scripts (secret scan, name conformance, publish guard)
 .claude/               agent identities (fixer, publisher, reviewer) + repo laws
-.github/workflows/     one CI workflow: gates, test-suites, build-test, publish-guard
+.github/workflows/     one CI workflow: gates, test-suites, build-test, verify-generated, publish-guard
 ```
 
 ## Member status (2026-08-15)
 
-75 member packages are imported under `apps/`, each a public `@hasna/<name>`
+77 member packages are imported under `apps/` (measured by the
+standard-adherence census, 2026-08-15), each a public `@hasna/<name>`
 package with the four surfaces (CLI, MCP server bin, `-serve` server bin,
 `./sdk` import). The initial `main` commit was the owner-approved bootstrap;
 everything after is PR-first. The remaining public-estate repos are tracked by

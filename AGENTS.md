@@ -15,9 +15,10 @@ re-derived for a producer tree, never copied from a consumer tree.
 
 Membership of a project in THIS monorepo is decided by role, not by popularity:
 a project that publishes a public `@hasna/*` package and is not a fork or an
-archived artifact belongs here. Member census: 75 members are imported under
-`apps/` (measured by the standard-adherence suite census); the remaining
-public-estate imports are tracked by the import wave (todos `28ac4516`).
+archived artifact belongs here. Member census: 77 members are imported under
+`apps/` (measured by the standard-adherence suite census, 2026-08-15); the
+remaining public-estate imports are tracked by the import wave (todos
+`28ac4516`).
 
 ## Repo laws (binding)
 
@@ -59,9 +60,10 @@ bun run check               # names + secrets + manifests + publish-guard
 
 - `bun` workspaces (`apps/*`), `turbo` for build/test/lint (strict env lists),
   `changesets` with independent per-package versions and public access.
-- CI: one workflow, four jobs — `gates` (secrets scan with self-test,
+- CI: one workflow, five jobs — `gates` (secrets scan with self-test,
   name-conformance gate, contract-manifest placeholder), `test-suites`
   (versioning + standard-adherence, hard gate), `build-test` (`turbo --affected`
-  with `TURBO_SCM_BASE`), `publish-guard` (npm pack --dry-run per member).
+  with `TURBO_SCM_BASE`), `verify-generated` (byte-reproducible bin/dist),
+  `publish-guard` (npm pack --dry-run per member).
 - Agent identities: `.claude/agents/{fixer,publisher,reviewer}.md`, laws in
   `.claude/rules/`.

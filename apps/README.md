@@ -1,7 +1,8 @@
 # apps/ — member packages
 
-Each directory here is one public `@hasna/<name>` package. **75 members are
-imported today**, each landed as its own PR from the public-estate import wave
+Each directory here is one public `@hasna/<name>` package. **77 members are
+imported today** (measured by the standard-adherence census, 2026-08-15),
+each landed as its own PR from the public-estate import wave
 (todos `28ac4516`); the remaining repos in that census are tracked by the same
 wave and land PR-first, never by a bootstrap.
 
