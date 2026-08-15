@@ -146,9 +146,103 @@ describe("P2 #7 — pinned version install/update (QA-2)", () => {
       expect(lock2.hooks["qa6-pinned"].version).toBe("1.0.2");
       expect(lock2.hooks["qa6-pinned"].sha256).toBe(shaV2);
       expect(readFileSync(join(customHookDir("qa6-pinned"), "script.sh"), "utf-8")).toBe(SCRIPT_V2);
+
+      // Downgrade round-trip (P3): back to 1.0.1, then forward to 1.0.2 again.
+      current = "1.0.1";
+      const down = await run("update", "qa6-pinned@1.0.1");
+      expect(down.exitCode, down.stdout + down.stderr).toBe(0);
+      const lock3 = JSON.parse(readFileSync(join(TEST_HOME, ".hasna", "hooks", "hooks.lock"), "utf-8"));
+      expect(lock3.hooks["qa6-pinned"].version).toBe("1.0.1");
+      expect(lock3.hooks["qa6-pinned"].sha256).toBe(shaV1);
+      expect(readFileSync(join(customHookDir("qa6-pinned"), "script.sh"), "utf-8")).toBe(SCRIPT_V1);
+
+      current = "1.0.2";
+      const back = await run("update", "qa6-pinned@1.0.2");
+      expect(back.exitCode, back.stdout + back.stderr).toBe(0);
+      const lock4 = JSON.parse(readFileSync(join(TEST_HOME, ".hasna", "hooks", "hooks.lock"), "utf-8"));
+      expect(lock4.hooks["qa6-pinned"].version).toBe("1.0.2");
+      expect(lock4.hooks["qa6-pinned"].sha256).toBe(shaV2);
+      expect(readFileSync(join(customHookDir("qa6-pinned"), "script.sh"), "utf-8")).toBe(SCRIPT_V2);
     } finally {
       delete process.env.HASNA_HOOKS_API_URL;
       server.stop(true);
+    }
+  });
+
+  test("hooks install <manifest-url-containing-@> installs as a custom source, never as a pinned request", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/x@1/manifest.json") {
+          return Response.json({
+            name: "qa6-at-url",
+            version: "1.0.0",
+            events: ["PreToolUse"],
+            script: "script.sh",
+          });
+        }
+        if (url.pathname === "/x@1/script.sh") {
+          return new Response("#!/bin/bash\necho '{\"continue\":true}'\n");
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const manifestUrl = `http://127.0.0.1:${server.port}/x@1/manifest.json`;
+    try {
+      const human = await run("install", manifestUrl);
+      expect(human.exitCode, human.stdout + human.stderr).toBe(0);
+      expect(human.stdout).not.toContain("Pinned install failed");
+      expect(human.stdout).not.toContain("Cannot install");
+      expect(human.stdout).toContain("Registered in");
+      const lock = JSON.parse(readFileSync(join(TEST_HOME, ".hasna", "hooks", "hooks.lock"), "utf-8"));
+      expect(lock.hooks["qa6-at-url"]).toBeDefined();
+
+      const json = await run("install", manifestUrl, "--json", "--overwrite");
+      expect(json.exitCode, json.stdout + json.stderr).toBe(0);
+      expect(json.stdout).not.toContain("Pinned install failed");
+      const lastLine = json.stdout.trim().split("\n").pop()!;
+      const parsed = JSON.parse(lastLine);
+      expect(parsed.success).toBe(1);
+      expect(parsed.installed).toContain("qa6-at-url");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("hooks install <git-url-containing-@> installs as a custom source, never as a pinned request", async () => {
+    const repoDir = join(TEST_HOME, "x@1-git");
+    mkdirSync(repoDir, { recursive: true });
+    writeFileSync(join(repoDir, "manifest.json"), JSON.stringify({
+      name: "qa6-at-git",
+      version: "1.0.0",
+      events: ["PreToolUse"],
+      script: "script.sh",
+    }));
+    writeFileSync(join(repoDir, "script.sh"), "#!/bin/bash\necho '{\"continue\":true}'\n", { mode: 0o755 });
+    const gitInit = Bun.spawnSync(["git", "init", "-q"], { cwd: repoDir });
+    expect(gitInit.exitCode).toBe(0);
+    Bun.spawnSync(["git", "config", "user.email", "test@test"], { cwd: repoDir });
+    Bun.spawnSync(["git", "config", "user.name", "test"], { cwd: repoDir });
+    const gitAdd = Bun.spawnSync(["git", "add", "-A"], { cwd: repoDir });
+    expect(gitAdd.exitCode).toBe(0);
+    const gitCommit = Bun.spawnSync(["git", "commit", "-qm", "init"], { cwd: repoDir });
+    expect(gitCommit.exitCode, gitCommit.stderr.toString()).toBe(0);
+    const gitUrl = `file://${repoDir}`;
+    try {
+      const human = await run("install", gitUrl);
+      expect(human.exitCode, human.stdout + human.stderr).toBe(0);
+      expect(human.stdout).not.toContain("Pinned install failed");
+      expect(human.stdout).not.toContain("Cannot install");
+      const json = await run("install", gitUrl, "--json", "--overwrite");
+      expect(json.exitCode, json.stdout + json.stderr).toBe(0);
+      expect(json.stdout).not.toContain("Pinned install failed");
+      const lastLine = json.stdout.trim().split("\n").pop()!;
+      const parsed = JSON.parse(lastLine);
+      expect(parsed.success).toBe(1);
+      expect(parsed.installed).toContain("qa6-at-git");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
     }
   });
 
@@ -272,6 +366,9 @@ describe("P2 #9 — hooks list surfaces custom/registry hooks (QA-4 A1 / bug e84
     expect(entry).toBeDefined();
     expect(entry.version).toBe("2.0.0");
     expect(entry.source).toBe("custom");
+    // P3: a custom hook's tags must not duplicate the source ("custom" from
+    // the meta + "custom" from the source).
+    expect(entry.tags).toEqual(["custom"]);
 
     const installed = await run("list", "--installed", "--json");
     const parsedInstalled = JSON.parse(installed.stdout) as Array<{ name: string }>;
