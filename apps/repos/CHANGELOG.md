@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.1.48
+
 ## 0.1.47
 
 Deduplicates registry rows by canonical path identity on case-insensitive

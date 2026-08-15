@@ -5,6 +5,8 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.5.1 (2026-08-15)
+
 ## 0.5.0 (unreleased)
 
 Deployment-mode removal per the canonical doctrine: there are no deployment

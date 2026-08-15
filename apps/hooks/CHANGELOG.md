@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] - 2026-08-15
+
+### Fixed
+
+- **Timeout kills target the whole process group.** Measured on station02: Bun's `process.kill(-pid)` returns without error and does nothing, and the machine's Landlock signal-scope domain silently blocks negative-pid group kills even via `/usr/bin/kill -9 -pgid` (rc=0, no effect). `killGroup` now enumerates the hook's process group from /proc and SIGKILLs every member by positive pid, then the leader — on both the timeout path and the post-exit drain path. A hook's children can no longer outlive it with PPID=1 (bug 4d4c8f0b). Verified through the real stdio MCP server with pgid-based probes (earlier name-based probes were vacuous: `ps comm` is `sleep`, not `sleep 300`).
+
 ## [0.6.4] - 2026-08-15
 
 ### Security

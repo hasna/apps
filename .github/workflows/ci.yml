@@ -188,6 +188,43 @@ jobs:
           TURBO_SCM_BASE: ${{ steps.affected.outputs.base }}
 
   # ---------------------------------------------------------------------------------
+  # verify-generated: the committed byte-reproducibility gate. apps/knowledge commits
+  # its build output (bin/, dist/ — GENERATED_PATHS in
+  # apps/knowledge/scripts/verify-generated-artifacts.mjs) and the gate rebuilds it,
+  # then requires `git diff --exit-code -- bin dist` to be empty. A PR whose committed
+  # bundles drift from what the current source builds is refused here. That is the
+  # dirty-tree class that broke the merge train and was fixed by #110 (regenerated
+  # bundles under bun 1.3.14); it regresses silently whenever someone regenerates
+  # artifacts and forgets to commit them, or rebuilds under a different bun — so it
+  # must be a gate, not a convention.
+  #
+  # Deliberately NOT routed through turbo: the turbo task cache is keyed on inputs and
+  # would replay a cached success instead of running the rebuild, making the byte
+  # comparison vacuous. This job runs the member's verify:generated script directly.
+  #
+  # The bun-version pin is LOAD-BEARING: the byte comparison is bun-version-sensitive
+  # (bun 1.3.13 vs 1.3.14 differ by empty `else {}` dead-code elimination), so this
+  # must stay equal to the version that built the committed bundles — see the note at
+  # the top of apps/knowledge/.github/workflows/ci.yml. Bumping or lowering it without
+  # rebuilding bin/ and dist/ in the same commit turns this gate red.
+  verify-generated:
+    name: verify generated artifacts (byte-reproducible)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14 # LOAD-BEARING — see the note above and in apps/knowledge ci.yml
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Verify generated artifacts (rebuild + byte-compare bin/ dist/)
+        run: bun run verify:generated
+        working-directory: apps/knowledge
+
+  # ---------------------------------------------------------------------------------
   publish-guard:
     name: publish guard (no internal-infra strings in tarballs)
     runs-on: ubuntu-latest

@@ -120,6 +120,38 @@ describe("MCP run tools (QA-4 bug 4d4c8f0b)", () => {
     });
   });
 
+  test("(d) membership churn during timeout leaves no group survivor", async () => {
+    // A hook that keeps forking backgrounded children while its foreground
+    // work exceeds the manifest timeout. A one-shot group snapshot would race
+    // with the forker and leave survivors (reviewer P1-1: 3 survivors from an
+    // 80-child forking hook); the fixed-point re-enumeration must empty the
+    // group.
+    const pidFile = join(TEST_DIR, "churn-pids.txt");
+    customHook(
+      "qa4-churn",
+      { name: "qa4-churn", version: "1.0.0", timeout_ms: 400 },
+      `#!/bin/bash
+echo "hookpid=\$\$ pgid=\$(ps -o pgid= -p \$\$ | tr -d ' ')" > ${pidFile}
+for i in \$(seq 1 40); do
+  (sleep 300 &)
+done
+(sleep 300 &)
+while true; do sleep 300 & sleep 0.01; done
+`,
+    );
+    await withClient(async (client) => {
+      const data = parseResult(await client.callTool({ name: "hooks_run", arguments: { name: "qa4-churn", input: {} } }));
+      expect(data.timedOut).toBe(true);
+    });
+    const recorded = readFileSync(pidFile, "utf-8");
+    const m = /hookpid=(\d+) pgid=(\d+)/.exec(recorded);
+    expect(m).not.toBeNull();
+    const pgid = Number(m![2]);
+    await new Promise((r) => setTimeout(r, 800));
+    const ps = require("child_process").spawnSync("bash", ["-c", `ps -eo pid,ppid,pgid,comm | awk -v g=${pgid} '$3 == g {print}'`]);
+    expect(ps.stdout.toString().trim()).toBe("");
+  });
+
   test("(c) timeout kills the whole process group — no orphaned child", async () => {
     // Foreground work exceeds the manifest timeout; a grandchild is
     // backgrounded in a subshell so it survives the direct child alone.

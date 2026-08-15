@@ -6,6 +6,8 @@ All notable changes to `@hasna/accounts` are documented here. The format is base
 
 ## [Unreleased]
 
+## [0.2.44] - 2026-08-15
+
 ## [0.2.43] - 2026-08-10
 
 Release span measured from the published `0.2.42` release to the head being
