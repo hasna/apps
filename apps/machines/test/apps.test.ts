@@ -41,6 +41,10 @@ function createExactBunPackageFixture(expectedVersion: string) {
 }
 
 function runProbeCommand(probeCommand: string, binaryOutput: string) {
+  return runProbeCommandUnderShell("sh", probeCommand, binaryOutput);
+}
+
+function runProbeCommandUnderShell(shell: string, probeCommand: string, binaryOutput: string) {
   const dir = mkdtempSync(join(tmpdir(), "machines-apps-probe-bin-"));
   probeFixtureDirs.push(dir);
   const binDir = join(dir, "bin");
@@ -51,7 +55,7 @@ function runProbeCommand(probeCommand: string, binaryOutput: string) {
   writeFileSync(binaryPath, `#!/bin/sh\nprintf '%s\\n' ${shellQuote(binaryOutput)}\n`);
   chmodSync(bunPath, 0o755);
   chmodSync(binaryPath, 0o755);
-  return spawnSync("sh", ["-c", probeCommand], {
+  return spawnSync(shell, ["-c", probeCommand], {
     env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
     encoding: "utf8",
   });
@@ -323,6 +327,16 @@ describe("apps", () => {
       installed: false,
       version: "0.2.20",
     });
+  });
+
+  test("generated Bun package probe parses and verifies under the macOS zsh login shell, not only sh/bash", () => {
+    const { probeCommand } = createExactBunPackageFixture("0.2.21");
+    for (const shell of ["sh", "bash", "zsh"]) {
+      const result = runProbeCommandUnderShell(shell, probeCommand, "machines v0.2.21 (build 2026.08.13)");
+      expect(result.status, `${shell}: exit code`).toBe(0);
+      expect(result.stdout, `${shell}: stdout`).toBe("installed=1\nversion=0.2.21\n");
+      expect(result.stderr, `${shell}: stderr`).toBe("");
+    }
   });
 
   test("keeps legacy custom packageName install and command-v probe semantics", () => {
