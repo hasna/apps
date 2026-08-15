@@ -4,6 +4,25 @@ All notable changes to `@hasna/machines` are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.27] - 2026-08-15
+
+### Fixed
+
+- Generated Bun package probes (`machines apps plan`/`apply`) now execute under
+  an explicit `bash -c` wrapper, so the probe script parses on macOS targets
+  whose remote login shell is zsh. Previously the multi-line bash probe was
+  parsed by the login shell directly and failed with `zsh:1: parse error near
+  'printf'`, so installs ran but verification always failed on macOS (bug task
+  e406620f; measured on station03). Linux targets are unaffected.
+
+## [0.2.26] - 2026-08-14
+
+### Fixed
+
+- Removed deployment-mode storage vocabulary and `deploymentMode(s)` branching
+  from machine manifests and the station template (owner directive 2026-07-29;
+  todos 7abbf333, PR #124).
+
 ## [Unreleased]
 
 Station template 1.7.0 -> 1.8.0. No package version is claimed here: the
@@ -73,6 +92,8 @@ reported success about things it had not actually established.
   AWS box granted tailscale — must be written into that box's overlay rather
   than reached by deleting a check. Physical classes are untouched: `dgx-spark`
   keeps `tailscale:join` and gets no absence item.
+
+## [0.2.26] - 2026-08-15
 
 ## [0.2.25] - 2026-08-14
 
