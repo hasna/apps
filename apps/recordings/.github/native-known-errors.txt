@@ -1,0 +1,49 @@
+# Compiler errors the native half is allowed to produce. THE BASELINE IS EMPTY.
+#
+# Empty means the native job is a plain build gate: every target and every test target must compile
+# cleanly on every run, and any compile error at all fails the job on the first run that introduces
+# it. Nothing in src/native is exempt.
+#
+# It was NOT empty when this file arrived. The first CI runs on this repository discovered that main
+# did not compile at all — 2 C errors in Updater/VerifierLauncher and 4 Swift errors in
+# Updater/Protocol, measured on macos-latest (macOS 26.4, Apple Swift 6.3.2, Xcode 26.5,
+# SDK MacOSX26.5.sdk) in runs 30302342895 and 30305062756. Between them they blocked
+# RecordingsVerifierLauncher, RecordingsUpdateBroker, RecordingsUpdateBrokerTests,
+# RecordingsUpdateProtocol, RecordingsUpdateClient, RecordingsEnvelopeSigner,
+# RecordingsBootstrapPreflight and RecordingsUpdateProtocolTests — 31 of the 84 Swift files that
+# belonged to a target, i.e. the entire updater subsystem, about 37% of the Swift.
+#
+# They were fixed in #55, which is what emptied this file: `swift build --build-tests` and
+# `swift test` both exit 0 on the merged tree, all five executable products link, and every one of
+# the eight targets above appears in a `Compiling` line. The six entries were removed in the same
+# change, because scripts/ci-native-build.ts fails the job when a blocked target starts building
+# cleanly — this file cannot outlive the defects it describes, in either direction.
+#
+# WHAT AN EMPTY BASELINE DOES NOT CLAIM: that the native half is verified. It says the native half
+# COMPILES. The runtime behaviour of the Swift test targets is TCC-gated (microphone, clipboard,
+# accessibility) and `swift test` is deliberately not a gate on a headless runner — see the
+# `native` job in ci.yml, which records that outcome rather than asserting one.
+#
+# ---------------------------------------------------------------------------------------------------
+# IF YOU ARE ABOUT TO ADD AN ENTRY, READ THIS FIRST.
+#
+# Adding one re-exempts every target that entry blocks, plus everything that depends on them, and the
+# transitive closure is easy to underestimate: two C errors in one launcher file blocked eight
+# targets. An entry here is not a note, it is a hole in the only regression protection the Swift/C
+# half has.
+#
+# So: fix the error instead. If it genuinely cannot be fixed in the same change, then adding an entry
+# also means deleting the "the baseline is empty" test in src/__tests__/ci-native-build.test.ts, in
+# that same change, with the blast radius named in the PR body. That test exists to make re-exempting
+# the native half a deliberate and reviewable act rather than a one-line append nobody notices.
+#
+# Format, if an entry is ever justified:
+#   <repo-relative source file>: <clang/swift message, truncated at the first ';'>
+# Line and column numbers are deliberately NOT part of the signature — they move whenever anything
+# above them is edited, and a signature that churns is a signature nobody maintains. The cost of that
+# choice, stated plainly: a SECOND occurrence of an already-listed message in the same file is not
+# distinguishable from the first, so it would not be caught.
+#
+# Which targets an entry blocks is DERIVED, not configured: scripts/ci-native-build.ts maps each
+# entry to its owning target via `swift package dump-package` and then closes over dependents. Do not
+# hand-maintain a list of blocked targets here; read the job's output instead.

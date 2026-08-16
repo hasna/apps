@@ -1,0 +1,224 @@
+import { Database } from "bun:sqlite";
+import { SqliteAdapter } from "./sqlite-adapter.js";
+import { mkdirSync } from "fs";
+import { dirname } from "path";
+import { loadConfig } from "../lib/config.js";
+
+let _db: Database | null = null;
+let _adapter: SqliteAdapter | null = null;
+
+export const MIGRATIONS = [
+  // Migration 0: Initial schema
+  `
+  CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    path TEXT UNIQUE NOT NULL,
+    description TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS agents (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    role TEXT DEFAULT 'agent',
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS recordings (
+    id TEXT PRIMARY KEY,
+    audio_path TEXT,
+    raw_text TEXT NOT NULL,
+    processed_text TEXT,
+    processing_mode TEXT NOT NULL DEFAULT 'raw' CHECK(processing_mode IN ('raw', 'enhanced')),
+    model_used TEXT NOT NULL DEFAULT 'gpt-4o-transcribe',
+    enhancement_model TEXT,
+    duration_ms INTEGER DEFAULT 0,
+    language TEXT,
+    tags TEXT DEFAULT '[]',
+    agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    session_id TEXT,
+    machine_id TEXT,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS recording_tags (
+    recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+    tag TEXT NOT NULL,
+    PRIMARY KEY (recording_id, tag)
+  );
+
+  CREATE TABLE IF NOT EXISTS _migrations (
+    id INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_recordings_agent ON recordings(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_recordings_project ON recordings(project_id);
+  CREATE INDEX IF NOT EXISTS idx_recordings_session ON recordings(session_id);
+  CREATE INDEX IF NOT EXISTS idx_recordings_created ON recordings(created_at);
+  CREATE INDEX IF NOT EXISTS idx_recordings_mode ON recordings(processing_mode);
+  CREATE INDEX IF NOT EXISTS idx_recording_tags_tag ON recording_tags(tag);
+  `,
+
+  // Migration 2: session tagging attributes
+  `
+  ALTER TABLE recordings ADD COLUMN goal TEXT;
+  ALTER TABLE recordings ADD COLUMN role TEXT;
+  ALTER TABLE recordings ADD COLUMN task_list_id TEXT;
+  INSERT OR IGNORE INTO _migrations (id) VALUES (2);
+  `,
+
+  // Migration 3: feedback table
+  `
+  CREATE TABLE IF NOT EXISTS feedback (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+    message TEXT NOT NULL,
+    email TEXT,
+    category TEXT DEFAULT 'general',
+    version TEXT,
+    machine_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  `,
+
+  // Migration 4: agent focus
+  `
+  ALTER TABLE agents ADD COLUMN active_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
+  `,
+];
+
+/**
+ * Migration id a fully-migrated store carries in `_migrations`.
+ *
+ * Exposed so a diagnostic can tell a current store from a legacy one by reading
+ * it, rather than by opening it read-write — which is itself the act of
+ * migrating, and therefore the thing being checked for.
+ */
+export const CURRENT_MIGRATION_LEVEL = MIGRATIONS.length - 1;
+
+export function getDatabase(dbPath?: string): Database {
+  if (_db) return _db;
+
+  const path = dbPath || loadConfig().db_path;
+
+  // Ensure directory exists
+  const dir = dirname(path);
+  mkdirSync(dir, { recursive: true });
+
+  _adapter = new SqliteAdapter(path);
+  _db = _adapter.raw;
+
+  // SqliteAdapter already sets WAL and foreign_keys; add busy_timeout
+  _db.run("PRAGMA busy_timeout = 5000");
+
+  runMigrations(_db);
+  return _db;
+}
+
+function runMigrations(db: Database): void {
+  // Ensure _migrations table exists
+  db.run(`
+    CREATE TABLE IF NOT EXISTS _migrations (
+      id INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  const result = db
+    .query("SELECT MAX(id) as max_id FROM _migrations")
+    .get() as { max_id: number | null } | null;
+
+  const currentLevel = result?.max_id ?? -1;
+
+  for (let i = currentLevel + 1; i < MIGRATIONS.length; i++) {
+    try {
+      const migration = MIGRATIONS[i];
+      if (migration === undefined) {
+        throw new Error(`Missing SQLite migration at version ${i}`);
+      }
+      db.run(migration);
+      db.query("INSERT INTO _migrations (id) VALUES (?)").run(i);
+    } catch (e) {
+      if (isBenignMigrationError(e)) {
+        db.query("INSERT OR IGNORE INTO _migrations (id) VALUES (?)").run(i);
+        continue;
+      }
+      if (!(e instanceof Error && e.message.includes("UNIQUE constraint failed"))) {
+        throw e;
+      }
+      // Migration already applied, continue
+    }
+  }
+
+  repairSchemaDrift(db);
+}
+
+function isBenignMigrationError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message.includes("duplicate column name");
+}
+
+function repairSchemaDrift(db: Database): void {
+  ensureColumn(db, "recordings", "goal", "TEXT");
+  ensureColumn(db, "recordings", "role", "TEXT");
+  ensureColumn(db, "recordings", "task_list_id", "TEXT");
+  ensureColumn(db, "recordings", "machine_id", "TEXT");
+  ensureColumn(db, "recordings", "metadata", "TEXT DEFAULT '{}'");
+  ensureColumn(
+    db,
+    "agents",
+    "active_project_id",
+    "TEXT REFERENCES projects(id) ON DELETE SET NULL"
+  );
+}
+
+function ensureColumn(
+  db: Database,
+  table: string,
+  column: string,
+  definition: string
+): void {
+  const rows = db.query(`PRAGMA table_info(${table})`).all() as {
+    name: string;
+  }[];
+  if (rows.some((row) => row.name === column)) {
+    return;
+  }
+  db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+export function closeDatabase(): void {
+  if (_db) {
+    _db.close();
+    _db = null;
+    _adapter = null;
+  }
+}
+
+export function resetDatabase(): void {
+  _db = null;
+  _adapter = null;
+}
+
+/** Get the SqliteAdapter for direct SQL queries (e.g. feedback). */
+export function getAdapter(): SqliteAdapter {
+  if (!_adapter) {
+    getDatabase(); // force initialization
+  }
+  return _adapter!;
+}
+
+export function getDbPath(): string {
+  return loadConfig().db_path;
+}
+
+export function shortUuid(): string {
+  return crypto.randomUUID().slice(0, 8);
+}

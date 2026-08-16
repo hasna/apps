@@ -1,0 +1,101 @@
+import SwiftUI
+
+// MARK: - Voice Shortcut
+
+public struct VoiceShortcut: Identifiable, Codable {
+    public let id: UUID
+    public var trigger: String   // e.g. "add disclaimer"
+    public var content: String   // text to insert when trigger is spoken
+
+    public init(trigger: String, content: String) {
+        self.id = UUID()
+        self.trigger = trigger
+        self.content = content
+    }
+}
+
+// MARK: - Voice Shortcuts Manager
+
+@MainActor
+public final class VoiceShortcuts: ObservableObject {
+    @Published public var shortcuts: [VoiceShortcut] = []
+
+    private let storageURL: URL
+
+    /// Injected for the same reason as `RecordingEngine.home`, and named to match the
+    /// `homePath:` seam the rest of the package already uses: the default resolves through the
+    /// password database (`getpwuid`), not `$HOME`, so a test cannot redirect this write by
+    /// overriding the environment and has to pass a temp directory explicitly. Without it a
+    /// test that touches voice shortcuts rewrites the operator's real
+    /// `~/.hasna/recordings/voice-shortcuts.json`.
+    public init(homePath: String = FileManager.default.homeDirectoryForCurrentUser.path) {
+        storageURL = URL(fileURLWithPath: homePath)
+            .appendingPathComponent(".hasna/recordings/voice-shortcuts.json")
+        load()
+    }
+
+    func add(trigger: String, content: String) {
+        let shortcut = VoiceShortcut(trigger: trigger, content: content)
+        shortcuts.append(shortcut)
+        save()
+    }
+
+    func remove(at offsets: IndexSet) {
+        shortcuts.remove(atOffsets: offsets)
+        save()
+    }
+
+    func update(_ shortcut: VoiceShortcut) {
+        if let index = shortcuts.firstIndex(where: { $0.id == shortcut.id }) {
+            shortcuts[index] = shortcut
+            save()
+        }
+    }
+
+    /// Check if transcribed text matches a voice shortcut trigger.
+    /// Returns the content to paste if matched, nil otherwise.
+    /// A shortcut fires only when the whole utterance is the trigger phrase (case,
+    /// surrounding punctuation, and whitespace ignored) — an ordinary sentence or question
+    /// that merely contains the trigger words can never hijack routing.
+    func match(_ text: String) -> String? {
+        shortcuts.first { Self.matches(trigger: $0.trigger, transcript: text) }?.content
+    }
+
+    nonisolated static func matches(trigger: String, transcript: String) -> Bool {
+        let triggerTokens = normalizedTokens(trigger)
+        guard !triggerTokens.isEmpty else { return false }
+        return triggerTokens == normalizedTokens(transcript)
+    }
+
+    nonisolated static func normalizedTokens(_ text: String) -> [String] {
+        text.lowercased()
+            .split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+            .map { $0.trimmingCharacters(in: .punctuationCharacters) }
+            .filter { !$0.isEmpty }
+    }
+
+    // MARK: - Persistence
+
+    private func save() {
+        do {
+            let data = try JSONEncoder().encode(shortcuts)
+            try FileManager.default.createDirectory(
+                at: storageURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: storageURL, options: .atomic)
+        } catch {
+            print("Failed to save voice shortcuts: \(error)")
+        }
+    }
+
+    private func load() {
+        guard FileManager.default.fileExists(atPath: storageURL.path) else { return }
+        do {
+            let data = try Data(contentsOf: storageURL)
+            shortcuts = try JSONDecoder().decode([VoiceShortcut].self, from: data)
+        } catch {
+            print("Failed to load voice shortcuts: \(error)")
+        }
+    }
+}
