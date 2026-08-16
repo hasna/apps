@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
-import { chmod, mkdir, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { loadConfig } from "./config.js";
 import { bridgeHome, defaultConfigPath } from "./paths.js";
@@ -52,6 +52,8 @@ export interface DaemonMetadata {
 export interface DaemonStatus {
   running: boolean;
   stale: boolean;
+  /** True when this call removed metadata left behind by a daemon that is gone. */
+  reaped: boolean;
   supervisor: DaemonSupervisor;
   pid?: number;
   startedAt?: string;
@@ -176,24 +178,132 @@ async function writeMetadata(paths: DaemonPaths, metadata: DaemonMetadata): Prom
   await chmod(paths.metadataFile, 0o600);
 }
 
-async function withDaemonLock<T>(paths: DaemonPaths, fn: () => Promise<T>): Promise<T> {
-  try {
-    await mkdir(paths.lockDir, { mode: 0o700 });
-  } catch (err) {
-    if (err && typeof err === "object" && "code" in err && err.code === "EEXIST") {
-      throw new Error(`Another bridge daemon operation is already running: ${paths.lockDir}`);
-    }
-    throw err;
-  }
+/**
+ * A daemon operation (start/stop/restart) never legitimately runs this long.
+ * Past it the lock is assumed abandoned even if its recorded owner pid still
+ * resolves to a live process, because pids get recycled.
+ */
+const LOCK_MAX_AGE_MS = 120_000;
 
+/** Grace window after metadata is written before it may be treated as stale. */
+const REAP_GRACE_MS = 5_000;
+
+interface DaemonLockOwner {
+  pid: number;
+  acquiredAt: string;
+}
+
+function hasCode(err: unknown, code: string): boolean {
+  return Boolean(err && typeof err === "object" && "code" in err && err.code === code);
+}
+
+function lockOwnerFile(paths: DaemonPaths): string {
+  return join(paths.lockDir, "owner.json");
+}
+
+async function readLockOwner(paths: DaemonPaths): Promise<DaemonLockOwner | undefined> {
   try {
-    return await fn();
-  } finally {
-    await rmdir(paths.lockDir).catch(() => undefined);
+    const parsed = JSON.parse(await readFile(lockOwnerFile(paths), "utf-8")) as Partial<DaemonLockOwner>;
+    if (!isSignalablePid(parsed.pid)) return undefined;
+    return { pid: parsed.pid, acquiredAt: String(parsed.acquiredAt ?? "") };
+  } catch {
+    return undefined;
   }
 }
 
+/**
+ * Break a lock directory left behind by a process that died before its `finally`
+ * ran (SIGKILL, power loss, OOM kill). Without this, one crashed `bridge daemon
+ * start` wedges every later start/stop/restart with no recovery short of
+ * deleting the directory by hand.
+ *
+ * The lock is moved aside with a single atomic rename so that two racing callers
+ * cannot both "break" the lock and then both believe they hold it.
+ */
+async function breakAbandonedDaemonLock(paths: DaemonPaths): Promise<boolean> {
+  const info = await stat(paths.lockDir).catch(() => undefined);
+  if (!info) return true;
+  const ageMs = Date.now() - info.mtimeMs;
+  const owner = await readLockOwner(paths);
+  const expired = ageMs > LOCK_MAX_AGE_MS;
+  const ownerGone = owner ? owner.pid !== process.pid && !pidAlive(owner.pid) : false;
+  if (!expired && !ownerGone) return false;
+
+  const abandoned = `${paths.lockDir}.abandoned.${process.pid}.${Date.now()}`;
+  try {
+    await rename(paths.lockDir, abandoned);
+  } catch (err) {
+    if (hasCode(err, "ENOENT")) return true;
+    throw err;
+  }
+  await rm(abandoned, { recursive: true, force: true }).catch(() => undefined);
+  return true;
+}
+
+async function acquireDaemonLock(paths: DaemonPaths): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await mkdir(paths.lockDir, { mode: 0o700 });
+      await chmod(paths.lockDir, 0o700).catch(() => undefined);
+      const owner: DaemonLockOwner = { pid: process.pid, acquiredAt: new Date().toISOString() };
+      await writeFile(lockOwnerFile(paths), `${JSON.stringify(owner)}\n`, { encoding: "utf-8", mode: 0o600 }).catch(() => undefined);
+      return;
+    } catch (err) {
+      if (!hasCode(err, "EEXIST")) throw err;
+      if (attempt === 0 && await breakAbandonedDaemonLock(paths)) continue;
+      const owner = await readLockOwner(paths);
+      throw new Error(
+        `Another bridge daemon operation is already running: ${paths.lockDir}` +
+        (owner ? ` (held by pid ${owner.pid} since ${owner.acquiredAt})` : ""),
+      );
+    }
+  }
+}
+
+async function releaseDaemonLock(paths: DaemonPaths): Promise<void> {
+  // Only drop the lock if it is still ours. If a long operation overran
+  // LOCK_MAX_AGE_MS another caller may have taken over, and removing its lock
+  // would let a third caller in alongside it.
+  const owner = await readLockOwner(paths);
+  if (owner && owner.pid !== process.pid) return;
+  await rm(paths.lockDir, { recursive: true, force: true }).catch(() => undefined);
+}
+
+async function withDaemonLock<T>(paths: DaemonPaths, fn: () => Promise<T>): Promise<T> {
+  await acquireDaemonLock(paths);
+  try {
+    return await fn();
+  } finally {
+    await releaseDaemonLock(paths);
+  }
+}
+
+/** Try to take the lock without failing the caller when it is genuinely busy. */
+async function tryWithDaemonLock<T>(paths: DaemonPaths, fn: () => Promise<T>): Promise<{ locked: true; value: T } | { locked: false }> {
+  try {
+    await acquireDaemonLock(paths);
+  } catch {
+    return { locked: false };
+  }
+  try {
+    return { locked: true, value: await fn() };
+  } finally {
+    await releaseDaemonLock(paths);
+  }
+}
+
+/**
+ * pid 0 and negative pids are process-*group* selectors for `kill(2)`: pid 0
+ * means "every process in my own group". Treating a corrupt metadata pid as a
+ * real process would make bridge signal the shell that invoked it, so anything
+ * that is not a plain child pid is rejected outright.
+ */
+function isSignalablePid(pid: unknown): pid is number {
+  return typeof pid === "number" && Number.isInteger(pid) && pid > 1;
+}
+
 function pidAlive(pid: number): boolean {
+  if (!isSignalablePid(pid)) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -230,10 +340,15 @@ function commandPattern(command: string[]): string {
 }
 
 async function processMatches(metadata: DaemonMetadata): Promise<boolean> {
+  if (!isSignalablePid(metadata.pid)) return false;
   if (!pidAlive(metadata.pid)) return false;
   const command = await processCommand(metadata.pid);
   if (!command) return false;
-  if (!metadata.pgid) return false;
+  // `startProcessDaemon` spawns detached, so a bridge daemon is always the
+  // leader of its own process group. Metadata claiming any other group cannot
+  // be trusted: `stopPid` signals the whole group, and honouring a foreign
+  // pgid would mean SIGTERMing an unrelated group (potentially the caller's).
+  if (!isSignalablePid(metadata.pgid) || metadata.pgid !== metadata.pid) return false;
   const pgid = await processPgid(metadata.pid);
   if (pgid !== metadata.pgid) return false;
   const requiredArgs = [
@@ -252,6 +367,63 @@ async function processMatches(metadata: DaemonMetadata): Promise<boolean> {
 
 async function removeMetadata(paths: DaemonPaths): Promise<void> {
   await rm(paths.metadataFile, { force: true });
+}
+
+export interface DaemonReapResult {
+  reaped: boolean;
+  /** Why nothing was reaped, when `reaped` is false. */
+  reason?: "no metadata" | "running" | "within start grace period" | "locked" | "metadata changed";
+  pid?: number;
+}
+
+export interface DaemonReapOptions {
+  daemonDir?: string;
+  /**
+   * How recently metadata may have been written and still be reaped. Metadata is
+   * written before the child has finished establishing its process group, so a
+   * concurrent `status` must not mistake a starting daemon for a dead one.
+   */
+  graceMs?: number;
+}
+
+/**
+ * Remove daemon metadata whose process is gone.
+ *
+ * `start` already did this, so anything that crashed without going through
+ * `stop` left `status` and `doctor` reporting `stale pid=N` forever. Reaping is
+ * done under the daemon lock and the metadata is re-read and re-verified while
+ * held, so a daemon that starts concurrently is never orphaned by a reader.
+ */
+export async function reapStaleDaemonMetadata(options: DaemonReapOptions = {}): Promise<DaemonReapResult> {
+  const paths = daemonPaths(options.daemonDir);
+  const graceMs = options.graceMs ?? REAP_GRACE_MS;
+  const observed = await readMetadata(paths);
+  if (!observed) return { reaped: false, reason: "no metadata" };
+  if (await processMatches(observed)) return { reaped: false, reason: "running", pid: observed.pid };
+
+  // The grace window protects a daemon whose *identity* is not yet
+  // establishable (metadata is written before the child has finished setting up
+  // its process group). A pid that does not exist at all cannot be starting, so
+  // a crashed daemon is reaped immediately rather than after the window.
+  if (pidAlive(observed.pid)) {
+    const startedAt = Date.parse(observed.startedAt ?? "");
+    if (Number.isFinite(startedAt) && Date.now() - startedAt < graceMs) {
+      return { reaped: false, reason: "within start grace period", pid: observed.pid };
+    }
+  }
+
+  const outcome = await tryWithDaemonLock(paths, async (): Promise<DaemonReapResult> => {
+    const current = await readMetadata(paths);
+    if (!current) return { reaped: false, reason: "no metadata" };
+    if (current.pid !== observed.pid || current.startedAt !== observed.startedAt) {
+      return { reaped: false, reason: "metadata changed", pid: current.pid };
+    }
+    if (await processMatches(current)) return { reaped: false, reason: "running", pid: current.pid };
+    await removeMetadata(paths);
+    return { reaped: true, pid: current.pid };
+  });
+
+  return outcome.locked ? outcome.value : { reaped: false, reason: "locked", pid: observed.pid };
 }
 
 function safeTelegramApiBaseInfo(): DaemonStatus["telegramApiBase"] {
@@ -355,27 +527,67 @@ async function installedSupervisorStatus(supervisor: DaemonSupervisor, paths: Da
   return { running: false, detail: "process supervisor has no installed status" };
 }
 
-export async function daemonStatus(options: { daemonDir?: string; supervisor?: DaemonSupervisorOption } = {}): Promise<DaemonStatus> {
+export interface DaemonStatusOptions {
+  daemonDir?: string;
+  supervisor?: DaemonSupervisorOption;
+  /**
+   * Remove metadata for a daemon that is gone (default true), so `status` and
+   * `doctor` self-heal instead of reporting `stale` forever. Callers that hold
+   * the daemon lock, or that want a pure read, pass false.
+   */
+  reap?: boolean;
+}
+
+export async function daemonStatus(options: DaemonStatusOptions = {}): Promise<DaemonStatus> {
   const supervisor = resolveSupervisor(options.supervisor);
   const paths = daemonPaths(options.daemonDir);
-  const metadata = await readMetadata(paths);
-  const live = metadata ? await processMatches(metadata) : false;
+  const reap = options.reap !== false && supervisor === "process";
+
+  let metadata = await readMetadata(paths);
+  let live = metadata ? await processMatches(metadata) : false;
+  let reapResult: DaemonReapResult | undefined;
+  if (reap && metadata && !live) {
+    reapResult = await reapStaleDaemonMetadata({ daemonDir: paths.dir });
+    if (reapResult.reaped) {
+      metadata = undefined;
+    } else if (reapResult.reason !== "within start grace period" && reapResult.reason !== "locked") {
+      // The record changed underneath us (a daemon started, or another process
+      // reaped it). Re-observe rather than report the record we first read.
+      metadata = await readMetadata(paths);
+      live = metadata ? await processMatches(metadata) : false;
+    }
+  }
   const stale = Boolean(metadata && !live);
   const startedAt = metadata?.startedAt;
-  const uptimeSeconds = live && startedAt ? Math.max(0, Math.floor((Date.now() - Date.parse(startedAt)) / 1000)) : undefined;
+  const startedAtMs = startedAt ? Date.parse(startedAt) : Number.NaN;
+  const uptimeSeconds = live && Number.isFinite(startedAtMs)
+    ? Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000))
+    : undefined;
   const installed = {
     launchd: await fileExists(paths.launchdPlist),
     systemd: await fileExists(paths.systemdUnit),
   };
   const installedRuntime = supervisor === "process" ? undefined : await installedSupervisorStatus(supervisor, paths);
+  const processDetail = stale
+    ? reapResult?.reason === "locked"
+      ? "stale process metadata (not reaped: another daemon operation is in progress)"
+      : reapResult?.reason === "within start grace period"
+        ? "starting"
+        : "stale process metadata"
+    : live
+      ? "running"
+      : reapResult?.reaped
+        ? `reaped stale process metadata (pid=${reapResult.pid})`
+        : "not running";
   return {
     running: installedRuntime ? installedRuntime.running : live,
     stale: installedRuntime ? false : stale,
+    reaped: Boolean(reapResult?.reaped),
     supervisor,
     pid: metadata?.pid,
     startedAt,
     uptimeSeconds,
-    detail: installedRuntime?.detail || (stale ? "stale process metadata" : live ? "running" : "not running"),
+    detail: installedRuntime?.detail || processDetail,
     installedDetail: installedRuntime?.detail,
     metadata,
     paths,
@@ -387,7 +599,8 @@ export async function daemonStatus(options: { daemonDir?: string; supervisor?: D
 export async function startProcessDaemon(options: DaemonStartOptions = {}): Promise<DaemonStatus> {
   const paths = await ensureDaemonDir(options.daemonDir);
   return withDaemonLock(paths, async () => {
-    const existing = await daemonStatus({ daemonDir: paths.dir, supervisor: "process" });
+    // reap:false — we already hold the lock, and stale metadata is removed below.
+    const existing = await daemonStatus({ daemonDir: paths.dir, supervisor: "process", reap: false });
     if (existing.running) return existing;
     if (existing.stale) await removeMetadata(paths);
 
@@ -439,11 +652,16 @@ export async function startProcessDaemon(options: DaemonStartOptions = {}): Prom
         stdoutLog: paths.stdoutLog,
         stderrLog: paths.stderrLog,
       };
-      if (!metadata.pid) throw new Error("Failed to start bridge daemon process");
+      if (!isSignalablePid(metadata.pid)) throw new Error("Failed to start bridge daemon process");
       await writeMetadata(paths, metadata);
       await Bun.sleep(200);
-      const status = await daemonStatus({ daemonDir: paths.dir, supervisor: "process" });
+      const status = await daemonStatus({ daemonDir: paths.dir, supervisor: "process", reap: false });
       if (!status.running) {
+        // The child may still be alive but unidentifiable (e.g. it has not
+        // established its process group yet). Dropping the metadata without
+        // killing it would leave an unmanaged bridge polling Telegram forever
+        // with no record of how to stop it.
+        await killDaemonProcessGroup(metadata.pid).catch(() => undefined);
         await removeMetadata(paths);
         throw new Error(`Bridge daemon failed to stay running; inspect ${paths.stderrLog}`);
       }
@@ -457,39 +675,162 @@ export async function startProcessDaemon(options: DaemonStartOptions = {}): Prom
   });
 }
 
+// ─── stop grace window ────────────────────────────────────────────────────────
+
+/**
+ * serve installs a SIGTERM handler that only raises a stop flag, which
+ * suppresses the default terminate-on-signal. It therefore exits at the next
+ * loop boundary, not on the signal — so a stop budget has to cover whatever
+ * serve can legitimately still be inside.
+ *
+ * The two things it can be inside are one agent turn and one Telegram long
+ * poll, both of which are configured, so the window is derived rather than
+ * guessed. This is a *ceiling*: `waitForExit` returns the moment the process is
+ * gone, so a wide ceiling costs an idle daemon nothing.
+ */
+
+/**
+ * The agent runner's default turn budget (`agent.timeoutMs ?? 120_000`, see
+ * agents.ts). Mirrored rather than imported because agents.ts does not export
+ * it; if that default changes, change this with it.
+ */
+const DEFAULT_AGENT_TIMEOUT_MS = 120_000;
+
+/** serve's default Telegram long poll (`channel.pollTimeoutSeconds || 20`). */
+const DEFAULT_POLL_TIMEOUT_SECONDS = 20;
+
+/** Headroom for serve to deliver the reply and persist state after a turn. */
+const STOP_SETTLE_MARGIN_MS = 2_000;
+
+/** Floor: a bridge with no agents and no pollers still deserves a moment. */
+const MIN_STOP_GRACE_MS = 5_000;
+
+/** Ceiling: a misconfigured budget must not let `daemon stop` hang forever. */
+const MAX_STOP_GRACE_MS = 10 * 60_000;
+
+/** `--force` asks for speed: SIGTERM, a brief moment, then SIGKILL. */
+const FORCE_STOP_GRACE_MS = 2_000;
+
+/** How long to wait for SIGKILL to take effect before giving up. */
+const KILL_GRACE_MS = 2_000;
+
+/**
+ * Longest a stop should wait for serve to exit on its own, derived from config:
+ * one in-flight agent turn plus one in-flight long poll, plus settle margin,
+ * clamped to a sane range.
+ */
+export function stopGraceMsForConfig(config: BridgeConfig): number {
+  const agents = Object.values(config.agents);
+  const agentCeiling = agents.length
+    ? Math.max(...agents.map((agent) => agent.timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS))
+    : 0;
+
+  const pollers = telegramChannels(config);
+  const pollCeiling = pollers.length
+    ? Math.max(...pollers.map((channel) => (channel.pollTimeoutSeconds || DEFAULT_POLL_TIMEOUT_SECONDS) * 1000))
+    : 0;
+
+  const derived = agentCeiling + pollCeiling + (agentCeiling || pollCeiling ? STOP_SETTLE_MARGIN_MS : 0);
+  return Math.min(MAX_STOP_GRACE_MS, Math.max(MIN_STOP_GRACE_MS, derived));
+}
+
+async function resolveStopGraceMs(options: DaemonStopOptions, metadata: DaemonMetadata): Promise<number> {
+  if (options.timeoutMs !== undefined) return options.timeoutMs;
+  if (options.force) return FORCE_STOP_GRACE_MS;
+  try {
+    return stopGraceMsForConfig(await loadConfig(metadata.configPath));
+  } catch {
+    // Config unreadable: assume the widest realistic in-flight turn rather than
+    // cutting a busy daemon short. SIGKILL still bounds the total wait.
+    return Math.min(
+      MAX_STOP_GRACE_MS,
+      DEFAULT_AGENT_TIMEOUT_MS + DEFAULT_POLL_TIMEOUT_SECONDS * 1000 + STOP_SETTLE_MARGIN_MS,
+    );
+  }
+}
+
 async function stopPid(pid: number, force: boolean): Promise<void> {
+  // Guarded so a corrupt pid can never turn into kill(0, …) — "signal my own
+  // process group", i.e. the user's shell.
+  if (!isSignalablePid(pid)) throw new Error(`Refusing to signal invalid daemon pid: ${pid}`);
   process.kill(-pid, force ? "SIGKILL" : "SIGTERM");
+}
+
+/** Best-effort teardown of a daemon we started but can no longer account for. */
+async function killDaemonProcessGroup(pid: number): Promise<void> {
+  if (!isSignalablePid(pid) || !pidAlive(pid)) return;
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch {
+    process.kill(pid, "SIGTERM");
+  }
+  if (await waitForExit(pid, 2000)) return;
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    process.kill(pid, "SIGKILL");
+  }
+}
+
+/**
+ * A pid that has exited but not yet been reaped still answers `kill(pid, 0)`.
+ * Only consulted once a wait has otherwise failed, since it costs a subprocess.
+ */
+async function processIsZombie(pid: number): Promise<boolean> {
+  const proc = Bun.spawn(["ps", "-p", String(pid), "-o", "stat="], { stdout: "pipe", stderr: "ignore" });
+  if ((await proc.exited) !== 0) return false;
+  return (await new Response(proc.stdout).text()).trim().startsWith("Z");
 }
 
 async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
   const started = Date.now();
+  // Back off from a tight first poll: the grace window is a ceiling, so an idle
+  // daemon must be observed gone in milliseconds, not at the next 100ms tick.
+  let delay = 5;
   while (Date.now() - started < timeoutMs) {
     if (!pidAlive(pid)) return true;
-    await Bun.sleep(100);
+    await Bun.sleep(Math.min(delay, Math.max(1, timeoutMs - (Date.now() - started))));
+    delay = Math.min(100, delay * 2);
   }
-  return !pidAlive(pid);
+  if (!pidAlive(pid)) return true;
+  return processIsZombie(pid);
 }
 
 export async function stopProcessDaemon(options: DaemonStopOptions = {}): Promise<DaemonStatus> {
   const paths = await ensureDaemonDir(options.daemonDir);
   return withDaemonLock(paths, async () => {
     const metadata = await readMetadata(paths);
-    if (!metadata) return daemonStatus({ daemonDir: paths.dir, supervisor: "process" });
+    if (!metadata) return daemonStatus({ daemonDir: paths.dir, supervisor: "process", reap: false });
 
     if (!(await processMatches(metadata))) {
       await removeMetadata(paths);
-      return daemonStatus({ daemonDir: paths.dir, supervisor: "process" });
+      return daemonStatus({ daemonDir: paths.dir, supervisor: "process", reap: false });
     }
 
+    const graceMs = await resolveStopGraceMs(options, metadata);
     await stopPid(metadata.pid, false);
-    let exited = await waitForExit(metadata.pid, options.timeoutMs ?? 5000);
-    if (!exited && options.force) {
+    let exited = await waitForExit(metadata.pid, graceMs);
+    if (!exited) {
+      // Escalate unconditionally. `force` now selects a *shorter* grace window
+      // rather than deciding whether SIGKILL happens at all: once the derived
+      // window (a full agent turn plus a full long poll) has elapsed, the daemon
+      // is wedged rather than busy, and leaving it alive to fail the caller is
+      // not a defined outcome.
       await stopPid(metadata.pid, true);
-      exited = await waitForExit(metadata.pid, 2000);
+      exited = await waitForExit(metadata.pid, KILL_GRACE_MS);
     }
-    if (!exited) throw new Error(`Bridge daemon did not stop within ${options.timeoutMs ?? 5000}ms`);
+    if (!exited) {
+      // Deliberately keep the metadata: the process is still alive, and dropping
+      // its record would let the next `start` launch a second daemon alongside
+      // it, both polling the same channels. Once it does die, `status`/`doctor`/
+      // `start` reap the record automatically.
+      throw new Error(
+        `Bridge daemon pid ${metadata.pid} survived SIGTERM (${graceMs}ms) and SIGKILL (${KILL_GRACE_MS}ms); ` +
+        `leaving metadata at ${paths.metadataFile} so the live process stays tracked`,
+      );
+    }
     await removeMetadata(paths);
-    return daemonStatus({ daemonDir: paths.dir, supervisor: "process" });
+    return daemonStatus({ daemonDir: paths.dir, supervisor: "process", reap: false });
   });
 }
 
@@ -697,13 +1038,37 @@ export async function uninstallDaemon(options: { supervisor?: DaemonSupervisorOp
   return { supervisor, removed };
 }
 
+/** Upper bound on how much of a log file a single tail may pull into memory. */
+const TAIL_MAX_BYTES = 4 * 1024 * 1024;
+
 export async function tailFile(path: string, lines: number): Promise<string> {
+  const wanted = Math.max(1, lines);
+  let handle;
   try {
-    const raw = await readFile(path, "utf-8");
-    return raw.split(/\r?\n/).slice(-Math.max(1, lines)).join("\n");
+    handle = await open(path, "r");
   } catch (err) {
     if (isNotFound(err)) return "";
     throw err;
+  }
+
+  try {
+    // Daemon logs are append-only and never rotated, so reading the whole file
+    // to show the last few lines can mean loading gigabytes. Read only the tail.
+    const size = (await handle.stat()).size;
+    const length = Math.min(size, TAIL_MAX_BYTES);
+    const buffer = Buffer.alloc(length);
+    if (length > 0) await handle.read(buffer, 0, length, size - length);
+    const raw = buffer.toString("utf-8");
+
+    const split = raw.split(/\r?\n/);
+    // A log file ends with a newline, which yields a trailing empty element.
+    // Counting it as a line silently returned one fewer line than requested.
+    if (split.length > 1 && split[split.length - 1] === "") split.pop();
+    // When the window starts mid-file its first element is a line fragment.
+    if (length < size && split.length > 1) split.shift();
+    return split.slice(-wanted).join("\n");
+  } finally {
+    await handle.close();
   }
 }
 
