@@ -202,3 +202,134 @@ describe("monitor kill --name", () => {
     expect(output.error).toContain("Invalid name pattern");
   });
 });
+
+const killFixture = join(import.meta.dir, "kill-fixture.preload.ts");
+
+function runMonitorKillPreload(args: string[], preload: string = killFixture) {
+  return spawnSync(process.execPath, ["--preload", preload, monitorBin, "kill", ...args], {
+    cwd: join(import.meta.dir, "../.."),
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+    timeout: 20_000,
+  });
+}
+
+describe("monitor kill batch operations", () => {
+  it("reports one dry-run JSON result per unique PID", () => {
+    const child = runMonitorKill(["--pids", "1234,5678,1234", "--dry-run", "--json"]);
+
+    expect(child.status).toBe(0);
+    expect(child.stderr).toBe("");
+    expect(JSON.parse(child.stdout)).toEqual([
+      {
+        pid: 1234,
+        name: "pid:1234",
+        action: "skipped",
+        reason: "dry-run: would send SIGTERM on local",
+      },
+      {
+        pid: 5678,
+        name: "pid:5678",
+        action: "skipped",
+        reason: "dry-run: would send SIGTERM on local",
+      },
+    ]);
+  });
+
+  it("accepts the ps filter vocabulary and returns per-PID JSON", () => {
+    const child = runMonitorKillPreload(["--filter", "zombies", "--dry-run", "--json"]);
+
+    expect(child.status).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual([
+      {
+        pid: 1234,
+        name: "pid:1234",
+        action: "skipped",
+        reason: "dry-run: would send SIGTERM on local",
+      },
+    ]);
+  });
+
+  it("rejects conflicting batch selectors", () => {
+    const child = runMonitorKill(["1234", "--pids", "5678,9012", "--dry-run", "--json"]);
+
+    expect(child.status).toBe(1);
+    const output = JSON.parse(child.stdout) as { error: string };
+    expect(output.error).toContain("Specify exactly one of");
+  });
+
+  it("rejects all-process filter kills", () => {
+    const child = runMonitorKill(["--filter", "all", "--dry-run", "--json"]);
+
+    expect(child.status).toBe(1);
+    expect(child.stdout).toBe("");
+    expect(child.stderr).toContain("kill filter must be 'zombies', 'orphans', or 'high_mem'");
+  });
+
+  it("rejects malformed PID lists", () => {
+    const child = runMonitorKill(["--pids", "1234,not-a-pid", "--dry-run", "--json"]);
+
+    expect(child.status).toBe(1);
+    expect(child.stdout).toBe("");
+    expect(child.stderr).toContain("PIDs must be a comma-separated list of integers");
+  });
+
+  it("requires confirmation before batch-killing multiple PIDs", () => {
+    const marker = `monitor-kill-batch-confirm-${process.pid}-${Date.now()}`;
+    const first = startMarkedProcess(marker);
+    const second = startMarkedProcess(marker);
+
+    const result = runMonitorKill(["--pids", `${first.pid},${second.pid}`, "--json"], "no\n");
+
+    expect(result.status).toBe(0);
+    const output = JSON.parse(result.stdout) as {
+      cancelled: boolean;
+      actions: unknown[];
+    };
+    expect(output.cancelled).toBe(true);
+    expect(output.actions).toEqual([]);
+    expect(isAlive(first.pid!)).toBe(true);
+    expect(isAlive(second.pid!)).toBe(true);
+  });
+
+  it("refuses oversized batch PID lists before sending any signals", () => {
+    const marker = `monitor-kill-batch-limit-${process.pid}-${Date.now()}`;
+    const spawned = Array.from({ length: 6 }, () => startMarkedProcess(marker));
+
+    const result = runMonitorKill(
+      ["--pids", spawned.map((c) => c.pid).join(","), "--yes", "--json"]
+    );
+
+    expect(result.status).toBe(1);
+    const output = JSON.parse(result.stdout) as {
+      error: string;
+      actions: unknown[];
+    };
+    expect(output.error).toContain("no processes were killed");
+    expect(output.actions).toEqual([]);
+    for (const child of spawned) {
+      expect(isAlive(child.pid!)).toBe(true);
+    }
+  });
+
+  it("batch-kills multiple PIDs with --yes", async () => {
+    const marker = `monitor-kill-batch-kill-${process.pid}-${Date.now()}`;
+    const first = startMarkedProcess(marker);
+    const second = startMarkedProcess(marker);
+
+    const result = runMonitorKill(["--pids", `${first.pid},${second.pid}`, "--yes", "--json"]);
+
+    expect(result.status).toBe(0);
+    const output = JSON.parse(result.stdout) as Array<{ pid: number; action: string }>;
+    expect(output).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ pid: first.pid, action: "killed" }),
+        expect.objectContaining({ pid: second.pid, action: "killed" }),
+      ])
+    );
+    await waitForChildExit(first);
+    await waitForChildExit(second);
+    expect(isAlive(first.pid!)).toBe(false);
+    expect(isAlive(second.pid!)).toBe(false);
+  });
+});
