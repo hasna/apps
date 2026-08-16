@@ -26,7 +26,7 @@ export function openDatabase(path?: string): Database {
   if (mode === "cloud" && path === undefined) {
     throw new Error(
       "cloud storage mode is PURE REMOTE (Postgres via the vendored storage-kit) and is not " +
-        "exercised in the local build. Set HASNA_HOLDINGS_STORAGE_MODE=local for the SQLite path.",
+        "exercised in the local build. Remove HASNA_HOLDINGS_DATABASE_URL to use the local SQLite path.",
     );
   }
 

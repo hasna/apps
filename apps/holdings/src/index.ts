@@ -9,7 +9,7 @@ export { appendAudit, listAudit, verifyAuditChain } from "./db/audit.js";
 export { SCHEMA, AUDIT_TABLES, SYNC_TABLES } from "./db/schema.js";
 export {
   APP_NAME,
-  ENV_PREFIX,
+  ENV_TOKEN,
   DATABASE_URL_SECRET_REF,
   resolveStorageMode,
   resolveDbPath,

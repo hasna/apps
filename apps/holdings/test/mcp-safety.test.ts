@@ -7,7 +7,7 @@ import { seedEntity } from "../src/services/entities.js";
 import { createAsset } from "../src/services/assets.js";
 import { systemContext } from "../src/services/runtime.js";
 
-const ENV_KEYS = ["HASNA_HOLDINGS_STORAGE_MODE", "HASNA_HOLDINGS_DATABASE_URL", "HASNA_HOLDINGS_PROFILE", "HASNA_HOLDINGS_API_CREDENTIALS", "HASNA_HOLDINGS_MCP_AUTH"];
+const ENV_KEYS = ["HASNA_HOLDINGS_DATABASE_URL", "HASNA_HOLDINGS_PROFILE", "HASNA_HOLDINGS_API_CREDENTIALS", "HASNA_HOLDINGS_MCP_AUTH"];
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -24,7 +24,6 @@ afterEach(() => {
 describe("mcp safety", () => {
   it("holdings_storage_status never leaks the DSN value", async () => {
     const secretDsn = "postgres://holdings:sup3rs3cr3t@rds.example.com:5432/holdings?sslmode=verify-full";
-    process.env["HASNA_HOLDINGS_STORAGE_MODE"] = "cloud";
     process.env["HASNA_HOLDINGS_DATABASE_URL"] = secretDsn;
     const db = makeDb(); // scrubs the DSN from env after connecting
     const handlers = captureMcpHandlers(db);
@@ -37,7 +36,6 @@ describe("mcp safety", () => {
   });
 
   it("holdings_storage_status reports remote_reachable honestly (null in the local build, never a hardcoded false)", async () => {
-    delete process.env["HASNA_HOLDINGS_STORAGE_MODE"];
     delete process.env["HASNA_HOLDINGS_DATABASE_URL"];
     const db = makeDb();
     const handlers = captureMcpHandlers(db);
