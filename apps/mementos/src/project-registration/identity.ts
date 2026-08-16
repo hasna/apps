@@ -7,6 +7,10 @@ import {
   type MementosProjectRegistrationAuthorityOptions,
   type MementosProjectRegistrationCapability,
 } from "./types.js";
+import {
+  FLEET_RESOURCES_HISTORICAL_LOOKUP_IDENTITY,
+  supportsFleetResourcesHistoricalReceiptLookup,
+} from "./historical-receipt.js";
 
 export const MEMENTOS_PROJECT_AUTHORITY_ENV = {
   authorityId: "MEMENTOS_PROJECT_AUTHORITY_ID",
@@ -76,12 +80,13 @@ export function buildMementosProjectRegistrationCapability(
   options: MementosProjectRegistrationAuthorityOptions = {},
 ): MementosProjectRegistrationCapability {
   const identity = resolveMementosProjectAuthorityIdentity(options);
-  return {
+  const capability: MementosProjectRegistrationCapability = {
     authority: "mementos",
     route: MEMENTOS_PROJECT_REGISTRATION_ROUTE,
     package_version: options.packageVersion ?? getMementosPackageVersion(),
     ...identity,
     supported_resources: ["project"],
+    supported_historical_lookup_identities: [],
     conditional_create: true,
     immutable_receipts: true,
     exact_terminal_lookup: true,
@@ -100,4 +105,10 @@ export function buildMementosProjectRegistrationCapability(
     stable_keyset_pagination: true,
     explicit_membership_only: true,
   };
+  if (supportsFleetResourcesHistoricalReceiptLookup(capability)) {
+    capability.supported_historical_lookup_identities = [
+      FLEET_RESOURCES_HISTORICAL_LOOKUP_IDENTITY,
+    ];
+  }
+  return capability;
 }

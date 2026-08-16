@@ -40,7 +40,7 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external @hasna/contracts --external @hasna/contracts/schemas --external @hasna/contracts/auth --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @hasna/contracts --external @hasna/contracts/schemas --external @hasna/contracts/auth --external pg && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/contracts --external @hasna/contracts/schemas --external @hasna/contracts/auth --external pg && bun build src/index.ts src/storage.ts src/pg-sync-worker.ts src/project-registration.ts --outdir dist --target bun --external @hasna/contracts --external @hasna/contracts/schemas --external @hasna/contracts/auth --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external @hasna/contracts --external @hasna/contracts/schemas --external @hasna/contracts/auth --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @hasna/contracts --external @hasna/contracts/schemas --external @hasna/contracts/auth --external pg && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/contracts --external @hasna/contracts/schemas --external @hasna/contracts/auth --external pg && bun build src/index.ts src/storage.ts src/pg-sync-worker.ts src/project-registration.ts --outdir dist --target bun --external @hasna/contracts --external @hasna/contracts/schemas --external @hasna/contracts/auth --external pg && bun build src/diagnostics/historical-project-registration-receipt.ts --outdir dist/diagnostics --target bun --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun && tsc --emitDeclarationOnly --outDir dist",
     "prepare": "bun run build",
     "prepack": "bun run build && bun run scan-artifact",
     "prepublishOnly": "bun run typecheck && bun run test && bun run contracts:conformance && contracts no-cloud-scan .",
@@ -49,6 +49,7 @@
     "contracts:conformance": "contracts conformance fixtures",
     "typecheck": "tsc --noEmit",
     "test": "bun test --isolate --timeout=10000",
+    "diagnose:historical-project-registration-receipt": "bun run src/diagnostics/historical-project-registration-receipt.ts",
     "test:pg": "bun scripts/pg-test-gate.ts",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",

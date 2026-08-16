@@ -44,6 +44,11 @@ import {
   type MementosProjectRegistrationRequest,
 } from "./types.js";
 import { buildMementosProjectRegistrationCapability } from "./identity.js";
+import {
+  FLEET_RESOURCES_HISTORICAL_LOOKUP_IDENTITY,
+  FLEET_RESOURCES_HISTORICAL_RECEIPT,
+  supportsFleetResourcesHistoricalReceiptLookup,
+} from "./historical-receipt.js";
 
 const WORKSPACE_ID_PATTERN = /^wks_[A-Za-z0-9][A-Za-z0-9_-]{11,}$/;
 const OPERATION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
@@ -995,10 +1000,42 @@ function assertInverseRequest(
   return accepted;
 }
 
+function matchesCurrentLookupIdentity(
+  request: MementosProjectRegistrationLookupRequest,
+  capability: MementosProjectRegistrationCapability,
+): boolean {
+  return request.authority_route === capability.route
+    && request.package_version === capability.package_version
+    && request.authority_id === capability.authority_id
+    && request.tenant_id === capability.tenant_id
+    && request.corpus_id === capability.corpus_id;
+}
+
+function matchesFleetResourcesHistoricalLookup(
+  request: MementosProjectRegistrationLookupRequest,
+  capability: MementosProjectRegistrationCapability,
+): boolean {
+  if (!supportsFleetResourcesHistoricalReceiptLookup(capability)) return false;
+  const source = FLEET_RESOURCES_HISTORICAL_LOOKUP_IDENTITY.source;
+  return request.authority === source.authority
+    && request.authority_route === source.authority_route
+    && request.package_version === source.package_version
+    && request.authority_id === source.authority_id
+    && request.tenant_id === source.tenant_id
+    && request.corpus_id === source.corpus_id
+    && request.operation_id === source.operation_id
+    && request.step_id === source.step_id
+    && request.resource_kind === source.resource_kind
+    && request.direction === source.direction
+    && request.target_selector === source.target_selector
+    && request.target_id === source.target_id
+    && request.idempotency_key === source.idempotency_key;
+}
+
 function assertLookup(
   request: MementosProjectRegistrationLookupRequest,
   capability: MementosProjectRegistrationCapability,
-): void {
+): "current" | "fleet_resources_historical" {
   assertBounds(request);
   if (request.max_items !== 1) {
     throw new MementosProjectRegistrationError(
@@ -1009,11 +1046,10 @@ function assertLookup(
   if (
     request.authority !== "mementos"
     || request.resource_kind !== "project"
-    || request.authority_route !== capability.route
-    || request.package_version !== capability.package_version
-    || request.authority_id !== capability.authority_id
-    || request.tenant_id !== capability.tenant_id
-    || request.corpus_id !== capability.corpus_id
+    || (
+      !matchesCurrentLookupIdentity(request, capability)
+      && !matchesFleetResourcesHistoricalLookup(request, capability)
+    )
   ) {
     throw new MementosProjectRegistrationError(
       "MEMENTOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH",
@@ -1035,6 +1071,9 @@ function assertLookup(
       pattern: PROJECT_ID_PATTERN,
     });
   }
+  return matchesCurrentLookupIdentity(request, capability)
+    ? "current"
+    : "fleet_resources_historical";
 }
 
 export class PackageOwnedMementosProjectRegistrationAuthority
@@ -1467,12 +1506,25 @@ implements MementosProjectRegistrationAuthority {
     request: MementosProjectRegistrationLookupRequest,
   ): Promise<MementosProjectRegistrationLookupResult> {
     const startedAt = Date.now();
-    assertLookup(request, this.capabilityValue);
+    const lookupIdentity = assertLookup(request, this.capabilityValue);
     const receipt = getReceiptForLookup(this.db, request);
     if (!receipt || (request.target_id !== undefined && receipt.target_id !== request.target_id)) {
       throw new MementosProjectRegistrationError(
         "MEMENTOS_PROJECT_REGISTRATION_RECEIPT_NOT_FOUND",
         "exact immutable terminal receipt was not found",
+      );
+    }
+    if (
+      lookupIdentity === "fleet_resources_historical"
+      && (
+        receipt.receipt_id !== FLEET_RESOURCES_HISTORICAL_LOOKUP_IDENTITY.source.receipt_id
+        || canonicalMementosProjectRegistrationJson(publicReceipt(receipt))
+          !== canonicalMementosProjectRegistrationJson(FLEET_RESOURCES_HISTORICAL_RECEIPT)
+      )
+    ) {
+      throw new MementosProjectRegistrationError(
+        "MEMENTOS_PROJECT_REGISTRATION_RECEIPT_NOT_FOUND",
+        "exact immutable historical terminal receipt was not found",
       );
     }
     return withResponseControl(publicReceipt(receipt), request, startedAt);

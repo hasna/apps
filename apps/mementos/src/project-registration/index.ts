@@ -66,6 +66,7 @@ export type {
   MementosProjectRegistrationDirection,
   MementosProjectRegistrationErrorCode,
   MementosProjectRegistrationFaultPoint,
+  MementosProjectRegistrationHistoricalLookupIdentity,
   MementosProjectRegistrationHttpClientOptions,
   MementosProjectRegistrationInverseVerification,
   MementosProjectRegistrationLookupRequest,
