@@ -119,20 +119,20 @@ dispatch send --to work:agent --prompt "draft" --no-submit
 
 # Queue to an active Codewith/Claude pane that proves queued-message support
 # (Codewith queues with Tab, Claude Code queues with Enter)
-dispatch send --to open-dispatch:1.1 --prompt "Follow up safely" --queue --dry-run
+dispatch send --to dispatch:1.1 --prompt "Follow up safely" --queue --dry-run
 
 # Explicit submit key. Tab is accepted only when detection proves queue support.
-dispatch send --to open-dispatch:1.1 --prompt "Follow up safely" --submit-key Tab
+dispatch send --to dispatch:1.1 --prompt "Follow up safely" --submit-key Tab
 
 # Create a Codewith goal from the delivered prompt
-dispatch send --goal --to open-browser:1.1 --prompt "Fix native chat..."
+dispatch send --goal --to browser:1.1 --prompt "Fix native chat..."
 
 # Bulk-send to explicit targets with safety guards and pre-capture
 dispatch send --to open-a:1.1,open-b:1.1 --prompt "Run smoke tests" \
   --if-idle --dry-run --capture-before 120 --max-concurrency 2 --jitter 500
 
-# Resolve targets from an open-sessions registry when available
-dispatch send --from sessions-query --sessions-query open-router \
+# Resolve targets from an sessions registry when available
+dispatch send --from sessions-query --sessions-query router \
   --prompt "Fix native chat..." --goal --dry-run
 
 # Target a pane explicitly, and another machine
@@ -199,8 +199,8 @@ the same agent-composer safety checks as `dispatch send`, so shells and arbitrar
 `node`/`bun` panes are refused.
 
 ```bash
-dispatch key --to open-browser:1.1 --key Tab
-dispatch key --to open-browser:1.1 --key Enter --json
+dispatch key --to browser:1.1 --key Tab
+dispatch key --to browser:1.1 --key Enter --json
 ```
 
 Allowed keys: `Enter`, `Tab`, `Escape`, `Up`, `Down`, `Left`, `Right`, `Backspace`,
@@ -218,10 +218,10 @@ only the requested tail lines, and redacts obvious secret-looking values before 
 or JSON output.
 
 ```bash
-dispatch capture --to open-browser:1.1 --lines 200
-dispatch capture --to open-browser:1.1 --lines 200 --json
-dispatch capture --to open-browser:1.1 --lines 200 --ai --transform summary
-dispatch capture --to open-browser:1.1 --lines 200 --ai \
+dispatch capture --to browser:1.1 --lines 200
+dispatch capture --to browser:1.1 --lines 200 --json
+dispatch capture --to browser:1.1 --lines 200 --ai --transform summary
+dispatch capture --to browser:1.1 --lines 200 --ai \
   --prompt "Summarize what the agent did and list blockers"
 ```
 
@@ -253,9 +253,9 @@ can write the full bounded redacted capture to an artifact path instead of dumpi
 into the terminal.
 
 ```bash
-dispatch triage --to open-dispatch:1.1 --json
-dispatch triage --machine spark01 --to open-dispatch:1.1 \
-  --lines 120 --excerpt-chars 800 --artifact open-dispatch-triage.txt --json
+dispatch triage --to dispatch:1.1 --json
+dispatch triage --machine spark01 --to dispatch:1.1 \
+  --lines 120 --excerpt-chars 800 --artifact dispatch-triage.txt --json
 ```
 
 The JSON schema is versioned as `dispatch.agentTriage.v1`. Default output includes only
@@ -271,9 +271,9 @@ for Claude Code) only when detection proves queued prompt support; shells, arbit
 `node`/`bun`, stale transcripts, and unknown panes are refused.
 
 ```bash
-dispatch recover --to open-dispatch:1.1 --prompt "Summarize status and continue safely" --json
-dispatch recover --to open-dispatch:1.1 --prompt "Summarize status and continue safely" --apply --json
-dispatch recover --to open-dispatch:1.1 --file ./recovery.md --goal --apply
+dispatch recover --to dispatch:1.1 --prompt "Summarize status and continue safely" --json
+dispatch recover --to dispatch:1.1 --prompt "Summarize status and continue safely" --apply --json
+dispatch recover --to dispatch:1.1 --file ./recovery.md --goal --apply
 ```
 
 Use `--no-queue` to refuse active-agent queued recovery. The MCP tools
@@ -290,7 +290,7 @@ values, classifies the failure as `target`, `auth`, `machine`, `stale_package`,
 dispatch self-heal diagnose \
   --to work:agent \
   --machine spark01 \
-  --route "sessions-query:open-router" \
+  --route "sessions-query:router" \
   --error "target not found" \
   --json
 ```
@@ -313,7 +313,7 @@ dispatch exec --to open-mailery:01 --command "mailery status" --dry-run
 
 # Submit a reviewed safe command to a detected shell pane.
 dispatch exec --to open-mailery:01 \
-  --command "cd ~/workspace/hasna/opensource/open-emails && mailery doctor" \
+  --command "cd ~/workspace/repos/hasna/emails && mailery doctor" \
   --allow ./dispatch-exec-policy.json
 
 # Prompts still use send.
@@ -328,8 +328,8 @@ from a reviewed JSON policy file:
 ```json
 {
   "allowPrefixes": ["git reset --hard"],
-  "allowGitResetHardPaths": ["/home/hasna/workspace/hasna/opensource/open-dispatch"],
-  "allowTargets": ["open-dispatch:*"]
+  "allowGitResetHardPaths": ["/home/hasna/workspace/hasna/opensource/dispatch"],
+  "allowTargets": ["dispatch:*"]
 }
 ```
 
@@ -352,7 +352,7 @@ dispatch targets --machine spark01 --json
 dispatch targets --machine spark01 --json --all   # deliberately inspect every pane
 
 dispatch fleet summary --targets "open-*:*" --changed-since 5m --max-pane-chars 1200 --json
-dispatch fleet summary --machine spark01 --targets "open-dispatch:*" --preflight-ai --json
+dispatch fleet summary --machine spark01 --targets "dispatch:*" --preflight-ai --json
 ```
 
 `fleet summary` is read-only. It applies `--targets` and `--limit` before pane
@@ -535,7 +535,7 @@ console.log(keyRec.status, cap.text);
 ```ts
 const bulk = await dispatch.bulkSend({
   source: "sessions-query",
-  sessionsQuery: "open-router",
+  sessionsQuery: "router",
   prompt: "Fix native chat...",
   goal: true,
   dryRun: true,
