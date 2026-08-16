@@ -362,3 +362,110 @@ describe("pruneRegistryRows applies", () => {
     expect((db.query("SELECT COUNT(*) AS c FROM repos").get() as { c: number }).c).toBe(1);
   });
 });
+
+describe("planRegistryPrune row selection", () => {
+  test("--match selects only rows whose registry name starts with the prefix", () => {
+    // THE FILED GAP. prune planned EVERY missing-path row with no way to scope
+    // a class (retired-prefix duplicates, decommissioned rows) before review.
+    const { db, dbPath } = seed({
+      present: ["platform-live", "open-live"],
+      absent: ["platform-gone", "open-gone"],
+    });
+    const plan = planRegistryPrune({ db, databasePath: dbPath, matchPrefix: "platform-" });
+    expect(plan.rows.map((row) => row.name)).toEqual(["platform-gone"]);
+    expect(plan.row_count).toBe(1);
+  });
+
+  test("a prefix with no matching rows plans nothing", () => {
+    const { db, dbPath } = seed({ absent: ["open-gone"] });
+    const plan = planRegistryPrune({ db, databasePath: dbPath, matchPrefix: "platform-" });
+    expect(plan.row_count).toBe(0);
+    expect(plan.rows).toEqual([]);
+  });
+
+  test("the prefix filter also scopes the undetermined report", () => {
+    const { db, dbPath, paths } = seed({ absent: ["open-gone", "open-other"] });
+    const plan = planRegistryPrune({
+      db,
+      databasePath: dbPath,
+      matchPrefix: "open-go",
+      pathState: (path) => (path === paths["open-gone"] ? "undetermined" : "missing"),
+    });
+    expect(plan.row_count).toBe(0);
+    expect(plan.undetermined.map((row) => row.name)).toEqual(["open-gone"]);
+  });
+
+  test("--status undetermined reports only the unclassifiable class and plans nothing", () => {
+    const { db, dbPath, paths } = seed({ absent: ["open-gone", "open-unreadable"] });
+    const plan = planRegistryPrune({
+      db,
+      databasePath: dbPath,
+      status: "undetermined",
+      pathState: (path) => (path === paths["open-unreadable"] ? "undetermined" : "missing"),
+    });
+    expect(plan.row_count).toBe(0);
+    expect(plan.rows).toEqual([]);
+    expect(plan.undetermined.map((row) => row.name)).toEqual(["open-unreadable"]);
+  });
+
+  test("--status missing is the explicit default and binds the same plan", () => {
+    const { db, dbPath, paths } = seed({ absent: ["open-gone", "open-unreadable"] });
+    const pathState = (path: string) => (path === paths["open-unreadable"] ? "undetermined" : "missing");
+    const explicit = planRegistryPrune({ db, databasePath: dbPath, status: "missing", pathState });
+    const implicit = planRegistryPrune({ db, databasePath: dbPath, pathState });
+    expect(explicit.rows.map((row) => row.name)).toEqual(["open-gone"]);
+    expect(explicit.plan_hash).toBe(implicit.plan_hash);
+  });
+
+  test("rejects an unknown status and a malformed prefix", () => {
+    const { db, dbPath } = seed({ absent: ["open-gone"] });
+    for (const override of [
+      { status: "present" },
+      { status: "MISSING" },
+      { matchPrefix: "open\0gone" },
+    ] as Array<Record<string, unknown>>) {
+      let error: RegistryPruneError | null = null;
+      try {
+        planRegistryPrune({ db, databasePath: dbPath, ...override } as never);
+      } catch (caught) {
+        error = caught as RegistryPruneError;
+      }
+      expect(error?.code).toBe("INVALID_REQUEST");
+    }
+  });
+
+  test("filters compose with the limit", () => {
+    const { db, dbPath } = seed({ absent: ["platform-a", "platform-b", "open-c"] });
+    const plan = planRegistryPrune({ db, databasePath: dbPath, matchPrefix: "platform-", limit: 1 });
+    expect(plan.row_count).toBe(1);
+    expect(plan.rows[0]!.name).toBe("platform-a");
+  });
+});
+
+describe("pruneRegistryRows with a class filter", () => {
+  test("applies --match and leaves rows outside the class alone", () => {
+    const { db, dbPath } = seed({ absent: ["platform-gone", "open-gone"] });
+    const plan = planRegistryPrune({ db, databasePath: dbPath, matchPrefix: "platform-" });
+    const result = pruneRegistryRows(
+      { ...confirmations(dbPath, plan.plan_hash), matchPrefix: "platform-" },
+      { db, databasePath: dbPath },
+    );
+    expect(result.applied).toBe(true);
+    expect(result.receipt?.row_count).toBe(1);
+    const remaining = db.query("SELECT name FROM repos ORDER BY name").all() as Array<{ name: string }>;
+    expect(remaining.map((row) => row.name)).toEqual(["open-gone"]);
+  });
+
+  test("applying without the filter used at dry-run time is a changed plan", () => {
+    const { db, dbPath } = seed({ absent: ["platform-gone", "open-gone"] });
+    const plan = planRegistryPrune({ db, databasePath: dbPath, matchPrefix: "platform-" });
+    let error: RegistryPruneError | null = null;
+    try {
+      pruneRegistryRows(confirmations(dbPath, plan.plan_hash), { db, databasePath: dbPath });
+    } catch (caught) {
+      error = caught as RegistryPruneError;
+    }
+    expect(error?.code).toBe("PLAN_HASH_MISMATCH");
+    expect((db.query("SELECT COUNT(*) AS c FROM repos").get() as { c: number }).c).toBe(2);
+  });
+});

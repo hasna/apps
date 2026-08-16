@@ -105,6 +105,14 @@ export type RegistryPruneErrorCode =
   | "UNKNOWN_REPO_FOREIGN_KEY"
   | "IDEMPOTENCY_CONFLICT";
 
+/**
+ * The two reportable path states a prune plan carries. `missing` is the
+ * prunable class; `undetermined` rows are surfaced but never deleted.
+ */
+export type RegistryPrunePathStatus = "missing" | "undetermined";
+
+const MAX_MATCH_PREFIX_LENGTH = 200;
+
 export interface RegistryPruneErrorDetails {
   expected_database?: string;
   actual_database?: string;
@@ -208,6 +216,18 @@ export interface RegistryPruneRequest {
   idempotencyKey?: string;
   /** Cap on rows pruned in one operation. Absent means no cap. */
   limit?: number;
+  /**
+   * Select only rows whose registry name starts with this prefix, so a prune
+   * can be scoped to one class (a retired prefix, a decommissioned line)
+   * instead of every missing-path row. Absent means no name filter.
+   */
+  matchPrefix?: string;
+  /**
+   * Select only rows whose path classifies as this state. Defaults to
+   * `missing` — the prunable class. `undetermined` plans nothing and reports
+   * only the rows whose paths cannot be classified.
+   */
+  status?: RegistryPrunePathStatus;
 }
 
 export interface RegistryPruneResult {
@@ -283,7 +303,8 @@ function countChildRows(db: Database, keys: ForeignKeyRow[], repoId: number): Re
 }
 
 /**
- * Build the plan: every row whose stored path does not exist on this machine.
+ * Build the plan: the rows selected by the optional name-prefix and path-state
+ * filters whose stored path does not exist on this machine.
  *
  * `pathExists` is injectable so the selection rule itself can be tested without
  * needing the filesystem to be in a particular state.
@@ -293,6 +314,10 @@ export function planRegistryPrune(
     db?: Database;
     databasePath?: string;
     limit?: number;
+    /** Select only rows whose registry name starts with this prefix. */
+    matchPrefix?: string;
+    /** Select only rows whose path classifies as this state. Defaults to `missing`. */
+    status?: RegistryPrunePathStatus;
     /** Legacy boolean seam. `true` means present, `false` means missing. */
     pathExists?: (path: string) => boolean;
     pathState?: (path: string) => "present" | "missing" | "undetermined";
@@ -301,6 +326,7 @@ export function planRegistryPrune(
   const db = opts.db ?? getDb();
   const database = opts.databasePath ?? connectionDatabasePath(db) ?? getDbPath();
   const pathState = resolvePathState(opts);
+  const selection = validatePruneSelection(opts);
   const keys = assertKnownForeignKeys(db);
 
   const all = db
@@ -314,12 +340,14 @@ export function planRegistryPrune(
   const undetermined: Array<{ id: number; name: string; path: string; reason: string }> = [];
   for (const row of all) {
     if (!row.path) continue;
+    if (selection.matchPrefix !== undefined && !row.name.startsWith(selection.matchPrefix)) continue;
     const state = pathState(row.path);
     if (state === "present") continue;
     if (state === "undetermined") {
       undetermined.push({ id: row.id, name: row.name, path: row.path, reason: "path-unreadable" });
       continue;
     }
+    if (selection.status === "undetermined") continue;
     rows.push({ ...row, cascade_counts: countChildRows(db, keys, row.id) });
     if (opts.limit !== undefined && rows.length >= opts.limit) break;
   }
@@ -342,6 +370,37 @@ export function planRegistryPrune(
     cascade_totals: cascadeTotals,
     plan_hash: planHash(database, rows),
   };
+}
+
+export interface PruneRowSelection {
+  /** Name prefix filter; absent means no filter. */
+  matchPrefix?: string;
+  /** Path-state class to plan. Defaults to `missing`. */
+  status: RegistryPrunePathStatus;
+}
+
+/**
+ * Validate the row-selection options shared by planning and applying.
+ * An unknown status or a malformed prefix is a request error, never a silent
+ * no-op: a prune that quietly ignored its filter would plan the wrong class.
+ */
+function validatePruneSelection(opts: {
+  matchPrefix?: string;
+  status?: string;
+}): PruneRowSelection {
+  let matchPrefix: string | undefined = opts.matchPrefix;
+  if (matchPrefix !== undefined && matchPrefix === "") matchPrefix = undefined;
+  if (matchPrefix !== undefined) {
+    if (matchPrefix.includes("\0") || matchPrefix.length > MAX_MATCH_PREFIX_LENGTH) {
+      throw new RegistryPruneError("INVALID_REQUEST", "matchPrefix must be a short name prefix without NUL bytes");
+    }
+  }
+  const statusValue: string = opts.status ?? "missing";
+  if (statusValue !== "missing" && statusValue !== "undetermined") {
+    throw new RegistryPruneError("INVALID_REQUEST", "status must be one of: missing, undetermined");
+  }
+  const status: RegistryPrunePathStatus = statusValue;
+  return { matchPrefix, status };
 }
 
 /**
@@ -424,7 +483,14 @@ export function pruneRegistryRows(
     throw new RegistryPruneError("INVALID_REQUEST", "limit must be a positive integer");
   }
 
-  const plan = planRegistryPrune({ db, databasePath: database, limit: request.limit, pathState });
+  const plan = planRegistryPrune({
+    db,
+    databasePath: database,
+    limit: request.limit,
+    pathState,
+    matchPrefix: request.matchPrefix,
+    status: request.status,
+  });
   if (!request.apply) {
     return { schema: REGISTRY_PRUNE_SCHEMA, applied: false, replayed: false, plan, receipt: null };
   }

@@ -294,6 +294,17 @@ function isWithin(root: string, candidate: string): boolean {
   return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
+/**
+ * `isWithin` with the boundary itself admitted. Used only where Git may report
+ * the boundary as a path it is probing — the checkout top-level when the target
+ * IS the authority boundary — while every real authority component (git dir,
+ * common dir, object store) remains strictly inside it.
+ */
+function isWithinOrEqual(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
 function sanitizeCheckoutRemoteUrl(remote: string): string {
   const trimmed = remote.trim();
   const isNetworkUrl = trimmed.includes("://");
@@ -497,13 +508,13 @@ function reportedGitPath(path: string, args: string[], label: string): string {
 }
 
 function containedGitAuthorityPath(reported: string, root: string, label: string): string {
-  if (!isWithin(root, reported)) {
-    fail("TARGET_OUTSIDE_ROOT", `${label} is outside the trusted canonical root`);
+  if (!isWithinOrEqual(root, reported)) {
+    fail("TARGET_OUTSIDE_ROOT", `${label} is outside the trusted authority boundary`);
   }
   try {
     const resolved = realpathSync(reported);
-    if (!isWithin(root, resolved)) {
-      fail("TARGET_OUTSIDE_ROOT", `${label} resolves outside the trusted canonical root`);
+    if (!isWithinOrEqual(root, resolved)) {
+      fail("TARGET_OUTSIDE_ROOT", `${label} resolves outside the trusted authority boundary`);
     }
     if (!statSync(resolved).isDirectory()) {
       fail("TARGET_NOT_GIT_CHECKOUT", `${label} is not a directory`);
@@ -573,7 +584,7 @@ function assertContainedAuthorityTree(path: string, root: string, label: string,
       fail("TARGET_UNTRUSTED_GIT_AUTHORITY", `${label} cannot contain symbolic links`);
     }
     if (!isWithin(root, realpathSync(current))) {
-      fail("TARGET_OUTSIDE_ROOT", `${label} resolves outside the trusted canonical root`);
+      fail("TARGET_OUTSIDE_ROOT", `${label} resolves outside the trusted authority boundary`);
     }
     if (currentStat.isDirectory()) {
       let entries;
@@ -616,7 +627,7 @@ function assertNoObjectAlternates(objects: string, root: string): void {
       fail("TARGET_NOT_GIT_CHECKOUT", "target object authority metadata directory is unsafe");
     }
     if (!isWithin(root, realpathSync(info))) {
-      fail("TARGET_OUTSIDE_ROOT", "target object authority metadata resolves outside the trusted canonical root");
+      fail("TARGET_OUTSIDE_ROOT", "target object authority metadata resolves outside the trusted authority boundary");
     }
   } catch (error) {
     if (error instanceof PrimaryRelocationError) throw error;
@@ -939,11 +950,19 @@ function validateTarget(targetPath: string, root: string, remote: string, head: 
     const realRoot = realpathSync(root);
     const realTarget = realpathSync(targetPath);
     if (realTarget !== targetPath) fail("TARGET_NOT_CANONICAL", "target path cannot be a symlink alias");
-    if (!isWithin(realRoot, realTarget)) fail("TARGET_OUTSIDE_ROOT", "target is outside the trusted canonical root");
+    // The authority boundary is the worktree store when the target lives in it
+    // (the historical behaviour), and otherwise the checkout directory itself —
+    // a target outside the store is only reachable here after the checks above
+    // proved it is a real, canonical, existing directory. Every containment
+    // check that follows (Git metadata, objects, refs and config must not escape
+    // the boundary; no symlink escapes; no alternates, promisor or shallow
+    // authority; clean fsck) then means exactly what it meant inside the store,
+    // applied to the checkout that owns the Git store.
+    const authorityRoot = isWithin(realRoot, realTarget) ? realRoot : realTarget;
     // Establish filesystem and object ownership before reading refs, objects, or
     // repository-controlled attributes. These plumbing calls cannot invoke
     // conversion filters, hooks, credential helpers, or lazy object fetches.
-    validateGitAuthority(realTarget, realRoot);
+    validateGitAuthority(realTarget, authorityRoot);
     // Read the local config value directly: `remote get-url` applies url.*.insteadOf
     // rewrites and can make a different raw origin impersonate the expected one.
     if (sanitizeCheckoutRemoteUrl(rawOriginUrl(realTarget)) !== remote) {
