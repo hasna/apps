@@ -61,7 +61,8 @@
     "scan:artifact": "bun run scripts/scan-artifact.ts",
     "version:set": "bun run scripts/set-version.ts",
     "version:check": "bun run scripts/set-version.ts --check",
-    "prepack": "bash -c 'if [ \"$(uname -s)\" = Darwin ]; then bun run build:native-fs-guard; else echo \"WARN: native fs-guard build skipped on $(uname -s) — dry-run/CI pack; publish recordings from macOS\"; fi' && bun run version:check && bun run build && bun run verify:release && bun run scan:artifact",
+    "prepack": "bun run prepack:platform-gate && bun run version:check && bun run build && bun run verify:release && bun run scan:artifact",
+    "prepack:platform-gate": "bash -c 'if [ \"$(uname -s)\" = Darwin ]; then bun run build:native-fs-guard; else echo \"WARN: native fs-guard build skipped on $(uname -s) — dry-run/CI pack; publish recordings from macOS\"; fi'",
     "prepublishOnly": "bun run typecheck && bun run test",
     "typecheck:shortcut-contract": "tsc --noEmit -p tsconfig.test.json"
   },

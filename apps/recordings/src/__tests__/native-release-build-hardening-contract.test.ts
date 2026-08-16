@@ -91,7 +91,13 @@ describe("native release build hardening contract", () => {
     expect(packageJson.scripts["build:native-fs-guard"]).toBe(
       "/bin/bash scripts/build_native_fs_guard.sh",
     );
-    expect(packageJson.scripts.prepack).toStartWith("bun run build:native-fs-guard &&");
+    // MONOREPO ABSORPTION (2026-08-16, import of hasna/recordings): prepack now starts with the
+    // named gate `prepack:platform-gate` (Darwin-conditional — builds the guard on macOS, warns
+    // and skips elsewhere so the monorepo's Linux check:publish-guard dry-pack can run). The gate
+    // script must keep invoking build:native-fs-guard; a regression that drops the gate or moves
+    // it after version:check fails the version-site-guard test too.
+    expect(packageJson.scripts.prepack).toStartWith("bun run prepack:platform-gate &&");
+    expect(packageJson.scripts["prepack:platform-gate"]).toContain("build:native-fs-guard");
     expect(nativeGuardBuild).toContain('[ "$(/usr/bin/uname -s)" = "Darwin" ]');
     expect(nativeGuardBuild).toContain('/usr/bin/lipo "$OUTPUT" -verify_arch arm64 x86_64');
     expect(nativeGuardBuild).toContain("node_modules/node-api-headers/include");

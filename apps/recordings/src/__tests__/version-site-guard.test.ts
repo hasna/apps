@@ -113,13 +113,26 @@ describe("release version sites", () => {
 
   // `version:check` in prepack was previously unasserted by anything: the only prepack needle in
   // the repo is native-release-build-hardening-contract's `toStartWith`, which this PR's original
-  // ordering broke outright. build:native-fs-guard has to stay first -- it is the fail-closed
+  // ordering broke outright. The platform gate has to stay first -- it is the fail-closed
   // macOS gate, and nothing may run ahead of it -- so the version check goes immediately after it
   // and still short-circuits before the expensive `bun run build`.
+  // MONOREPO ABSORPTION (2026-08-16, import of hasna/recordings): the gate step is now the named
+  // script `prepack:platform-gate`, which runs `build:native-fs-guard` on Darwin and warns+skips
+  // on any other host. The source repo's `build_native_fs_guard.sh` exits 1 on non-Darwin BY
+  // DESIGN (its own ci.yml documents the publish path as macOS-only), which made the source
+  // prepack un-runnable on Linux; the hasna/apps monorepo's check:publish-guard dry-packs every
+  // member (`npm pack --dry-run` runs prepack), so the pack failed on Linux with no JSON document.
+  // On Darwin the gate is byte-identical in intent (guard builds first, fails closed); the
+  // non-Darwin branch exists so CI can pack and scan. Recordings must still be PUBLISHED from
+  // macOS (the .node is built at prepack time and shipped via scripts/).
   test("prepack checks the version sites after the platform gate and before the build", () => {
     const steps = packageJson.scripts.prepack.split(" && ");
+    const gate = packageJson.scripts["prepack:platform-gate"];
 
-    expect(steps[0]).toBe("bun run build:native-fs-guard");
+    expect(steps[0]).toBe("bun run prepack:platform-gate");
+    expect(gate).toContain("build:native-fs-guard");
+    expect(gate).toContain('= Darwin');
+    expect(gate).toContain("publish recordings from macOS");
     expect(steps.indexOf("bun run version:check")).toBeGreaterThan(-1);
     expect(steps.indexOf("bun run build")).toBeGreaterThan(-1);
     expect(steps.indexOf("bun run version:check")).toBeLessThan(steps.indexOf("bun run build"));
