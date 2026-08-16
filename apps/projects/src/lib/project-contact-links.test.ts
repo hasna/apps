@@ -1,0 +1,730 @@
+import { describe, expect, test } from "bun:test";
+import type { ProjectStore } from "../store/project-store.js";
+import type {
+  ProjectResourceLink,
+  ProjectResourceLinkMutationRequest,
+  ProjectResourceLinkMutationResult,
+  ProjectResourceLinkReadResult,
+  ProjectResourceLinkRollbackRequest,
+  Workspace,
+} from "../types/workspace.js";
+import {
+  ProjectContactLinkOperationError,
+  attachProjectContact,
+  detachProjectContact,
+  listProjectContacts,
+  type ContactProjectMembershipAuthority,
+  type ContactProjectMembershipMutationResult,
+  type ContactProjectMembershipSnapshot,
+} from "./project-contact-links.js";
+
+const projectId = "wks_eHb1kcLUzgQVJQt6L0CCB";
+const contactId = "6b68e131-abe5-43b7-92cd-9930b04611df";
+const otherContactId = "515fbb15-4661-4cdc-b1df-f719797b8cad";
+const serviceInstance = "urn:hasna:contacts:service:primary";
+
+const project: Workspace = {
+  id: projectId,
+  slug: "reges-kpmg",
+  name: "REGES / KPMG",
+  description: null,
+  kind: "generic",
+  status: "active",
+  root_id: null,
+  recipe_id: null,
+  canonical_machine: null,
+  primary_path: null,
+  git_remote: null,
+  integrations: {},
+  metadata: {},
+  tags: [],
+  s3_bucket: null,
+  s3_prefix: null,
+  last_opened_at: null,
+  synced_at: null,
+  created_at: "2026-08-08 12:00:00",
+  updated_at: "2026-08-08 12:00:00",
+};
+
+function resourceLink(id = contactId, resourceServiceInstance = serviceInstance): ProjectResourceLink {
+  return {
+    id: `prl_${id.replaceAll("-", "").slice(0, 36)}`,
+    project_id: projectId,
+    authority: "contacts",
+    service_instance: resourceServiceInstance,
+    source_package: "@hasna/contacts",
+    target_kind: "contact",
+    locator: { kind: "external_uuid", value: id },
+    scope: "resource",
+    labels: {},
+    created_at: "2026-08-08 12:00:00",
+    updated_at: "2026-08-08 12:00:00",
+  };
+}
+
+function projectRead(links: ProjectResourceLink[] = [], revision = project.updated_at): ProjectResourceLinkReadResult {
+  const maxItems = 1000;
+  const collectionDigest = `digest-${links.length}-${revision}`;
+  return {
+    ok: true,
+    project_id: projectId,
+    project: { ...project, updated_at: revision },
+    current_revision: revision,
+    links,
+    link_count: links.length,
+    max_items: maxItems,
+    collection_digest: collectionDigest,
+    complete: true,
+    truncated: false,
+    contract: {
+      schema: "hasna.project_resource_link_collection.v1",
+      project_id: projectId,
+      current_revision: revision,
+      links,
+      link_count: links.length,
+      max_items: maxItems,
+      collection_digest: collectionDigest,
+      complete: true,
+      truncated: false,
+    },
+    response_control: {
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      response_bytes: 1_000,
+      elapsed_ms: 1,
+      complete: true,
+      truncated: false,
+    },
+  };
+}
+
+function projectMutation(
+  request: ProjectResourceLinkMutationRequest,
+  before: ProjectResourceLinkReadResult,
+  afterLinks: ProjectResourceLink[],
+): ProjectResourceLinkMutationResult {
+  const nextRevision = "2026-08-08 12:00:01";
+  return {
+    ok: true,
+    dry_run: false,
+    outcome: "accepted",
+    mode: request.mode,
+    idempotency_key: `${request.operation_id}:${request.step_id}`,
+    request_digest: "request",
+    precondition_digest: "precondition",
+    project_id: projectId,
+    expected_revision: request.expected_revision,
+    current_revision: nextRevision,
+    before: {
+      project: before.project,
+      links: before.links,
+      collection_digest: before.collection_digest,
+    },
+    after: {
+      project: { ...before.project, updated_at: nextRevision },
+      links: afterLinks,
+      collection_digest: `digest-${afterLinks.length}-${nextRevision}`,
+    },
+    receipt: {
+      receipt_id: `gpr_${request.step_id}`,
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      direction: "forward",
+      idempotency_key: `${request.operation_id}:${request.step_id}`,
+      target_id: projectId,
+      request_digest: "request",
+      precondition_digest: "precondition",
+      expected_revision: request.expected_revision,
+      outcome: "accepted",
+      reason: null,
+      result_project_id: projectId,
+      before: null,
+      after: null,
+      duplicate_of_receipt_id: null,
+      post_revision: nextRevision,
+      created_at: "2026-08-08 12:00:01",
+    },
+    response_control: before.response_control,
+  };
+}
+
+function terminalProjectMutation(
+  request: ProjectResourceLinkMutationRequest,
+  before: ProjectResourceLinkReadResult,
+  reason: string,
+): ProjectResourceLinkMutationResult {
+  const result = projectMutation(request, before, before.links);
+  return {
+    ...result,
+    ok: false,
+    outcome: "terminal_nonacceptance",
+    current_revision: before.current_revision,
+    after: null,
+    receipt: {
+      ...result.receipt!,
+      outcome: "terminal_nonacceptance",
+      reason,
+      result_project_id: null,
+      after: null,
+      post_revision: null,
+    },
+  };
+}
+
+class FakeProjectStore {
+  readonly mode = "api" as const;
+  readonly mutations: ProjectResourceLinkMutationRequest[] = [];
+  readonly rollbacks: ProjectResourceLinkRollbackRequest[] = [];
+  read = projectRead();
+  throwMutation: Error | null = null;
+  terminalMutationReason: string | null = null;
+  commitBeforeThrow = false;
+
+  async readProjectResourceLinks(): Promise<ProjectResourceLinkReadResult> {
+    return this.read;
+  }
+
+  async mutateProjectResourceLinks(
+    request: ProjectResourceLinkMutationRequest,
+  ): Promise<ProjectResourceLinkMutationResult> {
+    this.mutations.push(request);
+    const requested = request.links.map((input) => ({
+      ...input,
+      id: resourceLink(input.locator.value).id,
+      project_id: projectId,
+      labels: input.labels ?? {},
+      created_at: "2026-08-08 12:00:01",
+      updated_at: "2026-08-08 12:00:01",
+    }));
+    const afterLinks = request.mode === "add"
+      ? [...this.read.links, ...requested.filter((candidate) => (
+        !this.read.links.some((existing) => existing.id === candidate.id)
+      ))]
+      : requested;
+    if (this.terminalMutationReason) {
+      return terminalProjectMutation(request, this.read, this.terminalMutationReason);
+    }
+    const result = projectMutation(request, this.read, afterLinks);
+    if (this.commitBeforeThrow) {
+      this.read = projectRead(afterLinks, result.current_revision);
+    }
+    if (this.throwMutation) throw this.throwMutation;
+    this.read = projectRead(afterLinks, result.current_revision);
+    return result;
+  }
+
+  async rollbackProjectResourceLinks(
+    request: ProjectResourceLinkRollbackRequest,
+  ): Promise<ProjectResourceLinkMutationResult> {
+    this.rollbacks.push(request);
+    throw new Error("project rollback should not be used by these tests");
+  }
+}
+
+function membership(linked: boolean, version: string): ContactProjectMembershipSnapshot {
+  return {
+    contact_id: contactId,
+    project_id: projectId,
+    linked,
+    version,
+  };
+}
+
+class FakeMembershipAuthority implements ContactProjectMembershipAuthority {
+  readonly mutations: Array<{ kind: "attach" | "detach"; expected_version: string; operation_id: string; step_id: string }> = [];
+  readonly receipts = new Map<string, ContactProjectMembershipMutationResult>();
+  snapshot = membership(false, "contacts-v1");
+  projectContactIds = [contactId];
+  failCompensation = false;
+
+  constructor(readonly service_instance = serviceInstance) {}
+
+  async readMembership(): Promise<ContactProjectMembershipSnapshot> {
+    return this.snapshot;
+  }
+
+  async listProjectMemberships() {
+    return {
+      project_id: projectId,
+      contact_ids: [...this.projectContactIds],
+      complete: true as const,
+      membership_revision: "contacts-list-v1",
+    };
+  }
+
+  async attach(input: {
+    expected_version: string;
+    operation_id: string;
+    step_id: string;
+  }): Promise<ContactProjectMembershipMutationResult> {
+    this.mutations.push({ kind: "attach", ...input });
+    const receiptKey = `attach:${input.operation_id}:${input.step_id}`;
+    const duplicate = this.receipts.get(receiptKey);
+    if (duplicate) return { ...duplicate, outcome: "duplicate_of_accepted" };
+    if (this.failCompensation && input.step_id.includes(":compensate:")) {
+      throw new Error("contacts compensation failed");
+    }
+    if (input.expected_version !== this.snapshot.version) {
+      throw new Error("contacts membership expected_version conflict");
+    }
+    const before = this.snapshot;
+    this.snapshot = membership(true, `${before.version}:attach`);
+    const result: ContactProjectMembershipMutationResult = {
+      outcome: before.linked ? "duplicate_of_accepted" : "accepted",
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      before,
+      after: this.snapshot,
+      receipt_id: `contacts-${input.step_id}`,
+    };
+    this.receipts.set(receiptKey, result);
+    return result;
+  }
+
+  async detach(input: {
+    expected_version: string;
+    operation_id: string;
+    step_id: string;
+  }): Promise<ContactProjectMembershipMutationResult> {
+    this.mutations.push({ kind: "detach", ...input });
+    const receiptKey = `detach:${input.operation_id}:${input.step_id}`;
+    const duplicate = this.receipts.get(receiptKey);
+    if (duplicate) return { ...duplicate, outcome: "duplicate_of_accepted" };
+    if (this.failCompensation && input.step_id.includes(":compensate:")) {
+      throw new Error("contacts compensation failed");
+    }
+    if (input.expected_version !== this.snapshot.version) {
+      throw new Error("contacts membership expected_version conflict");
+    }
+    const before = this.snapshot;
+    this.snapshot = membership(false, `${before.version}:detach`);
+    const result: ContactProjectMembershipMutationResult = {
+      outcome: before.linked ? "accepted" : "duplicate_of_accepted",
+      operation_id: input.operation_id,
+      step_id: input.step_id,
+      before,
+      after: this.snapshot,
+      receipt_id: `contacts-${input.step_id}`,
+    };
+    this.receipts.set(receiptKey, result);
+    return result;
+  }
+}
+
+function dependencies(projects: FakeProjectStore, contacts: FakeMembershipAuthority) {
+  return {
+    projects: projects as unknown as Pick<
+      ProjectStore,
+      "readProjectResourceLinks" | "mutateProjectResourceLinks" | "rollbackProjectResourceLinks"
+    >,
+    contacts,
+  };
+}
+
+describe("project contact-link coordination", () => {
+  test("canonicalizes URL service identities across attach, exact retry, list, detach, and reattach", async () => {
+    const projects = new FakeProjectStore();
+    const contacts = new FakeMembershipAuthority("https://contacts.example.test");
+    const attachInput = {
+      project_id: projectId,
+      contact_id: contactId,
+      operation_id: "attach-url-service-instance",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    };
+
+    const attached = await attachProjectContact(dependencies(projects, contacts), attachInput);
+    expect(attached.outcome).toBe("accepted");
+    expect(attached.project_link?.service_instance).toBe("https://contacts.example.test/");
+    expect(projects.read.link_count).toBe(1);
+
+    const retried = await attachProjectContact(dependencies(projects, contacts), attachInput);
+    expect(retried.outcome).toBe("duplicate_of_accepted");
+    expect(retried.project_link?.service_instance).toBe("https://contacts.example.test/");
+    expect(contacts.mutations).toHaveLength(1);
+    expect(projects.mutations).toHaveLength(1);
+
+    const listed = await listProjectContacts(dependencies(projects, contacts), {
+      project_id: projectId,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    });
+    expect(listed.synchronized_contact_ids).toEqual([contactId]);
+    expect(listed.missing_project_link_contact_ids).toEqual([]);
+    expect(listed.project_links).toHaveLength(1);
+
+    const detached = await detachProjectContact(dependencies(projects, contacts), {
+      ...attachInput,
+      operation_id: "detach-url-service-instance",
+    });
+    expect(detached.outcome).toBe("accepted");
+    expect(detached.project_link).toBeNull();
+    expect(projects.read.link_count).toBe(0);
+    expect(projects.read.links).toEqual([]);
+
+    const reattached = await attachProjectContact(dependencies(projects, contacts), {
+      ...attachInput,
+      operation_id: "reattach-url-service-instance",
+    });
+    expect(reattached.outcome).toBe("accepted");
+    expect(reattached.project_link?.service_instance).toBe("https://contacts.example.test/");
+    expect(projects.read.link_count).toBe(1);
+  });
+
+  test("recognizes a reachable legacy root URL form as the same Contacts service instance", async () => {
+    const projects = new FakeProjectStore();
+    projects.read = projectRead([resourceLink(contactId, "https://contacts.example.test")]);
+    const contacts = new FakeMembershipAuthority("https://contacts.example.test/");
+    contacts.snapshot = membership(true, "contacts-v2");
+
+    const listed = await listProjectContacts(dependencies(projects, contacts), {
+      project_id: projectId,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    });
+
+    expect(listed.synchronized_contact_ids).toEqual([contactId]);
+    expect(listed.missing_project_link_contact_ids).toEqual([]);
+    expect(listed.project_links).toHaveLength(1);
+  });
+
+  test("lists Contacts membership as authority and reports missing or stale Projects evidence", async () => {
+    const projects = new FakeProjectStore();
+    projects.read = projectRead([resourceLink(contactId), resourceLink("d9a3bd8a-14b4-4e58-9fe8-6b0274f36f1f")]);
+    const contacts = new FakeMembershipAuthority();
+    contacts.projectContactIds = [contactId, otherContactId];
+
+    const result = await listProjectContacts(dependencies(projects, contacts), {
+      project_id: projectId,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    });
+
+    expect(result.authority).toBe("contacts");
+    expect(result.contact_ids).toEqual([otherContactId, contactId]);
+    expect(result.synchronized_contact_ids).toEqual([contactId]);
+    expect(result.missing_project_link_contact_ids).toEqual([otherContactId]);
+    expect(result.stale_project_link_contact_ids).toEqual(["d9a3bd8a-14b4-4e58-9fe8-6b0274f36f1f"]);
+  });
+
+  test("attaches membership first, then writes immutable Projects evidence with stable step IDs", async () => {
+    const projects = new FakeProjectStore();
+    const contacts = new FakeMembershipAuthority();
+
+    const result = await attachProjectContact(dependencies(projects, contacts), {
+      project_id: projectId,
+      contact_id: contactId,
+      operation_id: "attach-bianca",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    });
+
+    expect(result.outcome).toBe("accepted");
+    expect(contacts.mutations).toEqual([
+      expect.objectContaining({
+        kind: "attach",
+        expected_version: "contacts-v1",
+        operation_id: "attach-bianca",
+        step_id: expect.stringMatching(/^contacts-membership:forward:[0-9a-f]{16}$/),
+      }),
+    ]);
+    expect(projects.mutations).toHaveLength(1);
+    expect(projects.mutations[0]).toMatchObject({
+      project_id: projectId,
+      operation_id: "attach-bianca",
+      step_id: "projects-resource-link",
+      mode: "add",
+      expected_revision: project.updated_at,
+      links: [{
+        authority: "contacts",
+        service_instance: serviceInstance,
+        source_package: "@hasna/contacts",
+        target_kind: "contact",
+        locator: { kind: "external_uuid", value: contactId },
+        scope: "resource",
+      }],
+    });
+    expect(result.evidence.map((item) => item.step_id)).toEqual([
+      expect.stringMatching(/^contacts-membership:forward:[0-9a-f]{16}$/),
+      "projects-resource-link",
+    ]);
+  });
+
+  test("returns duplicate without writes when authority membership and Projects evidence already exist", async () => {
+    const projects = new FakeProjectStore();
+    projects.read = projectRead([resourceLink()]);
+    const contacts = new FakeMembershipAuthority();
+    contacts.snapshot = membership(true, "contacts-v2");
+
+    const result = await attachProjectContact(dependencies(projects, contacts), {
+      project_id: projectId,
+      contact_id: contactId,
+      operation_id: "attach-bianca",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    });
+
+    expect(result.outcome).toBe("duplicate_of_accepted");
+    expect(contacts.mutations).toEqual([]);
+    expect(projects.mutations).toEqual([]);
+  });
+
+  test("compensates Contacts when the Projects attach CAS fails", async () => {
+    const projects = new FakeProjectStore();
+    projects.terminalMutationReason = "stale_revision";
+    const contacts = new FakeMembershipAuthority();
+
+    await expect(attachProjectContact(dependencies(projects, contacts), {
+      project_id: projectId,
+      contact_id: contactId,
+      operation_id: "attach-bianca",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    })).rejects.toMatchObject({
+      name: "ProjectContactLinkOperationError",
+      code: "PROJECT_CONTACT_LINK_PROJECT_WRITE_FAILED_COMPENSATED",
+      stage: "projects-resource-link",
+      compensated: true,
+    } satisfies Partial<ProjectContactLinkOperationError>);
+
+    expect(contacts.mutations).toEqual([
+      expect.objectContaining({
+        kind: "attach",
+        step_id: expect.stringMatching(/^contacts-membership:forward:[0-9a-f]{16}$/),
+      }),
+      expect.objectContaining({
+        kind: "detach",
+        expected_version: "contacts-v1:attach",
+        step_id: expect.stringMatching(/^contacts-membership:compensate:[0-9a-f]{16}$/),
+      }),
+    ]);
+  });
+
+  test("retries attach with a new revision-bound step after successful compensation", async () => {
+    const projects = new FakeProjectStore();
+    projects.terminalMutationReason = "stale_revision";
+    const contacts = new FakeMembershipAuthority();
+    const input = {
+      project_id: projectId,
+      contact_id: contactId,
+      operation_id: "attach-bianca-retry",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    };
+
+    await expect(attachProjectContact(dependencies(projects, contacts), input)).rejects.toMatchObject({
+      code: "PROJECT_CONTACT_LINK_PROJECT_WRITE_FAILED_COMPENSATED",
+      compensated: true,
+    } satisfies Partial<ProjectContactLinkOperationError>);
+    expect(contacts.snapshot.linked).toBe(false);
+
+    projects.terminalMutationReason = null;
+    const retried = await attachProjectContact(dependencies(projects, contacts), input);
+
+    const forwardSteps = contacts.mutations
+      .filter((mutation) => mutation.kind === "attach" && mutation.step_id.includes(":forward:"))
+      .map((mutation) => mutation.step_id);
+    expect(forwardSteps).toHaveLength(2);
+    expect(new Set(forwardSteps).size).toBe(2);
+    expect(contacts.snapshot.linked).toBe(true);
+    expect(retried.membership.linked).toBe(true);
+    expect(retried.project_link).not.toBeNull();
+  });
+
+  test("does not compensate an ambiguous Projects attach and same-operation retry completes it", async () => {
+    const projects = new FakeProjectStore();
+    projects.throwMutation = new Error("connection closed before Projects response");
+    const contacts = new FakeMembershipAuthority();
+    const input = {
+      project_id: projectId,
+      contact_id: contactId,
+      operation_id: "attach-bianca-ambiguous",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    };
+
+    await expect(attachProjectContact(dependencies(projects, contacts), input)).rejects.toMatchObject({
+      code: "PROJECT_CONTACT_LINK_PARTIAL_FAILURE",
+      stage: "projects-resource-link",
+      compensated: false,
+    } satisfies Partial<ProjectContactLinkOperationError>);
+    expect(contacts.snapshot.linked).toBe(true);
+    expect(contacts.mutations).toHaveLength(1);
+    expect(projects.read.links).toEqual([]);
+
+    projects.throwMutation = null;
+    const retried = await attachProjectContact(dependencies(projects, contacts), input);
+
+    expect(retried.outcome).toBe("accepted");
+    expect(retried.membership.linked).toBe(true);
+    expect(retried.project_link).not.toBeNull();
+    expect(contacts.mutations).toHaveLength(1);
+    expect(projects.mutations).toHaveLength(2);
+    expect(projects.mutations.map((mutation) => ({
+      operation_id: mutation.operation_id,
+      step_id: mutation.step_id,
+    }))).toEqual([
+      {
+        operation_id: "attach-bianca-ambiguous",
+        step_id: "projects-resource-link",
+      },
+      {
+        operation_id: "attach-bianca-ambiguous",
+        step_id: "projects-resource-link",
+      },
+    ]);
+  });
+
+  test("preserves an exact uncompensated Projects conflict when Contacts was already linked", async () => {
+    const projects = new FakeProjectStore();
+    projects.terminalMutationReason = "stale_revision";
+    const contacts = new FakeMembershipAuthority();
+    contacts.snapshot = membership(true, "contacts-v2");
+
+    await expect(attachProjectContact(dependencies(projects, contacts), {
+      project_id: projectId,
+      contact_id: contactId,
+      operation_id: "attach-bianca",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    })).rejects.toMatchObject({
+      code: "PROJECT_CONTACT_LINK_PROJECT_WRITE_FAILED",
+      stage: "projects-resource-link",
+      compensated: false,
+    } satisfies Partial<ProjectContactLinkOperationError>);
+    expect(contacts.mutations).toEqual([]);
+  });
+
+  test("reports an uncompensated partial failure when the inverse Contacts write also fails", async () => {
+    const projects = new FakeProjectStore();
+    projects.terminalMutationReason = "stale_revision";
+    const contacts = new FakeMembershipAuthority();
+    contacts.failCompensation = true;
+
+    await expect(attachProjectContact(dependencies(projects, contacts), {
+      project_id: projectId,
+      contact_id: contactId,
+      operation_id: "attach-bianca",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    })).rejects.toMatchObject({
+      code: "PROJECT_CONTACT_LINK_PARTIAL_FAILURE",
+      stage: "contacts-membership:compensate",
+      compensated: false,
+    } satisfies Partial<ProjectContactLinkOperationError>);
+  });
+
+  test("detaches authoritative membership then reconciles only the matching Projects evidence", async () => {
+    const projects = new FakeProjectStore();
+    const unrelated = resourceLink(otherContactId);
+    projects.read = projectRead([resourceLink(), unrelated]);
+    const contacts = new FakeMembershipAuthority();
+    contacts.snapshot = membership(true, "contacts-v2");
+
+    const result = await detachProjectContact(dependencies(projects, contacts), {
+      project_id: projectId,
+      contact_id: contactId,
+      operation_id: "detach-bianca",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    });
+
+    expect(result.outcome).toBe("accepted");
+    expect(contacts.mutations).toEqual([
+      expect.objectContaining({
+        kind: "detach",
+        expected_version: "contacts-v2",
+        step_id: expect.stringMatching(/^contacts-membership:forward:[0-9a-f]{16}$/),
+      }),
+    ]);
+    expect(projects.mutations[0]).toMatchObject({
+      mode: "reconcile",
+      expected_revision: project.updated_at,
+      links: [expect.objectContaining({
+        locator: { kind: "external_uuid", value: otherContactId },
+      })],
+    });
+  });
+
+  test("retries detach with a new revision-bound step after successful compensation", async () => {
+    const projects = new FakeProjectStore();
+    projects.read = projectRead([resourceLink()]);
+    projects.terminalMutationReason = "stale_revision";
+    const contacts = new FakeMembershipAuthority();
+    contacts.snapshot = membership(true, "contacts-v2");
+    const input = {
+      project_id: projectId,
+      contact_id: contactId,
+      operation_id: "detach-bianca-retry",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    };
+
+    await expect(detachProjectContact(dependencies(projects, contacts), input)).rejects.toMatchObject({
+      code: "PROJECT_CONTACT_LINK_PROJECT_WRITE_FAILED_COMPENSATED",
+      compensated: true,
+    } satisfies Partial<ProjectContactLinkOperationError>);
+    expect(contacts.snapshot.linked).toBe(true);
+
+    projects.terminalMutationReason = null;
+    const retried = await detachProjectContact(dependencies(projects, contacts), input);
+
+    const forwardSteps = contacts.mutations
+      .filter((mutation) => mutation.kind === "detach" && mutation.step_id.includes(":forward:"))
+      .map((mutation) => mutation.step_id);
+    expect(forwardSteps).toHaveLength(2);
+    expect(new Set(forwardSteps).size).toBe(2);
+    expect(contacts.snapshot.linked).toBe(false);
+    expect(retried.membership.linked).toBe(false);
+    expect(retried.project_link).toBeNull();
+  });
+
+  test("does not compensate a committed-but-unacknowledged Projects detach and same-operation retry converges", async () => {
+    const projects = new FakeProjectStore();
+    projects.read = projectRead([resourceLink()]);
+    projects.commitBeforeThrow = true;
+    projects.throwMutation = new Error("connection closed after Projects commit");
+    const contacts = new FakeMembershipAuthority();
+    contacts.snapshot = membership(true, "contacts-v2");
+    const input = {
+      project_id: projectId,
+      contact_id: contactId,
+      operation_id: "detach-bianca-ambiguous",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      max_items: 1000,
+    };
+
+    await expect(detachProjectContact(dependencies(projects, contacts), input)).rejects.toMatchObject({
+      code: "PROJECT_CONTACT_LINK_PARTIAL_FAILURE",
+      stage: "projects-resource-link",
+      compensated: false,
+    } satisfies Partial<ProjectContactLinkOperationError>);
+    expect(contacts.snapshot.linked).toBe(false);
+    expect(contacts.mutations).toHaveLength(1);
+    expect(projects.read.links).toEqual([]);
+
+    projects.commitBeforeThrow = false;
+    projects.throwMutation = null;
+    const retried = await detachProjectContact(dependencies(projects, contacts), input);
+
+    expect(retried.outcome).toBe("duplicate_of_accepted");
+    expect(retried.membership.linked).toBe(false);
+    expect(retried.project_link).toBeNull();
+    expect(contacts.mutations).toHaveLength(1);
+    expect(projects.mutations).toHaveLength(1);
+  });
+});

@@ -1,0 +1,4816 @@
+import chalk from "chalk";
+import type { Command } from "commander";
+import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import {
+  ensureCliAgent,
+  generateWorkspaceId,
+  getAgent,
+  getAgentBySlug,
+  getRecipe,
+  getRoot,
+  workspaceSlugify,
+  listAgents,
+  listRecipes,
+  listRoots,
+  listTmuxProfileWindows,
+  listTmuxProfiles,
+  listStartedWorkspaceEvents,
+  updateRoot,
+} from "../../db/workspaces.js";
+import {
+  applyWorkspaceTmuxProfile,
+  workspaceMarkerPath,
+  type WorkspaceTmuxWindowSpec,
+} from "../../lib/workspace-runtime.js";
+import {
+  cleanupWorkspaceCreationTarget,
+  deriveWorkspaceRegistryFields,
+  executeWorkspaceCreation,
+  type WorkspaceCreationCleanupTarget,
+  type WorkspaceCreationPlanAction,
+} from "../../lib/workspace-plan.js";
+import {
+  ProjectRegistrationPathHandle,
+  registerFullProject,
+  type FullProjectRegistrationProjectInput,
+  type FullProjectRegistrationReconciliationInput,
+  type ProjectRegistrationHistoricalAuthorityIdentity,
+} from "../../lib/project-registration.js";
+import { productionProjectRegistrationAuthorities } from "../../lib/production-project-registration-authorities.js";
+import { doctorWorkspace } from "../../lib/workspace-doctor.js";
+import { resolveProjectStore, type ProjectStore } from "../../store/project-store.js";
+
+// Drop keys whose value is `undefined` so a cloud PATCH only carries fields the
+// caller actually set (an explicit `null` still clears the field server-side).
+import { builtInWorkspaceRecipes } from "../../lib/workspace-defaults.js";
+import {
+  importWorkspaceFromGitHub,
+  syncWorkspaceGitHubRoots,
+  normalizeWorkspaceIntegrations,
+  publishWorkspaceToGitHub,
+  unpublishWorkspaceFromGitHub,
+  type GitHubRemoteProtocol,
+  type GitHubVisibility,
+} from "../../lib/workspace-github.js";
+import { importWorkspace, importWorkspaceBulk } from "../../lib/workspace-import.js";
+import { runWorkspaceLegacyMigration } from "../../lib/workspace-migration.js";
+import {
+  ensureProjectStore as ensureCanonicalProjectStore,
+  ensureProjectStoreForTarget,
+  inspectProjectStore as inspectCanonicalProjectStore,
+  migrateProjectToStore,
+  planProjectStoreMigration,
+} from "../../lib/project-store.js";
+import { repairProjectPermissions } from "../../lib/project-permissions.js";
+import { redactProjectText, redactProjectValue } from "../../lib/redaction.js";
+import {
+  buildOssProjectMatrix,
+  DEFAULT_OSS_MATRIX_LIMIT,
+  MAX_OSS_MATRIX_LIMIT,
+} from "../../lib/oss-project-matrix.js";
+import { parseWorkspaceAgentEvalCaseIds, runWorkspaceAgentEval } from "../../lib/workspace-agent-eval.js";
+import { cleanupProjectEvalArtifacts, filterProjectEvalArtifacts } from "../../lib/project-eval-artifacts.js";
+import { projectChannelSummary, resolveProjectChannelForProject } from "../../lib/project-channel.js";
+import { buildProjectContextBundle } from "../../lib/project-context-bundle.js";
+import {
+  parseProjectStartAgent,
+  parseProjectStartSessionPolicy,
+  startProject,
+  type ProjectStartSessionPolicy,
+  type ProjectStartResult,
+} from "../../lib/project-start.js";
+import { projectTmuxStatus } from "../../lib/project-tmux-status.js";
+import { runProjectPrefixMigration } from "../../lib/project-prefix-migration.js";
+import { buildProjectDetailPayload, buildProjectListRender, buildProjectSessionsPayload, buildProjectStartBulkRender, buildRecentSessionsPayload, buildRecipesRender, buildRootsRender } from "../../lib/project-render.js";
+import {
+  buildProjectMachineAssignmentPlan,
+  buildProjectWhereResult,
+  DEFAULT_CANONICAL_MACHINE_POOL,
+  projectActivitySignals,
+  type ProjectWhereResult,
+} from "../../lib/project-machine-assignment.js";
+import {
+  createContactsProjectMembershipAuthorityFromEnv,
+} from "../../lib/contacts-authority-adapter.js";
+import {
+  attachProjectContact,
+  detachProjectContact,
+  listProjectContacts,
+} from "../../lib/project-contact-links.js";
+import {
+  buildProjectAgentContext,
+  buildProjectHandoff,
+  explainProjectResolution,
+  getProjectAgentRunDetail,
+  listProjectAgentRunsView,
+  suggestProjectNextActions,
+  toAgentText,
+} from "../../lib/project-agent-assist.js";
+import {
+  PROJECT_PRIORITIES,
+  PROJECT_START_AGENTS,
+  PROJECT_START_SESSION_POLICIES,
+  PROJECT_STAGES,
+  expandProjectIntegrationUnlinkKeys,
+  hasProjectIntegrationFields,
+  hasProjectManagementFields,
+  mergeProjectIntegrationFields,
+  mergeProjectManagementMetadata,
+  mergeProjectIntegrations,
+  mergeProjectTags,
+  projectDashboardSummary,
+  projectExternalLinksSummary,
+  projectManagementSummary,
+  projectWithManagement,
+  removeProjectTags,
+  unlinkProjectIntegrationFields,
+} from "../../lib/project-management.js";
+import { PROJECT_RESOURCE_LINK_INTEGRATION_KEYS } from "../../lib/project-resource-links.js";
+import {
+  PROJECT_AGENT_ROLES,
+  WORKSPACE_KINDS,
+  WORKSPACE_STATUSES,
+  type AgentKind,
+  type JsonObject,
+  type ProjectResourceLinkInput,
+  type ProjectResourceLinkMigrationItem,
+  type ProjectResourceLinkProducerEvidence,
+  type Recipe,
+  type Root,
+  type Workspace,
+  type WorkspaceEvent,
+  type WorkspaceIntegrations,
+  type WorkspaceKind,
+  type WorkspaceLock,
+  type WorkspaceStatus,
+} from "../../types/workspace.js";
+
+const DEFAULT_LIST_LIMIT = 25;
+const DEFAULT_EVENT_LIMIT = 20;
+const MAX_HUMAN_LIMIT = 200;
+const FULL_REGISTRATION_STDIN_LIMIT = 64 * 1024;
+
+function wantsRenderSpec(opts?: { renderSpec?: boolean }): boolean {
+  return Boolean(opts?.renderSpec || process.argv.includes("--render-spec"));
+}
+
+function wantsAgentText(opts?: { forAgent?: boolean }): boolean {
+  return Boolean(opts?.forAgent || process.argv.includes("--for-agent"));
+}
+
+function resolveCwdOption(opts: { cwd?: string }): string {
+  return opts.cwd && opts.cwd.trim() ? opts.cwd : process.cwd();
+}
+
+function wantsJson(opts?: { json?: boolean }): boolean {
+  return Boolean(opts?.json || process.env["PROJECTS_JSON"] || process.env["WORKSPACES_JSON"] || process.argv.includes("--json") || process.argv.includes("-j"));
+}
+
+function splitList(value: string | undefined): string[] {
+  return value?.split(",").map((item) => item.trim()).filter(Boolean) ?? [];
+}
+
+function splitVariadicList(values: string[] | undefined): string[] {
+  return splitList(values?.join(","));
+}
+
+function splitLabelFilters(...values: Array<string | undefined>): string[] {
+  return [...new Set(values.flatMap((value) => splitList(value)))];
+}
+
+function assertNoLegacyResourceLinkIntegrationWrites(keys: string[]): void {
+  const ownedKeys = new Set<string>(PROJECT_RESOURCE_LINK_INTEGRATION_KEYS);
+  const attempted = keys.find((key) => ownedKeys.has(key));
+  if (attempted) {
+    throw new Error(
+      `integration '${attempted}' is a typed resource-link compatibility projection and must be changed through resource-links`,
+    );
+  }
+}
+
+function printObject(value: unknown, opts?: { json?: boolean }): void {
+  if (wantsJson(opts)) {
+    process.stdout.write(`${JSON.stringify(redactProjectValue(value), null, 2)}\n`);
+  }
+}
+
+function printRenderSpec(value: unknown): void {
+  process.stdout.write(`${JSON.stringify(redactProjectValue(value), null, 2)}\n`);
+}
+
+function withoutRender<T extends Record<string, unknown>>(value: T): Omit<T, "render" | "schema_version" | "kind"> {
+  const { render: _render, schema_version: _schemaVersion, kind: _kind, ...rest } = value;
+  return rest;
+}
+
+function projectPayload(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => projectPayload(item));
+  if (!value || typeof value !== "object") return value;
+  const payload: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    const nextKey = key === "workspace"
+      ? "project"
+      : key === "workspaces"
+        ? "projects"
+        : key === "workspace_id"
+          ? "project_id"
+          : key === "workspace_slug"
+            ? "project_slug"
+            : key === "workspace_input"
+              ? "project_input"
+              : key;
+    payload[nextKey] = projectPayload(raw);
+  }
+  return payload;
+}
+
+function projectLockPayload(lock: WorkspaceLock): Omit<WorkspaceLock, "workspace_id"> & { project_id: string | null } {
+  const { workspace_id, ...payload } = lock;
+  return { ...payload, project_id: workspace_id };
+}
+
+function parseKind(value: string | undefined): WorkspaceKind | undefined {
+  if (!value) return undefined;
+  if ((WORKSPACE_KINDS as readonly string[]).includes(value)) return value as WorkspaceKind;
+  throw new Error(`Invalid workspace kind: ${value}. Expected one of: ${WORKSPACE_KINDS.join(", ")}`);
+}
+
+function parseStatus(value: string | undefined): WorkspaceStatus | undefined {
+  if (!value) return undefined;
+  if ((WORKSPACE_STATUSES as readonly string[]).includes(value)) return value as WorkspaceStatus;
+  throw new Error(`Invalid workspace status: ${value}. Expected one of: ${WORKSPACE_STATUSES.join(", ")}`);
+}
+
+function parseProjectAgentRole(value: string | undefined): string {
+  const role = value ?? "contributor";
+  if ((PROJECT_AGENT_ROLES as readonly string[]).includes(role)) return role;
+  throw new Error(`Invalid project agent role: ${role}. Expected one of: ${PROJECT_AGENT_ROLES.join(", ")}`);
+}
+
+function parseJsonObject(value: string | undefined, label: string): JsonObject | undefined {
+  if (!value) return undefined;
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  return parsed as JsonObject;
+}
+
+async function readBoundedStdinJson(maxBytes = FULL_REGISTRATION_STDIN_LIMIT): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of process.stdin) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.length;
+    if (bytes > maxBytes) {
+      throw new Error(`register-full stdin exceeds ${maxBytes} bytes`);
+    }
+    chunks.push(buffer);
+  }
+  if (bytes === 0) throw new Error("register-full requires one JSON object on stdin");
+  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+}
+
+function stdinHasExplicitInputSource(): boolean {
+  try {
+    const stdin = fstatSync(0);
+    return !stdin.isCharacterDevice();
+  } catch {
+    return false;
+  }
+}
+
+function readBoundedInputFileJson(
+  inputPath: string,
+  maxBytes = FULL_REGISTRATION_STDIN_LIMIT,
+): unknown {
+  let descriptor: number;
+  try {
+    descriptor = openSync(
+      inputPath,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+    );
+  } catch {
+    throw new Error("register-full --input must reference a regular file");
+  }
+
+  try {
+    const before = fstatSync(descriptor);
+    if (!before.isFile()) {
+      throw new Error("register-full --input must reference a regular file");
+    }
+    if (typeof process.getuid !== "function") {
+      throw new Error("register-full --input file ownership cannot be verified on this platform");
+    }
+    if (before.uid !== process.getuid()) {
+      throw new Error("register-full --input file must be owned by the current caller");
+    }
+    if ((before.mode & 0o7777) !== 0o600) {
+      throw new Error("register-full --input file mode must be 0600");
+    }
+    if (before.size === 0) {
+      throw new Error("register-full --input file must contain one JSON object");
+    }
+    if (before.size > maxBytes) {
+      throw new Error(`register-full --input file exceeds ${maxBytes} bytes`);
+    }
+
+    const contents = readFileSync(descriptor);
+    const after = fstatSync(descriptor);
+    if (
+      after.dev !== before.dev
+      || after.ino !== before.ino
+      || after.size !== before.size
+      || after.mtimeMs !== before.mtimeMs
+      || after.ctimeMs !== before.ctimeMs
+      || after.uid !== before.uid
+      || (after.mode & 0o7777) !== (before.mode & 0o7777)
+    ) {
+      throw new Error("register-full --input file changed while it was being read");
+    }
+    if (contents.length > maxBytes) {
+      throw new Error(`register-full --input file exceeds ${maxBytes} bytes`);
+    }
+    try {
+      return JSON.parse(contents.toString("utf8")) as unknown;
+    } catch {
+      throw new Error("register-full --input file must contain valid JSON");
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+async function readFullRegistrationJson(inputPath?: string): Promise<unknown> {
+  if (!inputPath) return readBoundedStdinJson();
+  if (stdinHasExplicitInputSource()) {
+    throw new Error("register-full accepts exactly one input source: stdin or --input");
+  }
+  return readBoundedInputFileJson(inputPath);
+}
+
+function parseHistoricalAuthorityIdentity(
+  value: unknown,
+  label: string,
+): ProjectRegistrationHistoricalAuthorityIdentity {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  const identity = value as Record<string, unknown>;
+  const expectedKeys = ["authority_id", "corpus_id", "package_version", "route"];
+  if (JSON.stringify(Object.keys(identity).sort()) !== JSON.stringify(expectedKeys)) {
+    throw new Error(`${label} requires only route, package_version, authority_id, and corpus_id`);
+  }
+  for (const field of expectedKeys) {
+    const fieldValue = identity[field];
+    if (typeof fieldValue !== "string" || !fieldValue.trim()) {
+      throw new Error(`${label}.${field} must be a non-empty string`);
+    }
+  }
+  return {
+    route: identity.route as string,
+    package_version: identity.package_version as string,
+    authority_id: identity.authority_id as string,
+    corpus_id: identity.corpus_id as string,
+  };
+}
+
+function parseFullRegistrationReconciliation(
+  value: unknown,
+): FullProjectRegistrationReconciliationInput | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("register-full reconcile_existing must be an object");
+  }
+  const root = value as Record<string, unknown>;
+  const supportedKeys = [
+    "conversations_channel",
+    "todos_project",
+    "todos_task_list",
+    "mementos_project",
+  ] as const;
+  const rootKeys = Object.keys(root).sort();
+  if (rootKeys.length === 0 || rootKeys.some((key) => !supportedKeys.includes(key as typeof supportedKeys[number]))) {
+    throw new Error(
+      "register-full reconcile_existing supports only conversations_channel, todos_project, todos_task_list, and mementos_project",
+    );
+  }
+  const parsed: FullProjectRegistrationReconciliationInput = {};
+  for (const key of supportedKeys) {
+    const entryValue = root[key];
+    if (entryValue === undefined) continue;
+    if (!entryValue || typeof entryValue !== "object" || Array.isArray(entryValue)) {
+      throw new Error(`register-full reconcile_existing.${key} must be an object`);
+    }
+    const entry = entryValue as Record<string, unknown>;
+    const expectedKeys = key === "mementos_project"
+      ? ["source_operation_id", "source_target_path", "target_id"]
+      : ["source_operation_id", "target_id"];
+    const actualKeys = Object.keys(entry).sort();
+    const historicalIdentityKeys = [...expectedKeys, "source_authority_identity"].sort();
+    const keysValid = JSON.stringify(actualKeys) === JSON.stringify(expectedKeys)
+      || JSON.stringify(actualKeys) === JSON.stringify(historicalIdentityKeys);
+    if (!keysValid) {
+      throw new Error(
+        `register-full reconcile_existing.${key} requires ${expectedKeys.join(" and ")}, with optional source_authority_identity`,
+      );
+    }
+    if (typeof entry.source_operation_id !== "string") {
+      throw new Error(`register-full reconcile_existing.${key}.source_operation_id must be a string`);
+    }
+    if (typeof entry.target_id !== "string") {
+      throw new Error(`register-full reconcile_existing.${key}.target_id must be a string`);
+    }
+    const sourceAuthorityIdentity = entry.source_authority_identity === undefined
+      ? undefined
+      : parseHistoricalAuthorityIdentity(
+          entry.source_authority_identity,
+          `register-full reconcile_existing.${key}.source_authority_identity`,
+        );
+    if (key === "mementos_project") {
+      if (typeof entry.source_target_path !== "string") {
+        throw new Error(
+          "register-full reconcile_existing.mementos_project.source_target_path must be a string",
+        );
+      }
+      parsed.mementos_project = {
+        source_operation_id: entry.source_operation_id,
+        target_id: entry.target_id,
+        source_target: ProjectRegistrationPathHandle.fromPath(entry.source_target_path),
+        ...(sourceAuthorityIdentity ? { source_authority_identity: sourceAuthorityIdentity } : {}),
+      };
+    } else if (key === "conversations_channel") {
+      parsed.conversations_channel = {
+        source_operation_id: entry.source_operation_id,
+        target_id: entry.target_id,
+        ...(sourceAuthorityIdentity ? { source_authority_identity: sourceAuthorityIdentity } : {}),
+      };
+    } else {
+      parsed[key] = {
+        source_operation_id: entry.source_operation_id,
+        target_id: entry.target_id,
+        ...(sourceAuthorityIdentity ? { source_authority_identity: sourceAuthorityIdentity } : {}),
+      };
+    }
+  }
+  return parsed;
+}
+
+function parseFullRegistrationPayload(value: unknown): {
+  operation_id: string;
+  mode?: "create" | "retrofit";
+  expected_project_revision?: string;
+  reconcile_existing?: FullProjectRegistrationReconciliationInput;
+  project: FullProjectRegistrationProjectInput;
+  target_path: string;
+  goals_markdown: string;
+  worklog_markdown: string;
+  response_byte_limit: number;
+  time_budget_ms: number;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("register-full input must be a JSON object");
+  }
+  const payload = value as Record<string, unknown>;
+  if (typeof payload.operation_id !== "string") throw new Error("register-full operation_id must be a string");
+  if (payload.mode !== undefined && payload.mode !== "create" && payload.mode !== "retrofit") {
+    throw new Error("register-full mode must be create or retrofit");
+  }
+  if (payload.expected_project_revision !== undefined && typeof payload.expected_project_revision !== "string") {
+    throw new Error("register-full expected_project_revision must be a string");
+  }
+  if (typeof payload.target_path !== "string") throw new Error("register-full target_path must be a string");
+  if (typeof payload.goals_markdown !== "string") throw new Error("register-full goals_markdown must be a string");
+  if (typeof payload.worklog_markdown !== "string") throw new Error("register-full worklog_markdown must be a string");
+  if (!payload.project || typeof payload.project !== "object" || Array.isArray(payload.project)) {
+    throw new Error("register-full project must be a JSON object");
+  }
+  const project = payload.project as Record<string, unknown>;
+  if (typeof project.name !== "string") throw new Error("register-full project.name must be a string");
+  if (payload.response_byte_limit !== undefined && typeof payload.response_byte_limit !== "number") {
+    throw new Error("register-full response_byte_limit must be a number");
+  }
+  if (payload.time_budget_ms !== undefined && typeof payload.time_budget_ms !== "number") {
+    throw new Error("register-full time_budget_ms must be a number");
+  }
+  return {
+    operation_id: payload.operation_id,
+    mode: payload.mode as "create" | "retrofit" | undefined,
+    expected_project_revision: payload.expected_project_revision as string | undefined,
+    reconcile_existing: parseFullRegistrationReconciliation(payload.reconcile_existing),
+    project: payload.project as FullProjectRegistrationProjectInput,
+    target_path: payload.target_path,
+    goals_markdown: payload.goals_markdown,
+    worklog_markdown: payload.worklog_markdown,
+    response_byte_limit: payload.response_byte_limit ?? 512_000,
+    time_budget_ms: payload.time_budget_ms ?? 30_000,
+  };
+}
+
+function parseJsonArray<T>(value: string | undefined, label: string): T[] | undefined {
+  if (!value) return undefined;
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed)) throw new Error(`${label} must be a JSON array`);
+  return parsed as T[];
+}
+
+function parseProjectResourceLinksJson(value: string | undefined): ProjectResourceLinkInput[] {
+  return parseJsonArray<ProjectResourceLinkInput>(value, "--links-json") ?? [];
+}
+
+function parseIntegrationsJson(value: string | undefined): WorkspaceIntegrations | undefined {
+  const parsed = parseJsonObject(value, "--integrations-json");
+  if (!parsed) return undefined;
+  const integrations: WorkspaceIntegrations = {};
+  for (const [key, item] of Object.entries(parsed)) {
+    if (item === null) continue;
+    if (typeof item !== "string") throw new Error("--integrations-json values must be strings or null");
+    integrations[key] = item;
+  }
+  return integrations;
+}
+
+function parseIntegrationPairs(values: string[] | undefined): WorkspaceIntegrations {
+  const integrations: WorkspaceIntegrations = {};
+  for (const value of values ?? []) {
+    const index = value.indexOf("=");
+    if (index <= 0) throw new Error("--integration values must use key=value");
+    const key = value.slice(0, index).trim();
+    const pairValue = value.slice(index + 1).trim();
+    if (!key || !pairValue) throw new Error("--integration values must use non-empty key=value");
+    integrations[key] = pairValue;
+  }
+  return integrations;
+}
+
+function mergeIntegrations(...items: Array<WorkspaceIntegrations | undefined>): WorkspaceIntegrations {
+  return Object.assign({}, ...items.filter(Boolean));
+}
+
+function parseGitHubVisibility(value: string | undefined): GitHubVisibility | undefined {
+  if (!value) return undefined;
+  if (value === "public" || value === "private") return value;
+  throw new Error("GitHub visibility must be public or private");
+}
+
+function parseGitHubRemoteProtocol(value: string | undefined): GitHubRemoteProtocol | undefined {
+  if (!value) return undefined;
+  if (value === "https" || value === "ssh") return value;
+  throw new Error("GitHub remote protocol must be https or ssh");
+}
+
+function parsePositiveInteger(value: string | undefined, label: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${label} must be a positive integer`);
+  return parsed;
+}
+
+function parseNonNegativeInteger(value: string | undefined, label: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`${label} must be a non-negative integer`);
+  return parsed;
+}
+
+function parseNonNegativeNumber(value: string | undefined, label: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${label} must be a non-negative number`);
+  return parsed;
+}
+
+// Machine-local mutation lock routed through the Store. In api/cloud mode the
+// Store cannot hold a local lock (writes are atomic server-side and a local
+// lock would be invisible to the rest of the fleet), so it becomes a no-op.
+async function withWorkspaceLock<T>(
+  store: ProjectStore,
+  workspace: Workspace,
+  agentId: string | undefined,
+  reason: string,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  if (store.mode !== "local") return fn();
+  const key = `workspace:${workspace.id}`;
+  try {
+    await store.acquireLock({ key, workspaceId: workspace.id, agentId, reason, ttlSeconds: 600 });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.startsWith("Workspace lock already held:")) {
+      throw new Error(message.replace("Workspace lock", "Project lock"));
+    }
+    throw err;
+  }
+  try {
+    return await fn();
+  } finally {
+    await store.releaseLock(key);
+  }
+}
+
+// Root/recipe are shared registry resources reachable through the Store in
+// BOTH transports (local sqlite or `/v1/roots` + `/v1/recipes` over HTTP), so
+// slug->id resolution must route through the Store — never straight to local
+// sqlite, which would resolve stale local ids on a flipped machine.
+async function resolveRoot(store: ProjectStore, idOrSlug: string): Promise<Root> {
+  const root = await store.getRoot(idOrSlug);
+  if (!root) throw new Error(`Root not found: ${idOrSlug}`);
+  return root;
+}
+
+async function resolveRecipe(store: ProjectStore, idOrSlug: string): Promise<Recipe> {
+  const recipe = await store.getRecipe(idOrSlug);
+  if (!recipe) throw new Error(`Recipe not found: ${idOrSlug}`);
+  return recipe;
+}
+
+async function resolveRootId(store: ProjectStore, idOrSlug: string | undefined): Promise<string | undefined> {
+  if (!idOrSlug) return undefined;
+  return (await resolveRoot(store, idOrSlug)).id;
+}
+
+async function resolveRecipeId(store: ProjectStore, idOrSlug: string | undefined): Promise<string | undefined> {
+  if (!idOrSlug) return undefined;
+  return (await resolveRecipe(store, idOrSlug)).id;
+}
+
+function resolveAgentId(idOrSlug: string | undefined): string {
+  if (!idOrSlug) return ensureCliAgent().id;
+  const agent = getAgent(idOrSlug) ?? getAgentBySlug(idOrSlug);
+  if (!agent) throw new Error(`Agent not found: ${idOrSlug}`);
+  return agent.id;
+}
+
+/**
+ * Resolve the attributing agent for a mutation. Local resolves/creates an
+ * on-box agent identity; api mode leaves attribution to the server (derived
+ * from the bearer key), so we never create a local agent row in api mode.
+ */
+function mutationAgentId(store: ProjectStore, optAgent?: string): string | undefined {
+  if (store.mode !== "local") return undefined;
+  return optAgent ? resolveAgentId(optAgent) : ensureCliAgent().id;
+}
+
+// Guard for writes that only exist on the machine-local sqlite store. When a
+// cloud/self-hosted projects backend is active, the /v1 API exposes no matching
+// write route (e.g. it serves GET /projects/:id/events but not POST), so calling
+// through would either leak a raw upstream 404 or silently persist to the local
+// store instead of the cloud project. Fail fast with a clear, actionable message
+// that mirrors the sibling registry commands' cloud awareness.
+function assertLocalOnlyWrite(operation: string): void {
+  if (resolveProjectStore().mode !== "local") {
+    throw new Error(`${operation} is a local-only operation and is not available in api/cloud mode.`);
+  }
+}
+
+function printRows(rows: Array<Record<string, unknown>>, columns: string[]): void {
+  if (!rows.length) {
+    console.log(chalk.dim("No records found."));
+    return;
+  }
+  for (const row of rows) {
+    console.log(columns.map((column) => String(row[column] ?? "")).join("\t"));
+  }
+}
+
+function compactText(value: string | null | undefined, max = 80): string {
+  if (!value) return "";
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= max) return normalized;
+  if (max <= 3) return normalized.slice(0, max);
+  return `${normalized.slice(0, max - 3)}...`;
+}
+
+function parseHumanLimit(value: string | undefined, defaultLimit: number, label = "--limit"): number {
+  const parsed = parsePositiveInteger(value, label) ?? defaultLimit;
+  if (parsed > MAX_HUMAN_LIMIT) throw new Error(`${label} must be ${MAX_HUMAN_LIMIT} or less for terminal output`);
+  return parsed;
+}
+
+function printDiscoveryHint(message: string): void {
+  console.log(chalk.dim(message));
+}
+
+function eventSummary(event: WorkspaceEvent, verbose = false): Record<string, unknown> {
+  const row: Record<string, unknown> = {
+    id: event.id,
+    event_type: event.event_type,
+    source: event.source,
+    agent_id: event.agent_id ?? "",
+    created_at: event.created_at,
+  };
+  if (verbose) {
+    row.prompt = compactText(event.prompt, 60);
+    row.command = compactText(event.command, 80);
+    row.metadata = Object.keys(event.metadata).join(",");
+  }
+  return row;
+}
+
+function parseTmuxWindowsJson(value: string | undefined, label = "--tmux-windows-json"): WorkspaceTmuxWindowSpec[] | undefined {
+  if (!value) return undefined;
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed)) throw new Error(`${label} must be a JSON array`);
+  return parsed.map((item) => {
+    if (!item || typeof item !== "object") throw new Error("Each tmux window must be an object");
+    const window = item as Record<string, unknown>;
+    if (typeof window.name !== "string" || window.name.trim().length === 0) {
+      throw new Error("Each tmux window needs a non-empty name");
+    }
+    return {
+      name: window.name,
+      path: typeof window.path === "string" ? window.path : undefined,
+      command: typeof window.command === "string" ? window.command : undefined,
+      index: typeof window.index === "number" ? window.index : undefined,
+      detached: typeof window.detached === "boolean" ? window.detached : undefined,
+    };
+  });
+}
+
+function parseStartWindows(values: string[] | undefined): WorkspaceTmuxWindowSpec[] | undefined {
+  if (!values || values.length === 0) return undefined;
+  return values.map((value) => {
+    const index = value.indexOf(":");
+    const name = (index === -1 ? value : value.slice(0, index)).trim();
+    const command = index === -1 ? undefined : value.slice(index + 1).trim();
+    if (!name) throw new Error("--window values must use a non-empty name or name:command");
+    return {
+      name,
+      command: command || undefined,
+      detached: true,
+    };
+  });
+}
+
+function parseStartBulkFile(path: string): string[] {
+  const text = readFileSync(path, "utf-8").trim();
+  if (!text) return [];
+  if (text.startsWith("[")) {
+    const parsed = JSON.parse(text) as unknown;
+    if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) {
+      throw new Error("--bulk-file JSON must be an array of project targets");
+    }
+    return parsed.map((item) => item.trim()).filter(Boolean);
+  }
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+}
+
+function collectStartTargets(targets: string[] | undefined, bulkFile: string | undefined): Array<string | undefined> {
+  const collected = [...(targets ?? [])];
+  if (bulkFile) collected.push(...parseStartBulkFile(bulkFile));
+  return collected.length > 0 ? collected : [undefined];
+}
+
+function parseStartSessionPolicyOptions(opts: { reuse?: boolean; new?: boolean; errorIfRunning?: boolean }): ProjectStartSessionPolicy | undefined {
+  const selected = [
+    opts.reuse ? "reuse" : undefined,
+    opts.new ? "new" : undefined,
+    opts.errorIfRunning ? "error-if-running" : undefined,
+  ].filter(Boolean) as ProjectStartSessionPolicy[];
+  if (selected.length > 1) {
+    throw new Error("Choose only one session policy: --reuse, --new, or --error-if-running");
+  }
+  if (selected.length === 0) return undefined;
+  return parseProjectStartSessionPolicy(selected[0]);
+}
+
+interface ProjectStartFailure {
+  target: string;
+  error: string;
+}
+
+interface ProjectStartBulkSummary {
+  total: number;
+  succeeded: number;
+  failed: number;
+  planned: number;
+  created_sessions: number;
+  reused_sessions: number;
+  planned_sessions: number;
+  failed_sessions: number;
+  imported: number;
+  planned_imports: number;
+  windows: {
+    completed: number;
+    skipped: number;
+    planned: number;
+    failed: number;
+  };
+}
+
+interface ProjectStartBulkResult {
+  bulk: true;
+  dry_run: boolean;
+  total: number;
+  started: ProjectStartResult[];
+  failed: ProjectStartFailure[];
+  summary: ProjectStartBulkSummary;
+}
+
+function summarizeProjectStarts(started: ProjectStartResult[], failed: ProjectStartFailure[]): ProjectStartBulkSummary {
+  const windowCounts = { completed: 0, skipped: 0, planned: 0, failed: 0 };
+  for (const result of started) {
+    for (const window of result.tmux.windows) {
+      if (window.status === "completed") windowCounts.completed += 1;
+      if (window.status === "skipped") windowCounts.skipped += 1;
+      if (window.status === "planned") windowCounts.planned += 1;
+      if (window.status === "failed") windowCounts.failed += 1;
+    }
+  }
+  return {
+    total: started.length + failed.length,
+    succeeded: started.filter((result) => result.tmux.success).length,
+    failed: failed.length + started.filter((result) => !result.tmux.success).length,
+    planned: started.filter((result) => result.tmux.dry_run).length,
+    created_sessions: started.filter((result) => result.tmux.session_action === "created").length,
+    reused_sessions: started.filter((result) => result.tmux.session_action === "reused").length,
+    planned_sessions: started.filter((result) => result.tmux.session_action === "planned").length,
+    failed_sessions: started.filter((result) => result.tmux.session_action === "failed").length,
+    imported: started.filter((result) => result.resolution.source === "imported").length,
+    planned_imports: started.filter((result) => result.resolution.source === "planned-import").length,
+    windows: windowCounts,
+  };
+}
+
+function compactWindowSummary(result: ProjectStartResult): string {
+  const names = result.tmux.windows
+    .map((window) => {
+      const parts = window.target.split(":");
+      const name = parts.length > 1 ? parts.slice(1).join(":") : window.target;
+      return `${name} ${window.status}`;
+    })
+    .join(", ");
+  return names || "none";
+}
+
+function pendingRenameReports(result: ProjectStartResult): ProjectStartResult["rename_report"] {
+  return result.rename_report.filter((report) => report.status === "manual" || report.status === "unsupported");
+}
+
+function printRenameReports(result: ProjectStartResult): void {
+  for (const report of result.rename_report) {
+    const status = report.status === "configured"
+      ? chalk.green(report.status)
+      : report.status === "skipped"
+        ? chalk.dim(report.status)
+        : chalk.yellow(report.status);
+    console.log(`  ${chalk.dim("rename:")} ${report.agent_tool} ${status} -> ${report.desired_name}`);
+    console.log(`    ${chalk.dim(report.message)}`);
+    if (report.manual_instruction) console.log(`    ${chalk.dim(report.manual_instruction)}`);
+  }
+}
+
+function printProjectStartResult(result: ProjectStartResult, opts: { verbose?: boolean; renameReport?: boolean } = {}): void {
+  const prefix = result.tmux.dry_run ? "[dry-run] " : "";
+  console.log(`${chalk.green(`${prefix}Project started:`)} ${result.project.slug}`);
+  if (result.project.primary_path) console.log(`  ${chalk.dim("path:")} ${result.project.primary_path}`);
+  console.log(`  ${chalk.dim("session:")} ${result.tmux.session_name} (${result.tmux.session_action})`);
+  console.log(`  ${chalk.dim("session policy:")} ${result.session_policy}`);
+  console.log(`  ${chalk.dim("agent:")} ${result.agent_tool}${result.tool_command ? ` -> ${result.tool_command}` : ""}`);
+  console.log(`  ${chalk.dim("windows:")} ${compactWindowSummary(result)}`);
+  const pendingRename = pendingRenameReports(result);
+  if (pendingRename.length) {
+    console.log(`  ${chalk.dim("rename:")} ${pendingRename.length} pending; use --rename-report or projects sessions ${result.project.slug}`);
+  }
+  if (opts.verbose) {
+    for (const window of result.tmux.windows) {
+      console.log(`  ${chalk.dim("window:")} ${window.status} ${window.target}${window.message ? chalk.dim(` - ${window.message}`) : ""}`);
+    }
+  }
+  if (opts.renameReport || opts.verbose) {
+    printRenameReports(result);
+  }
+  if (result.resolution.source === "imported") {
+    console.log(chalk.dim("  registered project from path before starting"));
+  } else if (result.resolution.source === "planned-import") {
+    console.log(chalk.dim("  would register project from path before starting"));
+  }
+  if (result.attached) console.log(chalk.dim("  attached to tmux session"));
+}
+
+function printProjectStartBulkResult(result: ProjectStartBulkResult): void {
+  const prefix = result.dry_run ? "[dry-run] " : "";
+  console.log(`${chalk.green(`${prefix}Projects start summary:`)} ${result.summary.succeeded}/${result.summary.total} ok, ${result.summary.failed} failed`);
+  console.log(`  ${chalk.dim("sessions:")} planned ${result.summary.planned_sessions}, created ${result.summary.created_sessions}, reused ${result.summary.reused_sessions}, failed ${result.summary.failed_sessions}`);
+  console.log(`  ${chalk.dim("windows:")} planned ${result.summary.windows.planned}, completed ${result.summary.windows.completed}, skipped ${result.summary.windows.skipped}, failed ${result.summary.windows.failed}`);
+  for (const started of result.started) {
+    const marker = started.tmux.success ? chalk.green("✓") : chalk.red("✗");
+    console.log(`  ${marker} ${started.project.slug} ${chalk.dim(started.tmux.session_name)} (${started.tmux.session_action})`);
+  }
+  for (const failure of result.failed) {
+    console.log(`  ${chalk.red("✗")} ${failure.target}: ${failure.error}`);
+  }
+}
+
+function parseTmuxProfileWindowsJson(value: string | undefined) {
+  if (!value) return undefined;
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed)) throw new Error("--windows-json must be a JSON array");
+  return parsed.map((item) => {
+    if (!item || typeof item !== "object") throw new Error("Each profile window must be an object");
+    const window = item as Record<string, unknown>;
+    const name = window.window_name_template ?? window.name;
+    if (typeof name !== "string" || name.trim().length === 0) {
+      throw new Error("Each profile window needs name or window_name_template");
+    }
+    return {
+      window_name_template: name,
+      path_template: typeof window.path_template === "string" ? window.path_template : typeof window.path === "string" ? window.path : undefined,
+      command: typeof window.command === "string" ? window.command : undefined,
+      window_index: typeof window.window_index === "number" ? window.window_index : typeof window.index === "number" ? window.index : undefined,
+      detached: typeof window.detached === "boolean" ? window.detached : undefined,
+      env: window.env && typeof window.env === "object" ? window.env as Record<string, string> : undefined,
+      revive: typeof window.revive === "boolean" ? window.revive : undefined,
+    };
+  });
+}
+
+function collectOption(value: string, previous: string[]): string[] {
+  previous.push(value);
+  return previous;
+}
+
+function isRollbackAction(value: unknown): value is WorkspaceCreationPlanAction {
+  if (!value || typeof value !== "object") return false;
+  const action = value as Record<string, unknown>;
+  return action.type === "rollback"
+    && typeof action.action === "string"
+    && typeof action.target === "string"
+    && action.status === "planned";
+}
+
+function parseRollbackActions(value: unknown): WorkspaceCreationPlanAction[] | null {
+  if (!Array.isArray(value)) return null;
+  const actions = value.filter(isRollbackAction);
+  return actions.length === value.length ? actions : null;
+}
+
+function cleanupTargetFromPlanFile(path: string): WorkspaceCreationCleanupTarget {
+  const parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+  const payload = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+  const plan = payload.plan && typeof payload.plan === "object" ? payload.plan as Record<string, unknown> : payload;
+  const workspace = plan.workspace && typeof plan.workspace === "object" ? plan.workspace as Record<string, unknown> : null;
+  const rollbackActions = parseRollbackActions(plan.rollback_actions);
+  if (!workspace || typeof workspace.slug !== "string" || !rollbackActions) {
+    throw new Error("--plan must point to a workspace creation plan or execution JSON payload");
+  }
+  return {
+    workspace_slug: workspace.slug,
+    primary_path: typeof workspace.primary_path === "string" ? workspace.primary_path : null,
+    rollback_actions: rollbackActions,
+  };
+}
+
+function cleanupTargetFromWorkspace(workspace: Workspace, events: WorkspaceEvent[]): WorkspaceCreationCleanupTarget {
+  for (const event of events.slice().reverse()) {
+    const fromMetadata = parseRollbackActions(event.metadata.rollback_actions);
+    if (fromMetadata) {
+      return {
+        workspace_slug: workspace.slug,
+        primary_path: workspace.primary_path,
+        rollback_actions: fromMetadata,
+      };
+    }
+    const after = event.after_json as Record<string, unknown> | null;
+    const plan = after?.plan as Record<string, unknown> | undefined;
+    const fromPlan = parseRollbackActions(plan?.rollback_actions);
+    if (fromPlan) {
+      return {
+        workspace_slug: workspace.slug,
+        primary_path: workspace.primary_path,
+        rollback_actions: fromPlan,
+      };
+    }
+  }
+
+  const rollbackActions: WorkspaceCreationPlanAction[] = [
+    { type: "rollback", action: "delete", target: `workspaces:${workspace.slug}`, status: "planned", metadata: { automatic: false } },
+    { type: "rollback", action: "delete", target: `workspace_events:${workspace.slug}`, status: "planned", metadata: { automatic: false } },
+  ];
+  if (workspace.primary_path) {
+    rollbackActions.push({ type: "rollback", action: "delete", target: `workspace_locations:${workspace.primary_path}`, status: "planned", metadata: { automatic: false } });
+    rollbackActions.push({ type: "rollback", action: "remove_file", target: workspaceMarkerPath(workspace), status: "planned", metadata: { automatic: false } });
+    rollbackActions.push({ type: "rollback", action: "remove_git_dir", target: join(workspace.primary_path, ".git"), status: "planned", metadata: { automatic: false } });
+    rollbackActions.push({ type: "rollback", action: "remove_empty_directory", target: workspace.primary_path, status: "planned", metadata: { automatic: false } });
+  }
+  return {
+    workspace_slug: workspace.slug,
+    primary_path: workspace.primary_path,
+    rollback_actions: rollbackActions,
+  };
+}
+
+export function registerWorkspaceCommands(program: Command): void {
+  registerProjectStartCommand(program);
+  registerProjectStatusCommand(program);
+  registerProjectSessionsCommand(program);
+  registerProjectCommands(program);
+  registerProjectContactCommands(program);
+  registerProjectContextBundleCommand(program);
+  registerBudgetCommands(program);
+  registerAgentAssistCommands(program);
+  registerOssCommands(program);
+  registerPermissionsCommand(program);
+  registerStoreCommand(program);
+  registerProjectLoopCommands(program);
+  registerLabelsCommand(program);
+  registerLocationsCommand(program);
+  registerRootsCommand(program);
+  registerRecipesCommand(program);
+  registerAgentsCommand(program);
+  registerTmuxProfilesCommand(program);
+}
+
+function registerProjectContactCommands(program: Command): void {
+  const cmd = program
+    .command("contacts")
+    .description("Manage authoritative Contact memberships and synchronized Project resource links");
+
+  cmd
+    .command("list <project-id>")
+    .description("List authoritative Contacts memberships and compare them with Project resource links")
+    .option("--max-items <n>", "Maximum complete contact/link collection size", "1000")
+    .option("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes", "1048576")
+    .option("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds", "30000")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const result = await listProjectContacts({
+          projects: resolveProjectStore(),
+          contacts: createContactsProjectMembershipAuthorityFromEnv(),
+        }, {
+          project_id: projectId,
+          max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Project contacts: ${result.project_id}`));
+        console.log(`  ${chalk.dim("authoritative contacts:")} ${result.contact_ids.length}`);
+        console.log(`  ${chalk.dim("synchronized:")} ${result.synchronized_contact_ids.length}`);
+        console.log(`  ${chalk.dim("missing project links:")} ${result.missing_project_link_contact_ids.length}`);
+        console.log(`  ${chalk.dim("stale project links:")} ${result.stale_project_link_contact_ids.length}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  for (const direction of ["attach", "detach"] as const) {
+    cmd
+      .command(`${direction} <project-id> <contact-id>`)
+      .description(
+        `${direction === "attach" ? "Attach" : "Detach"} a Contact through Contacts-authoritative, compensation-safe coordination`,
+      )
+      .requiredOption("--operation-id <id>", "Caller-stable operation id reused for retries of this logical operation")
+      .option("--labels-json <json>", "Optional Project resource-link labels JSON")
+      .option("--max-items <n>", "Maximum complete contact/link collection size", "1000")
+      .option("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes", "1048576")
+      .option("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds", "30000")
+      .option("--agent <id-or-slug>", "Attributing agent")
+      .option("-j, --json", "Output JSON")
+      .action(async (projectId, contactId, opts) => {
+        try {
+          const projects = resolveProjectStore();
+          const mutation = direction === "attach" ? attachProjectContact : detachProjectContact;
+          const result = await mutation({
+            projects,
+            contacts: createContactsProjectMembershipAuthorityFromEnv(),
+          }, {
+            project_id: projectId,
+            contact_id: contactId,
+            operation_id: opts.operationId,
+            labels: parseJsonObject(opts.labelsJson, "--labels-json"),
+            max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+            response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+            time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+            agent_id: mutationAgentId(projects, opts.agent),
+            source: "cli",
+            command: process.argv.join(" "),
+          });
+          if (wantsJson(opts)) { printObject(result, opts); return; }
+          console.log(chalk.green(`✓ Contact ${direction} ${result.outcome}: ${result.contact_id}`));
+          for (const evidence of result.evidence) {
+            console.log(
+              `  ${chalk.dim(`${evidence.system}/${evidence.step_id}:`)} ${evidence.outcome}`
+              + `${evidence.compensated ? " (compensated)" : ""}`,
+            );
+          }
+        } catch (err) {
+          console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+          process.exit(1);
+        }
+      });
+  }
+}
+
+function registerProjectContextBundleCommand(program: Command): void {
+  program
+    .command("context-bundle <exact-project-id>")
+    .description("Emit a strict Instructions project-context bundle for an exact project id")
+    .option("-j, --json", "Output the strict JSON bundle")
+    .action(async (exactProjectId, opts) => {
+      try {
+        if (!wantsJson(opts)) throw new Error("context-bundle requires --json");
+        const bundle = await buildProjectContextBundle(resolveProjectStore(), exactProjectId);
+        process.stdout.write(`${JSON.stringify(bundle, null, 2)}\n`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+}
+
+function registerAgentAssistCommands(program: Command): void {
+  program
+    .command("context [target]")
+    .description("Emit a compact agent-priming bundle for a project (orientation in one call)")
+    .option("--cwd <path>", "Working directory used when target is omitted")
+    .option("--events-limit <n>", "Maximum recent events to include", "8")
+    .option("--siblings-limit <n>", "Maximum sibling projects to include", "12")
+    .option("--for-agent", "Output LLM-friendly text instead of JSON")
+    .option("-j, --json", "Output JSON")
+    .action(async (target, opts) => {
+      try {
+        const context = await buildProjectAgentContext(resolveProjectStore(), {
+          target,
+          cwd: resolveCwdOption(opts),
+          eventsLimit: parsePositiveInteger(opts.eventsLimit, "--events-limit") ?? 8,
+          siblingsLimit: parsePositiveInteger(opts.siblingsLimit, "--siblings-limit") ?? 12,
+        });
+        if (wantsAgentText(opts)) { console.log(toAgentText(context)); return; }
+        if (wantsJson(opts)) { printObject(context, opts); return; }
+        console.log(toAgentText(context));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("next [target]")
+    .description("Suggest high-leverage next actions for a project to an agent")
+    .option("--cwd <path>", "Working directory used when target is omitted")
+    .option("--limit <n>", "Maximum suggestions", "6")
+    .option("--for-agent", "Output LLM-friendly text instead of JSON")
+    .option("-j, --json", "Output JSON")
+    .action(async (target, opts) => {
+      try {
+        const result = await suggestProjectNextActions(resolveProjectStore(), {
+          target,
+          cwd: resolveCwdOption(opts),
+          limit: parsePositiveInteger(opts.limit, "--limit") ?? 6,
+        });
+        if (wantsAgentText(opts)) { console.log(toAgentText(result)); return; }
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        if (!result.actions.length) {
+          console.log(chalk.dim("No suggestions. Project is in good shape."));
+          return;
+        }
+        for (const a of result.actions) {
+          const color = a.priority === "high" ? chalk.red : a.priority === "medium" ? chalk.yellow : chalk.dim;
+          console.log(`${color(`[${a.priority}]`)} ${chalk.bold(a.title)}`);
+          console.log(`  ${chalk.dim("why:")} ${a.rationale}`);
+          console.log(`  ${chalk.dim("run:")} ${a.command}`);
+        }
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("why [target]")
+    .description("Explain how a project target resolves (or why it does not)")
+    .option("--cwd <path>", "Working directory used when target is omitted")
+    .option("--for-agent", "Output LLM-friendly text instead of JSON")
+    .option("-j, --json", "Output JSON")
+    .action(async (target, opts) => {
+      try {
+        const result = await explainProjectResolution(resolveProjectStore(), target, { cwd: resolveCwdOption(opts) });
+        if (wantsAgentText(opts)) { console.log(toAgentText(result)); return; }
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(toAgentText(result));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("channel [target]")
+    .description("Resolve the project's conversations channel (prints the channel name)")
+    .option("--cwd <path>", "Working directory used when target is omitted")
+    .option("--ensure", "Create the conversations channel if it does not exist (does not write the link)")
+    .option("--from <identity>", "Conversations identity recorded as channel creator (with --ensure)")
+    .option("--dry-run", "With --ensure: report what would happen without creating anything")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (target, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const effectiveTarget = typeof target === "string" && target.trim() ? target : resolveCwdOption(opts);
+        const project = await store.resolveTarget(effectiveTarget);
+        if (!opts.ensure) {
+          const resolution = resolveProjectChannelForProject(project);
+          if (wantsJson(opts)) { printObject(resolution, opts); return; }
+          console.log(resolution.channel);
+          for (const warning of resolution.warnings) console.error(chalk.yellow(`! ${warning}`));
+          return;
+        }
+        const agentId = mutationAgentId(store, opts.agent);
+        const result = await store.ensureChannel(project, {
+          agentId,
+          source: "cli",
+          command: process.argv.join(" "),
+          from: opts.from,
+          dryRun: opts.dryRun,
+        });
+        if (wantsJson(opts)) {
+          printObject({
+            channel: result.channel,
+            channel_class: result.channel_class,
+            source: result.source,
+            status: result.status,
+            created: result.created,
+            linked: result.linked,
+            message: result.message,
+            warnings: result.warnings,
+            side_effects: result.side_effects,
+            project: { id: result.project.id, slug: result.project.slug, integrations: result.project.integrations },
+          }, opts);
+        } else if (result.status === "planned") {
+          console.log(chalk.dim(`[dry-run] Would ensure conversations channel #${result.channel}${result.channel_class ? ` (${result.channel_class})` : ""}.`));
+        } else if (result.status === "error") {
+          console.error(chalk.red(`Channel ensure failed for #${result.channel}: ${result.message ?? "unknown error"}`));
+          // Partial-state evidence so a retry is informed rather than blind;
+          // ensure is idempotent, so re-running is always safe.
+          console.error(chalk.dim(
+            `  committed: channel_created=${result.side_effects.channel_created} channel_present=${result.side_effects.channel_present} integration_linked=${result.side_effects.integration_linked} event_recorded=${result.side_effects.event_recorded}`,
+          ));
+        } else {
+          const detail = [result.channel_class, result.linked ? "linked on project" : null].filter(Boolean).join(", ");
+          console.log(chalk.green(`✓ Channel ${result.status === "created" ? "created" : "exists"}: #${result.channel}`) + (detail ? chalk.dim(` (${detail})`) : ""));
+        }
+        if (!wantsJson(opts)) {
+          for (const warning of result.warnings) console.error(chalk.yellow(`! ${warning}`));
+        }
+        if (result.status === "error") process.exit(1);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("handoff [target]")
+    .description("Emit a cross-agent/cross-machine handoff bundle for a project")
+    .option("--cwd <path>", "Working directory used when target is omitted")
+    .option("--events-limit <n>", "Maximum recent events to include", "10")
+    .option("--runs-limit <n>", "Maximum recent agent runs to include", "5")
+    .option("--for-agent", "Output LLM-friendly text instead of JSON")
+    .option("-j, --json", "Output JSON")
+    .action(async (target, opts) => {
+      try {
+        const handoff = await buildProjectHandoff(resolveProjectStore(), {
+          target,
+          cwd: resolveCwdOption(opts),
+          eventsLimit: parsePositiveInteger(opts.eventsLimit, "--events-limit") ?? 10,
+          runsLimit: parsePositiveInteger(opts.runsLimit, "--runs-limit") ?? 5,
+        });
+        if (wantsAgentText(opts)) { console.log(toAgentText(handoff)); return; }
+        if (wantsJson(opts)) { printObject(handoff, opts); return; }
+        console.log(toAgentText(handoff));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  const runs = program.command("runs").description("Inspect prompt-agent run ledger entries for a project");
+
+  runs
+    .command("list [target]")
+    .description("List recent agent runs for a project")
+    .option("--cwd <path>", "Working directory used when target is omitted")
+    .option("--limit <n>", "Maximum runs to return", "20")
+    .option("--status <status>", "Filter by status: planned, running, completed, failed")
+    .option("--for-agent", "Output LLM-friendly text instead of JSON")
+    .option("-j, --json", "Output JSON")
+    .action(async (target, opts) => {
+      try {
+        const result = await listProjectAgentRunsView(resolveProjectStore(), {
+          target,
+          cwd: resolveCwdOption(opts),
+          limit: parsePositiveInteger(opts.limit, "--limit") ?? 20,
+          status: opts.status as "planned" | "running" | "completed" | "failed" | undefined,
+        });
+        if (wantsAgentText(opts)) { console.log(toAgentText(result)); return; }
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        if (!result.runs.length) {
+          console.log(chalk.dim("No agent runs recorded for this project."));
+          return;
+        }
+        printRows(result.runs.map((r) => ({
+          id: r.id,
+          status: r.status,
+          model: r.model ?? "",
+          tool_calls: r.tool_calls,
+          started_at: r.started_at,
+        })), ["id", "status", "model", "tool_calls", "started_at"]);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  runs
+    .command("show <run-id> [target]")
+    .description("Show full detail for one agent run, including tool-call trace")
+    .option("--cwd <path>", "Working directory used when target is omitted")
+    .option("--for-agent", "Output LLM-friendly text instead of JSON")
+    .option("-j, --json", "Output JSON")
+    .action(async (runId, target, opts) => {
+      try {
+        const detail = await getProjectAgentRunDetail(resolveProjectStore(), { runId, target, cwd: resolveCwdOption(opts) });
+        if (wantsJson(opts)) {
+          printObject(detail, opts);
+          return;
+        }
+        if (wantsAgentText(opts) || !wantsJson(opts)) {
+          console.log(`# Run ${detail.run.id} [${detail.run.status}]`);
+          console.log(`model: ${detail.run.model ?? "—"}`);
+          console.log(`agent: ${detail.agent?.slug ?? detail.run.agent_id ?? "—"}`);
+          console.log(`started: ${detail.run.started_at}`);
+          console.log(`\nprompt: ${redactProjectText(detail.run.prompt)}`);
+          if (detail.run.error) console.log(`\nerror: ${redactProjectText(detail.run.error)}`);
+          if (Array.isArray(detail.run.tool_calls_json)) {
+            console.log(`\ntool calls (${detail.run.tool_calls_json.length}):`);
+            for (const tc of detail.run.tool_calls_json) {
+              const t = redactProjectValue(tc) as JsonObject;
+              console.log(`  - ${t["name"] ?? t["type"] ?? "call"} ${t["args"] ? JSON.stringify(t["args"]).slice(0, 120) : ""}`);
+            }
+          }
+          return;
+        }
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+}
+
+function registerBudgetCommands(program: Command): void {
+  const cmd = program
+    .command("budgets")
+    .description("Define, inspect, and account for project/run money and token budgets");
+
+  cmd
+    .command("set")
+    .description("Create or update a project or run budget")
+    .option("--id <id>", "Budget id")
+    .option("--project <project>", "Project id, slug, name, or path")
+    .option("--run-id <run>", "Agent run id")
+    .option("--window <window>", "Budget window: daily, monthly, lifetime", "lifetime")
+    .option("--mode <mode>", "Budget mode: hard or soft", "hard")
+    .option("--max-usd <amount>", "USD budget")
+    .option("--max-input-tokens <n>", "Input token budget")
+    .option("--max-output-tokens <n>", "Output token budget")
+    .option("--max-total-tokens <n>", "Total token budget")
+    .option("--warning-threshold <ratio>", "Soft warning threshold ratio, e.g. 0.8")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = opts.project ? await store.resolveTarget(opts.project) : null;
+        if (!project && !opts.runId) throw new Error("Pass --project or --run-id");
+        if (opts.project && opts.runId) throw new Error("Choose only one scope: --project or --run-id");
+        const scopeType = project ? "project" : "run";
+        const scopeId = project?.id ?? opts.runId;
+        const budget = await store.createBudget({
+          id: opts.id ?? `${scopeType}-${scopeId}`,
+          scope_type: scopeType,
+          scope_id: scopeId,
+          window: opts.window,
+          mode: opts.mode,
+          max_usd: parseNonNegativeNumber(opts.maxUsd, "--max-usd"),
+          max_input_tokens: parseNonNegativeNumber(opts.maxInputTokens, "--max-input-tokens"),
+          max_output_tokens: parseNonNegativeNumber(opts.maxOutputTokens, "--max-output-tokens"),
+          max_total_tokens: parseNonNegativeNumber(opts.maxTotalTokens, "--max-total-tokens"),
+          warning_threshold: parseNonNegativeNumber(opts.warningThreshold, "--warning-threshold"),
+          metadata: { project_slug: project?.slug },
+        });
+        const payload = { budget, project: project ? projectPayload(project) : null };
+        if (wantsJson(opts)) { printObject(payload, opts); return; }
+        console.log(chalk.green(`✓ Budget saved: ${budget.id}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("list")
+    .description("List configured budgets")
+    .option("--project <project>", "Project id, slug, name, or path")
+    .option("--run-id <run>", "Agent run id")
+    .option("--limit <n>", `Max rows for terminal output (default ${DEFAULT_LIST_LIMIT}, max ${MAX_HUMAN_LIMIT})`)
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = opts.project ? await store.resolveTarget(opts.project) : null;
+        const budgets = await store.listBudgets({ workspace_id: project?.id, run_id: opts.runId });
+        if (wantsJson(opts)) { printObject(budgets, opts); return; }
+        const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
+        const visible = budgets.slice(0, limit);
+        printRows(visible.map((budget) => ({
+          id: budget.id,
+          scope: `${budget.scope_type}:${budget.scope_id}`,
+          mode: budget.mode,
+          window: budget.window,
+        })), ["id", "scope", "mode", "window"]);
+        printDiscoveryHint(`Showing ${visible.length} of ${budgets.length} budget(s). Use --limit <n> or --json for full records.`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("remaining")
+    .description("Show remaining money and token budget")
+    .option("--id <id>", "Budget id")
+    .option("--project <project>", "Project id, slug, name, or path")
+    .option("--run-id <run>", "Agent run id")
+    .option("--limit <n>", `Max rows for terminal output (default ${DEFAULT_LIST_LIMIT}, max ${MAX_HUMAN_LIMIT})`)
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = opts.project ? await store.resolveTarget(opts.project) : null;
+        const statuses = await store.getBudgetStatuses({ workspace_id: project?.id, run_id: opts.runId, budget_id: opts.id });
+        if (wantsJson(opts)) { printObject(statuses, opts); return; }
+        const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
+        const visible = statuses.slice(0, limit);
+        printRows(visible.map((status) => ({
+          id: status.budget.id,
+          usd: status.remaining.usd ?? "",
+          input: status.remaining.input_tokens ?? "",
+          output: status.remaining.output_tokens ?? "",
+          total: status.remaining.total_tokens ?? "",
+        })), ["id", "usd", "input", "output", "total"]);
+        printDiscoveryHint(`Showing ${visible.length} of ${statuses.length} budget status row(s). Use --limit <n> or --json for full records.`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("reset <id>")
+    .description("Reset a budget window from now")
+    .option("-j, --json", "Output JSON")
+    .action(async (id, opts) => {
+      try {
+        const budget = await resolveProjectStore().resetBudget(id);
+        if (wantsJson(opts)) { printObject({ budget }, opts); return; }
+        console.log(chalk.green(`✓ Budget reset: ${budget.id}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("spend")
+    .description("Record audited project/run spend")
+    .option("--project <project>", "Project id, slug, name, or path")
+    .option("--run-id <run>", "Agent run id")
+    .option("--provider <provider>", "Provider name", "openrouter")
+    .option("--model <model>", "Model id")
+    .option("--usd <amount>", "USD spend", "0")
+    .option("--input-tokens <n>", "Input tokens", "0")
+    .option("--output-tokens <n>", "Output tokens", "0")
+    .option("--total-tokens <n>", "Total tokens")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = opts.project ? await store.resolveTarget(opts.project) : null;
+        if (!project && !opts.runId) throw new Error("Pass --project or --run-id");
+        const spend = await store.recordSpend({
+          workspace_id: project?.id,
+          run_id: opts.runId,
+          provider: opts.provider,
+          model: opts.model,
+          usd: parseNonNegativeNumber(opts.usd, "--usd"),
+          input_tokens: parseNonNegativeNumber(opts.inputTokens, "--input-tokens"),
+          output_tokens: parseNonNegativeNumber(opts.outputTokens, "--output-tokens"),
+          total_tokens: parseNonNegativeNumber(opts.totalTokens, "--total-tokens"),
+          metadata: { source: "cli" },
+        });
+        if (wantsJson(opts)) { printObject({ spend }, opts); return; }
+        console.log(chalk.green(`✓ Spend recorded: ${spend.id}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+}
+
+function registerProjectStatusCommand(program: Command): void {
+  program
+    .command("status [target]")
+    .description("Show project launch and tmux session status")
+    .option("--profile <id-or-slug>", "Saved tmux profile used to compute expected windows")
+    .option("--session <name>", "Expected tmux session name")
+    .option("--agent <tool>", "Expected start tool: codewith, claude, opencode, cursor, or none")
+    .option("--command <command>", "Expected command for the primary window")
+    .option("--window-name <name>", "Expected primary window name; defaults to 01")
+    .option("--window <name:command>", "Expected additional tmux window; repeatable", collectOption, [])
+    .option("--windows-json <json>", "Exact expected tmux windows JSON array")
+    .option("--render-spec", "Output a JSON Render spec")
+    .option("-j, --json", "Output JSON")
+    .action(async (target, opts) => {
+      try {
+        const requestedWindows = parseTmuxWindowsJson(opts.windowsJson, "--windows-json");
+        const result = await projectTmuxStatus(target, {
+          profile: opts.profile,
+          session: opts.session,
+          agentTool: opts.agent ? parseProjectStartAgent(opts.agent) : undefined,
+          command: opts.command,
+          windowName: opts.windowName,
+          requestedWindows,
+          extraWindows: parseStartWindows(opts.window),
+        });
+        if (wantsRenderSpec(opts)) { printRenderSpec(result.render); return; }
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(`${chalk.bold(result.project.name)} ${chalk.dim(`(${result.project.slug})`)}`);
+        console.log(`  ${chalk.dim("expected session:")} ${result.expected.session_name}`);
+        if (result.expected.profile) console.log(`  ${chalk.dim("profile:")} ${result.expected.profile.slug}`);
+        if (!result.tmux_available) {
+          console.log(`  ${chalk.dim("tmux:")} unavailable`);
+          for (const error of result.errors) console.log(`  ${chalk.red("error:")} ${error}`);
+          return;
+        }
+        console.log(`  ${chalk.dim("session:")} ${result.exists ? chalk.green("running") : chalk.yellow("missing")}`);
+        if (result.session) {
+          console.log(`  ${chalk.dim("windows:")} ${result.session.windows}${result.session.attached ? " attached" : ""}`);
+        }
+        for (const window of result.windows) {
+          const state = window.dead ? chalk.yellow(window.reason) : chalk.green("alive");
+          console.log(`  ${chalk.dim("window:")} ${window.index}:${window.name} ${state}`);
+        }
+        if (!result.windows.length && result.expected.windows.length) {
+          console.log(`  ${chalk.dim("expected windows:")} ${result.expected.windows.map((window) => window.name).join(", ")}`);
+        }
+        if (result.related_sessions.length > 1) {
+          console.log(`  ${chalk.dim("related sessions:")} ${result.related_sessions.map((session) => session.name).join(", ")}`);
+        }
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+}
+
+function registerProjectSessionsCommand(program: Command): void {
+  program
+    .command("sessions [target]")
+    .description("Report recent project start sessions and coding-agent rename status")
+    .option("--unrenamed", "Only show sessions with pending/manual rename work")
+    .option("--limit <n>", "Maximum session records to return", "20")
+    .option("--render-spec", "Output a JSON Render spec")
+    .option("-j, --json", "Output JSON")
+    .action(async (target, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const limit = parsePositiveInteger(opts.limit, "--limit") ?? 20;
+        if (target === undefined) {
+          const payload = buildRecentSessionsPayload({
+            startEvents: listStartedWorkspaceEvents(),
+            limit,
+            unrenamedOnly: opts.unrenamed,
+          });
+          if (wantsRenderSpec(opts)) { printRenderSpec(payload.render); return; }
+          if (wantsJson(opts)) { printObject(projectPayload(payload), opts); return; }
+          const sessions = payload.sessions as Array<Record<string, unknown>>;
+          console.log(chalk.bold("Recent project sessions"));
+          console.log(`  ${chalk.dim("sessions:")} ${payload.returned}/${payload.total} shown, ${payload.unrenamed_count} pending rename`);
+          if (!sessions.length) {
+            console.log(chalk.dim("  No project start session records found."));
+            return;
+          }
+          for (const session of sessions) {
+            const unrenamed = session.unrenamed ? chalk.yellow("rename pending") : chalk.green("rename ok");
+            console.log(`  ${session.created_at} ${chalk.dim(String(session.project_slug ?? ""))} ${chalk.dim(String(session.session_name ?? ""))} ${session.session_action ?? ""} ${unrenamed}`);
+          }
+          return;
+        }
+        const project = await store.resolveTarget(target);
+        const payload = buildProjectSessionsPayload({
+          project,
+          events: await store.listEvents(project.id),
+          limit,
+          unrenamedOnly: opts.unrenamed,
+        });
+        if (wantsRenderSpec(opts)) { printRenderSpec(payload.render); return; }
+        if (wantsJson(opts)) { printObject(projectPayload(payload), opts); return; }
+        const sessions = payload.sessions as Array<Record<string, unknown>>;
+        console.log(`${chalk.bold(project.name)} ${chalk.dim(`(${project.slug})`)}`);
+        console.log(`  ${chalk.dim("sessions:")} ${payload.returned}/${payload.total} shown, ${payload.unrenamed_count} pending rename`);
+        if (!sessions.length) {
+          console.log(chalk.dim("  No project start session records found."));
+          return;
+        }
+        for (const session of sessions) {
+          const unrenamed = session.unrenamed ? chalk.yellow("rename pending") : chalk.green("rename ok");
+          console.log(`  ${session.created_at} ${chalk.dim(String(session.session_name ?? ""))} ${session.session_action ?? ""} ${unrenamed}`);
+        }
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+  });
+}
+
+function registerOssCommands(program: Command): void {
+  const cmd = program.command("oss").description("Open-source workspace routing helpers");
+
+  cmd
+    .command("matrix")
+    .description("Build a compact matrix for routing work across open-* repositories")
+    .option("--root <path>", "Parent folder to scan for open-* repositories", process.cwd())
+    .option("--prefix <prefix>", "Directory prefix to include", "open-")
+    .option("--limit <n>", `Maximum repositories to inspect (default ${DEFAULT_OSS_MATRIX_LIMIT}, max ${MAX_OSS_MATRIX_LIMIT})`)
+    .option("--task-limit <n>", "Maximum latest task refs per repository", "1")
+    .option("--pr-limit <n>", "Maximum latest pull request refs per repository", "1")
+    .option("--timeout-ms <n>", "Per external command timeout in milliseconds", "1500")
+    .option("--no-tasks", "Skip todos CLI task refs")
+    .option("--no-prs", "Skip GitHub pull request refs")
+    .option("--no-tmux", "Skip tmux session/window hints")
+    .option("--verbose", "Show package, warning, and ref detail in terminal output")
+    .option("-j, --json", "Output JSON")
+    .action((opts) => {
+      try {
+        const matrix = buildOssProjectMatrix({
+          root: opts.root,
+          prefix: opts.prefix,
+          limit: parsePositiveInteger(opts.limit, "--limit") ?? DEFAULT_OSS_MATRIX_LIMIT,
+          taskLimit: parsePositiveInteger(opts.taskLimit, "--task-limit") ?? 1,
+          prLimit: parsePositiveInteger(opts.prLimit, "--pr-limit") ?? 1,
+          timeoutMs: parsePositiveInteger(opts.timeoutMs, "--timeout-ms") ?? 1500,
+          includeTasks: opts.tasks,
+          includePullRequests: opts.prs,
+          includeTmux: opts.tmux,
+        });
+        if (wantsJson(opts)) { printObject(matrix, opts); return; }
+
+        printRows(matrix.rows.map((row) => {
+          const task = row.task_refs[0];
+          const pr = row.pr_refs[0];
+          const tmuxSessions = row.tmux?.sessions.map((session) => session.name).join(",") ?? "";
+          const base = {
+            repo: row.name,
+            branch: row.git.branch ?? "",
+            dirty: row.git.dirty ? String(row.git.changed_files) : "",
+            tmux: compactText(tmuxSessions, 28),
+            task: task ? `${task.id.slice(0, 8)}:${task.status ?? ""}` : "",
+            pr: pr ? `#${pr.number}:${pr.state}` : "",
+            path: compactText(row.path, opts.verbose ? 100 : 54),
+          };
+          if (!opts.verbose) return base;
+          return {
+            ...base,
+            package: row.package?.name ?? "",
+            version: row.package?.version ?? "",
+            bin: compactText(row.package?.bins.join(",") ?? "", 36),
+            github: row.git.github_repo ?? "",
+            warnings: row.warnings.length,
+          };
+        }), opts.verbose
+          ? ["repo", "branch", "dirty", "tmux", "task", "pr", "package", "version", "bin", "github", "warnings", "path"]
+          : ["repo", "branch", "dirty", "tmux", "task", "pr", "path"]);
+        const more = matrix.truncated
+          ? `Showing ${matrix.returned} of ${matrix.total_candidates} matching repositories.`
+          : `Showing ${matrix.returned} matching repositories.`;
+        printDiscoveryHint(`${more} Use --limit <n>, --verbose, --json, --no-tasks, or --no-prs to tune the matrix.`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+}
+
+function registerProjectStartCommand(program: Command): void {
+  program
+    .command("start")
+    .argument("[targets...]", "Project target(s): id, slug, name, path, or .")
+    .description("Start a project by opening or reusing its tmux session")
+    .option("--bulk", "Treat targets as a bulk start set")
+    .option("--bulk-file <path>", "Read project targets from a JSON array or newline-delimited file")
+    .option("--agent <tool>", "Tool to start: codewith, claude, opencode, cursor, or none")
+    .option("--command <command>", "Override the command started in the main window")
+    .option("--profile <id-or-slug>", "Saved tmux profile to apply while starting")
+    .option("--session <name>", "Tmux session name")
+    .option("--name <name>", "Tmux session name alias")
+    .option("--reuse", "Reuse an existing tmux session when present")
+    .option("--new", "Create a new tmux session if the default session already exists")
+    .option("--error-if-running", "Fail if the resolved tmux session already exists")
+    .option("--window-name <name>", "Main tmux window name; defaults to 01")
+    .option("--window <name:command>", "Additional tmux window; repeatable", collectOption, [])
+    .option("--windows-json <json>", "Exact tmux windows JSON array to create for this start")
+    .option("--tags <tags>", "Tags to apply when registering an unknown folder")
+    .option("--label <labels>", "Start active projects matching comma-separated labels when no target is supplied")
+    .option("--labels <labels>", "Start active projects matching comma-separated labels when no target is supplied")
+    .option("--metadata-json <json>", "Metadata JSON to apply when registering an unknown folder")
+    .option("--actor <id-or-slug>", "Projects agent credited for the start event")
+    .option("--attach", "Attach to the tmux session after starting", false)
+    .option("--no-attach", "Do not attach to the tmux session after starting")
+    .option("--no-register", "Do not import unknown path targets before starting")
+    .option("--dry-run", "Preview project resolution and tmux actions without writing")
+    .option("--rename-report", "Show coding-agent session rename details")
+    .option("--verbose", "Show detailed tmux window and rename actions")
+    .option("--render-spec", "Output a JSON Render spec")
+    .option("-j, --json", "Output JSON")
+    .action(async (targets, opts) => {
+      try {
+        const labelFilters = splitLabelFilters(opts.label, opts.labels);
+        const startTargets = await (async () => {
+          const explicitTargets = collectStartTargets(targets, opts.bulkFile);
+          const hasExplicitTargets = (targets?.length ?? 0) > 0 || Boolean(opts.bulkFile);
+          if (hasExplicitTargets || labelFilters.length === 0) return explicitTargets;
+          return (await resolveProjectStore().listProjects({ status: "active", tags: labelFilters, limit: parseHumanLimit(undefined, MAX_HUMAN_LIMIT) })).map((project) => project.slug);
+        })();
+        if (startTargets.length === 0 && labelFilters.length > 0) {
+          throw new Error(`No active projects matched label filter: ${labelFilters.join(", ")}`);
+        }
+        const bulk = Boolean(opts.bulk || opts.bulkFile || startTargets.length > 1);
+        if (bulk && opts.attach) {
+          throw new Error("--attach is only supported for a single project start");
+        }
+        if (bulk && (opts.session || opts.name)) {
+          throw new Error("--session/--name is only supported for a single project start");
+        }
+
+        const agentId = opts.actor ? resolveAgentId(opts.actor) : ensureCliAgent().id;
+        const requestedWindows = parseTmuxWindowsJson(opts.windowsJson, "--windows-json");
+        const commonOptions = {
+          agentTool: opts.agent ? parseProjectStartAgent(opts.agent) : undefined,
+          toolCommand: opts.command,
+          profile: opts.profile,
+          sessionPolicy: parseStartSessionPolicyOptions(opts),
+          windowName: opts.windowName,
+          requestedWindows,
+          extraWindows: parseStartWindows(opts.window),
+          register: opts.register,
+          importTags: splitLabelFilters(opts.tags, opts.label, opts.labels),
+          importMetadata: parseJsonObject(opts.metadataJson, "--metadata-json"),
+          dryRun: opts.dryRun,
+          agentId,
+          source: "cli" as const,
+          auditCommand: process.argv.join(" "),
+        };
+
+        if (bulk) {
+          const started: ProjectStartResult[] = [];
+          const failed: ProjectStartFailure[] = [];
+          for (const startTarget of startTargets) {
+            try {
+              started.push(await startProject(startTarget, {
+                ...commonOptions,
+                attach: false,
+              }));
+            } catch (err) {
+              failed.push({
+                target: startTarget ?? ".",
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
+          const result: ProjectStartBulkResult = {
+            bulk: true,
+            dry_run: Boolean(opts.dryRun),
+            total: started.length + failed.length,
+            started,
+            failed,
+            summary: summarizeProjectStarts(started, failed),
+          };
+          if (wantsRenderSpec(opts)) {
+            printRenderSpec(buildProjectStartBulkRender({
+              dryRun: result.dry_run,
+              started: result.started,
+              failed: result.failed,
+              summary: result.summary as unknown as Record<string, unknown>,
+            }));
+            if (result.summary.failed > 0) process.exitCode = 1;
+            return;
+          }
+          if (wantsJson(opts)) { printObject(projectPayload(result), opts); return; }
+          printProjectStartBulkResult(result);
+          if (result.summary.failed > 0) process.exitCode = 1;
+          return;
+        }
+
+        const result = await startProject(startTargets[0], {
+          ...commonOptions,
+          session: opts.session ?? opts.name,
+          attach: opts.attach,
+        });
+        if (wantsRenderSpec(opts)) { printRenderSpec(result.render); return; }
+        if (wantsJson(opts)) { printObject(projectPayload(result), opts); return; }
+
+        printProjectStartResult(result, { verbose: opts.verbose, renameReport: opts.renameReport });
+        if (!result.tmux.success) process.exitCode = 1;
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+}
+
+function printProjectWhereForAgent(result: ProjectWhereResult): void {
+  console.log(`# Project location — ${result.project.slug}`);
+  console.log(`canonical_machine: ${result.canonical_machine ?? "unassigned"}`);
+  console.log(`canonical_path: ${result.canonical_path ?? "unset"}`);
+  console.log("mirrors:");
+  if (result.mirrors.length === 0) {
+    console.log("  none");
+    return;
+  }
+  for (const mirror of result.mirrors) {
+    console.log(`  - machine=${mirror.machine} path=${mirror.path} label=${mirror.label}`);
+  }
+}
+
+function registerProjectCommands(program: Command): void {
+  program
+    .command("where <target>")
+    .description("Show a project's canonical machine/path and registered mirror locations")
+    .option("--for-agent", "Output compact LLM-friendly text")
+    .option("-j, --json", "Output JSON")
+    .action(async (target, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(target);
+        const result = buildProjectWhereResult(project, await store.getProjectLocations(project.id));
+        if (wantsAgentText(opts)) {
+          printProjectWhereForAgent(result);
+          return;
+        }
+        if (wantsJson(opts)) {
+          printObject(result, opts);
+          return;
+        }
+        printRows(result.locations.map((location) => ({ ...location })), ["role", "machine", "path", "label"]);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("assign-machines")
+    .description("Balance active projects across canonical machines using recent activity")
+    .option("--pool <csv>", "Comma-separated canonical machine pool", DEFAULT_CANONICAL_MACHINE_POOL.join(","))
+    .option("--dry-run", "Print the proposed assignment map without writing")
+    .option("--force", "Also rebalance projects already assigned inside the pool")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const store = resolveProjectStore();
+        const pool = splitList(opts.pool);
+        const knownMachines = new Set((await store.listMachines()).map((machine) => machine.slug));
+        const unknown = pool.filter((machine) => !knownMachines.has(machine));
+        if (unknown.length > 0) {
+          throw new Error(`Unknown machine${unknown.length === 1 ? "" : "s"} in pool: ${unknown.join(", ")} (not in the machines registry)`);
+        }
+        const projects = await store.listProjects({ status: "active", limit: 10_000 });
+        const activity = await Promise.all(projects.map(async (project) => {
+          const [events, runs] = await Promise.all([
+            store.listEvents(project.id, 1_000),
+            store.listAgentRuns({ workspace_id: project.id, limit: 1_000 }),
+          ]);
+          return { project, activity: projectActivitySignals(project, events, runs) };
+        }));
+        const plan = buildProjectMachineAssignmentPlan(activity, pool, Boolean(opts.force));
+
+        if (!opts.dryRun) {
+          const agentId = mutationAgentId(store);
+          for (const assignment of plan.assignments) {
+            if (!assignment.changed) continue;
+            await store.updateProject(assignment.project_id, {
+              canonical_machine: assignment.canonical_machine,
+              agent_id: agentId,
+              source: "cli",
+              command: process.argv.join(" "),
+            });
+          }
+        }
+
+        const payload = { kind: "projects.machine_assignment", dry_run: Boolean(opts.dryRun), ...plan };
+        if (wantsJson(opts)) {
+          printObject(payload, opts);
+          return;
+        }
+        if (opts.dryRun) console.log(chalk.dim("[dry-run] Proposed canonical machine map:"));
+        printRows(plan.assignments.map((assignment) => ({
+          slug: assignment.slug,
+          previous: assignment.previous_machine ?? "",
+          machine: assignment.canonical_machine,
+          disposition: assignment.pinned ? "pinned" : assignment.changed ? "assign" : "unchanged",
+          activity: assignment.activity.latest_activity_at ?? "",
+        })), ["slug", "previous", "machine", "disposition", "activity"]);
+        console.log(chalk.dim(`Pool totals: ${Object.entries(plan.pool_counts).map(([machine, count]) => `${machine}=${count}`).join(", ")}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("register-full")
+    .description("Run bounded all-or-nothing project registration from stdin or a caller-owned mode-0600 file")
+    .option("--input <path>", "Read one JSON object from a caller-owned regular mode-0600 file")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const payload = parseFullRegistrationPayload(await readFullRegistrationJson(opts.input));
+        const result = await registerFullProject({
+          operation_id: payload.operation_id,
+          mode: payload.mode,
+          expected_project_revision: payload.expected_project_revision,
+          reconcile_existing: payload.reconcile_existing,
+          project: payload.project,
+          target: ProjectRegistrationPathHandle.fromPath(payload.target_path),
+          goals_markdown: payload.goals_markdown,
+          worklog_markdown: payload.worklog_markdown,
+          response_byte_limit: payload.response_byte_limit,
+          time_budget_ms: payload.time_budget_ms,
+        }, {
+          authorities: productionProjectRegistrationAuthorities(),
+          projectStore: resolveProjectStore(),
+        });
+        if (wantsJson(opts)) {
+          printObject(result, opts);
+        } else if (result.ok) {
+          console.log(chalk.green(`✓ Full project registration: ${result.project_slug}`));
+        } else {
+          console.error(chalk.red(`Full project registration refused: ${result.reason_code}`));
+          for (const dependency of result.dependencies) {
+            console.error(chalk.dim(`  ${dependency.authority}: Todos ${dependency.dependency_task_id}`));
+          }
+        }
+        if (!result.ok) process.exitCode = 1;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (wantsJson(opts)) {
+          printObject({
+            ok: false,
+            outcome: "no_go",
+            reason_code: "invalid_bounded_stdin_request",
+            error: message,
+          }, opts);
+          process.exitCode = 1;
+          return;
+        }
+        console.error(chalk.red(message));
+        process.exitCode = 1;
+      }
+    });
+
+  program
+    .command("create")
+    .description("Create or plan a project anywhere on disk")
+    .requiredOption("--name <name>", "Project name")
+    .option("--slug <slug>", "Project slug")
+    .option("--description <text>", "Description")
+    .option("--kind <kind>", `Project kind (${WORKSPACE_KINDS.join(", ")})`)
+    .option("--root <id-or-slug>", "Root id or slug")
+    .option("--recipe <id-or-slug>", "Recipe id or slug")
+    .option("--path <path>", "Explicit primary path")
+    .option("--tags <tags>", "Comma-separated tags")
+    .option("--stage <stage>", `Project stage (${PROJECT_STAGES.join(", ")})`)
+    .option("--priority <priority>", `Project priority (${PROJECT_PRIORITIES.join(", ")})`)
+    .option("--owner <owner>", "Project owner")
+    .option("--launch-profile <id-or-slug>", "Default tmux launch profile")
+    .option("--start-agent <tool>", `Default start tool (${PROJECT_START_AGENTS.join(", ")})`)
+    .option("--start-command <command>", "Default command for the primary start window")
+    .option("--start-session-policy <policy>", `Default tmux session policy (${PROJECT_START_SESSION_POLICIES.join(", ")})`)
+    .option("--start-windows-json <json>", "Default start windows JSON array")
+    .option("--todos-project-id <id>", "Linked todos project id")
+    .option("--todos-task-list-id <id>", "Linked todos task list id")
+    .option("--brief-id <id>", "Linked brief/spec id")
+    .option("--brief-path <path>", "Linked brief/spec path")
+    .option("--canvases-project-id <id>", "Linked external Canvases project id")
+    .option("--canvases-default-canvas-id <id>", "Linked external default canvas id")
+    .option("--metadata-json <json>", "Initial metadata JSON object")
+    .option("--integrations-json <json>", "Initial integrations JSON object")
+    .option("--agent <id-or-slug>", "Creating agent; defaults to CLI agent")
+    .option("--git-remote <url>", "Git remote URL")
+    .option("--mkdir", "Create the project directory")
+    .option("--git-init", "Initialize a git repository in the project directory")
+    .option("--marker", "Write local project marker")
+    .option("--tmux-session <name>", "Create or reuse a tmux session after creating the project")
+    .option("--tmux-windows-json <json>", "JSON array of tmux windows: [{\"name\":\"editor\",\"command\":\"npm run dev\"}]")
+    .option("--tmux-profile <id-or-slug>", "Apply a saved tmux profile")
+    .option("--dry-run", "Preview full creation without writing DB/files/tmux")
+    .option("--dry-run-runtime", "Plan directory/git/tmux runtime actions without applying them")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const store = resolveProjectStore();
+        // Registry-level input is store-agnostic: parse/merge it once so api
+        // (cloud) creation honors exactly the same flags as local creation
+        // instead of silently dropping them.
+        const tmuxWindows = parseTmuxWindowsJson(opts.tmuxWindowsJson);
+        const baseMetadata = parseJsonObject(opts.metadataJson, "--metadata-json") ?? {};
+        const startWindows = parseTmuxWindowsJson(opts.startWindowsJson, "--start-windows-json");
+        const managementMetadata = mergeProjectManagementMetadata(baseMetadata, {
+          stage: opts.stage,
+          priority: opts.priority,
+          owner: opts.owner,
+          launch_profile: opts.launchProfile,
+          start_agent: opts.startAgent,
+          start_command: opts.startCommand,
+          start_session_policy: opts.startSessionPolicy,
+          start_windows: startWindows,
+        }) ?? baseMetadata;
+        const baseIntegrations = parseIntegrationsJson(opts.integrationsJson) ?? {};
+        const integrations = mergeProjectIntegrationFields(baseIntegrations, {
+          todos_project_id: opts.todosProjectId,
+          todos_task_list_id: opts.todosTaskListId,
+          brief_id: opts.briefId,
+          brief_path: opts.briefPath,
+          canvases_project_id: opts.canvasesProjectId,
+          canvases_default_canvas_id: opts.canvasesDefaultCanvasId,
+        }) ?? baseIntegrations;
+        // --dry-run must preview only and never persist. The api (cloud) Store
+        // has no plan/preview endpoint, so when a dry-run is requested we skip
+        // the remote create entirely and fall through to the local planner,
+        // which builds the plan without writing to any registry (local or cloud).
+        if (store.mode === "api" && !opts.dryRun) {
+          // Machine-local runtime (directory/git/marker/tmux) cannot be applied
+          // to a remote row, and there is no api-mode command that can apply it
+          // afterwards. Refuse BEFORE the create so a rejected request never
+          // leaves a partial, row-only project behind in the cloud registry.
+          const unsupported = [
+            opts.mkdir ? "--mkdir" : null,
+            opts.gitInit ? "--git-init" : null,
+            opts.marker ? "--marker" : null,
+            opts.tmuxSession ? "--tmux-session" : null,
+            opts.tmuxWindowsJson ? "--tmux-windows-json" : null,
+            opts.tmuxProfile ? "--tmux-profile" : null,
+          ].filter((flag): flag is string => Boolean(flag));
+          if (unsupported.length) {
+            throw new Error(
+              `create with machine-local runtime flags (${unsupported.join(", ")}) is a local-only operation and is not available in api/cloud mode. `
+              + "No project was created. Re-run without those flags (registry fields such as --path, --git-remote, --stage and --priority are honored in api/cloud mode), "
+              + "or preview the full local plan with --dry-run.",
+            );
+          }
+          // Cloud project rows are created through the Store. Root/recipe are
+          // shared registry resources: resolve slug->id through the Store so the
+          // intent is honored (not silently dropped) in api mode. Agent
+          // attribution stays server-side (see mutationAgentId).
+          const root = opts.root ? await resolveRoot(store, opts.root) : null;
+          const recipe = opts.recipe ? await resolveRecipe(store, opts.recipe) : null;
+          // Generate the id client-side so the canonical no-root path can still
+          // describe this client's project store. Slug-dependent defaults are
+          // server-authoritative: a root template may contain {slug}, and the
+          // server may suffix a duplicate slug. Do not send an implicit rooted
+          // path or derived channel, because the server cannot distinguish
+          // those guesses from explicit operator values. It derives missing
+          // fields after selecting the exact slug it persists.
+          const id = generateWorkspaceId();
+          const slug = opts.slug ?? workspaceSlugify(opts.name);
+          const kind = parseKind(opts.kind) ?? recipe?.kind ?? root?.default_kind ?? "generic";
+          const derived = deriveWorkspaceRegistryFields({
+            name: opts.name,
+            primary_path: opts.path ? resolve(opts.path) : undefined,
+            integrations,
+          }, { root, slug, id, kind });
+          const project = await store.createProject({
+            id,
+            name: opts.name,
+            slug,
+            description: opts.description,
+            kind,
+            root_id: root?.id,
+            recipe_id: recipe?.id,
+            primary_path: opts.path || !root ? derived.primary_path ?? undefined : undefined,
+            git_remote: opts.gitRemote,
+            tags: splitList(opts.tags),
+            metadata: Object.keys(managementMetadata).length ? managementMetadata : undefined,
+            integrations: Object.keys(integrations).length ? integrations : undefined,
+          });
+          if (wantsJson(opts)) { printObject({ project }, opts); return; }
+          console.log(chalk.green(`✓ Project created (cloud): ${project.slug}`));
+          if (project.primary_path) console.log(`  ${chalk.dim("path:")} ${project.primary_path}`);
+          return;
+        }
+        const agentId = resolveAgentId(opts.agent);
+        const result = await executeWorkspaceCreation({
+          name: opts.name,
+          slug: opts.slug,
+          description: opts.description,
+          kind: parseKind(opts.kind),
+          root_id: await resolveRootId(store, opts.root),
+          recipe_id: await resolveRecipeId(store, opts.recipe),
+          primary_path: opts.path,
+          git_remote: opts.gitRemote,
+          tags: splitList(opts.tags),
+          integrations,
+          metadata: managementMetadata,
+          agent_id: agentId,
+          source: "cli",
+          command: process.argv.join(" "),
+          createDirectory: opts.mkdir || opts.gitInit,
+          gitInit: opts.gitInit,
+          writeMarker: opts.marker,
+          tmux: opts.tmuxSession || tmuxWindows ? { session: opts.tmuxSession, windows: tmuxWindows } : undefined,
+          tmux_profile: opts.tmuxProfile,
+        }, { dryRun: opts.dryRun, runtimeDryRun: opts.dryRunRuntime, createProject: (input) => store.createProject(input) });
+        if (wantsJson(opts)) { printObject(projectPayload(result), opts); return; }
+        if (result.dry_run) {
+          console.log(chalk.dim(`[dry-run] Project plan: ${result.plan.workspace.slug}`));
+          if (result.plan.workspace.primary_path) console.log(`  ${chalk.dim("path:")} ${result.plan.workspace.primary_path}`);
+          for (const action of result.plan.runtime_actions) {
+            console.log(`  ${chalk.dim(action.type + ":")} ${action.status} ${action.target}`);
+          }
+          if (result.plan.tmux) console.log(`  ${chalk.dim("tmux:")} planned ${result.plan.tmux.session_name}`);
+          return;
+        }
+        const project = result.workspace!;
+        console.log(chalk.green(`✓ Project created: ${project.slug}`));
+        if (project.primary_path) console.log(`  ${chalk.dim("path:")} ${project.primary_path}`);
+        for (const action of result.prepare) {
+          console.log(`  ${chalk.dim(action.type + ":")} ${action.status} ${action.target}`);
+        }
+        if (result.tmux) {
+          const status = result.tmux.success ? result.tmux.session_action : "failed";
+          console.log(`  ${chalk.dim("tmux:")} ${status} ${result.tmux.session_name}`);
+        }
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("import <path>")
+    .description("Import an existing folder as a project")
+    .option("--bulk", "Import direct child directories")
+    .option("--dry-run", "Preview imports without writing project rows")
+    .option("--tags <tags>", "Comma-separated tags")
+    .option("--metadata-json <json>", "Authoritative metadata JSON object")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (path, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const agentId = mutationAgentId(store, opts.agent);
+        const metadata = parseJsonObject(opts.metadataJson, "--metadata-json");
+        const result = opts.bulk
+          ? await importWorkspaceBulk(store, path, {
+              dryRun: opts.dryRun,
+              tags: splitList(opts.tags),
+              metadata,
+              agent_id: agentId,
+            })
+          : await importWorkspace(store, path, {
+              dryRun: opts.dryRun,
+              tags: splitList(opts.tags),
+              metadata,
+              agent_id: agentId,
+            });
+        const rejected = "imported" in result ? result.errors.length > 0 : Boolean(result.error);
+        if (wantsJson(opts)) {
+          printObject(projectPayload(result), opts);
+          if (rejected) process.exitCode = 1;
+          return;
+        }
+        if ("imported" in result) {
+          console.log(chalk.green(`✓ Imported ${result.imported.length} project(s)`));
+          if (result.previews.length) console.log(chalk.dim(`  previews: ${result.previews.length}`));
+          if (result.skipped.length) console.log(chalk.dim(`  skipped: ${result.skipped.length}`));
+          if (result.errors.length) console.log(chalk.yellow(`  errors: ${result.errors.length}`));
+          if (rejected) process.exitCode = 1;
+          return;
+        }
+        if (result.workspace) console.log(chalk.green(`✓ Imported project: ${result.workspace.slug}`));
+        else if (result.preview) console.log(`${chalk.dim("[dry-run]")} ${result.preview.slug} ${result.preview.path}`);
+        else console.log(chalk.yellow(result.skipped ?? result.error ?? "No import performed"));
+        if (rejected) process.exitCode = 1;
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("cleanup-create [id-or-slug]")
+    .description("Safely clean up DB/files created by a project creation run")
+    .option("--plan <path>", "Creation plan/execution JSON file to clean up")
+    .option("--dry-run", "Preview cleanup actions without mutating DB/files")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const target = opts.plan
+          ? cleanupTargetFromPlanFile(opts.plan)
+          : await (async () => {
+              if (!idOrSlug) throw new Error("Provide a project id/slug or --plan");
+              const project = await store.resolveTarget(idOrSlug);
+              return cleanupTargetFromWorkspace(project, await store.listEvents(project.id));
+            })();
+        const result = cleanupWorkspaceCreationTarget(target, {
+          dryRun: opts.dryRun,
+          agentId: opts.agent ? resolveAgentId(opts.agent) : ensureCliAgent().id,
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(result.dry_run ? chalk.dim(`[dry-run] Cleanup ${result.workspace_slug}`) : chalk.green(`✓ Cleanup ${result.workspace_slug}`));
+        for (const action of result.actions) {
+          const color = action.status === "failed" ? chalk.red : action.status === "skipped" ? chalk.yellow : action.status === "planned" ? chalk.dim : chalk.green;
+          console.log(`  ${color(action.status)} ${action.action} ${action.target}${action.message ? chalk.dim(` - ${action.message}`) : ""}`);
+        }
+        if (!result.success) process.exitCode = 1;
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("import-github <repo>")
+    .description("Import a GitHub repository as a project")
+    .option("--root <id-or-slug>", "Root id or slug used for path derivation")
+    .option("--path <path>", "Explicit clone/import path")
+    .option("--clone", "Clone the repository before registering the project")
+    .option("--remote-only", "Register a remote-only project without a local path")
+    .option("--kind <kind>", `Project kind (${WORKSPACE_KINDS.join(", ")})`)
+    .option("--tags <tags>", "Comma-separated tags")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("--remote-protocol <protocol>", "Git remote protocol: https or ssh")
+    .option("--dry-run", "Preview the import without cloning or writing DB rows")
+    .option("-j, --json", "Output JSON")
+    .action(async (repo, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const result = await importWorkspaceFromGitHub(store, repo, {
+          root: opts.root,
+          path: opts.path,
+          clone: opts.clone,
+          remoteOnly: opts.remoteOnly,
+          kind: parseKind(opts.kind),
+          tags: splitList(opts.tags),
+          remoteProtocol: parseGitHubRemoteProtocol(opts.remoteProtocol),
+          dryRun: Boolean(opts.dryRun),
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(projectPayload(result), opts); return; }
+        if (result.status === "planned") {
+          console.log(chalk.dim(`[dry-run] GitHub import: ${result.full_name}`));
+          if (result.path) console.log(`  ${chalk.dim("path:")} ${result.path}`);
+          return;
+        }
+        if (result.status === "skipped") {
+          console.log(chalk.yellow(`Skipped: ${result.skipped}`));
+          return;
+        }
+        console.log(chalk.green(`✓ Imported GitHub project: ${result.workspace?.slug ?? result.full_name}`));
+        if (result.path) console.log(`  ${chalk.dim("path:")} ${result.path}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("scan-roots")
+    .description("Dry-run import plans for repositories in configured GitHub roots")
+    .option("--root <id-or-slug>", "Only scan one configured root")
+    .option("--repo-prefix <prefix>", "Only include repositories with this name prefix")
+    .option("--limit <n>", "Maximum GitHub repositories to list per root", "500")
+    .option("--tags <tags>", "Comma-separated tags to apply")
+    .option("--clone", "Include clone commands in the dry-run plan")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("--remote-protocol <protocol>", "Git remote protocol: https or ssh")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const store = resolveProjectStore();
+        const limit = parsePositiveInteger(opts.limit, "--limit") ?? 500;
+        const result = await syncWorkspaceGitHubRoots(store, {
+          root: opts.root,
+          repoPrefix: opts.repoPrefix,
+          limit,
+          clone: opts.clone,
+          tags: splitList(opts.tags),
+          remoteProtocol: parseGitHubRemoteProtocol(opts.remoteProtocol),
+          dryRun: true,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.dim(`[dry-run] Scanned ${result.roots.length} GitHub root(s), ${result.planned.length} repo plan(s)`));
+        if (result.errors.length) console.log(chalk.yellow(`  errors: ${result.errors.length}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("sync-roots")
+    .description("Import and optionally clone repositories from configured GitHub roots")
+    .option("--root <id-or-slug>", "Only sync one configured root")
+    .option("--repo-prefix <prefix>", "Only include repositories with this name prefix")
+    .option("--limit <n>", "Maximum GitHub repositories to list per root", "500")
+    .option("--tags <tags>", "Comma-separated tags to apply")
+    .option("--clone", "Clone repositories while importing", true)
+    .option("--no-clone", "Register repositories without cloning")
+    .option("--dry-run", "Preview imports without cloning or writing")
+    .option("--allow-partial", "Exit successfully even if some repositories fail")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("--remote-protocol <protocol>", "Git remote protocol: https or ssh")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const store = resolveProjectStore();
+        const limit = parsePositiveInteger(opts.limit, "--limit") ?? 500;
+        const result = await syncWorkspaceGitHubRoots(store, {
+          root: opts.root,
+          repoPrefix: opts.repoPrefix,
+          limit,
+          clone: opts.clone,
+          tags: splitList(opts.tags),
+          remoteProtocol: parseGitHubRemoteProtocol(opts.remoteProtocol),
+          dryRun: opts.dryRun,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) {
+          printObject(result, opts);
+          if (result.errors.length && !opts.allowPartial) process.exitCode = 1;
+          return;
+        }
+        console.log(chalk.green(`✓ Synced ${result.imported.length} GitHub project(s)`));
+        if (result.planned.length) console.log(chalk.dim(`  planned: ${result.planned.length}`));
+        if (result.skipped.length) console.log(chalk.dim(`  skipped: ${result.skipped.length}`));
+        if (result.errors.length) console.log(chalk.yellow(`  errors: ${result.errors.length}`));
+        if (result.errors.length && !opts.allowPartial) process.exitCode = 1;
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+  program
+    .command("agent-eval")
+    .description("Run project prompt-agent eval cases")
+    .option("--mock", "Use deterministic mock mode instead of a live model")
+    .option("--model <model>", "OpenRouter model")
+    .option("--max-steps <n>", "Maximum AI SDK tool-call steps per case", "8")
+    .option("--case <ids>", "Comma-separated eval case ids")
+    .option("--base-path <path>", "Base path for eval fixtures")
+    .option("--fail-on-error", "Exit nonzero if any executed eval case fails")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const maxSteps = Number.parseInt(opts.maxSteps, 10);
+        if (!Number.isInteger(maxSteps) || maxSteps <= 0) throw new Error("--max-steps must be a positive integer");
+        const result = await runWorkspaceAgentEval({
+          mock: opts.mock,
+          model: opts.model,
+          maxSteps,
+          caseIds: parseWorkspaceAgentEvalCaseIds(opts.case),
+          basePath: opts.basePath,
+        });
+        if (wantsJson(opts)) {
+          printObject(result, opts);
+        } else {
+          const rate = `${Math.round(result.summary.success_rate * 100)}%`;
+          const confidence = `${Math.round(result.summary.confidence * 100)}%`;
+          console.log(`${result.summary.failed === 0 ? chalk.green("✓") : chalk.red("✗")} agent eval ${rate} success, ${confidence} confidence`);
+          console.log(`  ${chalk.dim("executed:")} ${result.summary.executed}`);
+          console.log(`  ${chalk.dim("passed:")}   ${result.summary.passed}`);
+          console.log(`  ${chalk.dim("failed:")}   ${result.summary.failed}`);
+          console.log(`  ${chalk.dim("skipped:")}  ${result.summary.skipped}`);
+          for (const item of result.cases) {
+            const status = item.skipped ? chalk.dim("skipped") : item.passed ? chalk.green("pass") : chalk.red("fail");
+            console.log(`  ${status} ${item.id}`);
+          }
+        }
+        if (opts.failOnError && result.summary.failed > 0) process.exit(1);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("cleanup-evals")
+    .description("Preview or remove prompt-agent eval fixture records from the project registry")
+    .option("--dry-run", "Preview eval artifacts without deleting them", true)
+    .option("--apply", "Delete eval artifacts")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action((opts) => {
+      try {
+        const result = cleanupProjectEvalArtifacts({
+          dryRun: !opts.apply,
+          agentId: opts.agent ? resolveAgentId(opts.agent) : ensureCliAgent().id,
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        const total = result.projects.length
+          + result.supporting.roots.length
+          + result.supporting.recipes.length
+          + result.supporting.agents.length
+          + result.supporting.tmux_profiles.length;
+        console.log(result.dry_run ? chalk.dim(`[dry-run] Eval artifacts found: ${total}`) : chalk.green(`✓ Eval artifacts removed: ${Object.values(result.deleted).reduce((sum, count) => sum + count, 0)}`));
+        if (result.projects.length) console.log(`  ${chalk.dim("projects:")} ${result.projects.map((item) => item.slug).join(", ")}`);
+        if (result.supporting.roots.length) console.log(`  ${chalk.dim("roots:")} ${result.supporting.roots.map((item) => item.slug).join(", ")}`);
+        if (result.supporting.recipes.length) console.log(`  ${chalk.dim("recipes:")} ${result.supporting.recipes.map((item) => item.slug).join(", ")}`);
+        if (result.supporting.agents.length) console.log(`  ${chalk.dim("agents:")} ${result.supporting.agents.map((item) => item.slug).join(", ")}`);
+        if (result.supporting.tmux_profiles.length) console.log(`  ${chalk.dim("tmux profiles:")} ${result.supporting.tmux_profiles.map((item) => item.slug).join(", ")}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("list")
+    .description("List registered projects")
+    .option("--kind <kind>", "Filter by kind")
+    .option("--status <status>", "Filter by status")
+    .option("--query <text>", "Search name, slug, description, path, tags, integrations, or metadata")
+    .option("--tags <tags>", "Comma-separated tag filter")
+    .option("--label <labels>", "Comma-separated label filter (labels are stored as tags)")
+    .option("--labels <labels>", "Comma-separated label filter (alias for --label)")
+    .option("--include-evals", "Include prompt-agent eval fixture projects")
+    .option(
+      "--limit <n>",
+      `Max rows (terminal output defaults to ${DEFAULT_LIST_LIMIT} and caps at ${MAX_HUMAN_LIMIT}; --json returns every matching project unless you pass this)`,
+    )
+    .option("--offset <n>", "Skip this many matching projects before listing")
+    .option("--meta", "With --json, wrap the array in { projects, count, total, has_more, complete }")
+    .option("--verbose", "Show additional columns in terminal output")
+    .option("--render-spec", "Output a JSON Render spec")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const json = wantsJson(opts);
+        const baseFilter = {
+          kind: parseKind(opts.kind),
+          status: parseStatus(opts.status),
+          query: opts.query,
+          tags: splitLabelFilters(opts.tags, opts.label, opts.labels),
+          offset: parseNonNegativeInteger(opts.offset, "--offset"),
+        };
+        const store = resolveProjectStore();
+        if (wantsRenderSpec(opts)) {
+          const projects = filterProjectEvalArtifacts(await store.listProjects({
+            ...baseFilter,
+            exclude_eval_artifacts: !opts.includeEvals,
+            limit: parsePositiveInteger(opts.limit, "--limit"),
+          }), opts.includeEvals);
+          printRenderSpec(buildProjectListRender(projects));
+          return;
+        }
+        if (json) {
+          // No --limit means every matching project: the store walks the
+          // server's pages so a capped response can no longer masquerade as the
+          // whole registry. A caller-supplied --limit is still honoured, but the
+          // result is then announced as bounded rather than passing for
+          // complete.
+          const page = await store.listProjectsPage({
+            ...baseFilter,
+            exclude_eval_artifacts: !opts.includeEvals,
+            limit: parsePositiveInteger(opts.limit, "--limit"),
+          });
+          const projects = filterProjectEvalArtifacts(page.projects, opts.includeEvals);
+          const rows = projects.map(projectWithManagement);
+          // Eval fixtures are dropped client-side on the api path (the server
+          // has no such filter), so a complete read knows its own true total;
+          // a bounded one can only report the server's, minus what it dropped.
+          const dropped = page.projects.length - projects.length;
+          const total = page.complete ? rows.length : Math.max(page.total - dropped, rows.length);
+          if (opts.meta) {
+            printObject(
+              {
+                projects: rows,
+                count: rows.length,
+                total,
+                offset: page.offset,
+                limit: page.limit,
+                has_more: page.has_more,
+                complete: page.complete,
+              },
+              opts,
+            );
+          } else {
+            printObject(rows, opts);
+          }
+          if (!page.complete) {
+            // stdout stays a clean JSON document; the warning goes to stderr so
+            // a piped consumer still sees that it is holding a partial list.
+            console.error(
+              chalk.yellow(
+                `projects list: returned ${rows.length} of ${total} matching projects (offset ${page.offset}${page.limit === null ? "" : `, --limit ${page.limit}`}). Drop --limit for the full set, or use --meta to read total/has_more.`,
+              ),
+            );
+          }
+          return;
+        }
+        const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
+        const projects = filterProjectEvalArtifacts(await store.listProjects({
+          ...baseFilter,
+          exclude_eval_artifacts: !opts.includeEvals,
+          limit: limit + 1,
+        }), opts.includeEvals);
+        const visible = projects.slice(0, limit);
+        const hasMore = projects.length > limit;
+        printRows(visible.map((project) => {
+          const management = projectManagementSummary(project);
+          const externalLinks = projectExternalLinksSummary(project);
+          const dashboard = projectDashboardSummary(project);
+          const base = {
+            slug: project.slug,
+            status: project.status,
+            stage: management.stage ?? "",
+            priority: management.priority ?? "",
+            health: dashboard.path_health.status,
+            path: compactText(project.primary_path, opts.verbose ? 96 : 56),
+          };
+          if (!opts.verbose) return base;
+          return {
+            ...base,
+            kind: project.kind,
+            owner: management.owner ?? "",
+            tags: compactText(project.tags.join(","), 40),
+            todos: externalLinks.todos.project_id ?? externalLinks.todos.task_list_id ?? "",
+            brief: externalLinks.brief.id ?? externalLinks.brief.path ?? "",
+            last_opened: dashboard.launch.last_opened_at ?? "",
+          };
+        }), opts.verbose
+          ? ["slug", "status", "stage", "priority", "health", "path", "kind", "owner", "tags", "todos", "brief", "last_opened"]
+          : ["slug", "status", "stage", "priority", "health", "path"]);
+        const more = hasMore ? ` Showing ${visible.length} of more than ${limit} matching projects.` : ` Showing ${visible.length} project(s).`;
+        printDiscoveryHint(`${more} Use --limit <n>, --verbose, --json, or 'projects show <slug>' for details.`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("show <id-or-slug>")
+    .alias("get")
+    .description("Show project details")
+    .option("--verbose", "Show registered locations, agents, and a longer event summary")
+    .option("--render-spec", "Output a JSON Render spec")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, opts) => {
+      try {
+      const store = resolveProjectStore();
+      const project = await store.resolveTarget(idOrSlug);
+      const dashboard = projectDashboardSummary(project);
+      const agents = await store.getProjectAgents(project.id);
+      const locations = await store.getProjectLocations(project.id);
+      const events = await store.listEvents(project.id);
+      const payload = buildProjectDetailPayload({ project, agents, locations, events });
+      if (wantsRenderSpec(opts)) { printRenderSpec(payload.render); return; }
+      if (wantsJson(opts)) {
+        // `integrations` stays the raw record — it is the stored truth and
+        // scripts diff it. The resolved channel rides alongside it so the JSON
+        // answers the same question the human output does; without this,
+        // `show` and `show -j` disagree for every project whose channel is
+        // derived rather than pinned, which is most of them.
+        const summary = projectChannelSummary(project);
+        printObject({
+          ...(withoutRender(payload) as Record<string, unknown>),
+          conversations_channel: summary.channel,
+          conversations_channel_source: summary.source,
+        }, opts);
+        return;
+      }
+      console.log(`${chalk.bold(project.name)} ${chalk.dim(`(${project.slug})`)} ${chalk.green(`[${project.status}]`)}`);
+      console.log(`  ${chalk.dim("id:")}   ${project.id}`);
+      console.log(`  ${chalk.dim("kind:")} ${project.kind}`);
+      const management = projectManagementSummary(project);
+      const externalLinks = projectExternalLinksSummary(project);
+      const duplicateNames = (await store.listProjects({ query: project.name, limit: 100 }))
+        .filter((item) => item.id !== project.id && item.name.trim().toLowerCase() === project.name.trim().toLowerCase());
+      if (management.stage) console.log(`  ${chalk.dim("stage:")} ${management.stage}`);
+      if (management.priority) console.log(`  ${chalk.dim("priority:")} ${management.priority}`);
+      if (management.owner) console.log(`  ${chalk.dim("owner:")} ${management.owner}`);
+      if (management.launch_profile) console.log(`  ${chalk.dim("launch profile:")} ${management.launch_profile}`);
+      if (management.start_agent) console.log(`  ${chalk.dim("start agent:")} ${management.start_agent}`);
+      if (management.start_command) console.log(`  ${chalk.dim("start command:")} ${opts.verbose ? management.start_command : compactText(management.start_command, 140)}`);
+      if (management.start_session_policy) console.log(`  ${chalk.dim("start session policy:")} ${management.start_session_policy}`);
+      if (management.start_windows.length) {
+        const startWindows = management.start_windows.map((window) => window.name).join(", ");
+        console.log(`  ${chalk.dim("start windows:")} ${opts.verbose ? startWindows : compactText(startWindows, 100)}`);
+      }
+      if (project.primary_path) console.log(`  ${chalk.dim("path:")} ${opts.verbose ? project.primary_path : compactText(project.primary_path, 160)}`);
+      console.log(`  ${chalk.dim("path health:")} ${dashboard.path_health.status}${dashboard.path_health.exists === false ? " (missing)" : ""}`);
+      if (dashboard.launch.last_opened_at) console.log(`  ${chalk.dim("last opened:")} ${dashboard.launch.last_opened_at}`);
+      if (project.tags.length) {
+        const tags = project.tags.join(", ");
+        console.log(`  ${chalk.dim("tags:")} ${opts.verbose ? tags : compactText(tags, 120)}`);
+      }
+      if (agents.length) {
+        const agentLabels = agents.map((assignment) => `${assignment.agent?.slug ?? assignment.agent_id}:${assignment.role}`);
+        const visibleAgents = opts.verbose ? agentLabels : agentLabels.slice(0, 10);
+        console.log(`  ${chalk.dim("agents:")} ${compactText(visibleAgents.join(", "), opts.verbose ? 240 : 120)}${!opts.verbose && agentLabels.length > visibleAgents.length ? chalk.dim(` (+${agentLabels.length - visibleAgents.length} more)`) : ""}`);
+      }
+      console.log(`  ${chalk.dim("locations:")} ${locations.length} registered${locations.length > 1 ? chalk.dim(" (use --verbose for paths)") : ""}`);
+      if (duplicateNames.length) console.log(`  ${chalk.yellow("warning:")} duplicate project name also used by ${duplicateNames.map((item) => item.slug).join(", ")}`);
+      if (externalLinks.todos.linked) {
+        console.log(`  ${chalk.dim("todos:")} ${externalLinks.todos.project_id ?? "none"}${externalLinks.todos.task_list_id ? ` task-list=${externalLinks.todos.task_list_id}` : ""}`);
+      }
+      if (externalLinks.brief.linked) {
+        const briefTarget = externalLinks.brief.id ?? externalLinks.brief.path;
+        console.log(`  ${chalk.dim("brief:")} ${opts.verbose ? briefTarget : compactText(briefTarget, 120)}${externalLinks.brief.path_exists === false ? " (path missing)" : ""}`);
+      }
+      const channelSummary = projectChannelSummary(project);
+      if (channelSummary.channel) {
+        // Derived is shown too, marked as such: the channel a project resolves
+        // to is not blank just because it was never pinned on the record.
+        const suffix = channelSummary.source === "derived" ? chalk.dim(" (derived)") : "";
+        console.log(`  ${chalk.dim("channel:")} #${channelSummary.channel}${suffix}`);
+      }
+      try {
+        const tmux = await projectTmuxStatus(project.slug);
+        if (tmux.tmux_available) {
+          console.log(`  ${chalk.dim("current session:")} ${tmux.exists ? "running" : "missing"} ${tmux.expected.session_name}${tmux.session ? ` windows=${tmux.session.windows}` : ""}`);
+        } else if (tmux.errors.length) {
+          console.log(`  ${chalk.dim("tmux:")} unavailable (${tmux.errors[0]})`);
+        }
+      } catch (err) {
+        console.log(`  ${chalk.dim("tmux:")} ${err instanceof Error ? err.message : String(err)}`);
+      }
+      const recentEvents = events.slice(-3).reverse();
+      if (recentEvents.length) {
+        console.log(`  ${chalk.dim("recent events:")} ${recentEvents.map((event) => `${event.event_type}@${event.created_at}`).join(", ")}`);
+      }
+      if (opts.verbose) {
+        if (locations.length) {
+          for (const location of locations) {
+            console.log(`  ${chalk.dim("location:")} ${location.is_primary ? "primary " : ""}${location.label} ${compactText(location.path, 100)}`);
+          }
+        }
+        const verboseEvents = events.slice(-10).reverse();
+        for (const event of verboseEvents) {
+          console.log(`  ${chalk.dim("event:")} ${event.event_type} ${event.source} ${event.created_at}${event.command ? chalk.dim(` ${compactText(event.command, 80)}`) : ""}`);
+        }
+      }
+      printDiscoveryHint(`  Use --json for the full project record${opts.verbose ? "." : ", or --verbose for locations and more recent events."}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  const events = program.command("events").description("Inspect and record project audit events");
+
+  events
+    .command("list <project>")
+    .description("List audit events for a project")
+    .option("--limit <n>", `Max rows for terminal output (default ${DEFAULT_EVENT_LIMIT}, max ${MAX_HUMAN_LIMIT})`)
+    .option("--verbose", "Include compact prompt, command, and metadata-key columns")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectTarget, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(projectTarget);
+        const events = await store.listEvents(project.id);
+        const payload = { project: projectWithManagement(project), events };
+        if (wantsJson(opts)) { printObject(payload, opts); return; }
+        const limit = parseHumanLimit(opts.limit, DEFAULT_EVENT_LIMIT);
+        const visible = events.slice(-limit).reverse();
+        printRows(visible.map((event) => eventSummary(event, Boolean(opts.verbose))), opts.verbose
+          ? ["id", "event_type", "source", "agent_id", "created_at", "prompt", "command", "metadata"]
+          : ["id", "event_type", "source", "agent_id", "created_at"]);
+        const hidden = Math.max(0, events.length - visible.length);
+        printDiscoveryHint(`Showing latest ${visible.length} of ${events.length} event(s).${hidden ? ` ${hidden} older hidden.` : ""} Use --limit <n>, --verbose, or --json for details.`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  events
+    .command("record <project> <type>")
+    .description("Record a custom project audit event")
+    .option("--metadata-json <json>", "Event metadata JSON object")
+    .option("--before-json <json>", "Before-state JSON object")
+    .option("--after-json <json>", "After-state JSON object")
+    .option("--prompt <text>", "Prompt or note that led to this event")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectTarget, type, opts) => {
+      try {
+        assertLocalOnlyWrite("Recording project audit events");
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(projectTarget);
+        const event = await store.recordEvent(project.id, {
+          agentId: mutationAgentId(store, opts.agent),
+          event_type: type,
+          source: "cli",
+          prompt: opts.prompt,
+          command: process.argv.join(" "),
+          before: parseJsonObject(opts.beforeJson, "--before-json"),
+          after: parseJsonObject(opts.afterJson, "--after-json"),
+          metadata: parseJsonObject(opts.metadataJson, "--metadata-json"),
+        });
+        const payload = { project: projectWithManagement(project), event };
+        if (wantsJson(opts)) { printObject(payload, opts); return; }
+        console.log(chalk.green(`✓ Project event recorded: ${event.event_type}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("update <id-or-slug>")
+    .description("Update project metadata")
+    .option("--name <name>", "Project name")
+    .option("--slug <slug>", "Project slug")
+    .option("--description <text>", "Description")
+    .option("--kind <kind>", `Project kind (${WORKSPACE_KINDS.join(", ")})`)
+    .option("--status <status>", `Project status (${WORKSPACE_STATUSES.join(", ")})`)
+    .option("--root <id-or-slug>", "Root id or slug")
+    .option("--clear-root", "Clear root")
+    .option("--recipe <id-or-slug>", "Recipe id or slug")
+    .option("--clear-recipe", "Clear recipe")
+    .option("--canonical-machine <id>", "Canonical owner machine")
+    .option("--path <path>", "Primary path")
+    .option("--clear-path", "Clear primary path")
+    .option("--tags <tags>", "Replace tags with comma-separated tags")
+    .option("--stage <stage>", `Project stage (${PROJECT_STAGES.join(", ")})`)
+    .option("--clear-stage", "Clear project stage")
+    .option("--priority <priority>", `Project priority (${PROJECT_PRIORITIES.join(", ")})`)
+    .option("--clear-priority", "Clear project priority")
+    .option("--owner <owner>", "Project owner")
+    .option("--clear-owner", "Clear project owner")
+    .option("--launch-profile <id-or-slug>", "Default tmux launch profile")
+    .option("--clear-launch-profile", "Clear default tmux launch profile")
+    .option("--start-agent <tool>", `Default start tool (${PROJECT_START_AGENTS.join(", ")})`)
+    .option("--clear-start-agent", "Clear default start tool")
+    .option("--start-command <command>", "Default command for the primary start window")
+    .option("--clear-start-command", "Clear default command for the primary start window")
+    .option("--start-session-policy <policy>", `Default tmux session policy (${PROJECT_START_SESSION_POLICIES.join(", ")})`)
+    .option("--clear-start-session-policy", "Clear default tmux session policy")
+    .option("--start-windows-json <json>", "Replace default start windows with a JSON array")
+    .option("--clear-start-windows", "Clear default start windows")
+    .option("--todos-project-id <id>", "Linked todos project id")
+    .option("--clear-todos-project-id", "Clear linked todos project id")
+    .option("--todos-task-list-id <id>", "Linked todos task list id")
+    .option("--clear-todos-task-list-id", "Clear linked todos task list id")
+    .option("--brief-id <id>", "Linked brief/spec id")
+    .option("--clear-brief-id", "Clear linked brief/spec id")
+    .option("--brief-path <path>", "Linked brief/spec path")
+    .option("--clear-brief-path", "Clear linked brief/spec path")
+    .option("--canvases-project-id <id>", "Linked external Canvases project id")
+    .option("--clear-canvases-project-id", "Clear linked external Canvases project id")
+    .option("--canvases-default-canvas-id <id>", "Linked external default canvas id")
+    .option("--clear-canvases-default-canvas-id", "Clear linked external default canvas id")
+    .option("--git-remote <url>", "Git remote URL")
+    .option("--clear-git-remote", "Clear git remote")
+    .option("--s3-bucket <bucket>", "S3 bucket")
+    .option("--clear-s3-bucket", "Clear S3 bucket")
+    .option("--s3-prefix <prefix>", "S3 prefix")
+    .option("--clear-s3-prefix", "Clear S3 prefix")
+    .option("--integrations-json <json>", "Replace integrations with a JSON object")
+    .option("--metadata-json <json>", "Replace metadata with a JSON object")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(idOrSlug);
+        const agentId = mutationAgentId(store, opts.agent);
+        const metadataBase = opts.metadataJson === undefined
+          ? project.metadata
+          : parseJsonObject(opts.metadataJson, "--metadata-json") ?? {};
+        const startWindows = opts.clearStartWindows
+          ? null
+          : parseTmuxWindowsJson(opts.startWindowsJson, "--start-windows-json");
+        const metadataFields = {
+          stage: opts.clearStage ? null : opts.stage,
+          priority: opts.clearPriority ? null : opts.priority,
+          owner: opts.clearOwner ? null : opts.owner,
+          launch_profile: opts.clearLaunchProfile ? null : opts.launchProfile,
+          start_agent: opts.clearStartAgent ? null : opts.startAgent,
+          start_command: opts.clearStartCommand ? null : opts.startCommand,
+          start_session_policy: opts.clearStartSessionPolicy ? null : opts.startSessionPolicy,
+          start_windows: startWindows,
+        };
+        const mergedMetadata = hasProjectManagementFields(metadataFields)
+          ? mergeProjectManagementMetadata(metadataBase, metadataFields)
+          : opts.metadataJson === undefined ? undefined : metadataBase;
+        const integrationsBase = opts.integrationsJson === undefined
+          ? project.integrations
+          : parseIntegrationsJson(opts.integrationsJson) ?? {};
+        const integrationFields = {
+          todos_project_id: opts.clearTodosProjectId ? null : opts.todosProjectId,
+          todos_task_list_id: opts.clearTodosTaskListId ? null : opts.todosTaskListId,
+          brief_id: opts.clearBriefId ? null : opts.briefId,
+          brief_path: opts.clearBriefPath ? null : opts.briefPath,
+          canvases_project_id: opts.clearCanvasesProjectId ? null : opts.canvasesProjectId,
+          canvases_default_canvas_id: opts.clearCanvasesDefaultCanvasId ? null : opts.canvasesDefaultCanvasId,
+        };
+        const mergedIntegrations = hasProjectIntegrationFields(integrationFields)
+          ? mergeProjectIntegrationFields(integrationsBase, integrationFields)
+          : opts.integrationsJson === undefined ? undefined : integrationsBase;
+        // Root/recipe are shared registry resources; resolve slug->id through
+        // the Store in BOTH transports so --root/--recipe are never silently
+        // dropped on a flipped machine.
+        const rootPatch = {
+          root_id: opts.clearRoot ? null : await resolveRootId(store, opts.root),
+          recipe_id: opts.clearRecipe ? null : await resolveRecipeId(store, opts.recipe),
+        };
+        const updated = await store.updateProject(project.id, {
+          name: opts.name,
+          slug: opts.slug,
+          description: opts.description,
+          kind: parseKind(opts.kind),
+          status: parseStatus(opts.status),
+          ...rootPatch,
+          canonical_machine: opts.canonicalMachine,
+          primary_path: opts.clearPath ? null : opts.path,
+          tags: opts.tags === undefined ? undefined : splitList(opts.tags),
+          git_remote: opts.clearGitRemote ? null : opts.gitRemote,
+          s3_bucket: opts.clearS3Bucket ? null : opts.s3Bucket,
+          s3_prefix: opts.clearS3Prefix ? null : opts.s3Prefix,
+          integrations: mergedIntegrations,
+          metadata: mergedMetadata,
+          agent_id: agentId,
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(updated, opts); return; }
+        console.log(chalk.green(`✓ Project updated: ${updated.slug}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("guarded-read <project-id>")
+    .description("Read one project by exact stable id with bounded complete JSON and its current mutation revision")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("--resource-link-max-items <n>", "Maximum complete typed resource-link collection size", "1000")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const result = await resolveProjectStore().guardedReadProject({
+          project_id: projectId,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          resource_link_max_items: parsePositiveInteger(opts.resourceLinkMaxItems, "--resource-link-max-items")!,
+        });
+        if (wantsJson(opts)) {
+          process.stdout.write(JSON.stringify(result));
+          return;
+        }
+        console.log(chalk.green(`✓ Guarded project read: ${result.project_id}`));
+        console.log(`  ${chalk.dim("revision:")} ${result.current_revision}`);
+        console.log(`  ${chalk.dim("complete:")} ${result.response_control.complete}`);
+        console.log(`  ${chalk.dim("truncated:")} ${result.response_control.truncated}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("resource-links-read <project-id>")
+    .description("Read the complete typed resource-link collection for one exact stable project id")
+    .requiredOption("--max-items <n>", "Positive maximum collection size")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const result = await resolveProjectStore().readProjectResourceLinks({
+          project_id: projectId,
+          max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Typed resource links: ${result.project_id}`));
+        console.log(`  ${chalk.dim("links:")} ${result.link_count}`);
+        console.log(`  ${chalk.dim("digest:")} ${result.collection_digest}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  for (const mode of ["add", "reconcile"] as const) {
+    program
+      .command(`resource-links-${mode} <project-id>`)
+      .description(mode === "add"
+        ? "Idempotently add typed resource links under an exact project revision CAS"
+        : "Reconcile the complete typed resource-link collection under an exact project revision CAS")
+      .requiredOption("--links-json <json>", "Closed JSON array of typed resource links")
+      .requiredOption("--expected-revision <revision>", "Fresh project revision from guarded-read or resource-links-read")
+      .requiredOption("--operation-id <id>", "Caller-stable operation id")
+      .requiredOption("--step-id <id>", "Caller-stable step id")
+      .option("--max-items <n>", "Maximum complete collection size", "1000")
+      .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+      .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+      .option("--dry-run", "Preview without writing or persisting a receipt")
+      .option("--agent <id-or-slug>", "Attributing agent")
+      .option("-j, --json", "Output JSON")
+      .action(async (projectId, opts) => {
+        try {
+          const store = resolveProjectStore();
+          const result = await store.mutateProjectResourceLinks({
+            project_id: projectId,
+            operation_id: opts.operationId,
+            step_id: opts.stepId,
+            mode,
+            expected_revision: opts.expectedRevision,
+            links: parseProjectResourceLinksJson(opts.linksJson),
+            max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+            dry_run: Boolean(opts.dryRun),
+            response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+            time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+            agent_id: mutationAgentId(store, opts.agent),
+            source: "cli",
+            command: process.argv.join(" "),
+          });
+          if (wantsJson(opts)) { printObject(result, opts); return; }
+          console.log(chalk.green(`✓ Typed resource links ${mode} ${result.outcome}: ${result.project_id}`));
+          if (result.receipt) console.log(`  ${chalk.dim("receipt:")} ${result.receipt.receipt_id}`);
+        } catch (err) {
+          console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+          process.exit(1);
+        }
+      });
+  }
+
+  program
+    .command("resource-links-rollback <project-id>")
+    .description("Restore the exact typed resource-link collection from an accepted forward receipt")
+    .requiredOption("--accepted-receipt-id <id>", "Forward accepted resource-link receipt id")
+    .requiredOption("--expected-current-revision <revision>", "Current revision matching the accepted receipt")
+    .requiredOption("--operation-id <id>", "Caller-stable rollback operation id")
+    .requiredOption("--step-id <id>", "Caller-stable rollback step id")
+    .option("--max-items <n>", "Maximum complete collection size", "1000")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const result = await store.rollbackProjectResourceLinks({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          accepted_receipt_id: opts.acceptedReceiptId,
+          expected_current_revision: opts.expectedCurrentRevision,
+          max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Typed resource links rollback ${result.outcome}: ${result.project_id}`));
+        if (result.receipt) console.log(`  ${chalk.dim("receipt:")} ${result.receipt.receipt_id}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("duplicate-quarantine-read <project-id>")
+    .description("Read the exact complete project, typed-link, and path-selector preimage for duplicate quarantine")
+    .option("--resource-link-max-items <n>", "Maximum complete typed resource-link collection size", "1000")
+    .option("--workspace-location-max-items <n>", "Maximum complete workspace-location collection size", "1000")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const result = await resolveProjectStore().readDuplicateProjectQuarantinePreimage({
+          project_id: projectId,
+          resource_link_max_items: parsePositiveInteger(opts.resourceLinkMaxItems, "--resource-link-max-items")!,
+          workspace_location_max_items: parsePositiveInteger(opts.workspaceLocationMaxItems, "--workspace-location-max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Duplicate quarantine preimage: ${result.project_id}`));
+        console.log(`  ${chalk.dim("revision:")} ${result.current_revision}`);
+        console.log(`  ${chalk.dim("project digest:")} ${result.snapshot.project_digest}`);
+        console.log(`  ${chalk.dim("resource links:")} ${result.resource_link_count}`);
+        console.log(`  ${chalk.dim("workspace locations:")} ${result.workspace_location_count}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("duplicate-quarantine <project-id>")
+    .description("Atomically retire duplicate selectors and links while retaining reversible provenance")
+    .requiredOption("--operation-id <id>", "Caller-stable quarantine operation id")
+    .requiredOption("--step-id <id>", "Caller-stable quarantine step id")
+    .requiredOption("--expected-revision <revision>", "Exact project revision from duplicate-quarantine-read")
+    .requiredOption("--expected-project-digest <digest>", "Exact full project and path-selector digest")
+    .requiredOption("--expected-resource-link-collection-digest <digest>", "Exact complete typed resource-link digest")
+    .requiredOption("--expected-resource-link-ids-json <json>", "Exact JSON array of resource-link ids")
+    .option("--resource-link-max-items <n>", "Maximum complete typed resource-link collection size", "1000")
+    .requiredOption("--expected-workspace-location-collection-digest <digest>", "Exact complete path-selector digest")
+    .requiredOption("--expected-workspace-location-ids-json <json>", "Exact JSON array of workspace-location ids")
+    .option("--workspace-location-max-items <n>", "Maximum complete workspace-location collection size", "1000")
+    .requiredOption("--quarantine-name <name>", "Provenance-only project name")
+    .requiredOption("--quarantine-slug <slug>", "Unowned canonical provenance-only slug")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("--dry-run", "Validate and preview without writing or persisting a receipt")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const result = await store.quarantineDuplicateProject({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          expected_revision: opts.expectedRevision,
+          expected_project_digest: opts.expectedProjectDigest,
+          expected_resource_link_collection_digest: opts.expectedResourceLinkCollectionDigest,
+          expected_resource_link_ids: parseJsonArray<string>(
+            opts.expectedResourceLinkIdsJson,
+            "--expected-resource-link-ids-json",
+          ) ?? [],
+          resource_link_max_items: parsePositiveInteger(opts.resourceLinkMaxItems, "--resource-link-max-items")!,
+          expected_workspace_location_collection_digest: opts.expectedWorkspaceLocationCollectionDigest,
+          expected_workspace_location_ids: parseJsonArray<string>(
+            opts.expectedWorkspaceLocationIdsJson,
+            "--expected-workspace-location-ids-json",
+          ) ?? [],
+          workspace_location_max_items: parsePositiveInteger(opts.workspaceLocationMaxItems, "--workspace-location-max-items")!,
+          quarantine_name: opts.quarantineName,
+          quarantine_slug: opts.quarantineSlug,
+          dry_run: Boolean(opts.dryRun),
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Duplicate quarantine ${result.outcome}: ${result.project_id}`));
+        if (result.receipt) console.log(`  ${chalk.dim("receipt:")} ${result.receipt.receipt_id}`);
+        if (result.rollback) console.log(`  ${chalk.dim("rollback revision:")} ${result.rollback.expected_current_revision}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("duplicate-quarantine-rollback <project-id>")
+    .description("Restore exact project metadata, typed links, and path selectors from an accepted quarantine receipt")
+    .requiredOption("--operation-id <id>", "Caller-stable rollback operation id")
+    .requiredOption("--step-id <id>", "Caller-stable rollback step id")
+    .requiredOption("--accepted-receipt-id <id>", "Forward accepted quarantine receipt id")
+    .requiredOption("--expected-current-revision <revision>", "Current revision matching the accepted receipt")
+    .option("--resource-link-max-items <n>", "Maximum complete typed resource-link collection size", "1000")
+    .option("--workspace-location-max-items <n>", "Maximum complete workspace-location collection size", "1000")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const result = await store.rollbackDuplicateProjectQuarantine({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          accepted_receipt_id: opts.acceptedReceiptId,
+          expected_current_revision: opts.expectedCurrentRevision,
+          resource_link_max_items: parsePositiveInteger(opts.resourceLinkMaxItems, "--resource-link-max-items")!,
+          workspace_location_max_items: parsePositiveInteger(opts.workspaceLocationMaxItems, "--workspace-location-max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Duplicate quarantine rollback ${result.outcome}: ${result.project_id}`));
+        if (result.receipt) console.log(`  ${chalk.dim("receipt:")} ${result.receipt.receipt_id}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("resource-link-migration-plan <project-id>")
+    .description("Persist a durable resource-link migration manifest before any producer or Projects write")
+    .requiredOption("--operation-id <id>", "Caller-stable migration operation id")
+    .requiredOption("--step-id <id>", "Caller-stable migration step id")
+    .requiredOption("--expected-project-revision <revision>", "Fresh complete Projects collection revision")
+    .requiredOption("--items-json <json>", "Closed JSON array of link, producer_resource_kind, and producer_binding objects")
+    .option("--max-items <n>", "Maximum complete collection size", "1000")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const bounds = {
+          max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        };
+        const result = await store.planProjectResourceLinkMigration({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          expected_project_revision: opts.expectedProjectRevision,
+          links: parseJsonArray<Omit<ProjectResourceLinkMigrationItem, "link_id" | "producer_evidence">>(
+            opts.itemsJson,
+            "--items-json",
+          ) ?? [],
+          ...bounds,
+        });
+        const readback = await store.readProjectResourceLinkMigration({
+          project_id: projectId,
+          manifest_id: result.manifest.manifest_id,
+          ...bounds,
+        });
+        if (
+          readback.manifest.transition_version !== result.manifest.transition_version
+          || readback.manifest.state !== result.manifest.state
+        ) {
+          throw new Error("migration plan readback does not match the persisted manifest transition");
+        }
+        if (wantsJson(opts)) { printObject(readback, opts); return; }
+        console.log(chalk.green(`✓ Resource-link migration planned: ${readback.manifest.manifest_id}`));
+        console.log(`  ${chalk.dim("state:")} ${readback.manifest.state}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("resource-link-migration-read <project-id>")
+    .description("Read one durable resource-link migration manifest and its complete immutable events")
+    .requiredOption("--manifest-id <id>", "Exact migration manifest id")
+    .option("--max-items <n>", "Maximum complete event population size", "1000")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const result = await resolveProjectStore().readProjectResourceLinkMigration({
+          project_id: projectId,
+          manifest_id: opts.manifestId,
+          max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Resource-link migration: ${result.manifest.manifest_id}`));
+        console.log(`  ${chalk.dim("state:")} ${result.manifest.state}`);
+        console.log(`  ${chalk.dim("events:")} ${result.events.length}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("resource-link-migration-advance <project-id>")
+    .description("CAS-advance a durable migration manifest using exact producer or Projects evidence")
+    .requiredOption("--manifest-id <id>", "Exact migration manifest id")
+    .requiredOption("--expected-transition-version <n>", "Current manifest transition version")
+    .requiredOption(
+      "--next-state <state>",
+      "producer_applied, projects_applied, verified, or failed_reconcilable",
+    )
+    .option("--producer-evidence-json <json>", "Closed JSON array of exact producer receipt/readback evidence")
+    .option("--projects-forward-receipt-id <id>", "Accepted Projects forward receipt bound to the manifest")
+    .option("--last-verified-projects-revision <revision>", "Fresh complete Projects revision")
+    .option("--last-verified-projects-digest <digest>", "Fresh complete Projects collection digest")
+    .requiredOption("--evidence-json <json>", "Immutable transition evidence JSON object")
+    .option("--max-items <n>", "Maximum complete event population size", "1000")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const allowedStates = new Set(["producer_applied", "projects_applied", "verified", "failed_reconcilable"]);
+        if (!allowedStates.has(opts.nextState)) {
+          throw new Error("--next-state must be producer_applied, projects_applied, verified, or failed_reconcilable");
+        }
+        const store = resolveProjectStore();
+        const bounds = {
+          max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        };
+        const result = await store.advanceProjectResourceLinkMigration({
+          project_id: projectId,
+          manifest_id: opts.manifestId,
+          expected_transition_version: parsePositiveInteger(
+            opts.expectedTransitionVersion,
+            "--expected-transition-version",
+          )!,
+          next_state: opts.nextState,
+          max_items: bounds.max_items,
+          producer_evidence: parseJsonArray<ProjectResourceLinkProducerEvidence>(
+            opts.producerEvidenceJson,
+            "--producer-evidence-json",
+          ),
+          projects_forward_receipt_id: opts.projectsForwardReceiptId,
+          last_verified_projects_revision: opts.lastVerifiedProjectsRevision,
+          last_verified_projects_digest: opts.lastVerifiedProjectsDigest,
+          evidence: parseJsonObject(opts.evidenceJson, "--evidence-json") ?? {},
+          response_byte_limit: bounds.response_byte_limit,
+          time_budget_ms: bounds.time_budget_ms,
+        });
+        const readback = await store.readProjectResourceLinkMigration({
+          project_id: projectId,
+          manifest_id: result.manifest.manifest_id,
+          ...bounds,
+        });
+        if (
+          readback.manifest.transition_version !== result.manifest.transition_version
+          || readback.manifest.state !== result.manifest.state
+        ) {
+          throw new Error("migration advance readback does not match the persisted manifest transition");
+        }
+        if (wantsJson(opts)) { printObject(readback, opts); return; }
+        console.log(chalk.green(`✓ Resource-link migration advanced: ${readback.manifest.manifest_id}`));
+        console.log(`  ${chalk.dim("state:")} ${readback.manifest.state}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("resource-link-migration-rollback <project-id>")
+    .description("Remove Projects references first, persist proof, and record the producer rollback outcome")
+    .requiredOption("--manifest-id <id>", "Exact migration manifest id")
+    .requiredOption("--expected-transition-version <n>", "Current manifest transition version")
+    .requiredOption(
+      "--producer-outcome <outcome>",
+      "pending, complete, retained_target, or failed_reconcilable",
+    )
+    .option("--producer-evidence-json <json>", "Closed JSON array of exact producer inverse/readback evidence")
+    .requiredOption("--evidence-json <json>", "Immutable rollback evidence JSON object")
+    .option("--max-items <n>", "Maximum complete link and event population size", "1000")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const allowedOutcomes = new Set(["pending", "complete", "retained_target", "failed_reconcilable"]);
+        if (!allowedOutcomes.has(opts.producerOutcome)) {
+          throw new Error("--producer-outcome must be pending, complete, retained_target, or failed_reconcilable");
+        }
+        const store = resolveProjectStore();
+        const bounds = {
+          max_items: parsePositiveInteger(opts.maxItems, "--max-items")!,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        };
+        const result = await store.rollbackProjectResourceLinkMigration({
+          project_id: projectId,
+          manifest_id: opts.manifestId,
+          expected_transition_version: parsePositiveInteger(
+            opts.expectedTransitionVersion,
+            "--expected-transition-version",
+          )!,
+          producer_outcome: opts.producerOutcome,
+          producer_evidence: parseJsonArray<ProjectResourceLinkProducerEvidence>(
+            opts.producerEvidenceJson,
+            "--producer-evidence-json",
+          ),
+          evidence: parseJsonObject(opts.evidenceJson, "--evidence-json") ?? {},
+          ...bounds,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        const readback = await store.readProjectResourceLinkMigration({
+          project_id: projectId,
+          manifest_id: result.manifest.manifest_id,
+          ...bounds,
+        });
+        if (
+          readback.manifest.transition_version !== result.manifest.transition_version
+          || readback.manifest.state !== result.manifest.state
+        ) {
+          throw new Error("migration rollback readback does not match the persisted manifest transition");
+        }
+        if (wantsJson(opts)) { printObject(readback, opts); return; }
+        console.log(chalk.green(`✓ Resource-link migration rollback reconciled: ${readback.manifest.manifest_id}`));
+        console.log(`  ${chalk.dim("state:")} ${readback.manifest.state}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("guarded-update <project-id>")
+    .description("Safely update an existing project by exact stable id with revision, idempotency, receipt, and dry-run controls")
+    .option("--name <name>", "Project name")
+    .option("--slug <slug>", "Project slug")
+    .option("--description <text>", "Description")
+    .option("--kind <kind>", `Project kind (${WORKSPACE_KINDS.join(", ")})`)
+    .option("--path <path>", "Primary path (alias for --primary-path)")
+    .option("--primary-path <path>", "Primary path (alias for --path)")
+    .option("--git-remote <url>", "Git remote URL")
+    .option("--metadata-json <json>", "Replace metadata with a JSON object")
+    .option("--integrations-json <json>", "Replace integrations with a JSON object")
+    .requiredOption("--expected-revision <revision>", "Fresh project updated_at revision from an exact-id read")
+    .requiredOption("--operation-id <id>", "Caller-stable operation id")
+    .requiredOption("--step-id <id>", "Caller-stable step id")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("--dry-run", "Preview without writing or persisting a receipt")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const path = opts.path ? resolve(opts.path) : undefined;
+        const primaryPath = opts.primaryPath ? resolve(opts.primaryPath) : undefined;
+        if (path !== undefined && primaryPath !== undefined && path !== primaryPath) {
+          throw new Error("--path and --primary-path must resolve to the same path when both are provided");
+        }
+        const patch = {
+          name: opts.name,
+          slug: opts.slug,
+          description: opts.description,
+          kind: parseKind(opts.kind),
+          primary_path: primaryPath ?? path,
+          git_remote: opts.gitRemote,
+          metadata: parseJsonObject(opts.metadataJson, "--metadata-json"),
+          integrations: parseIntegrationsJson(opts.integrationsJson),
+        };
+        if (Object.values(patch).every((value) => value === undefined)) throw new Error("Provide at least one guarded metadata field to update");
+        const store = resolveProjectStore();
+        const result = await store.guardedUpdateProject({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          expected_revision: opts.expectedRevision,
+          patch,
+          dry_run: Boolean(opts.dryRun),
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        const prefix = result.dry_run ? "[dry-run] " : "";
+        console.log(`${chalk.green(`${prefix}Guarded project mutation ${result.outcome}`)}: ${result.project_id}`);
+        console.log(`  ${chalk.dim("idempotency:")} ${result.idempotency_key}`);
+        if (result.receipt) console.log(`  ${chalk.dim("receipt:")} ${result.receipt.receipt_id}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("guarded-receipt <project-id>")
+    .description("Look up exactly one guarded project mutation terminal receipt")
+    .requiredOption("--operation-id <id>", "Operation id")
+    .requiredOption("--step-id <id>", "Step id")
+    .requiredOption("--direction <direction>", "forward or inverse")
+    .requiredOption("--idempotency-key <key>", "Derived guarded idempotency key")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const direction = String(opts.direction);
+        if (direction !== "forward" && direction !== "inverse") throw new Error("--direction must be forward or inverse");
+        const result = await resolveProjectStore().lookupGuardedProjectMutationReceipt({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          direction,
+          idempotency_key: opts.idempotencyKey,
+          max_items: 1,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Guarded receipt: ${result.receipt.receipt_id} (${result.receipt.outcome})`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("guarded-rollback <project-id>")
+    .description("Rollback a guarded project mutation using an accepted receipt and current post-write revision")
+    .requiredOption("--accepted-receipt-id <id>", "Forward accepted receipt id")
+    .requiredOption("--expected-current-revision <revision>", "Current revision, which must equal the accepted receipt post_revision")
+    .requiredOption("--operation-id <id>", "Caller-stable rollback operation id")
+    .requiredOption("--step-id <id>", "Caller-stable rollback step id")
+    .requiredOption("--response-byte-limit <n>", "Positive maximum serialized JSON response bytes")
+    .requiredOption("--time-budget-ms <n>", "Positive whole-operation time budget in milliseconds")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectId, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const result = await store.rollbackGuardedProjectMutation({
+          project_id: projectId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
+          accepted_receipt_id: opts.acceptedReceiptId,
+          expected_current_revision: opts.expectedCurrentRevision,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.green(`✓ Guarded rollback ${result.outcome}: ${result.project_id}`));
+        if (result.receipt) console.log(`  ${chalk.dim("receipt:")} ${result.receipt.receipt_id}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("migrate-prefixes")
+    .description("Preview or apply a receipt-backed removal of leading iproj- and internal-iproj- prefixes")
+    .option("--apply", "Apply the ordered migration; without this flag the command is a read-only dry run")
+    .option("--operation-id <id>", "Caller-stable operation id for retries")
+    .option("--response-byte-limit <n>", "Positive maximum serialized guarded response bytes", "1000000")
+    .option("--time-budget-ms <n>", "Positive guarded operation time budget in milliseconds", "30000")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const store = resolveProjectStore();
+        const result = await runProjectPrefixMigration({
+          store,
+          dry_run: !opts.apply,
+          operation_id: opts.operationId,
+          response_byte_limit: parsePositiveInteger(opts.responseByteLimit, "--response-byte-limit")!,
+          time_budget_ms: parsePositiveInteger(opts.timeBudgetMs, "--time-budget-ms")!,
+          agent_id: mutationAgentId(store, opts.agent),
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) {
+          printObject(result, opts);
+          if (!result.ok) process.exitCode = 1;
+          return;
+        }
+        const prefix = result.dry_run ? "[dry-run] " : "";
+        const action = result.steps.length === 0 ? "No prefixed identities found" : `${result.steps.length} migration step(s)`;
+        console.log(`${result.ok ? chalk.green("✓") : chalk.red("✗")} ${prefix}${action}`);
+        console.log(`  ${chalk.dim("projects:")} ${result.inventory.project_candidates} candidate(s)`);
+        console.log(`  ${chalk.dim("channels:")} ${result.inventory.channel_candidates} candidate(s)`);
+        console.log(`  ${chalk.dim("complete:")} ${result.inventory.complete}`);
+        if (!result.ok) {
+          console.error(chalk.red(`Migration failed: ${result.refusal ?? "unknown failure"}`));
+          console.error(chalk.yellow(`Rollback complete: ${result.rollback.complete}`));
+          process.exitCode = 1;
+        }
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("tag <id-or-slug> <tags...>")
+    .description("Add tags to a project")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, tags, opts) => {
+      try {
+        const requestedTags = splitVariadicList(tags);
+        if (requestedTags.length === 0) throw new Error("Provide at least one tag");
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(idOrSlug);
+        const agentId = mutationAgentId(store, opts.agent);
+        const updated = await store.updateProject(project.id, {
+          tags: mergeProjectTags(project.tags ?? [], requestedTags),
+          agent_id: agentId,
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(projectWithManagement(updated), opts); return; }
+        console.log(chalk.green(`✓ Tagged project: ${updated.slug} (${(updated.tags ?? []).join(", ")})`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("untag <id-or-slug> <tags...>")
+    .description("Remove tags from a project")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, tags, opts) => {
+      try {
+        const requestedTags = splitVariadicList(tags);
+        if (requestedTags.length === 0) throw new Error("Provide at least one tag");
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(idOrSlug);
+        const agentId = mutationAgentId(store, opts.agent);
+        const updated = await store.updateProject(project.id, {
+          tags: removeProjectTags(project.tags ?? [], requestedTags),
+          agent_id: agentId,
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(projectWithManagement(updated), opts); return; }
+        console.log(chalk.green(`✓ Removed tags from project: ${updated.slug} (${(updated.tags ?? []).join(", ")})`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("link <id-or-slug>")
+    .description("Merge external integration IDs into a project")
+    .option("--github-repo <name>", "GitHub full name, such as org/repo")
+    .option("--github-url <url>", "GitHub repository URL")
+    .option("--todos-project-id <id>", "Todos project id")
+    .option("--todos-task-list-id <id>", "Todos task list id")
+    .option("--brief-id <id>", "Brief/spec id")
+    .option("--brief-path <path>", "Brief/spec path")
+    .option("--canvases-project-id <id>", "External Canvases project id")
+    .option("--canvases-default-canvas-id <id>", "External default canvas id")
+    .option("--mementos-project-id <id>", "Mementos project id")
+    .option("--conversations-space <space>", "Conversations space")
+    .option("--conversations-channel <name>", "Conversations channel name")
+    .option("--files-index-id <id>", "Files index id")
+    .option("--integration <key=value>", "Additional integration key=value", collectOption, [])
+    .option("--integrations-json <json>", "Additional integrations JSON object")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(idOrSlug);
+        const integrations = mergeIntegrations(
+          {
+            github_repo: opts.githubRepo,
+            github_url: opts.githubUrl,
+            todos_project_id: opts.todosProjectId,
+            todos_task_list_id: opts.todosTaskListId,
+            brief_id: opts.briefId,
+            brief_path: opts.briefPath,
+            canvases_project_id: opts.canvasesProjectId,
+            canvases_default_canvas_id: opts.canvasesDefaultCanvasId,
+            mementos_project_id: opts.mementosProjectId,
+            conversations_space: opts.conversationsSpace,
+            conversations_channel: opts.conversationsChannel,
+            files_index_id: opts.filesIndexId,
+          },
+          parseIntegrationPairs(opts.integration),
+          parseIntegrationsJson(opts.integrationsJson),
+        );
+        assertNoLegacyResourceLinkIntegrationWrites(
+          Object.entries(integrations)
+            .filter(([, value]) => value !== undefined)
+            .map(([key]) => key),
+        );
+        const updated = await store.updateProject(project.id, {
+          integrations: mergeProjectIntegrations(project.integrations, normalizeWorkspaceIntegrations(integrations)),
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(updated, opts); return; }
+        console.log(chalk.green(`✓ Linked integrations for ${updated.slug}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("unlink <id-or-slug>")
+    .description("Clear external integration IDs from a project")
+    .option("--github", "Clear GitHub repo and URL links")
+    .option("--todos", "Clear todos project and task-list links")
+    .option("--brief", "Clear brief/spec id and path links")
+    .option("--canvases", "Clear external Canvases project and default-canvas links")
+    .option("--mementos", "Clear mementos project link")
+    .option("--conversations", "Clear conversations space and channel links")
+    .option("--files", "Clear files index link")
+    .option("--key <key>", "Integration key or group to clear; repeatable", collectOption, [])
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(idOrSlug);
+        const requestedKeys = [
+          ...(opts.github ? ["github"] : []),
+          ...(opts.todos ? ["todos"] : []),
+          ...(opts.brief ? ["brief"] : []),
+          ...(opts.canvases ? ["canvases"] : []),
+          ...(opts.mementos ? ["mementos"] : []),
+          ...(opts.conversations ? ["conversations"] : []),
+          ...(opts.files ? ["files"] : []),
+          ...(opts.key ?? []),
+        ];
+        const expandedKeys = expandProjectIntegrationUnlinkKeys(requestedKeys);
+        if (expandedKeys.length === 0) throw new Error("Provide at least one integration key or group to unlink");
+        assertNoLegacyResourceLinkIntegrationWrites(expandedKeys);
+        const nextIntegrations = unlinkProjectIntegrationFields(project.integrations, requestedKeys);
+        const updated = await store.updateProject(project.id, {
+          integrations: nextIntegrations,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject({ project: projectWithManagement(updated), unlinked: expandedKeys }, opts); return; }
+        console.log(chalk.green(`✓ Unlinked integrations for ${updated.slug}: ${expandedKeys.join(", ")}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("publish <id-or-slug>")
+    .description("Plan or publish a project to GitHub")
+    .option("--org <org>", "GitHub organization or owner")
+    .option("--repo <name>", "GitHub repository name")
+    .option("--visibility <visibility>", "Repository visibility: public or private")
+    .option("--description <text>", "Repository description")
+    .option("--remote-protocol <protocol>", "Git remote protocol: https or ssh")
+    .option("--no-push", "Create/update the repository without pushing the current branch")
+    .option("--dry-run", "Preview GitHub and git actions without mutating")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(idOrSlug);
+        // The registry write routes through store.updateProject, which serializes
+        // the mutation itself (local lock / server atomicity) — no coarse lock.
+        const result = await publishWorkspaceToGitHub(store, project, {
+          org: opts.org,
+          repoName: opts.repo,
+          visibility: parseGitHubVisibility(opts.visibility),
+          description: opts.description,
+          remoteProtocol: parseGitHubRemoteProtocol(opts.remoteProtocol),
+          push: opts.push,
+          dryRun: opts.dryRun,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(projectPayload(result), opts); return; }
+        const marker = result.dry_run ? chalk.dim("[dry-run]") : chalk.green("✓");
+        console.log(`${marker} GitHub publish ${result.full_name}`);
+        console.log(`  ${chalk.dim("visibility:")} ${result.visibility}`);
+        console.log(`  ${chalk.dim("remote:")} ${result.remote}`);
+        for (const command of result.commands) console.log(`  ${chalk.dim("cmd:")} ${command}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("unpublish <id-or-slug>")
+    .description("Remove local GitHub publication metadata from a project")
+    .option("--clear-integrations", "Remove stored GitHub integration fields")
+    .option("--dry-run", "Preview changes without mutating")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(idOrSlug);
+        const result = await unpublishWorkspaceFromGitHub(store, project, {
+          clearIntegrations: opts.clearIntegrations,
+          dryRun: opts.dryRun,
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(projectPayload(result), opts); return; }
+        const marker = result.dry_run ? chalk.dim("[dry-run]") : chalk.green("✓");
+        console.log(`${marker} GitHub unpublish ${project.slug}`);
+        if (result.local_path) console.log(`  ${chalk.dim("path:")} ${result.local_path}`);
+        console.log(`  ${chalk.dim("remote removed:")} ${result.remote_removed}`);
+        console.log(`  ${chalk.dim("integrations cleared:")} ${result.integrations_cleared}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("archive <id-or-slug>")
+    .description("Archive a project")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(idOrSlug);
+        const agentId = mutationAgentId(store, opts.agent);
+        const archived = await store.archiveProject(project.id, { agentId, source: "cli", command: process.argv.join(" ") });
+        if (wantsJson(opts)) { printObject(archived, opts); return; }
+        console.log(chalk.green(`✓ Archived ${archived.slug}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("unarchive <id-or-slug>")
+    .description("Unarchive a project")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(idOrSlug);
+        const agentId = mutationAgentId(store, opts.agent);
+        const unarchived = await store.unarchiveProject(project.id, { agentId, source: "cli", command: process.argv.join(" ") });
+        if (wantsJson(opts)) { printObject(unarchived, opts); return; }
+        console.log(chalk.green(`✓ Unarchived ${unarchived.slug}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("delete <id-or-slug>")
+    .description("Mark a project deleted, or hard-delete the row with --hard")
+    .option("--hard", "Hard-delete the project row")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(idOrSlug);
+        const agentId = mutationAgentId(store, opts.agent);
+        const result = await store.deleteProject(project.id, { hard: opts.hard }, { agentId, source: "cli", command: process.argv.join(" ") });
+        const label = result.workspace?.slug ?? result.id;
+        if (wantsJson(opts)) { printObject(projectPayload({ workspace: result.workspace, hard: result.hard }), opts); return; }
+        console.log(result.hard ? chalk.yellow(`Deleted ${label}`) : chalk.green(`✓ Marked deleted ${label}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("lock <id-or-slug>")
+    .description("Acquire an explicit project mutation lock")
+    .option("--key <key>", "Lock key; defaults to the project's mutation lock")
+    .option("--reason <text>", "Lock reason", "manual project lock")
+    .option("--ttl-seconds <seconds>", "Lock TTL in seconds")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(idOrSlug);
+        const lock = await store.acquireLock({
+          key: opts.key ?? `workspace:${project.id}`,
+          workspaceId: project.id,
+          agentId: mutationAgentId(store, opts.agent),
+          reason: opts.reason,
+          ttlSeconds: parsePositiveInteger(opts.ttlSeconds, "--ttl-seconds"),
+        });
+        if (wantsJson(opts)) { printObject(projectLockPayload(lock), opts); return; }
+        console.log(chalk.green(`✓ Project lock acquired: ${lock.lock_key}`));
+      } catch (err) {
+        const message = err instanceof Error ? err.message.replace("Workspace lock", "Project lock") : String(err);
+        console.error(chalk.red(message));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("locks")
+    .description("List active project mutation locks")
+    .option("--project <id-or-slug>", "Filter by project")
+    .option("--limit <n>", `Max rows for terminal output (default ${DEFAULT_LIST_LIMIT}, max ${MAX_HUMAN_LIMIT})`)
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = opts.project ? await store.resolveTarget(opts.project) : null;
+        const locks = (await store.listLocks())
+          .filter((lock) => !project || lock.workspace_id === project.id)
+          .map(projectLockPayload);
+        if (wantsJson(opts)) { printObject(locks, opts); return; }
+        const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
+        const visible = locks.slice(0, limit);
+        printRows(visible.map((lock) => ({
+          lock_key: lock.lock_key,
+          project_id: lock.project_id ?? "",
+          agent_id: lock.agent_id ?? "",
+          reason: compactText(lock.reason, 80),
+          expires_at: lock.expires_at ?? "",
+        })), ["lock_key", "project_id", "agent_id", "reason", "expires_at"]);
+        printDiscoveryHint(`Showing ${visible.length} of ${locks.length} lock(s). Use --limit <n> or --json for full records.`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("unlock <key>")
+    .description("Release a project mutation lock")
+    .option("-j, --json", "Output JSON")
+    .action(async (key, opts) => {
+      const released = await resolveProjectStore().releaseLock(key);
+      if (wantsJson(opts)) { printObject({ released }, opts); return; }
+      console.log(released ? chalk.green(`✓ Project lock released: ${key}`) : chalk.yellow(`No project lock found: ${key}`));
+    });
+
+  program
+    .command("doctor [id-or-slug]")
+    .description("Validate project markers, paths, locations, references, and failed runs")
+    .option("--fix", "Apply safe fixes")
+    .option("--dry-run", "Preview fixes without writing")
+    .option("--limit <n>", `Max projects for terminal output when no project is provided (default ${DEFAULT_LIST_LIMIT}, max ${MAX_HUMAN_LIMIT})`)
+    .option("--verbose", "Show every check instead of only issue counts")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const runDoctor = (project: Workspace) => opts.fix && !opts.dryRun
+          ? withWorkspaceLock(store, project, mutationAgentId(store), "project doctor fix", () => doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun, storageMode: store.mode }))
+          : Promise.resolve(doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun, storageMode: store.mode }));
+        const json = wantsJson(opts);
+        const limit = json ? undefined : parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
+        const results = idOrSlug
+          ? [await runDoctor(await store.resolveTarget(idOrSlug))]
+          : await Promise.all((await store.listProjects({ limit: json ? undefined : limit! + 1 })).map(runDoctor));
+        if (json) { printObject(results, opts); return; }
+        const visible = idOrSlug ? results : results.slice(0, limit);
+        for (const result of visible) {
+          console.log(`${chalk.bold(result.workspace.slug)} ${result.ok ? chalk.green("[ok]") : chalk.yellow("[needs attention]")}`);
+          const checks = opts.verbose ? result.checks : result.checks.filter((check) => check.status !== "ok");
+          if (!opts.verbose && checks.length === 0) {
+            const okCount = result.checks.filter((check) => check.status === "ok").length;
+            console.log(`  ${chalk.dim("checks:")} ${okCount} ok`);
+          }
+          for (const check of checks) {
+            const color = check.status === "ok" ? chalk.green : check.status === "error" ? chalk.red : chalk.yellow;
+            console.log(`  ${color(check.status)} ${check.code} ${chalk.dim(compactText(check.message, 140))}`);
+          }
+        }
+        if (!idOrSlug) {
+          const hasMore = results.length > visible.length;
+          printDiscoveryHint(`${hasMore ? `Showing ${visible.length} of more than ${limit} checked project(s).` : `Showing ${visible.length} checked project(s).`} Use --limit <n>, --verbose, --json, or 'projects doctor <slug>' for details.`);
+        }
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+}
+
+/**
+ * `store migrate` moves an existing machine-local primary path and rewrites the
+ * local registry's location history. The API registry cannot own or coordinate
+ * that source directory, so migration remains local-only. `store ensure` is
+ * intentionally excluded: it provisions the exact-id machine-local app store
+ * after a bounded guarded API read and uses guarded registry mutation only when
+ * the hosted row has no primary path.
+ */
+function assertLocalOnlyStoreOperation(store: ReturnType<typeof resolveProjectStore>, operation: string): void {
+  if (store.mode === "api") {
+    throw new Error(
+      `${operation} is a local-only operation: the canonical on-box store is a machine-local resource the cloud project does not own. Run it in local mode on the machine that holds the files.`,
+    );
+  }
+}
+
+function registerPermissionsCommand(program: Command): void {
+  const cmd = program.command("permissions").description("Inspect and repair local Projects file permissions");
+
+  cmd
+    .command("repair")
+    .description("Dry-run or apply private permissions for Projects registry, stores, backups, reports, and dashboard artifacts")
+    .option("--apply", "Apply chmod repairs; default is dry-run")
+    .option("--no-project-artifacts", "Skip registered project reports and dashboard artifacts outside HASNA_PROJECTS_HOME")
+    .option("-j, --json", "Output JSON")
+    .action((opts) => {
+      try {
+        const result = repairProjectPermissions({
+          apply: Boolean(opts.apply),
+          includeProjectArtifacts: opts.projectArtifacts,
+        });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+
+        const prefix = result.applied ? chalk.green("permissions repaired") : chalk.dim("permissions dry-run");
+        console.log(`${prefix}: ${result.changed || result.planned} ${result.applied ? "changed" : "planned"}, ${result.errors} error(s), ${result.skipped} skipped`);
+        const visible = result.actions
+          .filter((action) => action.status === "planned" || action.status === "changed" || action.status === "error")
+          .slice(0, 20);
+        for (const action of visible) {
+          const mode = action.target_mode ? `${action.before_mode ?? "----"} -> ${action.target_mode}` : action.before_mode ?? "----";
+          const marker = action.status === "error" ? chalk.red("error") : action.status === "changed" ? chalk.green("changed") : chalk.yellow("planned");
+          console.log(`  ${marker} ${mode} ${action.path}`);
+        }
+        if (result.actions.length > visible.length) {
+          console.log(chalk.dim(`  ${result.actions.length - visible.length} additional checked path(s); rerun with --json for full redacted details.`));
+        }
+        if (!result.applied) console.log(chalk.dim("  Re-run with --apply to repair modes."));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+}
+
+function registerStoreCommand(program: Command): void {
+  const cmd = program.command("store").description("Inspect, ensure, and safely migrate canonical project stores");
+
+  cmd
+    .command("inspect <project>")
+    .description("Inspect a project's canonical workspace and data store paths")
+    .option("--include-loops", "Include linked OpenLoops summaries in app_store through @hasna/loops")
+    .option("--include-runs", "Include recent linked loop runs with --include-loops")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectIdOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(projectIdOrSlug);
+        const inspection = inspectCanonicalProjectStore(project);
+        const appStore = opts.includeLoops
+          ? await store.inspectAppStoreWithLoops(project, { includeRuns: opts.includeRuns })
+          : await store.inspectAppStore(project);
+        if (wantsJson(opts)) { printObject({ ...inspection, app_store: appStore }, opts); return; }
+        console.log(`${chalk.bold(project.slug)} store`);
+        console.log(`  ${chalk.dim("home:")} ${inspection.paths.home}`);
+        console.log(`  ${chalk.dim("workspace:")} ${inspection.paths.workspace_path}${inspection.exists.workspace ? "" : " (missing)"}`);
+        console.log(`  ${chalk.dim("data:")} ${inspection.paths.data_path}${inspection.exists.data ? "" : " (missing)"}`);
+        console.log(`  ${chalk.dim("primary:")} ${inspection.primary_path ?? "none"}${inspection.primary_is_canonical ? " (canonical)" : ""}`);
+        console.log(`  ${chalk.dim("app db:")} ${appStore.paths.db_path}`);
+        console.log(`  ${chalk.dim("legacy canvases:")} ${appStore.legacy_canvas_storage.record_count} (read-only migration source)`);
+        console.log(`  ${chalk.dim("app loop links:")} ${appStore.counts.loop_links}`);
+        if (inspection.migration_recommended) console.log(chalk.yellow("  migration recommended: primary path is not the canonical store path"));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("ensure <project>")
+    .description("Ensure canonical workspace/data store directories exist")
+    .option("--dry-run", "Preview directory creation and primary-path updates")
+    .option("--no-primary", "Do not set the canonical path as primary when the project has no primary path")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectIdOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const agentId = opts.agent
+          ? (store.mode === "local" ? resolveAgentId(opts.agent) : opts.agent)
+          : (store.mode === "local" ? ensureCliAgent().id : undefined);
+        const common = {
+          dryRun: opts.dryRun,
+          setPrimaryIfMissing: opts.primary,
+          agentId,
+          source: "cli" as const,
+          command: process.argv.join(" "),
+        };
+        const result = store.mode === "local"
+          ? await (async () => {
+              const project = await store.resolveTarget(projectIdOrSlug);
+              const ensure = () => ensureCanonicalProjectStore(project, common);
+              return opts.dryRun ? ensure() : withWorkspaceLock(store, project, agentId, "project store ensure", ensure);
+            })()
+          : await ensureProjectStoreForTarget(store, projectIdOrSlug, common);
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(result.dry_run ? chalk.dim(`[dry-run] Store ensure ${result.project.slug}`) : chalk.green(`✓ Store ensured: ${result.project.slug}`));
+        console.log(`  ${chalk.dim("workspace:")} ${result.paths.workspace_path}`);
+        console.log(`  ${chalk.dim("data:")} ${result.paths.data_path}`);
+        if (result.created.length) console.log(`  ${chalk.dim(result.dry_run ? "would create:" : "created:")} ${result.created.join(", ")}`);
+        if (result.primary_updated) console.log(`  ${chalk.dim(result.dry_run ? "would set primary:" : "primary set:")} ${result.paths.workspace_path}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("migrate <project>")
+    .description("Safely move a project primary path into the canonical workspace store")
+    .option("--apply", "Apply the migration plan")
+    .option("--yes", "Apply the migration plan (alias for --apply)")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectIdOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        assertLocalOnlyStoreOperation(store, "store migrate");
+        const project = await store.resolveTarget(projectIdOrSlug);
+        const agentId = opts.agent ? resolveAgentId(opts.agent) : ensureCliAgent().id;
+        const apply = Boolean(opts.apply || opts.yes);
+        const result = apply
+          ? await withWorkspaceLock(store, project, agentId, "project store migrate", () => migrateProjectToStore(project, {
+              apply: true,
+              agentId,
+              source: "cli",
+              command: process.argv.join(" "),
+            }))
+          : planProjectStoreMigration(project, { dryRun: true });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        const marker = apply ? chalk.green("✓") : chalk.dim("[dry-run]");
+        console.log(`${marker} Store migration ${project.slug}`);
+        console.log(`  ${chalk.dim("from:")} ${result.source_path ?? "none"}`);
+        console.log(`  ${chalk.dim("to:")} ${result.target_path}`);
+        if (result.warnings.length) for (const warning of result.warnings) console.log(`  ${chalk.yellow("warning:")} ${warning}`);
+        for (const action of result.actions) {
+          console.log(`  ${chalk.dim(action.type + ":")} ${action.status} ${action.action} ${action.source ? `${action.source} -> ` : ""}${action.target}`);
+        }
+        if (!apply) console.log(chalk.dim("  Re-run with --apply or --yes to move files and update the primary location."));
+        if ("verified" in result && result.verified) console.log(`  ${chalk.dim("verified:")} canonical primary exists`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+}
+
+function registerProjectLoopCommands(program: Command): void {
+  const cmd = program.command("loops").description("Link projects to OpenLoops SDK loops");
+
+  cmd
+    .command("link <project> <loop>")
+    .description("Link an @hasna/loops loop id or name to a project store")
+    .option("--name <name>", "Loop display name if different from the id")
+    .option("--role <role>", "Project-specific loop role", "project-loop")
+    .option("--metadata-json <json>", "Loop link metadata JSON object")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectIdOrSlug, loopId, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(projectIdOrSlug);
+        const link = await store.linkLoop(project, {
+          loop_id: loopId,
+          loop_name: opts.name,
+          role: opts.role,
+          metadata: parseJsonObject(opts.metadataJson, "--metadata-json"),
+        }, { agentId: mutationAgentId(store), source: "cli", command: process.argv.join(" ") });
+        if (wantsJson(opts)) { printObject({ project: projectWithManagement(project), link }, opts); return; }
+        console.log(chalk.green(`✓ Linked OpenLoops loop ${link.loop_id} to ${project.slug}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("list <project>")
+    .description("List linked OpenLoops loops for a project through @hasna/loops")
+    .option("--include-runs", "Include recent run status summaries")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectIdOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(projectIdOrSlug);
+        const loops = await store.listLoopSummaries(project, { includeRuns: opts.includeRuns });
+        if (wantsJson(opts)) { printObject({ project: projectWithManagement(project), loops }, opts); return; }
+        printRows(loops.map((item) => ({
+          loop_id: item.link.loop_id,
+          name: item.link.loop_name ?? "",
+          role: item.link.role,
+          status: item.status,
+          loop_status: item.loop && typeof item.loop.status === "string" ? item.loop.status : "",
+          next_run_at: item.loop && typeof item.loop.next_run_at === "string" ? item.loop.next_run_at : "",
+        })), ["loop_id", "name", "role", "status", "loop_status", "next_run_at"]);
+        printDiscoveryHint(`Showing ${loops.length} linked loop${loops.length === 1 ? "" : "s"}.`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+}
+
+function registerLabelsCommand(program: Command): void {
+  const cmd = program.command("labels").alias("label").description("Manage project labels (stored as normalized tags)");
+
+  cmd
+    .command("list [project]")
+    .description("List labels on one project, or label counts across projects")
+    .option("--limit <n>", `Max rows for terminal output (default ${DEFAULT_LIST_LIMIT}, max ${MAX_HUMAN_LIMIT})`)
+    .option("-j, --json", "Output JSON")
+    .action(async (projectIdOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        if (projectIdOrSlug) {
+          const project = await store.resolveTarget(projectIdOrSlug);
+          const payload = { project: projectWithManagement(project), labels: project.tags };
+          if (wantsJson(opts)) { printObject(payload, opts); return; }
+          console.log(`${project.slug}\t${project.tags.join(",")}`);
+          return;
+        }
+        const counts = new Map<string, number>();
+        for (const project of await store.listProjects({ limit: 10000 })) {
+          for (const label of project.tags) counts.set(label, (counts.get(label) ?? 0) + 1);
+        }
+        const rows = [...counts.entries()]
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+          .map(([label, count]) => ({ label, count }));
+        if (wantsJson(opts)) { printObject(rows, opts); return; }
+        const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
+        printRows(rows.slice(0, limit), ["label", "count"]);
+        printDiscoveryHint(`Showing ${Math.min(limit, rows.length)} of ${rows.length} label(s). Use --limit <n> or --json for full records.`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("add <project> <labels...>")
+    .description("Add labels to a project")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectIdOrSlug, labels, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(projectIdOrSlug);
+        const requestedLabels = splitVariadicList(labels);
+        if (requestedLabels.length === 0) throw new Error("Provide at least one label");
+        const updated = await store.updateProject(project.id, {
+          tags: mergeProjectTags(project.tags, requestedLabels),
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        const payload = { project: projectWithManagement(updated), labels: updated.tags };
+        if (wantsJson(opts)) { printObject(payload, opts); return; }
+        console.log(chalk.green(`✓ Added labels to ${updated.slug}: ${requestedLabels.join(", ")}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("remove <project> <labels...>")
+    .alias("rm")
+    .description("Remove labels from a project")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectIdOrSlug, labels, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(projectIdOrSlug);
+        const requestedLabels = splitVariadicList(labels);
+        if (requestedLabels.length === 0) throw new Error("Provide at least one label");
+        const updated = await store.updateProject(project.id, {
+          tags: removeProjectTags(project.tags, requestedLabels),
+          agent_id: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        const payload = { project: projectWithManagement(updated), labels: updated.tags };
+        if (wantsJson(opts)) { printObject(payload, opts); return; }
+        console.log(chalk.green(`✓ Removed labels from ${updated.slug}: ${requestedLabels.join(", ")}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+}
+
+function registerLocationsCommand(program: Command): void {
+  const cmd = program.command("locations").description("Manage project folder locations");
+
+  cmd
+    .command("list <project>")
+    .description("List registered folder locations for a project")
+    .option("--limit <n>", `Max rows for terminal output (default ${DEFAULT_LIST_LIMIT}, max ${MAX_HUMAN_LIMIT})`)
+    .option("--verbose", "Show full paths and location metadata keys")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectIdOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(projectIdOrSlug);
+        const locations = await store.getProjectLocations(project.id);
+        if (wantsJson(opts)) { printObject({ project: projectWithManagement(project), locations }, opts); return; }
+        const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
+        const visible = locations.slice(0, limit);
+        printRows(visible.map((location) => ({
+          path: opts.verbose ? location.path : compactText(location.path, 100),
+          label: location.label,
+          kind: location.kind,
+          primary: location.is_primary ? "yes" : "no",
+          machine: location.machine_id,
+          ...(opts.verbose ? { metadata: Object.keys(location.metadata).join(",") } : {}),
+        })), opts.verbose ? ["path", "label", "kind", "primary", "machine", "metadata"] : ["path", "label", "kind", "primary", "machine"]);
+        printDiscoveryHint(`Showing ${visible.length} of ${locations.length} location(s). Use --limit <n>, --verbose, or --json for full records.`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("add <project> <path>")
+    .description("Register another folder location for a project")
+    .option("--machine <id>", "Machine that hosts this location")
+    .option("--label <label>", "Location label", "main")
+    .option("--kind <kind>", "Location kind", "local")
+    .option("--primary", "Make this the primary project path")
+    .option("--metadata-json <json>", "Location metadata JSON object")
+    .option("--agent <id-or-slug>", "Attributing agent")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectIdOrSlug, path, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(projectIdOrSlug);
+        const { project: updated, location } = await store.addLocation(project.id, {
+          path,
+          machineId: opts.machine,
+          label: opts.label,
+          kind: opts.kind,
+          isPrimary: Boolean(opts.primary),
+          metadata: parseJsonObject(opts.metadataJson, "--metadata-json"),
+          agentId: mutationAgentId(store, opts.agent),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject({ project: projectWithManagement(updated), location }, opts); return; }
+        console.log(chalk.green(`✓ Project location registered: ${location.path}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+}
+
+function registerRootsCommand(program: Command): void {
+  const cmd = program.command("roots").description("Manage registered project roots");
+
+  cmd
+    .command("add")
+    .requiredOption("--name <name>", "Root name")
+    .requiredOption("--path <path>", "Base path")
+    .option("--slug <slug>", "Root slug")
+    .option("--tags <tags>", "Comma-separated tags")
+    .option("--kind <kind>", `Default project kind (${WORKSPACE_KINDS.join(", ")})`)
+    .option("--github-org <org>", "Default GitHub organization")
+    .option("--visibility <visibility>", "Default repo visibility: public or private")
+    .option("--path-template <template>", "Path template relative to base path")
+    .option("--name-template <template>", "Name template for generated names")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const visibility = opts.visibility as "public" | "private" | undefined;
+        if (visibility && visibility !== "public" && visibility !== "private") {
+          throw new Error("Visibility must be public or private");
+        }
+        const root = await resolveProjectStore().createRoot({
+          name: opts.name,
+          slug: opts.slug,
+          base_path: opts.path,
+          tags: splitList(opts.tags),
+          default_kind: parseKind(opts.kind),
+          github_org: opts.githubOrg,
+          repo_visibility: visibility,
+          path_template: opts.pathTemplate,
+          name_template: opts.nameTemplate,
+        });
+        if (wantsJson(opts)) { printObject(root, opts); return; }
+        console.log(chalk.green(`✓ Root created: ${root.slug}`));
+        console.log(`  ${chalk.dim("path:")} ${root.base_path}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("list")
+    .option("--limit <n>", `Max rows for terminal output (default ${DEFAULT_LIST_LIMIT}, max ${MAX_HUMAN_LIMIT})`)
+    .option("--verbose", "Show full paths and tags")
+    .option("--render-spec", "Output a JSON Render spec")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      const roots = await resolveProjectStore().listRoots();
+      if (wantsRenderSpec(opts)) { printRenderSpec(buildRootsRender(roots)); return; }
+      if (wantsJson(opts)) { printObject(roots, opts); return; }
+      const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
+      const visible = roots.slice(0, limit);
+      printRows(visible.map((root) => ({
+        slug: root.slug,
+        kind: root.default_kind ?? "",
+        path: opts.verbose ? root.base_path : compactText(root.base_path, 100),
+        tags: compactText(root.tags.join(","), opts.verbose ? 120 : 40),
+      })), ["slug", "kind", "path", "tags"]);
+      printDiscoveryHint(`Showing ${visible.length} of ${roots.length} root(s). Use --limit <n>, --verbose, --json, or 'projects roots show <slug>' for details.`);
+    });
+
+  cmd
+    .command("show <id-or-slug>")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, opts) => {
+      const root = await resolveProjectStore().getRoot(idOrSlug);
+      if (!root) {
+        console.error(chalk.red(`Root not found: ${idOrSlug}`));
+        process.exit(1);
+      }
+      if (wantsJson(opts)) { printObject(root, opts); return; }
+      console.log(`${chalk.bold(root.name)} ${chalk.dim(`(${root.slug})`)}`);
+      console.log(`  ${chalk.dim("path:")} ${root.base_path}`);
+      if (root.default_kind) console.log(`  ${chalk.dim("kind:")} ${root.default_kind}`);
+      if (root.github_org) console.log(`  ${chalk.dim("github:")} ${root.github_org}`);
+    });
+
+  cmd
+    .command("update <id-or-slug>")
+    .option("--name <name>", "Root name")
+    .option("--slug <slug>", "Root slug")
+    .option("--path <path>", "Base path")
+    .option("--tags <tags>", "Comma-separated tags")
+    .option("--kind <kind>", `Default project kind (${WORKSPACE_KINDS.join(", ")})`)
+    .option("--clear-kind", "Clear default kind")
+    .option("--github-org <org>", "Default GitHub organization")
+    .option("--clear-github-org", "Clear default GitHub organization")
+    .option("--visibility <visibility>", "Default repo visibility: public or private")
+    .option("--clear-visibility", "Clear default repo visibility")
+    .option("--path-template <template>", "Path template relative to base path")
+    .option("--clear-path-template", "Clear path template")
+    .option("--name-template <template>", "Name template")
+    .option("--clear-name-template", "Clear name template")
+    .option("--allowed-recipes <ids>", "Comma-separated allowed recipe ids/slugs")
+    .option("--allowed-agents <ids>", "Comma-separated allowed agent ids/slugs")
+    .option("--metadata-json <json>", "Replace metadata with JSON object")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, opts) => {
+      try {
+        const visibility = opts.clearVisibility ? null : opts.visibility as "public" | "private" | undefined;
+        if (visibility && visibility !== "public" && visibility !== "private") throw new Error("Visibility must be public or private");
+        const updated = await resolveProjectStore().updateRoot(idOrSlug, {
+          name: opts.name,
+          slug: opts.slug,
+          base_path: opts.path,
+          tags: opts.tags === undefined ? undefined : splitList(opts.tags),
+          default_kind: opts.clearKind ? null : parseKind(opts.kind),
+          github_org: opts.clearGithubOrg ? null : opts.githubOrg,
+          repo_visibility: visibility,
+          path_template: opts.clearPathTemplate ? null : opts.pathTemplate,
+          name_template: opts.clearNameTemplate ? null : opts.nameTemplate,
+          allowed_recipes: opts.allowedRecipes === undefined ? undefined : splitList(opts.allowedRecipes),
+          allowed_agents: opts.allowedAgents === undefined ? undefined : splitList(opts.allowedAgents),
+          metadata: parseJsonObject(opts.metadataJson, "--metadata-json"),
+        });
+        if (wantsJson(opts)) { printObject(updated, opts); return; }
+        console.log(chalk.green(`✓ Root updated: ${updated.slug}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("delete <id-or-slug>")
+    .option("--detach-workspaces", "Clear root_id on referencing projects before deleting")
+    .option("-j, --json", "Output JSON")
+    .action(async (idOrSlug, opts) => {
+      try {
+        const result = await resolveProjectStore().deleteRoot(idOrSlug, { detachProjects: opts.detachWorkspaces });
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(chalk.yellow(`✓ Root deleted: ${result.root.slug}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("match")
+    .option("--path <path>", "Path to match")
+    .option("--kind <kind>", `Project kind (${WORKSPACE_KINDS.join(", ")})`)
+    .option("--tags <tags>", "Comma-separated tags")
+    .option("--github-org <org>", "GitHub organization")
+    .option("--limit <n>", `Max rows for terminal output (default ${DEFAULT_LIST_LIMIT}, max ${MAX_HUMAN_LIMIT})`)
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const matches = await resolveProjectStore().matchRoots({
+          path: opts.path,
+          kind: parseKind(opts.kind),
+          tags: splitList(opts.tags),
+          github_org: opts.githubOrg,
+        });
+        if (wantsJson(opts)) { printObject(matches, opts); return; }
+        const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
+        const visible = matches.slice(0, limit);
+        printRows(visible.map((item) => ({
+          slug: item.root.slug,
+          score: item.score,
+          reasons: compactText(item.reasons.join(","), 60),
+          path: compactText(item.root.base_path, 100),
+        })), ["slug", "score", "reasons", "path"]);
+        printDiscoveryHint(`Showing ${visible.length} of ${matches.length} root match(es). Use --limit <n> or --json for full records.`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+}
+
+function registerRecipesCommand(program: Command): void {
+  const cmd = program.command("recipes").description("Manage project creation recipes");
+
+  cmd
+    .command("add")
+    .requiredOption("--name <name>", "Recipe name")
+    .option("--slug <slug>", "Recipe slug")
+    .option("--description <text>", "Description")
+    .option("--kind <kind>", `Recipe project kind (${WORKSPACE_KINDS.join(", ")})`)
+    .option("--tags <tags>", "Default tags")
+    .option("--step-json <json>", "Single JSON recipe step to append")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const steps = opts.stepJson ? [JSON.parse(opts.stepJson)] : [];
+        const recipe = await resolveProjectStore().createRecipe({
+          name: opts.name,
+          slug: opts.slug,
+          description: opts.description,
+          kind: parseKind(opts.kind),
+          default_tags: splitList(opts.tags),
+          steps,
+        });
+        if (wantsJson(opts)) { printObject(recipe, opts); return; }
+        console.log(chalk.green(`✓ Recipe created: ${recipe.slug}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("list")
+    .option("--limit <n>", `Max rows for terminal output (default ${DEFAULT_LIST_LIMIT}, max ${MAX_HUMAN_LIMIT})`)
+    .option("--verbose", "Show descriptions and recipe step counts")
+    .option("--render-spec", "Output a JSON Render spec")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      const recipes = await resolveProjectStore().listRecipes();
+      if (wantsRenderSpec(opts)) { printRenderSpec(buildRecipesRender(recipes)); return; }
+      if (wantsJson(opts)) { printObject(recipes, opts); return; }
+      const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
+      const visible = recipes.slice(0, limit);
+      printRows(visible.map((recipe) => ({
+        slug: recipe.slug,
+        kind: recipe.kind ?? "",
+        version: recipe.version,
+        tags: compactText(recipe.default_tags.join(","), opts.verbose ? 120 : 40),
+        ...(opts.verbose ? {
+          steps: recipe.steps.length,
+          description: compactText(recipe.description, 80),
+        } : {}),
+      })), opts.verbose ? ["slug", "kind", "version", "tags", "steps", "description"] : ["slug", "kind", "version", "tags"]);
+      printDiscoveryHint(`Showing ${visible.length} of ${recipes.length} recipe(s). Use --limit <n>, --verbose, or --json for full records.`);
+    });
+
+  cmd
+    .command("built-ins")
+    .description("List built-in project recipes")
+    .option("--limit <n>", `Max rows for terminal output (default ${DEFAULT_LIST_LIMIT}, max ${MAX_HUMAN_LIMIT})`)
+    .option("--verbose", "Show descriptions and recipe step counts")
+    .option("-j, --json", "Output JSON")
+    .action((opts) => {
+      const recipes = builtInWorkspaceRecipes();
+      if (wantsJson(opts)) { printObject(recipes, opts); return; }
+      const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
+      const visible = recipes.slice(0, limit);
+      printRows(visible.map((recipe) => ({
+        slug: recipe.slug ?? "",
+        kind: recipe.kind ?? "",
+        tags: compactText(recipe.default_tags?.join(",") ?? "", opts.verbose ? 120 : 40),
+        name: recipe.name,
+        ...(opts.verbose ? {
+          steps: recipe.steps?.length ?? 0,
+          description: compactText(recipe.description, 80),
+        } : {}),
+      })), opts.verbose ? ["slug", "kind", "tags", "name", "steps", "description"] : ["slug", "kind", "tags", "name"]);
+      printDiscoveryHint(`Showing ${visible.length} of ${recipes.length} built-in recipe(s). Use --limit <n>, --verbose, or --json for full definitions.`);
+    });
+
+  cmd
+    .command("seed-defaults")
+    .description("Create missing built-in project recipes")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      const store = resolveProjectStore();
+      const created: unknown[] = [];
+      const existing: unknown[] = [];
+      for (const def of builtInWorkspaceRecipes()) {
+        const current = def.slug ? await store.getRecipe(def.slug) : null;
+        if (current) { existing.push(current); continue; }
+        created.push(await store.createRecipe(def));
+      }
+      const result = { created, existing };
+      if (wantsJson(opts)) { printObject(result, opts); return; }
+      console.log(chalk.green(`✓ Created ${created.length} built-in recipe(s)`));
+      if (existing.length) console.log(chalk.dim(`  existing: ${existing.length}`));
+    });
+}
+
+function registerAgentsCommand(program: Command): void {
+  const cmd = program.command("agents").description("Manage project agents");
+
+  cmd
+    .command("add")
+    .requiredOption("--name <name>", "Agent name")
+    .requiredOption("--kind <kind>", "Agent kind: human, ai, service, cli")
+    .option("--slug <slug>", "Agent slug")
+    .option("--provider <provider>", "Provider, e.g. openrouter")
+    .option("--model <model>", "Model name")
+    .option("--role <role>", "Default role")
+    .option("--permissions <permissions>", "Comma-separated permissions")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const kind = opts.kind as AgentKind;
+        if (!["human", "ai", "service", "cli"].includes(kind)) {
+          throw new Error("Agent kind must be human, ai, service, or cli");
+        }
+        const agent = await resolveProjectStore().createAgent({
+          name: opts.name,
+          slug: opts.slug,
+          kind,
+          provider: opts.provider,
+          model: opts.model,
+          role: opts.role,
+          permissions: splitList(opts.permissions),
+        });
+        if (wantsJson(opts)) { printObject(agent, opts); return; }
+        console.log(chalk.green(`✓ Agent created: ${agent.slug}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("list")
+    .option("--project <id-or-slug>", "List agents assigned to a project")
+    .option("--limit <n>", `Max rows for terminal output (default ${DEFAULT_LIST_LIMIT}, max ${MAX_HUMAN_LIMIT})`)
+    .option("--verbose", "Show assignment timestamps and permission summaries")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      if (opts.project) {
+        // Per-project assignments are an on-box sub-resource (not modeled by the
+        // /v1 API); this view is local-only, matching the Store contract.
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(opts.project);
+        const assignments = await store.getProjectAgents(project.id);
+        if (wantsJson(opts)) { printObject(assignments, opts); return; }
+        const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
+        const visible = assignments.slice(0, limit);
+        printRows(visible.map((assignment) => ({
+          agent: assignment.agent?.slug ?? assignment.agent_id,
+          role: assignment.role,
+          kind: assignment.agent?.kind ?? "",
+          ...(opts.verbose ? {
+            assigned_by: assignment.assigned_by ?? "",
+            created_at: assignment.created_at,
+            permissions: compactText(assignment.agent?.permissions.join(",") ?? "", 80),
+          } : {}),
+        })), opts.verbose ? ["agent", "role", "kind", "assigned_by", "created_at", "permissions"] : ["agent", "role", "kind"]);
+        printDiscoveryHint(`Showing ${visible.length} of ${assignments.length} assignment(s). Use --limit <n>, --verbose, or --json for full records.`);
+        return;
+      }
+      const agents = await resolveProjectStore().listAgents();
+      if (wantsJson(opts)) { printObject(agents, opts); return; }
+      const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
+      const visible = agents.slice(0, limit);
+      printRows(visible.map((agent) => ({
+        slug: agent.slug,
+        kind: agent.kind,
+        provider: agent.provider ?? "",
+        model: agent.model ?? "",
+        role: agent.role ?? "",
+        ...(opts.verbose ? { permissions: compactText(agent.permissions.join(","), 80) } : {}),
+      })), opts.verbose ? ["slug", "kind", "provider", "model", "role", "permissions"] : ["slug", "kind", "provider", "model", "role"]);
+      printDiscoveryHint(`Showing ${visible.length} of ${agents.length} agent(s). Use --limit <n>, --verbose, or --json for full records.`);
+    });
+
+  cmd
+    .command("assign <project> <agent>")
+    .description("Assign a registered agent to a project role")
+    .option("--role <role>", `Project role (${PROJECT_AGENT_ROLES.join(", ")})`, "contributor")
+    .option("--assigned-by <id-or-slug>", "Agent assigning the role; defaults to CLI agent")
+    .option("--metadata-json <json>", "Assignment metadata JSON object")
+    .option("-j, --json", "Output JSON")
+    .action(async (projectIdOrSlug, agentIdOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const project = await store.resolveTarget(projectIdOrSlug);
+        const agent = await store.getAgent(agentIdOrSlug);
+        if (!agent) throw new Error(`Agent not found: ${agentIdOrSlug}`);
+        const assignment = await store.assignAgent(project.id, {
+          agentId: agent.id,
+          role: parseProjectAgentRole(opts.role),
+          assignedBy: mutationAgentId(store, opts.assignedBy),
+          metadata: parseJsonObject(opts.metadataJson, "--metadata-json"),
+          source: "cli",
+          command: process.argv.join(" "),
+        });
+        if (wantsJson(opts)) { printObject(assignment, opts); return; }
+        console.log(chalk.green(`✓ Assigned ${agent.slug} to ${project.slug} as ${assignment.role}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+}
+
+function registerTmuxProfilesCommand(program: Command): void {
+  const cmd = program.command("tmux-profiles").description("Manage project tmux profiles");
+
+  cmd
+    .command("add")
+    .requiredOption("--name <name>", "Profile name")
+    .option("--slug <slug>", "Profile slug")
+    .option("--description <text>", "Description")
+    .option("--session-template <template>", "Session template", "{slug}")
+    .option("--attach", "Attach after applying")
+    .option("--windows-json <json>", "JSON array of profile windows")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const store = resolveProjectStore();
+        const profile = await store.createTmuxProfile({
+          name: opts.name,
+          slug: opts.slug,
+          description: opts.description,
+          session_template: opts.sessionTemplate,
+          attach: opts.attach,
+          windows: parseTmuxProfileWindowsJson(opts.windowsJson),
+        });
+        const payload = { profile, windows: await store.listTmuxProfileWindows(profile.id) };
+        if (wantsJson(opts)) { printObject(payload, opts); return; }
+        console.log(chalk.green(`✓ Tmux profile created: ${profile.slug}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("window-add <profile>")
+    .requiredOption("--name <template>", "Window name template")
+    .option("--path-template <template>", "Window path template")
+    .option("--command <command>", "Command template")
+    .option("--index <n>", "Window index")
+    .option("--attached", "Create focused rather than detached")
+    .option("-j, --json", "Output JSON")
+    .action(async (profileIdOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const profile = await store.getTmuxProfile(profileIdOrSlug);
+        if (!profile) throw new Error(`Tmux profile not found: ${profileIdOrSlug}`);
+        const window = await store.addTmuxProfileWindow({
+          profile_id: profile.id,
+          window_name_template: opts.name,
+          path_template: opts.pathTemplate,
+          command: opts.command,
+          window_index: opts.index ? Number.parseInt(opts.index, 10) : undefined,
+          detached: !opts.attached,
+        });
+        if (wantsJson(opts)) { printObject(window, opts); return; }
+        console.log(chalk.green(`✓ Window added: ${window.window_name_template}`));
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("list")
+    .option("--limit <n>", `Max rows for terminal output (default ${DEFAULT_LIST_LIMIT}, max ${MAX_HUMAN_LIMIT})`)
+    .option("--verbose", "Show description and window count")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      const store = resolveProjectStore();
+      const profiles = await store.listTmuxProfiles();
+      if (wantsJson(opts)) { printObject(profiles, opts); return; }
+      const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
+      const visible = profiles.slice(0, limit);
+      const windowCounts = opts.verbose
+        ? new Map(await Promise.all(visible.map(async (profile) => [profile.id, (await store.listTmuxProfileWindows(profile.id)).length] as const)))
+        : new Map<string, number>();
+      printRows(visible.map((profile) => ({
+        slug: profile.slug,
+        session: compactText(profile.session_template, 80),
+        attach: profile.attach ? "yes" : "no",
+        ...(opts.verbose ? {
+          windows: windowCounts.get(profile.id) ?? 0,
+          description: compactText(profile.description, 80),
+        } : {}),
+      })), opts.verbose ? ["slug", "session", "attach", "windows", "description"] : ["slug", "session", "attach"]);
+      printDiscoveryHint(`Showing ${visible.length} of ${profiles.length} tmux profile(s). Use --limit <n>, --verbose, --json, or 'projects tmux-profiles show <slug>' for details.`);
+    });
+
+  cmd
+    .command("show <profile>")
+    .option("-j, --json", "Output JSON")
+    .action(async (profileIdOrSlug, opts) => {
+      const store = resolveProjectStore();
+      const profile = await store.getTmuxProfile(profileIdOrSlug);
+      if (!profile) {
+        console.error(chalk.red(`Tmux profile not found: ${profileIdOrSlug}`));
+        process.exit(1);
+      }
+      const payload = { profile, windows: await store.listTmuxProfileWindows(profile.id) };
+      if (wantsJson(opts)) { printObject(payload, opts); return; }
+      console.log(`${chalk.bold(profile.name)} ${chalk.dim(`(${profile.slug})`)}`);
+      for (const window of payload.windows) console.log(`  ${window.window_name_template}`);
+    });
+
+  cmd
+    .command("apply <profile> <project>")
+    .option("--dry-run", "Plan tmux changes without applying")
+    .option("-j, --json", "Output JSON")
+    .action(async (profileIdOrSlug, projectIdOrSlug, opts) => {
+      try {
+        const store = resolveProjectStore();
+        const profile = await store.getTmuxProfile(profileIdOrSlug);
+        if (!profile) throw new Error(`Tmux profile not found: ${profileIdOrSlug}`);
+        const workspace = await store.resolveTarget(projectIdOrSlug);
+        const agentId = mutationAgentId(store);
+        const windows = await store.listTmuxProfileWindows(profile.id);
+        const result = opts.dryRun
+          ? applyWorkspaceTmuxProfile(workspace, profile, windows, {
+              dryRun: true,
+              source: "cli",
+              command: process.argv.join(" "),
+            })
+          : await withWorkspaceLock(store, workspace, agentId, "tmux profile apply", () => applyWorkspaceTmuxProfile(workspace, profile, windows, {
+              source: "cli",
+              command: process.argv.join(" "),
+            }));
+        if (wantsJson(opts)) { printObject(result, opts); return; }
+        console.log(`${result.success ? chalk.green("✓") : chalk.red("✗")} ${result.session_action} ${result.session_name}`);
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+}
