@@ -273,4 +273,63 @@ describe("monitor kill batch operations", () => {
     expect(child.stdout).toBe("");
     expect(child.stderr).toContain("PIDs must be a comma-separated list of integers");
   });
+
+  it("requires confirmation before batch-killing multiple PIDs", () => {
+    const marker = `monitor-kill-batch-confirm-${process.pid}-${Date.now()}`;
+    const first = startMarkedProcess(marker);
+    const second = startMarkedProcess(marker);
+
+    const result = runMonitorKill(["--pids", `${first.pid},${second.pid}`, "--json"], "no\n");
+
+    expect(result.status).toBe(0);
+    const output = JSON.parse(result.stdout) as {
+      cancelled: boolean;
+      actions: unknown[];
+    };
+    expect(output.cancelled).toBe(true);
+    expect(output.actions).toEqual([]);
+    expect(isAlive(first.pid!)).toBe(true);
+    expect(isAlive(second.pid!)).toBe(true);
+  });
+
+  it("refuses oversized batch PID lists before sending any signals", () => {
+    const marker = `monitor-kill-batch-limit-${process.pid}-${Date.now()}`;
+    const spawned = Array.from({ length: 6 }, () => startMarkedProcess(marker));
+
+    const result = runMonitorKill(
+      ["--pids", spawned.map((c) => c.pid).join(","), "--yes", "--json"]
+    );
+
+    expect(result.status).toBe(1);
+    const output = JSON.parse(result.stdout) as {
+      error: string;
+      actions: unknown[];
+    };
+    expect(output.error).toContain("no processes were killed");
+    expect(output.actions).toEqual([]);
+    for (const child of spawned) {
+      expect(isAlive(child.pid!)).toBe(true);
+    }
+  });
+
+  it("batch-kills multiple PIDs with --yes", async () => {
+    const marker = `monitor-kill-batch-kill-${process.pid}-${Date.now()}`;
+    const first = startMarkedProcess(marker);
+    const second = startMarkedProcess(marker);
+
+    const result = runMonitorKill(["--pids", `${first.pid},${second.pid}`, "--yes", "--json"]);
+
+    expect(result.status).toBe(0);
+    const output = JSON.parse(result.stdout) as Array<{ pid: number; action: string }>;
+    expect(output).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ pid: first.pid, action: "killed" }),
+        expect.objectContaining({ pid: second.pid, action: "killed" }),
+      ])
+    );
+    await waitForChildExit(first);
+    await waitForChildExit(second);
+    expect(isAlive(first.pid!)).toBe(false);
+    expect(isAlive(second.pid!)).toBe(false);
+  });
 });

@@ -1308,18 +1308,18 @@ program
 
     if (opts.pids !== undefined || opts.filter !== undefined) {
       let pids: number[];
-      let collector: ReturnType<typeof getCollectorForMachine> | undefined;
+      let collector: ReturnType<typeof getCollectorForMachine>;
+      try {
+        collector = getCollectorForMachine(machineId);
+      } catch (error) {
+        return fail(
+          `Error selecting machine: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
 
       if (opts.pids !== undefined) {
         pids = opts.pids;
       } else {
-        try {
-          collector = getCollectorForMachine(machineId);
-        } catch (error) {
-          return fail(
-            `Error selecting machine: ${error instanceof Error ? error.message : String(error)}`
-          );
-        }
         const result = await collector.collect();
         if (!result.ok) return fail(`Error collecting snapshot: ${result.error}`);
 
@@ -1333,9 +1333,46 @@ program
         pids = selected.map((row) => row.pid);
       }
 
+      if (pids.length === 0) {
+        if (opts.json) {
+          console.log(JSON.stringify([]));
+        } else {
+          console.log(chalk.yellow("  No processes matched"));
+        }
+        return;
+      }
+
       const killMachineId = collector instanceof LocalCollector ? "local" : machineId;
       const remoteCollector = collector instanceof LocalCollector ? undefined : collector;
       const pm = new ProcessManager();
+      const remainingKillSlots = pm.remainingKillSlots(killMachineId);
+
+      if (!opts.dryRun && pids.length > remainingKillSlots) {
+        const message =
+          `Refused: ${pids.length} process(es) selected, ` +
+          `but only ${remainingKillSlots} kill operation(s) remain this minute; no processes were killed`;
+        if (opts.json) {
+          console.log(JSON.stringify({ error: message, actions: [] }));
+        } else {
+          console.error(chalk.red(`  ${message}`));
+        }
+        process.exit(1);
+      }
+
+      if (!opts.dryRun && pids.length > 1 && !opts.yes) {
+        const confirmed = await confirmProcessKills(
+          `Kill ${pids.length} process(es) with ${signal}?`
+        );
+        if (!confirmed) {
+          if (opts.json) {
+            console.log(JSON.stringify({ cancelled: true, actions: [] }));
+          } else {
+            console.log(chalk.yellow("  Cancelled"));
+          }
+          return;
+        }
+      }
+
       const actions: ProcessAction[] = [];
 
       for (const pid of pids) {
