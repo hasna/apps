@@ -203,9 +203,9 @@ describe("MCP server", () => {
 
     test("hooks_list returns all hooks by category", async () => {
       const data = parseResult(await client.callTool({ name: "hooks_list", arguments: {} }));
-      expect(data.total).toBe(50);
+      expect(data.total).toBe(51);
       expect(data.count).toBe(25);
-      expect(data.omitted).toBe(25);
+      expect(data.omitted).toBe(26);
       expect(data.hooks[0]).toHaveProperty("name");
       expect(data.hooks[0]).not.toHaveProperty("description");
       expect(data.hint).toContain("compact:false");
@@ -368,9 +368,9 @@ describe("MCP server", () => {
 
     test("hooks_install_all installs default-compatible hooks", async () => {
       const data = parseResult(await client.callTool({ name: "hooks_install_all", arguments: {} }));
-      expect(data.total).toBe(50);
-      expect(data.success).toBe(48);
-      expect(data.installed).toHaveLength(48);
+      expect(data.total).toBe(51);
+      expect(data.success).toBe(49);
+      expect(data.installed).toHaveLength(49);
       expect(data.failed.map((f: any) => f.hook)).toEqual(["knowledge-context", "prompt-guard"]);
     });
 
@@ -603,7 +603,7 @@ describe("MCP server", () => {
     test("hooks_install_all with overwrite after install", async () => {
       await client.callTool({ name: "hooks_install_all", arguments: {} });
       const data = parseResult(await client.callTool({ name: "hooks_install_all", arguments: { overwrite: true } }));
-      expect(data.success).toBe(48);
+      expect(data.success).toBe(49);
     });
 
     // --- docs for every hook ---
@@ -664,7 +664,7 @@ describe("MCP server", () => {
 
     test("install all compatible default hooks then remove a subset", async () => {
       const install = parseResult(await client.callTool({ name: "hooks_install_all", arguments: {} }));
-      expect(install.success).toBe(48);
+      expect(install.success).toBe(49);
 
       const allHooks = [
         "gitguard", "branchprotect", "checkpoint",
@@ -977,7 +977,7 @@ describe("MCP server", () => {
 
     test("hooks_list compact returns minimal fields", async () => {
       const data = parseResult(await client.callTool({ name: "hooks_list", arguments: { compact: true } }));
-      expect(data.total).toBe(50);
+      expect(data.total).toBe(51);
       expect(data.count).toBe(25);
       expect(data.hooks[0]).toHaveProperty("name");
       expect(data.hooks[0]).toHaveProperty("event");

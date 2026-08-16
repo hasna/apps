@@ -1,0 +1,12 @@
+{
+  "name": "hook-spiral-detector",
+  "version": "0.1.0",
+  "description": "Interrupts Claude Code sessions after repeated identical command failures",
+  "type": "module",
+  "main": "./src/hook.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "author": "Hasna",
+  "license": "Apache-2.0"
+}

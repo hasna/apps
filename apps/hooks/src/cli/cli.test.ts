@@ -92,7 +92,7 @@ describe("CLI", () => {
   describe("hooks list", () => {
     test("lists all hooks", async () => {
       const { stdout } = await run("list");
-      expect(stdout).toContain("Available hooks (50, showing 20)");
+      expect(stdout).toContain("Available hooks (51, showing 20)");
       expect(stdout).toContain("Git Safety");
       expect(stdout).toContain("Code Quality");
       expect(stdout).toContain("Security");
@@ -534,13 +534,13 @@ describe("CLI", () => {
   });
 
   describe("hooks install --all (JSON)", () => {
-    test("--all --json attempts all 50 hooks and reports target-incompatible Codewith-only hooks", async () => {
+    test("--all --json attempts all 51 hooks and reports target-incompatible Codewith-only hooks", async () => {
       backupSettings();
       try {
         const data = await runJson("install", "--all");
-        expect(data.total).toBe(50);
-        expect(data.success).toBe(48);
-        expect(data.installed).toHaveLength(48);
+        expect(data.total).toBe(51);
+        expect(data.success).toBe(49);
+        expect(data.installed).toHaveLength(49);
         expect(data.failed.map((f: any) => f.hook)).toEqual(["knowledge-context", "prompt-guard"]);
         expect(data.scope).toBe("global");
       } finally {
@@ -852,7 +852,7 @@ describe("CLI", () => {
       backupSettings();
       try {
         const install = await runJson("install", "--all");
-        expect(install.success).toBe(48);
+        expect(install.success).toBe(49);
 
         const listed = await runJson("list", "--installed");
         expect(listed.length).toBeGreaterThanOrEqual(30);
