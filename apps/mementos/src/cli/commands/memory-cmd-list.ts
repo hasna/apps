@@ -54,7 +54,10 @@ export function registerListCommand(program: Command): void {
         let projectId: string | undefined;
         if (projectPath) {
           const project = getProject(resolve(projectPath));
-          if (project) projectId = project.id;
+          if (!project) {
+            throw new Error(`Project not found: ${projectPath}`);
+          }
+          projectId = project.id;
         }
 
         const filter: MemoryFilter = {
