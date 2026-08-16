@@ -4182,6 +4182,12 @@
             "type": "string",
             "nullable": true
           },
+          "expiresAfterRuns": {
+            "type": "integer",
+            "minimum": 1,
+            "nullable": true,
+            "description": "Expire the loop after this many consecutive successful runs. Independent of expiresAt."
+          },
           "createdAt": {
             "type": "string"
           },
@@ -4219,6 +4225,12 @@
           "target": {
             "type": "object",
             "additionalProperties": true
+          },
+          "expiresAfterRuns": {
+            "type": "integer",
+            "minimum": 1,
+            "nullable": true,
+            "description": "Expire the loop after this many consecutive successful runs. Independent of expiresAt."
           }
         },
         "required": [
@@ -4250,6 +4262,12 @@
           "expiresAt": {
             "type": "string",
             "nullable": true
+          },
+          "expiresAfterRuns": {
+            "type": "integer",
+            "minimum": 1,
+            "nullable": true,
+            "description": "Expire the loop after this many consecutive successful runs. Null clears the ceiling. Independent of expiresAt."
           },
           "maxAttempts": {
             "type": "integer",

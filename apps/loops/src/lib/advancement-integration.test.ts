@@ -351,4 +351,75 @@ describe("loop advancement storage and scheduler integration", () => {
       store.close();
     }
   });
+
+  test("expires a loop after N consecutive successful runs, writes the marker, and a resume restarts the streak", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "expires-after-runs",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          expiresAfterRuns: 3,
+          maxAttempts: 1,
+        },
+        new Date("2026-01-01T00:00:00.000Z"),
+      );
+      expect(store.getLoop(loop.id)).toMatchObject({ expiresAfterRuns: 3 });
+
+      // Two clean runs stay under the ceiling.
+      for (let i = 1; i <= 2; i += 1) {
+        const slot = `2026-01-01T00:0${i}:00.000Z`;
+        const claimed = store.claimRun(loop, slot, "runner", new Date(slot))!;
+        const finished = store.finalizeRun(claimed.run.id, {
+          status: "succeeded",
+          finishedAt: `2026-01-01T00:0${i}:10.000Z`,
+          durationMs: 10_000,
+          stdout: "clean",
+          stderr: "",
+          exitCode: 0,
+        });
+        advanceLoop(store, loop, finished, new Date(finished.finishedAt!), true, { random: noJitter });
+      }
+      expect(store.getLoop(loop.id)?.status).toBe("active");
+
+      // The third clean run expires the loop and writes the expiry marker.
+      const third = store.claimRun(loop, "2026-01-01T00:03:00.000Z", "runner", new Date("2026-01-01T00:03:01.000Z"))!;
+      const thirdFinished = store.finalizeRun(third.run.id, {
+        status: "succeeded",
+        finishedAt: "2026-01-01T00:03:10.000Z",
+        durationMs: 9_000,
+        stdout: "clean",
+        stderr: "",
+        exitCode: 0,
+      });
+      advanceLoop(store, loop, thirdFinished, new Date(thirdFinished.finishedAt!), true, { random: noJitter });
+      const expired = store.getLoop(loop.id)!;
+      expect(expired.status).toBe("expired");
+      expect(expired.nextRunAt).toBeUndefined();
+      const markers = store.listRuns({ loopId: loop.id, status: "skipped" });
+      expect(markers).toHaveLength(1);
+      expect(markers[0]!.error).toContain("expired after consecutive successful runs: 3");
+
+      // A manual resume gives the loop a fresh streak instead of re-expiring it.
+      const resumed = store.updateLoop(loop.id, {
+        status: "active",
+        nextRunAt: "2026-01-01T00:04:00.000Z",
+      });
+      expect(resumed.status).toBe("active");
+      const fourth = store.claimRun(resumed, "2026-01-01T00:04:00.000Z", "runner", new Date("2026-01-01T00:04:01.000Z"))!;
+      const fourthFinished = store.finalizeRun(fourth.run.id, {
+        status: "succeeded",
+        finishedAt: "2026-01-01T00:04:10.000Z",
+        durationMs: 9_000,
+        stdout: "clean",
+        stderr: "",
+        exitCode: 0,
+      });
+      advanceLoop(store, resumed, fourthFinished, new Date(fourthFinished.finishedAt!), true, { random: noJitter });
+      expect(store.getLoop(loop.id)?.status).toBe("active");
+    } finally {
+      store.close();
+    }
+  });
 });

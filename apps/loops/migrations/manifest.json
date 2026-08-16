@@ -70,6 +70,11 @@
       "id": "0014_loops_identity_aliases",
       "file": "0014_loops_identity_aliases.sql",
       "checksum": "sha256:9e73cf54d084709bf08f4a74dc1d5900a647cd574acb958503e5b50b8122e792"
+    },
+    {
+      "id": "0014_loop_expires_after_runs",
+      "file": "0014_loop_expires_after_runs.sql",
+      "checksum": "sha256:4c60d6c900c2f3146bd20da3bc3665a0a40e1b7e145433d8944d663da57460d7"
     }
   ]
 }

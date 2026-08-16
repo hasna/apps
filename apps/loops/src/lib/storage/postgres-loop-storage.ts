@@ -110,7 +110,7 @@ import type {
 } from "../../types.js";
 import { normalizeRunReceipt } from "../run-receipts.js";
 import { normalizeLoopLabels } from "../labels.js";
-import { assertLoopStatus, assertMaxAttempts } from "../loop-status.js";
+import { assertExpiresAfterRuns, assertLoopStatus, assertMaxAttempts } from "../loop-status.js";
 import { normalizeRunCompletion } from "../run-completion.js";
 import type { PoolQueryClient, TypedQueryClient } from "../../generated/storage-kit/query.js";
 import type { LoopStorageContract, LoopStorageMethodName } from "./contract.js";
@@ -527,13 +527,14 @@ export class PostgresLoopStorage implements LoopStorageContract {
       retryDelayMs: input.retryDelayMs ?? 60_000,
       leaseMs: input.leaseMs ?? 30 * 60_000,
       expiresAt: input.expiresAt,
+      expiresAfterRuns: input.expiresAfterRuns,
       createdAt: now,
       updatedAt: now,
     };
     await this.client.execute(
       `INSERT INTO loops (id, name, description, labels_json, status, schedule_json, target_json, machine_json, next_run_at, retry_scheduled_for,
-        goal_json, catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms, expires_at, created_at, updated_at, tenant_id)
-       VALUES ($1,$2,$3,$4::jsonb,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,NULL,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18,$19,open_loops_current_tenant_id())`,
+        goal_json, catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms, expires_at, expires_after_runs, created_at, updated_at, tenant_id)
+       VALUES ($1,$2,$3,$4::jsonb,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,NULL,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,open_loops_current_tenant_id())`,
       [
         loop.id,
         loop.name,
@@ -552,6 +553,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
         loop.retryDelayMs,
         loop.leaseMs,
         loop.expiresAt ?? null,
+        loop.expiresAfterRuns ?? null,
         loop.createdAt,
         loop.updatedAt,
       ],
@@ -633,6 +635,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const [id, patch, opts = {}] = args;
     if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
     if ("maxAttempts" in patch && patch.maxAttempts !== undefined) assertMaxAttempts(patch.maxAttempts);
+    if ("expiresAfterRuns" in patch && patch.expiresAfterRuns !== undefined) assertExpiresAfterRuns(patch.expiresAfterRuns);
     const updated = (opts.now ?? new Date()).toISOString();
     return this.client.transaction(async (c) => {
       const current = await this.loadLoop(c, id);
@@ -645,15 +648,16 @@ export class PostgresLoopStorage implements LoopStorageContract {
         updatedAt: updated,
       };
       const res = await c.query(
-        `UPDATE loops SET status=$1, labels_json=$2::jsonb, next_run_at=$3, retry_scheduled_for=$4, expires_at=$5, max_attempts=$6, updated_at=$7
-         WHERE tenant_id = open_loops_current_tenant_id() AND id=$8
-           AND ($9::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$9 AND expires_at > $10))`,
+        `UPDATE loops SET status=$1, labels_json=$2::jsonb, next_run_at=$3, retry_scheduled_for=$4, expires_at=$5, expires_after_runs=$6, max_attempts=$7, updated_at=$8
+         WHERE tenant_id = open_loops_current_tenant_id() AND id=$9
+           AND ($10::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$10 AND expires_at > $11))`,
         [
           merged.status,
           JSON.stringify(merged.labels),
           merged.nextRunAt ?? null,
           merged.retryScheduledFor ?? null,
           merged.expiresAt ?? null,
+          merged.expiresAfterRuns ?? null,
           merged.maxAttempts,
           merged.updatedAt,
           id,
@@ -994,6 +998,80 @@ export class PostgresLoopStorage implements LoopStorageContract {
     });
   }
 
+  async expireLoopIfCurrent(...args: M<"expireLoopIfCurrent">["args"]): Promise<M<"expireLoopIfCurrent">["result"]> {
+    const [id, expected, patch, marker, opts = {}] = args;
+    if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
+    const updated = (opts.now ?? new Date()).toISOString();
+    const scrubbedReason = scrubbedOrNull(marker.reason) ?? "";
+    return this.client.transaction(async (c) => {
+      const currentRow = await c.get<LoopRow>(
+        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND id=$1 FOR UPDATE",
+        [id],
+      );
+      const current = currentRow ? rowToLoop(currentRow) : undefined;
+      if (
+        !current ||
+        current.archivedAt ||
+        current.status !== expected.status ||
+        current.nextRunAt !== expected.nextRunAt ||
+        current.retryScheduledFor !== expected.retryScheduledFor
+      ) {
+        return undefined;
+      }
+      const merged: Loop = { ...current, ...patch, updatedAt: updated };
+      const res = await c.query(
+        `UPDATE loops SET status=$1, next_run_at=$2, retry_scheduled_for=$3, updated_at=$4
+         WHERE tenant_id = open_loops_current_tenant_id() AND id=$5
+           AND archived_at IS NULL
+           AND status=$6
+           AND next_run_at IS NOT DISTINCT FROM $7::timestamptz
+           AND retry_scheduled_for IS NOT DISTINCT FROM $8::timestamptz
+           AND ($9::text IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease
+             WHERE tenant_id = open_loops_current_tenant_id() AND id=$9 AND expires_at > $10
+           ))`,
+        [
+          merged.status,
+          merged.nextRunAt ?? null,
+          merged.retryScheduledFor ?? null,
+          updated,
+          id,
+          expected.status,
+          expected.nextRunAt ?? null,
+          expected.retryScheduledFor ?? null,
+          opts.daemonLeaseId ?? null,
+          updated,
+        ],
+      );
+      if (res.rowCount !== 1) return undefined;
+
+      let markerAtMs = new Date(marker.scheduledFor).getTime();
+      let markerRun: LoopRun | undefined;
+      for (let probe = 0; probe < 1_000 && !markerRun; probe += 1) {
+        const scheduledFor = new Date(markerAtMs).toISOString();
+        const markerId = genId();
+        const inserted = await c.get<{ id: string }>(
+          `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
+            claimed_by, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at, tenant_id)
+           VALUES ($1,$2,$3,$4,1,'skipped',NULL,$5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$6,$5,$5,open_loops_current_tenant_id())
+           ON CONFLICT (tenant_id, loop_id, scheduled_for) DO NOTHING
+           RETURNING id`,
+          [markerId, current.id, current.name, scheduledFor, updated, scrubbedReason],
+        );
+        if (inserted) markerRun = await this.loadRun(c, inserted.id);
+        markerAtMs += 1;
+      }
+      if (!markerRun) throw new Error(`expiry marker slot unavailable: ${id}`);
+      if (patch.status && patch.status !== "active") {
+        const status: WorkflowWorkItemStatus = patch.status === "paused" ? "deferred" : "cancelled";
+        await this.setWorkItemsForLoop(c, id, status, `loop ${patch.status}`, updated);
+      }
+      const loop = await this.loadLoop(c, id);
+      if (!loop) throw new Error(`expiry loop missing after update: ${id}`);
+      return { loop, marker: markerRun };
+    });
+  }
+
   async renameLoop(...args: M<"renameLoop">["args"]): Promise<M<"renameLoop">["result"]> {
     const [id, name, opts = {}] = args;
     const current = await this.getLoop(id);
@@ -1214,8 +1292,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
     await this.client.execute(
       `INSERT INTO loops (id, name, description, labels_json, status, archived_at, archived_from_status, schedule_json, target_json,
         goal_json, machine_json, next_run_at, retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts,
-        retry_delay_ms, lease_ms, expires_at, created_at, updated_at, tenant_id)
-       VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,open_loops_current_tenant_id())
+        retry_delay_ms, lease_ms, expires_at, expires_after_runs, created_at, updated_at, tenant_id)
+       VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,open_loops_current_tenant_id())
        ON CONFLICT(tenant_id,id) DO UPDATE SET
          name=EXCLUDED.name,
          description=EXCLUDED.description,
@@ -1236,6 +1314,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
          retry_delay_ms=EXCLUDED.retry_delay_ms,
          lease_ms=EXCLUDED.lease_ms,
          expires_at=EXCLUDED.expires_at,
+         expires_after_runs=EXCLUDED.expires_after_runs,
          created_at=EXCLUDED.created_at,
          updated_at=EXCLUDED.updated_at`,
       [
@@ -1259,6 +1338,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
         loop.retryDelayMs,
         loop.leaseMs,
         loop.expiresAt ?? null,
+        loop.expiresAfterRuns ?? null,
         loop.createdAt,
         loop.updatedAt,
       ],

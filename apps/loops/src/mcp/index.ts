@@ -156,6 +156,7 @@ const createLoopCommonSchema = {
   retryDelayMs: z.number().int().positive().optional().describe("Base retry delay in milliseconds (exponential backoff with jitter)."),
   leaseMs: z.number().int().positive().optional().describe("Run lease in milliseconds before an unresponsive runner is considered dead."),
   expiresAt: z.string().optional().describe("Date/time after which the loop expires and stops scheduling."),
+  expiresAfterRuns: z.number().int().positive().optional().describe("Expire the loop after this many consecutive successful runs. Independent of expiresAt; a failed run resets the streak, skipped runs are neutral."),
 };
 
 export interface LoopsMcpToolMetadata {
@@ -382,6 +383,7 @@ function commonCreateInput(input: {
   retryDelayMs?: number;
   leaseMs?: number;
   expiresAt?: string;
+  expiresAfterRuns?: number;
 }): CreateLoopInput {
   const name = nonEmpty(input.name, "name");
   const schedule = normalizeSchedule(input.schedule);
@@ -398,6 +400,7 @@ function commonCreateInput(input: {
     retryDelayMs: input.retryDelayMs,
     leaseMs: input.leaseMs,
     expiresAt: input.expiresAt ? normalizeDate(input.expiresAt, "expiresAt") : undefined,
+    expiresAfterRuns: input.expiresAfterRuns,
   };
 }
 

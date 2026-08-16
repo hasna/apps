@@ -34,6 +34,7 @@ export class SqliteLoopStorage implements LoopStorageContract {
   getLoopMutationResult(...args: StoreMethod<"getLoopMutationResult">["args"]) { return this.call("getLoopMutationResult", ...args); }
   advanceLoopIfCurrent(...args: StoreMethod<"advanceLoopIfCurrent">["args"]) { return this.call("advanceLoopIfCurrent", ...args); }
   tripCircuitBreakerIfCurrent(...args: StoreMethod<"tripCircuitBreakerIfCurrent">["args"]) { return this.call("tripCircuitBreakerIfCurrent", ...args); }
+  expireLoopIfCurrent(...args: StoreMethod<"expireLoopIfCurrent">["args"]) { return this.call("expireLoopIfCurrent", ...args); }
   renameLoop(...args: StoreMethod<"renameLoop">["args"]) { return this.call("renameLoop", ...args); }
   archiveLoop(...args: StoreMethod<"archiveLoop">["args"]) { return this.call("archiveLoop", ...args); }
   unarchiveLoop(...args: StoreMethod<"unarchiveLoop">["args"]) { return this.call("unarchiveLoop", ...args); }

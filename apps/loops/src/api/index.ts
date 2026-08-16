@@ -66,7 +66,7 @@ import {
 } from "../lib/advancement.js";
 import { normalizeLoopLabels } from "../lib/labels.js";
 import { supportsConfiguredLoopSkip } from "../lib/loop-result.js";
-import { isLoopStatus, isMaxAttempts, LOOP_STATUSES } from "../lib/loop-status.js";
+import { isExpiresAfterRuns, isLoopStatus, isMaxAttempts, LOOP_STATUSES } from "../lib/loop-status.js";
 import { normalizeRunCompletion } from "../lib/run-completion.js";
 import { scrubSecretsDeep } from "../lib/redact.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
@@ -716,6 +716,7 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
       nextRunAt: string | null;
       retryScheduledFor: string | null;
       expiresAt: string | null;
+      expiresAfterRuns: number | null;
       maxAttempts: unknown;
     }>;
     // Only forward keys the caller actually sent. Store.updateLoop merges
@@ -723,7 +724,7 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
     // current value: emitting all four keys unconditionally wiped omitted
     // schedule fields (and set status=NULL -> NOT NULL 500). A key set to
     // JSON null is an explicit clear (mapped to undefined -> merged to null).
-    const patch: Partial<{ status: LoopStatus; labels: string[]; nextRunAt: string; retryScheduledFor: string; expiresAt: string; maxAttempts: number }> = {};
+    const patch: Partial<{ status: LoopStatus; labels: string[]; nextRunAt: string; retryScheduledFor: string; expiresAt: string; expiresAfterRuns: number; maxAttempts: number }> = {};
     if ("status" in body) {
       if (!isLoopStatus(body.status)) throw apiError("invalid_loop_status", 422);
       patch.status = body.status;
@@ -731,6 +732,12 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
     if ("maxAttempts" in body) {
       if (!isMaxAttempts(body.maxAttempts)) throw apiError("invalid_max_attempts", 422);
       patch.maxAttempts = body.maxAttempts;
+    }
+    if ("expiresAfterRuns" in body) {
+      if (body.expiresAfterRuns !== null && !isExpiresAfterRuns(body.expiresAfterRuns)) {
+        throw apiError("invalid_expires_after_runs", 422);
+      }
+      patch.expiresAfterRuns = body.expiresAfterRuns === null ? undefined : body.expiresAfterRuns;
     }
     if ("labels" in body) patch.labels = normalizedLabels(body.labels);
     if ("nextRunAt" in body) patch.nextRunAt = body.nextRunAt === null ? undefined : body.nextRunAt;
@@ -2005,9 +2012,17 @@ async function advanceLoopAfterRun(
         { scheduledFor: plan.markerScheduledFor, reason: plan.reason },
         { recoveredRun: opts.recoveredRun },
       )
-      : await storage.advanceLoopIfCurrent(current!.id, current!, plan.patch, {
-        recoveredRun: opts.recoveredRun,
-      });
+      : plan.kind === "expires_after_runs"
+        ? await storage.expireLoopIfCurrent(
+          current!.id,
+          current!,
+          plan.patch,
+          { scheduledFor: plan.markerScheduledFor, reason: plan.reason },
+          { recoveredRun: opts.recoveredRun },
+        )
+        : await storage.advanceLoopIfCurrent(current!.id, current!, plan.patch, {
+          recoveredRun: opts.recoveredRun,
+        });
     if (applied) return;
     if (opts.recoveredRun) {
       const latest = await storage.getRun(opts.recoveredRun.id);

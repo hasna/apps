@@ -15,6 +15,7 @@ export type LoopStorageMethodName =
   | "getLoopMutationResult"
   | "advanceLoopIfCurrent"
   | "tripCircuitBreakerIfCurrent"
+  | "expireLoopIfCurrent"
   | "renameLoop"
   | "archiveLoop"
   | "unarchiveLoop"
@@ -108,6 +109,7 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   getLoopMutationResult: AsyncStoreMethod<"getLoopMutationResult">;
   advanceLoopIfCurrent: AsyncStoreMethod<"advanceLoopIfCurrent">;
   tripCircuitBreakerIfCurrent: AsyncStoreMethod<"tripCircuitBreakerIfCurrent">;
+  expireLoopIfCurrent: AsyncStoreMethod<"expireLoopIfCurrent">;
   renameLoop: AsyncStoreMethod<"renameLoop">;
   archiveLoop: AsyncStoreMethod<"archiveLoop">;
   unarchiveLoop: AsyncStoreMethod<"unarchiveLoop">;
