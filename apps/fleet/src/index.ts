@@ -12,3 +12,7 @@ export { buildApp } from "./server/app.js";
 export { openApiDocument, serializeOpenApiDocument } from "./api/index.js";
 export { getDatabase, closeDatabase, resetDatabase } from "./db/database.js";
 export { health } from "./server/health.js";
+export * from "./core/verification.js";
+export * from "./core/fraction.js";
+export * from "./core/io.js";
+export * from "./core/types.js";

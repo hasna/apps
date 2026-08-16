@@ -13,6 +13,9 @@ import { REGISTRY, validateInput, type OpContext, type OpDescriptor } from "../s
 import { toErrorEnvelope } from "../types/index.js";
 import { checkOpenApiDocument, serializeOpenApiDocument } from "../api/index.js";
 import { renderDashboard } from "./dashboard.js";
+import { loadProbeFile, loadSourceFile, parsePositiveControl } from "../core/io.js";
+import { exitCodeForResult, verifyFleet } from "../core/verification.js";
+import type { FleetSource, PositiveControl } from "../core/types.js";
 
 let jsonMode = false;
 
@@ -25,6 +28,10 @@ function fail(error: unknown): never {
   const env = toErrorEnvelope(error);
   console.log(JSON.stringify(env));
   process.exit(1);
+}
+
+function collect(value: string, previous: string[]): string[] {
+  return previous.concat([value]);
 }
 
 function snakeToCamel(s: string): string {
@@ -110,6 +117,34 @@ function build(): Command {
     .action(async (opts: { entityId: string; windowDays: string }) => {
       const ctx: OpContext = { db: getDatabase(), principal: localOwnerPrincipal(), adapters: defaultAdapters() };
       await renderDashboard(ctx, opts.entityId, Number.parseInt(opts.windowDays, 10) || 30);
+    });
+
+  program
+    .command("verify")
+    .description("Fleet verification: provenance-bearing coverage fraction over inventory sources")
+    .option("--manifest <path>", "manifest inventory JSON file")
+    .option("--aws <path>", "aws-ec2 inventory JSON file")
+    .option("--tailscale <path>", "tailscale inventory JSON file")
+    .option("--source <name=path>", "additional named inventory source (repeatable)", collect, [])
+    .option("--probes <path>", "probe observations JSON file")
+    .option("--positive-control <source:evidence>", "observed positive control (repeatable)", collect, [])
+    .action(async (opts: {
+      manifest?: string; aws?: string; tailscale?: string; source: string[]; probes?: string; positiveControl: string[];
+    }) => {
+      const sources: FleetSource[] = [];
+      if (opts.manifest) sources.push(await loadSourceFile(opts.manifest, "manifest"));
+      if (opts.aws) sources.push(await loadSourceFile(opts.aws, "aws-ec2"));
+      if (opts.tailscale) sources.push(await loadSourceFile(opts.tailscale, "tailscale"));
+      for (const pair of opts.source) {
+        const separator = pair.indexOf("=");
+        if (separator <= 0) throw new Error(`--source uses name=path`);
+        sources.push(await loadSourceFile(pair.slice(separator + 1), pair.slice(0, separator)));
+      }
+      const probes = opts.probes ? await loadProbeFile(opts.probes) : [];
+      const positiveControls: PositiveControl[] = opts.positiveControl.map(parsePositiveControl);
+      const result = verifyFleet({ sources, probes, positiveControls });
+      emit(result);
+      process.exitCode = exitCodeForResult(result);
     });
 
   const openapi = program.command("openapi").description("OpenAPI document tooling");
