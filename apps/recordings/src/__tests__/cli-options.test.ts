@@ -1,0 +1,198 @@
+import { describe, expect, test } from "bun:test";
+import { applyEnhancementOptions, parseListPagination } from "../cli/options.js";
+import type { RecordingsConfig } from "../types/index.js";
+
+function config(auto_enhance = true): RecordingsConfig {
+  return {
+    openai_api_key: "sk-test",
+    enhancement_api_key: "sk-enhance",
+    transcription_model: "gpt-4o-transcribe",
+    enhancement_model: "gpt-4o",
+    language: "en",
+    audio_format: "wav",
+    sample_rate: 16_000,
+    record_command: "sox",
+    hotkey: "space",
+    transcription_prompt: "",
+    transcriber_prompt: "",
+    post_processing_mode: "auto",
+    auto_enhance,
+    enhance_triggers: [],
+    keyword_transforms: {},
+    db_path: "/tmp/recordings.db",
+    audio_dir: "/tmp/audio",
+    max_recording_seconds: 1_800,
+  };
+}
+
+describe("CLI enhancement options", () => {
+  test("commander --no-enhance disables auto enhancement", () => {
+    const cfg = config(true);
+
+    applyEnhancementOptions(cfg, { enhance: false });
+
+    expect(cfg.auto_enhance).toBe(false);
+    expect(cfg.post_processing_mode).toBe("off");
+  });
+
+  test("legacy noEnhance option shape still disables auto enhancement", () => {
+    const cfg = config(true);
+
+    applyEnhancementOptions(cfg, { noEnhance: false });
+
+    expect(cfg.auto_enhance).toBe(false);
+    expect(cfg.post_processing_mode).toBe("off");
+  });
+
+  test("enhancement remains enabled by default", () => {
+    const cfg = config(true);
+
+    applyEnhancementOptions(cfg, {});
+
+    expect(cfg.auto_enhance).toBe(true);
+    expect(cfg.post_processing_mode).toBe("auto");
+  });
+
+  test("--post-processing always forces cleanup mode", () => {
+    const cfg = config(true);
+
+    applyEnhancementOptions(cfg, { postProcessing: "always" });
+
+    expect(cfg.auto_enhance).toBe(true);
+    expect(cfg.post_processing_mode).toBe("always");
+  });
+
+  test("--transcriber-prompt and --transcriber-model update config", () => {
+    const cfg = config(true);
+
+    applyEnhancementOptions(cfg, {
+      transcriberPrompt: "Format as Markdown",
+      transcriberModel: "gpt-test",
+    });
+
+    expect(cfg.transcriber_prompt).toBe("Format as Markdown");
+    expect(cfg.transcriber_model).toBe("gpt-test");
+  });
+
+  test("--system-prompt remains a transcriber prompt alias", () => {
+    const cfg = config(true);
+
+    applyEnhancementOptions(cfg, { systemPrompt: "Use terse notes" });
+
+    expect(cfg.transcriber_prompt).toBe("Use terse notes");
+  });
+
+  test("the explicit transcriber prompt wins over its legacy alias", () => {
+    const cfg = config(true);
+
+    applyEnhancementOptions(cfg, {
+      transcriberPrompt: "explicit",
+      systemPrompt: "legacy",
+    });
+
+    expect(cfg.transcriber_prompt).toBe("explicit");
+  });
+
+  test("enhancement model supplies the transcriber fallback when no override exists", () => {
+    const cfg = config(true);
+
+    applyEnhancementOptions(cfg, { enhancementModel: "gpt-fallback" });
+
+    expect(cfg.enhancement_model).toBe("gpt-fallback");
+    expect(cfg.transcriber_model).toBe("gpt-fallback");
+  });
+
+  test("frozen model and enhancement trigger options override mutable config", () => {
+    const cfg = config(true);
+
+    applyEnhancementOptions(cfg, {
+      transcriptionModel: "whisper-1",
+      transcriberModel: "gpt-snapshot",
+      enhancementModel: "gpt-fallback-snapshot",
+      enhanceTriggersJson: '["rewrite snapshot"]',
+      keywordTransformsJson: '{"code with":"Codewith"}',
+    });
+
+    expect(cfg.transcription_model).toBe("whisper-1");
+    expect(cfg.transcriber_model).toBe("gpt-snapshot");
+    expect(cfg.enhancement_model).toBe("gpt-fallback-snapshot");
+    expect(cfg.enhance_triggers).toEqual(["rewrite snapshot"]);
+    expect(cfg.keyword_transforms).toEqual({ "code with": "Codewith" });
+  });
+
+  test("invalid frozen enhancement triggers fail before processing", () => {
+    expect(() => applyEnhancementOptions(config(true), {
+      enhanceTriggersJson: '{"not":"an array"}',
+    })).toThrow("Invalid enhancement triggers snapshot");
+  });
+
+  test("frozen enhancement triggers require strings and valid JSON", () => {
+    expect(() => applyEnhancementOptions(config(true), {
+      enhanceTriggersJson: '["valid", 17]',
+    })).toThrow("Invalid enhancement triggers snapshot");
+    expect(() => applyEnhancementOptions(config(true), {
+      enhanceTriggersJson: "not-json",
+    })).toThrow();
+  });
+
+  test("frozen keyword transforms require a string map", () => {
+    for (const keywordTransformsJson of [
+      "null",
+      "[]",
+      '{"spoken":17}',
+      "not-json",
+    ]) {
+      expect(() => applyEnhancementOptions(config(true), {
+        keywordTransformsJson,
+      })).toThrow();
+    }
+  });
+
+  test("frozen realtime-only model cannot bypass bounded transcription normalization", () => {
+    const cfg = config(true);
+    applyEnhancementOptions(cfg, { transcriptionModel: "gpt-realtime" });
+    expect(cfg.transcription_model).toBe("gpt-4o-transcribe");
+  });
+
+  test("invalid post-processing mode throws", () => {
+    const cfg = config(true);
+
+    expect(() => applyEnhancementOptions(cfg, { postProcessing: "sometimes" })).toThrow(
+      "Invalid post-processing mode"
+    );
+  });
+
+  test("--no-enhance wins over --post-processing", () => {
+    const cfg = config(true);
+
+    applyEnhancementOptions(cfg, {
+      enhance: false,
+      postProcessing: "always",
+    });
+
+    expect(cfg.auto_enhance).toBe(false);
+    expect(cfg.post_processing_mode).toBe("off");
+  });
+});
+
+describe("CLI list pagination", () => {
+  test("accepts bounded positive limit and offset", () => {
+    expect(parseListPagination("200", "400")).toEqual({ limit: 200, offset: 400 });
+  });
+
+  test("caps limit to the remote Store contract", () => {
+    expect(parseListPagination("10000", "0")).toEqual({ limit: 500, offset: 0 });
+  });
+
+  test("normalizes invalid and negative values", () => {
+    expect(parseListPagination("not-a-number", "not-a-number")).toEqual({ limit: 20, offset: 0 });
+    expect(parseListPagination("1junk", "2junk")).toEqual({ limit: 20, offset: 0 });
+    expect(parseListPagination("-7", "-2")).toEqual({ limit: 1, offset: 0 });
+    expect(parseListPagination("0", "0")).toEqual({ limit: 1, offset: 0 });
+    expect(parseListPagination("9007199254740992", "9007199254740992")).toEqual({
+      limit: 20,
+      offset: 0,
+    });
+    expect(parseListPagination(" +12 ", " +3 ")).toEqual({ limit: 12, offset: 3 });
+  });
+});

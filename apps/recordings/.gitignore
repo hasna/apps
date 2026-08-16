@@ -1,0 +1,16 @@
+node_modules/
+scripts/native/prebuilds/
+dist/
+.build/
+.recordings/
+.hasna/
+*.db
+*.db-wal
+*.db-shm
+.secrets/
+.env
+*.wav
+*.mp3
+*.m4a
+*.webm
+desktop-snapshot.png

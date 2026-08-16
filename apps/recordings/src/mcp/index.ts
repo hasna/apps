@@ -1,0 +1,901 @@
+#!/usr/bin/env bun
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { DEFAULT_MCP_HTTP_PORT, isStdioMode, startMcpHttpServer, resolveMcpHttpPort } from "./http.js";
+import { z } from "zod";
+import {
+  loadConfig,
+  ensureDataDir,
+  normalizePostProcessingConfig,
+  normalizePostProcessingMode,
+} from "../lib/config.js";
+import { countStoreRecordings, getStore } from "../store.js";
+import { transcribeAudio } from "../lib/transcriber.js";
+import { processText, needsEnhancement, resolveTranscriberModel } from "../lib/enhancer.js";
+import type { Recording, RecordingFilter } from "../types/index.js";
+import { VERSION } from "../version.js";
+import { currentMachineId } from "../lib/machine.js";
+
+// ── Initialize ──────────────────────────────────────────────────────────────
+// Config is loaded eagerly for the transcription/enhancement tools. Storage is
+// resolved lazily per call via `getStore()` so cloud mode never opens SQLite.
+
+const config = loadConfig();
+ensureDataDir(config);
+
+function runtimeConfig(): typeof config {
+  return {
+    ...loadConfig(),
+    db_path: config.db_path,
+    audio_dir: config.audio_dir,
+  };
+}
+
+export function buildServer(): McpServer {
+const server = new McpServer({
+  name: "recordings",
+  version: VERSION,
+});
+const registerTool = server.tool.bind(server) as (
+  name: string,
+  description: string,
+  paramsSchema: Record<string, unknown>,
+  cb: (args: any) => unknown
+) => void;
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+function text(content: string) {
+  return { content: [{ type: "text" as const, text: content }] };
+}
+
+function errorResult(e: unknown) {
+  const msg = e instanceof Error ? e.message : String(e);
+  return { content: [{ type: "text" as const, text: `Error: ${truncateText(msg, 500)}` }], isError: true };
+}
+
+function compact(r: Recording): string {
+  const preview = truncateText(r.processed_text || r.raw_text, 100);
+  return `${truncateText(r.id, 8)} | ${truncateText(r.processing_mode, 16)} | ${truncateText(r.created_at, 16)} | ${preview}`;
+}
+
+function detail(r: Recording): string {
+  const lines: string[] = [`ID: ${truncateText(r.id, 80)}`, `Mode: ${truncateText(r.processing_mode, 16)}`, `Model: ${truncateText(r.model_used, 80)}`];
+  if (r.enhancement_model) lines.push(`Enhanced by: ${truncateText(r.enhancement_model, 80)}`);
+  if (r.duration_ms) lines.push(`Duration: ${(r.duration_ms / 1000).toFixed(1)}s`);
+  if (r.language) lines.push(`Language: ${truncateText(r.language, 20)}`);
+  if (r.tags.length > 0) lines.push(`Tags: ${r.tags.map((tag) => truncateText(tag, 80)).join(", ")}`);
+  if (r.agent_id) lines.push(`Agent: ${truncateText(r.agent_id, 80)}`);
+  if (r.project_id) lines.push(`Project: ${truncateText(r.project_id, 80)}`);
+  if (r.session_id) lines.push(`Session: ${truncateText(r.session_id, 80)}`);
+  lines.push(`Created: ${truncateText(r.created_at, 40)}`);
+  lines.push(`Text: ${stripTerminalControls(r.raw_text)}`);
+  if (r.processed_text && r.processed_text !== r.raw_text) {
+    lines.push(`Enhanced: ${stripTerminalControls(r.processed_text)}`);
+  }
+  return lines.join("\n");
+}
+
+function verboseRecording(r: Recording): string {
+  const lines: string[] = [
+    `${truncateText(r.id, 8)} | ${truncateText(r.processing_mode, 16)} | ${truncateText(r.created_at, 16)}`,
+    `Preview: ${truncateText(r.processed_text || r.raw_text, 180)}`,
+    `Model: ${r.enhancement_model ? `${truncateText(r.model_used, 80)} -> ${truncateText(r.enhancement_model, 80)}` : truncateText(r.model_used, 80)}`,
+  ];
+  if (r.duration_ms) lines.push(`Duration: ${(r.duration_ms / 1000).toFixed(1)}s`);
+  if (r.language) lines.push(`Language: ${truncateText(r.language, 20)}`);
+  if (r.tags.length > 0) lines.push(`Tags: ${summarizeTags(r.tags)}`);
+  const scopes = [
+    r.agent_id ? `agent=${truncateText(r.agent_id, 80)}` : null,
+    r.project_id ? `project=${truncateText(r.project_id, 80)}` : null,
+    r.session_id ? `session=${truncateText(r.session_id, 80)}` : null,
+  ].filter(Boolean);
+  if (scopes.length > 0) lines.push(`Scope: ${scopes.join(" ")}`);
+  lines.push(`Details: get_recording { "id": "${truncateText(r.id, 8)}" }`);
+  return lines.join("\n");
+}
+
+function applyTranscriptionArgs(
+  cfg: ReturnType<typeof runtimeConfig>,
+  args: {
+    language?: string;
+    prompt?: string;
+    transcription_prompt?: string;
+    transcriber_prompt?: string;
+    system_prompt?: string;
+    post_processing_mode?: "off" | "auto" | "always";
+    post_processing?: "off" | "auto" | "always";
+    no_enhance?: boolean;
+    enhance?: boolean;
+    transcriber_model?: string;
+    enhancement_model?: string;
+  }
+): ReturnType<typeof runtimeConfig> {
+  if (args.language) cfg.language = args.language;
+
+  const transcriptionPrompt = args.transcription_prompt ?? args.prompt;
+  if (transcriptionPrompt !== undefined) {
+    cfg.transcription_prompt = transcriptionPrompt;
+  }
+
+  const transcriberPrompt = args.transcriber_prompt ?? args.system_prompt;
+  if (transcriberPrompt !== undefined) {
+    cfg.transcriber_prompt = transcriberPrompt;
+  }
+
+  if (args.transcriber_model) {
+    cfg.transcriber_model = args.transcriber_model;
+  } else if (args.enhancement_model) {
+    cfg.enhancement_model = args.enhancement_model;
+    cfg.transcriber_model = args.enhancement_model;
+  }
+
+  const requestedMode = args.post_processing_mode ?? args.post_processing;
+  if (args.no_enhance || args.enhance === false) {
+    cfg.post_processing_mode = "off";
+    normalizePostProcessingConfig(cfg, true);
+  } else if (args.enhance === true) {
+    cfg.post_processing_mode = "always";
+    normalizePostProcessingConfig(cfg, true);
+  } else if (requestedMode) {
+    cfg.post_processing_mode = normalizePostProcessingMode(
+      requestedMode,
+      cfg.post_processing_mode ?? "auto"
+    );
+    normalizePostProcessingConfig(cfg, true);
+  } else {
+    normalizePostProcessingConfig(cfg, false);
+  }
+
+  return cfg;
+}
+
+function buildTranscriptionMetadata(
+  cfg: ReturnType<typeof runtimeConfig>,
+  processed: Awaited<ReturnType<typeof processText>>,
+  sources: {
+    transcriptionPromptFromRequest?: boolean;
+    transcriberPromptFromRequest?: boolean;
+  } = {}
+): Record<string, unknown> {
+  const transcriptionPromptConfigured = Boolean(cfg.transcription_prompt?.trim());
+  const transcriberPromptConfigured = Boolean(cfg.transcriber_prompt?.trim());
+
+  return {
+    transcription_prompt: {
+      configured: transcriptionPromptConfigured,
+      source: sources.transcriptionPromptFromRequest
+        ? "request"
+        : transcriptionPromptConfigured
+          ? "config"
+          : "none",
+    },
+    transcriber_prompt: {
+      configured: transcriberPromptConfigured,
+      source: sources.transcriberPromptFromRequest
+        ? "request"
+        : transcriberPromptConfigured
+          ? "config"
+          : "none",
+    },
+    post_processing: {
+      mode: processed.post_processing_mode,
+      applied: processed.mode === "enhanced",
+      reason: processed.enhancement_reason,
+      model: processed.enhancement_model,
+    },
+    transcriber_model: resolveTranscriberModel(cfg),
+  };
+}
+
+function recordingJson(r: Recording): string {
+  return JSON.stringify({
+    id: r.id,
+    raw_text: r.raw_text,
+    processed_text: r.processed_text,
+    processing_mode: r.processing_mode,
+    model_used: r.model_used,
+    enhancement_model: r.enhancement_model,
+    language: r.language,
+    tags: r.tags,
+    metadata: r.metadata,
+    created_at: r.created_at,
+  }, null, 2);
+}
+
+function truncateText(value: string, max: number): string {
+  const normalized = sanitizeInline(value);
+  const prefix: string[] = [];
+  for (const point of normalized) {
+    if (prefix.length === max) {
+      return `${prefix.slice(0, Math.max(0, max - 3)).join("")}...`;
+    }
+    prefix.push(point);
+  }
+  return normalized;
+}
+
+function stripTerminalControls(value: string): string {
+  return value
+    .replace(/(?:\u001b\]|\u009d)[\s\S]*?(?:\u0007|\u001b\\|\u009c)/g, "")
+    .replace(/(?:\u001b[PX^_]|\u0090|\u0098|\u009e|\u009f)[\s\S]*?(?:\u001b\\|\u009c)/g, "")
+    .replace(/(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b[@-_]/g, "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "");
+}
+
+function sanitizeInline(value: string): string {
+  return stripTerminalControls(value).replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function summarizeTags(tags: string[]): string {
+  const shown = tags.slice(0, 3).map((tag) => truncateText(tag, 20));
+  if (tags.length > shown.length) shown.push(`+${tags.length - shown.length}`);
+  return shown.join(", ");
+}
+
+function resolveMcpPagination(args: {
+  limit?: number;
+  offset?: number;
+  cursor?: number;
+  full?: boolean;
+}, defaultLimit = 10): { limit: number; offset: number; capped: boolean } {
+  const requested = Number.isFinite(args.limit) && args.limit && args.limit > 0
+    ? Math.floor(args.limit)
+    : defaultLimit;
+  const max = args.full ? 10 : 50;
+  const rawOffset = args.cursor ?? args.offset ?? 0;
+  return {
+    limit: Math.min(requested, max),
+    offset: Number.isFinite(rawOffset) ? Math.max(0, Math.floor(rawOffset)) : 0,
+    capped: requested > max,
+  };
+}
+
+function withoutPagination(filter: RecordingFilter): RecordingFilter {
+  const { limit: _limit, offset: _offset, ...rest } = filter;
+  return rest;
+}
+
+function formatMcpCollection(
+  label: string,
+  recordings: Recording[],
+  options: {
+    total: number;
+    offset: number;
+    limit: number;
+    full?: boolean;
+    capped?: boolean;
+  }
+): string {
+  if (recordings.length === 0) {
+    return options.total === 0
+      ? `No ${label} found.`
+      : `No ${label} at cursor ${options.offset}.`;
+  }
+  const format = options.full ? verboseRecording : compact;
+  const separator = options.full ? "\n---\n" : "\n";
+  const end = options.offset + recordings.length;
+  const total = Math.max(options.total, end);
+  const lines = [
+    `${label}: showing ${recordings.length} of ${total} (${options.offset + 1}-${end}, limit ${options.limit})`,
+    recordings.map(format).join(separator),
+  ];
+  const hints: string[] = [];
+  if (options.capped) hints.push(`limit capped at ${options.limit} for MCP output`);
+  if (end < total) hints.push(`next cursor: ${end}`);
+  hints.push("use get_recording { id } for full details; set full=true for richer rows");
+  lines.push(`Hints: ${hints.join("; ")}.`);
+  return lines.join(separator);
+}
+
+function formatMcpPage<T>(
+  label: string,
+  items: T[],
+  args: { limit?: number; offset?: number; cursor?: number },
+  format: (item: T) => string
+): string {
+  const pagination = resolveMcpPagination(args, 20);
+  const page = items.slice(pagination.offset, pagination.offset + pagination.limit);
+  if (page.length === 0) {
+    return items.length === 0 ? `No ${label}.` : `No ${label} at cursor ${pagination.offset}.`;
+  }
+  const end = pagination.offset + page.length;
+  const hints: string[] = [];
+  if (pagination.capped) hints.push(`limit capped at ${pagination.limit} for MCP output`);
+  if (end < items.length) hints.push(`next cursor: ${end}`);
+  return [
+    `${label}: showing ${page.length} of ${items.length} (${pagination.offset + 1}-${end}, limit ${pagination.limit})`,
+    page.map(format).join("\n"),
+    hints.length > 0 ? `Hints: ${hints.join("; ")}.` : "",
+  ].filter(Boolean).join("\n");
+}
+
+async function saveRecordingMemento(args: {
+  key: string;
+  value: string;
+  summary: string;
+}): Promise<void> {
+  try {
+    const proc = Bun.spawn(
+      [
+        "mementos",
+        "save",
+        "--scope",
+        "shared",
+        "--category",
+        "history",
+        "--importance",
+        "5",
+        "--tags",
+        "recording,transcription",
+        "--summary",
+        args.summary,
+        args.key,
+        args.value,
+      ],
+      {
+        stdout: "ignore",
+        stderr: "ignore",
+      }
+    );
+    await proc.exited;
+  } catch {
+    // Memory capture is best-effort; transcription should still succeed.
+  }
+}
+
+// ── Full tool schemas for describe_tool ─────────────────────────────────────
+
+const toolDocs: Record<string, string> = {
+  recordings_status: "Show safe service status for agents.\nParams: none\nReturns: JSON with package version, MCP HTTP defaults, active transcription/enhancement models, language, data paths, key-presence booleans, and recording counts. Never returns secret values.",
+  transcribe_audio: "Transcribe audio file and save raw plus optional processed text.\nParams: audio_path (string, required): path to wav/mp3/m4a/webm | language (string): ISO code e.g. en/es/fr | transcription_prompt or prompt (string): STT vocabulary/context only | transcriber_prompt or system_prompt (string): post-transcription cleanup instructions | post_processing_mode ('off'|'auto'|'always') | transcriber_model (string) | no_enhance (bool): alias for post_processing_mode=off | tags (string[]) | agent_id (string) | project_id (string) | session_id (string)\nReturns: JSON recording summary with raw_text, processed_text, processing_mode, and safe metadata.",
+  save_recording: "Save text as recording. Auto-enhances if needed.\nParams: text (string, required): text to save | enhance (bool): true forces always, false disables | transcriber_prompt or system_prompt (string): post-processing instructions | post_processing_mode ('off'|'auto'|'always') | tags (string[]) | agent_id (string) | project_id (string) | session_id (string) | metadata (object)",
+  get_recording: "Get recording by ID or prefix.\nParams: id (string, required): recording ID or prefix",
+  list_recordings: "List recordings, compact and capped by default, most recent first.\nParams: limit (number, default 10, max 50 compact / 10 verbose) | offset or cursor (number) | processing_mode ('raw'|'enhanced') | tags (string[]) | search (string): text search | since/until (ISO date) | agent_id | project_id | session_id | full (bool): richer metadata rows with bounded previews. Use get_recording for full text/details.",
+  search_recordings: "Search recordings by text content, compact and capped by default.\nParams: query (string, required) | limit (number, default 10, max 50 compact / 10 verbose) | offset or cursor (number) | agent_id | project_id | full (bool): richer metadata rows with bounded previews. Use get_recording for full text/details.",
+  delete_recording: "Delete recording by ID.\nParams: id (string, required)",
+  recording_stats: "Recording count, mode breakdown, duration, and capped model breakdown.\nParams: limit_models (number, default 10, max 10 compact / 50 verbose) | verbose (bool): allow up to 50 model counts",
+  detect_enhancement: "Check if text needs AI enhancement.\nParams: text (string, required)",
+  register_agent: "Register agent (idempotent). Auto-updates last_seen_at on re-register.\nParams: name (string, required) | description (string) | role (string)",
+  list_agents: "List registered agents, capped by default.\nParams: limit (number, default 20, max 50) | offset or cursor (number)",
+  get_agent: "Get agent by ID or name.\nParams: id (string, required)",
+  heartbeat: "Update last_seen_at to signal agent is active.\nParams: agent_id (string, required): agent ID or name",
+  set_focus: "Set active project context for this agent session.\nParams: agent_id (string, required) | project_id (string, nullable): project ID or null to clear",
+  register_project: "Register project (idempotent).\nParams: name (string, required) | path (string, required): absolute path | description (string)",
+  list_projects: "List registered projects, capped by default.\nParams: limit (number, default 20, max 50) | offset or cursor (number)",
+};
+
+// ── Meta Tool ───────────────────────────────────────────────────────────────
+
+registerTool(
+  "describe_tool",
+  "Get full param docs for any tool.",
+  { name: z.string() },
+  async (args) => {
+    const doc = toolDocs[args.name];
+    return doc ? text(doc) : text(`Unknown tool: ${truncateText(args.name, 80)}. Available: ${Object.keys(toolDocs).join(", ")}`);
+  }
+);
+
+registerTool(
+  "recordings_status",
+  "Show safe service status for agents.",
+  {},
+  async () => {
+    try {
+      const cfg = runtimeConfig();
+      const stats = await getStore().getRecordingStats();
+      return text(JSON.stringify({
+        service: "recordings",
+        version: VERSION,
+        mcp: {
+          default_http_port: DEFAULT_MCP_HTTP_PORT,
+          endpoint: "/mcp",
+        },
+        config: {
+          transcription_model: cfg.transcription_model,
+          realtime_session_model: cfg.realtime_session_model,
+          realtime_transcription_model: cfg.realtime_transcription_model,
+          enhancement_model: cfg.enhancement_model,
+          transcriber_model: resolveTranscriberModel(cfg),
+          language: cfg.language,
+          auto_enhance: cfg.auto_enhance,
+          post_processing_mode: cfg.post_processing_mode,
+          transcription_prompt_configured: Boolean(cfg.transcription_prompt?.trim()),
+          transcriber_prompt_configured: Boolean(cfg.transcriber_prompt?.trim()),
+          max_recording_seconds: cfg.max_recording_seconds,
+          db_path: cfg.db_path,
+          audio_dir: cfg.audio_dir,
+          openai_api_key_configured: Boolean(cfg.openai_api_key),
+          enhancement_api_key_configured: Boolean(cfg.enhancement_api_key || cfg.openai_api_key),
+          config_warnings: cfg.config_warnings ?? [],
+        },
+        stats,
+      }, null, 2));
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+// ── Recording Tools (lean stubs — no param descriptions) ────────────────────
+
+registerTool(
+  "transcribe_audio",
+  "Transcribe audio file. Auto-enhances if needed.",
+  {
+    audio_path: z.string(),
+    language: z.string().optional(),
+    transcription_prompt: z.string().optional(),
+    prompt: z.string().optional(),
+    transcriber_prompt: z.string().optional(),
+    system_prompt: z.string().optional(),
+    post_processing_mode: z.enum(["off", "auto", "always"]).optional(),
+    post_processing: z.enum(["off", "auto", "always"]).optional(),
+    transcriber_model: z.string().optional(),
+    enhancement_model: z.string().optional(),
+    no_enhance: z.boolean().optional(),
+    tags: z.array(z.string()).optional(),
+    agent_id: z.string().optional(),
+    project_id: z.string().optional(),
+    session_id: z.string().optional(),
+  },
+  async (args) => {
+    try {
+      const cfg = applyTranscriptionArgs({ ...runtimeConfig() }, args);
+
+      const transcription = await transcribeAudio(args.audio_path, cfg);
+      const processed = await processText(transcription.text, cfg);
+      const metadata = buildTranscriptionMetadata(cfg, processed, {
+        transcriptionPromptFromRequest:
+          args.transcription_prompt !== undefined || args.prompt !== undefined,
+        transcriberPromptFromRequest:
+          args.transcriber_prompt !== undefined || args.system_prompt !== undefined,
+      });
+
+      const recording = await getStore().createRecording({
+        audio_path: args.audio_path,
+        raw_text: transcription.text,
+        processed_text: processed.mode === "enhanced" ? processed.text : undefined,
+        processing_mode: processed.mode,
+        model_used: transcription.model,
+        enhancement_model: processed.enhancement_model || undefined,
+        duration_ms: transcription.duration_ms,
+        language: transcription.language || undefined,
+        tags: args.tags,
+        agent_id: args.agent_id,
+        project_id: args.project_id,
+        session_id: args.session_id,
+        machine_id: currentMachineId(),
+        metadata,
+      });
+
+      // Create memory in Open Mementos if agent_id is provided
+      if (args.agent_id) {
+        await saveRecordingMemento({
+          key: `recording-${recording.id}`,
+          value: JSON.stringify({
+            recording_id: recording.id,
+            text: processed.mode === "enhanced" ? processed.text : transcription.text,
+            agent_id: args.agent_id,
+            project_id: args.project_id,
+            session_id: args.session_id,
+            created_at: recording.created_at
+          }),
+          summary: `Recording ${recording.id.slice(0, 8)} for ${args.agent_id}`,
+        });
+      }
+
+      return text(recordingJson(recording));
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+registerTool(
+  "save_recording",
+  "Save text as recording. Auto-enhances if needed.",
+  {
+    text: z.string(),
+    enhance: z.boolean().optional(),
+    transcriber_prompt: z.string().optional(),
+    system_prompt: z.string().optional(),
+    post_processing_mode: z.enum(["off", "auto", "always"]).optional(),
+    post_processing: z.enum(["off", "auto", "always"]).optional(),
+    transcriber_model: z.string().optional(),
+    enhancement_model: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+    agent_id: z.string().optional(),
+    project_id: z.string().optional(),
+    session_id: z.string().optional(),
+    goal: z.string().optional().describe("Goal or purpose of this recording session (e.g. 'code review for PR #123')"),
+    role: z.string().optional().describe("Agent role for this session (e.g. 'dev agent for connectdev')"),
+    task_list_id: z.string().optional().describe("Task list ID to bind this recording to"),
+    metadata: z.record(z.unknown()).optional(),
+  },
+  async (args) => {
+    try {
+      const cfg = applyTranscriptionArgs(runtimeConfig(), args);
+      let processedText: string | undefined;
+      let mode: "raw" | "enhanced" = "raw";
+      let enhModel: string | undefined;
+      let processed: Awaited<ReturnType<typeof processText>> = {
+        text: args.text,
+        mode: "raw",
+        enhancement_model: null,
+        post_processing_mode: cfg.post_processing_mode ?? "auto",
+        enhancement_reason: null,
+      };
+
+      if (cfg.post_processing_mode !== "off") {
+        processed = await processText(args.text, cfg);
+      }
+      if (processed.mode === "enhanced") {
+        processedText = processed.text;
+        mode = "enhanced";
+        enhModel = processed.enhancement_model || undefined;
+      }
+      const processingMetadata = buildTranscriptionMetadata(cfg, processed, {
+        transcriberPromptFromRequest:
+          args.transcriber_prompt !== undefined || args.system_prompt !== undefined,
+      });
+
+      const recording = await getStore().createRecording({
+        raw_text: args.text,
+        processed_text: processedText,
+        processing_mode: mode,
+        model_used: "direct-input",
+        enhancement_model: enhModel,
+        tags: args.tags,
+        agent_id: args.agent_id,
+        project_id: args.project_id,
+        session_id: args.session_id,
+        goal: args.goal,
+        role: args.role,
+        task_list_id: args.task_list_id,
+        machine_id: currentMachineId(),
+        metadata: {
+          ...(args.metadata ?? {}),
+          ...processingMetadata,
+        },
+      });
+
+      return text(recordingJson(recording));
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+registerTool(
+  "get_recording",
+  "Get recording by ID or prefix.",
+  { id: z.string() },
+  async (args) => {
+    try {
+      const r = await getStore().getRecording(args.id);
+      if (!r) return text(`Not found: ${truncateText(args.id, 80)}`);
+      return text(detail(r));
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+registerTool(
+  "list_recordings",
+  "List recordings. Compact default, recent first.",
+  {
+    limit: z.number().optional(),
+    offset: z.number().optional(),
+    cursor: z.number().optional(),
+    processing_mode: z.enum(["raw", "enhanced"]).optional(),
+    tags: z.array(z.string()).optional(),
+    search: z.string().optional(),
+    since: z.string().optional(),
+    until: z.string().optional(),
+    agent_id: z.string().optional(),
+    project_id: z.string().optional(),
+    session_id: z.string().optional(),
+    full: z.boolean().optional(),
+  },
+  async (args) => {
+    try {
+      const pagination = resolveMcpPagination(args);
+      const filter: RecordingFilter = {
+        limit: pagination.limit,
+        offset: pagination.offset,
+        processing_mode: args.processing_mode,
+        tags: args.tags,
+        search: args.search,
+        since: args.since,
+        until: args.until,
+        agent_id: args.agent_id,
+        project_id: args.project_id,
+        session_id: args.session_id,
+      };
+
+      const store = getStore();
+      const [recordings, total] = await Promise.all([
+        store.listRecordings(filter),
+        countStoreRecordings(store, withoutPagination(filter)),
+      ]);
+      return text(formatMcpCollection("recordings", recordings, {
+        total,
+        offset: pagination.offset,
+        limit: pagination.limit,
+        full: args.full,
+        capped: pagination.capped,
+      }));
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+registerTool(
+  "search_recordings",
+  "Search recordings by text.",
+  {
+    query: z.string(),
+    limit: z.number().optional(),
+    offset: z.number().optional(),
+    cursor: z.number().optional(),
+    agent_id: z.string().optional(),
+    project_id: z.string().optional(),
+    session_id: z.string().optional(),
+    full: z.boolean().optional(),
+  },
+  async (args) => {
+    try {
+      const pagination = resolveMcpPagination(args);
+      const filter: RecordingFilter = {
+        limit: pagination.limit,
+        offset: pagination.offset,
+        agent_id: args.agent_id,
+        project_id: args.project_id,
+        session_id: args.session_id,
+      };
+      const store = getStore();
+      const [results, total] = await Promise.all([
+        store.searchRecordings(args.query, filter),
+        countStoreRecordings(store, withoutPagination({ ...filter, search: args.query })),
+      ]);
+
+      return text(formatMcpCollection("results", results, {
+        total,
+        offset: pagination.offset,
+        limit: pagination.limit,
+        full: args.full,
+        capped: pagination.capped,
+      }));
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+registerTool(
+  "delete_recording",
+  "Delete recording by ID.",
+  { id: z.string() },
+  async (args) => {
+    try {
+      return text((await getStore().deleteRecording(args.id)) ? `Deleted ${truncateText(args.id, 80)}` : `Not found: ${truncateText(args.id, 80)}`);
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+registerTool(
+  "recording_stats",
+  "Recording stats: count, modes, duration, and capped model breakdown.",
+  {
+    limit_models: z.number().optional(),
+    verbose: z.boolean().optional(),
+  },
+  async (args) => {
+    try {
+      const s = await getStore().getRecordingStats();
+      let out = `Total: ${s.total} | Raw: ${s.raw} | Enhanced: ${s.enhanced} | Duration: ${(s.total_duration_ms / 1000).toFixed(1)}s`;
+      const models = Object.entries(s.by_model).sort((a, b) => b[1] - a[1]);
+      if (models.length > 0) {
+        const maxModels = args.verbose ? 50 : 10;
+        const requested = Number.isFinite(args.limit_models) && args.limit_models && args.limit_models > 0
+          ? Math.floor(args.limit_models)
+          : maxModels;
+        const limit = Math.min(requested, maxModels);
+        out += "\nModels: " + models.slice(0, limit).map(([m, c]) => `${truncateText(m, 80)}: ${c}`).join(", ");
+        if (limit < models.length) {
+          out += `\nHints: ${models.length - limit} more model(s); call recording_stats with verbose=true and limit_models up to 50.`;
+        }
+      }
+      return text(out);
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+registerTool(
+  "detect_enhancement",
+  "Check if text needs AI enhancement.",
+  { text: z.string() },
+  async (args) => {
+    try {
+      const r = needsEnhancement(args.text, runtimeConfig());
+      return text(`${r.needs ? "Yes" : "No"}: ${r.reason}`);
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+// ── Agent Tools ─────────────────────────────────────────────────────────────
+
+registerTool(
+  "register_agent",
+  "Register agent (idempotent).",
+  { name: z.string(), description: z.string().optional(), role: z.string().optional() },
+  async (args) => {
+    try {
+      const a = await getStore().registerAgent(args.name, args.description, args.role);
+      return text(`${truncateText(a.id, 80)} | ${truncateText(a.name, 80)} | ${truncateText(a.role, 40)}`);
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+registerTool(
+  "list_agents",
+  "List registered agents, capped by default.",
+  {
+    limit: z.number().optional(),
+    offset: z.number().optional(),
+    cursor: z.number().optional(),
+  },
+  async (args) => {
+    try {
+      const agents = await getStore().listAgents();
+      return text(formatMcpPage(
+        "agents",
+        agents,
+        args,
+        (agent) => `${truncateText(agent.id, 80)} | ${truncateText(agent.name, 80)} | ${truncateText(agent.role, 40)} | last_seen: ${truncateText(agent.last_seen_at, 40)}`
+      ));
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+registerTool(
+  "get_agent",
+  "Get agent by ID or name.",
+  { id: z.string() },
+  async (args) => {
+    try {
+      const a = await getStore().getAgent(args.id);
+      if (!a) return text(`Not found: ${truncateText(args.id, 80)}`);
+      return text(`${truncateText(a.id, 80)} | ${truncateText(a.name, 80)} | ${truncateText(a.role, 40)} | ${truncateText(a.last_seen_at, 40)}`);
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+// ── Project Tools ───────────────────────────────────────────────────────────
+
+registerTool(
+  "register_project",
+  "Register project (idempotent).",
+  { name: z.string(), path: z.string(), description: z.string().optional() },
+  async (args) => {
+    try {
+      const p = await getStore().registerProject(args.name, args.path, args.description);
+      return text(`${truncateText(p.id, 8)} | ${truncateText(p.name, 80)} | ${truncateText(p.path, 120)}`);
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+registerTool(
+  "list_projects",
+  "List registered projects, capped by default.",
+  {
+    limit: z.number().optional(),
+    offset: z.number().optional(),
+    cursor: z.number().optional(),
+  },
+  async (args) => {
+    try {
+      const projects = await getStore().listProjects();
+      return text(formatMcpPage(
+        "projects",
+        projects,
+        args,
+        (project) => `${truncateText(project.id, 8)} | ${truncateText(project.name, 80)} | ${truncateText(project.path, 120)}`
+      ));
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+// ── Heartbeat & Focus ───────────────────────────────────────────────────────
+
+registerTool(
+  "heartbeat",
+  "Update last_seen_at to signal agent is active. Call periodically during long tasks.",
+  { agent_id: z.string().describe("Agent ID or name") },
+  async (args) => {
+    try {
+      const agent = await getStore().heartbeatAgent(args.agent_id);
+      if (!agent) return text(`Agent not found: ${truncateText(args.agent_id, 80)}`);
+      return text(`${truncateText(agent.id, 80)} | ${truncateText(agent.name, 80)} | last_seen: ${truncateText(agent.last_seen_at, 40)}`);
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+registerTool(
+  "set_focus",
+  "Set active project context for this agent session.",
+  { agent_id: z.string().describe("Agent ID or name"), project_id: z.string().nullable().optional().describe("Project ID to focus on, or null to clear") },
+  async (args) => {
+    try {
+      const agent = await getStore().setAgentFocus(args.agent_id, args.project_id ?? null);
+      if (!agent) return text(`Agent not found: ${truncateText(args.agent_id, 80)}`);
+      return text(args.project_id ? `Focus set: ${truncateText(args.project_id, 80)}` : "Focus cleared");
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+registerTool(
+  "send_feedback",
+  "Send feedback about this service",
+  {
+    message: z.string().describe("Feedback message"),
+    email: z.string().optional().describe("Contact email (optional)"),
+    category: z.enum(["bug", "feature", "general"]).optional().describe("Feedback category"),
+  },
+  async (params: { message: string; email?: string; category?: string }) => {
+    try {
+      await getStore().saveFeedback({
+        message: params.message,
+        email: params.email || null,
+        category: params.category || "general",
+        version: VERSION,
+      });
+      return text("Feedback saved. Thank you!");
+    } catch (e) {
+      return errorResult(e);
+    }
+  }
+);
+
+return server;
+}
+
+async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  if (isStdioMode(args)) {
+    const transport = new StdioServerTransport();
+    await buildServer().connect(transport);
+    return;
+  }
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  startMcpHttpServer({ name: "recordings", port: resolveMcpHttpPort(args), buildServer });
+}
+
+if (import.meta.main) {
+  await main();
+}
