@@ -14,6 +14,36 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `PROJECTS_AGENT_ONLINE_NOTIFICATIONS=0`, remain side-effect-free in dry runs,
   and are not repeated when an existing session is reused.
 
+## [0.1.131]
+
+### Fixed
+
+- Quarantine dry runs stay receipt-free: a dry-run WORKLOG registration no
+  longer writes a receipt that later runs treat as a completed real run.
+
+## [0.1.130]
+
+### Added
+
+- Transactional WORKLOG registration with duplicate quarantine: concurrent or
+  repeated registrations of the same worklog entry are detected and quarantined
+  instead of creating duplicate rows.
+
+## [0.1.129]
+
+### Fixed
+
+- API typed-link validation errors are now surfaced on the response instead of
+  being swallowed.
+- Registration validates historical record drift before accepting a record.
+
+## [0.1.128]
+
+### Fixed
+
+- Full project adoption is secured: adoption validates ownership and scope
+  before applying.
+
 ## [0.1.127]
 
 ### Fixed
@@ -515,7 +545,7 @@ fails against that build.
   `src/lib/redaction.ts` scrubs secret-shaped keys (password/token/api_key/
   client_secret/authorization/cookie/dsn/connection_string/…), URL credentials,
   `Authorization` headers, secret CLI flags, `ENV=value` assignments, PEM
-  private-key blocks, and known token prefixes (`sk-`, `ghp_`, `github_pat_`,
+  private-key blocks, and known token prefixes (`sk-`, `ghp[_]`, `github_pat[_]`,
   `npm_`, `xox*`, `AKIA…`). It is wired through CLI JSON/text printers, the MCP
   JSON-RPC tool responses, the SDK row mappers (`rowTo*`), the dashboard/reports
   servers, and the agent context/handoff/runs surfaces, and is also applied at

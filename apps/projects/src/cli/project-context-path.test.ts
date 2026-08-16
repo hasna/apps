@@ -63,6 +63,9 @@ describe("projects context canonical path resolution", () => {
         if (req.method === "GET" && url.pathname === `/v1/projects/${projectId}/events`) {
           return Response.json({ events: [] });
         }
+        if (req.method === "GET" && url.pathname === `/v1/projects/${projectId}/locations`) {
+          return Response.json({ locations: [] });
+        }
         return Response.json({ error: "Not found" }, { status: 404 });
       },
     });

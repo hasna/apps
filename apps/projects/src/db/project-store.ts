@@ -214,7 +214,7 @@ export interface ProjectStoreSummary extends JsonObject {
 }
 
 export interface LoopsClientLike {
-  get(idOrName: string): unknown;
+  get(idOrName: string): unknown | Promise<unknown>;
   runs(loopId?: string): unknown[];
   close?(): void;
 }
@@ -961,28 +961,30 @@ export function listProjectLoopSummaries(
 ): Promise<ProjectLoopSummary[]> {
   const links = listProjectLoopLinks(project, options.db);
   return withLoopsClient(options.loopsClient, async (client) => {
-    return links.map((link) => {
+    const summaries: ProjectLoopSummary[] = [];
+    for (const link of links) {
       try {
-        const loop = client.get(link.loop_id) ?? (link.loop_name ? client.get(link.loop_name) : undefined);
+        const loop = (await client.get(link.loop_id)) ?? (link.loop_name ? await client.get(link.loop_name) : undefined);
         const runs = options.includeRuns
           ? client.runs(stringField(loop, "id")).slice(0, options.runLimit ?? 5).map(loopRunSummary)
           : [];
-        return {
+        summaries.push({
           link,
           status: "linked" as const,
           loop: loopSummary(loop),
           runs,
-        };
+        });
       } catch (err) {
-        return {
+        summaries.push({
           link,
           status: "missing" as const,
           loop: null,
           runs: [],
           error: err instanceof Error ? err.message : String(err),
-        };
+        });
       }
-    });
+    }
+    return summaries;
   }).catch((err) => {
     return links.map((link) => ({
       link,
