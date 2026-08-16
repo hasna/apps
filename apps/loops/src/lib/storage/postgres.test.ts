@@ -52,6 +52,7 @@ describe("Postgres storage migrations", () => {
       "0009_tenant_backfill",
       "0010_tenant_enforce",
       "0013_loop_mutation_contract",
+      "0014_loops_identity_aliases",
     ]);
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(migration.checksum).toBe(checksumStorageSql(migration.sql));
@@ -95,6 +96,7 @@ describe("Postgres storage migrations", () => {
       "0009_tenant_backfill": "sha256:7bfd222e503736ec0bc2811f8a31d3e57820a0fa1106795e09fd26a5cf966f2c",
       "0010_tenant_enforce": "sha256:f923c70c2960e0372b4c01c5f01d9432fa0c76b24921c616dc149fa191409053",
       "0013_loop_mutation_contract": "sha256:eb35e8d593628f2d7a2449dddf60b28e6ffc42f87ff694441262aa2794e78913",
+      "0014_loops_identity_aliases": "sha256:9e73cf54d084709bf08f4a74dc1d5900a647cd574acb958503e5b50b8122e792",
     };
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(`${migration.id} ${migration.checksum}`).toBe(`${migration.id} ${pinned[migration.id]}`);
