@@ -1365,6 +1365,102 @@ suite("PostgresLoopStorage (live)", () => {
     expect(await storage.countRuns()).toBe(1_000);
   });
 
+  test("expires a loop after runs on PostgreSQL: round-trips expiresAfterRuns and writes the expiry marker atomically", async () => {
+    const now = new Date("2026-07-06T12:00:10.000Z");
+    const nextRunAt = "2026-07-06T12:00:00.000Z";
+    const loop = await storage.createLoop(loopInput("pg-expires-after-runs", { expiresAfterRuns: 3, maxAttempts: 1 }));
+    const created = await storage.updateLoop(loop.id, { nextRunAt }, { now });
+    expect(created).toMatchObject({ expiresAfterRuns: 3, nextRunAt });
+
+    // The expiry plan for a loop whose success streak has reached the ceiling.
+    const plan = planLoopAdvancement({
+      current: created!,
+      run: {
+        id: "pg-expiry-run",
+        loopId: loop.id,
+        loopName: loop.name,
+        scheduledFor: nextRunAt,
+        attempt: 1,
+        status: "succeeded",
+        finishedAt: now.toISOString(),
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+      },
+      finishedAt: now,
+      succeeded: true,
+      recentRuns: [
+        {
+          id: "pg-run-3",
+          loopId: loop.id,
+          loopName: loop.name,
+          scheduledFor: "2026-07-06T11:58:00.000Z",
+          attempt: 1,
+          status: "succeeded",
+          finishedAt: "2026-07-06T11:58:10.000Z",
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+        },
+        {
+          id: "pg-run-2",
+          loopId: loop.id,
+          loopName: loop.name,
+          scheduledFor: "2026-07-06T11:57:00.000Z",
+          attempt: 1,
+          status: "succeeded",
+          finishedAt: "2026-07-06T11:57:10.000Z",
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+        },
+        {
+          id: "pg-run-1",
+          loopId: loop.id,
+          loopName: loop.name,
+          scheduledFor: "2026-07-06T11:56:00.000Z",
+          attempt: 1,
+          status: "succeeded",
+          finishedAt: "2026-07-06T11:56:10.000Z",
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+        },
+      ],
+    });
+    expect(plan).toMatchObject({ kind: "expires_after_runs", successes: 3 });
+
+    const transition = await storage.expireLoopIfCurrent(
+      loop.id,
+      {
+        status: created!.status,
+        nextRunAt: created!.nextRunAt,
+        retryScheduledFor: created!.retryScheduledFor,
+      },
+      { status: "expired", nextRunAt: undefined, retryScheduledFor: undefined },
+      { scheduledFor: nextRunAt, reason: "expired after consecutive successful runs: 3" },
+      { now },
+    );
+    expect(transition?.loop).toMatchObject({
+      status: "expired",
+      nextRunAt: undefined,
+      retryScheduledFor: undefined,
+    });
+    const runs = await storage.listRuns({ loopId: loop.id });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      status: "skipped",
+      error: "expired after consecutive successful runs: 3",
+    });
+
+    // A stale expected state is a no-op: the loop stays expired with one marker.
+    const staleTransition = await storage.expireLoopIfCurrent(
+      loop.id,
+      { status: "active", nextRunAt: undefined, retryScheduledFor: undefined },
+      { status: "expired", nextRunAt: undefined, retryScheduledFor: undefined },
+      { scheduledFor: nextRunAt, reason: "stale" },
+      { now },
+    );
+    expect(staleTransition).toBeUndefined();
+    expect((await storage.listRuns({ loopId: loop.id })).filter((run) => run.status === "skipped")).toHaveLength(1);
+  });
+
   test("nextRetryableRun returns the globally earliest retryable slot deterministically", async () => {
     const loop = await storage.createLoop(loopInput("pg-retry-order", { maxAttempts: 3 }));
     const later = "2026-07-06T11:10:00.000Z";

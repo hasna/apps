@@ -1746,6 +1746,71 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("PATCH sets and clears expiresAfterRuns in place and rejects invalid ceilings with a stable 422", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const loop = await storage.createLoop({
+        name: "api-expires-after-runs",
+        schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      }, new Date("2026-01-01T00:00:00Z"));
+      expect(loop.expiresAfterRuns).toBeUndefined();
+
+      const ok = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ expiresAfterRuns: 7 }),
+      });
+      expect(ok.status).toBe(200);
+      expect((await ok.json()).loop.expiresAfterRuns).toBe(7);
+      expect((await storage.getLoop(loop.id))?.expiresAfterRuns).toBe(7);
+      // The schedule must survive an expiry-ceiling-only PATCH.
+      expect((await storage.getLoop(loop.id))?.nextRunAt).toBe(loop.nextRunAt);
+
+      const before = await storage.getLoop(loop.id);
+      for (const expiresAfterRuns of [0, -1, 1.5, "2", {}]) {
+        const response = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), {
+          method: "PATCH",
+          headers: jsonHeaders,
+          body: JSON.stringify({ expiresAfterRuns, labels: ["mutated"] }),
+        });
+        expect(response.status).toBe(422);
+        expect(await response.json()).toEqual({ ok: false, error: "invalid_expires_after_runs" });
+        expect(await storage.getLoop(loop.id)).toEqual(before);
+      }
+
+      // JSON null is an explicit clear.
+      const cleared = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ expiresAfterRuns: null }),
+      });
+      expect(cleared.status).toBe(200);
+      expect((await storage.getLoop(loop.id))?.expiresAfterRuns).toBeUndefined();
+
+      // A PATCH that omits the field must not reset the ceiling.
+      const other = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ expiresAfterRuns: 3 }),
+      });
+      expect(other.status).toBe(200);
+      const pauseOnly = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ status: "paused" }),
+      });
+      expect(pauseOnly.status).toBe(200);
+      expect((await storage.getLoop(loop.id))?.expiresAfterRuns).toBe(3);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("PATCH rejects every invalid loop status atomically with a stable 422", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");

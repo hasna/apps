@@ -192,6 +192,7 @@ Both SQLite and PostgreSQL implementations must prove the same externally visibl
 
 - recover, expire, and claim transitions are atomic;
 - `expiresAt` is persisted and enforced;
+- `expiresAfterRuns` (expiry after N consecutive successful runs) is persisted and enforced with circuit-breaker semantics: a success advances the streak, a final failure resets it, retryable failures and skipped runs are neutral, and the expiry marker restarts the streak on resume;
 - `overlap=skip` is decided by `LoopsApplication` and atomically enforced by an application-supplied storage transition;
 - an attempt advances exactly once;
 - concurrent finalization has one winner and deterministic loser behavior;
@@ -345,7 +346,7 @@ Implementation must advance in this order; later claims are blocked by earlier R
 
 1. Define and test the closed authority/persistence/role resolver, including every supported row and all absent, partial, conflicting, ambiguous, and role-inapplicable configurations before resource creation.
 2. Build the shared `LoopsApplication` capability contract and route embedded SQLite paths through it.
-3. Add SQLite lifecycle tests for atomic recover/expire/claim, `expiresAt`, `overlap=skip`, exactly-once attempt advance, and one-winner finalize.
+3. Add SQLite lifecycle tests for atomic recover/expire/claim, `expiresAt`, `expiresAfterRuns`, `overlap=skip`, exactly-once attempt advance, and one-winner finalize.
 4. Run the same shared suite against SQLite and disposable PostgreSQL, with tenant/RLS/role tests for PostgreSQL.
 5. Make OpenAPI complete and authoritative; fail CI on generation drift and test generated-client behavior.
 6. Route CLI, HTTP, MCP, daemon, runner, and server/admin through thin adapters; prove `run-now` parity and precise remote errors.
@@ -372,7 +373,7 @@ No production cutover, parity announcement, or readiness statement is permitted 
 | Admin/migrator requires explicit privileged DSN and operation | RED | operation allowlist, privilege separation, and refusal tests |
 | Remote failures never fall back or become absence | RED | typed-error tests across API store, SDK, CLI, and MCP |
 | SQLite/PostgreSQL lifecycle parity | RED | shared suite passing against SQLite and disposable PostgreSQL |
-| Hosted recovery/attempts, `expiresAt`, and `overlap=skip` parity | RED | P0 regression suite and transaction evidence |
+| Hosted recovery/attempts, `expiresAt`, `expiresAfterRuns`, and `overlap=skip` parity | RED | P0 regression suite and transaction evidence |
 | PostgreSQL workflow provenance integrated parity | RED | existing migration and targeted test plus executed shared cross-backend suite at the final SHA |
 | Complete authoritative-state SQLite-to-PostgreSQL no-loss cutover | RED | quiescence, zero active daemon leases, recorded expired-lease disposal, zero authoritative skips, category disposition, per-entity counts/hashes/provenance/orphans, and restore proof |
 | OpenAPI and generated SDK are authoritative | RED | complete spec, generation-drift check, generated-client tests |

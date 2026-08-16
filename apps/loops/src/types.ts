@@ -558,6 +558,8 @@ export interface Loop {
   retryDelayMs: number;
   leaseMs: number;
   expiresAt?: string;
+  /** Expire the loop after this many consecutive successful runs. Independent of expiresAt. */
+  expiresAfterRuns?: number;
   latestRunId?: string;
   latestRunStatus?: RunStatus;
   lastRunAt?: string;
@@ -654,6 +656,8 @@ export interface CreateLoopInput {
   retryDelayMs?: number;
   leaseMs?: number;
   expiresAt?: string;
+  /** Expire the loop after this many consecutive successful runs. Independent of expiresAt. */
+  expiresAfterRuns?: number;
 }
 
 export interface ExecutorResult {

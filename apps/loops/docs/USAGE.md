@@ -191,6 +191,47 @@ Run a deterministic command every minute:
 loops create command repo-status --every 1m --cmd "git status --short" --cwd /path/to/repo
 ```
 
+### Expiry: `--expires-at` and `--expires-after-runs`
+
+Loops stop scheduling on either of two independent conditions:
+
+```bash
+# stop after a wall-clock time
+loops create command repo-status --every 1m --cmd "git status --short" --expires-at 2026-09-01T00:00:00Z
+
+# stop after N consecutive successful runs (e.g. a check loop that retires
+# after 7 clean runs)
+loops create agent weekly-audit \
+  --provider claude \
+  --cron "0 8 * * 1" \
+  --cwd /path/to/repo \
+  --prompt "Audit and fix what needs fixing." \
+  --expires-after-runs 7
+```
+
+`--expires-at <time>` expires the loop after an absolute time; the daemon
+checks it on every tick and marks the loop `expired`. `--expires-after-runs
+<n>` expires the loop after `<n>` consecutive successful runs (run status
+`succeeded` — the provider exited 0 with output). The two flags are
+independent and may be combined.
+
+Run-count expiry mirrors the circuit breaker:
+
+- a successful run advances the streak; a final failure (retry budget
+  exhausted) resets it;
+- retryable failures (`attempt < maxAttempts`) and `skipped` runs are
+  neutral — they neither advance nor reset the streak;
+- when the loop expires, an expiry marker run is recorded in the run history,
+  and `loops resume <name>` starts a fresh streak instead of re-expiring the
+  loop on the next success.
+
+Note: "success" is the run's exit status. Findings are not representable in
+the run record today, so a command check loop that exits 0 counts as
+successful even when it found nothing — a no-findings check loop expires
+after N clean runs, which is the intended use. A check loop that fails (e.g.
+`--cmd` exits non-zero when findings exist) keeps resetting the streak and
+never expires this way.
+
 Validate the target before storing the loop:
 
 ```bash

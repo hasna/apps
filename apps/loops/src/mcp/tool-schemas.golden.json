@@ -171,6 +171,11 @@
           "type": "string",
           "description": "Date/time after which the loop expires and stops scheduling."
         },
+        "expiresAfterRuns": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Expire the loop after this many consecutive successful runs. Independent of expiresAt; a failed run resets the streak, skipped runs are neutral."
+        },
         "command": {
           "type": "string",
           "minLength": 1,
@@ -364,6 +369,11 @@
         "expiresAt": {
           "type": "string",
           "description": "Date/time after which the loop expires and stops scheduling."
+        },
+        "expiresAfterRuns": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Expire the loop after this many consecutive successful runs. Independent of expiresAt; a failed run resets the streak, skipped runs are neutral."
         },
         "workflow": {
           "type": "string",
@@ -759,6 +769,11 @@
           "type": "string",
           "description": "Date/time after which the loop expires and stops scheduling."
         },
+        "expiresAfterRuns": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Expire the loop after this many consecutive successful runs. Independent of expiresAt; a failed run resets the streak, skipped runs are neutral."
+        },
         "command": {
           "type": "string",
           "minLength": 1,
@@ -952,6 +967,11 @@
         "expiresAt": {
           "type": "string",
           "description": "Date/time after which the loop expires and stops scheduling."
+        },
+        "expiresAfterRuns": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Expire the loop after this many consecutive successful runs. Independent of expiresAt; a failed run resets the streak, skipped runs are neutral."
         },
         "workflow": {
           "type": "string",

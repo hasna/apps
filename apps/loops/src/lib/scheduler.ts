@@ -241,6 +241,23 @@ function applyCircuitBreakerPlan(
   return transition !== undefined;
 }
 
+function applyExpiryPlan(
+  store: Store,
+  loop: Loop,
+  plan: Extract<ReturnType<typeof planLoopAdvancement>, { kind: "expires_after_runs" }>,
+  opts: AdvanceLoopOptions,
+): boolean {
+  const transition = store.expireLoopIfCurrent(
+    loop.id,
+    loop,
+    plan.patch,
+    { scheduledFor: plan.markerScheduledFor, reason: plan.reason },
+    { daemonLeaseId: opts.daemonLeaseId },
+  );
+  if (transition) opts.onRun?.(transition.marker);
+  return transition !== undefined;
+}
+
 export function advanceLoop(
   store: Store,
   loop: Loop,
@@ -270,9 +287,11 @@ export function advanceLoop(
     if (loopAdvancementPatchMatchesCurrent(current!, plan.patch)) return;
     const applied = plan.kind === "circuit_breaker"
       ? applyCircuitBreakerPlan(store, current!, plan, opts)
-      : store.advanceLoopIfCurrent(current!.id, current!, plan.patch, {
-        daemonLeaseId: opts.daemonLeaseId,
-      }) !== undefined;
+      : plan.kind === "expires_after_runs"
+        ? applyExpiryPlan(store, current!, plan, opts)
+        : store.advanceLoopIfCurrent(current!.id, current!, plan.patch, {
+          daemonLeaseId: opts.daemonLeaseId,
+        }) !== undefined;
     if (applied) return;
     if (attempt === 1) throw new LoopAdvancementConflictError(loop.id, run.id);
   }

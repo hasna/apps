@@ -26,3 +26,17 @@ export function assertMaxAttempts(value: unknown): asserts value is number {
     throw new ValidationError("loop maxAttempts must be an integer >= 1");
   }
 }
+
+export function isExpiresAfterRuns(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+// --expires-after-runs is the number of consecutive successful runs after which
+// the loop expires (status "expired"). 0 or a negative value would make the
+// ceiling unusable ("expire after zero runs"), so require a positive integer.
+// Shared by the sqlite and postgres backends and the hosted PATCH validation.
+export function assertExpiresAfterRuns(value: unknown): asserts value is number {
+  if (!isExpiresAfterRuns(value)) {
+    throw new ValidationError("loop expiresAfterRuns must be an integer >= 1");
+  }
+}

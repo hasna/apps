@@ -1910,4 +1910,14 @@ $loops_identity_postconditions$;
 REVOKE CREATE ON SCHEMA public FROM open_loops_owner, open_loops_migrator;
 GRANT USAGE ON SCHEMA public TO open_loops_owner, open_loops_migrator;`,
   ),
+  // Additive run-count expiry ceiling (--expires-after-runs): the loop expires
+  // after N consecutive successful runs, independent of the time-based
+  // expires_at. Mirrors sqlite migration 0016_loop_expires_after_runs; an older
+  // server binary ignores the column and keeps scheduling forever.
+  migration(
+    "0014_loop_expires_after_runs",
+    `
+ALTER TABLE loops ADD COLUMN IF NOT EXISTS expires_after_runs INTEGER;
+    `,
+  ),
 ]);
