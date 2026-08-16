@@ -25,6 +25,11 @@ import { ensureGlobalAgentRulesStandardConfig } from "../lib/global-agent-rules-
 import { ensureDangerousOperationGuardStandardConfig } from "../lib/dangerous-operation-guard-standard.js";
 import { ensureCodewithSharedTodosStorageStandardConfig } from "../lib/codewith-shared-todos-storage-standard.js";
 import {
+  inspectManagedSkillRuntimes,
+  reconcileManagedSkillRuntimes,
+  type ManagedSkillRuntimeReconcileReport,
+} from "../lib/managed-skill-runtimes.js";
+import {
   ProjectContextError,
   PROJECT_CONTEXT_MAX_INPUT_BYTES,
   SESSION_MANAGED_INPUT_MAX_BYTES,
@@ -74,6 +79,26 @@ function printLine(text = ""): void {
 /** Pretty-print a JSON value to stdout with a guaranteed-complete write. */
 function printJson(value: unknown): void {
   printLine(JSON.stringify(value, null, 2));
+}
+
+function printManagedSkillRuntimeReport(report: ManagedSkillRuntimeReconcileReport): void {
+  for (const runtime of report.runtimes) {
+    if (!runtime.skill_present) continue;
+    const prefix =
+      runtime.action === "failed"
+        ? chalk.red("[failed]")
+        : runtime.dry_run
+          ? chalk.yellow("[dry-run]")
+          : runtime.manual_fallback_ready && !runtime.healthy
+            ? chalk.yellow("[degraded]")
+            : runtime.action === "unchanged"
+              ? chalk.dim("=")
+              : chalk.green("✓");
+    console.log(`${prefix} ${runtime.skill} via ${runtime.runtime} — ${runtime.reason}`);
+    if (runtime.action === "update") {
+      console.log(chalk.dim(`  skill contracts: ${runtime.skill_contracts_changed}`));
+    }
+  }
 }
 
 function fmtConfig(c: Config, format: string) {
@@ -1942,6 +1967,55 @@ program
     console.log(chalk.cyan("Secrets:") + ` ${status.health.unredactedSecretFindings === 0 ? chalk.green("0 ✓") : chalk.red(String(status.health.unredactedSecretFindings) + " ⚠")} unredacted`);
     console.log(chalk.cyan("Retired agents:") + ` ${status.health.retiredAgentRows === 0 ? chalk.green("0") : chalk.yellow(String(status.health.retiredAgentRows))} row(s)`);
     console.log(chalk.cyan("Templates:") + ` ${status.counts.configs.templates} (with {{VAR}} placeholders)`);
+  });
+
+// ── managed skill runtimes ──────────────────────────────────────────────────
+const managedSkillsCmd = program
+  .command("managed-skills")
+  .description("Inspect or reconcile package-owned runtime contracts for installed managed skills");
+
+managedSkillsCmd
+  .command("status")
+  .option("--from <agent>", "verify the hosted Conversations heartbeat for this agent")
+  .option("--delivery-verified", "assert channel and direct-message canaries were observed in this acceptance pass")
+  .option("--json", "output the full local runtime status as JSON")
+  .action((opts: { deliveryVerified?: boolean; from?: string; json?: boolean }) => {
+    const report = inspectManagedSkillRuntimes({
+      agent: opts.from,
+      deliveryVerified: opts.deliveryVerified,
+    });
+    if (opts.json) {
+      printJson(report);
+      if (report.missing > 0) process.exitCode = 1;
+      return;
+    }
+    if (report.skills_present === 0) {
+      console.log(chalk.dim("No managed skills with package-owned runtime contracts are installed."));
+      return;
+    }
+    for (const runtime of report.runtimes) {
+      if (!runtime.skill_present) continue;
+      const prefix = runtime.healthy ? chalk.green("✓") : chalk.yellow("!");
+      console.log(`${prefix} ${runtime.skill} via ${runtime.runtime} — ${runtime.reason}`);
+    }
+    if (report.missing > 0) process.exitCode = 1;
+  });
+
+managedSkillsCmd
+  .command("apply")
+  .option("--dry-run", "preview without writing")
+  .option("--from <agent>", "verify the hosted Conversations heartbeat for this agent")
+  .option("--delivery-verified", "assert channel and direct-message canaries were observed in this acceptance pass")
+  .option("--json", "output the reconcile report as JSON")
+  .action(async (opts: { deliveryVerified?: boolean; dryRun?: boolean; from?: string; json?: boolean }) => {
+    const report = await reconcileManagedSkillRuntimes({
+      dryRun: opts.dryRun,
+      agent: opts.from,
+      deliveryVerified: opts.deliveryVerified,
+    });
+    if (opts.json) printJson(report);
+    else printManagedSkillRuntimeReport(report);
+    if (report.failed > 0) process.exitCode = 1;
   });
 
 // ── diff --all ────────────────────────────────────────────────────────────────
