@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1
 # @hasna/recordings server image — ARM64 / Bun.
-# Default CMD runs recordings-serve with the `postgresql` data backend: the serve
-# process reads/writes Postgres directly with @hasna/contracts API-key auth. The
-# one-shot migration task overrides the command with `... migrate`.
+# Default CMD runs recordings-serve with the `postgresql` data backend: the
+# serve process reads/writes Postgres directly, selected by the presence of
+# HASNA_RECORDINGS_DATABASE_URL. The one-shot migration task overrides the
+# command with `... migrate`.
 
 FROM --platform=linux/arm64 oven/bun:1 AS deps
 WORKDIR /app
@@ -23,7 +24,6 @@ WORKDIR /app
 # verify-full-capable clients.
 COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
 ENV NODE_ENV=production \
-    HASNA_RECORDINGS_STORAGE_MODE=postgresql \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
     PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem \
     HOST=0.0.0.0 \
