@@ -117,6 +117,37 @@ describe("import-export bridge", () => {
     expect(deps.length).toBeGreaterThanOrEqual(0);
   });
 
+  it("does not import dependency edges whose endpoints exist nowhere (no dangling edges minted)", () => {
+    // A bundle can legitimately reference a task that is not part of it and not
+    // in the receiving store. Importing the edge anyway mints a dangling
+    // depends_on row — the measured production defect class.
+    const t1 = createTask({ title: "First" });
+    const t2 = createTask({ title: "Second" });
+    addDependency(t2.id, t1.id);
+    const bundle = exportLocalBundle();
+    closeDatabase();
+
+    // Fresh receiving store. Drop the target task from the bundle, simulating
+    // a partial bundle whose dependency points outside itself.
+    const trimmed = {
+      ...bundle,
+      tasks: bundle.tasks.filter((t: { id: string }) => t.id !== t1.id),
+      projects: [],
+      plans: [],
+      templates: [],
+      comments: [],
+      verification_records: [],
+    };
+    process.env["TODOS_DB_PATH"] = ":memory:";
+    resetDatabase();
+    getDatabase();
+    const result = importBundle(trimmed, { strategy: "remote_wins" });
+
+    expect(result.skipped.dependencies ?? 0).toBeGreaterThan(0);
+    const deps = getDatabase().query("SELECT * FROM task_dependencies").all();
+    expect(deps.length).toBe(0);
+  });
+
   it("rejects invalid bundles", () => {
     const validation = validateBundle({ schema_version: "wrong" });
     expect(validation.valid).toBe(false);

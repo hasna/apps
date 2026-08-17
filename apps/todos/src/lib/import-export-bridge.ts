@@ -527,6 +527,14 @@ export function importBundle(bundle: ImportExportBundle, options: ImportBundleOp
 
   for (const dep of bundle.dependencies) {
     try {
+      // Skip edges whose endpoints exist nowhere in the receiving store: the
+      // bundle can reference tasks that are not part of it, and inserting the
+      // edge anyway mints a dangling depends_on row — eternally unmet for any
+      // dependency resolver.
+      if (!getTask(dep.task_id, d) || !getTask(dep.depends_on, d)) {
+        bump(result.skipped, "dependencies");
+        continue;
+      }
       d.run("INSERT OR IGNORE INTO task_dependencies (task_id, depends_on) VALUES (?, ?)", [dep.task_id, dep.depends_on]);
       bump(result.created, "dependencies");
     } catch (e) {
