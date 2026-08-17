@@ -55,7 +55,18 @@ const args = new Set(rawArgs);
 // import time (#103 shipped exactly that ReferenceError).
 const SERVE_PROBE_TIMEOUT_SECONDS = "15";
 
-main();
+// spawnSync's DEFAULT maxBuffer is 1MB, and when a captured command exceeds it
+// the child is KILLED (status null) with stdout truncated mid-stream. The
+// release gate captures `git ls-tree -r --full-tree -z HEAD`, which on the
+// monorepo-scale tree is 3.5MB and growing (measured 2026-08-17 on hasna/apps),
+// so the default made every publish fail "release-tracked-proof: could not
+// enumerate HEAD" (OPE2-00174). Explicit ceiling, same pattern as
+// apps/mementos/scripts/release-provenance.ts (MAX_COMMAND_OUTPUT_BYTES).
+const CAPTURE_MAX_BUFFER = 256 * 1024 * 1024;
+
+if (import.meta.main) {
+  main();
+}
 
 function main(): void {
   const failures: ReleaseGateFailure[] = [];
@@ -213,6 +224,7 @@ function readReleaseSourceIdentity(): ReleaseSourceIdentity {
   const listing = spawnSync("git", ["ls-tree", "-r", "--full-tree", "-z", "HEAD"], {
     cwd: root,
     env: process.env,
+    maxBuffer: CAPTURE_MAX_BUFFER,
   });
   if (commit.status !== 0 || tree.status !== 0 || listing.status !== 0 || !listing.stdout) {
     failReleaseGate([{
@@ -428,11 +440,12 @@ function run(command: string, commandArgs: string[], env: NodeJS.ProcessEnv = pr
   return spawnSync(command, commandArgs, { cwd: root, stdio: "inherit", env });
 }
 
-function runCapture(command: string, commandArgs: string[], env: NodeJS.ProcessEnv = process.env): { status: number; stdout: string; stderr: string } {
+export function runCapture(command: string, commandArgs: string[], env: NodeJS.ProcessEnv = process.env, cwd: string = root): { status: number; stdout: string; stderr: string } {
   const result = spawnSync(command, commandArgs, {
-    cwd: root,
+    cwd,
     encoding: "utf8",
     env,
+    maxBuffer: CAPTURE_MAX_BUFFER,
   });
   return {
     status: result.status ?? 1,
@@ -441,8 +454,8 @@ function runCapture(command: string, commandArgs: string[], env: NodeJS.ProcessE
   };
 }
 
-function runCaptureBuffer(command: string, commandArgs: string[]): { status: number; stdout: Buffer; stderr: Buffer } {
-  const result = spawnSync(command, commandArgs, { cwd: root, env: process.env });
+export function runCaptureBuffer(command: string, commandArgs: string[], cwd: string = root): { status: number; stdout: Buffer; stderr: Buffer } {
+  const result = spawnSync(command, commandArgs, { cwd, env: process.env, maxBuffer: CAPTURE_MAX_BUFFER });
   return {
     status: result.status ?? 1,
     stdout: result.stdout ?? Buffer.alloc(0),
