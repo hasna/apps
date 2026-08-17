@@ -42,7 +42,13 @@ const DB_PATH = join(tmpdir(), `mementos-agent-filter-${Date.now()}.db`);
 const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
 
 function testEnv(): Record<string, string> {
-  return isolatedStoreEnv(DB_PATH, { extra: blankLlmProviderEnv() });
+  return isolatedStoreEnv(DB_PATH, {
+    // save now attributes agent-source writes to the writing agent, resolved
+    // from MEMENTOS_AGENT when --agent is omitted; the harness declares the
+    // identity so the positive control resolves on CI, which has no
+    // ~/.hasna/conversations/agent-id.
+    extra: { ...blankLlmProviderEnv(), MEMENTOS_AGENT: "e2e-test-agent" },
+  });
 }
 
 async function runCli(

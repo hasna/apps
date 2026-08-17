@@ -29,7 +29,12 @@ const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
 // validation under test — and any write that DOES succeed lands in the shared
 // production store. Built and then VERIFIED via store-isolation rather than
 // hand-blanked here, so the list cannot drift from the resolver.
-const CLI_ENV = isolatedStoreEnv(DB_PATH);
+const CLI_ENV = isolatedStoreEnv(DB_PATH, {
+  // save attributes agent-source writes to the writing agent (MEMENTOS_AGENT
+  // when --agent is omitted); declare the identity so the positive-control
+  // save resolves on CI, which has no ~/.hasna/conversations/agent-id.
+  extra: { MEMENTOS_AGENT: "e2e-test-agent" },
+});
 
 beforeAll(async () => {
   await assertLocalStoreBackend(CLI_PATH, CLI_ENV, DB_PATH);

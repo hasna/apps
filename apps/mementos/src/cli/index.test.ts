@@ -23,7 +23,12 @@ const UNCONFIGURED_PROJECT_AUTHORITY_ENV = Object.fromEntries(
 // DB_PATH — see src/test-support/store-isolation.ts for why blanking the vars
 // by hand here was unsafe, and why `beforeAll` verifies the result instead of
 // trusting it.
-const CLI_ENV = isolatedStoreEnv(DB_PATH, { extra: blankLlmProviderEnv() });
+const CLI_ENV = isolatedStoreEnv(DB_PATH, {
+  // save attributes agent-source writes to the writing agent, resolved from
+  // MEMENTOS_AGENT when --agent is omitted; declare the identity so saves
+  // resolve on CI, which has no ~/.hasna/conversations/agent-id.
+  extra: { ...blankLlmProviderEnv(), MEMENTOS_AGENT: "e2e-test-agent" },
+});
 
 beforeAll(async () => {
   // Fail loudly BEFORE any write if the child did not resolve to local SQLite.

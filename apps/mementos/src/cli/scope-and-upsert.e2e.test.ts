@@ -45,7 +45,12 @@ const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
  * resolved to local SQLite instead of trusting that it did.
  */
 function testEnv(): Record<string, string> {
-  return isolatedStoreEnv(DB_PATH, { extra: blankLlmProviderEnv() });
+  return isolatedStoreEnv(DB_PATH, {
+    // save attributes agent-source writes to the writing agent, resolved from
+    // MEMENTOS_AGENT when --agent is omitted; declare the identity so saves
+    // resolve on CI, which has no ~/.hasna/conversations/agent-id.
+    extra: { ...blankLlmProviderEnv(), MEMENTOS_AGENT: "e2e-test-agent" },
+  });
 }
 
 beforeAll(async () => {
@@ -289,7 +294,12 @@ describe("scope persistence and save fork (e2e)", () => {
     expect(second.exitCode).toBe(1);
     const out = `${second.stdout}${second.stderr}`;
     expect(out).toContain("scope/project/session/agent");
-    expect(out).toContain("agent=none)");
+    // The descriptor must name the agent column with a REAL value, not the
+    // old "none": agent-source saves are now attributed to the writing agent
+    // (resolved from MEMENTOS_AGENT here), so "agent=none)" would mean the
+    // attribution fix silently regressed while the column is still named.
+    expect(out).toContain("agent=");
+    expect(out).not.toContain("agent=none)");
   });
 
   test("save reports whether it created a new row or updated an existing one", async () => {

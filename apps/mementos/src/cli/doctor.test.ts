@@ -15,7 +15,12 @@ const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
 // the child must be pinned to DB_PATH. Inheriting the ambient env unmodified —
 // which is what this harness used to do — put those writes in the shared
 // production store. See src/test-support/store-isolation.ts.
-const CLI_ENV = isolatedStoreEnv(DB_PATH);
+const CLI_ENV = isolatedStoreEnv(DB_PATH, {
+  // save attributes agent-source writes to the writing agent (MEMENTOS_AGENT
+  // when --agent is omitted); declare the identity so the seed save resolves
+  // on CI, which has no ~/.hasna/conversations/agent-id.
+  extra: { MEMENTOS_AGENT: "e2e-test-agent" },
+});
 
 beforeAll(async () => {
   await assertLocalStoreBackend(CLI_PATH, CLI_ENV, DB_PATH);

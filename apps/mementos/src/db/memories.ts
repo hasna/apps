@@ -204,7 +204,8 @@ export function createMemory(
            importance = ?, metadata = ?, expires_at = ?,
            when_to_use = ?,
            pinned = COALESCE(pinned, 0),
-           version = version + 1, updated_at = ?
+           version = version + 1, updated_at = ?,
+           updated_by_agent = ?
          WHERE id = ?`,
         [
           safeValue,
@@ -216,6 +217,7 @@ export function createMemory(
           expiresAt,
           input.when_to_use || null,
           timestamp,
+          input.agent_id || null, // who performed this update write
           existing.id,
         ]
       );
@@ -1337,6 +1339,10 @@ export function updateMemory(
   if ((input as any).when_to_use !== undefined) {
     sets.push("when_to_use = ?");
     params.push((input as any).when_to_use ?? null);
+  }
+  if (input.updated_by_agent !== undefined) {
+    sets.push("updated_by_agent = ?");
+    params.push(input.updated_by_agent ?? null);
   }
   if (input.tags !== undefined) {
     sets.push("tags = ?");
