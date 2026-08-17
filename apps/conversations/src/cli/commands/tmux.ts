@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { printErrorLine, printJsonLine, printLine } from "../../lib/stdout.js";
 
 function sleep(ms: number): Promise<void> {
@@ -49,19 +49,23 @@ export async function tmuxSend(
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     // 1. Paste message literally
-    execSync(`tmux send-keys -t ${JSON.stringify(target)} -l ${JSON.stringify(message)}`);
+    // execFileSync with an argv array: the message is passed as a single argv
+    // entry, never through a shell. The previous execSync form interpolated
+    // JSON.stringify(message) into a double-quoted shell string, where $(...)
+    // and backticks still expand — command injection from message content.
+    execFileSync("tmux", ["send-keys", "-t", target, "-l", message]);
 
     // 2. Wait for pane to be idle
     await sleep(delay);
 
     // 3. Hit Enter to submit
-    execSync(`tmux send-keys -t ${JSON.stringify(target)} Enter`);
+    execFileSync("tmux", ["send-keys", "-t", target, "Enter"]);
 
     // 4. Verify (optional) — capture pane and check input bar is empty
     if (!verify) return { success: true, attempts: attempt };
 
     await sleep(getVerifyPauseMs(message));
-    const pane = execSync(`tmux capture-pane -t ${JSON.stringify(target)} -p`).toString();
+    const pane = execFileSync("tmux", ["capture-pane", "-t", target, "-p"]).toString();
     const lastLines = pane.split("\n").slice(-6).join("\n");
     // If the beginning of the message is no longer visible in the prompt area, it was submitted
     const marker = message.slice(0, Math.min(32, message.length));

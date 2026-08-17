@@ -8,6 +8,7 @@ export class SqliteServerAutomationsStore implements ServerAutomationsStore {
   constructor(options: AutomationsStoreOptions = {}) { this.#store = new AutomationsStore(options); }
   async close() { this.#store.close(); }
   async createAutomation(spec: Parameters<AutomationsStore["createAutomation"]>[0]) { return this.#store.createAutomation(spec); }
+  async ensureAutomation(spec: Parameters<AutomationsStore["ensureAutomation"]>[0]) { return this.#store.ensureAutomation(spec); }
   async listAutomations(options: ListPageOptions = {}) { return pageBy(this.#store.listAutomations(), options, "createdAt"); }
   async requireAutomation(id: string) { return this.#store.requireAutomation(id); }
   async createWebhookRoute(input: CreateWebhookRouteInput) { return this.#store.createWebhookRoute(input); }

@@ -31,6 +31,7 @@ export interface ListPageOptions {
 export interface ServerAutomationsStore {
   close(): Promise<void>;
   createAutomation(spec: AutomationSpec): Promise<ReturnType<AutomationsStore["createAutomation"]>>;
+  ensureAutomation(spec: AutomationSpec): Promise<ReturnType<AutomationsStore["ensureAutomation"]>>;
   listAutomations(options?: ListPageOptions): Promise<ReturnType<AutomationsStore["listAutomations"]>>;
   requireAutomation(id: string): Promise<ReturnType<AutomationsStore["requireAutomation"]>>;
   createWebhookRoute(input: CreateWebhookRouteInput): Promise<WebhookRoute>;
