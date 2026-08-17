@@ -1001,8 +1001,8 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
       },
       {
         "name": "worktreeRoot",
-        "default": "~/.hasna/loops/worktrees",
-        "description": "Base directory for Loops-managed git worktrees."
+        "default": "~/.hasna/repos/worktrees",
+        "description": "Base directory for Loops-managed git worktrees (canonical root per global-worktree-placement)."
       },
       {
         "name": "worktreeBranchPrefix",
@@ -1132,8 +1132,8 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
       },
       {
         "name": "worktreeRoot",
-        "default": "~/.hasna/loops/worktrees",
-        "description": "Base directory for Loops-managed git worktrees."
+        "default": "~/.hasna/repos/worktrees",
+        "description": "Base directory for Loops-managed git worktrees (canonical root per global-worktree-placement)."
       },
       {
         "name": "worktreeBranchPrefix",
@@ -1248,8 +1248,8 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
       },
       {
         "name": "worktreeRoot",
-        "default": "~/.hasna/loops/worktrees",
-        "description": "Base directory for Loops-managed git worktrees."
+        "default": "~/.hasna/repos/worktrees",
+        "description": "Base directory for Loops-managed git worktrees (canonical root per global-worktree-placement)."
       },
       {
         "name": "worktreeBranchPrefix",
