@@ -7,10 +7,10 @@
 // @hasna/todos publishes.
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCapture, runCaptureBuffer } from "./verify-public-release";
+import { runCapture, runCaptureBuffer, verifyTrackedWorktreeAgainstHead } from "./verify-public-release";
 
 const HEAD_TREE_ARGS = ["ls-tree", "-r", "--full-tree", "-z", "HEAD"];
 const RECORD_PATTERN = /^(\d+) (\w+) ([0-9a-f]+)\t([\s\S]+)$/;
@@ -107,5 +107,66 @@ describe("verify-public-release capture helpers (OPE2-00174)", () => {
     const records = parseRecords(capture.stdout);
     expect(records.length).toBeGreaterThan(0);
     for (const record of records) expect(RECORD_PATTERN.test(record)).toBe(true);
+  });
+});
+
+// Regression test for b631c46a-15ac-4012-9940-6dab77f4ced7:
+// verifyTrackedWorktreeAgainstHead enumerated `git ls-tree -r --full-tree -z
+// HEAD`, which returns MONOREPO-ROOT-relative paths (.changeset/README.md,
+// apps/todos/src/...), but resolved each as join(root, path) with root =
+// apps/todos. Every non-package path — and every package path, which already
+// carries the apps/todos/ prefix — therefore read actualType=missing and the
+// gate failed "release-tracked-type" for the entire tree (measured 2026-08-17:
+// 34,523 of 34,531 records resolved missing on hasna/apps). In the standalone
+// repo root == package dir, so the gate worked pre-import. The fix scopes the
+// enumeration to the package subtree (drop --full-tree, paths become
+// cwd-relative) so proof paths resolve under the package dir.
+describe("verify-public-release tracked-worktree path resolution (b631c46a)", () => {
+  const fixtureDirs: string[] = [];
+
+  afterAll(() => {
+    for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Fixture: a monorepo-shaped git repo. Tracked files live under a package
+  // subdirectory (pkg/), while the repo root carries its own tracked files
+  // (.changeset/README.md, sibling.md). The gate enumerates with cwd = the
+  // package dir, so a --full-tree listing is repo-root-relative and a
+  // join(pkgDir, path) resolution misses every entry.
+  function makeMonorepoFixture(): string {
+    const dir = mkdtempSync(join(tmpdir(), "todos-release-rootshape-"));
+    fixtureDirs.push(dir);
+    const pkgDir = join(dir, "pkg");
+    mkdirSync(join(dir, ".changeset"), { recursive: true });
+    mkdirSync(join(pkgDir, "src"), { recursive: true });
+    writeFileSync(join(dir, ".changeset", "README.md"), "# changesets\n");
+    writeFileSync(join(dir, "sibling.md"), "repo-root tracked file\n");
+    writeFileSync(join(pkgDir, "package.json"), '{"name":"pkg"}\n');
+    writeFileSync(join(pkgDir, "src", "index.ts"), "export const x = 1;\n");
+    writeFileSync(join(pkgDir, "run.sh"), "#!/usr/bin/env bash\necho ok\n", { mode: 0o755 });
+    symlinkSync("src/index.ts", join(pkgDir, "link.ts"));
+    const init = spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+    if (init.status !== 0) throw new Error(`git init failed: ${init.stderr?.toString()}`);
+    const add = spawnSync("git", ["add", "-A"], { cwd: dir });
+    if (add.status !== 0) throw new Error(`git add failed: ${add.stderr?.toString()}`);
+    const commit = spawnSync(
+      "git",
+      ["-c", "user.name=release-capture-test", "-c", "user.email=release-capture-test@hasna.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", "fixture"],
+      { cwd: dir },
+    );
+    if (commit.status !== 0) throw new Error(`fixture commit failed: ${commit.stderr?.toString()}`);
+    return dir;
+  }
+
+  test("resolves the package's own tracked files against HEAD in a monorepo layout", () => {
+    const pkgDir = join(makeMonorepoFixture(), "pkg");
+    // Before the fix this returns a release-tracked-type failure for every
+    // entry: repo-root paths (.changeset/README.md) and package paths
+    // (pkg/src/index.ts -> join(pkgDir, "pkg/src/index.ts")) both resolve
+    // missing. The fixture's repo-root files also prove the enumeration is
+    // package-scoped: if a root-level path leaked into the proof it would
+    // resolve missing and fail here.
+    const failures = verifyTrackedWorktreeAgainstHead(pkgDir);
+    expect(failures).toEqual([]);
   });
 });

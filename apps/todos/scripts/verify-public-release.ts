@@ -244,8 +244,15 @@ function gitBlobObject(content: Buffer): string {
   return createHash("sha1").update(header).update(content).digest("hex");
 }
 
-function verifyTrackedWorktreeAgainstHead(): ReleaseGateFailure[] {
-  const listing = runCaptureBuffer("git", ["ls-tree", "-r", "--full-tree", "-z", "HEAD"]);
+export function verifyTrackedWorktreeAgainstHead(baseDir: string = root): ReleaseGateFailure[] {
+  // Enumeration is deliberately NOT --full-tree: in the monorepo, --full-tree
+  // returns repo-root-relative paths (`.changeset/README.md`, `apps/todos/…`),
+  // which join(baseDir, path) then resolves under the package dir — every
+  // entry read actualType=missing and the gate failed the whole tree
+  // (b631c46a). Without --full-tree, `git ls-tree -r -z HEAD` from cwd=baseDir
+  // lists the package subtree with package-relative paths, matching the
+  // standalone-repo semantics where root == repo root.
+  const listing = runCaptureBuffer("git", ["ls-tree", "-r", "-z", "HEAD"], baseDir);
   if (listing.status !== 0) {
     return [{ check: "release-tracked-proof", message: listing.stderr.toString("utf8") || "could not enumerate HEAD" }];
   }
@@ -254,7 +261,7 @@ function verifyTrackedWorktreeAgainstHead(): ReleaseGateFailure[] {
     const match = /^(\d+) (\w+) ([0-9a-f]+)\t([\s\S]+)$/.exec(record);
     if (!match) return [{ check: "release-tracked-proof", message: "could not parse git ls-tree output" }];
     const [, headMode, headType, headObject, path] = match;
-    const absolute = join(root, path!);
+    const absolute = join(baseDir, path!);
     let actualType: TrackedWorktreeProof["actualType"] = "missing";
     let actualMode: string | null = null;
     let actualObject: string | null = null;
