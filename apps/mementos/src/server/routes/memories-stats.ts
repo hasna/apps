@@ -76,8 +76,10 @@ addRoute("GET", "/api/memories/stale", (_req: Request, url: URL) => {
   const parsedOffset = Number(q["offset"]);
   const offset =
     Number.isInteger(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
+  const pinned = q["pinned"] === "1" || q["pinned"] === "true" ? true : q["pinned"] === "0" || q["pinned"] === "false" ? false : undefined;
   const page = getStaleMemoriesPage({
     days,
+    pinned,
     project_id: q["project_id"],
     agent_id: q["agent_id"],
     limit,

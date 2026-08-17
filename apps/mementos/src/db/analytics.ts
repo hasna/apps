@@ -271,6 +271,10 @@ export interface StaleFilter {
   days?: number;
   project_id?: string;
   agent_id?: string;
+  /** Scope the check to pinned rows (true) or unpinned rows (false). When
+   * undefined, pinned rows stay excluded — the pre-existing contract — so a
+   * caller must opt in to review the pinned subset. */
+  pinned?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -305,7 +309,7 @@ export function getStaleMemoriesPage(filter: StaleFilter = {}, db?: Database): S
   const limit = filter.limit ?? 20;
   const offset = filter.offset ?? 0;
   if (!db && isApiMode()) {
-    const q = toQuery({ days, project_id: filter.project_id, agent_id: filter.agent_id, limit, offset });
+    const q = toQuery({ days, project_id: filter.project_id, agent_id: filter.agent_id, pinned: filter.pinned, limit, offset });
     const { data } = apiJson<{
       memories?: StaleMemory[];
       total?: number;
@@ -324,8 +328,17 @@ export function getStaleMemoriesPage(filter: StaleFilter = {}, db?: Database): S
   }
   const d = db || getDatabase();
   const cutoffDate = new Date(Date.now() - days * 86400000).toISOString();
-  const conds = ["status = 'active'", "(accessed_at IS NULL OR accessed_at < ?)", "pinned = 0"];
+  const conds = ["status = 'active'", "(accessed_at IS NULL OR accessed_at < ?)"];
   const params: (string | number)[] = [cutoffDate];
+  if (filter.pinned !== undefined) {
+    conds.push("pinned = ?");
+    params.push(filter.pinned ? 1 : 0);
+  } else {
+    // Pinned rows stay excluded by default: pins are the promoted subset and
+    // the plain stale view is for cleanup candidates. `pinned: true` opts into
+    // reviewing them (never-accessed pins are otherwise invisible forever).
+    conds.push("pinned = 0");
+  }
   if (filter.project_id) { conds.push("project_id = ?"); params.push(filter.project_id); }
   if (filter.agent_id) { conds.push("agent_id = ?"); params.push(filter.agent_id); }
 

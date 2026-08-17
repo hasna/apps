@@ -88,6 +88,7 @@ export function registerMemoryLifecycleTools(server: McpServer): void {
     "Find memories not accessed recently. Useful for cleanup or review.",
     {
       days: z.coerce.number().optional(),
+      pinned: z.boolean().optional().describe("Review stale pinned memories (default excludes pinned)"),
       project_id: z.string().optional(),
       agent_id: z.string().optional(),
       limit: z.coerce.number().optional(),
@@ -97,6 +98,7 @@ export function registerMemoryLifecycleTools(server: McpServer): void {
         const days = args.days || 30;
         const rows = getStaleMemories({
           days,
+          pinned: args.pinned,
           project_id: args.project_id,
           agent_id: args.agent_id,
           limit: args.limit || 20,
