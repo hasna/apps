@@ -5,8 +5,9 @@ import { getDatabase, resolvePartialId } from "../../db/database.js";
 import { releaseAgent, listAgents, normalizeGeneratedAgentNames, suggestAgentNames } from "../../db/agents.js";
 import { normalizeAgentNameInput } from "../../lib/agent-name-normalize.js";
 import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskList } from "../../db/task-lists.js";
+import type { UpdateTaskListInput } from "../../types/index.js";
 import { listTasks } from "../../db/tasks.js";
-import { getPackageVersion, handleError, autoProject, output, outputRecord } from "../helpers.js";
+import { getPackageVersion, handleError, autoProject, output, outputRecord, resolveExplicitProject } from "../helpers.js";
 import { clearPersistedIdentity, detectIdentityCollision, persistIdentity, readPersistedIdentity } from "../../lib/creator-identity.js";
 import {
   getTodosCloudClient,
@@ -574,12 +575,38 @@ export function registerAgentCommands(program: Command) {
             outputRecord(list, Boolean(globalOpts.json), "Task list:");
             return;
           }
-          const patch = {
+          const patch: UpdateTaskListInput = {
             ...(opts.name !== undefined ? { name: opts.name } : {}),
             ...(opts.slug !== undefined ? { slug: opts.slug } : {}),
             ...(opts.description !== undefined ? { description: opts.description } : {}),
           };
-          if (Object.keys(patch).length === 0) throw new Error("lists --update requires --name, --slug, or --description");
+          // The task-list repair path (doctor task_lists_without_project /
+          // task_lists_with_unregistered_project): rebind the list to its
+          // registry project, or unbind it with --project "". The global
+          // --project option is read here, NOT the auto-detected project —
+          // `lists --add` scopes with the same option, so a rebind must only
+          // ever happen on an explicit ref, never on a cwd guess. (Commander
+          // routes a same-named subcommand flag to the parent's opts, which is
+          // why this reads program.opts() like `todos add` does.)
+          const rebindRef = globalOpts.project;
+          if (rebindRef !== undefined) {
+            if (rebindRef === "") {
+              patch.project_id = null;
+            } else {
+              const projectId = cloud
+                ? await cloudResolveProjectRef(cloud, rebindRef)
+                : (() => {
+                    try {
+                      return resolveExplicitProject(rebindRef).id;
+                    } catch {
+                      return null;
+                    }
+                  })();
+              if (!projectId) throw new Error(`Project not found: ${rebindRef}`);
+              patch.project_id = projectId;
+            }
+          }
+          if (Object.keys(patch).length === 0) throw new Error("lists --update requires --name, --slug, --description, or --project");
           const list = cloud
             ? await cloudUpdateTaskList(cloud, resolved, patch)
             : updateTaskList(resolved, patch);

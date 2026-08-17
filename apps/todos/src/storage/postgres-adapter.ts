@@ -3022,11 +3022,23 @@ async function createTaskList(input: CreateTaskListInput, store: PostgresJsonRec
 async function updateTaskList(id: string, input: UpdateTaskListInput, store: PostgresJsonRecordStore): Promise<TaskList> {
   const list = await requireRecord<TaskList>("task_lists", id, store);
   const patch = definedPatch(input);
+  // The slug scope moves with the project, so the uniqueness check runs
+  // against the FINAL project scope — a rebind must collide with an existing
+  // slug in the target scope rather than silently shadow it.
+  let nextProjectId = list.project_id;
+  if (input.project_id !== undefined) {
+    nextProjectId = input.project_id === null || input.project_id === "" ? null : input.project_id;
+    if (nextProjectId !== null) {
+      const project = await store.get("projects", nextProjectId);
+      if (!project) throw new ProjectNotFoundError(nextProjectId);
+    }
+    patch.project_id = nextProjectId;
+  }
   if (input.slug !== undefined) {
     const slug = slugifyRaw(input.slug);
     if (!slug) throw new Error("Invalid task-list slug — must be non-empty kebab-case");
     const duplicate = (await store.list<TaskList>("task_lists")).find((candidate) =>
-      candidate.id !== id && candidate.project_id === list.project_id && candidate.slug === slug
+      candidate.id !== id && candidate.project_id === nextProjectId && candidate.slug === slug
     );
     if (duplicate) {
       throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${slug}" already exists in this scope`);

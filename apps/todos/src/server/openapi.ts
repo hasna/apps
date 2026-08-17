@@ -1109,6 +1109,10 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             name: { type: "string" },
             description: { type: "string" },
             metadata: { type: "object", additionalProperties: true },
+            // Rebind the list to a project, or unbind it with null. The
+            // project must exist — the repair contract for doctor's
+            // task_lists_without_project / task_lists_with_unregistered_project.
+            project_id: { type: "string", nullable: true, minLength: 1 },
           },
         },
         CreateTaskCommentInput: {

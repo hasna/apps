@@ -1564,7 +1564,7 @@ export async function handleV1Request(
       if (id && (method === "PATCH" || method === "PUT")) {
         const body = await readJson<UpdateTaskListInput>(req);
         if (!body) return error(400, "invalid JSON body");
-        const unknownField = Object.keys(body).find((key) => !["slug", "name", "description", "metadata"].includes(key));
+        const unknownField = Object.keys(body).find((key) => !["slug", "name", "description", "metadata", "project_id"].includes(key));
         if (unknownField) return error(400, `unsupported task-list update field: ${unknownField}`);
         if (Object.keys(body).length === 0) return error(400, "task-list update must not be empty");
         if (body.slug !== undefined && (typeof body.slug !== "string" || !normalizeSlug(body.slug))) return error(400, "slug must be a non-empty string");
@@ -1572,6 +1572,14 @@ export async function handleV1Request(
         if (body.description !== undefined && typeof body.description !== "string") return error(400, "description must be a string");
         if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata))) {
           return error(400, "metadata must be an object");
+        }
+        // The task-list repair contract: PATCH may rebind the list to a project
+        // (referential integrity — a nonexistent project is a 404) and null
+        // unbinds it. Empty string is rejected here; the CLI maps --project ""
+        // to null before this point.
+        if (body.project_id !== undefined && body.project_id !== null
+          && (typeof body.project_id !== "string" || !body.project_id.trim())) {
+          return error(400, "project_id must be a non-empty string or null");
         }
         if (!await store.taskLists.get(id)) return error(404, "task list not found");
         const taskList = await store.taskLists.update(id, body);

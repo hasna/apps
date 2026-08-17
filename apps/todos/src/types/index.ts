@@ -507,6 +507,12 @@ export interface UpdateTaskListInput {
   name?: string;
   description?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * Rebind the list to a project, or unbind it (`null` / empty string clears
+   * `project_id`). The target project must exist — the repair path for doctor's
+   * `task_lists_without_project` / `task_lists_with_unregistered_project`.
+   */
+  project_id?: string | null;
 }
 
 // Task

@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { CreateTaskListInput, TaskList, TaskListRow, UpdateTaskListInput } from "../types/index.js";
-import { ResourceConflictError, TaskListNotFoundError } from "../types/index.js";
+import { ProjectNotFoundError, ResourceConflictError, TaskListNotFoundError } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { slugify } from "./projects.js";
 import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
@@ -74,23 +74,45 @@ export function updateTaskList(id: string, input: UpdateTaskListInput, db?: Data
     const sets: string[] = ["updated_at = ?"];
     const params: (string | null)[] = [now()];
 
+    // The scope a slug lives in moves when the list is rebound, so both the
+    // uniqueness check and the canonical-slug-claim move are computed against
+    // the FINAL project scope, never the pre-update one. Otherwise a rebind
+    // could silently shadow another list's slug in the target scope.
+    let nextProjectId = existing.project_id;
+    if (input.project_id !== undefined) {
+      nextProjectId = input.project_id === null || input.project_id === "" ? null : input.project_id;
+      if (nextProjectId !== null) {
+        const project = d.query("SELECT id FROM projects WHERE id = ?").get(nextProjectId) as { id: string } | undefined;
+        if (!project) throw new ProjectNotFoundError(nextProjectId);
+      }
+    }
+
+    let nextSlug = existing.slug;
     if (input.slug !== undefined) {
       const slug = slugify(input.slug);
       if (!slug) throw new Error("Invalid task-list slug — must be non-empty kebab-case");
-      const duplicate = existing.project_id
-        ? d.query("SELECT id FROM task_lists WHERE project_id = ? AND slug = ? AND id != ?").get(existing.project_id, slug, id)
-        : d.query("SELECT id FROM task_lists WHERE project_id IS NULL AND slug = ? AND id != ?").get(slug, id);
+      nextSlug = slug;
+    }
+
+    if (nextProjectId !== existing.project_id || nextSlug !== existing.slug) {
+      const duplicate = nextProjectId
+        ? d.query("SELECT id FROM task_lists WHERE project_id = ? AND slug = ? AND id != ?").get(nextProjectId, nextSlug, id)
+        : d.query("SELECT id FROM task_lists WHERE project_id IS NULL AND slug = ? AND id != ?").get(nextSlug, id);
       if (duplicate) {
-        throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${slug}" already exists in this scope`);
+        throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${nextSlug}" already exists in this scope`);
       }
-      if (slug !== existing.slug) {
-        releaseCanonicalSlugClaims("task_list", id, d);
-        if (!claimCanonicalSlug("task_list", taskListSlugScopeKey(existing.project_id), slug, id, d)) {
-          throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${slug}" already exists in this scope`);
-        }
+      releaseCanonicalSlugClaims("task_list", id, d);
+      if (!claimCanonicalSlug("task_list", taskListSlugScopeKey(nextProjectId), nextSlug, id, d)) {
+        throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${nextSlug}" already exists in this scope`);
       }
+    }
+    if (nextProjectId !== existing.project_id) {
+      sets.push("project_id = ?");
+      params.push(nextProjectId);
+    }
+    if (nextSlug !== existing.slug) {
       sets.push("slug = ?");
-      params.push(slug);
+      params.push(nextSlug);
     }
     if (input.name !== undefined) {
       sets.push("name = ?");

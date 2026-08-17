@@ -112,7 +112,7 @@ export interface ErrorResponse { "error": string; "code"?: string; "conflict"?: 
 
 export interface CreateTaskListInput { "name": string; "slug"?: string; "project_id"?: string; "description"?: string; "metadata"?: Record<string, unknown> }
 
-export interface UpdateTaskListInput { "slug"?: string; "name"?: string; "description"?: string; "metadata"?: Record<string, unknown> }
+export interface UpdateTaskListInput { "slug"?: string; "name"?: string; "description"?: string; "metadata"?: Record<string, unknown>; "project_id"?: string | null }
 
 export interface CreateTaskCommentInput { "content": string; "agent_id"?: string; "session_id"?: string; "type"?: "comment" | "progress" | "note"; "progress_pct"?: number }
 
@@ -194,7 +194,14 @@ export class TodosV1Client {
     const url = new URL(this.baseUrl + path);
     if (opts.query) {
       for (const [key, value] of Object.entries(opts.query)) {
-        if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+        if (value === undefined || value === null) continue;
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item !== undefined && item !== null) url.searchParams.append(key, String(item));
+          }
+        } else {
+          url.searchParams.set(key, String(value));
+        }
       }
     }
     const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };

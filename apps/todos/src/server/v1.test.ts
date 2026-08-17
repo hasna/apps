@@ -1053,9 +1053,32 @@ describe("/v1 task-list cloud parity", () => {
     });
     expect((await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { slug: 42 }))?.status).toBe(400);
     expect((await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { metadata: [] }))?.status).toBe(400);
-    expect((await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { project_id: null }))?.status).toBe(400);
+    expect((await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { project_id: 42 }))?.status).toBe(400);
+    expect((await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { project_id: "" }))?.status).toBe(400);
+    // The repair contract for the task-list layer: a PATCH may rebind the list
+    // to a project (referential-integrity enforced: the project must exist)
+    // and null unbinds it. This is the supported path that clears doctor's
+    // task_lists_without_project / task_lists_with_unregistered_project rows.
+    const rebound = await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { project_id: project.id });
+    expect(rebound?.status).toBe(200);
+    expect(await rebound!.json()).toMatchObject({ task_list: { id: createdBody.task_list.id, project_id: project.id } });
+    expect((await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { project_id: "no-such-project" }))?.status).toBe(404);
+    const unbound = await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { project_id: null });
+    expect(unbound?.status).toBe(200);
+    expect(await unbound!.json()).toMatchObject({ task_list: { id: createdBody.task_list.id, project_id: null } });
     expect((await request(`/v1/task-lists/${createdBody.task_list.id}`, "DELETE"))?.status).toBe(200);
     expect((await request(`/v1/task-lists/${createdBody.task_list.id}`))?.status).toBe(404);
+  });
+
+  test("rebinding a task list into a scope that holds its slug returns a stable 409", async () => {
+    const projectA = await store.projects.create({ name: "A", path: "/tmp/a" });
+    const projectB = await store.projects.create({ name: "B", path: "/tmp/b" });
+    await store.taskLists.create({ name: "Taken", slug: "shared", project_id: projectB.id });
+    const moving = await store.taskLists.create({ name: "Moving", slug: "shared", project_id: projectA.id });
+
+    const response = await request(`/v1/task-lists/${moving.id}`, "PATCH", { project_id: projectB.id });
+    expect(response?.status).toBe(409);
+    expect(await response!.json()).toMatchObject({ code: "TASK_LIST_SLUG_CONFLICT", conflict: true });
   });
 
   test("task-list filtering does not return unrelated tasks", async () => {

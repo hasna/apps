@@ -166,6 +166,58 @@ describe("updateTaskList", () => {
     const list = createTaskList({ name: "Old", slug: "old" });
     expect(() => updateTaskList(list.id, { slug: "release" })).toThrow("already exists");
   });
+
+  // Regression: the production task-list layer held 46 lists with project_id
+  // null (doctor task_lists_without_project) and 1 with a filesystem path as
+  // its project_id (task_lists_with_unregistered_project), and the CLI had NO
+  // supported path to rebind a list to its registry project — the repair had
+  // to be hand-edited or left undone.
+  it("rebinds a standalone list to an existing project", () => {
+    const project = createProject({ name: "Rebind Target", path: "/rebind" });
+    const list = createTaskList({ name: "Unbound", slug: "unbound" });
+    expect(list.project_id).toBeNull();
+
+    const updated = updateTaskList(list.id, { project_id: project.id });
+    expect(updated.project_id).toBe(project.id);
+    // The list must remain resolvable through its slug in the new scope.
+    expect(getTaskListBySlug("unbound", project.id)?.id).toBe(list.id);
+    expect(getTaskListBySlug("unbound")).toBeNull();
+  });
+
+  it("unbinds a project-bound list when project_id is null or empty", () => {
+    const project = createProject({ name: "P", path: "/p" });
+    const list = createTaskList({ name: "Bound", slug: "bound", project_id: project.id });
+    expect(updateTaskList(list.id, { project_id: null }).project_id).toBeNull();
+    const rebound = updateTaskList(list.id, { project_id: project.id });
+    expect(rebound.project_id).toBe(project.id);
+    expect(updateTaskList(list.id, { project_id: "" }).project_id).toBeNull();
+  });
+
+  it("throws ProjectNotFoundError when rebinding to a project that does not exist", () => {
+    const list = createTaskList({ name: "Unbound", slug: "unbound" });
+    expect(() => updateTaskList(list.id, { project_id: "no-such-project" }))
+      .toThrow("Project not found: no-such-project");
+  });
+
+  it("rejects a rebind whose slug is already taken in the target project scope", () => {
+    const projectA = createProject({ name: "A", path: "/a" });
+    const projectB = createProject({ name: "B", path: "/b" });
+    // The same slug in two different scopes is legal today — that is what
+    // makes the rebind the dangerous step: moving one into the other's scope
+    // must collide, not silently shadow it.
+    createTaskList({ name: "Taken", slug: "taken", project_id: projectB.id });
+    const moving = createTaskList({ name: "Moving", slug: "taken", project_id: projectA.id });
+    expect(() => updateTaskList(moving.id, { project_id: projectB.id })).toThrow("already exists");
+    // Unchanged by the rejected rebind.
+    expect(getTaskList(moving.id)?.project_id).toBe(projectA.id);
+  });
+
+  it("rejects a rebind to a project whose scope holds the same slug in the slug-claim registry", () => {
+    const project = createProject({ name: "P", path: "/p" });
+    createTaskList({ name: "Existing", slug: "shared", project_id: project.id });
+    const legacy = createTaskList({ name: "Legacy", slug: "shared" });
+    expect(() => updateTaskList(legacy.id, { project_id: project.id })).toThrow("already exists");
+  });
 });
 
 describe("deleteTaskList", () => {
