@@ -39,6 +39,31 @@ export type {
 // IDs
 export { generateSlug, uniqueSlug, generatePromptId } from "./lib/ids.js"
 
+// Dispatch engine (emit + codewith read-only)
+export {
+  dispatchPrompt,
+  cancelDispatchRun,
+  getDispatchRun,
+  getRunReceipt,
+  listDispatchRuns,
+  mergeVars,
+  strictRender,
+  defaultRunsDir,
+  pruneDispatchRuns,
+  discoverTargets,
+  selectTarget,
+  projectTargets,
+  DispatchError,
+} from "./lib/dispatch/index.js"
+export type {
+  DispatchRun,
+  DispatchRuntime,
+  DispatchStatus,
+  DispatchTarget,
+  DispatchReceipt,
+  DispatchOptions,
+} from "./lib/dispatch/index.js"
+
 // Types
 export type {
   Prompt,
