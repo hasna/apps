@@ -1,7 +1,8 @@
 // Set in-memory DB before any imports
+const PREV_DB_PATH = process.env["MEMENTOS_DB_PATH"];
 process.env["MEMENTOS_DB_PATH"] = ":memory:";
 
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterAll } from "bun:test";
 import { resetDatabase, getDatabase } from "./database.js";
 import {
   createMemory,
@@ -358,4 +359,15 @@ describe("semanticSearch - embedding paths (lines 860-867)", () => {
       // Main assertion: no crash from malformed data
     }
   });
+});
+
+afterAll(() => {
+  // Restore the env: the module-scope set above leaks into sibling test files
+  // that share this process (bun batches listed files), and the api-test-guard
+  // suite reads DB_PATH precedence and breaks.
+  if (PREV_DB_PATH === undefined) {
+    delete process.env["MEMENTOS_DB_PATH"];
+  } else {
+    process.env["MEMENTOS_DB_PATH"] = PREV_DB_PATH;
+  }
 });

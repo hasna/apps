@@ -442,7 +442,24 @@ export function apiJson<T = unknown>(
 ): { status: number; data: T } {
   const raw = apiRequestRaw(method, path, body);
   if (raw.status >= 200 && raw.status < 300) {
-    const data = raw.body.trim() ? (JSON.parse(raw.body) as T) : (undefined as unknown as T);
+    let data: T;
+    if (raw.body.trim()) {
+      try {
+        data = JSON.parse(raw.body) as T;
+      } catch (e) {
+        // The CLI's own stdout is the data contract for structured commands, so
+        // an internal failure must never read as "the CLI produced unparseable
+        // output". A truncated 2xx body (proxy cap, server crash mid-write) is
+        // a CLOUD failure: name it as one, with the remedy.
+        throw new ApiRequestError(
+          `mementos cloud ${method} ${path} returned status ${raw.status} with a body that is not valid JSON (${e instanceof Error ? e.message : String(e)}) — the response is truncated or the server is unhealthy`,
+          raw.status,
+          raw.body.slice(0, 500),
+        );
+      }
+    } else {
+      data = undefined as unknown as T;
+    }
     return { status: raw.status, data };
   }
   if (raw.status === 404 && options?.allow404) {

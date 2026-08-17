@@ -723,22 +723,89 @@ export class MementosClient {
   // Memories
   // --------------------------------------------------------------------------
 
-  async listMemories(filter: ListMemoriesFilter = {}): Promise<{ memories: Memory[]; count: number }> {
-    const q: Record<string, string | number | boolean | undefined> = {};
-    if (filter.scope) q["scope"] = filter.scope;
-    if (filter.category) q["category"] = filter.category;
-    if (filter.tags?.length) q["tags"] = filter.tags.join(",");
-    if (filter.min_importance !== undefined) q["min_importance"] = filter.min_importance;
-    if (filter.pinned !== undefined) q["pinned"] = filter.pinned;
-    if (filter.agent_id) q["agent_id"] = filter.agent_id;
-    if (filter.project_id) q["project_id"] = filter.project_id;
-    if (filter.session_id) q["session_id"] = filter.session_id;
-    if (filter.namespace) q["namespace"] = filter.namespace;
-    if (filter.status) q["status"] = filter.status;
-    if (filter.limit !== undefined) q["limit"] = filter.limit;
-    if (filter.offset !== undefined) q["offset"] = filter.offset;
-    if (filter.fields?.length) q["fields"] = filter.fields.join(",");
-    return this.get("/api/memories", q);
+  async listMemories(filter: ListMemoriesFilter = {}): Promise<{
+    memories: Memory[];
+    count: number;
+    total?: number;
+    has_more?: boolean;
+    next_cursor?: number | null;
+  }> {
+    // The server caps every single response at 1000 rows (bounded pages), so a
+    // requested limit above that — or no limit at all — must be assembled by
+    // walking pages. A single request would silently return only one page.
+    const pageSize = 1000;
+    const maxPages = 1000;
+    const target = filter.limit;
+    const want = target === undefined ? undefined : target + 1;
+    const memories: Memory[] = [];
+    const seenCursors = new Set<number>();
+    let cursor = filter.offset ?? 0;
+    let total: number | undefined;
+    let pages = 0;
+    for (;;) {
+      if (want !== undefined && memories.length >= want) break;
+      if (++pages > maxPages) {
+        throw new MementosError(
+          `memories list traversal exceeded its bounded ${maxPages}-page population`,
+          502,
+        );
+      }
+      const limit = Math.min(
+        want === undefined ? pageSize : want - memories.length,
+        pageSize,
+      );
+      const q: Record<string, string | number | boolean | undefined> = {};
+      if (filter.scope) q["scope"] = filter.scope;
+      if (filter.category) q["category"] = filter.category;
+      if (filter.tags?.length) q["tags"] = filter.tags.join(",");
+      if (filter.min_importance !== undefined) q["min_importance"] = filter.min_importance;
+      if (filter.pinned !== undefined) q["pinned"] = filter.pinned;
+      if (filter.agent_id) q["agent_id"] = filter.agent_id;
+      if (filter.project_id) q["project_id"] = filter.project_id;
+      if (filter.session_id) q["session_id"] = filter.session_id;
+      if (filter.namespace) q["namespace"] = filter.namespace;
+      if (filter.status) q["status"] = filter.status;
+      if (filter.fields?.length) q["fields"] = filter.fields.join(",");
+      q["limit"] = limit;
+      q["offset"] = cursor;
+      const page = await this.get<{
+        memories?: Memory[];
+        total?: number;
+        has_more?: boolean;
+        next_cursor?: number | null;
+      }>("/api/memories", q);
+      const rows = page.memories ?? [];
+      if (total === undefined) total = page.total ?? rows.length;
+      memories.push(...rows);
+      const ended =
+        page.has_more === false ||
+        (page.has_more === undefined && rows.length < limit);
+      if (ended) break;
+      if (page.has_more === true && page.next_cursor == null) {
+        throw new MementosError(
+          "memories list page claimed more results without a cursor",
+          502,
+        );
+      }
+      const next = page.next_cursor ?? cursor + rows.length;
+      if (seenCursors.has(next)) {
+        throw new MementosError(
+          "memories list traversal repeated a continuation cursor",
+          502,
+        );
+      }
+      seenCursors.add(next);
+      cursor = next;
+    }
+    const hasMore = target !== undefined && memories.length > target;
+    const trimmed = hasMore ? memories.slice(0, target) : memories;
+    return {
+      memories: trimmed,
+      count: trimmed.length,
+      total,
+      has_more: hasMore,
+      next_cursor: hasMore ? (filter.offset ?? 0) + trimmed.length : null,
+    };
   }
 
   getStats(): Promise<MemoryStats> {
@@ -782,8 +849,85 @@ export class MementosClient {
     return this.get("/api/report", options as Record<string, string | number | boolean | undefined>);
   }
 
-  getStaleMemories(options?: { days?: number; project_id?: string; agent_id?: string; limit?: number }): Promise<{ memories: Memory[]; count: number; days: number }> {
-    return this.get("/api/memories/stale", options as Record<string, string | number | boolean | undefined>);
+  async getStaleMemories(options?: { days?: number; project_id?: string; agent_id?: string; limit?: number; offset?: number }): Promise<{
+    memories: Memory[];
+    count: number;
+    days: number;
+    total?: number;
+    has_more?: boolean;
+    next_cursor?: number | null;
+  }> {
+    // Same bounded-page walk as listMemories: the server caps single stale
+    // responses at 1000 rows and answers with total / has_more / next_cursor.
+    const pageSize = 1000;
+    const maxPages = 1000;
+    const target = options?.limit;
+    const want = target === undefined ? undefined : target + 1;
+    const memories: Memory[] = [];
+    const seenCursors = new Set<number>();
+    let cursor = options?.offset ?? 0;
+    let total: number | undefined;
+    let days = options?.days ?? 30;
+    let pages = 0;
+    for (;;) {
+      if (want !== undefined && memories.length >= want) break;
+      if (++pages > maxPages) {
+        throw new MementosError(
+          `memories stale traversal exceeded its bounded ${maxPages}-page population`,
+          502,
+        );
+      }
+      const limit = Math.min(
+        want === undefined ? pageSize : want - memories.length,
+        pageSize,
+      );
+      const page = await this.get<{
+        memories?: Memory[];
+        total?: number;
+        has_more?: boolean;
+        next_cursor?: number | null;
+        days?: number;
+      }>("/api/memories/stale", {
+        days: options?.days,
+        project_id: options?.project_id,
+        agent_id: options?.agent_id,
+        limit,
+        offset: cursor,
+      });
+      const rows = page.memories ?? [];
+      if (total === undefined) total = page.total ?? rows.length;
+      if (typeof page.days === "number") days = page.days;
+      memories.push(...rows);
+      const ended =
+        page.has_more === false ||
+        (page.has_more === undefined && rows.length < limit);
+      if (ended) break;
+      if (page.has_more === true && page.next_cursor == null) {
+        throw new MementosError(
+          "memories stale page claimed more results without a cursor",
+          502,
+        );
+      }
+      const next = page.next_cursor ?? cursor + rows.length;
+      if (seenCursors.has(next)) {
+        throw new MementosError(
+          "memories stale traversal repeated a continuation cursor",
+          502,
+        );
+      }
+      seenCursors.add(next);
+      cursor = next;
+    }
+    const hasMore = target !== undefined && memories.length > target;
+    const trimmed = hasMore ? memories.slice(0, target) : memories;
+    return {
+      memories: trimmed,
+      count: trimmed.length,
+      days,
+      total,
+      has_more: hasMore,
+      next_cursor: hasMore ? (options?.offset ?? 0) + trimmed.length : null,
+    };
   }
 
   getActivity(options?: { days?: number; scope?: MemoryScope; agent_id?: string; project_id?: string }): Promise<{

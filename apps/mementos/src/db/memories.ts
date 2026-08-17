@@ -707,29 +707,10 @@ export function getMemoriesByKey(
 // List
 // ============================================================================
 
-export function listMemories(filter?: MemoryFilter, db?: Database): Memory[] {
-  if (!db && isApiMode()) {
-    const f = filter || {};
-    const q = toQuery({
-      key: f.key,
-      scope: f.scope,
-      category: f.category,
-      status: f.status,
-      tags: f.tags,
-      min_importance: f.min_importance,
-      pinned: f.pinned,
-      agent_id: f.agent_id,
-      project_id: f.project_id,
-      session_id: f.session_id,
-      namespace: f.namespace,
-      as_of: f.as_of,
-      limit: f.limit,
-      offset: f.offset,
-    });
-    const { data } = apiJson<{ memories: Memory[] }>("GET", `/memories${q}`);
-    return data?.memories ?? [];
-  }
-  const d = db || getDatabase();
+/** WHERE conditions for the memories list surface, shared by the row query and the count query. */
+function buildMemoryListConditions(
+  filter: MemoryFilter | undefined,
+): { conditions: string[]; params: SQLQueryBindings[] } {
   const conditions: string[] = [];
   const params: SQLQueryBindings[] = [];
 
@@ -749,9 +730,7 @@ export function listMemories(filter?: MemoryFilter, db?: Database): Memory[] {
     }
     if (filter.category) {
       if (Array.isArray(filter.category)) {
-        conditions.push(
-          `category IN (${filter.category.map(() => "?").join(",")})`
-        );
+        conditions.push(`category IN (${filter.category.map(() => "?").join(",")})`);
         params.push(...filter.category);
       } else {
         conditions.push("category = ?");
@@ -760,9 +739,7 @@ export function listMemories(filter?: MemoryFilter, db?: Database): Memory[] {
     }
     if (filter.source) {
       if (Array.isArray(filter.source)) {
-        conditions.push(
-          `source IN (${filter.source.map(() => "?").join(",")})`
-        );
+        conditions.push(`source IN (${filter.source.map(() => "?").join(",")})`);
         params.push(...filter.source);
       } else {
         conditions.push("source = ?");
@@ -771,9 +748,7 @@ export function listMemories(filter?: MemoryFilter, db?: Database): Memory[] {
     }
     if (filter.status) {
       if (Array.isArray(filter.status)) {
-        conditions.push(
-          `status IN (${filter.status.map(() => "?").join(",")})`
-        );
+        conditions.push(`status IN (${filter.status.map(() => "?").join(",")})`);
         params.push(...filter.status);
       } else {
         conditions.push("status = ?");
@@ -857,23 +832,104 @@ export function listMemories(filter?: MemoryFilter, db?: Database): Memory[] {
     conditions.push("status = 'active'");
   }
 
+  return { conditions, params };
+}
+
+export interface MemoryListPage {
+  rows: Memory[];
+  /**
+   * true = more rows exist beyond this page; false = the end was reached;
+   * undefined = the server did not say (an older server without the
+   * pagination contract — callers fall back to a short-page heuristic).
+   */
+  has_more: boolean | undefined;
+  next_cursor: number | null;
+}
+
+/**
+ * One bounded page of the memories list surface.
+ *
+ * The server caps every single response at 1000 rows and answers with
+ * `has_more` / `next_cursor`, so a caller that wants more than one page (or
+ * the full population) walks pages. A bare `listMemories()` keeps returning
+ * exactly one page for its existing callers.
+ */
+export function listMemoriesPage(filter?: MemoryFilter, db?: Database): MemoryListPage {
+  const f = filter || {};
+  if (!db && isApiMode()) {
+    const q = toQuery({
+      key: f.key,
+      scope: f.scope,
+      category: f.category,
+      status: f.status,
+      tags: f.tags,
+      min_importance: f.min_importance,
+      pinned: f.pinned,
+      agent_id: f.agent_id,
+      project_id: f.project_id,
+      session_id: f.session_id,
+      namespace: f.namespace,
+      as_of: f.as_of,
+      limit: f.limit,
+      offset: f.offset,
+    });
+    const { data } = apiJson<{
+      memories?: Memory[];
+      has_more?: boolean;
+      next_cursor?: number | null;
+    }>("GET", `/memories${q}`);
+    return {
+      rows: data?.memories ?? [],
+      has_more: data?.has_more,
+      next_cursor: data?.next_cursor ?? null,
+    };
+  }
+  const d = db || getDatabase();
+  const { conditions, params } = buildMemoryListConditions(f);
   let sql = "SELECT * FROM memories";
   if (conditions.length > 0) {
     sql += ` WHERE ${conditions.join(" AND ")}`;
   }
   sql += " ORDER BY importance DESC, created_at DESC";
 
-  if (filter?.limit) {
+  if (f.limit) {
     sql += " LIMIT ?";
-    params.push(filter.limit);
+    params.push(f.limit);
   }
-  if (filter?.offset) {
+  if (f.offset) {
     sql += " OFFSET ?";
-    params.push(filter.offset);
+    params.push(f.offset);
   }
 
   const rows = d.query(sql).all(...params) as Record<string, unknown>[];
-  return rows.map(parseMemoryRow);
+  const parsed = rows.map(parseMemoryRow);
+  // A full page may have more rows; the caller walks on (an exact-multiple
+  // population costs one extra empty page, which terminates the walk).
+  const hasMore = f.limit !== undefined && parsed.length === f.limit;
+  return {
+    rows: parsed,
+    has_more: hasMore,
+    next_cursor: hasMore ? (f.offset ?? 0) + parsed.length : null,
+  };
+}
+
+export function listMemories(filter?: MemoryFilter, db?: Database): Memory[] {
+  return listMemoriesPage(filter, db).rows;
+}
+
+/**
+ * Total rows matching the list filter (limit/offset ignored). Local-store
+ * count; the server route computes it so API consumers never need it.
+ */
+export function countMemories(filter?: MemoryFilter, db?: Database): number {
+  const d = db || getDatabase();
+  const { conditions, params } = buildMemoryListConditions(filter);
+  let sql = "SELECT COUNT(*) AS c FROM memories";
+  if (conditions.length > 0) {
+    sql += ` WHERE ${conditions.join(" AND ")}`;
+  }
+  const row = d.query(sql).get(...params) as { c: number } | undefined;
+  return row?.c ?? 0;
 }
 
 export interface MemoryBriefingResult {
@@ -989,16 +1045,34 @@ export function listLowTrustMemories(
  * List memories ordered by most-recently-accessed (the `history` surface).
  * Only returns memories that have been accessed at least once.
  */
-export function listMemoryHistory(
+export interface MemoryHistoryPage {
+  rows: Memory[];
+  has_more: boolean | undefined;
+  next_cursor: number | null;
+}
+
+/**
+ * One bounded page of the history surface (most-recently-accessed memories).
+ * Same pagination contract as the list surface.
+ */
+export function listMemoryHistoryPage(
   opts: { limit?: number; offset?: number } = {},
   db?: Database
-): Memory[] {
+): MemoryHistoryPage {
   const limit = opts.limit ?? 20;
   const offset = opts.offset ?? 0;
   if (!db && isApiMode()) {
     const q = toQuery({ limit, offset });
-    const { data } = apiJson<{ memories: Memory[] }>("GET", `/memories/history${q}`);
-    return data?.memories ?? [];
+    const { data } = apiJson<{
+      memories?: Memory[];
+      has_more?: boolean;
+      next_cursor?: number | null;
+    }>("GET", `/memories/history${q}`);
+    return {
+      rows: data?.memories ?? [],
+      has_more: data?.has_more,
+      next_cursor: data?.next_cursor ?? null,
+    };
   }
   const d = db || getDatabase();
   const params: SQLQueryBindings[] = [limit];
@@ -1009,12 +1083,37 @@ export function listMemoryHistory(
     params.push(offset);
   }
   const rows = d.query(sql).all(...params) as Record<string, unknown>[];
-  return rows.map(parseMemoryRow);
+  const parsed = rows.map(parseMemoryRow);
+  const hasMore = parsed.length === limit;
+  return {
+    rows: parsed,
+    has_more: hasMore,
+    next_cursor: hasMore ? offset + parsed.length : null,
+  };
 }
 
 /**
- * Retrieve an ordered memory chain by sequence_group (the `chain` surface).
+ * List memories ordered by most-recently-accessed (the `history` surface).
+ * Only returns memories that have been accessed at least once.
  */
+export function listMemoryHistory(
+  opts: { limit?: number; offset?: number } = {},
+  db?: Database
+): Memory[] {
+  return listMemoryHistoryPage(opts, db).rows;
+}
+
+/** Total accessed memories (the history surface population). */
+export function countMemoryHistory(db?: Database): number {
+  const d = db || getDatabase();
+  const row = d
+    .query(
+      "SELECT COUNT(*) AS c FROM memories WHERE status = 'active' AND accessed_at IS NOT NULL",
+    )
+    .get() as { c: number } | undefined;
+  return row?.c ?? 0;
+}
+
 export function getMemoryChain(
   sequenceGroup: string,
   projectId?: string,

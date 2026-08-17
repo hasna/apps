@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { resolve } from "node:path";
 import { getProject } from "../../db/projects.js";
-import { listMemories } from "../../db/memories.js";
+import { listMemoriesPage } from "../../db/memories.js";
 import type { MemoryScope, MemoryCategory, MemoryStatus, MemoryFilter } from "../../types/index.js";
 import {
   resolveAgentFilter,
@@ -15,6 +15,7 @@ import {
   cursorOrOffset,
   positiveIntOrDefault,
   printPageHint,
+  collectPagedRows,
   type GlobalOpts,
 } from "../helpers.js";
 
@@ -44,11 +45,20 @@ export function registerListCommand(program: Command): void {
         const fmt = getOutputFormat(program, opts.format as string | undefined);
         const isStructured = fmt === "json" || fmt === "csv" || fmt === "yaml";
         const requestedLimit = opts.limit as number | undefined;
-        const limit = positiveIntOrDefault(
-          requestedLimit,
-          isStructured ? 50 : DEFAULT_COMPACT_LIMIT
-        );
-        const offset = cursorOrOffset(opts.cursor, opts.offset);
+        // Structured formats emit a bare array / rows and cannot carry a
+        // truncation marker, so no --limit means the FULL population — a
+        // silent default page was the defect (BUG 2796806b). Compact keeps
+        // its default page plus the "has more" hint.
+        const limit =
+          requestedLimit === undefined
+            ? isStructured
+              ? undefined
+              : DEFAULT_COMPACT_LIMIT
+            : positiveIntOrDefault(
+                requestedLimit,
+                isStructured ? 50 : DEFAULT_COMPACT_LIMIT
+              );
+        const offset = cursorOrOffset(opts.cursor, opts.offset) ?? 0;
         const agentId = resolveAgentFilter((opts.agent as string | undefined) || globalOpts.agent);
         const projectPath = (opts.project as string | undefined) || globalOpts.project;
         let projectId: string | undefined;
@@ -70,18 +80,37 @@ export function registerListCommand(program: Command): void {
           pinned: opts.pinned ? true : undefined,
           agent_id: agentId,
           project_id: projectId,
-          limit: isStructured ? limit : limit + 1,
-          offset,
           status: opts.status as MemoryStatus | undefined,
           session_id: (opts.session as string | undefined) || globalOpts.session,
         };
 
-        const fetched = listMemories(filter);
-        const hasMore = !isStructured && fetched.length > limit;
-        const memories = hasMore ? fetched.slice(0, limit) : fetched;
+        // Collect bounded pages (1000 rows max per server response) until the
+        // requested limit or the full population is assembled. This is also
+        // what keeps `--limit 40000` from ever issuing one giant request that
+        // a proxy could truncate mid-body.
+        const { rows: collected, hasMore } = collectPagedRows(
+          (cursor, pageLimit) => {
+            const page = listMemoriesPage({
+              ...filter,
+              limit: pageLimit,
+              offset: cursor,
+            });
+            return {
+              rows: page.rows,
+              has_more: page.has_more,
+              next_cursor: page.next_cursor,
+            };
+          },
+          limit,
+          offset,
+        );
+        const memories =
+          hasMore && limit !== undefined
+            ? collected.slice(0, limit)
+            : collected;
 
         if (fmt === "json") {
-          outputJson(fetched);
+          outputJson(memories);
           return;
         }
 
@@ -113,7 +142,7 @@ export function registerListCommand(program: Command): void {
         }
         printPageHint({
           shown: memories.length,
-          limit,
+          limit: limit ?? memories.length,
           offset,
           hasMore,
           command: "mementos list",

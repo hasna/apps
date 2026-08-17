@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { listMemoryHistory } from "../../db/memories.js";
+import { listMemoryHistoryPage } from "../../db/memories.js";
 import {
   DEFAULT_SEARCH_LIMIT,
   outputJson,
@@ -11,6 +11,7 @@ import {
   positiveIntOrDefault,
   printPageHint,
   truncateText,
+  collectPagedRows,
   type GlobalOpts,
 } from "../helpers.js";
 
@@ -28,15 +29,36 @@ export function registerHistoryCommand(program: Command): void {
       try {
         const globalOpts = program.opts<GlobalOpts>();
         const isJson = Boolean(globalOpts.json);
-        const limit = positiveIntOrDefault(opts.limit, isJson ? 20 : DEFAULT_SEARCH_LIMIT);
-        const offset = cursorOrOffset(opts.cursor, opts.offset);
+        // Same contract as `list`: a structured read with no --limit returns
+        // the full population (a bare array cannot carry a truncation marker).
+        const requestedLimit = opts.limit as number | undefined;
+        const limit =
+          requestedLimit === undefined
+            ? isJson
+              ? undefined
+              : DEFAULT_SEARCH_LIMIT
+            : positiveIntOrDefault(requestedLimit, isJson ? 20 : DEFAULT_SEARCH_LIMIT);
+        const offset = cursorOrOffset(opts.cursor, opts.offset) ?? 0;
 
-        const fetched = listMemoryHistory({ limit: isJson ? limit : limit + 1, offset });
-        const hasMore = !isJson && fetched.length > limit;
-        const memories = hasMore ? fetched.slice(0, limit) : fetched;
+        const { rows: collected, hasMore } = collectPagedRows(
+          (cursor, pageLimit) => {
+            const page = listMemoryHistoryPage({ limit: pageLimit, offset: cursor });
+            return {
+              rows: page.rows,
+              has_more: page.has_more,
+              next_cursor: page.next_cursor,
+            };
+          },
+          limit,
+          offset,
+        );
+        const memories =
+          hasMore && limit !== undefined
+            ? collected.slice(0, limit)
+            : collected;
 
         if (globalOpts.json) {
-          outputJson(fetched);
+          outputJson(memories);
           return;
         }
 
@@ -64,7 +86,7 @@ export function registerHistoryCommand(program: Command): void {
         }
         printPageHint({
           shown: memories.length,
-          limit,
+          limit: limit ?? memories.length,
           offset,
           hasMore,
           command: "mementos history",

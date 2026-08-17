@@ -1,6 +1,7 @@
 import {
   getMemory,
   listMemories,
+  countMemories,
   createMemory,
   updateMemory,
   deleteMemory,
@@ -16,6 +17,7 @@ import type {
 } from "../../types/index.js";
 import { addRoute } from "../router.js";
 import { json, errorResponse, readJson, getSearchParams } from "../helpers.js";
+import { getDatabase } from "../../db/database.js";
 import { validateMemoryEnums, formatEnumViolation } from "../../lib/enum-validation.js";
 import { MemoryNotFoundError, VersionConflictError, DuplicateMemoryError } from "../../types/index.js";
 
@@ -38,21 +40,53 @@ addRoute("GET", "/api/memories", (_req: Request, url: URL) => {
   if (q["session_id"]) filter.session_id = q["session_id"];
   if (q["namespace"]) filter.namespace = q["namespace"];
   if (q["status"]) filter.status = q["status"] as import("../../types/index.js").MemoryStatus;
-  if (q["limit"]) filter.limit = parseInt(q["limit"], 10);
-  if (q["offset"]) filter.offset = parseInt(q["offset"], 10);
+
+  // Bounded page contract (BUG 2796806b): a huge requested limit used to
+  // produce an unbounded response body that a proxy could truncate mid-JSON,
+  // which the client then reported as its own parse failure. Cap the single
+  // response at 1000 rows and expose the truncation explicitly via
+  // has_more / next_cursor / total instead of silently dropping rows.
+  const parsedLimit = Number(q["limit"]);
+  const limit =
+    Number.isInteger(parsedLimit) && parsedLimit > 0
+      ? Math.min(parsedLimit, 1000)
+      : 1000;
+  const parsedOffset = Number(q["offset"]);
+  filter.limit = limit;
+  filter.offset =
+    Number.isInteger(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
 
   const memories = listMemories(filter);
+  const total = countMemories(filter, getDatabase());
+  const hasMore = memories.length === limit;
+  const nextCursor = hasMore ? (filter.offset ?? 0) + memories.length : null;
 
-  // ?fields=key,value,importance — field filtering (60-80% smaller responses)
+  // ?fields=key,value,importance — field filtering (60-80% smaller responses).
+  // Carries the same bounded-page signals as the full response: a capped page
+  // must never be silent, whatever the projection.
   if (q["fields"]) {
     const fields = q["fields"].split(",").map((f: string) => f.trim());
     const filtered = memories.map(m =>
       Object.fromEntries(fields.map((f: string) => [f, (m as unknown as Record<string, unknown>)[f]]).filter(([, v]) => v !== undefined))
     );
-    return json({ memories: filtered, count: filtered.length });
+    return json({
+      memories: filtered,
+      count: filtered.length,
+      total,
+      limit,
+      has_more: hasMore,
+      next_cursor: nextCursor,
+    });
   }
 
-  return json({ memories, count: memories.length });
+  return json({
+    memories,
+    count: memories.length,
+    total,
+    limit,
+    has_more: hasMore,
+    next_cursor: nextCursor,
+  });
 });
 
 // POST /api/memories — create memory

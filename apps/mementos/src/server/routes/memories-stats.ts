@@ -3,10 +3,10 @@ import {
   getMemoryStats,
   getMemoryActivity,
   getMemoryReport,
-  getStaleMemories,
+  getStaleMemoriesPage,
   getMemoryHealth,
 } from "../../db/analytics.js";
-import { listMemoryHistory } from "../../db/memories.js";
+import { listMemoryHistoryPage, countMemoryHistory } from "../../db/memories.js";
 import type { MemoryScope } from "../../types/index.js";
 import { addRoute } from "../router.js";
 import { json, getSearchParams } from "../helpers.js";
@@ -61,28 +61,61 @@ addRoute("GET", "/api/activity", (_req: Request, url: URL) => {
 });
 
 // GET /api/memories/stale — memories not accessed recently
+// Bounded page contract (BUG 2796806b): the previous silent hard cap of 100
+// rows made `count` mirror the page length with no signal. A page now carries
+// the TRUE total plus has_more / next_cursor; single responses are capped at
+// 1000 so no proxy can truncate a huge body mid-JSON.
 addRoute("GET", "/api/memories/stale", (_req: Request, url: URL) => {
   const q = getSearchParams(url);
   const days = q["days"] ? parseInt(q["days"], 10) : undefined;
-  const limit = Math.min(q["limit"] ? parseInt(q["limit"], 10) : 20, 100);
-  const memories = getStaleMemories({
+  const parsedLimit = Number(q["limit"]);
+  const limit =
+    Number.isInteger(parsedLimit) && parsedLimit > 0
+      ? Math.min(parsedLimit, 1000)
+      : 20;
+  const parsedOffset = Number(q["offset"]);
+  const offset =
+    Number.isInteger(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
+  const page = getStaleMemoriesPage({
     days,
     project_id: q["project_id"],
     agent_id: q["agent_id"],
     limit,
-    offset: q["offset"] ? parseInt(q["offset"], 10) : undefined,
+    offset,
   }, getDatabase());
-  return json({ memories, count: memories.length, days: Math.min(days || 30, 365) });
+  return json({
+    memories: page.rows,
+    count: page.rows.length,
+    total: page.total,
+    days: Math.min(days || 30, 365),
+    limit,
+    has_more: page.has_more,
+    next_cursor: page.next_cursor,
+  });
 });
 
 // GET /api/memories/history — memories by most recently accessed
+// Same bounded page contract as the list and stale surfaces.
 addRoute("GET", "/api/memories/history", (_req: Request, url: URL) => {
   const q = getSearchParams(url);
-  const memories = listMemoryHistory({
-    limit: Math.min(q["limit"] ? parseInt(q["limit"], 10) : 20, 200),
-    offset: q["offset"] ? parseInt(q["offset"], 10) : undefined,
-  }, getDatabase());
-  return json({ memories, count: memories.length });
+  const parsedLimit = Number(q["limit"]);
+  const limit =
+    Number.isInteger(parsedLimit) && parsedLimit > 0
+      ? Math.min(parsedLimit, 200)
+      : 20;
+  const parsedOffset = Number(q["offset"]);
+  const offset =
+    Number.isInteger(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
+  const page = listMemoryHistoryPage({ limit, offset }, getDatabase());
+  const total = countMemoryHistory(getDatabase());
+  return json({
+    memories: page.rows,
+    count: page.rows.length,
+    total,
+    limit,
+    has_more: page.has_more,
+    next_cursor: page.next_cursor,
+  });
 });
 
 // GET /api/memories/health — stale / forgotten / possibly-superseded report
