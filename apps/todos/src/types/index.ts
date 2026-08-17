@@ -507,6 +507,12 @@ export interface UpdateTaskListInput {
   name?: string;
   description?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * Rebind the list to a project scope, or clear the binding with an explicit
+   * `null`. Slugs are project-scoped, so a rebind re-claims the slug in the
+   * destination scope and rejects a conflict there with TASK_LIST_SLUG_CONFLICT.
+   */
+  project_id?: string | null;
 }
 
 // Task

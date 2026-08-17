@@ -1053,9 +1053,52 @@ describe("/v1 task-list cloud parity", () => {
     });
     expect((await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { slug: 42 }))?.status).toBe(400);
     expect((await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { metadata: [] }))?.status).toBe(400);
-    expect((await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { project_id: null }))?.status).toBe(400);
     expect((await request(`/v1/task-lists/${createdBody.task_list.id}`, "DELETE"))?.status).toBe(200);
     expect((await request(`/v1/task-lists/${createdBody.task_list.id}`))?.status).toBe(404);
+  });
+
+  test("PATCH task-list project_id rebinds an unbound list to a registered project and clears it back", async () => {
+    const project = await store.projects.create({ name: "Rebind Target", path: "/tmp/rebind-target" });
+    const created = await request("/v1/task-lists", "POST", { name: "Wanderer", slug: "wanderer" });
+    expect(created?.status).toBe(201);
+    const createdBody = await created!.json() as { task_list: { id: string } };
+
+    // The list starts unbound and invisible in project-scoped enumeration.
+    const before = await request(`/v1/task-lists?project_id=${project.id}`);
+    expect((await before!.json() as { task_lists: Array<{ id: string }> }).task_lists).toEqual([]);
+
+    // Rebind: unbound -> project.
+    const rebound = await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { project_id: project.id });
+    expect(rebound?.status).toBe(200);
+    expect(await rebound!.json()).toMatchObject({
+      task_list: { id: createdBody.task_list.id, project_id: project.id, slug: "wanderer" },
+    });
+
+    // The list is now visible under the project.
+    const scoped = await request(`/v1/task-lists?project_id=${project.id}`);
+    const scopedBody = await scoped!.json() as { task_lists: Array<{ id: string }> };
+    expect(scopedBody.task_lists.map((list) => list.id)).toEqual([createdBody.task_list.id]);
+
+    // A rebind to an unregistered project is refused — never a new dangling ref.
+    expect((await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { project_id: "not-a-real-project-id" }))?.status).toBe(400);
+
+    // Clear the binding back to unbound with an explicit null.
+    const cleared = await request(`/v1/task-lists/${createdBody.task_list.id}`, "PATCH", { project_id: null });
+    expect(cleared?.status).toBe(200);
+    expect(await cleared!.json()).toMatchObject({ task_list: { project_id: null } });
+  });
+
+  test("rebinding a task list re-scopes its slug claim — a slug conflict in the destination scope is rejected", async () => {
+    const project = await store.projects.create({ name: "Rebind Target", path: "/tmp/rebind-target" });
+    await store.taskLists.create({ name: "Inbox", slug: "inbox", project_id: project.id });
+    // Same slug in the standalone scope is fine while unbound.
+    const wanderer = await store.taskLists.create({ name: "Wanderer", slug: "inbox" });
+
+    const response = await request(`/v1/task-lists/${wanderer.id}`, "PATCH", { project_id: project.id });
+    expect(response?.status).toBe(409);
+    expect(await response!.json()).toMatchObject({ code: "TASK_LIST_SLUG_CONFLICT", conflict: true });
+    // The failed rebind leaves the list untouched.
+    expect(await store.taskLists.get(wanderer.id)).toMatchObject({ project_id: null, slug: "inbox" });
   });
 
   test("task-list filtering does not return unrelated tasks", async () => {

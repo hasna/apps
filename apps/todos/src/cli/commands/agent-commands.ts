@@ -574,12 +574,17 @@ export function registerAgentCommands(program: Command) {
             outputRecord(list, Boolean(globalOpts.json), "Task list:");
             return;
           }
+          // `--project` rebinds the list to a project scope. It must be an
+          // EXPLICIT ref — the auto-detected cwd project must never silently
+          // re-scope an existing list on a rename.
+          const explicitProject = typeof globalOpts.project === "string" && globalOpts.project.trim() !== "";
           const patch = {
+            ...(explicitProject ? { project_id: projectId } : {}),
             ...(opts.name !== undefined ? { name: opts.name } : {}),
             ...(opts.slug !== undefined ? { slug: opts.slug } : {}),
             ...(opts.description !== undefined ? { description: opts.description } : {}),
           };
-          if (Object.keys(patch).length === 0) throw new Error("lists --update requires --name, --slug, or --description");
+          if (Object.keys(patch).length === 0) throw new Error("lists --update requires --project, --name, --slug, or --description");
           const list = cloud
             ? await cloudUpdateTaskList(cloud, resolved, patch)
             : updateTaskList(resolved, patch);

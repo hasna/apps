@@ -74,23 +74,39 @@ export function updateTaskList(id: string, input: UpdateTaskListInput, db?: Data
     const sets: string[] = ["updated_at = ?"];
     const params: (string | null)[] = [now()];
 
-    if (input.slug !== undefined) {
-      const slug = slugify(input.slug);
-      if (!slug) throw new Error("Invalid task-list slug — must be non-empty kebab-case");
-      const duplicate = existing.project_id
-        ? d.query("SELECT id FROM task_lists WHERE project_id = ? AND slug = ? AND id != ?").get(existing.project_id, slug, id)
-        : d.query("SELECT id FROM task_lists WHERE project_id IS NULL AND slug = ? AND id != ?").get(slug, id);
+    // A rebind changes the slug's scope, so the slug conflict check and the
+    // canonical-slug claim must run against the DESTINATION scope, not the
+    // list's current scope.
+    const projectId = input.project_id === "" || input.project_id === null
+      ? null
+      : (input.project_id === undefined ? existing.project_id : input.project_id);
+    const scopeChanged = projectId !== existing.project_id;
+    const effectiveSlug = input.slug !== undefined ? slugify(input.slug) : existing.slug;
+    if (input.slug !== undefined && !effectiveSlug) {
+      throw new Error("Invalid task-list slug — must be non-empty kebab-case");
+    }
+
+    if (scopeChanged || (input.slug !== undefined && effectiveSlug !== existing.slug)) {
+      const duplicate = projectId
+        ? d.query("SELECT id FROM task_lists WHERE project_id = ? AND slug = ? AND id != ?").get(projectId, effectiveSlug, id)
+        : d.query("SELECT id FROM task_lists WHERE project_id IS NULL AND slug = ? AND id != ?").get(effectiveSlug, id);
       if (duplicate) {
-        throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${slug}" already exists in this scope`);
+        throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${effectiveSlug}" already exists in this scope`);
       }
-      if (slug !== existing.slug) {
+      if (scopeChanged || effectiveSlug !== existing.slug) {
         releaseCanonicalSlugClaims("task_list", id, d);
-        if (!claimCanonicalSlug("task_list", taskListSlugScopeKey(existing.project_id), slug, id, d)) {
-          throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${slug}" already exists in this scope`);
+        if (!claimCanonicalSlug("task_list", taskListSlugScopeKey(projectId), effectiveSlug, id, d)) {
+          throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${effectiveSlug}" already exists in this scope`);
         }
       }
+    }
+    if (input.slug !== undefined) {
       sets.push("slug = ?");
-      params.push(slug);
+      params.push(effectiveSlug!);
+    }
+    if (projectId !== existing.project_id) {
+      sets.push("project_id = ?");
+      params.push(projectId);
     }
     if (input.name !== undefined) {
       sets.push("name = ?");
