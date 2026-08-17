@@ -5,22 +5,16 @@ import { join } from "node:path";
 /**
  * Canonical Hasna Service Contract v1 storage config for @hasna/workforce.
  *
- * Runtime storage modes are `local | cloud` ONLY (Amendment A1, PURE REMOTE):
- *   - local: SQLite at ~/.hasna/workforce/workforce.db is authoritative.
- *   - cloud: reads AND writes go directly to the app-owned cloud Postgres.
- *
- * The legacy words `remote`, `hybrid`, and `self_hosted` are accepted only as
- * deprecated aliases that normalize to `cloud`. Mode is chosen from the mode env
- * var and the *presence* of a DATABASE_URL — never by reading a secret value.
+ * The server storage backend is `sqlite | postgresql` only (owner directive
+ * 2026-07-29): SQLite at ~/.hasna/workforce/workforce.db when no DATABASE_URL
+ * is configured; Postgres (the app-owned cloud store) when one is. The retired
+ * HASNA_WORKFORCE_STORAGE_MODE variable is no longer read.
  */
 export const APP_NAME = "workforce";
 export const ENV_TOKEN = "WORKFORCE";
 
 export type StorageMode = "local" | "cloud";
 
-const DEPRECATED_CLOUD_ALIASES = new Set(["remote", "hybrid", "self_hosted"]);
-
-const MODE_KEYS = [`HASNA_${ENV_TOKEN}_STORAGE_MODE`, `${ENV_TOKEN}_STORAGE_MODE`] as const;
 const DB_URL_KEYS = [`HASNA_${ENV_TOKEN}_DATABASE_URL`, `${ENV_TOKEN}_DATABASE_URL`] as const;
 const DB_URL_FILE_KEYS = [`HASNA_${ENV_TOKEN}_DATABASE_URL_FILE`, `${ENV_TOKEN}_DATABASE_URL_FILE`] as const;
 const DB_PATH_KEYS = [`HASNA_${ENV_TOKEN}_DB_PATH`, `${ENV_TOKEN}_DB_PATH`] as const;
@@ -40,38 +34,9 @@ export function databaseUrlPresent(env: Env = process.env): boolean {
   return firstEnv(env, DB_URL_KEYS) !== undefined || firstEnv(env, DB_URL_FILE_KEYS) !== undefined;
 }
 
-/**
- * Resolve the storage mode from the environment; defaults to `local`.
- *
- * Fail-closed guard (v2): if a DATABASE_URL is present but mode resolves to
- * `local`, that is almost certainly a mis-deploy that would silently write to
- * SQLite while a cloud DB is configured — treat it as a hard startup error.
- */
+/** Resolve the storage backend from the environment: Postgres when a DATABASE_URL is present, otherwise SQLite. */
 export function resolveStorageMode(env: Env = process.env): StorageMode {
-  const raw = firstEnv(env, MODE_KEYS);
-  let mode: StorageMode;
-  if (!raw) {
-    mode = "local";
-  } else {
-    const normalized = raw.toLowerCase().replace(/-/g, "_");
-    if (normalized === "local") mode = "local";
-    else if (normalized === "cloud" || DEPRECATED_CLOUD_ALIASES.has(normalized)) mode = "cloud";
-    else throw new Error(`Unknown storage mode: ${raw}. Use local or cloud.`);
-  }
-
-  if (mode === "local" && databaseUrlPresent(env)) {
-    throw new Error(
-      `Refusing to start: a DATABASE_URL is present but HASNA_${ENV_TOKEN}_STORAGE_MODE is local. ` +
-        `This would silently write to SQLite while a cloud database is configured. ` +
-        `Set HASNA_${ENV_TOKEN}_STORAGE_MODE=cloud or unset the DATABASE_URL.`,
-    );
-  }
-  if (mode === "cloud" && !databaseUrlPresent(env)) {
-    console.warn(
-      `[workforce] cloud mode needs HASNA_${ENV_TOKEN}_DATABASE_URL(_FILE); PURE REMOTE reads/writes go to cloud Postgres.`,
-    );
-  }
-  return mode;
+  return databaseUrlPresent(env) ? "cloud" : "local";
 }
 
 /**
