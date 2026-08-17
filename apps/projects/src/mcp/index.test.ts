@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { runMigrations } from "../db/schema.js";
 import { createWorkspace, recordWorkspaceEvent } from "../db/workspaces.js";
 import { PROJECT_REDACTED_VALUE } from "../lib/redaction.js";
-import { testSpawnEnv } from "../testing/spawn-env.js";
+import { API_MODE_ENV_KEYS, testSpawnEnv } from "../testing/spawn-env.js";
 
 function runMcpCli(args: string[]) {
   return Bun.spawnSync({
@@ -17,11 +17,20 @@ function runMcpCli(args: string[]) {
 }
 
 function runMcpSession(messages: unknown[], env: Record<string, string>) {
+  // Api-mode selectors are stripped from the passed env itself, not only from
+  // process.env: a call site passing raw process.env must not be able to
+  // reach an api transport through this helper. testSpawnEnv() keeps keys
+  // present in `overrides`, so it cannot express that here.
+  const isolated: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if ((API_MODE_ENV_KEYS as readonly string[]).includes(key)) continue;
+    isolated[key] = value;
+  }
   return Bun.spawnSync({
     cmd: ["node", "src/testing/mcp-stdio-client.mjs", JSON.stringify(messages)],
     stdout: "pipe",
     stderr: "pipe",
-    env,
+    env: isolated,
   });
 }
 
@@ -403,6 +412,72 @@ describe("projects-mcp project-first surface", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("spawned MCP sessions strip api-mode env even from a raw process.env call site — writes land in the temp DB", async () => {
+    const root = mkdtempSync(join(tmpdir(), "project-mcp-hermetic-"));
+    const dbPath = join(root, "projects.db");
+    const requests: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        requests.push(`${req.method} ${new URL(req.url).pathname}`);
+        return Response.json({ error: "ambient api env reached a spawned MCP server" }, { status: 500 });
+      },
+    });
+
+    const previousUrl = process.env.HASNA_PROJECTS_API_URL;
+    const previousKey = process.env.HASNA_PROJECTS_API_KEY;
+    process.env.HASNA_PROJECTS_API_URL = `http://127.0.0.1:${server.port}`;
+    process.env.HASNA_PROJECTS_API_KEY = "hermetic-test-key";
+    try {
+      const messages = [
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "project-mcp-test", version: "0" },
+          },
+        },
+        { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: {
+            name: "projects_create",
+            arguments: {
+              name: "Hermetic MCP Create",
+              slug: "mcp-hermetic-create",
+            },
+          },
+        },
+      ];
+      // The only call shape that pins the structural property: raw process.env
+      // (with api url/key set above), NOT a call-site testSpawnEnv() — that
+      // would strip the selectors before the wrapper runs and pass trivially.
+      const result = runMcpSession(messages, { ...process.env, HASNA_PROJECTS_DB_PATH: dbPath });
+      expect(result.exitCode).toBe(0);
+      expect(Buffer.from(result.stderr).toString("utf-8")).toBe("");
+
+      const db = new Database(dbPath);
+      const row = db.query("SELECT slug FROM workspaces WHERE slug = ?").get("mcp-hermetic-create");
+      db.close();
+
+      expect(row).not.toBeNull();
+      expect(requests).toEqual([]);
+    } finally {
+      if (previousUrl === undefined) delete process.env.HASNA_PROJECTS_API_URL;
+      else process.env.HASNA_PROJECTS_API_URL = previousUrl;
+      if (previousKey === undefined) delete process.env.HASNA_PROJECTS_API_KEY;
+      else process.env.HASNA_PROJECTS_API_KEY = previousKey;
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   test("projects_import_github accepts and persists finance metadata over MCP", () => {
     const root = mkdtempSync(join(tmpdir(), "project-mcp-finance-github-"));
