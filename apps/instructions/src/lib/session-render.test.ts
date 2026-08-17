@@ -18,6 +18,7 @@ import {
   NO_BRITTLE_HARDCODING_RULE,
 } from "./global-agent-rules-standard";
 import { makeTempRoot } from "./test-temp-root";
+import { stampCursorGlobalAuthorityMarker } from "./cursor-authority";
 
 const globalIdentity: SessionInstructionSource = {
   id: "global-codewith",
@@ -132,7 +133,7 @@ afterEach(() => {
 });
 
 describe("session render planner", () => {
-  test("defaults to an absolute raw-store session home", () => {
+  test("defaults to an absolute profile home", () => {
     const plan = planSessionRender({
       tool: "codex",
       profile: "account999",
@@ -141,7 +142,7 @@ describe("session render planner", () => {
       sources: [globalIdentity],
     });
 
-    expect(plan.targetHome).toBe(join(tmpRoot, "raw", "sessions", "codex", "account999", "sess-1"));
+    expect(plan.targetHome).toBe(join(tmpRoot, "home", ".hasna", "accounts", "profiles", "codex", "account999"));
     expect(plan.targetKind).toBe("session-home");
     expect(plan.targetOwner.kind).toBe("provider-profile");
     expect(plan.writable).toBe(true);
@@ -209,6 +210,72 @@ describe("session render planner", () => {
     expect(plan.files.filter((file) => file.role === "fragment")).toHaveLength(2);
     expect(plan.manifest.files[0]?.sha256).toBe(plan.files[0]?.sha256);
     expect(plan.manifestFile.path).toBe("/tmp/claude-account999/.hasna/session-render-manifest.json");
+  });
+
+  test("fails closed when Claude target has unmanaged legacy AGENTS authority", () => {
+    const targetHome = join(tmpRoot, "claude-legacy-authority");
+    mkdirSync(targetHome, { recursive: true });
+    writeFileSync(join(targetHome, "AGENTS.md"), [
+      "# Agent Rules (Claude)",
+      "",
+      "## No Worktrees",
+      "Never use git worktrees.",
+      "",
+    ].join("\n"));
+
+    const plan = planSessionRender({
+      tool: "claude",
+      profile: "account999",
+      targetHome,
+      sources: [globalRulesStandard],
+    });
+
+    expect(plan.blocked).toBe(true);
+    expect(plan.writable).toBe(false);
+    expect(plan.files).toEqual([]);
+    expect(plan.authorityConflicts).toHaveLength(1);
+    expect(plan.authorityConflicts[0]).toMatchObject({
+      relativePath: "AGENTS.md",
+      kind: "known-legacy-no-worktree",
+      provenance: { detection: "known-legacy-markers" },
+    });
+    expect(plan.manifest.authorityConflicts).toEqual(plan.authorityConflicts);
+    expect(plan.manifestFile.content).toContain("known-legacy-no-worktree");
+    expect(plan.manifestFile.content).not.toContain("Never use git worktrees");
+  });
+
+  test("fresh Claude target emits current worktree rule without legacy authority", () => {
+    const plan = planSessionRender({
+      tool: "claude",
+      profile: "account999",
+      targetHome: join(tmpRoot, "claude-fresh"),
+      sources: [globalRulesStandard],
+    });
+
+    expect(plan.blocked).toBe(false);
+    expect(plan.writable).toBe(true);
+    expect(plan.authorityConflicts).toEqual([]);
+    expect(plan.files.find((file) => file.role === "fragment")?.content)
+      .toContain("$HOME/.hasna/repos/worktrees");
+    expect(plan.files.find((file) => file.role === "fragment")?.content)
+      .not.toContain("Never use git worktrees.");
+  });
+
+  test("does not apply Claude authority rules to unrelated adapters", () => {
+    const targetHome = join(tmpRoot, "codex-with-agents");
+    mkdirSync(targetHome, { recursive: true });
+    writeFileSync(join(targetHome, "AGENTS.md"), "Codex-owned content.\n");
+
+    const plan = planSessionRender({
+      tool: "codex",
+      profile: "account999",
+      targetHome,
+      sources: [globalRulesStandard],
+    });
+
+    expect(plan.blocked).toBe(false);
+    expect(plan.authorityConflicts).toEqual([]);
+    expect(plan.files[0]?.relativePath).toBe("AGENTS.md");
   });
 
   test("plans Codex as one flattened AGENTS.md without native imports", () => {
@@ -282,6 +349,34 @@ describe("session render planner", () => {
     });
     expect(plan.manifest.authorityObservations).toEqual(plan.authorityObservations);
     expect(plan.manifest.authorityConflicts).toEqual(plan.authorityConflicts);
+  });
+
+  test("renders Cursor project rules when fixed global authority is a template-rendered managed file", () => {
+    mkdirSync(join(tmpRoot, "home", ".cursor", "rules"), { recursive: true });
+    writeFileSync(
+      join(tmpRoot, "home", ".cursor", "rules", "hasna-global.mdc"),
+      stampCursorGlobalAuthorityMarker("---\nalwaysApply: true\n---\n# Hasna global rules (Cursor)\n"),
+    );
+
+    const plan = planSessionRender({
+      tool: "cursor",
+      profile: "account999",
+      projectRoot: join(tmpRoot, "repo"),
+      cursorAuthorityHome: join(tmpRoot, "home"),
+      sources: [globalIdentity, agentIdentity],
+    });
+
+    expect(plan.blocked).toBe(false);
+    expect(plan.writable).toBe(true);
+    expect(plan.authorityConflicts).toEqual([]);
+    expect(plan.authorityObservations[0]).toMatchObject({
+      relativePath: ".cursor/rules/hasna-global.mdc",
+      status: "managed",
+    });
+    expect(plan.files.map((file) => file.relativePath)).toEqual([
+      ".cursor/rules/01-global-codewith.mdc",
+      ".cursor/rules/02-agent-marcus.mdc",
+    ]);
   });
 
   test("keeps unrelated adapters independent of Cursor fixed global authority", () => {

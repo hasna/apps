@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import type { Stats } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, parse, relative, resolve } from "node:path";
 
 export const INBOX_CONVERSATIONS_MINIMUM_VERSION = "0.5.28";
 
@@ -123,6 +123,26 @@ function lstatOrNull(path: string): Stats | null {
     return lstatSync(path);
   } catch {
     return null;
+  }
+}
+
+function findSymlinkedAncestor(path: string): string | null {
+  const normalized = resolve(path);
+  const parsed = parse(normalized);
+  let current = parsed.root;
+  const rel = relative(parsed.root, normalized);
+  for (const segment of rel.split(/[\\/]+/).filter(Boolean)) {
+    current = join(current, segment);
+    if (!existsSync(current)) return null;
+    if (lstatSync(current).isSymbolicLink()) return current;
+  }
+  return null;
+}
+
+function assertNoSymlinkAncestors(path: string): void {
+  const found = findSymlinkedAncestor(path);
+  if (found !== null) {
+    throw new Error(`managed skill path uses a symlink ancestor: ${found}`);
   }
 }
 
@@ -252,7 +272,12 @@ function inspectInbox(options: ManagedSkillRuntimeOptions): InboxInspection {
   let reason = "skill not installed";
   if (skillPresent) {
     const nonRegular = snapshots.some((snapshot) => !snapshot.regular);
+    const symlinkAncestor = snapshots
+      .map((snapshot) => snapshot.path)
+      .map((path) => findSymlinkedAncestor(dirname(path)))
+      .find((found): found is string => found !== null);
     if (nonRegular) reason = "managed skill target is not a regular file";
+    else if (symlinkAncestor) reason = `managed skill path uses a symlink ancestor: ${symlinkAncestor}`;
     else if (assetError) reason = assetError;
     else if (!versionProbe.ok) reason = "conversations command unavailable";
     else if (!runtimeVersion) reason = "conversations version is unreadable";
@@ -350,6 +375,7 @@ function cleanup(path: string): void {
 }
 
 function writeAtomic(path: string, content: string, mode: number): void {
+  assertNoSymlinkAncestors(dirname(path));
   const tempPath = `${path}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   try {
     mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
@@ -449,6 +475,19 @@ export async function reconcileManagedSkillRuntimes(
   }
 
   if (before.snapshots.some((snapshot) => !snapshot.regular)) {
+    return {
+      runtimes: [{ ...status, action: "failed", dry_run: dryRun, skill_contracts_changed: 0 }],
+      changed: 0,
+      failed: 1,
+      dry_run: dryRun,
+    };
+  }
+
+  const symlinkedAncestor = before.snapshots
+    .map((snapshot) => snapshot.path)
+    .map((path) => findSymlinkedAncestor(dirname(path)))
+    .find((found): found is string => found !== null);
+  if (symlinkedAncestor) {
     return {
       runtimes: [{ ...status, action: "failed", dry_run: dryRun, skill_contracts_changed: 0 }],
       changed: 0,

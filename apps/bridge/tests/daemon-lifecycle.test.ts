@@ -206,6 +206,24 @@ test("a lock held by a live process is still respected", async () => {
   expect(await Bun.file(join(paths.lockDir, "owner.json")).exists()).toBe(true);
 });
 
+// A long derived stop grace can hold the lock past LOCK_MAX_AGE_MS while the
+// owning process is still alive; the age of the directory alone must never
+// cause a live owner's lock to be broken (regression: lock was broken solely
+// on `expired`, defeating the mutex that protects daemon lifecycle).
+test("a lock held by a live process is not broken on age alone", async () => {
+  const daemonDir = await scratchDaemonDir();
+  const paths = daemonPaths(daemonDir);
+  const holder = Bun.spawn(["sh", "-lc", "sleep 30"], { stdout: "ignore", stderr: "ignore" });
+  spawned.push(holder);
+  await mkdir(paths.lockDir, { mode: 0o700 });
+  await writeFile(join(paths.lockDir, "owner.json"), JSON.stringify({ pid: holder.pid, acquiredAt: new Date().toISOString() }), { mode: 0o600 });
+  const old = new Date(Date.now() - 10 * 60_000);
+  await utimes(paths.lockDir, old, old);
+
+  await expect(stopProcessDaemon({ daemonDir })).rejects.toThrow("already running");
+  expect(await Bun.file(join(paths.lockDir, "owner.json")).exists()).toBe(true);
+});
+
 // The lock directory now holds an owner file, so releasing it with rmdir(2)
 // would silently fail (ENOTEMPTY) and leave the daemon wedged after one call.
 test("the lock is fully released after a successful operation", async () => {
