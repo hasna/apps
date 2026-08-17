@@ -40,6 +40,11 @@ import {
   type CommentRedactionBackfillOptions,
   type CommentRedactionBackfillResult,
 } from "../storage/comment-redaction-backfill.js";
+import {
+  backfillMissingTimestamps,
+  type TimestampBackfillOptions,
+  type TimestampBackfillResult,
+} from "../storage/timestamp-backfill.js";
 
 export const TODOS_APP_SLUG = "todos";
 
@@ -277,6 +282,19 @@ export function backfillCloudCommentRedaction(
   options: CommentRedactionBackfillOptions = {},
 ): Promise<CommentRedactionBackfillResult> {
   return backfillPostgresCommentRedaction(getClient(), { ...options, service: TODOS_APP_SLUG });
+}
+
+/**
+ * Preview or explicitly apply the terminal-status timestamp backfill using the
+ * service's existing Postgres pool. The underlying operation defaults to a dry
+ * run, requires an explicit confirmation AND an evidence path for --apply, and
+ * only ever fills NULL timestamp columns (never overwrites a concurrent
+ * writer). See ../storage/timestamp-backfill.js.
+ */
+export function backfillCloudTimestamps(
+  options: TimestampBackfillOptions = {},
+): Promise<TimestampBackfillResult> {
+  return backfillMissingTimestamps(getClient(), { ...options, service: TODOS_APP_SLUG });
 }
 
 /** Cheap readiness probe: round-trips a trivial query to RDS. */

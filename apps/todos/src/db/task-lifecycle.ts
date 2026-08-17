@@ -655,9 +655,14 @@ export function failTask(
   // metadata read-modify-write and the status write happen atomically.
   const failTx = d.transaction(() => {
     const res = d.run(
-      `UPDATE tasks SET status = 'failed', reason = ?, locked_by = NULL, locked_at = NULL, metadata = ?, version = version + 1, updated_at = ?
+      // End-timestamp contract: a failed row must be datable by recency reads.
+      // Measured 2026-08-17: 123 failed rows carried neither started_at nor
+      // completed_at and silently dropped out of recap/standup activity
+      // surfaces. COALESCE preserves a real completion time when a completed
+      // row is reopened and then failed.
+      `UPDATE tasks SET status = 'failed', reason = ?, locked_by = NULL, locked_at = NULL, completed_at = COALESCE(completed_at, ?), metadata = ?, version = version + 1, updated_at = ?
        WHERE id = ? AND version = ?`,
-      [safeReason, JSON.stringify(safeMeta), timestamp, id, task.version],
+      [safeReason, timestamp, JSON.stringify(safeMeta), timestamp, id, task.version],
     );
     if (res.changes === 0) {
       const current = getTask(id, d);
@@ -671,6 +676,7 @@ export function failTask(
     status: "failed" as const,
     locked_by: null,
     locked_at: null,
+    completed_at: task.completed_at ?? timestamp,
     reason: safeReason,
     metadata: safeMeta,
     version: task.version + 1,
