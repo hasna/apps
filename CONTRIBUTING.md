@@ -18,7 +18,13 @@ bunx turbo run build --affected
 bunx turbo run test --affected
 ```
 
-`bun run check` covers names, secrets, manifests, and the publish guard. The
-Turbo commands cover affected build and test work.
+`bun run check` covers names, secrets, and the publish guard. The
+contract-manifest gate is not yet implemented — `tooling/ci/check-manifests.ts`
+is a placeholder that cannot refuse yet, so do not rely on it for manifest
+coverage. The Turbo commands cover affected build and test work.
 
-This repo and every member package are licensed under Apache-2.0.
+This repository is licensed under Apache-2.0. Member packages carry their own
+licenses: some are Apache-2.0 and some are intentionally different (for
+example `apps/notes` and `apps/ui` are MIT). The standard census
+(`tooling/ci/tests/standard/census.ts`) records the exceptions; follow each
+package's own `LICENSE` and `license` field.
