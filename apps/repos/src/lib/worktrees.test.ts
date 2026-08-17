@@ -606,6 +606,59 @@ describe("removeWorktree", () => {
       .toBe("PATH_OUTSIDE_ROOT");
     expect(existsSync(join(clonePath, "README.md"))).toBe(true);
   });
+
+  test("refuses a worktree whose gitdir is dead, unless removal explicitly archives the working tree", () => {
+    // The 2026-08-14 monorepo move: the parent checkout moved, and the
+    // `.git/worktrees/<name>` metadata it carried went with it — the worktree
+    // directory survives with a shape-valid `.git` pointer to a gitdir that no
+    // longer exists. git cannot open the worktree (`fatal: not a git
+    // repository`), so every git-derived guard — dirty, unpushed, landed — is
+    // unanswerable, and the old code read all of them as "clean", classified
+    // the worktree as landed-detached, and then failed at `git worktree
+    // remove` with an opaque GIT_FAILED. There was no supported path that
+    // disposed of the directory WITH evidence.
+    const { root, repoName } = seed();
+    const dead = join(root, repoName, "dead-pointer");
+    mkdirSync(dead, { recursive: true });
+    writeFileSync(join(dead, ".git"), "gitdir: /nonexistent/checkout/.git/worktrees/dead-pointer\n");
+    writeFileSync(join(dead, "ONLY-HERE.txt"), "working-tree-only content\n");
+
+    // The dry run reports the refusal as a value, and the direct call throws
+    // the named code. Nothing is removed without the explicit opt-in.
+    const dry = removeWorktree({ ref: `${repoName}/dead-pointer`, dryRun: true });
+    expect(dry.would_remove).toBe(false);
+    expect(dry.refusal).toBe("WORKTREE_DEAD_GITDIR");
+    expect(codeOf(() => removeWorktree({ ref: `${repoName}/dead-pointer` }))).toBe("WORKTREE_DEAD_GITDIR");
+    expect(existsSync(dead)).toBe(true);
+
+    // The explicit opt-in archives the working tree before the directory goes,
+    // because the working tree is the only content left to preserve. The
+    // archive says plainly that git could not verify anything.
+    const forced = removeWorktree({ ref: `${repoName}/dead-pointer`, allowDeadGitdir: true });
+    expect(forced.removed).toBe(true);
+    expect(existsSync(dead)).toBe(false);
+    expect(forced.evidence_path).toBeTruthy();
+    expect(readFileSync(join(forced.evidence_path!, "worktree-tree", "ONLY-HERE.txt"), "utf8"))
+      .toBe("working-tree-only content\n");
+    expect(readFileSync(join(forced.evidence_path!, "gitdir-pointer.txt"), "utf8"))
+      .toContain("/nonexistent/checkout/.git/worktrees/dead-pointer");
+    expect(readFileSync(join(forced.evidence_path!, "INCOMPLETE.txt"), "utf8")).toContain("git");
+
+    // A relative pointer resolves against the worktree directory, exactly as
+    // git resolves it — dead the same way, refused the same way.
+    const deadRelative = join(root, repoName, "dead-relative");
+    mkdirSync(deadRelative, { recursive: true });
+    writeFileSync(join(deadRelative, ".git"), "gitdir: ../../nonexistent/.git/worktrees/dead-relative\n");
+    expect(codeOf(() => removeWorktree({ ref: `${repoName}/dead-relative` }))).toBe("WORKTREE_DEAD_GITDIR");
+  });
+
+  test("the dead-gitdir opt-in is a no-op on a live worktree", () => {
+    const { repoName } = seed();
+    const created = addWorktree({ repo: repoName, task: "live" });
+    const forced = removeWorktree({ ref: created.lease.lease_id, allowDeadGitdir: true });
+    expect(forced.removed).toBe(true);
+    expect(forced.evidence_path).toBeNull();
+  });
 });
 
 describe("releaseWorktree argument shape", () => {
@@ -627,6 +680,34 @@ describe("releaseWorktree argument shape", () => {
 });
 
 describe("listWorktrees", () => {
+  test("names a linked worktree whose gitdir pointer is dead", () => {
+    const { root, repoName } = seed();
+    const live = addWorktree({ repo: repoName, task: "live-one" });
+
+    // A shape-valid `.git` pointer whose gitdir no longer exists: the parent
+    // checkout moved or was deleted and took its `.git/worktrees/<name>`
+    // metadata with it. git cannot open the worktree, and the reconciliation
+    // surface has to be able to say so.
+    const dead = join(root, repoName, "dead-pointer");
+    mkdirSync(dead, { recursive: true });
+    writeFileSync(join(dead, ".git"), "gitdir: /nonexistent/checkout/.git/worktrees/dead-pointer\n");
+
+    // A relative pointer resolves against the worktree directory, exactly as
+    // git resolves it.
+    const deadRelative = join(root, repoName, "dead-relative");
+    mkdirSync(deadRelative, { recursive: true });
+    writeFileSync(join(deadRelative, ".git"), "gitdir: ../../nonexistent/.git/worktrees/dead-relative\n");
+
+    const report = listWorktrees();
+    const byPath = new Map(report.entries.map((entry) => [entry.path, entry]));
+
+    expect(byPath.get(dead)?.is_worktree).toBe(true);
+    expect(byPath.get(dead)?.issues).toContain("dead-gitdir");
+    expect(byPath.get(deadRelative)?.issues).toContain("dead-gitdir");
+    expect(byPath.get(live.path)?.issues).not.toContain("dead-gitdir");
+    expect(report.summary.issue_count).toBeGreaterThanOrEqual(2);
+  });
+
   test("reconciles leases against disk and names the measured corruption classes", () => {
     const { root, repoName } = seed();
     const live = addWorktree({ repo: repoName, task: "live-one" });
@@ -685,6 +766,25 @@ describe("listWorktrees", () => {
 });
 
 describe("adoptWorktrees", () => {
+  test("refuses a dead-gitdir worktree and skips it in bulk mode", () => {
+    const { root, repoName } = seed();
+    const dead = join(root, repoName, "dead-pointer");
+    mkdirSync(dead, { recursive: true });
+    writeFileSync(join(dead, ".git"), "gitdir: /nonexistent/checkout/.git/worktrees/dead-pointer\n");
+
+    // A lease on a worktree git cannot open would claim `verified_at` for a
+    // directory that can never be verified — refuse the single-path form.
+    expect(codeOf(() => adoptWorktrees({ path: dead, apply: true }))).toBe("WORKTREE_DEAD_GITDIR");
+
+    // The bulk sweep reports the dead candidate as skipped rather than
+    // leasing it, so the sweep does not fail on the first dead entry and does
+    // not lie about what it adopted.
+    const bulk = adoptWorktrees({ all: true, apply: true });
+    expect(bulk.adopted.map((row) => row.path)).not.toContain(dead);
+    expect(bulk.skipped.map((row) => row.path)).toContain(dead);
+    expect(bulk.skipped[0]!.reason).toBe("dead-gitdir");
+  });
+
   test("backfills a lease for a stray worktree without touching it", () => {
     const { root, clonePath, repoName } = seed();
     const stray = join(root, repoName, "hand-made");

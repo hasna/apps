@@ -1156,6 +1156,10 @@ worktree
     "--allow-unlanded",
     "Tear down a worktree whose branch has not landed (open PR, or content not in the base)",
   )
+  .option(
+    "--allow-dead-gitdir",
+    "Archive the working tree and tear down a worktree whose gitdir pointer is dead (parent checkout moved or deleted)",
+  )
   .option("--dry-run", "Report what would happen and change nothing")
   .option("--json", "Output the versioned JSON result")
   .action((ref, opts) => {
@@ -1165,6 +1169,7 @@ worktree
         ref,
         discardChanges: Boolean(opts.discardChanges),
         allowUnlanded: Boolean(opts.allowUnlanded),
+        allowDeadGitdir: Boolean(opts.allowDeadGitdir),
         dryRun: Boolean(opts.dryRun),
       });
       if (json) {
@@ -1213,6 +1218,12 @@ worktree
       for (const row of result.adopted.slice(0, 40)) {
         const state = row.already_leased ? chalk.dim("leased") : chalk.yellow("stray");
         console.log(`  ${state} ${compactText(row.path, 110)} ${chalk.dim(row.branch ?? "")}`);
+      }
+      if (result.skipped.length > 0) {
+        console.log(chalk.yellow(
+          `  ${result.skipped.length} dead-gitdir entr(ies) skipped — dispose of them with `
+          + "`repos worktree remove --allow-dead-gitdir`, which archives the working tree first",
+        ));
       }
       if (!result.applied) console.log(chalk.dim("  Nothing was written. Re-run with --apply."));
     } catch (error) {
