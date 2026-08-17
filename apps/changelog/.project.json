@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "id": "wks_stvhdtlw05ac",
-  "slug": "open-changelog",
-  "name": "Open Changelog",
+  "slug": "changelog",
+  "name": "Changelog",
   "kind": "open-source",
   "root_id": null,
   "recipe_id": null,
-  "primary_path": "/home/hasna/workspace/hasna/opensource/open-changelog",
-  "git_remote": null,
+  "primary_path": "/home/hasna/workspace/repos/hasna/changelog",
+  "git_remote": "https://github.com/hasna/changelog.git",
   "tags": [
     "open-source",
     "changelog",

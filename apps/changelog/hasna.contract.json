@@ -1,0 +1,23 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "changelog",
+  "class": "library",
+  "contractVersion": "v1",
+  "kitVersion": "0.10.6",
+  "description": "Reusable changelog collection, generation, publishing, CLI, API, SDK, and MCP server for Hasna-coded apps.",
+  "hosting": [
+    "user-hosted"
+  ],
+  "bins": [
+    "changelog"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "changelog-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "changelog",
+      "authMode": "local-only"
+    }
+  ]
+}

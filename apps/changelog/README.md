@@ -27,15 +27,15 @@ changelog init
 
 changelog add "Initial changelog scaffold" --kind added --task 731aace9
 
-changelog list --app open-changelog
+changelog list --app changelog
 changelog show <entry-id>
 changelog update <entry-id> --kind fixed --message "Tighten publish safety"
 changelog release --version 0.1.0
-changelog generate --app open-changelog --version 0.1.0 --kind added --title "Open Changelog Notes"
-changelog export --app open-changelog --format jsonl
+changelog generate --app changelog --version 0.1.0 --kind added --title "Open Changelog Notes"
+changelog export --app changelog --format jsonl
 
-changelog publish --app open-changelog --dry-run --diff
-changelog publish --app open-changelog --write --target CHANGELOG.md --title "Open Changelog Notes"
+changelog publish --app changelog --dry-run --diff
+changelog publish --app changelog --write --target CHANGELOG.md --title "Open Changelog Notes"
 ```
 
 `publish` prints a Markdown preview by default. It writes only with `--write`.
@@ -47,12 +47,12 @@ When `--app` is omitted for `add`, `generate`, `release`, or `publish`, the CLI 
 
 App ids are normalized to the `hasna.app.v1` AppId slug used as the join key
 across the Hasna distribution contracts: `@hasna/todos` maps to the
-`open-todos` repo-folder convention, and other names are slugified
+`todos` repo-folder convention, and other names are slugified
 (lowercase, dash-separated).
 
-### Release publishing (open-releases entrypoint)
+### Release publishing (releases entrypoint)
 
-`changelog publish --release` is the entrypoint invoked by open-releases when
+`changelog publish --release` is the entrypoint invoked by releases when
 a version ships: it accepts an appId and version, promotes that app's pending
 entries, regenerates the changelog file, and prints a JSON result containing a
 `changelogRef` resource pointer (`kind: "document"`,
@@ -60,7 +60,7 @@ entries, regenerates the changelog file, and prints a JSON result containing a
 `hasna.release.v1` document.
 
 ```bash
-changelog publish --release --app open-todos --version 1.2.3
+changelog publish --release --app todos --version 1.2.3
 changelog publish --release --app @hasna/todos --version 1.2.3 \
   --target CHANGELOG.md --base-url https://changelog.hasna.com
 ```
@@ -79,7 +79,7 @@ JSON Feed 1.1 feeds (`apps/<appId>/index.html`, `apps/<appId>/rss.xml`,
 
 ```bash
 changelog web --out ./public --base-url https://changelog.hasna.com
-changelog web --out ./public --app open-todos --title "open-todos releases"
+changelog web --out ./public --app todos --title "todos releases"
 ```
 
 The generator is also exported as `generateChangelogSite` from

@@ -1,0 +1,23 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "computers",
+  "class": "library",
+  "contractVersion": "v1",
+  "kitVersion": "0.10.6",
+  "description": "Durable lifetime computers for AI employees.",
+  "hosting": [
+    "user-hosted"
+  ],
+  "bins": [
+    "computers"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "computers-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "computers",
+      "authMode": "local-only"
+    }
+  ]
+}
