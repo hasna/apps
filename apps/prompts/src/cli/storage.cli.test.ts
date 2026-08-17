@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { Database } from "bun:sqlite"
+import { sha256Hex } from "../body-store.js"
 
 type CliResult = {
   exitCode: number
@@ -158,6 +159,115 @@ describe("storage CLI verbs", () => {
       const apply = runCli(dbPath, ["storage", "migrate", "--apply"], env)
       expect(apply.exitCode).toBe(1)
       expect(apply.stderr).toContain("changed since the dry run")
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true })
+    }
+  })
+
+  test("migrate apply writes each version's own inline body to its object and stamps per-version hashes", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "prompts-cli-storage-"))
+    try {
+      const env = { HOME: tempHome, HASNA_PROMPTS_MIGRATION_RECEIPT_PATH: join(tempHome, "receipt.json") }
+      const dbPath = join(tempHome, "t.db")
+      const bodyV1 = "BODY VERSION 1 ORIGINAL"
+      const bodyV2 = "BODY VERSION 2 CURRENT"
+      expect(runCli(dbPath, ["save", "One", "--body", bodyV1, "--slug", "one"], env).exitCode).toBe(0)
+      // second save with a different body creates prompt_versions v2
+      expect(runCli(dbPath, ["update", "one", "--body", bodyV2], env).exitCode).toBe(0)
+
+      const db = new Database(dbPath)
+      const promptId = (db.query("SELECT id FROM prompts WHERE slug = 'one'").get() as { id: string }).id
+      db.close()
+
+      stripBodyColumns(dbPath, tempHome)
+      expect(runCli(dbPath, ["storage", "migrate", "--dry-run"], env).exitCode).toBe(0)
+      const apply = runCli(dbPath, ["--json", "storage", "migrate", "--apply"], env)
+      expect(apply.exitCode).toBe(0)
+      const report = JSON.parse(apply.stdout) as { objectsWritten: number }
+      expect(report.objectsWritten).toBe(3)
+
+      // each historical version's object must carry that version's own body
+      const objectV1 = readFileSync(join(tempHome, "bodies", "prompts", promptId, "versions", "1.md"), "utf8")
+      const objectV2 = readFileSync(join(tempHome, "bodies", "prompts", promptId, "versions", "2.md"), "utf8")
+      expect(objectV1).toBe(bodyV1)
+      expect(objectV2).toBe(bodyV2)
+
+      // per-version hash stamps must match the body inside each object
+      const check = new Database(dbPath)
+      const v1 = check.query("SELECT body_sha256, body_bytes, body_uri FROM prompt_versions WHERE prompt_id = ? AND version = 1").get(promptId) as {
+        body_sha256: string | null
+        body_bytes: number | null
+        body_uri: string | null
+      }
+      const v2 = check.query("SELECT body_sha256, body_bytes, body_uri FROM prompt_versions WHERE prompt_id = ? AND version = 2").get(promptId) as {
+        body_sha256: string | null
+        body_bytes: number | null
+        body_uri: string | null
+      }
+      const cur = check.query("SELECT body_sha256 FROM prompts WHERE id = ?").get(promptId) as { body_sha256: string | null }
+      check.close()
+
+      expect(v1.body_uri).not.toBeNull()
+      expect(v2.body_uri).not.toBeNull()
+      expect(v1.body_sha256).toBe(sha256Hex(bodyV1))
+      expect(v2.body_sha256).toBe(sha256Hex(bodyV2))
+      expect(cur.body_sha256).toBe(sha256Hex(bodyV2))
+      expect(v1.body_bytes).toBe(Buffer.byteLength(bodyV1, "utf8"))
+      expect(v2.body_bytes).toBe(Buffer.byteLength(bodyV2, "utf8"))
+
+      // reconcile stays clean: metadata agrees with object content
+      const rec = runCli(dbPath, ["--json", "storage", "reconcile"], env)
+      expect(rec.exitCode).toBe(0)
+      const rc = JSON.parse(rec.stdout) as { missing_objects: unknown[]; hash_drift: unknown[] }
+      expect(rc.missing_objects).toEqual([])
+      expect(rc.hash_drift).toEqual([])
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true })
+    }
+  })
+
+  test("migrate apply completes when historical objects already exist, without aborting mid-loop", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "prompts-cli-storage-"))
+    try {
+      const env = { HOME: tempHome, HASNA_PROMPTS_MIGRATION_RECEIPT_PATH: join(tempHome, "receipt.json") }
+      const dbPath = join(tempHome, "t.db")
+      const bodyV1 = "BODY VERSION 1 ORIGINAL"
+      const bodyV2 = "BODY VERSION 2 CURRENT"
+      expect(runCli(dbPath, ["save", "One", "--body", bodyV1, "--slug", "one"], env).exitCode).toBe(0)
+      expect(runCli(dbPath, ["update", "one", "--body", bodyV2], env).exitCode).toBe(0)
+
+      const db = new Database(dbPath)
+      const promptId = (db.query("SELECT id FROM prompts WHERE slug = 'one'").get() as { id: string }).id
+      db.close()
+
+      stripBodyColumns(dbPath, tempHome)
+      // a previous partial apply already wrote the version-1 object with its own body
+      const v1Dir = join(tempHome, "bodies", "prompts", promptId, "versions")
+      mkdirSync(v1Dir, { recursive: true })
+      writeFileSync(join(v1Dir, "1.md"), bodyV1, { mode: 0o600 })
+
+      expect(runCli(dbPath, ["storage", "migrate", "--dry-run"], env).exitCode).toBe(0)
+      const apply = runCli(dbPath, ["--json", "storage", "migrate", "--apply"], env)
+      expect(apply.exitCode).toBe(0)
+      const report = JSON.parse(apply.stdout) as { objectsWritten: number; conflicts: unknown[] }
+      expect(report.conflicts).toEqual([])
+      expect(report.objectsWritten).toBe(3)
+
+      // the pre-existing object was reused, not overwritten with the current body
+      const objectV1 = readFileSync(join(v1Dir, "1.md"), "utf8")
+      const objectV2 = readFileSync(join(tempHome, "bodies", "prompts", promptId, "versions", "2.md"), "utf8")
+      expect(objectV1).toBe(bodyV1)
+      expect(objectV2).toBe(bodyV2)
+
+      // every item's metadata was updated (none aborted mid-loop)
+      const check = new Database(dbPath)
+      const refs = check.query("SELECT version, body_sha256 FROM prompt_versions WHERE prompt_id = ? ORDER BY version").all(promptId) as Array<{
+        version: number
+        body_sha256: string | null
+      }>
+      check.close()
+      expect(refs.length).toBe(2)
+      expect(refs.map((r) => r.body_sha256)).toEqual([sha256Hex(bodyV1), sha256Hex(bodyV2)])
     } finally {
       rmSync(tempHome, { recursive: true, force: true })
     }

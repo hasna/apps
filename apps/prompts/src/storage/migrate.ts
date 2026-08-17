@@ -32,6 +32,10 @@ export interface MigrationItem {
   promptId: string
   version: number
   key: string
+  /** The inline body that row owns — the current body for the prompts row,
+   *  the historical body for a prompt_versions row. The apply loop writes
+   *  exactly this body to the object and stamps its hash. */
+  body: string
   expectedSha256: string
   expectedBytes: number
   state: InventoryState
@@ -45,11 +49,24 @@ export interface MigrationInventory {
   promptsWithObject: number
 }
 
-export interface MigrationDryRunReport extends MigrationInventory {
+/** Items as persisted in the dry-run receipt. Bodies are prompt content and
+ *  are not needed for re-verification — apply re-derives the inventory from
+ *  the database and the inventory hash covers (promptId, version, sha256). */
+export interface MigrationReceiptItem {
+  promptId: string
+  version: number
+  key: string
+  expectedSha256: string
+  expectedBytes: number
+  state: InventoryState
+}
+
+export interface MigrationDryRunReport extends Omit<MigrationInventory, "items" | "conflicts"> {
   dryRun: true
+  items: MigrationReceiptItem[]
+  conflicts: MigrationReceiptItem[]
   objectsToWrite: number
   alreadyPresent: number
-  conflicts: MigrationItem[]
   inventoryHash: string
   receiptPath: string
   rollback: {
@@ -111,7 +128,7 @@ export async function buildMigrationInventory(store: BodyStore): Promise<Migrati
       }
     }
     if (hasDbRef) promptsWithObject += 1
-    return { promptId, version, key, expectedSha256, expectedBytes, state }
+    return { promptId, version, key, body, expectedSha256, expectedBytes, state }
   }
 
   for (const p of prompts) {
@@ -134,6 +151,11 @@ export async function buildMigrationInventory(store: BodyStore): Promise<Migrati
   }
 }
 
+/** Drop the inline body from items before persisting the receipt. */
+function receiptItems(items: MigrationItem[]): MigrationReceiptItem[] {
+  return items.map(({ body: _body, ...rest }) => rest)
+}
+
 export async function migrationDryRun(
   store: BodyStore,
   env: NodeJS.ProcessEnv = process.env,
@@ -143,8 +165,11 @@ export async function migrationDryRun(
   const objectsToWrite = inventory.items.filter((i) => i.state === "unmigrated").length
   const alreadyPresent = inventory.items.filter((i) => i.state === "object-ready").length
   const hash = inventoryHash(inventory.items)
+  const items = receiptItems(inventory.items)
   const report: MigrationDryRunReport = {
     ...inventory,
+    items,
+    conflicts: items.filter((i) => i.state === "object-conflict"),
     dryRun: true,
     objectsToWrite,
     alreadyPresent,
@@ -222,10 +247,12 @@ export async function migrationApply(
   let objectsSkipped = 0
 
   for (const item of inventory.items) {
-    const row = db
-      .query("SELECT body FROM prompts WHERE id = ?")
-      .get(item.promptId) as { body: string } | null
-    const body = row?.body ?? ""
+    // The body comes from the inventory item, which was read from the row that
+    // owns this version — the prompts row for the current version, the
+    // prompt_versions row for every historical version. Re-reading the current
+    // body here would write the current body into every historical version's
+    // object and stamp its hash with the wrong body.
+    const body = item.body
     if (item.state === "migrated") {
       objectsSkipped += 1
       continue
