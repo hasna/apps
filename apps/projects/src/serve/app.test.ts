@@ -1,0 +1,1636 @@
+import { describe, expect, test } from "bun:test";
+import { mintApiKey } from "@hasna/contracts/auth";
+import Ajv2020 from "ajv/dist/2020.js";
+import { createFetchHandler } from "./app.js";
+import { NotFoundError, ProjectsPgStore, ValidationError } from "./pg-store.js";
+import type {
+  ProjectResourceLink,
+  ProjectResourceLinkMutationRequest,
+  ProjectResourceLinkReadResult,
+  Workspace,
+} from "../types/workspace.js";
+import type {
+  ContactProjectMembershipAuthority,
+  ContactProjectMembershipSnapshot,
+} from "../lib/project-contact-links.js";
+
+const SIGNING_SECRET = "test-signing-secret-projects-0000000000";
+
+function fakeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
+  return {
+    id: "wks_test1",
+    slug: "demo",
+    name: "Demo",
+    description: null,
+    kind: "generic",
+    status: "active",
+    root_id: null,
+    recipe_id: null,
+    canonical_machine: null,
+    primary_path: null,
+    git_remote: null,
+    s3_bucket: null,
+    s3_prefix: null,
+    tags: [],
+    integrations: {},
+    metadata: {},
+    last_opened_at: null,
+    created_at: "2026-07-06 00:00:00",
+    updated_at: "2026-07-06 00:00:00",
+    synced_at: null,
+    ...overrides,
+  };
+}
+
+/** Minimal fake store — exercises routing/auth without a live Postgres. */
+function fakeStore(): ProjectsPgStore {
+  const created: Workspace[] = [];
+  return {
+    async ping() {
+      return true;
+    },
+    async listWorkspaces() {
+      return created;
+    },
+    async countWorkspaces() {
+      return created.length;
+    },
+    async createWorkspace(input: { name: string; slug?: string }) {
+      const ws = fakeWorkspace({ id: `wks_${created.length + 1}`, name: input.name, slug: input.slug ?? "demo" });
+      created.push(ws);
+      return ws;
+    },
+    async requireWorkspace(id: string) {
+      const ws = created.find((w) => w.id === id || w.slug === id);
+      if (!ws) throw new NotFoundError(`Workspace not found: ${id}`);
+      return ws;
+    },
+    async recordEvent(input: { workspace_id?: string; event_type: string; source: string }) {
+      return {
+        id: "evt_1",
+        workspace_id: input.workspace_id ?? null,
+        agent_id: null,
+        event_type: input.event_type,
+        source: input.source,
+        prompt: null,
+        command: null,
+        before_json: null,
+        after_json: null,
+        metadata: {},
+        created_at: "2026-07-06 00:00:00",
+      };
+    },
+    async listRoots() {
+      return [];
+    },
+  } as unknown as ProjectsPgStore;
+}
+
+function handler(store = fakeStore()) {
+  return createFetchHandler({
+    store,
+    version: "9.9.9",
+    app: "projects",
+    signingSecret: SIGNING_SECRET,
+    allowUnregisteredKeys: true,
+  });
+}
+
+function contactRouteFixture() {
+  const projectId = "wks_eHb1kcLUzgQVJQt6L0CCB";
+  const contactId = "6b68e131-abe5-43b7-92cd-9930b04611df";
+  const serviceInstance = "urn:hasna:contacts:test";
+  let revision = "2026-08-08 12:00:00";
+  let links: ProjectResourceLink[] = [];
+  let membership: ContactProjectMembershipSnapshot = {
+    project_id: projectId,
+    contact_id: contactId,
+    linked: false,
+    version: "membership-v1",
+  };
+  const project = fakeWorkspace({ id: projectId, slug: "reges-kpmg", updated_at: revision });
+
+  const readProjectResourceLinks = async (
+    input: { project_id: string; max_items?: number },
+  ): Promise<ProjectResourceLinkReadResult> => {
+    const maxItems = input.max_items ?? 1000;
+    const collectionDigest = `digest-${links.length}-${revision}`;
+    return {
+      ok: true,
+      project_id: input.project_id,
+      project: { ...project, updated_at: revision },
+      current_revision: revision,
+      links,
+      link_count: links.length,
+      max_items: maxItems,
+      collection_digest: collectionDigest,
+      complete: true,
+      truncated: false,
+      contract: {
+        schema: "hasna.project_resource_link_collection.v1",
+        project_id: input.project_id,
+        current_revision: revision,
+        links,
+        link_count: links.length,
+        max_items: maxItems,
+        collection_digest: collectionDigest,
+        complete: true,
+        truncated: false,
+      },
+      response_control: {
+        response_byte_limit: 100_000,
+        time_budget_ms: 5_000,
+        response_bytes: 1_000,
+        elapsed_ms: 1,
+        complete: true,
+        truncated: false,
+      },
+    };
+  };
+
+  const store = {
+    ...fakeStore(),
+    readProjectResourceLinks,
+    async mutateProjectResourceLinks(input: ProjectResourceLinkMutationRequest) {
+      const before = await readProjectResourceLinks(input);
+      revision = revision.endsWith("00") ? "2026-08-08 12:00:01" : "2026-08-08 12:00:02";
+      links = input.links.map((candidate) => ({
+        ...candidate,
+        id: `prl_${contactId.replaceAll("-", "")}`,
+        project_id: projectId,
+        labels: candidate.labels ?? {},
+        created_at: revision,
+        updated_at: revision,
+      }));
+      return {
+        ok: true,
+        dry_run: false,
+        outcome: "accepted" as const,
+        mode: input.mode,
+        idempotency_key: `${input.operation_id}:${input.step_id}`,
+        request_digest: "request",
+        precondition_digest: "precondition",
+        project_id: projectId,
+        expected_revision: input.expected_revision,
+        current_revision: revision,
+        before: {
+          project: before.project,
+          links: before.links,
+          collection_digest: before.collection_digest,
+        },
+        after: {
+          project: { ...project, updated_at: revision },
+          links,
+          collection_digest: `digest-${links.length}-${revision}`,
+        },
+        receipt: {
+          receipt_id: `gpr_${input.operation_id}`,
+          operation_id: input.operation_id,
+          step_id: input.step_id,
+          direction: "forward" as const,
+          idempotency_key: `${input.operation_id}:${input.step_id}`,
+          target_id: projectId,
+          request_digest: "request",
+          precondition_digest: "precondition",
+          expected_revision: input.expected_revision,
+          outcome: "accepted" as const,
+          reason: null,
+          result_project_id: projectId,
+          duplicate_of_receipt_id: null,
+          before: null,
+          after: null,
+          post_revision: revision,
+          created_at: revision,
+        },
+        response_control: before.response_control,
+      };
+    },
+  } as unknown as ProjectsPgStore;
+
+  const contacts: ContactProjectMembershipAuthority = {
+    service_instance: serviceInstance,
+    async readMembership() {
+      return membership;
+    },
+    async listProjectMemberships() {
+      return {
+        project_id: projectId,
+        contact_ids: membership.linked ? [contactId] : [],
+        complete: true,
+        membership_revision: membership.version,
+      };
+    },
+    async attach(input) {
+      const before = membership;
+      membership = { ...membership, linked: true, version: "membership-v2" };
+      return {
+        outcome: "accepted",
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        before,
+        after: membership,
+        receipt_id: `cmr_${input.operation_id}`,
+      };
+    },
+    async detach(input) {
+      const before = membership;
+      membership = { ...membership, linked: false, version: "membership-v3" };
+      return {
+        outcome: "accepted",
+        operation_id: input.operation_id,
+        step_id: input.step_id,
+        before,
+        after: membership,
+        receipt_id: `cmr_${input.operation_id}`,
+      };
+    },
+  };
+
+  return {
+    projectId,
+    contactId,
+    handler: createFetchHandler({
+      store,
+      contacts,
+      version: "9.9.9",
+      app: "projects",
+      signingSecret: SIGNING_SECRET,
+      allowUnregisteredKeys: true,
+    }),
+  };
+}
+
+function keyWith(scopes: string[]): string {
+  return mintApiKey({ app: "projects", scopes, signingSecret: SIGNING_SECRET }).token;
+}
+
+describe("projects-serve probes", () => {
+  test("GET /health returns status/version without retired deployment mode", async () => {
+    const res = await handler()(new Request("http://x/health"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ status: "ok", version: "9.9.9" });
+  });
+
+  test("GET /version preserves the exact legacy compatibility response", async () => {
+    const res = await handler()(new Request("http://x/version"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "ok", version: "9.9.9", mode: "cloud" });
+  });
+
+  test("GET / preserves the exact legacy compatibility response", async () => {
+    const res = await handler()(new Request("http://x/"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      name: "projects-serve",
+      version: "9.9.9",
+      mode: "cloud",
+      openapi: "/openapi.json",
+    });
+  });
+
+  test("GET /ready returns ready when db pings", async () => {
+    const res = await handler()(new Request("http://x/ready"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "ready", version: "9.9.9" });
+  });
+
+  test("GET /ready preserves degraded status without retired deployment mode", async () => {
+    const store = fakeStore();
+    store.ping = async () => false;
+    const res = await handler(store)(new Request("http://x/ready"));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ status: "degraded", version: "9.9.9" });
+  });
+
+  test("GET /ready preserves unavailable status without retired deployment mode", async () => {
+    const store = fakeStore();
+    store.ping = async () => { throw new Error("database unavailable"); };
+    const res = await handler(store)(new Request("http://x/ready"));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ status: "unavailable", version: "9.9.9" });
+  });
+
+  test("GET /openapi.json serves the spec", async () => {
+    const res = await handler()(new Request("http://x/openapi.json"));
+    expect(res.status).toBe(200);
+    const spec = await res.json();
+    expect(spec.openapi).toBe("3.1.0");
+    expect(spec.components.schemas.Health).toEqual({
+      type: "object",
+      properties: { status: { type: "string" }, version: { type: "string" } },
+      required: ["status", "version"],
+    });
+    expect(spec.components.schemas.LegacyVersionResponse).toEqual({
+      type: "object",
+      description: "Legacy compatibility response for /version.",
+      properties: {
+        status: { type: "string" },
+        version: { type: "string" },
+        mode: {
+          type: "string",
+          deprecated: true,
+          description: "Deprecated compatibility field; do not use it for deployment branching.",
+        },
+      },
+      required: ["status", "version", "mode"],
+    });
+    expect(spec.paths["/version"].get.responses["200"].content["application/json"].schema).toEqual({
+      $ref: "#/components/schemas/LegacyVersionResponse",
+    });
+    expect(spec.paths["/v1/projects"]).toBeDefined();
+    expect(spec.paths["/v1/projects/{id}/guarded-metadata"].get.operationId).toBe("guardedReadProject");
+    expect(spec.paths["/v1/projects/{id}/guarded-metadata"].post.operationId).toBe("guardedUpdateProject");
+    expect(spec.paths["/v1/projects/{id}/guarded-metadata/receipts"].get.operationId).toBe("lookupGuardedProjectMutationReceipt");
+    expect(spec.paths["/v1/projects/{id}/guarded-metadata/rollback"].post.operationId).toBe("rollbackGuardedProjectMutation");
+    expect(spec.paths["/v1/projects/{id}/resource-links"].get.operationId).toBe("readProjectResourceLinks");
+    expect(spec.paths["/v1/projects/{id}/resource-links/add"].post.operationId).toBe("addProjectResourceLinks");
+    expect(spec.paths["/v1/projects/{id}/resource-links/reconcile"].post.operationId).toBe("reconcileProjectResourceLinks");
+    expect(spec.paths["/v1/projects/{id}/resource-links/rollback"].post.operationId).toBe("rollbackProjectResourceLinks");
+    expect(spec.paths["/v1/projects/{id}/duplicate-quarantine"].get.operationId)
+      .toBe("readDuplicateProjectQuarantinePreimage");
+    expect(spec.paths["/v1/projects/{id}/duplicate-quarantine"].post.operationId)
+      .toBe("quarantineDuplicateProject");
+    expect(spec.paths["/v1/projects/{id}/duplicate-quarantine/rollback"].post.operationId)
+      .toBe("rollbackDuplicateProjectQuarantine");
+    expect(spec.paths["/v1/projects/{id}/resource-link-migrations/plan"].post.operationId)
+      .toBe("planProjectResourceLinkMigration");
+    expect(spec.paths["/v1/projects/{id}/resource-link-migrations/{manifestId}"].get.operationId)
+      .toBe("readProjectResourceLinkMigration");
+    expect(spec.paths["/v1/projects/{id}/resource-link-migrations/{manifestId}/advance"].post.operationId)
+      .toBe("advanceProjectResourceLinkMigration");
+    expect(spec.paths["/v1/projects/{id}/resource-link-migrations/{manifestId}/rollback"].post.operationId)
+      .toBe("rollbackProjectResourceLinkMigration");
+    expect(spec.paths["/v1/projects/{id}/contacts"].get.operationId).toBe("listProjectContacts");
+    expect(spec.paths["/v1/projects/{id}/contacts/{contact_id}/attach"].post.operationId)
+      .toBe("attachProjectContact");
+    expect(spec.paths["/v1/projects/{id}/contacts/{contact_id}/detach"].post.operationId)
+      .toBe("detachProjectContact");
+    expect(spec.components.schemas.ProjectContactLinkMutationRequest.required).toEqual([
+      "operation_id",
+      "max_items",
+      "response_byte_limit",
+      "time_budget_ms",
+    ]);
+    expect(spec.components.schemas.GuardedProjectRead.required).toContain("project");
+    expect(spec.components.schemas.GuardedProjectRead.required).toContain("resource_links");
+    const resourceLinkBranches = spec.components.schemas.ProjectResourceLinkInput.oneOf;
+    expect(resourceLinkBranches).toHaveLength(8);
+    const todosTaskBranch = resourceLinkBranches.find((branch: any) => (
+      branch.properties.authority.enum[0] === "todos" && branch.properties.target_kind.enum.includes("task")
+    ));
+    const knowledgeBranch = resourceLinkBranches.find((branch: any) => branch.properties.authority.enum[0] === "knowledge");
+    const contactsBranch = resourceLinkBranches.find((branch: any) => branch.properties.authority.enum[0] === "contacts");
+    expect(todosTaskBranch.properties.source_package.enum).toEqual(["@hasna/todos"]);
+    expect(todosTaskBranch.properties.target_kind.enum).toEqual(["task"]);
+    expect(todosTaskBranch.properties.locator).toEqual({
+      $ref: "#/components/schemas/ProjectResourceExternalUuidLocator",
+    });
+    expect(knowledgeBranch.properties.source_package.enum).toEqual(["@hasna/knowledge"]);
+    expect(knowledgeBranch.properties.target_kind.enum).toEqual(["collection", "item"]);
+    expect(contactsBranch.properties.source_package.enum).toEqual(["@hasna/contacts"]);
+    expect(contactsBranch.properties.target_kind.enum).toEqual(["contact"]);
+    expect(contactsBranch.properties.locator).toEqual({
+      $ref: "#/components/schemas/ProjectResourceExternalUuidLocator",
+    });
+    expect(resourceLinkBranches.filter((branch: any) => branch.properties.target_kind.enum.includes("task")))
+      .toEqual([todosTaskBranch]);
+    const conversationsProjectBranch = resourceLinkBranches.find((branch: any) => (
+      branch.properties.authority.enum[0] === "conversations"
+      && branch.properties.target_kind.enum.includes("project")
+    ));
+    const conversationsChannelBranch = resourceLinkBranches.find((branch: any) => (
+      branch.properties.authority.enum[0] === "conversations"
+      && branch.properties.target_kind.enum.includes("channel")
+    ));
+    expect(conversationsProjectBranch.properties.locator).toEqual({
+      $ref: "#/components/schemas/ProjectResourcePortableLocator",
+    });
+    expect(conversationsChannelBranch.properties.locator).toEqual({
+      $ref: "#/components/schemas/ProjectResourceConversationsChannelLinkLocator",
+    });
+    expect(conversationsChannelBranch.properties.labels).toEqual({
+      $ref: "#/components/schemas/ProjectResourceConversationsChannelLabels",
+    });
+    expect(spec.components.schemas.ProjectResourceLinkRead.required).toContain("contract");
+    expect(spec.components.schemas.ProjectResourceLinkCollectionV1.properties.schema.enum)
+      .toEqual(["hasna.project_resource_link_collection.v1"]);
+
+    const validatePersistedResourceLink = new Ajv2020({
+      strict: false,
+      allErrors: true,
+    }).compile({
+      $ref: "#/components/schemas/ProjectResourceLink",
+      components: spec.components,
+    });
+    const persistedResourceLink = {
+      id: "prl_http_resource",
+      project_id: "wks_httpresource0001",
+      authority: "conversations",
+      service_instance: "urn:hasna:conversations:test",
+      source_package: "@hasna/conversations",
+      target_kind: "channel",
+      locator: {
+        kind: "conversations_channel_id",
+        value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
+      },
+      scope: "resource",
+      labels: { channel_name: "http-resource" },
+      created_at: "2026-08-08 00:00:00.000",
+      updated_at: "2026-08-08 00:00:00.000",
+    };
+    expect(validatePersistedResourceLink(persistedResourceLink)).toBe(true);
+    expect(validatePersistedResourceLink({
+      ...persistedResourceLink,
+      caller_forged_field: true,
+    })).toBe(false);
+    expect(validatePersistedResourceLink({
+      ...persistedResourceLink,
+      locator: { kind: "conversations_channel_id", value: "chn_partial" },
+    })).toBe(false);
+
+    const locatorBranches = spec.components.schemas.ProjectResourceLinkLocator.oneOf;
+    expect(locatorBranches).toEqual([
+      { $ref: "#/components/schemas/ProjectResourceExternalUuidLocator" },
+      { $ref: "#/components/schemas/ProjectResourceCanonicalUriLocator" },
+      { $ref: "#/components/schemas/ProjectResourceConversationsChannelLocator" },
+    ]);
+    const externalUuidLocator = spec.components.schemas.ProjectResourceExternalUuidLocator;
+    expect(externalUuidLocator.properties.value.pattern).toBe(
+      "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+    );
+    const externalUuidPattern = new RegExp(externalUuidLocator.properties.value.pattern);
+    expect(externalUuidPattern.test("e2f791bd-f26b-4fac-a762-2cba96202aa5")).toBe(true);
+    expect(externalUuidPattern.test("e2f791bd")).toBe(false);
+    expect(spec.components.schemas.Workspace.required).toEqual(expect.arrayContaining([
+      "s3_bucket",
+      "s3_prefix",
+      "last_opened_at",
+      "synced_at",
+    ]));
+    expect(spec.components.schemas.UpdateWorkspace.properties.last_opened_at).toEqual({
+      type: "string",
+      nullable: true,
+    });
+    expect(spec.components.schemas.GuardedProjectMutationResult.properties.after.anyOf).toEqual([
+      { $ref: "#/components/schemas/Workspace" },
+      { type: "null" },
+    ]);
+    expect(spec.components.schemas.GuardedProjectMutationResult.properties.receipt.anyOf).toEqual([
+      { $ref: "#/components/schemas/GuardedProjectMutationReceipt" },
+      { type: "null" },
+    ]);
+  });
+});
+
+describe("projects-serve contact membership coordination", () => {
+  test("exposes attach, list, and detach through the authenticated production API surface", async () => {
+    const fixture = contactRouteFixture();
+    const apiKey = keyWith(["projects:read", "projects:write"]);
+    const headers = {
+      authorization: `Bearer ${apiKey}`,
+      "content-type": "application/json",
+    };
+    const mutationBody = {
+      operation_id: "projects-api-contact-attach",
+      max_items: 1000,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+
+    const attach = await fixture.handler(new Request(
+      `http://x/v1/projects/${fixture.projectId}/contacts/${fixture.contactId}/attach`,
+      { method: "POST", headers, body: JSON.stringify(mutationBody) },
+    ));
+    expect(attach.status).toBe(200);
+    expect(await attach.json()).toMatchObject({
+      outcome: "accepted",
+      authority: "contacts",
+      project_id: fixture.projectId,
+      contact_id: fixture.contactId,
+      membership: { linked: true },
+    });
+
+    const list = await fixture.handler(new Request(
+      `http://x/v1/projects/${fixture.projectId}/contacts?max_items=1000&response_byte_limit=100000&time_budget_ms=5000`,
+      { headers: { authorization: `Bearer ${apiKey}` } },
+    ));
+    expect(list.status).toBe(200);
+    expect(await list.json()).toMatchObject({
+      contact_ids: [fixture.contactId],
+      synchronized_contact_ids: [fixture.contactId],
+      missing_project_link_contact_ids: [],
+      stale_project_link_contact_ids: [],
+    });
+
+    const detach = await fixture.handler(new Request(
+      `http://x/v1/projects/${fixture.projectId}/contacts/${fixture.contactId}/detach`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ...mutationBody, operation_id: "projects-api-contact-detach" }),
+      },
+    ));
+    expect(detach.status).toBe(200);
+    expect(await detach.json()).toMatchObject({
+      outcome: "accepted",
+      membership: { linked: false },
+      project_link: null,
+    });
+  });
+});
+
+describe("projects-serve auth", () => {
+  test("/v1 without a key is 401", async () => {
+    const res = await handler()(new Request("http://x/v1/projects"));
+    expect(res.status).toBe(401);
+  });
+
+  test("/v1 with a wrong-app key is rejected", async () => {
+    const token = mintApiKey({ app: "todos", scopes: ["todos:*"], signingSecret: SIGNING_SECRET }).token;
+    const res = await handler()(new Request("http://x/v1/projects", { headers: { "x-api-key": token } }));
+    expect(res.status).toBe(401);
+  });
+
+  test("read scope allows GET but not POST", async () => {
+    const h = handler();
+    const token = keyWith(["projects:read"]);
+    const listRes = await h(new Request("http://x/v1/projects", { headers: { "x-api-key": token } }));
+    expect(listRes.status).toBe(200);
+    const postRes = await h(
+      new Request("http://x/v1/projects", {
+        method: "POST",
+        headers: { "x-api-key": token, "content-type": "application/json" },
+        body: JSON.stringify({ name: "Nope" }),
+      }),
+    );
+    expect(postRes.status).toBe(403);
+  });
+
+  test("wildcard key can create and read back a project", async () => {
+    const h = handler();
+    const token = keyWith(["projects:*"]);
+    const create = await h(
+      new Request("http://x/v1/projects", {
+        method: "POST",
+        headers: { "x-api-key": token, "content-type": "application/json" },
+        body: JSON.stringify({ name: "Alpha", slug: "alpha" }),
+      }),
+    );
+    expect(create.status).toBe(201);
+    const created = await create.json();
+    expect(created.name).toBe("Alpha");
+
+    const get = await h(new Request(`http://x/v1/projects/${created.id}`, { headers: { "x-api-key": token } }));
+    expect(get.status).toBe(200);
+    expect((await get.json()).slug).toBe("alpha");
+  });
+
+  test("POST /v1/projects/:id/events records an event (write scope)", async () => {
+    const h = handler();
+    const token = keyWith(["projects:*"]);
+    const create = await h(
+      new Request("http://x/v1/projects", {
+        method: "POST",
+        headers: { "x-api-key": token, "content-type": "application/json" },
+        body: JSON.stringify({ name: "Beta", slug: "beta" }),
+      }),
+    );
+    const created = await create.json();
+    const post = await h(
+      new Request(`http://x/v1/projects/${created.id}/events`, {
+        method: "POST",
+        headers: { "x-api-key": token, "content-type": "application/json" },
+        body: JSON.stringify({ event_type: "note", source: "mcp", metadata: { k: 1 } }),
+      }),
+    );
+    expect(post.status).toBe(201);
+    expect((await post.json()).event.event_type).toBe("note");
+  });
+
+  test("POST events requires event_type and write scope", async () => {
+    const h = handler();
+    const writeToken = keyWith(["projects:*"]);
+    const create = await h(
+      new Request("http://x/v1/projects", {
+        method: "POST",
+        headers: { "x-api-key": writeToken, "content-type": "application/json" },
+        body: JSON.stringify({ name: "Gamma", slug: "gamma" }),
+      }),
+    );
+    const created = await create.json();
+    const missingType = await h(
+      new Request(`http://x/v1/projects/${created.id}/events`, {
+        method: "POST",
+        headers: { "x-api-key": writeToken, "content-type": "application/json" },
+        body: JSON.stringify({ source: "mcp" }),
+      }),
+    );
+    expect(missingType.status).toBe(400);
+    const readToken = keyWith(["projects:read"]);
+    const forbidden = await h(
+      new Request(`http://x/v1/projects/${created.id}/events`, {
+        method: "POST",
+        headers: { "x-api-key": readToken, "content-type": "application/json" },
+        body: JSON.stringify({ event_type: "note", source: "mcp" }),
+      }),
+    );
+    expect(forbidden.status).toBe(403);
+  });
+
+  test("typed resource-link projection updates return an actionable HTTP 400 on direct and guarded routes", async () => {
+    const message = "integration 'conversations_channel' is a typed resource-link compatibility projection and must be changed through resource-links";
+    const store = {
+      async updateWorkspace() {
+        throw new ValidationError(message);
+      },
+      async guardedUpdateWorkspace() {
+        throw new ValidationError(message);
+      },
+    } as unknown as ProjectsPgStore;
+    const h = handler(store);
+    const token = keyWith(["projects:*"]);
+    const requests = [
+      new Request("http://x/v1/projects/wks_httpguarded0001", {
+        method: "PATCH",
+        headers: { "x-api-key": token, "content-type": "application/json" },
+        body: JSON.stringify({
+          integrations: { conversations_channel: "moved-outside-resource-links" },
+        }),
+      }),
+      new Request("http://x/v1/projects/wks_httpguarded0001/guarded-metadata", {
+        method: "POST",
+        headers: { "x-api-key": token, "content-type": "application/json" },
+        body: JSON.stringify({
+          operation_id: "op-http-invalid-integration",
+          step_id: "integrations",
+          expected_revision: "2026-08-12 00:00:00.000",
+          patch: {
+            integrations: { conversations_channel: "moved-outside-resource-links" },
+          },
+          dry_run: true,
+          response_byte_limit: 50_000,
+          time_budget_ms: 2_000,
+        }),
+      }),
+    ];
+
+    for (const request of requests) {
+      const response = await h(request);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: message });
+    }
+  });
+
+  test("POST guarded metadata mutation returns explicit bounded complete JSON envelope", async () => {
+    const calls: Array<{ project_id: string; operation_id: string }> = [];
+    const store = {
+      async ping() {
+        return true;
+      },
+      async guardedUpdateWorkspace(input: { project_id: string; operation_id: string; response_byte_limit: number; time_budget_ms: number }) {
+        calls.push({ project_id: input.project_id, operation_id: input.operation_id });
+        return {
+          ok: true,
+          dry_run: false,
+          outcome: "accepted",
+          idempotency_key: "gpm_test",
+          request_digest: "req",
+          precondition_digest: "pre",
+          project_id: input.project_id,
+          expected_revision: "2026-08-07 00:00:00.000",
+          current_revision: "2026-08-07 00:00:00.000",
+          before: fakeWorkspace({ id: input.project_id, name: "Before" }),
+          after: fakeWorkspace({ id: input.project_id, name: "After" }),
+          receipt: {
+            receipt_id: "gpmr_test",
+            operation_id: input.operation_id,
+            step_id: "rename",
+            direction: "forward",
+            idempotency_key: "gpm_test",
+            target_id: input.project_id,
+            request_digest: "req",
+            precondition_digest: "pre",
+            expected_revision: "2026-08-07 00:00:00.000",
+            outcome: "accepted",
+            reason: null,
+            result_project_id: input.project_id,
+            duplicate_of_receipt_id: null,
+            before: {},
+            after: {},
+            post_revision: "2026-08-07 00:00:01.000",
+            created_at: "2026-08-07 00:00:01.000",
+          },
+          response_control: {
+            response_byte_limit: input.response_byte_limit,
+            time_budget_ms: input.time_budget_ms,
+            response_bytes: 1,
+            elapsed_ms: 0,
+            complete: true,
+            truncated: false,
+          },
+        };
+      },
+    } as unknown as ProjectsPgStore;
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET, allowUnregisteredKeys: true });
+    const token = keyWith(["projects:*"]);
+    const res = await h(
+      new Request("http://x/v1/projects/wks_httpguarded0001/guarded-metadata", {
+        method: "POST",
+        headers: { "x-api-key": token, "content-type": "application/json" },
+        body: JSON.stringify({
+          operation_id: "op-http",
+          step_id: "rename",
+          expected_revision: "2026-08-07 00:00:00.000",
+          patch: { name: "After" },
+          response_byte_limit: 50_000,
+          time_budget_ms: 2_000,
+        }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(calls).toEqual([{ project_id: "wks_httpguarded0001", operation_id: "op-http" }]);
+    expect(body.outcome).toBe("accepted");
+    expect(body.response_control.complete).toBe(true);
+    expect(body.response_control.truncated).toBe(false);
+    expect(body.response_control.response_bytes).toBeGreaterThan(0);
+    expect(body.response_control.response_byte_limit).toBe(50_000);
+  });
+
+  test("GET guarded metadata receipt lookup returns the exact receipt instead of the guarded-read envelope", async () => {
+    const projectId = "wks_httpguarded0001";
+    const receiptId = "gpmr_57183a0201f44adbc903011493be510f";
+    const lookupCalls: Array<Record<string, unknown>> = [];
+    let guardedReadCalls = 0;
+    const store = {
+      async ping() {
+        return true;
+      },
+      async guardedReadWorkspace() {
+        guardedReadCalls += 1;
+        throw new Error("guarded read route must not handle receipt lookup");
+      },
+      async lookupGuardedWorkspaceMutationReceipt(input: Record<string, unknown>) {
+        lookupCalls.push(input);
+        return {
+          receipt: {
+            receipt_id: receiptId,
+            operation_id: input.operation_id,
+            step_id: input.step_id,
+            direction: input.direction,
+            idempotency_key: input.idempotency_key,
+            target_id: input.project_id,
+            request_digest: "req",
+            precondition_digest: "pre",
+            expected_revision: "2026-08-07 11:41:58.001",
+            outcome: "accepted",
+            reason: null,
+            result_project_id: input.project_id,
+            duplicate_of_receipt_id: null,
+            before: { name: "Monthly Accounting" },
+            after: { name: "Monthly Filing" },
+            post_revision: "2026-08-07 11:42:01.569",
+            created_at: "2026-08-07 11:42:01.570",
+          },
+          response_control: {
+            response_byte_limit: input.response_byte_limit,
+            time_budget_ms: input.time_budget_ms,
+            response_bytes: 1,
+            elapsed_ms: 0,
+            complete: true,
+            truncated: false,
+          },
+        };
+      },
+    } as unknown as ProjectsPgStore;
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET, allowUnregisteredKeys: true });
+    const token = keyWith(["projects:read"]);
+    const query = new URLSearchParams({
+      operation_id: "project-rename-wks_httpguarded0001-20260807",
+      step_id: "metadata-to-monthly-filing",
+      direction: "forward",
+      idempotency_key: "gpm_project-rename-wks_httpguarded0001-20260807",
+      max_items: "1",
+      response_byte_limit: "16384",
+      time_budget_ms: "5000",
+    });
+    const res = await h(new Request(
+      `http://x/v1/projects/${projectId}/guarded-metadata/receipts?${query}`,
+      { headers: { "x-api-key": token } },
+    ));
+
+    expect(res.status).toBe(200);
+    expect(guardedReadCalls).toBe(0);
+    expect(lookupCalls).toEqual([{
+      project_id: projectId,
+      operation_id: "project-rename-wks_httpguarded0001-20260807",
+      step_id: "metadata-to-monthly-filing",
+      direction: "forward",
+      idempotency_key: "gpm_project-rename-wks_httpguarded0001-20260807",
+      max_items: 1,
+      response_byte_limit: 16_384,
+      time_budget_ms: 5_000,
+    }]);
+    const body = await res.json();
+    expect(body.receipt.receipt_id).toBe(receiptId);
+    expect(body.receipt.post_revision).toBe("2026-08-07 11:42:01.569");
+    expect(body.project_id).toBeUndefined();
+    expect(body.current_revision).toBeUndefined();
+    expect(body.response_control.complete).toBe(true);
+    expect(body.response_control.truncated).toBe(false);
+  });
+
+  test("GET guarded metadata receipt lookup preserves not-found, cardinality, and bounds failures", async () => {
+    const failures = [
+      "guarded receipt lookup expected exactly one terminal receipt, found 0",
+      "guarded receipt lookup expected exactly one terminal result, found 2",
+      "guarded receipt lookup max_items must be exactly 1",
+      "guarded mutation response byte budget exceeded",
+    ];
+    const token = keyWith(["projects:read"]);
+
+    for (const message of failures) {
+      let guardedReadCalls = 0;
+      const store = {
+        async ping() {
+          return true;
+        },
+        async guardedReadWorkspace() {
+          guardedReadCalls += 1;
+          throw new Error("guarded read route must not handle receipt lookup failures");
+        },
+        async lookupGuardedWorkspaceMutationReceipt() {
+          throw new ValidationError(message);
+        },
+      } as unknown as ProjectsPgStore;
+      const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET, allowUnregisteredKeys: true });
+      const query = new URLSearchParams({
+        operation_id: "op-http",
+        step_id: "rename",
+        direction: "forward",
+        idempotency_key: "gpm_http",
+        max_items: "1",
+        response_byte_limit: "16384",
+        time_budget_ms: "5000",
+      });
+      const res = await h(new Request(
+        `http://x/v1/projects/wks_httpguarded0001/guarded-metadata/receipts?${query}`,
+        { headers: { "x-api-key": token } },
+      ));
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: message });
+      expect(guardedReadCalls).toBe(0);
+    }
+  });
+
+  test("GET guarded metadata reads one exact id with producer bounds and revision envelope", async () => {
+    const projectId = "wks_httpguarded0001";
+    const calls: Array<{
+      project_id: string;
+      response_byte_limit: number;
+      time_budget_ms: number;
+      resource_link_max_items: number;
+    }> = [];
+    const store = {
+      async ping() {
+        return true;
+      },
+      async guardedReadWorkspace(input: {
+        project_id: string;
+        response_byte_limit: number;
+        time_budget_ms: number;
+        resource_link_max_items: number;
+      }) {
+        calls.push(input);
+        return {
+          ok: true,
+          project_id: input.project_id,
+          project: fakeWorkspace({ id: input.project_id, slug: "guarded-read", name: "Guarded Read" }),
+          current_revision: "2026-08-07 00:00:01",
+          resource_links: [],
+          resource_link_count: 0,
+          resource_link_max_items: input.resource_link_max_items,
+          resource_link_collection_digest: "empty",
+          response_control: {
+            response_byte_limit: input.response_byte_limit,
+            time_budget_ms: input.time_budget_ms,
+            response_bytes: 512,
+            elapsed_ms: 1,
+            complete: true,
+            truncated: false,
+          },
+        };
+      },
+    } as unknown as ProjectsPgStore;
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET, allowUnregisteredKeys: true });
+    const token = keyWith(["projects:read"]);
+    const res = await h(new Request(
+      `http://x/v1/projects/${projectId}/guarded-metadata?response_byte_limit=16384&time_budget_ms=5000`,
+      { headers: { "x-api-key": token } },
+    ));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(calls).toEqual([{
+      project_id: projectId,
+      response_byte_limit: 16_384,
+      time_budget_ms: 5_000,
+      resource_link_max_items: 1000,
+    }]);
+    expect(body.project_id).toBe(projectId);
+    expect(body.project).toMatchObject({ id: projectId, slug: "guarded-read", name: "Guarded Read" });
+    expect(body.current_revision).toBe("2026-08-07 00:00:01");
+    expect(body.response_control.complete).toBe(true);
+    expect(body.response_control.truncated).toBe(false);
+  });
+
+  test("POST guarded metadata rollback is not shadowed by the generic guarded update route", async () => {
+    const projectId = "wks_httpguarded0001";
+    let guardedUpdateCalls = 0;
+    const rollbackCalls: Array<Record<string, unknown>> = [];
+    const store = {
+      async ping() {
+        return true;
+      },
+      async guardedUpdateWorkspace() {
+        guardedUpdateCalls += 1;
+        throw new Error("guarded update route must not handle rollback");
+      },
+      async rollbackGuardedWorkspaceMutation(input: Record<string, unknown>) {
+        rollbackCalls.push(input);
+        return {
+          ok: true,
+          dry_run: false,
+          outcome: "accepted",
+          idempotency_key: "gpm_inverse",
+          request_digest: "req-inverse",
+          precondition_digest: "pre-inverse",
+          project_id: input.project_id,
+          expected_revision: input.expected_current_revision,
+          current_revision: input.expected_current_revision,
+          before: fakeWorkspace({ id: projectId, name: "Monthly Filing" }),
+          after: fakeWorkspace({ id: projectId, name: "Monthly Accounting" }),
+          receipt: {
+            receipt_id: "gpmr_inverse",
+            operation_id: input.operation_id,
+            step_id: input.step_id,
+            direction: "inverse",
+            idempotency_key: "gpm_inverse",
+            target_id: input.project_id,
+            request_digest: "req-inverse",
+            precondition_digest: "pre-inverse",
+            expected_revision: input.expected_current_revision,
+            outcome: "accepted",
+            reason: null,
+            result_project_id: input.project_id,
+            duplicate_of_receipt_id: null,
+            before: {},
+            after: {},
+            post_revision: "2026-08-07 11:43:00.000",
+            created_at: "2026-08-07 11:43:00.001",
+          },
+          response_control: {
+            response_byte_limit: input.response_byte_limit,
+            time_budget_ms: input.time_budget_ms,
+            response_bytes: 1,
+            elapsed_ms: 0,
+            complete: true,
+            truncated: false,
+          },
+        };
+      },
+    } as unknown as ProjectsPgStore;
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET, allowUnregisteredKeys: true });
+    const token = keyWith(["projects:*"]);
+    const body = {
+      operation_id: "project-rollback-wks_httpguarded0001-20260807",
+      step_id: "metadata-from-monthly-filing",
+      accepted_receipt_id: "gpmr_57183a0201f44adbc903011493be510f",
+      expected_current_revision: "2026-08-07 11:42:01.569",
+      response_byte_limit: 16_384,
+      time_budget_ms: 5_000,
+    };
+    const res = await h(new Request(
+      `http://x/v1/projects/${projectId}/guarded-metadata/rollback`,
+      {
+        method: "POST",
+        headers: { "x-api-key": token, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ));
+
+    expect(res.status).toBe(200);
+    expect(guardedUpdateCalls).toBe(0);
+    expect(rollbackCalls).toEqual([{ ...body, project_id: projectId }]);
+    expect((await res.json()).outcome).toBe("accepted");
+  });
+
+  test("typed resource-link routes preserve exact bounds, modes, and rollback identity", async () => {
+    const projectId = "wks_httpresource0001";
+    const calls: Array<{ operation: string; input: Record<string, unknown> }> = [];
+    const project = fakeWorkspace({
+      id: projectId,
+      slug: "http-resource",
+      name: "HTTP Resource",
+      updated_at: "2026-08-08 00:00:00.000",
+    });
+    const link = {
+      id: "prl_http_resource",
+      project_id: projectId,
+      authority: "conversations",
+      service_instance: "urn:hasna:conversations:test",
+      source_package: "@hasna/conversations",
+      target_kind: "channel",
+      locator: {
+        kind: "conversations_channel_id",
+        value: "chn_79fa9c68937a1d020d6031dcaa3dd8d7",
+      },
+      scope: "resource",
+      labels: { channel_name: "http-resource" },
+      created_at: "2026-08-08 00:00:00.000",
+      updated_at: "2026-08-08 00:00:00.000",
+    };
+    const responseControl = {
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      response_bytes: 1,
+      elapsed_ms: 0,
+      complete: true,
+      truncated: false,
+    };
+    const store = {
+      async ping() {
+        return true;
+      },
+      async readProjectResourceLinks(input: Record<string, unknown>) {
+        calls.push({ operation: "read", input });
+        return {
+          ok: true,
+          project_id: projectId,
+          project,
+          current_revision: project.updated_at,
+          links: [link],
+          link_count: 1,
+          max_items: input.max_items,
+          collection_digest: "digest",
+          complete: true,
+          truncated: false,
+          contract: {
+            schema: "hasna.project_resource_link_collection.v1",
+            project_id: projectId,
+            current_revision: project.updated_at,
+            links: [link],
+            link_count: 1,
+            max_items: input.max_items,
+            collection_digest: "digest",
+            complete: true,
+            truncated: false,
+          },
+          response_control: responseControl,
+        };
+      },
+      async mutateProjectResourceLinks(input: Record<string, unknown>) {
+        calls.push({ operation: String(input.mode), input });
+        return {
+          ok: true,
+          dry_run: false,
+          outcome: "accepted",
+          mode: input.mode,
+          idempotency_key: "gpm_http_resource",
+          request_digest: "request",
+          precondition_digest: "precondition",
+          project_id: projectId,
+          expected_revision: input.expected_revision,
+          current_revision: project.updated_at,
+          before: { project, links: [], collection_digest: "before" },
+          after: { project, links: [link], collection_digest: "after" },
+          receipt: { receipt_id: "gpmr_http_resource" },
+          response_control: responseControl,
+        };
+      },
+      async rollbackProjectResourceLinks(input: Record<string, unknown>) {
+        calls.push({ operation: "rollback", input });
+        return {
+          ok: true,
+          dry_run: false,
+          outcome: "accepted",
+          mode: "reconcile",
+          idempotency_key: "gpm_http_resource_rollback",
+          request_digest: "request",
+          precondition_digest: "precondition",
+          project_id: projectId,
+          expected_revision: input.expected_current_revision,
+          current_revision: input.expected_current_revision,
+          before: { project, links: [link], collection_digest: "after" },
+          after: { project, links: [], collection_digest: "before" },
+          receipt: { receipt_id: "gpmr_http_resource_rollback" },
+          response_control: responseControl,
+        };
+      },
+    } as unknown as ProjectsPgStore;
+    const h = createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET, allowUnregisteredKeys: true });
+    const readToken = keyWith(["projects:read"]);
+    const writeToken = keyWith(["projects:*"]);
+
+    const read = await h(new Request(
+      `http://x/v1/projects/${projectId}/resource-links?max_items=10&response_byte_limit=100000&time_budget_ms=5000`,
+      { headers: { "x-api-key": readToken } },
+    ));
+    expect(read.status).toBe(200);
+    expect((await read.json()).link_count).toBe(1);
+
+    const forwardBody = {
+      operation_id: "http-resource-links",
+      step_id: "links",
+      expected_revision: project.updated_at,
+      links: [link],
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    for (const mode of ["add", "reconcile"]) {
+      const response = await h(new Request(
+        `http://x/v1/projects/${projectId}/resource-links/${mode}`,
+        {
+          method: "POST",
+          headers: { "x-api-key": writeToken, "content-type": "application/json" },
+          body: JSON.stringify(forwardBody),
+        },
+      ));
+      expect(response.status).toBe(200);
+      expect((await response.json()).mode).toBe(mode);
+    }
+
+    const rollbackBody = {
+      operation_id: "http-resource-links-rollback",
+      step_id: "rollback-links",
+      accepted_receipt_id: "gpmr_http_resource",
+      expected_current_revision: "2026-08-08 00:00:01.000",
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const rollback = await h(new Request(
+      `http://x/v1/projects/${projectId}/resource-links/rollback`,
+      {
+        method: "POST",
+        headers: { "x-api-key": writeToken, "content-type": "application/json" },
+        body: JSON.stringify(rollbackBody),
+      },
+    ));
+    expect(rollback.status).toBe(200);
+
+    expect(calls).toEqual([
+      {
+        operation: "read",
+        input: {
+          project_id: projectId,
+          max_items: 10,
+          response_byte_limit: 100_000,
+          time_budget_ms: 5_000,
+        },
+      },
+      {
+        operation: "add",
+        input: { ...forwardBody, project_id: projectId, mode: "add" },
+      },
+      {
+        operation: "reconcile",
+        input: { ...forwardBody, project_id: projectId, mode: "reconcile" },
+      },
+      {
+        operation: "rollback",
+        input: { ...rollbackBody, project_id: projectId },
+      },
+    ]);
+  });
+
+  test("duplicate-quarantine routes preserve exact complete preimage, CAS inputs, and inverse receipt", async () => {
+    const projectId = "wks_httpquarantine0001";
+    const project = fakeWorkspace({
+      id: projectId,
+      slug: "http-quarantine",
+      name: "HTTP Quarantine",
+      primary_path: "/srv/http-quarantine",
+      updated_at: "2026-08-13 13:50:08.071",
+    });
+    const snapshot = {
+      project,
+      project_digest: "project-digest",
+      resource_links: [],
+      resource_link_collection_digest: "resource-link-digest",
+      workspace_locations: [],
+      workspace_location_collection_digest: "workspace-location-digest",
+    };
+    const calls: Array<{ operation: string; input: Record<string, unknown> }> = [];
+    const responseControl = {
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      response_bytes: 1,
+      elapsed_ms: 0,
+      complete: true,
+      truncated: false,
+    };
+    const result = (input: Record<string, unknown>) => input.dry_run === true
+      ? {
+          ok: false,
+          dry_run: true,
+          outcome: "terminal_nonacceptance",
+          idempotency_key: "gpm_http_quarantine_preview",
+          request_digest: "request-preview",
+          precondition_digest: "precondition-preview",
+          project_id: projectId,
+          expected_revision: input.expected_revision,
+          current_revision: project.updated_at,
+          before: snapshot,
+          after: null,
+          receipt: null,
+          rollback: null,
+          response_control: responseControl,
+        }
+      : {
+          ok: true,
+          dry_run: false,
+          outcome: "accepted",
+          idempotency_key: "gpm_http_quarantine",
+          request_digest: "request",
+          precondition_digest: "precondition",
+          project_id: projectId,
+          expected_revision: input.expected_revision ?? input.expected_current_revision,
+          current_revision: project.updated_at,
+          before: snapshot,
+          after: snapshot,
+          receipt: { receipt_id: "gpmr_http_quarantine" },
+          rollback: null,
+          response_control: responseControl,
+        };
+    const store = {
+      ...fakeStore(),
+      async readDuplicateProjectQuarantinePreimage(input: Record<string, unknown>) {
+        calls.push({ operation: "read", input });
+        return {
+          ok: true,
+          project_id: projectId,
+          current_revision: project.updated_at,
+          snapshot,
+          resource_link_count: 0,
+          workspace_location_count: 0,
+          complete: true,
+          truncated: false,
+          response_control: responseControl,
+        };
+      },
+      async quarantineDuplicateProject(input: Record<string, unknown>) {
+        calls.push({ operation: "forward", input });
+        return result(input);
+      },
+      async rollbackDuplicateProjectQuarantine(input: Record<string, unknown>) {
+        calls.push({ operation: "inverse", input });
+        return result(input);
+      },
+    } as unknown as ProjectsPgStore;
+    const h = createFetchHandler({
+      store,
+      version: "9.9.9",
+      app: "projects",
+      signingSecret: SIGNING_SECRET,
+      allowUnregisteredKeys: true,
+    });
+    const headers = { "x-api-key": keyWith(["projects:read", "projects:write"]) };
+
+    const read = await h(new Request(
+      `http://x/v1/projects/${projectId}/duplicate-quarantine?resource_link_max_items=10&workspace_location_max_items=20&response_byte_limit=100000&time_budget_ms=5000`,
+      { headers },
+    ));
+    expect(read.status).toBe(200);
+    expect((await read.json()).snapshot.project_digest).toBe("project-digest");
+
+    const forwardBody = {
+      operation_id: "http-quarantine",
+      step_id: "retire-duplicate",
+      expected_revision: project.updated_at,
+      expected_project_digest: "project-digest",
+      expected_resource_link_collection_digest: "resource-link-digest",
+      expected_resource_link_ids: [],
+      resource_link_max_items: 10,
+      expected_workspace_location_collection_digest: "workspace-location-digest",
+      expected_workspace_location_ids: [],
+      workspace_location_max_items: 20,
+      quarantine_name: "HTTP Quarantine provenance",
+      quarantine_slug: "http-quarantine-provenance",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const dryRunBody = {
+      ...forwardBody,
+      operation_id: "http-quarantine-stale-preview",
+      expected_revision: "2026-01-01 00:00:00",
+      dry_run: true,
+    };
+    const dryRun = await h(new Request(
+      `http://x/v1/projects/${projectId}/duplicate-quarantine`,
+      {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify(dryRunBody),
+      },
+    ));
+    expect(dryRun.status).toBe(200);
+    expect(await dryRun.json()).toMatchObject({
+      ok: false,
+      dry_run: true,
+      outcome: "terminal_nonacceptance",
+      receipt: null,
+      rollback: null,
+    });
+
+    const forward = await h(new Request(
+      `http://x/v1/projects/${projectId}/duplicate-quarantine`,
+      {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify(forwardBody),
+      },
+    ));
+    expect(forward.status).toBe(200);
+
+    const inverseBody = {
+      operation_id: "http-quarantine-rollback",
+      step_id: "restore-duplicate",
+      accepted_receipt_id: "gpmr_http_quarantine",
+      expected_current_revision: "2026-08-13 13:50:09.071",
+      resource_link_max_items: 10,
+      workspace_location_max_items: 20,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const inverse = await h(new Request(
+      `http://x/v1/projects/${projectId}/duplicate-quarantine/rollback`,
+      {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify(inverseBody),
+      },
+    ));
+    expect(inverse.status).toBe(200);
+    expect(calls).toEqual([
+      {
+        operation: "read",
+        input: {
+          project_id: projectId,
+          resource_link_max_items: 10,
+          workspace_location_max_items: 20,
+          response_byte_limit: 100_000,
+          time_budget_ms: 5_000,
+        },
+      },
+      { operation: "forward", input: { ...dryRunBody, project_id: projectId } },
+      { operation: "forward", input: { ...forwardBody, project_id: projectId } },
+      { operation: "inverse", input: { ...inverseBody, project_id: projectId } },
+    ]);
+  });
+
+  test("resource-link migration routes preserve exact project, manifest, CAS, and rollback evidence", async () => {
+    const projectId = "wks_eHb1kcLUzgQVJQt6L0CCB";
+    const manifestId = `prlm_${"a".repeat(36)}`;
+    const calls: Array<{ operation: string; input: Record<string, unknown> }> = [];
+    const responseControl = {
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+      response_bytes: 1,
+      elapsed_ms: 0,
+      complete: true,
+      truncated: false,
+    };
+    const manifest = {
+      schema: "projects.project_resource_link_migration_manifest.v1",
+      manifest_id: manifestId,
+      project_id: projectId,
+      operation_id: "http-migration",
+      step_id: "links",
+      state: "planned",
+      expected_project_revision: "revision-1",
+      desired_collection_digest: "b".repeat(64),
+      links: [],
+      projects_forward_receipt_id: null,
+      projects_inverse_receipt_id: null,
+      projects_reference_proof: null,
+      last_verified_projects_revision: null,
+      last_verified_projects_digest: null,
+      transition_version: 1,
+      created_at: "2026-08-08T00:00:00.000Z",
+      updated_at: "2026-08-08T00:00:00.000Z",
+    };
+    const result = () => ({
+      ok: true,
+      outcome: "accepted",
+      manifest,
+      events: [],
+      response_control: responseControl,
+    });
+    const store = {
+      async ping() {
+        return true;
+      },
+      async planProjectResourceLinkMigration(input: Record<string, unknown>) {
+        calls.push({ operation: "plan", input });
+        return result();
+      },
+      async readProjectResourceLinkMigration(input: Record<string, unknown>) {
+        calls.push({ operation: "read", input });
+        return {
+          ...result(),
+          response_control: {
+            ...responseControl,
+            complete: false,
+            truncated: true,
+          },
+        };
+      },
+      async advanceProjectResourceLinkMigration(input: Record<string, unknown>) {
+        calls.push({ operation: "advance", input });
+        return result();
+      },
+      async rollbackProjectResourceLinkMigration(input: Record<string, unknown>) {
+        calls.push({ operation: "rollback", input });
+        return result();
+      },
+    } as unknown as ProjectsPgStore;
+    const h = createFetchHandler({
+      store,
+      version: "9.9.9",
+      app: "projects",
+      signingSecret: SIGNING_SECRET,
+      allowUnregisteredKeys: true,
+    });
+    const readToken = keyWith(["projects:read"]);
+    const writeToken = keyWith(["projects:*"]);
+    const planBody = {
+      project_id: "must-be-overridden",
+      operation_id: "http-migration",
+      step_id: "links",
+      expected_project_revision: "revision-1",
+      links: [],
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const plan = await h(new Request(
+      `http://x/v1/projects/${projectId}/resource-link-migrations/plan`,
+      {
+        method: "POST",
+        headers: { "x-api-key": writeToken, "content-type": "application/json" },
+        body: JSON.stringify(planBody),
+      },
+    ));
+    expect(plan.status).toBe(200);
+
+    const read = await h(new Request(
+      `http://x/v1/projects/${projectId}/resource-link-migrations/${manifestId}?max_items=10&response_byte_limit=100000&time_budget_ms=5000`,
+      { headers: { "x-api-key": readToken } },
+    ));
+    expect(read.status).toBe(200);
+    expect(await read.json()).toMatchObject({
+      response_control: {
+        complete: false,
+        truncated: true,
+      },
+    });
+
+    const advanceBody = {
+      project_id: "must-be-overridden",
+      manifest_id: "must-be-overridden",
+      expected_transition_version: 1,
+      next_state: "producer_applied",
+      max_items: 10,
+      producer_evidence: [],
+      evidence: { producer: "readback" },
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const advance = await h(new Request(
+      `http://x/v1/projects/${projectId}/resource-link-migrations/${manifestId}/advance`,
+      {
+        method: "POST",
+        headers: { "x-api-key": writeToken, "content-type": "application/json" },
+        body: JSON.stringify(advanceBody),
+      },
+    ));
+    expect(advance.status).toBe(200);
+
+    const rollbackBody = {
+      project_id: "must-be-overridden",
+      manifest_id: "must-be-overridden",
+      expected_transition_version: 2,
+      max_items: 10,
+      producer_outcome: "pending",
+      producer_evidence: [{
+        created_by_operation: true,
+        forward_receipt_id: "producer-forward-receipt",
+        child_link_receipt_ids: [],
+        target_revision: "producer-revision-2",
+        target_digest: "producer-digest-2",
+        inverse_verified: true,
+        inverse_outcome: "complete",
+      }],
+      evidence: { projects_references: "checked" },
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const rollback = await h(new Request(
+      `http://x/v1/projects/${projectId}/resource-link-migrations/${manifestId}/rollback`,
+      {
+        method: "POST",
+        headers: { "x-api-key": writeToken, "content-type": "application/json" },
+        body: JSON.stringify(rollbackBody),
+      },
+    ));
+    expect(rollback.status).toBe(200);
+
+    expect(calls).toEqual([
+      { operation: "plan", input: { ...planBody, project_id: projectId } },
+      {
+        operation: "read",
+        input: {
+          project_id: projectId,
+          manifest_id: manifestId,
+          max_items: 10,
+          response_byte_limit: 100_000,
+          time_budget_ms: 5_000,
+        },
+      },
+      {
+        operation: "advance",
+        input: { ...advanceBody, project_id: projectId, manifest_id: manifestId },
+      },
+      {
+        operation: "rollback",
+        input: { ...rollbackBody, project_id: projectId, manifest_id: manifestId },
+      },
+    ]);
+  });
+
+  test("Authorization: Bearer scheme is accepted", async () => {
+    const token = keyWith(["projects:read"]);
+    const res = await handler()(
+      new Request("http://x/v1/roots", { headers: { authorization: `Bearer ${token}` } }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  test("missing resource under /v1 is 404 (authenticated)", async () => {
+    const token = keyWith(["projects:*"]);
+    const res = await handler()(new Request("http://x/v1/nope", { headers: { "x-api-key": token } }));
+    expect(res.status).toBe(404);
+  });
+});
+
+// Regression for dc3ba294: the list envelope carried only `count` (the page
+// length), so a client had no way to tell a server-capped page from the whole
+// set — `projects list --json` returned 939 of 2399 rows with rc=0 and no
+// signal. The response now reports the match total and an explicit has_more.
+describe("projects-serve list envelope (truncation must be detectable)", () => {
+  function pagedHandler(total: number, cap: number) {
+    const rows = Array.from({ length: total }, (_, i) => fakeWorkspace({ id: `wks_${i}`, slug: `p-${i}` }));
+    const store = {
+      async ping() {
+        return true;
+      },
+      async listWorkspaces(filter: { limit?: number; offset?: number } = {}) {
+        const limit = Math.min(Math.max(filter.limit ?? 100, 1), cap);
+        const offset = Math.max(filter.offset ?? 0, 0);
+        return rows.slice(offset, offset + limit);
+      },
+      async countWorkspaces() {
+        return rows.length;
+      },
+    } as unknown as ProjectsPgStore;
+    return createFetchHandler({ store, version: "9.9.9", app: "projects", signingSecret: SIGNING_SECRET, allowUnregisteredKeys: true });
+  }
+
+  test("a capped page reports total and has_more, not just count", async () => {
+    const res = await pagedHandler(2399, 1000)(
+      new Request("http://x/v1/projects?limit=100000", { headers: { "x-api-key": keyWith(["projects:read"]) } }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.count).toBe(1000);
+    expect(body.total).toBe(2399);
+    expect(body.limit).toBe(1000); // the clamp is reported, not hidden
+    expect(body.has_more).toBe(true);
+  });
+
+  test("the final page reports has_more false", async () => {
+    const res = await pagedHandler(2399, 1000)(
+      new Request("http://x/v1/projects?limit=1000&offset=2000", {
+        headers: { "x-api-key": keyWith(["projects:read"]) },
+      }),
+    );
+    const body = await res.json();
+    expect(body.count).toBe(399);
+    expect(body.total).toBe(2399);
+    expect(body.offset).toBe(2000);
+    expect(body.has_more).toBe(false);
+  });
+});
