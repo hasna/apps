@@ -305,12 +305,9 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "computers", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "context", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "crawl", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "datasets", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "evals", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "markdown", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "releases", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "repos", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "router", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "skills", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "search", reason: "No hasna.contract.json; manifest lane (todos 41208cbe). Imported by #68." },
   { member: "snapshots", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
@@ -350,6 +347,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "conversations",
     cause: "bins_match_package: package.json ships bins conversations-inbox and conversations-hook that the manifest does not declare (manifest declares conversations, conversations-mcp, conversations-serve only). Imported by #100 after the original census; validated at pinned ^0.4.2 (kitVersion 0.4.2).",
     task: "todos ee9fbb4d (import row — conversations; reconcile the two bins against the manifest or extend the manifest's bins)",
+  },
+  {
+    member: "datasets",
+    cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Manifest imported via delta (hasna/contracts 0.10.6 pin) from org repo; org repo has no artifact-scan script.",
+    task: "todos 226bfc01-093a-469a-bc94-57491c08fe1b (contracts task — datasets)",
   },
   {
     member: "docs",
@@ -442,6 +444,16 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos eb3f331d (contracts task — prompts)",
   },
   {
+    member: "router",
+    cause: "bins_match_package (package.json ships bin open-router that the manifest does not declare) and surface_matrix (api/sdk/mcp/cli missing or unwaived); published_artifact_gate (metadata.release.artifactScan.script is required). Manifest imported by the hasna-org delta lane (2026-08-17).",
+    task: "todos 93a8e6ac-b447-4605-9af5-bf73ff0a9bb1 (reconcile @hasna/router contracts conformance — auto-filed)",
+  },
+  {
+    member: "releases",
+    cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Manifest imported by the hasna-org delta lane (2026-08-17).",
+    task: "todos a2f6ab06-43ae-4cbd-847a-4b3fa4082d71 (reconcile @hasna/releases contracts conformance — auto-filed)",
+  },
+  {
     member: "sheets",
     cause: "manifest_valid: unrecognized 'exports' key at root; library-repo storage shape drift.",
     task: "todos d766ac9c (contracts task — sheets)",
@@ -516,6 +528,8 @@ export const NO_VALIDATOR_PIN: string[] = [
   "sheets",
   "slides",
   "tables",
+  "router",
+  "releases",
   "ui",
 ];
 

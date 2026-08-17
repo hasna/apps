@@ -1,0 +1,51 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "datasets",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.10.6",
+  "description": "Local dataset registry, previews, render adapters, and project dashboard provider for Hasna agents.",
+  "hosting": [
+    "user-hosted"
+  ],
+  "bins": [
+    "datasets",
+    "datasets-mcp"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "datasets-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "datasets",
+      "authMode": "local-only"
+    },
+    {
+      "name": "datasets-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "datasets-mcp",
+      "authMode": "local-only"
+    }
+  ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite"
+    ],
+    "envPrefix": "HASNA_DATASETS_",
+    "sqlitePath": "~/.hasna/datasets/datasets.db"
+  },
+  "metadata": {
+    "conformance": {
+      "waivedStorageEngines": [
+        {
+          "engine": "postgresql",
+          "reason": "No PostgreSQL backend is implemented in this repo; the sqlite store at ~/.hasna/datasets/datasets.db is the only storage evidenced in src.",
+          "reviewedBy": "drain-lane-8250899b",
+          "expiresAt": "2027-08-15T00:00:00.000Z"
+        }
+      ]
+    }
+  }
+}
