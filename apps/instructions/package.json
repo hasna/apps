@@ -1,6 +1,6 @@
 {
   "name": "@hasna/instructions",
-  "version": "0.4.35",
+"version": "0.4.36",
   "description": "AI coding agent instruction & configuration manager \u2014 store, version, apply, and share all your AI coding configs. CLI + MCP + HTTP API (instructions-serve) + generated SDK + Dashboard.",
   "type": "module",
   "main": "dist/index.js",
@@ -20,8 +20,8 @@
   },
   "files": [
     "dist",
-    "dashboard/dist",
     "assets/skills/inbox/SKILL.md",
+    "dashboard/dist",
     "LICENSE",
     "README.md"
   ],
@@ -34,8 +34,8 @@
     "generate:sdk": "bun run scripts/generate-sdk.ts",
     "kit:check": "bunx @hasna/contracts vendor-kit --check",
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
-    "check:package-secrets": "bun run src/cli/index.tsx package-manager-scan --fail-on-findings --home .",
+    "test": "env -u HASNA_INSTRUCTIONS_API_URL -u HASNA_INSTRUCTIONS_API_KEY bun test",
+    "check:package-secrets": "bun run src/cli/index.tsx package-manager-scan --fail-on-findings .",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",

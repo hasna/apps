@@ -6,10 +6,7 @@ export { getDb, closeDb, getDbForTesting } from "./db/database.js";
 export {
   SEARCH_STORAGE_ENV,
   SEARCH_STORAGE_FALLBACK_ENV,
-  SEARCH_STORAGE_MODE_ENV,
-  SEARCH_STORAGE_MODE_FALLBACK_ENV,
   STORAGE_DATABASE_ENV,
-  STORAGE_MODE_ENV,
   getStorageConfig,
   getStorageConnectionString,
   getStorageDatabaseEnv,

@@ -34,6 +34,7 @@ import {
   type CursorAuthorityConflict,
   type CursorAuthorityObservation,
 } from "./cursor-authority.js";
+import { detectClaudeAuthorityConflicts, type ClaudeAuthorityConflict } from "./session-authority.js";
 import {
   CODEWITH_NATIVE_IMPORTS_ENV,
   SESSION_INSTRUCTION_LAYERS,
@@ -289,7 +290,7 @@ export interface SessionRenderManifest {
   blocked: boolean;
   blockers: string[];
   authorityObservations: CursorAuthorityObservation[];
-  authorityConflicts: CursorAuthorityConflict[];
+  authorityConflicts: Array<CursorAuthorityConflict | ClaudeAuthorityConflict>;
   generatedAt: string;
   env: Record<string, string>;
   sourceHash: string;
@@ -403,7 +404,7 @@ export interface SessionRenderPlan {
   blocked: boolean;
   blockers: string[];
   authorityObservations: CursorAuthorityObservation[];
-  authorityConflicts: CursorAuthorityConflict[];
+  authorityConflicts: Array<CursorAuthorityConflict | ClaudeAuthorityConflict>;
   /**
    * Carries the caller's --allow-empty-sources choice from plan-build time into
    * apply time. Apply-time emptiness (a plan that deletes every previously
@@ -737,7 +738,8 @@ function getRawStoreRoot(): string {
 }
 
 function defaultTargetHome(tool: SessionRenderTool, profile: string, sessionId?: string): string {
-  return join(getRawStoreRoot(), "sessions", tool, slug(profile), slug(sessionId || "latest"));
+  const home = process.env["HOME"] || homedir();
+  return join(home, ".hasna", "accounts", "profiles", tool, slug(profile));
 }
 
 function joinTarget(targetHome: string, relativePath: string): string {
@@ -2035,7 +2037,9 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
     : [];
   const authorityConflicts = input.tool === "cursor" && targetKind !== "blocked"
     ? detectCursorAuthorityConflicts(authorityObservations[0])
-    : [];
+    : input.tool === "claude" && targetKind !== "blocked"
+      ? detectClaudeAuthorityConflicts(targetHome)
+      : [];
   const blockers = [
     ...targetBlockers,
     ...authorityConflicts.map((conflict) => `${conflict.relativePath}: ${conflict.reason}`),

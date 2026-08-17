@@ -1,7 +1,7 @@
 # @hasna/router
 
 `@hasna/router` (CLI: `open-router`) is the smart model router companion for
-[`open-gateway`](https://github.com/hasna/open-gateway). It makes deterministic,
+[`gateway`](https://github.com/hasna/gateway). It makes deterministic,
 inspectable route decisions for prompts; it does not execute provider calls,
 hold provider credentials, or expand gateway policy.
 
@@ -94,7 +94,7 @@ Routing is intentionally transparent:
 5. Return a complete explanation. If no candidate is policy-eligible, return
    `status: "no_route"` with skip reasons.
 
-`open-router` preserves the `open-gateway` fail-closed model by treating request
+`open-router` preserves the `gateway` fail-closed model by treating request
 policy as restrictive by default. Request hints can narrow providers, regions,
 capabilities, costs, and data policy. They cannot expand configured policy unless
 `policy.allowRequestPolicyExpansion` is explicitly enabled in the router config.
@@ -102,7 +102,7 @@ capabilities, costs, and data policy. They cannot expand configured policy unles
 Credential checks are off by default because this package does not call
 providers. Use `runtime.credentialMode: "skip-missing"` when running the router
 standalone and you want missing provider env vars to make candidates ineligible.
-`open-gateway` should continue enforcing credentials before execution. Service
+`gateway` should continue enforcing credentials before execution. Service
 responses redact provider auth, headers, credential env names, and endpoint
 configuration.
 
@@ -110,7 +110,7 @@ configuration.
 
 Descriptors and sanitized gateway-hint helpers are included for:
 
-- Direct Hasna/open-gateway providers
+- Direct Hasna/gateway providers
 - OpenRouter, including provider routing and Auto Router plugin options
 - Vercel AI Gateway provider options
 - LiteLLM Proxy
@@ -119,5 +119,5 @@ Descriptors and sanitized gateway-hint helpers are included for:
 - Kong AI Gateway
 - Helicone AI Gateway
 
-See [open-gateway integration](docs/integration-open-gateway.md) and
+See [gateway integration](docs/integration-open-gateway.md) and
 [provider references](docs/provider-references.md).

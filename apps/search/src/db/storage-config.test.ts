@@ -6,8 +6,6 @@ import { getStorageStatus, parseStorageTables } from "./storage-sync.js";
 const envKeys = [
   "HASNA_SEARCH_DATABASE_URL",
   "SEARCH_DATABASE_URL",
-  "HASNA_SEARCH_STORAGE_MODE",
-  "SEARCH_STORAGE_MODE",
 ] as const;
 
 const savedEnv = new Map<string, string | undefined>();
@@ -59,11 +57,11 @@ describe("search storage config", () => {
     expect(getStorageConfig().mode).toBe("hybrid");
   });
 
-  test("canonical storage mode wins over fallback storage mode", () => {
+  test("the retired HASNA_SEARCH_STORAGE_MODE variable is ignored", () => {
     process.env.HASNA_SEARCH_STORAGE_MODE = "remote";
-    process.env.SEARCH_STORAGE_MODE = "local";
+    process.env.SEARCH_STORAGE_MODE = "hybrid";
 
-    expect(getStorageConfig().mode).toBe("remote");
+    expect(getStorageConfig().mode).toBe("local");
   });
 
   test("parses storage tables and rejects unknown tables", () => {

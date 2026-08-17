@@ -5,7 +5,6 @@ import { resolveStorageMode } from "../src/config.js";
 // §4.8 + §2.3 config assertions (no live DB required).
 
 afterEach(() => {
-  delete process.env["HASNA_WORKFORCE_STORAGE_MODE"];
   delete process.env["HASNA_WORKFORCE_DATABASE_URL"];
 });
 
@@ -14,20 +13,17 @@ describe("cloud storage config", () => {
     await expect(openCloudPool("postgres://u:p@h:5432/db?sslmode=require")).rejects.toThrow(/verify-full/);
   });
 
-  it("fail-closed: a DSN present while mode=local is a hard error", () => {
-    process.env["HASNA_WORKFORCE_STORAGE_MODE"] = "local";
-    process.env["HASNA_WORKFORCE_DATABASE_URL"] = "postgres://u:p@h:5432/db?sslmode=verify-full";
-    expect(() => resolveStorageMode()).toThrow(/DATABASE_URL is present but/i);
-  });
-
-  it("normalizes deprecated aliases to cloud", () => {
-    process.env["HASNA_WORKFORCE_STORAGE_MODE"] = "self_hosted";
-    process.env["HASNA_WORKFORCE_DATABASE_URL"] = "postgres://u:p@h/db?sslmode=verify-full";
+  it("resolves the postgres backend when a DATABASE_URL is present", () => {
+    process.env["HASNA_WORKFORCE_DATABASE_URL"] = "postgres://db.internal:5432/workforce?sslmode=verify-full";
     expect(resolveStorageMode()).toBe("cloud");
   });
 
-  it("rejects an unknown storage mode", () => {
-    process.env["HASNA_WORKFORCE_STORAGE_MODE"] = "hybrid-turbo";
-    expect(() => resolveStorageMode()).toThrow(/Unknown storage mode/);
+  it("defaults to SQLite and ignores the retired STORAGE_MODE variable", () => {
+    process.env["HASNA_WORKFORCE_STORAGE_MODE"] = "cloud";
+    process.env["HASNA_WORKFORCE_DATABASE_URL"] = "postgres://db.internal:5432/workforce?sslmode=verify-full";
+    expect(resolveStorageMode()).toBe("cloud");
+    delete process.env["HASNA_WORKFORCE_DATABASE_URL"];
+    process.env["HASNA_WORKFORCE_STORAGE_MODE"] = "cloud";
+    expect(resolveStorageMode()).toBe("local");
   });
 });

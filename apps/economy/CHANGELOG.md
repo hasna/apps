@@ -2,6 +2,18 @@
 
 All notable changes to this repository are tracked here. This project follows semantic versioning for published npm packages when practical.
 
+## @hasna/economy 0.3.10 - 2026-08-15
+
+Two PRs merged after `0.3.9`; neither is published yet.
+
+- **#32** `fix(economy)` — `breakdown --since` now actually filters the billing
+  window it reports, and `doctor` stops certifying drift between two zeroes: when
+  no provider billing was imported, or the imported total is zero, drift is
+  reported as UNKNOWN instead of a false `0.0%` green tick.
+- **#33** `feat(contracts)` — satisfy the contracts `published_artifact_gate`:
+  `prepack` builds into `dist` and runs `contracts artifact-scan dist`, so a
+  packed tarball is scanned before it reaches the registry.
+
 ## @hasna/economy 0.3.9 - 2026-08-04
 
 Release-only bump. Four PRs merged after `0.3.8` and were never published, because

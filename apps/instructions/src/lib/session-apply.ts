@@ -28,6 +28,7 @@ import {
   detectCursorAuthorityConflicts,
   observeCursorGlobalAuthorityAtPath,
 } from "./cursor-authority.js";
+import { detectClaudeAuthorityConflicts } from "./session-authority.js";
 
 export type SessionApplyAction = "create" | "update" | "delete" | "unchanged" | "conflict";
 
@@ -202,6 +203,7 @@ function applySessionRenderUnlocked(
   assertCursorAuthorityUnchanged(plan);
 
   const targetHome = assertSafeTargetHome(plan.targetHome);
+  assertClaudeAuthorityStillClear(plan, targetHome);
   const payloadFiles = [...plan.files, ...(plan.assetFiles ?? [])];
   const files = [...payloadFiles, plan.manifestFile];
   const manifestPath = resolvePlannedFilePath(plan, plan.manifestFile, targetHome);
@@ -334,6 +336,16 @@ function assertCursorAuthorityUnchanged(plan: SessionRenderPlan): void {
   if (JSON.stringify(current) !== JSON.stringify(planned)) {
     throw new SessionApplyError("Cursor fixed global authority changed after planning; refusing to apply a stale render plan.");
   }
+}
+
+function assertClaudeAuthorityStillClear(plan: SessionRenderPlan, targetHome: string): void {
+  if (plan.tool !== "claude" || plan.targetKind === "blocked") return;
+  const conflicts = detectClaudeAuthorityConflicts(targetHome);
+  if (conflicts.length === 0) return;
+  const summary = conflicts
+    .map((conflict) => `${conflict.relativePath}: ${conflict.reason}`)
+    .join("; ");
+  throw new SessionApplyError(`Claude authority changed after planning; refusing to apply: ${summary}`);
 }
 
 function ensureSessionTargetHome(targetHome: string): void {
