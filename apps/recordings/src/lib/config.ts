@@ -351,10 +351,29 @@ function findProjectRecordingsPath(entry?: string): string | null {
 function findRepositoryRoot(start: string): string | null {
   let dir = start;
   while (true) {
-    if (existsSync(join(dir, ".git"))) return dir;
+    const gitPath = join(dir, ".git");
+    if (isRepositoryMarker(gitPath)) return dir;
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;
+  }
+}
+
+/**
+ * A directory named `.git` is a repository marker only when it is actually a
+ * git repository or a gitdir pointer to one. `existsSync` alone qualifies a
+ * stray empty `.git` directory (measured leftover at /tmp/.git) and silently
+ * widens the project-local store search past the HOME boundary. The two valid
+ * shapes: a real repo has a `HEAD` file inside `.git/` (present even in an
+ * empty `git init`), and a linked worktree has a `gitdir:` pointer FILE named
+ * `.git` (the shape the store tests use).
+ */
+function isRepositoryMarker(gitPath: string): boolean {
+  try {
+    if (statSync(gitPath).isFile()) return true;
+    return existsSync(join(gitPath, "HEAD"));
+  } catch {
+    return false;
   }
 }
 
