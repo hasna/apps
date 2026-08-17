@@ -440,11 +440,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos 41208cbe (manifest lane — align imported pixels manifest)",
   },
   {
-    member: "prompts",
-    cause: "surface_matrix (api/sdk missing or unwaived) and service_api_topology (a supported API surface is required). (The earlier self_host_artifact and storage_capabilities causes no longer fire at main.)",
-    task: "todos eb3f331d (contracts task — prompts)",
-  },
-  {
     member: "search",
     cause: "surface_matrix (api/sdk missing or unwaived) and service_api_topology (a supported API surface is required); self_host_artifact (service-class repos require a self-host deployment artifact); storage_capabilities (storage.pgTestGate is required to prove live PostgreSQL support); published_artifact_gate (metadata.release.artifactScan.script is required). Manifest imported by the hasna-org delta lane (2026-08-17).",
     task: "todos 405a8c38-d59a-4a96-948f-943e9a17241c (reconcile @hasna/search contracts conformance — auto-filed)",
