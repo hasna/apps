@@ -23,7 +23,7 @@ Docs rechecked on 2026-06-23.
 - Router: https://docs.litellm.ai/docs/routing
 - Proxy load balancing: https://docs.litellm.ai/docs/proxy/load_balancing
 - Auto routing: https://docs.litellm.ai/docs/proxy/auto_routing
-- LiteLLM owns its internal deployment routing. `open-router` treats LiteLLM
+- LiteLLM owns its internal deployment routing. `router` treats LiteLLM
   Proxy as one upstream candidate unless config lists more local candidates.
 
 ## Portkey
@@ -31,7 +31,7 @@ Docs rechecked on 2026-06-23.
 - Configs: https://portkey.ai/docs/product/ai-gateway/configs
 - Load balancing: https://portkey.ai/docs/product/ai-gateway/load-balancing
 - Portkey supports weighted and sticky load balancing through gateway configs.
-  `open-router` represents Portkey as a normal OpenAI-compatible upstream with
+  `router` represents Portkey as a normal OpenAI-compatible upstream with
   config/header metadata.
 
 ## Cloudflare AI Gateway
@@ -47,7 +47,7 @@ Docs rechecked on 2026-06-23.
 - Load balancing:
   https://developer.konghq.com/ai-gateway/load-balancing/
 - Kong supports weighted round-robin, consistent hashing, least connections,
-  usage, latency, semantic, and priority routing. `open-router` treats Kong as
+  usage, latency, semantic, and priority routing. `router` treats Kong as
   one upstream candidate unless config exposes individual models separately.
 
 ## Smart Routing References

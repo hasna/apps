@@ -28,7 +28,7 @@ export const gatewayDescriptors: Record<string, RouterGatewayCompatibility> = {
     openAiCompatible: true,
     requestOptionsShape: "headers-and-config",
     docsUrl: "https://docs.litellm.ai/docs/proxy/load_balancing",
-    notes: ["LiteLLM owns its internal load balancing; open-router treats it as one upstream candidate."],
+    notes: ["LiteLLM owns its internal load balancing; router treats it as one upstream candidate."],
   },
   portkey: {
     kind: "portkey",
