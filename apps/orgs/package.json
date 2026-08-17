@@ -6,8 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "orgs": "dist/cli.js",
-    "open-orgs": "dist/cli.js"
+    "orgs": "dist/cli.js"
   },
   "exports": {
     ".": {
