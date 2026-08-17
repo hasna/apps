@@ -237,7 +237,7 @@
     },
     "apps/bridge": {
       "name": "@hasna/bridge",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "bin": {
         "bridge": "dist/cli/index.js",
         "bridge-mcp": "dist/mcp/index.js",
@@ -1044,7 +1044,7 @@
     },
     "apps/instructions": {
       "name": "@hasna/instructions",
-      "version": "0.4.35",
+      "version": "0.4.36",
       "bin": {
         "instructions": "dist/cli/index.js",
         "configs": "dist/cli/index.js",
@@ -1331,7 +1331,6 @@
       "version": "0.1.0",
       "bin": {
         "orgs": "dist/cli.js",
-        "open-orgs": "dist/cli.js",
       },
       "devDependencies": {
         "@types/bun": "^1.2.4",
