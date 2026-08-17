@@ -7,7 +7,7 @@ sweep / intercompany-funding recommendations.
 
 > **Read/advisory only.** Treasury never moves money itself. Every sweep
 > recommendation is flagged `requires_controls_authorization` — actual movement
-> must be requested through **iapp-controls**, which issues the single-use
+> must be requested through **controls**, which issues the single-use
 > authorization token. Every operation is entity-anchored and deny-by-default
 > authorized against the caller principal.
 
