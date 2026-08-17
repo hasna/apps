@@ -7,20 +7,30 @@
  * payload values are encrypted at rest with the app-layer master key.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { TypedQueryClient } from "../generated/storage-kit/index.js";
 import { assertValidSecretPath } from "../hasna-xyz-paths.js";
-import { decryptValueWithMetadata, encryptValue } from "./cloud-crypto.js";
+import { decryptValue, decryptValueWithMetadata, encryptValue, fingerprintValue, shortFingerprint } from "./cloud-crypto.js";
 import type {
+  PruneVersionsResult,
+  RestoreVersionOptions,
   SecretEntry,
   SecretMetadata,
   SecretType,
+  SecretVersionCheck,
+  SecretVersionMeta,
+  SetSecretOptions,
+  SetSecretResult,
   VaultItem,
   VaultItemInput,
   VaultItemKind,
   VaultItemMetadata,
   VaultItemPayload,
+  VersionChangeKind,
 } from "../types.js";
+import { MAX_VERSIONS_PER_KEY, SUPERSEDED_VERSION_AGE_DAYS } from "../types.js";
+import { VersionConflictError, VersionNotFoundError } from "../store/types.js";
+import { assertMetadataSafe } from "../metadata.js";
 
 const VAULT_ITEM_KINDS: VaultItemKind[] = [
   "login",
@@ -40,6 +50,36 @@ interface SecretRow {
   expires_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface VersionRow {
+  key: string;
+  version: number;
+  value_blob: string;
+  value_hash: string;
+  value_length: number;
+  change_kind: VersionChangeKind;
+  reason: string | null;
+  label: string | null;
+  source_version: number | null;
+  batch_id: string | null;
+  provider_expires_at: string | null;
+  created_at: string;
+  created_by: string;
+}
+
+interface NewVersionInput {
+  version: number;
+  valueBlob: string;
+  valueHash: string;
+  valueLength: number;
+  changeKind: VersionChangeKind;
+  reason?: string;
+  label?: string;
+  sourceVersion?: number;
+  batchId?: string;
+  createdAt: string;
+  createdBy: string;
 }
 
 interface VaultRow {
@@ -102,6 +142,24 @@ function secretMeta(row: SecretRow): SecretMetadata {
   };
 }
 
+/** Metadata-only projection of a version row; never includes value material. */
+function versionMeta(row: VersionRow, currentVersion: number): SecretVersionMeta {
+  return {
+    version: row.version,
+    change_kind: row.change_kind,
+    ...(row.reason ? { reason: row.reason } : {}),
+    ...(row.label ? { label: row.label } : {}),
+    ...(row.source_version ? { source_version: row.source_version } : {}),
+    ...(row.batch_id ? { batch_id: row.batch_id } : {}),
+    ...(row.provider_expires_at ? { provider_expires_at: row.provider_expires_at } : {}),
+    created_at: row.created_at,
+    created_by: row.created_by,
+    value_length: row.value_length,
+    fingerprint: shortFingerprint(row.value_hash),
+    current: row.version === currentVersion,
+  };
+}
+
 function vaultMeta(row: VaultRow): VaultItemMetadata {
   return {
     id: row.id,
@@ -128,7 +186,7 @@ export class CloudSecretsStore {
   constructor(private readonly db: TypedQueryClient) {}
 
   private async audit(
-    action: "get" | "set" | "delete",
+    action: "get" | "set" | "delete" | "restore",
     key: string,
     actor: string,
     tenantId: string,
@@ -140,6 +198,19 @@ export class CloudSecretsStore {
     );
   }
 
+  /**
+   * Run a callback inside a transaction when the underlying client supports one
+   * (the server pool does), otherwise execute sequentially (test shims). Restore
+   * relies on this for the read-validate-insert/update sequence to be atomic.
+   */
+  private async runInTransaction<T>(fn: (db: TypedQueryClient) => Promise<T>): Promise<T> {
+    const transaction = (
+      this.db as unknown as { transaction?: (cb: (client: TypedQueryClient) => Promise<T>) => Promise<T> }
+    ).transaction;
+    if (typeof transaction === "function") return transaction(fn);
+    return fn(this.db);
+  }
+
   // ---- secrets ----
   async setSecret(
     key: string,
@@ -149,10 +220,54 @@ export class CloudSecretsStore {
     expiresAt: string | undefined,
     actor: string,
     tenantId: string,
-  ): Promise<SecretEntry> {
+    opts?: SetSecretOptions,
+  ): Promise<SetSecretResult> {
     const tenant = requireTenantId(tenantId);
     assertValidSecretPath(key);
+    // Metadata policy (spec §2.7.6): reason/label are scanned and length-bounded
+    // before anything is written, so a rejected payload performs zero mutation.
+    assertMetadataSafe("reason", opts?.reason);
+    assertMetadataSafe("label", label);
     const now = new Date().toISOString();
+    await this.ensureVersionBaseline(key);
+    const current = await this.currentVersionRow(key);
+    const hash = fingerprintValue(value);
+    let version: number;
+    let unchanged = false;
+    if (current) {
+      if (current.value_hash === hash) {
+        // No value change: return `unchanged` instead of creating noise. The
+        // metadata upsert below still runs (type/label/expiry may have changed).
+        unchanged = true;
+        version = current.version;
+      } else {
+        version = current.version + 1;
+        await this.insertVersion(key, {
+          version,
+          valueBlob: encryptValue(value),
+          valueHash: hash,
+          valueLength: value.length,
+          changeKind: opts?.changeKind ?? "set",
+          reason: opts?.reason,
+          batchId: opts?.batchId,
+          createdAt: now,
+          createdBy: actor,
+        });
+      }
+    } else {
+      version = 1;
+      await this.insertVersion(key, {
+        version,
+        valueBlob: encryptValue(value),
+        valueHash: hash,
+        valueLength: value.length,
+        changeKind: "initial",
+        reason: opts?.reason,
+        batchId: opts?.batchId,
+        createdAt: now,
+        createdBy: actor,
+      });
+    }
     const existing = await this.db.get<{ created_at: string }>(
       "SELECT created_at FROM secrets WHERE key = $1",
       [key],
@@ -167,7 +282,204 @@ export class CloudSecretsStore {
       [key, encryptValue(value), type, label ?? null, expiresAt ?? null, existing?.created_at ?? now, now, tenant],
     );
     await this.audit("set", key, actor, tenant);
-    return (await this.getSecret(key, actor, tenant))!;
+    const entry = await this.getSecret(key, actor, tenant);
+    return { ...entry!, version, unchanged };
+  }
+
+  // ---- secret versioning ----
+  async listVersions(key: string, actor: string, tenantId: string, limit = 20): Promise<SecretVersionMeta[]> {
+    const tenant = requireTenantId(tenantId);
+    const max = await this.db.get<{ version: number | null }>(
+      "SELECT MAX(version) AS version FROM secret_versions WHERE key = $1",
+      [key],
+    );
+    const currentVersion = max?.version ?? 0;
+    const rows = await this.db.many<VersionRow>(
+      `SELECT version, change_kind, reason, label, source_version, batch_id, provider_expires_at,
+              created_at, created_by, value_length, value_hash
+       FROM secret_versions WHERE key = $1 ORDER BY version DESC LIMIT $2`,
+      [key, limit],
+    );
+    await this.audit("get", key, actor, tenant);
+    return rows.map((row) => versionMeta(row, currentVersion));
+  }
+
+  async checkVersion(key: string, version: number, actor: string, tenantId: string): Promise<SecretVersionCheck> {
+    const tenant = requireTenantId(tenantId);
+    const max = await this.db.get<{ version: number | null }>(
+      "SELECT MAX(version) AS version FROM secret_versions WHERE key = $1",
+      [key],
+    );
+    const currentVersion = max?.version ?? 0;
+    const row = await this.db.get<VersionRow>(
+      "SELECT * FROM secret_versions WHERE key = $1 AND version = $2",
+      [key, version],
+    );
+    if (!row) throw new VersionNotFoundError(`Version ${version} not found for key ${key}`);
+    const digest = createHash("sha256").update(decryptValue(row.value_blob)).digest("hex");
+    await this.audit("get", key, actor, tenant);
+    return { ...versionMeta(row, currentVersion), hash: digest };
+  }
+
+  async restoreVersion(
+    key: string,
+    version: number,
+    opts: RestoreVersionOptions,
+    actor: string,
+    tenantId: string,
+  ): Promise<SecretVersionMeta> {
+    const tenant = requireTenantId(tenantId);
+    const reason = opts.reason?.trim();
+    if (!reason) throw new Error("A reason is required for restore.");
+    assertMetadataSafe("reason", reason);
+    if (typeof opts.expectCurrent !== "number" || !Number.isInteger(opts.expectCurrent) || opts.expectCurrent < 1) {
+      throw new Error("expected_current_version is required and must be a positive integer.");
+    }
+    return this.runInTransaction(async (db) => {
+      const secretsRow = await db.get<{ created_at: string }>("SELECT created_at FROM secrets WHERE key = $1", [key]);
+      if (!secretsRow) throw new VersionNotFoundError(`Secret not found: ${key}`);
+      const source = await db.get<VersionRow>(
+        "SELECT * FROM secret_versions WHERE key = $1 AND version = $2",
+        [key, version],
+      );
+      if (!source) throw new VersionNotFoundError(`Version ${version} not found for key ${key}`);
+      const max = await db.get<{ version: number | null }>(
+        "SELECT MAX(version) AS version FROM secret_versions WHERE key = $1",
+        [key],
+      );
+      const currentVersion = max?.version ?? 0;
+      if (opts.expectCurrent !== currentVersion) {
+        throw new VersionConflictError(
+          `Current version is ${currentVersion}, expected ${opts.expectCurrent}. Re-list versions and retry.`,
+        );
+      }
+      const plaintext = decryptValue(source.value_blob);
+      const newVersion = currentVersion + 1;
+      const now = new Date().toISOString();
+      await db.execute(
+        `INSERT INTO secret_versions
+           (key, version, value_blob, value_hash, value_length, change_kind, reason, label,
+            source_version, batch_id, provider_expires_at, created_at, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        [
+          key,
+          newVersion,
+          source.value_blob,
+          fingerprintValue(plaintext),
+          plaintext.length,
+          "restore",
+          reason,
+          null,
+          version,
+          null,
+          null,
+          now,
+          actor,
+        ],
+      );
+      // The current value served by get/exec must match the restored version.
+      await db.execute("UPDATE secrets SET value = $1, updated_at = $2 WHERE key = $3", [source.value_blob, now, key]);
+      await this.pruneVersionHistoryForKey(key, db);
+      return versionMeta({ ...source, version: newVersion, value_length: plaintext.length, reason, source_version: version, created_at: now, created_by: actor }, newVersion);
+    }).then(async (meta) => {
+      await this.audit("restore", key, actor, tenant);
+      return meta;
+    });
+  }
+
+  async pruneVersionHistory(): Promise<PruneVersionsResult> {
+    const cutoff = new Date(Date.now() - SUPERSEDED_VERSION_AGE_DAYS * 86_400_000).toISOString();
+    const result = await this.db.query(
+      `DELETE FROM secret_versions
+       WHERE version < (SELECT MAX(v2.version) FROM secret_versions v2 WHERE v2.key = secret_versions.key)
+         AND (
+           version NOT IN (
+             SELECT v3.version FROM secret_versions v3
+             WHERE v3.key = secret_versions.key ORDER BY v3.version DESC LIMIT $1
+           )
+           OR created_at < $2
+         )`,
+      [MAX_VERSIONS_PER_KEY, cutoff],
+    );
+    return { versions: result.rowCount ?? 0 };
+  }
+
+  async runVersionBackfill(): Promise<number> {
+    const keys = await this.db.many<{ key: string }>("SELECT key FROM secrets");
+    let created = 0;
+    for (const { key } of keys) created += (await this.ensureVersionBaseline(key)) ? 1 : 0;
+    return created;
+  }
+
+  /** Current version row, or null when the key has no history yet. */
+  private async currentVersionRow(key: string, db: TypedQueryClient = this.db): Promise<VersionRow | null> {
+    return db.get<VersionRow>(
+      "SELECT * FROM secret_versions WHERE key = $1 AND version = (SELECT MAX(version) FROM secret_versions WHERE key = $1)",
+      [key],
+    );
+  }
+
+  /** Idempotent: an existing value with no version rows becomes version 1 (migration). */
+  private async ensureVersionBaseline(key: string): Promise<boolean> {
+    const row = await this.db.get<{ value: string }>("SELECT value FROM secrets WHERE key = $1", [key]);
+    if (!row) return false;
+    const existing = await this.db.get("SELECT 1 FROM secret_versions WHERE key = $1 AND version = 1", [key]);
+    if (existing) return false;
+    const plaintext = decryptValue(row.value);
+    await this.insertVersion(key, {
+      version: 1,
+      valueBlob: row.value,
+      valueHash: fingerprintValue(plaintext),
+      valueLength: plaintext.length,
+      changeKind: "migration",
+      reason: "baseline current value",
+      createdAt: new Date().toISOString(),
+      createdBy: "system:migration",
+    });
+    return true;
+  }
+
+  /** Insert one immutable version row, then enforce retention for this key. */
+  private async insertVersion(key: string, input: NewVersionInput): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO secret_versions
+         (key, version, value_blob, value_hash, value_length, change_kind, reason, label,
+          source_version, batch_id, provider_expires_at, created_at, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+      [
+        key,
+        input.version,
+        input.valueBlob,
+        input.valueHash,
+        input.valueLength,
+        input.changeKind,
+        input.reason ?? null,
+        input.label ?? null,
+        input.sourceVersion ?? null,
+        input.batchId ?? null,
+        null, // provider_expires_at — not exposed by any current write surface
+        input.createdAt,
+        input.createdBy,
+      ],
+    );
+    await this.pruneVersionHistoryForKey(key);
+  }
+
+  /** Retention for one key: count + superseded-age bounds; never the current version. */
+  private async pruneVersionHistoryForKey(key: string, db: TypedQueryClient = this.db): Promise<void> {
+    const cutoff = new Date(Date.now() - SUPERSEDED_VERSION_AGE_DAYS * 86_400_000).toISOString();
+    await db.execute(
+      `DELETE FROM secret_versions
+       WHERE key = $1 AND version < (SELECT MAX(v2.version) FROM secret_versions v2 WHERE v2.key = secret_versions.key)
+         AND (
+           version NOT IN (
+             SELECT v3.version FROM secret_versions v3
+             WHERE v3.key = secret_versions.key ORDER BY v3.version DESC LIMIT $2
+           )
+           OR created_at < $3
+         )`,
+      [key, MAX_VERSIONS_PER_KEY, cutoff],
+    );
   }
 
   async getSecret(key: string, actor: string, tenantId: string): Promise<SecretEntry | undefined> {

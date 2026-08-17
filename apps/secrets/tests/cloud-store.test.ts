@@ -158,13 +158,26 @@ describe("cloud Postgres store", () => {
     const db = new FakeDb();
     const store = new CloudSecretsStore(db as any);
     const row = secretRow();
-    db.getResults.push({ created_at: "2020-01-01" }, row);
+    // Versioned set flow: baseline value read, v1-exists check, current version
+    // row (hash differs → creates version 2), existing created_at, then getSecret.
+    db.getResults.push(
+      { value: encryptValue("value") }, // baseline: the existing secrets row
+      null, // baseline: version 1 already present? no → backfill runs
+      { version: 1, value_hash: "0".repeat(64), value_blob: encryptValue("old"), value_length: 3, change_kind: "migration", reason: "baseline current value", label: null, source_version: null, batch_id: null, provider_expires_at: null, created_at: now, created_by: "system:migration" },
+      { created_at: "2020-01-01" },
+      row,
+    );
     const saved = await store.setSecret("demo/key", "value", "api_key", "Demo", row.expires_at, "agent-1", TEST_TENANT);
     expect(saved).toMatchObject({ key: "demo/key", value: "value", label: "Demo", expires_at: row.expires_at });
+    expect(saved.version).toBe(2);
+    expect(saved.unchanged).toBe(false);
     expect(db.executed.some((entry) => entry.sql.includes("ON CONFLICT(key)"))).toBe(true);
     const secretInsert = db.executed.find((entry) => entry.sql.includes("INSERT INTO secrets"))!;
     expect(secretInsert.sql).toContain("tenant_id");
     expect(secretInsert.params?.at(-1)).toBe(TEST_TENANT);
+    const versionInsert = [...db.executed].reverse().find((entry) => entry.sql.includes("INSERT INTO secret_versions"))!;
+    expect(versionInsert.params?.at(1)).toBe(2);
+    expect(versionInsert.params?.at(5)).toBe("set");
     expect(db.executed.filter((entry) => entry.sql.includes("audit_log"))).toHaveLength(2);
     expect(db.executed.filter((entry) => entry.sql.includes("audit_log")).every((entry) => entry.params?.at(-1) === TEST_TENANT)).toBe(true);
 

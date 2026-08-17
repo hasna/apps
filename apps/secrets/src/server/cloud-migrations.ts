@@ -144,6 +144,26 @@ export const SECRETS_TENANCY_MIGRATIONS: Migration[] = [
      UPDATE audit_log     SET tenant_id = '${ROOT_TENANT}' WHERE tenant_id IS NULL;
      UPDATE api_keys      SET tenant_id = '${ROOT_TENANT}' WHERE tenant_id IS NULL;`,
   ),
+  defineMigration(
+    "secrets_0013_secret_versions",
+    `CREATE TABLE IF NOT EXISTS secret_versions (
+       key               TEXT NOT NULL,
+       version           INTEGER NOT NULL,
+       value_blob        TEXT NOT NULL,
+       value_hash        TEXT NOT NULL,
+       value_length      INTEGER NOT NULL,
+       change_kind       TEXT NOT NULL DEFAULT 'initial',
+       reason            TEXT,
+       label             TEXT,
+       source_version    INTEGER,
+       batch_id          TEXT,
+       provider_expires_at TEXT,
+       created_at        TEXT NOT NULL,
+       created_by        TEXT NOT NULL,
+       PRIMARY KEY (key, version)
+     );
+     CREATE INDEX IF NOT EXISTS idx_secret_versions_key ON secret_versions(key, version);`,
+  ),
 ];
 
 /** Full ordered migration set for the secrets cloud database. */
