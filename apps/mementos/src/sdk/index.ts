@@ -861,7 +861,7 @@ export class MementosClient {
     return this.get("/api/report", options as Record<string, string | number | boolean | undefined>);
   }
 
-  async getStaleMemories(options?: { days?: number; project_id?: string; agent_id?: string; limit?: number; offset?: number }): Promise<{
+  async getStaleMemories(options?: { days?: number; pinned?: boolean; project_id?: string; agent_id?: string; limit?: number; offset?: number }): Promise<{
     memories: Memory[];
     count: number;
     days: number;
@@ -901,6 +901,7 @@ export class MementosClient {
         days?: number;
       }>("/api/memories/stale", {
         days: options?.days,
+        pinned: options?.pinned,
         project_id: options?.project_id,
         agent_id: options?.agent_id,
         limit,

@@ -26,6 +26,7 @@ export function registerStaleCommand(program: Command): void {
     .command("stale")
     .description("Find memories not accessed recently (for cleanup/review)")
     .option("--days <n>", "Stale threshold in days (default: 30)", parseInt)
+    .option("--pinned", "Review stale PINNED memories (default view excludes pinned)")
     .option("--project <path>", "Project filter")
     .option("--agent <name>", "Agent filter")
     .option("--limit <n>", "Max results (default: 20)", parseInt)
@@ -61,6 +62,7 @@ export function registerStaleCommand(program: Command): void {
           (cursor, pageLimit) => {
             const page = getStaleMemoriesPage({
               days,
+              pinned: opts.pinned ? true : undefined,
               project_id: projectId,
               agent_id: agentId,
               limit: pageLimit,
