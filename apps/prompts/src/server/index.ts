@@ -6,7 +6,8 @@ import { createProject, getProject, listProjects, deleteProject } from "../db/pr
 import { resolveProject } from "../db/database.js"
 import { getDatabase } from "../db/database.js"
 import { searchPrompts, searchPromptsSlim, findSimilar } from "../lib/search.js"
-import { renderTemplate, extractVariableInfo } from "../lib/template.js"
+import { extractVariableInfo } from "../lib/template.js"
+import { renderTemplateWithIntegrations } from "../lib/integrations/render.js"
 import { importFromJson, exportToJson } from "../lib/importer.js"
 import { getPackageVersion } from "../lib/package-info.js"
 import { buildServer } from "../mcp/index.js"
@@ -143,10 +144,20 @@ export default {
       // ── POST /api/prompts/:id/render ────────────────────────────────────────
       const renderMatch = path.match(/^\/api\/prompts\/([^/]+)\/render$/)
       if (renderMatch && method === "POST") {
-        const { vars = {} } = await parseBody<{ vars?: Record<string, string> }>(req)
+        const { vars = {}, allow_unresolved_integrations = false } = await parseBody<{
+          vars?: Record<string, string>
+          allow_unresolved_integrations?: boolean
+        }>(req)
         const prompt = getPrompt(renderMatch[1]!)
         if (!prompt) return notFound()
-        return json(renderTemplate(prompt.body, vars))
+        try {
+          const result = await renderTemplateWithIntegrations(prompt.body, vars, {
+            allowUnresolvedIntegrations: allow_unresolved_integrations === true,
+          })
+          return json(result)
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : String(e) }, 422)
+        }
       }
 
       // ── POST /api/prompts/:id/move ──────────────────────────────────────────

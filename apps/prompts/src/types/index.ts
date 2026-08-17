@@ -236,6 +236,20 @@ export interface RenderResult {
   unresolved?: string[]
   /** Prompt sources resolved during dependency-aware rendering */
   resolved_sources?: ResolvedSource[]
+  /** Resolved integration source ids/versions — render receipt. */
+  resolved_integrations?: Array<{
+    kind: string
+    ref: string
+    source_id: string
+    source_version: string | number | null
+    projection: string
+  }>
+  /** Unresolved integration refs with their named codes — render receipt. */
+  unresolved_integrations?: Array<{
+    kind: string
+    ref: string
+    code: string
+  }>
 }
 
 export interface PromptStats {

@@ -41,6 +41,68 @@ export {
 // Render receipts
 export { recordRenderReceipt, getRenderReceipts, renderHash } from "./db/receipts.js"
 
+// Cross-app integration resolution
+export {
+  renderTemplateWithIntegrations,
+  hasIntegrationRefs,
+  extractIntegrationRefs,
+  parseIntegrationRef,
+  parseIntegrationRefs,
+  isFullUuid,
+  resolveIntegrationRef,
+  parseRefOrThrow,
+  integrationInvalidCode,
+  buildSurfaceMap,
+  IntegrationResolutionError,
+  wrapProjectionText,
+  TODO_PROJECTION,
+  TODO_PROJECTION_FIELDS,
+  projectTodoRecord,
+  serializeTodoProjection,
+  CHANNEL_PROJECTION,
+  projectChannel,
+  serializeChannelProjection,
+  KNOWLEDGE_PROJECTION,
+  projectKnowledgeItem,
+  serializeKnowledgeProjection,
+  MEMENTO_PROJECTION,
+  projectMemento,
+  serializeMementoProjection,
+  defaultMementoReadSurface,
+  FILE_PROJECTION,
+  projectFilePack,
+  serializeFileProjection,
+  redactText,
+  containsCredentialShape,
+  truncateText,
+  PROJECTION_BOUNDS,
+} from "./lib/integrations/index.js"
+export type {
+  IntegrationRenderOptions,
+  IntegrationRenderResult,
+  IntegrationKind,
+  IntegrationErrorCode,
+  IntegrationRef,
+  ParsedIntegrationRef,
+  ResolvedIntegration,
+  UnresolvedIntegration,
+  ResolvedIntegrationReceipt,
+  UnresolvedIntegrationReceipt,
+  IntegrationDeps,
+  ResolverSurfaceMap,
+  TodoReadSurface,
+  TodoProjectionData,
+  ChannelReadSurface,
+  ChannelProjectionData,
+  KnowledgeReadSurface,
+  KnowledgeProjectionData,
+  MementoReadSurface,
+  MementoModuleLoader,
+  MementoProjectionData,
+  FileReadSurface,
+  FileProjectionData,
+} from "./lib/integrations/index.js"
+
 // Import/Export
 export { importFromJson, exportToJson } from "./lib/importer.js"
 export { findDuplicates } from "./lib/duplicates.js"

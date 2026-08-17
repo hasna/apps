@@ -4,6 +4,7 @@ import { readFileSync } from "fs"
 import { getPrompt, listPrompts, listPromptsSlim, updatePrompt, deletePrompt, usePrompt, upsertPrompt, pinPrompt } from "../../db/prompts.js"
 import { searchPrompts, searchPromptsSlim, findSimilar } from "../../lib/search.js"
 import { extractVariableInfo } from "../../lib/template.js"
+import { renderTemplateWithIntegrations } from "../../lib/integrations/render.js"
 import { renderPromptTemplate } from "../../db/dependencies.js"
 import { recordRenderReceipt } from "../../db/receipts.js"
 import { setLabel, removeLabel, listLabels, normalizeLabelKey, normalizeLabelValue } from "../../db/labels.js"
@@ -291,13 +292,14 @@ export function registerPromptCommands(program: Command): void {
   // ── render ──────────────────────────────────────────────────────────────────
   program
     .command("render <id>")
-    .description("Render a template prompt by filling in {{variables}}")
+    .description("Render a template prompt by filling in {{variables}} and resolving {{todo:...}}/{{channel:...}}/{{knowledge:...}}/{{memento:...}}/{{file:...}} integrations")
     .option("-v, --var <assignments...>", "Variable assignments as key=value")
     .option("--vars-json <json>", "Typed variable values as a JSON object (or @file)")
     .option("--strict", "Fail with a named error when required variables are missing")
     .option("--preview", "Show [UNRESOLVED ...] markers for missing variables (never empty strings)")
     .option("--format <format>", "Output format: text|json (default: text)", "text")
-    .action((id: string, opts: { var?: string[]; varsJson?: string; strict?: boolean; preview?: boolean; format?: string }) => {
+    .option("--allow-unresolved-integrations", "Permissive preview: emit [UNRESOLVED ...] markers instead of failing on unresolvable integrations")
+    .action(async (id: string, opts: { var?: string[]; varsJson?: string; strict?: boolean; preview?: boolean; format?: string; allowUnresolvedIntegrations?: boolean }) => {
       try {
         const prompt = usePrompt(id)
         const vars: Record<string, unknown> = {}
@@ -325,9 +327,15 @@ export function registerPromptCommands(program: Command): void {
         }
 
         const jsonOutput = isJson(program) || opts.format === "json"
-        const result = renderPromptTemplate(prompt, vars, {
+        // Template engine first (typed vars, strict/preview, partials), then
+        // integration refs resolved against the rendered output.
+        const engineResult = renderPromptTemplate(prompt, vars, {
           strict: Boolean(opts.strict),
           preview: Boolean(opts.preview),
+        })
+        const result = await renderTemplateWithIntegrations(engineResult.rendered, vars, {
+          allowUnresolvedIntegrations: opts.allowUnresolvedIntegrations,
+          base: engineResult,
         })
         // Record a render receipt when dependencies were resolved (reproducibility).
         if (result.resolved_sources && result.resolved_sources.length > 0) {
@@ -352,6 +360,10 @@ export function registerPromptCommands(program: Command): void {
             console.error(chalk.gray(`Used defaults: ${result.used_defaults.join(", ")}`))
           if (result.resolved_sources && result.resolved_sources.length > 0)
             console.error(chalk.gray(`Resolved: ${result.resolved_sources.map((s) => s.id).join(", ")}`))
+          if ((result.resolved_integrations?.length ?? 0) > 0)
+            console.error(chalk.gray(`Resolved integrations: ${result.resolved_integrations!.map((r) => `${r.kind}:${r.source_id}`).join(", ")}`))
+          if ((result.unresolved_integrations?.length ?? 0) > 0)
+            console.error(chalk.yellow(`Unresolved integrations: ${result.unresolved_integrations!.map((u) => `${u.kind}:${u.code}`).join(", ")}`))
         }
       } catch (e) {
         handleError(program, e)
