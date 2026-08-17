@@ -1090,14 +1090,19 @@ async function assertNoDuplicateWorkStatusTransitionPg(
   // The dedupe window is measured from the event's OWN timestamp: a single
   // send writes now, but a bulk backfill preserves the original created_at,
   // and a historical event must be compared against the events around its own
-  // time — not against the present.
+  // time — not against the present. The window is bounded on BOTH sides
+  // [T - window, T]: a row dated after the event (clock skew, a
+  // future-dated backfill row) must not decide whether this event is a
+  // duplicate, and a future same-state row must not mask the real most-recent
+  // prior event.
   const eventAtMs = eventCreatedAtMs ?? Date.now();
   const cutoff = new Date(eventAtMs - WORK_STATUS_DUPLICATE_WINDOW_MS).toISOString();
+  const eventAt = new Date(eventAtMs).toISOString();
   const rows = await tx.many<{ content: string }>(
     `SELECT content FROM messages
-     WHERE channel = $1 AND reply_to IS NULL AND created_at >= $2
+     WHERE channel = $1 AND reply_to IS NULL AND created_at >= $2 AND created_at <= $3
      ORDER BY id DESC`,
-    [WORK_STATUS_CHANNEL, cutoff],
+    [WORK_STATUS_CHANNEL, cutoff, eventAt],
   );
   const violation = duplicateWorkStatusTransitionViolation(
     rows.map((row) => row.content),
@@ -2315,7 +2320,7 @@ async function handleV1(
     // original created_at when present, otherwise NOW — the same fallback the
     // INSERT applies); the dedupe window is measured from it, so historical
     // events are not compared against the present.
-    const workStatusItems: Array<{ uuid: string; content: string; createdAtMs: number }> = [];
+    const workStatusItems: Array<{ index: number; uuid: string; content: string; createdAtMs: number }> = [];
     const projectIdx = cols.indexOf("project_id");
     for (let i = 0; i < items.length; i++) {
       const raw = items[i];
@@ -2355,27 +2360,13 @@ async function handleV1(
         if (violation !== null) {
           return json({ error: `messages[${i}]: work-status lifecycle event rejected: ${redactSensitiveText(violation)}` }, 400);
         }
-        // In-request dedupe: every item in this request is inserted by one
-        // multi-row INSERT after the transaction guard, so the guard cannot
-        // observe this request's own items as stream rows. Run the same
-        // decision logic against the items already collected — windowed by
-        // each item's own preserved timestamp, so a same-state pair written
-        // more than the dedupe window apart is a real historical sequence and
-        // is not refused.
-        const event = parseWorkStatusEvent(firstLineOf(content))!;
+        // Collected here; the in-request dedupe runs once, after the loop, in
+        // timestamp order (see below) so it cannot depend on request order.
         const createdAtRaw = str(m.created_at);
         const createdAtMs = createdAtRaw
           ? (Number.isFinite(Date.parse(createdAtRaw)) ? Date.parse(createdAtRaw) : Date.now())
           : Date.now();
-        const inRequestWindow = workStatusItems
-          .filter((prior) => prior.createdAtMs <= createdAtMs && prior.createdAtMs >= createdAtMs - WORK_STATUS_DUPLICATE_WINDOW_MS)
-          .map((prior) => prior.content)
-          .reverse();
-        const inRequestViolation = duplicateWorkStatusTransitionViolation(inRequestWindow, event);
-        if (inRequestViolation !== null) {
-          return json({ error: `messages[${i}]: ${redactSensitiveText(inRequestViolation)}` }, 400);
-        }
-        workStatusItems.push({ uuid, content, createdAtMs });
+        workStatusItems.push({ index: i, uuid, content, createdAtMs });
       }
       // Canonicalize the stored channel for work-status items (see above);
       // every other channel keeps the raw backfill value.
@@ -2428,6 +2419,28 @@ async function handleV1(
           channel: channel ?? null,
           sessionId,
         });
+      }
+    }
+
+    // In-request dedupe, run ONCE in timestamp order so it cannot depend on
+    // request order: every item in this request is inserted by one multi-row
+    // INSERT after the transaction guard, so the guard cannot observe this
+    // request's own items as stream rows. Each task's most recent event
+    // decides (the same rule as the stream guard): a same-state pair within
+    // the dedupe window is refused no matter which of the two appears first
+    // in the request, and a pair written more than the window apart is a real
+    // historical sequence and is not refused.
+    if (workStatusItems.length > 1) {
+      const sortedWorkStatus = [...workStatusItems].sort((a, b) => a.createdAtMs - b.createdAtMs);
+      const lastEventByTask = new Map<string, { state: string; content: string; atMs: number }>();
+      for (const item of sortedWorkStatus) {
+        const event = parseWorkStatusEvent(firstLineOf(item.content))!;
+        const prior = lastEventByTask.get(event.task_id);
+        if (prior !== undefined && prior.state === event.state && item.createdAtMs - prior.atMs <= WORK_STATUS_DUPLICATE_WINDOW_MS) {
+          const violation = duplicateWorkStatusTransitionViolation([prior.content], event);
+          return json({ error: `messages[${item.index}]: ${redactSensitiveText(violation ?? "work-status duplicate transition")}` }, 400);
+        }
+        lastEventByTask.set(event.task_id, { state: event.state, content: item.content, atMs: item.createdAtMs });
       }
     }
 

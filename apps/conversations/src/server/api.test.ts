@@ -133,6 +133,25 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       if (/FROM messages WHERE channel = \$1 ORDER BY id ASC/i.test(sql)) {
         return messages.filter((message) => message.channel === _p[0]).slice().sort((a, b) => a.id - b.id);
       }
+      // Work-status dedupe read: apply the channel / reply_to / created_at
+      // predicates (the window is bounded on both sides) so the hosted
+      // timestamp-window behaviour is actually exercised rather than returning
+      // every message.
+      if (/FROM messages\s+WHERE channel = \$1 AND reply_to IS NULL/i.test(sql)) {
+        const channel = String(_p[0] ?? "");
+        const cutoffMatch = sql.match(/created_at >= \$(\d+)/i);
+        const upperMatch = sql.match(/created_at <= \$(\d+)/i);
+        let rows = messages.filter((row) => row.channel === channel && row.reply_to == null);
+        if (cutoffMatch) {
+          const cutoff = String(_p[Number(cutoffMatch[1]) - 1]);
+          rows = rows.filter((row) => row.created_at >= cutoff);
+        }
+        if (upperMatch) {
+          const upper = String(_p[Number(upperMatch[1]) - 1]);
+          rows = rows.filter((row) => row.created_at <= upper);
+        }
+        return rows.slice().sort((a, b) => b.id - a.id);
+      }
       if (/FROM messages/i.test(sql)) return messages.slice().reverse();
       if (/revoked_at IS NOT NULL/i.test(sql)) return [];
       if (/SELECT id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata[\s\S]*AS online\s+FROM agent_presence/i.test(sql)) {
@@ -3462,6 +3481,60 @@ describe("POST /v1/messages work-status lifecycle guards (hosted path)", () => {
     expect(valid.status).toBe(200);
     const stored = activeFakeClient!.__debug.messages.find((row: any) => row.uuid === "bulk-ws-alias-2");
     expect(stored.channel).toBe("work-status");
+  });
+
+  test("a same-state bulk pair is refused regardless of request order", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const before = workStatusMessageCount();
+    const taskId = "e7345678-1234-4234-8234-123456789abc";
+    const now = Date.now();
+    const newer = new Date(now - 60_000).toISOString();
+    const older = new Date(now - 120_000).toISOString();
+    // The NEWER event appears FIRST in the request; the in-request dedupe must
+    // not depend on request order.
+    const response = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-rev-1", from: "test-agent", to: "test-agent", channel: "work-status", created_at: newer, content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001") },
+          { uuid: "bulk-ws-rev-2", from: "test-agent", to: "test-agent", channel: "work-status", created_at: older, content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000002") },
+        ],
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as any).error).toContain("work-status duplicate transition");
+    expect(workStatusMessageCount()).toBe(before);
+  });
+
+  test("a future-dated row does not decide the hosted dedupe: an in-window duplicate is still refused", async () => {
+    const taskId = "f8345678-1234-4234-8234-123456789abc";
+    const now = Date.now();
+    const seededRows = [
+      // In-window same-state event for the task.
+      { id: 9001, uuid: "ws-seed-1", from_agent: "test-agent", to_agent: "test-agent", channel: "work-status", content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001", new Date(now - 30_000).toISOString()), created_at: new Date(now - 30_000).toISOString(), reply_to: null, session_id: SESSION_ID, project_id: null },
+      // Future-dated different-state row that must NOT mask the event above.
+      { id: 9002, uuid: "ws-seed-2", from_agent: "test-agent", to_agent: "test-agent", channel: "work-status", content: envelope("BLOCKED", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000003", new Date(now + 300_000).toISOString()), created_at: new Date(now + 300_000).toISOString(), reply_to: null, session_id: SESSION_ID, project_id: null },
+    ];
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], seededRows);
+    const before = workStatusMessageCount();
+    const response = await postWorkStatus(envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000004"));
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as any).error).toContain("work-status duplicate transition");
+    expect(workStatusMessageCount()).toBe(before);
+  });
+
+  test("a future same-state row does not wrongly reject a legitimate current event", async () => {
+    const taskId = "a9345678-1234-4234-8234-123456789abc";
+    const now = Date.now();
+    const seededRows = [
+      { id: 9003, uuid: "ws-seed-3", from_agent: "test-agent", to_agent: "test-agent", channel: "work-status", content: envelope("BLOCKED", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001", new Date(now + 300_000).toISOString()), created_at: new Date(now + 300_000).toISOString(), reply_to: null, session_id: SESSION_ID, project_id: null },
+    ];
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], seededRows);
+    const before = workStatusMessageCount();
+    const response = await postWorkStatus(envelope("BLOCKED", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000002"));
+    expect(response.status).toBe(201);
+    expect(workStatusMessageCount()).toBe(before + 1);
   });
 
   // (e) — the dedupe guard must serialize same-task writers: the advisory lock
