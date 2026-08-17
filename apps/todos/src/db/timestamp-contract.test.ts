@@ -106,6 +106,24 @@ describe("timestamp contract — updateTask status transitions (SQLite)", () => 
     expect(getTask(task.id, db)?.completed_at).toBeTruthy();
   });
 
+  it("explicit completed_at: null on a terminal transition returns the stamped value (return/persist parity)", () => {
+    // REGRESSION: the SQL writes completionTimestamp (= input.completed_at ??
+    // timestamp) on a terminal transition, so the object returned to the caller
+    // must report the stamped value, never null — a null report diverged from
+    // the persisted row and from the Postgres lane.
+    const task = createTask({ title: "Completed with explicit null" }, db);
+
+    const updated = updateTask(
+      task.id,
+      { version: task.version, status: "completed", completed_at: null },
+      db,
+    );
+
+    expect(updated.completed_at).toBeTruthy();
+    expect(getTask(task.id, db)?.completed_at).toBeTruthy();
+    expect(updated.completed_at).toBe(getTask(task.id, db)?.completed_at);
+  });
+
   it("does NOT clobber an existing completed_at when a completed row is failed", () => {
     const task = createTask({ title: "Completed then failed" }, db);
     const completed = completeTask(task.id, "holder-a", db);

@@ -49,6 +49,8 @@ function createFake(rows: StoredRow[]) {
             const nullish = (value: unknown) => value == null || value === "null";
             return (status === "completed" && nullish(payload.completed_at))
               || (status === "failed"
+                && (nullish(payload.started_at) || nullish(payload.completed_at)))
+              || (status === "cancelled"
                 && (nullish(payload.started_at) || nullish(payload.completed_at)));
           })
           .filter((row) => cursor === null || row.objectId > cursor)
@@ -267,6 +269,36 @@ describe("backfillMissingTimestamps", () => {
     expect(t2.completed_at).toBe("2026-08-05T12:00:00.000Z");
     // t-1 is still a candidate (started_at undeterminable); t-2 is complete.
     expect(report.remaining_candidates).toBe(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("cancelled rows are candidates and get backfilled (write-path parity)", async () => {
+    // REGRESSION: the write path stamps `completed_at` on reaching "cancelled"
+    // (db/task-crud.updateTask), so pre-existing cancelled rows with NULL
+    // timestamps must be repairable too — the candidate scan previously covered
+    // only completed and failed, leaving every undatable cancelled row stuck.
+    const dir = mkdtempSync(join(tmpdir(), "todos-backfill-"));
+    const evidencePath = join(dir, "evidence.jsonl");
+    const harness = createFake([
+      taskRow("t-1", { status: "cancelled", started_at: null, completed_at: null, updated_at: "2026-08-06T09:00:00.000Z" }),
+    ]);
+    harness.state.set("audit_history:h-1", historyRow("t-1", "h-1", "start", "2026-08-06T08:00:00.000Z"));
+
+    const report = await backfillMissingTimestamps(harness.client, {
+      service: SERVICE,
+      apply: true,
+      confirmation: TIMESTAMP_BACKFILL_CONFIRMATION,
+      evidencePath,
+    });
+
+    expect(report.candidates).toBe(1);
+    expect(report.completed_at_backfilled).toBe(1);
+    expect(report.started_at_backfilled).toBe(1);
+    const t1 = harness.state.get("tasks:t-1")!.payload as Record<string, unknown>;
+    // No complete/fail receipt exists, so completed_at falls back to updated_at.
+    expect(t1.completed_at).toBe("2026-08-06T09:00:00.000Z");
+    expect(t1.started_at).toBe("2026-08-06T08:00:00.000Z");
+    expect(report.remaining_candidates).toBe(0);
     rmSync(dir, { recursive: true, force: true });
   });
 

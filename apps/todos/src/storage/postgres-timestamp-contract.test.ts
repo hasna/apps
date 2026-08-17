@@ -240,6 +240,22 @@ describe("postgres tasks.update — terminal-status timestamp contract", () => {
     expect(harness.readTask(task.id)?.completed_at).toBeTruthy();
   });
 
+  test("PATCH {status: completed, completed_at: null} stamps it (explicit-null parity with SQLite)", async () => {
+    // REGRESSION: an explicit `null` completed_at must be treated as ABSENT so
+    // the terminal transition stamps the end timestamp on this lane exactly as
+    // the SQLite lane does (db/task-crud.updateTask writes
+    // `completionTimestamp = input.completed_at ?? timestamp`).
+    const harness = createFake();
+    const adapter = createPostgresTodosStorageAdapter({ client: harness.client, service: SERVICE });
+    const task = baseTask({ id: randomUUID() });
+    harness.seedTask(task);
+
+    const updated = await adapter.tasks.update(task.id, { status: "completed", completed_at: null, version: task.version });
+
+    expect(updated.completed_at).toBeTruthy();
+    expect(harness.readTask(task.id)?.completed_at).toBeTruthy();
+  });
+
   test("status -> completed with NO completed_at in the payload stamps it (the PATCH gap)", async () => {
     const harness = createFake();
     const adapter = createPostgresTodosStorageAdapter({ client: harness.client, service: SERVICE });

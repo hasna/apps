@@ -2324,7 +2324,12 @@ async function updateTask(
     // no completed_at previously left the column NULL on this lane, unlike
     // SQLite. Existing values are never clobbered.
     completed_at:
-      input.completed_at !== undefined
+      // An explicit `null` is treated as ABSENT (parity with db/task-crud:
+      // `completionTimestamp = input.completed_at ?? timestamp`), so a PATCH
+      // carrying `{status: <terminal>, completed_at: null}` stamps the end
+      // timestamp on this lane exactly as the SQLite lane does, and the stored
+      // value never diverges from what the sibling lane would persist.
+      input.completed_at != null
         ? input.completed_at
         : input.status !== undefined && isTerminalStatus(input.status)
           ? (existing.completed_at ?? new Date().toISOString())

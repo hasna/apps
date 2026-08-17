@@ -958,7 +958,12 @@ function updateTaskStored(
     locked_by: terminalNow ? null : task.locked_by,
     locked_at: terminalNow ? null : task.locked_at,
     completed_at:
-      input.completed_at !== undefined
+      // An explicit `null` is treated as ABSENT so the object returned to the
+      // caller matches what the SQL above persisted: the SQL writes
+      // `completionTimestamp` (= input.completed_at ?? timestamp) on a terminal
+      // transition, so reporting `null` here while the row carries a timestamp
+      // (or COALESCE'd value) would diverge from the stored state.
+      input.completed_at != null
         ? input.completed_at
         : completedNow
           ? completionTimestamp

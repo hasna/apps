@@ -140,6 +140,9 @@ export async function backfillMissingTimestamps(
              AND ((payload->>'completed_at') IS NULL OR (payload->>'completed_at') = 'null'))
            OR (payload->>'status' = 'failed'
              AND ((payload->>'started_at') IS NULL OR (payload->>'started_at') = 'null'
+               OR (payload->>'completed_at') IS NULL OR (payload->>'completed_at') = 'null'))
+           OR (payload->>'status' = 'cancelled'
+             AND ((payload->>'started_at') IS NULL OR (payload->>'started_at') = 'null'
                OR (payload->>'completed_at') IS NULL OR (payload->>'completed_at') = 'null')))
          AND ($2::text IS NULL OR object_id > $2)
        ORDER BY object_id
@@ -309,11 +312,12 @@ export async function backfillMissingTimestamps(
       }
 
       // Would this row still match the candidate scan on the next run?
-      // completed rows remain candidates while completed_at is unfilled; failed
-      // rows while EITHER column is unfilled.
+      // completed rows remain candidates while completed_at is unfilled;
+      // failed/cancelled rows while EITHER column is unfilled.
       if (row.completed_at === null && !completedAtLanded) {
         remainingAfterApply += 1;
-      } else if (row.status === "failed" && row.started_at === null && !startedAtLanded) {
+      } else if ((row.status === "failed" || row.status === "cancelled")
+        && row.started_at === null && !startedAtLanded) {
         remainingAfterApply += 1;
       }
     }
