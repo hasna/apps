@@ -54,12 +54,14 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import {
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   realpathSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -117,6 +119,7 @@ export type WorktreeErrorCode =
   | "WORKTREE_DIRTY"
   | "WORKTREE_UNPUSHED"
   | "WORKTREE_UNLANDED"
+  | "WORKTREE_DEAD_GITDIR"
   | "TRUSTED_HOME_UNAVAILABLE"
   | "LAYOUT_INVARIANT_VIOLATED"
   | "GIT_FAILED";
@@ -663,6 +666,40 @@ function assertRefArgument(
 }
 
 /**
+ * The gitdir a linked-worktree `.git` pointer names, resolved, or null when
+ * the pointer is absent, malformed, or not a linked-worktree pointer.
+ *
+ * git resolves a relative `gitdir:` pointer against the directory that
+ * contains the pointer file — the worktree itself — so relative and absolute
+ * pointers are resolved the same way. Existence is deliberately NOT checked
+ * here: `isLinkedWorktree` must stay a shape check (it runs once per candidate
+ * in a multi-thousand-directory listing), and the caller decides whether the
+ * target needs to exist.
+ */
+function linkedGitdirTarget(path: string): string | null {
+  const pointer = join(path, ".git");
+  let stats;
+  try {
+    stats = lstatSync(pointer);
+  } catch {
+    return null;
+  }
+  // A primary checkout keeps its object store here; it is not a linked worktree.
+  if (stats.isDirectory()) return null;
+  if (!stats.isFile()) return null;
+  try {
+    const gitdir = readFileSync(pointer, "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
+    if (!gitdir) return null;
+    // `<common>/worktrees/<name>` is git's linked-worktree layout. A submodule
+    // points at `<parent>/.git/modules/<name>` and is correctly excluded.
+    if (!/(^|\/)worktrees\/[^/]+\/?$/.test(gitdir)) return null;
+    return resolve(path, gitdir);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Is this directory a *linked* worktree, as opposed to a primary checkout, a
  * submodule, or an ordinary directory?
  *
@@ -678,25 +715,24 @@ function assertRefArgument(
  * removes ~3,800 process spawns from a read-only report.
  */
 function isLinkedWorktree(path: string): boolean {
-  const pointer = join(path, ".git");
-  let stats;
-  try {
-    stats = lstatSync(pointer);
-  } catch {
-    return false;
-  }
-  // A primary checkout keeps its object store here; it is not a linked worktree.
-  if (stats.isDirectory()) return false;
-  if (!stats.isFile()) return false;
-  try {
-    const gitdir = readFileSync(pointer, "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
-    if (!gitdir) return false;
-    // `<common>/worktrees/<name>` is git's linked-worktree layout. A submodule
-    // points at `<parent>/.git/modules/<name>` and is correctly excluded.
-    return /(^|\/)worktrees\/[^/]+\/?$/.test(gitdir);
-  } catch {
-    return false;
-  }
+  return linkedGitdirTarget(path) !== null;
+}
+
+/**
+ * Is the linked worktree's gitdir actually present on disk?
+ *
+ * A `.git` pointer can be shape-valid and dead at the same time: when the
+ * parent checkout is moved or deleted, its `.git/worktrees/<name>` metadata
+ * goes with it and the worktree directory is left pointing at nothing. git
+ * then refuses to open the worktree at all (`fatal: not a git repository`),
+ * which makes every git-derived guard — dirty, unpushed, landed —
+ * unanswerable. Measured on this station after the 2026-08-14 monorepo move:
+ * ~1,600 of ~2,000 worktree directories under the live root carried pointers
+ * whose target was gone.
+ */
+function linkedGitdirIsLive(path: string): boolean {
+  const target = linkedGitdirTarget(path);
+  return target !== null && isDirectory(target);
 }
 
 export function addWorktree(request: AddWorktreeRequest): AddWorktreeResult {
@@ -750,6 +786,17 @@ export function addWorktree(request: AddWorktreeRequest): AddWorktreeResult {
     ?? leaseByPath(db, target);
 
   if (existing && existsSync(existing.worktree_path) && isLinkedWorktree(existing.worktree_path)) {
+    if (!linkedGitdirIsLive(existing.worktree_path)) {
+      // The lease's gitdir is dead — the parent checkout moved or was deleted
+      // since the lease was written. Reusing the path hands the caller a
+      // worktree git cannot open, and refreshing `verified_at` marks a lease
+      // verified that nothing verified. Refuse with the same named code the
+      // removal and adoption paths use.
+      fail("WORKTREE_DEAD_GITDIR", "refusing to reuse a worktree whose gitdir pointer is dead", {
+        path: existing.worktree_path,
+        hint: "dispose of it with `repos worktree remove --allow-dead-gitdir`, which archives the working tree first",
+      });
+    }
     // Idempotent by design. A second `add` for the same claim is a caller
     // re-entering, not a caller asking for a clean slate — the destroy-then-
     // create reading of this is the factory hazard.
@@ -1149,6 +1196,16 @@ export interface RemoveWorktreeRequest {
    */
   allowUnlanded?: boolean;
   /**
+   * Archive the working tree and tear down a worktree whose gitdir is dead.
+   *
+   * A dead gitdir (parent checkout moved or deleted) makes every git-derived
+   * guard unanswerable, so removal is refused by default; this opt-in states
+   * that the working tree — the only content left — is archived before the
+   * directory goes, and that the git state is unrecoverable and unverified.
+   * It is a no-op on a live worktree.
+   */
+  allowDeadGitdir?: boolean;
+  /**
    * Report what would happen and change nothing.
    *
    * The shape a scheduled loop needs: a safety refusal comes back as a value on
@@ -1280,12 +1337,17 @@ function repoRowForTarget(db: Database, target: ResolvedTarget, path: string): R
  * written as a patch. Untracked file *contents* are listed but not copied —
  * stated here rather than implied, because an archive that silently omits
  * something is worse than one that says what it omits.
+ *
+ * `copyTree` is the dead-gitdir case: git cannot read the worktree, so none of
+ * the captures above can speak and the whole working tree is copied instead —
+ * the only content that is left to preserve.
  */
 function archiveBeforeReap(
   target: ResolvedTarget,
   leaseId: string,
   landing: BranchLanding,
   bundleBranch: boolean,
+  copyTree = false,
 ): string {
   // The archive directory is named after the lease, and on the
   // `<repo>/<worktree>` path that id comes from the database row rather than
@@ -1324,6 +1386,36 @@ function archiveBeforeReap(
   // fact for whoever finds this directory later, and a channel post is not
   // where they will be looking.
   writeFileSync(join(evidenceDir, "landing.json"), `${JSON.stringify(landing, null, 2)}\n`);
+
+  if (copyTree) {
+    // The dead-gitdir case: git cannot read the worktree at all, so the
+    // captures above are all empty and the branch bundle is impossible. The
+    // working tree is the only content left, so it is copied whole (minus
+    // `node_modules`, which is rebuildable and can dwarf the actual work) and
+    // indexed by a manifest, and the `.git` pointer is preserved so a reader
+    // can see exactly which gitdir was dead.
+    const treeCopy = join(evidenceDir, "worktree-tree");
+    cpSync(target.path, treeCopy, {
+      recursive: true,
+      filter: (src) => !src.split(sep).includes("node_modules"),
+    });
+    const manifest: string[] = [];
+    const walk = (dir: string) => {
+      for (const child of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, child.name);
+        if (child.isDirectory()) walk(full);
+        else if (child.isFile()) {
+          const stats = lstatSync(full);
+          manifest.push(`${relative(treeCopy, full)}\t${stats.size}\t${stats.mtime.toISOString()}`);
+        }
+      }
+    };
+    walk(treeCopy);
+    writeFileSync(join(evidenceDir, "tree-manifest.txt"), `${manifest.sort().join("\n")}\n`);
+    const pointer = linkedGitdirTarget(target.path);
+    writeFileSync(join(evidenceDir, "gitdir-pointer.txt"), `gitdir: ${pointer ?? "unresolvable"}\n`);
+    incomplete.push("worktree-tree: copied without git verification — the gitdir is dead and git could not open the worktree");
+  }
 
   if (bundleBranch) {
     // `HEAD` is always bundled, and it is what makes this archive honest.
@@ -1393,6 +1485,7 @@ export function removeWorktree(request: RemoveWorktreeRequest): RemoveWorktreeRe
       hint: "use `repos worktree list` to reconcile leases against disk",
     });
   }
+  const deadGitdir = !linkedGitdirIsLive(resolved);
 
   const dirty = gitOut(resolved, ["status", "--porcelain"], { allowFailure: true });
   const unpushed = countUnpushedCommits(resolved);
@@ -1417,6 +1510,19 @@ export function removeWorktree(request: RemoveWorktreeRequest): RemoveWorktreeRe
    * flags; the mode decides only whether the answer is thrown or returned.
    */
   const refusal: { code: WorktreeErrorCode; message: string; hint: string } | null = (() => {
+    // First, because a dead gitdir makes every other check unanswerable: git
+    // cannot open the worktree, so dirty, unpushed and landed all read as
+    // "clean" fail-closed values. Without this the worktree would classify as
+    // landed-detached and reach deletion with no archive at all — or fail
+    // later at `git worktree remove` with an opaque GIT_FAILED and no
+    // supported path forward. The opt-in archives the working tree first.
+    if (deadGitdir && !request.allowDeadGitdir) {
+      return {
+        code: "WORKTREE_DEAD_GITDIR" as const,
+        message: "the worktree's gitdir is dead — the parent checkout it was linked to has moved or been deleted, so git cannot open this worktree and nothing in it can be verified",
+        hint: "recover anything you need from the working tree yourself, or pass --allow-dead-gitdir to archive the working tree and remove the directory",
+      };
+    }
     if (dirty && !request.discardChanges) {
       return {
         code: "WORKTREE_DIRTY" as const,
@@ -1481,11 +1587,18 @@ export function removeWorktree(request: RemoveWorktreeRequest): RemoveWorktreeRe
   // delete-WITH-archive rather than a slower `rm -rf`. The branch is bundled
   // when its commits are at risk (unpushed) or when an unlanded branch is being
   // torn down anyway, in which case the remote copy can still disappear with
-  // the PR.
+  // the PR. A dead gitdir always archives: the working tree is the only
+  // content left, and the archive copies it whole because git cannot.
   const overrodeUnlanded = Boolean(request.allowUnlanded) && !landing.landed && landing.reason !== "unpushed";
-  const archiving = (request.discardChanges && (dirty || unpushed > 0)) || overrodeUnlanded;
+  const archiving = (request.discardChanges && (dirty || unpushed > 0)) || overrodeUnlanded || deadGitdir;
   const evidencePath = archiving
-    ? archiveBeforeReap({ ...target, path: resolved }, leaseId, landing, unpushed > 0 || overrodeUnlanded)
+    ? archiveBeforeReap(
+        { ...target, path: resolved },
+        leaseId,
+        landing,
+        unpushed > 0 || overrodeUnlanded,
+        deadGitdir,
+      )
     : null;
 
   const parentForGit = target.parentPath && existsSync(target.parentPath) ? target.parentPath : resolved;
@@ -1501,10 +1614,19 @@ export function removeWorktree(request: RemoveWorktreeRequest): RemoveWorktreeRe
   const headBranch = gitOut(resolved, ["rev-parse", "--abbrev-ref", "HEAD"], { allowFailure: true });
   const branch = headBranch && headBranch !== "HEAD" ? headBranch : null;
 
-  runGit(parentForGit, request.discardChanges
-    ? ["worktree", "remove", "--force", resolved]
-    : ["worktree", "remove", resolved]);
-  runGit(parentForGit, ["worktree", "prune"], { allowFailure: true });
+  if (deadGitdir) {
+    // git cannot resolve a worktree whose gitdir is dead, so `git worktree
+    // remove` (and any prune of a parent that no longer exists) is impossible
+    // by construction. The directory was already archived above; this is the
+    // one sanctioned path that bypasses git for a dead worktree.
+    rmSync(resolved, { recursive: true, force: true });
+  } else {
+    runGit(parentForGit, request.discardChanges
+      ? ["worktree", "remove", "--force", resolved]
+      : ["worktree", "remove", resolved]);
+    runGit(parentForGit, ["worktree", "prune"], { allowFailure: true });
+  }
+
   if (branch && REF_ARGUMENT_PATTERN.test(branch)) {
     // `-d` on the unlanded path is load-bearing, not incidental: git refuses to
     // delete an unmerged branch, so overriding the refusal reclaims the
@@ -1616,7 +1738,8 @@ export type WorktreeIssue =
   | "nested-layout"
   | "machine-mismatch"
   | "stale"
-  | "not-a-worktree";
+  | "not-a-worktree"
+  | "dead-gitdir";
 
 export interface WorktreeListEntry {
   path: string;
@@ -1714,6 +1837,9 @@ export function listWorktrees(options: WorktreeListOptions = {}): WorktreeListRe
       // A worktree (or any checkout) directly under the root: the flat class.
       const entry = record(repoDir, { worktree_name: repoName, on_disk: true, is_worktree: true });
       entry.issues.push("flat-layout");
+      if (isLinkedWorktree(repoDir) && !linkedGitdirIsLive(repoDir)) {
+        entry.issues.push("dead-gitdir");
+      }
       continue;
     }
     for (const worktreeDir of listChildDirs(repoDir)) {
@@ -1744,10 +1870,19 @@ export function listWorktrees(options: WorktreeListOptions = {}): WorktreeListRe
               is_worktree: true,
             });
             nestedEntry.issues.push("nested-layout");
+            if (!linkedGitdirIsLive(nested)) {
+              nestedEntry.issues.push("dead-gitdir");
+            }
           }
           continue;
         }
         entry.issues.push("not-a-worktree");
+      } else if (!linkedGitdirIsLive(worktreeDir)) {
+        // A shape-valid `.git` pointer whose gitdir is gone — the parent
+        // checkout moved or was deleted. git cannot open the worktree, so the
+        // reconciliation surface has to name the class: measured at ~1,600
+        // entries under the live root after the 2026-08-14 monorepo move.
+        entry.issues.push("dead-gitdir");
       }
     }
   }
@@ -1826,6 +1961,12 @@ export interface AdoptWorktreeResult {
   applied: boolean;
   root: string;
   adopted: AdoptedWorktree[];
+  /**
+   * Candidates the sweep declined to lease, and why. A dead-gitdir worktree is
+   * unopenable by git, so a lease on it would claim `verified_at` for a
+   * directory that can never be verified — it is reported here instead.
+   */
+  skipped: { path: string; reason: "dead-gitdir" }[];
 }
 
 /**
@@ -1878,6 +2019,7 @@ export function adoptWorktrees(request: AdoptWorktreeRequest = {}): AdoptWorktre
   }
 
   const candidates: string[] = [];
+  const skipped: { path: string; reason: "dead-gitdir" }[] = [];
   if (request.path) {
     if (!isAbsolute(request.path)) {
       fail("INVALID_REQUEST", "an adopt path must be absolute", { path: request.path });
@@ -1889,11 +2031,27 @@ export function adoptWorktrees(request: AdoptWorktreeRequest = {}): AdoptWorktre
     if (!existsSync(resolved) || !isLinkedWorktree(resolved)) {
       fail("NOT_A_WORKTREE", "the path is not a linked git worktree", { path: resolved });
     }
+    if (!linkedGitdirIsLive(resolved)) {
+      fail(
+        "WORKTREE_DEAD_GITDIR",
+        "the path is a linked worktree whose gitdir is dead — git cannot open it, so no lease can be verified against it",
+        {
+          path: resolved,
+          hint: "recover anything you need from the working tree, then remove the directory with `repos worktree remove --allow-dead-gitdir <repo>/<name>`",
+        },
+      );
+    }
     candidates.push(resolved);
   } else {
     for (const repoDir of listChildDirs(root)) {
       for (const worktreeDir of listChildDirs(repoDir)) {
-        if (isLinkedWorktree(worktreeDir)) candidates.push(worktreeDir);
+        if (isLinkedWorktree(worktreeDir)) {
+          if (linkedGitdirIsLive(worktreeDir)) {
+            candidates.push(worktreeDir);
+          } else {
+            skipped.push({ path: worktreeDir, reason: "dead-gitdir" });
+          }
+        }
       }
     }
   }
@@ -1956,5 +2114,6 @@ export function adoptWorktrees(request: AdoptWorktreeRequest = {}): AdoptWorktre
     applied: Boolean(request.apply),
     root,
     adopted,
+    skipped,
   };
 }
