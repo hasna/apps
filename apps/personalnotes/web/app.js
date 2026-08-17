@@ -13,9 +13,8 @@
 //      in memory — writes just mutate the in-memory model + re-render, so the whole
 //      UI is testable headless (tests hydrate their own fixtures).
 //
-// No chat/composer/task/diff screens — those are gone. Navigation is hash-free
-// for the editor (selection is in-memory); only Settings uses a hash (#settings) so a
-// screenshot harness can deep-link to it.
+// Navigation is hash-free for the editor and chat (selection is in-memory); only
+// Settings uses a hash (#settings) so a screenshot harness can deep-link to it.
 (function () {
   'use strict';
 
@@ -54,6 +53,11 @@
   const collapsedSections = { notes: false, labels: false };
   // Machines dropdown open state (top of the sidebar).
   let machinesMenuOpen = false;
+  // Chat chrome is session-only: the conversation state remains the source of truth,
+  // while these flags only control its view and inspector panel.
+  let chatPanelOpen = true;
+  let chatWideView = false;
+  let chatMoreOpen = false;
   // Screen to restore when leaving compact mode (defect 20: never force Home).
   let compactReturnScreen = 'home';
 
@@ -3085,7 +3089,53 @@
     const text = input.value.trim();
     if (!text) return;
     input.value = '';
+    input.style.height = 'auto';
     sendChat(text).catch(err => toast(err.message || String(err)));
+  }
+  function onChatInput(e) {
+    const input = e && e.target ? e.target : $('chat-input');
+    if (!input) return;
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight || 34, 116) + 'px';
+  }
+  function onChatInputKeydown(e) {
+    // An Enter that only commits an input-method candidate (Japanese/Chinese/Korean)
+    // must never send: the browser reports it with `isComposing` — `keyCode` 229 on
+    // older WebKit — and native form submission is suppressed the same way.
+    if (!e || e.key !== 'Enter' || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+    e.preventDefault();
+    onChatSubmit();
+  }
+  function setChatMoreMenu(open) {
+    chatMoreOpen = !!open;
+    const menu = $('chat-more-menu');
+    if (menu) menu.hidden = !chatMoreOpen;
+    const button = $('chat-more');
+    if (button) button.setAttribute('aria-expanded', chatMoreOpen ? 'true' : 'false');
+  }
+  function onChatMoreToggle(e) {
+    if (e) e.preventDefault();
+    setChatMoreMenu(!chatMoreOpen);
+  }
+  function onChatClear(e) {
+    if (e) e.preventDefault();
+    setChatMoreMenu(false);
+    clearChat();
+  }
+  function onChatViewToggle(e) {
+    if (e) e.preventDefault();
+    chatWideView = !chatWideView;
+    renderChatChrome();
+  }
+  function onChatPanelToggle(e) {
+    if (e) e.preventDefault();
+    chatPanelOpen = !chatPanelOpen;
+    renderChatChrome();
+  }
+  function onChatPanelClose(e) {
+    if (e) e.preventDefault();
+    chatPanelOpen = false;
+    renderChatChrome();
   }
   function onLabelCreate(e) {
     if (e) e.preventDefault();
@@ -3224,6 +3274,7 @@
       closeMachinePop();
       closeSearchPop();
       closeMdPop();
+      setChatMoreMenu(false);
       if (machinesMenuOpen) setMachinesMenu(false);
     }
   }
@@ -3240,6 +3291,9 @@
     if (mdPop && !mdPop.hidden && !mdPop.contains(e.target)) closeMdPop();
     const slash = $('slash-menu');
     if (slash && !slash.hidden && !slash.contains(e.target)) closeSlashMenu();
+    const chatMenu = $('chat-more-menu');
+    const chatMore = $('chat-more');
+    if (chatMoreOpen && chatMenu && e.target !== chatMore && !chatMenu.contains(e.target)) setChatMoreMenu(false);
   }
   // ---- scroll chrome (design spec §3.6/§3.7 — purely presentational) ----
   // Overlay scrollbars: the thin thumb is invisible at rest and appears while the
@@ -3258,7 +3312,7 @@
   // Scroll-edge fade under the content header (Rule 6): .scrolled on #content shows the
   // soft gradient once page content actually sits beneath the header — never a border.
   // Only the page-level scrollers drive it; inner scrollers (chat log, transcript) don't.
-  const PAGE_SCROLLERS = '.home,.np-inner,.chat-inner,.editor-scroll';
+  const PAGE_SCROLLERS = '.home,.np-inner,.chat-scroll,.editor-scroll';
   function syncHeaderScrollEdge(fromNode) {
     const content = $('content');
     if (!content) return;
@@ -3353,6 +3407,16 @@
     }
     const cForm = $('compact-form'); if (cForm) cForm.addEventListener('submit', onCompactNote);
     const chatForm = $('chat-form'); if (chatForm) chatForm.addEventListener('submit', onChatSubmit);
+    const chatInput = $('chat-input');
+    if (chatInput) {
+      chatInput.addEventListener('input', onChatInput);
+      chatInput.addEventListener('keydown', onChatInputKeydown);
+    }
+    const chatMore = $('chat-more'); if (chatMore) chatMore.addEventListener('click', onChatMoreToggle);
+    const chatClear = $('chat-clear'); if (chatClear) chatClear.addEventListener('click', onChatClear);
+    const chatView = $('chat-view-toggle'); if (chatView) chatView.addEventListener('click', onChatViewToggle);
+    const chatPanel = $('chat-panel-toggle'); if (chatPanel) chatPanel.addEventListener('click', onChatPanelToggle);
+    const chatPanelClose = $('chat-panel-close'); if (chatPanelClose) chatPanelClose.addEventListener('click', onChatPanelClose);
     const labelForm = $('label-create-form'); if (labelForm) labelForm.addEventListener('submit', onLabelCreate);
     const recBtn = $('rec-btn'); if (recBtn) recBtn.addEventListener('click', onRecordClick);
     const qnPause = $('qn-pause'); if (qnPause) qnPause.addEventListener('click', onRecPauseToggle);
@@ -3425,6 +3489,16 @@
     }
     const cForm = $('compact-form'); if (cForm) cForm.removeEventListener('submit', onCompactNote);
     const chatForm = $('chat-form'); if (chatForm) chatForm.removeEventListener('submit', onChatSubmit);
+    const chatInput = $('chat-input');
+    if (chatInput) {
+      chatInput.removeEventListener('input', onChatInput);
+      chatInput.removeEventListener('keydown', onChatInputKeydown);
+    }
+    const chatMore = $('chat-more'); if (chatMore) chatMore.removeEventListener('click', onChatMoreToggle);
+    const chatClear = $('chat-clear'); if (chatClear) chatClear.removeEventListener('click', onChatClear);
+    const chatView = $('chat-view-toggle'); if (chatView) chatView.removeEventListener('click', onChatViewToggle);
+    const chatPanel = $('chat-panel-toggle'); if (chatPanel) chatPanel.removeEventListener('click', onChatPanelToggle);
+    const chatPanelClose = $('chat-panel-close'); if (chatPanelClose) chatPanelClose.removeEventListener('click', onChatPanelClose);
     const labelForm = $('label-create-form'); if (labelForm) labelForm.removeEventListener('submit', onLabelCreate);
     const recBtn = $('rec-btn'); if (recBtn) recBtn.removeEventListener('click', onRecordClick);
     const qnPause = $('qn-pause'); if (qnPause) qnPause.removeEventListener('click', onRecPauseToggle);
@@ -3667,9 +3741,36 @@
     message.parts[0].text = String(text || '');
   }
 
+  function renderChatChrome() {
+    const stage = $('chat-stage');
+    if (stage) {
+      stage.classList.toggle('panel-closed', !chatPanelOpen);
+      stage.classList.toggle('chat-wide', chatWideView);
+    }
+    const panel = $('chat-panel');
+    if (panel) panel.hidden = !chatPanelOpen;
+    const panelToggle = $('chat-panel-toggle');
+    if (panelToggle) {
+      panelToggle.classList.toggle('active', chatPanelOpen);
+      panelToggle.setAttribute('aria-pressed', chatPanelOpen ? 'true' : 'false');
+    }
+    const viewToggle = $('chat-view-toggle');
+    if (viewToggle) {
+      viewToggle.classList.toggle('active', chatWideView);
+      viewToggle.setAttribute('aria-pressed', chatWideView ? 'true' : 'false');
+    }
+    setChatMoreMenu(chatMoreOpen);
+  }
+
   function renderChatPage() {
     const status = $('chat-status');
-    if (status) status.textContent = state.chat.status.replace(/_/g, ' ');
+    if (status) {
+      status.innerHTML = '';
+      status.dataset.status = state.chat.status;
+      status.appendChild(el('span', 'chat-status-dot'));
+      status.appendChild(el('span', 'chat-status-label', state.chat.status.replace(/_/g, ' ')));
+    }
+    renderChatChrome();
     renderChatGoal();
     renderChatLog();
     renderChatTools();
@@ -3682,16 +3783,67 @@
     if (!host) return;
     host.innerHTML = '';
     if (!state.chat.messages.length) {
-      host.appendChild(el('div', 'chat-empty', ai().available ? 'No messages' : CHAT_UNAVAILABLE));
+      host.appendChild(el('div', 'chat-empty', ai().available
+        ? 'No messages yet. Ask PersonalNotes anything about your notes.'
+        : CHAT_UNAVAILABLE));
       return;
     }
     state.chat.messages.forEach(message => {
       const row = el('div', 'chat-msg chat-' + (message.role || 'assistant'));
-      row.appendChild(el('div', 'chat-role', message.role === 'user' ? 'You' : 'PersonalNotes'));
-      row.appendChild(el('div', 'chat-text', chatMessageText(message)));
+      const head = el('div', 'chat-msg-head');
+      if (message.role !== 'user') head.appendChild(el('span', 'chat-avatar', 'P'));
+      head.appendChild(el('div', 'chat-role', message.role === 'user' ? 'You' : 'PersonalNotes'));
+      row.appendChild(head);
+      const body = el('div', 'chat-msg-body');
+      const messageText = chatMessageText(message);
+      const text = el('div', 'chat-text', messageText || (message.sidecarPending ? 'Thinking…' : ''));
+      if (!messageText && message.sidecarPending) text.classList.add('chat-typing');
+      body.appendChild(text);
+      row.appendChild(body);
       host.appendChild(row);
     });
-    host.scrollTop = host.scrollHeight || 0;
+    const scroller = $('chat-scroll');
+    if (scroller) scroller.scrollTop = scroller.scrollHeight || 0;
+  }
+
+  function chatToolPresentation(call) {
+    const name = String(call.name || call.toolName || 'tool');
+    const input = call.input || {};
+    const path = String(input.path || input.file || input.filename || '');
+    const leaf = path.split(/[\\/]/).filter(Boolean).pop() || '';
+    let title = '';
+    if (/skill\.md$/i.test(path)) title = 'Reading SKILL.md';
+    else if (/^(load|loaded|use)_?tool$/i.test(name)) title = 'Loaded a tool';
+    else {
+      const action = name.replace(/_/g, ' ').trim().toLowerCase() || 'tool';
+      if (call.state === 'approval-requested') title = 'Waiting to approve ' + action;
+      else if (call.state === 'cancelled') title = 'Cancelled ' + action;
+      else if (call.state === 'result') title = 'Ran ' + action;
+      else title = 'Running ' + action;
+    }
+    const summary = chatActionSummary(name, input);
+    const marker = summary.indexOf(' — ');
+    const detail = leaf && !/skill\.md$/i.test(leaf)
+      ? leaf
+      : (marker >= 0 ? summary.slice(marker + 3) : 'Tool run');
+    return { title, detail };
+  }
+
+  const CHAT_TOOL_ICON = '<svg viewBox="0 0 16 16" fill="none"><path d="M9.5 3.1a3.2 3.2 0 01-3.9 3.9l-3 3a1.5 1.5 0 002.1 2.1l3-3a3.2 3.2 0 003.9-3.9L9.8 7 7 4.2l1.8-1.8.7.7z" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const CHAT_SOURCE_ICON = '<svg viewBox="0 0 16 16" fill="none"><path d="M4 2.5h5l3 3v8H4z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/><path d="M9 2.5v3h3M6 8h4M6 10.5h4" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>';
+
+  function makeChatToolRow(call) {
+    const presentation = chatToolPresentation(call);
+    const row = el('div', 'ct-row is-' + (call.state || 'call'));
+    const icon = el('span', 'ct-icon');
+    icon.innerHTML = CHAT_TOOL_ICON;
+    row.appendChild(icon);
+    const copy = el('div', 'ct-copy');
+    copy.appendChild(el('div', 'ct-name', presentation.title));
+    copy.appendChild(el('div', 'ct-detail', presentation.detail));
+    row.appendChild(copy);
+    row.appendChild(el('div', 'ct-state', (call.state || 'running').replace(/-/g, ' ')));
+    return row;
   }
 
   function renderChatTools() {
@@ -3699,24 +3851,57 @@
     if (!host) return;
     host.innerHTML = '';
     host.hidden = state.chat.toolCalls.length === 0;
+    state.chat.toolCalls.forEach(call => host.appendChild(makeChatToolRow(call)));
+    renderChatOutputs();
+  }
+
+  function renderChatOutputs() {
+    const host = $('chat-outputs');
+    const count = $('chat-output-count');
+    if (count) count.textContent = String(state.chat.toolCalls.length);
+    if (!host) return;
+    host.innerHTML = '';
+    if (!state.chat.toolCalls.length) {
+      host.appendChild(el('div', 'chat-panel-empty', 'Tool results will appear here.'));
+      return;
+    }
     state.chat.toolCalls.forEach(call => {
-      const row = el('div', 'ct-row');
-      // Human-readable action line — never raw JSON payloads.
-      row.appendChild(el('div', 'ct-name', chatActionSummary(call.name || call.toolName, call.input)));
-      row.appendChild(el('div', 'ct-state', call.state || 'call'));
-      host.appendChild(row);
+      const presentation = chatToolPresentation(call);
+      const item = el('div', 'co-item');
+      const icon = el('span', 'co-icon');
+      icon.innerHTML = CHAT_TOOL_ICON;
+      item.appendChild(icon);
+      const copy = el('div', 'co-copy');
+      copy.appendChild(el('div', 'co-title', presentation.title));
+      copy.appendChild(el('div', 'co-meta', (call.state || 'running').replace(/-/g, ' ')));
+      item.appendChild(copy);
+      host.appendChild(item);
     });
   }
 
   function renderChatSources() {
     const host = $('chat-sources');
+    const count = $('chat-source-count');
+    if (count) count.textContent = String(state.chat.sources.length);
     if (!host) return;
     host.innerHTML = '';
-    host.hidden = state.chat.sources.length === 0;
+    if (!state.chat.sources.length) {
+      host.appendChild(el('div', 'chat-panel-empty', 'Referenced notes will appear here.'));
+      return;
+    }
     state.chat.sources.forEach(source => {
       const btn = el('button', 'cs-item');
       btn.type = 'button';
-      btn.textContent = (source.title || 'Untitled Note') + (source.id ? ' · ' + source.id.slice(0, 8) : '');
+      const icon = el('span', 'cs-icon');
+      icon.innerHTML = CHAT_SOURCE_ICON;
+      btn.appendChild(icon);
+      const copy = el('span', 'cs-copy');
+      copy.appendChild(el('span', 'cs-title', source.title || 'Untitled Note'));
+      const meta = (source.labels && source.labels.length)
+        ? source.labels.slice(0, 2).join(', ')
+        : (source.machine || (source.id ? source.id.slice(0, 8) : 'Note'));
+      copy.appendChild(el('span', 'cs-meta', meta));
+      btn.appendChild(copy);
       btn.addEventListener('click', () => { if (source.id) selectNote(source.id); });
       host.appendChild(btn);
     });

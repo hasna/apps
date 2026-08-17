@@ -3,6 +3,11 @@ import { copyFile, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
+import {
+  beginNoteCreatedIntent,
+  cancelNoteCreatedIntent,
+  commitNoteCreatedIntent,
+} from './notes-events.mjs';
 
 export function dataRoot() {
   return process.env.PERSONALNOTES_ROOT || process.env.HASNA_NOTES_ROOT || join(homedir(), '.hasna', 'apps', 'notes');
@@ -662,23 +667,79 @@ export async function loadNotes(root = dataRoot()) {
   return notes.sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
 }
 
+/**
+ * Strict note-store snapshot for reconciliation and other correctness-critical
+ * callers. Unlike loadNotes(), this never turns an enumeration, read, or parse
+ * failure into a partial list. Normal interactive reads intentionally retain
+ * their historical tolerant behaviour through loadNotes().
+ */
+export async function loadNotesStrict(root = dataRoot(), options = {}) {
+  const dir = notesDir(root);
+  await mkdir(dir, { recursive: true });
+  const readDirectory = options.readdir ?? readdir;
+  const readNote = options.readFile ?? readFile;
+  const parse = options.parseNote ?? parseNote;
+  const files = await readDirectory(dir);
+  const notes = [];
+  for (const file of [...files].sort()) {
+    if (!file.endsWith('.md')) continue;
+    const fallbackID = file.replace(/\.md$/, '');
+    if (!isUUID(fallbackID)) throw new Error('invalid_note_filename');
+    const raw = await readNote(join(dir, file), 'utf8');
+    const normalized = String(raw).replace(/\r\n/g, '\n');
+    if (normalized.startsWith('---\n')) {
+      const lines = normalized.split('\n');
+      if (!lines.some((line, index) => index > 0 && line === '---')) {
+        throw new Error('invalid_note_document');
+      }
+    }
+    const parsed = await parse(raw, fallbackID);
+    if (!parsed || !isUUID(parsed.id) || parsed.id.toLowerCase() !== fallbackID.toLowerCase()) {
+      throw new Error('invalid_note_document');
+    }
+    notes.push(parsed);
+  }
+  return notes.sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
+}
+
 export async function saveNote(note, root = dataRoot(), opts = {}) {
   const dir = notesDir(root);
   await mkdir(dir, { recursive: true });
   const n = noteFromFields(note);
   const path = join(dir, `${n.id.toLowerCase()}.md`);
+  const existingRaw = await readFile(path, 'utf8').catch((error) => {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  });
+  // The shared save boundary is authoritative: every absent target is a create,
+  // including direct library callers that do not know about event plumbing.
+  // eventContext remains optional call-site provenance and never gates emission.
+  const isCreatedEvent = existingRaw == null;
+  let hasCreatedIntent = false;
+  if (isCreatedEvent) {
+    // At least one metadata-only intent location must be durable before the
+    // note rename. beginNoteCreatedIntent falls back to a private directory on
+    // the note-store filesystem when <root>/events is unavailable.
+    await beginNoteCreatedIntent(n, root);
+    hasCreatedIntent = true;
+  }
   if (!opts.preserveRev) {
     // Every local mutation bumps the per-note monotonic `rev` past whatever is on
     // disk, so sync can order versions without trusting wall clocks. New files keep
     // their initial rev (default 1). Sync-applied writes pass `preserveRev: true`.
-    const existingRaw = await readFile(path, 'utf8').catch(() => null);
     if (existingRaw != null) {
       n.rev = Math.max(revFrom(n.rev), revFrom(parseNote(existingRaw, n.id).rev)) + 1;
     }
   }
   const tmp = join(dir, `.${n.id}.${randomUUID()}.tmp`);
-  await writeFile(tmp, serializeNote(n), 'utf8');
-  await rename(tmp, path);
+  try {
+    await writeFile(tmp, serializeNote(n), 'utf8');
+    await rename(tmp, path);
+  } catch (error) {
+    if (hasCreatedIntent) await cancelNoteCreatedIntent(n.id, root).catch(() => {});
+    throw error;
+  }
+  if (isCreatedEvent) await commitNoteCreatedIntent(n, root);
   return n;
 }
 

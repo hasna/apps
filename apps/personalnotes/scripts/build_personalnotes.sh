@@ -78,11 +78,19 @@ if [[ -f "$SIDECAR_SRC/bun.lock" ]]; then
   cp "$SIDECAR_SRC/bun.lock" "$RESOURCES/ai-sidecar/"
 fi
 # server.mjs imports the shared disk-backed notes tool registry via ../tools.
-rm -rf "$RESOURCES/tools"
+rm -rf "$RESOURCES/tools" "$RESOURCES/node_modules/@hasna/events"
 mkdir -p "$RESOURCES/tools"
-cp "$REPO_ROOT/tools/notes-agent.mjs" "$REPO_ROOT/tools/notes-lib.mjs" "$RESOURCES/tools/"
+cp "$REPO_ROOT/tools/notes-agent.mjs" "$REPO_ROOT/tools/notes-events.mjs" "$REPO_ROOT/tools/notes-lib.mjs" "$RESOURCES/tools/"
+if [[ ! -f "$REPO_ROOT/node_modules/@hasna/events/dist/durable-spool.js" ]]; then
+  echo "error: missing @hasna/events; run bun install at the repository root" >&2
+  exit 1
+fi
+mkdir -p "$RESOURCES/node_modules/@hasna"
+mkdir -p "$RESOURCES/node_modules/@hasna/events"
+cp "$REPO_ROOT/node_modules/@hasna/events/package.json" "$RESOURCES/node_modules/@hasna/events/"
+cp -RL "$REPO_ROOT/node_modules/@hasna/events/dist" "$RESOURCES/node_modules/@hasna/events/dist"
 
-# Bundle the CLI + sync engine (zero runtime deps) so the shell app's background
+# Bundle the CLI + sync engine and its Node-safe durable spool dependency so the shell app's background
 # sync timer can spawn `Resources/bin/personalnotes.mjs sync --json` — the SAME
 # engine the `personalnotes sync --watch` daemon uses. Relative imports
 # (../sync, ../cli, ../tools) keep working because the layout mirrors the repo.

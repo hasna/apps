@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +47,7 @@ import {
   runNotesAgent,
   runNotesGoal,
 } from '../tools/notes-agent.mjs';
+import { notesEventsDataDir } from '../tools/notes-events.mjs';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const cliPath = join(repoRoot, 'cli', 'personalnotes.mjs');
@@ -60,6 +61,13 @@ async function tempRoot(t) {
   const root = await mkdtemp(join(tmpdir(), 'personalnotes-test-'));
   t.after(async () => { await rm(root, { recursive: true, force: true }); });
   return root;
+}
+
+async function createdEvents(root) {
+  const inbox = join(notesEventsDataDir(root), 'spool', 'inbox');
+  const names = await readdir(inbox).catch((error) => error?.code === 'ENOENT' ? [] : Promise.reject(error));
+  return Promise.all(names.filter((name) => /^[a-f0-9]{64}\.json$/.test(name))
+    .map(async (name) => JSON.parse(await readFile(join(inbox, name), 'utf8'))));
 }
 
 function runNode(script, args, env = {}) {
@@ -758,6 +766,7 @@ test('agent write tools preview unsafe changes and apply confirmed create append
   assert.equal(created.note.createdByActorType, 'agent');
   assert.equal(created.note.createdByName, 'Test Agent');
   assert.deepEqual(created.note.labels, ['agent']);
+  assert.ok((await createdEvents(root)).some((event) => event.data.noteId === created.note.id));
 
   const dryEvents = [];
   const dry = await runNotesAgent('consolidate alpha notes', { root, onEvent: event => dryEvents.push(event) });
@@ -772,6 +781,10 @@ test('agent write tools preview unsafe changes and apply confirmed create append
   assert.ok(consolidated);
   assert.equal(consolidated.createdByName, 'Consolidator');
   assert.match(consolidated.body, /Source One/);
+  const emitted = await createdEvents(root);
+  assert.ok(emitted.some((event) => event.data.noteId === consolidated.id));
+  assert.equal(JSON.stringify(emitted).includes('Created from chat.'), false);
+  assert.equal(JSON.stringify(emitted).includes('Alpha project context.'), false);
 });
 
 test('agent label move and goal flows use shared safe tools', async (t) => {
@@ -844,7 +857,11 @@ test('web chat streams sidecar events and applies approvals through the sidecar'
       return ndjsonResponse([
         { type: 'text-delta', text: 'Reviewing the note.' },
         { type: 'tool-call', toolCallId: 'tool-1', toolName: 'trash_note', input: { id: 'chat-1' } },
-        { type: 'tool-result', toolCallId: 'tool-1', output: { requiresConfirmation: true, approval } },
+        { type: 'tool-result', toolCallId: 'tool-1', output: {
+          requiresConfirmation: true,
+          approval,
+          sources: [{ id: 'chat-1', title: 'Alpha Plan', labels: ['alpha'], machine: 'studio-mac' }],
+        } },
         { type: 'confirmation', approval },
         { type: 'finish', text: 'Reviewing the note.', pendingConfirmations: [approval] },
       ]);
@@ -854,7 +871,7 @@ test('web chat streams sidecar events and applies approvals through the sidecar'
     }
     throw new Error(`unexpected sidecar url ${url}`);
   };
-  const { windowTarget } = loadWebAppWithFakeDOM(app, {
+  const { windowTarget, document } = loadWebAppWithFakeDOM(app, {
     __AI__: { port: 4222, available: true },
     fetch: fetchStub,
     TextDecoder,
@@ -877,6 +894,16 @@ test('web chat streams sidecar events and applies approvals through the sidecar'
   assert.equal(windowTarget.PersonalNotes.chat.state().status, 'awaiting_confirmation');
   assert.ok(events.some(event => event.name === 'hasna:chat-tool-call' && event.detail.toolCall.name === 'trash_note'));
   assert.ok(events.some(event => event.name === 'hasna:chat-confirmation' && event.detail.approval.id === approval.id));
+  assert.equal(document.getElementById('chat-log').children[0].classList.contains('chat-user'), true);
+  assert.equal(document.getElementById('chat-tools').children.length, 1, 'tool activity renders in the conversation');
+  assert.equal(document.getElementById('chat-outputs').children.length, 1, 'tool activity also renders in Outputs');
+  assert.equal(document.getElementById('chat-sources').children.length, 1, 'source notes render in the Sources panel');
+  document.getElementById('chat-panel-close').click();
+  assert.equal(document.getElementById('chat-panel').hidden, true);
+  document.getElementById('chat-panel-toggle').click();
+  assert.equal(document.getElementById('chat-panel').hidden, false);
+  document.getElementById('chat-view-toggle').click();
+  assert.equal(document.getElementById('chat-stage').classList.contains('chat-wide'), true);
 
   const approved = await windowTarget.PersonalNotes.chat.approve(approval.id, true);
   assert.equal(approved.approved, true);
@@ -913,6 +940,57 @@ test('web chat is honest when the AI sidecar is unavailable — no fake local an
   assert.equal(chatState.toolCalls.length, 0, 'no fabricated tool calls');
 });
 
+test('web chat composer: an Enter that only commits an IME candidate must not send', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  const chatCalls = [];
+  const fetchStub = async (url, init) => {
+    if (!String(url).endsWith('/chat')) throw new Error(`unexpected sidecar url ${url}`);
+    chatCalls.push(JSON.parse(init.body));
+    return ndjsonResponse([{ type: 'finish', text: 'Sent.' }]);
+  };
+  const { windowTarget, document } = loadWebAppWithFakeDOM(app, {
+    __AI__: { port: 4222, available: true },
+    fetch: fetchStub,
+    TextDecoder,
+  });
+  windowTarget.PersonalNotes.hydrate({ thisMachine: 'studio-mac', notes: [], machines: [{ id: 'studio-mac' }] });
+
+  const input = document.getElementById('chat-input');
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+  const enter = extra => {
+    const event = { type: 'keydown', key: 'Enter', defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...extra };
+    input.dispatchEvent(event);
+    return event;
+  };
+
+  // macOS Japanese/Chinese/Korean input: this Enter commits the candidate, nothing more.
+  input.value = 'hello there';
+  const composing = enter({ isComposing: true });
+  await settle();
+  assert.equal(composing.defaultPrevented, false, 'the input method must keep its own Enter');
+  assert.equal(chatCalls.length, 0, 'a composition Enter must not post to /chat');
+  assert.equal(input.value, 'hello there', 'the in-progress composition must survive');
+
+  // Older WebKit reports the same key as keyCode 229 with no isComposing flag.
+  enter({ keyCode: 229 });
+  await settle();
+  assert.equal(chatCalls.length, 0, 'keyCode 229 must not post to /chat');
+  assert.equal(input.value, 'hello there');
+
+  // Shift+Enter is still a newline, never a send.
+  enter({ shiftKey: true });
+  await settle();
+  assert.equal(chatCalls.length, 0, 'Shift+Enter must not post to /chat');
+
+  // The committed text still sends — the guard must not break the normal path.
+  const send = enter({});
+  await settle();
+  assert.equal(send.defaultPrevented, true);
+  assert.equal(chatCalls.length, 1, 'a plain Enter still sends');
+  assert.equal(chatCalls[0].prompt, 'hello there');
+  assert.equal(input.value, '', 'sending clears the composer');
+});
+
 test('web navigation: chat is a header button, labels manage in Settings, machines dropdown on top', async () => {
   const html = await readFile(join(repoRoot, 'web', 'index.html'), 'utf8');
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
@@ -933,6 +1011,14 @@ test('web navigation: chat is a header button, labels manage in Settings, machin
   assert.match(html, /id="slash-menu"/);
   assert.doesNotMatch(html, /id="md-toolbar"|class="toolbar"/);
   assert.match(html, /id="chat-page"/);
+  assert.match(html, /id="chat-more"/);
+  assert.match(html, /id="chat-view-toggle"/);
+  assert.match(html, /id="chat-panel-toggle"/);
+  assert.match(html, /id="chat-outputs"/);
+  assert.match(html, /id="chat-sources"/);
+  assert.match(html, /<textarea[^>]+id="chat-input"/);
+  assert.match(app, /Loaded a tool/);
+  assert.match(app, /Reading SKILL\.md/);
   // Labels MANAGEMENT page lives inside Settings; the sidebar keeps filter rows only.
   assert.match(html, /data-tab="labels"[^>]*id="labels-page-main"/);
   // Search is a Cmd+K popover, not a page or sidebar field.
@@ -2198,6 +2284,11 @@ test('MCP server speaks spec newline-delimited stdio framing (standard clients)'
     arguments: { title: 'NDJSON Note', body: 'ndjson body', targetMachine: 'studio-mac' },
   });
   assert.equal(parseToolText(created).title, 'NDJSON Note');
+  const events = await createdEvents(root);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].data.noteId, parseToolText(created).id);
+  assert.equal(JSON.stringify(events).includes('NDJSON Note'), false);
+  assert.equal(JSON.stringify(events).includes('ndjson body'), false);
 
   const listed = await client.send(4, 'tools/call', { name: 'notes_list', arguments: {} });
   assert.equal(parseToolText(listed).items.length, 1);
@@ -2401,6 +2492,19 @@ test('native destructive bridge actions require confirmed payloads', async () =>
   assert.match(swift, /case "delete":\s+guard allowDestructive\(action\) else \{ return \}/);
 });
 
+test('web duplicate routes through the native create boundary before its follow-up save', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  const swift = await readFile(join(repoRoot, 'Sources', 'PersonalNotesApp', 'main.swift'), 'utf8');
+  const quickCreate = app.slice(app.indexOf('function quickCreate'), app.indexOf('// Escape a string'));
+  const duplicate = app.slice(app.indexOf('function duplicateNote'), app.indexOf('function copyNoteText'));
+  assert.match(duplicate, /quickCreate\(/);
+  assert.match(quickCreate, /postNative\('create', serializeNote\(note\)\)/);
+  assert.match(duplicate, /postNative\('save', serializeNote\(dup\)\)/);
+  assert.match(swift, /case "create": changed = bridge\.save\(note\.dict, isCreate: true\)/);
+  assert.match(swift, /case "save":\s+changed = bridge\.save\(note\.dict, isCreate: false\)/);
+  assert.match(swift, /let shouldEmitCreate = isCreate && !FileManager\.default\.fileExists/);
+});
+
 test('native window drag strip spans full header band and honors web-reported control rects', async () => {
   const swift = await readFile(join(repoRoot, 'Sources', 'PersonalNotesApp', 'main.swift'), 'utf8');
   const dragClass = swift.match(/final class WindowDragStrip: NSView \{[\s\S]*?\n\}/)?.[0] || '';
@@ -2507,6 +2611,8 @@ test('recording and realtime transcription contracts are exposed to UI/native ho
   const buildScript = await readFile(join(repoRoot, 'scripts', 'build_personalnotes.sh'), 'utf8');
   assert.match(buildScript, /\$RESOURCES\/tools/);
   assert.match(buildScript, /notes-agent\.mjs/);
+  assert.match(buildScript, /notes-events\.mjs/);
+  assert.match(buildScript, /node_modules\/@hasna\/events/);
 });
 
 test('sidecar keeps bounded and realtime transcription models in separate slots', async (t) => {

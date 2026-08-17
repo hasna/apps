@@ -36,6 +36,7 @@ import {
   CHAT_TOOL_SCHEMAS,
   runNotesAgent,
 } from '../tools/notes-agent.mjs';
+import { notesEventsStatus, reconcileNoteCreatedEvents } from '../tools/notes-events.mjs';
 
 const DEFAULT_LIMIT = 10;
 
@@ -72,6 +73,7 @@ Usage:
   personalnotes labels assign <note-id> <name>
   personalnotes labels unassign <note-id> <name>
   personalnotes title <id> [--apply] [--force] [--sidecar http://127.0.0.1:8765] [--sidecar-token token] [--json]
+  personalnotes events status [--json]
 
 Data root defaults to ${dataRoot()} and can be overridden with PERSONALNOTES_ROOT (or the legacy HASNA_NOTES_ROOT).`;
 }
@@ -253,7 +255,7 @@ async function commandCreate(opts) {
     titleContentFingerprint: '',
     createdAt: now,
     updatedAt: now,
-  });
+  }, dataRoot(), { eventContext: { kind: 'created', writer: 'cli' } });
   if (opts.label?.length) await saveLabelList([...(await loadLabelList()), ...opts.label]);
   if (opts.json) return jsonOut(note);
   lineOut(noteSummary(note));
@@ -548,6 +550,7 @@ async function commandAgent(args, opts) {
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   const opts = parseArgs(rest);
+  await reconcileNoteCreatedEvents(dataRoot()).catch(() => null);
   if (!cmd || cmd === 'help' || opts.help) {
     lineOut(usage());
     return;
@@ -569,6 +572,12 @@ async function main() {
   if (cmd === 'settings') return commandSettings(opts._[0], opts._.slice(1), opts);
   if (cmd === 'labels') return commandLabels(opts._[0], opts._.slice(1), opts);
   if (cmd === 'title') return commandTitle(opts._[0], opts);
+  if (cmd === 'events' && opts._[0] === 'status') {
+    const status = await notesEventsStatus(dataRoot());
+    if (opts.json) return jsonOut(status);
+    for (const [key, value] of Object.entries(status)) lineOut(`${key}: ${value}`);
+    return;
+  }
   if (cmd === 'agent' || cmd === 'chat') return commandAgent(opts._, opts);
   throw new Error('unknown_command');
 }

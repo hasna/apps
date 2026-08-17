@@ -40,6 +40,22 @@ async function readTree(dir, files = []) {
   return files;
 }
 
+// UI-surface guard: the repo ships exactly ONE browser UI — `web/`, the directory
+// README.md documents as "The app UI" and scripts/build_personalnotes.sh bundles into
+// Resources/web. A second HTML surface elsewhere in the tree is either dead code or a
+// rival "app UI", and either way readers can no longer tell which one is real. The
+// branding half of the guard is the public-repo counterpart: this is an MIT-licensed
+// OSS repo, so a shipped page must present itself as PersonalNotes and never carry
+// another vendor's product name.
+
+const HTML_FILE = /\.html$/;
+const UI_DIR = 'web';
+const PRODUCT_NAME = 'PersonalNotes';
+
+async function readHtmlTree() {
+  return (await readTree(ROOT)).filter((file) => HTML_FILE.test(file));
+}
+
 describe('oss hygiene', () => {
   test('repo contains no internal machine names, fleet hosts, or private paths', async () => {
     const self = new URL(import.meta.url).pathname;
@@ -53,6 +69,25 @@ describe('oss hygiene', () => {
           if (re.test(line)) violations.push(`${relative(ROOT, file)}:${i + 1} [${name}] ${line.trim().slice(0, 120)}`);
         });
       }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  test(`every HTML surface lives under ${UI_DIR}/ — the one documented app UI`, async () => {
+    const strays = (await readHtmlTree())
+      .map((file) => relative(ROOT, file))
+      .filter((file) => !file.startsWith(`${UI_DIR}/`));
+    expect(strays).toEqual([]);
+  });
+
+  test(`every HTML surface is branded ${PRODUCT_NAME}, not another vendor's product`, async () => {
+    const violations = [];
+    for (const file of await readHtmlTree()) {
+      const text = await readFile(file, 'utf8');
+      const title = text.match(/<title>([\s\S]*?)<\/title>/i);
+      const where = relative(ROOT, file);
+      if (!title) violations.push(`${where} [no <title>]`);
+      else if (!title[1].includes(PRODUCT_NAME)) violations.push(`${where} [foreign product title] ${title[1].trim()}`);
     }
     expect(violations).toEqual([]);
   });

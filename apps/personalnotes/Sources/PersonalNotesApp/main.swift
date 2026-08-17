@@ -606,11 +606,13 @@ final class NotesBridge: @unchecked Sendable {
     let store = MarkdownStore()
     let labelStore: LabelStore
     let settingsStore: SettingsStore
+    let noteCreatedEvents: NoteCreatedEventSpool
     let thisMachine: String
 
     init() {
         self.labelStore = LabelStore(root: store.rootURL)
         self.settingsStore = SettingsStore(root: store.rootURL)
+        self.noteCreatedEvents = NoteCreatedEventSpool(root: store.rootURL)
         // The BOOT payload's `thisMachine` and every new note's `machine:` field
         // share ONE stable identity — `Note.currentMachine` ($PERSONALNOTES_MACHINE
         // → sync client config `machine` → short hostname). The old cosmetic
@@ -775,8 +777,38 @@ final class NotesBridge: @unchecked Sendable {
     @discardableResult
     func save(_ dict: [String: Any], isCreate: Bool) -> Bool {
         let n = note(from: dict, isCreate: isCreate)
-        do { try store.save(n); return true }
-        catch { NSLog("PersonalNotes: save failed: \(error.localizedDescription)"); return false }
+        let shouldEmitCreate = isCreate && !FileManager.default.fileExists(atPath: store.fileURL(for: n.id).path)
+        var hasIntent = false
+        if shouldEmitCreate {
+            do {
+                try noteCreatedEvents.beginCreate(n)
+                hasIntent = true
+            } catch {
+                // A create must not commit without a durable metadata-only
+                // intent in either the canonical or fallback location.
+                NSLog("PersonalNotes: create intent unavailable")
+                return false
+            }
+        }
+        do {
+            try store.save(n)
+        } catch {
+            if hasIntent { noteCreatedEvents.cancelCreate(n.id) }
+            NSLog("PersonalNotes: save failed: \(error.localizedDescription)")
+            return false
+        }
+        if shouldEmitCreate && !noteCreatedEvents.commitCreate(n) {
+            NSLog("PersonalNotes: note.created pending reconciliation")
+        }
+        return true
+    }
+
+    func reconcileNoteCreatedEvents() {
+        do {
+            _ = try noteCreatedEvents.reconcile(store: store)
+        } catch {
+            NSLog("PersonalNotes: note.created reconciliation pending")
+        }
     }
 
     @discardableResult
@@ -1029,6 +1061,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         // Spawn the AI sidecar first so we know its port + availability before injecting
         // the `__AI__` boot flag below. Never blocks UI; failure just disables AI features.
         sidecar.start()
+
+        // One startup reconciliation, serialized ahead of all later note
+        // mutations. This replaces the retired continuous polling watcher.
+        let startupBridge = bridge
+        notesQueue.async {
+            startupBridge.reconcileNoteCreatedEvents()
+        }
 
         // Background sync: keeps the store fresh while the app is open by
         // running the bundled CLI sync on a timer (never on the main thread).

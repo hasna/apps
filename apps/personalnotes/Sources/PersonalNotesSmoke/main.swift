@@ -1,3 +1,5 @@
+import CryptoKit
+import Darwin
 import Foundation
 import PersonalNotesCore
 
@@ -7,6 +9,53 @@ import PersonalNotesCore
 
 final class Counter { var failures = 0 }
 let counter = Counter()
+
+enum InjectedSmokeError: Error {
+    case enumeration
+    case read
+}
+
+func noteCreatedIdentity(_ note: Note) -> String {
+    "notes:note:\(note.id.uuidString.lowercased()):created"
+}
+
+func noteCreatedPayload(_ note: Note) throws -> Data {
+    let noteID = note.id.uuidString.lowercased()
+    let createdAt = MarkdownStore.iso8601(note.createdAt)
+    let identity = noteCreatedIdentity(note)
+    let event: [String: Any] = [
+        "id": identity,
+        "source": "notes",
+        "type": "note.created",
+        "time": createdAt,
+        "subject": "note:\(noteID)",
+        "severity": "info",
+        "data": [
+            "noteId": noteID,
+            "createdAt": createdAt,
+            "originMachine": note.machine.isEmpty ? "unknown" : note.machine,
+        ],
+        "dedupeKey": identity,
+        "schemaVersion": "notes.v1",
+        "metadata": [:] as [String: Any],
+    ]
+    var payload = try JSONSerialization.data(withJSONObject: event, options: [.sortedKeys])
+    payload.append(0x0a)
+    return payload
+}
+
+func noteCreatedSpoolName(_ note: Note) -> String {
+    let hash = SHA256.hash(data: Data(noteCreatedIdentity(note).utf8))
+        .map { String(format: "%02x", $0) }.joined()
+    return "\(hash).json"
+}
+
+func finalSpoolFiles(_ root: URL) throws -> [URL] {
+    let inbox = root.appendingPathComponent("events/spool/inbox", isDirectory: true)
+    guard FileManager.default.fileExists(atPath: inbox.path) else { return [] }
+    return try FileManager.default.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil)
+        .filter { $0.pathExtension == "json" }
+}
 
 @MainActor
 func check(_ condition: Bool, _ message: String) {
@@ -548,6 +597,197 @@ do {
         """
         let parsed = MarkdownStore.parse(withEmpty, fallbackID: id)
         check(parsed?.labels == ["real", "another"], "empty legacy tag element pruned into labels (got: \(parsed?.labels ?? []))")
+    }
+
+    print("== durable note.created spool / clean baseline / crash recovery ==")
+    do {
+        let eventsRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("personalnotes-events-smoke-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: eventsRoot) }
+        let eventsStore = MarkdownStore(root: eventsRoot)
+        let publisher = NoteCreatedEventSpool(root: eventsRoot)
+
+        let historical = Note(title: "Historical private title", machine: "history-machine", body: "historical private body")
+        try eventsStore.save(historical)
+        let baseline = try publisher.reconcile(store: eventsStore)
+        check(baseline.establishedBaseline, "first reconciliation establishes a clean baseline")
+        let inbox = eventsRoot.appendingPathComponent("events/spool/inbox")
+        let baselineFiles = (try? FileManager.default.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil)) ?? []
+        check(baselineFiles.filter { $0.pathExtension == "json" }.isEmpty,
+              "historical notes are not emitted during baseline")
+
+        let created = Note(title: "Private title", machine: "origin-machine", body: "private body")
+        try publisher.beginCreate(created)
+        let intent = eventsRoot.appendingPathComponent(
+            "events/notes-note-created/intents/\(created.id.uuidString.lowercased()).json"
+        )
+        let intentPayload = try String(contentsOf: intent, encoding: .utf8)
+        check(!intentPayload.contains("Private title") && !intentPayload.contains("private body"),
+              "native create intent excludes note title and body")
+        try eventsStore.save(created)
+        check(publisher.commitCreate(created), "native create publishes to the durable spool")
+        let createdFiles = try FileManager.default.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
+        check(createdFiles.count == 1, "one create produces one immutable spool record")
+        let payload = try String(contentsOf: createdFiles[0], encoding: .utf8)
+        check(payload.contains(#""source":"notes""#) && payload.contains(#""type":"note.created""#),
+              "spool record uses exact notes/note.created routing")
+        check(payload.contains(#""schemaVersion":"notes.v1""#), "spool record uses notes.v1")
+        check(!payload.contains("Private title") && !payload.contains("private body"),
+              "spool record excludes note title and body")
+
+        let crashRecovered = Note(title: "Crash private title", machine: "recovery-machine", body: "crash private body")
+        try publisher.beginCreate(crashRecovered)
+        try eventsStore.save(crashRecovered)
+        let recovered = try publisher.reconcile(store: eventsStore)
+        check(recovered.enqueued == 1, "startup reconciliation recovers save-before-spool crash")
+        let afterRecovery = try FileManager.default.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
+        check(afterRecovery.count == 2, "recovery adds exactly one stable event")
+        let retry = try publisher.reconcile(store: eventsStore)
+        check(retry.enqueued == 0, "reconciliation replay does not duplicate events")
+    }
+
+    print("== strict 327-note baseline is fail-closed on partial snapshots ==")
+    do {
+        let strictRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("personalnotes-strict-events-smoke-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: strictRoot) }
+        let strictStore = MarkdownStore(root: strictRoot)
+        let strictPublisher = NoteCreatedEventSpool(root: strictRoot)
+        for index in 0..<327 {
+            try strictStore.save(Note(
+                title: "Historical private title \(index)",
+                machine: "history-machine",
+                body: "Historical private body \(index)"
+            ))
+        }
+
+        var enumerationRejected = false
+        do {
+            _ = try strictPublisher.reconcile(store: strictStore, strictLoader: { store in
+                try store.loadAllStrict(listFiles: { _ in throw InjectedSmokeError.enumeration })
+            })
+        } catch { enumerationRejected = true }
+        check(enumerationRejected, "strict reconciliation reports directory enumeration failure")
+
+        var reads = 0
+        var partialReadRejected = false
+        do {
+            _ = try strictPublisher.reconcile(store: strictStore, strictLoader: { store in
+                try store.loadAllStrict(readFile: { url in
+                    reads += 1
+                    if reads == 164 { throw InjectedSmokeError.read }
+                    return try String(contentsOf: url, encoding: .utf8)
+                })
+            })
+        } catch { partialReadRejected = true }
+        check(partialReadRejected, "strict reconciliation reports an individual read failure")
+
+        var parseRejected = false
+        do {
+            _ = try strictPublisher.reconcile(store: strictStore, strictLoader: { store in
+                try store.loadAllStrict(parseNote: { _, _ in nil })
+            })
+        } catch { parseRejected = true }
+        check(parseRejected, "strict reconciliation reports an individual parse failure")
+
+        let baselineURL = strictRoot.appendingPathComponent("events/notes-note-created/baseline-v1.json")
+        check(!FileManager.default.fileExists(atPath: baselineURL.path),
+              "partial snapshots never establish a baseline")
+        check(try finalSpoolFiles(strictRoot).isEmpty,
+              "partial snapshots emit no historical events")
+
+        let recovered = try strictPublisher.reconcile(store: strictStore)
+        check(recovered.establishedBaseline && recovered.enqueued == 0,
+              "recovered strict snapshot baselines all 327 notes with zero events")
+        check(try strictStore.loadAllStrict().count == 327, "strict snapshot contains all 327 notes")
+        let seenURL = strictRoot.appendingPathComponent("events/notes-note-created/seen", isDirectory: true)
+        let seen = try FileManager.default.contentsOfDirectory(at: seenURL, includingPropertiesForKeys: nil)
+        check(seen.count == 327, "baseline records all 327 seen identities")
+
+        let created = Note(title: "Next private title", machine: "new-machine", body: "next private body")
+        try strictPublisher.beginCreate(created)
+        try strictStore.save(created)
+        check(strictPublisher.commitCreate(created), "first post-baseline create is published")
+        check(try finalSpoolFiles(strictRoot).count == 1, "first post-baseline create emits exactly one event")
+    }
+
+    print("== events-as-file obstruction uses fallback create intent ==")
+    do {
+        let fallbackRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("personalnotes-fallback-events-smoke-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: fallbackRoot) }
+        try FileManager.default.createDirectory(at: fallbackRoot, withIntermediateDirectories: true)
+        let obstruction = fallbackRoot.appendingPathComponent("events")
+        try Data("obstruction".utf8).write(to: obstruction)
+        let fallbackStore = MarkdownStore(root: fallbackRoot)
+        let fallbackPublisher = NoteCreatedEventSpool(root: fallbackRoot)
+        let created = Note(title: "Fallback private title", machine: "fallback-machine", body: "fallback private body")
+
+        try fallbackPublisher.beginCreate(created)
+        let fallbackDir = fallbackRoot.appendingPathComponent("notes/.note-created-intents", isDirectory: true)
+        let fallbackIntent = fallbackDir.appendingPathComponent("\(created.id.uuidString.lowercased()).json")
+        let fallbackPayload = try String(contentsOf: fallbackIntent, encoding: .utf8)
+        check(!fallbackPayload.contains(created.title) && !fallbackPayload.contains(created.body),
+              "fallback intent remains metadata-only")
+        let fallbackPermissions = try FileManager.default.attributesOfItem(atPath: fallbackDir.path)[.posixPermissions] as? NSNumber
+        let intentPermissions = try FileManager.default.attributesOfItem(atPath: fallbackIntent.path)[.posixPermissions] as? NSNumber
+        check(fallbackPermissions?.intValue == 0o700, "fallback intent directory is owner-only")
+        check(intentPermissions?.intValue == 0o600, "fallback intent file is owner-only")
+        try fallbackStore.save(created)
+        check(!fallbackPublisher.commitCreate(created), "obstructed canonical spool leaves fallback intent pending")
+        check(FileManager.default.fileExists(atPath: fallbackIntent.path), "fallback intent survives committed note save")
+
+        try FileManager.default.removeItem(at: obstruction)
+        let recovered = try fallbackPublisher.reconcile(store: fallbackStore)
+        check(recovered.establishedBaseline && recovered.enqueued == 1,
+              "recovery publishes fallback intent before first-run baseline")
+        check(try finalSpoolFiles(fallbackRoot).count == 1, "fallback recovery emits exactly one event")
+        check(!FileManager.default.fileExists(atPath: fallbackIntent.path), "fallback intent is removed after enqueue")
+        check(try fallbackPublisher.reconcile(store: fallbackStore).enqueued == 0,
+              "fallback recovery retry remains idempotent")
+    }
+
+    print("== stale native spool recovery reports link failures and collisions ==")
+    do {
+        let collisionRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("personalnotes-spool-collision-smoke-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: collisionRoot) }
+        let publisher = NoteCreatedEventSpool(root: collisionRoot)
+        try publisher.recoverStaleSpoolTemps(olderThan: 0)
+        let inbox = collisionRoot.appendingPathComponent("events/spool/inbox", isDirectory: true)
+        let fixture = Note(title: "Collision", machine: "collision-machine", body: "private")
+        let temp = inbox.appendingPathComponent(".tmp-stale-collision")
+        try noteCreatedPayload(fixture).write(to: temp)
+        let old = Date(timeIntervalSinceNow: -120)
+        try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: temp.path)
+        let final = inbox.appendingPathComponent(noteCreatedSpoolName(fixture))
+        try Data(#"{"id":"other","dedupeKey":"other"}"#.utf8).write(to: final)
+        var collisionReported = false
+        do { try publisher.recoverStaleSpoolTemps(olderThan: 0) }
+        catch { collisionReported = true }
+        check(collisionReported, "stale spool identity mismatch is reported")
+        check(FileManager.default.fileExists(atPath: temp.path), "collision leaves stale temp for inspection/retry")
+
+        let linkRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("personalnotes-spool-link-smoke-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: linkRoot) }
+        let failingPublisher = NoteCreatedEventSpool(root: linkRoot, linkOperation: { _, _ in
+            errno = EIO
+            return -1
+        })
+        try failingPublisher.recoverStaleSpoolTemps(olderThan: 0)
+        let failingInbox = linkRoot.appendingPathComponent("events/spool/inbox", isDirectory: true)
+        let linkFixture = Note(title: "Link error", machine: "link-machine", body: "private")
+        let failingTemp = failingInbox.appendingPathComponent(".tmp-stale-link-error")
+        try noteCreatedPayload(linkFixture).write(to: failingTemp)
+        try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: failingTemp.path)
+        var linkErrorReported = false
+        do { try failingPublisher.recoverStaleSpoolTemps(olderThan: 0) }
+        catch { linkErrorReported = true }
+        check(linkErrorReported, "non-EEXIST stale spool link failure is reported")
+        check(FileManager.default.fileExists(atPath: failingTemp.path), "link failure leaves stale temp for retry")
     }
 
 } catch {
