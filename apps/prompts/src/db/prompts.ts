@@ -1,8 +1,9 @@
-import { getDatabase, resolvePrompt } from "./database.js"
+import { getDatabase, resolvePrompt, hasContentlessFts } from "./database.js"
 import { generatePromptId, generateSlug, uniqueSlug } from "../lib/ids.js"
 import { ensureCollection } from "./collections.js"
 import { findDuplicates } from "../lib/duplicates.js"
 import { extractVariables } from "../lib/template.js"
+import { writePromptBodyObject, registerBodyObject, getBodyStore } from "../storage/bodies.js"
 import type {
   Prompt,
   SlimPrompt,
@@ -77,7 +78,30 @@ function rowToPrompt(row: Record<string, unknown>): Prompt {
   }
 }
 
-export function createPrompt(input: CreatePromptInput): Prompt {
+/**
+ * Feed the contentless FTS5 index for one prompt row at write time. The
+ * contentless table carries no triggers; the app feeds it with the current
+ * text. Contentless FTS5 cannot use the special 'delete' command, so the
+ * table is declared `contentless_delete=1` and rows are removed with a plain
+ * DELETE before the new text is indexed.
+ */
+export function feedContentlessFts(
+  promptId: string,
+  values: { name: string; slug: string; title: string; body: string; description: string; tags: string },
+): void {
+  const db = getDatabase()
+  if (!hasContentlessFts(db)) return
+  const row = db.query("SELECT rowid FROM prompts WHERE id = ?").get(promptId) as { rowid: number } | null
+  if (!row) return
+  db.run("DELETE FROM prompts_fts_contentless WHERE rowid = ?", [row.rowid])
+  db.run(
+    `INSERT INTO prompts_fts_contentless(rowid, name, slug, title, body, description, tags)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [row.rowid, values.name, values.slug, values.title, values.body, values.description, values.tags],
+  )
+}
+
+export async function createPrompt(input: CreatePromptInput): Promise<Prompt> {
   const db = getDatabase()
 
   const slug = input.slug
@@ -105,18 +129,32 @@ export function createPrompt(input: CreatePromptInput): Prompt {
   )
   const is_template = vars.length > 0 ? 1 : 0
 
+  // Object-first: write the immutable body object before the DB transaction.
+  const bodyRecord = await writePromptBodyObject(getBodyStore(), id, 1, input.body)
+
   db.run(
-    `INSERT INTO prompts (id, name, slug, title, body, description, collection, tags, variables, is_template, source, project_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, name, slug, input.title, input.body, input.description ?? null, collection, tags, variables, is_template, source, project_id]
+    `INSERT INTO prompts (id, name, slug, title, body, description, collection, tags, variables, is_template, source, project_id,
+      body_uri, body_sha256, body_bytes, body_media_type)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, name, slug, input.title, input.body, input.description ?? null, collection, tags, variables, is_template, source, project_id,
+      bodyRecord.uri, bodyRecord.sha256, bodyRecord.bytes, bodyRecord.mediaType]
   )
 
-  // Save initial version
+  // Save initial version (immutable body object reference retained).
   db.run(
-    `INSERT INTO prompt_versions (id, prompt_id, body, version, changed_by)
-     VALUES (?, ?, ?, 1, ?)`,
-    [generateId("VER"), id, input.body, input.changed_by ?? null]
+    `INSERT INTO prompt_versions (id, prompt_id, body, version, changed_by, body_uri, body_sha256, body_bytes)
+     VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
+    [generateId("VER"), id, input.body, input.changed_by ?? null, bodyRecord.uri, bodyRecord.sha256, bodyRecord.bytes]
   )
+  registerBodyObject(bodyRecord.uri, bodyRecord.sha256, bodyRecord.bytes, bodyRecord.mediaType)
+  feedContentlessFts(id, {
+    name,
+    slug,
+    title: input.title,
+    body: input.body,
+    description: input.description ?? "",
+    tags,
+  })
 
   return getPrompt(id)!
 }
@@ -220,7 +258,7 @@ export function listPromptsSlim(filter: ListPromptsFilter = {}): SlimPrompt[] {
   return rows.map(rowToSlimPrompt)
 }
 
-export function updatePrompt(idOrSlug: string, input: UpdatePromptInput): Prompt {
+export async function updatePrompt(idOrSlug: string, input: UpdatePromptInput): Promise<Prompt> {
   const db = getDatabase()
   const prompt = requirePrompt(idOrSlug)
 
@@ -229,10 +267,26 @@ export function updatePrompt(idOrSlug: string, input: UpdatePromptInput): Prompt
   const variables = JSON.stringify(vars.map((v) => ({ name: v, required: true })))
   const is_template = vars.length > 0 ? 1 : 0
 
+  // Object-first: when the body changes, write the immutable object for the
+  // next version before the DB transaction.
+  let nextBodyUri: string | null = null
+  let nextBodySha256: string | null = null
+  let nextBodyBytes: number | null = null
+  if (input.body && input.body !== prompt.body) {
+    const bodyRecord = await writePromptBodyObject(getBodyStore(), prompt.id, prompt.version + 1, input.body)
+    nextBodyUri = bodyRecord.uri
+    nextBodySha256 = bodyRecord.sha256
+    nextBodyBytes = bodyRecord.bytes
+  }
+
   const updated = db.run(
     `UPDATE prompts SET
       title = COALESCE(?, title),
       body = COALESCE(?, body),
+      body_uri = CASE WHEN ? IS NOT NULL THEN ? ELSE body_uri END,
+      body_sha256 = CASE WHEN ? IS NOT NULL THEN ? ELSE body_sha256 END,
+      body_bytes = CASE WHEN ? IS NOT NULL THEN ? ELSE body_bytes END,
+      body_media_type = CASE WHEN ? IS NOT NULL THEN ? ELSE body_media_type END,
       description = COALESCE(?, description),
       collection = COALESCE(?, collection),
       tags = COALESCE(?, tags),
@@ -245,6 +299,14 @@ export function updatePrompt(idOrSlug: string, input: UpdatePromptInput): Prompt
     [
       input.title ?? null,
       input.body ?? null,
+      nextBodyUri,
+      nextBodyUri,
+      nextBodySha256,
+      nextBodySha256,
+      nextBodyBytes,
+      nextBodyBytes,
+      nextBodyUri !== null ? "text/markdown" : null,
+      nextBodyUri !== null ? "text/markdown" : null,
       input.description ?? null,
       input.collection ?? null,
       input.tags ? JSON.stringify(input.tags) : null,
@@ -262,11 +324,24 @@ export function updatePrompt(idOrSlug: string, input: UpdatePromptInput): Prompt
   // Save version snapshot if body changed
   if (input.body && input.body !== prompt.body) {
     db.run(
-      `INSERT INTO prompt_versions (id, prompt_id, body, version, changed_by)
-       VALUES (?, ?, ?, ?, ?)`,
-      [generateId("VER"), prompt.id, input.body, prompt.version + 1, input.changed_by ?? null]
+      `INSERT INTO prompt_versions (id, prompt_id, body, version, changed_by, body_uri, body_sha256, body_bytes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [generateId("VER"), prompt.id, input.body, prompt.version + 1, input.changed_by ?? null,
+        nextBodyUri, nextBodySha256, nextBodyBytes]
     )
+    if (nextBodyUri) {
+      registerBodyObject(nextBodyUri, nextBodySha256!, nextBodyBytes!, "text/markdown")
+    }
   }
+
+  feedContentlessFts(prompt.id, {
+    name: prompt.name,
+    slug: prompt.slug,
+    title: input.title ?? prompt.title,
+    body: newBody,
+    description: input.description ?? prompt.description ?? "",
+    tags: input.tags ? JSON.stringify(input.tags) : JSON.stringify(prompt.tags),
+  })
 
   return requirePrompt(prompt.id)
 }
@@ -329,13 +404,13 @@ export function pinPrompt(idOrSlug: string, pinned: boolean): Prompt {
   return requirePrompt(prompt.id)
 }
 
-export function upsertPrompt(input: CreatePromptInput, force = false): { prompt: Prompt; created: boolean; duplicate_warning?: string } {
+export async function upsertPrompt(input: CreatePromptInput, force = false): Promise<{ prompt: Prompt; created: boolean; duplicate_warning?: string }> {
   const db = getDatabase()
   const slug = input.slug || generateSlug(input.title)
   const existing = db.query("SELECT id FROM prompts WHERE slug = ?").get(slug) as { id: string } | null
 
   if (existing) {
-    const prompt = updatePrompt(existing.id, {
+    const prompt = await updatePrompt(existing.id, {
       title: input.title,
       body: input.body,
       description: input.description,
@@ -356,7 +431,7 @@ export function upsertPrompt(input: CreatePromptInput, force = false): { prompt:
     }
   }
 
-  const prompt = createPrompt({ ...input, slug })
+  const prompt = await createPrompt({ ...input, slug })
   return { prompt, created: true, duplicate_warning }
 }
 

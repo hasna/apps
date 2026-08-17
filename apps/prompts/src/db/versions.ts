@@ -1,5 +1,7 @@
 import { getDatabase } from "./database.js"
 import { generateId } from "../lib/ids.js"
+import { writePromptBodyObject, registerBodyObject, getBodyStore } from "../storage/bodies.js"
+import { feedContentlessFts } from "./prompts.js"
 import type { PromptVersion } from "../types/index.js"
 import { PromptNotFoundError } from "../types/index.js"
 
@@ -31,7 +33,7 @@ export function getVersion(promptId: string, version: number): PromptVersion | n
   return rowToVersion(row)
 }
 
-export function restoreVersion(promptId: string, version: number, changedBy?: string): void {
+export async function restoreVersion(promptId: string, version: number, changedBy?: string): Promise<void> {
   const db = getDatabase()
   const ver = getVersion(promptId, version)
   if (!ver) throw new PromptNotFoundError(`${promptId}@v${version}`)
@@ -41,16 +43,36 @@ export function restoreVersion(promptId: string, version: number, changedBy?: st
 
   const newVersion = current.version + 1
 
+  // Object-first: restore writes a new immutable object for the next version.
+  const bodyRecord = await writePromptBodyObject(getBodyStore(), promptId, newVersion, ver.body)
+
   db.run(
-    `UPDATE prompts SET body = ?, version = ?, updated_at = datetime('now'),
+    `UPDATE prompts SET body = ?, version = ?, body_uri = ?, body_sha256 = ?, body_bytes = ?, body_media_type = ?,
+     updated_at = datetime('now'),
      is_template = (CASE WHEN body LIKE '%{{%' THEN 1 ELSE 0 END)
      WHERE id = ?`,
-    [ver.body, newVersion, promptId]
+    [ver.body, newVersion, bodyRecord.uri, bodyRecord.sha256, bodyRecord.bytes, bodyRecord.mediaType, promptId]
   )
 
   db.run(
-    `INSERT INTO prompt_versions (id, prompt_id, body, version, changed_by)
-     VALUES (?, ?, ?, ?, ?)`,
-    [generateId("VER"), promptId, ver.body, newVersion, changedBy ?? null]
+    `INSERT INTO prompt_versions (id, prompt_id, body, version, changed_by, body_uri, body_sha256, body_bytes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [generateId("VER"), promptId, ver.body, newVersion, changedBy ?? null,
+      bodyRecord.uri, bodyRecord.sha256, bodyRecord.bytes]
   )
+  registerBodyObject(bodyRecord.uri, bodyRecord.sha256, bodyRecord.bytes, bodyRecord.mediaType)
+
+  const updated = db
+    .query("SELECT name, slug, title, body, description, tags FROM prompts WHERE id = ?")
+    .get(promptId) as { name: string; slug: string; title: string; body: string; description: string | null; tags: string } | null
+  if (updated) {
+    feedContentlessFts(promptId, {
+      name: updated.name,
+      slug: updated.slug,
+      title: updated.title,
+      body: updated.body,
+      description: updated.description ?? "",
+      tags: updated.tags,
+    })
+  }
 }

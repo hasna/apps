@@ -259,7 +259,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "testers", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #95 after the original census." },
   { member: "orgs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "pixels", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #69." },
-  { member: "prompts", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "releases", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "repos", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "router", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -438,11 +437,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "pixels",
     cause: "surface_matrix: missing supported surface declarations or eligible waivers: api, sdk, mcp; published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Imported by the delta lane from the org-side manifest (kitVersion 0.10.6, no pinned dep); alignment owned by the manifest lane.",
     task: "todos 41208cbe (manifest lane — align imported pixels manifest)",
-  },
-  {
-    member: "prompts",
-    cause: "surface_matrix (api/sdk missing or unwaived) and service_api_topology (a supported API surface is required). (The earlier self_host_artifact and storage_capabilities causes no longer fire at main.)",
-    task: "todos eb3f331d (contracts task — prompts)",
   },
   {
     member: "search",

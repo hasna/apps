@@ -139,27 +139,45 @@ bulk selection.
 
 ## Storage
 
-The authoritative store is local SQLite. Data is stored in
-`~/.hasna/prompts/prompts.db` by default. A legacy `~/.prompts/` directory is
-migrated during normal database startup when the destination allows it.
+A prompts client has exactly two connections: the on-box SQLite store plus a
+local markdown body folder, or the hosted HTTP API. A server has exactly two
+backends: SQLite or PostgreSQL. There is no storage-mode enum.
+
+**Clients** select the hosted API when `HASNA_PROMPTS_API_URL` and
+`HASNA_PROMPTS_API_KEY` are both set (an API URL without its key fails
+closed); without the URL they use local SQLite. A client never opens
+PostgreSQL directly and never receives S3 credentials.
+
+**Servers** (`prompts-serve`) select PostgreSQL when
+`HASNA_PROMPTS_DATABASE_URL` is set, and SQLite otherwise. Prompt bodies are
+immutable markdown objects at `prompts/<id>/versions/<version>.md`, stored in
+a local folder (`HASNA_PROMPTS_BODY_PATH`, default next to the database) or in
+S3 (`HASNA_PROMPTS_S3_BUCKET`, `HASNA_PROMPTS_S3_PREFIX`,
+`HASNA_PROMPTS_AWS_REGION`). The API signing secret is
+`HASNA_PROMPTS_API_SIGNING_KEY`.
+
+The retired `local|auto|remote` storage-mode variables
+(`HASNA_PROMPTS_STORAGE_MODE`, `PROMPTS_STORAGE_MODE`) and the retired
+registry diagnostics variables (`PROMPTS_REGISTRY_POSTGRES_URL`,
+`PROMPTS_REGISTRY_S3_BUCKET`, `PROMPTS_REGISTRY_AWS_REGION`) are rejected
+fail-loudly and must be unset.
+
+Other variables:
 
 - `HASNA_PROMPTS_DB_PATH` or `PROMPTS_DB_PATH` selects a custom database.
 - `PROMPTS_DB_SCOPE=project` selects `.prompts/prompts.db` at the nearest Git
   root.
-- `HASNA_PROMPTS_STORAGE_MODE` or `PROMPTS_STORAGE_MODE` accepts `local`,
-  `auto`, or `remote`.
-- `PROMPTS_REGISTRY_POSTGRES_URL`, `PROMPTS_REGISTRY_S3_BUCKET`, and
-  `PROMPTS_REGISTRY_AWS_REGION` are detected for diagnostics only.
 - `PROMPTS_SAVE_MEMENTOS=1` enables best-effort prompt-use memories when the
   optional `@hasna/mementos` package is available.
 
-`auto` and `remote` report remote intent, but reads and writes still fall back
-to local SQLite because this package does not provide a remote registry
-runtime. Inspect the active boundary without exposing configured values:
+Inspect the selected stores and migration state without exposing configured
+values:
 
 ```bash
-prompts storage
-prompts --json storage
+prompts storage status
+prompts storage migrate --dry-run     # inline -> object migration plan
+prompts storage migrate --apply       # requires a matching dry-run
+prompts storage reconcile             # drift report; never a silent repair
 ```
 
 The package does not provision buckets, secrets, roles, migrations,

@@ -9,7 +9,8 @@ import { listCollections, ensureCollection, movePrompt } from "../db/collections
 import { registerAgent, listAgents, heartbeatAgent, setAgentFocus } from "../db/agents.js"
 import { createProject, getProject, listProjects, deleteProject } from "../db/projects.js"
 import { resolveProject } from "../db/database.js"
-import { getDatabase, getPromptRegistryDiagnostics } from "../db/database.js"
+import { getDatabase } from "../db/database.js"
+import { storageStatus } from "../storage/status.js"
 import { searchPrompts, searchPromptsSlim, findSimilar } from "../lib/search.js"
 import { renderTemplate, extractVariableInfo, validateVars } from "../lib/template.js"
 import { importFromJson, exportToJson, scanAndImportSlashCommands } from "../lib/importer.js"
@@ -80,7 +81,7 @@ server.registerTool(
         if (!pid) return err(`Project not found: ${project}`)
         ;(input as typeof input & { project_id?: string }).project_id = pid
       }
-      const { prompt, created, duplicate_warning } = upsertPrompt(input, force ?? false)
+      const { prompt, created, duplicate_warning } = await upsertPrompt(input, force ?? false)
       return ok(promptToSaveResult(prompt, created, duplicate_warning))
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e))
@@ -408,7 +409,7 @@ server.registerTool(
     try {
       const prompt = getPrompt(id)
       if (!prompt) return err(`Prompt not found: ${id}`)
-      restoreVersion(prompt.id, version, changed_by)
+      await restoreVersion(prompt.id, version, changed_by)
       return ok({ restored: true, id: prompt.id, version })
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e))
@@ -449,7 +450,7 @@ server.registerTool(
     },
   },
   async ({ prompts, changed_by }) => {
-    const results = importFromJson(prompts, changed_by)
+    const results = await importFromJson(prompts, changed_by)
     return ok(results)
   }
 )
@@ -531,7 +532,7 @@ server.registerTool(
   },
   async ({ dir, changed_by }) => {
     const rootDir = dir ?? process.cwd()
-    const result = scanAndImportSlashCommands(rootDir, changed_by)
+    const result = await scanAndImportSlashCommands(rootDir, changed_by)
     return ok(result)
   }
 )
@@ -553,7 +554,7 @@ server.registerTool(
   },
   async ({ id, ...updates }) => {
     try {
-      const prompt = updatePrompt(id, updates)
+      const prompt = await updatePrompt(id, updates)
       return ok(promptToSaveResult(prompt, false))
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e))
@@ -631,7 +632,7 @@ server.registerTool(
         if (!pid) return err(`Project not found: ${project}`)
         project_id = pid
       }
-      const { prompt, created } = upsertPrompt({
+      const { prompt, created } = await upsertPrompt({
         title,
         body,
         slug,
@@ -732,7 +733,7 @@ server.registerTool(
     try {
       const source = getPrompt(id)
       if (!source) return err(`Prompt not found: ${id}`)
-      const { prompt } = upsertPrompt({
+      const { prompt } = await upsertPrompt({
         title: title ?? `Copy of ${source.title}`,
         slug,
         body: source.body,
@@ -920,10 +921,10 @@ server.registerTool(
 server.registerTool(
   "prompts_storage_diagnostics",
   {
-    description: "Report prompt registry storage mode, local SQLite path, remote Postgres/S3/AWS configuration presence, and local fallback behavior without exposing configured values.",
+    description: "Report prompts client transport, server backend, body store, and migration state without exposing configured values.",
     inputSchema: {},
   },
-  async () => ok(getPromptRegistryDiagnostics())
+  async () => ok(await storageStatus())
 )
 
 // ── prompts_project_create ────────────────────────────────────────────────────
@@ -1230,7 +1231,7 @@ server.registerTool(
         let tags = [...prompt.tags]
         for (const t of add) { if (!tags.includes(t)) tags.push(t) }
         for (const t of remove) { tags = tags.filter((x) => x !== t) }
-        updatePrompt(prompt.id, { tags })
+        await updatePrompt(prompt.id, { tags })
         results.push({ id: prompt.id, slug: prompt.slug, tags })
       } catch { /* skip failed */ }
     }

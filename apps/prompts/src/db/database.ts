@@ -1,140 +1,34 @@
 import { Database } from "bun:sqlite"
 import { join } from "path"
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs"
+import { resolveServerDataBackend, type ServerDataBackend } from "../generated/storage-kit/backend.js"
+import { assertNoRetiredPromptsStorageSelector } from "../client-transport.js"
 
 let _db: Database | null = null
 
-export type PromptsStorageMode = "local" | "auto" | "remote"
-export type PromptsActiveStorage = "local-sqlite"
-export type PromptsRegistryState =
-  | "local-only"
-  | "remote-configured-local-fallback"
-  | "remote-requested-local-fallback"
-
-export interface PromptRegistryDiagnostics {
-  requested_mode: PromptsStorageMode
-  active_storage: PromptsActiveStorage
-  registry_state: PromptsRegistryState
-  local: {
-    db_path: string
-    scope: "home" | "project" | "custom"
-    storage: "SQLite"
-  }
-  remote: {
-    requested: boolean
-    configured: boolean
-    postgres: {
-      configured: boolean
-      env: "PROMPTS_REGISTRY_POSTGRES_URL"
-    }
-    object_storage: {
-      configured: boolean
-      provider: "s3" | "none"
-      bucket_configured: boolean
-      bucket_env: "PROMPTS_REGISTRY_S3_BUCKET"
-    }
-    aws: {
-      region_configured: boolean
-      region_env: "PROMPTS_REGISTRY_AWS_REGION"
-    }
-  }
-  sync: {
-    strategy: "local-first"
-    reads: "local SQLite"
-    writes: "local SQLite"
-    remote_mutation: false
-    reason: string
-  }
-  warnings: string[]
+/**
+ * The one technical server switch, per the canonical two-backend contract:
+ * HASNA_PROMPTS_DATABASE_URL present -> postgresql; absent -> sqlite. There is
+ * no local|auto|remote mode enum. Retired selector variables fail loudly via
+ * the storage-kit backend resolver and the prompts ratchet.
+ */
+export function resolveServerBackend(env: NodeJS.ProcessEnv = process.env): ServerDataBackend {
+  return resolveServerDataBackend("prompts", env).backend
 }
 
 export interface DbPathOptions {
   migrateLegacy?: boolean
 }
 
-const supportedStorageModes = new Set<PromptsStorageMode>(["local", "auto", "remote"])
-
-export function resolveStorageMode(): PromptsStorageMode {
-  const raw = process.env["HASNA_PROMPTS_STORAGE_MODE"] ?? process.env["PROMPTS_STORAGE_MODE"] ?? "local"
-  const mode = raw.trim().toLowerCase()
-  if (!supportedStorageModes.has(mode as PromptsStorageMode)) {
-    throw new Error(
-      `Unsupported prompts storage mode "${raw}". Supported modes are local, auto, and remote; remote registry settings currently fall back to local SQLite.`
-    )
-  }
-  return mode as PromptsStorageMode
-}
-
-export function getPromptRegistryDiagnostics(): PromptRegistryDiagnostics {
-  const requestedMode = resolveStorageMode()
-  const dbPath = getDbPath({ migrateLegacy: false })
-  const remotePostgresConfigured = Boolean(process.env["PROMPTS_REGISTRY_POSTGRES_URL"])
-  const bucketConfigured = Boolean(process.env["PROMPTS_REGISTRY_S3_BUCKET"])
-  const regionConfigured = Boolean(process.env["PROMPTS_REGISTRY_AWS_REGION"])
-  const remoteConfigured = remotePostgresConfigured || bucketConfigured || regionConfigured
-  const remoteRequested = requestedMode === "remote" || (requestedMode === "auto" && remoteConfigured)
-
-  const registryState: PromptsRegistryState =
-    !remoteRequested
-      ? "local-only"
-      : remoteConfigured
-        ? "remote-configured-local-fallback"
-        : "remote-requested-local-fallback"
-
-  const reason =
-    registryState === "local-only"
-      ? "Local mode is active, so reads and writes use the local SQLite store."
-      : registryState === "remote-configured-local-fallback"
-        ? "Remote registry configuration is present, but this package has not been given a prompts-owned remote runtime, so reads and writes stay local."
-        : "Remote mode was requested without remote registry configuration, so reads and writes stay local."
-
-  return {
-    requested_mode: requestedMode,
-    active_storage: "local-sqlite",
-    registry_state: registryState,
-    local: {
-      db_path: dbPath,
-      scope: resolveLocalScope(dbPath),
-      storage: "SQLite",
-    },
-    remote: {
-      requested: remoteRequested,
-      configured: remoteConfigured,
-      postgres: {
-        configured: remotePostgresConfigured,
-        env: "PROMPTS_REGISTRY_POSTGRES_URL",
-      },
-      object_storage: {
-        configured: bucketConfigured,
-        provider: bucketConfigured ? "s3" : "none",
-        bucket_configured: bucketConfigured,
-        bucket_env: "PROMPTS_REGISTRY_S3_BUCKET",
-      },
-      aws: {
-        region_configured: regionConfigured,
-        region_env: "PROMPTS_REGISTRY_AWS_REGION",
-      },
-    },
-    sync: {
-      strategy: "local-first",
-      reads: "local SQLite",
-      writes: "local SQLite",
-      remote_mutation: false,
-      reason,
-    },
-    warnings: buildStorageWarnings(requestedMode, remoteConfigured, bucketConfigured, regionConfigured),
-  }
-}
-
-export function getDbPath(options: DbPathOptions = {}): string {
+export function getDbPath(options: DbPathOptions = {}, env: NodeJS.ProcessEnv = process.env): string {
   const migrateLegacy = options.migrateLegacy ?? true
 
   // Support env var overrides
-  const envPath = process.env["HASNA_PROMPTS_DB_PATH"] ?? process.env["PROMPTS_DB_PATH"]
+  const envPath = env["HASNA_PROMPTS_DB_PATH"] ?? env["PROMPTS_DB_PATH"]
   if (envPath) return envPath
 
   // Walk up looking for .prompts/prompts.db (project-local scope)
-  if (process.env["PROMPTS_DB_SCOPE"] === "project") {
+  if (env["PROMPTS_DB_SCOPE"] === "project") {
     let dir = process.cwd()
     while (true) {
       const candidate = join(dir, ".prompts", "prompts.db")
@@ -148,7 +42,7 @@ export function getDbPath(options: DbPathOptions = {}): string {
   }
 
   // Global: ~/.hasna/prompts/prompts.db (with backward compat from ~/.prompts/)
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~"
+  const home = env["HOME"] || env["USERPROFILE"] || "~"
   const newDir = join(home, ".hasna", "prompts")
   const oldDir = join(home, ".prompts")
 
@@ -162,31 +56,6 @@ export function getDbPath(options: DbPathOptions = {}): string {
   }
 
   return join(newDir, "prompts.db")
-}
-
-function resolveLocalScope(dbPath: string): PromptRegistryDiagnostics["local"]["scope"] {
-  if (process.env["HASNA_PROMPTS_DB_PATH"] || process.env["PROMPTS_DB_PATH"]) return "custom"
-  if (dbPath.includes(`${join(".prompts", "prompts.db")}`)) return "project"
-  return "home"
-}
-
-function buildStorageWarnings(
-  requestedMode: PromptsStorageMode,
-  remoteConfigured: boolean,
-  bucketConfigured: boolean,
-  regionConfigured: boolean
-): string[] {
-  const warnings: string[] = []
-  if (requestedMode === "remote" && !remoteConfigured) {
-    warnings.push("Remote mode was requested but no remote registry environment is configured.")
-  }
-  if (remoteConfigured) {
-    warnings.push("Remote registry configuration is detected but this package will not perform remote reads, writes, migrations, or AWS mutations.")
-  }
-  if (bucketConfigured && !regionConfigured) {
-    warnings.push("An S3 bucket is configured without a registry AWS region.")
-  }
-  return warnings
 }
 
 function mergeDirectoryContents(sourceDir: string, targetDir: string): void {
@@ -203,11 +72,14 @@ function mergeDirectoryContents(sourceDir: string, targetDir: string): void {
   }
 }
 
-export function getDatabase(): Database {
+export function getDatabase(env: NodeJS.ProcessEnv = process.env): Database {
   if (_db) return _db
 
-  resolveStorageMode()
-  const dbPath = getDbPath()
+  // A stale station fragment carrying a retired selector or registry variable
+  // must fail loudly, never be silently ignored.
+  assertNoRetiredPromptsStorageSelector(env)
+
+  const dbPath = getDbPath({}, env)
   if (dbPath !== ":memory:") {
     const dir = dbPath.substring(0, dbPath.lastIndexOf("/"))
     if (dir && !existsSync(dir)) {
@@ -237,7 +109,7 @@ export function resetDatabase(): void {
   _db = null
 }
 
-function runMigrations(db: Database): void {
+export function runMigrations(db: Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS _migrations (
       id INTEGER PRIMARY KEY,
@@ -406,6 +278,83 @@ function runMigrations(db: Database): void {
       name: "009_feedback",
       sql: `CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), message TEXT NOT NULL, email TEXT, category TEXT DEFAULT 'general', version TEXT, machine_id TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));`,
     },
+    {
+      name: "010_body_objects",
+      sql: `
+        ALTER TABLE prompts ADD COLUMN tenant_id TEXT;
+        ALTER TABLE prompts ADD COLUMN body_uri TEXT;
+        ALTER TABLE prompts ADD COLUMN body_sha256 TEXT;
+        ALTER TABLE prompts ADD COLUMN body_bytes INTEGER;
+        ALTER TABLE prompts ADD COLUMN body_media_type TEXT;
+
+        ALTER TABLE prompt_versions ADD COLUMN body_uri TEXT;
+        ALTER TABLE prompt_versions ADD COLUMN body_sha256 TEXT;
+        ALTER TABLE prompt_versions ADD COLUMN body_bytes INTEGER;
+
+        CREATE TABLE IF NOT EXISTS prompt_bodies (
+          body_uri TEXT PRIMARY KEY,
+          body_sha256 TEXT NOT NULL,
+          body_bytes INTEGER NOT NULL,
+          body_media_type TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_prompts_tenant_id ON prompts(tenant_id);
+        CREATE INDEX IF NOT EXISTS idx_prompt_bodies_sha256 ON prompt_bodies(body_sha256);
+      `,
+    },
+    {
+      name: "011_fts_contentless",
+      sql: `
+        CREATE VIRTUAL TABLE IF NOT EXISTS prompts_fts_contentless USING fts5(
+          name,
+          slug,
+          title,
+          body,
+          description,
+          tags,
+          content='',
+          contentless_delete=1
+        );
+      `,
+    },
+    {
+      name: "012_storage_events",
+      sql: `
+        CREATE TABLE IF NOT EXISTS prompt_storage_events (
+          id TEXT PRIMARY KEY,
+          event_kind TEXT NOT NULL,
+          prompt_id TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          detail TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_storage_events_prompt ON prompt_storage_events(prompt_id);
+      `,
+    },
+    {
+      name: "013_api_keys",
+      sql: `
+        CREATE TABLE IF NOT EXISTS api_keys (
+          kid TEXT PRIMARY KEY,
+          app TEXT NOT NULL,
+          agent TEXT,
+          scopes TEXT NOT NULL DEFAULT '[]',
+          token_hash TEXT NOT NULL UNIQUE,
+          issued_at TEXT NOT NULL,
+          expires_at TEXT,
+          revoked_at TEXT,
+          revoked_reason TEXT,
+          last_used_at TEXT,
+          created_by TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS api_keys_app_idx ON api_keys(app);
+        CREATE INDEX IF NOT EXISTS api_keys_token_hash_idx ON api_keys(token_hash);
+        ALTER TABLE api_keys ADD COLUMN tid TEXT;
+        CREATE INDEX IF NOT EXISTS api_keys_tid_idx ON api_keys(tid);
+      `,
+    },
   ]
 
   for (const migration of migrations) {
@@ -441,6 +390,15 @@ export function resolveProject(db: Database, idOrSlug: string): string | null {
   if (bySlugPrefix.length === 1 && bySlugPrefix[0]) return bySlugPrefix[0].id
 
   return null
+}
+
+/** True when the contentless FTS5 table exists (fed at write time by app code). */
+export function hasContentlessFts(db: Database): boolean {
+  return (
+    db
+      .query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='prompts_fts_contentless'")
+      .get() !== null
+  )
 }
 
 export function hasFts(db: Database): boolean {

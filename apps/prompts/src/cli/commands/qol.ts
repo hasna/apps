@@ -61,7 +61,7 @@ export function registerQolCommands(program: Command): void {
         const fmMatch = edited.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/m)
         if (!fmMatch) {
           // No frontmatter — treat whole file as body
-          updatePrompt(p.id, { body: edited.trim(), changed_by: opts.agent })
+          await updatePrompt(p.id, { body: edited.trim(), changed_by: opts.agent })
           if (!isJson(program)) console.log(chalk.green(`Updated ${chalk.bold(p.slug)} (body only)`))
           return
         }
@@ -76,7 +76,7 @@ export function registerQolCommands(program: Command): void {
           parsed[line.slice(0, colon).trim()] = line.slice(colon + 1).trim()
         }
 
-        updatePrompt(p.id, {
+        await updatePrompt(p.id, {
           title: parsed["title"] ?? p.title,
           body: body || p.body,
           description: parsed["description"] || (p.description != null ? p.description : undefined),
@@ -97,7 +97,7 @@ export function registerQolCommands(program: Command): void {
     .option("-a, --add <tags>", "Comma-separated tags to add")
     .option("-r, --remove <tags>", "Comma-separated tags to remove")
     .option("--set <tags>", "Replace all tags (comma-separated)")
-    .action((id: string, opts: { add?: string; remove?: string; set?: string }) => {
+    .action(async (id: string, opts: { add?: string; remove?: string; set?: string }) => {
       try {
         const prompt = getPrompt(id)
         if (!prompt) handleError(program, `Prompt not found: ${id}`)
@@ -119,7 +119,7 @@ export function registerQolCommands(program: Command): void {
           }
         }
 
-        updatePrompt(p.id, { tags })
+        await updatePrompt(p.id, { tags })
         if (isJson(program)) output(program, { id: p.id, slug: p.slug, tags })
         else console.log(`${chalk.bold(p.slug)}  tags: ${tags.length > 0 ? chalk.cyan(tags.join(", ")) : chalk.gray("(none)")}`)
       } catch (e) { handleError(program, e) }
@@ -308,7 +308,7 @@ Examples:
             if (op.startsWith("+")) { const t = op.slice(1); if (!tags.includes(t)) tags.push(t) }
             else if (op.startsWith("-")) { const t = op.slice(1); tags = tags.filter((x) => x !== t) }
           }
-          updatePrompt(prompt.id, { tags })
+          await updatePrompt(prompt.id, { tags })
           results.push({ id: prompt.id, slug: prompt.slug, tags })
         }
 

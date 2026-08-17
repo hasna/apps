@@ -1,0 +1,132 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Prompts API",
+    "version": "v1",
+    "description": "Authenticated /v1 API for @hasna/prompts. API keys are minted with `prompts keys mint` and passed via the `x-api-key` header or `Authorization: Bearer <token>`. Every request is scoped to the key's tenant (or to the null-tenant namespace for untenanted keys)."
+  },
+  "paths": {
+    "/v1/prompts": {
+      "get": {
+        "operationId": "listPrompts",
+        "summary": "List prompts",
+        "parameters": [
+          { "name": "collection", "in": "query", "schema": { "type": "string" } },
+          { "name": "tags", "in": "query", "schema": { "type": "string" } },
+          { "name": "templates", "in": "query", "schema": { "type": "boolean" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 20 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "minimum": 0, "default": 0 } }
+        ],
+        "responses": { "200": { "description": "Prompt list" } }
+      },
+      "post": {
+        "operationId": "createPrompt",
+        "summary": "Create a prompt",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["title", "body"],
+                "properties": {
+                  "title": { "type": "string" },
+                  "body": { "type": "string" },
+                  "slug": { "type": "string" },
+                  "description": { "type": "string" },
+                  "collection": { "type": "string" },
+                  "tags": { "type": "array", "items": { "type": "string" } },
+                  "source": { "type": "string", "enum": ["manual", "ai-session", "imported"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "Created prompt" } }
+      }
+    },
+    "/v1/prompts/{id}": {
+      "get": {
+        "operationId": "getPrompt",
+        "summary": "Fetch one prompt",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Prompt" }, "404": { "description": "Not found" } }
+      },
+      "put": {
+        "operationId": "updatePrompt",
+        "summary": "Update a prompt",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "Updated prompt" }, "404": { "description": "Not found" } }
+      },
+      "delete": {
+        "operationId": "deletePrompt",
+        "summary": "Delete a prompt",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Deleted" }, "404": { "description": "Not found" } }
+      }
+    },
+    "/v1/prompts/{id}/render": {
+      "post": {
+        "operationId": "renderPrompt",
+        "summary": "Render a prompt with variables",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "vars": { "type": "object", "additionalProperties": { "type": "string" } } }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Rendered result" }, "404": { "description": "Not found" } }
+      }
+    },
+    "/v1/prompts/{id}/use": {
+      "post": {
+        "operationId": "usePrompt",
+        "summary": "Use a prompt (increments use count)",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Prompt with body" }, "404": { "description": "Not found" } }
+      }
+    },
+    "/v1/search": {
+      "get": {
+        "operationId": "searchPrompts",
+        "summary": "Search prompts",
+        "parameters": [
+          { "name": "q", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 } }
+        ],
+        "responses": { "200": { "description": "Ranked search results" } }
+      }
+    },
+    "/v1/collections": {
+      "get": {
+        "operationId": "listCollections",
+        "summary": "List collections in scope",
+        "responses": { "200": { "description": "Collection names" } }
+      }
+    },
+    "/v1/storage/status": {
+      "get": {
+        "operationId": "storageStatus",
+        "summary": "Server storage status",
+        "responses": { "200": { "description": "Backend, body store, and migration counts" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "apiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key"
+      }
+    }
+  }
+}

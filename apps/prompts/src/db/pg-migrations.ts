@@ -132,4 +132,56 @@ export const PG_MIGRATIONS: string[] = [
     machine_id TEXT,
     created_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
+
+  // Migration 11: body-object columns (additive; inline body retained as
+  // rollback data until the verified cutover).
+  `ALTER TABLE prompts ADD COLUMN IF NOT EXISTS tenant_id TEXT`,
+  `ALTER TABLE prompts ADD COLUMN IF NOT EXISTS body_uri TEXT`,
+  `ALTER TABLE prompts ADD COLUMN IF NOT EXISTS body_sha256 TEXT`,
+  `ALTER TABLE prompts ADD COLUMN IF NOT EXISTS body_bytes BIGINT`,
+  `ALTER TABLE prompts ADD COLUMN IF NOT EXISTS body_media_type TEXT`,
+  `ALTER TABLE prompt_versions ADD COLUMN IF NOT EXISTS body_uri TEXT`,
+  `ALTER TABLE prompt_versions ADD COLUMN IF NOT EXISTS body_sha256 TEXT`,
+  `ALTER TABLE prompt_versions ADD COLUMN IF NOT EXISTS body_bytes BIGINT`,
+  `CREATE INDEX IF NOT EXISTS idx_prompts_tenant_id ON prompts(tenant_id)`,
+
+  // Migration 12: body registry table (immutable object ledger).
+  `CREATE TABLE IF NOT EXISTS prompt_bodies (
+    body_uri TEXT PRIMARY KEY,
+    body_sha256 TEXT NOT NULL,
+    body_bytes BIGINT NOT NULL,
+    body_media_type TEXT,
+    created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_prompt_bodies_sha256 ON prompt_bodies(body_sha256)`,
+
+  // Migration 13: storage events (dual-read fallbacks, migration writes).
+  `CREATE TABLE IF NOT EXISTS prompt_storage_events (
+    id TEXT PRIMARY KEY,
+    event_kind TEXT NOT NULL,
+    prompt_id TEXT NOT NULL,
+    version BIGINT NOT NULL,
+    detail TEXT,
+    created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_storage_events_prompt ON prompt_storage_events(prompt_id)`,
+
+  // Migration 14: application-built tsvector search (PG full-text index).
+  `ALTER TABLE prompts ADD COLUMN IF NOT EXISTS search_vector tsvector`,
+  `CREATE INDEX IF NOT EXISTS idx_prompts_search_vector ON prompts USING GIN (search_vector)`,
+  `CREATE OR REPLACE FUNCTION prompts_set_search_vector() RETURNS trigger AS $$
+    BEGIN
+      NEW.search_vector :=
+        setweight(to_tsvector('simple', coalesce(NEW.name, '')), 'A') ||
+        setweight(to_tsvector('simple', coalesce(NEW.slug, '')), 'A') ||
+        setweight(to_tsvector('simple', coalesce(NEW.title, '')), 'B') ||
+        setweight(to_tsvector('simple', coalesce(NEW.body, '')), 'C') ||
+        setweight(to_tsvector('simple', coalesce(NEW.description, '')), 'D');
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS prompts_search_vector_trigger ON prompts`,
+  `CREATE TRIGGER prompts_search_vector_trigger
+    BEFORE INSERT OR UPDATE OF name, slug, title, body, description ON prompts
+    FOR EACH ROW EXECUTE FUNCTION prompts_set_search_vector()`,
 ];

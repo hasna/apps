@@ -1,6 +1,25 @@
-import { getDatabase, hasFts } from "../db/database.js"
+import { getDatabase, hasContentlessFts, hasFts } from "../db/database.js"
 import type { SlimSearchResult, SearchResult, ListPromptsFilter } from "../types/index.js"
 import { listPrompts, listPromptsSlim } from "../db/prompts.js"
+
+/**
+ * Build a deterministic snippet from the inline body around the first query
+ * term. The contentless FTS5 index cannot produce snippets (it stores no
+ * original text), so search derives them here.
+ */
+export function buildSnippet(body: string, query: string): string | undefined {
+  const terms = query.trim().split(/\s+/).filter(Boolean)
+  if (terms.length === 0) return undefined
+  const term = terms[0]!
+  const index = body.toLowerCase().indexOf(term.toLowerCase())
+  if (index < 0) return undefined
+  const start = Math.max(0, index - 40)
+  const end = Math.min(body.length, index + term.length + 40)
+  const before = start > 0 ? "..." : ""
+  const after = end < body.length ? "..." : ""
+  const hit = body.slice(index, index + term.length)
+  return `${before}${body.slice(start, index)}[${hit}]${body.slice(index + term.length, end)}${after}`
+}
 
 function rowToSlimSearchResult(row: Record<string, unknown>, snippet?: string): SlimSearchResult {
   const variables = JSON.parse((row["variables"] as string) || "[]") as Array<{ name: string }>
@@ -105,7 +124,8 @@ export function searchPrompts(
     return prompts.map((p) => ({ prompt: p, score: 1 }))
   }
 
-  if (hasFts(db)) {
+  const ftsTable = hasContentlessFts(db) ? "prompts_fts_contentless" : hasFts(db) ? "prompts_fts" : null
+  if (ftsTable) {
     const ftsQuery = escapeFtsQuery(query)
 
     const { conditions, params } = buildPromptFilterConditions(filter, "p.")
@@ -117,18 +137,19 @@ export function searchPrompts(
     try {
       const rows = db
         .query(
-          `SELECT p.*, bm25(prompts_fts) as score,
-            snippet(prompts_fts, 2, '[', ']', '...', 10) as snippet
+          `SELECT p.*, bm25(${ftsTable}) as score
            FROM prompts p
-           INNER JOIN prompts_fts ON prompts_fts.rowid = p.rowid
-           WHERE prompts_fts MATCH ?
+           INNER JOIN ${ftsTable} ON ${ftsTable}.rowid = p.rowid
+           WHERE ${ftsTable} MATCH ?
            ${where}
-           ORDER BY bm25(prompts_fts)
+           ORDER BY bm25(${ftsTable})
            LIMIT ? OFFSET ?`
         )
         .all(ftsQuery, ...params, limit, offset) as Array<Record<string, unknown>>
 
-      return rows.map((r) => rowToSearchResult(r, r["snippet"] as string | undefined))
+      // The contentless index cannot produce snippets; derive one from the
+      // inline body (which is always present until the verified cutover).
+      return rows.map((r) => rowToSearchResult(r, buildSnippet(r["body"] as string, query)))
     } catch {
       // FTS query syntax error — fall through to LIKE
     }
@@ -166,7 +187,8 @@ export function searchPromptsSlim(
     }))
   }
 
-  if (hasFts(db)) {
+  const ftsTable = hasContentlessFts(db) ? "prompts_fts_contentless" : hasFts(db) ? "prompts_fts" : null
+  if (ftsTable) {
     const ftsQuery = escapeFtsQuery(query)
     const { conditions, params } = buildPromptFilterConditions(filter, "p.")
 
@@ -175,20 +197,19 @@ export function searchPromptsSlim(
     const offset = filter.offset ?? 0
 
     try {
-      // Select without body
+      // Select without body; snippet derived from the inline body column.
       const rows = db.query(
         `SELECT p.id, p.slug, p.name, p.title, p.description, p.collection, p.tags, p.variables,
-                p.is_template, p.use_count, bm25(prompts_fts) as score,
-                snippet(prompts_fts, 2, '[', ']', '...', 10) as snippet
+                p.is_template, p.use_count, p.body, bm25(${ftsTable}) as score
          FROM prompts p
-         INNER JOIN prompts_fts ON prompts_fts.rowid = p.rowid
-         WHERE prompts_fts MATCH ?
+         INNER JOIN ${ftsTable} ON ${ftsTable}.rowid = p.rowid
+         WHERE ${ftsTable} MATCH ?
          ${where}
-         ORDER BY bm25(prompts_fts)
+         ORDER BY bm25(${ftsTable})
          LIMIT ? OFFSET ?`
       ).all(ftsQuery, ...params, limit, offset) as Array<Record<string, unknown>>
 
-      return rows.map((r) => rowToSlimSearchResult(r, r["snippet"] as string | undefined))
+      return rows.map((r) => rowToSlimSearchResult(r, buildSnippet(r["body"] as string, query)))
     } catch { /* fall through */ }
   }
 

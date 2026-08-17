@@ -14,6 +14,7 @@ beforeEach(() => {
 })
 
 describe("runAudit", () => {
+
   test("returns clean report for empty db", () => {
     const report = runAudit()
     expect(report.issues).toHaveLength(0)
@@ -41,16 +42,16 @@ describe("runAudit", () => {
     expect(report.info).toBeGreaterThan(0)
   })
 
-  test("detects near-duplicate slugs", () => {
-    createPrompt({ title: "My Prompt", body: "body content here" })
-    createPrompt({ title: "My Prompt 2", body: "body content here", slug: "my-prompt-2" })
+  test("detects near-duplicate slugs", async () => {
+    await createPrompt({ title: "My Prompt", body: "body content here" })
+    await createPrompt({ title: "My Prompt 2", body: "body content here", slug: "my-prompt-2" })
     const report = runAudit()
     const issues = report.issues.filter((i) => i.type === "near-duplicate-slug")
     expect(issues.length).toBeGreaterThan(0)
   })
 
-  test("detects expired prompts", () => {
-    const p = createPrompt({ title: "Old Prompt", body: "body content here" })
+  test("detects expired prompts", async () => {
+    const p = await createPrompt({ title: "Old Prompt", body: "body content here" })
     setExpiry(p.id, "2020-01-01T00:00:00Z")
     const report = runAudit()
     const issues = report.issues.filter((i) => i.type === "expired")

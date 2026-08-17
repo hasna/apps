@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { getDbPath, getPromptRegistryDiagnostics, resolveStorageMode } from "./database.js"
+import { getDbPath, resolveServerBackend } from "./database.js"
+import {
+  resolvePromptsClientTransport,
+  assertNoRetiredPromptsStorageSelector,
+  RetiredPromptsStorageSelectorError,
+  PROMPTS_API_URL_ENV,
+  PROMPTS_API_KEY_ENV,
+} from "../client-transport.js"
 
 describe("database path resolution", () => {
   let originalHome: string | undefined
@@ -15,6 +22,9 @@ describe("database path resolution", () => {
   let originalRegistryPostgresUrl: string | undefined
   let originalRegistryS3Bucket: string | undefined
   let originalRegistryAwsRegion: string | undefined
+  let originalApiUrl: string | undefined
+  let originalApiKey: string | undefined
+  let originalDatabaseUrl: string | undefined
   let originalCwd: string
   let tempRoot: string
 
@@ -29,6 +39,9 @@ describe("database path resolution", () => {
     originalRegistryPostgresUrl = process.env["PROMPTS_REGISTRY_POSTGRES_URL"]
     originalRegistryS3Bucket = process.env["PROMPTS_REGISTRY_S3_BUCKET"]
     originalRegistryAwsRegion = process.env["PROMPTS_REGISTRY_AWS_REGION"]
+    originalApiUrl = process.env[PROMPTS_API_URL_ENV]
+    originalApiKey = process.env[PROMPTS_API_KEY_ENV]
+    originalDatabaseUrl = process.env["HASNA_PROMPTS_DATABASE_URL"]
     originalCwd = process.cwd()
     tempRoot = mkdtempSync(join(tmpdir(), "prompts-db-"))
     delete process.env["PROMPTS_DB_PATH"]
@@ -40,6 +53,9 @@ describe("database path resolution", () => {
     delete process.env["PROMPTS_REGISTRY_POSTGRES_URL"]
     delete process.env["PROMPTS_REGISTRY_S3_BUCKET"]
     delete process.env["PROMPTS_REGISTRY_AWS_REGION"]
+    delete process.env[PROMPTS_API_URL_ENV]
+    delete process.env[PROMPTS_API_KEY_ENV]
+    delete process.env["HASNA_PROMPTS_DATABASE_URL"]
   })
 
   afterEach(() => {
@@ -54,6 +70,9 @@ describe("database path resolution", () => {
     restoreEnv("PROMPTS_REGISTRY_POSTGRES_URL", originalRegistryPostgresUrl)
     restoreEnv("PROMPTS_REGISTRY_S3_BUCKET", originalRegistryS3Bucket)
     restoreEnv("PROMPTS_REGISTRY_AWS_REGION", originalRegistryAwsRegion)
+    restoreEnv(PROMPTS_API_URL_ENV, originalApiUrl)
+    restoreEnv(PROMPTS_API_KEY_ENV, originalApiKey)
+    restoreEnv("HASNA_PROMPTS_DATABASE_URL", originalDatabaseUrl)
     rmSync(tempRoot, { recursive: true, force: true })
   })
 
@@ -92,75 +111,52 @@ describe("database path resolution", () => {
     expect(existsSync(join(home, ".hasna", "prompts", "prompts.db"))).toBe(false)
   })
 
-  test("rejects unsupported storage modes", () => {
-    process.env["HASNA_PROMPTS_STORAGE_MODE"] = "shared"
-
-    expect(() => resolveStorageMode()).toThrow("Unsupported prompts storage mode")
+  test("server backend defaults to sqlite without HASNA_PROMPTS_DATABASE_URL", () => {
+    expect(resolveServerBackend()).toBe("sqlite")
   })
 
-  test("remote mode reports local fallback diagnostics without exposing configured values", () => {
-    const home = join(tempRoot, "home")
-    process.env["HOME"] = home
-    process.env["HASNA_PROMPTS_STORAGE_MODE"] = "remote"
+  test("server backend selects postgresql with HASNA_PROMPTS_DATABASE_URL", () => {
+    process.env["HASNA_PROMPTS_DATABASE_URL"] = "postgres://example/db"
+    expect(resolveServerBackend()).toBe("postgresql")
+  })
+
+  test("retired storage-mode variables fail loudly even when blank", () => {
+    process.env["HASNA_PROMPTS_STORAGE_MODE"] = ""
+    expect(() => assertNoRetiredPromptsStorageSelector(process.env)).toThrow(RetiredPromptsStorageSelectorError)
+    expect(() => resolvePromptsClientTransport(process.env)).toThrow(RetiredPromptsStorageSelectorError)
+  })
+
+  test("retired legacy storage-mode variable fails loudly", () => {
+    process.env["PROMPTS_STORAGE_MODE"] = "local"
+    expect(() => resolvePromptsClientTransport(process.env)).toThrow(RetiredPromptsStorageSelectorError)
+  })
+
+  test("retired registry diagnostics variables fail loudly", () => {
     process.env["PROMPTS_REGISTRY_POSTGRES_URL"] = "configured-postgres-url"
+    expect(() => resolvePromptsClientTransport(process.env)).toThrow(RetiredPromptsStorageSelectorError)
+    process.env["PROMPTS_REGISTRY_POSTGRES_URL"] = ""
     process.env["PROMPTS_REGISTRY_S3_BUCKET"] = "configured-bucket"
-    process.env["PROMPTS_REGISTRY_AWS_REGION"] = "configured-region"
-
-    const diagnostics = getPromptRegistryDiagnostics()
-    const serialized = JSON.stringify(diagnostics)
-
-    expect(diagnostics.requested_mode).toBe("remote")
-    expect(diagnostics.active_storage).toBe("local-sqlite")
-    expect(diagnostics.registry_state).toBe("remote-configured-local-fallback")
-    expect(diagnostics.local).toEqual({
-      db_path: join(home, ".hasna", "prompts", "prompts.db"),
-      scope: "home",
-      storage: "SQLite",
-    })
-    expect(diagnostics.remote.postgres.configured).toBe(true)
-    expect(diagnostics.remote.object_storage).toMatchObject({
-      configured: true,
-      provider: "s3",
-      bucket_configured: true,
-    })
-    expect(diagnostics.remote.aws.region_configured).toBe(true)
-    expect(diagnostics.sync).toMatchObject({
-      strategy: "local-first",
-      reads: "local SQLite",
-      writes: "local SQLite",
-      remote_mutation: false,
-    })
-    expect(serialized).not.toContain("configured-postgres-url")
-    expect(serialized).not.toContain("configured-bucket")
-    expect(serialized).not.toContain("configured-region")
+    expect(() => resolvePromptsClientTransport(process.env)).toThrow(RetiredPromptsStorageSelectorError)
   })
 
-  test("auto mode stays local when remote registry configuration is absent", () => {
-    process.env["HOME"] = join(tempRoot, "home")
-    process.env["HASNA_PROMPTS_STORAGE_MODE"] = "auto"
-
-    const diagnostics = getPromptRegistryDiagnostics()
-
-    expect(diagnostics.requested_mode).toBe("auto")
-    expect(diagnostics.registry_state).toBe("local-only")
-    expect(diagnostics.remote.requested).toBe(false)
-    expect(diagnostics.remote.configured).toBe(false)
-    expect(diagnostics.warnings).toEqual([])
+  test("client transport defaults to sqlite without the API URL", () => {
+    const report = resolvePromptsClientTransport()
+    expect(report.transport).toBe("sqlite")
+    expect(report.api_url_present).toBe(false)
+    expect(report.api_key_present).toBe(false)
   })
 
-  test("diagnostics report home scope when project scope has no git ancestor", () => {
-    const home = join(tempRoot, "home")
-    process.env["HOME"] = home
-    process.env["PROMPTS_DB_SCOPE"] = "project"
-    process.chdir("/")
+  test("API URL without its key fails closed", () => {
+    process.env[PROMPTS_API_URL_ENV] = "http://localhost:19430"
+    expect(() => resolvePromptsClientTransport()).toThrow(/missing/)
+  })
 
-    const diagnostics = getPromptRegistryDiagnostics()
-
-    expect(diagnostics.local).toEqual({
-      db_path: join(home, ".hasna", "prompts", "prompts.db"),
-      scope: "home",
-      storage: "SQLite",
-    })
+  test("API URL with its key selects http", () => {
+    process.env[PROMPTS_API_URL_ENV] = "http://localhost:19430"
+    process.env[PROMPTS_API_KEY_ENV] = "hasna_prompts_test"
+    const report = resolvePromptsClientTransport()
+    expect(report.transport).toBe("http")
+    expect(report.source).toBe(PROMPTS_API_URL_ENV)
   })
 
   test("diagnostics do not migrate legacy home directory", () => {
@@ -171,9 +167,7 @@ describe("database path resolution", () => {
     writeFileSync(join(legacyDir, "prompts.db"), "legacy-db")
     process.env["HOME"] = home
 
-    const diagnostics = getPromptRegistryDiagnostics()
-
-    expect(diagnostics.local.db_path).toBe(join(targetDir, "prompts.db"))
+    expect(getDbPath({ migrateLegacy: false })).toBe(join(targetDir, "prompts.db"))
     expect(existsSync(join(targetDir, "prompts.db"))).toBe(false)
     expect(readFileSync(join(legacyDir, "prompts.db"), "utf8")).toBe("legacy-db")
   })

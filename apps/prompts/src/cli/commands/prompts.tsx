@@ -36,7 +36,7 @@ export function registerPromptCommands(program: Command): void {
         if (!body) handleError(program, "No body provided. Use --body, --file, or pipe via stdin.")
 
         const project_id = getActiveProjectId(program)
-        const { prompt, created, duplicate_warning } = upsertPrompt({
+        const { prompt, created, duplicate_warning } = await upsertPrompt({
           title,
           body,
           slug: opts["slug"],
@@ -334,9 +334,9 @@ export function registerPromptCommands(program: Command): void {
     .option("-c, --collection <name>")
     .option("-t, --tags <tags>")
     .option("--agent <name>")
-    .action((id: string, opts: Record<string, string>) => {
+    .action(async (id: string, opts: Record<string, string>) => {
       try {
-        const prompt = updatePrompt(id, {
+        const prompt = await updatePrompt(id, {
           title: opts["title"] ?? undefined,
           body: opts["body"] ?? undefined,
           description: opts["description"] ?? undefined,
