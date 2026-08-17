@@ -566,15 +566,27 @@ export function registerAgentCommands(program: Command) {
           // EXPLICIT ref — the auto-detected cwd project must never silently
           // re-scope an existing list on a rename.
           const explicitProject = typeof globalOpts.project === "string" && globalOpts.project.trim() !== "";
-          // A rebind's source list lives OUTSIDE the destination project.
-          // Resolving it within the destination scope would reject an unbound
-          // source UUID ("Task list not found") or shadow it with a same-slug
-          // list already in the destination — so resolve the source unscoped
-          // for the rebind case and let only the destination be scoped.
-          const resolveScope = opts.update && explicitProject ? undefined : (projectId ?? undefined);
-          const resolved = cloud
-            ? await cloudResolveTaskListRef(cloud, ref, resolveScope)
-            : resolvePartialId(getDatabase(), "task_lists", ref);
+          let resolved;
+          if (cloud) {
+            if (opts.update && explicitProject) {
+              // A rebind's source list may live outside the destination
+              // project, so scoping resolution to the destination alone would
+              // reject an unbound source UUID. But an in-scope update that
+              // passes --project for context must keep resolving within the
+              // destination, where slugs are unique. Try the destination scope
+              // first (base behaviour), then fall back to unscoped so an
+              // unbound or other-scope source can still be resolved.
+              try {
+                resolved = await cloudResolveTaskListRef(cloud, ref, projectId ?? undefined);
+              } catch {
+                resolved = await cloudResolveTaskListRef(cloud, ref, undefined);
+              }
+            } else {
+              resolved = await cloudResolveTaskListRef(cloud, ref, projectId ?? undefined);
+            }
+          } else {
+            resolved = resolvePartialId(getDatabase(), "task_lists", ref);
+          }
           if (!resolved) throw new Error(`Task list not found or ambiguous: ${ref}`);
           if (opts.show) {
             const list = cloud ? await cloudGetTaskList(cloud, resolved) : getTaskList(resolved);

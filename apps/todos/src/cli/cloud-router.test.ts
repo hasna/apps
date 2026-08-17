@@ -2566,6 +2566,54 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
     ]);
   });
 
+  test("an in-scope slug update resolves within the destination even when another project shares the slug", async () => {
+    // The rebind resolution is scoped-first with an unscoped fallback: a slug
+    // update inside the destination project must resolve to THAT project's
+    // list even when a second project legally shares the slug (uniqueness is
+    // project-scoped), which is why unscoped-first is a regression.
+    const projectA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const projectB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const listA = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const listB = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    const scopedCalls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname === `/v1/task-lists/${listA}`) {
+        return { body: { task_list: { id: listA, project_id: projectA, slug: "inbox", name: "Inbox A" } } };
+      }
+      if (url.pathname === `/v1/task-lists/${listB}`) {
+        return { body: { task_list: { id: listB, project_id: projectB, slug: "inbox", name: "Inbox B" } } };
+      }
+      if (url.pathname === "/v1/task-lists" && url.searchParams.get("project_id") === projectA) {
+        return { body: { task_lists: [{ id: listA, project_id: projectA, slug: "inbox", name: "Inbox A" }] } };
+      }
+      if (url.pathname === "/v1/task-lists" && url.searchParams.get("project_id") === projectB) {
+        return { body: { task_lists: [{ id: listB, project_id: projectB, slug: "inbox", name: "Inbox B" }] } };
+      }
+      if (url.pathname === "/v1/task-lists") {
+        return { body: { task_lists: [
+          { id: listA, project_id: projectA, slug: "inbox", name: "Inbox A" },
+          { id: listB, project_id: projectB, slug: "inbox", name: "Inbox B" },
+        ] } };
+      }
+      return { status: 404, body: { error: "not found" } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudResolveTaskListRef(client, "inbox", projectA))
+      .resolves.toBe(listA);
+    await expect(cloudResolveTaskListRef(client, "inbox", projectB))
+      .resolves.toBe(listB);
+    // Unscoped, the shared slug is ambiguous — the reason the CLI tries the
+    // destination scope before falling back.
+    await expect(cloudResolveTaskListRef(client, "inbox"))
+      .rejects.toThrow(/not found|ambiguous/i);
+    expect(scopedCalls.map((call) => call.url)).toEqual([
+      `https://todos.example.com/v1/task-lists?project_id=${projectA}`,
+      `https://todos.example.com/v1/task-lists?project_id=${projectB}`,
+      `https://todos.example.com/v1/task-lists`,
+    ]);
+  });
+
   test("project-scoped plan resolution rejects an exact UUID from another project", async () => {
     const planId = "77777777-7777-4777-8777-777777777777";
     const calls = installFetch((call) => {
