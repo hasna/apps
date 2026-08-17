@@ -135,6 +135,7 @@ export interface MemoryStats {
   by_agent: Record<string, number>;
   pinned_count: number;
   expired_count: number;
+  expires_at_count: number;
 }
 
 // ============================================================================

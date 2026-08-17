@@ -51,6 +51,7 @@ export function registerStatsCommand(program: Command): void {
         console.log(`  ${chalk.dim("Total:")}   ${chalk.white(String(stats.total))}`);
         console.log(`  ${chalk.dim("Pinned:")}  ${stats.pinned_count > 0 ? chalk.red(String(stats.pinned_count)) : "0"}`);
         console.log(`  ${chalk.dim("Expired:")} ${stats.expired_count > 0 ? chalk.yellow(String(stats.expired_count)) : "0"}`);
+        console.log(`  ${chalk.dim("Expires-at:")} ${stats.expires_at_count > 0 ? chalk.yellow(String(stats.expires_at_count)) : "0"}`);
         console.log();
         console.log(chalk.bold("  By Scope"));
         for (const [scope, count] of Object.entries(stats.by_scope)) {

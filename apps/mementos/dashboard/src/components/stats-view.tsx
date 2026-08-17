@@ -27,6 +27,7 @@ export function StatsView({ stats, agentCount, projectCount }: StatsViewProps) {
     { label: "Total Memories", value: stats.total, icon: BrainIcon, color: "text-foreground" },
     { label: "Pinned", value: stats.pinned_count, icon: PinIcon, color: "text-amber-500" },
     { label: "Expired", value: stats.expired_count, icon: ClockIcon, color: "text-red-500" },
+    { label: "Expires-at set", value: stats.expires_at_count, icon: ClockIcon, color: "text-yellow-500" },
     { label: "Agents", value: agentCount, icon: BotIcon, color: "text-orange-500" },
     { label: "Projects", value: projectCount, icon: FolderIcon, color: "text-purple-500" },
   ];
@@ -55,7 +56,7 @@ export function StatsView({ stats, agentCount, projectCount }: StatsViewProps) {
   return (
     <div className="space-y-6">
       {/* Top-level stats */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {topCards.map((c) => (
           <Card key={c.label}>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 p-4">

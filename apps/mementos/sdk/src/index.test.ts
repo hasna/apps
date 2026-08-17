@@ -177,6 +177,7 @@ describe("MementosClient", () => {
         by_agent: {},
         pinned_count: 3,
         expired_count: 1,
+        expires_at_count: 2,
       };
       const { calls, fetch } = mockFetch([{ status: 200, body: stats }]);
       const client = new MementosClient({ fetch });

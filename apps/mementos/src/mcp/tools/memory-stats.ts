@@ -18,6 +18,7 @@ export function registerMemoryStatsTools(server: McpServer): void {
           `By category: preference=${stats.by_category.preference}, fact=${stats.by_category.fact}, knowledge=${stats.by_category.knowledge}, history=${stats.by_category.history}`,
           `Pinned: ${stats.pinned_count}`,
           `Expired: ${stats.expired_count}`,
+          `Expires-at set: ${stats.expires_at_count}`,
         ];
         if (Object.keys(stats.by_agent).length > 0) {
           lines.push(`By agent: ${Object.entries(stats.by_agent).map(([k, v]) => `${k}=${v}`).join(", ")}`);

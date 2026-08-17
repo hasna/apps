@@ -361,6 +361,7 @@ describe("GET /api/memories/stats", () => {
     expect(data.by_status).toBeDefined();
     expect(typeof data.pinned_count).toBe("number");
     expect(typeof data.expired_count).toBe("number");
+    expect(typeof data.expires_at_count).toBe("number");
   });
 });
 

@@ -52,11 +52,25 @@ export function getMemoryStats(db?: Database): MemoryStats {
   const pinnedCount = (
     d.query("SELECT COUNT(*) as c FROM memories WHERE pinned = 1 AND status = 'active'").get() as { c: number }
   ).c;
+  // Pure status match — identical to the `--status expired` list filter and
+  // to the by_status.expired bucket, so the stats payload cannot disagree with
+  // itself. The previous query OR'd in `expires_at IS NOT NULL AND
+  // expires_at < datetime('now')`, which counted still-active rows that merely
+  // carry an expiry timestamp — a fleet store with zero status='expired' rows
+  // reported expired_count 874 while by_status.expired read 0. Rows carrying
+  // an expiry date are counted separately under the distinctly named
+  // expires_at_count field.
   const expiredCount = (
     d
-      .query(
-        "SELECT COUNT(*) as c FROM memories WHERE status = 'expired' OR (expires_at IS NOT NULL AND expires_at < datetime('now'))"
-      )
+      .query("SELECT COUNT(*) as c FROM memories WHERE status = 'expired'")
+      .get() as { c: number }
+  ).c;
+  // Count of rows carrying an expiry date (future or past), independent of
+  // their status — the "has a TTL / expiry set" population that the old
+  // expired_count query conflated with status-expired memories.
+  const expiresAtCount = (
+    d
+      .query("SELECT COUNT(*) as c FROM memories WHERE expires_at IS NOT NULL")
       .get() as { c: number }
   ).c;
 
@@ -68,6 +82,7 @@ export function getMemoryStats(db?: Database): MemoryStats {
     by_agent: {},
     pinned_count: pinnedCount,
     expired_count: expiredCount,
+    expires_at_count: expiresAtCount,
   };
   for (const row of byScope) if (row.scope in stats.by_scope) stats.by_scope[row.scope] = row.c;
   for (const row of byCategory) if (row.category in stats.by_category) stats.by_category[row.category] = row.c;
@@ -100,6 +115,7 @@ function normalizeStats(data: Partial<MemoryStats> | undefined): MemoryStats {
     by_agent: data?.by_agent ?? {},
     pinned_count: data?.pinned_count ?? 0,
     expired_count: data?.expired_count ?? 0,
+    expires_at_count: data?.expires_at_count ?? 0,
   };
 }
 
