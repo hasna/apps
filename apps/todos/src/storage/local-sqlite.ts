@@ -65,6 +65,7 @@ import {
   getRecentActivity,
 } from "../db/audit.js";
 import { addComment, listComments } from "../db/comments.js";
+import { compareCommentKeyset, isStrictlyOlder } from "../lib/comment-cursor.js";
 import { getDatabase } from "../db/database.js";
 import { scanSqliteIntegrity } from "../db/integrity.js";
 import {
@@ -289,13 +290,14 @@ export function createLocalSqliteTodosStorageAdapter(
           throw new Error("Comment limit must be an integer between 1 and 1001");
         }
         let comments = listComments(taskId, database());
-        comments = comments.sort((left, right) =>
-          left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
+        // Sort and cursor-filter must use ONE keyset definition; see
+        // compareCommentKeyset in lib/comment-cursor.ts for why a second,
+        // locally-inlined comparator is how a page window and a cursor filter
+        // drift into describing different orderings.
+        comments = comments.sort(compareCommentKeyset);
         if (options?.before) {
           const before = options.before;
-          comments = comments.filter((comment) =>
-            comment.created_at < before.created_at ||
-            (comment.created_at === before.created_at && comment.id < before.id));
+          comments = comments.filter((comment) => isStrictlyOlder(comment, before));
         }
         if (options?.limit !== undefined) comments = comments.slice(-options.limit);
         return comments;
