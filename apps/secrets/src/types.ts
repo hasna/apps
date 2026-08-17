@@ -50,10 +50,89 @@ export interface VaultItemInput {
 
 export interface AuditEntry {
   id: number;
-  action: "get" | "set" | "delete";
+  action: "get" | "set" | "delete" | "restore";
   key: string;
   agent: string;
   timestamp: string;
+}
+
+// ── secret versioning ─────────────────────────────────────────────────────────
+//
+// Append-only, server-owned value history. Every row holds the value in the same
+// protected encrypted envelope as the current vault (never returned by any
+// history surface), plus a keyed fingerprint and metadata only. See the
+// versioning design study for the full contract.
+
+export type VersionChangeKind = "initial" | "set" | "rotation" | "import" | "restore" | "migration";
+
+/** Keep at most this many total versions per key, including the current one. */
+export const MAX_VERSIONS_PER_KEY = 20;
+/** Superseded (non-current) versions older than this many days are pruned. */
+export const SUPERSEDED_VERSION_AGE_DAYS = 180;
+
+export interface SecretVersionMeta {
+  version: number;
+  change_kind: VersionChangeKind;
+  reason?: string;
+  label?: string;
+  created_at: string;
+  created_by: string;
+  source_version?: number;
+  batch_id?: string;
+  provider_expires_at?: string;
+  value_length: number;
+  /** Short keyed fingerprint (16 hex chars) for metadata-only comparison. */
+  fingerprint: string;
+  /** True when this version is the one currently served by get/exec. */
+  current: boolean;
+}
+
+/** `versions --version N --check` evidence: length + full sha256 of the value. */
+export interface SecretVersionCheck extends SecretVersionMeta {
+  /** sha256 of the decrypted value — the same evidence class as `get --check`. */
+  hash: string;
+}
+
+/**
+ * Options carried by a value-writing operation into the version row it creates.
+ *
+ * `reason` and `label` are untrusted free-text metadata (spec §2.7.6): they are
+ * length-bounded and scanner-checked at the store write boundary — never stored
+ * verbatim without passing `assertMetadataSafe`, and never used to carry value
+ * material. Credential-shaped content is refused with a typed error.
+ */
+export interface SetSecretOptions {
+  /** Operator reason; required for rotation and restore, optional elsewhere. */
+  reason?: string;
+  /** Explicit change kind; defaults to `set` (or `initial` for a new key). */
+  changeKind?: VersionChangeKind;
+  /** Groups a bulk operation (e.g. import-env --push) for audit. */
+  batchId?: string;
+}
+
+export type SetSecretResult = SecretEntry & {
+  /** Version created (or already current) by this write. */
+  version?: number;
+  /** True when the value did not change and no new version was created. */
+  unchanged?: boolean;
+};
+
+export interface RestoreVersionOptions {
+  /** Required. Recorded on the new version row. */
+  reason: string;
+  /**
+   * Required. The current version the caller believes is served. The restore is
+   * refused with a conflict when it differs — the CAS that makes a restore
+   * concurrency-safe (spec §2.2/§2.7.8). The CLI always submits it (explicit
+   * `--expect-current`, or fetch-then-submit interactively), so requiring it
+   * here breaks no sanctioned path.
+   */
+  expectCurrent: number;
+}
+
+export interface PruneVersionsResult {
+  /** Number of version rows deleted by the retention sweep. */
+  versions: number;
 }
 
 export interface User {

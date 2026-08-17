@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { createHandler, type ServeDeps } from "../src/server/serve.js";
 import { SECRETS_MIGRATIONS } from "../src/server/cloud-migrations.js";
+import { MetadataValidationError, VersionConflictError, VersionNotFoundError, type RestoreVersionOptions } from "../src/store/types.js";
 
 const TEST_TENANT = "11111111-2222-4333-8444-555555555555";
 
@@ -47,13 +48,45 @@ function completeStore() {
     created_at: "now",
     updated_at: "now",
   };
+  const versionMeta = (version: number, overrides: Record<string, unknown> = {}) => ({
+    version,
+    change_kind: version === 1 ? "initial" : "set",
+    created_at: "now",
+    created_by: "agent",
+    value_length: 5,
+    fingerprint: "a1b2c3d4e5f60718",
+    current: version === 2,
+    ...overrides,
+  });
   return {
     calls,
     async listSecretMetadata(...args: unknown[]) { record("listSecretMetadata", args); return [secret]; },
-    async setSecret(...args: unknown[]) { record("setSecret", args); return secret; },
+    async setSecret(...args: unknown[]) { record("setSecret", args); return { ...secret, version: 2, unchanged: false }; },
     async deleteSecret(key: string, ...args: unknown[]) { record("deleteSecret", [key, ...args]); return key !== "missing"; },
     async getSecret(key: string, ...args: unknown[]) { record("getSecret", [key, ...args]); return key === "missing" ? undefined : secret; },
     async searchSecretMetadata(...args: unknown[]) { record("searchSecretMetadata", args); return [secret]; },
+    async listVersions(key: string, ...args: unknown[]) { record("listVersions", [key, ...args]); return [versionMeta(2), versionMeta(1)]; },
+    async checkVersion(key: string, version: number, ...args: unknown[]) {
+      record("checkVersion", [key, version, ...args]);
+      if (version === 99) throw new VersionNotFoundError(`Version 99 not found for key ${key}`);
+      return { ...versionMeta(version), hash: "ab".repeat(32) };
+    },
+    async restoreVersion(key: string, version: number, opts: RestoreVersionOptions, ...args: unknown[]) {
+      record("restoreVersion", [key, version, opts, ...args]);
+      if (key === "missing") throw new VersionNotFoundError(`Secret not found: ${key}`);
+      if (version === 99) throw new VersionNotFoundError(`Version 99 not found for key ${key}`);
+      if (opts.reason.includes("sk-synth")) {
+        throw new MetadataValidationError(
+          "reason contains credential-shaped content and was refused. Use a plain description without values.",
+        );
+      }
+      if (opts.expectCurrent !== 2) {
+        throw new VersionConflictError(`Current version is 2, expected ${opts.expectCurrent}.`);
+      }
+      return { ...versionMeta(3, { change_kind: "restore", source_version: version, current: true }), ...opts };
+    },
+    async pruneVersionHistory() { record("pruneVersionHistory", []); return { versions: 0 }; },
+    async runVersionBackfill() { record("runVersionBackfill", []); return 0; },
     async listVaultItemMetadata(...args: unknown[]) { record("listVaultItemMetadata", args); return [item]; },
     async setVaultItem(...args: unknown[]) { record("setVaultItem", args); return item; },
     async searchVaultItemMetadata(...args: unknown[]) { record("searchVaultItemMetadata", args); return [item]; },
@@ -166,7 +199,8 @@ describe("cloud server route matrix", () => {
 
     expect((await handle(request("/v1/secrets", "POST", { key: "demo/key", value: "value" }))).status).toBe(200);
     expect(store.calls.at(-1)).toMatchObject({ method: "setSecret" });
-    expect(store.calls.at(-1)?.args.at(-1)).toBe(TEST_TENANT);
+    // setSecret signature: (key, value, type, label, expiresAt, actor, tenantId, opts?)
+    expect(store.calls.at(-1)?.args[6]).toBe(TEST_TENANT);
 
     expect((await handle(request("/v1/items", "POST", { kind: "secure_note", title: "Example" }))).status).toBe(200);
     expect(store.calls.at(-1)).toMatchObject({ method: "setVaultItem" });
@@ -254,5 +288,90 @@ describe("cloud server route matrix", () => {
 
     expect(res.status).toBe(200);
     expect(await body(res)).toMatchObject({ status: "ok", pendingMigrations: [] });
+  });
+
+  it("covers secret version list/check/restore routes with typed 404/409 mapping", async () => {
+    const { handle, store } = makeHandler();
+
+    // versions list: metadata only, never value material
+    let res = await handle(request("/v1/secrets/versions"));
+    expect(res.status).toBe(400);
+    res = await handle(request("/v1/secrets/versions?key=demo%2Fkey&limit=200"));
+    expect(res.status).toBe(400);
+    res = await handle(request("/v1/secrets/versions?key=demo%2Fkey"));
+    expect(res.status).toBe(200);
+    const listed = await body(res);
+    expect(listed.versions).toHaveLength(2);
+    expect(JSON.stringify(listed)).not.toContain("value_blob");
+    expect(store.calls.at(-1)).toEqual({ method: "listVersions", args: ["demo/key", "kid-only", TEST_TENANT, 20] });
+
+    // versions check: evidence class only
+    res = await handle(request("/v1/secrets/versions/check?key=demo%2Fkey"));
+    expect(res.status).toBe(400);
+    res = await handle(request("/v1/secrets/versions/check?key=demo%2Fkey&version=99"));
+    expect(res.status).toBe(404);
+    res = await handle(request("/v1/secrets/versions/check?key=demo%2Fkey&version=1"));
+    expect(res.status).toBe(200);
+    const check = await body(res);
+    expect(check.check.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(check)).not.toContain("value_blob");
+
+    // restore: write grant, typed not-found and conflict mapping
+    res = await handle(request("/v1/secrets/restore", "POST", { key: "demo/key", version: 1 }));
+    expect(res.status).toBe(400); // reason required (server-side guard)
+    res = await handle(request("/v1/secrets/restore", "POST", { key: "demo/key", version: 1, reason: "x" }));
+    expect(res.status).toBe(400); // expected_current_version required (CAS mandatory at the API boundary)
+    res = await handle(request("/v1/secrets/restore", "POST", { key: "demo/key", version: 1, reason: "x", expected_current_version: "2" }));
+    expect(res.status).toBe(400); // non-integer expected_current_version
+    res = await handle(request("/v1/secrets/restore", "POST", { key: "demo/key", version: 99, reason: "x", expected_current_version: 1 }));
+    expect(res.status).toBe(404);
+    res = await handle(request("/v1/secrets/restore", "POST", { key: "demo/key", version: 1, reason: "x", expected_current_version: 1 }));
+    expect(res.status).toBe(409);
+    res = await handle(request("/v1/secrets/restore", "POST", { key: "demo/key", version: 1, reason: "x", expected_current_version: 2 }));
+    expect(res.status).toBe(200);
+    const restored = await body(res);
+    expect(restored.restored).toMatchObject({ version: 3, change_kind: "restore", source_version: 1, current: true });
+    expect(store.calls.at(-1)?.method).toBe("restoreVersion");
+    expect(JSON.stringify(restored)).not.toContain("value_blob");
+  });
+
+  it("maps a credential-shaped restore reason to a typed 400 without echoing the payload", async () => {
+    const { handle } = makeHandler();
+    // The mock store reproduces the write-boundary guard (the real store scans
+    // with scanInputExposures before persisting); this fixture asserts the ROUTE
+    // maps the typed error to 400 and never echoes the offending text. The
+    // shape is assembled at runtime so this file carries no literal credential.
+    const credShaped = ["sk-synth", "etic-value-9f8e7d6c5b4a3f2e1d0c"].join("");
+    const res = await handle(
+      request("/v1/secrets/restore", "POST", {
+        key: "demo/key",
+        version: 1,
+        reason: credShaped,
+        expected_current_version: 2,
+      }),
+    );
+    expect(res.status).toBe(400);
+    const errorBody = JSON.stringify(await body(res));
+    expect(errorBody).toContain("credential-shaped");
+    expect(errorBody).not.toContain(credShaped);
+  });
+
+  it("POST /v1/secrets forwards version metadata options and echoes version/unchanged", async () => {
+    const { handle, store } = makeHandler();
+    const res = await handle(
+      request("/v1/secrets", "POST", { key: "demo/key", value: "v", reason: "rotated", change_kind: "rotation", batch_id: "batch-1" }),
+    );
+    expect(res.status).toBe(200);
+    const bodyJson = await body(res);
+    expect(bodyJson).toMatchObject({ version: 2, unchanged: false });
+    const call = store.calls.at(-1)!;
+    expect(call.method).toBe("setSecret");
+    expect((call.args.at(-1) as Record<string, unknown>)).toEqual({
+      reason: "rotated",
+      changeKind: "rotation",
+      batchId: "batch-1",
+    });
+    // Metadata-only response: no value field.
+    expect(JSON.stringify(bodyJson)).not.toContain('"value"');
   });
 });

@@ -112,6 +112,25 @@ function migrate(db: Database): void {
       machine_id TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS secret_versions (
+      key               TEXT NOT NULL,
+      version           INTEGER NOT NULL,
+      value_blob        TEXT NOT NULL,
+      value_hash        TEXT NOT NULL,
+      value_length      INTEGER NOT NULL,
+      change_kind       TEXT NOT NULL DEFAULT 'initial',
+      reason            TEXT,
+      label             TEXT,
+      source_version    INTEGER,
+      batch_id          TEXT,
+      provider_expires_at TEXT,
+      created_at        TEXT NOT NULL,
+      created_by        TEXT NOT NULL,
+      PRIMARY KEY (key, version)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_secret_versions_key ON secret_versions(key, version);
   `);
 
   // Older vaults created the feedback table with a NOT NULL `service` column (no

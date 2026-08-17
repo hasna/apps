@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.35] - 2026-08-17
+
+### Fixed
+
+- **`list --limit N` no longer caps silently.** A bounded read was
+  indistinguishable from the full population: `--limit 2000` returned exactly
+  2000 rows of a 7,839-row pending set at rc=0 with no truncation signal. The
+  forwarded path now requests limit+1 as a truncation probe and slices to the
+  caller's limit; the withheld path (--sort, --overdue/--due-today, creator
+  and task-list filters, scalar-status union) compares the pre-window set. A
+  truncation is reported on stderr — the same channel as the scan-ceiling
+  warning — while `--json` stdout stays a clean parseable array. Applies to
+  the HTTP authority and the local SQLite store. (todos 52b0a207)
+
 ## [0.15.34] - 2026-08-15
 
 ### Changed

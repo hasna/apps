@@ -25,10 +25,16 @@ const VAULT_ITEM_KINDS: VaultItemKind[] = [
 import type {
   AuditEntry,
   EncryptVaultResult,
+  PruneVersionsResult,
+  RestoreVersionOptions,
   SecretEntry,
   SecretExportBundle,
   SecretMetadata,
   SecretType,
+  SecretVersionCheck,
+  SecretVersionMeta,
+  SetSecretOptions,
+  SetSecretResult,
   StoreCounts,
   StoreDescriptor,
   User,
@@ -37,7 +43,7 @@ import type {
   VaultItemKind,
   VaultItemMetadata,
 } from "../types.js";
-import type { Store } from "./types.js";
+import { VersionConflictError, VersionNotFoundError, type Store } from "./types.js";
 
 type Transport = HasnaStorageClient["transport"];
 
@@ -95,16 +101,82 @@ export class ApiStore implements Store {
   }
 
   // ── secrets ────────────────────────────────────────────────────────────
-  async setSecret(key: string, value: string, type: SecretType = "other", label?: string, expiresAt?: string): Promise<SecretEntry> {
+  async setSecret(key: string, value: string, type: SecretType = "other", label?: string, expiresAt?: string, opts?: SetSecretOptions): Promise<SetSecretResult> {
     assertValidSecretPath(key);
     // The Store contract's 5th arg is an absolute ISO expiry (parseTtl already resolved any --ttl duration).
     // Send it as `expires_at`; forwarding it as `ttl` makes the server try to parse an ISO string as a duration -> 500.
-    await this.transport.post("/secrets", { key, value, type, ...(label ? { label } : {}), ...(expiresAt ? { expires_at: expiresAt } : {}) });
+    const res = await this.transport.post<{ version?: number; unchanged?: boolean }>("/secrets", {
+      key,
+      value,
+      type,
+      ...(label ? { label } : {}),
+      ...(expiresAt ? { expires_at: expiresAt } : {}),
+      ...(opts?.reason ? { reason: opts.reason } : {}),
+      ...(opts?.changeKind ? { change_kind: opts.changeKind } : {}),
+      ...(opts?.batchId ? { batch_id: opts.batchId } : {}),
+    });
     // POST returns metadata only; fetch the full entry to match the Store contract.
     const entry = await this.getSecret(key);
-    if (entry) return entry;
+    if (entry) return { ...entry, version: res?.version, unchanged: res?.unchanged };
     const now = new Date().toISOString();
-    return { key, value, type, ...(label ? { label } : {}), created_at: now, updated_at: now };
+    return { key, value, type, ...(label ? { label } : {}), created_at: now, updated_at: now, version: res?.version, unchanged: res?.unchanged };
+  }
+
+  async listVersions(key: string, limit = 20): Promise<SecretVersionMeta[]> {
+    const res = await this.transport.get<{ versions?: SecretVersionMeta[] }>("/secrets/versions", {
+      query: { key, limit: String(limit) },
+    });
+    return res.versions ?? [];
+  }
+
+  async checkVersion(key: string, version: number): Promise<SecretVersionCheck> {
+    try {
+      const res = await this.transport.get<{ check?: SecretVersionCheck }>("/secrets/versions/check", {
+        query: { key, version: String(version) },
+      });
+      if (!res.check) throw new VersionNotFoundError(`Version ${version} not found for key ${key}`);
+      return res.check;
+    } catch (error) {
+      if (isNotFound(error)) throw new VersionNotFoundError(`Version ${version} not found for key ${key}`);
+      throw error;
+    }
+  }
+
+  async restoreVersion(key: string, version: number, opts: RestoreVersionOptions): Promise<SecretVersionMeta> {
+    try {
+      const res = await this.transport.post<{ restored?: SecretVersionMeta }>("/secrets/restore", {
+        key,
+        version,
+        reason: opts.reason,
+        expected_current_version: opts.expectCurrent,
+      });
+      if (!res.restored) throw new VersionNotFoundError(`Version ${version} not found for key ${key}`);
+      return res.restored;
+    } catch (error) {
+      if (isNotFound(error)) {
+        throw new VersionNotFoundError(`Version ${version} not found for key ${key}`);
+      }
+      if (typeof error === "object" && error !== null && (error as { status?: number }).status === 409) {
+        const body = (error as { body?: unknown }).body;
+        const message =
+          typeof body === "object" && body !== null && typeof (body as { error?: unknown }).error === "string"
+            ? (body as { error: string }).error
+            : `Current version changed; expected ${opts.expectCurrent}.`;
+        throw new VersionConflictError(message);
+      }
+      throw error;
+    }
+  }
+
+  async pruneVersionHistory(): Promise<PruneVersionsResult> {
+    // The server enforces retention on every version write; there is nothing to
+    // sweep client-side. Kept as a no-op so the Store contract is uniform.
+    return { versions: 0 };
+  }
+
+  async runVersionBackfill(): Promise<number> {
+    // The server owns the migration backfill; nothing to do client-side.
+    return 0;
   }
 
   async getSecret(key: string): Promise<SecretEntry | undefined> {
