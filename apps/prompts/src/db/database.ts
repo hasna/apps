@@ -406,6 +406,36 @@ function runMigrations(db: Database): void {
       name: "009_feedback",
       sql: `CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), message TEXT NOT NULL, email TEXT, category TEXT DEFAULT 'general', version TEXT, machine_id TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));`,
     },
+    {
+      name: "010_dispatch_runs",
+      sql: `
+        CREATE TABLE IF NOT EXISTS dispatch_runs (
+          id TEXT PRIMARY KEY,
+          runtime TEXT NOT NULL,
+          target TEXT,
+          status TEXT NOT NULL,
+          prompt_id TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+          prompt_slug TEXT NOT NULL,
+          prompt_version INTEGER NOT NULL,
+          render_hash TEXT NOT NULL,
+          vars_hash TEXT,
+          resolved_references TEXT NOT NULL DEFAULT '[]',
+          output_pointer TEXT,
+          output_hash TEXT,
+          output_bytes INTEGER NOT NULL DEFAULT 0,
+          exit_code INTEGER,
+          error_code TEXT,
+          notes TEXT,
+          started_at TEXT,
+          finished_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_dispatch_runs_status ON dispatch_runs(status);
+        CREATE INDEX IF NOT EXISTS idx_dispatch_runs_prompt ON dispatch_runs(prompt_id);
+        CREATE INDEX IF NOT EXISTS idx_dispatch_runs_created ON dispatch_runs(created_at);
+      `,
+    },
   ]
 
   for (const migration of migrations) {
