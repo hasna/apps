@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "id": "wks_3texxrawhaxm",
-  "slug": "open-models",
-  "name": "open-models",
+  "slug": "models",
+  "name": "Models",
   "kind": "open-source",
   "root_id": "root_28xtmiu5mi8j",
   "recipe_id": null,
   "primary_path": "/home/hasna/workspace/hasna/opensource/open-models",
-  "git_remote": null,
+  "git_remote": "https://github.com/hasna/models.git",
   "tags": [
     "hasna",
     "opensource",
