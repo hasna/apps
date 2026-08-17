@@ -180,7 +180,7 @@ describe("MCP tool operations", () => {
       const payload = JSON.parse(result.content[0]!.text);
       expect(payload.discovery.projectName).toBe("mcp-bootstrap");
       expect(payload.project.name).toBe("mcp-bootstrap");
-      expect(payload.taskList.slug).toBe("todos-mcp-bootstrap");
+      expect(payload.taskList.slug).toBe("mcp-bootstrap");
       expect(payload.created.project).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -367,7 +367,7 @@ describe("MCP tool operations", () => {
     const statusResult = await callCapturedTool(tools, "get_secret_safety", {});
     expect(JSON.parse(statusResult.content[0]!.text).redaction_patterns).toEqual(["INTERNAL-[0-9]{4}"]);
 
-    const scanResult = await callCapturedTool(tools, "scan_secret_text", { text: "INTERNAL-1234 TOKEN=secretsecret" });
+    const scanResult = await callCapturedTool(tools, "scan_secret_text", { text: "INTERNAL-1234 TOKEN=placeholder123" });
     const scan = JSON.parse(scanResult.content[0]!.text);
     expect(scan.ok).toBe(false);
     expect(scan.findings.map((finding: { pattern: string }) => finding.pattern)).toEqual(expect.arrayContaining([
@@ -375,7 +375,7 @@ describe("MCP tool operations", () => {
       "env-secret-assignment",
     ]));
     expect(scanResult.content[0]!.text).not.toContain("INTERNAL-1234");
-    expect(scanResult.content[0]!.text).not.toContain("secretsecret");
+    expect(scanResult.content[0]!.text).not.toContain("placeholder123");
 
     if (previousHome === undefined) delete process.env["HOME"];
     else process.env["HOME"] = previousHome;

@@ -1559,6 +1559,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         name: z.string().describe("Project name"),
         path: z.string().describe("Unique filesystem path for the project"),
         description: z.string().optional(),
+        parent_id: z.string().optional().describe("Optional parent project id to create this as a sub-project"),
         status: z.enum(["active", "completed", "on_hold", "archived"]).optional(),
         short_id: z.string().nullable().optional().describe("Short ID (auto-generated if omitted)"),
         metadata: z.record(z.unknown()).optional(),

@@ -3,7 +3,7 @@ import { getDatabase } from "../db/database.js";
 import { listAgents } from "../db/agents.js";
 import { getRecentActivity } from "../db/audit.js";
 import { listPlans } from "../db/plans.js";
-import { listProjects } from "../db/projects.js";
+import { listProjects, orderProjectsParentFirst } from "../db/projects.js";
 import { listTaskLists } from "../db/task-lists.js";
 import { listTasks, replaceTaskTags } from "../db/tasks.js";
 import { getTemplateTasks, listTemplates } from "../db/templates.js";
@@ -30,7 +30,7 @@ import {
 
 const PROJECT_COLUMNS = [
   "id", "name", "path", "description", "task_list_id", "task_prefix", "task_counter",
-  "created_at", "updated_at", "machine_id", "synced_at",
+  "parent_id", "created_at", "updated_at", "machine_id", "synced_at",
 ] as const;
 
 const PROJECT_MACHINE_PATH_COLUMNS = [
@@ -167,7 +167,7 @@ export function importSqliteTodosStorageSnapshot(
     }
   };
 
-  applyRows("projects", "projects", PROJECT_COLUMNS, snapshot.projects, "updated_at");
+  applyRows("projects", "projects", PROJECT_COLUMNS, orderProjectsParentFirst(snapshot.projects), "updated_at");
   applyRows("project_machine_paths", "project_machine_paths", PROJECT_MACHINE_PATH_COLUMNS, snapshot.projectMachinePaths ?? [], "updated_at");
   applyRows("agents", "agents", AGENT_COLUMNS, snapshot.agents, "last_seen_at");
   applyRows("task_lists", "task_lists", TASK_LIST_COLUMNS, snapshot.taskLists, "updated_at");

@@ -179,6 +179,7 @@ function createAgentProjectDemoBundle(): TodosLocalBridgeBundle {
     task_list_id: ids.list,
     task_prefix: "DEMO",
     task_counter: 4,
+    parent_id: null,
     created_at: createdAt,
     updated_at: completedAt,
   });

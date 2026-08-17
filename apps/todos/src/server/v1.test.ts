@@ -10,6 +10,7 @@ import {
   createLocalTodosProjectRegistrationAuthority,
   deriveTodosProjectRegistrationIdempotencyKey,
   digestProjectRegistrationValue,
+  type TodosProjectRegistrationRequest,
 } from "../project-registration/index.js";
 import {
   createSqliteTodosTaskManifestAuthority,
@@ -70,6 +71,66 @@ beforeEach(() => {
 });
 
 afterEach(() => resetDatabase());
+
+describe("/v1 projects parent_id", () => {
+  test("creates a sub-project and reads parent_id back on get and list", async () => {
+    const parent = await request("/v1/projects", "POST", {
+      name: "Internal Apps",
+      path: "/workspace/internal-apps",
+      task_list_id: "internal-apps",
+    });
+    expect(parent?.status).toBe(201);
+    const parentId = (await parent!.json() as { project: { id: string } }).project.id;
+
+    const child = await request("/v1/projects", "POST", {
+      name: "Internal App Todos",
+      path: "/workspace/internal-app-todos",
+      task_list_id: "internal-app-todos",
+      parent_id: parentId,
+    });
+    expect(child?.status).toBe(201);
+    const childBody = await child!.json() as { project: { id: string; parent_id: string | null } };
+    expect(childBody.project.parent_id).toBe(parentId);
+
+    const exact = await request(`/v1/projects/${childBody.project.id}`);
+    expect((await exact!.json() as { project: { parent_id: string | null } }).project.parent_id).toBe(parentId);
+
+    const list = await request("/v1/projects");
+    const projects = (await list!.json() as { projects: Array<{ id: string; parent_id: string | null }> }).projects;
+    expect(projects.find((project) => project.id === childBody.project.id)!.parent_id).toBe(parentId);
+  });
+
+  test("rejects a parent_id that does not exist", async () => {
+    const response = await request("/v1/projects", "POST", {
+      name: "Orphan",
+      path: "/workspace/orphan",
+      parent_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    });
+    expect(response?.status).toBe(404);
+    expect(await response!.json()).toMatchObject({ code: "PROJECT_NOT_FOUND" });
+  });
+
+  test("rejects a parent_id cycle through PATCH reparent", async () => {
+    const a = (await (await request("/v1/projects", "POST", { name: "A", path: "/workspace/a" }))!.json() as { project: { id: string } }).project;
+    const b = (await (await request("/v1/projects", "POST", { name: "B", path: "/workspace/b", parent_id: a.id }))!.json() as { project: { id: string } }).project;
+    const c = (await (await request("/v1/projects", "POST", { name: "C", path: "/workspace/c", parent_id: b.id }))!.json() as { project: { id: string } }).project;
+
+    const cycle = await request(`/v1/projects/${a.id}`, "PATCH", { parent_id: c.id });
+    expect(cycle?.status).toBe(409);
+    expect(await cycle!.json()).toMatchObject({ code: "PROJECT_PARENT_CYCLE" });
+
+    const detach = await request(`/v1/projects/${c.id}`, "PATCH", { parent_id: null });
+    expect(detach?.status).toBe(200);
+    expect((await detach!.json() as { project: { parent_id: string | null } }).project.parent_id).toBeNull();
+  });
+
+  test("rejects an unknown project patch field", async () => {
+    const created = await request("/v1/projects", "POST", { name: "P", path: "/workspace/p" });
+    const id = (await created!.json() as { project: { id: string } }).project.id;
+    const response = await request(`/v1/projects/${id}`, "PATCH", { parent_id: 42 });
+    expect(response?.status).toBe(400);
+  });
+});
 
 describe("/v1 task-manifest routing", () => {
   test("applies and recovers the owning tenant's binding through the production v1 router", async () => {
@@ -649,11 +710,13 @@ describe("/v1 task-list cloud parity", () => {
 
   test("routes exact historical registration receipt identity through authenticated v1", async () => {
     const historicalPackageVersion = "1.0.0-rc.3";
+    const historicalCorpusId =
+      "todos:adfd95c7-ee8b-52cb-ae47-4ae65dae3313:postgresql";
     const historicalAuthority = createLocalTodosProjectRegistrationAuthority(db, {
       packageVersion: historicalPackageVersion,
       authorityId: "todos-v1-test",
       tenantId: "tenant-v1-test",
-      corpusId: "corpus-v1-test",
+      corpusId: historicalCorpusId,
     });
     const desired = {
       source_project_id: "wks_fleetresourceshistoryv1",
@@ -675,7 +738,7 @@ describe("/v1 task-list cloud parity", () => {
       request_digest: requestDigest,
       precondition_digest: preconditionDigest,
     });
-    const receipt = await historicalAuthority.create({
+    const sourceRequest: TodosProjectRegistrationRequest = {
       operation_id: operationId,
       step_id: "todos_project",
       resource_kind: "project",
@@ -684,7 +747,7 @@ describe("/v1 task-list cloud parity", () => {
       package_version: historicalPackageVersion,
       authority_id: "todos-v1-test",
       tenant_id: "tenant-v1-test",
-      corpus_id: "corpus-v1-test",
+      corpus_id: historicalCorpusId,
       target_selector: targetSelector,
       idempotency_key: idempotencyKey,
       request_digest: requestDigest,
@@ -696,7 +759,8 @@ describe("/v1 task-list cloud parity", () => {
       target: null,
       response_byte_limit: 65_536,
       time_budget_ms: 5_000,
-    });
+    };
+    const receipt = await historicalAuthority.create(sourceRequest);
     const lookupRequest = {
       operation_id: operationId,
       step_id: "todos_project",
@@ -707,7 +771,7 @@ describe("/v1 task-list cloud parity", () => {
       package_version: historicalPackageVersion,
       authority_id: "todos-v1-test",
       tenant_id: "tenant-v1-test",
-      corpus_id: "corpus-v1-test",
+      corpus_id: historicalCorpusId,
       target_selector: targetSelector,
       idempotency_key: idempotencyKey,
       target_id: receipt.target_id,
@@ -743,6 +807,16 @@ describe("/v1 task-list cloud parity", () => {
       body: { code: "TODOS_PROJECT_REGISTRATION_RECEIPT_NOT_FOUND" },
     });
 
+    const currentCorpus = await request(
+      "/v1/project-registration/receipts/lookup",
+      "POST",
+      { ...lookupRequest, corpus_id: "corpus-v1-test" },
+    );
+    expect({ status: currentCorpus?.status, body: await currentCorpus!.json() }).toMatchObject({
+      status: 404,
+      body: { code: "TODOS_PROJECT_REGISTRATION_RECEIPT_NOT_FOUND" },
+    });
+
     const wrongRoute = await request(
       "/v1/project-registration/receipts/lookup",
       "POST",
@@ -761,6 +835,27 @@ describe("/v1 task-list cloud parity", () => {
     expect({ status: wrongTenant?.status, body: await wrongTenant!.json() }).toMatchObject({
       status: 400,
       body: { code: "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH" },
+    });
+
+    const currentRecord = await store.projects.get(receipt.target_id!);
+    const validated = await request(
+      "/v1/project-registration/validate-prior-adoption",
+      "POST",
+      {
+        source_request: sourceRequest,
+        source_receipt: receipt,
+        current_record: currentRecord,
+      },
+    );
+    expect({ status: validated?.status, body: await validated!.json() }).toMatchObject({
+      status: 200,
+      body: {
+        validation: {
+          valid: true,
+          source_receipt_id: receipt.receipt_id,
+          target_id: receipt.target_id,
+        },
+      },
     });
   });
 
@@ -1276,10 +1371,20 @@ describe("/v1 project mutation", () => {
       task_list_id: "Not Canonical !!",
     }))?.status).toBe(400);
 
+    const explicitPrefixed = await request("/v1/projects", "POST", {
+      name: "Explicit Prefixed",
+      path: "/tmp/explicit-prefixed",
+      task_list_id: "todos-explicit-prefixed",
+    });
+    expect(explicitPrefixed?.status).toBe(201);
+    expect(await explicitPrefixed!.json()).toMatchObject({
+      project: { task_list_id: "todos-explicit-prefixed" },
+    });
+
     const first = await request("/v1/projects", "POST", { name: "Open Emails", path: "/tmp/open-emails" });
     expect(first?.status).toBe(201);
     const firstProject = (await first!.json() as { project: { id: string; task_list_id: string } }).project;
-    expect(firstProject.task_list_id).toBe("todos-open-emails");
+    expect(firstProject.task_list_id).toBe("open-emails");
 
     const distinct = await request("/v1/projects", "POST", {
       name: "Open Emails",
@@ -1294,7 +1399,7 @@ describe("/v1 project mutation", () => {
 
     const bypass = await request(`/v1/projects/${firstProject.id}`, "PATCH", { task_list_id: "bypass" });
     expect(bypass?.status).toBe(400);
-    expect(await store.projects.get(firstProject.id)).toMatchObject({ task_list_id: "todos-open-emails" });
+    expect(await store.projects.get(firstProject.id)).toMatchObject({ task_list_id: "open-emails" });
 
     const emptyCanonicalSlug = await request("/v1/projects", "POST", { name: "---", path: "/tmp/empty" });
     expect(emptyCanonicalSlug?.status).toBe(400);

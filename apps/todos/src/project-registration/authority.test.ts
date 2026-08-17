@@ -28,6 +28,8 @@ const OPERATION_ID = "fleet-resources-registration-0001";
 const HISTORICAL_OPERATION_ID = "fleet-resources-historical-registration-0001";
 const HISTORICAL_ROUTE = "todos.project-registration.v1";
 const HISTORICAL_PACKAGE_VERSION = "1.0.0-rc.3";
+const HISTORICAL_CORPUS_ID =
+  "todos:adfd95c7-ee8b-52cb-ae47-4ae65dae3313:postgresql";
 const FABRICATED_PACKAGE_VERSION = "1.0.0-rc.7";
 const HISTORICAL_PROJECT_RECEIPT_ID =
   "tpr_f3f2fdc82fc4a7a4f4ffb97c42e90ada20cff6b5";
@@ -316,7 +318,7 @@ function insertHistoricalReceipt(fixture: HistoricalReceiptFixture): void {
       result_digest, duplicate_of_receipt_id, accepted_receipt_id,
       created_by_operation, created_at
     ) VALUES (
-      ?, 'todos', ?, ?, 'todos-test-authority', 'tenant-test', 'corpus-test',
+      ?, 'todos', ?, ?, 'todos-test-authority', 'tenant-test', ?,
       ?, ?, ?, 'forward', ?, ?, ?, ?, ?, 'accepted', NULL, ?, ?, ?,
       NULL, NULL, 1, ?
     )
@@ -324,6 +326,7 @@ function insertHistoricalReceipt(fixture: HistoricalReceiptFixture): void {
     fixture.receiptId,
     HISTORICAL_ROUTE,
     HISTORICAL_PACKAGE_VERSION,
+    HISTORICAL_CORPUS_ID,
     HISTORICAL_OPERATION_ID,
     fixture.stepId,
     fixture.resourceKind,
@@ -353,7 +356,7 @@ function historicalLookup(
     package_version: HISTORICAL_PACKAGE_VERSION,
     authority_id: "todos-test-authority",
     tenant_id: "tenant-test",
-    corpus_id: "corpus-test",
+    corpus_id: HISTORICAL_CORPUS_ID,
     target_selector: fixture.targetSelector,
     idempotency_key: fixture.idempotencyKey,
     target_id: fixture.targetId,
@@ -419,7 +422,7 @@ describe("Todos package-owned project registration authority", () => {
     expect(getProject(projectReceipt.target_id!, db)).toMatchObject({
       id: projectReceipt.target_id,
       name: "Fleet Resources",
-      task_list_id: "todos-fleet-resources",
+      task_list_id: "fleet-resources",
     });
     expect(await authority.readExact({
       resource_kind: "project",
@@ -443,7 +446,7 @@ describe("Todos package-owned project registration authority", () => {
     expect(list).toMatchObject({
       id: listReceipt.target_id,
       project_id: projectReceipt.target_id,
-      slug: "todos-fleet-resources",
+      slug: "fleet-resources",
       name: "Fleet Resources",
     });
     expect(list!.project_id).toBe(projectReceipt.target_id);
@@ -504,6 +507,44 @@ describe("Todos package-owned project registration authority", () => {
     await expect(authority.compensate(inverseRequest(projectReceipt, projectCall)))
       .rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_INVALID_INPUT" });
     expect(getProject(existingProject.id, db)).not.toBeNull();
+  });
+
+  test("binds a pre-normalization 'todos-' prefixed row without duplicating it", async () => {
+    // Rows registered before the slug-prefix removal carry `todos-<slug>`.
+    // bind_existing must bind that row (the same workspace, found by path /
+    // legacy task-list slug) instead of creating a new unprefixed one.
+    const legacyProject = createProject({
+      name: "Fleet Resources",
+      path: "hasna-project://wks_fleetresources01",
+      task_list_id: "todos-fleet-resources",
+    }, db);
+    const legacyTaskList = createTaskList({
+      name: "Fleet Resources",
+      slug: "todos-fleet-resources",
+      project_id: legacyProject.id,
+    }, db);
+
+    const projectReceipt = await authority.create(projectRequest({
+      operation_id: "fleet-resources-legacy-bind-0001",
+      bind_existing: true,
+    }));
+    expect(projectReceipt).toMatchObject({
+      outcome: "accepted",
+      target_id: legacyProject.id,
+      created_by_operation: false,
+    });
+    const taskListReceipt = await authority.create(taskListRequest(legacyProject.id, {
+      operation_id: "fleet-resources-legacy-task-list-bind-0001",
+      bind_existing: true,
+    }));
+    expect(taskListReceipt).toMatchObject({
+      outcome: "accepted",
+      target_id: legacyTaskList.id,
+      created_by_operation: false,
+    });
+    expect(db.query("SELECT COUNT(*) AS count FROM projects").get()).toEqual({ count: 1 });
+    expect(db.query("SELECT COUNT(*) AS count FROM task_lists").get()).toEqual({ count: 1 });
+    expect(getProject(legacyProject.id, db)?.task_list_id).toBe("todos-fleet-resources");
   });
 
   test("bind-existing receipts preserve immutable project and task-list incarnations across pre-bind mutable drift", async () => {
@@ -1190,7 +1231,7 @@ describe("Todos package-owned project registration authority", () => {
     const normalized = projectRequest(request);
     const receipt = await authority.create(normalized);
     expect(receipt.outcome).toBe("accepted");
-    expect(getProject(receipt.target_id!, db)?.task_list_id).toBe("todos-iapp-emails");
+    expect(getProject(receipt.target_id!, db)?.task_list_id).toBe("iapp-emails");
   });
 
   test("returns one bounded immutable terminal receipt from exact lookup", async () => {
@@ -1251,7 +1292,7 @@ describe("Todos package-owned project registration authority", () => {
         package_version: HISTORICAL_PACKAGE_VERSION,
         authority_id: "todos-test-authority",
         tenant_id: "tenant-test",
-        corpus_id: "corpus-test",
+        corpus_id: HISTORICAL_CORPUS_ID,
         target_id: fixture.targetId,
       });
       expect(result.response_control).toMatchObject({
@@ -1272,8 +1313,8 @@ describe("Todos package-owned project registration authority", () => {
       tenant_id: "tenant-other",
     }))).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH" });
     await expect(authority.lookupReceipt(historicalLookup(projectFixture, {
-      corpus_id: "corpus-other",
-    }))).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH" });
+      corpus_id: "corpus-test",
+    }))).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_RECEIPT_NOT_FOUND" });
     await expect(authority.lookupReceipt(historicalLookup(projectFixture, {
       authority: "projects" as "todos",
     }))).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH" });
@@ -1288,18 +1329,106 @@ describe("Todos package-owned project registration authority", () => {
   });
 
   test("keeps current create and inverse operations strict to the installed package identity", async () => {
-    await expect(authority.create(projectRequest({
-      package_version: HISTORICAL_PACKAGE_VERSION,
-    }))).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH" });
+    for (const identityOverride of [
+      { package_version: HISTORICAL_PACKAGE_VERSION },
+      { corpus_id: HISTORICAL_CORPUS_ID },
+    ]) {
+      await expect(authority.create(projectRequest(identityOverride)))
+        .rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH" });
+    }
 
     const forward = projectRequest({
       operation_id: "fleet-resources-current-package-inverse-0001",
     });
     const accepted = await authority.create(forward);
-    await expect(authority.compensate({
-      ...inverseRequest(accepted, forward),
+    for (const identityOverride of [
+      { package_version: HISTORICAL_PACKAGE_VERSION },
+      { corpus_id: HISTORICAL_CORPUS_ID },
+    ]) {
+      await expect(authority.compensate({
+        ...inverseRequest(accepted, forward),
+        ...identityOverride,
+      })).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH" });
+    }
+    expect(getProject(accepted.target_id!, db)).not.toBeNull();
+  });
+
+  test("validates prior adoption from the exact historical corpus without weakening current writes", async () => {
+    const historicalAuthority = createLocalTodosProjectRegistrationAuthority(db, {
+      packageVersion: HISTORICAL_PACKAGE_VERSION,
+      authorityId: "todos-test-authority",
+      tenantId: "tenant-test",
+      corpusId: HISTORICAL_CORPUS_ID,
+      now: () => "2026-08-07T10:00:00.000Z",
+    });
+    const sourceRequest = projectRequest({
+      operation_id: "fleet-resources-historical-adoption-0001",
       package_version: HISTORICAL_PACKAGE_VERSION,
-    })).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH" });
+      corpus_id: HISTORICAL_CORPUS_ID,
+      project_id: "wks_fleetresourceshistory01",
+      target_selector: "wks_fleetresourceshistory01",
+      project_slug: "fleet-resources-history",
+      project_name: "Fleet Resources History",
+      desired: {
+        source_project_id: "wks_fleetresourceshistory01",
+        source_project_slug: "fleet-resources-history",
+        name: "Fleet Resources History",
+      },
+    });
+    const sourceReceipt = await historicalAuthority.create(sourceRequest);
+    const currentRecord = getProject(sourceReceipt.target_id!, db)!;
+    const lookupRequest = {
+      operation_id: sourceRequest.operation_id,
+      step_id: sourceRequest.step_id,
+      resource_kind: sourceRequest.resource_kind,
+      direction: sourceRequest.direction,
+      authority: "todos" as const,
+      authority_route: sourceRequest.authority_route,
+      package_version: sourceRequest.package_version,
+      authority_id: sourceRequest.authority_id,
+      tenant_id: sourceRequest.tenant_id,
+      corpus_id: sourceRequest.corpus_id,
+      target_selector: sourceRequest.target_selector,
+      idempotency_key: sourceRequest.idempotency_key,
+      target_id: sourceReceipt.target_id!,
+      max_items: 1 as const,
+      ...BOUNDS,
+    };
+
+    expect(await authority.lookupReceipt(lookupRequest)).toMatchObject({
+      receipt: {
+        receipt_id: sourceReceipt.receipt_id,
+        corpus_id: HISTORICAL_CORPUS_ID,
+        target_id: currentRecord.id,
+      },
+      response_control: { complete: true, truncated: false },
+    });
+    await expect(authority.lookupReceipt({
+      ...lookupRequest,
+      corpus_id: "corpus-test",
+    })).rejects.toMatchObject({
+      code: "TODOS_PROJECT_REGISTRATION_RECEIPT_NOT_FOUND",
+    });
+    expect(await authority.validatePriorRegistrationAdoption(
+      sourceRequest,
+      sourceReceipt,
+      currentRecord,
+    )).toMatchObject({
+      valid: true,
+      source_receipt_id: sourceReceipt.receipt_id,
+      target_id: currentRecord.id,
+    });
+
+    await expect(authority.create(sourceRequest)).rejects.toMatchObject({
+      code: "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH",
+    });
+    await expect(authority.validatePriorRegistrationAdoption(
+      { ...sourceRequest, corpus_id: "corpus-test" },
+      sourceReceipt,
+      currentRecord,
+    )).rejects.toMatchObject({
+      code: "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED",
+    });
   });
 
   test("enforces positive byte/time bounds and max_items exactly one at the producer", async () => {
@@ -1625,14 +1754,18 @@ describe("Todos package-owned project registration authority", () => {
       registeredProject.target_id!,
       listRequest,
     ));
+    // `todos-` is no longer a reserved namespace: the registration derives the
+    // unprefixed slug, creates it, and leaves the ordinary `todos-` list
+    // untouched (not clobbered).
     expect(listReceipt).toMatchObject({
-      outcome: "terminal_nonacceptance",
-      reason: "target_already_exists",
-      created_by_operation: false,
+      outcome: "accepted",
+      resource_kind: "task_list",
+      created_by_operation: true,
     });
+    expect(getTaskList(listReceipt.target_id!, db)?.slug).toBe("fleet-list-conflict");
     expect(getTaskList(existingList.id, db)?.name).toBe("Existing Queue");
     expect(db.query("SELECT COUNT(*) AS count FROM task_lists").get())
-      .toEqual({ count: beforeListCount.count });
+      .toEqual({ count: beforeListCount.count + 1 });
   });
 
   for (const point of [
@@ -1774,7 +1907,7 @@ describe("Todos package-owned project registration authority", () => {
     const ordinaryWinner = createProject({
       name: "Ordinary winner",
       path: "/ordinary-winner",
-      task_list_id: "todos-fleet-resources",
+      task_list_id: "fleet-resources",
       task_prefix: "WIN",
     }, db);
     releaseFault();
@@ -2098,7 +2231,7 @@ describe("Todos package-owned project registration authority", () => {
     expect(sql).toContain("route, package_version");
   });
 
-  test("selects PostgreSQL receipts by the complete stored route and package identity", async () => {
+  test("selects PostgreSQL receipts by the complete historical stored source identity", async () => {
     const statements: Array<{ text: string; params: readonly unknown[] | undefined }> = [];
     const row = {
       receipt_id: HISTORICAL_PROJECT_RECEIPT_ID,
@@ -2107,7 +2240,7 @@ describe("Todos package-owned project registration authority", () => {
       package_version: HISTORICAL_PACKAGE_VERSION,
       authority_id: "todos-test-authority",
       tenant_id: "tenant-test",
-      corpus_id: "corpus-test",
+      corpus_id: HISTORICAL_CORPUS_ID,
       operation_id: HISTORICAL_OPERATION_ID,
       step_id: "todos_project",
       resource_kind: "project",
@@ -2126,7 +2259,7 @@ describe("Todos package-owned project registration authority", () => {
       accepted_receipt_id: null,
       created_by_operation: true,
       created_at: "2026-08-07T10:00:00.000Z",
-    };
+    } as const;
     const query = async (text: string, params?: readonly unknown[]) => {
       statements.push({ text, params });
       return text.includes("SELECT * FROM todos_project_registration_receipts")
@@ -2140,20 +2273,30 @@ describe("Todos package-owned project registration authority", () => {
       },
     };
     const backend = new PostgresTodosProjectRegistrationBackend(client);
+    const currentAuthority = new PackageOwnedTodosProjectRegistrationAuthority(backend, {
+      packageVersion: "0.15.32",
+      authorityId: row.authority_id,
+      tenantId: row.tenant_id,
+      corpusId: "todos:postgresql",
+    });
 
-    const receipt = await backend.getReceiptForLookup({
-      authority_id: row.authority_id,
-      tenant_id: row.tenant_id,
-      corpus_id: row.corpus_id,
-      route: row.route,
-      package_version: row.package_version,
+    const receipt = (await currentAuthority.lookupReceipt({
       operation_id: row.operation_id,
       step_id: row.step_id,
       resource_kind: row.resource_kind,
       direction: row.direction,
-      idempotency_key: row.idempotency_key,
+      authority: "todos",
+      authority_route: row.route,
+      package_version: row.package_version,
+      authority_id: row.authority_id,
+      tenant_id: row.tenant_id,
+      corpus_id: row.corpus_id,
       target_selector: row.target_selector,
-    });
+      idempotency_key: row.idempotency_key,
+      target_id: row.target_id,
+      max_items: 1,
+      ...BOUNDS,
+    })).receipt;
 
     expect(receipt?.receipt_id).toBe(HISTORICAL_PROJECT_RECEIPT_ID);
     const lookup = statements.find(({ text }) =>
