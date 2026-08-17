@@ -334,9 +334,9 @@ export function registerCommands(program: Command): void {
 
           // Try to open the browser
           try {
-            const { exec } = await import("child_process");
+            const { spawn } = await import("child_process");
             const openCmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-            exec(`${openCmd} "${oauthUrl}"`);
+            spawn(openCmd, [oauthUrl], { stdio: "ignore", detached: true }).unref();
             console.log(chalk.dim("Browser opened. Complete the OAuth flow, then press Ctrl+C to stop the server."));
           } catch {
             console.log(chalk.dim("Open the URL above in your browser to complete authentication."));

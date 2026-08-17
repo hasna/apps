@@ -14,7 +14,7 @@ import { createWorkflow, listWorkflows, getWorkflowByName, deleteWorkflow } from
 import { triggerJob } from "../lib/scheduler.js";
 import { runWorkflow } from "../lib/workflow-runner.js";
 import { getDatabase, getConnectorsHome } from "../db/database.js";
-import { join, dirname, extname, basename } from "path";
+import { join, dirname, extname, basename, relative, resolve, sep } from "path";
 import { fileURLToPath } from "url";
 import {
   CONNECTORS,
@@ -1025,10 +1025,15 @@ export async function startServer(requestedPort: number, options?: { open?: bool
       // ── Static Files (Vite dashboard) ──
       if (dashboardExists && (method === "GET" || method === "HEAD")) {
         // Try to serve exact file (e.g., /assets/index-abc123.js)
+        // Containment: never resolve outside dashboardDir (same contract as
+        // mcps serve resolveStaticPath).
         if (path !== "/") {
           const filePath = join(dashboardDir, path);
-          const res = serveStaticFile(filePath);
-          if (res) return res;
+          const rel = relative(dashboardDir, resolve(filePath));
+          if (!rel.startsWith("..") && !rel.includes(`..${sep}`) && rel !== "") {
+            const res = serveStaticFile(filePath);
+            if (res) return res;
+          }
         }
 
         // SPA fallback: serve index.html for all other GET routes
@@ -1059,13 +1064,13 @@ export async function startServer(requestedPort: number, options?: { open?: bool
 
   if (shouldOpen) {
     try {
-      const { exec } = await import("child_process");
+      const { spawn } = await import("child_process");
       const openCmd = process.platform === "darwin"
         ? "open"
         : process.platform === "win32"
           ? "start"
           : "xdg-open";
-      exec(`${openCmd} ${url}`);
+      spawn(openCmd, [url], { stdio: "ignore", detached: true }).unref();
     } catch {
       // Silently ignore if we can't open browser
     }

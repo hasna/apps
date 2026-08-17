@@ -6,6 +6,7 @@
 
 import { existsSync } from "fs";
 import { join, dirname, extname, resolve, relative, sep } from "path";
+import { timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "url";
 import {
   listServers,
@@ -168,8 +169,18 @@ function isAuthorized(req: Request, host: string): boolean {
     return isLoopbackHost(host);
   }
   const auth = req.headers.get("authorization");
-  if (auth === `Bearer ${token}`) return true;
+  if (safeBearerEq(auth, token)) return true;
   return isLoopbackHost(host);
+}
+
+/** Constant-time Bearer compare (length mismatch still fails). */
+function safeBearerEq(headerValue: string | null, token: string): boolean {
+  const expected = `Bearer ${token}`;
+  if (typeof headerValue !== "string") return false;
+  const a = Buffer.from(headerValue, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }
 
 function unauthorizedResponse(port: number): Response {
