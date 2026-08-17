@@ -16,7 +16,7 @@ export interface ImportResult {
   errors: Array<{ item: string; error: string }>
 }
 
-export function importFromJson(items: ImportItem[], changedBy?: string): ImportResult {
+export async function importFromJson(items: ImportItem[], changedBy?: string): Promise<ImportResult> {
   let created = 0
   let updated = 0
   const errors: Array<{ item: string; error: string }> = []
@@ -33,7 +33,7 @@ export function importFromJson(items: ImportItem[], changedBy?: string): ImportR
         source: "imported",
         changed_by: changedBy,
       }
-      const { created: wasCreated } = upsertPrompt(input)
+      const { created: wasCreated } = await upsertPrompt(input)
       if (wasCreated) created++
       else updated++
     } catch (e) {
@@ -267,11 +267,11 @@ function parseFrontmatterList(value: string): string[] {
   return items.map(parseFrontmatterScalar).filter(Boolean)
 }
 
-export function importFromMarkdown(files: Array<{ filename: string; content: string }>, changedBy?: string): ImportResult {
+export async function importFromMarkdown(files: Array<{ filename: string; content: string }>, changedBy?: string): Promise<ImportResult> {
   const items = files
     .map((f) => markdownToImportItem(f.content, f.filename))
     .filter((item): item is ImportItem => item !== null)
-  return importFromJson(items, changedBy)
+  return await importFromJson(items, changedBy)
 }
 
 // ── Auto-scan slash commands from all agents ──────────────────────────────────
@@ -280,10 +280,10 @@ export interface SlashCommandScanResult {
   imported: ImportResult
 }
 
-export function scanAndImportSlashCommands(
+export async function scanAndImportSlashCommands(
   rootDir: string,
   changedBy?: string
-): SlashCommandScanResult {
+): Promise<SlashCommandScanResult> {
   const { existsSync, readdirSync, readFileSync } = require("fs") as typeof import("fs")
   const { join } = require("path") as typeof import("path")
   const home = process.env["HOME"] ?? "~"
@@ -329,17 +329,17 @@ export function scanAndImportSlashCommands(
     return { title, slug: name, body: f.content.trim(), collection: f.collection, tags: f.tags }
   })
 
-  const imported = importFromJson(items, changedBy)
+  const imported = await importFromJson(items, changedBy)
   return { scanned, imported }
 }
 
 // ── Claude Code slash commands import ────────────────────────────────────────
 // Claude Code stores slash commands as .md files in .claude/commands/
 // Each file's name becomes the command name, content is the prompt body
-export function importFromClaudeCommands(
+export async function importFromClaudeCommands(
   files: Array<{ filename: string; content: string }>,
   changedBy?: string
-): ImportResult {
+): Promise<ImportResult> {
   const items: ImportItem[] = files.map((f) => {
     const name = f.filename.replace(/\.md$/, "")
     const title = name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
@@ -351,5 +351,5 @@ export function importFromClaudeCommands(
       tags: ["claude", "slash-command"],
     }
   })
-  return importFromJson(items, changedBy)
+  return await importFromJson(items, changedBy)
 }

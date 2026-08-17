@@ -47,12 +47,12 @@ describe("cron parser", () => {
 })
 
 describe("schedules", () => {
-  function makePrompt() {
+  async function makePrompt() {
     return createPrompt({ title: "Test Prompt", body: "Hello {{name|world}}" })
   }
 
-  test("creates a schedule", () => {
-    const p = makePrompt()
+  test("creates a schedule", async () => {
+    const p = await makePrompt()
     const s = createSchedule({ prompt_id: p.id, prompt_slug: p.slug, cron: "* * * * *" })
     expect(s.id).toMatch(/^SCH-/)
     expect(s.prompt_id).toBe(p.id)
@@ -61,40 +61,41 @@ describe("schedules", () => {
     expect(new Date(s.next_run_at).getTime()).toBeGreaterThan(Date.now())
   })
 
-  test("lists schedules", () => {
-    const p = makePrompt()
+  test("lists schedules", async () => {
+    const p = await makePrompt()
     createSchedule({ prompt_id: p.id, prompt_slug: p.slug, cron: "* * * * *" })
     createSchedule({ prompt_id: p.id, prompt_slug: p.slug, cron: "0 * * * *" })
     const all = listSchedules()
     expect(all.length).toBe(2)
   })
 
-  test("filters by prompt_id", () => {
-    const p1 = makePrompt()
-    const p2 = createPrompt({ title: "Other", body: "body" })
-    createSchedule({ prompt_id: p1.id, prompt_slug: p1.slug, cron: "* * * * *" })
+  test("filters by prompt_id", async () => {
+
+    const p1 = await makePrompt()
+    const p2 = await createPrompt({ title: "Other", body: "body" })
+    await createSchedule({ prompt_id: p1.id, prompt_slug: p1.slug, cron: "* * * * *" })
     createSchedule({ prompt_id: p2.id, prompt_slug: p2.slug, cron: "* * * * *" })
     expect(listSchedules(p1.id).length).toBe(1)
     expect(listSchedules(p2.id).length).toBe(1)
   })
 
-  test("deletes a schedule", () => {
-    const p = makePrompt()
+  test("deletes a schedule", async () => {
+    const p = await makePrompt()
     const s = createSchedule({ prompt_id: p.id, prompt_slug: p.slug, cron: "* * * * *" })
     deleteSchedule(s.id)
     expect(getSchedule(s.id)).toBeNull()
   })
 
-  test("getDueSchedules returns nothing when no due schedules", () => {
-    const p = makePrompt()
+  test("getDueSchedules returns nothing when no due schedules", async () => {
+    const p = await makePrompt()
     createSchedule({ prompt_id: p.id, prompt_slug: p.slug, cron: "* * * * *" })
     // next_run_at is in the future, nothing due
     const due = getDueSchedules()
     expect(due.length).toBe(0)
   })
 
-  test("stores and retrieves vars", () => {
-    const p = makePrompt()
+  test("stores and retrieves vars", async () => {
+    const p = await makePrompt()
     const s = createSchedule({ prompt_id: p.id, prompt_slug: p.slug, cron: "* * * * *", vars: { name: "Alice" } })
     const retrieved = getSchedule(s.id)
     expect(retrieved?.vars?.name).toBe("Alice")

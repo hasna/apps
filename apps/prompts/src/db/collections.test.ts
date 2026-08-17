@@ -12,13 +12,14 @@ beforeEach(() => {
 })
 
 describe("listCollections", () => {
+
   test("returns default collection on empty db", () => {
     const cols = listCollections()
     expect(cols.some((c) => c.name === "default")).toBe(true)
   })
 
-  test("includes prompt_count", () => {
-    createPrompt({ title: "Test", body: "test body here" })
+  test("includes prompt_count", async () => {
+    await createPrompt({ title: "Test", body: "test body here" })
     const cols = listCollections()
     const def = cols.find((c) => c.name === "default")!
     expect(def.prompt_count).toBe(1)
@@ -52,15 +53,17 @@ describe("ensureCollection", () => {
 })
 
 describe("movePrompt", () => {
-  test("moves prompt to new collection", () => {
-    const p = createPrompt({ title: "My Prompt", body: "test body here" })
+  test("moves prompt to new collection", async () => {
+
+    const p = await createPrompt({ title: "My Prompt", body: "test body here" })
     movePrompt(p.id, "work")
     const col = getCollection("work")!
     expect(col.prompt_count).toBe(1)
   })
 
-  test("moves prompt by slug", () => {
-    const p = createPrompt({ title: "My Prompt", body: "test body here" })
+  test("moves prompt by slug", async () => {
+
+    const p = await createPrompt({ title: "My Prompt", body: "test body here" })
     movePrompt(p.slug, "personal")
     expect(getCollection("personal")!.prompt_count).toBe(1)
   })

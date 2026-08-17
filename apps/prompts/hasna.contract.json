@@ -4,8 +4,8 @@
   "name": "prompts",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.8.5",
-  "description": "Reusable prompt library for AI agents — CLI, MCP server, REST API, and web dashboard over a local-first prompt registry.",
+  "kitVersion": "0.10.6",
+  "description": "Reusable prompt library for AI agents — CLI, MCP server, authenticated /v1 REST API, and web dashboard. Clients use local SQLite plus a local markdown body folder, or the hosted HTTP API selected by HASNA_PROMPTS_API_URL; prompts-serve reads PostgreSQL selected by HASNA_PROMPTS_DATABASE_URL.",
   "bins": [
     "prompts",
     "prompts-mcp",
@@ -32,25 +32,67 @@
     {
       "name": "http-api",
       "kind": "api",
-      "status": "deferred",
-      "authMode": "local-only",
-      "deferReason": "prompts-serve exposes an unversioned /api surface with GET /health only; the /v1 base path, GET /ready, GET /version, and the OpenAPI document are not implemented yet."
+      "status": "supported",
+      "bin": "prompts-serve",
+      "authMode": "api-key",
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json",
+      "health": {
+        "method": "GET",
+        "path": "/health"
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready"
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version"
+      }
     },
     {
       "name": "typescript-sdk",
       "kind": "sdk",
-      "status": "deferred",
-      "authMode": "local-only",
-      "deferReason": "The \".\" export is a hand-written library surface, not a client generated from an OpenAPI document; the generated service SDK lands with the /v1 API surface."
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/openapi.json",
+      "clientClassName": "PromptsV1Client"
     }
   ],
   "storage": {
-    "mode": "sqlite",
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
     "envPrefix": "HASNA_PROMPTS_",
     "aliasEnvPrefix": "PROMPTS_",
-    "sqlitePath": "~/.hasna/prompts/prompts.db"
+    "sqlitePath": "~/.hasna/prompts/prompts.db",
+    "pgTestGate": {
+      "envVar": "HASNA_PROMPTS_PG_TEST_DATABASE_URL",
+      "command": "bun run storage:pg-test"
+    }
   },
   "metadata": {
+    "service": {
+      "port": 19430,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "openapiPath": "/openapi.json",
+      "apiVersion": "v1",
+      "auth": "api-key",
+      "signingSecretEnvVar": "HASNA_PROMPTS_API_SIGNING_KEY",
+      "migrationCommand": [
+        "bun",
+        "scripts/apply-postgres-migrations.mjs"
+      ]
+    },
+    "client": {
+      "apiUrlEnv": "HASNA_PROMPTS_API_URL",
+      "apiKeyEnv": "HASNA_PROMPTS_API_KEY"
+    },
     "release": {
       "artifactScan": {
         "script": "scan:artifact"

@@ -13,28 +13,31 @@ beforeEach(() => {
 })
 
 describe("listVersions", () => {
-  test("returns version 1 entry on new prompt", () => {
-    const p = createPrompt({ title: "Test", body: "initial body" })
+
+  test("returns version 1 entry on new prompt", async () => {
+    const p = await createPrompt({ title: "Test", body: "initial body" })
     expect(listVersions(p.id)).toHaveLength(1)
   })
 
-  test("returns more versions after updates", () => {
-    const p = createPrompt({ title: "Test", body: "v1 body" })
-    updatePrompt(p.id, { body: "v2 body" })
+  test("returns more versions after updates", async () => {
+    const p = await createPrompt({ title: "Test", body: "v1 body" })
+    await updatePrompt(p.id, { body: "v2 body" })
     const versions = listVersions(p.id)
     expect(versions.length).toBeGreaterThanOrEqual(2)
   })
 })
 
 describe("getVersion", () => {
-  test("returns null for nonexistent version", () => {
-    const p = createPrompt({ title: "Test", body: "body" })
+  test("returns null for nonexistent version", async () => {
+
+    const p = await createPrompt({ title: "Test", body: "body" })
     expect(getVersion(p.id, 999)).toBeNull()
   })
 
-  test("returns correct version", () => {
-    const p = createPrompt({ title: "Test", body: "original" })
-    updatePrompt(p.id, { body: "updated" })
+  test("returns correct version", async () => {
+
+    const p = await createPrompt({ title: "Test", body: "original" })
+    await updatePrompt(p.id, { body: "updated" })
     const versions = listVersions(p.id)
     expect(versions.length).toBeGreaterThan(0)
     const v = getVersion(p.id, versions[0]!.version)
@@ -43,18 +46,20 @@ describe("getVersion", () => {
 })
 
 describe("restoreVersion", () => {
-  test("throws PromptNotFoundError for bad version", () => {
-    const p = createPrompt({ title: "Test", body: "body" })
-    expect(() => restoreVersion(p.id, 999)).toThrow(PromptNotFoundError)
+  test("throws PromptNotFoundError for bad version", async () => {
+
+    const p = await createPrompt({ title: "Test", body: "body" })
+    expect(async () => await restoreVersion(p.id, 999)).toThrow(PromptNotFoundError)
   })
 
-  test("restores body from previous version", () => {
-    const p = createPrompt({ title: "Test", body: "original body" })
-    updatePrompt(p.id, { body: "new body" })
+  test("restores body from previous version", async () => {
+
+    const p = await createPrompt({ title: "Test", body: "original body" })
+    await updatePrompt(p.id, { body: "new body" })
     const versions = listVersions(p.id)
     const oldVersion = versions.find((v) => v.body === "original body")
     if (oldVersion) {
-      restoreVersion(p.id, oldVersion.version, "test-agent")
+      await restoreVersion(p.id, oldVersion.version, "test-agent")
       const updated = listVersions(p.id)
       expect(updated[0]!.body).toBe("original body")
     }

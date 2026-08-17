@@ -18,7 +18,9 @@ import { registerVersionCommands } from "./commands/versions.js"
 import { registerQolCommands } from "./commands/qol.js"
 import { registerConfigCommands } from "./commands/config.js"
 import { registerRunbookCommands } from "./commands/runbook.js"
-import { getPromptRegistryDiagnostics } from "../db/database.js"
+import { storageStatus } from "../storage/status.js"
+import { migrationDryRun, migrationApply, reconcileBodies } from "../storage/migrate.js"
+import { getBodyStore } from "../storage/bodies.js"
 
 const require = createRequire(import.meta.url)
 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -128,7 +130,7 @@ program
       const { readFileSync } = await import("fs")
       const raw = JSON.parse(readFileSync(file, "utf-8")) as unknown
       const items = Array.isArray(raw) ? raw : (raw as { prompts: unknown[] }).prompts ?? []
-      const results = importFromJson(items as Parameters<typeof importFromJson>[0], opts["agent"])
+      const results = await importFromJson(items as Parameters<typeof importFromJson>[0], opts["agent"])
       if (isJson(program)) output(program, results)
       else {
         console.log(chalk.green(`Created: ${results.created}, Updated: ${results.updated}`))
@@ -170,32 +172,61 @@ program
     }
   })
 
-// ── storage diagnostics ──────────────────────────────────────────────────────
+// ── storage verbs ─────────────────────────────────────────────────────────────
 program
   .command("storage")
-  .description("Show prompt registry storage diagnostics")
-  .action(() => {
+  .description("Storage status, inline-to-object body migration, and reconciliation")
+  .argument("[verb]", "status | migrate | reconcile (default: status)")
+  .option("--dry-run", "Migrate: dry-run inventory only (required before --apply)")
+  .option("--apply", "Migrate: apply after a matching dry-run receipt")
+  .action(async (verb: string | undefined, opts: Record<string, string>) => {
+    const chosen = verb ?? "status"
     try {
-      const diagnostics = getPromptRegistryDiagnostics()
-      if (isJson(program)) {
-        output(program, diagnostics)
+      if (chosen === "status") {
+        const report = await storageStatus()
+        if (opts["json"] || isJson(program)) { output(program, report); return }
+        console.log(chalk.bold("Prompts storage"))
+        console.log(`  Client transport: ${chalk.cyan(report.client.transport)} (${report.client.api_url_env} set: ${report.client.api_url_present}, ${report.client.api_key_env} set: ${report.client.api_key_present})`)
+        console.log(`  Server backend:   ${chalk.cyan(report.server.backend)} (${report.server.database_url_env})`)
+        console.log(`  Body store:       ${chalk.cyan(report.body_store.type)} ${chalk.gray(report.body_store.root)}`)
+        console.log(`  Migration:        ${report.migration.prompts_with_object}/${report.migration.prompts_total} prompts, ${report.migration.versions_with_object}/${report.migration.versions_total} versions on objects; ${report.migration.missing_objects} missing object(s)`)
         return
       }
-
-      console.log(chalk.bold("Prompt Registry Storage"))
-      console.log(`  Requested mode: ${chalk.cyan(diagnostics.requested_mode)}`)
-      console.log(`  Active storage: ${chalk.green(diagnostics.active_storage)} (${diagnostics.local.storage})`)
-      console.log(`  Local database: ${chalk.gray(diagnostics.local.db_path)}`)
-      console.log(`  Local scope:    ${diagnostics.local.scope}`)
-      console.log(`  Registry state: ${diagnostics.registry_state}`)
-      console.log(`  Remote Postgres: ${diagnostics.remote.postgres.configured ? chalk.yellow("configured") : chalk.gray("not configured")}`)
-      console.log(`  Remote S3 bucket: ${diagnostics.remote.object_storage.bucket_configured ? chalk.yellow("configured") : chalk.gray("not configured")}`)
-      console.log(`  Registry AWS region: ${diagnostics.remote.aws.region_configured ? chalk.yellow("configured") : chalk.gray("not configured")}`)
-      console.log(`  Sync strategy: ${diagnostics.sync.strategy}; reads=${diagnostics.sync.reads}; writes=${diagnostics.sync.writes}; remote mutation=${diagnostics.sync.remote_mutation}`)
-      if (diagnostics.warnings.length > 0) {
-        console.log(chalk.bold("\nWarnings"))
-        for (const warning of diagnostics.warnings) console.log(chalk.yellow(`  - ${warning}`))
+      if (chosen === "migrate") {
+        const store = getBodyStore()
+        if (opts["apply"]) {
+          const report = await migrationApply(store)
+          if (isJson(program)) { output(program, report); return }
+          console.log(chalk.green(`Migration applied: ${report.objectsWritten} written, ${report.objectsSkipped} skipped (inline bodies preserved)`))
+          return
+        }
+        const report = await migrationDryRun(store)
+        if (isJson(program)) { output(program, report); return }
+        console.log(chalk.bold("Migration dry-run"))
+        console.log(`  Prompts:          ${report.promptsTotal} (${report.promptsWithObject} with objects)`)
+        console.log(`  Versions:         ${report.versionsTotal}`)
+        console.log(`  Objects to write: ${report.objectsToWrite}`)
+        console.log(`  Already present:  ${report.alreadyPresent}`)
+        console.log(`  Conflicts:        ${report.conflicts.length}`)
+        for (const c of report.conflicts) console.log(chalk.yellow(`    - ${c.key}`))
+        console.log(`  Rollback:         inline bodies preserved, database preserved`)
+        console.log(`  Receipt:          ${report.receiptPath}`)
+        console.log(chalk.gray("Run 'prompts storage migrate --apply' to write objects and update metadata (counts+hashes must still agree)."))
+        return
       }
+      if (chosen === "reconcile") {
+        const report = await reconcileBodies(getBodyStore())
+        if (isJson(program)) { output(program, report); return }
+        console.log(chalk.bold("Storage reconcile (report only — no silent repair)"))
+        console.log(`  Missing objects:  ${report.missing_objects.length}`)
+        for (const m of report.missing_objects) console.log(chalk.yellow(`    - ${m.key}`))
+        console.log(`  Hash drift:       ${report.hash_drift.length}`)
+        for (const d of report.hash_drift) console.log(chalk.yellow(`    - ${d.key} (expected ${d.expectedSha256.slice(0, 12)}, actual ${d.actualSha256.slice(0, 12)})`))
+        console.log(`  Orphan objects:   ${report.orphan_objects.length}`)
+        console.log(`  Orphan registry:  ${report.orphan_registry_rows.length}`)
+        return
+      }
+      handleError(program, `Unknown storage verb "${chosen}". Use status, migrate, or reconcile.`)
     } catch (e) {
       handleError(program, e)
     }
@@ -584,12 +615,12 @@ program
   .description("Clone a prompt with a new slug")
   .option("-s, --to <slug>", "New slug (auto-generated if omitted)")
   .option("--title <title>", "New title (defaults to 'Copy of <original>')")
-  .action((id: string, opts: Record<string, string>) => {
+  .action(async (id: string, opts: Record<string, string>) => {
     try {
       const source = getPrompt(id)
       if (!source) handleError(program, `Prompt not found: ${id}`)
       const p = source!
-      const { prompt } = upsertPrompt({
+      const { prompt } = await upsertPrompt({
         title: opts["title"] ?? `Copy of ${p.title}`,
         slug: opts["to"],
         body: p.body,
@@ -702,7 +733,7 @@ program
         }
 
         const content = readFileSync(filePath, "utf-8")
-        const result = importFromMarkdown([{ filename, content }], opts["agent"])
+        const result = await importFromMarkdown([{ filename, content }], opts["agent"])
         const action = result.created > 0 ? chalk.green("Created") : chalk.yellow("Updated")
         // Track this file's slug
         if (result.created > 0 || result.updated > 0) {
@@ -725,9 +756,9 @@ program
   .option("--dir <path>", "Root dir to scan (default: cwd)", process.cwd())
   .option("--agent <name>", "Attribution")
   .option("-n, --limit <n>", "Max scanned files to show in human output", "50")
-  .action((opts: Record<string, string>) => {
+  .action(async (opts: Record<string, string>) => {
     try {
-      const { scanned, imported } = scanAndImportSlashCommands(opts["dir"] ?? process.cwd(), opts["agent"])
+      const { scanned, imported } = await scanAndImportSlashCommands(opts["dir"] ?? process.cwd(), opts["agent"])
       if (isJson(program)) { output(program, { scanned, imported }); return }
       if (scanned.length === 0) { console.log(chalk.gray("No slash command files found.")); return }
       console.log(chalk.bold(`Scanned ${scanned.length} file(s):`))

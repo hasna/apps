@@ -43,14 +43,14 @@ describe("uniqueSlug", () => {
     expect(uniqueSlug("my-prompt")).toBe("my-prompt")
   })
 
-  test("appends -2 on collision", () => {
-    createPrompt({ title: "My Prompt", body: "test", slug: "my-prompt" })
+  test("appends -2 on collision", async () => {
+    await createPrompt({ title: "My Prompt", body: "test", slug: "my-prompt" })
     expect(uniqueSlug("my-prompt")).toBe("my-prompt-2")
   })
 
-  test("increments suffix for multiple collisions", () => {
-    createPrompt({ title: "My Prompt", body: "test", slug: "foo" })
-    createPrompt({ title: "My Prompt 2", body: "test", slug: "foo-2" })
+  test("increments suffix for multiple collisions", async () => {
+    await createPrompt({ title: "My Prompt", body: "test", slug: "foo" })
+    await createPrompt({ title: "My Prompt 2", body: "test", slug: "foo-2" })
     expect(uniqueSlug("foo")).toBe("foo-3")
   })
 })
