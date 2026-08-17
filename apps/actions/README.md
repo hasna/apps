@@ -1,8 +1,8 @@
-# open-actions
+# @hasna/actions
 
 Typed, auditable action contracts for agentic software.
 
-`open-actions` is an OSS primitive for making multi-step operator work safer:
+`actions` is an OSS primitive for making multi-step operator work safer:
 every action has a portable manifest, typed inputs and outputs, dry-run preview,
 approval policy, guardrail hooks, idempotency, execution bindings, and audit
 evidence.
@@ -104,17 +104,17 @@ await client.register(action);
 
 const preview = await client.run({
   actionId: "projects.metadata.update",
-  input: { project: "open-actions", metadata: { stage: "active" } },
+  input: { project: "actions", metadata: { stage: "active" } },
   actor: { id: "hasna", type: "human" },
-  idempotencyKey: "open-actions-stage-active",
+  idempotencyKey: "actions-stage-active",
   dryRun: true
 });
 
 const run = await client.run({
   actionId: "projects.metadata.update",
-  input: { project: "open-actions", metadata: { stage: "active" } },
+  input: { project: "actions", metadata: { stage: "active" } },
   actor: { id: "hasna", type: "human" },
-  idempotencyKey: "open-actions-stage-active-v2",
+  idempotencyKey: "actions-stage-active-v2",
   dryRun: false
 });
 
@@ -177,7 +177,7 @@ Run a local shell action manifest:
 
 ```bash
 actions run examples/local-shell.manifest.json \
-  --input '{"name":"open-actions"}' \
+  --input '{"name":"actions"}' \
   --idempotency-key demo-1 \
   --dry-run \
   --json
@@ -247,15 +247,15 @@ actions are registered in-process by the host application.
 
 ## Integration Model
 
-- `open-guardrails`: provide guardrail hooks that inspect manifest, actor,
+- `guardrails`: provide guardrail hooks that inspect manifest, actor,
   input, scope, and preview before execution.
-- `open-orgs`: resolve actor roles and approval authority before calling
+- `orgs`: resolve actor roles and approval authority before calling
   `approve`.
-- `open-dispatch`: expose dispatch operations as medium/high-risk actions with
+- `dispatch`: expose dispatch operations as medium/high-risk actions with
   dry-run, target policy, and capture evidence.
-- `open-projects`: represent create/publish/update workflows as composable
+- `projects`: represent create/publish/update workflows as composable
   action plans with rollback or compensating-action metadata.
-- `open-events`: receive audit events emitted by `ActionsClient` audit sinks.
+- `events`: receive audit events emitted by `ActionsClient` audit sinks.
 
 ## Project Dashboard Boundary
 
