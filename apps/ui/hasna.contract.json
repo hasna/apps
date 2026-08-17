@@ -1,0 +1,23 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "ui",
+  "class": "library",
+  "contractVersion": "v1",
+  "kitVersion": "0.10.6",
+  "description": "Offline-first UI design toolkit: mirror the ui.sh design skill locally and preview variants with a self-contained, dependency-free setup.",
+  "hosting": [
+    "user-hosted"
+  ],
+  "bins": [
+    "ui"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "ui-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "ui",
+      "authMode": "local-only"
+    }
+  ]
+}
