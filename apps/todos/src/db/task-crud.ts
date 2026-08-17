@@ -1044,5 +1044,12 @@ export function deleteTask(id: string, db?: Database): boolean {
     version: row.version,
   }, d);
   const result = d.run("DELETE FROM tasks WHERE id = ?", [id]);
+  if (result.changes > 0) {
+    // Cascade dependency edges in BOTH directions explicitly. The schema's
+    // ON DELETE CASCADE only fires while PRAGMA foreign_keys is enforced; a
+    // legacy or pragma-off store would otherwise leave dangling edges whose
+    // depends_on target exists nowhere — eternally unmet for any resolver.
+    d.run("DELETE FROM task_dependencies WHERE task_id = ? OR depends_on = ?", [id, id]);
+  }
   return result.changes > 0;
 }

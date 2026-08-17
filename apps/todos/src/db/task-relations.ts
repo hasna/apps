@@ -118,7 +118,13 @@ export function bulkDeleteTasks(
           continue;
         }
         const result = d.run("DELETE FROM tasks WHERE id = ?", [id]);
-        if (result.changes > 0) deleted++;
+        if (result.changes > 0) {
+          // Cascade dependency edges in BOTH directions explicitly (see
+          // deleteTask): a pragma-off or legacy store does not fire the
+          // schema's ON DELETE CASCADE, and a surviving edge would dangle.
+          d.run("DELETE FROM task_dependencies WHERE task_id = ? OR depends_on = ?", [id, id]);
+          deleted++;
+        }
       } catch (e) {
         failed.push({ id, error: e instanceof Error ? e.message : String(e) });
       }

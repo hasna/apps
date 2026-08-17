@@ -19,8 +19,11 @@ import {
   stealTask,
   addDependency,
   removeDependency,
+  getTaskDependencies,
+  getTaskDependents,
   bulkUpdateTasks,
   bulkCreateTasks,
+  bulkDeleteTasks,
   cloneTask,
   getTaskStats,
   getTaskGraph,
@@ -580,6 +583,78 @@ describe("deleteTask", () => {
     const child = createTask({ title: "Child", parent_id: parent.id }, db);
     deleteTask(parent.id, db);
     expect(getTask(child.id, db)).toBeNull();
+  });
+
+  it("should cascade-remove dependency edges even when FK enforcement is OFF (legacy store state)", () => {
+    // A legacy database can carry the task_dependencies rows without a live
+    // FK-enforcement state (pragma off, older schema, or a direct sqlite
+    // consumer). Deleting a task must not depend on the pragma: the edge
+    // B -> A survives the delete of A otherwise, and a resolver reads the
+    // surviving row as an eternally unmet dependency — the measured dangling
+    // edge shape (e07e2b7f / 07a2c4a5 in production).
+    const a = createTask({ title: "A" }, db);
+    const b = createTask({ title: "B" }, db);
+    addDependency(b.id, a.id, db); // B needs A
+    expect(getTaskDependencies(b.id, db)).toHaveLength(1);
+
+    db.run("PRAGMA foreign_keys = OFF");
+    try {
+      deleteTask(a.id, db);
+    } finally {
+      db.run("PRAGMA foreign_keys = ON");
+    }
+
+    // The edge B -> A must be gone: A no longer exists, so any surviving row
+    // would be dangling.
+    expect(getTaskDependencies(b.id, db)).toHaveLength(0);
+    expect(getTaskDependents(a.id, db)).toHaveLength(0);
+    const remaining = db.query("SELECT COUNT(*) as count FROM task_dependencies").get() as { count: number };
+    expect(remaining.count).toBe(0);
+  });
+
+  it("should cascade-remove dependency edges of the SOURCE task even when FK enforcement is OFF", () => {
+    const a = createTask({ title: "A" }, db);
+    const b = createTask({ title: "B" }, db);
+    addDependency(b.id, a.id, db); // B needs A
+    expect(getTaskDependencies(b.id, db)).toHaveLength(1);
+
+    db.run("PRAGMA foreign_keys = OFF");
+    try {
+      deleteTask(b.id, db);
+    } finally {
+      db.run("PRAGMA foreign_keys = ON");
+    }
+
+    expect(getTaskDependencies(b.id, db)).toHaveLength(0);
+    expect(getTaskDependents(a.id, db)).toHaveLength(0);
+    const remaining = db.query("SELECT COUNT(*) as count FROM task_dependencies").get() as { count: number };
+    expect(remaining.count).toBe(0);
+  });
+});
+
+describe("bulkDeleteTasks", () => {
+  it("should cascade-remove dependency edges for every deleted task even when FK enforcement is OFF", () => {
+    const a = createTask({ title: "A" }, db);
+    const b = createTask({ title: "B" }, db);
+    const c = createTask({ title: "C" }, db);
+    addDependency(b.id, a.id, db); // B needs A
+    addDependency(c.id, b.id, db); // C needs B
+
+    db.run("PRAGMA foreign_keys = OFF");
+    let result: ReturnType<typeof bulkDeleteTasks>;
+    try {
+      result = bulkDeleteTasks([a.id, c.id], false, db);
+    } finally {
+      db.run("PRAGMA foreign_keys = ON");
+    }
+    expect(result.deleted).toBe(2);
+
+    // Both directions of every edge touching a deleted task must be gone:
+    // B -> A (target deleted) and C -> B (source deleted).
+    expect(getTaskDependencies(b.id, db)).toHaveLength(0);
+    expect(getTaskDependents(b.id, db)).toHaveLength(0);
+    const remaining = db.query("SELECT COUNT(*) as count FROM task_dependencies").get() as { count: number };
+    expect(remaining.count).toBe(0);
   });
 });
 
