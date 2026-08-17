@@ -41,7 +41,7 @@ the environment after connect).
 
 ### Integrator (v0)
 
-Treasury composes upstream services (`iapp-banking`/`iapp-wallets` balances, an
+Treasury composes upstream services (`banking`/`wallets` balances, an
 FX provider, a cost feed). v0 ships `src/adapters/*` read-adapter interfaces
 backed by **fixtures**; v1 (gated behind `HASNA_TREASURY_LIVE_UPSTREAM=1`) swaps
 in live MCP/CLI calls. Upstream data is cached with provenance, never treated as
