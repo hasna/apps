@@ -1,4 +1,4 @@
-# open-guardrails
+# @hasna/guardrails
 
 Reusable guardrail and policy decisions for agentic systems.
 
@@ -98,11 +98,11 @@ The starter policy covers:
 Guardrails evaluate and decide. They do not execute actions, dispatch prompts,
 run commands, call MCP tools, route models, or scan repositories.
 
-- `open-actions` defines executable action contracts and previews.
-- `open-security` owns security scanning and vulnerability/secret exposure
+- `actions` defines executable action contracts and previews.
+- `shield` owns security scanning and vulnerability/secret exposure
   workflows.
-- `open-terminal`, `open-dispatch`, `open-mcps`, `open-gateway`, and
-  `open-router` own their runtime mechanics and can call this package before
+- `terminal`, `dispatch`, `mcps`, `gateway`, and
+  `router` own their runtime mechanics and can call this package before
   execution.
 
 See [docs/boundaries.md](docs/boundaries.md) and

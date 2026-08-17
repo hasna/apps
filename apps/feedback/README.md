@@ -9,7 +9,7 @@ runs the package in their own environment, and **Hasna SaaS** ("cloud"), where
 Hasna operates a private platform wrapper for outside users. Both use the same
 package behavior. The server backend contract is `sqlite | postgresql`; this
 package ships SQLite and accepts a host-injected `FeedbackStore` adapter for
-PostgreSQL. The project slug is `open-feedback`; the GitHub repository is
+PostgreSQL. The project slug is `feedback`; the GitHub repository is
 `hasna/feedback`.
 
 ## Install
@@ -138,7 +138,7 @@ feedback submit "Add export history" --app my-app --kind idea --tag reports --ro
 feedback list --app my-app --search export --since 2026-01-01 --limit 20
 feedback show <id>
 feedback status <id> triaged
-feedback shipped <id> --changelog-ref open-todos@1.2.3
+feedback shipped <id> --changelog-ref todos@1.2.3
 feedback sync-tasks
 feedback stats
 feedback export --format jsonl --until 2026-12-31

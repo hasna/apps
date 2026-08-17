@@ -8,7 +8,6 @@ export function useTestDatabase(prefix = "access-test"): string {
   const dir = mkdtempSync(join(tmpdir(), `${prefix}-`));
   const path = join(dir, "access.db");
   process.env["HASNA_ACCESS_DB_PATH"] = path;
-  delete process.env["HASNA_ACCESS_STORAGE_MODE"];
   delete process.env["HASNA_ACCESS_DATABASE_URL"];
   resetDatabase();
   return path;
