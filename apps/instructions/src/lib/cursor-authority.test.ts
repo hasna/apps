@@ -1,14 +1,22 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CURSOR_GLOBAL_AUTHORITY_MANAGED_MARKER,
   CURSOR_GLOBAL_AUTHORITY_RELATIVE_PATH,
   detectCursorAuthorityConflicts,
+  isCursorGlobalAuthorityPath,
+  markerPayload,
   observeCursorGlobalAuthority,
+  observeCursorGlobalAuthorityAtPath,
+  stampCursorGlobalAuthorityMarker,
 } from "./cursor-authority";
 import { makeTempRoot } from "./test-temp-root";
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
 
 let root = "";
 
@@ -28,11 +36,6 @@ function authorityPath(): string {
   return join(homePath(), CURSOR_GLOBAL_AUTHORITY_RELATIVE_PATH);
 }
 
-function managedAuthority(payload: string): string {
-  const digest = createHash("sha256").update(payload).digest("hex");
-  return `<!-- ${CURSOR_GLOBAL_AUTHORITY_MANAGED_MARKER} hash=sha256:${digest} -->\n${payload}`;
-}
-
 describe("Cursor fixed global authority detection", () => {
   test("treats a missing fixed authority as clean", () => {
     const observation = observeCursorGlobalAuthority({ home: homePath() });
@@ -45,7 +48,7 @@ describe("Cursor fixed global authority detection", () => {
     expect(detectCursorAuthorityConflicts(observation)).toEqual([]);
   });
 
-  test("does not trust a self-declared marker without package-owned provenance", () => {
+  test("treats a fixed authority stamped by the package apply path as managed", () => {
     const payload = [
       "---",
       "alwaysApply: true",
@@ -54,16 +57,104 @@ describe("Cursor fixed global authority detection", () => {
       "",
     ].join("\n");
     mkdirSync(join(root, "home", ".cursor", "rules"), { recursive: true });
-    writeFileSync(authorityPath(), managedAuthority(payload));
+    writeFileSync(authorityPath(), stampCursorGlobalAuthorityMarker(payload));
 
     const observation = observeCursorGlobalAuthority({ home: homePath() });
     expect(observation).toMatchObject({
-      status: "unmanaged",
+      status: "managed",
       fileType: "regular",
       markers: [CURSOR_GLOBAL_AUTHORITY_MANAGED_MARKER],
-      provenance: { authority: "unmanaged", detection: "unknown-content" },
+      provenance: { authority: "managed", detection: "managed-marker" },
     });
-    expect(detectCursorAuthorityConflicts(observation)[0]?.kind).toBe("unknown-unmanaged-authority");
+    expect(detectCursorAuthorityConflicts(observation)).toEqual([]);
+  });
+
+  test("stampCursorGlobalAuthorityMarker is idempotent and carries a valid payload hash", () => {
+    const payload = [
+      "---",
+      "alwaysApply: true",
+      "---",
+      "# Managed global rule",
+      "",
+    ].join("\n");
+    const stamped = stampCursorGlobalAuthorityMarker(payload);
+    const again = stampCursorGlobalAuthorityMarker(stamped);
+    expect(again).toBe(stamped);
+
+    mkdirSync(join(root, "home", ".cursor", "rules"), { recursive: true });
+    writeFileSync(authorityPath(), stamped);
+    const observation = observeCursorGlobalAuthorityAtPath(authorityPath());
+    expect(observation).toMatchObject({
+      status: "managed",
+      provenance: { authority: "managed", detection: "managed-marker" },
+    });
+    expect(detectCursorAuthorityConflicts(observation)).toEqual([]);
+  });
+
+  test("keeps frontmatter at byte 0 when stamping a frontmatter-bearing global rule", () => {
+    // Cursor requires YAML frontmatter to start the file; a marker stamped in
+    // front of `---` silently drops the frontmatter (gray-matter parses
+    // data: {}) and Cursor stops loading the rule. The stamp must land AFTER
+    // the closing `---`, matching the package's own session-render cursor
+    // files. parseLeadingFrontmatter mirrors gray-matter's behavior on this
+    // shape: only a file whose byte 0 is `---\n` yields data.
+    function parseLeadingFrontmatter(content: string): Record<string, string> {
+      if (!content.startsWith("---\n")) return {};
+      const end = content.indexOf("\n---", 4);
+      if (end < 0) return {};
+      const data: Record<string, string> = {};
+      for (const line of content.slice(4, end).split("\n")) {
+        const match = line.match(/^([A-Za-z0-9_.-]+):\s*(.*)$/);
+        if (match) data[match[1]] = match[2];
+      }
+      return data;
+    }
+
+    const payload = [
+      "---",
+      "alwaysApply: true",
+      "---",
+      "# Managed global rule",
+      "",
+    ].join("\n");
+    const stamped = stampCursorGlobalAuthorityMarker(payload);
+
+    expect(stamped.startsWith("---\n")).toBe(true);
+    expect(parseLeadingFrontmatter(stamped)).toEqual({ alwaysApply: "true" });
+    expect(stamped.indexOf(`<!-- ${CURSOR_GLOBAL_AUTHORITY_MANAGED_MARKER} hash=`))
+      .toBeGreaterThan(stamped.indexOf("\n---\n"));
+
+    const again = stampCursorGlobalAuthorityMarker(stamped);
+    expect(again).toBe(stamped);
+    expect(again.match(/Managed by @hasna\/configs cursor global authority/g)).toHaveLength(1);
+
+    mkdirSync(join(root, "home", ".cursor", "rules"), { recursive: true });
+    writeFileSync(authorityPath(), stamped);
+    const observation = observeCursorGlobalAuthorityAtPath(authorityPath());
+    expect(observation).toMatchObject({
+      status: "managed",
+      fileType: "regular",
+      markers: [CURSOR_GLOBAL_AUTHORITY_MANAGED_MARKER],
+      provenance: { authority: "managed", detection: "managed-marker" },
+    });
+    expect(observeCursorGlobalAuthority({ home: homePath() })).toMatchObject({
+      status: "managed",
+      provenance: { authority: "managed", detection: "managed-marker" },
+    });
+    expect(detectCursorAuthorityConflicts(observation)).toEqual([]);
+  });
+
+  test("isCursorGlobalAuthorityPath matches only the fixed authority path", () => {
+    const previousHome = process.env["HOME"];
+    process.env["HOME"] = homePath();
+    try {
+      expect(isCursorGlobalAuthorityPath(join(homePath(), ".cursor", "rules", "hasna-global.mdc"))).toBe(true);
+      expect(isCursorGlobalAuthorityPath(join(homePath(), ".cursor", "rules", "other.mdc"))).toBe(false);
+      expect(isCursorGlobalAuthorityPath(join(homePath(), ".cursor", "rules"))).toBe(false);
+      expect(isCursorGlobalAuthorityPath(join(homePath(), "outside", "hasna-global.mdc"))).toBe(false);
+    } finally {
+      process.env["HOME"] = previousHome;
+    }
   });
 
   test("fails closed for unknown or unmanaged content", () => {
@@ -158,5 +249,62 @@ describe("Cursor fixed global authority detection", () => {
       sha256: null,
       provenance: { detection: "unreadable-file" },
     });
+  });
+
+  test("round-trips the stamped payload exactly: sha256(markerPayload) equals the stamped hash for plain, frontmatter-bearing, and marker-quoting content", () => {
+    // The stamp hashes the pre-stamp content and embeds that digest in the
+    // marker line; the observer must recover the exact pre-stamp payload by
+    // removing the marker at its actual position. Any reconstruction that
+    // differs (even by one byte) breaks a legitimate stamped file.
+    const embeddedMarker = `<!-- ${CURSOR_GLOBAL_AUTHORITY_MANAGED_MARKER} hash=sha256:${"a".repeat(64)} -->`;
+    const fixtures = [
+      "# Managed global rule\n",
+      "---\nalwaysApply: true\n---\n# Managed global rule\n",
+      [
+        "---",
+        `description: "quotes the marker text: ${embeddedMarker}"`,
+        "---",
+        "# Managed global rule",
+        "",
+      ].join("\n"),
+    ];
+
+    for (const payload of fixtures) {
+      const stamped = stampCursorGlobalAuthorityMarker(payload);
+      const match = stamped.match(/^<!-- Managed by @hasna\/configs cursor global authority hash=(sha256:[a-f0-9]{64}) -->$/m);
+      expect(match, "stamped file must carry exactly one marker line").not.toBeNull();
+      const markerLine = match![0];
+      const markerHash = match![1];
+
+      const payloadFromMarker = markerPayload(stamped, markerLine, match!.index);
+      expect(payloadFromMarker).toBe(payload);
+      expect(`sha256:${sha256(payloadFromMarker)}`).toBe(markerHash);
+    }
+  });
+
+  test("accepts a stamped frontmatter-bearing authority whose content quotes the marker text elsewhere", () => {
+    // The observer matches the anchored marker line only. A file whose own
+    // body merely contains the marker text (for example a YAML description
+    // quoting it) must not corrupt the payload reconstruction: the payload is
+    // the content with the matched marker line removed at its position, and
+    // the stamped hash must still verify.
+    const payload = [
+      "---",
+      `description: "quotes the marker text: <!-- ${CURSOR_GLOBAL_AUTHORITY_MANAGED_MARKER} hash=sha256:${"a".repeat(64)} -->"`,
+      "---",
+      "# Managed global rule",
+      "",
+    ].join("\n");
+    mkdirSync(join(root, "home", ".cursor", "rules"), { recursive: true });
+    writeFileSync(authorityPath(), stampCursorGlobalAuthorityMarker(payload));
+
+    const observation = observeCursorGlobalAuthority({ home: homePath() });
+    expect(observation).toMatchObject({
+      status: "managed",
+      fileType: "regular",
+      markers: [CURSOR_GLOBAL_AUTHORITY_MANAGED_MARKER],
+      provenance: { authority: "managed", detection: "managed-marker" },
+    });
+    expect(detectCursorAuthorityConflicts(observation)).toEqual([]);
   });
 });

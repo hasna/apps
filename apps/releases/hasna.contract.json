@@ -1,0 +1,51 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "releases",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.10.6",
+  "description": "Release ledger, publish receipts, downstream fan-out, and npm reconciliation CLI + MCP server for Hasna-coded apps.",
+  "hosting": [
+    "user-hosted"
+  ],
+  "bins": [
+    "releases",
+    "releases-mcp"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "releases-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "releases",
+      "authMode": "local-only"
+    },
+    {
+      "name": "releases-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "releases-mcp",
+      "authMode": "local-only"
+    }
+  ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite"
+    ],
+    "aliasEnvPrefix": "RELEASES_",
+    "sqlitePath": "~/.hasna/releases/releases.db"
+  },
+  "metadata": {
+    "conformance": {
+      "waivedStorageEngines": [
+        {
+          "engine": "postgresql",
+          "reason": "No PostgreSQL backend is implemented in this repo; the sqlite ledger at ~/.hasna/releases/releases.db is the only storage evidenced in src.",
+          "reviewedBy": "drain-lane-8250899b",
+          "expiresAt": "2027-08-15T00:00:00.000Z"
+        }
+      ]
+    }
+  }
+}

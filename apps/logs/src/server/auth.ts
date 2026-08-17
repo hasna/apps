@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { Context, Next } from "hono";
+import { timingSafeEqual } from "node:crypto";
 import {
   type ValidBrowserIngestToken,
   validateBrowserIngestToken,
@@ -26,7 +27,16 @@ export function isApiRequestAuthorized(c: Context): boolean {
   const authorization = c.req.header("authorization") ?? "";
   const bearer = /^Bearer\s+(.+)$/i.exec(authorization)?.[1];
   const headerToken = c.req.header("x-logs-token");
-  return bearer === token || headerToken === token;
+  return safeEq(bearer, token) || safeEq(headerToken, token);
+}
+
+/** Constant-time string compare for token equality (length mismatch still fails). */
+function safeEq(a: string | undefined, b: string): boolean {
+  if (typeof a !== "string") return false;
+  const ba = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ba.length !== bb.length) return false;
+  return timingSafeEqual(ba, bb);
 }
 
 export function apiUnauthorizedResponse(c: Context): Response {

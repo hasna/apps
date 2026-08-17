@@ -19,17 +19,14 @@ describe("config storage mode", () => {
     expect(resolveStorageMode({})).toBe("local");
   });
 
-  it("normalizes deprecated aliases to cloud", () => {
-    expect(resolveStorageMode({ HASNA_FLEET_STORAGE_MODE: "self_hosted" })).toBe("cloud");
-    expect(resolveStorageMode({ HASNA_FLEET_STORAGE_MODE: "cloud", HASNA_FLEET_DATABASE_URL: "x" })).toBe("cloud");
+  it("resolves postgres backend when a DATABASE_URL is present", () => {
+    expect(resolveStorageMode({ HASNA_FLEET_DATABASE_URL: "postgres://x" })).toBe("cloud");
+    expect(resolveStorageMode({ FLEET_DATABASE_URL: "postgres://x" })).toBe("cloud");
   });
 
-  it("rejects unknown storage modes", () => {
-    expect(() => resolveStorageMode({ HASNA_FLEET_STORAGE_MODE: "hybrid-cache" })).toThrow();
-  });
-
-  it("fails closed when a DSN is present but mode resolves to local", () => {
-    expect(() => resolveStorageMode({ HASNA_FLEET_DATABASE_URL: "postgres://x" })).toThrow(/misconfiguration/);
+  it("ignores the retired HASNA_FLEET_STORAGE_MODE variable", () => {
+    expect(resolveStorageMode({ HASNA_FLEET_STORAGE_MODE: "self_hosted" })).toBe("local");
+    expect(resolveStorageMode({ HASNA_FLEET_STORAGE_MODE: "cloud" })).toBe("local");
   });
 
   it("detects DSN presence without reading its value", () => {

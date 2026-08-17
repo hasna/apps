@@ -42,7 +42,6 @@ afterEach(() => {
   cleanupTestDatabase(dbPath);
   delete process.env["ACCESS_PROFILE"];
   delete process.env["HASNA_ACCESS_MCP_AUTH"];
-  delete process.env["HASNA_ACCESS_STORAGE_MODE"];
   delete process.env["HASNA_ACCESS_DATABASE_URL"];
   delete process.env["HASNA_ACCESS_API_KEY"];
   delete process.env["HASNA_ACCESS_API_CREDENTIALS"];
@@ -102,7 +101,6 @@ describe("MCP write safety", () => {
 
   it("storage_status leaks no DSN substring", async () => {
     const secret = "SUPERSECRETPW-8f2a";
-    process.env["HASNA_ACCESS_STORAGE_MODE"] = "cloud";
     process.env["HASNA_ACCESS_DATABASE_URL"] = `postgres://u:${secret}@db.internal:5432/access?sslmode=verify-full`;
     const handlers = captureTools(registerStorageTools as (s: unknown) => void);
     const result = await handlers.get("access_storage_status")!({});

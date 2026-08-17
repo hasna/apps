@@ -28,7 +28,8 @@ afterEach(() => {
   delete process.env["ACCESS_BIND_HOST"];
   delete process.env["HASNA_ACCESS_MCP_BIND_HOST"];
   delete process.env["ACCESS_MCP_BIND_HOST"];
-  delete process.env["HASNA_ACCESS_STORAGE_MODE"];
+  delete process.env["HASNA_ACCESS_DATABASE_URL"];
+  delete process.env["ACCESS_DATABASE_URL"];
 });
 
 function newIdentity(entityId = E1) {
@@ -167,7 +168,7 @@ describe("tokens (MCP bearer-token issuer)", () => {
   });
 
   it("fails closed instead of using the dev signing key in cloud mode", () => {
-    process.env["HASNA_ACCESS_STORAGE_MODE"] = "cloud";
+    process.env["HASNA_ACCESS_DATABASE_URL"] = "postgres://cloud-backend";
     expect(() => issueToken({ identity_id: "not-read" })).toThrow(ValidationError);
     expect(() => verifyToken("a.b.c")).toThrow(/signing key/);
   });

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "id": "wks_3mxsdby2m56h",
-  "slug": "open-automations",
-  "name": "Open Automations",
+  "slug": "automations",
+  "name": "Automations",
   "kind": "open-source",
   "root_id": null,
   "recipe_id": null,

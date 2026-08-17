@@ -1,0 +1,46 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "tenants",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.10.6",
+  "description": "Hasna fleet tenant auth / IdP: tenants, users, memberships, service principals, sessions, OTP login front door, and asymmetric-key auth.",
+  "hosting": [
+    "user-hosted"
+  ],
+  "bins": [
+    "tenants",
+    "tenants-serve"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "tenants-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "tenants",
+      "authMode": "local-only"
+    },
+    {
+      "name": "tenants-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk"
+    },
+    {
+      "name": "tenants-api",
+      "kind": "api",
+      "status": "deferred",
+      "authMode": "api-key",
+      "deferReason": "tenants-serve exists, but contract-standard /ready, /version and published OpenAPI surfaces were not verified in this pass."
+    }
+  ],
+  "storage": {
+    "backend": "postgresql",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "envPrefix": "HASNA_TENANTS_"
+  }
+}

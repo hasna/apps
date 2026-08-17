@@ -1,0 +1,23 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "orgs",
+  "class": "library",
+  "contractVersion": "v1",
+  "kitVersion": "0.10.6",
+  "description": "Open organization graph and delegation-context layer for agentic systems.",
+  "hosting": [
+    "user-hosted"
+  ],
+  "bins": [
+    "orgs"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "orgs-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "orgs",
+      "authMode": "local-only"
+    }
+  ]
+}

@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto";
+
 export interface BrowserServerSecurityConfig {
   apiKey?: string | null;
   allowUnauthenticated: boolean;
@@ -50,11 +52,30 @@ export function authenticate(req: Request, config: BrowserServerSecurityConfig):
 
   const header = req.headers.get("Authorization") ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (token !== config.apiKey) {
+  // Timing-safe compare: a plain !== leaks an early-exit timing signal on a
+  // server that may be reachable beyond loopback when BROWSER_HOST is set.
+  if (!timingSafeEqualStr(token, config.apiKey)) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
     });
   }
   return null;
+}
+
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a, "utf8");
+  const bBuf = Buffer.from(b, "utf8");
+  if (aBuf.length !== bBuf.length) {
+    // Compare against self to keep the length-mismatch path constant-time-ish,
+    // then fail (length is not secret enough to protect, but avoid an instant
+    // early return distinguishable from a full compare).
+    timingSafeEqualBuf(aBuf, aBuf);
+    return false;
+  }
+  return timingSafeEqualBuf(aBuf, bBuf);
+}
+
+function timingSafeEqualBuf(a: Buffer, b: Buffer): boolean {
+  return timingSafeEqual(a, b);
 }

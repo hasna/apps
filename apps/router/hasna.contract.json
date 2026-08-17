@@ -1,0 +1,13 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "router",
+  "class": "library",
+  "contractVersion": "v1",
+  "kitVersion": "0.10.6",
+  "description": "Deterministic smart model router companion for open-gateway.",
+  "hosting": [
+    "user-hosted"
+  ],
+  "bins": [],
+  "serviceSurfaces": []
+}
