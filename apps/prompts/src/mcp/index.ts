@@ -11,7 +11,9 @@ import { createProject, getProject, listProjects, deleteProject } from "../db/pr
 import { resolveProject } from "../db/database.js"
 import { getDatabase, getPromptRegistryDiagnostics } from "../db/database.js"
 import { searchPrompts, searchPromptsSlim, findSimilar } from "../lib/search.js"
-import { renderTemplate, extractVariableInfo, validateVars } from "../lib/template.js"
+import { extractVariableInfo, validateVars } from "../lib/template.js"
+import { renderTemplateWithIntegrations } from "../lib/integrations/render.js"
+import { extractIntegrationRefs, parseRefOrThrow, resolveIntegrationRef, buildSurfaceMap } from "../lib/integrations/index.js"
 import { importFromJson, exportToJson, scanAndImportSlashCommands } from "../lib/importer.js"
 import { maybeSaveMemento } from "../lib/mementos.js"
 import { createSchedule, listSchedules, getSchedule, deleteSchedule, getDueSchedules } from "../db/schedules.js"
@@ -204,14 +206,15 @@ server.registerTool(
 server.registerTool(
   "prompts_render",
   {
-    description: "Render a template prompt by filling in {{variables}}. Returns rendered body plus info on missing/defaulted vars.",
+    description: "Render a template prompt by filling in {{variables}} and resolving {{todo:...}}/{{channel:...}}/{{knowledge:...}}/{{memento:...}}/{{file:...}} integrations. Returns rendered body plus info on missing/defaulted vars and integration receipts.",
     inputSchema: {
       id: z.string().describe("Prompt ID or slug"),
       vars: z.record(z.string()).describe("Variable values as key-value pairs"),
       agent: z.string().optional().describe("Agent ID for mementos integration"),
+      allow_unresolved_integrations: z.boolean().optional().describe("Permissive preview: emit [UNRESOLVED ...] markers instead of failing on unresolvable integrations"),
     },
   },
-  async ({ id, vars, agent }) => {
+  async ({ id, vars, agent, allow_unresolved_integrations }) => {
     try {
       const prompt = usePrompt(id)
 
@@ -238,12 +241,62 @@ server.registerTool(
       }
 
       const mergedVars = { ...autoFilled, ...vars }
-      const result = renderTemplate(prompt.body, mergedVars)
+      const result = await renderTemplateWithIntegrations(prompt.body, mergedVars, {
+        allowUnresolvedIntegrations: allow_unresolved_integrations,
+      })
       if (Object.keys(autoFilled).length > 0) {
         (result as unknown as Record<string, unknown>).auto_filled = autoFilled
       }
       await maybeSaveMemento({ slug: prompt.slug, body: prompt.body, rendered: result.rendered, agentId: agent })
       return ok(result)
+    } catch (e) {
+      return err(e instanceof Error ? e.message : String(e))
+    }
+  }
+)
+
+// ── prompts_resolve ───────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_resolve",
+  {
+    description: "Resolve integration references ({{todo:...}}, {{channel:...}}, {{knowledge:...}}, {{memento:...}}, {{file:...}}) in a text body against the owning apps, WITHOUT rendering. Returns resolved projections and unresolved named codes. Default fails on the first unresolved ref; pass allow_unresolved=true for a permissive preview.",
+    inputSchema: {
+      body: z.string().describe("Text containing integration references"),
+      allow_unresolved: z.boolean().optional().describe("Permissive preview: return unresolved refs with named codes instead of failing"),
+    },
+  },
+  async ({ body, allow_unresolved }) => {
+    try {
+      const surfaceMap = buildSurfaceMap({})
+      const refs = extractIntegrationRefs(body)
+      const resolved: Array<Record<string, unknown>> = []
+      const unresolved: Array<Record<string, unknown>> = []
+      for (const ref of refs) {
+        try {
+          const parsed = parseRefOrThrow(ref.raw, ref.kind, ref.payload)
+          const result = await resolveIntegrationRef(parsed, surfaceMap)
+          resolved.push({
+            kind: result.kind,
+            ref: result.ref,
+            source_id: result.source_id,
+            source_version: result.source_version,
+            projection: result.projection,
+            text: result.text,
+          })
+        } catch (e) {
+          if (e instanceof Error && "code" in e) {
+            const code = String((e as { code: unknown }).code)
+            unresolved.push({ kind: ref.kind, ref: ref.raw, code })
+          } else {
+            unresolved.push({ kind: ref.kind, ref: ref.raw, code: "UNKNOWN", message: e instanceof Error ? e.message : String(e) })
+          }
+        }
+      }
+      if (unresolved.length > 0 && !allow_unresolved) {
+        const first = unresolved[0]!
+        return err(`Unresolved integration ${first["kind"]}:${first["ref"]} code=${first["code"]}`)
+      }
+      return ok({ refs: refs.length, resolved, unresolved })
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e))
     }

@@ -2,7 +2,8 @@ import { Command } from "commander"
 import chalk from "chalk"
 import { getPrompt, listPrompts, listPromptsSlim, updatePrompt, deletePrompt, usePrompt, upsertPrompt, pinPrompt } from "../../db/prompts.js"
 import { searchPrompts, searchPromptsSlim, findSimilar } from "../../lib/search.js"
-import { renderTemplate, extractVariableInfo } from "../../lib/template.js"
+import { extractVariableInfo } from "../../lib/template.js"
+import { renderTemplateWithIntegrations } from "../../lib/integrations/render.js"
 import { isJson, output, handleError, fmtPrompt, fmtPromptDetail, fmtSearchResult, getActiveProjectId, parseOffset, parsePositiveInt, printPageSummary } from "../utils.js"
 import type { Prompt, SlimPrompt } from "../../types/index.js"
 
@@ -224,9 +225,10 @@ export function registerPromptCommands(program: Command): void {
   // ── render ──────────────────────────────────────────────────────────────────
   program
     .command("render <id>")
-    .description("Render a template prompt by filling in {{variables}}")
+    .description("Render a template prompt by filling in {{variables}} and resolving {{todo:...}}/{{channel:...}}/{{knowledge:...}}/{{memento:...}}/{{file:...}} integrations")
     .option("-v, --var <assignments...>", "Variable assignments as key=value")
-    .action((id: string, opts: { var?: string[] }) => {
+    .option("--allow-unresolved-integrations", "Permissive preview: emit [UNRESOLVED ...] markers instead of failing on unresolvable integrations")
+    .action(async (id: string, opts: { var?: string[]; allowUnresolvedIntegrations?: boolean }) => {
       try {
         const prompt = usePrompt(id)
         const vars: Record<string, string> = {}
@@ -235,7 +237,9 @@ export function registerPromptCommands(program: Command): void {
           if (eq === -1) handleError(program, `Invalid var format: ${assignment}. Use key=value`)
           vars[assignment.slice(0, eq)] = assignment.slice(eq + 1)
         }
-        const result = renderTemplate(prompt.body, vars)
+        const result = await renderTemplateWithIntegrations(prompt.body, vars, {
+          allowUnresolvedIntegrations: opts.allowUnresolvedIntegrations,
+        })
         if (isJson(program)) {
           output(program, result)
         } else {
@@ -244,6 +248,10 @@ export function registerPromptCommands(program: Command): void {
             console.error(chalk.yellow(`\nWarning: missing vars: ${result.missing_vars.join(", ")}`))
           if (result.used_defaults.length > 0)
             console.error(chalk.gray(`Used defaults: ${result.used_defaults.join(", ")}`))
+          if ((result.resolved_integrations?.length ?? 0) > 0)
+            console.error(chalk.gray(`Resolved integrations: ${result.resolved_integrations!.map((r) => `${r.kind}:${r.source_id}`).join(", ")}`))
+          if ((result.unresolved_integrations?.length ?? 0) > 0)
+            console.error(chalk.yellow(`Unresolved integrations: ${result.unresolved_integrations!.map((u) => `${u.kind}:${u.code}`).join(", ")}`))
         }
       } catch (e) {
         handleError(program, e)

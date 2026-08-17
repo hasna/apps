@@ -161,6 +161,20 @@ export interface RenderResult {
   rendered: string
   missing_vars: string[]
   used_defaults: string[]
+  /** Resolved integration source ids/versions — render receipt. */
+  resolved_integrations?: Array<{
+    kind: string
+    ref: string
+    source_id: string
+    source_version: string | number | null
+    projection: string
+  }>
+  /** Unresolved integration refs with their named codes — render receipt. */
+  unresolved_integrations?: Array<{
+    kind: string
+    ref: string
+    code: string
+  }>
 }
 
 export interface PromptStats {
