@@ -824,7 +824,14 @@ export class MementosClient {
     profile: string;
     db_path: string;
     hostname: string;
-    memories: { total: number; expired: number; pinned: number };
+    memories: {
+      total: number;
+      /** Rows with status = 'expired' — exactly what `--status expired` returns. */
+      expired: number;
+      /** Retention backlog: status = 'expired' OR expires_at in the past (drives the warn gate). */
+      expired_due: number;
+      pinned: number;
+    };
     agents: number;
     projects: number;
   }> {

@@ -86,6 +86,11 @@ describe("getMemoryStats expiry fields", () => {
     // The contradiction the issue names: --status expired returns only the
     // status='expired' row, so expired_count must be 1 — not 2 (past-due) and
     // not 3 (any expires_at).
+    // FAILING-FIRST: this assertion is the one that failed against the pre-fix
+    // SQL (old `expired_count` was `status='expired' OR expires_at < now`, so
+    // this fixture returned 2; received 2, expected 1). The sibling test below
+    // is a supporting test — its 2099 date is not past-due under either
+    // comparison, so it passes even on the old code and does not discriminate.
     expect(stats.expired_count).toBe(1);
     // The two rows carrying a (future or past) expiry date land in the new
     // explicitly named field instead.
