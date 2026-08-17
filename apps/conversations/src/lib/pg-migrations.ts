@@ -1109,4 +1109,26 @@ export const PG_MIGRATIONS: string[] = [
 
   INSERT INTO _migrations (id) VALUES (9) ON CONFLICT DO NOTHING;
   `,
+  // Migration 10: append-only archive for the single-touch roster reaper.
+  // The apply path preserves a recoverable original of every registration it
+  // removes, so the bulk delete has a rollback path instead of irreversible
+  // in-place destruction of the production roster.
+  `
+  CREATE TABLE IF NOT EXISTS agent_presence_reap_archive (
+    reaped_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    id TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    session_id TEXT,
+    role TEXT NOT NULL DEFAULT 'agent',
+    project_id TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'online',
+    last_seen_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    metadata TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_agent_presence_reap_archive_reaped_at
+    ON agent_presence_reap_archive(reaped_at);
+
+  INSERT INTO _migrations (id) VALUES (10) ON CONFLICT DO NOTHING;
+  `,
 ];

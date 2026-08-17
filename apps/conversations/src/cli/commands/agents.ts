@@ -378,6 +378,7 @@ export function registerAgentCommands(program: Command): void {
         }
         if (result.reaped > 0) {
           printLine(chalk.green(`  ${result.reaped} removed.`));
+          printLine(chalk.dim(`  ${result.archived} preserved in ${result.archiveTable} for rollback.`));
         } else {
           printLine(chalk.dim("  Report only — pass --apply to remove."));
         }

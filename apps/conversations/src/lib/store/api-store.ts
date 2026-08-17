@@ -637,13 +637,15 @@ export class ApiStore implements ConversationsStore {
     return (body.agents ?? []) as never;
   };
   reapStaleSingleTouch: ConversationsStore["reapStaleSingleTouch"] = async (opts) => {
-    const body = await this.post<{ candidates?: number; reaped?: number; agents?: string[] }>("/agents/reap-stale", {
+    const body = await this.post<{ candidates?: number; reaped?: number; archived?: number; archiveTable?: string; agents?: string[] }>("/agents/reap-stale", {
       apply: opts?.apply === true,
       older_than_seconds: opts?.olderThanSeconds,
     });
     return {
       candidates: Number(body?.candidates ?? 0),
       reaped: Number(body?.reaped ?? 0),
+      archived: Number(body?.archived ?? 0),
+      archiveTable: body?.archiveTable ?? "agent_presence_reap_archive",
       agents: body?.agents ?? [],
     } as never;
   };

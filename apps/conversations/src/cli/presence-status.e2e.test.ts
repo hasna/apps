@@ -91,7 +91,17 @@ describe("CLI agent presence status staleness (e2e)", () => {
 
     const applied = runCli(["agents", "reap-stale", "--apply", "-j"]);
     expect(applied.exitCode).toBe(0);
-    expect(JSON.parse(applied.stdout)).toMatchObject({ candidates: 1, reaped: 1, agents: ["reap-cli-single"] });
+    expect(JSON.parse(applied.stdout)).toMatchObject({ candidates: 1, reaped: 1, archived: 1, agents: ["reap-cli-single"] });
+
+    // The removed row is preserved in the append-only archive with its full
+    // registration, so the delete has a rollback path.
+    const archiveDb = new SqliteDatabase(TEST_DB);
+    const archived = archiveDb.prepare(
+      "SELECT id, agent, session_id, status FROM agent_presence_reap_archive WHERE agent = ?"
+    ).all("reap-cli-single");
+    archiveDb.close();
+    expect(archived).toHaveLength(1);
+    expect(archived[0]).toMatchObject({ agent: "reap-cli-single", session_id: "sess-reap-cli-single", status: "online" });
 
     const afterApply = runCli(["agents", "list", "-j"]);
     const remaining = JSON.parse(afterApply.stdout) as Array<{ agent: string }>;

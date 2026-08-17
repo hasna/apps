@@ -330,9 +330,13 @@ export function setPresenceProject(agent: string, projectId: string | null): voi
   });
 }
 
+export const AGENT_PRESENCE_REAP_ARCHIVE_TABLE = "agent_presence_reap_archive";
+
 export interface StaleSingleTouchReapResult {
   candidates: number;
   reaped: number;
+  archived: number;
+  archiveTable: string;
   agents: string[];
 }
 
@@ -364,13 +368,47 @@ export function reapStaleSingleTouchRegistrations(opts?: {
   if (opts?.apply === true && rows.length > 0) {
     const ids = rows.map((row) => row.id);
     const placeholders = ids.map(() => "?").join(",");
-    const result = db.prepare(`DELETE FROM agent_presence WHERE id IN (${placeholders})`).run(...ids);
-    reaped = Number(result.changes);
+    // Delete and preserve in one transaction: the DELETE re-checks heartbeat
+    // recency (a heartbeat between the candidate SELECT and this delete must
+    // keep the registration), and every row it actually removes is first
+    // written to the append-only archive so the mutation has a preserved
+    // original and a rollback path.
+    db.transaction(() => {
+      const doomed = db.query(`
+        DELETE FROM agent_presence
+        WHERE id IN (${placeholders})
+          AND last_seen_at < strftime('%Y-%m-%dT%H:%M:%f', 'now', '-${retentionSeconds} seconds')
+        RETURNING id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata
+      `).all(...ids) as Array<Record<string, unknown>>;
+      const archive = db.prepare(`
+        INSERT INTO ${AGENT_PRESENCE_REAP_ARCHIVE_TABLE}
+          (reaped_at, id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const reapedAt = new Date().toISOString();
+      for (const row of doomed) {
+        archive.run(
+          reapedAt,
+          row.id,
+          row.agent,
+          row.session_id,
+          row.role,
+          row.project_id,
+          row.status,
+          row.last_seen_at,
+          row.created_at,
+          row.metadata,
+        );
+      }
+      reaped = doomed.length;
+    });
   }
 
   return {
     candidates: rows.length,
     reaped,
+    archived: reaped,
+    archiveTable: AGENT_PRESENCE_REAP_ARCHIVE_TABLE,
     agents: rows.map((row) => row.agent),
   };
 }

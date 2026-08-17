@@ -620,14 +620,48 @@ describe("reapStaleSingleTouchRegistrations", () => {
     expect(getPresence("fresh-single-touch")).toBeTruthy();
   });
 
-  test("apply deletes only the flagged single-touch rows", () => {
+  test("apply deletes only the flagged single-touch rows and archives them", () => {
     seedReaperFixture();
 
     const result = reapStaleSingleTouchRegistrations({ apply: true });
     expect(result.candidates).toBe(1);
     expect(result.reaped).toBe(1);
+    expect(result.archived).toBe(1);
     expect(getPresence("stale-single-touch")).toBeNull();
     expect(getPresence("seen-again-agent")).toBeTruthy();
     expect(getPresence("fresh-single-touch")).toBeTruthy();
+
+    // The removed row is preserved in the append-only archive with its full
+    // registration, so the delete has a rollback path.
+    const archived = getDb().prepare(
+      `SELECT reaped_at, id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata
+       FROM agent_presence_reap_archive WHERE agent = ?`
+    ).all("stale-single-touch") as Array<Record<string, unknown>>;
+    expect(archived).toHaveLength(1);
+    expect(archived[0]).toMatchObject({
+      id: "st111111",
+      agent: "stale-single-touch",
+      session_id: "sess-st",
+      role: "agent",
+      status: "online",
+      last_seen_at: "2026-08-01T00:00:00.000",
+      created_at: "2026-08-01T00:00:00.000",
+    });
+  });
+
+  test("apply does not delete a registration whose heartbeat refreshed between report and apply", () => {
+    seedReaperFixture();
+
+    const report = reapStaleSingleTouchRegistrations();
+    expect(report.candidates).toBe(1);
+
+    // A heartbeat lands between report and apply, making the row current.
+    heartbeat("stale-single-touch", "online");
+
+    const result = reapStaleSingleTouchRegistrations({ apply: true });
+    expect(result.reaped).toBe(0);
+    expect(result.archived).toBe(0);
+    expect(getPresence("stale-single-touch")).toBeTruthy();
+    expect(getDb().prepare("SELECT COUNT(*) AS n FROM agent_presence_reap_archive").get()).toEqual({ n: 0 });
   });
 });

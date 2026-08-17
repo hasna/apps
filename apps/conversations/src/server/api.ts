@@ -2970,13 +2970,33 @@ async function handleV1(
     );
     let reaped = 0;
     if (apply && rows.length > 0) {
+      // Delete and preserve in one atomic statement: the DELETE re-checks
+      // heartbeat recency (a heartbeat between the candidate SELECT and this
+      // delete must keep the registration), and RETURNING feeds the
+      // append-only archive, so nothing is removed without a preserved
+      // original and a rollback path.
       const res = await client.query(
-        `DELETE FROM agent_presence WHERE id = ANY($1::text[])`,
+        `WITH doomed AS (
+           DELETE FROM agent_presence
+           WHERE id = ANY($1::text[])
+             AND last_seen_at < NOW() - interval '${retentionSeconds} seconds'
+           RETURNING id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata
+         )
+         INSERT INTO agent_presence_reap_archive
+           (reaped_at, id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata)
+         SELECT NOW(), id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata
+         FROM doomed`,
         [rows.map((row) => row.id)],
       );
       reaped = res.rowCount;
     }
-    return json({ candidates: rows.length, reaped, agents: rows.map((row) => row.agent) });
+    return json({
+      candidates: rows.length,
+      reaped,
+      archived: reaped,
+      archiveTable: "agent_presence_reap_archive",
+      agents: rows.map((row) => row.agent),
+    });
   }
 
   // ---- one agent: presence / rename / project / remove ----
