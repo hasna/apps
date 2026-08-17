@@ -115,26 +115,17 @@ mkdir -p "$RESOURCES/bin" "$RESOURCES/cli" "$RESOURCES/sync"
 cp "$REPO_ROOT/bin/notes.mjs" "$RESOURCES/bin/"
 cp "$REPO_ROOT/cli/notes.mjs" "$RESOURCES/cli/"
 cp "$REPO_ROOT"/sync/*.mjs "$RESOURCES/sync/"
-SOURCE_NODE_MODULES_OK=0
-if [[ -d "$SIDECAR_SRC/node_modules" \
-  && -f "$SIDECAR_SRC/node_modules/ai/dist/index.mjs" \
-  && -f "$SIDECAR_SRC/node_modules/@ai-sdk/openai/dist/index.mjs" \
-  && -d "$SIDECAR_SRC/node_modules/ws" ]]; then
-  SOURCE_NODE_MODULES_OK=1
-fi
-if [[ "$SOURCE_NODE_MODULES_OK" == "1" ]]; then
-  echo "   reusing source node_modules"
-  # bun installs workspace deps as symlinks into a store (.bun/...) — a plain
-  # cp -R would copy the symlinks and leave the bundle with dangling pointers.
-  # -L dereferences so the bundle carries real files and is self-contained.
-  cp -RL "$SIDECAR_SRC/node_modules" "$RESOURCES/ai-sidecar/node_modules"
+# Install the sidecar deps directly into the bundle. The source tree's
+# node_modules is bun-managed: workspace deps are symlinks into a store
+# (.bun/...) and transitive deps are hoisted outside the top-level tree, so
+# copying it (even dereferenced with -L) can never produce a complete bundle —
+# measured: ai/dist/index.mjs then fails with ERR_MODULE_NOT_FOUND on
+# @ai-sdk/gateway. Installing into the bundle is deterministic by design.
+echo "   installing sidecar deps into the bundle"
+if command -v bun >/dev/null 2>&1; then
+  ( cd "$RESOURCES/ai-sidecar" && bun install --production )
 else
-  echo "   installing sidecar deps into the bundle"
-  if command -v bun >/dev/null 2>&1; then
-    ( cd "$RESOURCES/ai-sidecar" && bun install --production )
-  else
-    ( cd "$RESOURCES/ai-sidecar" && npm install --omit=dev )
-  fi
+  ( cd "$RESOURCES/ai-sidecar" && npm install --omit=dev )
 fi
 [[ -f "$RESOURCES/ai-sidecar/node_modules/ai/dist/index.mjs" \
   && -f "$RESOURCES/ai-sidecar/node_modules/@ai-sdk/openai/dist/index.mjs" \
