@@ -153,7 +153,10 @@ describe("remote todos list without --status", () => {
       "--json", "list", "--assigned", ASSIGNEE, "--limit", "1",
     ]);
 
-    expect(limited).toMatchObject({ exitCode: 0, stderr: "" });
+    // Two matching rows against --limit 1: the truncation signal (todos 52b0a207)
+    // is expected on stderr; stdout stays the clean one-row array.
+    expect(limited).toMatchObject({ exitCode: 0 });
+    expect(limited.stderr).toContain("more than --limit 1");
     expect(rows(limited).map((row) => row.id)).toEqual([ROWS.in_progress[0]!.id]);
     expect(limited.statusQueries.sort()).toEqual(["in_progress", "pending"]);
   });
@@ -163,7 +166,8 @@ describe("remote todos list without --status", () => {
       "--json", "list", "--assigned", ASSIGNEE, "--limit", "1",
     ], SAME_PRIORITY_ROWS);
 
-    expect(limited).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(limited).toMatchObject({ exitCode: 0 });
+    expect(limited.stderr).toContain("more than --limit 1");
     expect(rows(limited).map((row) => row.id)).toEqual([SAME_PRIORITY_ROWS.pending[1]!.id]);
     expect(limited.statusQueries.sort()).toEqual(["in_progress", "pending"]);
     expect(limited.requestedLimits).toEqual([101, 101]);

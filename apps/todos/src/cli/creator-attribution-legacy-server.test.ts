@@ -228,8 +228,13 @@ describe("--inbox against a server that ignores the creator filter", () => {
       expect(result.exitCode).toBe(0);
       expect(JSON.parse(result.stdout)).toHaveLength(3);
       // Withholding the limit is scoped to client-side filtering and reordering.
-      // One scalar status needs neither, so it must not pull the whole table.
-      expect(seen.some((q) => q.includes("limit=3"))).toBe(true);
+      // One scalar status needs neither, so it must not pull the whole table — and
+      // since the server applies the bound itself, the request carries the caller's
+      // limit PLUS the one-row truncation probe (todos 52b0a207). The probe row
+      // proves the matching set is larger, which is exactly why stderr reports the
+      // bounded read instead of answering with a silent round number.
+      expect(seen.some((q) => q.includes("limit=4"))).toBe(true);
+      expect(result.stderr).toContain("more than --limit 3");
     } finally {
       server.stop(true);
     }

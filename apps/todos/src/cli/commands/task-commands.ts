@@ -1325,10 +1325,23 @@ export function registerTaskCommands(program: Command) {
         ? Math.max(requestedLimit ?? 0, listScanLimit())
         : undefined;
 
+      // Truncation probe (todos 52b0a207). When the authority applies the caller's
+      // limit itself — nothing reorders or narrows after the query — a page of
+      // exactly `limit` rows is indistinguishable from a population that happens to
+      // end there: the round-number tell that made `--limit 2000` read as the full
+      // pending set. So the request carries limit+1: the extra row is proof that the
+      // matching set is larger. The withheld path needs no probe — the CLI applies
+      // the window itself and compares the pre-window set, which IS the exact match
+      // count. One extra row on the wire is the cost of never answering a bounded
+      // read as if it were complete.
+      const probeLimit =
+        !withholdLimit && requestedLimit !== undefined ? requestedLimit + 1 : undefined;
+
       const serverFilter = (() => {
         const base = withholdLimit
           ? (() => { const { limit: _dropped, ...rest } = filter; return rest; })()
           : filter;
+        if (probeLimit !== undefined) return { ...base, limit: probeLimit };
         return scanCeiling === undefined ? base : { ...base, limit: scanCeiling };
       })();
 
@@ -1396,7 +1409,32 @@ export function registerTaskCommands(program: Command) {
 
       // The window is taken LAST, once the set and its order are final. When the
       // limit was left on the query this is a no-op — storage already truncated.
-      if (withholdLimit && requestedLimit !== undefined) tasks = tasks.slice(0, requestedLimit);
+      //
+      // A bounded read must be distinguishable from the full population (todos
+      // 52b0a207 — the silent `--limit` cap, measured at exactly 2000 / 4000 / 10000
+      // of a 63,541-task set at rc=0 with no signal). The +1 probe above makes the
+      // forwarded path exact: the extra row proves the matching set is larger. The
+      // withheld path compares the pre-window set, which IS the exact match count.
+      // Either way the truncation is reported on STDERR — the same channel as the
+      // scan-ceiling warning — so `--json` stdout stays a clean parseable array and
+      // every existing consumer keeps parsing it.
+      let truncatedByLimit = false;
+      if (requestedLimit !== undefined) {
+        if (withholdLimit) {
+          truncatedByLimit = tasks.length > requestedLimit;
+          tasks = tasks.slice(0, requestedLimit);
+        } else if (tasks.length > requestedLimit) {
+          truncatedByLimit = true;
+          tasks = tasks.slice(0, requestedLimit);
+        }
+      }
+      if (truncatedByLimit) {
+        console.error(chalk.yellow(
+          `Warning: the matching set has more than --limit ${requestedLimit} rows, so only the first\n` +
+          `         ${requestedLimit} are shown. This read is bounded — raise --limit or narrow the\n` +
+          `         query (--project, --status, --assigned) to see the full population.`,
+        ));
+      }
 
       // `--assigned` fails open the same way an out-of-vocabulary status did, but
       // it is a REFERENCE rather than a closed vocabulary, so the remedy differs.
