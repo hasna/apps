@@ -34,6 +34,16 @@ export const LOCK_KEY_PREFIX = "codewith/provider-account"
  */
 export const USAGE_READ_MAX_BYTES = 2 * 1024 * 1024
 
+/**
+ * Timeout for the discovery read. The real `codewith usage --all --json`
+ * takes ~32 s on this machine (measured twice 2026-08-17: 31.70 s, 32.37 s,
+ * 28 targets), so the previous 30 s default killed the real command with
+ * SIGTERM (exit 143) and every discovery failed with TARGET_DISCOVERY_FAILED
+ * even after the read bound was fixed. 60 s covers the measured population
+ * with margin.
+ */
+export const USAGE_READ_TIMEOUT_MS = 60_000
+
 export interface DiscoveredTarget extends DispatchTarget {}
 
 export interface TargetDiscoveryResult {
@@ -134,7 +144,7 @@ async function readBounded(
  */
 export async function discoverTargets(
   bin: string,
-  timeoutMs = 30_000
+  timeoutMs = USAGE_READ_TIMEOUT_MS
 ): Promise<TargetDiscoveryResult> {
   const captured = await runCaptured([bin, "usage", "--all", "--json"], timeoutMs, USAGE_READ_MAX_BYTES)
   if (captured.exitCode !== 0 && captured.exitCode !== 2) {

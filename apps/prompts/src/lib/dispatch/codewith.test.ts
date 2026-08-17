@@ -15,7 +15,7 @@ import {
   usageFixture,
   type FakeBins,
 } from "./test-fakes.js"
-import { USAGE_READ_MAX_BYTES } from "./codewith.js"
+import { USAGE_READ_MAX_BYTES, USAGE_READ_TIMEOUT_MS } from "./codewith.js"
 
 let fakes: FakeBins
 
@@ -217,6 +217,22 @@ describe("discoverTargets with a real-shape usage population", () => {
 
   test("the usage read bound covers the real population", () => {
     expect(USAGE_READ_MAX_BYTES).toBeGreaterThanOrEqual(2 * 1024 * 1024)
+  })
+
+  test("the discovery timeout covers the measured real CLI duration", () => {
+    // Real `codewith usage --all --json` measured twice on 2026-08-17:
+    // 31.70 s and 32.37 s. The retired 30 s default killed the real command
+    // (exit 143 = SIGTERM) before it could emit output. Keep the bound at or
+    // above 60 s so a reintroduced short timeout fails this test.
+    expect(USAGE_READ_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000)
+  })
+
+  test("a discovery read that completes within the timeout still parses", async () => {
+    fakes.setUsageFixture(realShapePayload())
+    const started = Date.now()
+    const result = await discoverTargets(fakes.codewithBin, 5_000)
+    expect(result.examined).toBe(28)
+    expect(Date.now() - started).toBeLessThan(5_000)
   })
 })
 
