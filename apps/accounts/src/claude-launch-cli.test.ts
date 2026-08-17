@@ -18,6 +18,7 @@ import {
   redactText,
   runClaudeLaunch,
 } from "./lib/claude-launch.js";
+import { quotePosixShellWord } from "./lib/env.js";
 import { getTool } from "./lib/tools.js";
 import { AccountsError } from "./types.js";
 
@@ -53,6 +54,7 @@ beforeAll(() => {
   writeExecutable("claude", fakeClaudeSource());
   writeExecutable("identities", fakeIdentitiesSource(), { windowsBatch: true });
   writeExecutable("configs", fakeConfigsSource(), { windowsBatch: true });
+  writeExecutable("secrets", fakeSecretsSource());
 });
 
 beforeEach(() => {
@@ -139,6 +141,11 @@ appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({
   active: process.env.ACCOUNTS_ACTIVE,
   supervisor: process.env.ACCOUNTS_SUPERVISOR,
   keychainAccount,
+  authTokenPresent: Boolean(process.env.ANTHROPIC_AUTH_TOKEN),
+  apiKeyPresent: Boolean(process.env.ANTHROPIC_API_KEY),
+  baseUrl: process.env.ANTHROPIC_BASE_URL,
+  model: process.env.ANTHROPIC_MODEL,
+  autoCompactWindow: process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW,
 }) + "\\n");
 if (process.env.FAKE_STDOUT !== "0") console.log("fake-claude-stdout");
 if (process.env.FAKE_STDERR !== "0") console.error("fake-claude-stderr");
@@ -149,8 +156,30 @@ process.exit(Number(process.env.FAKE_EXIT ?? 0));
 `;
 }
 
-function fakeSecuritySource(): string {
+/**
+ * The `secrets` CLI as Accounts invokes it: structurally, `exec <key> --as
+ * <VAR> -- <cmd> [args...]`, injecting the value into the CHILD's env only.
+ * The injected value is synthetic and is never written to any log or output.
+ */
+function fakeSecretsSource(): string {
   return `
+import { spawnSync } from "node:child_process";
+const args = process.argv.slice(2);
+if (args[0] !== "exec") process.exit(64);
+const key = args[1];
+const asIndex = args.indexOf("--as");
+const sep = args.indexOf("--");
+if (asIndex < 0 || sep < 0 || sep !== asIndex + 2) process.exit(65);
+const varName = args[asIndex + 1];
+if (process.env.FAKE_VAULT_EMPTY !== "1") {
+  process.env[varName] = "VAULT-SECRET-" + key;
+}
+const result = spawnSync(args[sep + 1], args.slice(sep + 2), { stdio: "inherit", env: process.env });
+process.exit(result.status === null ? 1 : result.status);
+`;
+}
+
+function fakeSecuritySource(): string {  return `
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const command = args[0];
@@ -315,6 +344,11 @@ function claudeEntries(): Array<{
   active?: string;
   supervisor?: string;
   keychainAccount?: string;
+  authTokenPresent?: boolean;
+  apiKeyPresent?: boolean;
+  baseUrl?: string;
+  model?: string;
+  autoCompactWindow?: string;
 }> {
   return entries(claudeLog);
 }
@@ -891,4 +925,194 @@ test("SIGTERM during keychain mutation still restores the prior credential", asy
   expect(completed.code).toBe(143);
   expect(readKeychain()).toEqual({ account: "prior", secret: "prior-credential-value" });
   expect(existsSync(keychainLock)).toBe(false);
+});
+
+describe("backend routing launch", () => {
+  test("a profile bound to a backend launches through a structural secrets exec wrapper", async () => {
+    expectStatus(runCli(["backend", "add", "--example", "deepseek"]), 0);
+    addProfile("routed");
+    expectStatus(runCli(["set", "routed", "--backend", "deepseek"]), 0);
+
+    const result = runCli([
+      "launch", "routed", "--tool", "claude", "--skip-configs", "--headless", "--", "Backend prompt",
+    ]);
+    expectStatus(result, 0);
+
+    // The display names the vault LOCATOR and the adapter auth var, never a value.
+    expect(result.stderr).toContain("secrets exec deepseek/api_key --as ANTHROPIC_AUTH_TOKEN -- claude");
+    // The injected synthetic secret value never reaches any transcript surface.
+    expect(result.stderr).not.toContain("VAULT-SECRET");
+    expect(result.stdout).not.toContain("VAULT-SECRET");
+
+    const entry = claudeEntries().at(-1);
+    expect(entry?.configDir).toBe(profileDir("routed"));
+    expect(entry?.args).toContain("Backend prompt");
+    // The wrapper injected the credential into the harness env — structurally.
+    expect(entry?.authTokenPresent).toBe(true);
+    // Exclusivity at the CLI level: the ambient API key was removed by the
+    // adapter's unsetEnv, so the harness holds the auth token OR the API key,
+    // never both.
+    expect(entry?.apiKeyPresent).toBe(false);
+    expect(entry?.baseUrl).toBe("https://api.deepseek.com/anthropic");
+    expect(entry?.model).toBe("deepseek-v4-flash[1m]");
+    // The auto-compact window must be a plain token count, not "true".
+    expect(entry?.autoCompactWindow).toBe("786432");
+  });
+
+  test("--backend override routes an unbound profile; unknown backends fail closed", async () => {
+    expectStatus(runCli(["backend", "add", "--example", "deepseek"]), 0);
+    addProfile("plain");
+
+    const overridden = runCli([
+      "launch", "plain", "--tool", "claude", "--skip-configs", "--headless", "--backend", "deepseek", "--", "Prompt",
+    ]);
+    expectStatus(overridden, 0);
+    expect(overridden.stderr).toContain("secrets exec deepseek/api_key --as ANTHROPIC_AUTH_TOKEN -- claude");
+
+    const unknown = runCli([
+      "launch", "plain", "--tool", "claude", "--skip-configs", "--headless", "--backend", "missing", "--", "Prompt",
+    ]);
+    expectStatus(unknown, 1);
+    expect(unknown.stderr).toContain('no backend route named "missing"');
+  });
+
+  test("switch to a backend-bound profile returns the launch-plan env without touching the keychain", () => {
+    expectStatus(runCli(["backend", "add", "--example", "deepseek"]), 0);
+    addProfile("routed");
+    expectStatus(runCli(["set", "routed", "--backend", "deepseek"]), 0);
+    setKeychain("acct", "credential-prior-value");
+
+    const result = runCli(["switch", "routed", "--tool", "claude", "--json"]);
+    expectStatus(result, 0);
+    const parsed = JSON.parse(result.stdout) as {
+      applied: boolean;
+      command: string[];
+      commandLine: string;
+      message: string;
+    };
+    // A bound profile is never "applied" to the live default paths.
+    expect(parsed.applied).toBe(false);
+    // The restart command routes through the launch-plan wrapper; the public
+    // shape redacts the credential-bearing argv tokens by design, and the
+    // vault LOCATOR survives.
+    expect(parsed.command[0]).toBe("secrets");
+    expect(parsed.command).toContain("deepseek/api_key");
+    expect(parsed.command).toContain("claude");
+    // The env is the launch-plan env — never the native OAuth blanking (no
+    // empty ANTHROPIC_* assignments) and never a credential value.
+    expect(parsed.commandLine).toContain("ANTHROPIC_BASE_URL='https://api.deepseek.com/anthropic'");
+    expect(parsed.commandLine).toContain("ANTHROPIC_MODEL='deepseek-v4-flash[1m]'");
+    expect(parsed.commandLine).toContain("-u ANTHROPIC_API_KEY");
+    expect(parsed.commandLine).not.toContain("ANTHROPIC_API_KEY=");
+    expect(parsed.commandLine).not.toContain("ANTHROPIC_AUTH_TOKEN=");
+    // The keychain was never consulted or written.
+    expect(entries(securityLog)).toEqual([]);
+    expect(readKeychain()).toEqual({ account: "acct", secret: "credential-prior-value" });
+  });
+
+  test("switch --mode apply on a backend-bound profile refuses loudly", () => {
+    expectStatus(runCli(["backend", "add", "--example", "deepseek"]), 0);
+    addProfile("routed");
+    expectStatus(runCli(["set", "routed", "--backend", "deepseek"]), 0);
+    setKeychain("acct", "credential-prior-value");
+
+    const result = runCli(["switch", "routed", "--tool", "claude", "--mode", "apply"]);
+    expectStatus(result, 1);
+    expect(result.stderr).toContain('profile "routed" is bound to backend "deepseek"');
+    expect(result.stderr).toContain("accounts launch routed");
+    expect(entries(securityLog)).toEqual([]);
+    expect(readKeychain()).toEqual({ account: "acct", secret: "credential-prior-value" });
+  });
+
+  test("switch --launch on a backend-bound profile routes through the launch plan", () => {
+    expectStatus(runCli(["backend", "add", "--example", "deepseek"]), 0);
+    addProfile("routed");
+    expectStatus(runCli(["set", "routed", "--backend", "deepseek"]), 0);
+    setKeychain("acct", "credential-prior-value");
+
+    const result = runCli([
+      "switch", "routed", "--tool", "claude", "--launch", "--skip-configs", "--", "Switch prompt",
+    ]);
+    expectStatus(result, 0);
+
+    const entry = claudeEntries().at(-1);
+    expect(entry?.configDir).toBe(profileDir("routed"));
+    expect(entry?.args).toContain("Switch prompt");
+    // The launch went through the structural wrapper: credential injected as
+    // the auth token, ambient API key removed, adapter env rendered.
+    expect(entry?.authTokenPresent).toBe(true);
+    expect(entry?.apiKeyPresent).toBe(false);
+    expect(entry?.baseUrl).toBe("https://api.deepseek.com/anthropic");
+    expect(entry?.model).toBe("deepseek-v4-flash[1m]");
+    // No keychain read or write happened anywhere on the switch path.
+    expect(entries(securityLog)).toEqual([]);
+    expect(readKeychain()).toEqual({ account: "acct", secret: "credential-prior-value" });
+  });
+
+  test("accounts env on a backend-bound profile exports only public env", () => {
+    expectStatus(runCli(["backend", "add", "--example", "deepseek"]), 0);
+    addProfile("routed");
+    expectStatus(runCli(["set", "routed", "--backend", "deepseek"]), 0);
+    setKeychain("acct", "credential-prior-value");
+
+    const result = runCli(["env", "routed", "--tool", "claude"]);
+    expectStatus(result, 0);
+    expect(result.stdout).toContain(`export CLAUDE_CONFIG_DIR=` + quotePosixShellWord(profileDir("routed")));
+    // A bound profile's env is public only: no adapter backend env and no
+    // secret env vars can appear in shell exports.
+    expect(result.stdout).not.toMatch(/ANTHROPIC_/);
+    expect(entries(securityLog)).toEqual([]);
+    expect(readKeychain()).toEqual({ account: "acct", secret: "credential-prior-value" });
+  });
+
+  test("sessions resume on a backend-bound profile launches through the backend plan", () => {
+    expectStatus(runCli(["backend", "add", "--example", "deepseek"]), 0);
+    addProfile("routed");
+    expectStatus(runCli(["set", "routed", "--backend", "deepseek"]), 0);
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const projectDir = join(profileDir("routed"), "projects", "-resume-project");
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(
+      join(projectDir, `${sessionId}.jsonl`),
+      JSON.stringify({
+        type: "user",
+        sessionId,
+        cwd: launchCwd,
+        message: { role: "user", content: "RESUME_SECRET_MUST_NOT_ESCAPE" },
+      }) + "\n",
+    );
+    const catalog = runCli(["sessions", "--json"]);
+    expectStatus(catalog, 0);
+    const catalogEntries = JSON.parse(catalog.stdout) as Array<{ catalogRef: string; uuid: string }>;
+    expect(catalogEntries).toHaveLength(1);
+    setKeychain("acct", "credential-prior-value");
+
+    const result = runCli([
+      "sessions", "resume", catalogEntries[0]!.catalogRef,
+      "--account", "routed", "--session-id", sessionId,
+    ]);
+    expectStatus(result, 0);
+
+    const entry = claudeEntries().at(-1);
+    expect(entry?.configDir).toBe(profileDir("routed"));
+    expect(entry?.args).toEqual(["--resume", sessionId]);
+    // Backend-only env: credential via the structural wrapper, adapter env
+    // rendered, ambient API key removed — and no native OAuth machinery ran.
+    expect(entry?.authTokenPresent).toBe(true);
+    expect(entry?.apiKeyPresent).toBe(false);
+    expect(entry?.baseUrl).toBe("https://api.deepseek.com/anthropic");
+    expect(entry?.model).toBe("deepseek-v4-flash[1m]");
+    expect(entries(securityLog)).toEqual([]);
+    expect(readKeychain()).toEqual({ account: "acct", secret: "credential-prior-value" });
+    expect(result.stdout).not.toContain("RESUME_SECRET_MUST_NOT_ESCAPE");
+  });
+
+  test("run --backend in interactive mode refuses loudly instead of ignoring the flag", () => {
+    expectStatus(runCli(["backend", "add", "--example", "deepseek"]), 0);
+    addProfile("plain");
+
+    const result = runCli(["run", "plain", "--tool", "claude", "--backend", "deepseek"]);
+    expectStatus(result, 1);
+    expect(result.stderr).toContain("--backend requires --headless (or use accounts launch)");
+  });
 });

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
-import { AccountsError, profileProvider, type Profile, type ToolDef } from "./types.js";
+import { AccountsError, backendRouteSchema, profileProvider, type BackendRoute, type Profile, type ToolDef } from "./types.js";
 import { findAliasHolders, formatAliasNote } from "./lib/aliases.js";
 import {
   DEFAULT_TOOL,
@@ -71,6 +71,19 @@ import { installHook, uninstallHook, shellSnippet, hookPath } from "./lib/hook.j
 import { prepareClaudeProfileKeychain, profileHasAuth } from "./lib/claude-auth.js";
 import { formatEnvAssignments, formatExportLines, operatorShellEnv, profileEnv, providerLaunchEnv } from "./lib/env.js";
 import { redactText } from "./lib/redaction.js";
+import {
+  planLaunch,
+  renderLaunchPlanCommand,
+  runLaunchPlan,
+} from "./lib/launch-plan.js";
+import {
+  addBackend,
+  backendForProfile,
+  EXAMPLE_DEEPSEEK_BACKEND,
+  listBackends,
+  removeBackend,
+  resolveBackend,
+} from "./lib/backend-routes.js";
 import { finalizeLogin, prepareLogin } from "./lib/login.js";
 import {
   publicSwitchResult,
@@ -540,6 +553,7 @@ program
   .option("--metadata <key=value>", "arbitrary JSON-safe metadata key=value (repeatable)", collectMetadata, [])
   .option("-d, --dir <path>", "config dir to use (default: managed dir under ~/.hasna/accounts)")
   .option("--description <text>", "free-text description")
+  .option("--backend <id>", "bind this profile to a machine-local backend route (accounts backend add)")
   .action(
     action(
       async (
@@ -553,8 +567,10 @@ program
           metadata?: string[];
           dir?: string;
           description?: string;
+          backend?: string;
         },
       ) => {
+        assertLocalBackendBinding(opts.backend);
         const p = await resolveStore().addProfile({
           name,
           tool: opts.tool,
@@ -565,6 +581,7 @@ program
           metadata: parseMetadataPairs(opts.metadata),
           dir: opts.dir,
           description: opts.description,
+          backendRef: opts.backend,
         });
       console.log(chalk.green(`✓ created profile ${chalk.bold(p.name)} for ${chalk.cyan(p.tool)}`));
       console.log(`  config dir: ${p.dir}`);
@@ -573,6 +590,7 @@ program
       if (p.identity) console.log(`  identity:   ${p.identity}`);
       if (p.cardLast4) console.log(`  card:       ****${p.cardLast4}`);
       const tool = getTool(p.tool);
+      if (p.backendRef) console.log(`  backend:    ${chalk.cyan(p.backendRef)} (routed via accounts launch)`);
       console.log(chalk.dim(`  launch it:  accounts launch ${p.name}    (sets ${tool.envVar} and runs ${tool.bin})`));
       },
     ),
@@ -982,9 +1000,14 @@ addConfigsOptions(program
           // launch still meets. Todos OPE15-00059.
           assertGovernedInstructionHome(result.profile, result.tool, configsPrelaunchOptions(opts));
           const [bin, ...launchArgs] = result.command;
+          const launchProcessEnv = providerLaunchEnv(process.env, result.env);
+          // A backend-bound profile's command is the launch-plan wrapper; the
+          // adapter-owned inherited-env conflicts (e.g. ANTHROPIC_API_KEY) must
+          // be removed before spawn, exactly as runLaunchPlan does.
+          for (const key of result.unsetEnv ?? []) delete launchProcessEnv[key];
           const res = spawnSync(bin!, launchArgs, {
             stdio: "inherit",
-            env: providerLaunchEnv(process.env, result.env),
+            env: launchProcessEnv,
           });
           if (res.error) {
             die(
@@ -1850,6 +1873,205 @@ hook
     }),
   );
 
+/**
+ * Resolve the backend route a launch should use: the `--backend` CLI override
+ * wins, then the profile's bound `backendRef`. Unknown ids fail closed with a
+ * hint to `accounts backend add`.
+ */
+function resolveLaunchBackend(profile: Profile, overrideId?: string): BackendRoute | undefined {
+  const ref = overrideId ?? profile.backendRef;
+  if (!ref) return undefined;
+  return resolveBackend(ref);
+}
+
+/**
+ * Backend routes are machine-local user data (vault locators + org endpoints),
+ * so binding flags are accepted only in local transport mode; in api mode the
+ * cloud registry cannot carry or resolve them.
+ */
+function assertLocalBackendBinding(backendId: string | undefined): void {
+  if (!backendId) return;
+  const store = resolveStore();
+  if (store.transport !== "local") {
+    die(
+      `backend routing is machine-local (vault locators never leave this box); --backend ${backendId} cannot be bound through the ${store.transport} registry. Use the local registry on the machine that launches the profile.`,
+    );
+  }
+}
+
+const backend = program.command("backend").description("manage machine-local backend API routes (provider endpoints, models, vault keys)");
+
+backend
+  .command("list", { isDefault: true })
+  .description("list registered backend routes")
+  .option("--json", "output JSON")
+  .action(
+    action((opts: { json?: boolean }) => {
+      const routes = listBackends();
+      if (opts.json) {
+        console.log(JSON.stringify(routes, null, 2));
+        return;
+      }
+      if (routes.length === 0) {
+        console.log(chalk.dim("no backend routes — add one with `accounts backend add --example deepseek`"));
+        return;
+      }
+      for (const route of routes) {
+        console.log(
+          `${chalk.cyan(route.id.padEnd(12))} ${route.name.padEnd(16)} ${chalk.dim(route.protocol)} ${chalk.dim(route.baseUrl)} → vault ${route.vaultKey}`,
+        );
+        const models = route.models.map((model) => `${model.id}(${model.contextWindowTokens})`).join(", ");
+        console.log(`  ${chalk.dim("models:")} ${models}`);
+        if (route.defaults) console.log(`  ${chalk.dim("default:")} ${route.defaults.model}`);
+      }
+    }),
+  );
+
+backend
+  .command("add")
+  .description("register a backend route (or install the public DeepSeek example)")
+  .option("--example <name>", "install a packaged example route by name (deepseek)", "none")
+  .option("--id <id>", "route id (slug, e.g. deepseek)")
+  .option("--name <name>", "display name")
+  .option("--protocol <protocol>", "wire protocol: anthropic-messages | openai-chat | openai-responses")
+  .option("--base-url <url>", "backend base URL (https://, or http://localhost[:port])")
+  .option("--vault-key <key>", "vault LOCATOR for the credential (e.g. deepseek/api_key) — never the value")
+  .option("--model <id>", "register one model id (repeatable)", collectRepeated, [])
+  .option("--context-window <tokens>", "context window in tokens for the model(s) (e.g. 1000000)")
+  .option("--max-output <tokens>", "max output tokens for the model(s)")
+  .option("--default-model <id>", "model used when none is selected (defaults to the first)")
+  .option("--alias-opus <id>", "model id for the opus alias")
+  .option("--alias-sonnet <id>", "model id for the sonnet alias")
+  .option("--alias-haiku <id>", "model id for the haiku alias")
+  .action(
+    action(
+      (opts: {
+        example: string;
+        id?: string;
+        name?: string;
+        protocol?: string;
+        baseUrl?: string;
+        vaultKey?: string;
+        model?: string[];
+        contextWindow?: string;
+        maxOutput?: string;
+        defaultModel?: string;
+        aliasOpus?: string;
+        aliasSonnet?: string;
+        aliasHaiku?: string;
+      }) => {
+        const route = opts.example !== "none"
+          ? installExampleBackend(opts.example)
+          : addBackend(
+              validateBackendRouteCli({
+                id: opts.id,
+                name: opts.name,
+                protocol: opts.protocol,
+                baseUrl: opts.baseUrl,
+                vaultKey: opts.vaultKey,
+                models: opts.model ?? [],
+                contextWindow: opts.contextWindow,
+                maxOutput: opts.maxOutput,
+                defaultModel: opts.defaultModel,
+                aliases: {
+                  opus: opts.aliasOpus,
+                  sonnet: opts.aliasSonnet,
+                  haiku: opts.aliasHaiku,
+                },
+              }),
+            );
+        console.log(chalk.green(`✓ registered backend ${chalk.bold(route.id)} (${route.protocol})`));
+        console.log(`  base URL: ${route.baseUrl}`);
+        console.log(`  vault:    ${route.vaultKey}`);
+        console.log(chalk.dim(`  bind a profile:  accounts set <profile> --backend ${route.id}`));
+      },
+    ),
+  );
+
+backend
+  .command("rm")
+  .alias("remove")
+  .argument("<id>", "backend route id")
+  .description("remove a backend route (refused while a profile binds it)")
+  .action(
+    action((id: string) => {
+      removeBackend(id);
+      console.log(chalk.green(`✓ removed backend ${chalk.bold(id)}`));
+    }),
+  );
+
+/** CLI-input -> backend route construction with semantic validation. */
+function validateBackendRouteCli(input: {
+  id?: string;
+  name?: string;
+  protocol?: string;
+  baseUrl?: string;
+  vaultKey?: string;
+  models: string[];
+  contextWindow?: string;
+  maxOutput?: string;
+  defaultModel?: string;
+  aliases: { opus?: string; sonnet?: string; haiku?: string };
+}): BackendRoute {
+  if (!input.id) throw new AccountsError("--id is required (or use --example deepseek)");
+  if (!input.name) throw new AccountsError("--name is required");
+  if (!input.protocol) throw new AccountsError("--protocol is required (anthropic-messages | openai-chat | openai-responses)");
+  if (!input.baseUrl) throw new AccountsError("--base-url is required");
+  if (!input.vaultKey) throw new AccountsError("--vault-key is required (a vault LOCATOR, never a value)");
+  if (input.models.length === 0) throw new AccountsError("--model is required (at least one)");
+  const contextWindow = input.contextWindow !== undefined ? parsePositiveInt(input.contextWindow, "--context-window") : undefined;
+  if (contextWindow === undefined) {
+    throw new AccountsError("--context-window is required: semantic context metadata is what adapters render windows from, and unknown windows fail closed");
+  }
+  const maxOutput = input.maxOutput !== undefined ? parsePositiveInt(input.maxOutput, "--max-output") : undefined;
+  const route: BackendRoute = {
+    id: input.id,
+    name: input.name,
+    protocol: input.protocol as BackendRoute["protocol"],
+    baseUrl: input.baseUrl,
+    vaultKey: input.vaultKey,
+    models: input.models.map((id) => ({
+      id,
+      contextWindowTokens: contextWindow,
+      ...(maxOutput !== undefined ? { maxOutputTokens: maxOutput } : {}),
+    })),
+    ...(input.defaultModel || input.aliases.opus || input.aliases.sonnet || input.aliases.haiku
+      ? {
+          defaults: {
+            model: input.defaultModel ?? input.models[0]!,
+            ...(input.aliases.opus || input.aliases.sonnet || input.aliases.haiku
+              ? {
+                  aliases: {
+                    ...(input.aliases.opus ? { opus: input.aliases.opus } : {}),
+                    ...(input.aliases.sonnet ? { sonnet: input.aliases.sonnet } : {}),
+                    ...(input.aliases.haiku ? { haiku: input.aliases.haiku } : {}),
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
+  };
+  const parsed = backendRouteSchema.safeParse(route);
+  if (!parsed.success) {
+    throw new AccountsError(`invalid backend route: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+  }
+  return parsed.data;
+}
+
+function parsePositiveInt(value: string, flag: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new AccountsError(`${flag} must be a positive integer; got "${value}"`);
+  }
+  return parsed;
+}
+
+function installExampleBackend(name: string): BackendRoute {
+  if (name === "deepseek") return addBackend({ ...EXAMPLE_DEEPSEEK_BACKEND });
+  throw new AccountsError(`no packaged example backend named "${name}" (available: deepseek)`);
+}
+
 program
   .command("env")
   .argument("[name]", "profile name (defaults to the active profile for the tool)")
@@ -1862,8 +2084,13 @@ program
       const profile = name ? await store.getProfile(name, opts.tool) : await store.currentProfile(toolId);
       if (!profile) die(`no active profile for "${toolId}". Use \`accounts use <name>\` first.`);
       const tool = getTool(profile.tool);
-      prepareClaudeProfileKeychain(profile.dir, tool, profile.name);
-      console.log(formatExportLines(await profileEnv(profile, tool)));
+      // A backend-bound profile exports its PUBLIC env only (config dir and
+      // extras): `accounts env` must never emit a credential value, and the
+      // native OAuth blanking/healing does not apply to a backend route —
+      // the vault binding owns the credential at `accounts launch` time.
+      const backend = profile.backendRef ? backendForProfile(profile) : undefined;
+      if (!backend) prepareClaudeProfileKeychain(profile.dir, tool, profile.name);
+      console.log(formatExportLines(await profileEnv(profile, tool, backend ? { backendRoute: backend } : {})));
     }),
   );
 
@@ -1878,8 +2105,9 @@ addConfigsOptions(program
   .option("--background", "run Claude with its native --bg flag")
   .option("--bg", "alias for --background")
   .option("--name <name>", "pass a validated native name to a background Claude session")
+  .option("--backend <id>", "route through this backend instead of the profile's bound backend or native auth")
   .action(
-    action(async (name: string, args: string[], opts: { tool?: string; permissions?: string } & ClaudeLaunchOptions & ConfigsCliOptions) => {
+    action(async (name: string, args: string[], opts: { tool?: string; permissions?: string; backend?: string } & ClaudeLaunchOptions & ConfigsCliOptions) => {
       const store = resolveStore();
       const profile = await store.getProfile(name, opts.tool);
       const tool = getTool(profile.tool);
@@ -1888,8 +2116,17 @@ addConfigsOptions(program
       // The exact path account095 took on 2026-08-07: `accounts launch <name>
       // --tool claude --permissions dangerous`, with the render skipped.
       assertGovernedInstructionHome(profile, tool, configsPrelaunchOptions(opts));
-      const env = await profileEnv(profile, tool);
       const launchArgs = mergeToolArgs(tool, plan.args, { permissions: opts.permissions, profile });
+      const backend = resolveLaunchBackend(profile, opts.backend);
+      if (backend) {
+        if (!plan.nonInteractive) await store.useProfile(name, tool.id);
+        const backendPlan = await planLaunch(profile, tool, launchArgs, { backend });
+        console.error(chalk.dim(`→ ${renderLaunchPlanCommand(backendPlan)}`));
+        const { ACCOUNTS_ACTIVE: _activeProfile, ...parentEnv } = process.env;
+        const code = await runLaunchPlan(backendPlan, plan.nonInteractive ? parentEnv : process.env, process.cwd());
+        process.exit(code);
+      }
+      const env = await profileEnv(profile, tool);
       if (!plan.nonInteractive) await store.useProfile(name, tool.id);
       console.error(chalk.dim(`→ ${formatEnvAssignments(env)} ${redactArgv([tool.bin, ...launchArgs]).join(" ")}`));
       const { ACCOUNTS_ACTIVE: _activeProfile, ...parentEnv } = process.env;
@@ -1917,8 +2154,9 @@ addConfigsOptions(program
   .option("--background", "run Claude with its native --bg flag without the Accounts supervisor")
   .option("--bg", "alias for --background")
   .option("--name <name>", "pass a validated native name to a background Claude session")
+  .option("--backend <id>", "route through this backend instead of the profile's bound backend or native auth")
   .action(
-    action(async (target: string, args: string[], opts: { profile?: string; tool?: string; resume?: boolean; permissions?: string } & ClaudeLaunchOptions & ConfigsCliOptions) => {
+    action(async (target: string, args: string[], opts: { profile?: string; tool?: string; resume?: boolean; permissions?: string; backend?: string } & ClaudeLaunchOptions & ConfigsCliOptions) => {
       const plan = await resolveSupervisorLaunch(target, { profile: opts.profile, tool: opts.tool });
       const launch = planClaudeLaunch(plan.tool, [...(opts.resume ? (plan.tool.resumeArgs ?? []) : []), ...args], opts);
       const runArgs = mergeToolArgs(plan.tool, launch.args, {
@@ -1928,6 +2166,14 @@ addConfigsOptions(program
       if (launch.nonInteractive) {
         runConfigsPrelaunch(plan.profile, plan.tool, configsPrelaunchOptions(opts));
         assertGovernedInstructionHome(plan.profile, plan.tool, configsPrelaunchOptions(opts));
+        const backend = resolveLaunchBackend(plan.profile, opts.backend);
+        if (backend) {
+          const backendPlan = await planLaunch(plan.profile, plan.tool, runArgs, { backend });
+          console.error(chalk.dim(`→ ${renderLaunchPlanCommand(backendPlan)}`));
+          const { ACCOUNTS_ACTIVE: _activeProfile, ...parentEnv } = process.env;
+          const code = await runLaunchPlan(backendPlan, parentEnv, process.cwd());
+          process.exit(code);
+        }
         const env = await profileEnv(plan.profile, plan.tool);
         const { ACCOUNTS_ACTIVE: _activeProfile, ...parentEnv } = process.env;
         console.error(chalk.dim(`→ ${formatEnvAssignments(env)} ${redactArgv([plan.tool.bin, ...runArgs]).join(" ")}`));
@@ -1939,6 +2185,9 @@ addConfigsOptions(program
           process.cwd(),
         );
         process.exit(code);
+      }
+      if (opts.backend) {
+        die("--backend requires --headless (or use accounts launch)");
       }
       console.error(chalk.green(`✓ accounts supervisor running ${publicToolLabel(plan.tool.id)} as ${chalk.bold(plan.profile.name)}`));
       console.error(chalk.dim(`  control: accounts supervisor status ${plan.tool.id}`));
@@ -2769,6 +3018,8 @@ program
     collectRepeated,
     [],
   )
+  .option("--backend <id>", "bind this profile to a machine-local backend route (accounts backend add)")
+  .option("--unbind-backend", "unbind this profile from its backend route (native auth)")
   .action(
     action(
       async (
@@ -2784,8 +3035,11 @@ program
           dir?: string;
           nativeName?: string;
           alias?: string[];
+          backend?: string;
+          unbindBackend?: boolean;
         },
       ) => {
+        assertLocalBackendBinding(opts.backend);
         if (
           opts.email === undefined &&
           opts.displayName === undefined &&
@@ -2795,11 +3049,16 @@ program
           opts.description === undefined &&
           opts.dir === undefined &&
           opts.nativeName === undefined &&
-          (!opts.alias || opts.alias.length === 0)
+          (!opts.alias || opts.alias.length === 0) &&
+          opts.backend === undefined &&
+          opts.unbindBackend !== true
         ) {
           die(
-            "nothing to set — pass --email, --display-name, --identity, --card-last4, --metadata, --description, --dir, --native-name, or --alias",
+            "nothing to set — pass --email, --display-name, --identity, --card-last4, --metadata, --description, --dir, --native-name, --alias, --backend, or --unbind-backend",
           );
+        }
+        if (opts.backend !== undefined && opts.unbindBackend === true) {
+          die("--backend and --unbind-backend are mutually exclusive");
         }
         const p = await resolveStore().updateProfile(name, {
           tool: opts.tool,
@@ -2812,6 +3071,7 @@ program
           dir: opts.dir,
           nativeName: opts.nativeName,
           aliases: opts.alias && opts.alias.length > 0 ? opts.alias : undefined,
+          backendRef: opts.backend !== undefined ? opts.backend : opts.unbindBackend === true ? null : undefined,
         });
         console.log(chalk.green(`✓ updated ${chalk.bold(p.name)}`));
       }

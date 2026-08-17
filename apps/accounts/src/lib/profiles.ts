@@ -9,6 +9,7 @@ import { sameConfigDir } from "./safe-path.js";
 import { ensureSharedCapabilities } from "./shared-capabilities.js";
 import { ensureSharedClaudeSessions } from "./claude-session-registry.js";
 import { isAccountUuid } from "./auth-store.js";
+import { resolveBackend } from "./backend-routes.js";
 
 export type ProfileMetadataValue = string | number | boolean | null;
 export type ProfileMetadata = Record<string, ProfileMetadataValue>;
@@ -16,6 +17,23 @@ const RESERVED_METADATA_KEYS = new Set(["__proto__", "prototype", "constructor"]
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+/**
+ * Validate a backendRef at bind time: shape-check the id and resolve it in
+ * the machine-local registry, so a typo'd or unknown backend fails when the
+ * profile is written, not when it is launched. `undefined` input returns
+ * `undefined` (unset); `null` clears the binding.
+ */
+function normalizeBackendRef(value: string | null | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return undefined;
+  const check = profileNameSchema.safeParse(value);
+  if (!check.success) {
+    throw new AccountsError(`backendRef must be a valid backend id; got ${JSON.stringify(value)}`);
+  }
+  resolveBackend(check.data);
+  return check.data;
 }
 
 function assertCardLast4(value: string): void {
@@ -151,6 +169,13 @@ export interface AddOptions {
   metadata?: ProfileMetadata;
   dir?: string;
   description?: string;
+  /**
+   * Bind this profile to a machine-local backend route (see
+   * `backendRouteSchema`): `accounts launch` then routes the harness to the
+   * backend instead of the profile's native auth. Validated against the local
+   * backend registry at add time, so a typo fails here, not at launch.
+   */
+  backendRef?: string;
 }
 
 /**
@@ -202,6 +227,7 @@ export function addProfile(opts: AddOptions): Profile {
   const displayName = normalizeNonEmptyText(opts.displayName, "display name");
   const identity = normalizeNonEmptyText(opts.identity, "identity");
   const metadata = normalizeMetadata(opts.metadata);
+  const backendRef = normalizeBackendRef(opts.backendRef);
   const profile: Profile = {
     name,
     tool: toolId,
@@ -217,6 +243,7 @@ export function addProfile(opts: AddOptions): Profile {
     ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
     dir,
     ...(opts.description ? { description: opts.description } : {}),
+    ...(backendRef !== undefined ? { backendRef } : {}),
     createdAt: nowIso(),
   };
 
@@ -383,6 +410,11 @@ export interface UpdateOptions {
    * recorded by an earlier rename.
    */
   aliases?: string[];
+  /**
+   * Bind this profile to a machine-local backend route, or `null` to unbind.
+   * See `AddOptions.backendRef`.
+   */
+  backendRef?: string | null;
 }
 
 export function updateProfile(name: string, opts: UpdateOptions): Profile {
@@ -434,6 +466,11 @@ export function updateProfile(name: string, opts: UpdateOptions): Profile {
     const merged = [...existing];
     for (const alias of opts.aliases) if (!merged.includes(alias)) merged.push(alias);
     profile.aliases = merged;
+  }
+  if (opts.backendRef !== undefined) {
+    const backendRef = normalizeBackendRef(opts.backendRef);
+    if (backendRef === undefined) delete profile.backendRef;
+    else profile.backendRef = backendRef;
   }
   if (opts.dir !== undefined) {
     const dir = expandPath(opts.dir);

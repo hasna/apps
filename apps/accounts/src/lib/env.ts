@@ -1,5 +1,7 @@
 import type { Profile, ToolDef } from "../types.js";
 import { AccountsError } from "../types.js";
+import type { BackendRoute } from "../types.js";
+import type { BackendAdapterEnv } from "./backend-adapters/claude.js";
 import {
   CLAUDE_API_AUTH_ENV_KEYS,
   healSwitchedProfileDir,
@@ -207,7 +209,29 @@ export function controlledProbeEnv(
   return providerLaunchEnv(parentEnv, ...overlays);
 }
 
-export async function profileEnv(profile: Profile, tool: ToolDef): Promise<Record<string, string>> {
+/** Options for the backend-api branch of `profileEnv`. */
+export interface BackendProfileEnvOptions {
+  /**
+   * The backend route this launch is routed to. When present, the profile's
+   * NATIVE auth machinery is skipped entirely — no OAuth credential recovery,
+   * no switched-dir healing, no settings sanitization, no auth-env blanking —
+   * because the harness authenticates to the backend via the vault binding
+   * instead (design 01a00e8a §42-44, §70).
+   */
+  backendRoute?: BackendRoute;
+  /**
+   * The adapter-rendered env overlay (base URL, model, aliases). Supplied by
+   * the launch planner; left absent, the backend branch contributes NO
+   * adapter env, so `accounts env` can never grow a plaintext materializer.
+   */
+  adapterEnv?: BackendAdapterEnv;
+}
+
+export async function profileEnv(
+  profile: Profile,
+  tool: ToolDef,
+  options: BackendProfileEnvOptions = {},
+): Promise<Record<string, string>> {
   const env: Record<string, string> = {
     [tool.envVar]: profile.dir,
   };
@@ -226,7 +250,7 @@ export async function profileEnv(profile: Profile, tool: ToolDef): Promise<Recor
   // starting), so without this the failure mode of a failed seed is a profile
   // that launches happily with its guards missing.
   assertProfileGuarded(profile.dir, tool);
-  if (tool.id === "claude") {
+  if (tool.id === "claude" && !options.backendRoute) {
     // A dir whose own credential was rotated away by another copy of the same
     // account has parked material nothing else reaches — put it back before the
     // launch, so the session starts with a working credential instead of a
@@ -308,6 +332,14 @@ export async function profileEnv(profile: Profile, tool: ToolDef): Promise<Recor
     healSwitchedProfileDir(profile.dir, tool, profile.name);
     sanitizeClaudeProfileApiSettings(profile.dir, tool);
     for (const key of CLAUDE_API_AUTH_ENV_KEYS) env[key] = "";
+  }
+  if (tool.id === "claude" && options.adapterEnv) {
+    // Backend-api branch: the adapter's NON-SECRET env (base URL, model,
+    // aliases) overlays the config-dir env. The credential itself is never
+    // here — it is injected structurally by `secrets exec` at spawn time.
+    for (const [name, value] of Object.entries(options.adapterEnv.env)) {
+      env[name] = value;
+    }
   }
   if (tool.id === "codex-app") ensureCodexAppProfileConfig(profile.dir);
   return removeUnsafeProviderRequestDebugEnv(env) as Record<string, string>;

@@ -12,6 +12,7 @@ import {
   snapshotLiveAuthToProfile,
 } from "./claude-auth.js";
 import { withApplyLock } from "./apply-lock.js";
+import { backendForProfile } from "./backend-routes.js";
 
 function singleMatch(profiles: Profile[]): Profile | undefined {
   return profiles.length === 1 ? profiles[0] : undefined;
@@ -58,6 +59,20 @@ export async function applyProfile(
   if (tool.id !== "claude") {
     throw new AccountsError(
       `apply is only supported for Claude Code today (tool "${tool.id}"). Use \`accounts launch ${name}\` for isolated switching.`,
+    );
+  }
+
+  // A backend-bound profile authenticates through a vault secret injected by
+  // `secrets exec` at launch time; its native OAuth/auth keychain must never
+  // be consulted or written (design 01a00e8a §42-44, §70). Apply restores
+  // native OAuth auth to the live default paths, so for a bound profile it is
+  // refused loudly here — the single choke point every apply surface passes
+  // through — instead of running assertRestorableProfileAuth /
+  // restoreClaudeAuthFromProfile against a profile that owns no native auth.
+  const boundBackend = backendForProfile(profile);
+  if (boundBackend) {
+    throw new AccountsError(
+      `profile "${profile.name}" is bound to backend "${boundBackend.id}"; apply restores native Claude OAuth auth to the live paths, which a backend-bound profile does not use — launch it with \`accounts launch ${profile.name}\` instead (Phase 1: applying a bound profile is refused rather than touching the live keychain)`,
     );
   }
 

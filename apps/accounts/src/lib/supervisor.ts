@@ -26,6 +26,7 @@ import type { Profile, ToolDef } from "../types.js";
 import { AccountsError } from "../types.js";
 import { prepareClaudeProfileKeychain } from "./claude-auth.js";
 import { profileEnv, providerLaunchEnv } from "./env.js";
+import { backendForProfile } from "./backend-routes.js";
 import { redactArgv, redactText } from "./redaction.js";
 import { resolveStore, type AccountsStore } from "./store.js";
 import {
@@ -1073,6 +1074,16 @@ export async function runSupervisedTool(
   };
 
   const startChild = async (nextProfile: Profile, nextArgs: string[], preflightedConfigs?: ConfigsPrelaunchResult): Promise<void> => {
+    // Backend-bound profiles authenticate through a vault secret injected by
+    // `secrets exec`; the supervisor spawns `tool.bin` directly and kills it
+    // by pid, which would orphan the real harness behind the wrapper on
+    // stop/switch. Phase 1 refuses loudly instead of corrupting supervision.
+    const boundBackend = backendForProfile(nextProfile);
+    if (boundBackend) {
+      throw new AccountsError(
+        `profile "${nextProfile.name}" is bound to backend "${boundBackend.id}"; the accounts supervisor does not support backend routing yet — use \`accounts launch ${nextProfile.name}\` (Phase 1: supervised backend runs are refused rather than orphaned)`,
+      );
+    }
     const configOpts = configsOptionsFor();
     const configs = preflightedConfigs ?? runConfigsPrelaunch(nextProfile, tool, configOpts);
     requireStableBoundary(boundary);

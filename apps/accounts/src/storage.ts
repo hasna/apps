@@ -62,7 +62,15 @@ export function sharedClaudeSessionsDir(): string {
   return join(accountsHome(), "shared", "claude-sessions");
 }
 
-const EMPTY_STORE: Store = { version: 1, current: {}, applied: {}, toolLocks: {}, profiles: [], tools: [] };
+const EMPTY_STORE: Store = {
+  version: 1,
+  current: {},
+  applied: {},
+  toolLocks: {},
+  profiles: [],
+  tools: [],
+  backends: [],
+};
 
 /**
  * Parse and schema-validate the on-box registry file WITHOUT the profile

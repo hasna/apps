@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,8 +14,8 @@ import {
   writeClaudeKeychain,
 } from "./keychain.js";
 import { providerLaunchEnv } from "./env.js";
-import { preparePortableCommand } from "./portable-command.js";
 import { redactText } from "./redaction.js";
+import { relayProcess } from "./launch-plan.js";
 
 export { redactArgv, redactText } from "./redaction.js";
 export { prepareWindowsBatchCommand } from "./portable-command.js";
@@ -273,51 +273,15 @@ function signalExitCode(signal: NodeJS.Signals | null): number {
   return signal ? 1 : 0;
 }
 
-async function relayProcess(tool: ToolDef, args: string[], env: NodeJS.ProcessEnv, cwd: string): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
-    const prepared = preparePortableCommand(tool.bin, args, env);
-    const child = spawn(prepared.command, prepared.args, {
-      cwd,
-      env,
-      stdio: "inherit",
-      windowsVerbatimArguments: prepared.windowsVerbatimArguments,
-    });
-    let forwardedSignal: NodeJS.Signals | undefined;
-    let killTimer: ReturnType<typeof setTimeout> | undefined;
-
-    const forward = (signal: NodeJS.Signals) => {
-      if (forwardedSignal) return;
-      forwardedSignal = signal;
-      child.kill(signal);
-      killTimer = setTimeout(() => child.kill("SIGKILL"), numericTestSetting("ACCOUNTS_TEST_CHILD_KILL_TIMEOUT_MS", 2_500));
-      killTimer.unref();
-    };
-    const onSigint = () => forward("SIGINT");
-    const onSigterm = () => forward("SIGTERM");
-    process.once("SIGINT", onSigint);
-    process.once("SIGTERM", onSigterm);
-
-    const cleanup = () => {
-      process.removeListener("SIGINT", onSigint);
-      process.removeListener("SIGTERM", onSigterm);
-      if (killTimer) clearTimeout(killTimer);
-    };
-    child.once("error", (error) => {
-      cleanup();
-      reject(
-        new AccountsError(
-          `failed to launch ${redactText(tool.bin)}: ${redactText(error.message)}`,
-        ),
-      );
-    });
-    child.once("exit", (code, signal) => {
-      cleanup();
-      resolve(forwardedSignal ? signalExitCode(forwardedSignal) : (code ?? signalExitCode(signal)));
-    });
-  });
-}
-
-/** Relay a launch directly to Claude, leasing the global keychain only when the profile needs it. */
+/**
+ * Relay a launch directly to Claude, leasing the global keychain only when
+ * the profile needs it.
+ *
+ * BACKEND ROUTES DO NOT REACH THIS PATH: a backend-bound profile is planned
+ * and executed through `runLaunchPlan` (src/lib/launch-plan.ts), which
+ * skips the keychain lease by construction and wraps the spawn in
+ * `secrets exec`.
+ */
 export async function runClaudeLaunch(
   profile: Profile,
   tool: ToolDef,
@@ -326,9 +290,9 @@ export async function runClaudeLaunch(
   cwd: string,
 ): Promise<number> {
   const launchEnv = providerLaunchEnv(env);
-  if (tool.id !== "claude" || !keychainSupported()) return relayProcess(tool, args, launchEnv, cwd);
+  if (tool.id !== "claude" || !keychainSupported()) return relayProcess(tool.bin, args, launchEnv, cwd);
   const credential = claudeKeychainCredentialFromProfile(profile.dir, profile.name);
-  if (!credential) return relayProcess(tool, args, launchEnv, cwd);
+  if (!credential) return relayProcess(tool.bin, args, launchEnv, cwd);
 
   const release = await acquireKeychainLock();
   let pendingSignal: NodeJS.Signals | undefined;
@@ -342,7 +306,7 @@ export async function runClaudeLaunch(
     prior = captureClaudeKeychain();
     keychainTouched = true;
     writeClaudeKeychain(credential);
-    const code = await relayProcess(tool, args, launchEnv, cwd);
+    const code = await relayProcess(tool.bin, args, launchEnv, cwd);
     return pendingSignal ? signalExitCode(pendingSignal) : code;
   } finally {
     try {

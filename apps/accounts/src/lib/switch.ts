@@ -12,6 +12,8 @@ import {
 import { ensureSharedCapabilities } from "./shared-capabilities.js";
 import { ensureSharedClaudeSessions } from "./claude-session-registry.js";
 import { resolveStore, type AccountsStore } from "./store.js";
+import { backendForProfile } from "./backend-routes.js";
+import { launchArgv, planLaunch } from "./launch-plan.js";
 import type { SwitchAccountResult } from "./switch-account.js";
 import {
   BUILTIN_TOOLS,
@@ -45,6 +47,8 @@ export interface SwitchResult {
   exports: string;
   command: string[];
   commandLine: string;
+  /** Inherited-env names the launch plan owns and must remove before spawn. */
+  unsetEnv?: string[];
   permissions?: string;
   restartRequired: boolean;
   message: string;
@@ -78,9 +82,13 @@ function commandLine(
   return `${assignments} ${command.map(quotePosixShellWord).join(" ")}`.trim();
 }
 
-function publicCommandLine(env: Record<string, string>, command: string[]): string {
+function publicCommandLine(
+  env: Record<string, string>,
+  command: string[],
+  additionalUnset: readonly string[] = [],
+): string {
   const publicEnv = redactEnvironment(env);
-  const unsetEnvKeys: string[] = [];
+  const unsetEnvKeys: string[] = [...additionalUnset];
   for (const [name, value] of Object.entries(env)) {
     if (value !== "" && isSensitiveCredentialKey(name)) {
       delete publicEnv[name];
@@ -124,7 +132,9 @@ export function publicSwitchResult(result: SwitchResult | SwitchAccountResult): 
     applied,
     active: launchResult?.active ?? true,
     command,
-    commandLine: launchResult ? publicCommandLine(launchResult.env, command) : "",
+    commandLine: launchResult
+      ? publicCommandLine(launchResult.env, command, launchResult.unsetEnv ?? [])
+      : "",
     ...(launchResult?.permissions ? { permissions: redactText(launchResult.permissions) } : {}),
     restartRequired: result.restartRequired,
     message: publicSwitchMessage(result.profile.name, toolLabel, applied),
@@ -148,6 +158,42 @@ export async function switchProfile(
     throw new AccountsError(`invalid switch mode "${mode}"`);
   }
   let applied = false;
+
+  // A backend-bound profile authenticates through a vault secret injected by
+  // `secrets exec`; its native OAuth/keychain machinery is NEVER consulted
+  // (design 01a00e8a §42-44, §70). Apply restores native OAuth auth to the
+  // live default paths, which a bound profile does not own — refuse loudly
+  // (same shape as the supervisor's Phase 1 refusal) instead of touching the
+  // keychain. Every other mode returns the launch-plan env and routes the
+  // restart command through the plan's structural wrapper.
+  const boundBackend = backendForProfile(profile);
+  if (boundBackend) {
+    if (mode === "apply") {
+      throw new AccountsError(
+        `profile "${profile.name}" is bound to backend "${boundBackend.id}"; \`accounts switch --mode apply\` restores native Claude OAuth auth, which a backend-bound profile does not use — launch it with \`accounts launch ${profile.name}\` instead (Phase 1: applying a bound profile is refused rather than touching the live keychain)`,
+      );
+    }
+    await store.useProfile(profile.name, tool.id);
+    const boundPlan = await planLaunch(profile, tool, commandFor(profile, tool, opts), {
+      backend: boundBackend,
+    });
+    const env = boundPlan.publicEnv;
+    const command = launchArgv(boundPlan);
+    return {
+      profile: await store.getProfile(profile.name, tool.id),
+      tool,
+      applied: false,
+      active: true,
+      env,
+      exports: formatExportLines(env),
+      command,
+      commandLine: commandLine(env, command, boundPlan.unsetEnv),
+      unsetEnv: boundPlan.unsetEnv,
+      ...(opts.permissions ? { permissions: normalizePermissionPreset(opts.permissions) } : {}),
+      restartRequired: opts.resume === true || mode === "env",
+      message: publicSwitchMessage(profile.name, publicToolLabel(tool.id), false),
+    };
+  }
 
   if (mode === "apply" || (mode === "auto" && tool.id === "claude")) {
     await applyProfile(profile.name, tool.id, store);
