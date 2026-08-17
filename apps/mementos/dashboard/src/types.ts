@@ -54,5 +54,10 @@ export interface MemoryStats {
   by_status: Record<MemoryStatus, number>;
   by_agent: Record<string, number>;
   pinned_count: number;
+  /** Rows with status = 'expired' — exactly what `--status expired` returns. */
   expired_count: number;
+  /** Rows carrying any expires_at date (future or past). */
+  expires_at_count: number;
+  /** Retention backlog: status = 'expired' OR expires_at in the past. */
+  expired_due_count: number;
 }

@@ -64,9 +64,47 @@ describe("Server health", () => {
     expect(typeof data.version).toBe("string");
     expect(typeof data.memories.total).toBe("number");
     expect(typeof data.memories.expired).toBe("number");
+    expect(typeof data.memories.expired_due).toBe("number");
     expect(typeof data.memories.pinned).toBe("number");
     expect(typeof data.agents).toBe("number");
     expect(typeof data.projects).toBe("number");
+  });
+
+  // Regression (review finding, round 1 of #7e183661): the /health route ran
+  // its own inline copy of the buggy SQL — status='expired' OR (expires_at IS
+  // NOT NULL AND expires_at < datetime('now')) — and labelled the result
+  // `memories.expired`, so a machine-read consumer of /health reported ~873
+  // "expired" memories while zero rows had status='expired'. The route must
+  // report `memories.expired` with exact `--status expired` semantics and
+  // carry the past-due retention backlog under its own name (`expired_due`).
+  // Failing-first against the pre-fix code: old code returns memories.expired
+  // >= 1 for the seeded past-due row and has no expired_due field at all.
+  test("GET /api/health: memories.expired matches status='expired' semantics; past-due rows land in memories.expired_due", async () => {
+    const before = await api("/api/health");
+    expect(before.status).toBe(200);
+
+    const key = `health-expired-regression-${Date.now()}`;
+    const created = await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({
+        key,
+        value: "past-due expires_at row",
+        scope: "global",
+        expires_at: "2020-01-01T00:00:00.000Z",
+      }),
+    });
+    expect(created.status).toBe(201);
+
+    const { status, data } = await api("/api/health");
+    expect(status).toBe(200);
+    // No code path writes status='expired' (cleanExpiredMemories deletes), so
+    // a past-due expires_at row must NOT inflate `expired`.
+    expect(data.memories.expired).toBe(0);
+    // The retention backlog the old SQL actually measured is reported under
+    // its own name, and this route's warn gate (expired_due > 50) uses it.
+    expect(typeof data.memories.expired_due).toBe("number");
+    expect(data.memories.expired_due).toBe((before.data.memories.expired_due ?? 0) + 1);
+    expect(data.memories.total).toBe(before.data.memories.total + 1);
   });
 });
 

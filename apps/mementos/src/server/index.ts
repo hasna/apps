@@ -15,6 +15,7 @@ import { startSessionQueueWorker } from "../lib/session-queue.js";
 import { startTaskRunner } from "../lib/task-runner.js";
 
 import { getStorageBackend, markServerContext } from "../storage.js";
+import { getMemoryStats } from "../db/analytics.js";
 
 // This is the mementos-serve server process — the ONLY process permitted to open
 // a direct RDS Postgres connection (CLAUDE.md §2). Opt in before any DB access.
@@ -194,13 +195,19 @@ export function startServer(port: number): void {
         const profile = getActiveProfile();
         try {
           const db = getDatabase();
-          const total = (db.query("SELECT COUNT(*) as c FROM memories WHERE status = 'active'").get() as { c: number }).c;
-          const expired = (db.query("SELECT COUNT(*) as c FROM memories WHERE status = 'expired' OR (expires_at IS NOT NULL AND expires_at < datetime('now'))").get() as { c: number }).c;
-          const pinned = (db.query("SELECT COUNT(*) as c FROM memories WHERE status = 'active' AND pinned = 1").get() as { c: number }).c;
+          // One stats source, no inline SQL: the analytics domain module backs
+          // every aggregate surface (CLI stats, MCP stats tool, server routes).
+          // `expired` carries exact status='expired' semantics — what
+          // `--status expired` returns. The past-due retention backlog that
+          // the old inline SQL (status='expired' OR expires_at < now) actually
+          // measured — which mislabelled ~873 live-store rows as "expired" —
+          // is reported under its own name (`expired_due`) and drives the
+          // warn gate, so no surface reports past-due rows as expired.
+          const stats = getMemoryStats(db);
           const agents = (db.query("SELECT COUNT(*) as c FROM agents").get() as { c: number }).c;
           const projects = (db.query("SELECT COUNT(*) as c FROM projects").get() as { c: number }).c;
-          const status = expired > 50 ? "warn" : "ok";
-          return json({ status, version: pkgVersion(), backend, profile: profile ?? "default", db_path: getDbPath(), hostname, memories: { total, expired, pinned }, agents, projects });
+          const status = stats.expired_due_count > 50 ? "warn" : "ok";
+          return json({ status, version: pkgVersion(), backend, profile: profile ?? "default", db_path: getDbPath(), hostname, memories: { total: stats.total, expired: stats.expired_count, expired_due: stats.expired_due_count, pinned: stats.pinned_count }, agents, projects });
         } catch (e) {
           return json({ status: "error", version: pkgVersion(), backend, error: e instanceof Error ? e.message : String(e) }, 503);
         }

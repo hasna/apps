@@ -3486,8 +3486,14 @@ function createMemoryPostgresClient(options: { rejectWritesForObjectType?: strin
         const targetProjectId = targetPlan && !targetPlan.deletedAt
           ? (targetPlan.payload as Record<string, unknown>)["project_id"] ?? null
           : null;
-        const allPlansFound = plans.length === planIds.length;
-        const targetPlanFound = !targetPlanId || Boolean(targetPlan && !targetPlan.deletedAt);
+        // Mirrors the guarded SQL: existence is required only for the
+        // membership this write ESTABLISHES. Leaving (or merely keeping) a
+        // plan that is already missing is the dangling-reference repair.
+        const membershipChanged = String(existingTask?.["plan_id"] ?? "")
+          !== String(task["plan_id"] ?? "");
+        const targetPlanFound = !membershipChanged
+          || !targetPlanId
+          || Boolean(targetPlan && !targetPlan.deletedAt);
         const projectConflict = Boolean(
           explicitProject && targetProjectId && (task["project_id"] ?? null) !== targetProjectId,
         );
@@ -3521,7 +3527,6 @@ function createMemoryPostgresClient(options: { rejectWritesForObjectType?: strin
           && versionMatches
           && parentFound
           && parentAcyclic
-          && allPlansFound
           && targetPlanFound
           && !projectConflict;
         if (canStore) {
@@ -3540,7 +3545,7 @@ function createMemoryPostgresClient(options: { rejectWritesForObjectType?: strin
           version_matches: versionMatches,
           parent_found: parentFound,
           parent_acyclic: parentAcyclic,
-          all_plans_found: allPlansFound,
+          membership_changed: membershipChanged,
           target_plan_found: targetPlanFound,
           project_conflict: projectConflict,
           payload: canStore ? task : null,
