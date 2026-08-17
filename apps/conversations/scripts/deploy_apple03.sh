@@ -5,7 +5,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE_HOST="${REMOTE_HOST:-apple03}"
-REMOTE_PATH="${REMOTE_PATH:-/Users/hasna/Workspace/hasna/opensource/open-conversations}"
+REMOTE_PATH="${REMOTE_PATH:-/Users/hasna/workspace/repos/hasna/apps/apps/conversations}"
 APP_NAME="Hasna Conversations"
 
 echo "==> rsync $REPO_ROOT -> $REMOTE_HOST:$REMOTE_PATH"
