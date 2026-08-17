@@ -306,7 +306,6 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "computers", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "context", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "crawl", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "datasets", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "evals", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "markdown", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "orgs", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
@@ -355,6 +354,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "conversations",
     cause: "bins_match_package: package.json ships bins conversations-inbox and conversations-hook that the manifest does not declare (manifest declares conversations, conversations-mcp, conversations-serve only). Imported by #100 after the original census; validated at pinned ^0.4.2 (kitVersion 0.4.2).",
     task: "todos ee9fbb4d (import row — conversations; reconcile the two bins against the manifest or extend the manifest's bins)",
+  },
+  {
+    member: "datasets",
+    cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Manifest imported via delta (hasna/contracts 0.10.6 pin) from org repo; org repo has no artifact-scan script.",
+    task: "todos 226bfc01-093a-469a-bc94-57491c08fe1b (contracts task — datasets)",
   },
   {
     member: "docs",
