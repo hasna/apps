@@ -1,8 +1,8 @@
-# open-orgs
+# @hasna/orgs
 
 Open organization graph and delegation context for agentic systems.
 
-`open-orgs` is a local-first graph layer for humans, agents, service accounts,
+`orgs` is a local-first graph layer for humans, agents, service accounts,
 teams, functions, roles, projects, machines, capabilities, reporting lines, and
 delegation authority.
 
@@ -91,10 +91,10 @@ The graph uses stable prefixed IDs and typed records:
 - `func_*`: business functions.
 - `role_*`: scoped roles and responsibilities.
 - `mem_*`: humans, agents, and service accounts, linked to
-  `open-identities`.
-- `proj_*`: project refs, linked to `open-projects`.
-- `mach_*`: machine refs and dispatch evidence, linked to `open-machines`,
-  `open-sessions`, and `open-dispatch`.
+  `identities`.
+- `proj_*`: project refs, linked to `projects`.
+- `mach_*`: machine refs and dispatch evidence, linked to `machines`,
+  `sessions`, and `dispatch`.
 - `cap_*`: capability ownership records.
 - `rel_*`: typed relationships with source, target, scope, authority,
   provenance, confidence, valid-from, expiry, and revocation fields.
@@ -125,8 +125,8 @@ values, secrets, or raw private source payloads.
 Import an example into an isolated store:
 
 ```bash
-orgs --store /tmp/open-orgs.json import examples/small-oss-org.json
-orgs --store /tmp/open-orgs.json snapshot mem_review_agent --format markdown
+orgs --store /tmp/orgs.json import examples/small-oss-org.json
+orgs --store /tmp/orgs.json snapshot mem_review_agent --format markdown
 ```
 
 Available examples:
@@ -138,9 +138,9 @@ Available examples:
 ## Integration Notes
 
 See [docs/integrations.md](docs/integrations.md) for the ownership matrix and
-bridge notes for `open-identities`, `open-projects`, `open-machines`,
-`open-sessions`, `open-dispatch`, `open-todos`, `open-events`, `open-actions`,
-and `open-guardrails`.
+bridge notes for `identities`, `projects`, `machines`,
+`sessions`, `dispatch`, `todos`, `events`, `actions`,
+and `guardrails`.
 
 ## Development
 

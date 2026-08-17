@@ -13,7 +13,7 @@ The first release is intentionally local-first:
 - JSON Render and React Flow-compatible canvas adapters
 - MCP stdio tools for listing, previewing, and rendering datasets
 
-Datasets emit `kind: "custom"` in project panels until `open-contracts` adds a
+Datasets emit `kind: "custom"` in project panels until `contracts` adds a
 first-class `datasets` integration kind.
 
 ## Install

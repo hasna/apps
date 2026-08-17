@@ -10,6 +10,9 @@ export const CURSOR_GLOBAL_AUTHORITY_MANAGED_MARKER = "Managed by @hasna/configs
 const CURSOR_GLOBAL_AUTHORITY_MARKER_PATTERN =
   /^<!-- Managed by @hasna\/configs cursor global authority hash=(sha256:[a-f0-9]{64}) -->$/m;
 
+const CURSOR_GLOBAL_AUTHORITY_FRONTMATTER_PATTERN =
+  /^---\n[\s\S]*?\n---(?:\n|$)/;
+
 export type CursorAuthorityFileType = "missing" | "regular" | "symlink" | "directory" | "other";
 export type CursorAuthorityObservationStatus = "absent" | "managed" | "unmanaged" | "invalid";
 export type CursorAuthorityDetection =
@@ -71,11 +74,19 @@ function homeDir(): string {
   return process.env["HOME"] || homedir();
 }
 
-function markerPayload(content: string, markerLine: string): string {
-  const withTrailingNewline = `${markerLine}\n`;
-  if (content.startsWith(withTrailingNewline)) return content.slice(withTrailingNewline.length);
-  if (content.startsWith(markerLine)) return content.slice(markerLine.length).replace(/^\n/, "");
-  return content.replace(`${markerLine}\n`, "").replace(markerLine, "");
+/**
+ * Reconstruct the pre-stamp payload from a stamped file: the content with the
+ * marker line removed at its actual position, together with the single
+ * trailing newline the stamp writes after the marker. `markerIndex` is the
+ * position of the matched marker line (its `RegExpMatchArray.index`); the
+ * observer passes it so a marker quoted elsewhere in the content cannot shift
+ * the removal. `markerIndex` defaults to the first occurrence for standalone
+ * use.
+ */
+export function markerPayload(content: string, markerLine: string, markerIndex?: number): string {
+  const index = markerIndex ?? content.indexOf(markerLine);
+  if (index < 0) return content;
+  return content.slice(0, index) + content.slice(index + markerLine.length).replace(/^\n/, "");
 }
 
 function baseObservation(path: string): Omit<CursorAuthorityObservation, "fileType" | "status" | "sha256" | "markers" | "markerSha256" | "provenance"> {
@@ -90,9 +101,12 @@ function baseObservation(path: string): Omit<CursorAuthorityObservation, "fileTy
  * Cursor reads this fixed global rule before project-scoped `.cursor/rules`
  * files. The session renderer owns only the project-scoped files, so an
  * unmanaged global rule is a second authority. A missing file is the clean
- * case. Existing content remains blocked unless a future registry-backed
- * migration contract proves package ownership; a self-declared marker is
- * intentionally insufficient.
+ * case. The package's own apply path stamps every write to this path with
+ * {@link stampCursorGlobalAuthorityMarker}; a regular file carrying that
+ * marker with a matching payload hash is the package's own output and is
+ * accepted as managed. Everything else — foreign content, a tampered marker,
+ * a non-regular file — remains blocked, because the renderer cannot guess
+ * whether it conflicts with the managed project render.
  */
 export function observeCursorGlobalAuthority(
   options: CursorAuthorityObservationOptions = {},
@@ -235,7 +249,7 @@ function observeCursorGlobalAuthorityPath(
   }
 
   const markerLine = markerMatch[0];
-  const payloadSha256 = sha256(markerPayload(content, markerLine));
+  const payloadSha256 = sha256(markerPayload(content, markerLine, markerMatch.index ?? -1));
   if (payloadSha256 !== markerSha256) {
     return {
       ...base,
@@ -253,24 +267,57 @@ function observeCursorGlobalAuthorityPath(
     };
   }
 
-  // A self-declared marker is not package-owned provenance. The live source
-  // registry/config version is not available to this filesystem-only planner,
-  // so even a matching hash remains unmanaged until a signed or registry-backed
-  // migration contract supplies that proof.
+  // The marker is the stamp the package's own apply path writes to this path
+  // (see stampCursorGlobalAuthorityMarker in this module and writeConfigResult
+  // in apply.ts). A valid marker with a matching payload hash is tamper-evident
+  // package-owned output; a foreign writer does not emit this exact marker.
   return {
     ...base,
     fileType,
-    status: "unmanaged",
+    status: "managed",
     sha256: contentSha256,
     markers,
     markerSha256,
     provenance: {
       source: "filesystem",
-      authority: "unmanaged",
+      authority: "managed",
       observedPath: authorityPath,
-      detection: "unknown-content",
+      detection: "managed-marker",
     },
   };
+}
+
+/**
+ * Whether an expanded target path is the Cursor fixed global authority path
+ * under the current home. Used by the apply path to decide when to stamp the
+ * managed marker; the comparison mirrors {@link observeCursorGlobalAuthority}'s
+ * resolution so the writer and the observer always agree.
+ */
+export function isCursorGlobalAuthorityPath(path: string): boolean {
+  return resolve(path) === resolve(join(homeDir(), CURSOR_GLOBAL_AUTHORITY_RELATIVE_PATH));
+}
+
+/**
+ * Stamp the managed marker onto content destined for the Cursor fixed global
+ * authority path. The marker carries the sha256 of the payload AFTER the
+ * marker line, which is exactly the payload the observer recomputes in
+ * {@link observeCursorGlobalAuthorityPath} — so a stamped file round-trips as
+ * managed. Cursor requires YAML frontmatter to start the file, so content that
+ * opens with a `---` frontmatter block is stamped AFTER the closing `---`,
+ * matching how the package's own session-render cursor files place their
+ * managed marker; plain content without frontmatter is stamped at the top.
+ * Content that already carries a valid marker anywhere is returned unchanged
+ * (idempotent re-apply).
+ */
+export function stampCursorGlobalAuthorityMarker(content: string): string {
+  if (CURSOR_GLOBAL_AUTHORITY_MARKER_PATTERN.test(content)) return content;
+  const digest = sha256(content);
+  const markerLine = `<!-- ${CURSOR_GLOBAL_AUTHORITY_MANAGED_MARKER} hash=sha256:${digest} -->`;
+  const frontmatter = content.match(CURSOR_GLOBAL_AUTHORITY_FRONTMATTER_PATTERN)?.[0];
+  if (frontmatter) {
+    return `${frontmatter}${markerLine}\n${content.slice(frontmatter.length)}`;
+  }
+  return `${markerLine}\n${content}`;
 }
 
 export function detectCursorAuthorityConflicts(
