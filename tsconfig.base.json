@@ -1,4 +1,11 @@
 {
+  // INHERITANCE CENSUS (2026-08-17): 0 of 80 members with a tsconfig.json
+  // extend this base. Imported members keep the standalone tsconfig they were
+  // published with — rewriting 80 member configs is a deliberate
+  // normalization task, not something an import should do. This file is the
+  // baseline for NEW members and for that future normalization; it is NOT a
+  // description of the current tree. When the census changes, update this
+  // comment in the same change.
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",

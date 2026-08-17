@@ -1,12 +1,14 @@
 # CI — the gate set for hasna/apps.
 #
-# Three jobs, split by what they NEED rather than by what they check:
+# Five jobs, split by what they NEED rather than by what they check:
 #
 #   gates         — no network beyond checkout. The checks that can refuse a
 #                   pull request in seconds: secret scan (with its own
 #                   two-sided self-test), name-conformance, and the
 #                   contract-manifest placeholder.
+#   test-suites   — versioning + standard-adherence suites (hard gate).
 #   build-test    — the affected build + test graph via turbo --affected.
+#   verify-generated — byte-reproducibility of committed generated bundles.
 #   publish-guard — internal-infra strings must never reach a published
 #                   tarball. Real npm pack --dry-run per member; fails loudly
 #                   when a pack cannot be parsed (never a vacuous pass).
@@ -20,6 +22,13 @@
 # the gates here are re-derived for a producer tree and must never be copied
 # verbatim from the consumer repo.
 name: ci
+
+# Least privilege: nothing in this workflow needs write access to the
+# repository. Every job is read-only over the checkout (the token is still
+# available for authenticated reads of private deps if that ever becomes
+# necessary, but no job may create releases, comments, or statuses).
+permissions:
+  contents: read
 
 on:
   pull_request:
@@ -52,12 +61,23 @@ jobs:
       - name: Secret scan self-test (prove it can fire AND stay silent)
         run: bun tooling/ci/check-secrets.ts --self-test
 
+      # Push lane: github.event.before is the PREVIOUS push head, so a
+      # multi-commit push scans every commit it carries — HEAD^ would scan only
+      # the tip and silently under-scan the rest. On the very first push
+      # event.before is all zeros and there is no earlier state to diff: fall
+      # back to HEAD^ (and on a root commit with no HEAD^ the scanner exits 2
+      # — could-not-scan — rather than passing vacuously).
       - name: Secret scan (added lines in the diff)
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             bun tooling/ci/check-secrets.ts --base "origin/${{ github.base_ref }}"
           else
-            bun tooling/ci/check-secrets.ts --base HEAD^
+            BASE="${{ github.event.before }}"
+            ZEROES="0000000000000000000000000000000000000000"
+            if [ -z "$BASE" ] || [ "$BASE" = "$ZEROES" ]; then
+              BASE="HEAD^"
+            fi
+            bun tooling/ci/check-secrets.ts --base "$BASE"
           fi
 
       # Name-conformance: every workspace member package.json name matches
