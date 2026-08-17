@@ -223,8 +223,14 @@ async function readLockOwner(paths: DaemonPaths): Promise<DaemonLockOwner | unde
 async function breakAbandonedDaemonLock(paths: DaemonPaths): Promise<boolean> {
   const info = await stat(paths.lockDir).catch(() => undefined);
   if (!info) return true;
-  const ageMs = Date.now() - info.mtimeMs;
   const owner = await readLockOwner(paths);
+  // A live owner's lock is never abandoned, however old the directory is: a
+  // stop with a long derived grace window legitimately holds the lock past
+  // LOCK_MAX_AGE_MS while it waits for the daemon to exit. This covers a lock
+  // owned by this same process too — breaking our own live lock would let a
+  // second caller in alongside us.
+  if (owner && pidAlive(owner.pid)) return false;
+  const ageMs = Date.now() - info.mtimeMs;
   const expired = ageMs > LOCK_MAX_AGE_MS;
   const ownerGone = owner ? owner.pid !== process.pid && !pidAlive(owner.pid) : false;
   if (!expired && !ownerGone) return false;

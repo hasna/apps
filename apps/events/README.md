@@ -139,7 +139,7 @@ const client = new EventsClient({ catalog, validateCatalogTypes: true });
 await client.emit({
   source: "open-publish",
   type: "release.published",
-  data: { appId: "open-todos" },
+  data: { appId: "todos" },
 });
 ```
 
@@ -520,7 +520,7 @@ events channels add events --id nested-route --transport command -- handle todos
 events channels match open-source-task-route \
   --source todos \
   --type task.created \
-  --metadata '{"project_path":"/home/hasna/workspace/hasna/opensource/open-events","route_enabled":true}'
+  --metadata '{"project_path":"/home/hasna/workspace/repos/hasna/events","route_enabled":true}'
 
 events channels test open-source-task-route --honor-filters \
   --source todos \
