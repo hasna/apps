@@ -26,7 +26,9 @@ export function buildObjectKey(input: BuildObjectKeyInput): string {
   const sandbox = input.sandbox
     ? `${input.sandbox.provider}:${input.sandbox.allocationId}`
     : "host";
-  const agent = input.agent ?? "unresolved";
+  const agent = typeof input.agent === "string" && input.agent.trim() !== ""
+    ? input.agent
+    : "unresolved";
   const extension = input.ext.startsWith(".") ? input.ext.slice(1) : input.ext;
 
   return [

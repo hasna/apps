@@ -100,6 +100,17 @@ describe("S3Client", () => {
     await expect(client.download("small.jsonl")).rejects.toThrow("not found");
   });
 
+  test("rejects deleting a missing object instead of silently succeeding", async () => {
+    const store = new FakeObjectStore();
+    const client = new S3Client(
+      { bucket: "sessions", region: "eu-central-1" },
+      testDependencies(store)
+    );
+
+    await expect(client.delete("absent.jsonl")).rejects.toThrow("not found");
+    await expect(client.delete("also-absent.jsonl")).rejects.toThrow("not found");
+  });
+
   test("uses a managed upload for large bodies", async () => {
     const store = new FakeObjectStore();
     const client = new S3Client(

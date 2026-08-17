@@ -169,6 +169,9 @@ export class S3Client {
 
   async delete(key: string): Promise<void> {
     await this.client.send(
+      new HeadObjectCommand({ Bucket: this.bucket, Key: key })
+    );
+    await this.client.send(
       new DeleteObjectCommand({ Bucket: this.bucket, Key: key })
     );
   }

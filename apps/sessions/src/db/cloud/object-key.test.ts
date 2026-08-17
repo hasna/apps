@@ -45,4 +45,32 @@ describe("buildObjectKey", () => {
 
     expect(buildObjectKey(input)).toBe(buildObjectKey(input));
   });
+
+  test("normalizes blank agent values to unresolved", () => {
+    expect(
+      buildObjectKey({
+        machineId: "station-03",
+        source: "codex",
+        agent: "   ",
+        sessionId: "session-789",
+        sha256: "abc",
+        ext: "jsonl",
+      })
+    ).toBe(
+      "machine=station-03/sandbox=host/runtime=codex/agent=unresolved/session=session-789/artifact=abc.jsonl"
+    );
+
+    expect(
+      buildObjectKey({
+        machineId: "station-03",
+        source: "codex",
+        agent: "",
+        sessionId: "session-789",
+        sha256: "abc",
+        ext: "jsonl",
+      })
+    ).toBe(
+      "machine=station-03/sandbox=host/runtime=codex/agent=unresolved/session=session-789/artifact=abc.jsonl"
+    );
+  });
 });
