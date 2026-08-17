@@ -1,8 +1,8 @@
-# open-automations
+# @hasna/automations
 
 Deterministic automation control plane and daemon for Hasna open-source apps.
 
-`open-automations` is the real automation product surface. It owns automation
+`automations` is the real automation product surface. It owns automation
 specs, trigger materialization, deterministic run/action queue state, replay
 requests, daemon leases, and release-grade audit boundaries. It uses
 `@hasna/actions` as the action contract layer and can hand deterministic action
@@ -41,7 +41,7 @@ automations --json spec example
 automations --json validate automation.json
 automations --json create automation.json
 automations --json list
-automations --json simulate automation.json --persist --event-json '{"id":"evt_1","source":"open-events","type":"ticket.created","data":{"priority":"critical"}}'
+automations --json simulate automation.json --persist --event-json '{"id":"evt_1","source":"events","type":"ticket.created","data":{"priority":"critical"}}'
 automations --json runs list --contract
 automations --json runs show <run-id> --contract
 automations --json queue claim --runner worker-1
@@ -51,7 +51,7 @@ automations --json queue approve <action-id>
 automations --json queue reject <action-id> --reason "policy denied"
 automations --json dlq list
 automations --json dlq replay <action-id>
-automations --json webhooks create tickets.escalate-critical --id tickets --path /webhooks/tickets --source open-events --type ticket.created --data-path data --dedupe-key-header X-Hasna-Event-Id --secret-ref secret://automations/webhooks/tickets
+automations --json webhooks create tickets.escalate-critical --id tickets --path /webhooks/tickets --source events --type ticket.created --data-path data --dedupe-key-header X-Hasna-Event-Id --secret-ref secret://automations/webhooks/tickets
 automations --json webhooks event tickets --body-json '{"data":{"priority":"critical"}}' --header X-Hasna-Event-Id:evt_1
 automations --json webhooks test tickets --body-json '{"data":{"priority":"critical"}}' --header X-Hasna-Event-Id:evt_1
 automations --json webhooks list
@@ -61,7 +61,7 @@ automations --json webhooks enable tickets
 automations --json webhooks rotate-secret tickets --secret-ref secret://automations/webhooks/tickets-v2
 automations --json webhooks archive tickets
 automations --json recipes list
-automations --json recipes render launch-followup --app-id open-todos --package @hasna/todos --app-version 1.2.3 --out ./specs --create
+automations --json recipes render launch-followup --app-id todos --package @hasna/todos --app-version 1.2.3 --out ./specs --create
 automations --json runtimes
 automations-daemon --json status
 automations-daemon --version
@@ -102,7 +102,7 @@ For local worktree validation after `bun run build`, pass a local package spec
 and explicit peer specs:
 
 ```sh
-bun run smoke:webhook-release -- --package file:$PWD --no-default-peers --peer file:/path/to/open-actions
+bun run smoke:webhook-release -- --package file:$PWD --no-default-peers --peer file:/path/to/actions
 ```
 
 The OpenLoops handoff check is intentionally dry-run only: it validates the
@@ -140,11 +140,11 @@ Platform semantics the pack is written against:
 
 ## Boundaries
 
-- `open-actions` defines portable action manifests and invocation contracts.
-- `open-events` is trigger ingress.
-- `open-automations` materializes triggers into durable automation runs and
+- `actions` defines portable action manifests and invocation contracts.
+- `events` is trigger ingress.
+- `automations` materializes triggers into durable automation runs and
   queued deterministic action work.
-- `open-loops` owns agent workflow invocation, admission, and workflow run
+- `loops` owns agent workflow invocation, admission, and workflow run
   artifacts. It can consume explicit event envelopes from OpenAutomations, but
   it is not the automation product.
 
@@ -171,15 +171,15 @@ actions, not the scheduler or control plane for automations. A runtime worker
 claims queued deterministic actions with:
 
 ```sh
-automations queue claim --runner open-loops:<worker-id>
+automations queue claim --runner loops:<worker-id>
 ```
 
 It must complete or fail the same action with the same runner id before the
 lease expires:
 
 ```sh
-automations queue complete <action-id> --runner open-loops:<worker-id>
-automations queue fail <action-id> --runner open-loops:<worker-id> --code <code> --message <message>
+automations queue complete <action-id> --runner loops:<worker-id>
+automations queue fail <action-id> --runner loops:<worker-id> --code <code> --message <message>
 ```
 
 The queue enforces runner ownership and live leases for completion/failure, so

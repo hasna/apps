@@ -1119,3 +1119,33 @@ function collectPlanNodes(plan: Record<string, unknown>): Record<string, unknown
   const children = Array.isArray(plan.Plans) ? plan.Plans as Record<string, unknown>[] : [];
   return [plan, ...children.flatMap(collectPlanNodes)];
 }
+
+describePostgreSql("PostgreSqlServerAutomationsStore.ensureAutomation", () => {
+  test("inserts a new automation when the id is absent", async () => {
+    const store = await PostgreSqlServerAutomationsStore.connect(databaseUrl!);
+    stores.push(store);
+    const installed = await store.ensureAutomation(spec("pg-ensure-absent"));
+    expect(installed.id).toBe("pg-ensure-absent");
+    expect((await store.listAutomations()).length).toBe(1);
+  });
+
+  test("is idempotent for identical content and never duplicates the row", async () => {
+    const store = await PostgreSqlServerAutomationsStore.connect(databaseUrl!);
+    stores.push(store);
+    const first = await store.ensureAutomation(spec("pg-ensure-idempotent"));
+    const second = await store.ensureAutomation(spec("pg-ensure-idempotent"));
+    expect(second.id).toBe(first.id);
+    expect((await store.listAutomations()).length).toBe(1);
+  });
+
+  test("refuses conflicting content without mutating the existing row", async () => {
+    const store = await PostgreSqlServerAutomationsStore.connect(databaseUrl!);
+    stores.push(store);
+    await store.ensureAutomation(spec("pg-ensure-conflict"));
+    const conflicting = spec("pg-ensure-conflict", { actions: [{ id: "only", actionId: "actions.only" }] });
+    await expect(store.ensureAutomation(conflicting)).rejects.toThrow(/immutable template installs cannot overwrite/);
+    const rows = await store.listAutomations();
+    expect(rows.length).toBe(1);
+    expect(rows[0].spec.actions).toHaveLength(2);
+  });
+});
