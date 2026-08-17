@@ -68,6 +68,8 @@ function buildPromptFilterConditions(
   const conditions: string[] = []
   const params: SqlParam[] = []
   const column = (name: string) => `${columnPrefix}${name}`
+  // Reference to the prompts table for subqueries: aliased in search, bare in list.
+  const promptIdRef = columnPrefix ? `${columnPrefix}id` : "prompts.id"
 
   if (filter.collection) {
     conditions.push(`${column("collection")} = ?`)
@@ -85,6 +87,14 @@ function buildPromptFilterConditions(
     const tagConds = filter.tags.map(() => `${column("tags")} LIKE ?`)
     conditions.push(`(${tagConds.join(" OR ")})`)
     for (const tag of filter.tags) params.push(`%"${tag}"%`)
+  }
+  if (filter.labels && filter.labels.length > 0) {
+    for (const label of filter.labels) {
+      conditions.push(
+        `EXISTS (SELECT 1 FROM prompt_labels pl WHERE pl.prompt_id = ${promptIdRef} AND pl.key = ? AND pl.value = ?)`
+      )
+      params.push(label.key, label.value)
+    }
   }
   if (filter.project_id !== undefined && filter.project_id !== null) {
     conditions.push(`(${column("project_id")} = ? OR ${column("project_id")} IS NULL)`)

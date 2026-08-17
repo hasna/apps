@@ -407,7 +407,80 @@ function runMigrations(db: Database): void {
       sql: `CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), message TEXT NOT NULL, email TEXT, category TEXT DEFAULT 'general', version TEXT, machine_id TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));`,
     },
     {
-      name: "010_dispatch_runs",
+      name: "010_prompt_variables",
+      sql: `
+        CREATE TABLE IF NOT EXISTS prompt_variables (
+          id TEXT PRIMARY KEY,
+          prompt_id TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          type TEXT NOT NULL DEFAULT 'string',
+          required INTEGER NOT NULL DEFAULT 1,
+          default_value TEXT,
+          description TEXT,
+          validation TEXT,
+          render_format TEXT NOT NULL DEFAULT 'json',
+          position INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(prompt_id, name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_prompt_variables_prompt_id ON prompt_variables(prompt_id);
+      `,
+    },
+    {
+      name: "011_prompt_labels",
+      sql: `
+        CREATE TABLE IF NOT EXISTS prompt_labels (
+          id TEXT PRIMARY KEY,
+          prompt_id TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+          key TEXT NOT NULL,
+          value TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(prompt_id, key, value)
+        );
+        CREATE INDEX IF NOT EXISTS idx_prompt_labels_key_value ON prompt_labels(key, value);
+        CREATE INDEX IF NOT EXISTS idx_prompt_labels_prompt_id ON prompt_labels(prompt_id);
+      `,
+    },
+    {
+      name: "012_prompt_dependencies",
+      sql: `
+        CREATE TABLE IF NOT EXISTS prompt_dependencies (
+          id TEXT PRIMARY KEY,
+          prompt_id TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+          dependency_prompt_id TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+          dependency_slug TEXT NOT NULL,
+          relation TEXT NOT NULL CHECK(relation IN ('parent','partial')),
+          slot TEXT,
+          pinned_version INTEGER,
+          ordering INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_prompt_dependencies_prompt_id ON prompt_dependencies(prompt_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_dependencies_unique
+          ON prompt_dependencies(prompt_id, dependency_prompt_id, relation, COALESCE(slot, ''));
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_dependencies_one_parent
+          ON prompt_dependencies(prompt_id) WHERE relation = 'parent';
+      `,
+    },
+    {
+      name: "013_render_receipts",
+      sql: `
+        CREATE TABLE IF NOT EXISTS render_receipts (
+          id TEXT PRIMARY KEY,
+          prompt_id TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+          prompt_version INTEGER NOT NULL,
+          resolved_sources TEXT NOT NULL DEFAULT '[]',
+          render_hash TEXT NOT NULL,
+          missing_vars TEXT NOT NULL DEFAULT '[]',
+          used_defaults TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_render_receipts_prompt_id ON render_receipts(prompt_id);
+      `,
+    },
+    {
+      name: "014_dispatch_runs",
       sql: `
         CREATE TABLE IF NOT EXISTS dispatch_runs (
           id TEXT PRIMARY KEY,

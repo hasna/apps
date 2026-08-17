@@ -56,11 +56,73 @@ export interface Project {
   created_at: string
 }
 
+export type TemplateValueType = "string" | "number" | "boolean" | "object" | "array"
+export type TemplateRenderFormat = "json" | "json-pretty" | "string"
+
 export interface TemplateVariable {
   name: string
+  type?: TemplateValueType
   description?: string
+  /** Inline string default from the body ({{name|default}}) */
   default?: string
+  /** Typed default value (persisted JSON) */
+  typed_default?: unknown
   required: boolean
+  /** JSON-serialized validation constraints: { pattern?, min?, max?, minLength?, maxLength?, enum? } */
+  validation?: string
+  render_format?: TemplateRenderFormat
+}
+
+/** Input shape for declaring typed variable metadata (save/update --var-schema). */
+export interface VariableSchemaEntry {
+  name: string
+  type?: TemplateValueType
+  required?: boolean
+  /** Typed default value */
+  default?: unknown
+  description?: string
+  validation?: string
+  render_format?: TemplateRenderFormat
+}
+
+export interface PromptLabel {
+  id: string
+  prompt_id: string
+  key: string
+  value: string
+  created_at: string
+}
+
+export type PromptDependencyRelation = "parent" | "partial"
+
+export interface PromptDependency {
+  id: string
+  prompt_id: string
+  dependency_prompt_id: string
+  dependency_slug: string
+  relation: PromptDependencyRelation
+  slot: string | null
+  pinned_version: number | null
+  ordering: number
+  created_at: string
+}
+
+export interface ResolvedSource {
+  id: string
+  version: number
+  relation: "self" | "parent" | "partial"
+  slot?: string | null
+}
+
+export interface RenderReceipt {
+  id: string
+  prompt_id: string
+  prompt_version: number
+  resolved_sources: ResolvedSource[]
+  render_hash: string
+  missing_vars: string[]
+  used_defaults: string[]
+  created_at: string
 }
 
 export interface PromptVersion {
@@ -101,6 +163,10 @@ export interface CreatePromptInput {
   source?: PromptSource
   changed_by?: string
   project_id?: string | null
+  var_schema?: VariableSchemaEntry[]
+  labels?: Array<{ key: string; value: string }>
+  /** One optional parent prompt (slug or id). No multiple inheritance. */
+  extends_prompt?: string | null
 }
 
 export interface UpdatePromptInput {
@@ -111,11 +177,16 @@ export interface UpdatePromptInput {
   tags?: string[]
   next_prompt?: string | null
   changed_by?: string
+  var_schema?: VariableSchemaEntry[]
+  labels?: Array<{ key: string; value: string }>
+  /** One optional parent prompt (slug or id). null clears. */
+  extends_prompt?: string | null
 }
 
 export interface ListPromptsFilter {
   collection?: string
   tags?: string[]
+  labels?: Array<{ key: string; value: string }>
   is_template?: boolean
   source?: PromptSource
   q?: string
@@ -161,6 +232,10 @@ export interface RenderResult {
   rendered: string
   missing_vars: string[]
   used_defaults: string[]
+  /** Visible [UNRESOLVED ...] markers placed in preview mode */
+  unresolved?: string[]
+  /** Prompt sources resolved during dependency-aware rendering */
+  resolved_sources?: ResolvedSource[]
 }
 
 export interface PromptStats {
@@ -195,9 +270,15 @@ export class DuplicateSlugError extends Error {
 }
 
 export class TemplateRenderError extends Error {
-  constructor(message: string) {
+  /** Machine-readable failure code: MISSING_VARIABLE, PARTIAL_NOT_FOUND, TEMPLATE_CYCLE, ... */
+  code?: string
+  /** Names of missing required variables (code MISSING_VARIABLE) */
+  missing?: string[]
+  constructor(message: string, code?: string, missing?: string[]) {
     super(message)
     this.name = "TemplateRenderError"
+    this.code = code
+    this.missing = missing
   }
 }
 

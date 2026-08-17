@@ -2,7 +2,10 @@ import { getDatabase, resolvePrompt } from "./database.js"
 import { generatePromptId, generateSlug, uniqueSlug } from "../lib/ids.js"
 import { ensureCollection } from "./collections.js"
 import { findDuplicates } from "../lib/duplicates.js"
-import { extractVariables } from "../lib/template.js"
+import { extractVariableInfo } from "../lib/template.js"
+import { syncPromptVariables, loadPromptVariablesForPrompts } from "./variables.js"
+import { setLabel } from "./labels.js"
+import { setParent, removeDependency } from "./dependencies.js"
 import type {
   Prompt,
   SlimPrompt,
@@ -52,7 +55,10 @@ export function promptToSaveResult(prompt: Prompt, created: boolean, duplicate_w
   }
 }
 
-function rowToPrompt(row: Record<string, unknown>): Prompt {
+function rowToPrompt(row: Record<string, unknown>, persistedVariables?: TemplateVariable[]): Prompt {
+  const legacyVariables = JSON.parse((row["variables"] as string) || "[]") as TemplateVariable[]
+  // prompt_variables is authoritative when populated; fall back to the legacy JSON column.
+  const variables = persistedVariables && persistedVariables.length > 0 ? persistedVariables : legacyVariables
   return {
     id: row["id"] as string,
     name: row["name"] as string,
@@ -62,7 +68,7 @@ function rowToPrompt(row: Record<string, unknown>): Prompt {
     description: (row["description"] as string | null) ?? null,
     collection: row["collection"] as string,
     tags: JSON.parse((row["tags"] as string) || "[]") as string[],
-    variables: JSON.parse((row["variables"] as string) || "[]") as TemplateVariable[],
+    variables,
     pinned: Boolean(row["pinned"]),
     next_prompt: (row["next_prompt"] as string | null) ?? null,
     expires_at: (row["expires_at"] as string | null) ?? null,
@@ -98,18 +104,32 @@ export function createPrompt(input: CreatePromptInput): Prompt {
   const source = input.source || "manual"
   const project_id = input.project_id ?? null
 
-  // Auto-detect template variables
-  const vars = extractVariables(input.body)
+  // Auto-detect template variables and persist real metadata
+  // (required reflects the presence of an inline default; typed metadata overlays via var_schema).
+  const variableInfos = extractVariableInfo(input.body)
   const variables = JSON.stringify(
-    vars.map((v) => ({ name: v, required: true }))
+    variableInfos.map((v) => ({ name: v.name, required: v.required }))
   )
-  const is_template = vars.length > 0 ? 1 : 0
+  const is_template = variableInfos.length > 0 ? 1 : 0
 
   db.run(
     `INSERT INTO prompts (id, name, slug, title, body, description, collection, tags, variables, is_template, source, project_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, name, slug, input.title, input.body, input.description ?? null, collection, tags, variables, is_template, source, project_id]
   )
+
+  // Persist typed variable metadata in prompt_variables (source of truth for types/descriptions).
+  syncPromptVariables(id, input.body, input.var_schema ?? [])
+
+  // Exact labels.
+  for (const label of input.labels ?? []) {
+    setLabel(id, label.key, label.value)
+  }
+
+  // One optional parent (no multiple inheritance).
+  if (input.extends_prompt) {
+    setParent(id, input.extends_prompt)
+  }
 
   // Save initial version
   db.run(
@@ -127,7 +147,7 @@ export function getPrompt(idOrSlug: string): Prompt | null {
   if (!id) return null
   const row = db.query("SELECT * FROM prompts WHERE id = ?").get(id) as Record<string, unknown> | null
   if (!row) return null
-  return rowToPrompt(row)
+  return rowToPrompt(row, loadPromptVariablesForPrompts([id]).get(id))
 }
 
 export function requirePrompt(idOrSlug: string): Prompt {
@@ -162,6 +182,14 @@ export function listPrompts(filter: ListPromptsFilter = {}): Prompt[] {
       params.push(`%"${tag}"%`)
     }
   }
+  if (filter.labels && filter.labels.length > 0) {
+    for (const label of filter.labels) {
+      conditions.push(
+        "EXISTS (SELECT 1 FROM prompt_labels pl WHERE pl.prompt_id = prompts.id AND pl.key = ? AND pl.value = ?)"
+      )
+      params.push(label.key, label.value)
+    }
+  }
 
   let orderBy = "pinned DESC, use_count DESC, updated_at DESC"
 
@@ -181,7 +209,8 @@ export function listPrompts(filter: ListPromptsFilter = {}): Prompt[] {
     .query(`SELECT * FROM prompts ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`)
     .all(...params, ...orderParams, limit, offset) as Array<Record<string, unknown>>
 
-  return rows.map(rowToPrompt)
+  const varsByPrompt = loadPromptVariablesForPrompts(rows.map((r) => r["id"] as string))
+  return rows.map((row) => rowToPrompt(row, varsByPrompt.get(row["id"] as string)))
 }
 
 /** Slim version of listPrompts — no body, no full variables. Default for MCP listing. */
@@ -198,6 +227,14 @@ export function listPromptsSlim(filter: ListPromptsFilter = {}): SlimPrompt[] {
     const tagConds = filter.tags.map(() => "tags LIKE ?")
     conditions.push(`(${tagConds.join(" OR ")})`)
     for (const tag of filter.tags) params.push(`%"${tag}"%`)
+  }
+  if (filter.labels && filter.labels.length > 0) {
+    for (const label of filter.labels) {
+      conditions.push(
+        "EXISTS (SELECT 1 FROM prompt_labels pl WHERE pl.prompt_id = prompts.id AND pl.key = ? AND pl.value = ?)"
+      )
+      params.push(label.key, label.value)
+    }
   }
 
   let orderBy = "pinned DESC, use_count DESC, updated_at DESC"
@@ -225,9 +262,15 @@ export function updatePrompt(idOrSlug: string, input: UpdatePromptInput): Prompt
   const prompt = requirePrompt(idOrSlug)
 
   const newBody = input.body ?? prompt.body
-  const vars = extractVariables(newBody)
-  const variables = JSON.stringify(vars.map((v) => ({ name: v, required: true })))
-  const is_template = vars.length > 0 ? 1 : 0
+  const mergedVariables = syncPromptVariables(prompt.id, newBody, input.var_schema ?? [])
+  const variables = JSON.stringify(
+    mergedVariables.map((v) => ({
+      name: v.name,
+      required: v.required,
+      ...(v.description !== undefined ? { description: v.description } : {}),
+    }))
+  )
+  const is_template = mergedVariables.length > 0 ? 1 : 0
 
   const updated = db.run(
     `UPDATE prompts SET
@@ -258,6 +301,20 @@ export function updatePrompt(idOrSlug: string, input: UpdatePromptInput): Prompt
   )
 
   if (updated.changes === 0) throw new VersionConflictError(prompt.id)
+
+  // Labels
+  for (const label of input.labels ?? []) {
+    setLabel(prompt.id, label.key, label.value)
+  }
+
+  // One optional parent: explicit value sets, null clears.
+  if ("extends_prompt" in input) {
+    if (input.extends_prompt) {
+      setParent(prompt.id, input.extends_prompt)
+    } else {
+      removeDependency(prompt.id, "parent")
+    }
+  }
 
   // Save version snapshot if body changed
   if (input.body && input.body !== prompt.body) {
@@ -335,14 +392,19 @@ export function upsertPrompt(input: CreatePromptInput, force = false): { prompt:
   const existing = db.query("SELECT id FROM prompts WHERE slug = ?").get(slug) as { id: string } | null
 
   if (existing) {
-    const prompt = updatePrompt(existing.id, {
+    const update: UpdatePromptInput = {
       title: input.title,
       body: input.body,
       description: input.description,
       collection: input.collection,
       tags: input.tags,
       changed_by: input.changed_by,
-    })
+      var_schema: input.var_schema,
+      labels: input.labels,
+    }
+    // Only an explicit extends value (or null to clear) touches the parent dependency.
+    if (input.extends_prompt !== undefined) update.extends_prompt = input.extends_prompt
+    const prompt = updatePrompt(existing.id, update)
     return { prompt, created: false }
   }
 
