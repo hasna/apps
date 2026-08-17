@@ -309,15 +309,15 @@ accidentally execute in bash.
 
 ```bash
 # Validate the target, command filter, and exact tmux input without typing.
-dispatch exec --to open-mailery:01 --command "mailery status" --dry-run
+dispatch exec --to emails:01 --command "emails status" --dry-run
 
 # Submit a reviewed safe command to a detected shell pane.
-dispatch exec --to open-mailery:01 \
-  --command "cd ~/workspace/repos/hasna/emails && mailery doctor" \
+dispatch exec --to emails:01 \
+  --command "cd ~/workspace/repos/hasna/apps/apps/emails && emails doctor" \
   --allow ./dispatch-exec-policy.json
 
 # Prompts still use send.
-dispatch send --to open-mailery:01 --file ./goal.md
+dispatch send --to emails:01 --file ./goal.md
 ```
 
 The exec filter blocks destructive patterns such as root/home removal, filesystem
@@ -328,7 +328,7 @@ from a reviewed JSON policy file:
 ```json
 {
   "allowPrefixes": ["git reset --hard"],
-  "allowGitResetHardPaths": ["/home/hasna/workspace/hasna/opensource/dispatch"],
+  "allowGitResetHardPaths": ["/home/hasna/workspace/repos/hasna/apps/apps/dispatch"],
   "allowTargets": ["dispatch:*"]
 }
 ```
@@ -519,8 +519,8 @@ dispatch.close();
 
 ```ts
 const execRec = await dispatch.exec({
-  target: "open-mailery:01",
-  command: "mailery status",
+  target: "emails:01",
+  command: "emails status",
   dryRun: true,
 });
 console.log(execRec.commandHash, execRec.filter?.code);

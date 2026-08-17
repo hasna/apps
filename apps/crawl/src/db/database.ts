@@ -74,6 +74,12 @@ export function getDb(): Database {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path, { create: true });
 
+  // busy_timeout MUST be the first statement: PRAGMA journal_mode below
+  // takes schema locks that can transiently collide with a concurrent
+  // process holding the WAL write lock, and without a busy handler that
+  // collision surfaces immediately as SQLITE_BUSY "database is locked"
+  // (measured as an intermittent full-suite failure in the CLI list path).
+  db.exec("PRAGMA busy_timeout = 5000");
   // journal_mode is persistent, but foreign_keys and synchronous are
   // per-connection: they must be re-applied on every handle or ON DELETE
   // CASCADE silently stops firing.

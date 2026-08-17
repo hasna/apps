@@ -141,7 +141,7 @@ async function fetchSitemapUrl(url: string): Promise<string | null> {
   try {
     const response = await fetch(url, {
       headers: {
-        "User-Agent": "open-crawl/1.0",
+        "User-Agent": "open-crawl/1.0 (+https://github.com/hasna/crawl)",
         Accept: "application/xml,text/xml,*/*",
       },
       signal: AbortSignal.timeout(15_000),

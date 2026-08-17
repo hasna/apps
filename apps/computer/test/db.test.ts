@@ -1,5 +1,8 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { randomUUID } from "crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   getDb,
   createSession,
@@ -30,9 +33,21 @@ function makeSession(overrides?: Partial<Session>): Session {
   };
 }
 
+// Isolate the suite in a throwaway database. Without this the suite runs
+// against the operator's real ~/.hasna/computer store, and tests that assume
+// a small table (listSessions ordering within limit:100) fail once the live
+// store grows past the limit — a machine-state dependency, not a product bug.
+const TEST_DB_ROOT = mkdtempSync(join(tmpdir(), "computer-db-test-"));
+
 describe("db", () => {
   beforeAll(() => {
+    process.env["COMPUTER_DB_PATH"] = join(TEST_DB_ROOT, "test.db");
     getDb(); // Ensure DB is initialized
+  });
+
+  afterAll(() => {
+    delete process.env["COMPUTER_DB_PATH"];
+    rmSync(TEST_DB_ROOT, { recursive: true, force: true });
   });
 
   test("createSession + getSession", async () => {

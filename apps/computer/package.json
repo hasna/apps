@@ -61,11 +61,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/open-computer.git"
+    "url": "https://github.com/hasna/computer.git"
   },
-  "homepage": "https://github.com/hasna/open-computer",
+  "homepage": "https://github.com/hasna/computer",
   "bugs": {
-    "url": "https://github.com/hasna/open-computer/issues"
+    "url": "https://github.com/hasna/computer/issues"
   },
   "engines": {
     "bun": ">=1.0.0"
