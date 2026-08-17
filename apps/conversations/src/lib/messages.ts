@@ -33,7 +33,7 @@ import { fireWebhooks } from "./webhooks.js";
 import { normalizeChannelName, unknownChannelMessage } from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "./content-safety.js";
-import { enforceWorkStatusEventWrite } from "./work-status-schema.js";
+import { enforceWorkStatusEventWrite, workStatusTaskLikePattern } from "./work-status-schema.js";
 import { resolveReadLimit, resolveReadWindow } from "./message-window.js";
 import {
   COLLECTION_MAX_MAX_BYTES,
@@ -362,10 +362,12 @@ export function sendMessage(opts: SendMessageOptions): Message {
       // same-state duplicates are rejected here, inside the write transaction,
       // so the stream's consumers can trust it. The Postgres server path
       // (src/server/api.ts) enforces the same gate.
-      enforceWorkStatusEventWrite(channelName, opts.content, () => {
+      enforceWorkStatusEventWrite(channelName, opts.content, (taskId) => {
+        // Task-scoped lookup: the previous event for THIS task, never a
+        // channel-wide scan that older same-task events can fall out of.
         const recent = db.prepare(
-          "SELECT content FROM messages WHERE channel = ? ORDER BY id DESC LIMIT 100"
-        ).all(channelName) as Array<{ content: unknown }>;
+          "SELECT content FROM messages WHERE channel = ? AND content LIKE ? ORDER BY id DESC LIMIT 10"
+        ).all(channelName, workStatusTaskLikePattern(taskId)) as Array<{ content: unknown }>;
         return recent.map((row) => String(row.content));
       });
       const row = db.prepare(`

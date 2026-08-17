@@ -27,9 +27,13 @@
  * a guard present on only one backend is absent exactly where it matters.
  *
  * Plain prose in the channel is not an event and is NOT rejected — the guard
- * only fires on lines that claim to be lifecycle events (a first token that
- * names a state, any `key=` field of the schema, or a JSON document) and on
- * consecutive duplicate transitions.
+ * only fires on lines that CLAIM to be lifecycle events (a JSON document, any
+ * schema `key=` field, or a bare state token FOLLOWED BY at least one
+ * key=value field — a prose line that merely starts with a state word such as
+ * "DONE — deployment complete" is left alone) and on consecutive duplicate
+ * transitions. The `at` value must be strict RFC3339 with a `Z` suffix and a
+ * real calendar date; identifiers follow the documented formats (event_id,
+ * task_id and session are UUIDs; scope is kind:stable-id).
  */
 
 export const WORK_STATUS_CHANNEL = "work-status";
@@ -55,6 +59,11 @@ export const WORK_STATUS_FIELDS = [
  * five minutes is wide enough to catch the class while still allowing a
  * genuinely new same-state transition (which per the lifecycle semantics
  * requires an intervening different state anyway).
+ *
+ * The window is measured from WRITE time (`now`), never from the
+ * user-supplied `at` values: an event's claimed timestamp is writer-controlled
+ * and an immediate duplicate could otherwise backdate or forwarddate itself
+ * past the window.
  */
 export const WORK_STATUS_DEDUPE_WINDOW_MS = 5 * 60_000;
 
@@ -79,7 +88,22 @@ export interface WorkStatusEvent {
 }
 
 const VALUE_RE = /^[^\s=]{1,128}$/;
-const RFC3339_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
+/** Full UUID: 8-4-4-4-12 hex, as the schema documents for <uuid> fields. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** <kind>:<stable-id> — the fleet's own example is `todos:691ea5e4`. */
+const SCOPE_RE = /^[a-z0-9]+:[a-zA-Z0-9_-]{1,96}$/;
+/** Strict RFC3339 with a mandatory `Z` suffix. */
+const RFC3339Z_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,9})?Z$/;
+
+/**
+ * A LIKE pattern that matches the stored serialized `task_id=<id>` marker for
+ * one task. task_id is validated as a full UUID, so no LIKE metacharacters
+ * (%, _, \) can appear in the interpolated value; this stays a plain literal
+ * match against the marker.
+ */
+export function workStatusTaskLikePattern(taskId: string): string {
+  return `%task_id=${taskId}%`;
+}
 
 function isJsonDocument(firstToken: string): boolean {
   return firstToken.startsWith("{") || firstToken.startsWith("[");
@@ -99,19 +123,24 @@ function isJsonObject(firstLine: string): boolean {
 function eventLineAttempt(firstLine: string): boolean {
   if (isJsonDocument(firstLine)) return true;
   const firstToken = firstLine.split(/\s+/, 1)[0] ?? "";
-  if ((WORK_STATUS_STATES as readonly string[]).includes(firstToken)) return true;
+  if ((WORK_STATUS_STATES as readonly string[]).includes(firstToken)) {
+    // A bare state word opens legitimate prose ("DONE — deployment
+    // complete"). Only treat the line as an event attempt when it also
+    // carries at least one key=value field.
+    return /[^\s=]+=/.test(firstLine);
+  }
   return /\bevent_id=/.test(firstLine) || /\btask_id=/.test(firstLine);
 }
 
 /**
  * Parse and validate the first line of a `work-status` message.
  *
- * Returns the parsed event when the line is a well-formed lifecycle event.
- * Returns null when the first line is plain prose with no event markers — the
- * guard deliberately leaves non-event messages alone.
+ * Returns the parsed event when the first line is a well-formed lifecycle
+ * event. Returns null when the first line is plain prose with no event
+ * markers — the guard deliberately leaves non-event messages alone.
  * Throws WorkStatusSchemaError when the first line CLAIMS to be an event (a
- * state token, a schema key, or a JSON document) but does not satisfy the
- * exact finite schema.
+ * JSON document, any schema key= field, or a bare state token followed by at
+ * least one key=value field) but does not satisfy the exact finite schema.
  */
 export function parseWorkStatusEvent(content: string): WorkStatusEvent | null {
   const firstLine = (content ?? "").split(/\r?\n/, 1)[0] ?? "";
@@ -188,24 +217,74 @@ export function parseWorkStatusEvent(content: string): WorkStatusEvent | null {
     return value;
   };
 
-  const eventId = fieldValue("event_id");
-  const taskId = fieldValue("task_id");
+  const assertUuidField = (key: string, value: string, label: string): string => {
+    if (!UUID_RE.test(value)) {
+      throw new WorkStatusSchemaError(
+        `field "${key}" must be a full UUID (${label}), got "${value}".`,
+      );
+    }
+    return value;
+  };
+
+  const eventId = assertUuidField("event_id", fieldValue("event_id"), "event_id=<uuid>");
+  const taskId = assertUuidField("task_id", fieldValue("task_id"), "task_id=<full-task-uuid>");
   const scope = fieldValue("scope");
+  if (!SCOPE_RE.test(scope)) {
+    throw new WorkStatusSchemaError(
+      `field "scope" must be <kind>:<stable-id> (e.g. todos:691ea5e4), got "${scope}".`,
+    );
+  }
   const agent = fieldValue("agent");
-  const session = fieldValue("session");
+  const session = assertUuidField("session", fieldValue("session"), "session=<session-uuid>");
   const claim = fieldValue("claim");
   const evidence = fieldValue("evidence");
 
   const at = fields.get("at") ?? "";
-  if (!RFC3339_RE.test(at)) {
-    throw new WorkStatusSchemaError(`field "at" is not RFC3339 ("${at}").`);
-  }
-  const atMs = Date.parse(at);
-  if (!Number.isFinite(atMs)) {
-    throw new WorkStatusSchemaError(`field "at" is not a parseable timestamp ("${at}").`);
+  const atMs = parseStrictRfc3339Z(at);
+  if (atMs === null) {
+    throw new WorkStatusSchemaError(
+      `field "at" must be a real RFC3339 timestamp with a Z suffix, e.g. 2026-08-17T12:00:00.000Z ("${at}").`,
+    );
   }
 
   return { state: state as WorkStatusState, event_id: eventId, task_id: taskId, scope, agent, session, at, atMs, claim, evidence };
+}
+
+/**
+ * Strict RFC3339-with-Z validation. Returns epoch ms, or null when the value
+ * is not a real timestamp: wrong shape, no `Z` suffix, out-of-range
+ * components, or an impossible calendar date (e.g. 2026-02-30, which
+ * Date.parse silently normalizes to March 2 and which the round-trip check
+ * rejects).
+ */
+export function parseStrictRfc3339Z(value: string): number | null {
+  const match = RFC3339Z_RE.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > 31) return null;
+  if (hour > 23 || minute > 59 || second > 59) return null;
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return null;
+  const d = new Date(ms);
+  // Round-trip check: the runtime normalizes impossible dates (Feb 30 ->
+  // Mar 2); the parsed components must equal the input components.
+  if (
+    d.getUTCFullYear() !== year ||
+    d.getUTCMonth() + 1 !== month ||
+    d.getUTCDate() !== day ||
+    d.getUTCHours() !== hour ||
+    d.getUTCMinutes() !== minute ||
+    d.getUTCSeconds() !== second
+  ) {
+    return null;
+  }
+  return ms;
 }
 
 /**
@@ -214,19 +293,19 @@ export function parseWorkStatusEvent(content: string): WorkStatusEvent | null {
  *
  * When `channelName` is the work-status channel this validates the message's
  * first line against the exact lifecycle schema and rejects duplicate
- * same-state transitions. `recentChannelContents` must supply the most recent
- * messages of the channel, newest first, so the dedupe check can find the
- * previous event for the same task_id. Any other channel is untouched.
+ * same-state transitions. `recentContentsForTask` must supply the most recent
+ * messages of the channel that carry the marker of the given task_id, newest
+ * first, so the dedupe check can find the previous event for that task
+ * without scanning the whole channel. The dedupe window is measured from
+ * `now` (write time), never from the writer-supplied `at` values. Any other
+ * channel is untouched.
  */
-export function enforceWorkStatusEventWrite(
-  channelName: string | null,
-  content: string,
-  recentChannelContents: () => Iterable<string>,
+function checkWorkStatusDuplicates(
+  recentContents: Iterable<string>,
+  event: WorkStatusEvent,
+  now: number,
 ): void {
-  if (channelName !== WORK_STATUS_CHANNEL) return;
-  const event = parseWorkStatusEvent(content);
-  if (!event) return;
-  for (const previousContent of recentChannelContents()) {
+  for (const previousContent of recentContents) {
     let previous: WorkStatusEvent | null;
     try {
       previous = parseWorkStatusEvent(previousContent);
@@ -236,26 +315,65 @@ export function enforceWorkStatusEventWrite(
       continue;
     }
     if (previous && previous.task_id === event.task_id) {
-      assertNotDuplicateWorkStatusTransition(previous, event);
+      assertNotDuplicateWorkStatusTransition(previous, event, now);
       break;
     }
   }
 }
+
+export function enforceWorkStatusEventWrite(
+  channelName: string | null,
+  content: string,
+  recentContentsForTask: (taskId: string) => Iterable<string>,
+  now: number = Date.now(),
+): void {
+  if (channelName !== WORK_STATUS_CHANNEL) return;
+  const event = parseWorkStatusEvent(content);
+  if (!event) return;
+  checkWorkStatusDuplicates(recentContentsForTask(event.task_id), event, now);
+}
+
+/**
+ * Async twin of `enforceWorkStatusEventWrite` for the Postgres server path,
+ * whose query adapter is promise-based. Same gate, same semantics; the recent
+ * contents lookup may await storage.
+ */
+export async function enforceWorkStatusEventWriteAsync(
+  channelName: string | null,
+  content: string,
+  recentContentsForTask: (taskId: string) => Promise<Iterable<string>>,
+  now: number = Date.now(),
+): Promise<void> {
+  if (channelName !== WORK_STATUS_CHANNEL) return;
+  const event = parseWorkStatusEvent(content);
+  if (!event) return;
+  checkWorkStatusDuplicates(await recentContentsForTask(event.task_id), event, now);
+}
 /**
  * Dedupe check: the lifecycle mandate allows ONE event per real transition, so
- * a same-state event for the same task_id recorded shortly after the previous
+ * a same-state event for the same task_id written shortly after the previous
  * one for that task is a duplicate (distinct event_ids notwithstanding).
  * The check only fires against the MOST RECENT event for the same task — an
  * intervening different state makes the new same-state emission a genuinely
- * new transition.
+ * new transition. The window is anchored on `now` (the write time of the
+ * current event): if the previous event was claimed more than the window
+ * before the current write, it is not recent and the emission is allowed.
+ * Anchoring on the previous event's claimed `at` instead would let an
+ * immediate duplicate backdate or forwarddate its own timestamp past the
+ * window, so the previous event's claimed time is never compared with the
+ * current event's claimed time.
  */
-export function assertNotDuplicateWorkStatusTransition(previous: WorkStatusEvent, current: WorkStatusEvent): void {
+export function assertNotDuplicateWorkStatusTransition(
+  previous: WorkStatusEvent,
+  current: WorkStatusEvent,
+  now: number = Date.now(),
+): void {
   if (previous.task_id !== current.task_id) return;
   if (previous.state !== current.state) return;
-  if (Math.abs(current.atMs - previous.atMs) > WORK_STATUS_DEDUPE_WINDOW_MS) return;
+  if (Math.abs(now - previous.atMs) > WORK_STATUS_DEDUPE_WINDOW_MS) return;
   throw new WorkStatusSchemaError(
     `duplicate ${current.state} event for task ${current.task_id}: a ${previous.state} event for the ` +
-      `same task was already recorded at ${previous.at} (event_id=${previous.event_id}); the lifecycle ` +
+      `same task was recorded recently at ${previous.at} (event_id=${previous.event_id}); the lifecycle ` +
       `schema allows one event per real transition.`,
   );
 }

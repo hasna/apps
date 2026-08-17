@@ -24,7 +24,7 @@ import { version as pkgVersion } from "../../package.json";
 import { openapiSpec } from "./openapi.js";
 import { decayedStatus, SINGLE_TOUCH_TOLERANCE_SECONDS, SINGLE_TOUCH_REAP_WINDOW_SECONDS } from "../lib/presence.js";
 import { normalizeChannelName, unknownChannelMessage } from "../lib/channel-names.js";
-import { enforceWorkStatusEventWrite, WORK_STATUS_CHANNEL } from "../lib/work-status-schema.js";
+import { enforceWorkStatusEventWriteAsync, WORK_STATUS_CHANNEL, workStatusTaskLikePattern } from "../lib/work-status-schema.js";
 import { newChannelId } from "../lib/channel-id.js";
 import { extractTopics } from "../lib/topic-extract.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "../lib/content-safety.js";
@@ -693,6 +693,17 @@ async function renameChannelServer(
 ): Promise<{ ok: true; name: string } | { ok: false; error: string; status: number }> {
   const from = normalizeChannelName(oldName);
   const to = normalizeChannelName(newName);
+  // The work-status channel is the fleet lifecycle stream: its identity is
+  // reserved and stable. Renaming TO it would bulk-move arbitrary messages
+  // into the stream without the write-time gate, and renaming it AWAY would
+  // silently orphan every consumer that reads the stream by its name.
+  if (from === WORK_STATUS_CHANNEL || to === WORK_STATUS_CHANNEL) {
+    return {
+      ok: false as const,
+      error: `Channel #work-status is the reserved lifecycle stream and cannot be renamed.`,
+      status: 400,
+    };
+  }
   return client.transaction(async (tx) => {
     await tx.get(
       "SELECT pg_advisory_xact_lock($1::bigint) AS channel_identity_locked",
@@ -2051,8 +2062,15 @@ async function handleV1(
     const row = await client.transaction(async (tx) => {
       let projectId = requestedProjectId;
       if (channelName) {
+        // The work-status lifecycle stream serializes its writers on the
+        // channel row with an exclusive lock: the schema gate reads prior
+        // events and then inserts, and a plain FOR SHARE read would let two
+        // concurrent writers both pass the dedupe check. The lock is taken
+        // before the history read so a blocked writer re-reads after the
+        // first transaction commits.
+        const lockKind = channelName === WORK_STATUS_CHANNEL ? "FOR UPDATE" : "FOR SHARE";
         const channelRow = await tx.get<{ name: string; project_id: string | null }>(
-          "SELECT name, project_id FROM channels WHERE name = $1 FOR SHARE",
+          `SELECT name, project_id FROM channels WHERE name = $1 ${lockKind}`,
           [channelName],
         );
         if (!channelRow) {
@@ -2075,11 +2093,15 @@ async function handleV1(
       // global-work-status-lifecycle). A guard present on only one backend is
       // absent exactly where it matters.
       if (channelName === WORK_STATUS_CHANNEL) {
-        const recent = await tx.many<{ content: unknown }>(
-          `SELECT content FROM messages WHERE channel = $1 ORDER BY id DESC LIMIT 100`,
-          [channelName],
-        );
-        enforceWorkStatusEventWrite(channelName, content, () => recent.map((row) => String(row.content)));
+        await enforceWorkStatusEventWriteAsync(channelName, content, async (taskId) => {
+          // Task-scoped lookup: the previous event for THIS task, never a
+          // channel-wide scan that older same-task events can fall out of.
+          const rows = await tx.many<{ content: unknown }>(
+            `SELECT content FROM messages WHERE channel = $1 AND content LIKE $2 ORDER BY id DESC LIMIT 10`,
+            [channelName, workStatusTaskLikePattern(taskId)],
+          );
+          return rows.map((row) => String(row.content));
+        });
       }
       const inserted = await tx.get<Record<string, unknown>>(
         `INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
@@ -2240,6 +2262,7 @@ async function handleV1(
       requestedProjectId: string | null;
       projectParamIndex: number;
     }> = [];
+    const workStatusItems: Array<{ index: number; channel: string; content: string }> = [];
     const replyReferences: Array<{
       itemIndex: number;
       uuid: string;
@@ -2264,13 +2287,20 @@ async function handleV1(
       let priority = str(m.priority)?.toLowerCase() ?? "normal";
       if (!VALID_PRIORITIES.includes(priority)) priority = "normal";
       const sessionId = str(m.session_id) ?? `api:${from}`;
-      const channel = str(m.channel);
+      // Channel names normalize like every other write path; the raw body
+      // value is never stored, so the work-status gate cannot be dodged with
+      // a differently-cased spelling of the stream name.
+      const rawChannel = str(m.channel);
+      assertNoSensitiveOptionalText(rawChannel, "Message channel");
+      // Channel names normalize like every other write path; the raw body
+      // value is never stored, so the work-status gate cannot be dodged with
+      // a differently-cased spelling of the stream name.
+      const channel = rawChannel ? normalizeChannelName(rawChannel) : undefined;
       const projectId = str(m.project_id);
       const replyTo = typeof m.reply_to === "number" ? m.reply_to : null;
       assertNoSensitiveContent(content, "Message content");
       assertNoSensitiveContent(from, "Message sender");
       assertNoSensitiveContent(to, "Message recipient");
-      assertNoSensitiveOptionalText(channel, "Message channel");
       assertNoSensitiveOptionalText(projectId, "Message project");
       assertNoSensitiveContent(sessionId, "Message session");
       const values: unknown[] = [
@@ -2316,6 +2346,9 @@ async function handleV1(
           sessionId,
         });
       }
+      if (channel === WORK_STATUS_CHANNEL) {
+        workStatusItems.push({ index: i, channel, content });
+      }
     }
 
     const result = await client.transaction(async (tx) => {
@@ -2327,8 +2360,12 @@ async function handleV1(
       const channelProjects = new Map<string, string | null>();
       const channels = [...new Set(channelProjectParams.map((entry) => entry.channel))].sort();
       for (const channel of channels) {
+        // The work-status stream serializes writers on the channel row with an
+        // exclusive lock so concurrent bulk and single writes cannot both pass
+        // the dedupe gate; every other channel keeps the SHARE lock.
+        const lockKind = channel === WORK_STATUS_CHANNEL ? "FOR UPDATE" : "FOR SHARE";
         const channelRow = await tx.get<{ name: string; project_id: string | null }>(
-          "SELECT name, project_id FROM channels WHERE name = $1 FOR SHARE",
+          `SELECT name, project_id FROM channels WHERE name = $1 ${lockKind}`,
           [channel],
         );
         if (channelRow) channelProjects.set(channel, channelRow.project_id ?? null);
@@ -2342,6 +2379,28 @@ async function handleV1(
           );
         }
         params[entry.projectParamIndex] = channelProjectId;
+      }
+
+      // Work-status lifecycle stream: every item of this batch that targets
+      // the stream goes through the same write-time schema gate as the single
+      // message path, including the duplicate check against already-stored
+      // events and against events accepted earlier in this same batch.
+      if (workStatusItems.length > 0) {
+        const batchAcceptedByChannel = new Map<string, string[]>();
+        for (const item of workStatusItems) {
+          await enforceWorkStatusEventWriteAsync(WORK_STATUS_CHANNEL, item.content, async (taskId) => {
+            const stored = await tx.many<{ content: unknown }>(
+              `SELECT content FROM messages WHERE channel = $1 AND content LIKE $2 ORDER BY id DESC LIMIT 10`,
+              [item.channel, workStatusTaskLikePattern(taskId)],
+            );
+            const batchPrevious = batchAcceptedByChannel.get(item.channel) ?? [];
+            // Batch-accepted contents are newest-first: later items win.
+            return [...stored.map((row) => String(row.content)), ...batchPrevious.slice().reverse()];
+          });
+          const accepted = batchAcceptedByChannel.get(item.channel) ?? [];
+          accepted.push(item.content);
+          batchAcceptedByChannel.set(item.channel, accepted);
+        }
       }
 
       if (replyReferences.length > 0) {

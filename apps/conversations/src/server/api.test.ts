@@ -1369,8 +1369,8 @@ describe("conversations-serve", () => {
   test("POST /v1/messages enforces the work-status lifecycle schema at write time", async () => {
     const ws = (state: string, overrides: Record<string, string> = {}): string => {
       const fields = {
-        event_id: "78b747e6",
-        task_id: "3f8f212c",
+        event_id: "8f3c7b1e-4d5a-4f2e-9a6b-2c4d5e6f7a8b",
+        task_id: "3f8f212c-9b2d-4c3e-8f4a-5b6c7d8e9f01",
         scope: "todos:691ea5e4",
         agent: "agent-chief-engineering",
         session: "0f0c2a9e-1b2d-4c3e-8f4a-5b6c7d8e9f01",
@@ -1400,18 +1400,19 @@ describe("conversations-serve", () => {
       body: JSON.stringify({ from: "a", to: "b", content, channel: "work-status" }),
     });
 
-    const ok = await post(ws("START"));
+    const ok = await post(ws("START", { at: new Date(Date.now() - 60_000).toISOString() }));
     expect(ok.status).toBe(201);
     expect(((await ok.json()) as any).message.content).toStartWith("START event_id=");
 
-    // Same-state duplicate for the same task within the dedupe window: id
-    // 702003/702004 class (BLOCKED 24s apart), rejected at write time.
-    const dup = await post(ws("START", { event_id: "f6e009ee", at: "2026-08-14T19:13:33.000Z" }));
+    // Same-state duplicate for the same task within the dedupe window (the
+    // window is anchored on write time): id 702003/702004 class, rejected at
+    // write time.
+    const dup = await post(ws("START", { event_id: "f6e009ee-1a2b-3c4d-5e6f-7a8b9c0d1e2f", at: new Date(Date.now() - 30_000).toISOString() }));
     expect(dup.status).toBe(400);
-    expect(((await dup.json()) as any).error).toContain("duplicate START event for task 3f8f212c");
+    expect(((await dup.json()) as any).error).toContain("duplicate START event for task 3f8f212c-9b2d-4c3e-8f4a-5b6c7d8e9f01");
 
     // An entire JSON document as the first line (id=701771 class).
-    const json = await post(`{"event":"DONE","task_id":"3f8f212c","at":"2026-08-14T20:00:00.000Z"}`);
+    const json = await post(`{"event":"DONE","task_id":"3f8f212c-9b2d-4c3e-8f4a-5b6c7d8e9f01","at":"2026-08-14T20:00:00.000Z"}`);
     expect(json.status).toBe(400);
     expect(((await json.json()) as any).error).toContain("Work-status lifecycle schema violation");
 
@@ -1421,8 +1422,12 @@ describe("conversations-serve", () => {
     expect(((await badState.json()) as any).error).toContain("invalid state \"CONTINUE\"");
 
     // A distinct state for the same task is a real transition and lands.
-    const done = await post(ws("DONE", { at: "2026-08-14T20:00:00.000Z" }));
+    const done = await post(ws("DONE", { at: new Date(Date.now() - 20_000).toISOString() }));
     expect(done.status).toBe(201);
+
+    // Prose that merely starts with a lifecycle token is left alone.
+    const prose = await post("DONE — deployment complete");
+    expect(prose.status).toBe(201);
 
     // Non-work-status channels are untouched by the gate.
     const other = await fetch(`${base}/v1/messages`, {
@@ -1431,6 +1436,127 @@ describe("conversations-serve", () => {
       body: JSON.stringify({ from: "a", to: "b", content: ws("CONTINUE"), channel: "deploys" }),
     });
     expect(other.status).toBe(201);
+  });
+
+  test("POST /v1/messages/bulk enforces the work-status lifecycle schema and normalizes channel names", async () => {
+    const ws = (state: string, overrides: Record<string, string> = {}): string => {
+      const fields = {
+        event_id: "8f3c7b1e-4d5a-4f2e-9a6b-2c4d5e6f7a8b",
+        task_id: "3f8f212c-9b2d-4c3e-8f4a-5b6c7d8e9f01",
+        scope: "todos:691ea5e4",
+        agent: "agent-chief-engineering",
+        session: "0f0c2a9e-1b2d-4c3e-8f4a-5b6c7d8e9f01",
+        at: new Date(Date.now() - 60_000).toISOString(),
+        claim: "clm_123",
+        evidence: "-",
+        ...overrides,
+      };
+      return [state, ...Object.entries(fields).map(([key, value]) => `${key}=${value}`)].join(" ");
+    };
+    activeFakeClient!.__debug.seedChannel({
+      id: "chn_00000000000000000000000000000052",
+      name: "work-status",
+      description: null,
+      topic: null,
+      project_id: null,
+      created_by: "alice",
+      created_at: "2026-08-09T00:00:00.000Z",
+      archived_at: null,
+      metadata: null,
+      tags: null,
+    }, [], []);
+
+    const bulkPost = (items: unknown[]) => fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ messages: items }),
+    });
+
+    // A well-formed event lands (channel spelled differently on purpose — the
+    // bulk path normalizes it, so the gate cannot be dodged with a case
+    // variant of the stream name).
+    const ok = await bulkPost([{
+      uuid: "a1a2a3a4-0000-4000-8000-000000000001",
+      from: "a",
+      to: "b",
+      content: ws("START"),
+      channel: "Work-Status",
+    }]);
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as any).inserted).toBe(1);
+
+    // A duplicate of the same state for the same task is rejected.
+    const dup = await bulkPost([{
+      uuid: "a1a2a3a4-0000-4000-8000-000000000002",
+      from: "a",
+      to: "b",
+      content: ws("START", { event_id: "f6e009ee-1a2b-3c4d-5e6f-7a8b9c0d1e2f", at: new Date(Date.now() - 30_000).toISOString() }),
+      channel: "work-status",
+    }]);
+    expect(dup.status).toBe(400);
+    expect(((await dup.json()) as any).error).toContain("duplicate START event for task 3f8f212c-9b2d-4c3e-8f4a-5b6c7d8e9f01");
+
+    // A malformed event line is rejected in bulk too.
+    const malformed = await bulkPost([{
+      uuid: "a1a2a3a4-0000-4000-8000-000000000003",
+      from: "a",
+      to: "b",
+      content: `{"event":"DONE","task_id":"3f8f212c-9b2d-4c3e-8f4a-5b6c7d8e9f01"}`,
+      channel: "work-status",
+    }]);
+    expect(malformed.status).toBe(400);
+    expect(((await malformed.json()) as any).error).toContain("Work-status lifecycle schema violation");
+
+    // A distinct state for the same task is a real transition and lands.
+    const done = await bulkPost([{
+      uuid: "a1a2a3a4-0000-4000-8000-000000000004",
+      from: "a",
+      to: "b",
+      content: ws("DONE", { at: new Date(Date.now() - 20_000).toISOString() }),
+      channel: "work-status",
+    }]);
+    expect(done.status).toBe(200);
+    expect(((await done.json()) as any).inserted).toBe(1);
+  });
+
+  test("PATCH /v1/channels refuses to rename any channel to or from work-status", async () => {
+    activeFakeClient!.__debug.seedChannel({
+      id: "chn_00000000000000000000000000000053",
+      name: "work-status",
+      description: null,
+      topic: null,
+      project_id: null,
+      created_by: "alice",
+      created_at: "2026-08-09T00:00:00.000Z",
+      archived_at: null,
+      metadata: null,
+      tags: null,
+    }, [], []);
+    const created = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ name: "ops-252-rename", created_by: "alice" }),
+    });
+    expect(created.status).toBe(201);
+
+    const rename = (target: string) => fetch(`${base}/v1/channels/ops-252-rename`, {
+      method: "PATCH",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ name: target }),
+    });
+
+    const intoStream = await rename("work-status");
+    expect(intoStream.status).toBe(400);
+    expect(((await intoStream.json()) as any).error).toContain("reserved lifecycle stream");
+
+    // Renaming the stream itself away is refused too.
+    const outOfStream = await fetch(`${base}/v1/channels/work-status`, {
+      method: "PATCH",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ name: "lifecycle" }),
+    });
+    expect(outOfStream.status).toBe(400);
+    expect(((await outOfStream.json()) as any).error).toContain("reserved lifecycle stream");
   });
 
   test("POST /v1/messages persists metadata for direct and channel UUID readback", async () => {
