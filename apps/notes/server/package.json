@@ -1,0 +1,37 @@
+{
+  "name": "notes-server",
+  "version": "0.1.0",
+  "description": "Self-hosted Hasna Notes sync server \u2014 Hono + SQLite (bun:sqlite) reference implementation of the personalnotes/v1 dialect.",
+  "type": "module",
+  "bin": {
+    "notes-server": "./index.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "env.mjs",
+    "app.mjs",
+    "auth.mjs",
+    "db.mjs",
+    "http.mjs",
+    "notes.mjs",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "bun index.mjs",
+    "test": "bun test"
+  },
+  "keywords": [
+    "notes",
+    "sync",
+    "self-hosted",
+    "sqlite",
+    "hono"
+  ],
+  "license": "MIT",
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "dependencies": {
+    "hono": "^4.6.0"
+  }
+}
