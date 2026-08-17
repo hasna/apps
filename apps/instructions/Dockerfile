@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
-# @hasna/instructions server image — ARM64 / Bun.
-# Default CMD runs instructions-serve (postgresql backend when
-# HASNA_INSTRUCTIONS_DATABASE_URL is set: the serve process reads/writes the
-# shared Postgres directly with @hasna/contracts API-key auth). The ECS
-# one-shot migration task overrides the command with `... migrate`.
+# @hasna/instructions server — ARM64 / Bun.
+# Default CMD runs instructions-serve against the Postgres backend (the serve
+# process reads/writes RDS Postgres directly, selected by the presence of
+# HASNA_INSTRUCTIONS_DATABASE_URL). The ECS one-shot migration task overrides
+# the command with `... migrate`.
 
 FROM --platform=linux/arm64 oven/bun:1 AS deps
 WORKDIR /app
@@ -34,6 +34,6 @@ COPY package.json bun.lock ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 EXPOSE 8080
-# Fail-closed: instructions-serve /v1 refuses to serve without a DSN +
+# Fail-closed: instructions-serve /v1 refuses to serve without a cloud DSN +
 # signing secret (503), and /ready reports DB reachability — no silent stub.
 CMD ["bun", "dist/server/index.js"]
