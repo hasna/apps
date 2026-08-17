@@ -61,14 +61,18 @@ addRoute("GET", "/api/activity", (_req: Request, url: URL) => {
 });
 
 // GET /api/memories/stale — memories not accessed recently
+// ?pinned=true restricts the scan to pinned rows; ?pinned=false or absent
+// keeps the historical unpinned-only behavior.
 addRoute("GET", "/api/memories/stale", (_req: Request, url: URL) => {
   const q = getSearchParams(url);
   const days = q["days"] ? parseInt(q["days"], 10) : undefined;
   const limit = Math.min(q["limit"] ? parseInt(q["limit"], 10) : 20, 100);
+  const pinned = q["pinned"] === "true" ? true : q["pinned"] === "false" ? false : undefined;
   const memories = getStaleMemories({
     days,
     project_id: q["project_id"],
     agent_id: q["agent_id"],
+    pinned,
     limit,
     offset: q["offset"] ? parseInt(q["offset"], 10) : undefined,
   }, getDatabase());

@@ -85,11 +85,12 @@ export function registerMemoryLifecycleTools(server: McpServer): void {
 
   server.tool(
     "memory_stale",
-    "Find memories not accessed recently. Useful for cleanup or review.",
+    "Find memories not accessed recently. Useful for cleanup or review. Pass pinned: true to scan the pinned population, so never-accessed pins can be flagged for curation.",
     {
       days: z.coerce.number().optional(),
       project_id: z.string().optional(),
       agent_id: z.string().optional(),
+      pinned: z.boolean().optional(),
       limit: z.coerce.number().optional(),
     },
     async (args) => {
@@ -99,6 +100,7 @@ export function registerMemoryLifecycleTools(server: McpServer): void {
           days,
           project_id: args.project_id,
           agent_id: args.agent_id,
+          pinned: args.pinned,
           limit: args.limit || 20,
         });
 

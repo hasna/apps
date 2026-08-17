@@ -117,7 +117,7 @@ objects rather than the compact display.
 | --- | --- | --- |
 | `stats` | Active-memory counts and breakdowns | `--format compact|json|csv|yaml` |
 | `report` | Activity and top-memory summary | `--days`, `--project`, `--markdown`, `--json` |
-| `stale` | Memories not accessed recently | `--days`, `--project`, `--agent`, paging, `--format`, `--verbose` |
+| `stale` | Memories not accessed recently | `--days`, `--project`, `--agent`, `--pinned` (scan pinned rows), paging, `--format`, `--verbose` |
 | `history` | Recently accessed memories | paging, `--verbose` |
 | `context [query]` | Prompt-ready relevant memory block | `--max-tokens`, `--min-importance`, `--scope`, `--categories`, `--agent`, `--project`, `--machine` |
 | `clean` | Remove expired memories and enforce configured retention | — |

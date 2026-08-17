@@ -31,6 +31,7 @@ export function registerStaleCommand(program: Command): void {
     .option("--offset <n>", "Offset for pagination", parseInt)
     .option("--cursor <n>", "Cursor offset for the next page", parseInt)
     .option("--format <fmt>", "Output format: compact (default), json")
+    .option("--pinned", "Scan the pinned population instead of the unpinned one — flags never-accessed pins for curation")
     .option("--verbose", "Show wider memory snippets")
     .action((opts) => {
       try {
@@ -55,6 +56,7 @@ export function registerStaleCommand(program: Command): void {
           days,
           project_id: projectId,
           agent_id: agentId,
+          pinned: opts.pinned ? true : undefined,
           limit: isJson ? limit : limit + 1,
           offset,
         });
@@ -62,22 +64,25 @@ export function registerStaleCommand(program: Command): void {
         const displayRows = hasMore ? rows.slice(0, limit) : rows;
 
         if (fmt === "json") {
-          outputJson({ stale_count: rows.length, threshold_days: days, memories: rows });
+          outputJson({ stale_count: rows.length, threshold_days: days, pinned_only: !!opts.pinned, memories: rows });
           return;
         }
 
         if (displayRows.length === 0) {
-          console.log(chalk.yellow(`No stale memories found (threshold: ${days} days).`));
+          const population = opts.pinned ? "pinned " : "";
+          console.log(chalk.yellow(`No ${population}stale memories found (threshold: ${days} days).`));
           return;
         }
 
-        console.log(chalk.bold(`\n  ${displayRows.length}${hasMore ? "+" : ""} stale memor${displayRows.length === 1 ? "y" : "ies"} (not accessed in ${days}+ days):`));
+        const population = opts.pinned ? "pinned " : "";
+        console.log(chalk.bold(`\n  ${displayRows.length}${hasMore ? "+" : ""} stale ${population}memor${displayRows.length === 1 ? "y" : "ies"} (not accessed in ${days}+ days):`));
         for (const row of displayRows) {
           const accessed = row.accessed_at
             ? chalk.dim(row.accessed_at.split("T")[0])
             : chalk.red("never");
+          const pin = row.pinned ? chalk.red(" *") : "";
           const value = truncateText(row.value, opts.verbose ? 120 : 64);
-          console.log(`  ${chalk.red(String(row.importance))} ${colorScope(row.scope as never)}/${colorCategory(row.category as never)} ${chalk.bold(row.key)} = ${value} ${chalk.dim(`(${accessed}, ${row.access_count} accesses)`)}`);
+          console.log(`  ${chalk.red(String(row.importance))} ${colorScope(row.scope as never)}/${colorCategory(row.category as never)} ${chalk.bold(row.key)} = ${value} ${chalk.dim(`(${accessed}, ${row.access_count} accesses)`)}${pin}`);
         }
         printPageHint({
           shown: displayRows.length,

@@ -247,6 +247,10 @@ export interface StaleFilter {
   days?: number;
   project_id?: string;
   agent_id?: string;
+  /** Restrict the scan to one pinned state. true = pinned rows only,
+   *  false = unpinned rows only. Absent keeps the historical default,
+   *  which excludes pinned rows entirely. */
+  pinned?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -261,6 +265,7 @@ export interface StaleMemory {
   accessed_at: string | null;
   access_count: number;
   created_at?: string;
+  pinned?: number;
 }
 
 export function getStaleMemories(filter: StaleFilter = {}, db?: Database): StaleMemory[] {
@@ -268,18 +273,24 @@ export function getStaleMemories(filter: StaleFilter = {}, db?: Database): Stale
   const limit = filter.limit ?? 20;
   const offset = filter.offset ?? 0;
   if (!db && isApiMode()) {
-    const q = toQuery({ days, project_id: filter.project_id, agent_id: filter.agent_id, limit, offset });
+    const q = toQuery({ days, project_id: filter.project_id, agent_id: filter.agent_id, pinned: filter.pinned, limit, offset });
     const { data } = apiJson<{ memories: StaleMemory[] }>("GET", `/memories/stale${q}`);
     return data?.memories ?? [];
   }
   const d = db || getDatabase();
   const cutoffDate = new Date(Date.now() - days * 86400000).toISOString();
-  const conds = ["status = 'active'", "(accessed_at IS NULL OR accessed_at < ?)", "pinned = 0"];
+  // Pinned rows are excluded by default (historical contract); a caller that
+  // explicitly asks for the pinned population (pinned: true) gets exactly that
+  // population, so never-accessed pins become flaggable for curation.
+  const pinnedCond = filter.pinned === undefined || filter.pinned === false
+    ? "pinned = 0"
+    : "pinned = 1";
+  const conds = ["status = 'active'", "(accessed_at IS NULL OR accessed_at < ?)", pinnedCond];
   const params: (string | number)[] = [cutoffDate];
   if (filter.project_id) { conds.push("project_id = ?"); params.push(filter.project_id); }
   if (filter.agent_id) { conds.push("agent_id = ?"); params.push(filter.agent_id); }
 
-  let sql = `SELECT id, key, value, importance, scope, category, accessed_at, access_count, created_at FROM memories WHERE ${conds.join(" AND ")} ORDER BY COALESCE(accessed_at, created_at) ASC LIMIT ?`;
+  let sql = `SELECT id, key, value, importance, scope, category, accessed_at, access_count, created_at, pinned FROM memories WHERE ${conds.join(" AND ")} ORDER BY COALESCE(accessed_at, created_at) ASC LIMIT ?`;
   params.push(limit);
   if (offset) { sql += " OFFSET ?"; params.push(offset); }
 

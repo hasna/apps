@@ -782,7 +782,7 @@ export class MementosClient {
     return this.get("/api/report", options as Record<string, string | number | boolean | undefined>);
   }
 
-  getStaleMemories(options?: { days?: number; project_id?: string; agent_id?: string; limit?: number }): Promise<{ memories: Memory[]; count: number; days: number }> {
+  getStaleMemories(options?: { days?: number; project_id?: string; agent_id?: string; pinned?: boolean; limit?: number }): Promise<{ memories: Memory[]; count: number; days: number }> {
     return this.get("/api/memories/stale", options as Record<string, string | number | boolean | undefined>);
   }
 

@@ -116,7 +116,7 @@ the handler fetches the current version before applying the patch.
 | `POST` | `/v1/memories/search/bm25` | BM25/FTS search |
 | `POST` | `/v1/memories/recall/deep` | Multi-agent deep recall |
 | `GET` | `/v1/memories/stats` | Aggregate active-memory statistics |
-| `GET` | `/v1/memories/stale` | Stale-memory report |
+| `GET` | `/v1/memories/stale` | Stale-memory report (`pinned=true` scans the pinned population) |
 | `GET` | `/v1/memories/history` | Recently accessed memories |
 | `GET` | `/v1/memories/health` | Memory health summary |
 | `GET` | `/v1/activity` | Daily creation activity, up to 365 days |
