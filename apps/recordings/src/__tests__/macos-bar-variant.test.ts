@@ -23,6 +23,31 @@ describe("macOS bar-only variant source wiring", () => {
     expect(source).toContain("declaresMainWindow: Bool { !isHelper && !isRuntimeSmoke && !isBarOnly }");
   });
 
+  test("launch plan defaults bar-only at compile time when the bar define is set", () => {
+    // Regression for the review finding that no real launch passed --bar-only: the bar
+    // build must be bar-only by construction, so the workspace window can never appear
+    // through the installer relaunch, a manual `open`, or a LaunchAgent.
+    const source = readRepositoryFile(
+      join(nativeRoot, "RecordingsLib", "PermissionRequestLaunchPlan.swift"),
+    );
+    expect(source).toContain("#if RECORDINGS_BAR_ONLY");
+    expect(source).toContain("isBarOnly = true");
+    expect(source).toContain("#else");
+    expect(source).toContain("#endif");
+    // The comment must record why the compile-time default exists.
+    expect(source).toContain("Bar builds are bar-only by construction");
+  });
+
+  test("bar launch plan tests cover the compile-time default in both build configurations", () => {
+    const tests = readRepositoryFile(
+      join(nativeRoot, "RecordingsTests", "BarOnlyLaunchPlanTests.swift"),
+    );
+    expect(tests).toContain("#if RECORDINGS_BAR_ONLY");
+    expect(tests).toContain("#expect(plan.isBarOnly)");
+    expect(tests).toContain("#expect(!plan.declaresMainWindow)");
+    expect(tests).toContain("bareLaunchFollowsBuildVariant");
+  });
+
   test("app state gates window creation, reopen, and smoke on declaresMainWindow", () => {
     const source = readRepositoryFile(
       join(nativeRoot, "App", "RecordingsApp.swift"),
@@ -77,6 +102,12 @@ describe("macOS bar-only variant source wiring", () => {
     expect(source).toContain("INSTALL_VARIANT=\"${RECORDINGS_VARIANT:-}\"");
     expect(source).toContain("Install variant must be empty or bar");
     expect(source).toContain('${INSTALL_VARIANT:+"--variant"} ${INSTALL_VARIANT:+"$INSTALL_VARIANT"}');
+  });
+
+  test("installer relaunches a bar install with --bar-only", () => {
+    const source = readRepositoryFile("scripts/install_macos_app.sh");
+    expect(source).toContain('"$OPEN_EXECUTABLE" -n "$APP_DEST" --args --bar-only');
+    expect(source).toContain('[ "$INSTALL_VARIANT" = "bar" ]');
   });
 
   test("CLI app install exposes --variant and forwards it to the installer", () => {

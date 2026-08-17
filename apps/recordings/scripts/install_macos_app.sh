@@ -2059,7 +2059,14 @@ STOPPED_RUNNING_APP=0
 if [ "$LAUNCH_APP" -eq 1 ] || [ "$was_running" -eq 1 ]; then
   EXPECTED_EXECUTABLE="$APP_DEST/Contents/MacOS/Recordings"
   RUNNING_EXECUTABLES+=("$EXPECTED_EXECUTABLE")
-  "$OPEN_EXECUTABLE" -n "$APP_DEST"
+  # Bar installs relaunch with --bar-only even though the bar build defaults to bar-only at
+  # compile time: the argument keeps the launch record self-describing and is harmless for
+  # a build that already consumes -DRECORDINGS_BAR_ONLY.
+  if [ "$INSTALL_VARIANT" = "bar" ]; then
+    "$OPEN_EXECUTABLE" -n "$APP_DEST" --args --bar-only
+  else
+    "$OPEN_EXECUTABLE" -n "$APP_DEST"
+  fi
   attempts=$((LAUNCH_TIMEOUT_SECONDS * 10))
   launched_pid=""
   launched_start_identity=""

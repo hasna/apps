@@ -55,13 +55,34 @@ struct BarOnlyLaunchPlanTests {
         #expect(plan.requestsAccessibilityPrompt)
     }
 
-    @Test("regular launch is unchanged: main window declared, bar-only false")
-    func regularLaunchUnchanged() {
+    @Test("bare launch follows the build variant: bar builds are bar-only by construction")
+    func bareLaunchFollowsBuildVariant() {
+        // Regression for the review finding that a real launch never passed --bar-only: the
+        // bar build must be bar-only at compile time (build.sh passes -Xswiftc
+        // -DRECORDINGS_BAR_ONLY for RECORDINGS_VARIANT=bar), so no launch path can re-create
+        // the workspace window. A full build keeps the argument-driven behavior.
         let plan = PermissionRequestLaunchPlan(arguments: ["Recordings"])
 
-        #expect(!plan.isBarOnly)
         #expect(plan.installsGlobalHandlers)
+        #expect(plan.declaresMenuBar)
+        #if RECORDINGS_BAR_ONLY
+        #expect(plan.isBarOnly)
+        #expect(!plan.declaresMainWindow)
+        #expect(!plan.terminatesAfterHandling)
+        #expect(!plan.requestsAccessibilityPrompt)
+        #else
+        #expect(!plan.isBarOnly)
         #expect(plan.declaresMainWindow)
+        #endif
+    }
+
+    @Test("bar build with explicit --bar-only is identical to the bare bar launch")
+    func barBuildExplicitArgumentIsConsistent() {
+        let plan = PermissionRequestLaunchPlan(arguments: ["Recordings", "--bar-only"])
+
+        #expect(plan.isBarOnly)
+        #expect(plan.installsGlobalHandlers)
+        #expect(!plan.declaresMainWindow)
         #expect(plan.declaresMenuBar)
     }
 }

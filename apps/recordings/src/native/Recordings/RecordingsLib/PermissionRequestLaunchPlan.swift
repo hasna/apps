@@ -25,7 +25,19 @@ public struct PermissionRequestLaunchPlan: Sendable, Equatable {
     public init(arguments: [String]) {
         isHelper = arguments.contains("--request-permissions")
         opensPermissionSettings = isHelper && arguments.contains("--open-permission-settings")
+#if RECORDINGS_BAR_ONLY
+        // Bar builds are bar-only by construction. The compile-time define (build.sh passes
+        // -Xswiftc -DRECORDINGS_BAR_ONLY for RECORDINGS_VARIANT=bar) is the guarantee that
+        // the workspace window never exists, on every launch path: the installer relaunch,
+        // a manual `open`, or a LaunchAgent. Relying on the launch argument alone left the
+        // installed bar binary behaviorally identical to the full app, because no real
+        // launch path passed `--bar-only` and only the runtime smoke did. `isHelper` and
+        // `isRuntimeSmoke` still win the gating above, so the permission helper and the
+        // runtime smoke run unchanged on a bar build.
+        isBarOnly = true
+#else
         isBarOnly = arguments.contains("--bar-only")
+#endif
         runtimeSmokeMode = Self.optionValue("--runtime-smoke", arguments: arguments)
         runtimeSmokeOutputPath = Self.optionValue("--runtime-smoke-output", arguments: arguments)
         runtimeSmokeAcknowledgementPath = Self.optionValue(
