@@ -154,7 +154,10 @@ export function workStatusEnvelopeViolation(firstLine: string): string | null {
   if (!scope) {
     return "scope is empty; use the <kind:stable-id> form (e.g. todos:open-todos)";
   }
-  if (!scope.includes(":")) {
+  // The <kind:stable-id> form (e.g. todos:open-todos): both halves must be
+  // non-empty, so a bare ":" or a half-empty "kind:" / ":stable-id" is
+  // rejected, as is anything with whitespace or other separator characters.
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*$/.test(scope)) {
     return `scope "${scope}" is not the <kind:stable-id> form (e.g. todos:open-todos)`;
   }
 

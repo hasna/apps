@@ -1076,6 +1076,7 @@ export function startApiServer(options: StartApiServerOptions = {}) {
 async function assertNoDuplicateWorkStatusTransitionPg(
   tx: TypedQueryClient,
   content: string,
+  eventCreatedAtMs?: number,
 ): Promise<void> {
   const event = parseWorkStatusEvent(firstLineOf(content));
   if (event === null) return; // envelope already validated before the transaction
@@ -1086,7 +1087,12 @@ async function assertNoDuplicateWorkStatusTransitionPg(
   // and observes the inserted event. Cross-task writers never contend; a
   // hashtext collision only over-serializes two unrelated tasks.
   await tx.many("SELECT pg_advisory_xact_lock(hashtext($1))", [event.task_id]);
-  const cutoff = new Date(Date.now() - WORK_STATUS_DUPLICATE_WINDOW_MS).toISOString();
+  // The dedupe window is measured from the event's OWN timestamp: a single
+  // send writes now, but a bulk backfill preserves the original created_at,
+  // and a historical event must be compared against the events around its own
+  // time — not against the present.
+  const eventAtMs = eventCreatedAtMs ?? Date.now();
+  const cutoff = new Date(eventAtMs - WORK_STATUS_DUPLICATE_WINDOW_MS).toISOString();
   const rows = await tx.many<{ content: string }>(
     `SELECT content FROM messages
      WHERE channel = $1 AND reply_to IS NULL AND created_at >= $2
@@ -2305,7 +2311,11 @@ async function handleV1(
     }> = [];
     // Work-status items collected during the loop; their duplicate-transition
     // guard runs inside the transaction (see the loop and the INSERT below).
-    const workStatusItems: Array<{ content: string }> = [];
+    // `createdAtMs` is the item's effective message timestamp (the preserved
+    // original created_at when present, otherwise NOW — the same fallback the
+    // INSERT applies); the dedupe window is measured from it, so historical
+    // events are not compared against the present.
+    const workStatusItems: Array<{ uuid: string; content: string; createdAtMs: number }> = [];
     const projectIdx = cols.indexOf("project_id");
     for (let i = 0; i < items.length; i++) {
       const raw = items[i];
@@ -2323,9 +2333,15 @@ async function handleV1(
       let priority = str(m.priority)?.toLowerCase() ?? "normal";
       if (!VALID_PRIORITIES.includes(priority)) priority = "normal";
       const sessionId = str(m.session_id) ?? `api:${from}`;
+      // The single-send path normalizes the channel before the work-status
+      // check; the bulk path must do the same or an alias such as
+      // "#WORK-STATUS" would bypass the guard and land under a noncanonical
+      // name. Work-status items are canonicalized for storage as well.
       const channel = str(m.channel);
+      const normalizedChannel = channel ? normalizeChannelName(channel) : null;
       const projectId = str(m.project_id);
       const replyTo = typeof m.reply_to === "number" ? m.reply_to : null;
+      const isWorkStatusNonReply = !replyTo && normalizedChannel === WORK_STATUS_CHANNEL;
       // Work-status lifecycle events must not reach the stream through the
       // bulk backfill path either: it is a write surface with the same
       // conversations:write scope as the single-send path. Same predicates as
@@ -2334,7 +2350,7 @@ async function handleV1(
       // duplicate-transition guard runs inside the transaction, before the
       // INSERT. The redaction mirrors the single-send rejection so a sensitive
       // caller value cannot be reflected into the API error.
-      if (!replyTo && channel === WORK_STATUS_CHANNEL) {
+      if (isWorkStatusNonReply) {
         const violation = workStatusEnvelopeViolation(firstLineOf(content));
         if (violation !== null) {
           return json({ error: `messages[${i}]: work-status lifecycle event rejected: ${redactSensitiveText(violation)}` }, 400);
@@ -2342,23 +2358,32 @@ async function handleV1(
         // In-request dedupe: every item in this request is inserted by one
         // multi-row INSERT after the transaction guard, so the guard cannot
         // observe this request's own items as stream rows. Run the same
-        // decision logic against the items already collected (newest first),
-        // so a same-state pair inside one request is refused like any other
-        // duplicate.
+        // decision logic against the items already collected — windowed by
+        // each item's own preserved timestamp, so a same-state pair written
+        // more than the dedupe window apart is a real historical sequence and
+        // is not refused.
         const event = parseWorkStatusEvent(firstLineOf(content))!;
-        const inRequestViolation = duplicateWorkStatusTransitionViolation(
-          workStatusItems.map((item) => item.content).reverse(),
-          event,
-        );
+        const createdAtRaw = str(m.created_at);
+        const createdAtMs = createdAtRaw
+          ? (Number.isFinite(Date.parse(createdAtRaw)) ? Date.parse(createdAtRaw) : Date.now())
+          : Date.now();
+        const inRequestWindow = workStatusItems
+          .filter((prior) => prior.createdAtMs <= createdAtMs && prior.createdAtMs >= createdAtMs - WORK_STATUS_DUPLICATE_WINDOW_MS)
+          .map((prior) => prior.content)
+          .reverse();
+        const inRequestViolation = duplicateWorkStatusTransitionViolation(inRequestWindow, event);
         if (inRequestViolation !== null) {
           return json({ error: `messages[${i}]: ${redactSensitiveText(inRequestViolation)}` }, 400);
         }
-        workStatusItems.push({ content });
+        workStatusItems.push({ uuid, content, createdAtMs });
       }
+      // Canonicalize the stored channel for work-status items (see above);
+      // every other channel keeps the raw backfill value.
+      const storedChannel = isWorkStatusNonReply ? WORK_STATUS_CHANNEL : channel;
       assertNoSensitiveContent(content, "Message content");
       assertNoSensitiveContent(from, "Message sender");
       assertNoSensitiveContent(to, "Message recipient");
-      assertNoSensitiveOptionalText(channel, "Message channel");
+      assertNoSensitiveOptionalText(storedChannel, "Message channel");
       assertNoSensitiveOptionalText(projectId, "Message project");
       assertNoSensitiveContent(sessionId, "Message session");
       const values: unknown[] = [
@@ -2366,7 +2391,7 @@ async function handleV1(
         sessionId,
         from,
         to,
-        channel ?? null,
+        storedChannel ?? null,
         projectId ?? null,
         content,
         priority,
@@ -2388,9 +2413,9 @@ async function handleV1(
       );
       rowsSql.push(`(${placeholders.join(", ")})`);
       params.push(...values);
-      if (channel) {
+      if (storedChannel) {
         channelProjectParams.push({
-          channel,
+          channel: storedChannel,
           requestedProjectId: projectId ?? null,
           projectParamIndex: base + projectIdx,
         });
@@ -2472,8 +2497,20 @@ async function handleV1(
       // bulk writers for the same task; rows inserted by earlier items in this
       // same transaction are visible to the guard's recent-events read, so two
       // same-state items in one request refuse the second as well.
-      for (const workStatusItem of workStatusItems) {
-        await assertNoDuplicateWorkStatusTransitionPg(tx, workStatusItem.content);
+      if (workStatusItems.length > 0) {
+        // Replays preserve the endpoint's documented idempotency: an item
+        // whose uuid already exists is skipped by ON CONFLICT (uuid) DO
+        // NOTHING, so it must not be refused as a duplicate transition here —
+        // it is the same event, re-sent, not a second event.
+        const existingRows = await tx.many<{ uuid: string }>(
+          "SELECT uuid FROM messages WHERE uuid = ANY($1::text[])",
+          [[...new Set(workStatusItems.map((item) => item.uuid))]],
+        );
+        const existingUuids = new Set(existingRows.map((row) => row.uuid));
+        for (const workStatusItem of workStatusItems) {
+          if (existingUuids.has(workStatusItem.uuid)) continue;
+          await assertNoDuplicateWorkStatusTransitionPg(tx, workStatusItem.content, workStatusItem.createdAtMs);
+        }
       }
 
       return tx.query<{ id: number; from_agent: string; channel: string | null; content: string }>(

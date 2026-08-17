@@ -3385,6 +3385,85 @@ describe("POST /v1/messages work-status lifecycle guards (hosted path)", () => {
     expect(workStatusMessageCount()).toBe(before + 2);
   });
 
+  test("replaying a bulk work-status event with the same uuid is an idempotent skip, not a duplicate error", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const taskId = "b4345678-1234-4234-8234-123456789abc";
+    const item = {
+      uuid: "bulk-ws-replay-1",
+      from: "test-agent",
+      to: "test-agent",
+      channel: "work-status",
+      content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001"),
+    };
+    const first = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [item] }),
+    });
+    expect(first.status).toBe(200);
+    const replay = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [item] }),
+    });
+    expect(replay.status).toBe(200);
+    const body = (await replay.json()) as any;
+    expect(body.skipped).toBe(1);
+  });
+
+  test("a same-state bulk pair outside the dedupe window is a historical sequence and is accepted", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const before = workStatusMessageCount();
+    const taskId = "c5345678-1234-4234-8234-123456789abc";
+    const now = Date.now();
+    const older = new Date(now - 10 * 60_000).toISOString();
+    const newer = new Date(now - 8 * 60_000).toISOString();
+    const response = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-hist-1", from: "test-agent", to: "test-agent", channel: "work-status", created_at: older, content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001") },
+          { uuid: "bulk-ws-hist-2", from: "test-agent", to: "test-agent", channel: "work-status", created_at: newer, content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000002") },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(workStatusMessageCount()).toBe(before + 2);
+  });
+
+  test("a bulk channel alias cannot bypass the work-status guard", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const before = workStatusMessageCount();
+    // Malformed envelope through the alias is refused.
+    const malformed = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-alias-1", from: "test-agent", to: "test-agent", channel: "#WORK-STATUS", content: "not an envelope" },
+        ],
+      }),
+    });
+    expect(malformed.status).toBe(400);
+    expect(((await malformed.json()) as any).error).toContain("work-status lifecycle event rejected");
+    expect(workStatusMessageCount()).toBe(before);
+    // A valid envelope through the alias is canonicalized on storage.
+    const taskId = "d6345678-1234-4234-8234-123456789abc";
+    const valid = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-alias-2", from: "test-agent", to: "test-agent", channel: "#WORK-STATUS", content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001") },
+        ],
+      }),
+    });
+    expect(valid.status).toBe(200);
+    const stored = activeFakeClient!.__debug.messages.find((row: any) => row.uuid === "bulk-ws-alias-2");
+    expect(stored.channel).toBe("work-status");
+  });
+
   // (e) — the dedupe guard must serialize same-task writers: the advisory lock
   // is taken before the recent-events read, so a concurrent same-state pair
   // cannot both pass the read.
