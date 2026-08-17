@@ -93,7 +93,11 @@ final class RecordingsAppState: ObservableObject {
     func openRecordings() {
         // Bar-only launch has no workspace window; the guard is what keeps the 1180x760
         // NSWindow from ever existing, even if a caller reaches this path by accident.
-        guard declaresMainWindow else { return }
+        // Keyed on barOnly, not declaresMainWindow: the window may exist whenever the app
+        // is not bar-only, and the full-build runtime smoke exercises openRecordings() to
+        // prove it. declaresMainWindow additionally excludes runtime-smoke mode so the
+        // init auto-open and the reopen handler stay smoke-immune.
+        guard !barOnly else { return }
         if let store {
             showWindow(contentView: NSHostingView(rootView: ContentView(store: store)))
         } else if runtimeSmokeMode == "normal" {
@@ -189,7 +193,7 @@ final class RecordingsAppState: ObservableObject {
         runtimeSmokeProbe.completed = { [weak self, weak runtimeSmokeProbe] in
             guard let self, let runtimeSmokeProbe else { return }
             let accessibility = RuntimeSmokeAccessibilitySnapshot.processMenuBarExtras()
-            if !self.declaresMainWindow {
+            if self.barOnly {
                 // Bar-variant smoke: no workspace window exists, so there is nothing to
                 // exercise or settle; report the window-less evidence directly.
                 self.finishRuntimeSmoke(

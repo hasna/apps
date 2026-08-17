@@ -38,6 +38,34 @@ struct BarOnlyLaunchPlanTests {
         #expect(!plan.requestsAccessibilityPrompt)
     }
 
+    @Test("full-build normal runtime smoke stays non-bar so the smoke keeps exercising the window")
+    func fullBuildRuntimeSmokePlan() {
+        // Regression for the review finding that RecordingsAppState keyed the smoke window
+        // path on declaresMainWindow, which excludes runtime-smoke mode: every normal smoke
+        // of the FULL build finished window-less and the retained-window assertions failed.
+        // The App layer therefore keys window creation on isBarOnly, not declaresMainWindow,
+        // and this plan-level invariant is what makes that safe: a full build's smoke is
+        // never bar-only, while a bar build's smoke always is.
+        let plan = PermissionRequestLaunchPlan(arguments: [
+            "Recordings",
+            "--runtime-smoke", "normal",
+            "--runtime-smoke-output", "/tmp/full-result.json",
+            "--runtime-smoke-ack", "/tmp/full-result.ack",
+            "--runtime-smoke-completion", "/tmp/full-result.completion.json",
+        ])
+
+        #expect(plan.isRuntimeSmoke)
+        #if RECORDINGS_BAR_ONLY
+        #expect(plan.isBarOnly)
+        #else
+        #expect(!plan.isBarOnly)
+        #endif
+        #expect(!plan.declaresMainWindow)
+        #expect(plan.declaresMenuBar)
+        #expect(!plan.installsGlobalHandlers)
+        #expect(!plan.requestsAccessibilityPrompt)
+    }
+
     @Test("permission-helper gating wins over the bar-only flag")
     func barOnlyHelperPlan() {
         let plan = PermissionRequestLaunchPlan(arguments: [

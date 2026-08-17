@@ -48,13 +48,24 @@ describe("macOS bar-only variant source wiring", () => {
     expect(tests).toContain("bareLaunchFollowsBuildVariant");
   });
 
-  test("app state gates window creation, reopen, and smoke on declaresMainWindow", () => {
+  test("app state gates window creation and the smoke window path on barOnly, not declaresMainWindow", () => {
+    // Regression for the review finding that the smoke branch keyed on declaresMainWindow,
+    // which excludes runtime-smoke mode, so the FULL-build normal smoke finished windowless
+    // (windowCreationCount===0) and its retained-window assertions always failed. Window
+    // creation keys on barOnly: the full-build smoke keeps exercising the workspace window,
+    // and only the bar variant finishes the smoke window-less.
     const source = readRepositoryFile(
       join(nativeRoot, "App", "RecordingsApp.swift"),
     );
-    expect(source).toContain("guard declaresMainWindow else { return }");
+    expect(source).toContain("guard !barOnly else { return }");
+    expect(source).not.toContain("guard declaresMainWindow else { return }");
+    expect(source).toContain("if self.barOnly {");
+    expect(source).not.toContain("if !self.declaresMainWindow");
+    // The init auto-open and the reopen handler stay keyed on declaresMainWindow (which
+    // excludes helper and runtime-smoke launches) so the smoke controls window creation
+    // deterministically.
     expect(source).toContain("guard let state, state.declaresMainWindow else { return false }");
-    expect(source).toContain("if !self.declaresMainWindow");
+    expect(source).toContain("if plan.declaresMainWindow");
     expect(source).toContain("barOnly: state.barOnly");
   });
 
