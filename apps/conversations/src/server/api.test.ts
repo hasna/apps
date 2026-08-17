@@ -3308,4 +3308,95 @@ describe("POST /v1/messages work-status lifecycle guards (hosted path)", () => {
     const second = await postWorkStatus(envelope("START", secondTask, "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"));
     expect(second.status).toBe(201);
   });
+
+  // (c) — error reflection. The envelope validator echoes caller-controlled
+  // field values into the violation reason, and the hosted handler returns it
+  // before the content-safety scan runs; a sensitive value placed in an
+  // envelope field must not be reflected into the API error, which clients
+  // throw and logs transcribe.
+  test("envelope violation errors do not reflect sensitive caller values on the hosted path", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    // Synthetic detector-positive value (slack-shaped): matches the content
+    // safety redaction patterns, not the staged-secrets scanner's detectors.
+    const leak = "xoxb-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const response = await postWorkStatus(
+      `START event_id=${leak} task_id=${OTHER_TASK_ID} scope=todos:open-todos agent=test-agent ` +
+      `session=${SESSION_ID} at=2026-08-17T10:00:00Z claim=${CLAIM_ID} evidence=-`,
+    );
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as any;
+    expect(body.error).toContain("work-status lifecycle event rejected");
+    expect(body.error).not.toContain(leak);
+  });
+
+  // (d) — the bulk backfill path is a write surface too: a malformed envelope
+  // or a duplicate transition must not be able to reach the stream through it.
+  test("a malformed work-status envelope is refused through the bulk path", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const before = workStatusMessageCount();
+    const response = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-1", from: "test-agent", to: "test-agent", channel: "work-status", content: "not an envelope" },
+        ],
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as any).error).toContain("work-status lifecycle event rejected");
+    expect(workStatusMessageCount()).toBe(before);
+  });
+
+  test("a duplicate work-status transition is refused through the bulk path", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const before = workStatusMessageCount();
+    const taskId = "92345678-1234-4234-8234-123456789abc";
+    const response = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-2", from: "test-agent", to: "test-agent", channel: "work-status", content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001") },
+          { uuid: "bulk-ws-3", from: "test-agent", to: "test-agent", channel: "work-status", content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000002") },
+        ],
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as any).error).toContain("work-status duplicate transition");
+    expect(workStatusMessageCount()).toBe(before);
+  });
+
+  test("a real transition sequence in one bulk request is accepted", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const before = workStatusMessageCount();
+    const taskId = "a3345678-1234-4234-8234-123456789abc";
+    const response = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-4", from: "test-agent", to: "test-agent", channel: "work-status", content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001") },
+          { uuid: "bulk-ws-5", from: "test-agent", to: "test-agent", channel: "work-status", content: envelope("BLOCKED", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000002") },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(workStatusMessageCount()).toBe(before + 2);
+  });
+
+  // (e) — the dedupe guard must serialize same-task writers: the advisory lock
+  // is taken before the recent-events read, so a concurrent same-state pair
+  // cannot both pass the read.
+  test("the hosted dedupe guard takes a per-task advisory lock before the recent-events read", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const mark = activeFakeClient!.__debug.manyCalls.length;
+    const response = await postWorkStatus(envelope("START", "a1345678-1234-4234-8234-123456789abc"));
+    expect(response.status).toBe(201);
+    const calls = activeFakeClient!.__debug.manyCalls.slice(mark);
+    const lockIndex = calls.findIndex((call) => call.sql.includes("pg_advisory_xact_lock"));
+    const recentIndex = calls.findIndex((call) => call.sql.includes("FROM messages"));
+    expect(lockIndex).toBeGreaterThanOrEqual(0);
+    expect(recentIndex).toBeGreaterThan(lockIndex);
+  });
 });

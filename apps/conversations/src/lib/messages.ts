@@ -235,7 +235,11 @@ function assertWorkStatusEnvelope(channelName: string | null, requestedReplyUuid
   if (requestedReplyUuid !== null || channelName !== WORK_STATUS_CHANNEL) return;
   const violation = workStatusEnvelopeViolation(firstLineOf(content));
   if (violation !== null) {
-    throw new Error(`work-status lifecycle event rejected: ${violation}`);
+    // The violation echoes caller-controlled field values (event_id, scope,
+    // session, ...); redact before throwing so a sensitive value placed in an
+    // envelope field cannot be reflected into the error the CLI prints and
+    // sessions transcribe.
+    throw new Error(redactSensitiveText(`work-status lifecycle event rejected: ${violation}`));
   }
 }
 

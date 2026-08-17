@@ -177,6 +177,26 @@ describe("work-status write-time envelope guard", () => {
     ).toThrow(/work-status lifecycle/i);
   });
 
+  test("work-status rejections never reflect sensitive caller values", () => {
+    // A sensitive value in the content is rejected (by the content-safety
+    // scan, which runs before the envelope check on this path), and neither
+    // rejection may echo the value back in the error. Synthetic
+    // detector-positive value (slack-shaped): matches the content-safety
+    // redaction patterns, not the staged-secrets scanner's detectors.
+    const leak = "xoxb-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    try {
+      sendMessage({
+        from: "station01-tmux-watchdog",
+        to: WORK_STATUS_CHANNEL,
+        channel: WORK_STATUS_CHANNEL,
+        content: `START event_id=${leak} task_id=${TASK_ID} scope=todos:open-todos agent=station01-tmux-watchdog session=${SESSION_ID} at=2026-08-17T10:00:00Z claim=${CLAIM_ID} evidence=-`,
+      });
+      throw new Error("expected the work-status send to be rejected");
+    } catch (error) {
+      expect(String((error as Error).message)).not.toContain(leak);
+    }
+  });
+
   test("the guard is scoped to the work-status channel: prose on other channels still sends", () => {
     const msg = sendMessage({
       from: "station01-tmux-watchdog",

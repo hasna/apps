@@ -1079,6 +1079,13 @@ async function assertNoDuplicateWorkStatusTransitionPg(
 ): Promise<void> {
   const event = parseWorkStatusEvent(firstLineOf(content));
   if (event === null) return; // envelope already validated before the transaction
+  // Close the check-then-insert race: two concurrent same-task sends could
+  // both observe no duplicate and both INSERT. A transaction-scoped advisory
+  // lock keyed on the task id serializes same-task writers, so the second
+  // writer's recent-events read runs only after the first transaction commits
+  // and observes the inserted event. Cross-task writers never contend; a
+  // hashtext collision only over-serializes two unrelated tasks.
+  await tx.many("SELECT pg_advisory_xact_lock(hashtext($1))", [event.task_id]);
   const cutoff = new Date(Date.now() - WORK_STATUS_DUPLICATE_WINDOW_MS).toISOString();
   const rows = await tx.many<{ content: string }>(
     `SELECT content FROM messages
@@ -2054,7 +2061,12 @@ async function handleV1(
     if (!replyParent && channelName === WORK_STATUS_CHANNEL) {
       const violation = workStatusEnvelopeViolation(firstLineOf(content));
       if (violation !== null) {
-        return json({ error: `work-status lifecycle event rejected: ${violation}` }, 400);
+        // The violation echoes caller-controlled field values (event_id,
+        // scope, session, ...); redact before returning so a sensitive value
+        // placed in an envelope field cannot be reflected into the API error,
+        // which clients throw and logs transcribe. The content-safety scan
+        // below runs after this rejection and cannot cover it.
+        return json({ error: redactSensitiveText(`work-status lifecycle event rejected: ${violation}`) }, 400);
       }
     }
     // `messages.channel` is free text with no foreign key to `channels`, so a
@@ -2291,6 +2303,9 @@ async function handleV1(
       channel: string | null;
       sessionId: string;
     }> = [];
+    // Work-status items collected during the loop; their duplicate-transition
+    // guard runs inside the transaction (see the loop and the INSERT below).
+    const workStatusItems: Array<{ content: string }> = [];
     const projectIdx = cols.indexOf("project_id");
     for (let i = 0; i < items.length; i++) {
       const raw = items[i];
@@ -2311,6 +2326,35 @@ async function handleV1(
       const channel = str(m.channel);
       const projectId = str(m.project_id);
       const replyTo = typeof m.reply_to === "number" ? m.reply_to : null;
+      // Work-status lifecycle events must not reach the stream through the
+      // bulk backfill path either: it is a write surface with the same
+      // conversations:write scope as the single-send path. Same predicates as
+      // the single-send path (non-reply sends only): a malformed envelope is
+      // refused here up front, and work-status items are collected so the
+      // duplicate-transition guard runs inside the transaction, before the
+      // INSERT. The redaction mirrors the single-send rejection so a sensitive
+      // caller value cannot be reflected into the API error.
+      if (!replyTo && channel === WORK_STATUS_CHANNEL) {
+        const violation = workStatusEnvelopeViolation(firstLineOf(content));
+        if (violation !== null) {
+          return json({ error: `messages[${i}]: work-status lifecycle event rejected: ${redactSensitiveText(violation)}` }, 400);
+        }
+        // In-request dedupe: every item in this request is inserted by one
+        // multi-row INSERT after the transaction guard, so the guard cannot
+        // observe this request's own items as stream rows. Run the same
+        // decision logic against the items already collected (newest first),
+        // so a same-state pair inside one request is refused like any other
+        // duplicate.
+        const event = parseWorkStatusEvent(firstLineOf(content))!;
+        const inRequestViolation = duplicateWorkStatusTransitionViolation(
+          workStatusItems.map((item) => item.content).reverse(),
+          event,
+        );
+        if (inRequestViolation !== null) {
+          return json({ error: `messages[${i}]: ${redactSensitiveText(inRequestViolation)}` }, 400);
+        }
+        workStatusItems.push({ content });
+      }
       assertNoSensitiveContent(content, "Message content");
       assertNoSensitiveContent(from, "Message sender");
       assertNoSensitiveContent(to, "Message recipient");
@@ -2419,6 +2463,17 @@ async function handleV1(
             throw new Error(`messages[${reference.itemIndex}].reply_to does not match parent session.`);
           }
         }
+      }
+
+      // Refuse a second lifecycle event for the same task in the same state
+      // inside the dedupe window, per work-status item — the same guard as the
+      // single-send path, run inside the transaction so a bulk request is not
+      // a bypass. The advisory lock inside the guard serializes concurrent
+      // bulk writers for the same task; rows inserted by earlier items in this
+      // same transaction are visible to the guard's recent-events read, so two
+      // same-state items in one request refuse the second as well.
+      for (const workStatusItem of workStatusItems) {
+        await assertNoDuplicateWorkStatusTransitionPg(tx, workStatusItem.content);
       }
 
       return tx.query<{ id: number; from_agent: string; channel: string | null; content: string }>(
