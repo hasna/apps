@@ -1,0 +1,48 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "search",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.10.6",
+  "description": "Unified search for machines and agents — local file index plus web providers and YouTube transcription; CLI + MCP + REST API + dashboard.",
+  "hosting": [
+    "user-hosted"
+  ],
+  "bins": [
+    "search",
+    "search-mcp",
+    "search-serve"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "search-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "search",
+      "authMode": "local-only"
+    },
+    {
+      "name": "search-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "search-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "search-api",
+      "kind": "api",
+      "status": "deferred",
+      "authMode": "api-key",
+      "deferReason": "search-serve exists, but contract-standard /ready, /version and published OpenAPI surfaces were not verified in this pass."
+    }
+  ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "envPrefix": "HASNA_SEARCH_",
+    "sqlitePath": "~/.hasna/search/data.db"
+  }
+}

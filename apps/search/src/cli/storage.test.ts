@@ -34,8 +34,6 @@ describe("search storage CLI", () => {
         HASNA_SEARCH_DB_PATH: ":memory:",
         HASNA_SEARCH_DATABASE_URL: "",
         SEARCH_DATABASE_URL: "",
-        HASNA_SEARCH_STORAGE_MODE: "",
-        SEARCH_STORAGE_MODE: "",
       });
       const out = new TextDecoder().decode(result.stdout);
 
