@@ -352,7 +352,8 @@ function defaultWorktreeRoot(root: string | undefined): string {
     const expanded = root.trim().replace(/^~(?=$|\/)/, homedir());
     return isAbsolute(expanded) ? expanded : resolve(expanded);
   }
-  return join(homedir(), ".hasna", "loops", "worktrees");
+  // Canonical worktree root per global-worktree-placement; never an app data dir.
+  return join(homedir(), ".hasna", "repos", "worktrees");
 }
 
 function gitRootFor(path: string): string | undefined {

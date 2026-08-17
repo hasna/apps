@@ -85,7 +85,7 @@ function commonCodewithDrain(): Pick<TodosDrainOptions, "provider" | "addDir" | 
 function policyDefinitions(): RoutePolicyDefinition[] {
   const loopsProject = defaultLoopsProject();
   const todosProject = defaultTodosProject();
-  const worktreeRoot = homePath(".hasna", "loops", "worktrees");
+  const worktreeRoot = homePath(".hasna", "repos", "worktrees");
   return [
     {
       id: "repoops-pr-queue",

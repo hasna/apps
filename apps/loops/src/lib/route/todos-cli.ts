@@ -89,11 +89,20 @@ export function runLocalCommandWithStdoutFile(
 }
 
 export function ensureTodosTaskList(project: string, slug: string, name: string, description: string): string {
-  runLocalCommand("todos", ["--project", project, "task-lists", "--add", name, "--slug", slug, "-d", description]);
+  // Create-if-absent: a blind `task-lists --add` on every call minted one
+  // duplicate list per firing (247 'Loop Error Self Heal' lists in the fleet
+  // store, 2026-06-26..2026-07-07). Resolve the existing list by slug first and
+  // only issue --add when it is genuinely absent.
   const list = runLocalCommand("todos", ["--project", project, "--json", "task-lists"]);
   if (!list.ok) throw new Error(list.stderr || list.error || "failed to list todos task lists");
   const values = JSON.parse(list.stdout || "[]") as Array<{ id: string; slug: string }>;
-  const found = values.find((entry) => entry.slug === slug);
+  const existing = values.find((entry) => entry.slug === slug);
+  if (existing) return existing.id;
+  runLocalCommand("todos", ["--project", project, "task-lists", "--add", name, "--slug", slug, "-d", description]);
+  const refreshed = runLocalCommand("todos", ["--project", project, "--json", "task-lists"]);
+  if (!refreshed.ok) throw new Error(refreshed.stderr || refreshed.error || "failed to list todos task lists");
+  const refreshedValues = JSON.parse(refreshed.stdout || "[]") as Array<{ id: string; slug: string }>;
+  const found = refreshedValues.find((entry) => entry.slug === slug);
   if (!found) throw new Error(`todos task list not found after ensure: ${slug}`);
   return found.id;
 }
