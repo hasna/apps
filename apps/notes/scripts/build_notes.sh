@@ -124,7 +124,10 @@ if [[ -d "$SIDECAR_SRC/node_modules" \
 fi
 if [[ "$SOURCE_NODE_MODULES_OK" == "1" ]]; then
   echo "   reusing source node_modules"
-  cp -R "$SIDECAR_SRC/node_modules" "$RESOURCES/ai-sidecar/node_modules"
+  # bun installs workspace deps as symlinks into a store (.bun/...) — a plain
+  # cp -R would copy the symlinks and leave the bundle with dangling pointers.
+  # -L dereferences so the bundle carries real files and is self-contained.
+  cp -RL "$SIDECAR_SRC/node_modules" "$RESOURCES/ai-sidecar/node_modules"
 else
   echo "   installing sidecar deps into the bundle"
   if command -v bun >/dev/null 2>&1; then
