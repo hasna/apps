@@ -383,7 +383,61 @@ function classifyRemoteRequestError(baseUrl: string, route: string, error: unkno
   throw error;
 }
 
-function protectRemoteClient(client: HasnaStorageClient): HasnaStorageClient {
+/**
+ * Hard per-request bound for every authenticated `/v1` call (task 9b050845).
+ *
+ * Measured defect: `todos count` on a stalled /tasks endpoint hung past 120
+ * seconds and then reported REMOTE_API_UNREACHABLE, while the authority was
+ * reachable (curl connected in 0.18s). The contracts transport's own 30s
+ * timer is consumed by two retries of a timeout-shaped failure (90s+), and a
+ * fetch that ignores the abort — or a response that sends headers and then
+ * never completes its body, which the transport reads with an unbounded
+ * `response.text()` — holds the CLI for minutes before a network-level error
+ * with no status is classified as "could not be reached".
+ *
+ * Every remote request is therefore race-bounded to a single finite budget:
+ * the injected signal aborts the transport's controller (which marks the
+ * timeout NON-retryable there), the race rejects with an AbortError even if
+ * the underlying fetch ignores the abort, and the existing classifier maps
+ * that AbortError to REMOTE_API_TIMEOUT — "the authority is slow", the
+ * distinction this fix exists to make — instead of REMOTE_API_UNREACHABLE.
+ */
+const REMOTE_REQUEST_TIMEOUT_MS = 10_000;
+
+function withBoundedRemoteRequest<T>(
+  options: { signal?: AbortSignal } | undefined,
+  requestTimeoutMs: number,
+  run: (options: { signal: AbortSignal }) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const onBaseAbort = () => controller.abort();
+  if (options?.signal) {
+    if (options.signal.aborted) controller.abort();
+    else options.signal.addEventListener("abort", onBaseAbort, { once: true });
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new DOMException(
+        `Todos remote request exceeded the ${requestTimeoutMs}ms bounded request timeout`,
+        "AbortError",
+      ));
+    }, requestTimeoutMs);
+  });
+  const attempt = run({ ...options, signal: controller.signal });
+  // The race settles the caller; a late settle of the underlying attempt must
+  // never surface as an unhandled rejection after the deadline already
+  // reported, and the transport's own timer is aligned to the same budget so
+  // no stray handle outlives the request.
+  attempt.catch(() => {});
+  return Promise.race([attempt, deadline]).finally(() => {
+    if (timer) clearTimeout(timer);
+    options?.signal?.removeEventListener("abort", onBaseAbort);
+  });
+}
+
+function protectRemoteClient(client: HasnaStorageClient, requestTimeoutMs: number): HasnaStorageClient {
   const baseUrl = remoteAuthorityBase(client);
   const protect = async <T>(route: string, request: () => Promise<T>): Promise<T> => {
     try {
@@ -392,31 +446,35 @@ function protectRemoteClient(client: HasnaStorageClient): HasnaStorageClient {
       return classifyRemoteRequestError(baseUrl, route, error);
     }
   };
+  const bounded = <T>(
+    options: { signal?: AbortSignal } | undefined,
+    run: (options: { signal: AbortSignal }) => Promise<T>,
+  ): Promise<T> => withBoundedRemoteRequest(options, requestTimeoutMs, run);
   const transport = client.transport;
   const protectedTransport = {
     baseUrl: transport.baseUrl,
     request: <T = unknown>(method: string, path: string, body?: unknown, options?: Parameters<typeof transport.request>[3]) =>
-      protect(path, () => transport.request<T>(method, path, body, options)),
+      protect(path, () => bounded(options, (opts) => transport.request<T>(method, path, body, opts))),
     get: <T = unknown>(path: string, options?: Parameters<typeof transport.get>[1]) =>
-      protect(path, () => transport.get<T>(path, options)),
+      protect(path, () => bounded(options, (opts) => transport.get<T>(path, opts))),
     post: <T = unknown>(path: string, body?: unknown, options?: Parameters<typeof transport.post>[2]) =>
-      protect(path, () => transport.post<T>(path, body, options)),
+      protect(path, () => bounded(options, (opts) => transport.post<T>(path, body, opts))),
     put: <T = unknown>(path: string, body?: unknown, options?: Parameters<typeof transport.put>[2]) =>
-      protect(path, () => transport.put<T>(path, body, options)),
+      protect(path, () => bounded(options, (opts) => transport.put<T>(path, body, opts))),
     patch: <T = unknown>(path: string, body?: unknown, options?: Parameters<typeof transport.patch>[2]) =>
-      protect(path, () => transport.patch<T>(path, body, options)),
+      protect(path, () => bounded(options, (opts) => transport.patch<T>(path, body, opts))),
     del: <T = unknown>(path: string, body?: unknown, options?: Parameters<typeof transport.del>[2]) =>
-      protect(path, () => transport.del<T>(path, body, options)),
+      protect(path, () => bounded(options, (opts) => transport.del<T>(path, body, opts))),
   };
   return {
     name: client.name,
     baseUrl: client.baseUrl,
     transport: protectedTransport,
-    list: (resource, options) => protect(`/${resource}`, () => client.list(resource, options)),
-    get: (resource, id, options) => protect(`/${resource}/${encodeURIComponent(id)}`, () => client.get(resource, id, options)),
-    create: (resource, body, options) => protect(`/${resource}`, () => client.create(resource, body, options)),
-    update: (resource, id, patch, options) => protect(`/${resource}/${encodeURIComponent(id)}`, () => client.update(resource, id, patch, options)),
-    delete: (resource, id, options) => protect(`/${resource}/${encodeURIComponent(id)}`, () => client.delete(resource, id, options)),
+    list: (resource, options) => protect(`/${resource}`, () => bounded(options, (opts) => client.list(resource, opts))),
+    get: (resource, id, options) => protect(`/${resource}/${encodeURIComponent(id)}`, () => bounded(options, (opts) => client.get(resource, id, opts))),
+    create: (resource, body, options) => protect(`/${resource}`, () => bounded(options, (opts) => client.create(resource, body, opts))),
+    update: (resource, id, patch, options) => protect(`/${resource}/${encodeURIComponent(id)}`, () => bounded(options, (opts) => client.update(resource, id, patch, opts))),
+    delete: (resource, id, options) => protect(`/${resource}/${encodeURIComponent(id)}`, () => bounded(options, (opts) => client.delete(resource, id, opts))),
   };
 }
 
@@ -457,21 +515,27 @@ async function requiredRemoteRoute<T>(
  * throws; a partial pair (URL without KEY or KEY without URL) throws instead of
  * falling back to SQLite.
  */
-export function getTodosCloudClient(env: Env = process.env as Env): HasnaStorageClient | null {
+export function getTodosCloudClient(
+  env: Env = process.env as Env,
+  requestTimeoutMs: number = REMOTE_REQUEST_TIMEOUT_MS,
+): HasnaStorageClient | null {
   // The selector is the API env pair: both set selects the HTTP authority, an
   // incomplete pair is an error, and an absent pair preserves the local default.
   if (requestedTransport(env) !== "http") return null;
   const resolved = resolveStorageClient("todos", requireTodosRemoteAuthorityEnv(env), {
     fetchImpl: (input, init) => globalThis.fetch(input, { ...init, redirect: "manual" }),
+    // Align the transport's own per-request timer with the CLI's bounded
+    // request budget so no request can outlive the deadline (task 9b050845).
+    timeoutMs: requestTimeoutMs,
   });
   // `cloud-http` is the pinned @hasna/contracts generation's transport name;
   // `http` is the post-removal generation's. Both mean "authenticated /v1".
-  if (resolved.transport === "cloud-http") return protectRemoteClient(resolved.client);
+  if (resolved.transport === "cloud-http") return protectRemoteClient(resolved.client, requestTimeoutMs);
   // The installed 0.5.2 typings declare only `cloud-http | local`, so the
   // forward-compat arm is compared via a widened string; both generations
   // construct the client alongside the http transport name.
   const transportName: string = resolved.transport;
-  if (transportName === "http") return protectRemoteClient(resolved.client!);
+  if (transportName === "http") return protectRemoteClient(resolved.client!, requestTimeoutMs);
   return null;
 }
 
