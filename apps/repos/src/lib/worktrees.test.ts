@@ -301,6 +301,32 @@ describe("addWorktree", () => {
     expect(readFileSync(join(first.path, "WORK-IN-PROGRESS.txt"), "utf8")).toBe("half-finished\n");
   });
 
+  test("refuses same-claim re-entry once the lease's gitdir is dead, without refreshing verified_at", () => {
+    // The dead-gitdir class in the reuse path: the lease exists, the directory
+    // exists, and the `.git` pointer is shape-valid — but the target gitdir is
+    // gone, exactly as a parent-checkout move leaves it. The reuse guard must
+    // not hand back a worktree git cannot open, and must not mark the lease
+    // verified.
+    const { repoName, db } = seed();
+    const first = addWorktree({ repo: repoName, task: "a321ba13" });
+    const claimedAt = (db.query("SELECT verified_at FROM worktree_leases WHERE lease_id = ?")
+      .get(first.lease.lease_id) as { verified_at: string }).verified_at;
+
+    // Kill the gitdir the worktree's `.git` pointer names, the way a moved
+    // parent checkout does. Deleting the object store directory instead would
+    // still be a live gitdir; the linked-worktree metadata must go.
+    const pointer = readFileSync(join(first.path, ".git"), "utf8").trim();
+    const gitdirTarget = pointer.replace(/^gitdir:\s*/, "");
+    rmSync(gitdirTarget, { recursive: true, force: true });
+
+    expect(codeOf(() => addWorktree({ repo: repoName, task: "a321ba13" })))
+      .toBe("WORKTREE_DEAD_GITDIR");
+    const after = (db.query("SELECT verified_at FROM worktree_leases WHERE lease_id = ?")
+      .get(first.lease.lease_id) as { verified_at: string }).verified_at;
+    expect(after).toBe(claimedAt);
+    expect(existsSync(first.path)).toBe(true);
+  });
+
   test("pins the base from origin, not from a stale local HEAD", () => {
     // A worktree branched off a local HEAD that is three days behind origin
     // produces a PR full of other people's reverts. The fetch is the point.

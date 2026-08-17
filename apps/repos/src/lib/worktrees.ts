@@ -786,6 +786,17 @@ export function addWorktree(request: AddWorktreeRequest): AddWorktreeResult {
     ?? leaseByPath(db, target);
 
   if (existing && existsSync(existing.worktree_path) && isLinkedWorktree(existing.worktree_path)) {
+    if (!linkedGitdirIsLive(existing.worktree_path)) {
+      // The lease's gitdir is dead — the parent checkout moved or was deleted
+      // since the lease was written. Reusing the path hands the caller a
+      // worktree git cannot open, and refreshing `verified_at` marks a lease
+      // verified that nothing verified. Refuse with the same named code the
+      // removal and adoption paths use.
+      fail("WORKTREE_DEAD_GITDIR", "refusing to reuse a worktree whose gitdir pointer is dead", {
+        path: existing.worktree_path,
+        hint: "dispose of it with `repos worktree remove --allow-dead-gitdir`, which archives the working tree first",
+      });
+    }
     // Idempotent by design. A second `add` for the same claim is a caller
     // re-entering, not a caller asking for a clean slate — the destroy-then-
     // create reading of this is the factory hazard.
