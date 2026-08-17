@@ -13,7 +13,7 @@ describe("redactText", () => {
 
   test("redacts npm and GitHub token shapes", () => {
     const npm = frag("npm_", "AbCdEf0123456789AbCdEf0123456789")
-    const gh = frag("ghp_", "AbCdEf0123456789AbCdEf0123456789")
+    const gh = frag("ghp", "_", "AbCdEf0123456789AbCdEf0123456789")
     const out = redactText(`npm=${npm} gh=${gh}`)
     expect(out).not.toContain(npm)
     expect(out).not.toContain(gh)
