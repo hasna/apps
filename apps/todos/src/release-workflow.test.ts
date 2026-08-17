@@ -2,136 +2,64 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const releaseWorkflow = readFileSync(resolve(import.meta.dir, "../.github/workflows/release.yml"), "utf8");
+const repoRoot = resolve(import.meta.dir, "../../..");
+const ciWorkflow = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
+const releasePackageResolver = readFileSync(resolve(import.meta.dir, "../scripts/resolve-npm-release-package.ts"), "utf8");
+const releaseReviewGuide = readFileSync(resolve(import.meta.dir, "../docs/npm-release-agent-review.md"), "utf8");
 const publicReleaseVerifier = readFileSync(resolve(import.meta.dir, "../scripts/verify-public-release.ts"), "utf8");
-const rootPackage = JSON.parse(readFileSync(resolve(import.meta.dir, "../package.json"), "utf8")) as { version: string };
+const rootPackage = JSON.parse(readFileSync(resolve(import.meta.dir, "../package.json"), "utf8")) as {
+  version: string;
+  scripts: Record<string, string>;
+};
 const companionPackage = JSON.parse(readFileSync(resolve(import.meta.dir, "../ai/package.json"), "utf8")) as {
   version: string;
   scripts: Record<string, string>;
 };
-const receiptSecretExpression = "${{ secrets.NPM_RELEASE_AGENT_REVIEW_RECEIPT }}";
-
-function syntheticActionsEnvPreamble(expressions: string[], receipt: string): string {
-  return expressions
-    .map((expression) =>
-      `NPM_RELEASE_AGENT_REVIEW_RECEIPT: ${expression === receiptSecretExpression ? "***" : receipt}`,
-    )
-    .join("\n");
-}
-
-function assertRootReleaseTestPolicy(workflow: string): void {
-  const testStepStart = workflow.indexOf("      - name: Test\n");
-  const buildStepStart = workflow.indexOf("      - name: Build\n", testStepStart);
-  if (testStepStart < 0 || buildStepStart < 0) {
-    throw new Error("root release Test and Build steps must remain present and ordered");
-  }
-
-  const testStep = workflow.slice(testStepStart, buildStepStart);
-  if (!testStep.includes("run: bun test --timeout=30000")) {
-    throw new Error("root release Test must use the finite 30000ms scheduling budget");
-  }
-  if (testStep.includes("--retry")) {
-    throw new Error("root release Test must remain single-pass without retries");
-  }
-}
-
-describe("npm release workflow", () => {
-  test("binds strict prepublish verification to the checked-out Actions commit", () => {
-    expect(releaseWorkflow).toContain("HASNA_TODOS_EXPECTED_COMMIT: ${{ github.sha }}");
-  });
-
-  test("bounds full-suite scheduling contention without retrying release failures", () => {
-    expect(() => assertRootReleaseTestPolicy(releaseWorkflow)).not.toThrow();
-  });
-
-  test("rejects both Bun's inherited 5-second default and retry-based release gates", () => {
-    const inheritedDefault = releaseWorkflow.replace(
-      "run: bun test --timeout=30000",
-      "run: bun test",
-    );
-    expect(() => assertRootReleaseTestPolicy(inheritedDefault)).toThrow(
-      "root release Test must use the finite 30000ms scheduling budget",
-    );
-
-    const retrying = releaseWorkflow.replace(
-      "run: bun test --timeout=30000",
-      "run: bun test --timeout=30000 --retry=2",
-    );
-    expect(() => assertRootReleaseTestPolicy(retrying)).toThrow(
-      "root release Test must remain single-pass without retries",
-    );
-  });
-
-  test("requires an exact independent-agent GO before OIDC publish", () => {
-    const reviewStep = releaseWorkflow.indexOf("- name: Require independent agent release review");
-    const publishStep = releaseWorkflow.indexOf("- name: Publish to npm via OIDC trusted publishing");
-
-    expect(reviewStep).toBeGreaterThan(-1);
-    expect(publishStep).toBeGreaterThan(reviewStep);
-    expect(releaseWorkflow.slice(reviewStep, publishStep)).toContain("run: bun run verify:release-review");
-    expect(releaseWorkflow.match(/RELEASE_REVIEWER_AGENT: \$\{\{ vars\.RELEASE_REVIEWER_AGENT \}\}/g)?.length).toBe(2);
-    expect(releaseWorkflow.match(/RELEASE_REVIEW_KEY_ID: \$\{\{ vars\.RELEASE_REVIEW_KEY_ID \}\}/g)?.length).toBe(2);
-    expect(releaseWorkflow.match(/RELEASE_REVIEW_PUBLIC_KEY: \$\{\{ vars\.RELEASE_REVIEW_PUBLIC_KEY \}\}/g)?.length).toBe(2);
-    expect(releaseWorkflow).toContain("environment: npm-release");
-    expect(releaseWorkflow).toContain("id-token: write");
-    expect(releaseWorkflow).toContain("npm publish --provenance --access public");
-    expect(releaseWorkflow).toContain("git merge-base --is-ancestor");
-    expect(releaseWorkflow).toContain("bun run test:no-cloud");
-    expect(releaseWorkflow).toContain("run: bun test");
-    expect(releaseWorkflow).toContain("run: bun run build");
+describe("npm release procedure", () => {
+  test("uses each package's strict prepublish hook as the signed procedure", () => {
+    expect(rootPackage.scripts.prepublishOnly).toBe("bun run scripts/verify-public-release.ts --mode=publish");
+    expect(companionPackage.scripts["verify:release-review"]).toBe("bun run ../scripts/verify-npm-release-agent-review.ts");
+    expect(companionPackage.scripts.prepublishOnly).toBe("bun run ../scripts/verify-npm-release-agent-review.ts");
     expect(publicReleaseVerifier).toContain('runOrExit("bun", ["run", "scripts/verify-npm-release-agent-review.ts"])');
   });
 
-  test("delivers every review receipt through a masked Actions secret", () => {
-    const receiptExpressions = Array.from(
-      releaseWorkflow.matchAll(/^\s+NPM_RELEASE_AGENT_REVIEW_RECEIPT:\s*(.+)$/gm),
-      (match) => match[1].trim(),
-    );
+  test("changing the AI review alias cannot bypass its direct prepublish verifier", () => {
+    const directProcedure = "bun run ../scripts/verify-npm-release-agent-review.ts";
+    const aliasChanged = {
+      ...companionPackage,
+      scripts: { ...companionPackage.scripts, "verify:release-review": "echo bypass" },
+    };
 
-    expect(receiptExpressions).toHaveLength(2);
-    expect(releaseWorkflow).not.toContain("vars.NPM_RELEASE_AGENT_REVIEW_RECEIPT");
-    expect(receiptExpressions).toEqual([receiptSecretExpression, receiptSecretExpression]);
+    expect(aliasChanged.scripts.prepublishOnly).toBe(directProcedure);
+    expect(aliasChanged.scripts.prepublishOnly).not.toBe("bun run verify:release-review");
 
-    const syntheticReceipt = "synthetic.release.review.receipt.fixture";
-    const unsafePreamble = syntheticActionsEnvPreamble(
-      ["${{ vars.NPM_RELEASE_AGENT_REVIEW_RECEIPT }}"],
-      syntheticReceipt,
-    );
-    expect(unsafePreamble).toContain(syntheticReceipt);
-    expect(unsafePreamble).not.toContain("***");
-
-    const preamble = syntheticActionsEnvPreamble(receiptExpressions, syntheticReceipt);
-    expect(preamble).not.toContain(syntheticReceipt);
-    expect(preamble.match(/NPM_RELEASE_AGENT_REVIEW_RECEIPT: \*\*\*/g)?.length).toBe(2);
+    const aliasedPrepublish = {
+      ...companionPackage,
+      scripts: { ...companionPackage.scripts, prepublishOnly: "bun run verify:release-review" },
+    };
+    expect(aliasedPrepublish.scripts.prepublishOnly).not.toBe(directProcedure);
   });
 
-  test("routes root and companion tags to only their fixed package directories", () => {
-    expect(releaseWorkflow).toContain('- "npm/todos/v*"');
-    expect(releaseWorkflow).toContain('- "npm/todos-ai/v*"');
-    expect(releaseWorkflow).toContain("scripts/resolve-npm-release-package.ts");
-    expect(releaseWorkflow).toContain("working-directory: ${{ steps.version.outputs.path }}");
-    expect(releaseWorkflow).toContain("HASNA_TODOS_RELEASE_PACKAGE_PATH: ${{ steps.version.outputs.path }}");
-    expect(rootPackage.version).toBe("0.15.35");
-    expect(companionPackage.version).toBe("0.1.3");
-    expect(companionPackage.scripts["verify:release-review"]).toBe("bun run ../scripts/verify-npm-release-agent-review.ts");
-    expect(companionPackage.scripts.prepublishOnly).toBe("bun run verify:release-review");
-    expect(releaseWorkflow).not.toMatch(/^\s+NODE_AUTH_TOKEN:/m);
-    expect(releaseWorkflow).not.toMatch(/^\s+NPM_TOKEN:/m);
+  test("does not misrepresent monorepo CI as an npm publish workflow", () => {
+    expect(ciWorkflow).toContain("pull_request:");
+    expect(ciWorkflow).toContain("branches: [main]");
+    expect(ciWorkflow).not.toContain("npm publish");
+    expect(ciWorkflow).not.toContain("npm/todos/v*");
+    expect(ciWorkflow).not.toContain("npm/todos-ai/v*");
   });
 
-  test("keeps root gates and adds companion install, typecheck, test, build, pack, and release-input gates", () => {
-    for (const step of [
-      "Install AI companion locked dependencies",
-      "Typecheck AI companion",
-      "Test AI companion",
-      "Build AI companion",
-      "Verify AI companion pack",
-      "Require a clean AI companion release input",
-    ]) {
-      expect(releaseWorkflow).toContain(`- name: ${step}`);
-    }
-    expect(releaseWorkflow).toContain("if: steps.version.outputs.path == '.'");
-    expect(releaseWorkflow).toContain("if: steps.version.outputs.path == 'ai'");
-    expect(releaseWorkflow).toContain("gitHead");
+  test("does not retain an unreachable package-local Actions release workflow", () => {
+    expect(() => readFileSync(resolve(import.meta.dir, "../.github/workflows/release.yml"), "utf8")).toThrow();
+  });
+
+  test("keeps manual release resolution and reviewer instructions on the monorepo contract", () => {
+    expect(releasePackageResolver).toContain('resolveNpmReleasePackageByPath("apps/todos")');
+    expect(releaseReviewGuide).toContain("hasna.npm-release-agent-review.v2");
+    expect(releaseReviewGuide).toContain('"repository": "hasna/apps"');
+    expect(releaseReviewGuide).toContain('"path": "apps/todos/scripts/verify-public-release.ts"');
+    expect(releaseReviewGuide).toContain("--repo hasna/apps --env npm-release");
+    expect(releaseReviewGuide).toContain("--package-path <apps-todos-or-apps-todos-ai>");
+    expect(releaseReviewGuide).not.toContain(".github/workflows/release.yml");
+    expect(releaseReviewGuide).not.toContain("hasna.npm-release-agent-review.v1");
   });
 });

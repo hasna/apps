@@ -14,11 +14,11 @@ type ReleasePackage = {
   name?: string;
   version?: string;
   publishConfig?: { registry?: string };
+  scripts?: { prepublishOnly?: string };
 };
 
-const REPOSITORY = "hasna/todos";
-const WORKFLOW_PATH = ".github/workflows/release.yml";
-const root = resolve(import.meta.dir, "..");
+const REPOSITORY = "hasna/apps";
+const root = repositoryRoot();
 
 main();
 
@@ -45,6 +45,12 @@ function main(): void {
   addContextFailure(failures, !packageJson.version, "release-agent-review-version", "package.json must declare a release version");
   addContextFailure(failures, packageJson.version !== releasePackage.version, "release-agent-review-ref-name", `GITHUB_REF_NAME must carry ${releasePackage.manifestPath} version ${packageJson.version ?? ""}`);
   addContextFailure(failures, packageJson.publishConfig?.registry !== "https://registry.npmjs.org", "release-agent-review-registry", "package.json must target the public npm registry");
+  addContextFailure(
+    failures,
+    packageJson.scripts?.prepublishOnly !== releasePackage.releaseProcedure,
+    "release-agent-review-procedure",
+    `${releasePackage.manifestPath} must retain its package-owned prepublishOnly review gate`,
+  );
   const selectedPackagePath = process.env["HASNA_TODOS_RELEASE_PACKAGE_PATH"];
   if (selectedPackagePath !== undefined) {
     addContextFailure(failures, selectedPackagePath !== releasePackage.packagePath, "release-agent-review-package-path", `HASNA_TODOS_RELEASE_PACKAGE_PATH must equal ${releasePackage.packagePath}`);
@@ -69,7 +75,7 @@ function main(): void {
   if (ancestry.status !== 0) {
     fail([{ check: "release-agent-review-protected-main", message: "the release commit must be contained in protected main" }]);
   }
-  const workflowRevision = runGit(["rev-parse", `${releaseCommit}:${WORKFLOW_PATH}`], "release-agent-review-workflow-revision");
+  const procedureRevision = runGit(["rev-parse", `${releaseCommit}:${releasePackage.releaseProcedurePath}`], "release-agent-review-procedure-revision");
   const tagRef = `refs/tags/${tag}`;
   const tagType = runGit(["cat-file", "-t", tagRef], "release-agent-review-tag-type");
   if (tagType !== "tag") {
@@ -90,8 +96,8 @@ function main(): void {
     packageName: packageJson.name!,
     packageVersion: packageJson.version!,
     tag,
-    workflowPath: WORKFLOW_PATH,
-    workflowRevision,
+    procedurePath: releasePackage.releaseProcedurePath,
+    procedureRevision,
     registry: packageJson.publishConfig!.registry!,
     reviewerAgentId,
     reviewerKeyId,
@@ -114,8 +120,8 @@ function main(): void {
     package: `${result.payload.package.name}@${result.payload.package.version}`,
     package_path: releasePackage.packagePath,
     tag: result.payload.tag,
-    workflow_path: result.payload.workflow.path,
-    workflow_revision: result.payload.workflow.revision,
+    procedure_path: result.payload.procedure.path,
+    procedure_revision: result.payload.procedure.revision,
     reviewer_agent_id: result.payload.reviewer.agent,
     publisher_agent_id: result.payload.publisher.agent,
     open_p0_blockers: result.payload.openReachableInScopeBlockers.p0,
@@ -130,6 +136,17 @@ function runGit(args: string[], check: string, trim = true): string {
     fail([{ check, message: result.stderr.trim() || `git ${args[0]} failed` }]);
   }
   return trim ? result.stdout.trim() : result.stdout;
+}
+
+function repositoryRoot(): string {
+  const result = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: resolve(import.meta.dir, ".."),
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    fail([{ check: "release-agent-review-repository-root", message: result.stderr.trim() || "could not resolve the hasna/apps repository root" }]);
+  }
+  return result.stdout.trim();
 }
 
 function addContextFailure(

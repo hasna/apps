@@ -1,11 +1,11 @@
 # Signed independent-agent review for npm releases
 
-The `@hasna/todos` and `@hasna/todos-ai` release workflow will not publish from a tag unless the
+The `@hasna/todos` and `@hasna/todos-ai` package-owned release procedures will not publish unless the
 `npm-release` environment contains a valid Ed25519-signed receipt using schema
-`hasna.npm-release-agent-review.v1`. The matching private key is the fixed
+`hasna.npm-release-agent-review.v2`. The matching private key is the fixed
 package release-review authority and is supplied only to the one independent
 native Codewith sub-agent lineage fixed before reviewing that candidate. It
-never enters this repository or the release workflow, and it is not attributed
+never enters this repository or a release procedure, and it is not attributed
 to a standing Fable persona.
 
 This is not a human approval gate. The `npm-release` environment has no required
@@ -22,7 +22,7 @@ The capability-bearing `NPM_RELEASE_AGENT_REVIEW_RECEIPT` is an environment
 secret. GitHub masks secrets before rendering a run-step environment preamble;
 an Actions variable would expose the complete receipt before the shell body
 could register a mask. The verifier still receives the exact secret value in
-process and applies the same package, version, tag, commit, workflow, reviewer,
+process and applies the same package, version, tag, commit, procedure, reviewer,
 and signature checks.
 
 The public key is canonical base64 SPKI DER. Its key id is
@@ -36,7 +36,7 @@ The environment receipt is an exact JSON object with no additional fields:
 
 ```json
 {
-  "schema": "hasna.npm-release-agent-review.v1",
+  "schema": "hasna.npm-release-agent-review.v2",
   "payload": "<canonical base64 of the exact UTF-8 JSON payload>",
   "signature": {
     "algorithm": "ed25519",
@@ -46,10 +46,9 @@ The environment receipt is an exact JSON object with no additional fields:
 }
 ```
 
-The v1 payload remains byte-compatible with existing root receipts. Its signed
-package name and tag bind the package path through one closed mapping:
-`@hasna/todos` plus `npm/todos/v*` selects `.`, while `@hasna/todos-ai` plus
-`npm/todos-ai/v*` selects `ai`. The issuer and verifier reject every other
+The v2 payload binds its signed package name and tag through one closed mapping:
+`@hasna/todos` plus `npm/todos/v*` selects `apps/todos`, while `@hasna/todos-ai` plus
+`npm/todos-ai/v*` selects `apps/todos/ai`. The issuer and verifier reject every other
 package path, package name, tag prefix, or cross-package combination; no path is
 accepted from receipt data or arbitrary workflow input.
 
@@ -57,17 +56,17 @@ The decoded, signed payload is also exact and has no additional fields:
 
 ```json
 {
-  "schema": "hasna.npm-release-agent-review.v1",
-  "repository": "hasna/todos",
+  "schema": "hasna.npm-release-agent-review.v2",
+  "repository": "hasna/apps",
   "commit": "<exact 40-hex release commit>",
   "package": {
     "name": "@hasna/todos",
     "version": "0.15.20"
   },
   "tag": "npm/todos/v0.15.20",
-  "workflow": {
-    "path": ".github/workflows/release.yml",
-    "revision": "<Git blob object for this path at the release commit>"
+  "procedure": {
+    "path": "apps/todos/scripts/verify-public-release.ts",
+    "revision": "<Git blob object for this package procedure at the release commit>"
   },
   "registry": "https://registry.npmjs.org",
   "reviewer": {
@@ -94,13 +93,15 @@ reviewers, root coordinators, and arbitrary coding-agent labels are rejected.
 Missing, unsigned, malformed, `NO_GO`, non-zero P0/P1, self-reviewed, stale,
 mismatched, tampered, wrong-key, or replayed receipts fail before publication.
 A valid receipt from an earlier commit or version is still a replay and fails
-the live commit, package, tag, and workflow-revision comparisons.
+the live commit, package, tag, and procedure-revision comparisons.
 
-The existing tag/version, protected-main, immutable-version, typecheck,
-no-cloud, full-test, build, clean-tree, OIDC, provenance, and registry-readback
-gates remain in place. The explicit workflow step checks the receipt before the
-test/build sequence, and `prepublishOnly` checks it again immediately before npm
-receives the package.
+The package-owned release procedure verifies the receipt again through
+`prepublishOnly` immediately before npm receives the package. For
+`@hasna/todos-ai`, `prepublishOnly` invokes
+`../scripts/verify-npm-release-agent-review.ts` directly; the
+`verify:release-review` script is only a convenience alias and changing it
+cannot bypass the package-owned gate. Its package checks remain the
+authoritative release gate.
 
 ## Exact issuance procedure for the later reviewer
 
@@ -129,14 +130,14 @@ reviewer_public_key_file="$(mktemp)"
 receipt_file="$(mktemp)"
 
 printf '%s\n' "${reviewer_lineage}" | gh variable set RELEASE_REVIEWER_AGENT \
-  --repo hasna/todos --env npm-release
+  --repo hasna/apps --env npm-release
 gh variable get RELEASE_REVIEWER_AGENT \
-  --repo hasna/todos --env npm-release > "${reviewer_agent_file}"
+  --repo hasna/apps --env npm-release > "${reviewer_agent_file}"
 test "$(sed -n '1p' "${reviewer_agent_file}")" = "${reviewer_lineage}"
 gh variable get RELEASE_REVIEW_KEY_ID \
-  --repo hasna/todos --env npm-release > "${reviewer_key_id_file}"
+  --repo hasna/apps --env npm-release > "${reviewer_key_id_file}"
 gh variable get RELEASE_REVIEW_PUBLIC_KEY \
-  --repo hasna/todos --env npm-release > "${reviewer_public_key_file}"
+  --repo hasna/apps --env npm-release > "${reviewer_public_key_file}"
 
 RELEASE_REVIEWER_AGENT="$(sed -n '1p' "${reviewer_agent_file}")" \
 RELEASE_REVIEW_KEY_ID="$(sed -n '1p' "${reviewer_key_id_file}")" \
@@ -145,15 +146,15 @@ secrets exec <fixed-reviewer-private-key-vault-item> \
   --as RELEASE_REVIEW_PRIVATE_KEY -- \
   bun run issue:release-review -- \
     --release-commit <exact-release-commit-sha> \
-    --package-path <dot-for-root-or-ai-for-companion> \
+    --package-path <apps-todos-or-apps-todos-ai> \
     --publisher-agent <intended-publisher-agent> \
     --verdict GO \
     --open-p0 0 \
     --open-p1 0 > "${receipt_file}"
 
 gh secret set NPM_RELEASE_AGENT_REVIEW_RECEIPT \
-  --repo hasna/todos --env npm-release < "${receipt_file}"
-test "$(gh secret list --repo hasna/todos --env npm-release --json name \
+  --repo hasna/apps --env npm-release < "${receipt_file}"
+test "$(gh secret list --repo hasna/apps --env npm-release --json name \
   --jq '[.[] | select(.name == "NPM_RELEASE_AGENT_REVIEW_RECEIPT")] | length')" = "1"
 sha256sum "${receipt_file}" > "${evidence_dir}/npm-release-agent-review.sha256"
 ```
@@ -164,10 +165,10 @@ the acceptance proof that the exact value reaches the verifier while the log
 contains only GitHub's masked placeholder.
 
 The issuer refuses a private key that does not derive the configured public key
-and key id. It derives the package version, tag, workflow blob revision, and
+and key id. It derives the package version, tag, package-procedure blob revision, and
 registry from the exact release commit rather than accepting those values as
-free-form arguments. `--package-path` defaults to `.` for root receipt
-compatibility and accepts only `.` or `ai`.
+free-form arguments. `--package-path` defaults to `apps/todos` and accepts only
+`apps/todos` or `apps/todos/ai`.
 
 The reviewer records the command result, receipt digest, readback result, exact
 release SHA, native Codewith lineage, review-run id, verdict, and blocker counts
@@ -180,6 +181,6 @@ Its message must end with exactly one registered agent trailer:
 Agent: <intended-publisher-agent>
 ```
 
-Any change to the commit, selected package path/name/version, workflow blob, registry, fixed
+Any change to the commit, selected package path/name/version, package procedure blob, registry, fixed
 reviewer/key, or intended publisher makes the receipt stale. The fixed reviewer
 must issue a replacement only after verification of the affected lane.

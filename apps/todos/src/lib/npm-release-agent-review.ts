@@ -5,9 +5,9 @@ import {
   sign,
   verify as verifySignature,
 } from "node:crypto";
-import { validateNpmReleasePackageBinding } from "./npm-release-package";
+import { validateNpmReleasePackageBinding, type NpmReleasePackagePath } from "./npm-release-package";
 
-export const NPM_RELEASE_AGENT_REVIEW_SCHEMA = "hasna.npm-release-agent-review.v1" as const;
+export const NPM_RELEASE_AGENT_REVIEW_SCHEMA = "hasna.npm-release-agent-review.v2" as const;
 
 export type NpmReleaseAgentReviewPayload = {
   schema: typeof NPM_RELEASE_AGENT_REVIEW_SCHEMA;
@@ -18,7 +18,7 @@ export type NpmReleaseAgentReviewPayload = {
     version: string;
   };
   tag: string;
-  workflow: {
+  procedure: {
     path: string;
     revision: string;
   };
@@ -51,12 +51,12 @@ export type SignedNpmReleaseAgentReviewReceipt = {
 export type ExpectedNpmReleaseAgentReview = {
   repository: string;
   releaseCommit: string;
-  packagePath: "." | "ai";
+  packagePath: NpmReleasePackagePath;
   packageName: string;
   packageVersion: string;
   tag: string;
-  workflowPath: string;
-  workflowRevision: string;
+  procedurePath: string;
+  procedureRevision: string;
   registry: string;
   reviewerAgentId: string;
   reviewerKeyId: string;
@@ -82,7 +82,7 @@ const PAYLOAD_KEYS = [
   "commit",
   "package",
   "tag",
-  "workflow",
+  "procedure",
   "registry",
   "reviewer",
   "publisher",
@@ -303,15 +303,15 @@ export function validateNpmReleaseAgentReviewReceipt(
   addIf(failures, payload.tag !== expected.tag, "release-agent-review-tag", `tag must be ${expected.tag}`);
   addIf(
     failures,
-    payload.workflow.path !== expected.workflowPath,
-    "release-agent-review-workflow-path",
-    `workflow.path must be ${expected.workflowPath}`,
+    payload.procedure.path !== expected.procedurePath,
+    "release-agent-review-procedure-path",
+    `procedure.path must be ${expected.procedurePath}`,
   );
   addIf(
     failures,
-    payload.workflow.revision !== expected.workflowRevision,
-    "release-agent-review-workflow-revision",
-    "workflow.revision must equal the release commit workflow blob object",
+    payload.procedure.revision !== expected.procedureRevision,
+    "release-agent-review-procedure-revision",
+    "procedure.revision must equal the release commit package procedure blob object",
   );
   addIf(
     failures,
@@ -398,7 +398,7 @@ function hasReceiptShape(value: unknown): boolean {
 function hasPayloadShape(value: unknown): boolean {
   if (!isRecord(value) || !hasExactKeys(value, PAYLOAD_KEYS)) return false;
   if (!isRecord(value.package) || !hasExactKeys(value.package, ["name", "version"])) return false;
-  if (!isRecord(value.workflow) || !hasExactKeys(value.workflow, ["path", "revision"])) return false;
+  if (!isRecord(value.procedure) || !hasExactKeys(value.procedure, ["path", "revision"])) return false;
   if (!isRecord(value.reviewer) || !hasExactKeys(value.reviewer, ["type", "agent"])) return false;
   if (!isRecord(value.publisher) || !hasExactKeys(value.publisher, ["type", "agent"])) return false;
   if (!isRecord(value.openReachableInScopeBlockers) || !hasExactKeys(value.openReachableInScopeBlockers, ["p0", "p1"])) return false;
@@ -410,8 +410,8 @@ function hasPayloadShape(value: unknown): boolean {
     value.package.name,
     value.package.version,
     value.tag,
-    value.workflow.path,
-    value.workflow.revision,
+    value.procedure.path,
+    value.procedure.revision,
     value.registry,
     value.reviewer.type,
     value.reviewer.agent,

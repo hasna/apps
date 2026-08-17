@@ -1,10 +1,14 @@
-export type NpmReleasePackagePath = "." | "ai";
+export type NpmReleasePackagePath = "apps/todos" | "apps/todos/ai";
 
 export type NpmReleasePackageDefinition = {
   packagePath: NpmReleasePackagePath;
-  manifestPath: "package.json" | "ai/package.json";
+  manifestPath: "apps/todos/package.json" | "apps/todos/ai/package.json";
   packageName: "@hasna/todos" | "@hasna/todos-ai";
   tagPrefix: "npm/todos/v" | "npm/todos-ai/v";
+  releaseProcedure: "bun run scripts/verify-public-release.ts --mode=publish" | "bun run ../scripts/verify-npm-release-agent-review.ts";
+  releaseProcedurePath:
+    | "apps/todos/scripts/verify-public-release.ts"
+    | "apps/todos/scripts/verify-npm-release-agent-review.ts";
 };
 
 export type ResolvedNpmReleasePackage = NpmReleasePackageDefinition & {
@@ -18,25 +22,29 @@ export type NpmReleasePackageBindingFailure = {
 
 export const NPM_RELEASE_PACKAGES: readonly NpmReleasePackageDefinition[] = [
   {
-    packagePath: ".",
-    manifestPath: "package.json",
+    packagePath: "apps/todos",
+    manifestPath: "apps/todos/package.json",
     packageName: "@hasna/todos",
     tagPrefix: "npm/todos/v",
+    releaseProcedure: "bun run scripts/verify-public-release.ts --mode=publish",
+    releaseProcedurePath: "apps/todos/scripts/verify-public-release.ts",
   },
   {
-    packagePath: "ai",
-    manifestPath: "ai/package.json",
+    packagePath: "apps/todos/ai",
+    manifestPath: "apps/todos/ai/package.json",
     packageName: "@hasna/todos-ai",
     tagPrefix: "npm/todos-ai/v",
+    releaseProcedure: "bun run ../scripts/verify-npm-release-agent-review.ts",
+    releaseProcedurePath: "apps/todos/scripts/verify-npm-release-agent-review.ts",
   },
 ] as const;
 
 export function resolveNpmReleasePackageByPath(
   packagePath: string | undefined,
 ): NpmReleasePackageDefinition {
-  const requestedPath = packagePath === undefined ? "." : packagePath;
+  const requestedPath = packagePath === undefined ? "apps/todos" : packagePath;
   const definition = NPM_RELEASE_PACKAGES.find((candidate) => candidate.packagePath === requestedPath);
-  if (!definition) throw new Error("package path must be . or ai");
+  if (!definition) throw new Error("package path must be apps/todos or apps/todos/ai");
   return definition;
 }
 
@@ -63,7 +71,7 @@ export function validateNpmReleasePackageBinding(input: {
   try {
     pathDefinition = resolveNpmReleasePackageByPath(input.packagePath);
   } catch {
-    failures.push({ check: "release-package-path", message: "package path must be . or ai" });
+    failures.push({ check: "release-package-path", message: "package path must be apps/todos or apps/todos/ai" });
   }
   try {
     tagDefinition = resolveNpmReleasePackageByTag(input.tag);
