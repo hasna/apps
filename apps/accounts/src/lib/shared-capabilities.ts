@@ -10,7 +10,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { platform } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { AccountsError, type SharedConfigSpec, type ToolDef } from "../types.js";
 import { accountsHome } from "../storage.js";
 import { writeFileAtomic } from "./safe-path.js";
@@ -285,13 +285,46 @@ function hasUnrenderedPlaceholder(value: unknown): boolean {
 }
 
 /**
+ * Resolve the installed statusline binary at provisioning time. The command
+ * belongs to the machine that owns the profile, so the provisioner must not
+ * bake one host's absolute path into the package or depend on shared settings
+ * having been updated by a separate install step.
+ */
+function installedStatuslineCommand(): string | undefined {
+  const names =
+    platform() === "win32"
+      ? ["statusline.exe", "statusline.cmd", "statusline.bat", "statusline"]
+      : ["statusline"];
+  for (const directory of (process.env.PATH ?? "").split(delimiter)) {
+    if (!directory) continue;
+    for (const name of names) {
+      const candidate = join(directory, name);
+      try {
+        const stats = statSync(candidate);
+        if (stats.isFile() && (platform() === "win32" || (stats.mode & 0o111) !== 0)) {
+          return resolve(candidate);
+        }
+      } catch {
+        // Try the next PATH entry; an unreadable candidate is not a usable binary.
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
  * Members are unioned across every source and the first definition of a member
  * name wins, so the tool can list rendered files ahead of raw ones without
  * losing anything only the raw file declares. A member whose definition still
  * carries an unsubstituted placeholder is dropped: shipping it would put a
  * server into every profile that cannot start.
  */
-function readSharedConfig(sharedHome: string, config: SharedConfigSpec): Record<string, JsonRecord> {
+function readSharedConfig(
+  sharedHome: string,
+  config: SharedConfigSpec,
+  tool: ToolDef,
+  includeInstalledDefaults: boolean,
+): Record<string, JsonRecord> {
   const found: Record<string, JsonRecord> = {};
   const excluded = new Set(config.exclude ?? []);
   for (const rel of config.sources) {
@@ -313,11 +346,32 @@ function readSharedConfig(sharedHome: string, config: SharedConfigSpec): Record<
   for (const key of Object.keys(found)) {
     if (Object.keys(found[key]!).length === 0) delete found[key];
   }
+  if (
+    includeInstalledDefaults &&
+    tool.id === "claude" &&
+    config.keys.includes("statusLine") &&
+    !found.statusLine
+  ) {
+    const binary = installedStatuslineCommand();
+    if (binary) {
+      found.statusLine = {
+        type: "command",
+        command: `${binary} render`,
+        padding: 0,
+      };
+    }
+  }
   return found;
 }
 
-function mergeSharedConfig(ctx: SharedContext, config: SharedConfigSpec, result: SharedCapabilitiesResult): void {
-  const shared = readSharedConfig(ctx.sharedHome, config);
+function mergeSharedConfig(
+  ctx: SharedContext,
+  config: SharedConfigSpec,
+  tool: ToolDef,
+  includeInstalledDefaults: boolean,
+  result: SharedCapabilitiesResult,
+): void {
+  const shared = readSharedConfig(ctx.sharedHome, config, tool, includeInstalledDefaults);
   if (Object.keys(shared).length === 0) return;
 
   const targetPath = join(ctx.profileDir, config.target);
@@ -489,7 +543,11 @@ export function resetCapabilityBaseline(tool: ToolDef): void {
  * it runs on every launch, so a filesystem that refuses a link must not stop the
  * tool from starting. `accounts doctor` reports what is actually on disk.
  */
-export function ensureSharedCapabilities(profileDir: string, tool: ToolDef): SharedCapabilitiesResult {
+export function ensureSharedCapabilities(
+  profileDir: string,
+  tool: ToolDef,
+  options: { freshProfile?: boolean } = {},
+): SharedCapabilitiesResult {
   const result: SharedCapabilitiesResult = {
     supported: toolSharesCapabilities(tool),
     linked: [],
@@ -514,7 +572,9 @@ export function ensureSharedCapabilities(profileDir: string, tool: ToolDef): Sha
       recordCorpusFloor(join(ctx.sharedHome, entry), corpusIsRecursive(tool, entry));
     }
   }
-  for (const config of sharedConfigsFor(tool)) mergeSharedConfig(ctx, config, result);
+  for (const config of sharedConfigsFor(tool)) {
+    mergeSharedConfig(ctx, config, tool, options.freshProfile === true, result);
+  }
   return result;
 }
 
@@ -547,7 +607,7 @@ export function assertProfileGuarded(profileDir: string, tool: ToolDef): void {
 
   const faults: string[] = [];
   for (const config of required) {
-    for (const row of specHealth(sharedHome, profileDir, config)) {
+    for (const row of specHealth(sharedHome, profileDir, tool, config)) {
       if (row.status === "missing") {
         faults.push(`"${row.key}" is declared on this machine but absent from ${row.target}`);
       } else if (row.status === "unreadable") {
@@ -583,11 +643,16 @@ function entryHealth(sharedHome: string, profileDir: string, entry: string): Sha
 }
 
 function configHealth(sharedHome: string, profileDir: string, tool: ToolDef): SharedCapabilityConfigHealth[] {
-  return sharedConfigsFor(tool).flatMap((config) => specHealth(sharedHome, profileDir, config));
+  return sharedConfigsFor(tool).flatMap((config) => specHealth(sharedHome, profileDir, tool, config));
 }
 
-function specHealth(sharedHome: string, profileDir: string, config: SharedConfigSpec): SharedCapabilityConfigHealth[] {
-  const shared = readSharedConfig(sharedHome, config);
+function specHealth(
+  sharedHome: string,
+  profileDir: string,
+  tool: ToolDef,
+  config: SharedConfigSpec,
+): SharedCapabilityConfigHealth[] {
+  const shared = readSharedConfig(sharedHome, config, tool, false);
   const targetPath = join(profileDir, config.target);
   const doc = readJsonDocument(targetPath);
   return config.keys.map((key) => {

@@ -1,6 +1,7 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
 import {
   existsSync,
+  chmodSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -13,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { addProfile, purgeProfileDir, removeProfile } from "./lib/profiles.js";
 import { addCustomTool, getTool } from "./lib/tools.js";
 import { profileEnv } from "./lib/env.js";
@@ -187,8 +188,9 @@ test("shared MCP servers are seeded into the profile account file, not settings.
   const accountFile = join(p.dir, ".claude.json");
   const data = readJson(accountFile);
   expect(Object.keys(data.mcpServers as Record<string, unknown>).sort()).toEqual(["notes", "todos"]);
-  // settings.json is not the file Claude Code reads user-scope MCP servers from.
-  expect(existsSync(join(p.dir, "settings.json"))).toBe(false);
+  // settings.json is not the file Claude Code reads user-scope MCP servers from;
+  // a fresh Claude profile may still receive the independent statusLine default.
+  expect(readJson(join(p.dir, "settings.json")).statusLine).toBeDefined();
 });
 
 test("MCP seeding merges without clobbering profile-local state", () => {
@@ -877,13 +879,49 @@ test("a profile is BORN with the machine's statusLine in its own settings.json",
   expect(statusLine).toEqual({ type: "command", command: "statusline render", padding: 0 });
 });
 
+test("a fresh Claude profile gets the installed statusline when shared settings omit it", () => {
+  const binDir = join(home, "bin");
+  const statuslineBin = join(binDir, "statusline");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(statuslineBin, "#!/bin/sh\nexit 0\n");
+  chmodSync(statuslineBin, 0o755);
+
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${binDir}${delimiter}${previousPath ?? ""}`;
+  try {
+    const p = addProfile({ name: "statusline-default-at-birth" });
+
+    expect(readJson(join(p.dir, "settings.json")).statusLine).toEqual({
+      type: "command",
+      command: `${statuslineBin} render`,
+      padding: 0,
+    });
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
+});
+
 test("a profile created before the statusLine spec is repaired through the same code path", () => {
   // The 10 profiles already on disk: minted while the machine declared no
   // status line, then repaired by the ensure pass that runs on env/launch/switch.
-  const p = addProfile({ name: "statusline-legacy" });
+  const previousPath = process.env.PATH;
+  process.env.PATH = join(home, "no-statusline-bin");
+  let p: ReturnType<typeof addProfile>;
+  try {
+    p = addProfile({ name: "statusline-legacy" });
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
   const settingsPath = join(p.dir, "settings.json");
   const born = existsSync(settingsPath) ? readJson(settingsPath).statusLine : undefined;
   expect(born).toBeUndefined();
+
+  // Existing-profile repair must not turn the installed default into a sweep.
+  ensureSharedCapabilities(p.dir, getTool("claude"));
+  const afterRepairWithoutSource = existsSync(settingsPath) ? readJson(settingsPath).statusLine : undefined;
+  expect(afterRepairWithoutSource).toBeUndefined();
 
   seedSharedStatusLine(sharedHome, "statusline render");
   ensureSharedCapabilities(p.dir, getTool("claude"));
@@ -917,7 +955,15 @@ test("a machine that declares NO statusLine seeds none, and still launches", () 
   // The negative control. Without it this spec could be satisfied by a rule that
   // writes a statusLine unconditionally, which would author policy in code and
   // put a broken command into every profile on a machine that wants none.
-  const p = addProfile({ name: "no-statusline-machine" });
+  const previousPath = process.env.PATH;
+  process.env.PATH = join(home, "no-statusline-bin");
+  let p: ReturnType<typeof addProfile>;
+  try {
+    p = addProfile({ name: "no-statusline-machine" });
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
 
   const settingsPath = join(p.dir, "settings.json");
   // Nothing to seed from either spec, so the file is not created at all; if some
