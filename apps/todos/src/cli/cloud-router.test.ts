@@ -588,6 +588,62 @@ describe("remote authority compatibility diagnostics", () => {
     const client = getTodosCloudClient(CLOUD_ENV)!;
     await expect(cloudListProjects(client)).rejects.toThrow("REMOTE_API_TIMEOUT");
   });
+
+  // Regression for task 9b050845: `todos count` on a stalled /tasks endpoint
+  // hung past 120s and then reported REMOTE_API_UNREACHABLE, while the host was
+  // reachable (curl connected in 0.18s). A slow authority must fail within the
+  // bounded request timeout and report REMOTE_API_TIMEOUT (slow), never the
+  // multi-minute hang followed by REMOTE_API_UNREACHABLE (down).
+  describe("bounded remote request timeout (task 9b050845)", () => {
+    const STALL_BOUND_MS = 200;
+
+    async function runStalledCloudListTasks(
+      fetchImpl: () => Promise<Response>,
+    ): Promise<{ error: unknown; elapsedMs: number }> {
+      previousFetch ??= globalThis.fetch;
+      globalThis.fetch = fetchImpl as unknown as typeof globalThis.fetch;
+      const client = getTodosCloudClient(CLOUD_ENV, STALL_BOUND_MS)!;
+      const started = Date.now();
+      let error: unknown;
+      try {
+        await cloudListTasks(client);
+      } catch (e) {
+        error = e;
+      }
+      return { error, elapsedMs: Date.now() - started };
+    }
+
+    test("a /tasks response that never completes fails within the bound with REMOTE_API_TIMEOUT, not REMOTE_API_UNREACHABLE", async () => {
+      // The measured stall shape: the authority accepts the connection and
+      // never answers. The fake fetch never settles, so only a bounded
+      // request deadline can terminate the call.
+      const { error, elapsedMs } = await runStalledCloudListTasks(
+        () => new Promise<Response>(() => {}),
+      );
+      expect(String(error)).toContain("REMOTE_API_TIMEOUT");
+      expect(String(error)).not.toContain("REMOTE_API_UNREACHABLE");
+      // The bound fired (not an instant error)...
+      expect(elapsedMs).toBeGreaterThanOrEqual(STALL_BOUND_MS - 100);
+      // ...and exactly once: a retried timeout would take ~3x the bound plus
+      // backoff, the multi-minute hang the census measured.
+      expect(elapsedMs).toBeLessThan(STALL_BOUND_MS * 3);
+    });
+
+    test("a response that sends headers then never completes its body is bounded the same way", async () => {
+      const { error, elapsedMs } = await runStalledCloudListTasks(
+        () =>
+          Promise.resolve(
+            new Response(new ReadableStream({ start() {} }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          ),
+      );
+      expect(String(error)).toContain("REMOTE_API_TIMEOUT");
+      expect(String(error)).not.toContain("REMOTE_API_UNREACHABLE");
+      expect(elapsedMs).toBeLessThan(STALL_BOUND_MS * 3);
+    });
+  });
 });
 
 describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => {

@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Bounded remote request timeout.** `todos count` and every other
+  authenticated `/v1` command against a stalled authority now fail within a
+  single 10s request bound and report `REMOTE_API_TIMEOUT` — "the authority is
+  slow" — instead of hanging for minutes and then reporting
+  `REMOTE_API_UNREACHABLE` — "the authority is down". Timeout-shaped failures
+  are no longer retried into a multi-attempt hang. (task 9b050845)
+
 - **`list --limit N` no longer caps silently.** A bounded read was
   indistinguishable from the full population: `--limit 2000` returned exactly
   2000 rows of a 7,839-row pending set at rc=0 with no truncation signal. The
