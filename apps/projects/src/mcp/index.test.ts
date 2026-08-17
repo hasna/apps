@@ -21,7 +21,7 @@ function runMcpSession(messages: unknown[], env: Record<string, string>) {
     cmd: ["node", "src/testing/mcp-stdio-client.mjs", JSON.stringify(messages)],
     stdout: "pipe",
     stderr: "pipe",
-    env,
+    env: testSpawnEnv(env),
   });
 }
 
@@ -403,6 +403,69 @@ describe("projects-mcp project-first surface", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("spawned MCP sessions do not inherit ambient api-mode env — writes land in the temp DB", async () => {
+    const root = mkdtempSync(join(tmpdir(), "project-mcp-hermetic-"));
+    const dbPath = join(root, "projects.db");
+    const requests: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        requests.push(`${req.method} ${new URL(req.url).pathname}`);
+        return Response.json({ error: "ambient api env reached a spawned MCP server" }, { status: 500 });
+      },
+    });
+
+    const previousUrl = process.env.HASNA_PROJECTS_API_URL;
+    const previousKey = process.env.HASNA_PROJECTS_API_KEY;
+    process.env.HASNA_PROJECTS_API_URL = `http://127.0.0.1:${server.port}`;
+    process.env.HASNA_PROJECTS_API_KEY = "hermetic-test-key";
+    try {
+      const messages = [
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "project-mcp-test", version: "0" },
+          },
+        },
+        { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: {
+            name: "projects_create",
+            arguments: {
+              name: "Hermetic MCP Create",
+              slug: "mcp-hermetic-create",
+            },
+          },
+        },
+      ];
+      const result = runMcpSession(messages, testSpawnEnv({ HASNA_PROJECTS_DB_PATH: dbPath }));
+      expect(result.exitCode).toBe(0);
+      expect(Buffer.from(result.stderr).toString("utf-8")).toBe("");
+
+      const db = new Database(dbPath);
+      const row = db.query("SELECT slug FROM workspaces WHERE slug = ?").get("mcp-hermetic-create");
+      db.close();
+
+      expect(row).not.toBeNull();
+      expect(requests).toEqual([]);
+    } finally {
+      if (previousUrl === undefined) delete process.env.HASNA_PROJECTS_API_URL;
+      else process.env.HASNA_PROJECTS_API_URL = previousUrl;
+      if (previousKey === undefined) delete process.env.HASNA_PROJECTS_API_KEY;
+      else process.env.HASNA_PROJECTS_API_KEY = previousKey;
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   test("projects_import_github accepts and persists finance metadata over MCP", () => {
     const root = mkdtempSync(join(tmpdir(), "project-mcp-finance-github-"));
