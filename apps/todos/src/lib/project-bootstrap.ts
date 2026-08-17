@@ -150,7 +150,7 @@ function addSourceOnce(
 export function bootstrapProject(options: ProjectBootstrapOptions = {}, db?: Database): ProjectBootstrapResult {
   const d = db || getDatabase();
   const discovery = discoverProjectWorkspace(options.path);
-  const taskListSlug = options.taskListSlug || `todos-${slugify(options.name || discovery.projectName)}`;
+  const taskListSlug = options.taskListSlug || slugify(options.name || discovery.projectName);
 
   if (options.dryRun) {
     return {

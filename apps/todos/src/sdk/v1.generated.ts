@@ -8,7 +8,7 @@ import { assertTodosPriorRegistrationAdoptionValidationEnvelope } from "../proje
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string | null; "parent_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "created_by"?: string | null; "reason"?: string | null; "tags"?: Array<string>; "version"?: number; "locked_by"?: string | null; "locked_at"?: string | null; "created_at"?: string; "updated_at"?: string }
 
-export interface Project { "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null; "task_prefix"?: string | null; "task_counter"?: number; "created_at"?: string; "updated_at"?: string }
+export interface Project { "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null; "task_prefix"?: string | null; "task_counter"?: number; "parent_id"?: string | null; "created_at"?: string; "updated_at"?: string }
 
 export interface TaskManifestBounds { "tasks": number; "dependencies": number; "comments": number; "verifications": number; "effects": number; "metadata_fields": number; "effect_payload_fields": number; "request_bytes": number; "response_bytes": number }
 
@@ -94,9 +94,9 @@ export interface FailTaskInput { "agent_id"?: string; "reason"?: string; "retry"
 
 export interface TaskFailureResult { "task": Task; "retryTask"?: Task }
 
-export interface CreateProjectInput { "name": string; "path": string; "description"?: string; "task_list_id"?: string; "task_prefix"?: string }
+export interface CreateProjectInput { "name": string; "path": string; "description"?: string; "task_list_id"?: string; "task_prefix"?: string; "parent_id"?: string }
 
-export interface UpdateProjectInput { "name"?: string; "path"?: string; "description"?: string | null }
+export interface UpdateProjectInput { "name"?: string; "path"?: string; "description"?: string | null; "parent_id"?: string | null }
 
 export interface RenameProjectInput { "new_slug": string; "name"?: string }
 

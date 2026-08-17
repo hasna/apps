@@ -1706,4 +1706,18 @@ export const MIGRATIONS = [
   INSERT OR IGNORE INTO _migrations (id) VALUES (70);
   COMMIT;
   `,
+  // Migration 71: Project parent_id — sub-projects (nesting). NULL = top-level.
+  // ON DELETE SET NULL: deleting a parent does NOT cascade-delete children;
+  // children are detached to top-level rather than destroyed with it.
+  //
+  // The column DDL intentionally lives in ensureSchema's ensureColumn rather
+  // than here: migrations 66+ must be re-runnable (the PR-group downgrade test
+  // rolls _migrations back to 65 and replays every later migration against a
+  // schema that already has this column), and SQLite has no
+  // `ADD COLUMN IF NOT EXISTS`. ensureColumn is the repo's idempotent
+  // safety net and runs on every startup after the migration batch.
+  `BEGIN;
+  INSERT OR IGNORE INTO _migrations (id) VALUES (71);
+  COMMIT;
+  `,
 ];

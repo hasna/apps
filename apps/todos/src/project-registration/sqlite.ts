@@ -832,7 +832,7 @@ implements TodosProjectRegistrationBackendTransaction {
   async createProject(input: CreateProjectInput): Promise<Project> {
     const derivedSlug = normalizeSlug(input.name);
     const taskListId = input.task_list_id === undefined
-      ? `todos-${derivedSlug}`
+      ? derivedSlug
       : normalizeSlug(input.task_list_id);
     if (!derivedSlug || !taskListId) {
       throw new Error("Project name and task-list slug must be non-empty");
@@ -845,6 +845,7 @@ implements TodosProjectRegistrationBackendTransaction {
       task_list_id: taskListId,
       task_prefix: input.task_prefix ?? this.availableProjectPrefix(input.name),
       task_counter: 0,
+      parent_id: input.parent_id ?? null,
       created_at: now(),
       updated_at: now(),
       machine_id: currentStorageMachineId(this.db),
@@ -856,8 +857,8 @@ implements TodosProjectRegistrationBackendTransaction {
         const result = this.db.run(
           `INSERT INTO projects (
              id, name, path, description, task_list_id, task_prefix,
-             task_counter, created_at, updated_at, machine_id
-           ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+             task_counter, parent_id, created_at, updated_at, machine_id
+           ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
           [
             project.id,
             project.name,
@@ -865,6 +866,7 @@ implements TodosProjectRegistrationBackendTransaction {
             project.description,
             project.task_list_id,
             project.task_prefix,
+            project.parent_id,
             project.created_at,
             project.updated_at,
             project.machine_id ?? null,

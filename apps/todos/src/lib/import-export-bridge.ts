@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { getDatabase, now } from "../db/database.js";
-import { listProjects, getProject } from "../db/projects.js";
+import { listProjects, getProject, orderProjectsParentFirst } from "../db/projects.js";
 import { listTasks, getTask, createTask } from "../db/tasks.js";
 import { listPlans } from "../db/plans.js";
 import { listComments } from "../db/comments.js";
@@ -367,16 +367,17 @@ function upsertProject(raw: Record<string, unknown>, d: Database): "created" | "
   const ts = now();
   if (!existing) {
     d.run(
-      `INSERT INTO projects (id, name, path, description, task_list_id, task_prefix, task_counter, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO projects (id, name, path, description, task_list_id, task_prefix, task_counter, parent_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         raw.name,
         raw.path,
         raw.description ?? null,
-        raw.task_list_id ?? `todos-${String(raw.name).toLowerCase().replace(/\s+/g, "-")}`,
+        raw.task_list_id ?? String(raw.name).toLowerCase().replace(/\s+/g, "-"),
         raw.task_prefix ?? "TSK",
         raw.task_counter ?? 0,
+        raw.parent_id ?? null,
         raw.created_at ?? ts,
         raw.updated_at ?? ts,
       ].map(sqlValue),
@@ -384,7 +385,7 @@ function upsertProject(raw: Record<string, unknown>, d: Database): "created" | "
     return "created";
   }
   d.run(
-    `UPDATE projects SET name = ?, path = ?, description = ?, task_list_id = ?, task_prefix = ?, task_counter = ?, updated_at = ?
+    `UPDATE projects SET name = ?, path = ?, description = ?, task_list_id = ?, task_prefix = ?, task_counter = ?, parent_id = ?, updated_at = ?
      WHERE id = ?`,
     [
       raw.name ?? existing.name,
@@ -393,6 +394,7 @@ function upsertProject(raw: Record<string, unknown>, d: Database): "created" | "
       raw.task_list_id ?? existing.task_list_id,
       raw.task_prefix ?? existing.task_prefix,
       raw.task_counter ?? existing.task_counter,
+      raw.parent_id ?? existing.parent_id,
       raw.updated_at ?? ts,
       id,
     ].map(sqlValue),
@@ -491,7 +493,7 @@ export function importBundle(bundle: ImportExportBundle, options: ImportBundleOp
 
   if (options.dry_run) return result;
 
-  for (const raw of bundle.projects) {
+  for (const raw of orderProjectsParentFirst(bundle.projects)) {
     try {
       const id = raw.id as string;
       const local = getProject(id, d);

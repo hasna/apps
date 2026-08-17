@@ -1487,7 +1487,7 @@ describe("CLI integration", () => {
       const result = JSON.parse(stdout);
       expect(result.discovery.projectName).toBe("cli-bootstrap");
       expect(result.project.name).toBe("cli-bootstrap");
-      expect(result.taskList.slug).toBe("todos-cli-bootstrap");
+      expect(result.taskList.slug).toBe("cli-bootstrap");
       expect(result.created.project).toBe(true);
     } finally {
       try { unlinkSync(dbPath); } catch {}
@@ -4261,6 +4261,37 @@ END:VCALENDAR`);
       expect(bogus.exitCode).not.toBe(0);
       expect(bogus.stderr).toContain("totally-bogus-nonexistent");
       expect(bogus.stdout).not.toContain("Assigned task");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it("should create a sub-project with projects --add --parent and read parent_id back", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const home = mkdtempSync(join(tmpdir(), "todos-cli-project-parent-"));
+    const dbPath = join(home, "todos.db");
+
+    try {
+      const parentPath = join(home, "internal-apps");
+      const childPath = join(home, "internal-app-todos");
+      const parent = await runCli(["--json", "projects", "--add", parentPath, "--name", "Internal Apps"], dbPath);
+      expect(parent.exitCode).toBe(0);
+      const parentId = (JSON.parse(parent.stdout) as { id: string }).id;
+
+      const child = await runCli(["--json", "projects", "--add", childPath, "--name", "Internal App Todos", "--parent", "Internal Apps"], dbPath);
+      expect(child.exitCode).toBe(0);
+      const childBody = JSON.parse(child.stdout) as { id: string; parent_id: string | null };
+      expect(childBody.parent_id).toBe(parentId);
+
+      const listed = await runCli(["--json", "projects", "--show", "Internal App Todos"], dbPath);
+      expect(listed.exitCode).toBe(0);
+      expect((JSON.parse(listed.stdout) as { parent_id: string | null }).parent_id).toBe(parentId);
+
+      const missingParent = await runCli(["projects", "--add", join(home, "orphan"), "--name", "Orphan", "--parent", "totally-bogus-nonexistent"], dbPath);
+      expect(missingParent.exitCode).not.toBe(0);
+      expect(missingParent.stderr).toContain("totally-bogus-nonexistent");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

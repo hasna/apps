@@ -6,13 +6,15 @@ import {
   getProject,
   getProjectByPath,
   listProjects,
+  listChildProjects,
+  orderProjectsParentFirst,
   updateProject,
   deleteProject,
   ensureProject,
   renameProject,
 } from "./projects.js";
 import { createTaskList } from "./task-lists.js";
-import { ProjectNotFoundError } from "../types/index.js";
+import { ProjectNotFoundError, ResourceConflictError } from "../types/index.js";
 import { runMigrations } from "./schema.js";
 
 let db: Database;
@@ -45,6 +47,19 @@ describe("createProject", () => {
       db,
     );
     expect(project.description).toBe("A test project");
+  });
+
+  it("derives the task-list slug from the name without a 'todos-' prefix", () => {
+    const project = createProject({ name: "Open Emails", path: "/tmp/open-emails" }, db);
+    expect(project.task_list_id).toBe("open-emails");
+  });
+
+  it("keeps an explicit user-typed 'todos-' slug verbatim", () => {
+    const project = createProject(
+      { name: "Explicit", path: "/tmp/explicit", task_list_id: "todos-explicit" },
+      db,
+    );
+    expect(project.task_list_id).toBe("todos-explicit");
   });
 });
 
@@ -179,6 +194,94 @@ describe("listProjects", () => {
     const projects = listProjects(db);
     expect(projects[0]!.name).toBe("Alpha");
     expect(projects[1]!.name).toBe("Zebra");
+  });
+});
+
+describe("project parent_id (sub-projects)", () => {
+  it("creates a top-level project with parent_id null", () => {
+    const project = createProject({ name: "Top", path: "/tmp/top" }, db);
+    expect(project.parent_id).toBeNull();
+  });
+
+  it("creates a child project under a parent and reads it back", () => {
+    const parent = createProject({ name: "Internal Apps", path: "/tmp/internal-apps" }, db);
+    const child = createProject(
+      { name: "Internal App Todos", path: "/tmp/internal-app-todos", parent_id: parent.id },
+      db,
+    );
+    expect(child.parent_id).toBe(parent.id);
+    expect(getProject(child.id, db)!.parent_id).toBe(parent.id);
+    expect(listProjects(db).find((project) => project.id === child.id)!.parent_id).toBe(parent.id);
+    expect(listChildProjects(parent.id, db).map((project) => project.id)).toEqual([child.id]);
+    expect(listChildProjects(child.id, db)).toHaveLength(0);
+  });
+
+  it("rejects a child whose parent does not exist", () => {
+    expect(() =>
+      createProject({ name: "Orphan", path: "/tmp/orphan", parent_id: "no-such-project" }, db),
+    ).toThrow(ProjectNotFoundError);
+  });
+
+  it("rejects reparenting a project under its own descendant (cycle)", () => {
+    const a = createProject({ name: "A", path: "/tmp/a" }, db);
+    const b = createProject({ name: "B", path: "/tmp/b", parent_id: a.id }, db);
+    const c = createProject({ name: "C", path: "/tmp/c", parent_id: b.id }, db);
+    for (const attempt of [
+      () => updateProject(a.id, { parent_id: c.id }, db),
+      () => updateProject(b.id, { parent_id: b.id }, db),
+    ]) {
+      let caught: unknown;
+      try {
+        attempt();
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(ResourceConflictError);
+      expect((caught as ResourceConflictError).code).toBe("PROJECT_PARENT_CYCLE");
+    }
+    expect(getProject(a.id, db)!.parent_id).toBeNull();
+  });
+
+  it("rejects reparenting to a non-existent parent", () => {
+    const project = createProject({ name: "P", path: "/tmp/p" }, db);
+    expect(() => updateProject(project.id, { parent_id: "no-such-project" }, db)).toThrow(
+      ProjectNotFoundError,
+    );
+  });
+
+  it("detaches a child to top-level with parent_id null", () => {
+    const parent = createProject({ name: "Parent", path: "/tmp/parent" }, db);
+    const child = createProject({ name: "Child", path: "/tmp/child", parent_id: parent.id }, db);
+    const detached = updateProject(child.id, { parent_id: null }, db);
+    expect(detached.parent_id).toBeNull();
+    expect(listChildProjects(parent.id, db)).toHaveLength(0);
+  });
+
+  it("keeps existing projects top-level after migration (parent_id null)", () => {
+    expect(db.query("SELECT MAX(id) AS id FROM _migrations").get()).toEqual({ id: 71 });
+    const project = createProject({ name: "Legacy", path: "/tmp/legacy" }, db);
+    expect(project.parent_id).toBeNull();
+  });
+
+  it("orders projects parent-first regardless of name, and never hangs on a cycle", () => {
+    const a = createProject({ name: "Internal Apps", path: "/tmp/a" }, db);
+    const b = createProject({ name: "Internal App Todos", path: "/tmp/b", parent_id: a.id }, db);
+    const c = createProject({ name: "Z Child", path: "/tmp/c", parent_id: b.id }, db);
+    const top = createProject({ name: "Aardvark", path: "/tmp/top" }, db);
+
+    const nameOrdered = [b, c, a, top]; // child before parent, exactly as ORDER BY name emits
+    const ordered = orderProjectsParentFirst(nameOrdered);
+    // Roots keep their relative order and precede children at every depth.
+    expect(ordered.map((project) => project.id)).toEqual([a, top, b, c].map((project) => project.id));
+
+    // Cyclic input must fall back to original order — no hang, nothing dropped.
+    const cyclic = [a, b, c];
+    cyclic.forEach((project, index) => {
+      (project as { parent_id: string | null }).parent_id = cyclic[(index + 1) % cyclic.length].id;
+    });
+    const cyclicOrdered = orderProjectsParentFirst(cyclic);
+    expect(cyclicOrdered).toHaveLength(3);
+    expect(cyclicOrdered.map((project) => project.id)).toEqual(cyclic.map((project) => project.id));
   });
 });
 

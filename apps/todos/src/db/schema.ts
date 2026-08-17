@@ -730,6 +730,8 @@ export function ensureSchema(db: Database): void {
   ensureColumn("projects", "task_list_id", "TEXT");
   ensureColumn("projects", "task_prefix", "TEXT");
   ensureColumn("projects", "task_counter", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("projects", "parent_id", "TEXT REFERENCES projects(id) ON DELETE SET NULL");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_projects_parent_id ON projects(parent_id)");
 
   // Tasks
   ensureColumn("tasks", "plan_id", "TEXT REFERENCES plans(id) ON DELETE SET NULL");
