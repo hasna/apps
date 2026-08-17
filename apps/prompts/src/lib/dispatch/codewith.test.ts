@@ -9,7 +9,13 @@ import {
   selectTarget,
 } from "./codewith.js"
 import { DispatchError } from "./types.js"
-import { createFakeBins, usageFixture, type FakeBins } from "./test-fakes.js"
+import {
+  createFakeBins,
+  realShapeUsageFixture,
+  usageFixture,
+  type FakeBins,
+} from "./test-fakes.js"
+import { USAGE_READ_MAX_BYTES } from "./codewith.js"
 
 let fakes: FakeBins
 
@@ -167,6 +173,50 @@ describe("discoverTargets", () => {
       error = caught
     }
     expect((error as DispatchError).code).toBe("TARGET_DISCOVERY_FAILED")
+  })
+})
+
+describe("discoverTargets with a real-shape usage population", () => {
+  /**
+   * Regression fixture for the 4096-byte read-bound defect: the real
+   * `codewith usage --all --json` payload measured 2026-08-17 was 81,511
+   * bytes for 28 targets, so the old 4096-byte capture bound truncated it
+   * mid-string and every real discovery failed with TARGET_DISCOVERY_FAILED.
+   * The fixture is stringified with 2-space indentation like the real CLI
+   * emits; it must stay far above 4096 bytes (and above a 64 KiB pipe
+   * buffer) so a reintroduced low bound fails this test.
+   */
+  const realShapePayload = () => JSON.stringify(realShapeUsageFixture(), null, 2)
+
+  test("the real-shape fixture is sized like the measured population", () => {
+    const bytes = Buffer.byteLength(realShapePayload(), "utf8")
+    expect(bytes).toBeGreaterThan(64 * 1024)
+    expect(bytes).toBeLessThan(160 * 1024)
+  })
+
+  test("parses a real-shape 28-target population end to end", async () => {
+    fakes.setUsageFixture(realShapePayload())
+    const result = await discoverTargets(fakes.codewithBin)
+    expect(result.examined).toBe(28)
+    // Root entry: unnamed auth profile.
+    const root = result.targets.find((t) => t.profile_name === null)
+    expect(root).toBeDefined()
+    expect(root?.ok).toBe(true)
+    expect(root?.fingerprint).not.toBeNull()
+    // 24 of 28 entries carry a fingerprint (measured population).
+    expect(result.targets.filter((t) => t.fingerprint !== null)).toHaveLength(24)
+    // Healthy-shaped entries report health status "unknown" (the current CLI
+    // contract), so none is `available`; selection must reach the honest
+    // NO_HEALTHY_TARGET verdict rather than a parse failure.
+    expect(result.targets.filter((t) => t.ok && t.health_status === "unknown").length).toBeGreaterThan(0)
+    expect(result.targets.filter((t) => t.available)).toHaveLength(0)
+    expect(() => selectTarget(result.targets)).toThrow(
+      expect.objectContaining({ code: "NO_HEALTHY_TARGET" })
+    )
+  })
+
+  test("the usage read bound covers the real population", () => {
+    expect(USAGE_READ_MAX_BYTES).toBeGreaterThanOrEqual(2 * 1024 * 1024)
   })
 })
 

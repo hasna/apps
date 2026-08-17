@@ -16,13 +16,23 @@
  *   events, the rendered prompt on STDIN, and an allowlisted environment.
  */
 
-import { mkdtempSync, readFileSync, rmSync } from "fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
-import { boundAndRedact } from "./redact.js"
+import { boundAndRedact, TRUNCATED_MARKER } from "./redact.js"
 import { DispatchError, type DispatchTarget } from "./types.js"
 
 export const LOCK_KEY_PREFIX = "codewith/provider-account"
+
+/**
+ * Read bound for `codewith usage --all --json`. The real CLI emits ~2.9 KB
+ * per target with indentation; a realistic population is tens of KB (measured
+ * 2026-08-17: 81,511 bytes for 28 targets). 4096 bytes truncated real
+ * populations mid-string and every dispatch/targets read failed with
+ * TARGET_DISCOVERY_FAILED. 2 MiB covers the real population with headroom
+ * while keeping the parse input bounded.
+ */
+export const USAGE_READ_MAX_BYTES = 2 * 1024 * 1024
 
 export interface DiscoveredTarget extends DispatchTarget {}
 
@@ -38,6 +48,9 @@ export interface CapturedRun {
   signalCode: string | null
   stdout: string
   stderr: string
+  /** True when the captured file exceeded the read bound and only its bounded head was read. */
+  stdoutTruncated: boolean
+  stderrTruncated: boolean
 }
 
 /**
@@ -69,11 +82,15 @@ async function runCaptured(
     }, timeoutMs)
     const exitCode = await proc.exited
     clearTimeout(killer)
+    const stdout = await readBounded(outPath, maxReadBytes)
+    const stderr = await readBounded(errPath, maxReadBytes)
     return {
       exitCode,
       signalCode: proc.signalCode,
-      stdout: readBounded(outPath, maxReadBytes),
-      stderr: readBounded(errPath, maxReadBytes),
+      stdout: stdout.text,
+      stderr: stderr.text,
+      stdoutTruncated: stdout.truncated,
+      stderrTruncated: stderr.truncated,
     }
   } finally {
     try {
@@ -84,11 +101,28 @@ async function runCaptured(
   }
 }
 
-function readBounded(path: string, maxBytes: number): string {
+/**
+ * Read a captured file bounded and redacted without ever materializing the
+ * whole file in memory: when the file exceeds the byte bound, only the
+ * bounded head is read (the JSON would then be mid-string and fail loudly,
+ * which is the correct behavior for an over-bound population).
+ */
+async function readBounded(
+  path: string,
+  maxBytes: number
+): Promise<{ text: string; truncated: boolean }> {
   try {
-    return boundAndRedact(readFileSync(path, "utf8"), maxBytes).text
+    if (!existsSync(path)) return { text: "", truncated: false }
+    const size = statSync(path).size
+    if (size > maxBytes) {
+      const sliced = await Bun.file(path).slice(0, maxBytes).arrayBuffer()
+      const text = Buffer.from(sliced).toString("utf8")
+      const bounded = boundAndRedact(text, maxBytes)
+      return { text: bounded.text + TRUNCATED_MARKER, truncated: true }
+    }
+    return { text: boundAndRedact(readFileSync(path, "utf8"), maxBytes).text, truncated: false }
   } catch {
-    return ""
+    return { text: "", truncated: false }
   }
 }
 
@@ -102,7 +136,7 @@ export async function discoverTargets(
   bin: string,
   timeoutMs = 30_000
 ): Promise<TargetDiscoveryResult> {
-  const captured = await runCaptured([bin, "usage", "--all", "--json"], timeoutMs, 4096)
+  const captured = await runCaptured([bin, "usage", "--all", "--json"], timeoutMs, USAGE_READ_MAX_BYTES)
   if (captured.exitCode !== 0 && captured.exitCode !== 2) {
     throw new DispatchError(
       "TARGET_DISCOVERY_FAILED",
@@ -117,6 +151,12 @@ export async function discoverTargets(
   try {
     parsed = JSON.parse(raw)
   } catch {
+    if (captured.stdoutTruncated) {
+      throw new DispatchError(
+        "TARGET_DISCOVERY_FAILED",
+        `codewith usage output exceeded the ${USAGE_READ_MAX_BYTES}-byte read bound and could not be parsed`
+      )
+    }
     throw new DispatchError(
       "TARGET_DISCOVERY_FAILED",
       `codewith usage returned invalid JSON: ${captured.stderr.trim().slice(0, 200)}`

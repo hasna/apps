@@ -208,3 +208,114 @@ export function usageFixture(targets: FakeUsageTarget[]): unknown {
     })),
   }
 }
+
+/**
+ * Synthetic fixture faithful to the shape and size of the REAL
+ * `codewith usage --all --json` payload measured 2026-08-17 (81,511 bytes,
+ * 28 targets; entry keys accounts/accountsError/authMode/error/ok/plan/
+ * redactedAccountId/spendStatus/target; 20 entries with rateLimits whose
+ * health.status is "unknown" + 2 usage snapshots each; 1 root entry with
+ * profileName null; 24 entries with a non-empty redactedAccountId; 4 no-auth
+ * entries with authMode null and no fingerprint). All values are synthetic;
+ * only the shape, sizes, and field names are reproduced. Stringify with
+ * 2-space indentation to reproduce the real payload's byte profile (the CLI
+ * emits indented JSON).
+ */
+export function realShapeUsageFixture(): unknown {
+  const spendStatusReported = {
+    backendCredits: { reason: "included_in_rate_limit_snapshots", status: "backend_reported" },
+    dollarSpend: { reason: "no_backend_dollar_spend_endpoint", status: "unavailable" },
+  }
+  const spendStatusUnavailable = {
+    backendCredits: { reason: "no_backend_credit_or_spend_control_status", status: "unavailable" },
+    dollarSpend: { reason: "no_backend_dollar_spend_endpoint", status: "unavailable" },
+  }
+
+  function usageSnapshot(index: number): unknown {
+    return {
+      credits: {
+        remaining: 840 + (index % 7),
+        resetsAt: "2026-08-18T00:00:00Z",
+        total: 1000,
+      },
+      individual_limit: {
+        remaining: 840 + (index % 7),
+        total: 1000,
+      },
+      limit_id: `usage-limit-${String(index).padStart(4, "0")}`,
+      limit_name: `chatgpt-usage-window-${String(index).padStart(4, "0")}`,
+      plan_type: "pro",
+      primary: {
+        code: "rate_limit_exceeded",
+        message: "rate limit exceeded for this usage window, retry later",
+        retryAfterSeconds: 60,
+      },
+      rate_limit_reached_type: "none",
+      secondary: [],
+    }
+  }
+
+  function healthyEntry(index: number, profileName: string | null): unknown {
+    const num = String(index).padStart(3, "0")
+    return {
+      target: {
+        displayName: profileName === null ? "default" : `account${num}`,
+        profileName,
+        subscriptionProvider: "chat-gpt",
+      },
+      authMode: "chatgpt",
+      ok: true,
+      error: null,
+      plan: "Pro",
+      rateLimits: {
+        capturedAt: "2026-08-17T08:00:00Z",
+        health: {
+          status: "unknown",
+          reason: "unsupported_or_missing_usage_windows",
+          remainingPercent: null,
+          resetsAt: null,
+          usableLanes: [],
+        },
+        snapshots: [usageSnapshot(index * 2), usageSnapshot(index * 2 + 1)],
+      },
+      spendStatus: spendStatusReported,
+      redactedAccountId: `acct_fake_${String(index).padStart(6, "0")}`,
+      accounts: [
+        {
+          default: true,
+          name: `account${num}`,
+          rateLimits: { capturedAt: "2026-08-17T08:00:00Z", health: { status: "unknown" } },
+          redactedAccountId: `acct_fake_${String(index).padStart(6, "0")}`,
+          spendStatus: spendStatusReported,
+          structure: { provider: "chatgpt", plan: "Pro" },
+        },
+      ],
+    }
+  }
+
+  function failedEntry(index: number, noAuth: boolean): unknown {
+    const num = String(index).padStart(3, "0")
+    return {
+      target: {
+        displayName: `account${num}`,
+        profileName: `account${num}`,
+        subscriptionProvider: "chat-gpt",
+      },
+      authMode: noAuth ? null : "chatgpt",
+      ok: false,
+      error: "x",
+      plan: noAuth ? null : "Pro",
+      spendStatus: spendStatusUnavailable,
+      redactedAccountId: noAuth ? null : `acct_fake_${String(index).padStart(6, "0")}`,
+      accounts: noAuth ? null : [],
+      accountsError: noAuth ? { message: "no authenticated account for this target" } : null,
+    }
+  }
+
+  const targets: unknown[] = []
+  targets.push(healthyEntry(0, null)) // root entry: unnamed auth profile
+  for (let i = 1; i <= 19; i++) targets.push(healthyEntry(i, `account${String(i).padStart(3, "0")}`))
+  for (let i = 20; i <= 23; i++) targets.push(failedEntry(i, true))
+  for (let i = 24; i <= 27; i++) targets.push(failedEntry(i, false))
+  return { ok: false, targets }
+}
