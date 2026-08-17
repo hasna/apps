@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
 import { createTask, getTask } from "../db/tasks.js";
-import { createProject } from "../db/projects.js";
+import { createProject, getProject } from "../db/projects.js";
 import { addComment } from "../db/comments.js";
 import { addDependency } from "../db/tasks.js";
 import {
@@ -137,5 +137,55 @@ describe("import-export bridge", () => {
 
   it("documents bridge workflow", () => {
     expect(getBridgeDocs()).toContain(BUNDLE_SCHEMA);
+  });
+});
+
+describe("parent_id projects round-trip", () => {
+  function roundTripImport() {
+    const bundle = exportLocalBundle();
+    closeDatabase();
+    process.env["TODOS_DB_PATH"] = ":memory:";
+    resetDatabase();
+    getDatabase();
+    return importBundle(bundle, { strategy: "remote_wins" });
+  }
+
+  function expectHierarchyRestored(parentId: string, childId: string, taskId: string, result: { errors: string[] }) {
+    expect(result.errors).toEqual([]);
+    expect(getProject(childId)?.name).toBe("Internal App Todos");
+    expect(getProject(childId)?.parent_id).toBe(parentId);
+    expect(getTask(taskId)?.project_id).toBe(childId);
+  }
+
+  it("restores a child that sorts BEFORE its parent, with its task rows", () => {
+    const parent = createProject({ name: "Internal Apps", path: "/tmp/roundtrip/internal-apps" });
+    const child = createProject({
+      name: "Internal App Todos",
+      path: "/tmp/roundtrip/internal-app-todos",
+      parent_id: parent.id,
+    });
+    const task = createTask({ title: "child project task", project_id: child.id });
+
+    // The bundle is exported in name order, so the child lands before its
+    // parent in the file; the import must still restore the whole hierarchy.
+    expect(child.name.localeCompare(parent.name)).toBeLessThan(0);
+
+    const result = roundTripImport();
+    expectHierarchyRestored(parent.id, child.id, task.id, result);
+    expect(getTask(task.id)?.title).toBe("child project task");
+  });
+
+  it("control: restores a child that sorts AFTER its parent", () => {
+    const parent = createProject({ name: "Alpha", path: "/tmp/roundtrip/alpha" });
+    const child = createProject({ name: "Beta Child", path: "/tmp/roundtrip/beta-child", parent_id: parent.id });
+    const task = createTask({ title: "beta child task", project_id: child.id });
+
+    expect(child.name.localeCompare(parent.name)).toBeGreaterThan(0);
+
+    const result = roundTripImport();
+    expect(result.errors).toEqual([]);
+    expect(getProject(child.id)?.name).toBe("Beta Child");
+    expect(getProject(child.id)?.parent_id).toBe(parent.id);
+    expect(getTask(task.id)?.project_id).toBe(child.id);
   });
 });

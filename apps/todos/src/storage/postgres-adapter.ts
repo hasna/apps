@@ -2733,22 +2733,48 @@ async function getChangedSince(since: string, filters: TodosActiveWorkFilter | u
 async function createProject(input: CreateProjectInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<Project> {
   const timestamp = new Date().toISOString();
   const derivedSlug = slugifyRaw(input.name);
-  const taskListId = input.task_list_id === undefined ? `todos-${derivedSlug}` : slugifyRaw(input.task_list_id);
+  const taskListId = input.task_list_id === undefined ? derivedSlug : slugifyRaw(input.task_list_id);
   if (!derivedSlug || !taskListId) throw new Error("Project name and task-list slug must be non-empty");
+  const parentId = input.parent_id ?? null;
+  const id = randomUUID();
+  if (parentId !== null) {
+    const parent = await store.get<Project>("projects", parentId);
+    if (!parent) throw new ProjectNotFoundError(parentId);
+    await assertNotProjectAncestorPostgres(id, parentId, store);
+  }
   const project: Project = {
-    id: randomUUID(),
+    id,
     name: input.name,
     path: input.path,
     description: input.description ?? null,
     task_list_id: taskListId,
     task_prefix: input.task_prefix ?? await generateProjectPrefix(input.name, store),
     task_counter: 0,
+    parent_id: parentId,
     created_at: timestamp,
     updated_at: timestamp,
     machine_id: store.machineId(context),
     synced_at: null,
   };
   return store.upsert("projects", project, context);
+}
+
+async function assertNotProjectAncestorPostgres(projectId: string, candidateParentId: string, store: PostgresJsonRecordStore): Promise<void> {
+  const all = await store.list<Project>("projects");
+  const byId = new Map(all.map((project) => [project.id, project.parent_id ?? null]));
+  let cursor: string | null = candidateParentId;
+  const seen = new Set<string>();
+  while (cursor !== null) {
+    if (cursor === projectId) {
+      throw new ResourceConflictError(
+        "PROJECT_PARENT_CYCLE",
+        `Project "${projectId}" cannot be placed under its own descendant`,
+      );
+    }
+    if (seen.has(cursor)) break;
+    seen.add(cursor);
+    cursor = byId.get(cursor) ?? null;
+  }
 }
 
 async function updateProject(
@@ -2760,7 +2786,17 @@ async function updateProject(
     throw new Error("task_list_id cannot be changed by updateProject; use renameProject for an atomic canonical rename");
   }
   const project = await requireRecord<Project>("projects", id, store);
-  const updated = { ...project, ...definedPatch(input), updated_at: new Date().toISOString() };
+  if (input.parent_id !== undefined && input.parent_id !== null) {
+    const parent = await store.get<Project>("projects", input.parent_id);
+    if (!parent) throw new ProjectNotFoundError(input.parent_id);
+    await assertNotProjectAncestorPostgres(id, input.parent_id, store);
+  }
+  const updated = {
+    ...project,
+    ...definedPatch(input),
+    ...(input.parent_id !== undefined ? { parent_id: input.parent_id } : {}),
+    updated_at: new Date().toISOString(),
+  };
   return store.upsert("projects", updated);
 }
 

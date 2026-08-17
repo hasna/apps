@@ -82,14 +82,14 @@ describe("project bootstrap state", () => {
     expect(first.created.project).toBe(true);
     expect(first.created.taskList).toBe(true);
     expect(first.project?.name).toBe("bootstrap-app");
-    expect(first.taskList?.slug).toBe("todos-bootstrap-app");
+    expect(first.taskList?.slug).toBe("bootstrap-app");
     expect(second.created.project).toBe(false);
     expect(second.created.taskList).toBe(false);
     expect(second.project?.id).toBe(first.project?.id);
 
     const lists = listTaskLists(first.project!.id);
     expect(lists).toHaveLength(1);
-    expect(lists[0]!.slug).toBe("todos-bootstrap-app");
+    expect(lists[0]!.slug).toBe("bootstrap-app");
 
     const sources = listProjectSources(first.project!.id);
     expect(sources.map((source) => source.type).sort()).toEqual(["git", "local"]);

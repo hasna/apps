@@ -422,7 +422,7 @@ describe("Todos package-owned project registration authority", () => {
     expect(getProject(projectReceipt.target_id!, db)).toMatchObject({
       id: projectReceipt.target_id,
       name: "Fleet Resources",
-      task_list_id: "todos-fleet-resources",
+      task_list_id: "fleet-resources",
     });
     expect(await authority.readExact({
       resource_kind: "project",
@@ -446,7 +446,7 @@ describe("Todos package-owned project registration authority", () => {
     expect(list).toMatchObject({
       id: listReceipt.target_id,
       project_id: projectReceipt.target_id,
-      slug: "todos-fleet-resources",
+      slug: "fleet-resources",
       name: "Fleet Resources",
     });
     expect(list!.project_id).toBe(projectReceipt.target_id);
@@ -507,6 +507,44 @@ describe("Todos package-owned project registration authority", () => {
     await expect(authority.compensate(inverseRequest(projectReceipt, projectCall)))
       .rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_INVALID_INPUT" });
     expect(getProject(existingProject.id, db)).not.toBeNull();
+  });
+
+  test("binds a pre-normalization 'todos-' prefixed row without duplicating it", async () => {
+    // Rows registered before the slug-prefix removal carry `todos-<slug>`.
+    // bind_existing must bind that row (the same workspace, found by path /
+    // legacy task-list slug) instead of creating a new unprefixed one.
+    const legacyProject = createProject({
+      name: "Fleet Resources",
+      path: "hasna-project://wks_fleetresources01",
+      task_list_id: "todos-fleet-resources",
+    }, db);
+    const legacyTaskList = createTaskList({
+      name: "Fleet Resources",
+      slug: "todos-fleet-resources",
+      project_id: legacyProject.id,
+    }, db);
+
+    const projectReceipt = await authority.create(projectRequest({
+      operation_id: "fleet-resources-legacy-bind-0001",
+      bind_existing: true,
+    }));
+    expect(projectReceipt).toMatchObject({
+      outcome: "accepted",
+      target_id: legacyProject.id,
+      created_by_operation: false,
+    });
+    const taskListReceipt = await authority.create(taskListRequest(legacyProject.id, {
+      operation_id: "fleet-resources-legacy-task-list-bind-0001",
+      bind_existing: true,
+    }));
+    expect(taskListReceipt).toMatchObject({
+      outcome: "accepted",
+      target_id: legacyTaskList.id,
+      created_by_operation: false,
+    });
+    expect(db.query("SELECT COUNT(*) AS count FROM projects").get()).toEqual({ count: 1 });
+    expect(db.query("SELECT COUNT(*) AS count FROM task_lists").get()).toEqual({ count: 1 });
+    expect(getProject(legacyProject.id, db)?.task_list_id).toBe("todos-fleet-resources");
   });
 
   test("bind-existing receipts preserve immutable project and task-list incarnations across pre-bind mutable drift", async () => {
@@ -1193,7 +1231,7 @@ describe("Todos package-owned project registration authority", () => {
     const normalized = projectRequest(request);
     const receipt = await authority.create(normalized);
     expect(receipt.outcome).toBe("accepted");
-    expect(getProject(receipt.target_id!, db)?.task_list_id).toBe("todos-acme-emails");
+    expect(getProject(receipt.target_id!, db)?.task_list_id).toBe("acme-emails");
   });
 
   test("returns one bounded immutable terminal receipt from exact lookup", async () => {
@@ -1716,14 +1754,18 @@ describe("Todos package-owned project registration authority", () => {
       registeredProject.target_id!,
       listRequest,
     ));
+    // `todos-` is no longer a reserved namespace: the registration derives the
+    // unprefixed slug, creates it, and leaves the ordinary `todos-` list
+    // untouched (not clobbered).
     expect(listReceipt).toMatchObject({
-      outcome: "terminal_nonacceptance",
-      reason: "target_already_exists",
-      created_by_operation: false,
+      outcome: "accepted",
+      resource_kind: "task_list",
+      created_by_operation: true,
     });
+    expect(getTaskList(listReceipt.target_id!, db)?.slug).toBe("fleet-list-conflict");
     expect(getTaskList(existingList.id, db)?.name).toBe("Existing Queue");
     expect(db.query("SELECT COUNT(*) AS count FROM task_lists").get())
-      .toEqual({ count: beforeListCount.count });
+      .toEqual({ count: beforeListCount.count + 1 });
   });
 
   for (const point of [
@@ -1865,7 +1907,7 @@ describe("Todos package-owned project registration authority", () => {
     const ordinaryWinner = createProject({
       name: "Ordinary winner",
       path: "/ordinary-winner",
-      task_list_id: "todos-fleet-resources",
+      task_list_id: "fleet-resources",
       task_prefix: "WIN",
     }, db);
     releaseFault();

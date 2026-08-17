@@ -259,7 +259,15 @@ function taskListSlug(projectSlug: string): string {
       "project_slug must be canonical kebab-case",
     );
   }
-  return `todos-${slug}`;
+  // User-given slugs stay verbatim: no "todos-" prefix is added anymore.
+  return slug;
+}
+
+function legacyTaskListSlug(projectSlug: string): string {
+  // Rows registered before the prefix removal carry `todos-<slug>`; the
+  // normalization migration renames them, and until then the bind paths below
+  // accept them as the existing incarnation of the same registered workspace.
+  return `todos-${normalizeSlug(projectSlug)}`;
 }
 
 function deterministicTaskPrefix(projectSlug: string): string {
@@ -1109,6 +1117,19 @@ implements TodosProjectRegistrationAuthority {
             created_by_operation: false,
           };
         }
+        if (
+          request.bind_existing === true
+          && conflict.path === path
+          && conflict.task_list_id === legacyTaskListSlug(request.project_slug)
+        ) {
+          // Pre-normalization row (slug `todos-<slug>`); bind it as the same
+          // registered workspace instead of duplicating. The normalization
+          // migration renames it to the unprefixed slug.
+          return {
+            record: boundExistingProjectRecord(conflict),
+            created_by_operation: false,
+          };
+        }
         return this.terminalFor(
           transaction,
           request,
@@ -1181,6 +1202,20 @@ implements TodosProjectRegistrationAuthority {
         "target_already_exists",
         { targetId: conflict.id },
       );
+    }
+    if (request.bind_existing === true) {
+      const legacy = await transaction.findTaskListConflict(
+        todosProjectId,
+        legacyTaskListSlug(request.project_slug),
+      );
+      if (legacy && legacy.project_id === todosProjectId) {
+        // Pre-normalization task list (slug `todos-<slug>`); bind it instead
+        // of duplicating. The normalization migration renames it.
+        return {
+          record: boundExistingTaskListRecord(legacy),
+          created_by_operation: false,
+        };
+      }
     }
     await this.fault("before_object_write", request);
     const taskList = await transaction.createTaskList({

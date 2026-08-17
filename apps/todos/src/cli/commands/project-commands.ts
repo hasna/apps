@@ -835,6 +835,7 @@ export function registerProjectCommands(program: Command) {
     .option("--path <path>", "Project path (with --update)")
     .option("--description <text>", "Project description (with --add or --update)")
     .option("--task-list-id <id>", "Custom task list ID (with --add)")
+    .option("--parent <project>", "Parent project (id, path, task-list slug, or name) to create a sub-project under (with --add)")
     .option("--ensure-task-list <project>", "Plan or apply creation of an existing project's declared task list")
     .option("--rollback-task-list <project>", "Conditionally roll back a task list created by --ensure-task-list")
     .option("--apply", "Apply --ensure-task-list or --rollback-task-list; ensure plans by default")
@@ -990,12 +991,21 @@ export function registerProjectCommands(program: Command) {
       if (opts.add) {
         const projectPath = resolve(opts.add);
         const name = opts.name || basename(projectPath);
+        let parentId: string | undefined;
+        if (opts.parent !== undefined) {
+          const parent = cloud ? await cloudResolveProject(cloud, opts.parent) : resolveExplicitProject(opts.parent);
+          parentId = parent.id;
+        }
         const existing = cloud
           ? (await cloudListProjects(cloud)).find((project) => project.path === projectPath)
           : getProjectByPath(projectPath);
         let project;
         if (existing) {
           project = existing;
+          if (opts.parent !== undefined && existing.parent_id !== parentId) {
+            if (cloud) project = await cloudUpdateProject(cloud, existing.id, { parent_id: parentId });
+            else project = updateProject(existing.id, { parent_id: parentId });
+          }
           if (opts.taskListId) {
             if (cloud && existing.task_list_id !== opts.taskListId) {
               handleError(new Error("Remote project task-list slug changes require project-rename"));
@@ -1003,7 +1013,7 @@ export function registerProjectCommands(program: Command) {
             if (!cloud) project = renameProject(existing.id, { new_slug: opts.taskListId }).project;
           }
         } else {
-          const input = { name, path: projectPath, description: opts.description, task_list_id: opts.taskListId };
+          const input = { name, path: projectPath, description: opts.description, task_list_id: opts.taskListId, parent_id: parentId };
           project = cloud ? await cloudCreateProject(cloud, input) : createProject(input);
         }
         // Auto-register machine-local path
@@ -1021,6 +1031,7 @@ export function registerProjectCommands(program: Command) {
         } else {
           console.log(chalk.green(`Project registered: ${project.name} (${project.path})`));
           if (project.task_list_id) console.log(chalk.dim(`  Task list: ${project.task_list_id}`));
+          if (parentId) console.log(chalk.dim(`  Parent: ${parentId}`));
         }
         return;
       }

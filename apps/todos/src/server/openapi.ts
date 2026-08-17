@@ -118,6 +118,7 @@ const projectSchema = {
     task_list_id: { type: "string", nullable: true },
     task_prefix: { type: "string", nullable: true },
     task_counter: { type: "number" },
+    parent_id: { type: "string", nullable: true },
     created_at: { type: "string" },
     updated_at: { type: "string" },
   },
@@ -1006,6 +1007,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             description: { type: "string" },
             task_list_id: { type: "string", minLength: 1, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
             task_prefix: { type: "string", minLength: 1 },
+            parent_id: { type: "string", minLength: 1 },
           },
         },
         UpdateProjectInput: {
@@ -1016,6 +1018,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             name: { type: "string", minLength: 1 },
             path: { type: "string", minLength: 1 },
             description: { type: "string", nullable: true },
+            parent_id: { type: "string", minLength: 1, nullable: true },
           },
         },
         RenameProjectInput: {

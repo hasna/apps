@@ -234,8 +234,8 @@ describe("project mutation OpenAPI contract", () => {
     const createProperties = document.components.schemas.CreateProjectInput.properties;
     const updateProperties = document.components.schemas.UpdateProjectInput.properties;
 
-    expect(Object.keys(createProperties)).toEqual(["name", "path", "description", "task_list_id", "task_prefix"]);
-    expect(Object.keys(updateProperties)).toEqual(["name", "path", "description"]);
+    expect(Object.keys(createProperties)).toEqual(["name", "path", "description", "task_list_id", "task_prefix", "parent_id"]);
+    expect(Object.keys(updateProperties)).toEqual(["name", "path", "description", "parent_id"]);
     expect(createProperties.task_list_id).toMatchObject({ minLength: 1, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" });
     expect(document.paths["/v1/projects"].post.responses["409"]).toBeDefined();
     expect(document.paths["/v1/projects/{id}/rename"].post.operationId).toBe("renameProject");

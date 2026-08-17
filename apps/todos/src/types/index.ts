@@ -64,6 +64,7 @@ export interface Project {
   task_list_id: string | null;
   task_prefix: string | null;
   task_counter: number;
+  parent_id: string | null;
   created_at: string;
   updated_at: string;
   machine_id?: string | null;
@@ -77,6 +78,7 @@ export interface CreateProjectInput {
   description?: string;
   task_list_id?: string;
   task_prefix?: string;
+  parent_id?: string;
 }
 
 /** Ordinary project metadata update. Canonical slug changes require renameProject. */
@@ -84,6 +86,7 @@ export interface UpdateProjectInput {
   name?: string;
   path?: string;
   description?: string | null;
+  parent_id?: string | null;
 }
 
 export interface RenameProjectInput {
@@ -1375,7 +1378,7 @@ export class ProjectNotFoundError extends Error {
 
 export class ResourceConflictError extends Error {
   constructor(
-    public readonly code: "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "PLAN_PROJECT_LINK_CONFLICT" | "TASK_PARENT_CYCLE",
+    public readonly code: "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "PLAN_PROJECT_LINK_CONFLICT" | "TASK_PARENT_CYCLE" | "PROJECT_PARENT_CYCLE",
     message: string,
   ) {
     super(message);

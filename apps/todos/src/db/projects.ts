@@ -43,19 +43,25 @@ export function createProject(
     const id = uuid();
     const timestamp = now();
     const derivedSlug = slugify(input.name);
-    const taskListId = input.task_list_id === undefined ? `todos-${derivedSlug}` : slugify(input.task_list_id);
+    const taskListId = input.task_list_id === undefined ? derivedSlug : slugify(input.task_list_id);
     if (!derivedSlug || !taskListId) throw new Error("Project name and task-list slug must be non-empty");
     const slugConflict = d.query("SELECT id FROM projects WHERE task_list_id = ? LIMIT 1").get(taskListId);
     if (slugConflict || !claimCanonicalSlug("project", "global", taskListId, id, d)) {
       throw new ResourceConflictError("PROJECT_SLUG_CONFLICT", `Project slug "${taskListId}" already exists`);
     }
+    const parentId = input.parent_id ?? null;
+    if (parentId !== null) {
+      const parent = getProject(parentId, d);
+      if (!parent) throw new ProjectNotFoundError(parentId);
+      assertNotProjectAncestor(id, parentId, d);
+    }
     const taskPrefix = input.task_prefix || generatePrefix(input.name, d);
     const machineId = currentStorageMachineId(d);
 
     d.run(
-      `INSERT INTO projects (id, name, path, description, task_list_id, task_prefix, task_counter, created_at, updated_at, machine_id)
-       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
-      [id, input.name, input.path, input.description || null, taskListId, taskPrefix, timestamp, timestamp, machineId],
+      `INSERT INTO projects (id, name, path, description, task_list_id, task_prefix, task_counter, parent_id, created_at, updated_at, machine_id)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+      [id, input.name, input.path, input.description || null, taskListId, taskPrefix, parentId, timestamp, timestamp, machineId],
     );
     return getProject(id, d)!;
   })();
@@ -90,6 +96,91 @@ export function listProjects(db?: Database): Project[] {
     .all() as Project[];
 }
 
+export function listChildProjects(parentId: string, db?: Database): Project[] {
+  const d = db || getDatabase();
+  return d
+    .query("SELECT * FROM projects WHERE parent_id = ? ORDER BY name")
+    .all(parentId) as Project[];
+}
+
+/**
+ * Order projects so every parent precedes its children, regardless of name.
+ *
+ * projects.parent_id is an immediate foreign key, so importing a child before
+ * its parent fails the constraint and drops the child — and everything that
+ * points at it, such as its task rows — into the import's error list. Both
+ * round-trip import paths (SQLite snapshot restore and bundle import) rely on
+ * this ordering and must not depend on the export side's `ORDER BY name`.
+ *
+ * Stable and cycle-safe: rows whose parent is null, already emitted, or
+ * outside the given set keep their original relative order; a malformed input
+ * whose parent chain loops falls back to original order instead of hanging or
+ * dropping rows silently — the FK constraint then rejects the offending rows
+ * per-row and the import records the errors.
+ */
+export function orderProjectsParentFirst<T extends object>(projects: readonly T[]): T[] {
+  const projectId = (project: T): string | null => {
+    const id = (project as { id?: unknown }).id;
+    return typeof id === "string" && id.length > 0 ? id : null;
+  };
+  const parentId = (project: T): string | null => {
+    const parent = (project as { parent_id?: unknown }).parent_id;
+    return parent == null ? null : String(parent);
+  };
+
+  const byId = new Set<string>();
+  for (const project of projects) {
+    const id = projectId(project);
+    if (id !== null) byId.add(id);
+  }
+
+  const ordered: T[] = [];
+  const emitted = new Set<string>();
+  let remaining = [...projects];
+  let progress = true;
+  while (progress && remaining.length > 0) {
+    progress = false;
+    const deferred: T[] = [];
+    for (const project of remaining) {
+      const parent = parentId(project);
+      if (parent === null || emitted.has(parent) || !byId.has(parent)) {
+        ordered.push(project);
+        const id = projectId(project);
+        if (id !== null) emitted.add(id);
+        progress = true;
+      } else {
+        deferred.push(project);
+      }
+    }
+    remaining = deferred;
+  }
+  ordered.push(...remaining);
+  return ordered;
+}
+
+/**
+ * Reject making `projectId` a descendant of `ancestorId`. Walks the ancestor
+ * chain of the candidate parent; if `projectId` appears anywhere in it, the
+ * new link would create a cycle (a project that is its own ancestor).
+ */
+export function assertNotProjectAncestor(projectId: string, ancestorId: string, db?: Database): void {
+  const d = db || getDatabase();
+  let cursor: string | null = ancestorId;
+  const seen = new Set<string>();
+  while (cursor !== null) {
+    if (cursor === projectId) {
+      throw new ResourceConflictError(
+        "PROJECT_PARENT_CYCLE",
+        `Project "${projectId}" cannot be placed under its own descendant`,
+      );
+    }
+    if (seen.has(cursor)) break; // defensive: pre-existing corrupt chain must not loop forever
+    seen.add(cursor);
+    const row = d.query("SELECT parent_id FROM projects WHERE id = ?").get(cursor) as { parent_id: string | null } | null;
+    cursor = row?.parent_id ?? null;
+  }
+}
+
 export function updateProject(
   id: string,
   input: UpdateProjectInput,
@@ -116,6 +207,15 @@ export function updateProject(
   if (input.path !== undefined) {
     sets.push("path = ?");
     params.push(input.path);
+  }
+  if (input.parent_id !== undefined) {
+    if (input.parent_id !== null) {
+      const parent = getProject(input.parent_id, d);
+      if (!parent) throw new ProjectNotFoundError(input.parent_id);
+      assertNotProjectAncestor(id, input.parent_id, d);
+    }
+    sets.push("parent_id = ?");
+    params.push(input.parent_id);
   }
 
   params.push(id);

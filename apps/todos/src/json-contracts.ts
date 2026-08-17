@@ -203,6 +203,7 @@ export const TODOS_JSON_CONTRACTS: TodosJsonObjectContract[] = [
       task_list_id: nullableIdField,
       task_prefix: field(["string", "null"], "Optional task prefix.", true),
       task_counter: field("integer", "Monotonic project task counter."),
+      parent_id: field(["string", "null"], "Optional parent project id; null means top-level.", true),
       created_at: isoDateField,
       updated_at: isoDateField,
     },

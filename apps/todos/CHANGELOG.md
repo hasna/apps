@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Configurations still setting the deprecated var must drop it before
   upgrading.
 
+## [0.15.33] - 2026-08-14
+
 ### Fixed
 
 - **Historical project-registration receipts can be looked up by their

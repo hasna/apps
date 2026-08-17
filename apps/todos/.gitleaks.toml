@@ -1,0 +1,14 @@
+[extend]
+useDefault = true
+
+# The generic-api-key rule flags the synthetic fixture secret in the MCP
+# secret-safety test (src/mcp/mcp.test.ts). The line is deliberately shaped
+# like a real env assignment (TOKEN=<8+ char value>) because the app's own
+# env-secret-assignment scanner rule requires exactly that shape to fire, and
+# the test asserts the value is redacted from the scan output. The value is a
+# fixture, not a credential; this allowlist is scoped to that one file/line so
+# no other finding is affected.
+[allowlist]
+description = "Synthetic fixture secret for the secret-safety scan_secret_text MCP test"
+paths = ['''src/mcp/mcp\.test\.ts''']
+regexes = ['''TOKEN=placeholder123''']
