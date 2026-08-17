@@ -1246,7 +1246,7 @@
     },
     "apps/mementos": {
       "name": "@hasna/mementos",
-      "version": "0.14.84",
+      "version": "0.14.85",
       "bin": {
         "mementos": "dist/cli/index.js",
         "mementos-mcp": "dist/mcp/index.js",
@@ -1636,6 +1636,9 @@
         "sessions-serve": "dist/server/index.js",
       },
       "dependencies": {
+        "@aws-sdk/client-s3": "^3.1007.0",
+        "@aws-sdk/lib-storage": "3.1007.0",
+        "@aws-sdk/s3-request-presigner": "^3.1007.0",
         "@hasna/contracts": "^0.5.2",
         "@hasna/events": "^0.1.11",
         "@modelcontextprotocol/sdk": "^1.27.1",
@@ -2080,7 +2083,7 @@
     },
     "apps/todos": {
       "name": "@hasna/todos",
-      "version": "0.15.34",
+      "version": "0.15.35",
       "bin": {
         "todos": "dist/cli/index.js",
         "todos-mcp": "dist/mcp/index.js",
