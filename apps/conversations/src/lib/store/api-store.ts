@@ -636,6 +636,17 @@ export class ApiStore implements ConversationsStore {
     const body = await this.get<{ agents?: unknown[] }>("/agents", opts as Q);
     return (body.agents ?? []) as never;
   };
+  reapStaleSingleTouch: ConversationsStore["reapStaleSingleTouch"] = async (opts) => {
+    const body = await this.post<{ candidates?: number; reaped?: number; agents?: string[] }>("/agents/reap-stale", {
+      apply: opts?.apply === true,
+      older_than_seconds: opts?.olderThanSeconds,
+    });
+    return {
+      candidates: Number(body?.candidates ?? 0),
+      reaped: Number(body?.reaped ?? 0),
+      agents: body?.agents ?? [],
+    } as never;
+  };
   removePresence: ConversationsStore["removePresence"] = async (agent) => {
     try {
       await this.del(`/agents/${encodeURIComponent(agent)}`);

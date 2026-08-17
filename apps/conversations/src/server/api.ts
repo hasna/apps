@@ -22,6 +22,7 @@ import { verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
 import type { ApiKeyVerifier } from "@hasna/contracts/auth";
 import { version as pkgVersion } from "../../package.json";
 import { openapiSpec } from "./openapi.js";
+import { decayedStatus, SINGLE_TOUCH_TOLERANCE_SECONDS, SINGLE_TOUCH_REAP_WINDOW_SECONDS } from "../lib/presence.js";
 import { normalizeChannelName, unknownChannelMessage } from "../lib/channel-names.js";
 import { newChannelId } from "../lib/channel-id.js";
 import { extractTopics } from "../lib/topic-extract.js";
@@ -952,13 +953,17 @@ async function isCircularDependency(client: TypedQueryClient, taskId: number, de
 /** Coerce an agent_presence row into the client-facing AgentPresence shape. */
 function parsePresenceRow(row: Record<string, unknown>): Record<string, unknown> {
   const projectId = typeof row.project_id === "string" && row.project_id.trim() ? row.project_id.trim() : null;
+  const lastSeenAt = row.last_seen_at as string | null | undefined;
+  const lastSeenMs = lastSeenAt ? new Date(lastSeenAt).getTime() : Number.NaN;
+  const ageMs = Number.isFinite(lastSeenMs) ? Date.now() - lastSeenMs : Number.POSITIVE_INFINITY;
+  const storedStatus = (row.status as string) || "online";
   return {
     id: (row.id as string) || "",
     agent: row.agent,
     session_id: (row.session_id as string | null) ?? null,
     role: (row.role as string) || "agent",
     project_id: projectId,
-    status: row.status,
+    status: decayedStatus(storedStatus, ageMs),
     last_seen_at: row.last_seen_at,
     created_at: row.created_at ?? row.last_seen_at,
     online: row.online === true,
@@ -2942,6 +2947,36 @@ async function handleV1(
       ],
     );
     return json({ agent: row });
+  }
+
+  // Flag — and only on explicit `apply`, remove — registrations created once
+  // and never seen again whose last heartbeat is older than the retention
+  // window. Report-first by default; the delete is a bulk mutation on the
+  // production roster and needs the explicit gate. Placed before the
+  // per-agent route so "reap-stale" is not swallowed as an agent name.
+  if (sub === "agents/reap-stale" && method === "POST") {
+    const body = await readJson(req);
+    const apply = body?.apply === true;
+    const requested = Number(body?.older_than_seconds);
+    const retentionSeconds = Number.isFinite(requested) && requested > 0
+      ? Math.round(requested)
+      : SINGLE_TOUCH_REAP_WINDOW_SECONDS;
+    const rows = await client.many<{ id: string; agent: string }>(
+      `SELECT id, agent FROM agent_presence
+       WHERE created_at IS NOT NULL
+         AND EXTRACT(EPOCH FROM (last_seen_at - created_at)) < ${SINGLE_TOUCH_TOLERANCE_SECONDS}
+         AND last_seen_at < NOW() - interval '${retentionSeconds} seconds'
+       ORDER BY last_seen_at ASC`,
+    );
+    let reaped = 0;
+    if (apply && rows.length > 0) {
+      const res = await client.query(
+        `DELETE FROM agent_presence WHERE id = ANY($1::text[])`,
+        [rows.map((row) => row.id)],
+      );
+      reaped = res.rowCount;
+    }
+    return json({ candidates: rows.length, reaped, agents: rows.map((row) => row.agent) });
   }
 
   // ---- one agent: presence / rename / project / remove ----

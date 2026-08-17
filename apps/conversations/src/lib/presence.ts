@@ -5,6 +5,25 @@ import { AGENT_LIST_ORDER, simpleOrderByClause } from "./list-order.js";
 const ONLINE_THRESHOLD_SECONDS = 60;
 const CONFLICT_THRESHOLD_SECONDS = 30 * 60; // 30 minutes
 
+// The stored status is a SELF-DECLARED claim that never expires on write. The
+// presence roster must not keep claiming "online" for an agent whose heartbeat
+// has not been seen for hours, so the reported status is derived at read time:
+// "online" is only credible while last_seen_at is inside this window.
+export const AGENT_STATUS_ONLINE_WINDOW_SECONDS = 60 * 60; // 1 hour
+// A registration is "single-touch" when created_at and last_seen_at agree (it
+// was registered once and never seen again). Such rows older than this window
+// are the stale roster clutter a coordinator can mistake for live agents.
+export const SINGLE_TOUCH_TOLERANCE_SECONDS = 60;
+export const SINGLE_TOUCH_REAP_WINDOW_SECONDS = 7 * 24 * 60 * 60; // 7 days
+
+/** Effective status for a presence row: a stale self-declared "online" decays to "offline". */
+export function decayedStatus(storedStatus: string, ageMs: number): string {
+  if (storedStatus === "online" && ageMs >= AGENT_STATUS_ONLINE_WINDOW_SECONDS * 1000) {
+    return "offline";
+  }
+  return storedStatus;
+}
+
 export function normalizeAgentName(name: string): string {
   return name.trim().toLowerCase();
 }
@@ -54,7 +73,8 @@ function parsePresence(row: Record<string, unknown>): AgentPresence {
   const lastSeenAt = row.last_seen_at as string;
   const lastSeenMs = new Date(lastSeenAt + "Z").getTime();
   const nowMs = Date.now();
-  const online = (nowMs - lastSeenMs) < ONLINE_THRESHOLD_SECONDS * 1000;
+  const ageMs = nowMs - lastSeenMs;
+  const online = ageMs < ONLINE_THRESHOLD_SECONDS * 1000;
 
   return {
     id: (row.id as string) || "",
@@ -62,7 +82,7 @@ function parsePresence(row: Record<string, unknown>): AgentPresence {
     session_id: (row.session_id as string | null) ?? null,
     role: (row.role as string) || "agent",
     project_id: fromStoredProjectId(row.project_id),
-    status: row.status as string,
+    status: decayedStatus(row.status as string, ageMs),
     last_seen_at: lastSeenAt,
     created_at: (row.created_at as string) || lastSeenAt,
     online,
@@ -308,4 +328,49 @@ export function setPresenceProject(agent: string, projectId: string | null): voi
       WHERE id = ?
     `).run(desiredProjectId, latestId);
   });
+}
+
+export interface StaleSingleTouchReapResult {
+  candidates: number;
+  reaped: number;
+  agents: string[];
+}
+
+/**
+ * Flag — and only on explicit `apply`, remove — registrations that were created
+ * once and never seen again (created_at == last_seen_at within a small
+ * tolerance) and whose last heartbeat is older than the retention window.
+ * Report-first by default: `apply` must be passed deliberately, mirroring the
+ * frozen-mutation discipline that a bulk delete needs an explicit gate.
+ */
+export function reapStaleSingleTouchRegistrations(opts?: {
+  olderThanSeconds?: number;
+  apply?: boolean;
+}): StaleSingleTouchReapResult {
+  const db = getDb();
+  const requested = opts?.olderThanSeconds;
+  const retentionSeconds = typeof requested === "number" && Number.isFinite(requested) && requested > 0
+    ? Math.round(requested)
+    : SINGLE_TOUCH_REAP_WINDOW_SECONDS;
+  const rows = db.prepare(`
+    SELECT id, agent FROM agent_presence
+    WHERE created_at != ''
+      AND strftime('%s', last_seen_at) - strftime('%s', created_at) < ${SINGLE_TOUCH_TOLERANCE_SECONDS}
+      AND last_seen_at < strftime('%Y-%m-%dT%H:%M:%f', 'now', '-${retentionSeconds} seconds')
+    ORDER BY last_seen_at ASC
+  `).all() as { id: string; agent: string }[];
+
+  let reaped = 0;
+  if (opts?.apply === true && rows.length > 0) {
+    const ids = rows.map((row) => row.id);
+    const placeholders = ids.map(() => "?").join(",");
+    const result = db.prepare(`DELETE FROM agent_presence WHERE id IN (${placeholders})`).run(...ids);
+    reaped = Number(result.changes);
+  }
+
+  return {
+    candidates: rows.length,
+    reaped,
+    agents: rows.map((row) => row.agent),
+  };
 }
