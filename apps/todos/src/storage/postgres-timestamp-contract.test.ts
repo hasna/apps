@@ -269,6 +269,38 @@ describe("postgres tasks.update — terminal-status timestamp contract", () => {
     expect(harness.readTask(task.id)?.completed_at).toBeTruthy();
   });
 
+  test("PATCH {status: failed, completed_at: null} stores null (generic value branch parity)", async () => {
+    // REGRESSION: parity with the SQLite lane's generic explicit-value branch
+    // (completed_at = ? for every status except "completed", last SET wins):
+    // an explicit NULL clears the column, and the stored row must match what
+    // SQLite would persist.
+    const harness = createFake();
+    const adapter = createPostgresTodosStorageAdapter({ client: harness.client, service: SERVICE });
+    const task = baseTask({ id: randomUUID() });
+    harness.seedTask(task);
+
+    const updated = await adapter.tasks.update(task.id, { status: "failed", completed_at: null, version: task.version });
+
+    expect(updated.completed_at).toBeNull();
+    expect(harness.readTask(task.id)?.completed_at).toBeNull();
+  });
+
+  test("PATCH {status: pending, completed_at: null} on a completed row clears the clock (reopen parity)", async () => {
+    // REGRESSION: SQLite's generic explicit-value branch clears completed_at
+    // even when the reopen-with-undefined M3 condition is not met; the cloud
+    // lane must store the same cleared value.
+    const harness = createFake();
+    const adapter = createPostgresTodosStorageAdapter({ client: harness.client, service: SERVICE });
+    const completedAt = "2026-08-02T10:00:00.000Z";
+    const task = baseTask({ id: randomUUID(), status: "completed", completed_at: completedAt, version: 2 });
+    harness.seedTask(task);
+
+    const updated = await adapter.tasks.update(task.id, { status: "pending", completed_at: null, version: task.version });
+
+    expect(updated.completed_at).toBeNull();
+    expect(harness.readTask(task.id)?.completed_at).toBeNull();
+  });
+
   test("does NOT clobber an existing completed_at on a failed transition", async () => {
     const harness = createFake();
     const adapter = createPostgresTodosStorageAdapter({ client: harness.client, service: SERVICE });

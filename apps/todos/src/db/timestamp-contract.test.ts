@@ -124,6 +124,42 @@ describe("timestamp contract — updateTask status transitions (SQLite)", () => 
     expect(updated.completed_at).toBe(getTask(task.id, db)?.completed_at);
   });
 
+  it("explicit completed_at: null with status failed stores and returns null (generic value branch parity)", () => {
+    // REGRESSION: the generic explicit-value SQL branch (completed_at = ? for
+    // every status except "completed") writes the explicit NULL and is the
+    // LAST assignment, so the row is cleared — the object returned to the
+    // caller must report null too (it previously reported a stamped timestamp).
+    const task = createTask({ title: "Failed with explicit null" }, db);
+
+    const updated = updateTask(
+      task.id,
+      { version: task.version, status: "failed", completed_at: null },
+      db,
+    );
+
+    expect(updated.completed_at).toBeNull();
+    expect(getTask(task.id, db)?.completed_at).toBeNull();
+  });
+
+  it("explicit completed_at: null on a reopen stores and returns null (M3 parity)", () => {
+    // REGRESSION: reopening a completed row with an explicit `completed_at:
+    // null` hits the generic explicit-value branch and clears the column — the
+    // returned object must report the cleared value, not the stale clock.
+    const task = createTask({ title: "Reopened with explicit null" }, db);
+    const completed = completeTask(task.id, "holder-a", db);
+    expect(completed.completed_at).toBeTruthy();
+
+    const fresh = getTask(task.id, db)!;
+    const updated = updateTask(
+      fresh.id,
+      { version: fresh.version, status: "pending", completed_at: null },
+      db,
+    );
+
+    expect(updated.completed_at).toBeNull();
+    expect(getTask(task.id, db)?.completed_at).toBeNull();
+  });
+
   it("does NOT clobber an existing completed_at when a completed row is failed", () => {
     const task = createTask({ title: "Completed then failed" }, db);
     const completed = completeTask(task.id, "holder-a", db);

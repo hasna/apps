@@ -943,7 +943,6 @@ function updateTaskStored(
 
   // Determine the post-write completion timestamp / lock state to mirror the SQL above.
   const reopened = input.status !== undefined && input.status !== "completed" && task.status === "completed" && input.completed_at === undefined;
-  const completedNow = input.status === "completed";
   // Mirrors the `isTerminalStatus` branch in the SQL above. These two must agree:
   // when they did not, the row was written correctly and the object returned to
   // the caller still reported the released lock as held.
@@ -958,15 +957,19 @@ function updateTaskStored(
     locked_by: terminalNow ? null : task.locked_by,
     locked_at: terminalNow ? null : task.locked_at,
     completed_at:
-      // An explicit `null` is treated as ABSENT so the object returned to the
-      // caller matches what the SQL above persisted: the SQL writes
-      // `completionTimestamp` (= input.completed_at ?? timestamp) on a terminal
-      // transition, so reporting `null` here while the row carries a timestamp
-      // (or COALESCE'd value) would diverge from the stored state.
-      input.completed_at != null
-        ? input.completed_at
-        : completedNow
-          ? completionTimestamp
+      // Mirrors the SQL assignment order exactly, arm by arm (the LAST SET for
+      // a column wins, and the generic explicit-value branch below the status
+      // block writes `input.completed_at` verbatim — including an explicit
+      // NULL — for every status except "completed"):
+      //   "completed"           -> completionTimestamp (input.completed_at ?? timestamp)
+      //   other status, value   -> input.completed_at verbatim (NULL included)
+      //   failed/cancelled, none-> COALESCE(completed_at, completionTimestamp)
+      //   reopen (M3), none     -> NULL
+      //   otherwise             -> unchanged
+      input.status === "completed"
+        ? completionTimestamp
+        : input.completed_at !== undefined
+          ? input.completed_at
           : terminalNow
             ? (task.completed_at ?? completionTimestamp)
             : reopened

@@ -2324,18 +2324,24 @@ async function updateTask(
     // no completed_at previously left the column NULL on this lane, unlike
     // SQLite. Existing values are never clobbered.
     completed_at:
-      // An explicit `null` is treated as ABSENT (parity with db/task-crud:
-      // `completionTimestamp = input.completed_at ?? timestamp`), so a PATCH
-      // carrying `{status: <terminal>, completed_at: null}` stamps the end
-      // timestamp on this lane exactly as the SQLite lane does, and the stored
-      // value never diverges from what the sibling lane would persist.
-      input.completed_at != null
-        ? input.completed_at
-        : input.status !== undefined && isTerminalStatus(input.status)
-          ? (existing.completed_at ?? new Date().toISOString())
-          : reopened
-            ? null
-            : existing.completed_at,
+      // Mirrors the SQLite lane's SQL assignment order arm by arm (see
+      // db/task-crud.updateTaskStored — the LAST SET wins, and the generic
+      // explicit-value branch writes input.completed_at verbatim, NULL
+      // included, for every status except "completed"):
+      //   "completed"           -> input.completed_at ?? now (completionTimestamp)
+      //   other status, value   -> input.completed_at verbatim (NULL included)
+      //   failed/cancelled, none-> existing ?? now (COALESCE)
+      //   reopen (M3), none     -> null
+      //   otherwise             -> unchanged
+      input.status === "completed"
+        ? (input.completed_at ?? new Date().toISOString())
+        : input.completed_at !== undefined
+          ? input.completed_at
+          : input.status !== undefined && isTerminalStatus(input.status)
+            ? (existing.completed_at ?? new Date().toISOString())
+            : reopened
+              ? null
+              : existing.completed_at,
     // started_at contract: driving a row to in_progress WITHOUT the start verb
     // stamps the start time when none exists, so a row that fails before
     // anyone ran `todos start` remains datable end-to-end. Assignment alone
