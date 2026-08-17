@@ -6,8 +6,11 @@ import { formatCell, isEmptyValue } from "./fields.js";
  * Empty values always sort last (regardless of direction).
  */
 export function compareValues(field: Field, a: CellValue, b: CellValue): number {
-  const aEmpty = isEmptyValue(a);
-  const bEmpty = isEmptyValue(b);
+  // `false` is a meaningful checkbox value, not an absent value for sorting.
+  // Other field operations intentionally treat it as empty, so keep this
+  // exception local to the comparator.
+  const aEmpty = isEmptyValue(a) && !(field.type === "checkbox" && a === false);
+  const bEmpty = isEmptyValue(b) && !(field.type === "checkbox" && b === false);
   if (aEmpty && bEmpty) return 0;
   if (aEmpty) return 1;
   if (bEmpty) return -1;
@@ -36,8 +39,13 @@ export function compareValues(field: Field, a: CellValue, b: CellValue): number 
       break;
   }
 
-  // string fallback (also reached by non-numeric `number` cells)
-  return formatCell(field, a).localeCompare(formatCell(field, b), undefined, {
+  // String fallback (also reached by non-numeric `number` cells). Number
+  // formatting intentionally renders invalid stored numbers as empty, which
+  // would collapse distinct legacy values to equality, so compare their raw
+  // text instead.
+  const aText = field.type === "number" ? String(a) : formatCell(field, a);
+  const bText = field.type === "number" ? String(b) : formatCell(field, b);
+  return aText.localeCompare(bText, undefined, {
     numeric: true,
     sensitivity: "base",
   });

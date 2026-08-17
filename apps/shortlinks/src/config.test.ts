@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { normalizeHostname } from "./config.js";
+import { formatShortUrl, loadConfig, normalizeHostname, updateConfig } from "./config.js";
 
 describe("normalizeHostname", () => {
   test("normalizes protocol, case, path, and trailing dot", () => {
@@ -15,6 +15,49 @@ describe("normalizeHostname", () => {
     expect(() => normalizeHostname("-bad.example.com")).toThrow("Invalid domain");
     expect(() => normalizeHostname("bad-.example.com")).toThrow("Invalid domain");
     expect(() => normalizeHostname(`go.${"a".repeat(64)}.example.com`)).toThrow("Invalid domain");
+  });
+
+  test("rejects empty and whitespace-only hostnames", () => {
+    expect(() => normalizeHostname("")).toThrow("Domain is required.");
+    expect(() => normalizeHostname("   ")).toThrow("Domain is required.");
+  });
+});
+
+describe("formatShortUrl", () => {
+  test("normalizes an optional public base URL before resolving a slug", () => {
+    expect(formatShortUrl("has.na", "docs", "https://links.example/base")).toBe(
+      "https://links.example/base/docs",
+    );
+    expect(formatShortUrl("has.na", "docs", "https://links.example/base/")).toBe(
+      "https://links.example/base/docs",
+    );
+  });
+
+  test("uses the normalized hostname when no public base URL is configured", () => {
+    expect(formatShortUrl("has.na", "docs")).toBe("https://has.na/docs");
+  });
+});
+
+describe("config updates", () => {
+  test("merges nested cloudflare settings without dropping existing values", () => {
+    const home = mkdtempSync(join(tmpdir(), "shortlinks-config-"));
+    const previousHome = process.env.SHORTLINKS_HOME;
+    process.env.SHORTLINKS_HOME = home;
+    try {
+      updateConfig({
+        defaultDomain: "has.na",
+        cloudflare: { accountId: "account-1", workerName: "worker-1" },
+      });
+      expect(updateConfig({ cloudflare: { origin: "origin-1" } })).toEqual({
+        defaultDomain: "has.na",
+        cloudflare: { accountId: "account-1", workerName: "worker-1", origin: "origin-1" },
+      });
+      expect(loadConfig().cloudflare?.workerName).toBe("worker-1");
+    } finally {
+      if (previousHome === undefined) delete process.env.SHORTLINKS_HOME;
+      else process.env.SHORTLINKS_HOME = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 

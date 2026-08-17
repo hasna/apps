@@ -157,6 +157,27 @@ describe("restore planning", () => {
     }
   });
 
+  test("blocks tmux sessions with unsafe names before checking the runtime", () => {
+    const resource: StoredSnapshotResource = {
+      id: "tmux-session:unsafe",
+      kind: "tmux-session",
+      name: "unsafe session name",
+      source: "tmux",
+      attributes: { cwd: "/tmp" },
+      observedAt: "2026-06-19T00:00:00.000Z",
+      hash: "unsafe-session-hash"
+    };
+
+    const plan = createRestorePlan(snapshot, [resource]);
+
+    expect(plan.summary.blocked).toBe(1);
+    expect(plan.operations[0]).toMatchObject({
+      kind: "tmux.create-session",
+      status: "blocked",
+      summary: "Unsafe tmux session name: unsafe session name"
+    });
+  });
+
   test("additional tmux panes are restored after windows", () => {
     const initialPane: StoredSnapshotResource = {
       id: "tmux-pane:restore-test:1",

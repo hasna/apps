@@ -26,7 +26,7 @@ const READ_ONLY = new Set([
   "which"
 ]);
 
-const SENSITIVE_PATH_PATTERN = /(?:^|[\s:/"'`])(?:\.env(?:\.[^\s]*)?|id_rsa|id_ed25519|credentials|secrets?|token|keychain|\.aws\/credentials|\.config\/gh|\.npmrc|\.netrc)(?:$|[\s/"'`])/i;
+const SENSITIVE_PATH_PATTERN = /(?:^|[\s:/"'`])(?:\.env(?:\.[^\s]*)?|id_rsa|id_ed25519|credentials(?:\.[^\s/"'`]+)?|secrets?(?:\.[^\s/"'`]+)?|token(?:\.[^\s/"'`]+)?|keychain(?:\.[^\s/"'`]+)?|\.aws\/credentials|\.config\/gh|\.npmrc|\.netrc)(?:$|[\s/"'`])/i;
 
 const CONFIRM_PATTERNS: Array<[RegExp, string]> = [
   [/\bgit\s+(?:add|commit|checkout|switch|merge|rebase|cherry-pick|stash|tag|branch\s+(?!-+(?:list|show-current)\b)|remote|fetch|pull|push)\b/i, "git operation that may change local or remote state"],
@@ -40,6 +40,7 @@ const CONFIRM_PATTERNS: Array<[RegExp, string]> = [
 
 const BLOCK_PATTERNS: Array<[RegExp, string]> = [
   [SENSITIVE_PATH_PATTERN, "possible credential disclosure"],
+  [/\b(?:curl|wget)\b.*[?&](?:api[_-]?key|(?:access|auth|refresh|id)[_-]?token|client[_-]?secret|secret[_-]?key|token|secret|password)=/i, "possible credential exfiltration"],
   [/\$\(|`|<\(|>\(/, "shell expansion can hide side effects"],
   [/\b(?:awk|perl|python|python3|ruby|node|bash|sh|zsh)\b.*\b(?:system|exec|spawn|eval|child_process)\b/i, "interpreter command can execute side effects"],
   [/\bfind\b.*(?:-exec|-delete|-execdir|-ok|-okdir)\b/i, "find action can mutate files or execute commands"],
@@ -47,8 +48,6 @@ const BLOCK_PATTERNS: Array<[RegExp, string]> = [
   [/\bsudo\b|\bsu\s+-?\b/i, "privilege escalation"],
   [/\b(?:git\s+push\b.*--force|git\s+push\b.*\+|git\s+reset\s+--hard|git\s+clean\s+-[^\s]*f)/i, "destructive git operation"],
   [/\b(?:npm|bun|pnpm|yarn)\s+publish\b|\b(?:gh|npm)\s+release\b|\b(?:vercel|netlify|wrangler)\s+deploy\b/i, "publish or deploy operation"],
-  [/\b(?:cat|grep|rg|sed|awk)\b.*(?:\.env|id_rsa|id_ed25519|credentials|secrets?|token|keychain)/i, "possible credential disclosure"],
-  [/\b(?:curl|wget)\b.*(?:\.env|id_rsa|id_ed25519|credentials|secrets?|token)/i, "possible credential exfiltration"]
 ];
 
 export function classifyCommand(command: string): CommandClassification {
@@ -65,6 +64,11 @@ export function classifyCommand(command: string): CommandClassification {
     return { risk: "block", reasons, requiresOverride: true };
   }
 
+  const first = firstCommand(trimmed);
+  if (first === "git" && isReadOnlyGit(trimmed)) {
+    return { risk: "allow", reasons: ["read-only git inspection command"], requiresOverride: false };
+  }
+
   for (const [pattern, reason] of CONFIRM_PATTERNS) {
     if (pattern.test(trimmed)) {
       reasons.push(reason);
@@ -73,11 +77,6 @@ export function classifyCommand(command: string): CommandClassification {
 
   if (reasons.length > 0) {
     return { risk: "confirm", reasons, requiresOverride: false };
-  }
-
-  const first = firstCommand(trimmed);
-  if (first === "git" && isReadOnlyGit(trimmed)) {
-    return { risk: "allow", reasons: ["read-only git inspection command"], requiresOverride: false };
   }
 
   if (first && READ_ONLY.has(first) && !/[;&|]\s*(?:rm|mv|cp|curl|wget|chmod|chown|sudo|tee)\b/i.test(trimmed)) {
@@ -93,7 +92,7 @@ function firstCommand(command: string): string | undefined {
 }
 
 function isReadOnlyGit(command: string): boolean {
-  if (/[;&|]/.test(command)) {
+  if (/[;&|>]/.test(command)) {
     return false;
   }
 
