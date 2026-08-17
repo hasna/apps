@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { runMigrations } from "../db/schema.js";
 import { createWorkspace, recordWorkspaceEvent } from "../db/workspaces.js";
 import { PROJECT_REDACTED_VALUE } from "../lib/redaction.js";
-import { testSpawnEnv } from "../testing/spawn-env.js";
+import { API_MODE_ENV_KEYS, testSpawnEnv } from "../testing/spawn-env.js";
 
 function runMcpCli(args: string[]) {
   return Bun.spawnSync({
@@ -17,11 +17,20 @@ function runMcpCli(args: string[]) {
 }
 
 function runMcpSession(messages: unknown[], env: Record<string, string>) {
+  // Api-mode selectors are stripped from the passed env itself, not only from
+  // process.env: a call site passing raw process.env must not be able to
+  // reach an api transport through this helper. testSpawnEnv() keeps keys
+  // present in `overrides`, so it cannot express that here.
+  const isolated: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if ((API_MODE_ENV_KEYS as readonly string[]).includes(key)) continue;
+    isolated[key] = value;
+  }
   return Bun.spawnSync({
     cmd: ["node", "src/testing/mcp-stdio-client.mjs", JSON.stringify(messages)],
     stdout: "pipe",
     stderr: "pipe",
-    env: testSpawnEnv(env),
+    env: isolated,
   });
 }
 
@@ -404,7 +413,7 @@ describe("projects-mcp project-first surface", () => {
     }
   });
 
-  test("spawned MCP sessions do not inherit ambient api-mode env — writes land in the temp DB", async () => {
+  test("spawned MCP sessions strip api-mode env even from a raw process.env call site — writes land in the temp DB", async () => {
     const root = mkdtempSync(join(tmpdir(), "project-mcp-hermetic-"));
     const dbPath = join(root, "projects.db");
     const requests: string[] = [];
@@ -447,7 +456,10 @@ describe("projects-mcp project-first surface", () => {
           },
         },
       ];
-      const result = runMcpSession(messages, testSpawnEnv({ HASNA_PROJECTS_DB_PATH: dbPath }));
+      // The only call shape that pins the structural property: raw process.env
+      // (with api url/key set above), NOT a call-site testSpawnEnv() — that
+      // would strip the selectors before the wrapper runs and pass trivially.
+      const result = runMcpSession(messages, { ...process.env, HASNA_PROJECTS_DB_PATH: dbPath });
       expect(result.exitCode).toBe(0);
       expect(Buffer.from(result.stderr).toString("utf-8")).toBe("");
 
