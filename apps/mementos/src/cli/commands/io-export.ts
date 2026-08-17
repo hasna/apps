@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { resolve } from "node:path";
 import { getProject } from "../../db/projects.js";
-import { listMemories } from "../../db/memories.js";
+import { listMemoriesBounded } from "../../db/memories.js";
 import type { MemoryCategory, MemoryScope, MemoryFilter } from "../../types/index.js";
 import {
   resolveAgentFilter,
@@ -37,10 +37,12 @@ export function registerExportCommand(program: Command): void {
           category: opts.category as MemoryCategory | undefined,
           agent_id: agentId,
           project_id: projectId,
-          limit: 10000,
         };
 
-        const memories = listMemories(filter);
+        // Export targets up to 10000 rows; the server caps single responses at
+        // 1000, so the requested population is assembled by walking bounded
+        // pages (BUG 2796806b).
+        const memories = listMemoriesBounded(filter, 10000).rows;
 
         // Export always outputs JSON
         outputJson(memories);

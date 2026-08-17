@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createMemory, listMemories } from "../../db/memories.js";
+import { createMemory, listMemoriesBounded } from "../../db/memories.js";
 import { formatError } from "./memory-utils.js";
 import type { CreateMemoryInput } from "../../types/index.js";
 
@@ -22,7 +22,10 @@ export function registerMemoryIoTools(server: McpServer): void {
           const entries = exportV1({ ...args });
           return { content: [{ type: "text" as const, text: toJsonl(entries) }] };
         }
-        const memories = listMemories({ ...args, limit: 10000 });
+        // Export targets up to 10000 rows; the server caps single responses at
+        // 1000, so the requested population is assembled by walking bounded
+        // pages (BUG 2796806b).
+        const memories = listMemoriesBounded({ ...args }, 10000).rows;
         return { content: [{ type: "text" as const, text: JSON.stringify(memories, null, 2) }] };
       } catch (e) {
         return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

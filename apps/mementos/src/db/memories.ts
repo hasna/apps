@@ -917,6 +917,73 @@ export function listMemories(filter?: MemoryFilter, db?: Database): Memory[] {
   return listMemoriesPage(filter, db).rows;
 }
 
+export interface MemoryListBounded {
+  rows: Memory[];
+  has_more: boolean;
+  next_cursor: number | null;
+}
+
+/**
+ * Collect the memories list surface across bounded pages (BUG 2796806b).
+ *
+ * The server caps every single response at 1000 rows, so a caller that wants
+ * more than one page — or the full population — must walk. Mirrors the CLI
+ * page-walk guards: cursor-cycle detection and a bounded page count. `target`
+ * is the maximum number of rows to return; undefined returns the full
+ * population. Termination: the server's `has_more: false`, or a page shorter
+ * than requested when the server carries no signal, or `target` rows collected.
+ */
+export function listMemoriesBounded(
+  filter: MemoryFilter = {},
+  target: number | undefined,
+  db?: Database,
+): MemoryListBounded {
+  const pageSize = 1000;
+  const maxPages = 1000;
+  const want = target === undefined ? undefined : target + 1;
+  const rows: Memory[] = [];
+  const seenCursors = new Set<number>();
+  let cursor = filter.offset ?? 0;
+  let pages = 0;
+  for (;;) {
+    if (want !== undefined && rows.length >= want) break;
+    if (++pages > maxPages) {
+      throw new Error(
+        `memories list traversal exceeded ${maxPages} pages while collecting rows — aborting (cursor cycle?)`,
+      );
+    }
+    const limit = Math.min(
+      want === undefined ? pageSize : want - rows.length,
+      pageSize,
+    );
+    const page = listMemoriesPage({ ...filter, limit, offset: cursor }, db);
+    rows.push(...page.rows);
+    if (page.has_more === false) break;
+    if (page.has_more === undefined && page.rows.length < limit) break;
+    if (
+      page.has_more === true &&
+      (page.next_cursor === null || page.next_cursor === undefined)
+    ) {
+      throw new Error(
+        "memories list page claimed more results without a next cursor — aborting",
+      );
+    }
+    const next = page.next_cursor ?? cursor + page.rows.length;
+    if (seenCursors.has(next)) {
+      throw new Error("memories list traversal repeated a cursor — aborting");
+    }
+    seenCursors.add(next);
+    cursor = next;
+  }
+  const hasMore = target !== undefined && rows.length > target;
+  const trimmed = hasMore ? rows.slice(0, target) : rows;
+  return {
+    rows: trimmed,
+    has_more: hasMore,
+    next_cursor: hasMore ? (filter.offset ?? 0) + trimmed.length : null,
+  };
+}
+
 /**
  * Total rows matching the list filter (limit/offset ignored). Local-store
  * count; the server route computes it so API consumers never need it.

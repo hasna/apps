@@ -2,7 +2,7 @@
 // Used by open-brains to collect fine-tuning examples from memory data
 
 import type { Memory } from "../types/index.js";
-import { listMemories } from "../db/memories.js";
+import { listMemoriesBounded } from "../db/memories.js";
 
 type GatherTrainingDataFn = (options?: {
   limit?: number;
@@ -89,7 +89,9 @@ function memoryToSearchExample(
 export const gatherTrainingData: GatherTrainingDataFn = async (
   options = {}
 ) => {
-  const allMemories = listMemories({ status: "active" });
+  // Full population: the server caps single responses at 1000 rows, so an
+  // unbounded training-data gather must walk bounded pages (BUG 2796806b).
+  const allMemories = listMemoriesBounded({ status: "active" }, undefined).rows;
 
   // Apply since filter
   const filtered = options.since
