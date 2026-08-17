@@ -844,7 +844,8 @@ scheduleCmd
   .option("--dry-run", "Show due prompts without marking them as ran")
   .action((opts: { dryRun?: boolean }) => {
     try {
-      const due = getDueSchedules()
+      // Dry-run must not advance run state — the mutation lives behind the flag.
+      const due = getDueSchedules({ dryRun: Boolean(opts.dryRun) })
       if (!due.length) { console.log(chalk.gray("No prompts due.")); return }
       if (isJson(program)) { output(program, due); return }
       for (const d of due) {

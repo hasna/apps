@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach } from "bun:test"
-import { closeDatabase, resetDatabase } from "./database.js"
+import { closeDatabase, resetDatabase, getDatabase } from "./database.js"
 
 process.env["PROMPTS_DB_PATH"] = ":memory:"
 
@@ -98,5 +98,70 @@ describe("schedules", () => {
     const s = createSchedule({ prompt_id: p.id, prompt_slug: p.slug, cron: "* * * * *", vars: { name: "Alice" } })
     const retrieved = getSchedule(s.id)
     expect(retrieved?.vars?.name).toBe("Alice")
+  })
+
+  test("dry-run returns due schedules without mutating run state", () => {
+    const db = getDatabase()
+    const p = createPrompt({ title: "Due", body: "Hello {{name|world}}" })
+    const s = createSchedule({ prompt_id: p.id, prompt_slug: p.slug, cron: "* * * * *" })
+    db.run("UPDATE prompt_schedules SET next_run_at = '2020-01-01T00:00:00.000Z' WHERE id = ?", [s.id])
+
+    const before = getSchedule(s.id)!
+    const due = getDueSchedules({ dryRun: true })
+
+    expect(due).toHaveLength(1)
+    expect(due[0]?.rendered).toBe("Hello world")
+
+    const after = getSchedule(s.id)!
+    expect(after.run_count).toBe(before.run_count)
+    expect(after.next_run_at).toBe(before.next_run_at)
+    expect(after.last_run_at).toBe(before.last_run_at)
+  })
+
+  test("non-dry-run advances run state", () => {
+    const db = getDatabase()
+    const p = createPrompt({ title: "Due", body: "Hello {{name|world}}" })
+    const s = createSchedule({ prompt_id: p.id, prompt_slug: p.slug, cron: "* * * * *" })
+    db.run("UPDATE prompt_schedules SET next_run_at = '2020-01-01T00:00:00.000Z' WHERE id = ?", [s.id])
+
+    const before = getSchedule(s.id)!
+    getDueSchedules()
+
+    const after = getSchedule(s.id)!
+    expect(after.run_count).toBe(before.run_count + 1)
+    expect(after.last_run_at).not.toBeNull()
+    expect(new Date(after.next_run_at).getTime()).toBeGreaterThan(Date.now())
+  })
+
+  test("dry-run default is mutation (backward compatible)", () => {
+    const db = getDatabase()
+    const p = createPrompt({ title: "Due", body: "Hello {{name|world}}" })
+    const s = createSchedule({ prompt_id: p.id, prompt_slug: p.slug, cron: "* * * * *" })
+    db.run("UPDATE prompt_schedules SET next_run_at = '2020-01-01T00:00:00.000Z' WHERE id = ?", [s.id])
+    getDueSchedules()
+    expect(getSchedule(s.id)!.run_count).toBe(1)
+  })
+
+  test("renders through the canonical engine (escaped braces stay literal)", () => {
+    const db = getDatabase()
+    const p = createPrompt({ title: "Escaped", body: "\\{{name}} literal {{name|d}}" })
+    const s = createSchedule({ prompt_id: p.id, prompt_slug: p.slug, cron: "* * * * *" })
+    db.run("UPDATE prompt_schedules SET next_run_at = '2020-01-01T00:00:00.000Z' WHERE id = ?", [s.id])
+    const due = getDueSchedules({ dryRun: true })
+    expect(due[0]?.rendered).toBe("{{name}} literal d")
+  })
+
+  test("typed schedule vars render through the canonical engine", () => {
+    const db = getDatabase()
+    const p = createPrompt({ title: "Typed", body: "Count {{count}}" })
+    const s = createSchedule({
+      prompt_id: p.id,
+      prompt_slug: p.slug,
+      cron: "* * * * *",
+      vars: { count: "42" },
+    })
+    db.run("UPDATE prompt_schedules SET next_run_at = '2020-01-01T00:00:00.000Z' WHERE id = ?", [s.id])
+    const due = getDueSchedules({ dryRun: true })
+    expect(due[0]?.rendered).toBe("Count 42")
   })
 })

@@ -1,12 +1,14 @@
 import { describe, expect, test, beforeEach } from "bun:test"
 import { Database } from "bun:sqlite"
-import { closeDatabase, resetDatabase } from "./database.js"
+import { closeDatabase, resetDatabase, getDatabase } from "./database.js"
 
 // Use in-memory DB for tests
 process.env["PROMPTS_DB_PATH"] = ":memory:"
 
 import { createPrompt, getPrompt, listPrompts, listPromptsSlim, updatePrompt, deletePrompt, usePrompt, upsertPrompt } from "./prompts.js"
 import { PromptNotFoundError, VersionConflictError, DuplicateSlugError } from "../types/index.js"
+import { loadPromptVariables } from "./variables.js"
+import { setLabel, listLabels } from "./labels.js"
 
 beforeEach(() => {
   closeDatabase()
@@ -168,5 +170,90 @@ describe("upsertPrompt", () => {
     const { prompt, created } = upsertPrompt({ title: "Existing", body: "v2", slug: "existing-prompt" })
     expect(created).toBe(false)
     expect(prompt.body).toBe("v2")
+  })
+})
+
+describe("variable metadata persistence (defect: stored variables always required:true)", () => {
+  test("inline default variables are stored as optional", () => {
+    const p = createPrompt({ title: "Template", body: "Hello {{name|world}} and {{required_var}}" })
+    const byName = new Map(p.variables.map((v) => [v.name, v]))
+    expect(byName.get("name")?.required).toBe(false)
+    expect(byName.get("required_var")?.required).toBe(true)
+  })
+
+  test("prompt_variables rows mirror the body extraction", () => {
+    const p = createPrompt({ title: "Template", body: "{{a|d}} {{b}}" })
+    const rows = loadPromptVariables(p.id)
+    expect(rows).toHaveLength(2)
+    const byName = new Map(rows.map((v) => [v.name, v]))
+    expect(byName.get("a")?.required).toBe(false)
+    expect(byName.get("a")?.type).toBe("string")
+    expect(byName.get("b")?.required).toBe(true)
+  })
+
+  test("var_schema persists typed defaults, types, descriptions, validation, render format", () => {
+    const p = createPrompt({
+      title: "Typed Template",
+      body: "{{count}} and {{items}}",
+      var_schema: [
+        { name: "count", type: "number", required: true, default: 5, description: "the count", validation: '{"min":0}' },
+        { name: "items", type: "array", required: false, default: ["a", "b"], render_format: "json-pretty" },
+      ],
+    })
+    const byName = new Map(p.variables.map((v) => [v.name, v]))
+    expect(byName.get("count")?.type).toBe("number")
+    expect(byName.get("count")?.typed_default).toBe(5)
+    expect(byName.get("count")?.description).toBe("the count")
+    expect(byName.get("count")?.validation).toBe('{"min":0}')
+    expect(byName.get("items")?.type).toBe("array")
+    expect(byName.get("items")?.typed_default).toEqual(["a", "b"])
+    expect(byName.get("items")?.render_format).toBe("json-pretty")
+  })
+
+  test("update re-syncs variables when body changes", () => {
+    const p = createPrompt({ title: "Template", body: "{{a}} {{b}}" })
+    expect(p.variables).toHaveLength(2)
+    const updated = updatePrompt(p.id, { body: "{{a}} only now" })
+    expect(updated.variables).toHaveLength(1)
+    expect(updated.variables[0]?.name).toBe("a")
+    expect(loadPromptVariables(p.id)).toHaveLength(1)
+  })
+
+  test("update preserves persisted metadata for surviving variables", () => {
+    const p = createPrompt({
+      title: "Template",
+      body: "{{a}} {{b}}",
+      var_schema: [{ name: "a", type: "number", description: "kept" }],
+    })
+    const updated = updatePrompt(p.id, { body: "{{a}} and {{c}}" })
+    const byName = new Map(updated.variables.map((v) => [v.name, v]))
+    expect(byName.get("a")?.type).toBe("number")
+    expect(byName.get("a")?.description).toBe("kept")
+    expect(byName.get("c")).toBeDefined()
+  })
+})
+
+describe("labels on save", () => {
+  test("save with labels persists them", () => {
+    const p = createPrompt({
+      title: "Labeled",
+      body: "body",
+      labels: [{ key: "env", value: "prod" }, { key: "team", value: "core" }],
+    })
+    const labels = listLabels(p.id)
+    expect(labels).toHaveLength(2)
+    expect(labels.map((l) => l.key).sort()).toEqual(["env", "team"])
+  })
+
+  test("save with extends sets a single parent", () => {
+    const parent = createPrompt({ title: "Parent", body: "P {{name|p}}", slug: "parent-prompt" })
+    const child = createPrompt({ title: "Child", body: "C", slug: "child-prompt", extends_prompt: "parent-prompt" })
+    const db = getDatabase()
+    const dep = db
+      .query("SELECT relation, dependency_prompt_id, pinned_version FROM prompt_dependencies WHERE prompt_id = ?")
+      .get(child.id) as { relation: string; dependency_prompt_id: string; pinned_version: number }
+    expect(dep.relation).toBe("parent")
+    expect(dep.dependency_prompt_id).toBe(parent.id)
+    expect(dep.pinned_version).toBe(parent.version)
   })
 })

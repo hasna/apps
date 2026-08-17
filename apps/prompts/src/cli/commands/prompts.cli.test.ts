@@ -209,3 +209,118 @@ describe("CLI pagination flags", () => {
     expect(templateRows.length).toBe(1)
   })
 })
+
+describe("CLI render strict/typed/preview", () => {
+  test("strict render fails with named error on missing required var", () => {
+    const dir = mkdtempSync(join(tmpdir(), "open-prompts-render-"))
+    const dbPath = join(dir, "prompts.db")
+    expect(runCli(dbPath, ["save", "Strict Tpl", "--body", "Hello {{name}}", "--slug", "strict-tpl"]).exitCode).toBe(0)
+    const result = runCli(dbPath, ["--json", "render", "strict-tpl", "--strict"])
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toContain("MISSING_VARIABLE")
+  })
+
+  test("non-strict render leaves placeholder and reports missing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "open-prompts-render-"))
+    const dbPath = join(dir, "prompts.db")
+    expect(runCli(dbPath, ["save", "Strict Tpl", "--body", "Hello {{name}}", "--slug", "strict-tpl"]).exitCode).toBe(0)
+    const result = runCli(dbPath, ["--json", "render", "strict-tpl"])
+    expect(result.exitCode).toBe(0)
+    const parsed = JSON.parse(result.stdout) as { rendered: string; missing_vars: string[] }
+    expect(parsed.rendered).toContain("{{name}}")
+    expect(parsed.missing_vars).toContain("name")
+  })
+
+  test("preview render emits visible markers", () => {
+    const dir = mkdtempSync(join(tmpdir(), "open-prompts-render-"))
+    const dbPath = join(dir, "prompts.db")
+    expect(runCli(dbPath, ["save", "Preview Tpl", "--body", "Hello {{name}}", "--slug", "preview-tpl"]).exitCode).toBe(0)
+    const result = runCli(dbPath, ["--json", "render", "preview-tpl", "--preview"])
+    const parsed = JSON.parse(result.stdout) as { rendered: string }
+    expect(parsed.rendered).toBe("Hello [UNRESOLVED kind:var name=name]")
+  })
+
+  test("vars-json renders typed values", () => {
+    const dir = mkdtempSync(join(tmpdir(), "open-prompts-render-"))
+    const dbPath = join(dir, "prompts.db")
+    expect(runCli(dbPath, ["save", "Typed Tpl", "--body", "Count {{count}}", "--slug", "typed-tpl"]).exitCode).toBe(0)
+    const result = runCli(dbPath, ["--json", "render", "typed-tpl", "--vars-json", '{"count": 42}'])
+    expect(result.exitCode).toBe(0)
+    const parsed = JSON.parse(result.stdout) as { rendered: string }
+    expect(parsed.rendered).toBe("Count 42")
+  })
+})
+
+describe("CLI labels", () => {
+  test("label --set, labels, and list --label filter", () => {
+    const dir = mkdtempSync(join(tmpdir(), "open-prompts-labels-"))
+    const dbPath = join(dir, "prompts.db")
+    expect(runCli(dbPath, ["save", "Labeled A", "--body", "body a", "--slug", "labeled-a"]).exitCode).toBe(0)
+    expect(runCli(dbPath, ["save", "Labeled B", "--body", "body b", "--slug", "labeled-b"]).exitCode).toBe(0)
+
+    expect(runCli(dbPath, ["label", "labeled-a", "--set", "environment=Production", "--set", "team=Core"]).exitCode).toBe(0)
+    expect(runCli(dbPath, ["label", "labeled-b", "--set", "environment=Staging"]).exitCode).toBe(0)
+
+    const labels = runCli(dbPath, ["--json", "labels", "labeled-a"])
+    expect(labels.exitCode).toBe(0)
+    const parsedLabels = JSON.parse(labels.stdout) as Array<{ key: string; value: string }>
+    expect(parsedLabels).toHaveLength(2)
+    expect(parsedLabels[0]?.key).toBe("environment")
+    expect(parsedLabels[0]?.value).toBe("production") // normalized
+
+    const filtered = runCli(dbPath, ["--json", "list", "--label", "environment=production"])
+    expect(filtered.exitCode).toBe(0)
+    const rows = JSON.parse(filtered.stdout) as Array<{ slug: string }>
+    expect(rows.map((r) => r.slug)).toEqual(["labeled-a"])
+
+    // Remove and re-filter
+    expect(runCli(dbPath, ["label", "labeled-a", "--remove", "environment"]).exitCode).toBe(0)
+    const after = runCli(dbPath, ["--json", "list", "--label", "environment=production"])
+    expect(JSON.parse(after.stdout) as unknown[]).toEqual([])
+  })
+
+  test("save --label persists labels and search --label filters", () => {
+    const dir = mkdtempSync(join(tmpdir(), "open-prompts-labels-"))
+    const dbPath = join(dir, "prompts.db")
+    expect(runCli(dbPath, ["save", "Searchable X", "--body", "unique searchable body", "--slug", "searchable-x", "--label", "env=prod"]).exitCode).toBe(0)
+    expect(runCli(dbPath, ["save", "Searchable Y", "--body", "unique searchable body", "--slug", "searchable-y"]).exitCode).toBe(0)
+
+    const results = runCli(dbPath, ["--json", "search", "searchable", "--label", "env=prod"])
+    expect(results.exitCode).toBe(0)
+    const rows = JSON.parse(results.stdout) as Array<{ prompt: { slug: string } }>
+    expect(rows.map((r) => r.prompt.slug)).toEqual(["searchable-x"])
+  })
+})
+
+describe("CLI var-schema and extends", () => {
+  test("save --var-schema persists typed defaults and render uses them", () => {
+    const dir = mkdtempSync(join(tmpdir(), "open-prompts-schema-"))
+    const dbPath = join(dir, "prompts.db")
+    const schema = JSON.stringify([{ name: "count", type: "number", default: 5, description: "the count" }])
+    expect(runCli(dbPath, ["save", "Schema Tpl", "--body", "Count {{count}}", "--slug", "schema-tpl", "--var-schema", schema]).exitCode).toBe(0)
+
+    const inspect = runCli(dbPath, ["--json", "inspect", "schema-tpl"])
+    expect(inspect.exitCode).toBe(0)
+    const vars = JSON.parse(inspect.stdout) as Array<{ name: string; typed_default: unknown; type: string }>
+    expect(vars[0]?.name).toBe("count")
+    expect(vars[0]?.typed_default).toBe(5)
+    expect(vars[0]?.type).toBe("number")
+
+    const rendered = runCli(dbPath, ["--json", "render", "schema-tpl"])
+    const parsed = JSON.parse(rendered.stdout) as { rendered: string }
+    expect(parsed.rendered).toBe("Count 5")
+  })
+
+  test("save --extends composes parent body at render time", () => {
+    const dir = mkdtempSync(join(tmpdir(), "open-prompts-extends-"))
+    const dbPath = join(dir, "prompts.db")
+    expect(runCli(dbPath, ["save", "Parent", "--body", "PARENT {{name|p}}", "--slug", "parent-tpl"]).exitCode).toBe(0)
+    expect(runCli(dbPath, ["save", "Child", "--body", "CHILD", "--slug", "child-tpl", "--extends", "parent-tpl"]).exitCode).toBe(0)
+
+    const rendered = runCli(dbPath, ["--json", "render", "child-tpl"])
+    expect(rendered.exitCode).toBe(0)
+    const parsed = JSON.parse(rendered.stdout) as { rendered: string; resolved_sources: Array<{ relation: string }> }
+    expect(parsed.rendered).toBe("PARENT p\n\nCHILD")
+    expect(parsed.resolved_sources.map((s) => s.relation)).toEqual(["self", "parent"])
+  })
+})
