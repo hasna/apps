@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createRequire } from "module";
+import { timingSafeEqual } from "node:crypto";
 import { getDatabase, getDbPath } from "../db/database.js";
 import {
   createLibrary,
@@ -141,9 +142,18 @@ function authenticateRequest(req: Request, path: string): Response | null {
 
   const bearer = req.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
   const headerToken = req.headers.get("x-context-token")?.trim();
-  if (bearer === expected || headerToken === expected) return null;
+  if (safeEq(bearer, expected) || safeEq(headerToken, expected)) return null;
 
   return json({ error: "Unauthorized" }, bearer || headerToken ? 403 : 401);
+}
+
+/** Constant-time string compare for token equality (length mismatch still fails). */
+function safeEq(a: string | undefined, b: string): boolean {
+  if (typeof a !== "string") return false;
+  const ba = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ba.length !== bb.length) return false;
+  return timingSafeEqual(ba, bb);
 }
 
 export async function handleRequest(req: Request): Promise<Response> {
