@@ -58,6 +58,7 @@ import {
   cloudResolveProjectRef,
   cloudRenameProject,
   cloudResolvePlan,
+  cloudResolveTaskListForUpdate,
   cloudResolveTaskListRef,
   cloudResolveTaskRef,
   cloudListProjectResources,
@@ -2527,6 +2528,179 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
 
     await expect(cloudResolveTaskListRef(client, listId, projectId))
       .rejects.toThrow(`Task list not found: "${listId}"`);
+  });
+
+  test("a rebind source resolves only unscoped — a foreign project scope rejects an unbound list", async () => {
+    // `lists --update <id> --project <p>` (PR #260) rebinds the list INTO p.
+    // The source list therefore lives OUTSIDE p, so the CLI must resolve the
+    // source unscoped: scoping it to the destination would reject an unbound
+    // source UUID ("Task list not found") or shadow it with a same-slug list
+    // already in the destination. This pair guards that invariant: the scoped
+    // form rejects, the unscoped form resolves.
+    const projectId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const unboundListId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname === `/v1/task-lists/${unboundListId}`) {
+        return {
+          body: {
+            task_list: {
+              id: unboundListId,
+              project_id: null,
+              slug: "wanderer",
+              name: "Wanderer",
+            },
+          },
+        };
+      }
+      return { status: 404, body: { error: "not found" } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudResolveTaskListRef(client, unboundListId, projectId))
+      .rejects.toThrow(`Task list not found: "${unboundListId}"`);
+    await expect(cloudResolveTaskListRef(client, unboundListId))
+      .resolves.toBe(unboundListId);
+    expect(calls.map((call) => call.url)).toEqual([
+      `https://todos.example.com/v1/task-lists/${unboundListId}`,
+      `https://todos.example.com/v1/projects/${projectId}`,
+    ]);
+  });
+
+  test("an in-scope slug update resolves within the destination even when another project shares the slug", async () => {
+    // The rebind resolution is scoped-first with an unscoped fallback: a slug
+    // update inside the destination project must resolve to THAT project's
+    // list even when a second project legally shares the slug (uniqueness is
+    // project-scoped), which is why unscoped-first is a regression.
+    const projectA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const projectB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const listA = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const listB = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    const scopedCalls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname === `/v1/task-lists/${listA}`) {
+        return { body: { task_list: { id: listA, project_id: projectA, slug: "inbox", name: "Inbox A" } } };
+      }
+      if (url.pathname === `/v1/task-lists/${listB}`) {
+        return { body: { task_list: { id: listB, project_id: projectB, slug: "inbox", name: "Inbox B" } } };
+      }
+      if (url.pathname === "/v1/task-lists" && url.searchParams.get("project_id") === projectA) {
+        return { body: { task_lists: [{ id: listA, project_id: projectA, slug: "inbox", name: "Inbox A" }] } };
+      }
+      if (url.pathname === "/v1/task-lists" && url.searchParams.get("project_id") === projectB) {
+        return { body: { task_lists: [{ id: listB, project_id: projectB, slug: "inbox", name: "Inbox B" }] } };
+      }
+      if (url.pathname === "/v1/task-lists") {
+        return { body: { task_lists: [
+          { id: listA, project_id: projectA, slug: "inbox", name: "Inbox A" },
+          { id: listB, project_id: projectB, slug: "inbox", name: "Inbox B" },
+        ] } };
+      }
+      return { status: 404, body: { error: "not found" } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudResolveTaskListRef(client, "inbox", projectA))
+      .resolves.toBe(listA);
+    await expect(cloudResolveTaskListRef(client, "inbox", projectB))
+      .resolves.toBe(listB);
+    // Unscoped, the shared slug is ambiguous — the reason the CLI tries the
+    // destination scope before falling back.
+    await expect(cloudResolveTaskListRef(client, "inbox"))
+      .rejects.toThrow(/not found|ambiguous/i);
+    expect(scopedCalls.map((call) => call.url)).toEqual([
+      `https://todos.example.com/v1/task-lists?project_id=${projectA}`,
+      `https://todos.example.com/v1/task-lists?project_id=${projectB}`,
+      `https://todos.example.com/v1/task-lists`,
+    ]);
+  });
+
+  test("lists --update resolution: scoped miss falls back, transport error never does", async () => {
+    // Exercises the production ordering the CLI action calls for
+    // `lists --update <ref> --project <p>` (cloudResolveTaskListForUpdate):
+    // - a confirmed scoped miss falls back unscoped so an unbound source can
+    //   still be rebound;
+    // - a scoped HTTP 500 (REMOTE_API_UNAVAILABLE) PROPAGATES — falling back
+    //   unscoped there could resolve another project's list and mutate the
+    //   wrong target, which the fallback must never do;
+    // - a UUID source resolves through the fetch-free unscoped fast path, so
+    //   no transport error can even be raised on it.
+    const projectA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const unboundListId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const missCalls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname === "/v1/task-lists" && url.searchParams.get("project_id") === projectA) {
+        return { body: { task_lists: [] } };
+      }
+      if (url.pathname === "/v1/task-lists") {
+        return { body: { task_lists: [{ id: unboundListId, project_id: null, slug: "wanderer", name: "Wanderer" }] } };
+      }
+      return { status: 404, body: { error: "not found" } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    // Confirmed scoped miss (empty scope -> not found) falls back unscoped.
+    await expect(cloudResolveTaskListForUpdate(client, "wanderer", projectA, true))
+      .resolves.toBe(unboundListId);
+    expect(missCalls.map((call) => call.url)).toEqual([
+      `https://todos.example.com/v1/task-lists?project_id=${projectA}`,
+      `https://todos.example.com/v1/projects/${projectA}`,
+      `https://todos.example.com/v1/task-lists`,
+    ]);
+
+    // Scoped HTTP 500 must propagate: no unscoped retry, no wrong-target PATCH.
+    installFetch(() => ({ status: 500, body: { error: "boom" } }));
+    await expect(cloudResolveTaskListForUpdate(client, "wanderer", projectA, true))
+      .rejects.toThrow(/REMOTE_API_UNAVAILABLE/);
+
+    // UUID source: fetch-free unscoped fast path — resolves even when the
+    // authority is erroring, and can never be shadowed by the destination.
+    await expect(cloudResolveTaskListForUpdate(client, unboundListId, projectA, true))
+      .resolves.toBe(unboundListId);
+  });
+
+  test("lists --update resolution: in-scope slug wins, outside-source slug falls back", async () => {
+    const projectA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const projectB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const listA = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const listB = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname === "/v1/task-lists" && url.searchParams.get("project_id") === projectA) {
+        return { body: { task_lists: [{ id: listA, project_id: projectA, slug: "inbox", name: "Inbox A" }] } };
+      }
+      if (url.pathname === "/v1/task-lists" && url.searchParams.get("project_id") === projectB) {
+        return { body: { task_lists: [{ id: listB, project_id: projectB, slug: "inbox", name: "Inbox B" }] } };
+      }
+      if (url.pathname === "/v1/task-lists") {
+        return { body: { task_lists: [
+          { id: listA, project_id: projectA, slug: "inbox", name: "Inbox A" },
+          { id: listB, project_id: projectB, slug: "roamer", name: "Roamer" },
+        ] } };
+      }
+      return { status: 404, body: { error: "not found" } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    // In-scope update: resolves within the destination, never ambiguous even
+    // though project B shares the slug.
+    await expect(cloudResolveTaskListForUpdate(client, "inbox", projectA, true))
+      .resolves.toBe(listA);
+    // Rebind of a source genuinely outside the destination: scoped miss in A
+    // (A has no list with this slug) falls back unscoped and resolves B's list.
+    await expect(cloudResolveTaskListForUpdate(client, "roamer", projectA, true))
+      .resolves.toBe(listB);
+    // Without an explicit project the scope comes from context; resolution
+    // must still work within it.
+    await expect(cloudResolveTaskListForUpdate(client, "inbox", projectB, false))
+      .resolves.toBe(listB);
+    expect(calls.map((call) => call.url)).toEqual([
+      `https://todos.example.com/v1/task-lists?project_id=${projectA}`,
+      `https://todos.example.com/v1/task-lists?project_id=${projectA}`,
+      `https://todos.example.com/v1/projects/${projectA}`,
+      `https://todos.example.com/v1/task-lists`,
+      `https://todos.example.com/v1/task-lists?project_id=${projectB}`,
+    ]);
   });
 
   test("project-scoped plan resolution rejects an exact UUID from another project", async () => {

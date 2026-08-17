@@ -21,6 +21,7 @@ import {
   cloudRegisterAgent,
   cloudReleaseAgent,
   cloudResolveProjectRef,
+  cloudResolveTaskListForUpdate,
   cloudResolveTaskListRef,
 } from "../cloud-router.js";
 
@@ -562,8 +563,12 @@ export function registerAgentCommands(program: Command) {
 
         if (opts.show || opts.update) {
           const ref = opts.show || opts.update;
+          // `--project` rebinds the list to a project scope. It must be an
+          // EXPLICIT ref — the auto-detected cwd project must never silently
+          // re-scope an existing list on a rename.
+          const explicitProject = typeof globalOpts.project === "string" && globalOpts.project.trim() !== "";
           const resolved = cloud
-            ? await cloudResolveTaskListRef(cloud, ref, projectId ?? undefined)
+            ? await cloudResolveTaskListForUpdate(cloud, ref, projectId, opts.update && explicitProject)
             : resolvePartialId(getDatabase(), "task_lists", ref);
           if (!resolved) throw new Error(`Task list not found or ambiguous: ${ref}`);
           if (opts.show) {
@@ -575,11 +580,12 @@ export function registerAgentCommands(program: Command) {
             return;
           }
           const patch = {
+            ...(explicitProject ? { project_id: projectId } : {}),
             ...(opts.name !== undefined ? { name: opts.name } : {}),
             ...(opts.slug !== undefined ? { slug: opts.slug } : {}),
             ...(opts.description !== undefined ? { description: opts.description } : {}),
           };
-          if (Object.keys(patch).length === 0) throw new Error("lists --update requires --name, --slug, or --description");
+          if (Object.keys(patch).length === 0) throw new Error("lists --update requires --project, --name, --slug, or --description");
           const list = cloud
             ? await cloudUpdateTaskList(cloud, resolved, patch)
             : updateTaskList(resolved, patch);

@@ -749,4 +749,33 @@ describe("CLI QoL commands", () => {
       expect(errorOutput).toContain("not both");
     }
   });
+
+  it("lists --update --project rebinds an unbound list to a registered project", () => {
+    const project = JSON.parse(run("projects --add /tmp/rebind-target --name 'Rebind Target' --json"));
+    const list = JSON.parse(run("lists --add 'RebindList' --slug rebind-list --json"));
+    expect(list.project_id ?? null).toBeNull();
+
+    const rebound = JSON.parse(run(`lists --update ${list.id} --project rebind-target --json`));
+    expect(rebound.project_id).toBe(project.id);
+
+    // The rebind is authoritative: a fresh show reads the bound project back.
+    const shown = JSON.parse(run(`lists --show ${list.id} --json`));
+    expect(shown.project_id).toBe(project.id);
+  });
+
+  it("lists --update --project refuses a reference that resolves to no project", () => {
+    const list = JSON.parse(run("lists --add 'UnresolvableRebind' --slug unresolvable-rebind --json"));
+    let thrown = false;
+    let errorOutput = "";
+    try {
+      run(`lists --update ${list.id} --project no-such-project-anywhere --json`);
+    } catch (e: any) {
+      thrown = true;
+      errorOutput = e.stderr?.toString() || e.message || "";
+    }
+    expect(thrown).toBe(true);
+    expect(errorOutput).toMatch(/Project not found|not found/i);
+    const after = JSON.parse(run(`lists --show ${list.id} --json`));
+    expect(after.project_id ?? null).toBeNull();
+  });
 });

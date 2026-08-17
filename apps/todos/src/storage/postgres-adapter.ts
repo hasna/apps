@@ -3071,17 +3071,27 @@ async function createTaskList(input: CreateTaskListInput, store: PostgresJsonRec
 async function updateTaskList(id: string, input: UpdateTaskListInput, store: PostgresJsonRecordStore): Promise<TaskList> {
   const list = await requireRecord<TaskList>("task_lists", id, store);
   const patch = definedPatch(input);
+  // A rebind changes the slug's scope, so the slug conflict check must run
+  // against the DESTINATION scope. JSONB records have no foreign keys, so the
+  // destination project's existence is validated by the /v1 route.
+  const projectId = input.project_id === "" || input.project_id === null
+    ? null
+    : (input.project_id === undefined ? list.project_id : input.project_id);
   if (input.slug !== undefined) {
     const slug = slugifyRaw(input.slug);
     if (!slug) throw new Error("Invalid task-list slug — must be non-empty kebab-case");
-    const duplicate = (await store.list<TaskList>("task_lists")).find((candidate) =>
-      candidate.id !== id && candidate.project_id === list.project_id && candidate.slug === slug
-    );
-    if (duplicate) {
-      throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${slug}" already exists in this scope`);
-    }
     patch.slug = slug;
   }
+  const effectiveSlug = patch.slug ?? list.slug;
+  if (projectId !== list.project_id || effectiveSlug !== list.slug) {
+    const duplicate = (await store.list<TaskList>("task_lists")).find((candidate) =>
+      candidate.id !== id && candidate.project_id === projectId && candidate.slug === effectiveSlug
+    );
+    if (duplicate) {
+      throw new ResourceConflictError("TASK_LIST_SLUG_CONFLICT", `Task list with slug "${effectiveSlug}" already exists in this scope`);
+    }
+  }
+  if (projectId !== list.project_id) patch.project_id = projectId;
   return store.upsert("task_lists", {
     ...list,
     ...patch,
