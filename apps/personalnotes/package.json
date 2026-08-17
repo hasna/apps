@@ -51,7 +51,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/notes.git"
+    "url": "git+https://github.com/hasna/apps"
   },
   "bugs": {
     "url": "https://github.com/hasna/notes/issues"
@@ -62,10 +62,15 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@hasna/events": "github:hasna/events#92120551c2eb15659a34a8ea4628212af41601c5",
+    "@hasna/events": "0.1.15",
     "hono": "^4.6.0"
   },
   "devDependencies": {
     "@types/bun": "1.2.4"
-  }
+  },
+  "private": false,
+  "workspaces": [
+    "ai-sidecar",
+    "server"
+  ]
 }

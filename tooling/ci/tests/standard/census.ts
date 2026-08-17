@@ -162,6 +162,11 @@ export const LICENSE_EXCEPTIONS: Array<{ member: string; license: string; reason
     license: "MIT",
     reason: "Intentional: apps/ui is the ui.sh skill mirror; its LICENSE file is MIT (Copyright (c) 2026 hasna). Revisit only if the org standard is applied retroactively.",
   },
+  {
+    member: "personalnotes",
+    license: "MIT",
+    reason: "Imported as-is from hasna/notes: the repository LICENSE file is MIT (Copyright (c) 2026 Hasna); the license field follows the repo's own LICENSE file. Revisit only if the org standard is applied retroactively.",
+  },
 ];
 
 /** Four-surface WARN exceptions — members missing the <name>-mcp bin. */
@@ -495,6 +500,7 @@ export const NO_VALIDATOR_PIN: string[] = [
   "guardrails",
   "hooks",
   "monitor",
+  "personalnotes",
   "sheets",
   "slides",
   "tables",

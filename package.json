@@ -5,7 +5,9 @@
   "packageManager": "bun@1.3.14",
   "description": "Hasna's public OSS apps monorepo — @hasna/* packages built and published from apps/ (per-app CLIs, unified hasna CLI, SDKs).",
   "workspaces": [
-    "apps/*"
+    "apps/*",
+    "apps/personalnotes/ai-sidecar",
+    "apps/personalnotes/server"
   ],
   "scripts": {
     "build": "turbo run build",

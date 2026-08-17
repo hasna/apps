@@ -9,7 +9,11 @@
     "user-hosted"
   ],
   "bins": [
-    "personalnotes"
+    "personalnotes",
+    "personalnotes-mcp",
+    "personalnotes-serve",
+    "hasna-notes",
+    "hasna-notes-mcp"
   ],
   "serviceSurfaces": [
     {
@@ -19,5 +23,13 @@
       "bin": "personalnotes",
       "authMode": "local-only"
     }
-  ]
+  ],
+  "metadata": {
+    "surfaces": {
+      "cli": "personalnotes",
+      "mcp": "personalnotes-mcp",
+      "serve": "personalnotes-serve",
+      "sdk": "@hasna/personalnotes"
+    }
+  }
 }
