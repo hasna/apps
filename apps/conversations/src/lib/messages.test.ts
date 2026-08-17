@@ -243,6 +243,96 @@ describe("sendMessage", () => {
   });
 });
 
+describe("work-status lifecycle stream write-time schema guard", () => {
+  const WS_EVENT = (state: string, overrides: Record<string, string> = {}): string => {
+    const fields = {
+      event_id: "78b747e6",
+      task_id: "3f8f212c",
+      scope: "todos:691ea5e4",
+      agent: "agent-chief-engineering",
+      session: "0f0c2a9e-1b2d-4c3e-8f4a-5b6c7d8e9f01",
+      at: "2026-08-17T12:00:00.000Z",
+      claim: "clm_123",
+      evidence: "-",
+      ...overrides,
+    };
+    // The schema line leads with the bare state token, never a `state=` field.
+    return [state, ...Object.entries(fields).map(([key, value]) => `${key}=${value}`)].join(" ");
+  };
+
+  beforeEach(() => {
+    createChannel("work-status", "fixture");
+  });
+
+  test("accepts a well-formed lifecycle event", () => {
+    const msg = sendMessage({ from: "a", to: "work-status", content: WS_EVENT("START"), channel: "work-status" });
+    expect(msg.channel).toBe("work-status");
+    expect(msg.content).toStartWith("START event_id=");
+  });
+
+  test("rejects a JSON document used as the event line", () => {
+    const json = `{"event":"DONE","task_id":"3f8f212c","at":"2026-08-17T12:00:00.000Z"}`;
+    expect(() => sendMessage({ from: "a", to: "work-status", content: json, channel: "work-status" }))
+      .toThrow(/Work-status lifecycle schema violation/);
+    expect(readMessages()).toHaveLength(0);
+  });
+
+  test("rejects an invalid state token", () => {
+    expect(() => sendMessage({ from: "a", to: "work-status", content: WS_EVENT("CONTINUE"), channel: "work-status" }))
+      .toThrow(/invalid state "CONTINUE"/);
+  });
+
+  test("rejects an empty event_id", () => {
+    expect(() => sendMessage({ from: "a", to: "work-status", content: WS_EVENT("START", { event_id: "" }), channel: "work-status" }))
+      .toThrow(/invalid value/);
+  });
+
+  test("rejects a missing claim= field", () => {
+    const line = WS_EVENT("DONE").split(" ").filter((token) => !token.startsWith("claim=")).join(" ");
+    expect(() => sendMessage({ from: "a", to: "work-status", content: line, channel: "work-status" }))
+      .toThrow(/missing required field claim/);
+  });
+
+  test("rejects an extra outcome= field", () => {
+    expect(() => sendMessage({ from: "a", to: "work-status", content: `${WS_EVENT("DONE")} outcome=success`, channel: "work-status" }))
+      .toThrow(/unexpected field outcome/);
+  });
+
+  test("rejects a duplicate same-state transition within the dedupe window", () => {
+    sendMessage({ from: "a", to: "work-status", content: WS_EVENT("START", { at: "2026-08-14T19:12:36.000Z" }), channel: "work-status" });
+    expect(() => sendMessage({
+      from: "a",
+      to: "work-status",
+      content: WS_EVENT("START", { event_id: "f6e009ee", at: "2026-08-14T19:13:33.000Z" }),
+      channel: "work-status",
+    })).toThrow(/duplicate START event for task 3f8f212c/);
+    expect(readMessages()).toHaveLength(1);
+  });
+
+  test("accepts a distinct state transition for the same task", () => {
+    sendMessage({ from: "a", to: "work-status", content: WS_EVENT("START"), channel: "work-status" });
+    const resumed = sendMessage({ from: "a", to: "work-status", content: WS_EVENT("RESUMED"), channel: "work-status" });
+    expect(resumed.content).toStartWith("RESUMED event_id=");
+    expect(readMessages()).toHaveLength(2);
+  });
+
+  test("accepts the same state again after the dedupe window", () => {
+    sendMessage({ from: "a", to: "work-status", content: WS_EVENT("BLOCKED", { at: "2026-08-14T21:11:06.000Z" }), channel: "work-status" });
+    const later = sendMessage({
+      from: "a",
+      to: "work-status",
+      content: WS_EVENT("BLOCKED", { event_id: "f6e009ee", at: "2026-08-14T21:20:00.000Z" }),
+      channel: "work-status",
+    });
+    expect(later.content).toStartWith("BLOCKED event_id=");
+  });
+
+  test("does not gate non-work-status channels", () => {
+    const msg = sendMessage({ from: "a", to: "general", content: WS_EVENT("CONTINUE"), channel: "general" });
+    expect(msg.channel).toBe("general");
+  });
+});
+
 describe("readMessages", () => {
   test("returns empty array when no messages", () => {
     const msgs = readMessages();

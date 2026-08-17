@@ -1366,6 +1366,73 @@ describe("conversations-serve", () => {
     expect(list.messages.length).toBeGreaterThan(0);
   });
 
+  test("POST /v1/messages enforces the work-status lifecycle schema at write time", async () => {
+    const ws = (state: string, overrides: Record<string, string> = {}): string => {
+      const fields = {
+        event_id: "78b747e6",
+        task_id: "3f8f212c",
+        scope: "todos:691ea5e4",
+        agent: "agent-chief-engineering",
+        session: "0f0c2a9e-1b2d-4c3e-8f4a-5b6c7d8e9f01",
+        at: "2026-08-14T19:12:36.000Z",
+        claim: "clm_123",
+        evidence: "-",
+        ...overrides,
+      };
+      return [state, ...Object.entries(fields).map(([key, value]) => `${key}=${value}`)].join(" ");
+    };
+    activeFakeClient!.__debug.seedChannel({
+      id: "chn_00000000000000000000000000000051",
+      name: "work-status",
+      description: null,
+      topic: null,
+      project_id: null,
+      created_by: "alice",
+      created_at: "2026-08-09T00:00:00.000Z",
+      archived_at: null,
+      metadata: null,
+      tags: null,
+    }, [], []);
+
+    const post = (content: string) => fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ from: "a", to: "b", content, channel: "work-status" }),
+    });
+
+    const ok = await post(ws("START"));
+    expect(ok.status).toBe(201);
+    expect(((await ok.json()) as any).message.content).toStartWith("START event_id=");
+
+    // Same-state duplicate for the same task within the dedupe window: id
+    // 702003/702004 class (BLOCKED 24s apart), rejected at write time.
+    const dup = await post(ws("START", { event_id: "f6e009ee", at: "2026-08-14T19:13:33.000Z" }));
+    expect(dup.status).toBe(400);
+    expect(((await dup.json()) as any).error).toContain("duplicate START event for task 3f8f212c");
+
+    // An entire JSON document as the first line (id=701771 class).
+    const json = await post(`{"event":"DONE","task_id":"3f8f212c","at":"2026-08-14T20:00:00.000Z"}`);
+    expect(json.status).toBe(400);
+    expect(((await json.json()) as any).error).toContain("Work-status lifecycle schema violation");
+
+    // Invalid state token (id=686051 class).
+    const badState = await post(ws("CONTINUE"));
+    expect(badState.status).toBe(400);
+    expect(((await badState.json()) as any).error).toContain("invalid state \"CONTINUE\"");
+
+    // A distinct state for the same task is a real transition and lands.
+    const done = await post(ws("DONE", { at: "2026-08-14T20:00:00.000Z" }));
+    expect(done.status).toBe(201);
+
+    // Non-work-status channels are untouched by the gate.
+    const other = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ from: "a", to: "b", content: ws("CONTINUE"), channel: "deploys" }),
+    });
+    expect(other.status).toBe(201);
+  });
+
   test("POST /v1/messages persists metadata for direct and channel UUID readback", async () => {
     const channelName = "message-metadata-roundtrip";
     const created = await fetch(`${base}/v1/channels`, {

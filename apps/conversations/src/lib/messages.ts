@@ -33,6 +33,7 @@ import { fireWebhooks } from "./webhooks.js";
 import { normalizeChannelName, unknownChannelMessage } from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "./content-safety.js";
+import { enforceWorkStatusEventWrite } from "./work-status-schema.js";
 import { resolveReadLimit, resolveReadWindow } from "./message-window.js";
 import {
   COLLECTION_MAX_MAX_BYTES,
@@ -355,6 +356,18 @@ export function sendMessage(opts: SendMessageOptions): Message {
       }
 
       const toAgent = channelName ?? opts.to;
+      // Work-status lifecycle stream: write-time schema enforcement. The
+      // fleet mandate (global-work-status-lifecycle) allows ONE event per real
+      // transition with an exact first-line shape; malformed lines and
+      // same-state duplicates are rejected here, inside the write transaction,
+      // so the stream's consumers can trust it. The Postgres server path
+      // (src/server/api.ts) enforces the same gate.
+      enforceWorkStatusEventWrite(channelName, opts.content, () => {
+        const recent = db.prepare(
+          "SELECT content FROM messages WHERE channel = ? ORDER BY id DESC LIMIT 100"
+        ).all(channelName) as Array<{ content: unknown }>;
+        return recent.map((row) => String(row.content));
+      });
       const row = db.prepare(`
         INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

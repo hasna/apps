@@ -24,6 +24,7 @@ import { version as pkgVersion } from "../../package.json";
 import { openapiSpec } from "./openapi.js";
 import { decayedStatus, SINGLE_TOUCH_TOLERANCE_SECONDS, SINGLE_TOUCH_REAP_WINDOW_SECONDS } from "../lib/presence.js";
 import { normalizeChannelName, unknownChannelMessage } from "../lib/channel-names.js";
+import { enforceWorkStatusEventWrite, WORK_STATUS_CHANNEL } from "../lib/work-status-schema.js";
 import { newChannelId } from "../lib/channel-id.js";
 import { extractTopics } from "../lib/topic-extract.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "../lib/content-safety.js";
@@ -2066,6 +2067,19 @@ async function handleV1(
           }
           projectId = channelRow.project_id;
         }
+      }
+      // Work-status lifecycle stream: write-time schema enforcement, shared
+      // with the SQLite path (src/lib/messages.ts). One event per real
+      // transition, exact first-line shape; malformed lines and same-state
+      // duplicates are rejected inside the write transaction (fleet mandate
+      // global-work-status-lifecycle). A guard present on only one backend is
+      // absent exactly where it matters.
+      if (channelName === WORK_STATUS_CHANNEL) {
+        const recent = await tx.many<{ content: unknown }>(
+          `SELECT content FROM messages WHERE channel = $1 ORDER BY id DESC LIMIT 100`,
+          [channelName],
+        );
+        enforceWorkStatusEventWrite(channelName, content, () => recent.map((row) => String(row.content)));
       }
       const inserted = await tx.get<Record<string, unknown>>(
         `INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
