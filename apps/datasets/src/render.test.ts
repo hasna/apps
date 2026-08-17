@@ -62,4 +62,20 @@ describe("dataset render adapters", () => {
     expect((root.edges as JsonObject[]).length).toBe(2);
     expect((root.data as JsonObject).privacy).toMatchObject({ previews_bounded: true, raw_records_embedded: false });
   });
+
+  test("bounds a canvas preview and marks it truncated when more rows exist", () => {
+    ingestDataset({
+      name: "Large sample",
+      projectId: "swiss-bank-account",
+      rows: [{ id: "a" }, { id: "b" }, { id: "c" }],
+    });
+
+    const spec = buildDatasetCanvasSpec({ projectId: "swiss-bank-account", limit: 1 });
+    const root = spec.elements.root.props as JsonObject;
+    const nodes = root.nodes as JsonObject[];
+    const sample = nodes.find((node) => node.type === "dataset.sample");
+
+    expect(sample?.data).toMatchObject({ status: "truncated" });
+    expect((sample?.data as JsonObject).items).toHaveLength(1);
+  });
 });

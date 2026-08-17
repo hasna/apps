@@ -70,6 +70,15 @@ describe("addStroke", () => {
     expect(el.pressures).toEqual([0.1, 0.9]);
   });
 
+  test("does not retain the caller's mutable pressure array", () => {
+    const pressures = [0.1, 0.9];
+    const scene = addStroke(createScene(), [[0, 0], [5, 5]], { pressures });
+
+    pressures[0] = 0.5;
+
+    expect(scene.elements[0]!.pressures).toEqual([0.1, 0.9]);
+  });
+
   test("empty point list adds nothing", () => {
     const scene = addStroke(createScene(), []);
     expect(scene.elements).toHaveLength(0);
@@ -135,5 +144,13 @@ describe("sceneBounds", () => {
     scene = addElement(scene, { type: "rectangle", x: 10, y: 10, width: 20, height: 20 });
     scene = addElement(scene, { type: "rectangle", x: 50, y: 5, width: 10, height: 40 });
     expect(sceneBounds(scene)).toEqual({ x: 10, y: 5, width: 50, height: 40 });
+  });
+
+  test("computes bounds when elements cross the origin", () => {
+    let scene = createScene();
+    scene = addElement(scene, { type: "rectangle", x: -20, y: -10, width: 30, height: 15 });
+    scene = addElement(scene, { type: "ellipse", x: 5, y: -4, width: 10, height: 20 });
+
+    expect(sceneBounds(scene)).toEqual({ x: -20, y: -10, width: 35, height: 26 });
   });
 });

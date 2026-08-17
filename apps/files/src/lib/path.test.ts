@@ -56,4 +56,18 @@ describe("SDK-safe file path helpers", () => {
       "Path contains null byte",
     );
   });
+
+  test("keeps malformed and oversized paths on the invalid-path boundary", () => {
+    expect(() => normalizeSafeRelativePath(42)).toThrow("Invalid path");
+    expect(() =>
+      normalizeSafeRelativePath("abcdef", {
+        maxLength: 5,
+        invalidMessage: "path exceeds configured limit",
+      }),
+    ).toThrow("path exceeds configured limit");
+    expect(() => normalizeSafeRelativePath("reports/../summary")).toThrow(
+      "Path traversal segments not allowed",
+    );
+    expect(normalizeSafeRelativePath(null, { allowEmpty: true })).toBe("");
+  });
 });
