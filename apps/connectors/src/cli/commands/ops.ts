@@ -302,9 +302,13 @@ export function registerCommands(program: Command): void {
               console.log(`  ${chalk.cyan(oauthUrl)}\n`);
 
               try {
-                const { exec } = await import("child_process");
+                const { spawn } = await import("child_process");
                 const openCmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-                exec(`${openCmd} "${oauthUrl}"`);
+                const p = spawn(openCmd, [oauthUrl], { stdio: "ignore", detached: true });
+                // An 'error' listener is required: without one, a missing opener binary
+                // emits an async 'error' event that escapes the try/catch and kills the process.
+                p.on("error", () => {});
+                p.unref();
                 console.log(chalk.dim("  Browser opened. Complete the OAuth flow, then press Ctrl+C.\n"));
               } catch {
                 console.log(chalk.dim("  Open the URL above in your browser.\n"));

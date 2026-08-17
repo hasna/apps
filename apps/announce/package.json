@@ -63,9 +63,10 @@
     "build": "bun run clean && bun build src/index.ts src/contracts.ts src/events.ts src/types.ts src/lib/compose.ts src/lib/campaigns.ts src/lib/ledger.ts src/lib/deliver.ts src/lib/shortlinks.ts src/lib/report.ts src/lib/render/index.ts --outdir dist --target bun --root src --packages external && bun build src/cli/index.ts --outdir dist/cli --target bun --packages external && bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "scan:artifact": "bun scripts/scan-artifact.ts",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
-    "prepack": "bun run build",
+    "prepack": "bun run build && bun run scan:artifact",
     "prepublishOnly": "bun run typecheck && bun test",
     "postinstall": "mkdir -p $HOME/.hasna/announce 2>/dev/null || true"
   },
@@ -114,6 +115,7 @@
   "devDependencies": {
     "@types/bun": "^1.2.4",
     "typescript": "^5.7.3",
-    "@hasna/shortlinks": ">=0.1.0"
+    "@hasna/shortlinks": ">=0.1.0",
+    "@hasna/contracts": "0.10.6"
   }
 }
