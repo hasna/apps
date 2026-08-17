@@ -1,5 +1,0 @@
----
-"@hasna/prompts": patch
----
-
-Dispatch engine (emit + codewith read-only) with run receipts. Adds `prompts dispatch <id>` (--runtime emit|codewith, --target, --var/--vars-json, --cwd, --wait), `prompts dispatch get <run-id>` (metadata-only default; --include-output for bounded redacted captures), `prompts dispatch cancel <run-id>`, and `prompts targets list` (read-only discovery, safe profile names + availability only). Codewith runs are strictly read-only, pass the rendered prompt on stdin (never a shell string), run under an allowlisted environment, reserve the provider account via the conversations lock store (`codewith/provider-account/<provider>/<fingerprint>`, released on terminal state), and record dispatch_runs receipts binding prompt id/version, render hash, target, and output pointers. Dispatch renders strictly by default; missing variables fail with `STRICT_RENDER_MISSING_VARS` before a run is accepted. One accepted run increments prompt usage exactly once. MCP tools added: `prompts_targets`, `prompts_dispatch`, `prompts_dispatch_get`.
