@@ -13,7 +13,7 @@ const setSecret = _store.setSecret.bind(_store);
 let testDir: string;
 
 beforeEach(async () => {
-  testDir = join(tmpdir(), "private-account-123-demo-host", `open-secrets-status-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  testDir = join(tmpdir(), "open-secrets-status", `os-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
   process.env.OPEN_SECRETS_DB = join(testDir, "vault.db");
   resetDb();
@@ -31,7 +31,7 @@ describe("secret reference status contract", () => {
     const privateKeyName = "private-account-123/demo-host/provider/live/token";
     const privateLabel = "demo-host private account token";
     await setSecret(privateKeyName, privateValue, "token", privateLabel);
-    await setSecret("example/synthetic/test/api_key", "sk-synthetic-value", "api_key");
+    await setSecret("example/synthetic/test/api_key", "synthetic-value-2f9c41", "api_key");
     await registerUser("agent-status", "Status Agent", "agent");
 
     const status = await getSecretReferenceStatus();

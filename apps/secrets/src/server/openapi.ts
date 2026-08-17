@@ -60,6 +60,50 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       mode: { type: "string" },
     },
   };
+  const secretVersionMeta = {
+    type: "object",
+    required: ["version", "change_kind", "created_at", "created_by", "value_length", "fingerprint", "current"],
+    properties: {
+      version: { type: "integer" },
+      change_kind: { type: "string", enum: ["initial", "set", "rotation", "import", "restore", "migration"] },
+      reason: { type: "string", nullable: true },
+      label: { type: "string", nullable: true },
+      created_at: { type: "string" },
+      created_by: { type: "string" },
+      source_version: { type: "integer", nullable: true },
+      batch_id: { type: "string", nullable: true },
+      provider_expires_at: { type: "string", nullable: true },
+      value_length: { type: "integer" },
+      fingerprint: { type: "string", description: "Short keyed fingerprint (16 hex chars); never value material" },
+      current: { type: "boolean" },
+    },
+  };
+  const secretVersionCheck = {
+    allOf: [
+      { $ref: "#/components/schemas/SecretVersionMeta" },
+      {
+        type: "object",
+        required: ["hash"],
+        properties: { hash: { type: "string", description: "sha256 of the value — same evidence class as get --check" } },
+      },
+    ],
+  };
+  const restoreInput = {
+    type: "object",
+    required: ["key", "version", "reason", "expected_current_version"],
+    properties: {
+      key: { type: "string" },
+      version: { type: "integer" },
+      reason: {
+        type: "string",
+        description: "Operator note recorded on the new version. Length-bounded and scanned at the store boundary; credential-shaped content is refused with 400.",
+      },
+      expected_current_version: {
+        type: "integer",
+        description: "Required. The current version the caller expects; restore is refused with 409 when it differs (concurrency CAS).",
+      },
+    },
+  };
 
   return {
     openapi: "3.0.3",
@@ -95,10 +139,16 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
             key: { type: "string" },
             value: { type: "string" },
             type: { type: "string", enum: ["api_key", "password", "token", "credential", "other"] },
-            label: { type: "string" },
+            label: { type: "string", description: "Length-bounded and scanner-checked at the store boundary; credential-shaped content is refused with 400" },
             ttl: { type: "string", description: "e.g. 30d, 24h, 60m" },
+            reason: { type: "string", description: "Operator reason recorded on the created version. Length-bounded and scanner-checked at the store boundary; credential-shaped content is refused with 400" },
+            change_kind: { type: "string", enum: ["initial", "set", "rotation", "import", "restore", "migration"] },
+            batch_id: { type: "string" },
           },
         },
+        SecretVersionMeta: secretVersionMeta,
+        SecretVersionCheck: secretVersionCheck,
+        RestoreInput: restoreInput,
         VaultItemMetadata: vaultItemMetadata,
         VaultItem: vaultItem,
         VaultItemInput: {
@@ -171,6 +221,40 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
           summary: "Search secret metadata",
           parameters: [{ name: "q", in: "query", required: true, schema: { type: "string" } }],
           responses: r("#/components/schemas/SecretMetadata", true, "results"),
+        },
+      },
+      "/v1/secrets/versions": {
+        get: {
+          operationId: "listSecretVersions",
+          summary: "List version metadata (never value material)",
+          parameters: [
+            { name: "key", in: "query", required: true, schema: { type: "string" } },
+            { name: "limit", in: "query", required: false, schema: { type: "integer" } },
+          ],
+          responses: r("#/components/schemas/SecretVersionMeta", true, "versions"),
+        },
+      },
+      "/v1/secrets/versions/check": {
+        get: {
+          operationId: "checkSecretVersion",
+          summary: "Version evidence in the get --check class (length + sha256)",
+          parameters: [
+            { name: "key", in: "query", required: true, schema: { type: "string" } },
+            { name: "version", in: "query", required: true, schema: { type: "integer" } },
+          ],
+          responses: r("#/components/schemas/SecretVersionCheck", true, "check"),
+        },
+      },
+      "/v1/secrets/restore": {
+        post: {
+          operationId: "restoreSecretVersion",
+          summary: "Append-only restore: copy a historical value server-side into a new current version",
+          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/RestoreInput" } } } },
+          responses: {
+            ...r("#/components/schemas/SecretVersionMeta", true, "restored"),
+            "404": { description: "Key or version not found; zero mutation" },
+            "409": { description: "expected_current_version mismatch; zero mutation" },
+          },
         },
       },
       "/v1/items": {

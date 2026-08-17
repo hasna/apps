@@ -14,7 +14,7 @@
  * Plaintext values (legacy) lack the "enc:" prefix — transparently migrated.
  */
 
-import { randomBytes, createCipheriv, createDecipheriv } from "crypto";
+import { randomBytes, createCipheriv, createDecipheriv, createHmac } from "crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "fs";
 import { join } from "path";
 import { ensureOperatorDataDir } from "./data-dir.js";
@@ -26,6 +26,11 @@ const IV_BYTES = 12;
 const PREFIX = "enc:v1:";
 
 let _cachedKey: Buffer | null = null;
+
+/** Test-only: reset the cached master key. */
+export function _resetLocalMasterKey(): void {
+  _cachedKey = null;
+}
 
 function getKeyDir(): string {
   const envDir = process.env.HASNA_SECRETS_KEY_DIR;
@@ -281,4 +286,19 @@ export function decrypt(stored: string): string {
 
 export function isEncrypted(value: string): boolean {
   return value.startsWith(PREFIX);
+}
+
+/**
+ * Keyed value fingerprint for version history (HMAC-SHA256 with the local
+ * master key). Comparable between versions without exposing plaintext and
+ * resistant to offline guessing; see cloud-crypto.ts for the same contract.
+ */
+export function fingerprintValue(plaintext: string): string {
+  const key = getMasterKey();
+  return createHmac("sha256", key).update(plaintext, "utf8").digest("hex");
+}
+
+/** The routine metadata-only fingerprint prefix (16 hex chars). */
+export function shortFingerprint(full: string): string {
+  return full.slice(0, 16);
 }

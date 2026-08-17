@@ -23,10 +23,16 @@
 import type {
   AuditEntry,
   EncryptVaultResult,
+  PruneVersionsResult,
+  RestoreVersionOptions,
   SecretEntry,
   SecretExportBundle,
   SecretMetadata,
   SecretType,
+  SecretVersionCheck,
+  SecretVersionMeta,
+  SetSecretOptions,
+  SetSecretResult,
   StoreCounts,
   StoreDescriptor,
   User,
@@ -36,12 +42,43 @@ import type {
   VaultItemMetadata,
 } from "../types.js";
 
+/** Typed not-found for version operations (server maps it to 404). */
+export class VersionNotFoundError extends Error {
+  readonly status = 404 as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "VersionNotFoundError";
+  }
+}
+
+/** Expected-current mismatch on restore (server maps it to 409). */
+export class VersionConflictError extends Error {
+  readonly status = 409 as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "VersionConflictError";
+  }
+}
+
+/**
+ * Untrusted metadata (reason/label) failed the write-boundary policy (server
+ * maps it to 400): too long, or scanner-detected credential-shaped content.
+ * The message never carries the offending text, so it cannot echo a value.
+ */
+export class MetadataValidationError extends Error {
+  readonly status = 400 as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "MetadataValidationError";
+  }
+}
+
 export interface Store {
   /** Which transport backs this store. */
   readonly mode: "local" | "api";
 
   // ── secrets ────────────────────────────────────────────────────────────
-  setSecret(key: string, value: string, type?: SecretType, label?: string, expiresAt?: string): Promise<SecretEntry>;
+  setSecret(key: string, value: string, type?: SecretType, label?: string, expiresAt?: string, opts?: SetSecretOptions): Promise<SetSecretResult>;
   getSecret(key: string): Promise<SecretEntry | undefined>;
   deleteSecret(key: string): Promise<boolean>;
   listSecrets(namespace?: string): Promise<SecretEntry[]>;
@@ -69,6 +106,27 @@ export interface Store {
 
   // ── audit ────────────────────────────────────────────────────────────────
   getAuditLog(key?: string, limit?: number): Promise<AuditEntry[]>;
+
+  // ── secret versioning ──────────────────────────────────────────────────────
+  /** Metadata-only version history, newest first. Never returns value material. */
+  listVersions(key: string, limit?: number): Promise<SecretVersionMeta[]>;
+  /**
+   * Version evidence in the same class as `get --check`: length + sha256 of the
+   * value. The value itself never leaves the store.
+   */
+  checkVersion(key: string, version: number): Promise<SecretVersionCheck>;
+  /**
+   * Append-only restore: the historical value is copied server-side into a new
+   * current version; the history is never rewound or deleted.
+   */
+  restoreVersion(key: string, version: number, opts: RestoreVersionOptions): Promise<SecretVersionMeta>;
+  /** Retention sweep: count + age bounds. Never prunes the current version. */
+  pruneVersionHistory(): Promise<PruneVersionsResult>;
+  /**
+   * Idempotent baseline: every existing value becomes version 1
+   * (`change_kind=migration`) exactly once. No-op when already backfilled.
+   */
+  runVersionBackfill(): Promise<number>;
 
   // ── feedback ───────────────────────────────────────────────────────────────
   sendFeedback(message: string, email?: string, category?: string): Promise<void>;

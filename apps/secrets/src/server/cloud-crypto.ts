@@ -11,7 +11,7 @@
  * Wire format matches the local vault: "enc:v1:<iv-hex>:<ciphertext+tag-hex>".
  */
 
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 
 const ALGO = "aes-256-gcm";
 const IV_BYTES = 12;
@@ -201,6 +201,23 @@ export function decryptValueWithMetadata(
 
 export function decryptValue(stored: string, env: NodeJS.ProcessEnv = process.env): string {
   return decryptValueWithMetadata(stored, env).value;
+}
+
+/**
+ * Keyed value fingerprint for version history. HMAC-SHA256 over the plaintext
+ * with the master key: comparable between versions and against the current
+ * value without exposing plaintext, and resistant to offline guessing of a
+ * known value (a bare sha256 of a short credential is brute-forceable). The
+ * full hex is stored on the version row; surfaces expose a short prefix.
+ */
+export function fingerprintValue(plaintext: string, env: NodeJS.ProcessEnv = process.env): string {
+  const key = getCloudMasterKey(env);
+  return createHmac("sha256", key).update(plaintext, "utf8").digest("hex");
+}
+
+/** The routine metadata-only fingerprint prefix (16 hex chars). */
+export function shortFingerprint(full: string): string {
+  return full.slice(0, 16);
 }
 
 /** Test-only: reset the cached key. */

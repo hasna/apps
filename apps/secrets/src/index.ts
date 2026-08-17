@@ -22,12 +22,17 @@ secrets — local secrets vault for AI agents
 
 Commands:
   docs                        show a practical usage guide
-  set <key> [<value>] [--stdin] [--type <type>] [--label <label>] [--ttl <ttl>]
+  set <key> [<value>] [--stdin] [--type <type>] [--label <label>] [--ttl <ttl>] [--reason <text>] [--rotation]
   get <key> [--show|--plaintext|--check]   redacted by default; --check prints length+sha256
   exec <key> [--as <VAR>] -- <cmd> [args...]   run <cmd> with a local vault value in its env only
   exec --provider <PROFILE> --account <ID> --env <VAR> -- <cmd> [args...]
                               run <cmd> with an account-scoped AWS secret in <VAR>
   delete <key>               (aliases: remove, rm, uninstall)
+  versions <key> [--limit <n>] [--json]   metadata-only version history; never prints values
+  versions <key> --version <N> --check [--json]   length + sha256 of a version (get --check class)
+  restore <key> --version <N> --reason <text> [--expect-current <N>]
+                              append-only restore: copies a historical value server-side
+                              into a new current version; the history is never rewound
   items list [kind] [--json]  list structured vault items
   items search <query> [--json]  search structured vault item metadata
   items get <id> [--show]     show a structured vault item; redacted unless --show is passed
@@ -128,6 +133,17 @@ Common CLI workflows
 
   Prove a secret exists or compare values without revealing them:
     secrets get example/anthropic/test/api_key --check
+
+  Review value history without revealing values (metadata only):
+    secrets versions example/anthropic/test/api_key
+    secrets versions example/anthropic/test/api_key --version 1 --check
+
+  Recover a previous value (append-only server-side restore; history is never rewound):
+    secrets restore example/anthropic/test/api_key --version 1 --reason "bad rotation, roll back"
+    secrets restore example/anthropic/test/api_key --version 1 --reason "roll back" --expect-current 2
+
+  Record why an overwrite happened:
+    secrets set example/anthropic/test/api_key --stdin --reason "replaced revoked key"
 
   Store a value without putting it in argv (ps/shell-history safe):
     secrets set example/anthropic/test/api_key --stdin < value-file
@@ -249,6 +265,7 @@ const BOOLEAN_FLAGS = new Set([
   "favorite",
   "json",
   "fix-permissions",
+  "rotation",
 ]);
 
 function parseArgs(args: string[]): { flags: Record<string, string>; positional: string[] } {
@@ -485,9 +502,117 @@ switch (command) {
       }
     }
     const expiresAt = flags.ttl ? parseTtl(flags.ttl) : undefined;
+    const rotation = flags.rotation === "true";
+    if (rotation && !flags.reason) {
+      console.error("Usage: secrets set <key> --stdin --rotation --reason <text>. A reason is required for a rotation.");
+      process.exit(1);
+    }
     try {
-      const entry = await store().setSecret(key, value, type, flags.label, expiresAt);
-      console.log(`✓ Stored: ${entry.key} [${entry.type}]${expiresAt ? ` (expires ${new Date(expiresAt).toLocaleDateString()})` : ""}`);
+      const entry = await store().setSecret(key, value, type, flags.label, expiresAt, {
+        ...(flags.reason ? { reason: flags.reason } : {}),
+        ...(rotation ? { changeKind: "rotation" as const } : {}),
+      });
+      const versionNote = typeof entry.version === "number" ? ` (version ${entry.version})` : "";
+      const unchangedNote = entry.unchanged ? " — unchanged, no new version" : "";
+      console.log(`✓ ${entry.unchanged ? "Unchanged" : "Stored"}: ${entry.key} [${entry.type}]${versionNote}${unchangedNote}${expiresAt ? ` (expires ${new Date(expiresAt).toLocaleDateString()})` : ""}`);
+    } catch (e: any) {
+      console.error(e.message);
+      process.exit(1);
+    }
+    break;
+  }
+
+  case "versions": {
+    const [key] = positional;
+    if (!key) { console.error("Usage: secrets versions <key> [--limit <n>] | secrets versions <key> --version <N> --check [--json]"); process.exit(1); }
+    if (flags.check === "true") {
+      const version = flags.version ? Number(flags.version) : Number.NaN;
+      if (!Number.isInteger(version) || version < 1) {
+        console.error("Usage: secrets versions <key> --version <N> --check. N must be a positive integer.");
+        process.exit(1);
+      }
+      try {
+        const check = await store().checkVersion(key, version);
+        if ("json" in flags) {
+          console.log(JSON.stringify(check, null, 2));
+          break;
+        }
+        console.log(`key=${key} version=${check.version} length=${check.value_length} sha256=${check.hash}${check.current ? " (current)" : ""}`);
+      } catch (e: any) {
+        console.error(e.message);
+        process.exit(1);
+      }
+      break;
+    }
+    const limit = flags.limit ? parseInt(flags.limit, 10) : 20;
+    if (!Number.isInteger(limit) || limit < 1) {
+      console.error(`Invalid --limit: ${flags.limit}. Use a positive integer.`);
+      process.exit(1);
+    }
+    try {
+      const versions = await store().listVersions(key, limit);
+      if ("json" in flags) {
+        console.log(JSON.stringify(versions, null, 2));
+        break;
+      }
+      if (versions.length === 0) {
+        console.log(`No versions for: ${key}`);
+        break;
+      }
+      for (const v of versions) {
+        const kind = v.change_kind;
+        const reason = v.reason ? ` · ${v.reason}` : "";
+        const label = v.label ? ` · ${v.label}` : "";
+        const source = v.source_version ? ` · from v${v.source_version}` : "";
+        const marker = v.current ? "  (current)" : "";
+        console.log(
+          `v${v.version} [${kind}] ${v.created_at} by ${v.created_by}${reason}${label}${source} len=${v.value_length} fp=${v.fingerprint}${marker}`,
+        );
+      }
+    } catch (e: any) {
+      console.error(e.message);
+      process.exit(1);
+    }
+    break;
+  }
+
+  case "restore": {
+    const [key] = positional;
+    if (!key || !flags.version || !flags.reason) {
+      console.error("Usage: secrets restore <key> --version <N> --reason <text> [--expect-current <N>]");
+      process.exit(1);
+    }
+    const version = Number(flags.version);
+    if (!Number.isInteger(version) || version < 1) {
+      console.error(`Invalid --version: ${flags.version}. Use a positive integer.`);
+      process.exit(1);
+    }
+    let expectCurrent: number | undefined;
+    if (flags["expect-current"] !== undefined) {
+      expectCurrent = Number(flags["expect-current"]);
+      if (!Number.isInteger(expectCurrent!) || expectCurrent! < 1) {
+        console.error(`Invalid --expect-current: ${flags["expect-current"]}. Use a positive integer.`);
+        process.exit(1);
+      }
+    } else if (!process.stdout.isTTY) {
+      // Non-interactive restore must not blind-overwrite a newer rotation: the
+      // caller has to state which current version they expect.
+      console.error("Usage: secrets restore <key> --version <N> --reason <text> --expect-current <N>");
+      console.error("Non-interactive restores require --expect-current to avoid overwriting a newer rotation.");
+      process.exit(1);
+    }
+    try {
+      if (expectCurrent === undefined) {
+        // Interactive convenience: fetch the current version first, then CAS on it.
+        const versions = await store().listVersions(key, 1);
+        expectCurrent = versions[0]?.version ?? 0;
+      }
+      const restored = await store().restoreVersion(key, version, { reason: flags.reason, expectCurrent });
+      console.log(`✓ Restored ${key} to version ${version} — created version ${restored.version}${restored.current ? " (current)" : ""}`);
+      console.error(
+        "Note: restoring a vault value cannot reactivate a credential that was revoked at its provider " +
+          "(npm, AWS, Stripe, GitHub, etc.). Verify the consumer/provider path before relying on it.",
+      );
     } catch (e: any) {
       console.error(e.message);
       process.exit(1);
