@@ -47,6 +47,11 @@ export function runCheckKit(targetRepo: string, options: VendorKitCliOptions): v
     if (result.staleVersion) {
       console.log(`  stale: on-disk kit is v${result.staleVersion}, regenerate to v${result.version}`);
     }
+    if (result.depVersionMismatch) {
+      const { kitVersion, declared } = result.depVersionMismatch;
+      console.log(`  dep drift: kit v${kitVersion} but package.json declares "${declared}"`);
+      console.log(`  align them: regenerate the kit or bump @hasna/contracts to the same minor line`);
+    }
     if (!result.ok) {
       console.log("  run: bunx @hasna/contracts vendor-kit   (regenerate the kit)");
     }

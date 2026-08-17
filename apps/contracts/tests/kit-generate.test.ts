@@ -109,6 +109,49 @@ describe("storage-kit generator", () => {
     expect(result.staleVersion).toBe("9.9.9");
   });
 
+  test("check fails when the kit minor line drifts from the declared dependency", () => {
+    // The contacts shape: kit vendored at 0.4.2 while package.json declares ^0.8.5.
+    const dir = makeTarget();
+    generateKit({ targetRepo: dir, version: "0.4.2" });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { "@hasna/contracts": "^0.8.5" } }));
+    const result = checkKit({ targetRepo: dir, version: "0.4.2" });
+    expect(result.ok).toBe(false);
+    expect(result.depVersionMismatch).toEqual({ kitVersion: "0.4.2", declared: "^0.8.5" });
+    expect(result.staleVersion).toBeNull();
+
+    // The bunx-latest shape: kit regenerated to 0.10.6 while the pin stays 0.8.5.
+    generateKit({ targetRepo: dir, version: "0.10.6" });
+    const freshened = checkKit({ targetRepo: dir, version: "0.10.6" });
+    expect(freshened.ok).toBe(false);
+    expect(freshened.depVersionMismatch).toEqual({ kitVersion: "0.10.6", declared: "^0.8.5" });
+  });
+
+  test("check passes when the kit and declared dependency are on the same minor line", () => {
+    const dir = makeTarget();
+    generateKit({ targetRepo: dir, version: "0.8.5" });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { "@hasna/contracts": "^0.8.5" } }));
+    const caret = checkKit({ targetRepo: dir, version: "0.8.5" });
+    expect(caret.ok).toBe(true);
+    expect(caret.depVersionMismatch).toBeNull();
+
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { "@hasna/contracts": "0.8.5" } }));
+    expect(checkKit({ targetRepo: dir, version: "0.8.5" }).ok).toBe(true);
+
+    // workspace and * ranges are skipped: no verdict, no failure.
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { "@hasna/contracts": "workspace:apps/contracts" } }));
+    expect(checkKit({ targetRepo: dir, version: "0.8.5" }).ok).toBe(true);
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { "@hasna/contracts": "*" } }));
+    expect(checkKit({ targetRepo: dir, version: "0.8.5" }).ok).toBe(true);
+
+    // >= ranges allow newer kit minor lines but not older ones.
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { "@hasna/contracts": ">=0.5.2" } }));
+    expect(checkKit({ targetRepo: dir, version: "0.8.5" }).ok).toBe(true);
+    generateKit({ targetRepo: dir, version: "0.4.2" });
+    const below = checkKit({ targetRepo: dir, version: "0.4.2" });
+    expect(below.ok).toBe(false);
+    expect(below.depVersionMismatch).toEqual({ kitVersion: "0.4.2", declared: ">=0.5.2" });
+  });
+
   test("regeneration removes the retired mode.ts file", () => {
     const dir = makeTarget();
     const kitDir = join(dir, KIT_TARGET_SUBDIR);

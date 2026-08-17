@@ -4,6 +4,26 @@ All notable changes to `@hasna/contracts` are documented here.
 
 ## [0.11.0] - unreleased
 
+Seven commits have merged since 0.10.6; only the two absorption lines were
+previously recorded here. The full set:
+
+- Keeps `safe-read` refusals metadata-only so child stderr and error-object
+  payloads cannot be reproduced in terminal output or durable transcripts
+  (#104). The 0.10.6 record below claimed this change; it actually merged
+  after the 0.10.6 release commit and ships here.
+- Adds token-silent Secrets-backed key issuance to the CLI (#105): `issue-key`
+  resolves its signing secret through `secrets exec` instead of reading
+  credential files, refuses conflicting Secrets authority, reconciles
+  ambiguous key activation, and makes secret issuance fail closed.
+- Import contracts: mono absorption adaptations — the `prepare` build script
+  and `@types/node` — plus the install-gate absorption fix and checklist-9
+  redaction.
+- Enforces the prepare-class boundary for the `@hasna/secrets` sibling and
+  adds a version-integrity gate (PR #81 cycle-2).
+- Fixes `client/storage` so 404 → null and swallowed errors work across the
+  client bundle boundary (todos 821a40ac) (#139).
+- Pins sibling deps to registry versions to avoid the workspace-resolution
+  hazard for consumers outside the monorepo.
 - Mono absorption: member version bumped past dependent ranges so dependents
   keep their registry pins (datasets' `^0.10.6` resolves the published
   0.10.6 instead of the workspace member).
@@ -15,8 +35,6 @@ All notable changes to `@hasna/contracts` are documented here.
   pagination across numeric cursors.
 - Adds the metadata-only `verify-write` command for checking stored writes
   without rendering capability-bearing content.
-- Keeps `safe-read` refusals metadata-only so child stderr and error-object
-  payloads cannot be reproduced in terminal output or durable transcripts.
 
 PATCH, not minor. This ships additive operational verification helpers without
 changing existing contract shapes.
