@@ -1581,6 +1581,108 @@ server.registerTool(
   }
 )
 
+// ── dispatch tools ────────────────────────────────────────────────────────────
+
+async function dispatchToolError(e: unknown) {
+  return err(e instanceof Error ? e.message : String(e))
+}
+
+server.registerTool(
+  "prompts_targets",
+  {
+    description:
+      "Read-only discovery of codewith dispatch targets: safe profile names, provider, plan, and availability. Never returns credentials or raw auth payloads. A target is usable only when the provider reports it healthy now.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const { discoverTargets, resolveBin } = await import("../lib/dispatch/codewith.js")
+      const bin = resolveBin("codewith", process.env["HASNA_PROMPTS_DISPATCH_CODEMITH_BIN"], "CODEMITH")
+      const result = await discoverTargets(bin)
+      return ok(result)
+    } catch (e) {
+      return dispatchToolError(e)
+    }
+  }
+)
+
+server.registerTool(
+  "prompts_dispatch",
+  {
+    description:
+      "Render a stored prompt strictly and dispatch it. Omitted runtime defaults to emit (rendered prompt only, no process). Codewith runs are read-only, reserve the provider account, and record a run receipt.",
+    inputSchema: {
+      id: z.string().describe("Prompt ID or slug"),
+      runtime: z.enum(["emit", "codewith"]).optional().describe("Dispatch runtime (default: emit)"),
+      target: z.string().optional().describe("Codewith target profile name"),
+      vars: z.record(z.string(), z.string()).optional().describe("Template variables"),
+      vars_json: z.string().optional().describe("JSON object of template variables"),
+      cwd: z.string().optional().describe("Working directory for the dispatched runtime"),
+      wait: z.boolean().optional().describe("Wait for a codewith run to finish"),
+      model: z.string().optional().describe("Codewith model (spark identifiers are rejected)"),
+    },
+  },
+  async (args: {
+    id: string
+    runtime?: "emit" | "codewith"
+    target?: string
+    vars?: Record<string, string>
+    vars_json?: string
+    cwd?: string
+    wait?: boolean
+    model?: string
+  }) => {
+    try {
+      const { dispatchPrompt, mergeVars } = await import("../lib/dispatch/index.js")
+      const receipt = await dispatchPrompt(args.id, {
+        runtime: args.runtime ?? "emit",
+        target: args.target,
+        vars: mergeVars(Object.entries(args.vars ?? {}), args.vars_json),
+        cwd: args.cwd,
+        wait: args.wait,
+        model: args.model,
+      })
+      return ok(receipt)
+    } catch (e) {
+      return dispatchToolError(e)
+    }
+  }
+)
+
+server.registerTool(
+  "prompts_dispatch_get",
+  {
+    description:
+      "Get a dispatch run receipt: status, target, prompt id/version, render hash, output pointers, exit/error codes, timestamps. Metadata only by default; include_output:true returns the bounded, redacted captures.",
+    inputSchema: {
+      run_id: z.string().describe("Dispatch run ID"),
+      include_output: z.boolean().optional().describe("Include bounded, redacted output captures"),
+    },
+  },
+  async (args: { run_id: string; include_output?: boolean }) => {
+    try {
+      const { getDispatchRun } = await import("../lib/dispatch/index.js")
+      const run = getDispatchRun(args.run_id)
+      if (!run) return err(`Dispatch run not found: ${args.run_id}`)
+      if (!args.include_output) return ok({ run })
+      const { capturePaths } = await import("../lib/dispatch/capture-helper.js")
+      const { defaultRunsDir } = await import("../lib/dispatch/index.js")
+      const { existsSync, readFileSync } = await import("fs")
+      const paths = capturePaths(defaultRunsDir(), args.run_id)
+      const read = (path: string): string | null => {
+        try {
+          return existsSync(path) ? readFileSync(path, "utf8") : null
+        } catch {
+          return null
+        }
+      }
+      return ok({ run, output: { out: read(paths.out), err: read(paths.err), last: read(paths.last) } })
+    } catch (e) {
+      return dispatchToolError(e)
+    }
+  }
+)
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 server.tool(

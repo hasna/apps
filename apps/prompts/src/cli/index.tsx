@@ -18,6 +18,7 @@ import { registerVersionCommands } from "./commands/versions.js"
 import { registerQolCommands } from "./commands/qol.js"
 import { registerConfigCommands } from "./commands/config.js"
 import { registerRunbookCommands } from "./commands/runbook.js"
+import { registerDispatchCommands } from "./commands/dispatch.js"
 import { getPromptRegistryDiagnostics } from "../db/database.js"
 
 const require = createRequire(import.meta.url)
@@ -46,6 +47,9 @@ registerConfigCommands(program)
 
 // ── loop runbook analysis ─────────────────────────────────────────────────────
 registerRunbookCommands(program)
+
+// ── dispatch ──────────────────────────────────────────────────────────────────
+registerDispatchCommands(program)
 
 // ── collections ───────────────────────────────────────────────────────────────
 program

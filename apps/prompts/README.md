@@ -81,6 +81,30 @@ prompts body PRMT-00001
 prompts --json list --limit 100
 ```
 
+### Dispatch
+
+`prompts dispatch` renders a stored prompt strictly (missing variables fail
+with `STRICT_RENDER_MISSING_VARS` before a run is accepted) and hands it to a
+runtime. Initial runtimes: `emit` (rendered prompt only, no process — the
+default) and `codewith` (read-only headless execution).
+
+```bash
+prompts dispatch PRMT-00001 --var target=src/cli            # emit (default)
+prompts dispatch PRMT-00001 --runtime codewith --target account001 --wait
+prompts targets list                                        # read-only discovery
+prompts dispatch get run-xxxxxx                             # status + pointers
+prompts dispatch get run-xxxxxx --include-output            # bounded captures
+prompts dispatch cancel run-xxxxxx                          # cancel a running run
+```
+
+Codewith runs are strictly read-only: the rendered prompt is passed on stdin
+(never interpolated into a shell command), the runtime environment is
+allowlisted, the provider account is reserved for the duration of the run
+(`conversations locks` key `codewith/provider-account/<provider>/<fingerprint>`),
+and stdout/stderr are bounded and redacted before persistence. One accepted
+run increments prompt usage exactly once. `prompts targets list` returns safe
+profile names and availability only — never credentials or raw auth payloads.
+
 ## MCP Server
 
 `prompts-mcp` uses Streamable HTTP by default and binds only to

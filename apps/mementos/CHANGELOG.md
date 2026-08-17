@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.85 — Explicit truncation contract for list/stale/history reads
+
+- Server list responses cap at 1000 rows and carry `total`/`limit`/`has_more`/`next_cursor`; the stale endpoint returns the true total instead of a silently capped page.
+- CLI `list`/`history` with no `--limit` return the full population via a bounded page walk; `stale` JSON emits the true `stale_count`.
+- In-package api-mode consumers (gatherer, io-export, memory_export) walk bounded pages so exports and training-data gathers cannot be silently truncated.
+- Truncated 2xx cloud responses are reported as cloud failures naming the surface, never as unparseable CLI output.
+
 ## 0.14.84
 
 ## 0.14.83 — Bound complete project-resource traversal

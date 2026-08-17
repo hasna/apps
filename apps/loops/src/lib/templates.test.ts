@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { AgentTarget, CreateWorkflowInput, WorkflowStepInput } from "../types.js";
@@ -159,6 +159,17 @@ describe("prompt fragment composition", () => {
     expect(workerPrompt).toContain("Loops worktree policy:");
     expect(workerPrompt).toContain("- Worktree mode off did not select an isolated worktree: worktree mode disabled.");
     expect(workerPrompt).not.toContain("- Worktree root:");
+  });
+
+  test("default worktree root is the canonical repos store, never the loops app data dir", () => {
+    // No worktreeRoot passed: exercises defaultWorktreeRoot()'s fallback.
+    const enabled = renderTodosTaskWorkerVerifierWorkflow({
+      taskId: "task-1200",
+      projectPath: repoPath,
+    });
+    const prompt = agentTargetOf(stepById(enabled, "worker")).prompt;
+    expect(prompt).toContain(`- Worktree root: ${join(homedir(), ".hasna", "repos", "worktrees")}`);
+    expect(prompt).not.toContain(".hasna/loops/worktrees");
   });
 
   test("enabled worktree policy prose lists cwd, root, branch, and original checkout", () => {

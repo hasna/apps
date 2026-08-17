@@ -55,7 +55,18 @@ const args = new Set(rawArgs);
 // import time (#103 shipped exactly that ReferenceError).
 const SERVE_PROBE_TIMEOUT_SECONDS = "15";
 
-main();
+// spawnSync's DEFAULT maxBuffer is 1MB, and when a captured command exceeds it
+// the child is KILLED (status null) with stdout truncated mid-stream. The
+// release gate captures `git ls-tree -r --full-tree -z HEAD`, which on the
+// monorepo-scale tree is 3.5MB and growing (measured 2026-08-17 on hasna/apps),
+// so the default made every publish fail "release-tracked-proof: could not
+// enumerate HEAD" (OPE2-00174). Explicit ceiling, same pattern as
+// apps/mementos/scripts/release-provenance.ts (MAX_COMMAND_OUTPUT_BYTES).
+const CAPTURE_MAX_BUFFER = 256 * 1024 * 1024;
+
+if (import.meta.main) {
+  main();
+}
 
 function main(): void {
   const failures: ReleaseGateFailure[] = [];
@@ -213,6 +224,7 @@ function readReleaseSourceIdentity(): ReleaseSourceIdentity {
   const listing = spawnSync("git", ["ls-tree", "-r", "--full-tree", "-z", "HEAD"], {
     cwd: root,
     env: process.env,
+    maxBuffer: CAPTURE_MAX_BUFFER,
   });
   if (commit.status !== 0 || tree.status !== 0 || listing.status !== 0 || !listing.stdout) {
     failReleaseGate([{
@@ -232,8 +244,15 @@ function gitBlobObject(content: Buffer): string {
   return createHash("sha1").update(header).update(content).digest("hex");
 }
 
-function verifyTrackedWorktreeAgainstHead(): ReleaseGateFailure[] {
-  const listing = runCaptureBuffer("git", ["ls-tree", "-r", "--full-tree", "-z", "HEAD"]);
+export function verifyTrackedWorktreeAgainstHead(baseDir: string = root): ReleaseGateFailure[] {
+  // Enumeration is deliberately NOT --full-tree: in the monorepo, --full-tree
+  // returns repo-root-relative paths (`.changeset/README.md`, `apps/todos/…`),
+  // which join(baseDir, path) then resolves under the package dir — every
+  // entry read actualType=missing and the gate failed the whole tree
+  // (b631c46a). Without --full-tree, `git ls-tree -r -z HEAD` from cwd=baseDir
+  // lists the package subtree with package-relative paths, matching the
+  // standalone-repo semantics where root == repo root.
+  const listing = runCaptureBuffer("git", ["ls-tree", "-r", "-z", "HEAD"], baseDir);
   if (listing.status !== 0) {
     return [{ check: "release-tracked-proof", message: listing.stderr.toString("utf8") || "could not enumerate HEAD" }];
   }
@@ -242,7 +261,7 @@ function verifyTrackedWorktreeAgainstHead(): ReleaseGateFailure[] {
     const match = /^(\d+) (\w+) ([0-9a-f]+)\t([\s\S]+)$/.exec(record);
     if (!match) return [{ check: "release-tracked-proof", message: "could not parse git ls-tree output" }];
     const [, headMode, headType, headObject, path] = match;
-    const absolute = join(root, path!);
+    const absolute = join(baseDir, path!);
     let actualType: TrackedWorktreeProof["actualType"] = "missing";
     let actualMode: string | null = null;
     let actualObject: string | null = null;
@@ -428,11 +447,12 @@ function run(command: string, commandArgs: string[], env: NodeJS.ProcessEnv = pr
   return spawnSync(command, commandArgs, { cwd: root, stdio: "inherit", env });
 }
 
-function runCapture(command: string, commandArgs: string[], env: NodeJS.ProcessEnv = process.env): { status: number; stdout: string; stderr: string } {
+export function runCapture(command: string, commandArgs: string[], env: NodeJS.ProcessEnv = process.env, cwd: string = root): { status: number; stdout: string; stderr: string } {
   const result = spawnSync(command, commandArgs, {
-    cwd: root,
+    cwd,
     encoding: "utf8",
     env,
+    maxBuffer: CAPTURE_MAX_BUFFER,
   });
   return {
     status: result.status ?? 1,
@@ -441,8 +461,8 @@ function runCapture(command: string, commandArgs: string[], env: NodeJS.ProcessE
   };
 }
 
-function runCaptureBuffer(command: string, commandArgs: string[]): { status: number; stdout: Buffer; stderr: Buffer } {
-  const result = spawnSync(command, commandArgs, { cwd: root, env: process.env });
+export function runCaptureBuffer(command: string, commandArgs: string[], cwd: string = root): { status: number; stdout: Buffer; stderr: Buffer } {
+  const result = spawnSync(command, commandArgs, { cwd, env: process.env, maxBuffer: CAPTURE_MAX_BUFFER });
   return {
     status: result.status ?? 1,
     stdout: result.stdout ?? Buffer.alloc(0),

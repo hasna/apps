@@ -921,6 +921,15 @@ class PostgresJsonRecordStore {
    * Both this write and the link transaction lock the same plan row before
    * reading or changing membership, so an apply snapshot cannot miss a task
    * inserted into or moved out of the plan at the CAS point.
+   *
+   * The guard requires existence only for the membership the write
+   * ESTABLISHES (the target plan). A plan the write leaves — or a plan a
+   * non-membership patch neither leaves nor joins — need not exist: when it
+   * is already missing the task holds a dangling reference, and clearing it
+   * (or updating unrelated fields) is the repair, not a membership change
+   * into a missing plan. Fleet population measured 2026-08-17: 726 tasks
+   * referencing 139 deleted plan ids were frozen behind the previous
+   * all-plans-must-exist check, which rejected every PATCH on them.
    */
   private async withTaskParentIntegrityTransaction<T>(
     fn: (client: TodosPostgresQueryClient) => Promise<T>,
@@ -978,7 +987,7 @@ class PostgresJsonRecordStore {
       version_matches: boolean;
       parent_found: boolean;
       parent_acyclic: boolean;
-      all_plans_found: boolean;
+      membership_changed: boolean;
       target_plan_found: boolean;
       project_conflict: boolean;
       payload: unknown | null;
@@ -1028,8 +1037,12 @@ class PostgresJsonRecordStore {
              OR ($11::text <> $2
                AND NOT EXISTS (SELECT 1 FROM parent_chain WHERE object_id = $2)
                AND NOT EXISTS (SELECT 1 FROM parent_chain WHERE cycle))) AS parent_acyclic,
-           (SELECT count(*) FROM locked_plans) = jsonb_array_length($7::jsonb) AS all_plans_found,
-           ($8::text IS NULL OR EXISTS (SELECT 1 FROM locked_plans WHERE object_id = $8)) AS target_plan_found,
+           (COALESCE((SELECT payload->>'plan_id' FROM locked_task), '')
+              IS DISTINCT FROM COALESCE($3::jsonb->>'plan_id', '')) AS membership_changed,
+           (NOT (COALESCE((SELECT payload->>'plan_id' FROM locked_task), '')
+                   IS DISTINCT FROM COALESCE($3::jsonb->>'plan_id', ''))
+             OR $8::text IS NULL
+             OR EXISTS (SELECT 1 FROM locked_plans WHERE object_id = $8)) AS target_plan_found,
            (SELECT payload->>'project_id' FROM locked_plans WHERE object_id = $8) AS target_project_id
        ), guarded AS (
          SELECT
@@ -1052,7 +1065,6 @@ class PostgresJsonRecordStore {
            AND guarded.version_matches
            AND guarded.parent_found
            AND guarded.parent_acyclic
-           AND guarded.all_plans_found
            AND guarded.target_plan_found
            AND NOT guarded.project_conflict
          ON CONFLICT (service, object_type, object_id) DO UPDATE SET
@@ -1068,7 +1080,7 @@ class PostgresJsonRecordStore {
          RETURNING payload
        )
        SELECT guarded.task_found, guarded.version_matches, guarded.parent_found, guarded.parent_acyclic,
-              guarded.all_plans_found, guarded.target_plan_found, guarded.project_conflict,
+              guarded.membership_changed, guarded.target_plan_found, guarded.project_conflict,
               (SELECT payload FROM stored) AS payload,
               (SELECT payload FROM locked_task) AS current_payload
        FROM guarded`,
@@ -1111,7 +1123,7 @@ class PostgresJsonRecordStore {
         `TASK_PARENT_CYCLE: assigning parent ${parentGuard.parentId} to task ${value.id} would create or retain a parent cycle`,
       );
     }
-    if (!row?.all_plans_found || !row.target_plan_found) {
+    if (!row?.target_plan_found) {
       throw new PlanProjectLinkError(
         "PLAN_PROJECT_LINK_PLAN_NOT_FOUND",
         `Plan membership changed through a missing plan: ${targetPlanId ?? planIds.join(", ")}`,
