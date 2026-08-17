@@ -99,6 +99,101 @@ describe("TypedActionWorker", () => {
     }
   });
 
+  test("materializes declared step outputs before invoking a dependent action", async () => {
+    const store = new AutomationsStore();
+    try {
+      store.createAutomation({
+        schemaVersion: "1.0",
+        id: "typed.outputs",
+        name: "Typed output materialization",
+        version: "1.0.0",
+        triggers: [{ kind: "manual" }],
+        actions: [
+          {
+            id: "lookup",
+            actionId: "typed.lookup",
+            manifestVersion: "1.0.0",
+            input: {},
+          },
+          {
+            id: "send",
+            actionId: "typed.send",
+            manifestVersion: "1.0.0",
+            dependsOn: ["lookup"],
+            input: {
+              contactId: "${{ steps.lookup.outputs.contactId }}",
+            },
+          },
+        ],
+        metadata: {
+          template: {
+            stepOutputs: {
+              lookup: {
+                contactId: "/contact/id",
+              },
+            },
+          },
+        },
+      });
+      let received: JsonValue | undefined;
+      const worker = new TypedActionWorker({
+        store,
+        definitions: [
+          definition("typed.lookup", () => ({
+            output: { contact: { id: "contact-1" } },
+          })),
+          definition("typed.send", ({ input }) => {
+            received = input;
+            return { output: { accepted: true } };
+          }),
+        ],
+      });
+
+      const receipt = await worker.run("typed.outputs@1.0.0");
+      expect(receipt.status).toBe("succeeded");
+      expect(received).toEqual({ contactId: "contact-1" });
+    } finally {
+      store.close();
+    }
+  });
+
+  test("does not let an installed template shadow an exact automation reference", async () => {
+    const store = new AutomationsStore();
+    try {
+      store.createAutomation(spec("typed.legacy"));
+      store.createAutomation({
+        ...spec("typed.template"),
+        id: "template:typed.worker.demo:1.0.0",
+        name: "Versioned template collision",
+      });
+      const observed: string[] = [];
+      const worker = new TypedActionWorker({
+        store,
+        definitions: [
+          definition("typed.legacy", () => {
+            observed.push("legacy");
+            return { output: {} };
+          }),
+          definition("typed.template", () => {
+            observed.push("template");
+            return { output: {} };
+          }),
+        ],
+      });
+
+      const exact = await worker.run("typed.worker.demo@1.0.0");
+      const explicitTemplate = await worker.run("template:typed.worker.demo:1.0.0@1.0.0");
+
+      expect(exact.status).toBe("succeeded");
+      expect(exact.automationId).toBe("typed.worker.demo");
+      expect(explicitTemplate.status).toBe("succeeded");
+      expect(explicitTemplate.automationId).toBe("template:typed.worker.demo:1.0.0");
+      expect(observed).toEqual(["legacy", "template"]);
+    } finally {
+      store.close();
+    }
+  });
+
   test("rejects non-TypeScript executor bindings before registration", () => {
     const store = new AutomationsStore();
     try {
