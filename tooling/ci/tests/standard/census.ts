@@ -311,7 +311,6 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "markdown", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "orgs", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "pixels", reason: "No hasna.contract.json; manifest lane (todos 41208cbe). Imported by #69." },
-  { member: "releases", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "repos", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "router", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "skills", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
@@ -437,6 +436,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos eb3f331d (contracts task — prompts)",
   },
   {
+    member: "releases",
+    cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Manifest imported by the hasna-org delta lane (2026-08-17).",
+    task: "todos a2f6ab06-43ae-4cbd-847a-4b3fa4082d71 (reconcile @hasna/releases contracts conformance — auto-filed)",
+  },
+  {
     member: "sheets",
     cause: "manifest_valid: unrecognized 'exports' key at root; library-repo storage shape drift.",
     task: "todos d766ac9c (contracts task — sheets)",
@@ -498,6 +502,7 @@ export const NO_VALIDATOR_PIN: string[] = [
   "sheets",
   "slides",
   "tables",
+  "releases",
 ];
 
 export const CONTRACTS_EXCEPTION_MEMBERS = new Set(CONTRACTS_EXCEPTIONS.map((e) => e.member));
