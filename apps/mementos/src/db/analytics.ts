@@ -52,12 +52,32 @@ export function getMemoryStats(db?: Database): MemoryStats {
   const pinnedCount = (
     d.query("SELECT COUNT(*) as c FROM memories WHERE pinned = 1 AND status = 'active'").get() as { c: number }
   ).c;
+  // `expired_count` counts exactly the rows `--status expired` returns:
+  // status = 'expired'. It must NEVER count rows that merely carry an
+  // expires_at date — measured on the live store, that conflation reported
+  // 876 "expired" memories while zero rows had status='expired' and the
+  // `--status expired` query returned []. Rows carrying an expiry date are
+  // reported separately as `expires_at_count`, and the past-due retention
+  // backlog (status='expired' OR expires_at in the past — the old SQL's real
+  // meaning) as `expired_due_count`.
   const expiredCount = (
+    d.query("SELECT COUNT(*) as c FROM memories WHERE status = 'expired'").get() as { c: number }
+  ).c;
+  const expiresAtCount = (
+    d.query("SELECT COUNT(*) as c FROM memories WHERE expires_at IS NOT NULL").get() as { c: number }
+  ).c;
+  // Bound ISO-8601 UTC now (same format the store writes via toISOString),
+  // matching the pattern used by getStaleMemories/getMemoryHealth and
+  // cleanExpiredMemories — datetime('now') emits a space-separated string
+  // that mis-compares against the 'T'-separated stored format for same-day
+  // values on SQLite.
+  const nowIso = new Date().toISOString();
+  const expiredDueCount = (
     d
       .query(
-        "SELECT COUNT(*) as c FROM memories WHERE status = 'expired' OR (expires_at IS NOT NULL AND expires_at < datetime('now'))"
+        "SELECT COUNT(*) as c FROM memories WHERE status = 'expired' OR (expires_at IS NOT NULL AND expires_at < ?)"
       )
-      .get() as { c: number }
+      .get(nowIso) as { c: number }
   ).c;
 
   const stats: MemoryStats = {
@@ -68,6 +88,8 @@ export function getMemoryStats(db?: Database): MemoryStats {
     by_agent: {},
     pinned_count: pinnedCount,
     expired_count: expiredCount,
+    expires_at_count: expiresAtCount,
+    expired_due_count: expiredDueCount,
   };
   for (const row of byScope) if (row.scope in stats.by_scope) stats.by_scope[row.scope] = row.c;
   for (const row of byCategory) if (row.category in stats.by_category) stats.by_category[row.category] = row.c;
@@ -100,6 +122,8 @@ function normalizeStats(data: Partial<MemoryStats> | undefined): MemoryStats {
     by_agent: data?.by_agent ?? {},
     pinned_count: data?.pinned_count ?? 0,
     expired_count: data?.expired_count ?? 0,
+    expires_at_count: data?.expires_at_count ?? 0,
+    expired_due_count: data?.expired_due_count ?? 0,
   };
 }
 
