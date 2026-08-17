@@ -95,7 +95,7 @@ fi
 # server.mjs imports the shared disk-backed notes tool registry via ../tools.
 rm -rf "$RESOURCES/tools" "$RESOURCES/node_modules/@hasna/events"
 mkdir -p "$RESOURCES/tools"
-cp "$REPO_ROOT/tools/notes-agent.mjs" "$REPO_ROOT/tools/notes-events.mjs" "$REPO_ROOT/tools/notes-lib.mjs" "$RESOURCES/tools/"
+cp "$REPO_ROOT/tools/notes-agent.mjs" "$REPO_ROOT/tools/notes-env.mjs" "$REPO_ROOT/tools/notes-events.mjs" "$REPO_ROOT/tools/notes-lib.mjs" "$RESOURCES/tools/"
 if [[ ! -f "$REPO_ROOT/node_modules/@hasna/events/dist/durable-spool.js" ]]; then
   echo "error: missing @hasna/events; run bun install at the repository root" >&2
   exit 1
