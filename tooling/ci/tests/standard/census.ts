@@ -308,7 +308,6 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "datasets", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "evals", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "markdown", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "orgs", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "pixels", reason: "No hasna.contract.json; manifest lane (todos 41208cbe). Imported by #69." },
   { member: "releases", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "repos", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
@@ -430,6 +429,16 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos d2c6d20f-7c80-4b84-ae35-a92ce866bc14 (contracts task — monitor)",
   },
   {
+    member: "orgs",
+    cause: "surface_matrix: missing supported surface declarations or eligible waivers: api, sdk, mcp; published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Imported by the delta lane from the org-side manifest (kitVersion 0.10.6, no pinned dep); alignment owned by the manifest lane.",
+    task: "todos 41208cbe (manifest lane — align imported orgs manifest)",
+  },
+  {
+    member: "pixels",
+    cause: "surface_matrix: missing supported surface declarations or eligible waivers: api, sdk, mcp; published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Imported by the delta lane from the org-side manifest (kitVersion 0.10.6, no pinned dep); alignment owned by the manifest lane.",
+    task: "todos 41208cbe (manifest lane — align imported pixels manifest)",
+  },
+  {
     member: "prompts",
     cause: "surface_matrix (api/sdk missing or unwaived) and service_api_topology (a supported API surface is required). (The earlier self_host_artifact and storage_capabilities causes no longer fire at main.)",
     task: "todos eb3f331d (contracts task — prompts)",
@@ -499,6 +508,8 @@ export const NO_VALIDATOR_PIN: string[] = [
   "guardrails",
   "hooks",
   "monitor",
+  "orgs",
+  "pixels",
   "sheets",
   "slides",
   "tables",
