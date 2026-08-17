@@ -17,7 +17,7 @@ beforeEach(() => {
   originalFetch = globalThis.fetch;
   originalApiKey = process.env["ANTHROPIC_API_KEY"];
   // Set a fake API key so the function doesn't bail early
-  process.env["ANTHROPIC_API_KEY"] = "sk-test-fake-key";
+  process.env["ANTHROPIC_API_KEY"] = "test-fake-key";
 });
 
 afterEach(() => {
@@ -336,7 +336,7 @@ describe("extractToolLessons", () => {
 
     expect(capturedUrl).toBe("https://api.anthropic.com/v1/messages");
     expect(capturedInit.method).toBe("POST");
-    expect(capturedInit.headers["x-api-key"]).toBe("sk-test-fake-key");
+    expect(capturedInit.headers["x-api-key"]).toBe("test-fake-key");
     expect(capturedInit.headers["anthropic-version"]).toBe("2023-06-01");
     expect(capturedInit.headers["content-type"]).toBe("application/json");
 
@@ -396,7 +396,10 @@ describe("extractToolLessons", () => {
   test("resilient to individual save failures from FK constraints", async () => {
     // Pass non-existent agent_id/project_id — FK constraint will cause
     // saveToolEvent/createMemory to throw, but the function should catch
-    // and still return the parsed lessons
+    // and still return the parsed lessons.
+    // NOTE: deliberately NOT a reserved placeholder id (agent-a/x/z,
+    // nonexistent-agent) — those are refused by the store's write guard for a
+    // different reason, and this test exercises the FK path specifically.
     const lessons = [
       {
         tool_name: "Bash",
@@ -409,8 +412,8 @@ describe("extractToolLessons", () => {
     mockFetchResponse(lessons);
 
     const result = await extractToolLessons("transcript", {
-      agent_id: "nonexistent-agent",
-      project_id: "nonexistent-project",
+      agent_id: "no-such-agent-fk",
+      project_id: "no-such-project-fk",
     });
 
     // Function should still return parsed lessons even if DB saves fail

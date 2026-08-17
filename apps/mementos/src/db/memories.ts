@@ -102,6 +102,51 @@ export function parseMemoryRow(row: Record<string, unknown>): Memory {
 }
 
 // ============================================================================
+// Reserved placeholder agent identifiers
+// ============================================================================
+
+/**
+ * Placeholder agent ids that must never own a memory in the shared store.
+ *
+ * Measured on the fleet store 2026-08-02: four rows were created in a
+ * 36-second window with agent_id values of "agent-a", "agent-x", "agent-z"
+ * and "nonexistent-agent" — literal placeholder ids straight from test
+ * fixtures. The store layer accepted them because ensureMemoryReferences
+ * stubs the referenced agents row, so the FK never blocked the write. The
+ * rows then polluted agent attribution and agent-filtered reads of the
+ * shared store.
+ *
+ * The CLI's --agent flag already refuses unresolvable names, but a harness
+ * that bypasses the CLI (SDK call, MCP, direct store access) never passed
+ * through that guard. This guard lives at the store write layer so every
+ * caller is covered.
+ */
+const RESERVED_AGENT_IDS: ReadonlySet<string> = new Set([
+  "agent-a",
+  "agent-x",
+  "agent-z",
+  "nonexistent-agent",
+]);
+
+/**
+ * Return a rejection message when `agentId` is a reserved placeholder, or
+ * null when it is acceptable. Matching is case- and whitespace-insensitive,
+ * mirroring how registerAgent normalizes names (trim().toLowerCase()).
+ */
+export function reservedAgentIdViolation(agentId: string | null | undefined): string | null {
+  if (!agentId) return null;
+  const normalized = agentId.trim().toLowerCase();
+  if (RESERVED_AGENT_IDS.has(normalized)) {
+    return (
+      `Reserved placeholder agent id "${agentId}" cannot own a memory. ` +
+      `Refusing to write: test harnesses must not write memories under placeholder agent ` +
+      `identities. Register a real agent (mementos register-agent <name>) and pass its id.`
+    );
+  }
+  return null;
+}
+
+// ============================================================================
 // Create
 // ============================================================================
 
@@ -110,6 +155,10 @@ export function createMemory(
   dedupeMode: DedupeMode = "merge",
   db?: Database
 ): Memory {
+  const reservedViolation = reservedAgentIdViolation(input.agent_id);
+  if (reservedViolation) {
+    throw new Error(reservedViolation);
+  }
   if (!db && isApiMode()) {
     const { status, data } = apiJson<Memory>("POST", "/memories", { ...input, dedupe: dedupeMode });
     // A create is only successful if the server actually handed back the stored
@@ -425,6 +474,18 @@ export function bulkUpsertMemories(
       if (violation) {
         rejected++;
         errors.push(`Rejected "${key}": ${formatEnumViolation(violation)}`);
+        continue;
+      }
+
+      // Reject reserved placeholder agent ids before the row reaches SQLite,
+      // for the same reason as the enum check: the stub in
+      // ensureMemoryReferences would otherwise let a test-harness row land.
+      const agentViolation = reservedAgentIdViolation(
+        typeof mem["agent_id"] === "string" ? (mem["agent_id"] as string) : undefined
+      );
+      if (agentViolation) {
+        rejected++;
+        errors.push(`Rejected "${key}": ${agentViolation}`);
         continue;
       }
 
