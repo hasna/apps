@@ -17,7 +17,7 @@ beforeEach(() => {
   originalFetch = globalThis.fetch;
   originalApiKey = process.env["ANTHROPIC_API_KEY"];
   // Set a fake API key so the function doesn't bail early
-  process.env["ANTHROPIC_API_KEY"] = "sk-test-fake-key";
+  process.env["ANTHROPIC_API_KEY"] = "test-fake-key";
 });
 
 afterEach(() => {
@@ -336,7 +336,7 @@ describe("extractToolLessons", () => {
 
     expect(capturedUrl).toBe("https://api.anthropic.com/v1/messages");
     expect(capturedInit.method).toBe("POST");
-    expect(capturedInit.headers["x-api-key"]).toBe("sk-test-fake-key");
+    expect(capturedInit.headers["x-api-key"]).toBe("test-fake-key");
     expect(capturedInit.headers["anthropic-version"]).toBe("2023-06-01");
     expect(capturedInit.headers["content-type"]).toBe("application/json");
 
@@ -393,14 +393,15 @@ describe("extractToolLessons", () => {
     expect(events).toHaveLength(2);
   });
 
-  test("resilient to individual save failures from FK constraints", async () => {
-    // Pass non-existent agent_id/project_id — FK constraint will cause
-    // saveToolEvent/createMemory to throw, but the function should catch
-    // and still return the parsed lessons
+  test("resilient to individual save failures", async () => {
+    // A reserved placeholder agent id is refused by the store's write-layer
+    // guard (createMemory throws), and the unknown project/agent ids fail
+    // saveToolEvent's FK constraints — but the function should catch each
+    // save failure and still return the parsed lessons.
     const lessons = [
       {
         tool_name: "Bash",
-        lesson: "This lesson will fail to save due to FK",
+        lesson: "This lesson will fail to save",
         when_to_use: "Context",
         success: true,
         error_type: null,
@@ -410,16 +411,20 @@ describe("extractToolLessons", () => {
 
     const result = await extractToolLessons("transcript", {
       agent_id: "nonexistent-agent",
-      project_id: "nonexistent-project",
+      project_id: "no-such-project-fk",
     });
 
     // Function should still return parsed lessons even if DB saves fail
     expect(result).toHaveLength(1);
     expect(result[0].tool_name).toBe("Bash");
 
-    // Events should be 0 because FK constraint failed
+    // Events should be 0 because the FK constraint failed
     const events = getToolEvents({});
     expect(events).toHaveLength(0);
+
+    // Memories should be 0 because the write guard refused the placeholder id
+    const memories = listMemories({});
+    expect(memories).toHaveLength(0);
   });
 
   test("saves with null error_type for successful lessons", async () => {

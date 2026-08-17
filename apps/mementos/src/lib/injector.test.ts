@@ -69,7 +69,7 @@ describe("MemoryInjector", () => {
   test("injects private memories when agent_id provided", () => {
     db.run(
       "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, datetime('now'), datetime('now'))",
-      ["agent-a", "maximus"]
+      ["agent-inj-1", "maximus"]
     );
 
     createMemory({
@@ -78,12 +78,12 @@ describe("MemoryInjector", () => {
       scope: "private",
       category: "preference",
       importance: 7,
-      agent_id: "agent-a",
+      agent_id: "agent-inj-1",
     });
 
     const injector = new MemoryInjector(DEFAULT_CONFIG);
     const result = injector.getInjectionContext({
-      agent_id: "agent-a",
+      agent_id: "agent-inj-1",
       db,
     });
     expect(result).toContain("private-pref");
@@ -266,11 +266,11 @@ describe("MemoryInjector", () => {
   test("scope isolation (private not visible to other agents)", () => {
     db.run(
       "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, datetime('now'), datetime('now'))",
-      ["agent-x", "agentX"]
+      ["agent-inj-x", "agentX"]
     );
     db.run(
       "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, datetime('now'), datetime('now'))",
-      ["agent-y", "agentY"]
+      ["agent-inj-y", "agentY"]
     );
 
     createMemory({
@@ -279,13 +279,13 @@ describe("MemoryInjector", () => {
       scope: "private",
       category: "preference",
       importance: 7,
-      agent_id: "agent-x",
+      agent_id: "agent-inj-x",
     });
 
     // Agent Y should not see agent X's private memories
     const injector = new MemoryInjector(DEFAULT_CONFIG);
     const result = injector.getInjectionContext({
-      agent_id: "agent-y",
+      agent_id: "agent-inj-y",
       db,
     });
     expect(result).not.toContain("agent-x-secret");
@@ -321,7 +321,7 @@ describe("MemoryInjector", () => {
     );
     db.run(
       "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, datetime('now'), datetime('now'))",
-      ["agent-z", "agentZ"]
+      ["agent-inj-z", "agentZ"]
     );
 
     createMemory({
@@ -345,13 +345,13 @@ describe("MemoryInjector", () => {
       scope: "private",
       category: "preference",
       importance: 7,
-      agent_id: "agent-z",
+      agent_id: "agent-inj-z",
     });
 
     const injector = new MemoryInjector(DEFAULT_CONFIG);
     const result = injector.getInjectionContext({
       project_id: "proj-x",
-      agent_id: "agent-z",
+      agent_id: "agent-inj-z",
       db,
     });
 
