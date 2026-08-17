@@ -1070,7 +1070,11 @@ export async function startServer(requestedPort: number, options?: { open?: bool
         : process.platform === "win32"
           ? "start"
           : "xdg-open";
-      spawn(openCmd, [url], { stdio: "ignore", detached: true }).unref();
+      const p = spawn(openCmd, [url], { stdio: "ignore", detached: true });
+      // An 'error' listener is required: without one, a missing opener binary
+      // emits an async 'error' event that escapes the try/catch and kills the process.
+      p.on("error", () => {});
+      p.unref();
     } catch {
       // Silently ignore if we can't open browser
     }
