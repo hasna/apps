@@ -131,6 +131,12 @@ test("serve stops promptly on SIGTERM even while blocked in a long poll", async 
 test("a second signal force-exits serve while an agent run is still in flight", async () => {
   // The first signal cannot interrupt an in-flight agent run (a codewith turn can
   // take minutes), so a repeated Ctrl-C / SIGTERM must remain an escape hatch.
+  // The fixture MUST escape the agent process group (setsid): since #8 the
+  // first stop signal is forwarded to in-flight agent groups, so a plain
+  // `sleep 120` in the same group is reaped and serve exits 0 gracefully before
+  // a second signal can ever arrive. Only a run that survives the group kill
+  // (setsid / double-fork, holding the pipes open) is genuinely in flight when
+  // the second signal lands, which is exactly the case the force-exit exists for.
   const update = {
     update_id: 500,
     message: { message_id: 1, text: "hang", chat: { id: 1, type: "private" }, date: 0 },
@@ -158,7 +164,7 @@ test("a second signal force-exits serve while an agent run is still in flight", 
     },
     profiles: {},
     // Explicit cwd keeps the run hermetic (no real workspace provisioning).
-    agents: { sleeper: { id: "sleeper", kind: "shell", command: "sh", args: ["-c", "trap '' TERM; sleep 120", "{prompt}"], cwd: tmpdir() } },
+    agents: { sleeper: { id: "sleeper", kind: "shell", command: "sh", args: ["-c", "setsid sleep 120", "{prompt}"], cwd: tmpdir() } },
     routes: [],
   };
   await saveConfig(hanging, configPath);
