@@ -473,6 +473,26 @@ describe("getDataDir", () => {
     });
   });
 
+  test("does not treat a HEAD-less stray .git directory as a repository root", () => {
+    const root = join(tempDir, "stray-git-root");
+    const actualHome = join(root, "actual-home");
+    const fakeHome = join(root, "fake-home");
+    const workingDir = join(actualHome, "workspace", "nested");
+    const inheritedDir = join(actualHome, ".recordings");
+    mkdirSync(workingDir, { recursive: true });
+    // A stray EMPTY .git directory (no HEAD file) sitting above the cwd —
+    // the leftover shape found at /tmp/.git. It is not a git repository, so it
+    // must not widen the project-local store search past HOME.
+    mkdirSync(join(root, ".git"), { recursive: true });
+    mkdirSync(inheritedDir, { recursive: true });
+    writeFileSync(join(inheritedDir, "config.json"), JSON.stringify({ language: "de" }));
+
+    withHomeAndCwd(fakeHome, workingDir, () => {
+      expect(getDataDir()).toBe(join(fakeHome, ".hasna", "recordings"));
+      expect(loadConfig().language).toBe(DEFAULT_CONFIG.language);
+    });
+  });
+
   test("does not inherit an ancestor store outside HOME when no repository root exists", () => {
     const actualHome = join(tempDir, "no-git-actual-home");
     const fakeHome = join(tempDir, "no-git-fake-home");

@@ -885,8 +885,34 @@ registerTool(
 return server;
 }
 
+function printHelp(): void {
+  console.log(`Usage: recordings-mcp [options]
+
+Start the @hasna/recordings MCP server.
+
+Options:
+  --stdio        Serve MCP over stdio (Codex/Claude agent form)
+  --http         Serve MCP over the shared Streamable HTTP endpoint
+  --port <port>  HTTP port to bind. Defaults to ${DEFAULT_MCP_HTTP_PORT} (or $MCP_HTTP_PORT)
+  -V, --version  output the version number
+  -h, --help     display help for command
+
+Environment:
+  MCP_STDIO      1 to select stdio transport
+  MCP_HTTP       1 to select the HTTP transport
+  MCP_HTTP_PORT  HTTP port override`);
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args.includes("--version") || args.includes("-V")) {
+    console.log(VERSION);
+    return;
+  }
+  if (args.includes("--help") || args.includes("-h")) {
+    printHelp();
+    return;
+  }
   if (isStdioMode(args)) {
     const transport = new StdioServerTransport();
     await buildServer().connect(transport);
