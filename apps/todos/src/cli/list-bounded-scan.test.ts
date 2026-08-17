@@ -32,11 +32,16 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
+import { runMigrations } from "../db/schema.js";
+import { createProject } from "../db/projects.js";
+import { createTask } from "../db/tasks.js";
+import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 
 setDefaultTimeout(30_000);
 
 const REPO_ROOT = join(import.meta.dir, "../..");
-const TEST_API_KEY = "hasna_todos_test_key";
+const TEST_API_KEY = "[REDACTED_SECRET]";
 
 type RemoteResult = {
   stdout: string;
@@ -63,11 +68,16 @@ function stubTask(index: number): Record<string, unknown> {
  * Run the CLI in self_hosted mode against a stub `/v1` authority that records every
  * query it is asked, and DELIBERATELY ignores `limit` — the assertion is about what
  * the client REQUESTS, so a stub that honoured the limit would hide the defect.
+ *
+ * `honorLimit` opts into the REAL server's response contract (`/v1/tasks` returns at
+ * most `limit` rows with `total` = full match count), for tests that assert what the
+ * CLI does with a truncating authority.
  */
 async function runRemote(
   args: string[],
   rowCount: number,
   extraEnv: Record<string, string> = {},
+  honorLimit = false,
 ): Promise<RemoteResult> {
   const tasks = Array.from({ length: rowCount }, (_, i) => stubTask(i));
   const taskQueries: string[] = [];
@@ -78,7 +88,11 @@ async function runRemote(
       const url = new URL(request.url);
       if (url.pathname === "/v1/tasks") {
         taskQueries.push(url.searchParams.toString());
-        return Response.json({ tasks, count: tasks.length, total: tasks.length });
+        const requested = url.searchParams.get("limit");
+        const served = honorLimit && requested !== null
+          ? tasks.slice(0, Number(requested))
+          : tasks;
+        return Response.json({ tasks: served, count: served.length, total: tasks.length });
       }
       if (url.pathname === "/v1/projects") return Response.json({ projects: [] });
       return Response.json({ error: "not found" }, { status: 404 });
@@ -138,14 +152,20 @@ describe("todos list bounds every remote task query", () => {
 
   /**
    * The control that keeps the case above honest. A query with no reorder/narrow step
-   * still forwards the caller's own limit untouched, so the assertion above is
-   * detecting the withheld-limit path rather than agreeing with a CLI that happens to
-   * put a limit on every request.
+   * still forwards the caller's own limit, so the assertion above is detecting the
+   * withheld-limit path rather than agreeing with a CLI that happens to put a limit
+   * on every request.
+   *
+   * The forwarded value is the caller's limit PLUS ONE (todos 52b0a207): when the
+   * authority applies the limit itself, the extra row is a truncation probe — a page
+   * of exactly `limit` rows from a `limit+1` request proves the matching set is
+   * larger, which is how the command knows to emit its truncation signal instead of
+   * answering with a silent round number.
    */
-  test("still forwards the caller's own limit for one scalar status when nothing reorders", async () => {
+  test("forwards the caller's limit plus a one-row truncation probe when nothing reorders", async () => {
     const result = await runRemote(["list", "--status", "pending", "--limit", "2", "--json"], 5);
     expect(result.exitCode).toBe(0);
-    expect(requestedLimit(result.taskQueries[0]!)).toBe(2);
+    expect(requestedLimit(result.taskQueries[0]!)).toBe(3);
   });
 
   /**
@@ -216,5 +236,123 @@ describe("todos list still takes the window AFTER ordering", () => {
     expect(result.exitCode).toBe(0);
     const titles = (JSON.parse(result.stdout) as Array<{ title: string }>).map((t) => t.title);
     expect(titles).toEqual(["Stub task 5", "Stub task 4"]);
+  });
+});
+
+describe("todos list makes a bounded read distinguishable from the full population (todos 52b0a207)", () => {
+  /**
+   * The defect: `--limit N` against a population larger than N answered with exactly
+   * N rows, rc=0, and no signal — a bounded read was indistinguishable from the full
+   * population (the round-number tell). These tests assert the truncation signal.
+   * It goes to STDERR so `--json` stdout stays a clean parseable array, matching the
+   * scan-ceiling warning's established channel.
+   */
+
+  test("warns on stderr when the caller's own limit truncates a forwarded read", async () => {
+    const result = await runRemote(
+      ["list", "--status", "pending", "--limit", "2", "--json"],
+      5,
+      {},
+      true,
+    );
+    expect(result.exitCode).toBe(0);
+    const rows = JSON.parse(result.stdout) as unknown[];
+    expect(rows.length).toBe(2);
+    expect(result.stderr).toContain("more than --limit 2");
+    // The JSON surface stays a bare array — no envelope was introduced.
+    expect(result.stdout.trimStart().startsWith("[")).toBe(true);
+  });
+
+  test("stays SILENT when the full population fits inside the caller's limit", async () => {
+    const result = await runRemote(
+      ["list", "--status", "pending", "--limit", "5", "--json"],
+      5,
+      {},
+      true,
+    );
+    expect(result.exitCode).toBe(0);
+    expect((JSON.parse(result.stdout) as unknown[]).length).toBe(5);
+    expect(result.stderr).not.toContain("more than --limit");
+  });
+
+  test("warns when the caller's limit truncates a client-side window (--sort)", async () => {
+    const result = await runRemote(["list", "--sort", "updated", "--limit", "2", "--json"], 5);
+    expect(result.exitCode).toBe(0);
+    expect((JSON.parse(result.stdout) as unknown[]).length).toBe(2);
+    expect(result.stderr).toContain("more than --limit 2");
+  });
+
+  test("stays SILENT when a client-side window covers the full population", async () => {
+    const result = await runRemote(["list", "--sort", "updated", "--limit", "5", "--json"], 5);
+    expect(result.exitCode).toBe(0);
+    expect((JSON.parse(result.stdout) as unknown[]).length).toBe(5);
+    expect(result.stderr).not.toContain("more than --limit");
+  });
+});
+
+describe("todos list truncation signal on the local SQLite store (todos 52b0a207)", () => {
+  /**
+   * The same silent-cap defect exists on the local store: `LIMIT N` in SQL answers
+   * with exactly N rows and nothing else. The +1 probe applies there too — SQL
+   * `LIMIT N+1` — so the local path must warn identically.
+   */
+  async function runLocal(
+    args: string[],
+    taskCount: number,
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const root = mkdtempSync(join(tmpdir(), "todos-local-trunc-"));
+    const dbPath = join(root, "todos.db");
+    const db = new Database(dbPath);
+    try {
+      runMigrations(db);
+      const project = createProject({ name: "TruncLocal", path: join(root, "proj") }, db);
+      db.transaction(() => {
+        for (let i = 0; i < taskCount; i += 1) {
+          createTask({
+            title: `Local task ${i}`,
+            project_id: project.id,
+            status: "pending",
+            priority: "medium",
+          }, db);
+        }
+      })();
+    } finally {
+      db.close();
+    }
+    try {
+      const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
+        cwd: REPO_ROOT,
+        env: localRoutingTestEnv({
+          HOME: join(root, "home"),
+          TMPDIR: root,
+          TODOS_DB_PATH: dbPath,
+          TODOS_AUTO_PROJECT: "false",
+        }),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      return { stdout, stderr, exitCode };
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  test("warns when the caller's limit truncates the local read", async () => {
+    const result = await runLocal(["list", "--status", "pending", "--limit", "2", "--json"], 5);
+    expect(result.exitCode).toBe(0);
+    expect((JSON.parse(result.stdout) as unknown[]).length).toBe(2);
+    expect(result.stderr).toContain("more than --limit 2");
+  });
+
+  test("stays SILENT when the local population fits inside the caller's limit", async () => {
+    const result = await runLocal(["list", "--status", "pending", "--limit", "5", "--json"], 5);
+    expect(result.exitCode).toBe(0);
+    expect((JSON.parse(result.stdout) as unknown[]).length).toBe(5);
+    expect(result.stderr).not.toContain("more than --limit");
   });
 });

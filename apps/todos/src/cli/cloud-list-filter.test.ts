@@ -16,7 +16,7 @@ function stderrWithoutAttributionWarning(stderr: string): string {
 
 
 const REPO_ROOT = join(import.meta.dir, "../..");
-const TEST_API_KEY = "hasna_todos_test_key";
+const TEST_API_KEY = "[REDACTED_SECRET]";
 const PROJECT_ID = "99999999-9999-4999-8999-999999999999";
 const PROJECT_SLUG = "open-emails";
 const PROJECT_PATH = "/workspace/hasna/opensource/open-emails";
@@ -423,7 +423,11 @@ describe("cloud CLI task-list filtering", () => {
         `http://127.0.0.1:${server.port}`,
         { TODOS_LIST_SCAN_LIMIT: "4" },
       );
-      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      // The stub serves three matching rows for a --limit 1 read, so the truncation
+      // signal (todos 52b0a207) is EXPECTED here: stderr names the bounded read
+      // while stdout stays a clean one-row array.
+      expect(result).toMatchObject({ exitCode: 0 });
+      expect(result.stderr).toContain("more than --limit 1");
       expect(taskRequests).toHaveLength(1);
       expect(taskRequests[0]!.searchParams.get("project_id")).toBe(PROJECT_ID);
       expect(taskRequests[0]!.searchParams.get("task_list_id")).toBe(LIST_ID);
