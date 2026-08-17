@@ -1,8 +1,8 @@
 # @hasna/access
 
-`open-access` is the scalable access gate for Hasna agents and services. Agents
+`access` is the scalable access gate for Hasna agents and services. Agents
 request access, API keys, provider credentials, MCP scopes, and short-lived
-bearer tokens here; `open-access` records the decision, exposes the same
+bearer tokens here; `access` records the decision, exposes the same
 operation through CLI/MCP/REST, and keeps an auditable inventory of which
 identity can use which reference.
 
@@ -12,10 +12,10 @@ identity can use which reference.
   Postgres (`HASNA_ACCESS_STORAGE_MODE=cloud`, pure remote, `sslmode=verify-full`)
   through the vendored `@hasna/contracts` storage kit
 
-`open-access` is intentionally not a secret vault. It never stores raw provider
+`access` is intentionally not a secret vault. It never stores raw provider
 tokens, API keys, app passwords, private keys, or OAuth refresh tokens. Credential
 records store `secret_ref` strings only; the values live in `@hasna/secrets`
-(open-secrets) or in the provider's own system.
+(secrets) or in the provider's own system.
 
 ## Domain
 
@@ -38,19 +38,19 @@ not authority.
 
 The gate is designed around this flow:
 
-1. Resolve or create the agent/service profile in `open-identities`.
-2. Register the access identity in `open-access` with the same durable identity
+1. Resolve or create the agent/service profile in `identities`.
+2. Register the access identity in `access` with the same durable identity
    reference carried in `owner_ref` or metadata, and the tenant boundary carried
    by `entity_id`.
 3. Record what the identity needs: a credential reference, an MCP/API scope
    grant, a pending JIT elevation request, or an issued access bearer token.
 4. Store secret material outside this package, then register only the
-   `@hasna/secrets` `secret_ref` in `open-access`.
+   `@hasna/secrets` `secret_ref` in `access`.
 5. Use reviews and revocations to recertify or remove access without exposing
    the underlying provider token.
 
 The current policy is permissive and operational: if the authenticated caller has
-the required access scope and entity reach, `open-access` records the request or
+the required access scope and entity reach, `access` records the request or
 grant. It does not yet evaluate declarative policy definitions such as
 `provider == npm`, approval quorum, maximum TTL, allowed package scope, or
 environment-specific break-glass rules. Those policy definitions are the next
@@ -59,17 +59,17 @@ evaluate.
 
 ### NPM Token Workflow
 
-For NPM publishing, do not paste the NPM token into `open-access`.
+For NPM publishing, do not paste the NPM token into `access`.
 
 ```bash
-# 1. Create or resolve the agent identity in open-identities, then register it here.
+# 1. Create or resolve the agent identity in identities, then register it here.
 access identity create \
   --entity-id <home-entity-uuid> \
   --kind agent \
   --name publish-bot \
-  --owner-ref open-identities:agent:publish-bot
+  --owner-ref identities:agent:publish-bot
 
-# 2. Store the token value in @hasna/secrets/open-secrets, then register only the ref.
+# 2. Store the token value in @hasna/secrets, then register only the ref.
 access credential register \
   --identity-id <access-identity-id> \
   --kind api_key \
@@ -77,7 +77,7 @@ access credential register \
   --secret-ref hasna/access/npm/publish-token
 
 # 3. Grant the least provider-policy scope the agent needs. This does not
-#    authorize open-access API calls by itself.
+#    authorize access API calls by itself.
 access scope grant --identity-id <access-identity-id> --scope npm:publish
 
 # 4. Issue short-lived access bearer tokens only for access/MCP calls.
@@ -93,23 +93,23 @@ The provider token remains in `@hasna/secrets` or NPM. The access-issued bearer
 token is for the access/MCP cohort path; it is not a replacement for a provider
 token.
 
-## Relationship To open-identities
+## Relationship To identities
 
-`open-identities` owns the canonical identity record: names, durable identifiers,
+`identities` owns the canonical identity record: names, durable identifiers,
 agent roster metadata, instruction sources, contact points, and narrative docs.
-`open-access` owns the authorization inventory for those identities: credential
+`access` owns the authorization inventory for those identities: credential
 references, granted scopes, JIT elevations, access reviews, revocation state, and
 access-issued bearer tokens.
 
 The integration boundary is by reference, not by duplication:
 
 - `owner_ref` should carry the durable identity reference, such as
-  `open-identities:agent:publish-bot` or `agent:publish-bot`.
+  `identities:agent:publish-bot` or `agent:publish-bot`.
 - `entity_id` remains the tenant/access boundary used by the authorization layer.
 - Optional metadata may carry non-sensitive lookup fields such as
   `identity_ref`, `agent_role`, or `source`.
-- `open-access` should not copy identity documents, prompt files, contact values,
-  profile images, or instruction-source content from `open-identities`.
+- `access` should not copy identity documents, prompt files, contact values,
+  profile images, or instruction-source content from `identities`.
 
 ## SecretRef Contract
 
@@ -120,8 +120,8 @@ references such as `provider:npm:automation-token:publish-bot`.
 
 Rules:
 
-- Store raw values in `@hasna/secrets`/open-secrets or the provider system.
-- Register only the reference string in `open-access`.
+- Store raw values in `@hasna/secrets`/secrets or the provider system.
+- Register only the reference string in `access`.
 - Rotate by updating the secret in the owning system, then update or revoke the
   access credential reference as needed.
 - Revoke in both places when a provider token is compromised: revoke the provider
@@ -189,14 +189,14 @@ redacted and never prints a DSN.
 
 ## Threat Model
 
-`open-access` assumes provider tokens and API keys are high-value secrets. The
+`access` assumes provider tokens and API keys are high-value secrets. The
 primary risks are accidental value storage, over-broad agent scopes, stale
 credentials after offboarding, confused identity references, exposed unauthenticated
 HTTP/MCP transports, and cloud/local storage misconfiguration.
 
 Current mitigations:
 
-- raw provider values stay outside `open-access`
+- raw provider values stay outside `access`
 - credential and access-request writes accept only strict `secret_ref` pointers
   and reject raw-looking secret values in sensitive fields
 - records are scoped by `entity_id` and caller scopes
@@ -212,12 +212,12 @@ are allowed before access records become active.
 
 ## Non-Goals
 
-- Secret vaulting or secret retrieval. Use `@hasna/secrets`/open-secrets or the
+- Secret vaulting or secret retrieval. Use `@hasna/secrets`/secrets or the
   provider's secret system for values.
-- Provider provisioning. `open-access` records, gates, and previews provider
+- Provider provisioning. `access` records, gates, and previews provider
   access; provider-specific CLIs or workers create, rotate, and revoke
   provider-side tokens after approval.
-- Replacing `open-identities`. Identity profiles, documents, contact points, and
+- Replacing `identities`. Identity profiles, documents, contact points, and
   instruction sources remain there.
 - A complete declarative policy engine in the current release. The records here
   are shaped so that later policy definitions can evaluate them.
@@ -241,10 +241,10 @@ credentials, scopes, reviews, revocations, tokens, and audit rows remain valid.
 To adopt the new operating model:
 
 1. Inventory any provider/API token that an agent currently uses.
-2. Move the raw value into `@hasna/secrets`/open-secrets or leave it in the
+2. Move the raw value into `@hasna/secrets`/secrets or leave it in the
    provider system if the provider owns its lifecycle.
-3. Register only a `secret_ref` in `open-access`.
-4. Backfill `owner_ref` or metadata with the matching `open-identities` durable
+3. Register only a `secret_ref` in `access`.
+4. Backfill `owner_ref` or metadata with the matching `identities` durable
    reference.
 5. Replace broad or implicit access with explicit scope grants, JIT elevations,
    and access reviews.
