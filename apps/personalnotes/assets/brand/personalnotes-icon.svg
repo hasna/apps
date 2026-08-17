@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PersonalNotes — macOS app icon master (1024×1024).
+  Design-only asset. See docs/brand-visual-system.md for the full spec.
+
+  Anatomy:
+    • Squircle body (832×832, 96px margin) — the macOS "Big Sur" icon grid safe area.
+    • Infinity-purple diagonal gradient: deep violet → indigo → magenta
+      (the design-token sidebar gradient, web/styles.css sb-grad-0/1/2 light).
+    • White note card with #B7B2F6 text-line panel (mirrors web .badge-glyph panel).
+    • Person silhouette on the ONE brand accent #7C3AED badge ("Personal" + "Notes").
+
+  Colors are documented as code-cross-references in docs/brand-visual-system.md.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <!-- Infinity-purple body gradient — the token sidebar gradient (light). -->
+    <linearGradient id="pnBody" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0"   stop-color="#5729A3"/>  <!-- deep violet  (sb-grad-0) -->
+      <stop offset="0.5" stop-color="#4D2EB8"/>  <!-- indigo       (sb-grad-1) -->
+      <stop offset="1"   stop-color="#85299E"/>  <!-- magenta      (sb-grad-2) -->
+    </linearGradient>
+    <!-- Soft top sheen so the squircle reads as a physical macOS icon. -->
+    <linearGradient id="pnSheen" x1="512" y1="96" x2="512" y2="640" gradientUnits="userSpaceOnUse">
+      <stop offset="0"   stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="1"   stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Squircle body. rx≈22.37% of side, the macOS continuous-corner approximation. -->
+  <rect x="96" y="96" width="832" height="832" rx="186" fill="url(#pnBody)"/>
+  <rect x="96" y="96" width="832" height="832" rx="186" fill="url(#pnSheen)"/>
+
+  <!-- Note card. White, slightly rotated for warmth, centered in the safe area. -->
+  <g transform="rotate(-4 512 512)">
+    <rect x="318" y="258" width="388" height="476" rx="44" fill="#ffffff"/>
+    <!-- Text-line panel (#B7B2F6) — same fill as the web badge-glyph panel. -->
+    <rect x="372" y="330" width="280" height="40" rx="14" fill="#B7B2F6"/>
+    <rect x="372" y="398" width="280" height="28" rx="12" fill="#B7B2F6"/>
+    <rect x="372" y="452" width="208" height="28" rx="12" fill="#B7B2F6"/>
+  </g>
+
+  <!-- Person badge ("Personal"): the ONE brand accent (#7C3AED, Rule 10)
+       disc + white silhouette, bottom-right overlap. -->
+  <g>
+    <circle cx="690" cy="700" r="118" fill="#7C3AED" stroke="#ffffff" stroke-width="16"/>
+    <circle cx="690" cy="664" r="40" fill="#ffffff"/>
+    <path d="M628 760c0-40 28-66 62-66s62 26 62 66z" fill="#ffffff"/>
+  </g>
+</svg>
