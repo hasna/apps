@@ -444,7 +444,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos eb3f331d (contracts task — prompts)",
   },
   {
-  {
     member: "router",
     cause: "bins_match_package (package.json ships bin open-router that the manifest does not declare) and surface_matrix (api/sdk/mcp/cli missing or unwaived); published_artifact_gate (metadata.release.artifactScan.script is required). Manifest imported by the hasna-org delta lane (2026-08-17).",
     task: "todos 93a8e6ac-b447-4605-9af5-bf73ff0a9bb1 (reconcile @hasna/router contracts conformance — auto-filed)",
@@ -453,7 +452,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "releases",
     cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Manifest imported by the hasna-org delta lane (2026-08-17).",
     task: "todos a2f6ab06-43ae-4cbd-847a-4b3fa4082d71 (reconcile @hasna/releases contracts conformance — auto-filed)",
-  },
   },
   {
     member: "sheets",
