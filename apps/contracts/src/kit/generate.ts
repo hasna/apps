@@ -26,6 +26,9 @@ export const KIT_TEMPLATE_FILES = [
 /** Files emitted by older kit versions and removed during regeneration. */
 export const RETIRED_KIT_FILES = ["mode.ts"] as const;
 
+/** The dependency the generated kit is provenance-bound to. */
+const KIT_DEPENDENCY_NAME = "@hasna/contracts";
+
 export type KitTemplateFile = (typeof KIT_TEMPLATE_FILES)[number];
 
 /** Relative directory the kit is stamped into inside a target repo. */
@@ -38,6 +41,58 @@ export interface KitManifest {
   kitVersion: string;
   files: Record<string, string>;
 }
+
+/** Parse `X.Y` out of a version or range spec; null when unparseable. */
+function baseMajorMinor(spec: string): { major: number; minor: number } | null {
+  const m = spec.trim().match(/^[\^~><=*\s]*(\d+)\.(\d+)/);
+  if (!m) return null;
+  return { major: Number(m[1]), minor: Number(m[2]) };
+}
+
+/**
+ * Whether a kit version is compatible with the target repo's declared
+ * `@hasna/contracts` dependency range. `null` means "no verdict" — the range
+ * or version is unparseable (`workspace:`, `*`, prerelease) and the check
+ * stays silent rather than guessing.
+ *
+ * The comparison is major.minor only. In the fleet's 0.x lineage a minor
+ * line is the compatibility boundary (`^0.8.5` means `0.8.x`), so a kit
+ * stamped on a different minor line than the declared dependency is drift
+ * even when the generated files happen to be self-contained.
+ */
+export function kitMatchesDeclaredDependency(kitVersion: string, declared: string): boolean | null {
+  if (declared.trim() === "*" || declared.includes("workspace:") || declared.includes(" || ")) return null;
+  const opMatch = declared.trim().match(/^([\^~><=]*)\s*(\d+\.\d+)/);
+  if (!opMatch) return null;
+  const op = opMatch[1];
+  const dep = baseMajorMinor(declared);
+  const kit = baseMajorMinor(kitVersion);
+  if (!dep || !kit) return null;
+  if (kit.major !== dep.major) return op === ">=" || op === ">";
+  if (op === ">=" || op === ">") return kit.minor >= dep.minor;
+  return kit.minor === dep.minor;
+}
+
+/** Read the target repo's declared `@hasna/contracts` dependency, if any. */
+export function readDeclaredKitDependency(targetRepo: string): string | null {
+  const pkgPath = join(resolve(targetRepo), "package.json");
+  if (!existsSync(pkgPath)) return null;
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+      peerDependencies?: Record<string, string>;
+    };
+    for (const section of ["dependencies", "devDependencies", "peerDependencies"] as const) {
+      const declared = pkg[section]?.[KIT_DEPENDENCY_NAME];
+      if (typeof declared === "string" && declared.length > 0) return declared;
+    }
+  } catch {
+    // An unreadable package.json is not kit drift; the hash check still runs.
+  }
+  return null;
+}
+
 
 function moduleDir(): string {
   return dirname(fileURLToPath(import.meta.url));
@@ -208,6 +263,13 @@ export interface KitCheckResult {
   extras: string[];
   /** Present when the on-disk manifest records a different kitVersion. */
   staleVersion: string | null;
+  /**
+   * Present when the target repo declares an `@hasna/contracts` dependency on
+   * a different minor line than the kit it carries — e.g. kit 0.4.2 under a
+   * `^0.8.5` dependency. The remedy is regenerating the kit or aligning the
+   * dependency, never hand-editing the kit.
+   */
+  depVersionMismatch: { kitVersion: string; declared: string } | null;
 }
 
 export interface CheckKitOptions {
@@ -246,16 +308,28 @@ export function checkKit(options: CheckKitOptions): KitCheckResult {
   }
 
   let staleVersion: string | null = null;
+  let manifestKitVersion: string | null = null;
   const manifestPath = join(targetDir, KIT_MANIFEST_FILE);
   if (existsSync(manifestPath)) {
     try {
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as KitManifest;
+      manifestKitVersion = manifest.kitVersion;
       if (manifest.kitVersion !== version) staleVersion = manifest.kitVersion;
     } catch {
       staleVersion = null;
     }
   }
 
-  const ok = files.every((f) => f.status === "ok") && extras.length === 0;
-  return { ok, version, targetDir, files, extras, staleVersion };
+  let depVersionMismatch: KitCheckResult["depVersionMismatch"] = null;
+  const declared = readDeclaredKitDependency(options.targetRepo);
+  if (declared && staleVersion === null) {
+    const kitVersion = manifestKitVersion ?? version;
+    const matches = kitMatchesDeclaredDependency(kitVersion, declared);
+    if (matches === false) {
+      depVersionMismatch = { kitVersion, declared };
+    }
+  }
+
+  const ok = files.every((f) => f.status === "ok") && extras.length === 0 && depVersionMismatch === null;
+  return { ok, version, targetDir, files, extras, staleVersion, depVersionMismatch };
 }
