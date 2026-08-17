@@ -313,7 +313,6 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "pixels", reason: "No hasna.contract.json; manifest lane (todos 41208cbe). Imported by #69." },
   { member: "releases", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "repos", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "router", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "skills", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "search", reason: "No hasna.contract.json; manifest lane (todos 41208cbe). Imported by #68." },
   { member: "snapshots", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
@@ -437,6 +436,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos eb3f331d (contracts task — prompts)",
   },
   {
+    member: "router",
+    cause: "bins_match_package (package.json ships bin open-router that the manifest does not declare) and surface_matrix (api/sdk/mcp/cli missing or unwaived); published_artifact_gate (metadata.release.artifactScan.script is required). Manifest imported by the hasna-org delta lane (2026-08-17).",
+    task: "todos 93a8e6ac-b447-4605-9af5-bf73ff0a9bb1 (reconcile @hasna/router contracts conformance — auto-filed)",
+  },
+  {
     member: "sheets",
     cause: "manifest_valid: unrecognized 'exports' key at root; library-repo storage shape drift.",
     task: "todos d766ac9c (contracts task — sheets)",
@@ -498,6 +502,7 @@ export const NO_VALIDATOR_PIN: string[] = [
   "sheets",
   "slides",
   "tables",
+  "router",
 ];
 
 export const CONTRACTS_EXCEPTION_MEMBERS = new Set(CONTRACTS_EXCEPTIONS.map((e) => e.member));
