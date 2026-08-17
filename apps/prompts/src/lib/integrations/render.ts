@@ -35,6 +35,13 @@ export interface IntegrationRenderOptions {
   allowUnresolvedIntegrations?: boolean
   /** Injectable owning-package read surfaces (tests). */
   deps?: IntegrationDeps
+  /**
+   * Pre-rendered base from the template engine (typed vars, strict/preview,
+   * partials). When provided, integration refs are extracted and resolved
+   * from this already-rendered text instead of calling renderTemplate again,
+   * so the two render paths compose: engine first, resolvers after.
+   */
+  base?: RenderResult
 }
 
 export interface IntegrationRenderResult extends RenderResult {
@@ -47,11 +54,11 @@ const UNRESOLVED_MARKER = (kind: IntegrationKind, ref: string, code: string) =>
 
 export async function renderTemplateWithIntegrations(
   body: string,
-  vars: Record<string, string>,
+  vars: Record<string, unknown>,
   options: IntegrationRenderOptions = {},
 ): Promise<IntegrationRenderResult> {
   const surfaceMap = buildSurfaceMap(options.deps)
-  const base = renderTemplate(body, vars)
+  const base = options.base ?? renderTemplate(body, vars)
 
   const refs = extractIntegrationRefs(base.rendered)
   const resolved: ResolvedIntegration[] = []
@@ -119,6 +126,8 @@ export async function renderTemplateWithIntegrations(
     rendered,
     missing_vars: base.missing_vars,
     used_defaults: base.used_defaults,
+    unresolved: base.unresolved,
+    resolved_sources: base.resolved_sources,
     resolved_integrations: resolvedReceipts,
     unresolved_integrations: unresolvedReceipts,
   }

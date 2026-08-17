@@ -1,11 +1,64 @@
 import { Command } from "commander"
 import chalk from "chalk"
+import { readFileSync } from "fs"
 import { getPrompt, listPrompts, listPromptsSlim, updatePrompt, deletePrompt, usePrompt, upsertPrompt, pinPrompt } from "../../db/prompts.js"
 import { searchPrompts, searchPromptsSlim, findSimilar } from "../../lib/search.js"
 import { extractVariableInfo } from "../../lib/template.js"
 import { renderTemplateWithIntegrations } from "../../lib/integrations/render.js"
+import { renderPromptTemplate } from "../../db/dependencies.js"
+import { recordRenderReceipt } from "../../db/receipts.js"
+import { setLabel, removeLabel, listLabels, normalizeLabelKey, normalizeLabelValue } from "../../db/labels.js"
 import { isJson, output, handleError, fmtPrompt, fmtPromptDetail, fmtSearchResult, getActiveProjectId, parseOffset, parsePositiveInt, printPageSummary } from "../utils.js"
-import type { Prompt, SlimPrompt } from "../../types/index.js"
+import type { Prompt, SlimPrompt, VariableSchemaEntry, TemplateVariable } from "../../types/index.js"
+
+function collectFlag(value: string, acc: string[] = []): string[] {
+  acc.push(value)
+  return acc
+}
+
+/** Parse a --var-schema flag value: inline JSON or @file path. */
+async function parseVarSchema(program: Command, raw: string | undefined): Promise<VariableSchemaEntry[] | undefined> {
+  if (!raw) return undefined
+  let text: string
+  if (raw.startsWith("@")) {
+    const { readFileSync } = await import("fs")
+    text = readFileSync(raw.slice(1), "utf-8")
+  } else {
+    text = raw
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch (e) {
+    handleError(program, `Invalid --var-schema JSON: ${e instanceof Error ? e.message : String(e)}`)
+    return undefined
+  }
+  if (!Array.isArray(parsed)) {
+    handleError(program, "Invalid --var-schema: expected a JSON array of variable definitions")
+    return undefined
+  }
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== "object" || typeof (entry as { name?: unknown }).name !== "string") {
+      handleError(program, `Invalid --var-schema entry: ${JSON.stringify(entry)} (expected { name: string, ... })`)
+      return undefined
+    }
+  }
+  return parsed as VariableSchemaEntry[]
+}
+
+function parseLabelAssignments(assignments: string[]): Array<{ key: string; value: string }> {
+  const labels: Array<{ key: string; value: string }> = []
+  for (const assignment of assignments) {
+    const eq = assignment.indexOf("=")
+    if (eq === -1) continue
+    labels.push({
+      key: normalizeLabelKey(assignment.slice(0, eq)),
+      value: normalizeLabelValue(assignment.slice(eq + 1)),
+    })
+  }
+  return labels
+}
+
 
 export function registerPromptCommands(program: Command): void {
 
@@ -23,7 +76,10 @@ export function registerPromptCommands(program: Command): void {
     .option("--agent <name>", "Agent name (for attribution)")
     .option("--force", "Save even if a similar prompt already exists")
     .option("--pin", "Pin immediately so it appears first in all lists")
-    .action(async (title: string, opts: Record<string, string>) => {
+    .option("--var-schema <file-or-json>", "Typed variable definitions as JSON array (or @file)")
+    .option("--label <key=value>", "Set an exact label (repeatable)", collectFlag, [] as string[])
+    .option("--extends <slug-or-id>", "Set one parent prompt (no multiple inheritance)")
+    .action(async (title: string, opts: Record<string, string> & { varSchema?: string; label?: string[]; extends?: string }) => {
       try {
         let body = opts["body"] ?? ""
         if (opts["file"]) {
@@ -37,6 +93,8 @@ export function registerPromptCommands(program: Command): void {
         if (!body) handleError(program, "No body provided. Use --body, --file, or pipe via stdin.")
 
         const project_id = getActiveProjectId(program)
+        const varSchema = await parseVarSchema(program, opts["varSchema"])
+        const labels = opts["label"] ? parseLabelAssignments(opts["label"]) : undefined
         const { prompt, created, duplicate_warning } = upsertPrompt({
           title,
           body,
@@ -47,6 +105,9 @@ export function registerPromptCommands(program: Command): void {
           source: (opts["source"] as "manual" | "ai-session" | "imported") || "manual",
           changed_by: opts["agent"],
           project_id,
+          var_schema: varSchema,
+          labels,
+          extends_prompt: opts["extends"] ?? undefined,
         }, Boolean(opts["force"]))
         if (duplicate_warning && !isJson(program)) {
           console.warn(chalk.yellow(`Warning: ${duplicate_warning}`))
@@ -130,21 +191,24 @@ export function registerPromptCommands(program: Command): void {
     .description("List prompts")
     .option("-c, --collection <name>", "Filter by collection")
     .option("-t, --tags <tags>", "Filter by tags (comma-separated)")
+    .option("--label <key=value>", "Filter by exact label (repeatable)", collectFlag, [] as string[])
     .option("--templates", "Show only templates")
     .option("--recent", "Sort by recently used")
     .option("-n, --limit <n>", "Max results (default: 20 human, 50 JSON)")
     .option("-o, --offset <n>", "Skip first N results", "0")
     .option("--cursor <n>", "Alias for --offset")
     .option("--verbose", "Show more metadata per prompt")
-    .action((opts: Record<string, string | boolean>) => {
+    .action((opts: Record<string, string | boolean | string[]>) => {
       try {
         const project_id = getActiveProjectId(program)
         const json = isJson(program)
         const limit = parsePositiveInt(opts["limit"], json ? 50 : 20)
         const offset = parseOffset(opts)
+        const labelFilters = parseLabelAssignments((opts["label"] as string[] | undefined) ?? [])
         const filter = {
           collection: opts["collection"] as string | undefined,
           tags: opts["tags"] ? (opts["tags"] as string).split(",").map((t) => t.trim()) : undefined,
+          labels: labelFilters.length > 0 ? labelFilters : undefined,
           is_template: opts["templates"] ? true : undefined,
           limit: json ? limit : limit + 1,
           offset,
@@ -183,19 +247,22 @@ export function registerPromptCommands(program: Command): void {
     .description("Full-text search across prompts (FTS5)")
     .option("-c, --collection <name>")
     .option("-t, --tags <tags>")
+    .option("--label <key=value>", "Filter by exact label (repeatable)", collectFlag, [] as string[])
     .option("-n, --limit <n>", "Max results (default: 10 human, 20 JSON)")
     .option("-o, --offset <n>", "Skip first N results", "0")
     .option("--cursor <n>", "Alias for --offset")
     .option("--verbose", "Show more metadata and longer snippets")
-    .action((query: string, opts: Record<string, string>) => {
+    .action((query: string, opts: Record<string, string | string[]>) => {
       try {
         const project_id = getActiveProjectId(program)
         const json = isJson(program)
         const limit = parsePositiveInt(opts["limit"], json ? 20 : 10)
         const offset = parseOffset(opts)
+        const labelFilters = parseLabelAssignments((opts["label"] as string[] | undefined) ?? [])
         const filter = {
-          collection: opts["collection"],
-          tags: opts["tags"] ? opts["tags"].split(",").map((t) => t.trim()) : undefined,
+          collection: opts["collection"] as string | undefined,
+          tags: opts["tags"] ? (opts["tags"] as string).split(",").map((t) => t.trim()) : undefined,
+          labels: labelFilters.length > 0 ? labelFilters : undefined,
           limit: json ? limit : limit + 1,
           offset,
           ...(project_id !== null ? { project_id } : {}),
@@ -227,27 +294,72 @@ export function registerPromptCommands(program: Command): void {
     .command("render <id>")
     .description("Render a template prompt by filling in {{variables}} and resolving {{todo:...}}/{{channel:...}}/{{knowledge:...}}/{{memento:...}}/{{file:...}} integrations")
     .option("-v, --var <assignments...>", "Variable assignments as key=value")
+    .option("--vars-json <json>", "Typed variable values as a JSON object (or @file)")
+    .option("--strict", "Fail with a named error when required variables are missing")
+    .option("--preview", "Show [UNRESOLVED ...] markers for missing variables (never empty strings)")
+    .option("--format <format>", "Output format: text|json (default: text)", "text")
     .option("--allow-unresolved-integrations", "Permissive preview: emit [UNRESOLVED ...] markers instead of failing on unresolvable integrations")
-    .action(async (id: string, opts: { var?: string[]; allowUnresolvedIntegrations?: boolean }) => {
+    .action(async (id: string, opts: { var?: string[]; varsJson?: string; strict?: boolean; preview?: boolean; format?: string; allowUnresolvedIntegrations?: boolean }) => {
       try {
         const prompt = usePrompt(id)
-        const vars: Record<string, string> = {}
+        const vars: Record<string, unknown> = {}
         for (const assignment of opts.var ?? []) {
           const eq = assignment.indexOf("=")
           if (eq === -1) handleError(program, `Invalid var format: ${assignment}. Use key=value`)
           vars[assignment.slice(0, eq)] = assignment.slice(eq + 1)
         }
-        const result = await renderTemplateWithIntegrations(prompt.body, vars, {
-          allowUnresolvedIntegrations: opts.allowUnresolvedIntegrations,
+        if (opts.varsJson) {
+          const text = opts.varsJson.startsWith("@")
+            ? readFileSync(opts.varsJson.slice(1), "utf-8")
+            : opts.varsJson
+          let parsed: unknown
+          try {
+            parsed = JSON.parse(text)
+          } catch (e) {
+            handleError(program, `Invalid --vars-json: ${e instanceof Error ? e.message : String(e)}`)
+            return
+          }
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            handleError(program, "Invalid --vars-json: expected a JSON object")
+            return
+          }
+          Object.assign(vars, parsed as Record<string, unknown>)
+        }
+
+        const jsonOutput = isJson(program) || opts.format === "json"
+        // Template engine first (typed vars, strict/preview, partials), then
+        // integration refs resolved against the rendered output.
+        const engineResult = renderPromptTemplate(prompt, vars, {
+          strict: Boolean(opts.strict),
+          preview: Boolean(opts.preview),
         })
-        if (isJson(program)) {
-          output(program, result)
+        const result = await renderTemplateWithIntegrations(engineResult.rendered, vars, {
+          allowUnresolvedIntegrations: opts.allowUnresolvedIntegrations,
+          base: engineResult,
+        })
+        // Record a render receipt when dependencies were resolved (reproducibility).
+        if (result.resolved_sources && result.resolved_sources.length > 0) {
+          recordRenderReceipt(prompt.id, prompt.version, {
+            resolvedSources: result.resolved_sources,
+            rendered: result.rendered,
+            missingVars: result.missing_vars,
+            usedDefaults: result.used_defaults,
+          })
+        }
+        if (jsonOutput) {
+          if (isJson(program)) {
+            output(program, result)
+          } else {
+            console.log(JSON.stringify(result, null, 2))
+          }
         } else {
           console.log(result.rendered)
           if (result.missing_vars.length > 0)
             console.error(chalk.yellow(`\nWarning: missing vars: ${result.missing_vars.join(", ")}`))
           if (result.used_defaults.length > 0)
             console.error(chalk.gray(`Used defaults: ${result.used_defaults.join(", ")}`))
+          if (result.resolved_sources && result.resolved_sources.length > 0)
+            console.error(chalk.gray(`Resolved: ${result.resolved_sources.map((s) => s.id).join(", ")}`))
           if ((result.resolved_integrations?.length ?? 0) > 0)
             console.error(chalk.gray(`Resolved integrations: ${result.resolved_integrations!.map((r) => `${r.kind}:${r.source_id}`).join(", ")}`))
           if ((result.unresolved_integrations?.length ?? 0) > 0)
@@ -314,7 +426,9 @@ export function registerPromptCommands(program: Command): void {
       try {
         const prompt = getPrompt(id)
         if (!prompt) handleError(program, `Prompt not found: ${id}`)
-        const vars = extractVariableInfo(prompt!.body)
+        const vars: TemplateVariable[] = prompt!.variables.length > 0
+          ? prompt!.variables
+          : extractVariableInfo(prompt!.body).map((v) => ({ name: v.name, required: v.required, default: v.default ?? undefined, type: "string" }))
         if (isJson(program)) {
           output(program, vars)
         } else if (vars.length === 0) {
@@ -323,10 +437,56 @@ export function registerPromptCommands(program: Command): void {
           console.log(chalk.bold(`Variables for ${prompt!.slug}:`))
           for (const v of vars) {
             const req = v.required ? chalk.red("required") : chalk.green("optional")
-            const def = v.default !== null ? chalk.gray(` (default: "${v.default}")`) : ""
-            console.log(`  ${chalk.bold(v.name)}  ${req}${def}`)
+            const def = v.typed_default !== undefined
+              ? chalk.gray(` (typed default: ${JSON.stringify(v.typed_default)})`)
+              : v.default !== undefined
+                ? chalk.gray(` (default: "${v.default}")`)
+                : ""
+            const type = v.type ? chalk.gray(` [${v.type}]`) : ""
+            const desc = v.description ? chalk.gray(` — ${v.description}`) : ""
+            console.log(`  ${chalk.bold(v.name)}  ${req}${type}${def}${desc}`)
           }
         }
+      } catch (e) {
+        handleError(program, e)
+      }
+    })
+
+  // ── label ───────────────────────────────────────────────────────────────────
+  program
+    .command("label <id>")
+    .description("Set or remove exact labels on a prompt (keys and values are normalized to lowercase)")
+    .option("-s, --set <key=value>", "Set a label (repeatable)", collectFlag, [] as string[])
+    .option("-r, --remove <key>", "Remove a label by key (repeatable)", collectFlag, [] as string[])
+    .action((id: string, opts: { set?: string[]; remove?: string[] }) => {
+      try {
+        const prompt = getPrompt(id)
+        if (!prompt) handleError(program, `Prompt not found: ${id}`)
+        const setPairs = parseLabelAssignments(opts.set ?? [])
+        const removeKeys = (opts.remove ?? []).map((k) => normalizeLabelKey(k))
+        for (const pair of setPairs) setLabel(prompt.id, pair.key, pair.value)
+        for (const key of removeKeys) removeLabel(prompt.id, key)
+        const labels = listLabels(prompt.id)
+        if (isJson(program)) { output(program, labels); return }
+        if (labels.length === 0) { console.log(chalk.gray(`No labels on ${prompt.slug}.`)); return }
+        for (const label of labels) console.log(`  ${chalk.bold(label.key)}=${label.value}`)
+      } catch (e) {
+        handleError(program, e)
+      }
+    })
+
+  // ── labels ──────────────────────────────────────────────────────────────────
+  program
+    .command("labels <id>")
+    .description("List exact labels for a prompt")
+    .action((id: string) => {
+      try {
+        const prompt = getPrompt(id)
+        if (!prompt) handleError(program, `Prompt not found: ${id}`)
+        const labels = listLabels(prompt.id)
+        if (isJson(program)) { output(program, labels); return }
+        if (labels.length === 0) { console.log(chalk.gray(`No labels on ${prompt.slug}.`)); return }
+        for (const label of labels) console.log(`  ${chalk.bold(label.key)}=${label.value}`)
       } catch (e) {
         handleError(program, e)
       }
@@ -342,8 +502,14 @@ export function registerPromptCommands(program: Command): void {
     .option("-c, --collection <name>")
     .option("-t, --tags <tags>")
     .option("--agent <name>")
-    .action((id: string, opts: Record<string, string>) => {
+    .option("--var-schema <file-or-json>", "Typed variable definitions as JSON array (or @file)")
+    .option("--label <key=value>", "Set an exact label (repeatable)", collectFlag, [] as string[])
+    .option("--extends <slug-or-id>", "Set one parent prompt (pass 'none' to clear)")
+    .action(async (id: string, opts: Record<string, string> & { varSchema?: string; label?: string[]; extends?: string }) => {
       try {
+        const varSchema = await parseVarSchema(program, opts["varSchema"])
+        const labels = opts["label"] ? parseLabelAssignments(opts["label"]) : undefined
+        const extendsValue = opts["extends"] === undefined ? undefined : opts["extends"] === "none" ? null : opts["extends"]
         const prompt = updatePrompt(id, {
           title: opts["title"] ?? undefined,
           body: opts["body"] ?? undefined,
@@ -351,6 +517,9 @@ export function registerPromptCommands(program: Command): void {
           collection: opts["collection"] ?? undefined,
           tags: opts["tags"] ? opts["tags"].split(",").map((t) => t.trim()) : undefined,
           changed_by: opts["agent"] ?? undefined,
+          var_schema: varSchema,
+          labels,
+          ...(opts["extends"] !== undefined ? { extends_prompt: extendsValue } : {}),
         })
         if (isJson(program)) output(program, prompt)
         else console.log(`${chalk.yellow("Updated")} ${chalk.bold(prompt.id)} — ${chalk.green(prompt.slug)}`)

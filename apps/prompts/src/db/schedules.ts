@@ -1,5 +1,7 @@
 import { getDatabase } from "./database.js"
 import { getNextRunTime } from "../lib/cron.js"
+import { getPrompt } from "./prompts.js"
+import { renderPromptTemplate } from "./dependencies.js"
 
 export interface PromptSchedule {
   id: string
@@ -82,7 +84,15 @@ export interface DueSchedule extends PromptSchedule {
   prompt_body: string
 }
 
-export function getDueSchedules(): DueSchedule[] {
+/**
+ * Returns schedules that are due now, rendered through the canonical template
+ * engine (dependency-aware: parents and partials resolve from the store).
+ *
+ * Run-state mutation (next_run_at, last_run_at, run_count) happens ONLY when
+ * dryRun is false — the default, preserving historical behavior. Callers that
+ * must not mutate (e.g. `schedule due --dry-run`) pass `{ dryRun: true }`.
+ */
+export function getDueSchedules(options: { dryRun?: boolean } = {}): DueSchedule[] {
   const db = getDatabase()
   const now = new Date().toISOString()
 
@@ -99,20 +109,21 @@ export function getDueSchedules(): DueSchedule[] {
   const due: DueSchedule[] = []
   for (const row of rows) {
     const schedule = rowToSchedule(row)
-    // Render template with vars
+    // Route through the canonical render engine (no ad-hoc regex renderer).
     let rendered = row.prompt_body
-    for (const [k, v] of Object.entries(schedule.vars)) {
-      rendered = rendered.replace(new RegExp(`\\{\\{\\s*${k}[^}]*\\}\\}`, "g"), v)
+    const prompt = getPrompt(schedule.prompt_id)
+    if (prompt) {
+      rendered = renderPromptTemplate(prompt, schedule.vars, { maxDepth: 10 }).rendered
     }
-    // Fill remaining unfilled vars with defaults from {{var|default}} pattern
-    rendered = rendered.replace(/\{\{([^|}]+)\|([^}]*)\}\}/g, (_: string, _name: string, def: string) => def)
 
-    // Update run state
-    const newNext = getNextRunTime(schedule.cron).toISOString()
-    db.run(
-      `UPDATE prompt_schedules SET last_run_at = ?, next_run_at = ?, run_count = run_count + 1 WHERE id = ?`,
-      [now, newNext, schedule.id]
-    )
+    if (!options.dryRun) {
+      // Update run state
+      const newNext = getNextRunTime(schedule.cron).toISOString()
+      db.run(
+        `UPDATE prompt_schedules SET last_run_at = ?, next_run_at = ?, run_count = run_count + 1 WHERE id = ?`,
+        [now, newNext, schedule.id]
+      )
+    }
 
     due.push({ ...schedule, rendered, prompt_body: row.prompt_body })
   }

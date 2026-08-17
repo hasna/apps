@@ -11,9 +11,12 @@ import { createProject, getProject, listProjects, deleteProject } from "../db/pr
 import { resolveProject } from "../db/database.js"
 import { getDatabase, getPromptRegistryDiagnostics } from "../db/database.js"
 import { searchPrompts, searchPromptsSlim, findSimilar } from "../lib/search.js"
-import { extractVariableInfo, validateVars } from "../lib/template.js"
+import { extractVariableInfo, validateVars, definitionsFromVariables } from "../lib/template.js"
 import { renderTemplateWithIntegrations } from "../lib/integrations/render.js"
 import { extractIntegrationRefs, parseRefOrThrow, resolveIntegrationRef, buildSurfaceMap } from "../lib/integrations/index.js"
+import { renderPromptTemplate, setParent, setPartial, listDependencies } from "../db/dependencies.js"
+import { recordRenderReceipt } from "../db/receipts.js"
+import { setLabel, removeLabel, listLabels } from "../db/labels.js"
 import { importFromJson, exportToJson, scanAndImportSlashCommands } from "../lib/importer.js"
 import { maybeSaveMemento } from "../lib/mementos.js"
 import { createSchedule, listSchedules, getSchedule, deleteSchedule, getDueSchedules } from "../db/schedules.js"
@@ -71,16 +74,26 @@ server.registerTool(
       changed_by: z.string().optional().describe("Agent name making this change"),
       force: z.boolean().optional().describe("Save even if a similar prompt already exists"),
       project: z.string().optional().describe("Project name, slug, or ID to scope this prompt to"),
+      var_schema: z.string().optional().describe("JSON string array of typed variable definitions (name, type, required, default, description, validation, render_format)"),
     },
   },
   async (args) => {
     try {
-      const { force, project, ...input } = args
+      const { force, project, var_schema, ...input } = args
       if (project) {
         const db = getDatabase()
         const pid = resolveProject(db, project)
         if (!pid) return err(`Project not found: ${project}`)
         ;(input as typeof input & { project_id?: string }).project_id = pid
+      }
+      if (var_schema) {
+        try {
+          const parsed: unknown = JSON.parse(var_schema)
+          if (!Array.isArray(parsed)) return err(`var_schema must be a JSON array`)
+          ;(input as typeof input & { var_schema?: unknown[] }).var_schema = parsed
+        } catch (e) {
+          return err(`Invalid var_schema: ${e instanceof Error ? e.message : String(e)}`)
+        }
       }
       const { prompt, created, duplicate_warning } = upsertPrompt(input, force ?? false)
       return ok(promptToSaveResult(prompt, created, duplicate_warning))
@@ -206,15 +219,18 @@ server.registerTool(
 server.registerTool(
   "prompts_render",
   {
-    description: "Render a template prompt by filling in {{variables}} and resolving {{todo:...}}/{{channel:...}}/{{knowledge:...}}/{{memento:...}}/{{file:...}} integrations. Returns rendered body plus info on missing/defaulted vars and integration receipts.",
+    description: "Render a template prompt by filling in {{variables}} and resolving {{todo:...}}/{{channel:...}}/{{knowledge:...}}/{{memento:...}}/{{file:...}} integrations. Returns rendered body plus info on missing/defaulted vars and integration receipts. Pass strict:true to fail on missing required values, preview:true for visible [UNRESOLVED ...] markers, and vars_json for typed values.",
     inputSchema: {
       id: z.string().describe("Prompt ID or slug"),
       vars: z.record(z.string()).describe("Variable values as key-value pairs"),
+      vars_json: z.string().optional().describe("Typed variable values as a JSON object string (merged over vars)"),
+      strict: z.boolean().optional().describe("Fail with a named error when required variables are missing"),
+      preview: z.boolean().optional().describe("Emit visible [UNRESOLVED kind:var name=...] markers instead of placeholders"),
       agent: z.string().optional().describe("Agent ID for mementos integration"),
       allow_unresolved_integrations: z.boolean().optional().describe("Permissive preview: emit [UNRESOLVED ...] markers instead of failing on unresolvable integrations"),
     },
   },
-  async ({ id, vars, agent, allow_unresolved_integrations }) => {
+  async ({ id, vars, vars_json, strict, preview, agent, allow_unresolved_integrations }) => {
     try {
       const prompt = usePrompt(id)
 
@@ -240,12 +256,37 @@ server.registerTool(
         }
       }
 
-      const mergedVars = { ...autoFilled, ...vars }
-      const result = await renderTemplateWithIntegrations(prompt.body, mergedVars, {
+      const typedVars: Record<string, unknown> = {}
+      if (vars_json) {
+        try {
+          const parsed: unknown = JSON.parse(vars_json)
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            return err(`vars_json must be a JSON object`)
+          }
+          Object.assign(typedVars, parsed as Record<string, unknown>)
+        } catch (e) {
+          return err(`Invalid vars_json: ${e instanceof Error ? e.message : String(e)}`)
+        }
+      }
+
+      const mergedVars = { ...autoFilled, ...vars, ...typedVars }
+      // Template engine first (typed vars, strict/preview, partials), then
+      // integration refs resolved against the rendered output.
+      const engineResult = renderPromptTemplate(prompt, mergedVars, { strict, preview })
+      const result = await renderTemplateWithIntegrations(engineResult.rendered, mergedVars, {
         allowUnresolvedIntegrations: allow_unresolved_integrations,
+        base: engineResult,
       })
       if (Object.keys(autoFilled).length > 0) {
         (result as unknown as Record<string, unknown>).auto_filled = autoFilled
+      }
+      if (result.resolved_sources && result.resolved_sources.length > 0) {
+        recordRenderReceipt(prompt.id, prompt.version, {
+          resolvedSources: result.resolved_sources,
+          rendered: result.rendered,
+          missingVars: result.missing_vars,
+          usedDefaults: result.used_defaults,
+        })
       }
       await maybeSaveMemento({ slug: prompt.slug, body: prompt.body, rendered: result.rendered, agentId: agent })
       return ok(result)
@@ -593,7 +634,7 @@ server.registerTool(
 server.registerTool(
   "prompts_update",
   {
-    description: "Update an existing prompt's fields.",
+    description: "Update an existing prompt's fields. var_schema is a JSON string array of typed variable definitions.",
     inputSchema: {
       id: z.string(),
       title: z.string().optional(),
@@ -602,11 +643,22 @@ server.registerTool(
       collection: z.string().optional(),
       tags: z.array(z.string()).optional(),
       changed_by: z.string().optional(),
+      var_schema: z.string().optional().describe("JSON string array of variable definitions (name, type, required, default, description, validation, render_format)"),
     },
   },
-  async ({ id, ...updates }) => {
+  async ({ id, var_schema, ...updates }) => {
     try {
-      const prompt = updatePrompt(id, updates)
+      const input: Record<string, unknown> = { ...updates }
+      if (var_schema) {
+        try {
+          const parsed: unknown = JSON.parse(var_schema)
+          if (!Array.isArray(parsed)) return err(`var_schema must be a JSON array`)
+          input["var_schema"] = parsed
+        } catch (e) {
+          return err(`Invalid var_schema: ${e instanceof Error ? e.message : String(e)}`)
+        }
+      }
+      const prompt = updatePrompt(id, input as Parameters<typeof updatePrompt>[1])
       return ok(promptToSaveResult(prompt, false))
     } catch (e) {
       return err(e instanceof Error ? e.message : String(e))
@@ -618,7 +670,7 @@ server.registerTool(
 server.registerTool(
   "prompts_validate_vars",
   {
-    description: "Validate which variables are required, optional, or extra for a template.",
+    description: "Validate which variables are required, optional, or extra for a template. Reads persisted variable metadata (typed defaults make variables optional).",
     inputSchema: {
       id: z.string(),
       vars: z.record(z.string()).optional().describe("Variables you plan to provide"),
@@ -627,7 +679,101 @@ server.registerTool(
   async ({ id, vars = {} }) => {
     const prompt = getPrompt(id)
     if (!prompt) return err(`Prompt not found: ${id}`)
-    return ok(validateVars(prompt.body, vars))
+    return ok(validateVars(prompt.body, vars, definitionsFromVariables(prompt.variables)))
+  }
+)
+
+// ── prompts_set_label ─────────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_set_label",
+  {
+    description: "Set an exact label (key=value) on a prompt. Keys and values are normalized to lowercase; setting the same pair twice is a no-op.",
+    inputSchema: {
+      id: z.string().describe("Prompt ID or slug"),
+      key: z.string(),
+      value: z.string(),
+    },
+  },
+  async ({ id, key, value }) => {
+    const prompt = getPrompt(id)
+    if (!prompt) return err(`Prompt not found: ${id}`)
+    return ok(setLabel(prompt.id, key, value))
+  }
+)
+
+// ── prompts_remove_label ──────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_remove_label",
+  {
+    description: "Remove all values for a label key on a prompt.",
+    inputSchema: {
+      id: z.string().describe("Prompt ID or slug"),
+      key: z.string(),
+    },
+  },
+  async ({ id, key }) => {
+    const prompt = getPrompt(id)
+    if (!prompt) return err(`Prompt not found: ${id}`)
+    removeLabel(prompt.id, key)
+    return ok({ removed: true, prompt_id: prompt.id, key })
+  }
+)
+
+// ── prompts_list_labels ───────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_list_labels",
+  {
+    description: "List exact labels for a prompt.",
+    inputSchema: {
+      id: z.string().describe("Prompt ID or slug"),
+    },
+  },
+  async ({ id }) => {
+    const prompt = getPrompt(id)
+    if (!prompt) return err(`Prompt not found: ${id}`)
+    return ok(listLabels(prompt.id))
+  }
+)
+
+// ── prompts_add_dependency ────────────────────────────────────────────────────
+server.registerTool(
+  "prompts_add_dependency",
+  {
+    description: "Add a template dependency: one parent (--extends, no multiple inheritance) or a partial. The dependency version is pinned at set time.",
+    inputSchema: {
+      id: z.string().describe("Prompt ID or slug"),
+      dependency: z.string().describe("Dependency prompt ID or slug"),
+      relation: z.enum(["parent", "partial"]).describe("'parent' composes this prompt's body after the parent; 'partial' makes the body available to {{>slug}} references"),
+      slot: z.string().optional().describe("Optional slot name for partials"),
+    },
+  },
+  async ({ id, dependency, relation, slot }) => {
+    const prompt = getPrompt(id)
+    if (!prompt) return err(`Prompt not found: ${id}`)
+    try {
+      const dep = relation === "parent"
+        ? setParent(prompt.id, dependency)
+        : setPartial(prompt.id, dependency, slot)
+      return ok(dep)
+    } catch (e) {
+      return err(e instanceof Error ? e.message : String(e))
+    }
+  }
+)
+
+// ── prompts_list_dependencies ─────────────────────────────────────────────────
+server.registerTool(
+  "prompts_list_dependencies",
+  {
+    description: "List a prompt's template dependencies (parent and partials) with pinned versions.",
+    inputSchema: {
+      id: z.string().describe("Prompt ID or slug"),
+    },
+  },
+  async ({ id }) => {
+    const prompt = getPrompt(id)
+    if (!prompt) return err(`Prompt not found: ${id}`)
+    return ok(listDependencies(prompt.id))
   }
 )
 

@@ -17,8 +17,29 @@ export { createProject, getProject, listProjects, deleteProject } from "./db/pro
 export { searchPrompts, searchPromptsSlim, findSimilar } from "./lib/search.js"
 
 // Templates
-export { extractVariables, extractVariableInfo, renderTemplate, validateVars } from "./lib/template.js"
-export type { VariableInfo } from "./lib/template.js"
+export { extractVariables, extractVariableInfo, renderTemplate, validateVars, getPath, definitionsFromVariables } from "./lib/template.js"
+export type { VariableInfo, VariableDefinition, PartialSource, RenderOptions } from "./lib/template.js"
+
+// Typed variable metadata
+export { syncPromptVariables, loadPromptVariables, loadPromptVariablesForPrompts } from "./db/variables.js"
+
+// Labels
+export { setLabel, removeLabel, listLabels, normalizeLabelKey, normalizeLabelValue } from "./db/labels.js"
+
+// Template dependencies (parents + partials) and dependency-aware rendering
+export {
+  setDependency,
+  setParent,
+  setPartial,
+  removeDependency,
+  listDependencies,
+  getParent,
+  composeBodyWithParent,
+  renderPromptTemplate,
+} from "./db/dependencies.js"
+
+// Render receipts
+export { recordRenderReceipt, getRenderReceipts, renderHash } from "./db/receipts.js"
 
 // Cross-app integration resolution
 export {
@@ -137,6 +158,14 @@ export type {
   Agent,
   Project,
   TemplateVariable,
+  VariableSchemaEntry,
+  TemplateValueType,
+  TemplateRenderFormat,
+  PromptLabel,
+  PromptDependency,
+  PromptDependencyRelation,
+  ResolvedSource,
+  RenderReceipt,
   PromptSource,
   CreatePromptInput,
   UpdatePromptInput,

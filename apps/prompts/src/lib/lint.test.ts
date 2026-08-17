@@ -107,3 +107,41 @@ describe("lintAll", () => {
     expect(results[0]!.issues.length).toBeGreaterThan(1)
   })
 })
+
+describe("undocumented-vars uses persisted descriptions", () => {
+  test("template with persisted descriptions raises no undocumented-vars warning", () => {
+    const p = makePrompt({
+      is_template: true,
+      variables: [
+        { name: "name", required: true, description: "Who to greet" },
+        { name: "age", required: false, description: "Age in years" },
+      ],
+    })
+    const issues = lintPrompt(p)
+    expect(issues.some((i) => i.rule === "undocumented-vars")).toBe(false)
+  })
+
+  test("template with an empty persisted description still warns", () => {
+    const p = makePrompt({
+      is_template: true,
+      variables: [{ name: "name", required: true, description: "" }],
+    })
+    const issues = lintPrompt(p)
+    expect(issues.some((i) => i.rule === "undocumented-vars" && i.message.includes("name"))).toBe(true)
+  })
+
+  test("createPrompt with var_schema descriptions keeps lint clean through the DB", async () => {
+    const { createPrompt } = await import("../db/prompts.js")
+    const { lintPrompt } = await import("./lint.js")
+    const { closeDatabase, resetDatabase } = await import("../db/database.js")
+    closeDatabase()
+    resetDatabase()
+    const p = createPrompt({
+      title: "Documented Template",
+      body: "Hello {{name}}",
+      var_schema: [{ name: "name", required: true, description: "Who to greet" }],
+    })
+    const issues = lintPrompt(p)
+    expect(issues.some((i) => i.rule === "undocumented-vars")).toBe(false)
+  })
+})

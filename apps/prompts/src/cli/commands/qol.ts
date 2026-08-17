@@ -2,7 +2,7 @@ import { Command } from "commander"
 import chalk from "chalk"
 import { getPrompt, updatePrompt } from "../../db/prompts.js"
 import { movePrompt } from "../../db/collections.js"
-import { extractVariableInfo, validateVars } from "../../lib/template.js"
+import { extractVariableInfo, validateVars, definitionsFromVariables } from "../../lib/template.js"
 import { lintPrompt } from "../../lib/lint.js"
 import { isJson, output, handleError, writeToClipboard } from "../utils.js"
 
@@ -182,7 +182,8 @@ export function registerQolCommands(program: Command): void {
               const eq = kv.indexOf("=")
               if (eq !== -1) vars[kv.slice(0, eq)] = kv.slice(eq + 1)
             }
-            result["vars"] = validateVars(p.body, vars)
+            // Read persisted metadata (kept in sync with body re-extraction).
+            result["vars"] = validateVars(p.body, vars, definitionsFromVariables(p.variables))
           }
           output(program, result)
           return
@@ -207,8 +208,10 @@ export function registerQolCommands(program: Command): void {
             const eq = kv.indexOf("=")
             if (eq !== -1) vars[kv.slice(0, eq)] = kv.slice(eq + 1)
           }
-          const varInfo = extractVariableInfo(p.body)
-          const { missing, extra, optional } = validateVars(p.body, vars)
+          const varInfo = p.variables.length > 0
+            ? p.variables.map((v) => ({ name: v.name, required: v.required, default: v.default ?? (v.typed_default !== undefined ? JSON.stringify(v.typed_default) : undefined) }))
+            : extractVariableInfo(p.body)
+          const { missing, extra, optional } = validateVars(p.body, vars, definitionsFromVariables(p.variables))
           console.log(chalk.bold("\n  Template variables:"))
           for (const v of varInfo) {
             const provided = v.name in vars

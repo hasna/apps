@@ -87,13 +87,13 @@ export function handleError(program: Command, e: unknown): never {
   process.exit(1)
 }
 
-export function parsePositiveInt(value: string | boolean | undefined, fallback: number): number {
+export function parsePositiveInt(value: string | boolean | string[] | undefined, fallback: number): number {
   if (typeof value !== "string") return fallback
   const parsed = parseInt(value, 10)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
-export function parseOffset(opts: Record<string, string | boolean | undefined>): number {
+export function parseOffset(opts: Record<string, string | boolean | string[] | undefined>): number {
   const value = opts["cursor"] ?? opts["offset"]
   return parsePositiveInt(value, 0)
 }
