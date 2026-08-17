@@ -45,32 +45,33 @@ afterEach(async () => {
 
 describe("MCP HTTP transport", () => {
   it("GET /health returns 200 with service name", async () => {
-    const port = randomPort();
     const dbPath = `/tmp/test-crawl-mcp-http-${Date.now()}.db`;
     dbPaths.push(dbPath);
     process.env["CRAWL_DB_PATH"] = dbPath;
     process.env["HASNA_CRAWL_DB_PATH"] = dbPath;
 
-    const server = await startHttpServer(buildServer, port);
+    // Port 0 lets the OS assign an ephemeral port: a pre-picked random port
+    // races every other process on the machine and intermittently fails the
+    // suite with EADDRINUSE. startHttpServer returns the bound port.
+    const server = await startHttpServer(buildServer, 0);
     servers.push(server);
 
-    const response = await fetch(`http://127.0.0.1:${port}/health`);
+    const response = await fetch(`http://127.0.0.1:${server.port}/health`);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ok", name: MCP_SERVER_NAME });
   });
 
   it("supports MCP initialize and tool call over streamable HTTP", async () => {
-    const port = randomPort();
     const dbPath = `/tmp/test-crawl-mcp-roundtrip-${Date.now()}.db`;
     dbPaths.push(dbPath);
     process.env["CRAWL_DB_PATH"] = dbPath;
     process.env["HASNA_CRAWL_DB_PATH"] = dbPath;
 
-    const server = await startHttpServer(buildServer, port);
+    const server = await startHttpServer(buildServer, 0);
     servers.push(server);
 
     const client = new Client({ name: "test-client", version: "1.0.0" });
-    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`)));
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${server.port}/mcp`)));
 
     const result = await client.callTool({ name: "get_stats", arguments: {} });
     expect(result.isError).not.toBe(true);
@@ -82,19 +83,18 @@ describe("MCP HTTP transport", () => {
   });
 
   it("serves three concurrent MCP clients from one process", async () => {
-    const port = randomPort();
     const dbPath = `/tmp/test-crawl-mcp-concurrent-${Date.now()}.db`;
     dbPaths.push(dbPath);
     process.env["CRAWL_DB_PATH"] = dbPath;
     process.env["HASNA_CRAWL_DB_PATH"] = dbPath;
 
-    const server = await startHttpServer(buildServer, port);
+    const server = await startHttpServer(buildServer, 0);
     servers.push(server);
 
     const clients = await Promise.all(
       Array.from({ length: 3 }, async () => {
         const client = new Client({ name: "test-client", version: "1.0.0" });
-        await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`)));
+        await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${server.port}/mcp`)));
         return client;
       }),
     );
@@ -133,7 +133,6 @@ describe("stdio mode", () => {
 
 describe("crawl-mcp --http entry", () => {
   it("starts HTTP mode on an ephemeral port", async () => {
-    const port = randomPort();
     const dbPath = `/tmp/test-crawl-mcp-entry-${Date.now()}.db`;
     dbPaths.push(dbPath);
 
@@ -141,7 +140,10 @@ describe("crawl-mcp --http entry", () => {
     env["CRAWL_DB_PATH"] = dbPath;
     env["HASNA_CRAWL_DB_PATH"] = dbPath;
     env["MCP_HTTP"] = "1";
-    env["MCP_HTTP_PORT"] = String(port);
+    // Port 0 asks the OS for a free ephemeral port; a pre-picked random port
+    // races every other process on the machine and fails the suite with
+    // EADDRINUSE. The bound port is parsed from the entry's stderr banner.
+    env["MCP_HTTP_PORT"] = "0";
 
     const proc = Bun.spawn([process.execPath, "run", "src/mcp/index.ts"], {
       cwd: repoRoot,
@@ -151,18 +153,50 @@ describe("crawl-mcp --http entry", () => {
     });
     processes.push(proc);
 
-    const deadline = Date.now() + 10_000;
+    // startCrawlServer writes "open-crawl server running on http://HOST:PORT"
+    // to stdout once the socket is bound. Read incrementally until the banner
+    // appears, then probe /health on the reported port.
+    const port = await new Promise<number | null>((resolve) => {
+      let buffered = "";
+      const timer = setTimeout(() => resolve(null), 15_000);
+      const pump = async () => {
+        const reader = proc.stdout.getReader();
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffered += new TextDecoder().decode(value);
+            const match = buffered.match(/server running on http:\/\/[^:]+:(\d+)/);
+            if (match) {
+              clearTimeout(timer);
+              resolve(Number(match[1]));
+              reader.cancel().catch(() => {});
+              return;
+            }
+          }
+        } catch {
+          // stream closed before the banner — fall through to resolve(null)
+        }
+        resolve(null);
+      };
+      pump().catch(() => resolve(null));
+    });
+
+    expect(port).not.toBeNull();
     let response: Response | undefined;
-    while (Date.now() < deadline) {
-      try {
-        response = await fetch(`http://127.0.0.1:${port}/health`);
-        if (response.ok) break;
-      } catch {
-        await Bun.sleep(100);
+    if (port !== null) {
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        try {
+          response = await fetch(`http://127.0.0.1:${port}/health`);
+          if (response.ok) break;
+        } catch {
+          await Bun.sleep(100);
+        }
       }
     }
 
     expect(response?.ok).toBe(true);
     expect(await response!.json()).toEqual({ status: "ok", name: MCP_SERVER_NAME });
-  });
+  }, 30_000);
 });

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { closeDb, getDataDir } from "./database";
+import { closeDb, getDataDir, getDb } from "./database";
 
 const originalHome = process.env["HOME"];
 const originalUserProfile = process.env["USERPROFILE"];
@@ -109,5 +109,19 @@ describe("package install", () => {
 
     expect(pkg.scripts?.postinstall ?? "").not.toContain(".hasna/crawl");
     expect(pkg.scripts?.postinstall ?? "").not.toContain(".crawl");
+  });
+});
+
+describe("connection concurrency", () => {
+  it("applies a busy timeout so cross-process lock contention waits instead of failing", async () => {
+    tempHome();
+    process.env["CRAWL_DB_PATH"] = join(tmpdir(), `open-crawl-busy-${Date.now()}.db`);
+    roots.push(process.env["CRAWL_DB_PATH"]);
+
+    const { getDb } = await import("./database");
+    const db = getDb();
+    const row = db.query("PRAGMA busy_timeout").get() as { timeout: number } | undefined;
+
+    expect(row?.timeout ?? 0).toBeGreaterThanOrEqual(5000);
   });
 });
