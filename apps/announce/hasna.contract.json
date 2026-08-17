@@ -1,0 +1,62 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "announce",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.10.6",
+  "description": "Release announcement composer, per-channel delivery ledger, scheduling, and engagement reporting for Hasna-coded apps. Local `announce` CLI and `announce-mcp` server over a user-owned SQLite campaign store; SDK exports are the embeddable surface. The package provisions no remote infrastructure.",
+  "hosting": [
+    "user-hosted"
+  ],
+  "bins": [
+    "announce",
+    "announce-mcp"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "announce-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "announce",
+      "authMode": "local-only"
+    },
+    {
+      "name": "announce-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "announce-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "announce-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "."
+    }
+  ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite"
+    ],
+    "envPrefix": "HASNA_ANNOUNCE_",
+    "aliasEnvPrefix": "ANNOUNCE_",
+    "sqlitePath": "~/.hasna/announce/announce.db"
+  },
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    },
+    "conformance": {
+      "waivedStorageEngines": [
+        {
+          "engine": "postgresql",
+          "reason": "Local-only CLI and stdio MCP package with no service bin, cloud placement, or managed SaaS runtime; campaign store is user-owned SQLite."
+        }
+      ]
+    }
+  }
+}

@@ -40,7 +40,7 @@ announce report <campaignId> --mock
 ## Delivery half
 
 - `composeAnnouncementCampaign` — build a campaign from a `hasna.release.v1`-shaped release record plus an optional changelog ref.
-- Renderers — `renderEmail` (mailery-compatible HTML + text), `renderTelegram` (open-bridge broadcast post), `renderConversations` (channel message), `renderSms` (short-form).
+- Renderers — `renderEmail` (mailery-compatible HTML + text), `renderTelegram` (bridge broadcast post), `renderConversations` (channel message), `renderSms` (short-form).
 - `ShortlinkAdapter` — mock adapter included; `@hasna/shortlinks` is used automatically when installed (optional peer dependency).
 - `DeliveryLedger` — JSONL ledger under `~/.hasna/announce` (override with `ANNOUNCE_DATA_DIR`), one entry per channel attempt, `simulated: true` for dry-runs.
 - `deliverCampaign` — scheduling + dry-run aware pipeline; emits `announcement.sent` through `@hasna/events` after real deliveries.
@@ -55,8 +55,8 @@ Clearly separated in `@hasna/announce/report`: `aggregateEngagement` consumes `M
 import { composeAnnouncementCampaign, deliverCampaign, DeliveryLedger, MockShortlinkAdapter } from "@hasna/announce";
 
 const campaign = composeAnnouncementCampaign({
-  release: { appId: "open-todos", package: "@hasna/todos", version: "0.11.92", gitSha: "a".repeat(7), publishedAt: new Date().toISOString(), publishPath: "ci", evidenceRefs: [{ id: "release-checks@0.11.92" }] },
-  changelogRef: { kind: "document", id: "open-todos@0.11.92", uri: "https://github.com/hasna/todos/blob/main/CHANGELOG.md" },
+  release: { appId: "todos", package: "@hasna/todos", version: "0.11.92", gitSha: "a".repeat(7), publishedAt: new Date().toISOString(), publishPath: "ci", evidenceRefs: [{ id: "release-checks@0.11.92" }] },
+  changelogRef: { kind: "document", id: "todos@0.11.92", uri: "https://github.com/hasna/todos/blob/main/CHANGELOG.md" },
   audience: { audienceId: "developers", name: "Developers" },
   channels: ["email", "telegram"],
 });

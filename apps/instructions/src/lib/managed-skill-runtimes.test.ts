@@ -380,4 +380,32 @@ describe("managed inbox skill runtime", () => {
     });
     expect(readFileSync(externalPath, "utf8")).toBe("external content\n");
   });
+
+  test("does not follow a symlinked runtime ancestor directory", async () => {
+    const root = makeRoot("symlink-ancestor");
+    const homeDir = join(root, "home");
+    const externalDir = join(root, "external-runtime");
+    mkdirSync(externalDir, { recursive: true });
+    const skillDir = join(externalDir, "skills", "inbox");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "stale inbox contract\n");
+    mkdirSync(join(homeDir, ".codex"), { recursive: true });
+    symlinkSync(externalDir, join(homeDir, ".claude"));
+    const assetPath = writeCanonicalAsset(root);
+    const conversationsCommand = writeConversationsRuntime(root);
+
+    const result = await reconcileManagedSkillRuntimes({
+      homeDir,
+      assetPath,
+      conversationsCommand,
+    });
+
+    expect(result).toMatchObject({ changed: 0, failed: 1 });
+    expect(result.runtimes[0]).toMatchObject({ action: "failed" });
+    expect(result.runtimes[0]).toMatchObject({
+      healthy: false,
+      reason: expect.stringContaining("symlink ancestor"),
+    });
+    expect(readFileSync(join(skillDir, "SKILL.md"), "utf8")).toBe("stale inbox contract\n");
+  });
 });

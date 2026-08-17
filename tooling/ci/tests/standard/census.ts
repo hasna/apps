@@ -298,7 +298,6 @@ export const CLI_EXCEPTIONS: Array<{ member: string; reason: string; task: strin
  * when #102 added its manifest on 2026-08-14) — each recorded with the
  * manifest lane pointer (aggregate task; see README). */
 export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string }> = [
-  { member: "announce", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "brains", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "browser", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "changelog", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
@@ -308,8 +307,6 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "crawl", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "evals", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "markdown", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "orgs", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "pixels", reason: "No hasna.contract.json; manifest lane (todos 41208cbe). Imported by #69." },
   { member: "releases", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "repos", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "router", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
@@ -319,9 +316,7 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "statusline", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "styles", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "tai", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "tenants", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "tickets", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "ui", reason: "No hasna.contract.json; legacy mirror member; manifest lane (todos 41208cbe)." },
   { member: "connectors", reason: "No hasna.contract.json; imported by #80 after the original census; manifest lane (todos 41208cbe)." },
   { member: "terminal", reason: "No hasna.contract.json; imported by #88 after the original census; manifest lane (todos 41208cbe)." },
 ];
@@ -436,6 +431,16 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos d2c6d20f-7c80-4b84-ae35-a92ce866bc14 (contracts task — monitor)",
   },
   {
+    member: "orgs",
+    cause: "surface_matrix: missing supported surface declarations or eligible waivers: api, sdk, mcp; published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Imported by the delta lane from the org-side manifest (kitVersion 0.10.6, no pinned dep); alignment owned by the manifest lane.",
+    task: "todos 41208cbe (manifest lane — align imported orgs manifest)",
+  },
+  {
+    member: "pixels",
+    cause: "surface_matrix: missing supported surface declarations or eligible waivers: api, sdk, mcp; published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Imported by the delta lane from the org-side manifest (kitVersion 0.10.6, no pinned dep); alignment owned by the manifest lane.",
+    task: "todos 41208cbe (manifest lane — align imported pixels manifest)",
+  },
+  {
     member: "prompts",
     cause: "surface_matrix (api/sdk missing or unwaived) and service_api_topology (a supported API surface is required). (The earlier self_host_artifact and storage_capabilities causes no longer fire at main.)",
     task: "todos eb3f331d (contracts task — prompts)",
@@ -466,9 +471,19 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos 2aceeb94-7077-4479-b61a-0a7b33b856f7 (contracts task — shield)",
   },
   {
+    member: "tenants",
+    cause: "manifest_valid at pinned 0.4.2 (mode-era validator vs backend-era manifest, kitVersion 0.10.6): storage.mode Required; storage Unrecognized key(s) in object: 'backend','engines'; <root> Unrecognized key(s) in object: 'hosting','serviceSurfaces'. Manifest imported with the org delta (e74cb94) from hasna/tenants.",
+    task: "todos 03671218-84ac-4859-9b8d-ff6cedeef82a (contracts task — tenants)",
+  },
+  {
     member: "todos",
     cause: "manifest_valid: pre-backend-schema-era manifest (kitVersion 0.8.4) validated at pinned 0.5.2 — storage.mode Invalid enum value. Expected 'local' | 'cloud', received 'sqlite'; storage Unrecognized key(s) in object: 'engines', 'pgTestGate'; serviceSurfaces.*.deploymentModes Required; serviceSurfaces.* Unrecognized key(s) in object: 'kind'/'exportSubpath'/'generatedFrom'; <root> Unrecognized key(s) in object: 'hosting'. Imported by #105 after the original census.",
     task: "todos 0ad82b16-5a7c-43c3-95b9-db2dc64f7ffa (contracts task — todos)",
+  },
+  {
+    member: "ui",
+    cause: "surface_matrix: manifest (imported with the org delta c594c9a from hasna/ui) declares only the cli surface — api/sdk/mcp missing without waivers; published_artifact_gate: metadata.release.artifactScan.script is required for a published package. Validated at kitVersion 0.10.6 (no pinned dep).",
+    task: "todos 3f3cc597-74d5-4eeb-ae17-c56cd8069a3a (contracts task — ui)",
   },
 ];
 
@@ -483,6 +498,7 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "instructions", kitVersion: "0.10.6", pinned: "0.4.2" },
   { member: "logs", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "shortlinks", kitVersion: "0.4.2", pinned: "0.5.2" },
+  { member: "tenants", kitVersion: "0.10.6", pinned: "0.4.2" },
   { member: "todos", kitVersion: "0.8.4", pinned: "0.5.2" },
 ];
 
@@ -499,9 +515,12 @@ export const NO_VALIDATOR_PIN: string[] = [
   "guardrails",
   "hooks",
   "monitor",
+  "orgs",
+  "pixels",
   "sheets",
   "slides",
   "tables",
+  "ui",
 ];
 
 export const CONTRACTS_EXCEPTION_MEMBERS = new Set(CONTRACTS_EXCEPTIONS.map((e) => e.member));

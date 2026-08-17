@@ -130,7 +130,7 @@ Set `runtime.mode` to `production-cloud` when running the gateway behind a cloud
 
 Production cloud mode does not create DNS, ACM, API Gateway, secrets, provider keys, or cloud infrastructure. Those deployment steps require an operator-owned deployment workflow outside this package.
 
-The companion `open-router` repo is currently documented as the future extraction point for prompt-aware routing and eval harnesses. The deterministic routing implementation lives in this package today because it is tightly coupled to gateway policy, provider config, budgets, attempts, and ledger metadata.
+The companion `router` repo is currently documented as the future extraction point for prompt-aware routing and eval harnesses. The deterministic routing implementation lives in this package today because it is tightly coupled to gateway policy, provider config, budgets, attempts, and ledger metadata.
 
 ## Documentation
 

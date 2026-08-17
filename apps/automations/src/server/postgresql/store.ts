@@ -31,7 +31,9 @@ import type { ActionQueueApprovalDecision, ActionQueueApprovalGate } from "../..
 import { isTerminalActionQueueStatus } from "../../lib/action-queue.js";
 import {
   CLAIM_CANDIDATE_BUDGET,
+  automationSpecForPersistence,
   compareClaimCandidates,
+  jsonValuesEqual,
   normalizeWebhookRequestToEvent,
   validateAutomationSpec,
   type CreateWebhookRouteInput,
@@ -111,6 +113,24 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
       [spec.id, json(this.sql, { ...spec, status }), status, now],
     );
     return this.requireAutomation(spec.id);
+  }
+
+  async ensureAutomation(spec: AutomationSpec): Promise<AutomationRecord> {
+    validateAutomationSpec(spec);
+    const status = spec.status ?? "active";
+    const persistedSpec = automationSpecForPersistence(spec, status);
+    const now = new Date();
+    await this.sql.unsafe(
+      `INSERT INTO automations (id,spec_json,status,created_at,updated_at)
+       VALUES ($1,$2::jsonb,$3,$4,$4)
+       ON CONFLICT (id) DO NOTHING`,
+      [spec.id, json(this.sql, persistedSpec), status, now],
+    );
+    const installed = await this.requireAutomation(spec.id);
+    if (!jsonValuesEqual(installed.spec as unknown as JsonValue, persistedSpec as unknown as JsonValue)) {
+      throw new Error(`installed automation ${spec.id} has different content; immutable template installs cannot overwrite it`);
+    }
+    return installed;
   }
 
   async listAutomations(options: ListPageOptions = {}): Promise<AutomationRecord[]> {

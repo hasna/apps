@@ -21,6 +21,7 @@ import { sessionRenderOwnsPath } from "./session-render-ownership.js";
 import { isSecretVarName, redactFormatForTarget, scanSecrets } from "./redact.js";
 import { parseTemplateVars } from "./template.js";
 import { applyTransform } from "./transforms.js";
+import { isCursorGlobalAuthorityPath, stampCursorGlobalAuthorityMarker } from "./cursor-authority.js";
 
 export function getConfigHome(): string {
   return process.env["CONFIGS_HOME"] || process.env["HOME"] || homedir();
@@ -142,10 +143,20 @@ async function writeConfigResult(
     );
   }
   const path = expandPath(renderedTargetPath);
+  // The Cursor fixed global authority guard (cursor-authority.ts) accepts only
+  // files carrying its managed marker with a valid payload hash. Every write
+  // this package makes to that path must therefore carry the stamp, or the
+  // guard classifies the package's own output as an unmanaged foreign file
+  // (todos 1a3e8689). Stamping happens here, at the single funnel every apply
+  // caller passes through, and BEFORE the changed-detection so a re-apply of an
+  // already-stamped file is a no-op.
+  const renderedForTarget = isCursorGlobalAuthorityPath(path)
+    ? stampCursorGlobalAuthorityMarker(renderedContent)
+    : renderedContent;
   const previousContent = existsSync(path)
     ? readFileSync(path, "utf-8")
     : null;
-  const changed = previousContent !== renderedContent;
+  const changed = previousContent !== renderedForTarget;
 
   if (!opts.dryRun) {
     const dir = dirname(path);
@@ -158,14 +169,14 @@ async function writeConfigResult(
       await store.createSnapshot(config.id, previousContent, config.version);
     }
 
-    writeFileSync(path, renderedContent, "utf-8");
+    writeFileSync(path, renderedForTarget, "utf-8");
   }
 
   return {
     config_id: config.id,
     path,
     previous_content: previousContent,
-    new_content: renderedContent,
+    new_content: renderedForTarget,
     dry_run: opts.dryRun ?? false,
     changed,
     primary_changed: changed,
