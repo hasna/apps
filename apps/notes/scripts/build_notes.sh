@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Build "PersonalNotes" — the WKWebView macOS shell hosting the web UI — and assemble a
+# Build "HasnaNotes" — the WKWebView macOS shell hosting the web UI — and assemble a
 # launchable .app bundle. Run ON a macOS 26 Mac (Command Line Tools, no Xcode).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-TARGET_NAME="PersonalNotesApp"
-APP_NAME="PersonalNotes"
-EXEC_NAME="PersonalNotes"
+TARGET_NAME="HasnaNotesApp"
+APP_NAME="HasnaNotes"
+EXEC_NAME="HasnaNotes"
 BUNDLE_ID="com.hasna.notes"
 DIST="$REPO_ROOT/dist"
 
@@ -139,7 +139,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
-    <key>NSMicrophoneUsageDescription</key><string>PersonalNotes uses the microphone for voice notes.</string>
+    <key>NSMicrophoneUsageDescription</key><string>Hasna Notes uses the microphone for voice notes.</string>
 </dict>
 </plist>
 PLIST

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@hasna/personalnotes",
+      "name": "@hasna/notes",
       "dependencies": {
         "@hasna/events": "0.1.15",
         "hono": "^4.6.0",

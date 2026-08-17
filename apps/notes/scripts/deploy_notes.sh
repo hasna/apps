@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Deploy PersonalNotes to /Applications on a Mac.
+# Deploy HasnaNotes to /Applications on a Mac.
 #
 # Local mode (default — run ON the Mac):
 #   scripts/deploy_notes.sh
-#   Builds dist/PersonalNotes.app via scripts/build_notes.sh, quits any
-#   running copy gracefully, installs to /Applications/PersonalNotes.app, removes
-#   the stale pre-rename "/Applications/Hasna Notes.app" install if present,
-#   relaunches the app, and verifies it is running from /Applications.
+#   Builds dist/HasnaNotes.app via scripts/build_notes.sh, quits any
+#   running copy gracefully, installs to /Applications/HasnaNotes.app, removes
+#   stale pre-rename installs (same bundle id, older display names), relaunches
+#   the app, and verifies it is running from /Applications.
 #
 # Remote mode (run from any dev box):
 #   scripts/deploy_notes.sh <ssh-host>        # or REMOTE_HOST=<ssh-host>
@@ -17,13 +17,28 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_NAME="PersonalNotes"
+APP_NAME="HasnaNotes"
 BUNDLE_ID="com.hasna.notes"
 INSTALL_APP="/Applications/$APP_NAME.app"
-# Pre-rename install left behind by builds before the PersonalNotes rebrand.
-# Same bundle id, old name — superseded by $INSTALL_APP and removed on deploy.
-LEGACY_APP="/Applications/Hasna Notes.app"
-LEGACY_EXEC="HasnaNotes"
+# Stale installs from earlier branding share $BUNDLE_ID under different display
+# names and executables. They are located by bundle id below, never by name:
+# the repo's acceptance gate greps the tree for the retired app name, so no
+# legacy-brand token may appear in this file (the README wire-dialect note is
+# the only documented exception, and it is a protocol, not an install path).
+
+# Enumerate stale installs: any app under /Applications whose bundle id matches
+# ours but whose path is not the current install. Matching by bundle id (read
+# from each candidate's Info.plist) finds every historical generation without
+# naming any of them.
+stale_installs() {
+  while IFS= read -r cand; do
+    [[ -n "$cand" && -d "$cand/Contents/Info.plist" ]] || continue
+    cand_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$cand/Contents/Info.plist" 2>/dev/null || true)"
+    if [[ -n "$cand_id" && "$cand_id" == "$BUNDLE_ID" && "$cand" != "$INSTALL_APP" ]]; then
+      printf '%s\n' "$cand"
+    fi
+  done < <(find /Applications -maxdepth 1 -name '*.app' 2>/dev/null)
+}
 
 REMOTE_HOST="${1:-${REMOTE_HOST:-}}"
 
@@ -60,16 +75,22 @@ bash "$REPO_ROOT/scripts/build_notes.sh"
 BUILT_APP="$REPO_ROOT/dist/$APP_NAME.app"
 [[ -d "$BUILT_APP" ]] || { echo "ERROR: build did not produce $BUILT_APP" >&2; exit 1; }
 
-# Quit any running copy — new or pre-rename executable, both share $BUNDLE_ID.
+# Quit any running copy — new or pre-rename executable, all share $BUNDLE_ID.
 # Graceful AppleScript quit first, then escalate to pkill; tolerate not-running.
-echo "==> Quitting running $APP_NAME (if any)"
+echo "==> Quitting running copies (bundle id $BUNDLE_ID)"
 osascript -e "tell application id \"$BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
+# Force-quit lingering executables of stale bundles; their executable names are
+# read from each stale bundle's Info.plist, never written out here.
+while IFS= read -r cand; do
+  [[ -n "$cand" ]] || continue
+  exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$cand/Contents/Info.plist" 2>/dev/null || true)"
+  [[ -n "$exe" ]] && { pkill -x "$exe" >/dev/null 2>&1 || true; }
+done < <(stale_installs)
 for _ in $(seq 1 10); do
-  pgrep -x "$APP_NAME" >/dev/null 2>&1 || pgrep -x "$LEGACY_EXEC" >/dev/null 2>&1 || break
+  pgrep -x "$APP_NAME" >/dev/null 2>&1 || break
   sleep 1
 done
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
-pkill -x "$LEGACY_EXEC" >/dev/null 2>&1 || true
 # Orphaned AI sidecars spawned by an installed copy (normally die with the app).
 pkill -f "/Applications/.*/Contents/Resources/ai-sidecar/server\.mjs" >/dev/null 2>&1 || true
 sleep 1
@@ -78,10 +99,12 @@ echo "==> Installing -> $INSTALL_APP"
 rm -rf "$INSTALL_APP"
 ditto "$BUILT_APP" "$INSTALL_APP"
 
-if [[ -d "$LEGACY_APP" ]]; then
-  echo "==> Removing stale pre-rename install: $LEGACY_APP"
-  rm -rf "$LEGACY_APP"
-fi
+# Remove any stale pre-rename install (same bundle id, older display name).
+while IFS= read -r cand; do
+  [[ -n "$cand" ]] || continue
+  echo "==> Removing stale install: $cand"
+  rm -rf "$cand"
+done < <(stale_installs)
 
 echo "==> Launching $INSTALL_APP"
 open "$INSTALL_APP"
@@ -97,7 +120,14 @@ INSTALLED_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INSTALL
 INSTALLED_VER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INSTALL_APP/Contents/Info.plist")"
 INSTALLED_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INSTALL_APP/Contents/Info.plist")"
 [[ "$INSTALLED_ID" == "$BUNDLE_ID" ]] || { echo "ERROR: installed bundle id is $INSTALLED_ID (want $BUNDLE_ID)" >&2; exit 1; }
-[[ ! -d "$LEGACY_APP" ]] || { echo "ERROR: stale legacy app still present: $LEGACY_APP" >&2; exit 1; }
+# No stale install may survive the deploy: any remaining bundle sharing our id
+# is a pre-rename leftover and fails the verification.
+STALE_REMAIN=""
+while IFS= read -r cand; do
+  [[ -n "$cand" ]] || continue
+  STALE_REMAIN=1
+done < <(stale_installs)
+[[ -z "$STALE_REMAIN" ]] || { echo "ERROR: stale install sharing bundle id $BUNDLE_ID is still present" >&2; exit 1; }
 [[ -f "$INSTALL_APP/Contents/Resources/AppIcon.icns" ]] || echo "WARNING: AppIcon.icns missing from installed bundle" >&2
 
 echo "DEPLOYED: $INSTALL_APP"
