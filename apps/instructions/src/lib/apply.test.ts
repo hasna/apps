@@ -7,6 +7,11 @@ import { createConfig } from "../db/configs";
 import { applyConfig, applyConfigs, applyConfigsWithReport } from "./apply";
 import { ANTIGRAVITY_RULE_FILE_CHAR_LIMIT } from "./session-render";
 import { detectMachineContext, machineContextToVariables, resolveProfileVariables } from "./machine";
+import {
+  CURSOR_GLOBAL_AUTHORITY_MANAGED_MARKER,
+  detectCursorAuthorityConflicts,
+  observeCursorGlobalAuthorityAtPath,
+} from "./cursor-authority";
 import type { ConfigAgent } from "../types";
 import { tempRootPath } from "./test-temp-root";
 
@@ -632,5 +637,72 @@ describe("apply renders machine variables even when the caller supplies none", (
     expect(existsSync(join(tmpDir, "{{HOME_DIR}}"))).toBe(false);
     expect(existsSync(join(process.cwd(), "{{HOME_DIR}}"))).toBe(false);
     expect(readFileSync(join(tmpDir, "nested", "templated.txt"), "utf-8")).toBe("body");
+  });
+});
+
+describe("apply stamps the Cursor fixed global authority marker", () => {
+  // Regression for todos 1a3e8689: `instructions template render hasna-global.mdc
+  // --apply` (and `apply <id>`) wrote ~/.cursor/rules/hasna-global.mdc without the
+  // managed marker, so the 0.4.30+ cursor authority guard classified the package's
+  // OWN output as unmanaged and blocked every cursor session render. The writer and
+  // the guard must agree: anything this package writes to the authority path carries
+  // the marker, and the guard accepts a marker with a valid payload hash.
+  test("applying a config to the authority path writes the managed marker", async () => {
+    const db = getDatabase();
+    const previousHome = process.env["HOME"];
+    process.env["HOME"] = tmpDir;
+    try {
+      const authority = join(tmpDir, ".cursor", "rules", "hasna-global.mdc");
+      const c = createConfig({
+        name: "hasna-global-mdc",
+        category: "rules",
+        agent: "global",
+        content: "---\nalwaysApply: true\n---\n# Hasna global rules (Cursor)\n",
+        target_path: authority,
+      }, db);
+
+      const report = await applyConfigsWithReport([c], { store: new LocalConfigStore(db) });
+      expect(report.failures).toEqual([]);
+
+      const written = readFileSync(authority, "utf-8");
+      // Cursor requires frontmatter at byte 0, so the marker must land AFTER
+      // the closing `---` (P1 on PR #108): a marker in front of `---` makes
+      // gray-matter parse data:{} and Cursor stops loading the rule.
+      expect(written.startsWith("---\nalwaysApply: true\n---\n")).toBe(true);
+      expect(written).toContain(`<!-- ${CURSOR_GLOBAL_AUTHORITY_MANAGED_MARKER} hash=sha256:`);
+      expect(written).toContain("# Hasna global rules (Cursor)");
+
+      const observation = observeCursorGlobalAuthorityAtPath(authority);
+      expect(observation.status).toBe("managed");
+      expect(detectCursorAuthorityConflicts(observation)).toEqual([]);
+    } finally {
+      process.env["HOME"] = previousHome;
+    }
+  });
+
+  test("re-applying the stamped authority is a no-op", async () => {
+    const db = getDatabase();
+    const previousHome = process.env["HOME"];
+    process.env["HOME"] = tmpDir;
+    try {
+      const authority = join(tmpDir, ".cursor", "rules", "hasna-global.mdc");
+      const c = createConfig({
+        name: "hasna-global-mdc",
+        category: "rules",
+        agent: "global",
+        content: "---\nalwaysApply: true\n---\n# Hasna global rules (Cursor)\n",
+        target_path: authority,
+      }, db);
+
+      await applyConfigsWithReport([c], { store: new LocalConfigStore(db) });
+      const first = readFileSync(authority, "utf-8");
+      const again = await applyConfigsWithReport([c], { store: new LocalConfigStore(db) });
+
+      expect(readFileSync(authority, "utf-8")).toBe(first);
+      expect(again.results[0]?.changed).toBe(false);
+      expect(observeCursorGlobalAuthorityAtPath(authority).status).toBe("managed");
+    } finally {
+      process.env["HOME"] = previousHome;
+    }
   });
 });
