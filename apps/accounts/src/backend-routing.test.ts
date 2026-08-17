@@ -164,7 +164,9 @@ test("adapter: renders base URL, model (with suffix), subagent model, auto-compa
   expect(adapter.env.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
   expect(adapter.env.ANTHROPIC_MODEL).toBe("deepseek-v4-pro");
   expect(adapter.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-v4-pro");
-  expect(adapter.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("true");
+  // Claude Code accepts a plain token count only; the numeric value must be
+  // what ships (the literal "true" parses to NaN and is ignored).
+  expect(adapter.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("786432");
   expect(adapter.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("deepseek-v4-pro");
   expect(adapter.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("deepseek-v4-flash[1m]");
   expect(adapter.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-v4-flash[1m]");

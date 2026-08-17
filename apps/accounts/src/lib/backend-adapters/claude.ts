@@ -72,8 +72,11 @@ export function claudeBackendAdapter(backend: BackendRoute, modelId?: string): B
     // Sub-agents inherit the same backend route.
     CLAUDE_CODE_SUBAGENT_MODEL: wireModel,
     // The harness knows the window; compact automatically instead of erroring
-    // when the rendered `[1m]` window is exhausted.
-    CLAUDE_CODE_AUTO_COMPACT_WINDOW: "true",
+    // when the rendered `[1m]` window is exhausted. Claude Code accepts a plain
+    // token count only — the literal "true" parses to NaN and is silently
+    // ignored. 786432 (768K) is the value proven by the verified working
+    // hotfixes env; it compacts before the rendered window edge.
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW: "786432",
   };
   for (const { alias, envVar } of CLAUDE_ALIAS_ENV_VARS) {
     const aliasModelId = backend.defaults?.aliases?.[alias];

@@ -1000,9 +1000,14 @@ addConfigsOptions(program
           // launch still meets. Todos OPE15-00059.
           assertGovernedInstructionHome(result.profile, result.tool, configsPrelaunchOptions(opts));
           const [bin, ...launchArgs] = result.command;
+          const launchProcessEnv = providerLaunchEnv(process.env, result.env);
+          // A backend-bound profile's command is the launch-plan wrapper; the
+          // adapter-owned inherited-env conflicts (e.g. ANTHROPIC_API_KEY) must
+          // be removed before spawn, exactly as runLaunchPlan does.
+          for (const key of result.unsetEnv ?? []) delete launchProcessEnv[key];
           const res = spawnSync(bin!, launchArgs, {
             stdio: "inherit",
-            env: providerLaunchEnv(process.env, result.env),
+            env: launchProcessEnv,
           });
           if (res.error) {
             die(
@@ -2180,6 +2185,9 @@ addConfigsOptions(program
           process.cwd(),
         );
         process.exit(code);
+      }
+      if (opts.backend) {
+        die("--backend requires --headless (or use accounts launch)");
       }
       console.error(chalk.green(`✓ accounts supervisor running ${publicToolLabel(plan.tool.id)} as ${chalk.bold(plan.profile.name)}`));
       console.error(chalk.dim(`  control: accounts supervisor status ${plan.tool.id}`));
