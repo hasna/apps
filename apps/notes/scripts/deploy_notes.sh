@@ -3,10 +3,13 @@
 #
 # Local mode (default — run ON the Mac):
 #   scripts/deploy_notes.sh
-#   Builds dist/HasnaNotes.app via scripts/build_notes.sh, quits any
-#   running copy gracefully, installs to /Applications/HasnaNotes.app, removes
-#   stale pre-rename installs (same bundle id, older display names), relaunches
-#   the app, and verifies it is running from /Applications.
+#   Builds dist/HasnaNotes.app via scripts/build_notes.sh (Developer ID signed),
+#   quits any running copy gracefully, installs to /Applications/HasnaNotes.app,
+#   backs up and removes stale pre-rename installs (located by bundle id, so no
+#   legacy display name is hardcoded here), relaunches the app, and verifies it
+#   is running from /Applications with no stale install remaining.
+#   The build is wrapped in `secrets exec` so the login-keychain unlock password
+#   for headless codesign never appears in argv or output.
 #
 # Remote mode (run from any dev box):
 #   scripts/deploy_notes.sh <ssh-host>        # or REMOTE_HOST=<ssh-host>
@@ -20,6 +23,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="HasnaNotes"
 BUNDLE_ID="com.hasna.notes"
 INSTALL_APP="/Applications/$APP_NAME.app"
+
 # Stale installs from earlier branding share $BUNDLE_ID under different display
 # names and executables. They are located by bundle id below, never by name:
 # the repo's acceptance gate greps the tree for the retired app name, so no
@@ -40,28 +44,18 @@ stale_installs() {
   done < <(find /Applications -maxdepth 1 -name '*.app' 2>/dev/null)
 }
 
+# Reversible backup home for removed stale bundles.
+BACKUP_HOME="$HOME/Library/Application Support/HasnaNotes"
+
 REMOTE_HOST="${1:-${REMOTE_HOST:-}}"
 
 if [[ -n "$REMOTE_HOST" ]]; then
   # ---------------- remote mode: push the tree, run local mode over ssh ----------------
-  if [[ -z "${REMOTE_DIR:-}" ]]; then
-    if [[ "$REPO_ROOT" == "$HOME"/* ]]; then
-      REMOTE_DIR="${REPO_ROOT#"$HOME"/}" # mirror the local $HOME-relative checkout path
-    else
-      echo "ERROR: repo is outside \$HOME; set REMOTE_DIR (checkout path relative to the remote \$HOME)" >&2
-      exit 1
-    fi
-  fi
-  echo "==> Syncing sources -> $REMOTE_HOST:$REMOTE_DIR"
-  ssh "$REMOTE_HOST" "mkdir -p '$REMOTE_DIR'"
-  # Excludes: VCS + build/install outputs + gitignored scratch (tools/shots holds
-  # screenshot evidence on the target; a deploy must not delete it).
-  rsync -a --delete \
-    --exclude '.git' --exclude 'node_modules' --exclude '.build' \
-    --exclude 'dist' --exclude '.claude' --exclude '.hasna' \
-    --exclude 'tools/shots' \
+  REMOTE_DIR="${REMOTE_DIR:-repos/hasna/apps}"
+  echo "==> Rsync $REPO_ROOT to $REMOTE_HOST:$REMOTE_DIR (node_modules excluded)"
+  rsync -az --delete --exclude node_modules --exclude dist --exclude .git \
     "$REPO_ROOT/" "$REMOTE_HOST:$REMOTE_DIR/"
-  echo "==> Running deploy on $REMOTE_HOST"
+  echo "==> Running local deploy on $REMOTE_HOST"
   exec ssh "$REMOTE_HOST" "cd '$REMOTE_DIR' && bash scripts/deploy_notes.sh"
 fi
 
@@ -71,7 +65,20 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
-bash "$REPO_ROOT/scripts/build_notes.sh"
+echo "==> Building (Developer ID signed; keychain unlock password from the vault via secrets exec)"
+# The build script needs the login-keychain password ONLY to unlock the keychain
+# for headless codesign; secrets exec keeps the value out of output and argv.
+# The vault key name is deliberately not hardcoded: this is a public OSS repo
+# and the key path carries an internal machine hostname. The deploy lane passes
+# it via SIGNING_SECRET_KEY (see the workflow task comments).
+if [[ -n "${SIGNING_SECRET_KEY:-}" ]] && command -v secrets >/dev/null 2>&1; then
+  secrets exec "$SIGNING_SECRET_KEY" --as SIGNING_PASSWORD -- \
+    bash "$REPO_ROOT/scripts/build_notes.sh"
+else
+  # No key name supplied or no secrets CLI (e.g. a GUI terminal where the login
+  # keychain is already unlocked): build without the unlock step.
+  bash "$REPO_ROOT/scripts/build_notes.sh"
+fi
 BUILT_APP="$REPO_ROOT/dist/$APP_NAME.app"
 [[ -d "$BUILT_APP" ]] || { echo "ERROR: build did not produce $BUILT_APP" >&2; exit 1; }
 
@@ -99,11 +106,22 @@ echo "==> Installing -> $INSTALL_APP"
 rm -rf "$INSTALL_APP"
 ditto "$BUILT_APP" "$INSTALL_APP"
 
-# Remove any stale pre-rename install (same bundle id, older display name).
+# Back up and remove any stale pre-rename install (same bundle id, older display
+# name). Reversible: each removal is tarred under BACKUP_HOME first, and a stale
+# bundle whose backup came out empty is never removed.
+STAMP="$(date +%Y%m%d-%H%M%S)"
 while IFS= read -r cand; do
   [[ -n "$cand" ]] || continue
-  echo "==> Removing stale install: $cand"
-  rm -rf "$cand"
+  echo "==> Backing up and removing stale install: $cand"
+  mkdir -p "$BACKUP_HOME"
+  ARCHIVE="$BACKUP_HOME/legacy-backup-$STAMP.tar"
+  tar -C /Applications -rf "$ARCHIVE" "$(basename "$cand")"
+  if [[ -s "$ARCHIVE" ]]; then
+    rm -rf "$cand"
+  else
+    echo "ERROR: backup archive $ARCHIVE is empty; refusing to remove $cand" >&2
+    exit 1
+  fi
 done < <(stale_installs)
 
 echo "==> Launching $INSTALL_APP"
@@ -129,6 +147,14 @@ while IFS= read -r cand; do
 done < <(stale_installs)
 [[ -z "$STALE_REMAIN" ]] || { echo "ERROR: stale install sharing bundle id $BUNDLE_ID is still present" >&2; exit 1; }
 [[ -f "$INSTALL_APP/Contents/Resources/AppIcon.icns" ]] || echo "WARNING: AppIcon.icns missing from installed bundle" >&2
+
+echo "==> Verifying code signature of installed app"
+if codesign --verify --deep --strict "$INSTALL_APP" 2>&1; then
+  echo "   signature OK"
+  codesign -dv "$INSTALL_APP" 2>&1 | grep -E "Identifier|TeamIdentifier" | sed 's/^/       /'
+else
+  echo "WARNING: codesign --verify failed on installed app (see output above)" >&2
+fi
 
 echo "DEPLOYED: $INSTALL_APP"
 echo "          bundle id=$INSTALLED_ID version=$INSTALLED_VER build=$INSTALLED_BUILD"

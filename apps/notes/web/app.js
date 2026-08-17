@@ -97,7 +97,6 @@
     const token = ai().token;
     if (token) {
       headers['X-Hasna-Notes-Token'] = token;
-      headers['X-Hasna-Notes-Token'] = token; // legacy header; removed next release
     }
     return headers;
   }
@@ -4350,13 +4349,6 @@
       transcriptBody: transcriptToNoteBody,
     },
   };
-
-  // DEPRECATED (kept for one release): the bridge global was renamed from
-  // the pre-rename global to window.HasnaNotes. This alias keeps old hosts and
-  // integrations working; remove it next release. See docs/ui-contracts.md.
-  // The old name is assembled from fragments so the case-insensitive rename
-  // gate never matches this compatibility alias.
-  window['Personal' + 'Notes'] = window.HasnaNotes;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init, { once: true });
