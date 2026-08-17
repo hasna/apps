@@ -2,6 +2,36 @@
 
 All notable changes to `@hasna/bridge` are documented here.
 
+## 0.7.1
+
+### Fixed
+- **Daemon stop honors a config-derived grace window.** `daemon stop` (and
+  `serve` shutdown) no longer assume a hard-coded 5s: the grace is derived from
+  the configured agent timeouts and channel poll timeouts — one in-flight agent
+  turn plus one long poll, plus a settle margin — clamped between 5s and
+  10 minutes, so a busy daemon is not cut short and a misconfigured budget
+  cannot hang the stop forever. `--force` keeps a short 2s grace.
+- **Bridge state is written atomically and survives corruption.** State saves
+  now write a private temp file, flush it, and rename it over the target (with
+  a directory sync), so a reader never observes a half-written document and a
+  crash mid-write cannot leave a truncated `state.json`. An unreadable state
+  file is quarantined — moved aside with its bytes preserved — instead of
+  blocking startup, and the bridge continues from empty state; a new
+  `onCorrupt: "throw"` mode refuses to start for operators who prefer
+  intervention to amnesia.
+- **A live owner's daemon lock is never broken on age alone.** Lock recovery
+  now verifies the recorded owner process before declaring a lock abandoned, so
+  a stop with a long derived grace window — or any slow legitimate operation —
+  cannot have its lock stolen by a stale-metadata sweep.
+
+### Hardened
+- **`bridge doctor` failures are real exit codes.** A failing check exits
+  non-zero in both human and `--json` output, so CI and scripts can gate on
+  bridge health. Checks carry an explicit `warn`/`error` severity: optional
+  agent runtimes (`codewith`, `claude`, `aicopilot`) warn only when actually
+  configured, and binary resolution now matches the daemon's own PATH instead
+  of a login shell's. `doctor` gained `-s/--state` and `--daemon-dir` options.
+
 ## 0.7.0
 
 ### Added

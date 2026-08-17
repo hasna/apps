@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { join } from "path";
+import { join, relative, resolve, sep } from "path";
 import { existsSync, readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
@@ -74,14 +74,19 @@ function serveStatic(urlPath: string): Response | null {
   // Strip query string
   const clean = urlPath.split("?")[0];
 
-  // Try exact path first, then /index.html for SPA fallback
-  const candidates = [
+  // Containment: reject any candidate that escapes dashboardDir. URL parsing
+  // normalizes plain dot-segments, but this keeps encoded/odd forms from ever
+  // resolving outside the dashboard tree (same contract as mcps serve).
+  const safeCandidates = [
     join(dashboardDir, clean),
     join(dashboardDir, clean, "index.html"),
     join(dashboardDir, "index.html"),
-  ];
+  ].filter((candidate) => {
+    const rel = relative(dashboardDir, resolve(candidate));
+    return rel !== "" && !rel.startsWith("..") && !rel.includes(`..${sep}`);
+  });
 
-  for (const candidate of candidates) {
+  for (const candidate of safeCandidates) {
     if (existsSync(candidate) && !candidate.endsWith("/")) {
       try {
         const ext = "." + candidate.split(".").pop()!;
@@ -565,12 +570,19 @@ const noOpen = process.argv.includes("--no-open");
 
 const port = await findFreePort(7200);
 
+// Bind loopback by default: the dashboard and its API routes are
+// unauthenticated, so an all-interfaces bind (Bun's default hostname)
+// exposes them to the local network. Override explicitly with
+// STYLES_SERVER_HOST when remote access is genuinely wanted.
+const hostname = process.env.STYLES_SERVER_HOST ?? "127.0.0.1";
+
 const server = Bun.serve({
   port,
+  hostname,
   fetch: handleRequest,
 });
 
-const url = `http://localhost:${port}`;
+const url = `http://${hostname === "0.0.0.0" ? "localhost" : hostname}:${port}`;
 console.log(`\n  open-styles server running at ${url}\n`);
 
 if (!noOpen) {

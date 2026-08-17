@@ -341,7 +341,8 @@ program
       }
     }
     // Exit non-zero on any error-severity failure in both output modes so CI and
-    // shell scripts can gate on bridge health.
+    // shell scripts can gate on bridge health. Outside the branch, `--json` used
+    // to always exit 0, so CI and scripts could never detect a failing check.
     process.exitCode = report.ok ? 0 : 1;
   });
 
@@ -845,11 +846,11 @@ daemon
   .description("Stop the bridge daemon")
   .option("--supervisor <type>", "process, launchd, systemd, or auto", "process")
   .option("--daemon-dir <path>", "daemon metadata/log directory")
-  .option("--timeout-ms <ms>", "graceful stop timeout", "5000")
+  .option("--timeout-ms <ms>", "override graceful stop timeout")
   .option("--force", "force kill after timeout")
   .option("--json", "output JSON")
   .action(async (options) => {
-    const timeoutMs = parseNonNegativeInt(options.timeoutMs, "--timeout-ms");
+    const timeoutMs = options.timeoutMs === undefined ? undefined : parseNonNegativeInt(options.timeoutMs, "--timeout-ms");
     const result = options.supervisor === "process"
       ? await stopProcessDaemon({ daemonDir: options.daemonDir, timeoutMs, force: options.force })
       : await stopInstalledDaemon({ supervisor: options.supervisor, daemonDir: options.daemonDir, timeoutMs, force: options.force });
@@ -867,7 +868,7 @@ daemon
   .option("-c, --config <path>", "config path")
   .option("--state <path>", "state path")
   .option("--serve-json", "emit routed message JSON to daemon stdout log")
-  .option("--timeout-ms <ms>", "graceful stop timeout", "5000")
+  .option("--timeout-ms <ms>", "override graceful stop timeout")
   .option("--force", "force kill after timeout")
   .option("--json", "output JSON")
   .action(async (options) => {
@@ -880,7 +881,7 @@ daemon
       serveJson: options.serveJson,
       resume: options.resume,
       maxAttempts: options.maxAttempts ? parseNonNegativeInt(options.maxAttempts, "--max-attempts") : undefined,
-      timeoutMs: parseNonNegativeInt(options.timeoutMs, "--timeout-ms"),
+      timeoutMs: options.timeoutMs === undefined ? undefined : parseNonNegativeInt(options.timeoutMs, "--timeout-ms"),
       force: options.force,
     };
     const result = options.supervisor === "process"
