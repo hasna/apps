@@ -1,0 +1,69 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "notes",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.10.6",
+  "description": "Local-first personal notes CLI, MCP server, macOS app, and self-hosted sync server (SQLite store).",
+  "hosting": [
+    "user-hosted"
+  ],
+  "bins": [
+    "notes",
+    "notes-mcp",
+    "notes-serve"
+  ],
+  "storage": {
+    "backend": "sqlite",
+    "envPrefix": "HASNA_NOTES_",
+    "sqlitePath": "~/.hasna/apps/notes-server/server.db"
+  },
+  "serviceSurfaces": [
+    {
+      "name": "notes-serve",
+      "kind": "api",
+      "status": "supported",
+      "bin": "notes-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      }
+    },
+    {
+      "name": "notes-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "notes-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "notes-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "notes",
+      "authMode": "local-only"
+    }
+  ],
+  "metadata": {
+    "service": {
+      "port": 8788,
+      "healthPath": "/health"
+    },
+    "client": {
+      "apiUrlEnv": "HASNA_NOTES_API_URL",
+      "apiKeyEnv": "HASNA_NOTES_API_KEY"
+    }
+  }
+}
