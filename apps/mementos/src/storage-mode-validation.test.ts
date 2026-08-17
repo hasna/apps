@@ -148,7 +148,12 @@ async function runCli(
   legacyValue: string | null,
   argv: string[] = ["storage", "mode"],
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const env = isolatedStoreEnv(DB_PATH);
+  const env = isolatedStoreEnv(DB_PATH, {
+    // save attributes agent-source writes to the writing agent, resolved from
+    // MEMENTOS_AGENT when --agent is omitted; declare the identity so the
+    // positive-control save resolves on CI, which has no agent-id file.
+    extra: { MEMENTOS_AGENT: "e2e-test-agent" },
+  });
   if (legacyValue !== null) env[CANONICAL] = legacyValue;
   const proc = Bun.spawn(["bun", "run", CLI_PATH, ...argv], {
     env,

@@ -15,7 +15,14 @@ const TEST_TIMEOUT_MS = 60_000;
 
 function testEnv(): Record<string, string> {
   return isolatedStoreEnv(DB_PATH, {
-    extra: { ...blankLlmProviderEnv(), ...projectAuthorityTestEnv() },
+    // save attributes agent-source writes to the writing agent (MEMENTOS_AGENT
+    // when --agent is omitted); declare the identity so the seed save resolves
+    // on CI, which has no ~/.hasna/conversations/agent-id.
+    extra: {
+      ...blankLlmProviderEnv(),
+      ...projectAuthorityTestEnv(),
+      MEMENTOS_AGENT: "e2e-test-agent",
+    },
   });
 }
 

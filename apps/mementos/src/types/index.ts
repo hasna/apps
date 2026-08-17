@@ -119,6 +119,8 @@ export interface UpdateMemoryInput {
   expires_at?: string | null;
   flag?: string | null;
   when_to_use?: string | null;
+  /** Writing agent identity, recorded for attribution. Null explicitly clears it. */
+  updated_by_agent?: string | null;
   version: number; // required for optimistic locking
 }
 

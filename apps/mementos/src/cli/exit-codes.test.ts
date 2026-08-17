@@ -31,7 +31,12 @@ const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
 // DB_PATH: ambient HASNA_MEMENTOS_API_URL + HASNA_MEMENTOS_API_KEY, exported by
 // the operator shell and inherited through tmux, would otherwise route it into
 // the shared production store.
-const CLI_ENV = isolatedStoreEnv(DB_PATH, { extra: blankLlmProviderEnv() });
+const CLI_ENV = isolatedStoreEnv(DB_PATH, {
+  // save attributes agent-source writes to the writing agent, resolved from
+  // MEMENTOS_AGENT when --agent is omitted; declare the identity so the
+  // positive-control save resolves on CI, which has no agent-id file.
+  extra: { ...blankLlmProviderEnv(), MEMENTOS_AGENT: "e2e-test-agent" },
+});
 
 const PRESENT_KEY = "contract/exit-codes/present";
 // A NEAR-MISS of a key that really is in the store — not an invented string.

@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { SqliteAdapter as Database } from "../storage.js";
 import type { Agent } from "../types/index.js";
 import { AgentConflictError } from "../types/index.js";
@@ -10,6 +13,35 @@ const UNBOUNDED_AGENT_LIST_LIMIT = Number.MAX_SAFE_INTEGER;
 export interface AgentListFilter {
   limit?: number;
   offset?: number;
+}
+
+/**
+ * Resolve the NAME of the agent currently doing the writing, without any CLI
+ * flag. Sources, in order:
+ *
+ *   1. `MEMENTOS_AGENT` — this package's existing identity convention (already
+ *      consumed by `init` and the open-sessions connector).
+ *   2. `~/.hasna/conversations/agent-id` — the fleet's machine-level identity
+ *      surface, written by `conversations agents register`.
+ *
+ * Returns null when neither source yields a non-empty name. An unreadable or
+ * missing identity file is treated as absent — a write must never fail merely
+ * because the identity file was mid-write.
+ */
+export function resolveWritingAgentName(): string | null {
+  const envName = process.env["MEMENTOS_AGENT"]?.trim();
+  if (envName) return envName;
+
+  try {
+    const path = join(homedir(), ".hasna", "conversations", "agent-id");
+    if (existsSync(path)) {
+      const fileAgent = readFileSync(path, "utf8").trim();
+      if (fileAgent) return fileAgent;
+    }
+  } catch {
+    // unreadable identity file — treat as absent
+  }
+  return null;
 }
 
 function parseAgentRow(row: Record<string, unknown>): Agent {

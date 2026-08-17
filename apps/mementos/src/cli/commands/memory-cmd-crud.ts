@@ -18,7 +18,7 @@ import {
 } from "../../db/memory-project-link.js";
 import { resolveMementosProjectAuthorityIdentity } from "../../project-registration/index.js";
 import { getProject } from "../../db/projects.js";
-import { getAgent } from "../../db/agents.js";
+import { getAgent, registerAgent, resolveWritingAgentName } from "../../db/agents.js";
 import { parseDuration } from "../../lib/duration.js";
 import { validateEnumField, formatEnumViolation } from "../../lib/enum-validation.js";
 import { MEMORY_CATEGORIES, MEMORY_SCOPES } from "../../types/index.js";
@@ -316,6 +316,36 @@ export function registerCrudCommands(program: Command): void {
           resolvedAgentId = ag.id;
         }
 
+        // Attribution of the write to the CURRENT agent, when the caller named
+        // none. The store's attribution model (agent_id/created_by_agent, and
+        // the by_agent stats that read them) was unenforced at write time:
+        // measured 2026-08-17, 12436 of 14370 rows (86.6%) carry no agent
+        // attribution while source='agent', including 170 created since Aug 15.
+        // An agent-source write is a claim that an agent wrote it; an
+        // unattributed claim is unverifiable and unrecoverable afterwards —
+        // the columns are NULL whether the caller was unidentified or none
+        // existed.
+        //
+        // So: resolve the writing identity when --agent is omitted
+        // (MEMENTOS_AGENT, then the fleet surface ~/.hasna/conversations/
+        // agent-id), register it on first use, and refuse the write when an
+        // agent-source save has NO resolvable identity.
+        const requestedSource = opts.source as MemorySource | undefined;
+        if (!resolvedAgentId) {
+          const writingName = resolveWritingAgentName();
+          if (writingName) {
+            resolvedAgentId =
+              getAgent(writingName)?.id ?? registerAgent(writingName).id;
+          } else if (!requestedSource || requestedSource === "agent") {
+            throw new Error(
+              `No agent identity: an agent-source save needs a writing agent, and none could be resolved.\n` +
+                `Pass --agent <name>, set MEMENTOS_AGENT, or write the fleet identity file ` +
+                `(~/.hasna/conversations/agent-id, produced by "conversations agents register").\n` +
+                `Alternatively pass --source user|system|auto|imported to write without claiming an agent author.`,
+            );
+          }
+        }
+
         const input: CreateMemoryInput = {
           key,
           value,
@@ -330,7 +360,7 @@ export function registerCrudCommands(program: Command): void {
           tags: mergedTags,
           summary: opts.summary as string | undefined,
           ttl_ms: opts.ttl ? parseDuration(opts.ttl) : undefined,
-          source: opts.source as MemorySource | undefined,
+          source: requestedSource,
           agent_id: resolvedAgentId,
           session_id: globalOpts.session,
         };
@@ -492,9 +522,22 @@ export function registerCrudCommands(program: Command): void {
           category?: MemoryCategory;
           scope?: MemoryScope;
           status?: MemoryStatus;
+          updated_by_agent?: string | null;
         } = {
           version: existing.version,
         };
+
+        // Record WHO performed the update when the writing identity is
+        // resolvable (MEMENTOS_AGENT / ~/.hasna/conversations/agent-id). All
+        // 14370 rows measured 2026-08-17 had updated_by_agent NULL; unlike the
+        // save path this is best-effort, because an update targets an existing
+        // row whose owner is already recorded — the caller is never blocked
+        // here for lacking an identity.
+        const writingName = resolveWritingAgentName();
+        if (writingName) {
+          updateInput.updated_by_agent =
+            getAgent(writingName)?.id ?? registerAgent(writingName).id;
+        }
 
         if (opts.value !== undefined)
           updateInput.value = opts.value as string;
@@ -528,14 +571,18 @@ export function registerCrudCommands(program: Command): void {
           if (violation) throw new Error(formatEnumViolation(violation));
         }
 
-        // `version` is bookkeeping, not a field the caller asked to change. If
-        // nothing else is set, the caller requested nothing — and the old code
-        // printed "Updated: <key>" and bumped only the version, which is how
-        // `update --scope`'s shadowed short flag looked like a successful write.
-        // Note this is deliberately a check on "were any field flags supplied",
-        // NOT on "did any value differ": setting a field to the value it already
-        // holds is a legitimate, idempotent success.
-        const changedFields = Object.keys(updateInput).filter((k) => k !== "version");
+        // `version` is bookkeeping, not a field the caller asked to change, and
+        // `updated_by_agent` is attribution bookkeeping recorded by the CLI
+        // itself, never a field the caller requested. If nothing else is set,
+        // the caller requested nothing — and the old code printed "Updated:
+        // <key>" and bumped only the version, which is how `update --scope`'s
+        // shadowed short flag looked like a successful write. Note this is
+        // deliberately a check on "were any field flags supplied", NOT on "did
+        // any value differ": setting a field to the value it already holds is a
+        // legitimate, idempotent success.
+        const changedFields = Object.keys(updateInput).filter(
+          (k) => k !== "version" && k !== "updated_by_agent",
+        );
         if (changedFields.length === 0) {
           throw new Error(
             `Nothing to update: no fields were given for ${existing.key} (${existing.id.slice(0, 8)}). ` +
