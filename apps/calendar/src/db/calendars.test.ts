@@ -8,13 +8,13 @@ describe("calendars", () => {
   let orgId: string;
 
   beforeEach(() => {
-    resetDatabase();
+    resetDatabase(":memory:");
     getDatabase(":memory:");
     const org = createOrg({ name: "Test Org", slug: "test" });
     orgId = org.id;
   });
 
-  afterEach(() => resetDatabase());
+  afterEach(() => resetDatabase(":memory:"));
 
   test("create and get calendar", () => {
     const cal = createCalendar({ name: "Team Calendar", org_id: orgId });

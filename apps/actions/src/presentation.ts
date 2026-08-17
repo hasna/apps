@@ -22,8 +22,9 @@ export function detailLevel(value: unknown): DetailLevel {
 }
 
 export function parsePositiveIntOption(value: string): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed < 1) {
+  const normalized = value.trim();
+  const parsed = Number(normalized);
+  if (!/^\d+$/.test(normalized) || !Number.isSafeInteger(parsed) || parsed < 1) {
     throw new Error(`Expected a positive integer, received ${value}`);
   }
   return parsed;
@@ -262,7 +263,9 @@ function normalizeLimit(limit: number | undefined, defaultLimit: number): number
 
 function normalizeCursor(cursor: string | number | undefined): number {
   if (cursor === undefined || cursor === "") return 0;
-  const parsed = typeof cursor === "number" ? cursor : Number.parseInt(cursor, 10);
+  const normalized = typeof cursor === "string" ? cursor.trim() : cursor;
+  if (typeof normalized === "string" && !/^\d+$/.test(normalized)) return 0;
+  const parsed = typeof normalized === "number" ? normalized : Number(normalized);
   if (!Number.isFinite(parsed) || parsed < 0) return 0;
   return Math.floor(parsed);
 }

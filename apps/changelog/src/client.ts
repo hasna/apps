@@ -43,11 +43,19 @@ export interface ChangelogAddRequestOptions {
 
 async function readJson<T>(response: Response): Promise<T> {
   const text = await response.text();
-  const value = text ? JSON.parse(text) : null;
+  let value: unknown = null;
+  if (text) {
+    try {
+      value = JSON.parse(text);
+    } catch (error) {
+      if (!response.ok) throw new Error(text || response.statusText);
+      throw error;
+    }
+  }
   if (!response.ok) {
     const message = value && typeof value === "object" && "error" in value
       ? String((value as { error: unknown }).error)
-      : response.statusText;
+      : text || response.statusText;
     throw new Error(message);
   }
   return value as T;

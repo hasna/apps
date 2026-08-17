@@ -14,7 +14,7 @@ describe("attendees", () => {
   let agent2Id: string;
 
   beforeEach(() => {
-    resetDatabase();
+    resetDatabase(":memory:");
     const org = createOrg({ name: "Test", slug: "test" });
     orgId = org.id;
     const cal = createCalendar({ name: "Main", org_id: orgId });
@@ -30,7 +30,7 @@ describe("attendees", () => {
     agent2Id = registerAgent({ name: "agent2" }).id;
   });
 
-  afterEach(() => resetDatabase());
+  afterEach(() => resetDatabase(":memory:"));
 
   test("create attendee with agent_id", () => {
     const a = createAttendee({ event_id: eventId, agent_id: agent1Id, display_name: "Agent One" });
