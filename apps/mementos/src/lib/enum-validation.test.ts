@@ -60,4 +60,36 @@ describe("enum validation", () => {
   test("a field only counts when present — an absent key is not a violation", () => {
     expect(validateMemoryEnums({ key: "k" })).toBeNull();
   });
+
+  test("rejects a near-miss value for every database-constrained enum field", () => {
+    const cases = [
+      ["category", MEMORY_CATEGORIES, "facts"],
+      ["scope", MEMORY_SCOPES, "shared-ish"],
+      ["source", MEMORY_SOURCES, "manual-ish"],
+      ["status", MEMORY_STATUSES, "active-ish"],
+    ] as const;
+
+    for (const [field, allowed, value] of cases) {
+      const violation = validateEnumField(field, value);
+      expect(violation).toEqual({ field, value, allowed });
+      expect(formatEnumViolation(violation!)).toBe(
+        `Invalid ${field}: "${value}". Allowed values: ${allowed.join(", ")}.`,
+      );
+    }
+  });
+
+  test("reports the first invalid field in canonical order regardless of payload order", () => {
+    const violation = validateMemoryEnums({
+      status: "active-ish",
+      source: "manual-ish",
+      scope: "shared-ish",
+      category: "facts",
+    });
+
+    expect(violation).toEqual({
+      field: "category",
+      value: "facts",
+      allowed: MEMORY_CATEGORIES,
+    });
+  });
 });
