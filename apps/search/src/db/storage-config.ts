@@ -21,10 +21,7 @@ export interface StorageEnv {
 
 export const SEARCH_STORAGE_ENV = "HASNA_SEARCH_DATABASE_URL";
 export const SEARCH_STORAGE_FALLBACK_ENV = "SEARCH_DATABASE_URL";
-export const SEARCH_STORAGE_MODE_ENV = "HASNA_SEARCH_STORAGE_MODE";
-export const SEARCH_STORAGE_MODE_FALLBACK_ENV = "SEARCH_STORAGE_MODE";
 export const STORAGE_DATABASE_ENV = [SEARCH_STORAGE_ENV, SEARCH_STORAGE_FALLBACK_ENV] as const;
-export const STORAGE_MODE_ENV = [SEARCH_STORAGE_MODE_ENV, SEARCH_STORAGE_MODE_FALLBACK_ENV] as const;
 
 export function getStorageConfigPath(): string {
   return join(getConfigDir(), "storage", "config.json");
@@ -81,11 +78,11 @@ export function getStorageConfig(): StorageConfig {
     }
   }
 
-  const modeOverride = readEnv(SEARCH_STORAGE_MODE_ENV) ?? readEnv(SEARCH_STORAGE_MODE_FALLBACK_ENV);
-  const normalizedMode = normalizeMode(modeOverride);
-  if (normalizedMode) {
-    config.mode = normalizedMode;
-  } else if (getStorageDatabaseUrl() && config.mode === "local") {
+  // The retired HASNA_SEARCH_STORAGE_MODE / SEARCH_STORAGE_MODE variables are
+  // no longer read (deployment modes removed, owner directive 2026-07-29):
+  // the mode comes from the config file, with the Postgres backend implied by
+  // the presence of a DATABASE_URL when the file does not say otherwise.
+  if (getStorageDatabaseUrl() && config.mode === "local") {
     config.mode = "hybrid";
   }
 
