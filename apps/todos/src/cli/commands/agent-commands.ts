@@ -562,8 +562,18 @@ export function registerAgentCommands(program: Command) {
 
         if (opts.show || opts.update) {
           const ref = opts.show || opts.update;
+          // `--project` rebinds the list to a project scope. It must be an
+          // EXPLICIT ref — the auto-detected cwd project must never silently
+          // re-scope an existing list on a rename.
+          const explicitProject = typeof globalOpts.project === "string" && globalOpts.project.trim() !== "";
+          // A rebind's source list lives OUTSIDE the destination project.
+          // Resolving it within the destination scope would reject an unbound
+          // source UUID ("Task list not found") or shadow it with a same-slug
+          // list already in the destination — so resolve the source unscoped
+          // for the rebind case and let only the destination be scoped.
+          const resolveScope = opts.update && explicitProject ? undefined : (projectId ?? undefined);
           const resolved = cloud
-            ? await cloudResolveTaskListRef(cloud, ref, projectId ?? undefined)
+            ? await cloudResolveTaskListRef(cloud, ref, resolveScope)
             : resolvePartialId(getDatabase(), "task_lists", ref);
           if (!resolved) throw new Error(`Task list not found or ambiguous: ${ref}`);
           if (opts.show) {
@@ -574,10 +584,6 @@ export function registerAgentCommands(program: Command) {
             outputRecord(list, Boolean(globalOpts.json), "Task list:");
             return;
           }
-          // `--project` rebinds the list to a project scope. It must be an
-          // EXPLICIT ref — the auto-detected cwd project must never silently
-          // re-scope an existing list on a rename.
-          const explicitProject = typeof globalOpts.project === "string" && globalOpts.project.trim() !== "";
           const patch = {
             ...(explicitProject ? { project_id: projectId } : {}),
             ...(opts.name !== undefined ? { name: opts.name } : {}),

@@ -1109,7 +1109,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             name: { type: "string" },
             description: { type: "string" },
             metadata: { type: "object", additionalProperties: true },
-            project_id: { type: ["string", "null"] },
+            project_id: { type: "string", nullable: true },
           },
         },
         CreateTaskCommentInput: {

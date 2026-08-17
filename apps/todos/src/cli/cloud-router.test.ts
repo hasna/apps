@@ -2529,6 +2529,43 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
       .rejects.toThrow(`Task list not found: "${listId}"`);
   });
 
+  test("a rebind source resolves only unscoped — a foreign project scope rejects an unbound list", async () => {
+    // `lists --update <id> --project <p>` (PR #260) rebinds the list INTO p.
+    // The source list therefore lives OUTSIDE p, so the CLI must resolve the
+    // source unscoped: scoping it to the destination would reject an unbound
+    // source UUID ("Task list not found") or shadow it with a same-slug list
+    // already in the destination. This pair guards that invariant: the scoped
+    // form rejects, the unscoped form resolves.
+    const projectId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const unboundListId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname === `/v1/task-lists/${unboundListId}`) {
+        return {
+          body: {
+            task_list: {
+              id: unboundListId,
+              project_id: null,
+              slug: "wanderer",
+              name: "Wanderer",
+            },
+          },
+        };
+      }
+      return { status: 404, body: { error: "not found" } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudResolveTaskListRef(client, unboundListId, projectId))
+      .rejects.toThrow(`Task list not found: "${unboundListId}"`);
+    await expect(cloudResolveTaskListRef(client, unboundListId))
+      .resolves.toBe(unboundListId);
+    expect(calls.map((call) => call.url)).toEqual([
+      `https://todos.example.com/v1/task-lists/${unboundListId}`,
+      `https://todos.example.com/v1/projects/${projectId}`,
+    ]);
+  });
+
   test("project-scoped plan resolution rejects an exact UUID from another project", async () => {
     const planId = "77777777-7777-4777-8777-777777777777";
     const calls = installFetch((call) => {
