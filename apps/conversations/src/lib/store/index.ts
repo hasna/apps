@@ -440,6 +440,7 @@ export interface ConversationsStore {
   removePresence: Async<typeof presenceLib.removePresence>;
   renameAgent: Async<typeof presenceLib.renameAgent>;
   setPresenceProject: Async<typeof presenceLib.setPresenceProject>;
+  reapStaleSingleTouch: Async<typeof presenceLib.reapStaleSingleTouchRegistrations>;
 
   // projects
   createProject: Async<typeof projectsLib.createProject>;
@@ -632,6 +633,7 @@ export class LocalStore implements ConversationsStore {
   removePresence: ConversationsStore["removePresence"] = async (...a) => presenceLib.removePresence(...a);
   renameAgent: ConversationsStore["renameAgent"] = async (...a) => presenceLib.renameAgent(...a);
   setPresenceProject: ConversationsStore["setPresenceProject"] = async (...a) => presenceLib.setPresenceProject(...a);
+  reapStaleSingleTouch: ConversationsStore["reapStaleSingleTouch"] = async (...a) => presenceLib.reapStaleSingleTouchRegistrations(...a);
 
   // projects
   createProject: ConversationsStore["createProject"] = async (...a) => projectsLib.createProject(...a);

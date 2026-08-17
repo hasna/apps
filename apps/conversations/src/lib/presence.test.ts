@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { Database as SqliteDatabase } from "bun:sqlite";
-import { heartbeat, getPresence, listAgents, removePresence, renameAgent, registerAgent, isAgentConflict, setPresenceProject } from "./presence";
+import { heartbeat, getPresence, listAgents, removePresence, renameAgent, registerAgent, isAgentConflict, setPresenceProject, reapStaleSingleTouchRegistrations } from "./presence";
 import { closeDb, getDb } from "./db";
 import type { AgentConflictError, RegisterAgentResult } from "../types";
 import { unlinkSync } from "fs";
@@ -547,5 +547,121 @@ describe("setPresenceProject", () => {
 
     const p = getPresence("agent-1");
     expect(p!.project_id).toBe("proj-abc");
+  });
+});
+
+describe("effective status decays with heartbeat recency", () => {
+  test("a self-declared 'online' status is only reported while last_seen_at is fresh", () => {
+    registerAgent("decay-online-agent", "session-decay");
+    const db = getDb();
+    db.prepare(
+      "UPDATE agent_presence SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '-7200 seconds') WHERE agent = ?"
+    ).run("decay-online-agent");
+
+    const p = getPresence("decay-online-agent");
+    expect(p!.status).toBe("offline");
+    expect(p!.online).toBe(false);
+
+    const row = listAgents().find((a) => a.agent === "decay-online-agent");
+    expect(row!.status).toBe("offline");
+    expect(row!.online).toBe(false);
+  });
+
+  test("a fresh registration still reports status online", () => {
+    registerAgent("decay-fresh-agent", "session-fresh");
+    const p = getPresence("decay-fresh-agent");
+    expect(p!.status).toBe("online");
+    expect(p!.online).toBe(true);
+  });
+
+  test("non-online self-declared statuses are preserved verbatim", () => {
+    heartbeat("decay-busy-agent", "busy");
+    const db = getDb();
+    db.prepare(
+      "UPDATE agent_presence SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '-7200 seconds') WHERE agent = ?"
+    ).run("decay-busy-agent");
+
+    const p = getPresence("decay-busy-agent");
+    expect(p!.status).toBe("busy");
+    expect(p!.online).toBe(false);
+  });
+});
+
+describe("reapStaleSingleTouchRegistrations", () => {
+  function seedReaperFixture(): void {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO agent_presence (id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata)
+       VALUES (?, ?, ?, 'agent', '', 'online', ?, ?, NULL)`
+    ).run("st111111", "stale-single-touch", "sess-st", "2026-08-01T00:00:00.000", "2026-08-01T00:00:00.000");
+    // Seen again after creation (last_seen moved 10 minutes later) — not single-touch.
+    db.prepare(
+      `INSERT INTO agent_presence (id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata)
+       VALUES (?, ?, ?, 'agent', '', 'online', ?, ?, NULL)`
+    ).run("mt222222", "seen-again-agent", "sess-mt", "2026-08-01T00:10:00.000", "2026-08-01T00:00:00.000");
+    // Single-touch but fresh — within the retention window.
+    db.prepare(
+      `INSERT INTO agent_presence (id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata)
+       VALUES (?, ?, ?, 'agent', '', 'online', strftime('%Y-%m-%dT%H:%M:%f', 'now'), strftime('%Y-%m-%dT%H:%M:%f', 'now'), NULL)`
+    ).run("fr333333", "fresh-single-touch", "sess-fr");
+  }
+
+  test("flags single-touch registrations older than the retention window without deleting (report-first)", () => {
+    seedReaperFixture();
+
+    const result = reapStaleSingleTouchRegistrations();
+    expect(result.candidates).toBe(1);
+    expect(result.reaped).toBe(0);
+    expect(result.agents).toEqual(["stale-single-touch"]);
+
+    // Nothing deleted without apply.
+    expect(getPresence("stale-single-touch")).toBeTruthy();
+    expect(getPresence("seen-again-agent")).toBeTruthy();
+    expect(getPresence("fresh-single-touch")).toBeTruthy();
+  });
+
+  test("apply deletes only the flagged single-touch rows and archives them", () => {
+    seedReaperFixture();
+
+    const result = reapStaleSingleTouchRegistrations({ apply: true });
+    expect(result.candidates).toBe(1);
+    expect(result.reaped).toBe(1);
+    expect(result.archived).toBe(1);
+    expect(getPresence("stale-single-touch")).toBeNull();
+    expect(getPresence("seen-again-agent")).toBeTruthy();
+    expect(getPresence("fresh-single-touch")).toBeTruthy();
+
+    // The removed row is preserved in the append-only archive with its full
+    // registration, so the delete has a rollback path.
+    const archived = getDb().prepare(
+      `SELECT reaped_at, id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata
+       FROM agent_presence_reap_archive WHERE agent = ?`
+    ).all("stale-single-touch") as Array<Record<string, unknown>>;
+    expect(archived).toHaveLength(1);
+    expect(archived[0]).toMatchObject({
+      id: "st111111",
+      agent: "stale-single-touch",
+      session_id: "sess-st",
+      role: "agent",
+      status: "online",
+      last_seen_at: "2026-08-01T00:00:00.000",
+      created_at: "2026-08-01T00:00:00.000",
+    });
+  });
+
+  test("apply does not delete a registration whose heartbeat refreshed between report and apply", () => {
+    seedReaperFixture();
+
+    const report = reapStaleSingleTouchRegistrations();
+    expect(report.candidates).toBe(1);
+
+    // A heartbeat lands between report and apply, making the row current.
+    heartbeat("stale-single-touch", "online");
+
+    const result = reapStaleSingleTouchRegistrations({ apply: true });
+    expect(result.reaped).toBe(0);
+    expect(result.archived).toBe(0);
+    expect(getPresence("stale-single-touch")).toBeTruthy();
+    expect(getDb().prepare("SELECT COUNT(*) AS n FROM agent_presence_reap_archive").get()).toEqual({ n: 0 });
   });
 });

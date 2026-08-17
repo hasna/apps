@@ -135,6 +135,28 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       }
       if (/FROM messages/i.test(sql)) return messages.slice().reverse();
       if (/revoked_at IS NOT NULL/i.test(sql)) return [];
+      if (/SELECT id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata[\s\S]*AS online\s+FROM agent_presence/i.test(sql)) {
+        const onlineOnly = /WHERE last_seen_at > NOW\(\) - interval '60 seconds'/i.test(sql);
+        return [...agentPresence.values()]
+          .map((row) => ({ ...row, online: Date.parse(String(row.last_seen_at)) > Date.now() - 60_000 }))
+          .filter((row) => !onlineOnly || row.online)
+          .sort((a, b) => String(b.last_seen_at).localeCompare(String(a.last_seen_at)));
+      }
+      if (/SELECT id, agent FROM agent_presence[\s\S]*EXTRACT\(EPOCH FROM \(last_seen_at - created_at\)\)/i.test(sql)) {
+        const m = sql.match(/interval '(\d+) seconds'/i);
+        const olderThanMs = m ? Number(m[1]) * 1000 : 7 * 24 * 60 * 60 * 1000;
+        const cutoff = Date.now() - olderThanMs;
+        return [...agentPresence.values()]
+          .filter((row) => {
+            const last = Date.parse(String(row.last_seen_at));
+            const created = Date.parse(String(row.created_at));
+            return Number.isFinite(last) && Number.isFinite(created)
+              && last < cutoff
+              && Math.abs(last - created) < 60_000;
+          })
+          .sort((a, b) => String(a.last_seen_at).localeCompare(String(b.last_seen_at)))
+          .map((row) => ({ id: row.id, agent: row.agent }));
+      }
       return [];
     },
     async query(sql: string, p: readonly unknown[] = []): Promise<{ rows: any[]; rowCount: number }> {
@@ -171,6 +193,20 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
           }
         }
         return { rows: [], rowCount: before - resourceLocks.length };
+      }
+      if (/DELETE FROM agent_presence\s+WHERE id = ANY/i.test(sql)) {
+        const ids = new Set((p[0] as string[]) ?? []);
+        const m = sql.match(/interval '(\d+) seconds'/i);
+        const olderThanMs = m ? Number(m[1]) * 1000 : 7 * 24 * 60 * 60 * 1000;
+        const cutoff = Date.now() - olderThanMs;
+        const before = agentPresence.size;
+        for (const [agent, row] of [...agentPresence.entries()]) {
+          if (ids.has(String(row.id)) && Date.parse(String(row.last_seen_at)) < cutoff) {
+            agentPresence.delete(agent);
+            activeFakeClient!.__debug.agentPresenceReapArchive.push({ reaped_at: new Date().toISOString(), ...row });
+          }
+        }
+        return { rows: [], rowCount: before - agentPresence.size };
       }
       if (/UPDATE resource_locks SET expires_at = \$4, locked_at = NOW\(\)/i.test(sql)) {
         const [resourceType, resourceId, lockType, expiresAt] = p as any[];
@@ -773,6 +809,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       messageAttachments,
       messageMentions,
       agentPresence,
+      agentPresenceReapArchive: [] as Array<Record<string, unknown>>,
       manyCalls,
       queryCalls,
       scopeRewriteCalls,
@@ -1105,6 +1142,121 @@ describe("conversations-serve", () => {
       status: "idle",
       metadata: {},
     });
+  });
+
+  test("GET /v1/agents reports effective status: 'online' only while last_seen_at is fresh", async () => {
+    const presence = activeFakeClient!.__debug.agentPresence;
+    const staleAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    presence.set("stale-roster-agent", {
+      id: "stale0001", agent: "stale-roster-agent", session_id: "sess-stale", role: "agent",
+      project_id: "", status: "online", last_seen_at: staleAt, created_at: staleAt, metadata: null,
+    });
+    presence.set("fresh-roster-agent", {
+      id: "fresh0001", agent: "fresh-roster-agent", session_id: "sess-fresh", role: "agent",
+      project_id: "", status: "online", last_seen_at: new Date().toISOString(), created_at: new Date().toISOString(), metadata: null,
+    });
+
+    const res = await fetch(`${base}/v1/agents`, { headers: { "x-api-key": rwKey } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { agents: Array<Record<string, unknown>> };
+    const byName = new Map(body.agents.map((a) => [a.agent, a]));
+    expect(byName.get("stale-roster-agent")).toMatchObject({ status: "offline", online: false });
+    expect(byName.get("fresh-roster-agent")).toMatchObject({ status: "online", online: true });
+
+    presence.delete("stale-roster-agent");
+    presence.delete("fresh-roster-agent");
+  });
+
+  test("POST /v1/agents/reap-stale is report-first and with apply removes only stale single-touch rows", async () => {
+    const presence = activeFakeClient!.__debug.agentPresence;
+    activeFakeClient!.__debug.agentPresenceReapArchive.length = 0;
+    const oldAt = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+    const seenAgainAt = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000 + 10 * 60 * 1000).toISOString();
+    presence.set("reap-single-touch", {
+      id: "reap00001", agent: "reap-single-touch", session_id: "s1", role: "agent",
+      project_id: "", status: "online", last_seen_at: oldAt, created_at: oldAt, metadata: null,
+    });
+    presence.set("reap-seen-again", {
+      id: "reap00002", agent: "reap-seen-again", session_id: "s2", role: "agent",
+      project_id: "", status: "online", last_seen_at: seenAgainAt, created_at: oldAt, metadata: null,
+    });
+    presence.set("reap-fresh", {
+      id: "reap00003", agent: "reap-fresh", session_id: "s3", role: "agent",
+      project_id: "", status: "online", last_seen_at: new Date().toISOString(), created_at: new Date().toISOString(), metadata: null,
+    });
+    const headers = { "x-api-key": rwKey, "content-type": "application/json" };
+
+    const dry = await fetch(`${base}/v1/agents/reap-stale`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({}),
+    });
+    expect(dry.status).toBe(200);
+    expect(await dry.json()).toEqual({
+      candidates: 1, reaped: 0, archived: 0, archiveTable: "agent_presence_reap_archive", agents: ["reap-single-touch"],
+    });
+    expect(presence.has("reap-single-touch")).toBe(true);
+
+    const applied = await fetch(`${base}/v1/agents/reap-stale`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ apply: true }),
+    });
+    expect(applied.status).toBe(200);
+    expect(await applied.json()).toEqual({
+      candidates: 1, reaped: 1, archived: 1, archiveTable: "agent_presence_reap_archive", agents: ["reap-single-touch"],
+    });
+    expect(presence.has("reap-single-touch")).toBe(false);
+    expect(presence.has("reap-seen-again")).toBe(true);
+    expect(presence.has("reap-fresh")).toBe(true);
+
+    // The removed row is preserved in the append-only archive with its full
+    // registration, so the delete has a rollback path.
+    expect(activeFakeClient!.__debug.agentPresenceReapArchive).toHaveLength(1);
+    expect(activeFakeClient!.__debug.agentPresenceReapArchive[0]).toMatchObject({
+      id: "reap00001",
+      agent: "reap-single-touch",
+      session_id: "s1",
+      role: "agent",
+      status: "online",
+    });
+  });
+
+  test("POST /v1/agents/reap-stale apply does not delete a registration whose heartbeat refreshed between report and apply", async () => {
+    const presence = activeFakeClient!.__debug.agentPresence;
+    activeFakeClient!.__debug.agentPresenceReapArchive.length = 0;
+    const oldAt = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+    presence.set("reap-race", {
+      id: "reap00010", agent: "reap-race", session_id: "s10", role: "agent",
+      project_id: "", status: "online", last_seen_at: oldAt, created_at: oldAt, metadata: null,
+    });
+    const headers = { "x-api-key": rwKey, "content-type": "application/json" };
+
+    const dry = await fetch(`${base}/v1/agents/reap-stale`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({}),
+    });
+    expect(dry.status).toBe(200);
+    expect((await dry.json()).candidates).toBe(1);
+
+    // A heartbeat refreshes the row between report and apply.
+    presence.set("reap-race", {
+      id: "reap00010", agent: "reap-race", session_id: "s10", role: "agent",
+      project_id: "", status: "online", last_seen_at: new Date().toISOString(), created_at: oldAt, metadata: null,
+    });
+
+    const applied = await fetch(`${base}/v1/agents/reap-stale`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ apply: true }),
+    });
+    expect(applied.status).toBe(200);
+    expect(await applied.json()).toEqual({
+      candidates: 0, reaped: 0, archived: 0, archiveTable: "agent_presence_reap_archive", agents: [],
+    });
+    expect(presence.has("reap-race")).toBe(true);
+    expect(activeFakeClient!.__debug.agentPresenceReapArchive).toHaveLength(0);
   });
 
   test("fresh same-context acquire stays visible to check and list despite stale prior presence", async () => {

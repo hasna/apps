@@ -894,6 +894,23 @@ export function getDb(): Database {
   `);
   ensureAgentPresenceAgentUniqueIndex(db);
 
+  // Append-only archive of rows removed by the single-touch roster reaper, so
+  // the apply path preserves a recoverable original of everything it deletes.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_presence_reap_archive (
+      reaped_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+      id TEXT NOT NULL,
+      agent TEXT NOT NULL,
+      session_id TEXT,
+      role TEXT NOT NULL DEFAULT 'agent',
+      project_id TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'online',
+      last_seen_at TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT '',
+      metadata TEXT
+    )
+  `);
+
   // Resource locks table (advisory + exclusive write coordination)
   db.exec(`
     CREATE TABLE IF NOT EXISTS resource_locks (

@@ -353,6 +353,39 @@ export function registerAgentCommands(program: Command): void {
       closeDb();
     });
 
+  agents
+    .command("reap-stale")
+    .description("Flag registrations created once and never seen again (report-only unless --apply)")
+    .option("--older-than <days>", "Minimum age in days for a single-touch registration to be flagged (default: 7)", parseInt)
+    .option("--apply", "Delete the flagged registrations (default: report only)")
+    .option("-j, --json", "Output as JSON")
+    .action(async (opts) => {
+      const olderThanDays = opts.olderThan;
+      const olderThanSeconds = typeof olderThanDays === "number" && Number.isFinite(olderThanDays) && olderThanDays > 0
+        ? Math.round(olderThanDays * 86400)
+        : undefined;
+      const applied = opts.apply === true;
+      const result = await getStore().reapStaleSingleTouch({ olderThanSeconds, apply: applied });
+
+      if (opts.json) {
+        printJsonLine({ ...result, applied });
+      } else if (result.candidates === 0) {
+        printLine(chalk.dim("No single-touch registrations older than the retention window."));
+      } else {
+        printLine(`  ${result.candidates} single-touch registration(s) older than the retention window:`);
+        for (const name of result.agents) {
+          printLine(`    ${chalk.cyan(name)}`);
+        }
+        if (result.reaped > 0) {
+          printLine(chalk.green(`  ${result.reaped} removed.`));
+          printLine(chalk.dim(`  ${result.archived} preserved in ${result.archiveTable} for rollback.`));
+        } else {
+          printLine(chalk.dim("  Report only — pass --apply to remove."));
+        }
+      }
+      closeDb();
+    });
+
   // ---- focus ----
   const focus = program
     .command("focus")

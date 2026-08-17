@@ -1231,6 +1231,20 @@ export const openapiSpec = {
         responses: { "200": { description: "presence", content: { "application/json": { schema: okObject } } } },
       },
     },
+    "/v1/agents/reap-stale": {
+      post: {
+        operationId: "reapStaleSingleTouch",
+        description: "Flag — and only with apply:true, remove — registrations created once and never seen again whose last heartbeat is older than the retention window.",
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: {
+            type: "object",
+            properties: { apply: { type: "boolean" }, older_than_seconds: { type: "number" } },
+          } } },
+        },
+        responses: { "200": { description: "reap result", content: { "application/json": { schema: okObject } } } },
+      },
+    },
   },
 } as const;
 
