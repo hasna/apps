@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 # Build "HasnaNotes" — the WKWebView macOS shell hosting the web UI — and assemble a
 # launchable .app bundle. Run ON a macOS 26 Mac (Command Line Tools, no Xcode).
+#
+# SIGNING: the bundle is signed with the fleet Developer ID identity
+#   "Developer ID Application: VASILE ANDREI HASNA (HKZ326A8Y3)"
+# whose private key lives in the LOGIN keychain on the build Mac. A headless ssh
+# session must unlock that keychain first: set SIGNING_PASSWORD to the build
+# Mac's login password (the vault item is named in the deploy lane brief, key
+# name delivered via `secrets exec <key> --as SIGNING_PASSWORD --`). The vault
+# key name is deliberately NOT hardcoded here: this is a public OSS repo and the
+# key path carries an internal machine hostname. If SIGNING_PASSWORD is unset
+# the script still attempts signing (works when the login keychain is already
+# unlocked in a GUI session). There is NO ad-hoc fallback: an unsigned build is
+# a failed build.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,6 +23,9 @@ APP_NAME="HasnaNotes"
 EXEC_NAME="HasnaNotes"
 BUNDLE_ID="com.hasna.notes"
 DIST="$REPO_ROOT/dist"
+
+CODESIGN_IDENTITY="Developer ID Application: VASILE ANDREI HASNA (HKZ326A8Y3)"
+LOGIN_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
 # Real version stamping (About screen + freshness proof): CFBundleShortVersionString
 # tracks package.json's "version" (single source of truth) and CFBundleVersion is a
@@ -130,7 +145,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key><string>$APP_NAME</string>
-    <key>CFBundleDisplayName</key><string>$APP_NAME</string>
+    <key>CFBundleDisplayName</key><string>Hasna Notes</string>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key><string>$EXEC_NAME</string>
     <key>CFBundlePackageType</key><string>APPL</string>
@@ -150,9 +165,31 @@ if [[ -f "$RESOURCES/AppIcon.icns" ]]; then
     || /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile AppIcon" "$CONTENTS/Info.plist" 2>/dev/null || true
 fi
 
-echo "==> Ad-hoc codesign"
-codesign --force --deep --sign - "$APP"
-codesign --verify --deep --strict "$APP" && echo "   signature OK"
+# ---- Codesign (Developer ID, stable designated requirement for TCC) ----
+# The identity's private key lives in the login keychain on the build Mac. A
+# headless session must unlock it first; SIGNING_PASSWORD is delivered by the
+# caller via `secrets exec <key> --as SIGNING_PASSWORD --` (key name from the
+# deploy lane brief; not hardcoded in this public repo).
+if [[ -n "${SIGNING_PASSWORD:-}" ]]; then
+  echo "==> Unlocking login keychain for headless codesign"
+  /usr/bin/security unlock-keychain -p "$SIGNING_PASSWORD" "$LOGIN_KEYCHAIN"
+  # Allow the codesign tool to use the identity without a GUI prompt.
+  /usr/bin/security set-key-partition-list -S apple-tool:,apple: -s -k "$SIGNING_PASSWORD" "$LOGIN_KEYCHAIN" >/dev/null
+fi
+
+echo "==> Codesign ($CODESIGN_IDENTITY)"
+if codesign --force --deep --sign "$CODESIGN_IDENTITY" "$APP" 2>"$DIST/codesign.err"; then
+  echo "   signed OK"
+else
+  echo "ERROR: codesign failed. Identity: $CODESIGN_IDENTITY" >&2
+  cat "$DIST/codesign.err" >&2
+  echo "       If the error mentions the keychain being locked, re-run with" >&2
+  echo "       SIGNING_PASSWORD delivered from the vault via secrets exec (see the" >&2
+  echo "       deploy lane brief for the key name; it is not hardcoded in this repo)." >&2
+  exit 1
+fi
+codesign --verify --deep --strict "$APP" && echo "   verification OK"
 
 echo "BUILT: $APP"
-echo "       (CFBundleName=\"$APP_NAME\", bundle id=$BUNDLE_ID, exec=$EXEC_NAME, version=$APP_VERSION, build=$BUILD_STAMP)"
+echo "       (CFBundleName=\"$APP_NAME\", display=\"Hasna Notes\", bundle id=$BUNDLE_ID, exec=$EXEC_NAME, version=$APP_VERSION, build=$BUILD_STAMP)"
+codesign -dv "$APP" 2>&1 | grep -E "Identifier|TeamIdentifier" | sed 's/^/       /'

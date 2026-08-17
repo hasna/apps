@@ -2,12 +2,10 @@
 
 This document is the functionality contract for the web/native UI lane.
 
-## Bridge Global Rename (Deprecation Notice)
+## Bridge Global
 
-The JS bridge global is `window.HasnaNotes` (renamed from `window.HasnaNotes`).
-For ONE release `web/app.js` also assigns the deprecated back-compat alias
-`window.HasnaNotes = window.HasnaNotes` so old hosts and integrations keep
-working; it will be removed next release. New code must use
+The JS bridge global is `window.HasnaNotes` (renamed from the pre-rename
+global; no back-compat alias is assigned). New code must use
 `window.HasnaNotes` only. The `hasna:*` CustomEvent names are an internal
 wire contract and are intentionally unchanged.
 

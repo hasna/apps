@@ -602,11 +602,10 @@ test('markdown command transforms cover inline, blocks, code block, and divider'
 test('web markdown bridge preserves literal transcript text and command escaping', async () => {
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
   const { windowTarget } = loadWebAppWithFakeDOM(app);
-  // Bridge rename contract: the deprecated pre-rename global (assembled from
-  // fragments in app.js so the rename gate never matches) must stay a working
-  // alias of window.HasnaNotes for one release (docs/ui-contracts.md).
-  assert.equal(windowTarget['Personal' + 'Notes'], windowTarget.HasnaNotes);
+  // Bridge rename contract: window.HasnaNotes is the canonical bridge global
+  // and the deprecated window.PersonalNotes alias is gone (docs/ui-contracts.md).
   assert.ok(windowTarget.HasnaNotes);
+  assert.equal(windowTarget.PersonalNotes, undefined);
   const literal = windowTarget.HasnaNotes.markdown.render(
     windowTarget.HasnaNotes.markdown.safeText('**urgent** [x](https://evil.example) `code`'),
   );
@@ -2554,8 +2553,8 @@ test('recording and realtime transcription contracts are exposed to UI/native ho
   assert.match(app, /hasna:transcript-delta/);
   assert.match(app, /hasna:transcript-complete/);
   assert.match(app, /window\.HasnaNotes = \{/);
-  // Deprecated back-compat alias, kept for one release (docs/ui-contracts.md).
-  assert.match(app, /window\['Personal' \+ 'Notes'\] = window\.HasnaNotes/);
+  // Deprecated PersonalNotes alias is removed — no PersonalNotes branding remains.
+  assert.doesNotMatch(app, /window\.PersonalNotes/);
   assert.match(app, /recording:\s*\{/);
   assert.match(app, /rec\.status = 'stopping'/);
   assert.match(app, /rec\.status = 'complete'/);
@@ -2573,7 +2572,7 @@ test('recording and realtime transcription contracts are exposed to UI/native ho
   assert.match(sidecar, /\/tool/);
   assert.match(sidecar, /HASNA_NOTES_SIDECAR_TOKEN/);
   assert.match(sidecar, /x-hasna-notes-token/);
-  assert.match(sidecar, /x-hasna-notes-token/); // legacy header kept for one release
+  assert.doesNotMatch(sidecar, /x-personalnotes-token/);
   assert.match(sidecar, /requireSidecarAuth/);
   assert.match(sidecar, /consumeApproval/);
   assert.match(sidecar, /streamText/);
@@ -2605,7 +2604,7 @@ test('recording and realtime transcription contracts are exposed to UI/native ho
   assert.match(app, /open-chat/);
   assert.match(app, /sendSidecarChat/);
   assert.match(app, /X-Hasna-Notes-Token/);
-  assert.match(app, /X-Hasna-Notes-Token/); // legacy header kept for one release
+  assert.doesNotMatch(app, /X-PersonalNotes-Token/);
   assert.match(swift, /HASNA_NOTES_SIDECAR_TOKEN/);
   assert.match(swift, /"token": sidecar\.token/);
 
