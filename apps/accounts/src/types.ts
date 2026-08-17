@@ -214,6 +214,71 @@ export const toolDefSchema = z.object({
  */
 export type ToolDef = z.infer<typeof toolDefSchema>;
 
+/**
+ * Wire protocols a backend route can speak. Adapters negotiate against these
+ * and refuse a protocol they cannot render — a backend record is semantic
+ * metadata, never a universal env map.
+ *
+ * Phase 1 supports `anthropic-messages` only (Claude Code adapter); the other
+ * values exist so the registry schema is stable for later adapters (grok, pi,
+ * kilocode) without a schema migration.
+ */
+export const backendProtocolSchema = z.enum([
+  "anthropic-messages",
+  "openai-chat",
+  "openai-responses",
+]);
+export type BackendProtocol = z.infer<typeof backendProtocolSchema>;
+
+/**
+ * One model a backend offers, with SEMANTIC context metadata.
+ *
+ * The context window is stored as a token count; the `[1m]` wire-model suffix
+ * is an ADAPTER concern and is never stored (design 01a00e8a §6): Claude Code
+ * renders `model[1m]` from `contextWindowTokens >= 1_000_000`, while a Grok
+ * adapter would render the same number as `context_window`.
+ */
+export const backendModelSchema = z.object({
+  id: z.string().min(1).max(128),
+  contextWindowTokens: z.number().int().positive().max(2_000_000_000),
+  maxOutputTokens: z.number().int().positive().max(2_000_000_000).optional(),
+});
+export type BackendModel = z.infer<typeof backendModelSchema>;
+
+/** Optional harness alias -> model id mapping (opus/sonnet/haiku). */
+export const backendAliasesSchema = z.object({
+  opus: z.string().min(1).max(128).optional(),
+  sonnet: z.string().min(1).max(128).optional(),
+  haiku: z.string().min(1).max(128).optional(),
+});
+export type BackendAliases = z.infer<typeof backendAliasesSchema>;
+
+export const backendDefaultsSchema = z.object({
+  /** Default model id, resolved against `models` at render time. */
+  model: z.string().min(1).max(128),
+  aliases: backendAliasesSchema.optional(),
+});
+export type BackendDefaults = z.infer<typeof backendDefaultsSchema>;
+
+/**
+ * A backend route: where a harness talks to, with which models, and which
+ * vault item authenticates it.
+ *
+ * `vaultKey` is a VAULT LOCATOR, never a credential value — Accounts consumes
+ * it structurally via `secrets exec <vaultKey> --as <VAR> -- <harness>` and
+ * never reads or captures the secret itself.
+ */
+export const backendRouteSchema = z.object({
+  id: slugSchema,
+  name: z.string().min(1).max(64),
+  protocol: backendProtocolSchema,
+  baseUrl: z.string().min(1).max(2048),
+  vaultKey: z.string().min(1).max(512),
+  models: z.array(backendModelSchema).min(1).max(128),
+  defaults: backendDefaultsSchema.optional(),
+});
+export type BackendRoute = z.infer<typeof backendRouteSchema>;
+
 const metadataKeyPattern = /^[A-Za-z0-9_.:-]{1,64}$/;
 const reservedMetadataKeys = new Set(["__proto__", "prototype", "constructor"]);
 const metadataValueSchema = z.union([
@@ -315,6 +380,18 @@ const profileObjectSchema = z.object({
    */
   nativeName: profileNameSchema.optional(),
   /**
+   * Optional binding to a backend route (see `backendRouteSchema`) that
+   * overrides the profile's native authentication: `accounts launch` then
+   * runs the harness against the backend's base URL with the backend's model,
+   * authenticating through the backend's vault key.
+   *
+   * Deliberately separate from `provider` (a migration mirror of `tool`, with
+   * mismatch rejection) and from `metadata` (flat scalars only): a backend
+   * binding is a first-class record reference, and stuffing it into either
+   * existing field would abuse a schema that means something else.
+   */
+  backendRef: slugSchema.optional(),
+  /**
    * Every former registry name this profile has answered to, oldest first.
    * Grows by one on each recorded rename; never pruned. Distinct from
    * `nativeName`: `nativeName` is the tool's single fixed on-disk identifier,
@@ -361,6 +438,13 @@ export const storeSchema = z.object({
   profiles: z.array(profileSchema).default([]),
   /** User-registered tools (apps) added at runtime, on top of built-ins. */
   tools: z.array(toolDefSchema).default([]),
+  /**
+   * Machine-local backend routes (provider endpoints + model metadata + vault
+   * locators). Kept in the local `accounts.json` schema-v1 store and NEVER
+   * sent through the cloud `/v1` transport: vault keys and org-specific
+   * endpoints are machine-local user data, not registry rows.
+   */
+  backends: z.array(backendRouteSchema).default([]),
 });
 
 export type Store = z.infer<typeof storeSchema>;

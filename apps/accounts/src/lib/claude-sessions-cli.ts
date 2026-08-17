@@ -14,6 +14,8 @@ import {
 import { formatEnvAssignments, profileEnv, providerLaunchEnv } from "./env.js";
 import { assertGovernedInstructionHome } from "./configs-prelaunch.js";
 import { runClaudeLaunch, redactArgv } from "./claude-launch.js";
+import { backendForProfile } from "./backend-routes.js";
+import { planLaunch, renderLaunchPlanCommand, runLaunchPlan } from "./launch-plan.js";
 import { getTool } from "./tools.js";
 
 interface SessionsCliOptions {
@@ -420,6 +422,13 @@ async function resumeSession(
     allowEmptySources: options.allowEmptyInstructions === true,
   });
   const env = await profileEnv(targetProfile, tool);
+  const boundBackend = backendForProfile(targetProfile);
+  if (boundBackend) {
+    const resumePlan = await planLaunch(targetProfile, tool, plan.command.slice(1), { backend: boundBackend });
+    console.error(chalk.dim(`→ ${renderLaunchPlanCommand(resumePlan)}`));
+    const { ACCOUNTS_ACTIVE: _activeProfile, ...parentEnv } = process.env;
+    process.exit(await runLaunchPlan(resumePlan, parentEnv, plan.cwd));
+  }
   console.error(chalk.dim(`→ ${formatEnvAssignments(env)} ${redactArgv(plan.command).join(" ")}`));
   const { ACCOUNTS_ACTIVE: _activeProfile, ...parentEnv } = process.env;
   // Resume attaches Claude to a credential-bearing provider session, so the

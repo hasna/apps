@@ -53,6 +53,7 @@ beforeAll(() => {
   writeExecutable("claude", fakeClaudeSource());
   writeExecutable("identities", fakeIdentitiesSource(), { windowsBatch: true });
   writeExecutable("configs", fakeConfigsSource(), { windowsBatch: true });
+  writeExecutable("secrets", fakeSecretsSource());
 });
 
 beforeEach(() => {
@@ -139,6 +140,9 @@ appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({
   active: process.env.ACCOUNTS_ACTIVE,
   supervisor: process.env.ACCOUNTS_SUPERVISOR,
   keychainAccount,
+  authTokenPresent: Boolean(process.env.ANTHROPIC_AUTH_TOKEN),
+  baseUrl: process.env.ANTHROPIC_BASE_URL,
+  model: process.env.ANTHROPIC_MODEL,
 }) + "\\n");
 if (process.env.FAKE_STDOUT !== "0") console.log("fake-claude-stdout");
 if (process.env.FAKE_STDERR !== "0") console.error("fake-claude-stderr");
@@ -149,8 +153,30 @@ process.exit(Number(process.env.FAKE_EXIT ?? 0));
 `;
 }
 
-function fakeSecuritySource(): string {
+/**
+ * The `secrets` CLI as Accounts invokes it: structurally, `exec <key> --as
+ * <VAR> -- <cmd> [args...]`, injecting the value into the CHILD's env only.
+ * The injected value is synthetic and is never written to any log or output.
+ */
+function fakeSecretsSource(): string {
   return `
+import { spawnSync } from "node:child_process";
+const args = process.argv.slice(2);
+if (args[0] !== "exec") process.exit(64);
+const key = args[1];
+const asIndex = args.indexOf("--as");
+const sep = args.indexOf("--");
+if (asIndex < 0 || sep < 0 || sep !== asIndex + 2) process.exit(65);
+const varName = args[asIndex + 1];
+if (process.env.FAKE_VAULT_EMPTY !== "1") {
+  process.env[varName] = "VAULT-SECRET-" + key;
+}
+const result = spawnSync(args[sep + 1], args.slice(sep + 2), { stdio: "inherit", env: process.env });
+process.exit(result.status === null ? 1 : result.status);
+`;
+}
+
+function fakeSecuritySource(): string {  return `
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const command = args[0];
@@ -315,6 +341,9 @@ function claudeEntries(): Array<{
   active?: string;
   supervisor?: string;
   keychainAccount?: string;
+  authTokenPresent?: boolean;
+  baseUrl?: string;
+  model?: string;
 }> {
   return entries(claudeLog);
 }
@@ -891,4 +920,48 @@ test("SIGTERM during keychain mutation still restores the prior credential", asy
   expect(completed.code).toBe(143);
   expect(readKeychain()).toEqual({ account: "prior", secret: "prior-credential-value" });
   expect(existsSync(keychainLock)).toBe(false);
+});
+
+describe("backend routing launch", () => {
+  test("a profile bound to a backend launches through a structural secrets exec wrapper", async () => {
+    expectStatus(runCli(["backend", "add", "--example", "deepseek"]), 0);
+    addProfile("routed");
+    expectStatus(runCli(["set", "routed", "--backend", "deepseek"]), 0);
+
+    const result = runCli([
+      "launch", "routed", "--tool", "claude", "--skip-configs", "--headless", "--", "Backend prompt",
+    ]);
+    expectStatus(result, 0);
+
+    // The display names the vault LOCATOR and the adapter auth var, never a value.
+    expect(result.stderr).toContain("secrets exec deepseek/api_key --as ANTHROPIC_AUTH_TOKEN -- claude");
+    // The injected synthetic secret value never reaches any transcript surface.
+    expect(result.stderr).not.toContain("VAULT-SECRET");
+    expect(result.stdout).not.toContain("VAULT-SECRET");
+
+    const entry = claudeEntries().at(-1);
+    expect(entry?.configDir).toBe(profileDir("routed"));
+    expect(entry?.args).toContain("Backend prompt");
+    // The wrapper injected the credential into the harness env — structurally.
+    expect(entry?.authTokenPresent).toBe(true);
+    expect(entry?.baseUrl).toBe("https://api.deepseek.com/anthropic");
+    expect(entry?.model).toBe("deepseek-v4-flash[1m]");
+  });
+
+  test("--backend override routes an unbound profile; unknown backends fail closed", async () => {
+    expectStatus(runCli(["backend", "add", "--example", "deepseek"]), 0);
+    addProfile("plain");
+
+    const overridden = runCli([
+      "launch", "plain", "--tool", "claude", "--skip-configs", "--headless", "--backend", "deepseek", "--", "Prompt",
+    ]);
+    expectStatus(overridden, 0);
+    expect(overridden.stderr).toContain("secrets exec deepseek/api_key --as ANTHROPIC_AUTH_TOKEN -- claude");
+
+    const unknown = runCli([
+      "launch", "plain", "--tool", "claude", "--skip-configs", "--headless", "--backend", "missing", "--", "Prompt",
+    ]);
+    expectStatus(unknown, 1);
+    expect(unknown.stderr).toContain('no backend route named "missing"');
+  });
 });
