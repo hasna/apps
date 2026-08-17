@@ -32,7 +32,14 @@ import { dirname, join, resolve } from "path";
 import { fireWebhooks } from "./webhooks.js";
 import { normalizeChannelName, unknownChannelMessage } from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
-import { parseWorkStatusEvent, WORK_STATUS_CHANNEL, workStatusEnvelopeViolation } from "./work-status-envelope.js";
+import {
+  WORK_STATUS_CHANNEL,
+  WORK_STATUS_DUPLICATE_WINDOW_MS,
+  duplicateWorkStatusTransitionViolation,
+  firstLineOf,
+  parseWorkStatusEvent,
+  workStatusEnvelopeViolation,
+} from "./work-status-envelope.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "./content-safety.js";
 import { resolveReadLimit, resolveReadWindow } from "./message-window.js";
 import {
@@ -216,22 +223,6 @@ function checkRateLimit(agentId: string): void {
 }
 
 /**
- * Window within which a repeated lifecycle event for the same task is treated
- * as a duplicate emission rather than a real transition. Measured on the live
- * stream (2026-08-17): duplicate START pairs as close as 57s apart and BLOCKED
- * pairs 24s apart, each with a fresh event_id. A task cannot legitimately
- * re-enter the same lifecycle state within a minute, so a same-state re-post
- * for the same task inside this window is a producer double-fire, and the
- * stream's "one event per real transition" invariant (global-work-status-lifecycle)
- * is enforced by refusing it.
- */
-const WORK_STATUS_DUPLICATE_WINDOW_MS = 60_000;
-
-function firstLineOf(content: string): string {
-  return content.split(/\r?\n/, 1)[0] ?? "";
-}
-
-/**
  * The single `work-status` channel is an append-only lifecycle event stream
  * (global-work-status-lifecycle): every event's first line MUST be the exact
  * machine-parseable envelope. A non-reply send to that channel with a first
@@ -270,20 +261,11 @@ function assertNoDuplicateWorkStatusTransition(db: Database, content: string): v
      ORDER BY id DESC`,
   ).all(WORK_STATUS_CHANNEL, cutoff) as Array<{ content: string }>;
 
-  for (const row of recent) {
-    const prior = parseWorkStatusEvent(firstLineOf(row.content));
-    if (prior === null) continue;
-    if (prior.task_id !== event.task_id) continue;
-    // Rows are newest-first, so the first same-task row is that task's most
-    // recent event; only a same-state consecutive pair is a duplicate.
-    if (prior.state === event.state) {
-      throw new Error(
-        `work-status duplicate transition: ${event.state} for task ${event.task_id} already recorded ` +
-          `(event_id ${prior.event_id} at ${prior.at}); one event per real transition`,
-      );
-    }
-    return;
-  }
+  const violation = duplicateWorkStatusTransitionViolation(
+    recent.map((row) => row.content),
+    event,
+  );
+  if (violation !== null) throw new Error(violation);
 }
 
 function assertNoSensitiveSendFields(opts: SendMessageOptions, serializedMetadata: string | null): void {

@@ -3090,3 +3090,222 @@ describe("G6 bounded analytics projections on /v1", () => {
     }
   });
 });
+
+describe("POST /v1/messages work-status lifecycle guards (hosted path)", () => {
+  // The hosted /v1/messages handler performs its own inline INSERT and never
+  // reached the local sendMessage guards, so the measured defect classes —
+  // a JSON document as the message (id 701771), an empty event_id (id
+  // 702774), invalid state values, and 96 consecutive same-state duplicate
+  // pairs written 24-57s apart with fresh event_ids — were written through
+  // THIS path (conversations.hasna.xyz). These tests prove the same write-time
+  // envelope and duplicate-transition guards now run here, mirroring the local
+  // send-guard tests.
+  const EVENT_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const TASK_ID = "12345678-1234-4234-8234-123456789abc";
+  const OTHER_TASK_ID = "22345678-1234-4234-8234-123456789abc";
+  const SESSION_ID = "a1b2c3d4-e5f6-47a8-9b0c-1d2e3f4a5b6c";
+  const CLAIM_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+  const workStatusChannelSeed = {
+    id: "chn_00000000000000000000000000000051",
+    name: "work-status",
+    description: null,
+    topic: null,
+    project_id: null,
+    created_by: "test",
+    created_at: "2026-08-17T00:00:00.000Z",
+    archived_at: null,
+    metadata: null,
+    tags: null,
+  };
+
+  function envelope(
+    state = "START",
+    taskId = TASK_ID,
+    eventId = EVENT_ID,
+    at = new Date().toISOString(),
+  ): string {
+    return [
+      state,
+      `event_id=${eventId}`,
+      `task_id=${taskId}`,
+      "scope=todos:open-todos",
+      "agent=test-agent",
+      `session=${SESSION_ID}`,
+      `at=${at}`,
+      `claim=${CLAIM_ID}`,
+      "evidence=-",
+    ].join(" ");
+  }
+
+  function postWorkStatus(content: string, extra: Record<string, unknown> = {}) {
+    return fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ from: "test-agent", channel: "work-status", content, ...extra }),
+    });
+  }
+
+  function workStatusMessageCount(): number {
+    return activeFakeClient!.__debug.messages.filter((row: any) => row.channel === "work-status").length;
+  }
+
+  test("a valid lifecycle envelope is accepted through the hosted path", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const before = workStatusMessageCount();
+    const response = await postWorkStatus(envelope("START", OTHER_TASK_ID));
+    expect(response.status).toBe(201);
+    expect(((await response.json()).message as any).content.startsWith("START event_id=")).toBe(true);
+    expect(workStatusMessageCount()).toBe(before + 1);
+  });
+
+  // (b) — malformed first lines measured on the live stream. Each must be
+  // rejected with a 4xx reason on the hosted path and leave the stream
+  // untouched, mirroring the local send-guard tests.
+  const malformedFirstLines: Array<[string, string]> = [
+    [
+      "an entire JSON document as the message (id 701771, agent-chief-finance)",
+      JSON.stringify({ event: "DONE", task_id: OTHER_TASK_ID }),
+    ],
+    [
+      "empty event_id (id 702774, agent-chief-staff)",
+      `START event_id= task_id=${OTHER_TASK_ID} scope=todos:open-todos agent=test-agent session=${SESSION_ID} at=2026-08-17T10:00:00Z claim=${CLAIM_ID} evidence=-`,
+    ],
+    [
+      "literal template word STATE as the state (ids 685044, 684554)",
+      `STATE event_id=${EVENT_ID} task_id=${OTHER_TASK_ID} scope=todos:open-todos agent=test-agent session=${SESSION_ID} at=2026-08-17T10:00:00Z claim=${CLAIM_ID} evidence=-`,
+    ],
+    [
+      "CONTINUE is not a lifecycle state (id 686051)",
+      `CONTINUE event_id=${EVENT_ID} task_id=${OTHER_TASK_ID} scope=todos:open-todos agent=test-agent session=${SESSION_ID} at=2026-08-17T10:00:00Z claim=${CLAIM_ID} evidence=-`,
+    ],
+    [
+      "IN_PROGRESS is not a lifecycle state (id 684083)",
+      `IN_PROGRESS event_id=${EVENT_ID} task_id=${OTHER_TASK_ID} scope=todos:open-todos agent=test-agent session=${SESSION_ID} at=2026-08-17T10:00:00Z claim=${CLAIM_ID} evidence=-`,
+    ],
+    [
+      "PENDING is not a lifecycle state (id 683838)",
+      `PENDING event_id=${EVENT_ID} task_id=${OTHER_TASK_ID} scope=todos:open-todos agent=test-agent session=${SESSION_ID} at=2026-08-17T10:00:00Z claim=${CLAIM_ID} evidence=-`,
+    ],
+    [
+      "PROGRESS is not a lifecycle state (id 683694)",
+      `PROGRESS event_id=${EVENT_ID} task_id=${OTHER_TASK_ID} scope=todos:open-todos agent=test-agent session=${SESSION_ID} at=2026-08-17T10:00:00Z claim=${CLAIM_ID} evidence=-`,
+    ],
+    [
+      "extra outcome= field with missing claim (id 683973)",
+      `DONE event_id=${EVENT_ID} task_id=${OTHER_TASK_ID} scope=todos:open-todos agent=test-agent session=${SESSION_ID} at=2026-08-17T10:00:00Z outcome=success evidence=-`,
+    ],
+    [
+      "retired [WORKLOG] prefix",
+      `[WORKLOG] ${envelope("START", OTHER_TASK_ID)}`,
+    ],
+    [
+      "free-form prose first line",
+      "blocker cleared, resuming the migration now",
+    ],
+  ];
+
+  for (const [name, firstLine] of malformedFirstLines) {
+    test(`${name} is rejected with a 400 reason on the hosted path`, async () => {
+      const before = workStatusMessageCount();
+      const response = await postWorkStatus(firstLine);
+      expect(response.status).toBe(400);
+      expect(((await response.json()) as any).error).toContain("work-status lifecycle event rejected");
+      expect(workStatusMessageCount()).toBe(before);
+    });
+  }
+
+  test("the hosted-path rejection names the lifecycle envelope as the reason", async () => {
+    const response = await postWorkStatus("prose is not an envelope");
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as any).error).toContain("work-status lifecycle");
+  });
+
+  test("the hosted guard is scoped to work-status: prose on other channels still sends", async () => {
+    activeFakeClient!.__debug.seedChannel({
+      id: "chn_00000000000000000000000000000052",
+      name: "work-status-guard-general",
+      description: null,
+      topic: null,
+      project_id: null,
+      created_by: "test",
+      created_at: "2026-08-17T00:00:00.000Z",
+      archived_at: null,
+      metadata: null,
+      tags: null,
+    }, [], []);
+    const response = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ from: "test-agent", channel: "work-status-guard-general", content: "ordinary prose is fine here" }),
+    });
+    expect(response.status).toBe(201);
+  });
+
+  test("a reply to a work-status message is commentary and is not envelope-checked on the hosted path", async () => {
+    const parentResponse = await postWorkStatus(envelope("BLOCKED", OTHER_TASK_ID));
+    expect(parentResponse.status).toBe(201);
+    const parent = (await parentResponse.json()).message as { id: number; uuid: string };
+    const before = workStatusMessageCount();
+    const reply = await postWorkStatus("why is this blocked?", {
+      reply_to: parent.id,
+      reply_to_uuid: parent.uuid,
+    });
+    expect(reply.status).toBe(201);
+    expect(((await reply.json()).message as any).reply_to).toBe(parent.id);
+    expect(workStatusMessageCount()).toBe(before + 1);
+  });
+
+  // (a) — duplicate transitions. The measured defect class was written through
+  // the hosted path, so the dedupe guard must run there too. Each test uses
+  // its own task id so the shared in-memory store cannot leak a prior event
+  // into the window.
+  test("the same state for the same task within the window is rejected on the hosted path (START double-fire)", async () => {
+    const taskId = "32345678-1234-4234-8234-123456789abc";
+    const first = await postWorkStatus(envelope("START", taskId, EVENT_ID));
+    expect(first.status).toBe(201);
+    const before = workStatusMessageCount();
+    const duplicate = await postWorkStatus(envelope("START", taskId, "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"));
+    expect(duplicate.status).toBe(400);
+    expect(((await duplicate.json()) as any).error).toContain("work-status duplicate transition");
+    expect(workStatusMessageCount()).toBe(before);
+  });
+
+  test("the same state for the same task within the window is rejected on the hosted path (BLOCKED too)", async () => {
+    const taskId = "42345678-1234-4234-8234-123456789abc";
+    const first = await postWorkStatus(envelope("BLOCKED", taskId, EVENT_ID));
+    expect(first.status).toBe(201);
+    const before = workStatusMessageCount();
+    const duplicate = await postWorkStatus(envelope("BLOCKED", taskId, "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"));
+    expect(duplicate.status).toBe(400);
+    expect(((await duplicate.json()) as any).error).toContain("work-status duplicate transition");
+    expect(workStatusMessageCount()).toBe(before);
+  });
+
+  test("a different state for the same task within the window is a real transition on the hosted path", async () => {
+    const taskId = "52345678-1234-4234-8234-123456789abc";
+    const start = await postWorkStatus(envelope("START", taskId, EVENT_ID));
+    expect(start.status).toBe(201);
+    const blocked = await postWorkStatus(envelope("BLOCKED", taskId, "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"));
+    expect(blocked.status).toBe(201);
+  });
+
+  test("BLOCKED -> RESUMED -> BLOCKED is a real sequence and is not deduped on the hosted path", async () => {
+    const taskId = "62345678-1234-4234-8234-123456789abc";
+    for (const [index, state] of ["BLOCKED", "RESUMED", "BLOCKED"].entries()) {
+      const response = await postWorkStatus(
+        envelope(state, taskId, `cccccccc-dddd-${4 + index}eee-8fff-00000000000${index + 1}`),
+      );
+      expect(response.status).toBe(201);
+    }
+  });
+
+  test("a duplicate for a different task within the window is not deduped on the hosted path", async () => {
+    const firstTask = "72345678-1234-4234-8234-123456789abc";
+    const secondTask = "82345678-1234-4234-8234-123456789abc";
+    const first = await postWorkStatus(envelope("START", firstTask, EVENT_ID));
+    expect(first.status).toBe(201);
+    const second = await postWorkStatus(envelope("START", secondTask, "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"));
+    expect(second.status).toBe(201);
+  });
+});

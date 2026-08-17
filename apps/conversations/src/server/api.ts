@@ -29,6 +29,7 @@ import { extractTopics } from "../lib/topic-extract.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "../lib/content-safety.js";
 import { resolveSelfSenderId } from "../lib/sender-identity.js";
 import { normalizeMessageUuid, parseMessageReference } from "../lib/message-reference.js";
+import { WORK_STATUS_CHANNEL, WORK_STATUS_DUPLICATE_WINDOW_MS, duplicateWorkStatusTransitionViolation, firstLineOf, parseWorkStatusEvent, workStatusEnvelopeViolation } from "../lib/work-status-envelope.js";
 import { normalizeExactIsoTimestamp } from "../lib/since.js";
 import { PROJECT_LIST_ORDER, pinnedOrderByClause, simpleOrderByClause } from "../lib/list-order.js";
 import { decodeAttachmentUploads } from "../lib/attachments.js";
@@ -1063,6 +1064,35 @@ export function startApiServer(options: StartApiServerOptions = {}) {
 
 // ---- /v1 router -------------------------------------------------------------
 
+/**
+ * Refuse a second lifecycle event for the same task in the same state inside
+ * the dedupe window, on the hosted Postgres path. Mirror of the local
+ * sendMessage guard (messages.ts): same SQL filter (channel = work-status,
+ * reply_to IS NULL, created_at within the window, newest first), same shared
+ * decision logic (duplicateWorkStatusTransitionViolation). Runs inside the
+ * send transaction, so the refused duplicate never reaches the stream; the
+ * thrown error aborts the transaction and surfaces as a 400 with the reason.
+ */
+async function assertNoDuplicateWorkStatusTransitionPg(
+  tx: TypedQueryClient,
+  content: string,
+): Promise<void> {
+  const event = parseWorkStatusEvent(firstLineOf(content));
+  if (event === null) return; // envelope already validated before the transaction
+  const cutoff = new Date(Date.now() - WORK_STATUS_DUPLICATE_WINDOW_MS).toISOString();
+  const rows = await tx.many<{ content: string }>(
+    `SELECT content FROM messages
+     WHERE channel = $1 AND reply_to IS NULL AND created_at >= $2
+     ORDER BY id DESC`,
+    [WORK_STATUS_CHANNEL, cutoff],
+  );
+  const violation = duplicateWorkStatusTransitionViolation(
+    rows.map((row) => row.content),
+    event,
+  );
+  if (violation !== null) throw new Error(violation);
+}
+
 async function handleV1(
   path: string,
   method: string,
@@ -2011,6 +2041,22 @@ async function handleV1(
     // A channel message addresses the channel itself; a DM needs an explicit `to`.
     const toAgent = channelName ?? str(body.to);
     if (!from || !toAgent || !content) return json({ error: "from, to (or channel), and content are required" }, 400);
+    // The single `work-status` channel is an append-only lifecycle event stream
+    // (global-work-status-lifecycle): every event's FIRST LINE must be the exact
+    // machine-parseable envelope, so the shapes measured on the live stream — a
+    // JSON document as the message, an empty event_id, invalid state values,
+    // missing fields — cannot reach the stream through the hosted path either.
+    // A non-reply send to that channel with a violating first line is refused
+    // with the reason. Replies are commentary, not events, and are not
+    // envelope-checked. `!replyParent` is the same predicate the local path
+    // expresses as `!requestedReplyUuid`; the two must stay in step, because a
+    // guard present on only one backend is absent exactly where it matters.
+    if (!replyParent && channelName === WORK_STATUS_CHANNEL) {
+      const violation = workStatusEnvelopeViolation(firstLineOf(content));
+      if (violation !== null) {
+        return json({ error: `work-status lifecycle event rejected: ${violation}` }, 400);
+      }
+    }
     // `messages.channel` is free text with no foreign key to `channels`, so a
     // typo'd name wrote an ORPHAN: readable by digest, invisible to
     // `GET /channels` (which selects FROM channels), and unarchivable (todos
@@ -2066,6 +2112,18 @@ async function handleV1(
           }
           projectId = channelRow.project_id;
         }
+      }
+      // Refuse a second lifecycle event for the same task in the same state
+      // inside the dedupe window (see the local sendMessage guard): the
+      // measured defect class — 96 consecutive same-state pairs, 24-57s apart,
+      // each with a fresh event_id — was written through this hosted path, so
+      // the check runs here too, inside the transaction, before the INSERT.
+      // Only the task's MOST RECENT event decides, so BLOCKED -> RESUMED ->
+      // BLOCKED is a real sequence and is not deduped. The decision logic is
+      // shared with the local path (work-status-envelope.ts) so the two cannot
+      // drift apart.
+      if (channelName === WORK_STATUS_CHANNEL && !replyTo) {
+        await assertNoDuplicateWorkStatusTransitionPg(tx, content);
       }
       const inserted = await tx.get<Record<string, unknown>>(
         `INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
