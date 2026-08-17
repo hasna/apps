@@ -298,7 +298,6 @@ export const CLI_EXCEPTIONS: Array<{ member: string; reason: string; task: strin
  * when #102 added its manifest on 2026-08-14) — each recorded with the
  * manifest lane pointer (aggregate task; see README). */
 export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string }> = [
-  { member: "announce", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "brains", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "browser", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "changelog", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
