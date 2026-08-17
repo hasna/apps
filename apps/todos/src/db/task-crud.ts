@@ -740,13 +740,33 @@ function updateTaskStored(
       // and failTask paths always cleared it; only this generic patch path did not.
       sets.push("locked_by = NULL");
       sets.push("locked_at = NULL");
-    }
-    if (input.status === "completed") {
-      sets.push("completed_at = ?");
-      params.push(completionTimestamp);
+      // End-timestamp contract: a TERMINAL row must be datable by recency reads
+      // (recap/standup filter on `completed_at > since`). Measured 2026-08-17:
+      // 1,569 completed rows with NULL completed_at and 123 failed rows with
+      // neither started_at nor completed_at silently dropped out of activity
+      // surfaces. "completed" stamps the transition moment unconditionally
+      // (existing behaviour); "failed"/"cancelled" stamp only when none exists,
+      // so a row that was genuinely completed earlier keeps its real completion
+      // clock when it is reopened and then failed/cancelled.
+      if (input.status === "completed") {
+        sets.push("completed_at = ?");
+        params.push(completionTimestamp);
+      } else {
+        sets.push("completed_at = COALESCE(completed_at, ?)");
+        params.push(completionTimestamp);
+      }
     } else if (task.status === "completed" && input.completed_at === undefined) {
       // M3: reopening a completed task clears the stale completed_at.
       sets.push("completed_at = NULL");
+    }
+    if (input.status === "in_progress") {
+      // started_at contract: driving a row to in_progress WITHOUT the start verb
+      // must still stamp the start time when none exists, so a row that fails
+      // before anyone ran `todos start` remains datable end-to-end. COALESCE
+      // keeps the first start time. Assignment alone never stamps it (a
+      // delegated-but-unclaimed row must stay visibly unclaimed).
+      sets.push("started_at = COALESCE(started_at, ?)");
+      params.push(timestamp);
     }
   }
   if (input.priority !== undefined) {
@@ -923,7 +943,6 @@ function updateTaskStored(
 
   // Determine the post-write completion timestamp / lock state to mirror the SQL above.
   const reopened = input.status !== undefined && input.status !== "completed" && task.status === "completed" && input.completed_at === undefined;
-  const completedNow = input.status === "completed";
   // Mirrors the `isTerminalStatus` branch in the SQL above. These two must agree:
   // when they did not, the row was written correctly and the object returned to
   // the caller still reported the released lock as held.
@@ -937,7 +956,26 @@ function updateTaskStored(
     updated_at: timestamp,
     locked_by: terminalNow ? null : task.locked_by,
     locked_at: terminalNow ? null : task.locked_at,
-    completed_at: completedNow ? completionTimestamp : reopened ? null : input.completed_at !== undefined ? input.completed_at : task.completed_at,
+    completed_at:
+      // Mirrors the SQL assignment order exactly, arm by arm (the LAST SET for
+      // a column wins, and the generic explicit-value branch below the status
+      // block writes `input.completed_at` verbatim — including an explicit
+      // NULL — for every status except "completed"):
+      //   "completed"           -> completionTimestamp (input.completed_at ?? timestamp)
+      //   other status, value   -> input.completed_at verbatim (NULL included)
+      //   failed/cancelled, none-> COALESCE(completed_at, completionTimestamp)
+      //   reopen (M3), none     -> NULL
+      //   otherwise             -> unchanged
+      input.status === "completed"
+        ? completionTimestamp
+        : input.completed_at !== undefined
+          ? input.completed_at
+          : terminalNow
+            ? (task.completed_at ?? completionTimestamp)
+            : reopened
+              ? null
+              : task.completed_at,
+    started_at: input.status === "in_progress" ? (task.started_at ?? timestamp) : task.started_at,
     sla_minutes: input.sla_minutes !== undefined ? input.sla_minutes : task.sla_minutes,
     actual_minutes: input.actual_minutes ?? task.actual_minutes,
     confidence: input.confidence !== undefined ? input.confidence : task.confidence,

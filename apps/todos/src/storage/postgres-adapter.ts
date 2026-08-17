@@ -2314,9 +2314,42 @@ async function updateTask(
     created_by: existing.created_by,
     // Match SQLite lifecycle semantics: reopening clears the current completion
     // clock, while evidence and completion metadata remain as immutable history.
-    completed_at: reopened
-      ? null
-      : input.completed_at !== undefined ? input.completed_at : existing.completed_at,
+    //
+    // End-timestamp contract (mirrors db/task-crud.updateTask): reaching a
+    // TERMINAL status stamps the end timestamp when none exists, so recency
+    // reads (recap/standup filter on `completed_at > since`) can date the row.
+    // Measured 2026-08-17: 1,569 completed rows with NULL completed_at and
+    // 123 failed rows with neither started_at nor completed_at silently
+    // dropped out of activity surfaces. PATCHing `{status:"completed"}` with
+    // no completed_at previously left the column NULL on this lane, unlike
+    // SQLite. Existing values are never clobbered.
+    completed_at:
+      // Mirrors the SQLite lane's SQL assignment order arm by arm (see
+      // db/task-crud.updateTaskStored — the LAST SET wins, and the generic
+      // explicit-value branch writes input.completed_at verbatim, NULL
+      // included, for every status except "completed"):
+      //   "completed"           -> input.completed_at ?? now (completionTimestamp)
+      //   other status, value   -> input.completed_at verbatim (NULL included)
+      //   failed/cancelled, none-> existing ?? now (COALESCE)
+      //   reopen (M3), none     -> null
+      //   otherwise             -> unchanged
+      input.status === "completed"
+        ? (input.completed_at ?? new Date().toISOString())
+        : input.completed_at !== undefined
+          ? input.completed_at
+          : input.status !== undefined && isTerminalStatus(input.status)
+            ? (existing.completed_at ?? new Date().toISOString())
+            : reopened
+              ? null
+              : existing.completed_at,
+    // started_at contract: driving a row to in_progress WITHOUT the start verb
+    // stamps the start time when none exists, so a row that fails before
+    // anyone ran `todos start` remains datable end-to-end. Assignment alone
+    // never stamps it (a delegated-but-unclaimed row stays visibly unclaimed).
+    started_at:
+      input.status === "in_progress"
+        ? (existing.started_at ?? new Date().toISOString())
+        : existing.started_at,
   };
   const storedTask = await store.upsertTaskWithPlanMembershipGuard(
     task,
@@ -2399,6 +2432,10 @@ async function failTask(
     assigned_to: task.assigned_to ?? agentId ?? null,
     reason: reason ?? task.reason,
     retry_after: options?.retry_after ?? task.retry_after,
+    // End-timestamp contract (mirrors db/task-lifecycle.failTask): a failed
+    // row must be datable by recency reads. Preserve an existing completion
+    // time when the row was genuinely completed earlier and then reopened.
+    completed_at: task.completed_at ?? new Date().toISOString(),
   }, store);
   if (!options?.retry) return { task: failed };
   const retryTask = await createTask({

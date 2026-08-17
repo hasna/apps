@@ -25,16 +25,23 @@ Start the @hasna/todos dashboard server.
 Commands:
   migrate                 Apply idempotent schema migrations
   redact-comments         Preview historical comment redaction (dry-run by default)
+  backfill-timestamps     Preview the terminal-status timestamp backfill
+                          (dry-run by default)
 
 Options:
   --port <port>     HTTP port to bind. Defaults to ${DEFAULT_PORT}
   --host <host>     Hostname to bind. Defaults to 127.0.0.1
   --api-key <key>   Require this API key for dashboard/API requests
   --no-open         Do not open the dashboard in a browser
-  --batch-size <n>  redact-comments batch size, 1-500 (default: 100)
-  --apply           Apply redact-comments changes (default is dry-run)
+  --batch-size <n>  redact-comments / backfill-timestamps batch size,
+                    1-500 (default: 100)
+  --apply           Apply changes (default is dry-run) for redact-comments
+                    and backfill-timestamps
   --confirm <value> Explicit confirmation required with --apply
-  --json            Emit redact-comments aggregate JSON
+  --evidence-path <path>
+                    backfill-timestamps: pre-state evidence file, REQUIRED
+                    with --apply (written before any mutation)
+  --json            Emit redact-comments / backfill-timestamps aggregate JSON
   -V, --version     output the version number
   -h, --help        display help for command
 
@@ -156,6 +163,56 @@ async function runCommentRedactionBackfill(): Promise<void> {
   }
 }
 
+async function runTimestampBackfill(): Promise<void> {
+  const {
+    backfillCloudTimestamps,
+    resolveCloudDatabaseUrl,
+    closeCloud,
+  } = await import("./cloud.js");
+  const {
+    TIMESTAMP_BACKFILL_CONFIRMATION,
+  } = await import("../storage/timestamp-backfill.js");
+  if (!resolveCloudDatabaseUrl()) {
+    console.error("backfill-timestamps: no database URL (HASNA_TODOS_DATABASE_URL / TODOS_DATABASE_URL / DATABASE_URL)");
+    process.exit(2);
+  }
+
+  const apply = process.argv.includes("--apply");
+  const rawBatchSize = parseStringArg("--batch-size");
+  const evidencePath = parseStringArg("--evidence-path");
+  try {
+    const report = await backfillCloudTimestamps({
+      apply,
+      confirmation: parseStringArg("--confirm"),
+      batchSize: rawBatchSize === undefined ? 100 : Number(rawBatchSize),
+      evidencePath,
+    });
+    if (process.argv.includes("--json")) {
+      console.log(JSON.stringify(report));
+    } else {
+      console.log(
+        `backfill-timestamps: ${report.dry_run ? "dry-run" : "applied"}; ` +
+        `scanned=${report.scanned} candidates=${report.candidates} ` +
+        `completed_at_backfilled=${report.completed_at_backfilled} ` +
+        `started_at_backfilled=${report.started_at_backfilled} batches=${report.batches} ` +
+        `remaining=${report.remaining_candidates}`,
+      );
+      if (report.dry_run && report.candidates > 0) {
+        console.log(
+          `backfill-timestamps: obtain approval before using ` +
+          `--apply --confirm=${TIMESTAMP_BACKFILL_CONFIRMATION} --evidence-path=<path>`,
+        );
+      }
+    }
+  } catch (error) {
+    const message = (error as Error).message.replace(/postgres(?:ql)?:\/\/[^@\s]+@/gi, "postgresql://[REDACTED]@");
+    console.error(`backfill-timestamps: failed: ${message}`);
+    process.exitCode = 1;
+  } finally {
+    await closeCloud();
+  }
+}
+
 async function main() {
   if (hasVersionFlag()) {
     console.log(getPackageVersion());
@@ -173,6 +230,10 @@ async function main() {
   }
   if (process.argv.includes("redact-comments")) {
     await runCommentRedactionBackfill();
+    return;
+  }
+  if (process.argv.includes("backfill-timestamps")) {
+    await runTimestampBackfill();
     return;
   }
   // When PORT is set (container/service deployment) bind it EXACTLY — never scan
