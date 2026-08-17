@@ -309,7 +309,6 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "markdown", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "repos", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "skills", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "search", reason: "No hasna.contract.json; manifest lane (todos 41208cbe). Imported by #68." },
   { member: "snapshots", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "statusline", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "styles", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
@@ -444,6 +443,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos eb3f331d (contracts task — prompts)",
   },
   {
+    member: "search",
+    cause: "surface_matrix (api/sdk missing or unwaived) and service_api_topology (a supported API surface is required); self_host_artifact (service-class repos require a self-host deployment artifact); storage_capabilities (storage.pgTestGate is required to prove live PostgreSQL support); published_artifact_gate (metadata.release.artifactScan.script is required). Manifest imported by the hasna-org delta lane (2026-08-17).",
+    task: "todos 405a8c38-d59a-4a96-948f-943e9a17241c (reconcile @hasna/search contracts conformance — auto-filed)",
+  },
+  {
     member: "router",
     cause: "bins_match_package (package.json ships bin open-router that the manifest does not declare) and surface_matrix (api/sdk/mcp/cli missing or unwaived); published_artifact_gate (metadata.release.artifactScan.script is required). Manifest imported by the hasna-org delta lane (2026-08-17).",
     task: "todos 93a8e6ac-b447-4605-9af5-bf73ff0a9bb1 (reconcile @hasna/router contracts conformance — auto-filed)",
@@ -528,6 +532,7 @@ export const NO_VALIDATOR_PIN: string[] = [
   "sheets",
   "slides",
   "tables",
+  "search",
   "router",
   "releases",
   "ui",
