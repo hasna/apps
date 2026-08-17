@@ -328,20 +328,33 @@ export function registerCrudCommands(program: Command): void {
         //
         // So: resolve the writing identity when --agent is omitted
         // (MEMENTOS_AGENT, then the fleet surface ~/.hasna/conversations/
-        // agent-id), register it on first use, and refuse the write when an
-        // agent-source save has NO resolvable identity.
+        // agent-id), register it on first use, and refuse an agent-source save
+        // that has NO resolvable identity.
+        //
+        // Attribution is applied ONLY to writes that claim an agent author.
+        // An explicit non-agent source (--source user|system|auto|imported) is
+        // not an agent claim and never receives ambient attribution — its
+        // bucket identity (which includes agent_id) must stay stable for
+        // unowned rows. An omitted source on a machine with no resolvable
+        // identity writes UNOWNED rather than failing, which preserves the
+        // documented zero-configuration quick start (README + `mementos init`);
+        // only an EXPLICIT --source agent save with no resolvable identity is
+        // refused.
         const requestedSource = opts.source as MemorySource | undefined;
-        if (!resolvedAgentId) {
+        const claimsAgentAuthor =
+          !requestedSource || requestedSource === "agent";
+        if (!resolvedAgentId && claimsAgentAuthor) {
           const writingName = resolveWritingAgentName();
           if (writingName) {
             resolvedAgentId =
               getAgent(writingName)?.id ?? registerAgent(writingName).id;
-          } else if (!requestedSource || requestedSource === "agent") {
+          } else if (requestedSource === "agent") {
             throw new Error(
               `No agent identity: an agent-source save needs a writing agent, and none could be resolved.\n` +
                 `Pass --agent <name>, set MEMENTOS_AGENT, or write the fleet identity file ` +
                 `(~/.hasna/conversations/agent-id, produced by "conversations agents register").\n` +
-                `Alternatively pass --source user|system|auto|imported to write without claiming an agent author.`,
+                `To write without claiming an agent author, omit --source or pass ` +
+                `--source user|system|auto|imported.`,
             );
           }
         }

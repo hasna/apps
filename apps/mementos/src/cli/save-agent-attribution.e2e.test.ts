@@ -72,16 +72,17 @@ async function runCli(
   return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode: await proc.exited };
 }
 
-function readMemories(): { key: string; agent_id: string | null; created_by_agent: string | null; updated_by_agent: string | null; source: string }[] {
+function readMemories(): { key: string; value: string; agent_id: string | null; created_by_agent: string | null; updated_by_agent: string | null; source: string }[] {
   const db = new Database(DB_PATH, { readonly: true });
   try {
     return db
       .query(
-        `SELECT key, agent_id, created_by_agent, updated_by_agent, source
+        `SELECT key, value, agent_id, created_by_agent, updated_by_agent, source
          FROM memories WHERE key LIKE 'attr-%' ORDER BY key`,
       )
       .all() as {
       key: string;
+      value: string;
       agent_id: string | null;
       created_by_agent: string | null;
       updated_by_agent: string | null;
@@ -154,9 +155,11 @@ describe("save: agent-source writes carry the writing agent identity", () => {
     expect(row!.agent_id).toBe(saved.agent_id);
   });
 
-  test("FAILING: an agent-source save with NO resolvable identity is refused and writes NOTHING", async () => {
+  test("FAILING: an EXPLICIT --source agent save with NO resolvable identity is refused and writes NOTHING", async () => {
     const env = envWithNoIdentity();
-    const { stdout, exitCode } = await runCli(env, "--json", "save", "attr-refused", "v1");
+    const { stdout, exitCode } = await runCli(
+      env, "--json", "save", "attr-refused", "v1", "--source", "agent",
+    );
     expect(exitCode).toBe(1);
 
     const parsed = JSON.parse(stdout) as { error?: string };
@@ -172,6 +175,23 @@ describe("save: agent-source writes carry the writing agent identity", () => {
     expect(rows.find((r) => r.key === "attr-refused")).toBeUndefined();
   });
 
+  test("an OMITTED source with no identity saves UNOWNED (zero-config quick start)", async () => {
+    // README + `mementos init` document a bare `mementos save` on a machine
+    // with no service configuration. A save that claims no agent author must
+    // not throw on such a machine — it writes the unowned bucket, as it did
+    // before attribution was enforced.
+    const env = envWithNoIdentity();
+    const { stdout, exitCode } = await runCli(env, "--json", "save", "attr-quickstart", "v1");
+    expect(exitCode).toBe(0);
+    const saved = JSON.parse(stdout) as { agent_id: string | null; source: string | null };
+    expect(saved.agent_id).toBeNull();
+
+    const rows = readMemories();
+    const row = rows.find((r) => r.key === "attr-quickstart");
+    expect(row).toBeTruthy();
+    expect(row!.agent_id).toBeNull();
+  });
+
   test("a NON-agent source with no identity still saves (no agent claim to attribute)", async () => {
     const env = envWithNoIdentity();
     const { stdout, exitCode } = await runCli(
@@ -181,6 +201,63 @@ describe("save: agent-source writes carry the writing agent identity", () => {
     const saved = JSON.parse(stdout) as { agent_id: string | null; source: string };
     expect(saved.source).toBe("user");
     expect(saved.agent_id).toBeNull();
+  });
+
+  test("a NON-agent source with an identity PRESENT still saves UNOWNED", async () => {
+    // An explicit non-agent source is not an agent claim, so an ambient
+    // identity must not be attached even when one is resolvable — otherwise
+    // the bucket identity of unowned non-agent rows would silently change
+    // depending on machine state, contradicting the refusal remedy text.
+    const env = testEnv({ MEMENTOS_AGENT: AGENT_NAME });
+    const { stdout, exitCode } = await runCli(
+      env, "--json", "save", "attr-user-ambient", "v1", "--source", "system",
+    );
+    expect(exitCode).toBe(0);
+    const saved = JSON.parse(stdout) as { agent_id: string | null; source: string };
+    expect(saved.source).toBe("system");
+    expect(saved.agent_id).toBeNull();
+
+    const rows = readMemories();
+    const row = rows.find((r) => r.key === "attr-user-ambient");
+    expect(row!.agent_id).toBeNull();
+  });
+
+  test("competing identities on the same key are isolated — a foreign write is refused, never attributed or merged across", async () => {
+    // Regression for the machine-global identity fallback: two concurrent
+    // sessions (here: two MEMENTOS_AGENT identities) writing the same key
+    // must never attribute a write to the other agent and must never merge
+    // into the other agent's row. The store enforces ONE active row per key:
+    // the fork guard refuses a same-key save whose bucket
+    // (scope/project/session/agent) matches no active row, so a competing
+    // identity's write is REFUSED outright — it cannot land in the other
+    // agent's bucket, and cannot fork a second active row by accident.
+    const envA = testEnv({ MEMENTOS_AGENT: "attribution-agent-a" });
+    const envB = testEnv({ MEMENTOS_AGENT: "attribution-agent-b" });
+
+    const a = await runCli(envA, "--json", "save", "attr-shared-key", "value-from-a");
+    expect(a.exitCode).toBe(0);
+
+    // B's same-key write from a different bucket is refused by the fork guard.
+    const b = await runCli(envB, "--json", "save", "attr-shared-key", "value-from-b");
+    expect(b.exitCode).toBe(1);
+    const bErr = JSON.parse(b.stdout) as { error?: string };
+    expect(String(bErr.error)).toContain("Refusing to fork");
+    expect(String(bErr.error)).toContain("attr-shared-key");
+
+    // A's row is untouched: still one active row, still attributed to A.
+    const rows = readMemories().filter((r) => r.key === "attr-shared-key");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.value).toBe("value-from-a");
+    expect(rows[0]!.agent_id).toBe(JSON.parse(a.stdout).agent_id);
+
+    // A re-saves the same key: the merge upsert lands in A's OWN bucket
+    // (same agent_id), updating the value and never touching any other row.
+    const a2 = await runCli(envA, "--json", "save", "attr-shared-key", "value-from-a-2");
+    expect(a2.exitCode).toBe(0);
+    const rows2 = readMemories().filter((r) => r.key === "attr-shared-key");
+    expect(rows2).toHaveLength(1);
+    expect(rows2[0]!.value).toBe("value-from-a-2");
+    expect(rows2[0]!.agent_id).toBe(JSON.parse(a.stdout).agent_id);
   });
 
   test("FAILING: an upsert (merge) records updated_by_agent as well", async () => {
