@@ -3393,6 +3393,46 @@ export async function cloudCreateTaskList(
     client.transport.post<unknown>("/task-lists", input as unknown as Record<string, unknown>)));
 }
 
+/**
+ * Resolve a task-list reference for `lists --update` (hasna/apps#260).
+ *
+ * An EXPLICIT `--project` on `--update` is a REBIND: the source list may live
+ * outside the destination project. The resolution order matters for both
+ * directions:
+ *
+ * - UUID sources are globally unambiguous, so they resolve unscoped directly —
+ *   the destination scope can neither shadow nor reject them.
+ * - Slug sources resolve scoped-first within the destination (base behaviour:
+ *   slugs are unique inside a project, so an in-scope update with `--project`
+ *   context resolves to the right list even when another project shares the
+ *   slug). Only a CONFIRMED scoped miss ("Task list not found") falls back to
+ *   unscoped, so an unbound or other-scope source can still be rebound.
+ *
+ * Transport, authorization, and ambiguity errors propagate — a scoped HTTP
+ * 500 or 401 must never fall back to unscoped, where it could resolve a
+ * different project's list and mutate the wrong target.
+ */
+export async function cloudResolveTaskListForUpdate(
+  client: HasnaStorageClient,
+  ref: string,
+  projectId: string | undefined,
+  explicitProject: boolean,
+): Promise<string> {
+  if (!explicitProject) return cloudResolveTaskListRef(client, ref, projectId ?? undefined);
+  const trimmed = ref.trim();
+  if (UUID_RE.test(trimmed.toLowerCase())) {
+    return cloudResolveTaskListRef(client, ref, undefined);
+  }
+  try {
+    return await cloudResolveTaskListRef(client, ref, projectId ?? undefined);
+  } catch (error) {
+    if (error instanceof Error && /^Task list not found: /.test(error.message)) {
+      return cloudResolveTaskListRef(client, ref, undefined);
+    }
+    throw error;
+  }
+}
+
 /** Update one cloud task list by exact UUID (`PATCH /v1/task-lists/:id`). */
 export async function cloudUpdateTaskList(
   client: HasnaStorageClient,
