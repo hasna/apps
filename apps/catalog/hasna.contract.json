@@ -8,7 +8,8 @@
   "description": "Read-model app catalog for Hasna distribution. Seeds hasna.app.v1 records into a local SQLite catalog, exposes CLI and MCP read surfaces, and can generate a static public catalog site.",
   "bins": [
     "catalog",
-    "catalog-mcp"
+    "catalog-mcp",
+    "catalog-serve"
   ],
   "hosting": [
     "user-hosted"
