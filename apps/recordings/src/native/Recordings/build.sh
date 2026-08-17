@@ -60,6 +60,20 @@ case "$MODE" in
         exit 2
         ;;
 esac
+# Build variant: empty (default) for the full workspace-window app, "bar" for the
+# menu-bar-only variant (RECORDINGS_VARIANT=bar). Bar builds drop the workspace window,
+# keep the menu-bar record controls, hold-to-talk, live transcription, paste delivery and
+# settings, and name their artifact RecordingsBar-<version>-macos-<target>-local-only.
+# Defaulted before validation because the script runs under `set -u`.
+RECORDINGS_VARIANT="${RECORDINGS_VARIANT:-}"
+case "$RECORDINGS_VARIANT" in
+    ""|bar) ;;
+    *)
+        echo "RECORDINGS_VARIANT must be empty or bar" >&2
+        exit 2
+        ;;
+esac
+readonly RECORDINGS_VARIANT
 if [ "$MODE" = "release" ]; then
     if [ -z "$RELEASE_SUBTYPE" ]; then
         echo "Release builds require an explicit subtype: initial-bootstrap or app-update." >&2
@@ -545,11 +559,15 @@ run_codesign() {
 }
 
 run_swift() {
+    local -a variant_flags=()
+    if [ "$RECORDINGS_VARIANT" = "bar" ]; then
+        variant_flags=(-Xswiftc -DRECORDINGS_BAR_ONLY)
+    fi
     "$ENV_EXECUTABLE" -i \
         HOME="$BUILD_HOME" \
         PATH="$SANITIZED_PATH" \
         TMPDIR="$BUILD_WORK_DIR" \
-        "$SWIFT_EXECUTABLE" "$@"
+        "$SWIFT_EXECUTABLE" "$@" "${variant_flags[@]}"
 }
 
 run_lipo() {
@@ -1300,6 +1318,11 @@ if [ "$MODE" = "release" ] && [ "$HOST_PLATFORM" = "Darwin" ]; then
     fi
 fi
 "$CP_EXECUTABLE" "$SOURCE_NATIVE_DIR/RecordingsLib/Info.plist" "$CONTENTS/Info.plist"
+if [ "$RECORDINGS_VARIANT" = "bar" ]; then
+    # Accessory app: no Dock icon. TCC keys on bundle identifier plus signing identity, so
+    # CFBundleIdentifier stays com.hasna.recordings and only LSUIElement differs here.
+    "$PLIST_BUDDY" -c 'Add :LSUIElement bool true' "$CONTENTS/Info.plist"
+fi
 VERSION="$("$PLIST_BUDDY" -c 'Print :CFBundleShortVersionString' "$CONTENTS/Info.plist")"
 
 compute_release_publication_identity() {
@@ -1643,7 +1666,8 @@ run_codesign --verify --deep --strict --verbose=2 "$APP_DIR"
     TMPDIR="$BUILD_WORK_DIR" \
     SSH_CONNECTION="${SSH_CONNECTION:-}" \
     ${SMOKE_TEST_ENVIRONMENT[0]+"${SMOKE_TEST_ENVIRONMENT[@]}"} \
-    "$BASH_EXECUTABLE" "$SMOKE_SCRIPT" "$APP_DIR" "$BUN_EXECUTABLE"
+    "$BASH_EXECUTABLE" "$SMOKE_SCRIPT" "$APP_DIR" "$BUN_EXECUTABLE" \
+    ${RECORDINGS_VARIANT:+"--variant"} ${RECORDINGS_VARIANT:+"$RECORDINGS_VARIANT"}
 
 publish_app_output() {
     local source_tree_digest
@@ -1833,7 +1857,11 @@ if [ "$MODE" = "debug" ]; then
 fi
 
 if [ "$MODE" = "local" ]; then
-    ARTIFACT_BASENAME="Recordings-${VERSION}-macos-${APPROVED_TARGET}-local-only"
+    if [ "$RECORDINGS_VARIANT" = "bar" ]; then
+        ARTIFACT_BASENAME="RecordingsBar-${VERSION}-macos-${APPROVED_TARGET}-local-only"
+    else
+        ARTIFACT_BASENAME="Recordings-${VERSION}-macos-${APPROVED_TARGET}-local-only"
+    fi
     FINAL_ARCHIVE="$OUTPUT_BUILD_DIR/${ARTIFACT_BASENAME}.zip"
     FINAL_MANIFEST="$OUTPUT_BUILD_DIR/${ARTIFACT_BASENAME}.manifest.json"
     "$RM_EXECUTABLE" -f "$FINAL_ARCHIVE" "$FINAL_MANIFEST"
@@ -1849,7 +1877,8 @@ if [ "$MODE" = "local" ]; then
         --approved-target "$APPROVED_TARGET" \
         --approved-target-identity-kind "$APPROVED_TARGET_IDENTITY_KIND" \
         --approved-target-identity-sha256 "$APPROVED_TARGET_IDENTITY_SHA256" \
-        --expected-team-id "$EXPECTED_TEAM_ID"
+        --expected-team-id "$EXPECTED_TEAM_ID" \
+        ${RECORDINGS_VARIANT:+"--variant"} ${RECORDINGS_VARIANT:+"$RECORDINGS_VARIANT"}
     publish_app_output
     verify_source_unchanged
     echo "Built immutable local-only app artifact: $FINAL_ARCHIVE"

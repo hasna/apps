@@ -3,6 +3,7 @@ import Foundation
 public struct PermissionRequestLaunchPlan: Sendable, Equatable {
     public let isHelper: Bool
     public let opensPermissionSettings: Bool
+    public let isBarOnly: Bool
     public let runtimeSmokeMode: String?
     public let runtimeSmokeOutputPath: String?
     public let runtimeSmokeAcknowledgementPath: String?
@@ -10,7 +11,10 @@ public struct PermissionRequestLaunchPlan: Sendable, Equatable {
 
     public var isRuntimeSmoke: Bool { runtimeSmokeMode != nil }
     public var installsGlobalHandlers: Bool { !isHelper && !isRuntimeSmoke }
-    public var declaresMainWindow: Bool { !isHelper && !isRuntimeSmoke }
+    // Bar-only launch never creates the workspace window: the app exists solely for its
+    // menu-bar record controls, fn/Globe hold-to-talk, live transcription, paste delivery,
+    // and settings. The helper and runtime-smoke launches keep the existing gating above it.
+    public var declaresMainWindow: Bool { !isHelper && !isRuntimeSmoke && !isBarOnly }
     public var declaresMenuBar: Bool {
         if isRuntimeSmoke { return runtimeSmokeMode == "normal" }
         return !isHelper
@@ -21,6 +25,7 @@ public struct PermissionRequestLaunchPlan: Sendable, Equatable {
     public init(arguments: [String]) {
         isHelper = arguments.contains("--request-permissions")
         opensPermissionSettings = isHelper && arguments.contains("--open-permission-settings")
+        isBarOnly = arguments.contains("--bar-only")
         runtimeSmokeMode = Self.optionValue("--runtime-smoke", arguments: arguments)
         runtimeSmokeOutputPath = Self.optionValue("--runtime-smoke-output", arguments: arguments)
         runtimeSmokeAcknowledgementPath = Self.optionValue(

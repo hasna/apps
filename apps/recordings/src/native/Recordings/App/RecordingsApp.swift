@@ -45,8 +45,9 @@ final class RecordingsAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard let state, state.declaresMainWindow else { return false }
         if !flag {
-            state?.openRecordings()
+            state.openRecordings()
         }
         return true
     }
@@ -56,6 +57,8 @@ final class RecordingsAppDelegate: NSObject, NSApplicationDelegate {
 final class RecordingsAppState: ObservableObject {
     let store: RecordingsStore?
     let declaresMenuBar: Bool
+    let declaresMainWindow: Bool
+    let barOnly: Bool
     let runtimeSmokeProbe: RuntimeSmokeProbe?
     private let runtimeSmokeMode: String?
     private let runtimeSmokeOutputPath: String?
@@ -67,6 +70,8 @@ final class RecordingsAppState: ObservableObject {
 
     init(plan: PermissionRequestLaunchPlan) {
         declaresMenuBar = plan.declaresMenuBar
+        declaresMainWindow = plan.declaresMainWindow
+        barOnly = plan.isBarOnly
         runtimeSmokeMode = plan.runtimeSmokeMode
         runtimeSmokeOutputPath = plan.runtimeSmokeOutputPath
         runtimeSmokeAcknowledgementPath = plan.runtimeSmokeAcknowledgementPath
@@ -86,6 +91,9 @@ final class RecordingsAppState: ObservableObject {
     }
 
     func openRecordings() {
+        // Bar-only launch has no workspace window; the guard is what keeps the 1180x760
+        // NSWindow from ever existing, even if a caller reaches this path by accident.
+        guard declaresMainWindow else { return }
         if let store {
             showWindow(contentView: NSHostingView(rootView: ContentView(store: store)))
         } else if runtimeSmokeMode == "normal" {
@@ -181,6 +189,17 @@ final class RecordingsAppState: ObservableObject {
         runtimeSmokeProbe.completed = { [weak self, weak runtimeSmokeProbe] in
             guard let self, let runtimeSmokeProbe else { return }
             let accessibility = RuntimeSmokeAccessibilitySnapshot.processMenuBarExtras()
+            if !self.declaresMainWindow {
+                // Bar-variant smoke: no workspace window exists, so there is nothing to
+                // exercise or settle; report the window-less evidence directly.
+                self.finishRuntimeSmoke(
+                    mode: mode,
+                    surfaceCount: runtimeSmokeProbe.surfaceAppearances,
+                    labels: runtimeSmokeProbe.renderedLabels,
+                    accessibility: accessibility
+                )
+                return
+            }
             self.openRecordings()
             let firstWindow = self.mainWindow
             self.openRecordings()
@@ -316,7 +335,11 @@ struct RecordingsApp: App {
     @SceneBuilder var body: some Scene {
         MenuBarExtra(isInserted: menuBarInsertion) {
             if let store = state.store {
-                MenuBarStatusView(store: store, openRecordings: state.openRecordings)
+                MenuBarStatusView(
+                    store: store,
+                    openRecordings: state.openRecordings,
+                    barOnly: state.barOnly
+                )
             } else if state.runtimeSmokeProbe != nil {
                 EmptyView()
             }

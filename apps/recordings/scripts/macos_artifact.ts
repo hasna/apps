@@ -181,6 +181,9 @@ export type BuildProvenance = {
 
 export type MacOSArtifactManifest = BuildProvenance & {
   artifact_type: "recordings-macos-app";
+  // "full" is the workspace-window app; "bar" is the menu-bar-only variant built with
+  // RECORDINGS_VARIANT=bar. Absent on release manifests, which are always full.
+  variant?: "full" | "bar";
   app_sha256: string;
   binding: {
     bundle_tree_sha256: string;
@@ -574,6 +577,31 @@ export function localOnlySigningMode(expectedTeamId: string): "ad_hoc" | "develo
     );
   }
   return "developer_id";
+}
+
+/**
+ * Binds a manifest to an operator-selected build variant when one is supplied. `bar`
+ * artifacts are menu-bar-only local-station builds; the bar variant is never valid for a
+ * release artifact. An absent manifest variant reads as "full".
+ */
+export function assertManifestVariant(
+  manifest: MacOSArtifactManifest,
+  expectedVariant: string | undefined,
+  expectedPolicy: ArtifactPolicy,
+): void {
+  if (!expectedVariant) return;
+  if (expectedVariant !== "bar" && expectedVariant !== "full") {
+    throw new Error(`unsupported artifact variant ${expectedVariant}`);
+  }
+  if (expectedPolicy !== "local_only" && expectedVariant === "bar") {
+    throw new Error("bar variant is only valid for local-only artifacts");
+  }
+  const actualVariant = manifest.variant ?? "full";
+  if (actualVariant !== expectedVariant) {
+    throw new Error(
+      `manifest artifact variant ${actualVariant} does not match the operator-selected variant ${expectedVariant}`,
+    );
+  }
 }
 
 export function designatedRequirementForPolicy(
@@ -1755,6 +1783,7 @@ export function verifyArchiveManifest(
   expectedApprovedTarget: string = RELEASE_APPROVED_TARGET,
   expectedApprovedTargetIdentitySha256: string = "none",
   expectedApprovedTargetIdentityKind: OperatorTargetIdentityKind = LEGACY_LOCAL_TARGET_IDENTITY_KIND,
+  expectedVariant: string = "",
 ): MacOSArtifactManifest {
   if (!expectedTeamId) throw new Error("expected Team ID is required");
   const manifest = readAuthenticatedManifest<MacOSArtifactManifest>(
@@ -1762,6 +1791,7 @@ export function verifyArchiveManifest(
     expectedManifestSha256,
   );
   assertManifestShape(manifest);
+  assertManifestVariant(manifest, expectedVariant, expectedPolicy);
   if (manifestPolicy(manifest) !== expectedPolicy) {
     throw new Error("manifest artifact policy does not match the explicit operator selection");
   }
@@ -1989,11 +2019,13 @@ export function verifyExtractedApp(
   expectedApprovedTarget: string = RELEASE_APPROVED_TARGET,
   expectedApprovedTargetIdentitySha256: string = "none",
   expectedApprovedTargetIdentityKind: OperatorTargetIdentityKind = LEGACY_LOCAL_TARGET_IDENTITY_KIND,
+  expectedVariant: string = "",
 ): MacOSArtifactManifest {
   const manifest = readAuthenticatedManifest<MacOSArtifactManifest>(
     manifestPath,
     expectedManifestSha256,
   );
+  assertManifestVariant(manifest, expectedVariant, expectedPolicy);
   verifyAppAgainstManifest(
     appPath,
     manifest,
@@ -2278,10 +2310,14 @@ function finalizeLocalArtifact(
   approvedTargetIdentityKind: TargetIdentityKind,
   approvedTargetIdentitySha256: string,
   expectedTeamId: string = "ADHOC",
+  variant: string = "",
 ): void {
   assertCurrentSourceRevision(packageRoot, expectedSourceSha);
   if (approvedTargetIdentityKind !== "tailscale_node_id_sha256") {
     throw new Error("new local-only artifacts require a Tailscale node ID identity hash");
+  }
+  if (variant !== "" && variant !== "full" && variant !== "bar") {
+    throw new Error(`unsupported artifact variant ${variant}`);
   }
   const localSigningMode = localOnlySigningMode(expectedTeamId);
   const executablePath = join(appPath, "Contents", "MacOS", "Recordings");
@@ -2319,6 +2355,7 @@ function finalizeLocalArtifact(
   const manifest: MacOSArtifactManifest = {
     ...provenance,
     artifact_type: "recordings-macos-app",
+    variant: variant === "bar" ? "bar" : "full",
     app_sha256: sha256File(executablePath),
     binding: { bundle_tree_sha256: treeDigest(appPath) },
     provenance_sha256: sha256File(embeddedPath),
@@ -2516,6 +2553,7 @@ function verifyActiveApp(
   expectedApprovedTarget: string,
   expectedApprovedTargetIdentitySha256: string,
   expectedApprovedTargetIdentityKind: OperatorTargetIdentityKind,
+  expectedVariant: string = "",
 ): void {
   const manifest = verifyExtractedApp(
     appPath,
@@ -2526,6 +2564,7 @@ function verifyActiveApp(
     expectedApprovedTarget,
     expectedApprovedTargetIdentitySha256,
     expectedApprovedTargetIdentityKind,
+    expectedVariant,
   );
   const helperPath = join(appPath, "Contents", "Helpers", "recordings");
   if (companionVersion(helperPath) !== manifest.companion.version) {
@@ -5303,6 +5342,7 @@ function main(): void {
       targetIdentityKindArgument(undefined, true),
       argument("--approved-target-identity-sha256"),
       optionalArgument("--expected-team-id") ?? "ADHOC",
+      optionalArgument("--variant") ?? "",
     );
   } else if (command === "verify-archive") {
     const teamId = argument("--team-id");
@@ -5318,6 +5358,7 @@ function main(): void {
       argument("--approved-target"),
       argument("--approved-target-identity-sha256"),
       targetIdentityKindArgument(policy),
+      optionalArgument("--variant") ?? "",
     );
   } else if (command === "extract-verified-archive") {
     const teamId = argument("--team-id");
@@ -5347,6 +5388,7 @@ function main(): void {
       argument("--approved-target"),
       argument("--approved-target-identity-sha256"),
       targetIdentityKindArgument(policy),
+      optionalArgument("--variant") ?? "",
     );
   } else if (command === "verify-active") {
     const teamId = argument("--team-id");
@@ -5360,6 +5402,7 @@ function main(): void {
       argument("--approved-target"),
       argument("--approved-target-identity-sha256"),
       targetIdentityKindArgument(policy),
+      optionalArgument("--variant") ?? "",
     );
   } else if (command === "assert-release") {
     assertExpectedRelease(

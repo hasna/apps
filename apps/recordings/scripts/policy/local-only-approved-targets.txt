@@ -11,7 +11,9 @@
 # beyond "regular file, not a symlink". Adding a name here therefore grants
 # nothing by itself.
 #
-# Every local-only artifact is still ad-hoc signed and non-notarized, must be
+# Every local-only artifact is signed either ad-hoc or with a Developer ID Application
+# identity (see build.sh local mode: RECORDINGS_CODESIGN_IDENTITY + RECORDINGS_EXPECTED_TEAM_IDENTIFIER
+# select Developer ID, absence selects ad-hoc), and is never notarized. It must be
 # built on a Mac other than the target AND on a different authenticated Tailscale
 # node, and stays bound to the target's authenticated machine-identity digest; the
 # install additionally re-checks `hostname -s`, the live Tailscale node digest,
@@ -19,3 +21,4 @@
 # entirely and use the fleet target policy.
 station03
 station06
+station07
