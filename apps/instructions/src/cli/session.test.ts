@@ -104,6 +104,45 @@ describe("configs session CLI", () => {
     }
   });
 
+  test("exits non-zero when the render plan is blocked instead of returning a silent empty plan", () => {
+    // Regression for todos 1a3e8689: with an unmanaged fixed global authority
+    // present, `session plan --tool cursor` returned rc=0 with files: [] — a
+    // plausible-zero that automation reads as "nothing to render" while the
+    // render is actually blocked.
+    const home = makeTempRoot("open-configs-session-cli-");
+    try {
+      mkdirSync(join(home, ".cursor", "rules"), { recursive: true });
+      writeFileSync(join(home, ".cursor", "rules", "hasna-global.mdc"), "# Foreign global rule\n");
+      mkdirSync(join(home, "sources"), { recursive: true });
+      writeFileSync(join(home, "sources", "global.md"), "Global CLI source");
+
+      const result = runCli([
+        "session",
+        "plan",
+        "--tool",
+        "cursor",
+        "--profile",
+        "account999",
+        "--project-root",
+        join(home, "repo"),
+        "--source",
+        "global:global-cli=~/sources/global.md",
+        "--json",
+      ], {
+        HOME: home,
+        HASNA_CONFIGS_HOME: join(home, ".hasna", "configs"),
+      });
+
+      expect(result.status).toBe(1);
+      const plan = JSON.parse(result.stdout) as { blocked: boolean; blockers: string[]; files: unknown[] };
+      expect(plan.blocked).toBe(true);
+      expect(plan.blockers.join(" ")).toContain(".cursor/rules/hasna-global.mdc");
+      expect(plan.files).toEqual([]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("expands quoted source and target paths before planning", () => {
     const home = makeTempRoot("open-configs-session-cli-");
     try {
@@ -645,6 +684,114 @@ describe("configs session CLI", () => {
       const rendered = readFileSync(join(home, "codewith-home", "CODEWITH.md"), "utf8");
       expect(manifest.sources).toHaveLength(1);
       expect((rendered.match(/hasna:agent-operating-rules v=1\.1\.6/g) ?? [])).toHaveLength(1);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("session plan WITHOUT --target-home shows profile home as target", () => {
+    const home = makeTempRoot("open-configs-session-cli-");
+    try {
+      mkdirSync(join(home, "sources"), { recursive: true });
+      writeFileSync(join(home, "sources", "global.md"), "# Global Plan Test\n\nPlan test content.");
+      
+      const result = runCli([
+        "session",
+        "plan",
+        "--tool",
+        "codex",
+        "--profile",
+        "plan-test",
+        "--source",
+        "global:global-plan=~/sources/global.md",
+        "--json",
+      ], {
+        HOME: home,
+        HASNA_CONFIGS_HOME: join(home, ".hasna", "configs"),
+      });
+
+      expect(result.status).toBe(0);
+      
+      const plan = JSON.parse(result.stdout) as { targetHome: string };
+      const expectedProfileHome = join(home, ".hasna", "accounts", "profiles", "codex", "plan-test");
+      
+      expect(plan.targetHome).toBe(expectedProfileHome);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("session apply WITHOUT --target-home writes to profile home", () => {
+    const home = makeTempRoot("open-configs-session-cli-");
+    try {
+      mkdirSync(join(home, "sources"), { recursive: true });
+      writeFileSync(join(home, "sources", "global.md"), "# Global Test\n\nThis is the global test content.");
+      
+      const result = runCli([
+        "session",
+        "apply",
+        "--tool",
+        "claude",
+        "--profile",
+        "test-profile",
+        "--source",
+        "global:global-test=~/sources/global.md",
+      ], {
+        HOME: home,
+        HASNA_CONFIGS_HOME: join(home, ".hasna", "configs"),
+      });
+
+      expect(result.status).toBe(0);
+      
+      const profileHome = join(home, ".hasna", "accounts", "profiles", "claude", "test-profile");
+      const sessionHome = join(home, ".hasna", "configs", "sessions", "claude", "test-profile", "latest");
+      
+      // Files should be in profile home, not session home
+      expect(existsSync(join(profileHome, "CLAUDE.md"))).toBe(true);
+      expect(existsSync(join(profileHome, ".hasna", "session-render-manifest.json"))).toBe(true);
+      
+      // Files should NOT be in the old session home location
+      expect(existsSync(sessionHome)).toBe(false);
+      
+      const rendered = readFileSync(join(profileHome, "CLAUDE.md"), "utf8");
+      expect(rendered).toContain("@./.hasna/instructions/01-global-test.md");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("session apply WITH --target-home writes to specified directory", () => {
+    const home = makeTempRoot("open-configs-session-cli-");
+    try {
+      mkdirSync(join(home, "sources"), { recursive: true });
+      mkdirSync(join(home, "custom-target"), { recursive: true });
+      writeFileSync(join(home, "sources", "global.md"), "# Global Custom\n\nCustom target content.");
+      
+      const customTarget = join(home, "custom-target");
+      const result = runCli([
+        "session",
+        "apply",
+        "--tool",
+        "claude",
+        "--profile",
+        "test-profile",
+        "--target-home",
+        customTarget,
+        "--source",
+        "global:global-custom=~/sources/global.md",
+      ], {
+        HOME: home,
+        HASNA_CONFIGS_HOME: join(home, ".hasna", "configs"),
+      });
+
+      expect(result.status).toBe(0);
+      
+      // Files should be in custom target
+      expect(existsSync(join(customTarget, "CLAUDE.md"))).toBe(true);
+      expect(existsSync(join(customTarget, ".hasna", "session-render-manifest.json"))).toBe(true);
+      
+      const rendered = readFileSync(join(customTarget, "CLAUDE.md"), "utf8");
+      expect(rendered).toContain("@./.hasna/instructions/01-global-custom.md");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

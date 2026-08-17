@@ -1,3 +1,14 @@
+## 0.4.36 (2026-08-15)
+
+### Fixed
+
+- **cursor-authority**: position-aware `markerPayload` — the stamp/observer
+  round-trip now inverts exactly for frontmatter-bearing and marker-quoting
+  payloads (PR #164, task ae2c7336). The observer's success return is
+  `managed` on main (PR #108); the published 0.4.34/0.4.35 artifacts shipped
+  the pre-fix observer and block cursor renders whenever `hasna-global.mdc`
+  exists — this release ships the corrected observer + payload handling.
+
 # Changelog
 
 ## 0.4.35
@@ -5,6 +16,16 @@
 Publishes merged PR #119, which releases the mode-removal content from PR #111
 (removing the deployment-mode vocabulary per the canonical doctrine). The
 release carries the exact merged main tree at `918cbc03`.
+## 0.4.34
+
+Fixes the Cursor fixed global-authority guard blocking every cursor session
+render (todos `1a3e8689`): the guard now recognizes the package's own apply
+output (a managed marker with a valid payload hash) as managed, and the apply
+path stamps that marker onto every write to `.cursor/rules/hasna-global.mdc`.
+Foreign, tampered, and non-regular files remain blocked. `session plan` also
+exits non-zero when the render plan is blocked instead of returning rc=0 with
+an empty plan.
+
 
 ## 0.4.33
 

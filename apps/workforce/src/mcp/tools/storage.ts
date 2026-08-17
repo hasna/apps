@@ -91,7 +91,7 @@ export function registerStorageTools(server: ToolRegistrar, ctx: ToolContext): v
         return jsonResult({
           ok: false,
           op,
-          reason: "cloud not configured; set HASNA_WORKFORCE_STORAGE_MODE=cloud with a DATABASE_URL to seed/mirror a local copy.",
+          reason: "cloud not configured; set HASNA_WORKFORCE_DATABASE_URL to use the Postgres backend for seed/mirror.",
           tables: eligible,
           excluded_audit_tables: excluded,
         });

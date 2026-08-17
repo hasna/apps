@@ -62,7 +62,7 @@ envelope. Its top-level fields are `configs`, `profiles`, `drift`, `secrets`,
 
 `instructions package-manager-scan` blocks package-manager credential ingress without
 printing credential values. It scans repo `.npmrc` files, home `.npmrc`, Bun
-config, lockfiles, and shell profiles, then reports only path, line, rule,
+config, lockfiles, and shell profiles, then reports only the path, line, rule,
 surface, and tracked status.
 
 Use it in CI or pre-commit hooks:
