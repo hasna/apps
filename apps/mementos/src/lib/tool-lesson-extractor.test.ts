@@ -393,17 +393,15 @@ describe("extractToolLessons", () => {
     expect(events).toHaveLength(2);
   });
 
-  test("resilient to individual save failures from FK constraints", async () => {
-    // Pass non-existent agent_id/project_id — FK constraint will cause
-    // saveToolEvent/createMemory to throw, but the function should catch
-    // and still return the parsed lessons.
-    // NOTE: deliberately NOT a reserved placeholder id (agent-a/x/z,
-    // nonexistent-agent) — those are refused by the store's write guard for a
-    // different reason, and this test exercises the FK path specifically.
+  test("resilient to individual save failures", async () => {
+    // A reserved placeholder agent id is refused by the store's write-layer
+    // guard (createMemory throws), and the unknown project/agent ids fail
+    // saveToolEvent's FK constraints — but the function should catch each
+    // save failure and still return the parsed lessons.
     const lessons = [
       {
         tool_name: "Bash",
-        lesson: "This lesson will fail to save due to FK",
+        lesson: "This lesson will fail to save",
         when_to_use: "Context",
         success: true,
         error_type: null,
@@ -412,7 +410,7 @@ describe("extractToolLessons", () => {
     mockFetchResponse(lessons);
 
     const result = await extractToolLessons("transcript", {
-      agent_id: "no-such-agent-fk",
+      agent_id: "nonexistent-agent",
       project_id: "no-such-project-fk",
     });
 
@@ -420,9 +418,13 @@ describe("extractToolLessons", () => {
     expect(result).toHaveLength(1);
     expect(result[0].tool_name).toBe("Bash");
 
-    // Events should be 0 because FK constraint failed
+    // Events should be 0 because the FK constraint failed
     const events = getToolEvents({});
     expect(events).toHaveLength(0);
+
+    // Memories should be 0 because the write guard refused the placeholder id
+    const memories = listMemories({});
+    expect(memories).toHaveLength(0);
   });
 
   test("saves with null error_type for successful lessons", async () => {
