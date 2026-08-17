@@ -15,6 +15,7 @@ type ReleasePackage = {
   name?: string;
   version?: string;
   publishConfig?: { registry?: string };
+  scripts?: { prepublishOnly?: string };
 };
 
 type Options = {
@@ -26,9 +27,8 @@ type Options = {
   openP1: number;
 };
 
-const REPOSITORY = "hasna/todos";
-const WORKFLOW_PATH = ".github/workflows/release.yml";
-const root = resolve(import.meta.dir, "..");
+const REPOSITORY = "hasna/apps";
+const root = repositoryRoot();
 
 main();
 
@@ -69,7 +69,7 @@ function main(): void {
   try {
     releasePackage = resolveNpmReleasePackageByPath(options.packagePath);
   } catch (error) {
-    fail(error instanceof Error ? error.message : "package path must be . or ai");
+    fail(error instanceof Error ? error.message : "package path must be apps/todos or apps/todos/ai");
   }
   const packageJson = JSON.parse(runGit(["show", `${options.releaseCommit}:${releasePackage.manifestPath}`])) as ReleasePackage;
   if (packageJson.name !== releasePackage.packageName) {
@@ -77,8 +77,11 @@ function main(): void {
   }
   if (!packageJson.version) fail(`the release commit ${releasePackage.manifestPath} must declare a version`);
   if (packageJson.publishConfig?.registry !== "https://registry.npmjs.org") fail("the release commit must target the public npm registry");
+  if (packageJson.scripts?.prepublishOnly !== releasePackage.releaseProcedure) {
+    fail(`the release commit ${releasePackage.manifestPath} must retain its package-owned prepublishOnly review gate`);
+  }
   requireProtectedMainAncestry(options.releaseCommit);
-  const workflowRevision = runGit(["rev-parse", `${options.releaseCommit}:${WORKFLOW_PATH}`]).trim();
+  const procedureRevision = runGit(["rev-parse", `${options.releaseCommit}:${releasePackage.releaseProcedurePath}`]).trim();
 
   const payload: NpmReleaseAgentReviewPayload = {
     schema: NPM_RELEASE_AGENT_REVIEW_SCHEMA,
@@ -86,7 +89,7 @@ function main(): void {
     commit: options.releaseCommit,
     package: { name: packageJson.name, version: packageJson.version },
     tag: `${releasePackage.tagPrefix}${packageJson.version}`,
-    workflow: { path: WORKFLOW_PATH, revision: workflowRevision },
+    procedure: { path: releasePackage.releaseProcedurePath, revision: procedureRevision },
     registry: packageJson.publishConfig.registry,
     reviewer: { type: "coding-agent", agent: reviewerAgent },
     publisher: { type: "coding-agent", agent: options.publisherAgent },
@@ -140,6 +143,15 @@ function runGit(args: string[]): string {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
   if (result.status !== 0) fail(result.stderr.trim() || `git ${args[0]} failed`);
   return result.stdout;
+}
+
+function repositoryRoot(): string {
+  const result = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: resolve(import.meta.dir, ".."),
+    encoding: "utf8",
+  });
+  if (result.status !== 0) fail(result.stderr.trim() || "could not resolve the hasna/apps repository root");
+  return result.stdout.trim();
 }
 
 function requireProtectedMainAncestry(releaseCommit: string): void {

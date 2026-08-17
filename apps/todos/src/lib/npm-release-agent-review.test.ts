@@ -18,14 +18,14 @@ const reviewerPrivateKey = keyPair.privateKey.export({ format: "der", type: "pkc
 const reviewerKeyId = deriveNpmReleaseAgentReviewKeyId(reviewerPublicKey);
 
 const expected: ExpectedNpmReleaseAgentReview = {
-  repository: "hasna/todos",
+  repository: "hasna/apps",
   releaseCommit: "1".repeat(40),
-  packagePath: ".",
+  packagePath: "apps/todos",
   packageName: "@hasna/todos",
   packageVersion: "0.15.20",
   tag: "npm/todos/v0.15.20",
-  workflowPath: ".github/workflows/release.yml",
-  workflowRevision: "2".repeat(40),
+    procedurePath: "apps/todos/scripts/verify-public-release.ts",
+  procedureRevision: "2".repeat(40),
   registry: "https://registry.npmjs.org",
   reviewerAgentId: "/root/review_todos_release_01522",
   reviewerKeyId,
@@ -35,7 +35,7 @@ const expected: ExpectedNpmReleaseAgentReview = {
 
 const companionExpected: ExpectedNpmReleaseAgentReview = {
   ...expected,
-  packagePath: "ai",
+  packagePath: "apps/todos/ai",
   packageName: "@hasna/todos-ai",
   packageVersion: "0.1.1",
   tag: "npm/todos-ai/v0.1.1",
@@ -50,9 +50,9 @@ const acceptedPayload: NpmReleaseAgentReviewPayload = {
     version: expected.packageVersion,
   },
   tag: expected.tag,
-  workflow: {
-    path: expected.workflowPath,
-    revision: expected.workflowRevision,
+  procedure: {
+    path: expected.procedurePath,
+    revision: expected.procedureRevision,
   },
   registry: expected.registry,
   reviewer: {
@@ -118,7 +118,7 @@ describe("npm release independent-agent review receipt", () => {
     expect(result.payload).toEqual(acceptedPayload);
   });
 
-  test("accepts exact root and companion receipts under the shared workflow contract", () => {
+  test("accepts exact root and companion receipts under the shared package procedure contract", () => {
     expect(validate(signedReceipt(acceptedPayload)).failures).toEqual([]);
     const companionReceipt = signedReceipt(companionPayload);
     expect(validateCompanion(companionReceipt).failures).toEqual([]);
@@ -238,12 +238,12 @@ describe("npm release independent-agent review receipt", () => {
     const mismatches: Array<[unknown, string, ExpectedNpmReleaseAgentReview?]> = [
       [{ ...acceptedPayload, repository: "hasna/accounts" }, "release-agent-review-repository"],
       [{ ...acceptedPayload, commit: "3".repeat(40) }, "release-agent-review-commit"],
-      [{ ...acceptedPayload }, "release-agent-review-package-path", { ...expected, packagePath: "ai" }],
+      [{ ...acceptedPayload }, "release-agent-review-package-path", { ...expected, packagePath: "apps/todos/ai" }],
       [{ ...acceptedPayload, package: { ...acceptedPayload.package, name: "@hasna/accounts" } }, "release-agent-review-package"],
       [{ ...acceptedPayload, package: { ...acceptedPayload.package, version: "0.15.21" } }, "release-agent-review-version"],
       [{ ...acceptedPayload, tag: "npm/todos/v0.15.21" }, "release-agent-review-tag"],
-      [{ ...acceptedPayload, workflow: { ...acceptedPayload.workflow, path: ".github/workflows/other.yml" } }, "release-agent-review-workflow-path"],
-      [{ ...acceptedPayload, workflow: { ...acceptedPayload.workflow, revision: "4".repeat(40) } }, "release-agent-review-workflow-revision"],
+      [{ ...acceptedPayload, procedure: { ...acceptedPayload.procedure, path: "apps/todos/other.json" } }, "release-agent-review-procedure-path"],
+      [{ ...acceptedPayload, procedure: { ...acceptedPayload.procedure, revision: "4".repeat(40) } }, "release-agent-review-procedure-revision"],
       [{ ...acceptedPayload, registry: "https://registry.example.invalid" }, "release-agent-review-registry"],
     ];
 

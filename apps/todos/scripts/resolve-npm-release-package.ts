@@ -21,7 +21,7 @@ if (!options.output) fail("--output is required");
 
 const selected = options.refType === "tag"
   ? resolveTag(options.refName)
-  : { ...resolveNpmReleasePackageByPath("."), version: "" };
+  : { ...resolveNpmReleasePackageByPath("apps/todos"), version: "" };
 const packageJson = JSON.parse(runGit(["show", `${options.releaseCommit}:${selected.manifestPath}`])) as ReleasePackage;
 if (!packageJson.version) fail(`${selected.manifestPath} must declare a version`);
 

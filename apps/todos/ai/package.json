@@ -40,7 +40,7 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "verify:release-review": "bun run ../scripts/verify-npm-release-agent-review.ts",
-    "prepublishOnly": "bun run verify:release-review",
+    "prepublishOnly": "bun run ../scripts/verify-npm-release-agent-review.ts",
     "smoke:groq": "bun run src/smoke.ts"
   },
   "keywords": [
