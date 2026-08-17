@@ -15,7 +15,11 @@ const TEST_TIMEOUT_MS = 60_000;
 
 function testEnv(): Record<string, string> {
   return isolatedStoreEnv(DB_PATH, {
-    extra: { ...blankLlmProviderEnv(), ...projectAuthorityTestEnv() },
+    extra: {
+      ...blankLlmProviderEnv(),
+      ...projectAuthorityTestEnv(),
+      MEMENTOS_AGENT: "test-agent",
+    },
   });
 }
 
@@ -58,6 +62,12 @@ function expectStableMemory(
 
 beforeAll(async () => {
   await assertLocalStoreBackend(CLI_PATH, testEnv(), DB_PATH);
+
+  // Attribution guard (2026-08-17): save refuses agent-source writes without a
+  // resolved writing identity; testEnv names test-agent via MEMENTOS_AGENT.
+  const reg = await runCli("register-agent", "test-agent");
+  expect(reg.exitCode).toBe(0);
+
   const projectResult = await runCli(
     "--json",
     "projects",

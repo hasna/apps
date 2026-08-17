@@ -15,10 +15,15 @@ const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
 // the child must be pinned to DB_PATH. Inheriting the ambient env unmodified —
 // which is what this harness used to do — put those writes in the shared
 // production store. See src/test-support/store-isolation.ts.
-const CLI_ENV = isolatedStoreEnv(DB_PATH);
+const CLI_ENV = isolatedStoreEnv(DB_PATH, { extra: { MEMENTOS_AGENT: "test-agent" } });
 
 beforeAll(async () => {
   await assertLocalStoreBackend(CLI_PATH, CLI_ENV, DB_PATH);
+  // Attribution guard (2026-08-17): save refuses agent-source writes without a
+  // resolved writing identity. This suite is about doctor output, not identity,
+  // so pin the identity and register it.
+  const reg = await runCli("register-agent", "test-agent");
+  if (reg.exitCode !== 0) throw new Error(`could not register test-agent: ${reg.stderr}`);
 });
 
 afterAll(() => {

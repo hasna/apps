@@ -44,6 +44,12 @@ function testEnv(): Record<string, string> {
 
 beforeAll(async () => {
   await assertLocalStoreBackend(CLI_PATH, testEnv(), DB_PATH);
+  // alpha is used by several tests below; registering it here removes any
+  // dependence on test execution order.
+  const reg = await runCli("register-agent", "alpha");
+  if (reg.exitCode !== 0) {
+    throw new Error(`could not register alpha: ${reg.stderr}`);
+  }
 });
 
 async function runCli(...args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -92,7 +98,10 @@ describe("save refuses an unresolvable scoping flag instead of retargeting the w
   });
 
   test("an unresolvable --agent is REFUSED, not collapsed into the unowned row", async () => {
-    const first = await runCli("--json", "save", "agentKey", "owned-by-nobody");
+    // The attribution guard (2026-08-17) refuses identityless agent-source
+    // writes, so the deliberate unowned row is created under an explicit
+    // non-agent source — the one route that stays legal unattributed.
+    const first = await runCli("--json", "save", "agentKey", "owned-by-nobody", "--source", "system");
     expect(first.exitCode).toBe(0);
     const id = JSON.parse(first.stdout).id as string;
 
@@ -134,12 +143,14 @@ describe("save refuses an unresolvable scoping flag instead of retargeting the w
   });
 
   test("an unresolvable --project is REFUSED (same defect, same function)", async () => {
-    const first = await runCli("--json", "save", "projectKey", "no-project");
+    // Identity is resolved from the flag so the refusal below is the PROJECT
+    // guard and not the attribution guard.
+    const first = await runCli("--json", "--agent", "alpha", "save", "projectKey", "no-project");
     expect(first.exitCode).toBe(0);
     const id = JSON.parse(first.stdout).id as string;
 
     const bogus = await runCli(
-      "--project", "/nonexistent/path/zzq-9f3",
+      "--agent", "alpha", "--project", "/nonexistent/path/zzq-9f3",
       "save", "projectKey", "BOGUS-PROJECT-WROTE-HERE",
     );
     expect(bogus.exitCode).toBe(1);
@@ -148,13 +159,14 @@ describe("save refuses an unresolvable scoping flag instead of retargeting the w
     expect(row["value"]).toBe("no-project");
   });
 
-  test("a save with NO scoping flags is unaffected", async () => {
-    // The fix must not make the unowned bucket unreachable — writing there
-    // deliberately, by passing no flag, stays legal.
-    const first = await runCli("--json", "save", "plainKey", "v1");
+  test("the unowned bucket stays reachable through an explicit non-agent source", async () => {
+    // The attribution guard refuses identityless AGENT-source writes; the
+    // unowned bucket remains deliberately writable via an explicit non-agent
+    // source, and the upsert on it still works.
+    const first = await runCli("--json", "save", "plainKey", "v1", "--source", "system");
     expect(first.exitCode).toBe(0);
 
-    const second = await runCli("--json", "save", "plainKey", "v2");
+    const second = await runCli("--json", "save", "plainKey", "v2", "--source", "system");
     expect(second.exitCode).toBe(0);
     expect(JSON.parse(second.stdout).outcome).toBe("updated");
   });

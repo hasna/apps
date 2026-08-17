@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -144,11 +144,22 @@ afterAll(() => {
   }
 });
 
+beforeAll(async () => {
+  // Attribution guard (2026-08-17): save refuses agent-source writes without a
+  // resolved writing identity. The CLI spawns below carry MEMENTOS_AGENT=
+  // test-agent, which must resolve in the temp DB for the WRITE-path cases to
+  // reach the storage-mode rejection rather than the attribution guard.
+  const reg = await runCli(null, ["register-agent", "test-agent"]);
+  if (reg.exitCode !== 0) {
+    throw new Error(`could not register test-agent: ${reg.stderr}`);
+  }
+});
+
 async function runCli(
   legacyValue: string | null,
   argv: string[] = ["storage", "mode"],
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const env = isolatedStoreEnv(DB_PATH);
+  const env = isolatedStoreEnv(DB_PATH, { extra: { MEMENTOS_AGENT: "test-agent" } });
   if (legacyValue !== null) env[CANONICAL] = legacyValue;
   const proc = Bun.spawn(["bun", "run", CLI_PATH, ...argv], {
     env,

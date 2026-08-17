@@ -45,13 +45,21 @@ const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
  * resolved to local SQLite instead of trusting that it did.
  */
 function testEnv(): Record<string, string> {
-  return isolatedStoreEnv(DB_PATH, { extra: blankLlmProviderEnv() });
+  return isolatedStoreEnv(DB_PATH, {
+    extra: { ...blankLlmProviderEnv(), MEMENTOS_AGENT: "test-agent" },
+  });
 }
 
 beforeAll(async () => {
   // Fail loudly BEFORE any write, rather than discovering afterwards that these
   // e2e writes went to the shared production store.
   await assertLocalStoreBackend(CLI_PATH, testEnv(), DB_PATH);
+
+  // Attribution guard (2026-08-17): save refuses agent-source writes without a
+  // resolved writing identity. This suite is about scope/upsert semantics, not
+  // identity, so pin the identity and register it.
+  const reg = await runCli("register-agent", "test-agent");
+  expect(reg.exitCode).toBe(0);
 });
 
 async function runCli(...args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -282,6 +290,10 @@ describe("scope persistence and save fork (e2e)", () => {
     // descriptor listed only three. When agent is the sole difference the
     // refusal printed matching scope/project/session on both lines and looked
     // self-contradictory.
+    //
+    // Since the attribution guard (2026-08-17) resolves test-agent from
+    // MEMENTOS_AGENT, the descriptor carries the real agent id rather than
+    // "none" — the column is still named, which is what this test asserts.
     const first = await save("fork-descriptor", "v1", "--scope", "private");
     expect(first.exitCode).toBe(0);
 
@@ -289,7 +301,7 @@ describe("scope persistence and save fork (e2e)", () => {
     expect(second.exitCode).toBe(1);
     const out = `${second.stdout}${second.stderr}`;
     expect(out).toContain("scope/project/session/agent");
-    expect(out).toContain("agent=none)");
+    expect(out).toMatch(/agent=[0-9a-f]+\)/);
   });
 
   test("save reports whether it created a new row or updated an existing one", async () => {

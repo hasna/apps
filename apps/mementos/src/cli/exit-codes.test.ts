@@ -31,7 +31,9 @@ const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
 // DB_PATH: ambient HASNA_MEMENTOS_API_URL + HASNA_MEMENTOS_API_KEY, exported by
 // the operator shell and inherited through tmux, would otherwise route it into
 // the shared production store.
-const CLI_ENV = isolatedStoreEnv(DB_PATH, { extra: blankLlmProviderEnv() });
+const CLI_ENV = isolatedStoreEnv(DB_PATH, {
+  extra: { ...blankLlmProviderEnv(), MEMENTOS_AGENT: "test-agent" },
+});
 
 const PRESENT_KEY = "contract/exit-codes/present";
 // A NEAR-MISS of a key that really is in the store — not an invented string.
@@ -57,6 +59,11 @@ async function runCli(
 beforeAll(async () => {
   // Fail loudly BEFORE any write if the child did not resolve to local SQLite.
   await assertLocalStoreBackend(CLI_PATH, CLI_ENV, DB_PATH);
+
+  // Attribution guard (2026-08-17): save refuses agent-source writes without a
+  // resolved writing identity; CLI_ENV names test-agent via MEMENTOS_AGENT.
+  const reg = await runCli("register-agent", "test-agent");
+  expect(reg.exitCode).toBe(0);
 
   const saved = await runCli("save", PRESENT_KEY, "exit-code contract fixture");
   // POSITIVE CONTROL for the whole suite: if the fixture did not land, every

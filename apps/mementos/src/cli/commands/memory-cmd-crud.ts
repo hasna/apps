@@ -316,6 +316,49 @@ export function registerCrudCommands(program: Command): void {
           resolvedAgentId = ag.id;
         }
 
+        // Resolve the writing identity from the environment when --agent is
+        // absent, then refuse identityless agent-source writes.
+        //
+        // Attribution census 2026-08-17 (fleet): 12,436 of 14,370 memories
+        // (86.6%) carry agent_id AND created_by_agent both NULL while
+        // source='agent' — including 170 rows created since 2026-08-15. The
+        // root cause is exactly this fork: identity was resolved ONLY from the
+        // explicit --agent flag, and the fleet's save call sites pass none, so
+        // every write silently landed in the unowned bucket by default.
+        //
+        // MEMENTOS_AGENT is the CLI identity convention this codebase already
+        // uses elsewhere (init.ts stop-hook ingestion, lib/open-sessions-
+        // connector.ts), so it is the resolution route for the flagless case.
+        // Both routes are fail-closed: an unregistered name refuses the write,
+        // because dropping an unresolvable identity is precisely the
+        // unowned-bucket write this guard exists to prevent.
+        if (!resolvedAgentId && process.env["MEMENTOS_AGENT"]) {
+          const envAgent = getAgent(process.env["MEMENTOS_AGENT"]);
+          if (!envAgent) {
+            throw new Error(
+              `Unknown agent "${process.env["MEMENTOS_AGENT"]}" from MEMENTOS_AGENT: no registered agent matches that name or id.\n` +
+                `Refusing to save. The write would land in the unowned (no-agent) row for key "${key}".\n` +
+                `Register the agent first:  mementos register-agent ${process.env["MEMENTOS_AGENT"]}\n` +
+                `Or unset MEMENTOS_AGENT and pass --agent <registered-name> instead.`,
+            );
+          }
+          resolvedAgentId = envAgent.id;
+        }
+
+        // `agent` is the default source, so an identityless save silently
+        // minted an unattributed memory — the exact gap the census measured.
+        // Reject that class at write time. Non-agent sources (user, system,
+        // auto, imported) are chosen deliberately via an explicit --source and
+        // remain eligible to carry no identity.
+        const effectiveSource = (opts.source as MemorySource | undefined) ?? "agent";
+        if (effectiveSource === "agent" && !resolvedAgentId) {
+          throw new Error(
+            `Refusing to save "${key}" without a writing agent identity: source is "agent" (the default) and no agent resolved.\n` +
+              `Pass --agent <registered-name>, or set MEMENTOS_AGENT to the registered name of the writing agent.\n` +
+              `Or pass an explicit --source (user|system|auto|imported) to write this memory unattributed deliberately.`,
+          );
+        }
+
         const input: CreateMemoryInput = {
           key,
           value,

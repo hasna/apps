@@ -29,10 +29,15 @@ const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
 // validation under test — and any write that DOES succeed lands in the shared
 // production store. Built and then VERIFIED via store-isolation rather than
 // hand-blanked here, so the list cannot drift from the resolver.
-const CLI_ENV = isolatedStoreEnv(DB_PATH);
+const CLI_ENV = isolatedStoreEnv(DB_PATH, { extra: { MEMENTOS_AGENT: "test-agent" } });
 
 beforeAll(async () => {
   await assertLocalStoreBackend(CLI_PATH, CLI_ENV, DB_PATH);
+  // Attribution guard (2026-08-17): save refuses agent-source writes without a
+  // resolved writing identity. This suite is about enum validation, not
+  // identity, so pin the identity and register it.
+  const reg = await runCli("register-agent", "test-agent");
+  if (reg.exitCode !== 0) throw new Error(`could not register test-agent: ${reg.stderr}`);
 });
 
 afterAll(() => {

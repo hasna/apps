@@ -23,7 +23,9 @@ const UNCONFIGURED_PROJECT_AUTHORITY_ENV = Object.fromEntries(
 // DB_PATH — see src/test-support/store-isolation.ts for why blanking the vars
 // by hand here was unsafe, and why `beforeAll` verifies the result instead of
 // trusting it.
-const CLI_ENV = isolatedStoreEnv(DB_PATH, { extra: blankLlmProviderEnv() });
+const CLI_ENV = isolatedStoreEnv(DB_PATH, {
+  extra: { ...blankLlmProviderEnv(), MEMENTOS_AGENT: "test-agent" },
+});
 
 beforeAll(async () => {
   // Fail loudly BEFORE any write if the child did not resolve to local SQLite.
@@ -31,6 +33,13 @@ beforeAll(async () => {
   // operator shell and inherited through tmux) would otherwise route every
   // write in this file into the shared production store.
   await assertLocalStoreBackend(CLI_PATH, CLI_ENV, DB_PATH);
+
+  // Attribution guard (2026-08-17): save refuses agent-source writes without a
+  // resolved writing identity. CLI_ENV names test-agent via MEMENTOS_AGENT.
+  const reg = await runCli("register-agent", "test-agent");
+  if (reg.exitCode !== 0) {
+    throw new Error(`could not register test-agent: ${reg.stderr}`);
+  }
 });
 
 afterAll(() => {
