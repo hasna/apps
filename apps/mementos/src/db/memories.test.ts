@@ -1,7 +1,8 @@
 // Set in-memory DB before any imports
+const PREV_DB_PATH = process.env["MEMENTOS_DB_PATH"];
 process.env["MEMENTOS_DB_PATH"] = ":memory:";
 
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterAll } from "bun:test";
 import { SqliteAdapter as Database } from "../storage.js";
 import {
   createMemory,
@@ -1362,4 +1363,12 @@ describe("working scope", () => {
     const after = getMemory(mem.id, db);
     expect(after).toBeNull();
   });
+});
+
+afterAll(() => {
+  if (PREV_DB_PATH === undefined) {
+    delete process.env["MEMENTOS_DB_PATH"];
+  } else {
+    process.env["MEMENTOS_DB_PATH"] = PREV_DB_PATH;
+  }
 });

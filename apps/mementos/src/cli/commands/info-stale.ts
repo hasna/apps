@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { resolve } from "node:path";
-import { getStaleMemories } from "../../db/analytics.js";
+import { getStaleMemoriesPage } from "../../db/analytics.js";
 import { getProject } from "../../db/projects.js";
 import {
   resolveAgentFilter,
@@ -15,6 +15,7 @@ import {
   positiveIntOrDefault,
   printPageHint,
   truncateText,
+  collectPagedRows,
   type GlobalOpts,
 } from "../helpers.js";
 
@@ -39,7 +40,7 @@ export function registerStaleCommand(program: Command): void {
         const fmt = getOutputFormat(program, opts.format as string | undefined);
         const isJson = fmt === "json";
         const limit = positiveIntOrDefault(opts.limit, isJson ? 20 : DEFAULT_COMPACT_LIMIT);
-        const offset = cursorOrOffset(opts.cursor, opts.offset);
+        const offset = cursorOrOffset(opts.cursor, opts.offset) ?? 0;
         const projectPath = (opts.project as string | undefined) || globalOpts.project;
         let projectId: string | undefined;
         if (projectPath) {
@@ -51,18 +52,44 @@ export function registerStaleCommand(program: Command): void {
           (opts.agent as string | undefined) || globalOpts.agent
         );
 
-        const rows = getStaleMemories({
-          days,
-          project_id: projectId,
-          agent_id: agentId,
-          limit: isJson ? limit : limit + 1,
+        // Collect bounded pages (server caps single responses at 1000 rows)
+        // up to the requested limit. `stale_count` is the TRUE total from the
+        // first page — never the returned page length (BUG 2796806b).
+        let staleTotal = 0;
+        let firstPage = true;
+        const { rows: collected, hasMore } = collectPagedRows(
+          (cursor, pageLimit) => {
+            const page = getStaleMemoriesPage({
+              days,
+              project_id: projectId,
+              agent_id: agentId,
+              limit: pageLimit,
+              offset: cursor,
+            });
+            if (firstPage) {
+              staleTotal = page.total;
+              firstPage = false;
+            }
+            return {
+              rows: page.rows,
+              has_more: page.has_more,
+              next_cursor: page.next_cursor,
+            };
+          },
+          limit,
           offset,
-        });
-        const hasMore = !isJson && rows.length > limit;
-        const displayRows = hasMore ? rows.slice(0, limit) : rows;
+        );
+        const displayRows = hasMore ? collected.slice(0, limit) : collected;
 
         if (fmt === "json") {
-          outputJson({ stale_count: rows.length, threshold_days: days, memories: rows });
+          outputJson({
+            stale_count: staleTotal,
+            returned: displayRows.length,
+            threshold_days: days,
+            has_more: hasMore,
+            next_cursor: hasMore ? offset + displayRows.length : null,
+            memories: displayRows,
+          });
           return;
         }
 

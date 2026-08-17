@@ -263,14 +263,40 @@ export interface StaleMemory {
   created_at?: string;
 }
 
-export function getStaleMemories(filter: StaleFilter = {}, db?: Database): StaleMemory[] {
+export interface StalePage {
+  rows: StaleMemory[];
+  /** True total of stale memories matching the filter — never the page length. */
+  total: number;
+  has_more: boolean | undefined;
+  next_cursor: number | null;
+}
+
+/**
+ * One bounded page of the stale surface, with the TRUE total and an explicit
+ * pagination signal. The server caps single responses and answers with
+ * `total` / `has_more` / `next_cursor`, so a page never silently truncates.
+ */
+export function getStaleMemoriesPage(filter: StaleFilter = {}, db?: Database): StalePage {
   const days = Math.min(filter.days || 30, 365);
   const limit = filter.limit ?? 20;
   const offset = filter.offset ?? 0;
   if (!db && isApiMode()) {
     const q = toQuery({ days, project_id: filter.project_id, agent_id: filter.agent_id, limit, offset });
-    const { data } = apiJson<{ memories: StaleMemory[] }>("GET", `/memories/stale${q}`);
-    return data?.memories ?? [];
+    const { data } = apiJson<{
+      memories?: StaleMemory[];
+      total?: number;
+      has_more?: boolean;
+      next_cursor?: number | null;
+    }>("GET", `/memories/stale${q}`);
+    const rows = data?.memories ?? [];
+    return {
+      rows,
+      // Older servers carry no `total`; fall back to the page length rather
+      // than inventing a number.
+      total: data?.total ?? rows.length,
+      has_more: data?.has_more,
+      next_cursor: data?.next_cursor ?? null,
+    };
   }
   const d = db || getDatabase();
   const cutoffDate = new Date(Date.now() - days * 86400000).toISOString();
@@ -279,11 +305,27 @@ export function getStaleMemories(filter: StaleFilter = {}, db?: Database): Stale
   if (filter.project_id) { conds.push("project_id = ?"); params.push(filter.project_id); }
   if (filter.agent_id) { conds.push("agent_id = ?"); params.push(filter.agent_id); }
 
-  let sql = `SELECT id, key, value, importance, scope, category, accessed_at, access_count, created_at FROM memories WHERE ${conds.join(" AND ")} ORDER BY COALESCE(accessed_at, created_at) ASC LIMIT ?`;
+  const where = conds.join(" AND ");
+  const countRow = d
+    .query(`SELECT COUNT(*) AS c FROM memories WHERE ${where}`)
+    .get(...params) as { c: number } | undefined;
+
+  let sql = `SELECT id, key, value, importance, scope, category, accessed_at, access_count, created_at FROM memories WHERE ${where} ORDER BY COALESCE(accessed_at, created_at) ASC LIMIT ?`;
   params.push(limit);
   if (offset) { sql += " OFFSET ?"; params.push(offset); }
 
-  return d.query(sql).all(...params) as StaleMemory[];
+  const rows = d.query(sql).all(...params) as StaleMemory[];
+  const hasMore = rows.length === limit;
+  return {
+    rows,
+    total: countRow?.c ?? 0,
+    has_more: hasMore,
+    next_cursor: hasMore ? offset + rows.length : null,
+  };
+}
+
+export function getStaleMemories(filter: StaleFilter = {}, db?: Database): StaleMemory[] {
+  return getStaleMemoriesPage(filter, db).rows;
 }
 
 // ---------------------------------------------------------------------------

@@ -156,6 +156,78 @@ export function truncateText(value: string | null | undefined, max = DEFAULT_SNI
   return `${normalized.slice(0, max - 3)}...`;
 }
 
+// ============================================================================
+// Bounded page walking
+// ============================================================================
+
+export interface PagedFetchResult<T> {
+  rows: T[];
+  /**
+   * true = more rows exist; false = the end was reached; undefined = the
+   * server did not say (an older server without the pagination contract —
+   * the walk falls back to a short-page heuristic).
+   */
+  has_more: boolean | undefined;
+  next_cursor: number | null;
+}
+
+/**
+ * Collect rows across bounded pages (BUG 2796806b). The server caps every
+ * single response (1000 rows for list surfaces), so a request for more than
+ * one page — or for the full population — must walk pages.
+ *
+ * `target` is the number of rows the caller will display; the walk probes one
+ * row past it so `hasMore` is truthful and a "use --cursor N for more" hint is
+ * honest. With `target` undefined every matching row is collected.
+ *
+ * Guarded against cursor cycles and runaway page counts (mirrors the SDK's
+ * traversal guards). Termination: the server's `has_more: false`, or a page
+ * shorter than requested when the server carries no signal, or `target` rows
+ * collected.
+ */
+export function collectPagedRows<T>(
+  fetchPage: (offset: number, limit: number) => PagedFetchResult<T>,
+  target: number | undefined,
+  offset: number,
+  opts: { pageSize?: number; maxPages?: number } = {},
+): { rows: T[]; hasMore: boolean } {
+  const pageSize = opts.pageSize ?? 1000;
+  const maxPages = opts.maxPages ?? 1000;
+  const want = target === undefined ? undefined : target + 1;
+  const rows: T[] = [];
+  const seenCursors = new Set<number>();
+  let cursor = offset;
+  let pages = 0;
+  for (;;) {
+    if (want !== undefined && rows.length >= want) break;
+    if (++pages > maxPages) {
+      throw new Error(
+        `pagination exceeded ${maxPages} pages while collecting rows — aborting (cursor cycle?)`,
+      );
+    }
+    const limit = Math.min(
+      want === undefined ? pageSize : want - rows.length,
+      pageSize,
+    );
+    const page = fetchPage(cursor, limit);
+    rows.push(...page.rows);
+    if (page.has_more === false) break;
+    if (page.has_more === undefined && page.rows.length < limit) break;
+    if (page.has_more === true && (page.next_cursor === null || page.next_cursor === undefined)) {
+      throw new Error(
+        "pagination claimed more results without a next cursor — aborting",
+      );
+    }
+    const next = page.next_cursor ?? cursor + page.rows.length;
+    if (seenCursors.has(next)) {
+      throw new Error("pagination repeated a cursor — aborting");
+    }
+    seenCursors.add(next);
+    cursor = next;
+  }
+  return { rows, hasMore: target !== undefined && rows.length > target };
+}
+
 export function printPageHint(opts: {
   shown: number;
   limit: number;
