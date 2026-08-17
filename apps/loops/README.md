@@ -854,8 +854,8 @@ loops routes schedule todos-task oss-task-route-drain \
   --provider-admission-check \
   --max-per-profile 2 \
   --launch-gate "pa19-controlled-launch" \
-  --launch-gate-blocker "$HOME/workspace/example/opensource/open-codewith::2d9d931b" \
-  --launch-gate-blocker "$HOME/workspace/example/opensource/open-loops::816e99db" \
+  --launch-gate-blocker "$HOME/workspace/example/opensource/codewith::2d9d931b" \
+  --launch-gate-blocker "$HOME/workspace/example/opensource/loops::816e99db" \
   --worktree-mode required \
   --evidence-dir "$HOME/.hasna/loops/reports/oss-task-route-drain" \
   --compact
@@ -935,8 +935,8 @@ const binding = openAutomationsRuntimeBinding();
 ```
 
 ```bash
-automations queue claim --runner open-loops:<worker-id>
-automations queue complete <action-id> --runner open-loops:<worker-id>
+automations queue claim --runner loops:<worker-id>
+automations queue complete <action-id> --runner loops:<worker-id>
 ```
 
 For explicit event workflow routing, OpenAutomations can export the normalized

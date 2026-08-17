@@ -242,6 +242,32 @@ describe("session apply writer", () => {
     expect(existsSync(join(targetHome, ".hasna", "session-render-manifest.json"))).toBe(false);
   });
 
+  test("fails closed when Claude legacy authority appears after planning", () => {
+    const targetHome = targetFor("claude-authority-race");
+    const plan = planSessionRender({
+      tool: "claude",
+      profile: "account999",
+      targetHome,
+      sources: [globalIdentity],
+    });
+
+    expect(plan.blocked).toBe(false);
+    expect(plan.authorityConflicts).toEqual([]);
+
+    mkdirSync(targetHome, { recursive: true });
+    writeFileSync(join(targetHome, "AGENTS.md"), [
+      "# Agent Rules (Claude)",
+      "",
+      "## No Worktrees",
+      "Never use git worktrees.",
+      "",
+    ].join("\n"));
+
+    expect(() => applySessionRender(plan)).toThrow("Claude authority changed after planning");
+    expect(existsSync(join(targetHome, "CLAUDE.md"))).toBe(false);
+    expect(existsSync(join(targetHome, ".hasna", "session-render-manifest.json"))).toBe(false);
+  });
+
   test("allows managed updates and writes a snapshot", () => {
     const targetHome = targetFor("codex-managed");
     const first = planSessionRender({
