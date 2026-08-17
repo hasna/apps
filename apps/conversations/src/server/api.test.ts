@@ -1517,6 +1517,40 @@ describe("conversations-serve", () => {
     }]);
     expect(done.status).toBe(200);
     expect(((await done.json()) as any).inserted).toBe(1);
+
+    // Same-batch duplicate: the second item is a same-state duplicate of the
+    // first, in ONE request — the gate scans batch items first, so the batch
+    // is rejected atomically.
+    const sameBatchDup = await bulkPost([
+      {
+        uuid: "a1a2a3a4-0000-4000-8000-000000000005",
+        from: "a",
+        to: "b",
+        content: ws("RESUMED", { at: new Date(Date.now() - 10_000).toISOString() }),
+        channel: "work-status",
+      },
+      {
+        uuid: "a1a2a3a4-0000-4000-8000-000000000006",
+        from: "a",
+        to: "b",
+        content: ws("RESUMED", { event_id: "f6e009ee-1a2b-3c4d-5e6f-7a8b9c0d1e2f", at: new Date(Date.now() - 5_000).toISOString() }),
+        channel: "work-status",
+      },
+    ]);
+    expect(sameBatchDup.status).toBe(400);
+    expect(((await sameBatchDup.json()) as any).error).toContain("duplicate RESUMED event");
+
+    // Idempotent replay: the same uuid again is a no-op skip (ON CONFLICT
+    // (uuid) DO NOTHING), not a duplicate rejection.
+    const replay = await bulkPost([{
+      uuid: "a1a2a3a4-0000-4000-8000-000000000001",
+      from: "a",
+      to: "b",
+      content: ws("START"),
+      channel: "work-status",
+    }]);
+    expect(replay.status).toBe(200);
+    expect(((await replay.json()) as any).inserted).toBe(0);
   });
 
   test("PATCH /v1/channels refuses to rename any channel to or from work-status", async () => {

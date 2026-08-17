@@ -24,7 +24,7 @@ import { version as pkgVersion } from "../../package.json";
 import { openapiSpec } from "./openapi.js";
 import { decayedStatus, SINGLE_TOUCH_TOLERANCE_SECONDS, SINGLE_TOUCH_REAP_WINDOW_SECONDS } from "../lib/presence.js";
 import { normalizeChannelName, unknownChannelMessage } from "../lib/channel-names.js";
-import { enforceWorkStatusEventWriteAsync, WORK_STATUS_CHANNEL, workStatusTaskLikePattern } from "../lib/work-status-schema.js";
+import { enforceWorkStatusEventWriteAsync, parseStoredWriteTime, WORK_STATUS_CHANNEL, workStatusTaskLikePattern } from "../lib/work-status-schema.js";
 import { newChannelId } from "../lib/channel-id.js";
 import { extractTopics } from "../lib/topic-extract.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "../lib/content-safety.js";
@@ -2094,13 +2094,20 @@ async function handleV1(
       // absent exactly where it matters.
       if (channelName === WORK_STATUS_CHANNEL) {
         await enforceWorkStatusEventWriteAsync(channelName, content, async (taskId) => {
-          // Task-scoped lookup: the previous event for THIS task, never a
-          // channel-wide scan that older same-task events can fall out of.
-          const rows = await tx.many<{ content: unknown }>(
-            `SELECT content FROM messages WHERE channel = $1 AND content LIKE $2 ORDER BY id DESC LIMIT 10`,
+          // Task-scoped lookup: the previous event for THIS task, newest
+          // first. No row cap: the marker-matched population is inherently
+          // tiny (only rows whose text contains this task's exact uuid
+          // marker), and a cap is what lets body-text mentions of the marker
+          // evict the real previous event. The stored created_at is the
+          // write-time anchor — never the writer-supplied at= field.
+          const rows = await tx.many<{ content: unknown; created_at: unknown }>(
+            `SELECT content, created_at FROM messages WHERE channel = $1 AND content LIKE $2 ORDER BY id DESC`,
             [channelName, workStatusTaskLikePattern(taskId)],
           );
-          return rows.map((row) => String(row.content));
+          return rows.map((row) => ({
+            content: String(row.content),
+            writtenAtMs: parseStoredWriteTime(row.created_at),
+          }));
         });
       }
       const inserted = await tx.get<Record<string, unknown>>(
@@ -2262,7 +2269,7 @@ async function handleV1(
       requestedProjectId: string | null;
       projectParamIndex: number;
     }> = [];
-    const workStatusItems: Array<{ index: number; channel: string; content: string }> = [];
+    const workStatusItems: Array<{ index: number; channel: string; content: string; uuid: string }> = [];
     const replyReferences: Array<{
       itemIndex: number;
       uuid: string;
@@ -2347,7 +2354,7 @@ async function handleV1(
         });
       }
       if (channel === WORK_STATUS_CHANNEL) {
-        workStatusItems.push({ index: i, channel, content });
+        workStatusItems.push({ index: i, channel, content, uuid });
       }
     }
 
@@ -2386,19 +2393,42 @@ async function handleV1(
       // message path, including the duplicate check against already-stored
       // events and against events accepted earlier in this same batch.
       if (workStatusItems.length > 0) {
-        const batchAcceptedByChannel = new Map<string, string[]>();
+        // Idempotent replays keep the bulk endpoint's ON CONFLICT (uuid) DO
+        // NOTHING contract: a work-status row whose uuid already exists is a
+        // no-op replay of a row that already passed the gate, so it is
+        // skipped here — gating it would reject a recent same-state replay as
+        // a duplicate instead of skipping it.
+        const workStatusUuids = workStatusItems.map((item) => item.uuid);
+        const existingWorkStatus = new Set(
+          (await tx.many<{ uuid: string }>(
+            `SELECT uuid FROM messages WHERE uuid = ANY($1::text[])`,
+            [workStatusUuids],
+          )).map((row) => row.uuid),
+        );
+        const batchAcceptedByChannel = new Map<string, Array<{ content: string; writtenAtMs: number }>>();
+        const now = Date.now();
         for (const item of workStatusItems) {
+          if (existingWorkStatus.has(item.uuid)) continue;
           await enforceWorkStatusEventWriteAsync(WORK_STATUS_CHANNEL, item.content, async (taskId) => {
-            const stored = await tx.many<{ content: unknown }>(
-              `SELECT content FROM messages WHERE channel = $1 AND content LIKE $2 ORDER BY id DESC LIMIT 10`,
+            const stored = await tx.many<{ content: unknown; created_at: unknown }>(
+              `SELECT content, created_at FROM messages WHERE channel = $1 AND content LIKE $2 ORDER BY id DESC`,
               [item.channel, workStatusTaskLikePattern(taskId)],
             );
             const batchPrevious = batchAcceptedByChannel.get(item.channel) ?? [];
-            // Batch-accepted contents are newest-first: later items win.
-            return [...stored.map((row) => String(row.content)), ...batchPrevious.slice().reverse()];
+            // Batch-accepted entries are NEWER than any stored row (this
+            // request writes them), so they scan first, newest batch item
+            // first, and a batch duplicate is caught against the most recent
+            // event rather than an older stored one.
+            return [
+              ...batchPrevious.slice().reverse(),
+              ...stored.map((row) => ({
+                content: String(row.content),
+                writtenAtMs: parseStoredWriteTime(row.created_at),
+              })),
+            ];
           });
           const accepted = batchAcceptedByChannel.get(item.channel) ?? [];
-          accepted.push(item.content);
+          accepted.push({ content: item.content, writtenAtMs: now });
           batchAcceptedByChannel.set(item.channel, accepted);
         }
       }

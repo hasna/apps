@@ -326,13 +326,17 @@ describe("work-status lifecycle stream write-time schema guard", () => {
   });
 
   test("accepts the same state again after the dedupe window", () => {
-    // The previous event was claimed more than five minutes before the write
-    // time, so the new same-state emission is a genuinely new transition.
-    sendMessage({ from: "a", to: "work-status", content: WS_EVENT("BLOCKED", { at: new Date(Date.now() - 10 * 60_000).toISOString() }), channel: "work-status" });
+    // The dedupe window is anchored on the STORED write time (created_at),
+    // never on the claimed at=: age the stored row beyond the window, then a
+    // new same-state emission is a genuinely new transition.
+    sendMessage({ from: "a", to: "work-status", content: WS_EVENT("BLOCKED"), channel: "work-status" });
+    getDb().prepare(
+      "UPDATE messages SET created_at = ? WHERE channel = 'work-status'",
+    ).run(new Date(Date.now() - 10 * 60_000).toISOString());
     const later = sendMessage({
       from: "a",
       to: "work-status",
-      content: WS_EVENT("BLOCKED", { event_id: "f6e009ee-1a2b-3c4d-5e6f-7a8b9c0d1e2f", at: new Date(Date.now() - 9 * 60_000).toISOString() }),
+      content: WS_EVENT("BLOCKED", { event_id: "f6e009ee-1a2b-3c4d-5e6f-7a8b9c0d1e2f" }),
       channel: "work-status",
     });
     expect(later.content).toStartWith("BLOCKED event_id=");

@@ -90,18 +90,30 @@ describe("parseWorkStatusEvent — schema enforcement at write time", () => {
     // The schema documents event_id=<uuid>, task_id=<full-task-uuid>,
     // session=<session-uuid>; a single-character value is not one.
     expect(() => parseWorkStatusEvent(validEvent("START", { event_id: "x" }))).toThrow(
-      /must be a full UUID/,
+      /must be a full LOWERCASE UUID/,
     );
     expect(() => parseWorkStatusEvent(validEvent("START", { task_id: "x" }))).toThrow(
-      /must be a full UUID/,
+      /must be a full LOWERCASE UUID/,
     );
     expect(() => parseWorkStatusEvent(validEvent("START", { session: "x" }))).toThrow(
-      /must be a full UUID/,
+      /must be a full LOWERCASE UUID/,
     );
     // The old fixture shape (short ids) is not a UUID either.
     expect(() => parseWorkStatusEvent(validEvent("START", { event_id: "78b747e6" }))).toThrow(
-      /must be a full UUID/,
+      /must be a full LOWERCASE UUID/,
     );
+  });
+
+  test("rejects uppercase UUIDs so task identity cannot be casing-spoofed", () => {
+    // The same UUID written in two casings must not resolve to two different
+    // tasks (the dedupe compares task_ids case-sensitively and Postgres LIKE
+    // is case-sensitive), so uppercase spellings are rejected at write time.
+    expect(() =>
+      parseWorkStatusEvent(validEvent("START", { task_id: TASK_ID.toUpperCase() })),
+    ).toThrow(/must be a full LOWERCASE UUID/);
+    expect(() =>
+      parseWorkStatusEvent(validEvent("START", { event_id: EVENT_ID.toUpperCase() })),
+    ).toThrow(/must be a full LOWERCASE UUID/);
   });
 
   test("rejects a scope that is not <kind>:<stable-id>", () => {
@@ -168,12 +180,16 @@ describe("parseWorkStatusEvent — schema enforcement at write time", () => {
 
 describe("assertNotDuplicateWorkStatusTransition — one event per real transition", () => {
   test("rejects the same state for the same task within the dedupe window", () => {
-    // task START at 19:12:36Z and again at 19:13:33Z, both claimed recent
-    // relative to the write time passed as `now`.
+    // task START at 19:12:36Z and again at 19:13:33Z; the previous event was
+    // STORED shortly before the current write.
     const first = parseWorkStatusEvent(validEvent("START", { at: "2026-08-14T19:12:36.000Z" }))!;
     const second = parseWorkStatusEvent(validEvent("START", { at: "2026-08-14T19:13:33.000Z" }))!;
     expect(() =>
-      assertNotDuplicateWorkStatusTransition(first, second, Date.parse("2026-08-14T19:13:33.000Z")),
+      assertNotDuplicateWorkStatusTransition(
+        first, second,
+        Date.parse("2026-08-14T19:13:00.000Z"),
+        Date.parse("2026-08-14T19:13:33.000Z"),
+      ),
     ).toThrow(/duplicate START event/);
   });
 
@@ -181,25 +197,48 @@ describe("assertNotDuplicateWorkStatusTransition — one event per real transiti
     const first = parseWorkStatusEvent(validEvent("BLOCKED", { at: "2026-08-14T21:11:06.000Z" }))!;
     const second = parseWorkStatusEvent(validEvent("BLOCKED", { at: "2026-08-14T21:11:30.000Z" }))!;
     expect(() =>
-      assertNotDuplicateWorkStatusTransition(first, second, Date.parse("2026-08-14T21:11:30.000Z")),
+      assertNotDuplicateWorkStatusTransition(
+        first, second,
+        Date.parse("2026-08-14T21:11:06.000Z"),
+        Date.parse("2026-08-14T21:11:30.000Z"),
+      ),
     ).toThrow(/duplicate BLOCKED event/);
   });
 
-  test("rejects an immediate duplicate whose own at= is backdated past the window", () => {
-    // The window is anchored on write time, never on the writer-supplied at:
-    // a duplicate written now cannot escape the check by claiming a timestamp
-    // six minutes earlier than the previous event.
+  test("rejects an immediate duplicate even when BOTH at= values are backdated", () => {
+    // The window is anchored on the previous event's STORED write time and
+    // the current write, never on the writer-supplied at values: a first
+    // event that backdates its own claimed timestamp cannot move the window,
+    // and a duplicate written now cannot escape by backdating either side.
     const first = parseWorkStatusEvent(validEvent("START", { at: "2026-08-17T11:55:00.000Z" }))!;
     const immediate = parseWorkStatusEvent(validEvent("START", { at: "2026-08-17T11:49:00.000Z" }))!;
-    expect(() => assertNotDuplicateWorkStatusTransition(first, immediate, NOW_MS)).toThrow(
-      /duplicate START event/,
-    );
+    expect(() =>
+      assertNotDuplicateWorkStatusTransition(
+        first, immediate,
+        Date.parse("2026-08-17T11:59:00.000Z"),
+        NOW_MS,
+      ),
+    ).toThrow(/duplicate START event/);
+  });
+
+  test("allows a same-state emission when the previous event was STORED beyond the window", () => {
+    // The previous event forward-dates its claimed at to be "recent" while it
+    // was actually stored ten minutes ago — the stored write time decides.
+    const first = parseWorkStatusEvent(validEvent("BLOCKED", { at: "2026-08-17T11:59:00.000Z" }))!;
+    const now = parseWorkStatusEvent(validEvent("BLOCKED", { at: NOW }))!;
+    expect(() =>
+      assertNotDuplicateWorkStatusTransition(
+        first, now,
+        Date.parse("2026-08-17T11:50:00.000Z"),
+        NOW_MS,
+      ),
+    ).not.toThrow();
   });
 
   test("allows a different state for the same task", () => {
     const blocked = parseWorkStatusEvent(validEvent("BLOCKED", { at: NOW }))!;
     const resumed = parseWorkStatusEvent(validEvent("RESUMED", { at: NOW }))!;
-    expect(() => assertNotDuplicateWorkStatusTransition(blocked, resumed, NOW_MS)).not.toThrow();
+    expect(() => assertNotDuplicateWorkStatusTransition(blocked, resumed, NOW_MS, NOW_MS)).not.toThrow();
   });
 
   test("allows the same state after the dedupe window", () => {
@@ -209,26 +248,30 @@ describe("assertNotDuplicateWorkStatusTransition — one event per real transiti
         at: new Date(Date.parse("2026-08-14T21:11:06.000Z") + WORK_STATUS_DEDUPE_WINDOW_MS + 1).toISOString(),
       }),
     )!;
-    // The previous event was claimed more than the window before the write
-    // time, so the new same-state emission is a genuinely new transition.
+    // The previous event was STORED more than the window before the current
+    // write, so the new same-state emission is a genuinely new transition.
     expect(() =>
-      assertNotDuplicateWorkStatusTransition(first, later, Date.parse("2026-08-14T21:20:00.000Z")),
+      assertNotDuplicateWorkStatusTransition(
+        first, later,
+        Date.parse("2026-08-14T21:11:06.000Z"),
+        Date.parse("2026-08-14T21:20:00.000Z"),
+      ),
     ).not.toThrow();
   });
 
   test("allows the same state for a different task", () => {
     const first = parseWorkStatusEvent(validEvent("START", { at: NOW }))!;
     const other = parseWorkStatusEvent(validEvent("START", { task_id: OTHER_TASK_ID, at: NOW }))!;
-    expect(() => assertNotDuplicateWorkStatusTransition(first, other, NOW_MS)).not.toThrow();
+    expect(() => assertNotDuplicateWorkStatusTransition(first, other, NOW_MS, NOW_MS)).not.toThrow();
   });
 
   test("allows a same-state re-emission after an intervening different state", () => {
     const firstBlocked = parseWorkStatusEvent(validEvent("BLOCKED", { at: NOW }))!;
     const resumed = parseWorkStatusEvent(validEvent("RESUMED", { at: "2026-08-17T12:01:00.000Z" }))!;
     const reBlocked = parseWorkStatusEvent(validEvent("BLOCKED", { at: "2026-08-17T12:02:00.000Z" }))!;
-    expect(() => assertNotDuplicateWorkStatusTransition(firstBlocked, resumed, NOW_MS)).not.toThrow();
+    expect(() => assertNotDuplicateWorkStatusTransition(firstBlocked, resumed, NOW_MS, NOW_MS)).not.toThrow();
     // The dedupe check fires against the most recent event for the task —
     // here that is RESUMED, so the new BLOCKED is a genuinely new transition.
-    expect(() => assertNotDuplicateWorkStatusTransition(resumed, reBlocked, NOW_MS)).not.toThrow();
+    expect(() => assertNotDuplicateWorkStatusTransition(resumed, reBlocked, NOW_MS, NOW_MS)).not.toThrow();
   });
 });

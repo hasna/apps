@@ -88,8 +88,14 @@ export interface WorkStatusEvent {
 }
 
 const VALUE_RE = /^[^\s=]{1,128}$/;
-/** Full UUID: 8-4-4-4-12 hex, as the schema documents for <uuid> fields. */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * Full UUID: 8-4-4-4-12 LOWERCASE hex, as the schema documents for <uuid>
+ * fields. Lowercase-only is deliberate: the parsed identifiers feed
+ * case-sensitive identity comparisons and SQL LIKE lookups on both backends,
+ * and a case-insensitive match would let one UUID written in two casings
+ * bypass the same-task duplicate check.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** <kind>:<stable-id> — the fleet's own example is `todos:691ea5e4`. */
 const SCOPE_RE = /^[a-z0-9]+:[a-zA-Z0-9_-]{1,96}$/;
 /** Strict RFC3339 with a mandatory `Z` suffix. */
@@ -97,12 +103,28 @@ const RFC3339Z_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,9})
 
 /**
  * A LIKE pattern that matches the stored serialized `task_id=<id>` marker for
- * one task. task_id is validated as a full UUID, so no LIKE metacharacters
- * (%, _, \) can appear in the interpolated value; this stays a plain literal
- * match against the marker.
+ * one task. task_id is validated as a lowercase full UUID, so no LIKE
+ * metacharacters (%, _, \) can appear in the interpolated value; this stays a
+ * plain literal match against the marker.
  */
 export function workStatusTaskLikePattern(taskId: string): string {
   return `%task_id=${taskId}%`;
+}
+
+/**
+ * Parse a stored message timestamp into epoch ms. The SQLite store writes
+ * UTC wall-clock timestamps without a zone suffix
+ * (strftime('%Y-%m-%dT%H:%M:%f','now')), which a bare Date.parse would read
+ * as LOCAL time; the codebase convention (parsePresenceTimestamp) appends
+ * `Z`. Postgres timestamptz values carry their own zone marker and pass
+ * through unchanged.
+ */
+export function parseStoredWriteTime(value: unknown): number {
+  let raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) return 0;
+  if (!/Z$|[+-]\d{2}:?\d{2}$/.test(raw)) raw = `${raw}Z`;
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? ms : 0;
 }
 
 function isJsonDocument(firstToken: string): boolean {
@@ -220,7 +242,7 @@ export function parseWorkStatusEvent(content: string): WorkStatusEvent | null {
   const assertUuidField = (key: string, value: string, label: string): string => {
     if (!UUID_RE.test(value)) {
       throw new WorkStatusSchemaError(
-        `field "${key}" must be a full UUID (${label}), got "${value}".`,
+        `field "${key}" must be a full LOWERCASE UUID (${label}), got "${value}".`,
       );
     }
     return value;
@@ -293,29 +315,37 @@ export function parseStrictRfc3339Z(value: string): number | null {
  *
  * When `channelName` is the work-status channel this validates the message's
  * first line against the exact lifecycle schema and rejects duplicate
- * same-state transitions. `recentContentsForTask` must supply the most recent
- * messages of the channel that carry the marker of the given task_id, newest
- * first, so the dedupe check can find the previous event for that task
- * without scanning the whole channel. The dedupe window is measured from
- * `now` (write time), never from the writer-supplied `at` values. Any other
- * channel is untouched.
+ * same-state transitions. `recentEntriesForTask` must supply the messages of
+ * the channel that carry the marker of the given task_id, newest first, each
+ * with its STORED write time (`writtenAtMs` from created_at — never the
+ * writer-supplied `at` field), so the dedupe check can find the previous
+ * event for that task without scanning the whole channel. The dedupe window
+ * is measured from `now` (the current write) against the previous event's
+ * STORED write time; a first event that backdates or forwarddates its own
+ * `at` value cannot move the window. Any other channel is untouched.
  */
+export interface WorkStatusRecentEntry {
+  content: string;
+  /** The message's STORED write time (created_at), in epoch ms. */
+  writtenAtMs: number;
+}
+
 function checkWorkStatusDuplicates(
-  recentContents: Iterable<string>,
+  recentEntries: Iterable<WorkStatusRecentEntry>,
   event: WorkStatusEvent,
   now: number,
 ): void {
-  for (const previousContent of recentContents) {
+  for (const entry of recentEntries) {
     let previous: WorkStatusEvent | null;
     try {
-      previous = parseWorkStatusEvent(previousContent);
+      previous = parseWorkStatusEvent(entry.content);
     } catch {
       // An earlier malformed line cannot carry a duplicate transition; keep
       // scanning for the previous well-formed event of this task.
       continue;
     }
     if (previous && previous.task_id === event.task_id) {
-      assertNotDuplicateWorkStatusTransition(previous, event, now);
+      assertNotDuplicateWorkStatusTransition(previous, event, entry.writtenAtMs, now);
       break;
     }
   }
@@ -324,30 +354,30 @@ function checkWorkStatusDuplicates(
 export function enforceWorkStatusEventWrite(
   channelName: string | null,
   content: string,
-  recentContentsForTask: (taskId: string) => Iterable<string>,
+  recentEntriesForTask: (taskId: string) => Iterable<WorkStatusRecentEntry>,
   now: number = Date.now(),
 ): void {
   if (channelName !== WORK_STATUS_CHANNEL) return;
   const event = parseWorkStatusEvent(content);
   if (!event) return;
-  checkWorkStatusDuplicates(recentContentsForTask(event.task_id), event, now);
+  checkWorkStatusDuplicates(recentEntriesForTask(event.task_id), event, now);
 }
 
 /**
  * Async twin of `enforceWorkStatusEventWrite` for the Postgres server path,
  * whose query adapter is promise-based. Same gate, same semantics; the recent
- * contents lookup may await storage.
+ * entries lookup may await storage.
  */
 export async function enforceWorkStatusEventWriteAsync(
   channelName: string | null,
   content: string,
-  recentContentsForTask: (taskId: string) => Promise<Iterable<string>>,
+  recentEntriesForTask: (taskId: string) => Promise<Iterable<WorkStatusRecentEntry>>,
   now: number = Date.now(),
 ): Promise<void> {
   if (channelName !== WORK_STATUS_CHANNEL) return;
   const event = parseWorkStatusEvent(content);
   if (!event) return;
-  checkWorkStatusDuplicates(await recentContentsForTask(event.task_id), event, now);
+  checkWorkStatusDuplicates(await recentEntriesForTask(event.task_id), event, now);
 }
 /**
  * Dedupe check: the lifecycle mandate allows ONE event per real transition, so
@@ -355,22 +385,22 @@ export async function enforceWorkStatusEventWriteAsync(
  * one for that task is a duplicate (distinct event_ids notwithstanding).
  * The check only fires against the MOST RECENT event for the same task — an
  * intervening different state makes the new same-state emission a genuinely
- * new transition. The window is anchored on `now` (the write time of the
- * current event): if the previous event was claimed more than the window
- * before the current write, it is not recent and the emission is allowed.
- * Anchoring on the previous event's claimed `at` instead would let an
- * immediate duplicate backdate or forwarddate its own timestamp past the
- * window, so the previous event's claimed time is never compared with the
- * current event's claimed time.
+ * new transition. The window is anchored on the previous event's STORED write
+ * time (`previousWrittenAtMs`, from created_at) against `now` (the current
+ * write): if the previous event was STORED more than the window before the
+ * current write, it is not recent and the emission is allowed. The writer-
+ * supplied `at` values never enter the window computation, so neither a
+ * backdated nor a forward-dated `at` can move the window.
  */
 export function assertNotDuplicateWorkStatusTransition(
   previous: WorkStatusEvent,
   current: WorkStatusEvent,
+  previousWrittenAtMs: number,
   now: number = Date.now(),
 ): void {
   if (previous.task_id !== current.task_id) return;
   if (previous.state !== current.state) return;
-  if (Math.abs(now - previous.atMs) > WORK_STATUS_DEDUPE_WINDOW_MS) return;
+  if (Math.abs(now - previousWrittenAtMs) > WORK_STATUS_DEDUPE_WINDOW_MS) return;
   throw new WorkStatusSchemaError(
     `duplicate ${current.state} event for task ${current.task_id}: a ${previous.state} event for the ` +
       `same task was recorded recently at ${previous.at} (event_id=${previous.event_id}); the lifecycle ` +

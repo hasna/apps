@@ -33,7 +33,7 @@ import { fireWebhooks } from "./webhooks.js";
 import { normalizeChannelName, unknownChannelMessage } from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "./content-safety.js";
-import { enforceWorkStatusEventWrite, workStatusTaskLikePattern } from "./work-status-schema.js";
+import { enforceWorkStatusEventWrite, parseStoredWriteTime, workStatusTaskLikePattern } from "./work-status-schema.js";
 import { resolveReadLimit, resolveReadWindow } from "./message-window.js";
 import {
   COLLECTION_MAX_MAX_BYTES,
@@ -363,12 +363,19 @@ export function sendMessage(opts: SendMessageOptions): Message {
       // so the stream's consumers can trust it. The Postgres server path
       // (src/server/api.ts) enforces the same gate.
       enforceWorkStatusEventWrite(channelName, opts.content, (taskId) => {
-        // Task-scoped lookup: the previous event for THIS task, never a
-        // channel-wide scan that older same-task events can fall out of.
+        // Task-scoped lookup: the previous event for THIS task, newest first.
+        // No row cap: the marker-matched population is inherently tiny (only
+        // rows whose text contains this task's exact uuid marker), and a cap
+        // here is what lets body-text mentions of the marker evict the real
+        // previous event. The stored created_at is the write-time anchor —
+        // never the writer-supplied at= field.
         const recent = db.prepare(
-          "SELECT content FROM messages WHERE channel = ? AND content LIKE ? ORDER BY id DESC LIMIT 10"
-        ).all(channelName, workStatusTaskLikePattern(taskId)) as Array<{ content: unknown }>;
-        return recent.map((row) => String(row.content));
+          "SELECT content, created_at FROM messages WHERE channel = ? AND content LIKE ? ORDER BY id DESC"
+        ).all(channelName, workStatusTaskLikePattern(taskId)) as Array<{ content: unknown; created_at: unknown }>;
+        return recent.map((row) => ({
+          content: String(row.content),
+          writtenAtMs: parseStoredWriteTime(row.created_at),
+        }));
       });
       const row = db.prepare(`
         INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
