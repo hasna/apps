@@ -48,8 +48,9 @@ entry fails the suite until removed, so the registry cannot rot.
 Filed 2026-08-14 in todos project `5e44770b-694c-46a3-864f-20a2b9ec1de2`
 (`TODOS_AGENT_ID=agent-ea`):
 
-- `router` (`452b7a32`), `slides` (`62ec9dbc`) — missing the HARD `<name>`
-  CLI bin (per-member tasks; bins are never invented in-suite).
+- `slides` (`62ec9dbc`) — missing the HARD `<name>`
+  CLI bin (per-member tasks; bins are never invented in-suite). The `router`
+  bin (`452b7a32`) landed with #216; its exception entry was deleted.
 - 22 contracts-conformance failures (accounts `f6869bad`, automations `99f670fe`, calendar
   `a967c9bd`, catalog `e4d8cd62`, docs `6818348f`, draw `5698b7d3`, emails
   `e0ef3e32`, gateway `9dc0ee28`, instructions `c15cca18`, knowledge

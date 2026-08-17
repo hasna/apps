@@ -179,7 +179,7 @@ export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "hooks", reason: "CLI+serve member (hooks registry/serve); no MCP surface yet." },
   { member: "models", reason: "Library-shaped (model metadata); no MCP surface." },
   { member: "orgs", reason: "Registry-shaped; no MCP surface." },
-  { member: "router", reason: "Gateway-shaped; no MCP surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
+  { member: "router", reason: "Gateway-shaped; no MCP surface." },
   { member: "sheets", reason: "Library-shaped (spreadsheet format); no MCP surface." },
   { member: "slides", reason: "Library-shaped; no MCP surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
   { member: "tables", reason: "Library-shaped (tabular data); no MCP surface." },
@@ -207,7 +207,7 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "orgs", reason: "Registry-shaped; no server surface." },
   { member: "pixels", reason: "CLI/MCP-shaped (browser pixel + MCP clients); no server surface. Imported by #69." },
   { member: "releases", reason: "CLI-only member; no server surface." },
-  { member: "router", reason: "Gateway-shaped; no server surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
+  { member: "router", reason: "Gateway-shaped; no server surface." },
   { member: "servers", reason: "CLI-only member (server lifecycle tooling); no server surface." },
   { member: "sheets", reason: "Library-shaped; no server surface." },
   { member: "skills", reason: "CLI-only member (skill corpus tooling); no server surface." },
@@ -284,11 +284,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
  * These are the only four-surface violations that are task-mandated (the
  * bin must NOT be invented in-suite; remediation is a tracked task). */
 export const CLI_EXCEPTIONS: Array<{ member: string; reason: string; task: string }> = [
-  {
-    member: "router",
-    reason: "Gateway-shaped member shipping only an internal binary; no public `router` CLI bin. Remediation task filed.",
-    task: "todos 452b7a32 (router missing CLI bin)",
-  },
   {
     member: "slides",
     reason: "Library-shaped member; no public `slides` CLI bin. Remediation task filed.",

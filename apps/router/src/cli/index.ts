@@ -58,15 +58,15 @@ function routeRequestFromFlags(flags: Record<string, string | boolean>): RoutePr
 }
 
 function help(): string {
-  return `open-router ${routerVersion}
+  return `router ${routerVersion}
 
-Usage:
-  open-router route --config router.config.json [--model auto] [--task coding] [--priority quality] --prompt "..."
-  open-router analyze --prompt "..."
-  open-router validate --config router.config.json
-  open-router smoke --config router.config.json
-  open-router serve --config router.config.json [--host 127.0.0.1] [--port 8797]
-  open-router help
+Usage (binary also installed as the legacy alias open-router):
+  router route --config router.config.json [--model auto] [--task coding] [--priority quality] --prompt "..."
+  router analyze --prompt "..."
+  router validate --config router.config.json
+  router smoke --config router.config.json
+  router serve --config router.config.json [--host 127.0.0.1] [--port 8797]
+  router help
 `;
 }
 
@@ -127,7 +127,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
     const host = flagString(parsed.flags, "host", "127.0.0.1");
     const port = flagNumber(parsed.flags, "port", 8797);
     const server = startRouterServer({ config, host, port });
-    console.log(`open-router listening on http://${server.hostname}:${server.port}`);
+    console.log(`router listening on http://${server.hostname}:${server.port}`);
     return;
   }
 

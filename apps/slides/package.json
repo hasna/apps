@@ -35,7 +35,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:dashboard": "cd dashboard && bun run dev",
-    "postinstall": "mkdir -p $HOME/.hasna/slides 2>/dev/null || true && cd dashboard && bun install --frozen-lockfile"
+    "postinstall": "mkdir -p $HOME/.hasna/slides 2>/dev/null || true; if test -f dashboard/package.json; then cd dashboard && bun install --frozen-lockfile; fi"
   },
   "keywords": [
     "slides",

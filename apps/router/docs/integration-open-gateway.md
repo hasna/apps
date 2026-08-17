@@ -1,6 +1,6 @@
 # open-gateway Integration
 
-`open-router` is intended to be called before `open-gateway` executes a request.
+`router` is intended to be called before `open-gateway` executes a request.
 It recommends and explains an ordered candidate list. It does not send requests
 to providers and does not own provider credentials, budgets, retries, streaming,
 or usage ledgers.
@@ -79,7 +79,7 @@ set by the operator.
 For service mode, run:
 
 ```bash
-open-router serve --config router.config.example.json --port 8797
+router serve --config router.config.example.json --port 8797
 ```
 
 Then call:

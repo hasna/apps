@@ -1,6 +1,6 @@
 # @hasna/router
 
-`@hasna/router` (CLI: `open-router`) is the smart model router companion for
+`@hasna/router` (CLI: `router`; also installed as the legacy alias `open-router`) is the smart model router companion for
 [`gateway`](https://github.com/hasna/gateway). It makes deterministic,
 inspectable route decisions for prompts; it does not execute provider calls,
 hold provider credentials, or expand gateway policy.
@@ -19,7 +19,7 @@ bun add @hasna/router
 
 # as a CLI
 bun add -g @hasna/router
-open-router help
+router help
 ```
 
 Local development:
@@ -32,12 +32,12 @@ bun run smoke
 
 ## CLI
 
-Installed globally, the binary is `open-router`:
+Installed globally, the binary is `router`:
 
 ```bash
-open-router route --config router.config.json --model auto --prompt "..."
-open-router analyze --prompt "..."
-open-router validate --config router.config.json
+router route --config router.config.json --model auto --prompt "..."
+router analyze --prompt "..."
+router validate --config router.config.json
 ```
 
 From a source checkout:
@@ -94,7 +94,7 @@ Routing is intentionally transparent:
 5. Return a complete explanation. If no candidate is policy-eligible, return
    `status: "no_route"` with skip reasons.
 
-`open-router` preserves the `gateway` fail-closed model by treating request
+`router` preserves the `gateway` fail-closed model by treating request
 policy as restrictive by default. Request hints can narrow providers, regions,
 capabilities, costs, and data policy. They cannot expand configured policy unless
 `policy.allowRequestPolicyExpansion` is explicitly enabled in the router config.
