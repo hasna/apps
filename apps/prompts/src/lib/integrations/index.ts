@@ -23,6 +23,6 @@ export type {
 export { TODO_PROJECTION, TODO_PROJECTION_FIELDS, projectTodoRecord, serializeTodoProjection, type TodoReadSurface, type TodoProjectionData } from "./resolvers/todo.js"
 export { CHANNEL_PROJECTION, projectChannel, serializeChannelProjection, type ChannelReadSurface, type ChannelProjectionData } from "./resolvers/channel.js"
 export { KNOWLEDGE_PROJECTION, projectKnowledgeItem, serializeKnowledgeProjection, type KnowledgeReadSurface, type KnowledgeProjectionData } from "./resolvers/knowledge.js"
-export { MEMENTO_PROJECTION, MEMENTO_SEARCH_PROJECTION, projectMemento, serializeMementoProjection, serializeMementoSearchProjection, type MementoReadSurface, type MementoProjectionData, type MementoSearchProjectionData } from "./resolvers/memento.js"
+export { MEMENTO_PROJECTION, projectMemento, serializeMementoProjection, defaultMementoReadSurface, type MementoReadSurface, type MementoModuleLoader, type MementoProjectionData } from "./resolvers/memento.js"
 export { FILE_PROJECTION, projectFilePack, serializeFileProjection, type FileReadSurface, type FileProjectionData } from "./resolvers/file.js"
 export { redactText, containsCredentialShape, truncateText, PROJECTION_BOUNDS } from "./redact.js"

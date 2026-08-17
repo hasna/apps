@@ -49,6 +49,11 @@ export type IntegrationErrorCode =
   | "MEMENTO_TIMEOUT"
   | "MEMENTO_RESPONSE_INVALID"
   | "MEMENTO_UNAVAILABLE"
+  // Memento purity codes (report D4): search mode is removed until the owning
+  // package ships a pure search (searchMemories logs / writes search_history);
+  // id mode requires the owning package's no-touch read (peekMemory).
+  | "MEMENTO_SEARCH_UNAVAILABLE"
+  | "MEMENTO_READ_MODE_UNAVAILABLE"
   // files
   | "FILE_NOT_FOUND"
   | "FILE_DENIED"

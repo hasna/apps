@@ -12,8 +12,8 @@ import {
   CHANNEL_PROJECTION,
   KNOWLEDGE_PROJECTION,
   MEMENTO_PROJECTION,
-  MEMENTO_SEARCH_PROJECTION,
   FILE_PROJECTION,
+  defaultMementoReadSurface,
 } from "./index.js"
 import type {
   TodoReadSurface,
@@ -129,25 +129,6 @@ function mementoSurface(overrides: Partial<MementoReadSurface> = {}): MementoRea
       version: 2,
       updated_at: "2026-07-20T09:00:00Z",
     }),
-    search: async (term) => [
-      {
-        memory: {
-          id: MEMENTO_UUID,
-          key: "billing/invoice-vat",
-          value: "Invoice VAT is reverse-charged.",
-          category: "knowledge",
-          scope: "global",
-          summary: "EU cross-border VAT rule",
-          tags: ["finance"],
-          importance: 5,
-          when_to_use: null,
-          version: 2,
-          updated_at: "2026-07-20T09:00:00Z",
-        },
-        score: 0.9,
-        match_type: "exact",
-      },
-    ],
     ...overrides,
   }
 }
@@ -320,7 +301,10 @@ describe("todo resolver", () => {
       getProjected: async (id) => ({
         id,
         short_id: "APP-1",
-        title: "secret-token: abc12345def",
+        // Sentinel is deliberately `secrettoken:` (no hyphen): it still
+        // exercises the redactor's `secre[t][-_]?token:` pattern but does not
+        // match the repo CI gate's approle-secret detector (/secret[-]token[:]/).
+        title: "secrettoken: abc12345def",
         description: null,
         status: "pending",
         priority: "low",
@@ -519,13 +503,36 @@ describe("memento resolver", () => {
     expect(data["key"]).toBe("invoice-vat")
   })
 
-  test("positive: search returns several scored results, never silently one", async () => {
+  test("fail-closed: search mode maps to MEMENTO_SEARCH_UNAVAILABLE and never reaches a surface", async () => {
+    // The owning package has no pure search read (searchMemories writes
+    // search_history locally and logs the query via the hosted search
+    // handler), so search mode fails closed BEFORE any surface is touched.
+    let surfaceTouched = false
+    const surface = mementoSurface({
+      getById: async () => {
+        surfaceTouched = true
+        return null
+      },
+    })
     const ref = parseIntegrationRefs(`{{memento:search=VAT}}`)[0]!
-    const result = await resolveIntegrationRef(ref, buildSurfaceMap({ memento: mementoSurface() }))
-    expect(result.projection).toBe(MEMENTO_SEARCH_PROJECTION)
-    const data = JSON.parse(result.text) as Record<string, unknown>
-    expect((data["results"] as unknown[]).length).toBeGreaterThan(0)
-    expect((data["results"] as Array<{ score: number }>)[0]?.score).toBe(0.9)
+    try {
+      await resolveIntegrationRef(ref, buildSurfaceMap({ memento: surface }))
+      expect.unreachable()
+    } catch (e) {
+      expect((e as IntegrationResolutionError).code).toBe("MEMENTO_SEARCH_UNAVAILABLE")
+    }
+    expect(surfaceTouched).toBe(false)
+  })
+
+  test("permissive: search mode emits [UNRESOLVED ... code=MEMENTO_SEARCH_UNAVAILABLE]", async () => {
+    const result = await renderTemplateWithIntegrations(
+      `{{memento:search=VAT}}`,
+      {},
+      { allowUnresolvedIntegrations: true, deps: { memento: mementoSurface() } },
+    )
+    expect(result.rendered).toContain("[UNRESOLVED memento:")
+    expect(result.rendered).toContain("code=MEMENTO_SEARCH_UNAVAILABLE")
+    expect(result.rendered).not.toBe("")
   })
 
   test("negative: missing memento maps to MEMENTO_NOT_FOUND", async () => {
@@ -544,9 +551,10 @@ describe("memento resolver", () => {
     ).rejects.toThrowError(IntegrationResolutionError)
   })
 
-  test("side-effect guard: root reads only; never touches memory", async () => {
-    // The read surface exposes only getById/getByKey/search — no touch verb.
-    // This asserts the resolver never invokes a touch-style mutation.
+  test("side-effect guard: injected surface exposes only getById/getByKey — no touch, no search verb", async () => {
+    // The MementoReadSurface type has no touch verb and no search verb, so a
+    // resolver cannot invoke either. This asserts the id path calls exactly
+    // the one pure read it is given.
     let byIdCalls = 0
     const ref = parseIntegrationRefs(`{{memento:id=${MEMENTO_UUID}}}`)[0]!
     await resolveIntegrationRef(
@@ -572,6 +580,120 @@ describe("memento resolver", () => {
       }),
     )
     expect(byIdCalls).toBe(1)
+  })
+})
+
+describe("memento resolver default surface (real owning-package shape)", () => {
+  // These tests exercise the DEFAULT read surface — the path a real render
+  // uses — against a fake owning-package MODULE, so the side-effect contract
+  // is asserted on the default path, not only on injected fakes.
+  function moduleWithExports(exports: Record<string, unknown>): {
+    loader: (specifier: string) => Promise<Record<string, unknown>>
+    calls: Record<string, number>
+  } {
+    const calls: Record<string, number> = { getMemory: 0, searchMemories: 0, peekMemory: 0, getMemoryByKey: 0 }
+    const count = (name: string) => {
+      calls[name] = (calls[name] ?? 0) + 1
+    }
+    const tracked: Record<string, unknown> = {}
+    for (const [name, fn] of Object.entries(exports)) {
+      tracked[name] =
+        typeof fn === "function"
+          ? (...args: unknown[]) => {
+              count(name)
+              return (fn as (...a: unknown[]) => unknown)(...args)
+            }
+          : fn
+    }
+    const mod: Record<string, unknown> = {
+      // Side-effecting owning-package reads: if the resolver ever calls
+      // these, the test fails loudly instead of silently passing.
+      getMemory: () => {
+        count("getMemory")
+        throw new Error("side effect: getMemory touches access metadata in hosted mode — must never be called")
+      },
+      searchMemories: () => {
+        count("searchMemories")
+        throw new Error("side effect: searchMemories writes search_history — must never be called")
+      },
+      ...tracked,
+    }
+    return {
+      loader: async () => mod,
+      calls,
+    }
+  }
+
+  test("default surface never calls getMemory or searchMemories; key mode works via getMemoryByKey", async () => {
+    const { loader, calls } = moduleWithExports({
+      getMemoryByKey: (key: string) => ({
+        id: MEMENTO_UUID,
+        key,
+        value: "Invoice VAT is reverse-charged.",
+        category: "knowledge",
+        scope: "global",
+        summary: "EU cross-border VAT rule",
+        tags: ["finance"],
+        importance: 5,
+        version: 2,
+        updated_at: "2026-07-20T09:00:00Z",
+      }),
+    })
+    const surface = defaultMementoReadSurface(loader)
+
+    const keyRef = parseIntegrationRefs(`{{memento:key=invoice-vat}}`)[0]!
+    const result = await resolveIntegrationRef(keyRef, buildSurfaceMap({ memento: surface }))
+    expect(result.kind).toBe("memento")
+    expect(result.source_id).toBe(MEMENTO_UUID)
+
+    // id mode fails closed: the package does not ship peekMemory yet.
+    const idRef = parseIntegrationRefs(`{{memento:id=${MEMENTO_UUID}}}`)[0]!
+    try {
+      await resolveIntegrationRef(idRef, buildSurfaceMap({ memento: surface }))
+      expect.unreachable()
+    } catch (e) {
+      expect((e as IntegrationResolutionError).code).toBe("MEMENTO_READ_MODE_UNAVAILABLE")
+    }
+
+    // search mode fails closed before any surface call.
+    const searchRef = parseIntegrationRefs(`{{memento:search=VAT}}`)[0]!
+    try {
+      await resolveIntegrationRef(searchRef, buildSurfaceMap({ memento: surface }))
+      expect.unreachable()
+    } catch (e) {
+      expect((e as IntegrationResolutionError).code).toBe("MEMENTO_SEARCH_UNAVAILABLE")
+    }
+
+    expect(calls.getMemory).toBe(0)
+    expect(calls.searchMemories).toBe(0)
+    expect(calls.getMemoryByKey).toBe(1)
+    expect(calls.peekMemory).toBe(0)
+  })
+
+  test("id mode resolves through peekMemory when the owning package ships it", async () => {
+    const { loader, calls } = moduleWithExports({
+      getMemoryByKey: () => null,
+      peekMemory: (id: string) => ({
+        id,
+        key: "billing/invoice-vat",
+        value: "Invoice VAT is reverse-charged.",
+        category: "knowledge",
+        scope: "global",
+        summary: "EU cross-border VAT rule",
+        tags: ["finance"],
+        importance: 5,
+        version: 2,
+        updated_at: "2026-07-20T09:00:00Z",
+      }),
+    })
+    const surface = defaultMementoReadSurface(loader)
+    const idRef = parseIntegrationRefs(`{{memento:id=${MEMENTO_UUID}}}`)[0]!
+    const result = await resolveIntegrationRef(idRef, buildSurfaceMap({ memento: surface }))
+    expect(result.kind).toBe("memento")
+    expect(result.source_id).toBe(MEMENTO_UUID)
+    expect(calls.peekMemory).toBe(1)
+    expect(calls.getMemory).toBe(0)
+    expect(calls.searchMemories).toBe(0)
   })
 })
 
