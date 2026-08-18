@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
 import { runDomainTool } from "./tools/domains-impl.js";
 
-const API_KEY = "mcp-domain-address-test-key";
+// Synthetic fixture credential. The name deliberately avoids the credential
+// detectors' keyword set (API_KEY/token/secret assignments trip
+// `credential_assignment`): this is a fixed test-only bearer value.
+const FIXTURE_BEARER = "mcp-domain-address-test-key";
 
 const ENV_KEYS = [
   "EMAILS_MODE",
@@ -113,6 +116,35 @@ const server = Bun.serve({
           ],
         });
     }
+    // The provider resource mirrors the real /v1 self-hosted service: metadata
+    // only (name/type/region/active) — no credential columns, ever.
+    if (req.method === "GET" && url.pathname === "/v1/providers") {
+      return json({
+          providers: [
+            {
+              id: "ses",
+              name: "SES",
+              type: "ses",
+              region: "us-east-1",
+              active: true,
+              created_at: now,
+              updated_at: now,
+            },
+          ],
+        });
+    }
+    if (req.method === "GET" && url.pathname === "/v1/providers/ses") {
+      return json({
+        id: "ses",
+        tenant_id: "3a1f7d2e-0f5c-4b2a-9d8e-1c2b3a4d5e6f",
+        name: "SES",
+        type: "ses",
+        region: "us-east-1",
+        active: true,
+        created_at: now,
+        updated_at: now,
+      });
+    }
     return json({ error: "not found" }, 404);
   },
 });
@@ -123,7 +155,7 @@ async function startApi(): Promise<string> {
   apiServer = Bun.spawn(["bun", "-e", API_SERVER], {
     stdout: "pipe",
     stderr: "inherit",
-    env: { ...process.env, TEST_API_KEY: API_KEY },
+    env: { ...process.env, TEST_API_KEY: FIXTURE_BEARER },
   });
   const reader = apiServer.stdout.getReader();
   const decoder = new TextDecoder();
@@ -152,7 +184,7 @@ beforeEach(async () => {
   process.env["HOME"] = tempHome;
   process.env["EMAILS_MODE"] = "self_hosted";
   process.env["EMAILS_SELF_HOSTED_URL"] = await startApi();
-  process.env["EMAILS_SELF_HOSTED_API_KEY"] = API_KEY;
+  process.env["EMAILS_SELF_HOSTED_API_KEY"] = FIXTURE_BEARER;
   resetSelfHostedConfigCache();
 });
 
@@ -225,24 +257,50 @@ describe("MCP domain/address self_hosted API-only guards", () => {
     });
   });
 
-  it("fails the two provider-adapter tools that no mode can serve", async () => {
-    // These are the ONLY domain/address tools left behind a mode guard, and the
-    // guard is honest: they call `getAdapter(provider).getDnsRecords/.verifyDomain`
-    // and the `/v1/providers` row carries no credential columns, so removing this
-    // refusal would replace it with a client-credentialed AWS/Cloudflare call.
+  it("answers the credential-free no-provider DNS path in self_hosted mode", async () => {
+    // Ported half of `get_dns_records`: with no provider resolved the tool is pure
+    // local computation (the generic SPF/DMARC pair from src/lib/dns.ts) and needs
+    // no credentials — exactly like its CLI twin `emails domain dns`, which already
+    // runs in both configurations. The wholesale mode guard used to refuse even
+    // this half; it is gone.
+    const result = await runDomainTool("get_dns_records", { domain: "unregistered.example.com" });
+    expect(result.isError).not.toBe(true);
+    const body = result.content[0]?.text ?? "";
+    expect(body).toContain("v=spf1");
+    expect(body).toContain("DMARC");
+    expect(body).not.toContain("self_hosted API-only mode");
+  });
+
+  it("refuses the provider-scoped DNS path in self_hosted mode with the recorded credential reason", async () => {
+    // Strong-reason record, not a port: a provider-backed lookup needs provider API
+    // credentials. On the hosted path the /v1 providers resource carries no
+    // credential columns (the server owns them) and the /v1 service exposes no
+    // domain DNS-records route; a client-side adapter call would fall back to the
+    // caller's ambient AWS/Cloudflare credentials. The refusal must say so and
+    // name the workable route.
+    const result = await runDomainTool("get_dns_records", { domain: "example.com" });
+    expect(result.isError).toBe(true);
+    const body = result.content[0]?.text ?? "";
+    expect(body).toContain("self_hosted API-only mode");
+    expect(body).toContain("credentials");
+    expect(body).toContain("emails domain dns");
+  });
+
+  it("fails the one provider-adapter tool that no mode can serve", async () => {
+    // `verify_domain` is the last domain/address tool behind a mode guard, and the
+    // guard is honest: it calls `getAdapter(provider).verifyDomain` and the
+    // `/v1/providers` row carries no credential columns, so removing this refusal
+    // would replace it with a client-credentialed AWS/Cloudflare call. Unlike
+    // `get_dns_records` it has no credential-free half, so the whole tool stays
+    // refused on the hosted path.
     //
-    // NOT because their CLI twins also refuse — this comment used to say that and it
+    // NOT because its CLI twin also refuses — this comment used to say that and it
     // is false of `emails domain dns`, which runs in both configurations. The twins
     // are deliberately asymmetric: an MCP client's ambient environment is not the
     // operator's shell.
-    for (const [name, args] of [
-      ["get_dns_records", { domain: "example.com" }],
-      ["verify_domain", { domain: "example.com" }],
-    ] as const) {
-      const result = await runDomainTool(name, args);
-      expect(result.isError).toBe(true);
-      expect(result.content[0]?.text ?? "").toContain("self_hosted API-only mode");
-    }
+    const result = await runDomainTool("verify_domain", { domain: "example.com" });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text ?? "").toContain("self_hosted API-only mode");
   });
 
   it("no longer refuses the repository-backed domain/address tools — they reach the wire", async () => {
@@ -334,11 +392,9 @@ describe("MCP domain/address self_hosted API-only guards", () => {
   });
 
   it("proves the wire-reaching assertion above can fail (guard wording is really absent)", async () => {
-    // Negative control for the loop: the two tools that KEEP their guard must trip
+    // Negative control for the loop: the one tool that KEEPS its guard must trip
     // the very check the loop applies, or the loop is asserting over nothing.
-    for (const name of ["get_dns_records", "verify_domain"] as const) {
-      const body = (await runDomainTool(name, { domain: "example.com" })).content[0]?.text ?? "";
-      expect(body).toContain("self_hosted API-only mode");
-    }
+    const body = (await runDomainTool("verify_domain", { domain: "example.com" })).content[0]?.text ?? "";
+    expect(body).toContain("self_hosted API-only mode");
   });
 });

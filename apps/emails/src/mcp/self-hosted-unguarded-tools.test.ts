@@ -26,19 +26,24 @@
 //             in the test ever wrote, so the data can only have come off the wire.
 // On unmodified main every one of these tests fails with a refusal.
 //
-// NOT HERE, deliberately: `get_dns_records` and `verify_domain` keep their guard.
-// They call a provider ADAPTER rather than a repository; with a real `/v1/providers`
-// row of type `ses` the adapter would resolve credentials from the CLIENT's ambient
-// AWS environment, because the server schema has no credential columns. That
-// credential fallback is the whole reason and it stands on its own — neither tool
-// has a `/v1` route, so this is not a guard in front of a working one.
+// NOT HERE, deliberately: `verify_domain` keeps its guard, and `get_dns_records`
+// has no repository-backed half to pin. They call a provider ADAPTER rather than
+// a repository; with a real `/v1/providers` row of type `ses` the adapter would
+// resolve credentials from the CLIENT's ambient AWS environment, because the
+// server schema has no credential columns. That credential fallback is the whole
+// reason `verify_domain` stays refused on the hosted path, and it stands on its
+// own — the /v1 service exposes no domain verify route, so this is not a guard in
+// front of a working one. `get_dns_records`' no-provider path is pure local
+// computation (src/lib/dns.ts) with no server state to pin, so it is not here
+// either; its provider-scoped half refuses in the tool body for the same
+// credential reason.
 //
 // The CLI twins are NOT symmetric with it, and this comment used to claim they were:
 // `emails domain verify` refuses, but `emails domain dns` RUNS in both
 // configurations — it is a read, and its no-provider arm needs no credentials at
 // all. So the refusal does NOT "match a command that also cannot run"; it matches
 // a surface whose ambient environment is not the operator's shell.
-// src/mcp/domain-address-self-hosted.test.ts pins the guard itself.
+// src/mcp/domain-address-self-hosted.test.ts pins the guards themselves.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
 import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";

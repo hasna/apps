@@ -369,18 +369,14 @@ describe("MCP CLI equivalents", () => {
     expect(cliRefusalFor(serverOnlyCommand!, "self_hosted")).toBe(serverOnlyCommand);
   });
 
-  it("keeps the get_dns_records guard while its CLI twin runs, and advertises the twin", () => {
-    // This assertion is INVERTED from what it was, on purpose. `get_dns_records`
-    // keeps its self_hosted guard for the credential reason documented on
-    // `assertMcpLocalStateAllowed` — an MCP client's ambient AWS/Cloudflare
-    // environment is not the operator's shell. That reason never depended on the CLI
-    // twin also refusing, and the twin no longer does: `emails domain dns` is wired
-    // to `src/lib/dns.ts`, whose no-provider path is credential-free.
-    //
-    // So the tool is guarded AND the command it advertises runs. That is the useful
-    // shape: an agent refused the tool is handed something it can actually execute.
-    // A stale `.toBe("emails domain dns")` here would be a demand that the CLI go
-    // back to refusing.
+  it("unguards get_dns_records' credential-free half while its CLI twin runs, and advertises the twin", () => {
+    // The wholesale `get_dns_records` guard is GONE. Its no-provider path is pure
+    // local computation (the generic SPF/DMARC pair from src/lib/dns.ts) and needs
+    // no credentials, so it now runs in self_hosted mode exactly like its CLI twin
+    // `emails domain dns`. Only the provider-scoped half is refused, in the tool
+    // body, for the credential reason documented on `assertMcpLocalStateAllowed`
+    // — an MCP client's ambient AWS/Cloudflare environment is not the operator's
+    // shell. `verify_domain` has no credential-free half, so its guard stays.
     const twin = cliEquivalentForTool("get_dns_records", { domain: "acme.example" });
     // Pinned exactly, not by `toContain`. `toContain("emails domain dns")` also passes
     // for `emails domain dns <domain-or-id> --json` — an unsubstituted placeholder —
@@ -389,15 +385,23 @@ describe("MCP CLI equivalents", () => {
     expect(runnable).toBe("emails domain dns acme.example --json");
     expect(cliRefusalFor(runnable, "self_hosted")).toBeNull();
     // But the command must NOT be advertised bare: for a provider-backed domain it
-    // performs the very adapter call the guard exists to prevent, with the caller's
-    // ambient credentials. An agent handed this has to be told that, or the guard is
-    // circumventable by following its own fix_commands.
+    // performs the very adapter call the tool refuses to make, with the caller's
+    // ambient credentials. An agent handed this has to be told that, or the refusal
+    // is circumventable by following its own advice.
     expect(twin).toContain(" # note: ");
     expect(twin).toContain("AMBIENT credentials");
-    // And the guard itself is still installed — read off the source, so deleting the
-    // call cannot leave this test green.
+    // Guard state read off the source, so deleting the call cannot leave this test
+    // green: `get_dns_records`' guard is CONDITIONAL — the call must still exist,
+    // but only AFTER the credential-free no-provider return (the order IS the
+    // port); `verify_domain`'s guard stays installed. The regex tolerates the
+    // calls' line wrapping; the behavior itself is pinned in
+    // src/mcp/domain-address-self-hosted.test.ts.
     const impl = readFileSync(new URL("./tools/domains-impl.ts", import.meta.url), "utf8");
-    expect(impl).toContain('assertMcpLocalStateAllowed("get_dns_records"');
-    expect(impl).toContain('assertMcpLocalStateAllowed("verify_domain"');
+    const getDnsGuard = impl.search(/assertMcpLocalStateAllowed\(\s*"get_dns_records"/);
+    const genericReturn = impl.indexOf("No provider resolved: return the generic SPF/DMARC pair.");
+    expect(getDnsGuard).toBeGreaterThan(-1);
+    expect(genericReturn).toBeGreaterThan(-1);
+    expect(getDnsGuard).toBeGreaterThan(genericReturn);
+    expect(impl).toMatch(/assertMcpLocalStateAllowed\(\s*"verify_domain"/);
   });
 });
