@@ -3,8 +3,20 @@
   "contractsVersion": "0.8.5",
   "reported": [
     {
-      "id": "manifest_valid",
-      "detail": "Service contract manifest failed validation: storage cli-with-store repos must declare storage"
+      "id": "self_host_artifact",
+      "detail": "service-class repos require one self-host deployment artifact: docker-compose.yml, docker-compose.yaml, compose.yml, compose.yaml, Dockerfile"
+    },
+    {
+      "id": "service_api_topology",
+      "detail": "a supported API surface is required"
+    },
+    {
+      "id": "storage_capabilities",
+      "detail": "storage.pgTestGate is required to prove live PostgreSQL support"
+    },
+    {
+      "id": "surface_matrix",
+      "detail": "missing supported surface declarations or eligible waivers: api, sdk"
     }
   ],
   "behindManifestGate": [
@@ -18,15 +30,11 @@
     },
     {
       "id": "storage_capabilities",
-      "detail": "missing storage engines: sqlite, postgres; storage.envPrefix is required for the PostgreSQL DATABASE_URL contract; storage.pgTestGate is required to prove live PostgreSQL support"
-    },
-    {
-      "id": "surface_bindings",
-      "detail": "serviceSurfaces[2].generatedFrom is required for a supported service SDK"
+      "detail": "storage.pgTestGate is required to prove live PostgreSQL support"
     },
     {
       "id": "surface_matrix",
-      "detail": "missing supported surface declarations or eligible waivers: api"
+      "detail": "missing supported surface declarations or eligible waivers: api, sdk"
     }
   ]
 }
