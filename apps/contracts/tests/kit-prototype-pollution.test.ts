@@ -324,16 +324,15 @@ describe("backend.ts env reads do not walk the prototype chain", () => {
     expect(resolveDatabaseUrl("todos", env)).toBe("postgres://u@real/db");
   });
 
-  test("an own legacy mode key is inert and never selects a backend", () => {
-    expect(resolveServerDataBackend("todos", { HASNA_TODOS_STORAGE_MODE: "cloud" }).backend).toBe(
-      "sqlite",
-    );
-    expect(
-      resolveServerDataBackend("todos", {
-        HASNA_TODOS_STORAGE_MODE: "cloud",
-        HASNA_TODOS_DATABASE_URL: "postgres://u@real/db",
-      }).backend,
-    ).toBe("postgresql");
+  test("an own legacy mode key is inert: no throw, no backend selection", () => {
+    // No-compat mandate: the mode concept is removed, so an own legacy key is
+    // simply never read — it neither throws (no transitional guard) nor selects.
+    expect(resolveServerDataBackend("todos", { HASNA_TODOS_STORAGE_MODE: "cloud" })).toEqual({
+      backend: "sqlite",
+      source: "default",
+      databaseUrlPresent: false,
+      databaseUrlSource: null,
+    });
   });
 });
 
