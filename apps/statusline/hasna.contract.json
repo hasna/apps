@@ -40,6 +40,11 @@
         }
       ],
       "notes": "storage is deliberately absent. The package has no database backend: the only persistent state is a JSON config file at $XDG_CONFIG_HOME/statusline/config.json (config.ts) plus read-only access to the Claude accounts state file. storage.backend admits sqlite | postgresql only, and neither engine is used."
+    },
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
     }
   }
 }

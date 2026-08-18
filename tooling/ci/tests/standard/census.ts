@@ -399,12 +399,7 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "repos", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "skills", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "snapshots", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "statusline", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "styles", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "tai", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "tickets", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "connectors", reason: "No hasna.contract.json; imported by #80 after the original census; manifest lane (todos 41208cbe)." },
-  { member: "terminal", reason: "No hasna.contract.json; imported by #88 after the original census; manifest lane (todos 41208cbe)." },
   { member: "agency", reason: "No hasna.contract.json; source reconstructed from the published 0.3.1 bundle (row 91a7b09d) — CLI-only member; manifest lane (todos 41208cbe)." },
 ];
 
@@ -557,6 +552,26 @@ export const NO_VALIDATOR_PIN: string[] = [
   "test-guard",
   "releases",
   "ui",
+  {
+    member: "statusline",
+    cause: "bins_match_package: package.json ships the statusline-mcp bin which the kit taxonomy forbids a library class to declare (schema: 'bins library repos must not ship a -serve or -mcp bin'); mcp surface waived truthfully in metadata.conformance.waivedSurfaces. published_artifact_gate fixed (scan:artifact wired).",
+    task: "todos 41208cbe (manifest lane — statusline)",
+  },
+  {
+    member: "tai",
+    cause: "bins_match_package: package.json ships the tai-mcp bin which the kit taxonomy forbids a library class to declare (schema: 'bins library repos must not ship a -serve or -mcp bin'); mcp surface waived truthfully in metadata.conformance.waivedSurfaces. published_artifact_gate fixed (scan:artifact wired).",
+    task: "todos 41208cbe (manifest lane — tai)",
+  },
+  {
+    member: "terminal",
+    cause: "bins_match_package: package.json ships the `t` alias bin alongside terminal (same entry, dist/cli.js) which is not allowlisted for app terminal; mcp surface declared deferred truthfully (no dedicated mcpBin; reachable via `terminal mcp serve`). published_artifact_gate fixed (scan:artifact wired).",
+    task: "todos 41208cbe (manifest lane — terminal)",
+  },
+  {
+    member: "tickets",
+    cause: "surface_matrix/service_api_topology: api and sdk surfaces declared deferred truthfully (tickets-serve has GET /api/health only, no GET /ready, GET /version, /v1 base, or /openapi.json; the ./sdk client is hand-written), so no supported API surface exists; the kit requires one for a service-capable cli-with-store shipping tickets-serve. storage.engines postgresql is validator-forced and disclosed in metadata.conformance.notes. self_host_artifact and published_artifact_gate fixed (docker-compose.yml; scan:artifact wired).",
+    task: "todos 41208cbe (manifest lane — tickets)",
+  },
 ];
 
 export const CONTRACTS_EXCEPTION_MEMBERS = new Set(CONTRACTS_EXCEPTIONS.map((e) => e.member));
