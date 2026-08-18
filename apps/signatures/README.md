@@ -1,20 +1,20 @@
-# Open Signatures
+# Hasna Signatures
 
-Open Signatures is an open-source agreement workflow toolkit for local-first document
+Hasna Signatures is an open-source agreement workflow toolkit for local-first document
 signing. It can render Markdown agreements to clean PDFs, place signatures at detected
 fields or explicit coordinates, generate completion certificates, manage signers, send
-signing requests through open-emails, and prepare domain setup through open-domains.
+signing requests through emails, and prepare domain setup through domains.
 
 The current package name stays focused on signatures, but the product surface is broader:
 agreements, people, signing sessions, provider handoff, evidence, and completion records.
 
-Open Signatures is not a qualified trust service or a substitute for regulated digital
+Hasna Signatures is not a qualified trust service or a substitute for regulated digital
 signature infrastructure. It is intended for regular electronic signatures, internal
 workflows, and developer-owned signing flows where local audit evidence is sufficient.
 
 ## Legal, IP, and Filing Boundary
 
-Open Signatures is the signing ceremony and evidence package for Hasna legal/IP
+Hasna Signatures is the signing ceremony and evidence package for Hasna legal/IP
 workflows. It does not by itself file trademark, IP, or legal-office submissions.
 Apps such as the IP, trademark, and signing services, `open-contracts`,
 and document/file storage integrations should exchange `hasna.legal-boundary.v1`
@@ -150,10 +150,10 @@ signatures document send <document-id> \
 ```
 
 The generated signing URL resolves to `/sign/<token>`, where the signer can type
-their name/signature and complete the local signing session. Open Signatures creates a
+their name/signature and complete the local signing session. Hasna Signatures creates a
 text signature when the signer does not already have one.
 
-Send with open-emails if the `emails` CLI is configured:
+Send with emails if the `emails` CLI is configured:
 
 ```bash
 signatures document send <document-id> \
@@ -162,7 +162,7 @@ signatures document send <document-id> \
   --base-url https://sign.example.com
 ```
 
-Use `--dry-run-email` to preview the open-emails command without sending.
+Use `--dry-run-email` to preview the emails command without sending.
 
 Attachment sharing is optional. If `@hasna/attachments` is installed and configured,
 send/share flows attach a document share link. If it is not installed, local signing
@@ -182,7 +182,7 @@ Signer records can be humans or agents. Agent signatures are recorded as local
 agent attestations with agent id, provider/runtime, run id, policy id, reason, hashes,
 audit events, and certificate metadata. They are useful for internal approvals between
 agents or systems, but they are not human identity proof and are not QES/eIDAS signatures.
-For ordered or multi-signer documents, Open Signatures writes signer-evidence certificates
+For ordered or multi-signer documents, Hasna Signatures writes signer-evidence certificates
 for partial completion and reserves document-completion metadata for the final required
 field/session.
 
@@ -211,7 +211,7 @@ signatures sessions list --signer-type agent
 
 ## Domains
 
-Open Signatures delegates domain setup to open-domains through the `domains` CLI.
+Hasna Signatures delegates domain setup to domains through the `domains` CLI.
 
 Preview commands:
 
@@ -225,7 +225,7 @@ Run setup:
 signatures domain setup example.com --subdomain sign --target cname.example.net
 ```
 
-Use `--buy` to ask open-domains to run its full domain setup flow.
+Use `--buy` to ask domains to run its full domain setup flow.
 
 ## Provider Integrations
 
@@ -238,7 +238,7 @@ Provider flows always require an explicit signature level:
 - `eseal` - legal-entity electronic seal target
 - `qeseal` - legal-entity qualified eSeal target
 
-Open Signatures does not turn local signatures into QES. QES and qualified eSeals
+Hasna Signatures does not turn local signatures into QES. QES and qualified eSeals
 must be completed by a qualified trust-service/provider flow. The app stores the
 request, hashes, provider response, validation status, and audit events as provider
 evidence.
@@ -397,7 +397,7 @@ used as the SQLite database. Otherwise, a git checkout uses the repo-local
 
 ## Security Model
 
-Open Signatures stores signing evidence locally. A certificate includes signer metadata,
+Hasna Signatures stores signing evidence locally. A certificate includes signer metadata,
 document hashes, session id, audit summary, and metadata that distinguishes `signer_evidence`
 from `document_completion`. This provides useful evidence for ordinary electronic signature
 workflows, but does not provide regulated digital signature, qualified electronic signature,

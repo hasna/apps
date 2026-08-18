@@ -27,7 +27,7 @@ export function sendSigningEmail(input: SigningEmailInput): SigningEmailResult {
     "",
     input.signingUrl,
     "",
-    "This message was prepared by Open Signatures.",
+    "This message was prepared by Hasna Signatures.",
   ].join("\n");
 
   const args = [

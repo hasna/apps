@@ -51,7 +51,7 @@ export async function createCompletionCertificate(input: {
   const certificateKind = documentComplete ? "document_completion" : "signer_evidence";
 
   centerText(page, documentComplete ? "Certificate of Completion" : "Signer Evidence Certificate", 500, 34, serifBold, rgb(0.12, 0.12, 0.14));
-  centerText(page, "Open Signatures", 462, 14, sansBold, rgb(0.33, 0.33, 0.36));
+  centerText(page, "Hasna Signatures", 462, 14, sansBold, rgb(0.33, 0.33, 0.36));
   centerText(page, documentComplete
     ? "This certifies that all required local signature fields for the document are completed."
     : "This records one completed local signing session; the document may require additional signers.",

@@ -631,7 +631,7 @@ export function App() {
     <main className="app">
       <header className="topbar">
         <div>
-          <h1>Open Signatures</h1>
+          <h1>Hasna Signatures</h1>
           <p>Agreement operations and e-signature workflows</p>
         </div>
         <span className="badge badge-neutral">{stats.data?.total_sessions ?? 0} sessions</span>

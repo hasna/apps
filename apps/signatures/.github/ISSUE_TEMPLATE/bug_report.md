@@ -14,7 +14,7 @@ labels: bug
 
 ## Environment
 
-- Open Signatures version:
+- Hasna Signatures version:
 - Bun version:
 - OS:
 

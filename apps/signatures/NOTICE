@@ -1,8 +1,8 @@
-Open Signatures
+Hasna Signatures
 Copyright Hasna
 
 Licensed under the Apache License, Version 2.0.
 
-This project can integrate with third-party services such as PandaDoc, open-emails, and
-open-domains when users configure those services. Those integrations are optional and are
+This project can integrate with third-party services such as PandaDoc, emails, and
+domains when users configure those services. Those integrations are optional and are
 not required for local signing.

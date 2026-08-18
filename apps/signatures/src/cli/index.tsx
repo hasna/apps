@@ -315,10 +315,10 @@ documentCmd
   .option("--role <role>", "Signer role for routing")
   .option("--signing-order <n>", "Signing order group")
   .option("--parallel-group <n>", "Parallel signing group")
-  .option("--from <email>", "Sender email for open-emails delivery")
+  .option("--from <email>", "Sender email for emails delivery")
   .option("--base-url <url>", "Public signing base URL", "http://localhost:19440")
   .option("--expiry <expiry>", "Attachment share expiry", "7d")
-  .option("--dry-run-email", "Preview open-emails send without sending")
+  .option("--dry-run-email", "Preview emails send without sending")
   .option("--json", "Output as JSON")
   .action(async (idOrSlug: string, opts: Record<string, unknown>) => {
     try {
@@ -711,7 +711,7 @@ sessionCmd
 
 // ── domain ───────────────────────────────────────────────────────────────────
 
-const domainCmd = program.command("domain").description("Signing domain setup via open-domains");
+const domainCmd = program.command("domain").description("Signing domain setup via domains");
 
 domainCmd
   .command("setup <domain>")
