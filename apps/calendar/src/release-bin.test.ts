@@ -131,7 +131,7 @@ describe("release bin artifacts", () => {
     const calendarBin = pkg.bin?.["calendar"];
     expect(calendarBin).toBeDefined();
 
-    const home = mkdtempSync(join(tmpdir(), "open-calendar-home-"));
+    const home = mkdtempSync(join(tmpdir(), "calendar-home-"));
     try {
       const env = {
         HOME: home,
@@ -158,7 +158,7 @@ describe("release bin artifacts", () => {
     const mcpBin = pkg.bin?.["calendar-mcp"];
     expect(mcpBin).toBeDefined();
 
-    const home = mkdtempSync(join(tmpdir(), "open-calendar-mcp-home-"));
+    const home = mkdtempSync(join(tmpdir(), "calendar-mcp-home-"));
     try {
       const result = spawnSync(join(repoRoot, mcpBin!), [], {
         cwd: repoRoot,
@@ -185,7 +185,7 @@ describe("release bin artifacts", () => {
     expect(serveBin).toBeDefined();
 
     const port = await getAvailablePort();
-    const home = mkdtempSync(join(tmpdir(), "open-calendar-serve-home-"));
+    const home = mkdtempSync(join(tmpdir(), "calendar-serve-home-"));
     const child = spawn(join(repoRoot, serveBin!), [], {
       cwd: repoRoot,
       env: {

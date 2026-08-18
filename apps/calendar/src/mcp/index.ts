@@ -11,7 +11,7 @@ const MAX_TOOL_LIMIT = 100;
 
 export function buildServer(): McpServer {
   const server = new McpServer({
-    name: "open-calendar",
+    name: "calendar",
     version: packageJson.version,
   });
 
