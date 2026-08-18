@@ -35,8 +35,10 @@ service without making the OSS core depend on one deployment.
 
 Good OSS commands:
 
-- `auth login`, `auth logout`, `auth whoami`
-- `run`, `runs`, `exports`, and artifact download commands (server-executed skills)
+- `auth login`, `auth logout`, `auth whoami` — remote-client commands
+- `run`, `runs list/show`, `exports open` — local execution and local run records
+  (`src/cli/commands/runtime.ts`); they never call the Skills API
+- `runs status`, `exports download` — the remote-client subcommands
 - `push`, `pull`, and registry commands (the instance-local registry surface)
 - browse/list commands against the local corpus cache or a configured server
 
@@ -45,8 +47,10 @@ pins the `--help` surface, the MCP contract, and the server route table to zero
 billing/payments vocabulary. Billing, credits, checkout, and portal are the hosted
 wrapper's surface, never the OSS package's.
 
-These commands only call the configured Skills API, print/open returned URLs, and
-store scoped local credentials.
+Only the remote-client commands (auth, `runs status`, `exports download`, push/pull)
+call the configured Skills API, print/open returned URLs, and store scoped local
+credentials. The local-execution commands (`run`, `runs list/show`, `exports open`,
+browse/list) run on this machine and require no API origin.
 
 Do not put these in OSS:
 

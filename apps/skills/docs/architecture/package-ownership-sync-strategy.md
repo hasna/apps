@@ -81,10 +81,12 @@ skill-specific local credentials.
 The OSS CLI ships server client commands such as `skills auth login`, `skills run`,
 `skills runs`, `skills exports`, and `skills push`/`skills pull` — and no billing
 or credits namespaces (`no-billing-surface.test.ts` pins the help and MCP surfaces
-to zero billing vocabulary). Those commands are adapters over the server's HTTP API.
-They must not contain Stripe keys, webhook handlers, entitlement ledgers,
-tenant database logic, auth servers, or private hosted-worker execution logic
-beyond the shipped engine.
+to zero billing vocabulary). The remote-client subcommands (`runs status`,
+`exports download`, auth, push/pull) are adapters over the server's HTTP API;
+the local commands (`run`, `runs list/show`, `exports open`) execute on this
+machine and never call the API. Neither surface may contain Stripe keys, webhook
+handlers, entitlement ledgers, tenant database logic, auth servers, or private
+hosted-worker execution logic beyond the shipped engine.
 
 Remote execution is configured by API origin, not by a named setup variant. The
 CLI has no vocabulary for a deployment variant a user selects, and no alias table
