@@ -349,7 +349,7 @@ try {
       unlistedCrossOriginServer.preflights.every((preflight) => {
         const headers = corsRequestHeaderTokens(preflight.request_headers);
         return (
-          headers.includes("x-open-logs-lab") &&
+          headers.includes("x-logs-browser-runtime-lab") &&
           !headers.includes("traceparent")
         );
       }),
@@ -661,7 +661,7 @@ async function buildBrowserApp(appDir: string): Promise<void> {
       "  await fetch(`/ok?token=${encodeURIComponent(config.secret)}`);",
       "  await fetch(`/fail?token=${encodeURIComponent(config.secret)}`);",
       "  await fetch(`${config.crossOriginBaseUrl}/cross-origin?token=${encodeURIComponent(config.secret)}`);",
-      "  await fetch(`${config.unlistedCrossOriginBaseUrl}/cross-origin-unlisted?token=${encodeURIComponent(config.secret)}`, { headers: { 'x-open-logs-lab': 'unlisted' } });",
+      "  await fetch(`${config.unlistedCrossOriginBaseUrl}/cross-origin-unlisted?token=${encodeURIComponent(config.secret)}`, { headers: { 'x-logs-browser-runtime-lab': 'unlisted' } });",
       "  await fetch(`/no-cors?token=${encodeURIComponent(config.secret)}`, { mode: 'no-cors' });",
       "  const blobUrl = URL.createObjectURL(new Blob([`browser runtime blob token=${config.secret}`], { type: 'text/plain' }));",
       "  try {",
@@ -810,7 +810,7 @@ function startCrossOriginServer(input: {
   const requests: BrowserCrossOriginRequestObservation[] = [];
   const preflights: BrowserCrossOriginPreflightObservation[] = [];
   const corsHeaders = {
-    "Access-Control-Allow-Headers": "traceparent, x-open-logs-lab",
+    "Access-Control-Allow-Headers": "traceparent, x-logs-browser-runtime-lab",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
     "Access-Control-Allow-Origin": input.appBaseUrl,
     Vary: "Origin",
