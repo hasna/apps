@@ -70,7 +70,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
 function makeProject(overrides: Partial<Project> = {}): Project {
   return {
     id: "proj-1",
-    name: "open-mementos",
+    name: "mementos",
     path: "/path/to/project",
     description: null,
     memory_prefix: null,
@@ -360,16 +360,16 @@ describe("MementosClient", () => {
       const client = new MementosClient({ fetch });
       const result = await client.listProjects();
       expect(calls[0]!.url).toBe(`${BASE}/api/projects`);
-      expect(result.projects[0]!.name).toBe("open-mementos");
+      expect(result.projects[0]!.name).toBe("mementos");
     });
 
     it("registers a project", async () => {
       const project = makeProject();
       const { calls, fetch } = mockFetch([{ status: 201, body: project }]);
       const client = new MementosClient({ fetch });
-      const result = await client.registerProject({ name: "open-mementos", path: "/path/to/project" });
+      const result = await client.registerProject({ name: "mementos", path: "/path/to/project" });
       expect(calls[0]!.url).toBe(`${BASE}/api/projects`);
-      expect(result.name).toBe("open-mementos");
+      expect(result.name).toBe("mementos");
     });
   });
 
@@ -665,12 +665,12 @@ describe("listAgentsByProject", () => {
 
 describe("getProject", () => {
   it("GETs /api/projects/:id", async () => {
-    const proj = makeProject({ name: "open-mementos" });
+    const proj = makeProject({ name: "mementos" });
     const { calls, fetch } = mockFetch([{ status: 200, body: proj }]);
     const client = new MementosClient({ fetch });
-    const result = await client.getProject("open-mementos");
-    expect(calls[0]!.url).toContain("/api/projects/open-mementos");
-    expect(result.name).toBe("open-mementos");
+    const result = await client.getProject("mementos");
+    expect(calls[0]!.url).toContain("/api/projects/mementos");
+    expect(result.name).toBe("mementos");
   });
 });
 
@@ -678,8 +678,8 @@ describe("getProjectAgents", () => {
   it("GETs /api/projects/:id/agents", async () => {
     const { calls, fetch } = mockFetch([{ status: 200, body: { agents: [], count: 0 } }]);
     const client = new MementosClient({ fetch });
-    await client.getProjectAgents("open-mementos");
-    expect(calls[0]!.url).toContain("/api/projects/open-mementos/agents");
+    await client.getProjectAgents("mementos");
+    expect(calls[0]!.url).toContain("/api/projects/mementos/agents");
   });
 });
 

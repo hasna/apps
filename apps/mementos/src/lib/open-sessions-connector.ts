@@ -1,7 +1,7 @@
 /**
- * Open-sessions connector — bridge between open-sessions REST API and mementos.
+ * sessions connector — bridge between the sessions REST API and mementos.
  *
- * When open-sessions ingests a new session, this connector fetches the session
+ * When sessions ingests a new session, this connector fetches the session
  * transcript and submits it to mementos for memory extraction.
  *
  * Usage:
@@ -11,11 +11,11 @@
  */
 
 export interface OpenSessionsConnectorConfig {
-  /** open-sessions REST API base URL */
+  /** sessions REST API base URL */
   openSessionsUrl: string;
   /** mementos REST API base URL */
   mementosUrl: string;
-  /** Optional auth token for open-sessions */
+  /** Optional auth token for sessions */
   openSessionsToken?: string;
   /** Default agent ID for extracted memories */
   defaultAgentId?: string;
@@ -38,14 +38,14 @@ export class OpenSessionsConnector {
   }
 
   /**
-   * Fetch a session transcript from open-sessions and ingest into mementos.
+   * Fetch a session transcript from sessions and ingest into mementos.
    */
   async ingestSession(
     sessionId: string,
     options: { agentId?: string; projectId?: string } = {}
   ): Promise<IngestResult> {
     try {
-      // Fetch session from open-sessions
+      // Fetch session from sessions
       const transcript = await this.fetchSessionTranscript(sessionId);
       if (!transcript || transcript.length < 50) {
         return { sessionId, jobId: "", status: "skipped", message: "Transcript too short" };
@@ -149,7 +149,7 @@ export class OpenSessionsConnector {
 /**
  * Create a connector from environment variables.
  *
- * OPEN_SESSIONS_URL — open-sessions server URL
+ * OPEN_SESSIONS_URL — sessions server URL
  * OPEN_SESSIONS_TOKEN — optional auth token
  * MEMENTOS_URL — mementos server URL (default: http://localhost:19428)
  */

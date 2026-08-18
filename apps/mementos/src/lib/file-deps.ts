@@ -1,5 +1,5 @@
 /**
- * File dependency graph builder for open-mementos.
+ * File dependency graph builder for mementos.
  * Scans a codebase, creates 'file' entities for each source file, and
  * creates 'depends_on' relations between files based on import/require statements.
  *

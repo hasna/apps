@@ -419,7 +419,7 @@ describe("autoResolveAgentProject", () => {
     );
     db.run(
       `INSERT INTO projects (id, name, path, created_at, updated_at)
-       VALUES ('proj-001', 'open-mementos', '/home/user/repos/open-mementos', datetime('now'), datetime('now'))`
+       VALUES ('proj-001', 'mementos', '/home/user/repos/mementos', datetime('now'), datetime('now'))`
     );
   });
 
@@ -432,7 +432,7 @@ describe("autoResolveAgentProject", () => {
 
   it("resolves project by working directory (high confidence)", () => {
     const result = autoResolveAgentProject(
-      { workingDir: "/home/user/repos/open-mementos" },
+      { workingDir: "/home/user/repos/mementos" },
       db
     );
     expect(result.projectId).toBe("proj-001");
@@ -451,7 +451,7 @@ describe("autoResolveAgentProject", () => {
     const result = autoResolveAgentProject(
       {
         agentName: "maximus",
-        workingDir: "/home/user/repos/open-mementos",
+        workingDir: "/home/user/repos/mementos",
       },
       db
     );
@@ -462,7 +462,7 @@ describe("autoResolveAgentProject", () => {
 
   it("resolves project by git remote (low confidence)", () => {
     const result = autoResolveAgentProject(
-      { gitRemote: "git@github.com:user/open-mementos.git" },
+      { gitRemote: "git@github.com:user/mementos.git" },
       db
     );
     expect(result.projectId).toBe("proj-001");

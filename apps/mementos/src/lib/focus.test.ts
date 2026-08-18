@@ -21,7 +21,7 @@ beforeEach(() => {
 describe("setFocus / getFocus", () => {
   test("set and get focus for an agent", () => {
     const agent = registerAgent("maximus");
-    const project = registerProject("open-mementos", "/tmp/test");
+    const project = registerProject("mementos", "/tmp/test");
     setFocus(agent.id, project.id);
     expect(getFocus(agent.id)).toBe(project.id);
   });

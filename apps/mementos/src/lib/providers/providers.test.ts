@@ -32,10 +32,10 @@ const MOCK_MEMORIES: ExtractedMemory[] = [
 const MOCK_ENTITIES: EntityExtractionResult = {
   entities: [
     { name: "TypeScript", type: "tool", confidence: 0.95 },
-    { name: "open-mementos", type: "project", confidence: 0.9 },
+    { name: "mementos", type: "project", confidence: 0.9 },
   ],
   relations: [
-    { from: "open-mementos", to: "TypeScript", type: "uses" },
+    { from: "mementos", to: "TypeScript", type: "uses" },
   ],
 };
 
@@ -97,7 +97,7 @@ describe("AnthropicProvider", () => {
     global.fetch = mockFetchSuccess({
       content: [{ type: "text", text: JSON.stringify(MOCK_ENTITIES) }],
     });
-    const result = await provider.extractEntities("open-mementos uses TypeScript");
+    const result = await provider.extractEntities("mementos uses TypeScript");
     expect(result.entities).toHaveLength(2);
     expect(result.relations).toHaveLength(1);
   });

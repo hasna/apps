@@ -1,4 +1,4 @@
-# open-mementos — Agent Guidelines
+# mementos — Agent Guidelines
 
 ## Project Overview
 
@@ -61,7 +61,7 @@ memory_save(
   session_id="<current-session-id>"
 )
 
-# If using open-sessions, auto-extract from session:
+# If using sessions, auto-extract from session:
 session_extract(
   session_id="<id>",
   title="<session title>",
@@ -169,12 +169,12 @@ mementos profile delete work     # delete profile + its DB
 
 | Integration | How |
 |-------------|-----|
-| **open-sessions** | `session_extract(session_id, ...)` after session ingest — auto-saves key learnings |
-| **open-todos** | Include `session_id` on `memory_save` when working on a task |
-| **open-economy** | `memory_save(key="cost-session-X", value="$1.23")` — track costs as memories |
-| **open-conversations** | `update_agent(active_project_id)` — mementos is the canonical agent registry |
-| **open-configs** | `memory_inject()` for context; saves config decisions as `fact` memories |
-| **open-attachments** | Store attachment IDs as memory values for later retrieval |
+| **sessions** | `session_extract(session_id, ...)` after session ingest — auto-saves key learnings |
+| **todos** | Include `session_id` on `memory_save` when working on a task |
+| **economy** | `memory_save(key="cost-session-X", value="$1.23")` — track costs as memories |
+| **conversations** | `update_agent(active_project_id)` — mementos is the canonical agent registry |
+| **configs** | `memory_inject()` for context; saves config decisions as `fact` memories |
+| **attachments** | Store attachment IDs as memory values for later retrieval |
 
 ## Architecture
 

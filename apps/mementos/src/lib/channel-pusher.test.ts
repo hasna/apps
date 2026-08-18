@@ -474,9 +474,9 @@ describe("formatBriefing", () => {
   });
 
   it("includes project name in header", () => {
-    const result = formatBriefing({ projectName: "open-mementos" });
+    const result = formatBriefing({ projectName: "mementos" });
     expect(result).toContain("Mementos Session Briefing");
-    expect(result).toContain("project: open-mementos");
+    expect(result).toContain("project: mementos");
   });
 
   it("omits empty sections", () => {
@@ -498,7 +498,7 @@ describe("formatBriefing", () => {
 
   it("renders all sections together in correct order", () => {
     const result = formatBriefing({
-      projectName: "open-mementos",
+      projectName: "mementos",
       profile: "Agent maximus",
       memories: [mockMemory({ key: "stack", value: "Bun + SQLite", category: "fact" })],
       lastSession: "Fixed search indexing",
