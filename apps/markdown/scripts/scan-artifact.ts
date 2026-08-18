@@ -34,7 +34,13 @@ try {
   const archive = isAbsolute(packed) ? packed : join(workspace, packed);
   // The manifest is where a reviewed, time-boxed waiver is declared, so the gate
   // reads ./hasna.contract.json from the repo root by default.
-  run(["contracts", "artifact-scan", archive], repoRoot);
+  // Resolve the contracts CLI through bunx (pinned to the kit version) rather
+  // than a bare `contracts` binary: CI does not install @hasna/contracts
+  // globally, so a PATH spawn fails with ENOENT in the publish-guard job
+  // (measured on the ca-r2-missing-manifest CI run, 2026-08-18). bunx with the
+  // pinned version is the pattern already proven in apps/search and
+  // apps/releases.
+  run(["bunx", "@hasna/contracts@0.11.1", "artifact-scan", archive], repoRoot);
   console.log(`scan:artifact PASS — ${archive}`);
 } finally {
   rmSync(workspace, { recursive: true, force: true });
