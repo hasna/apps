@@ -1372,6 +1372,7 @@
         "orgs": "dist/cli.js",
       },
       "devDependencies": {
+        "@hasna/contracts": "0.11.1",
         "@types/bun": "^1.2.4",
         "@types/node": "^22.13.4",
         "typescript": "^5.7.3",
@@ -1503,7 +1504,7 @@
     },
     "apps/repos": {
       "name": "@hasna/repos",
-      "version": "0.1.48",
+      "version": "0.1.49",
       "bin": {
         "repos": "dist/cli/index.js",
         "repos-mcp": "dist/mcp/index.js",
@@ -4713,7 +4714,6 @@
     "@hasna/attachments/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/automations/@hasna/actions": ["@hasna/actions@0.1.6", "", { "dependencies": { "@hasna/contracts": "^0.2.2", "@modelcontextprotocol/sdk": "^1.26.0", "commander": "^13.1.0", "zod": "^3.24.2" }, "bin": { "actions": "dist/cli/index.js", "actions-mcp": "dist/mcp/index.js" } }, "sha512-NPp42p7gqhbcBqVRKKEqdeOOhgONz/UXL/WoeZ0U74fuLwpLiAOYpb1GFJXgDbJ4mezfm0X2fJMHmz9c+YmduA=="],
-
 
     "@hasna/automations/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 

@@ -18,6 +18,32 @@
       "status": "supported",
       "bin": "orgs",
       "authMode": "local-only"
+    },
+    {
+      "name": "orgs-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "."
     }
-  ]
+  ],
+  "metadata": {
+    "conformance": {
+      "waivedSurfaces": [
+        {
+          "kind": "api",
+          "reason": "Library package with no HTTP service boundary; no serve bin ships."
+        },
+        {
+          "kind": "mcp",
+          "reason": "Library package with no MCP server bin; MCP execution belongs to consumers."
+        }
+      ]
+    },
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    }
+  }
 }
