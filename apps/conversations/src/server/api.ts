@@ -29,6 +29,7 @@ import { extractTopics } from "../lib/topic-extract.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "../lib/content-safety.js";
 import { resolveSelfSenderId } from "../lib/sender-identity.js";
 import { normalizeMessageUuid, parseMessageReference } from "../lib/message-reference.js";
+import { WORK_STATUS_CHANNEL, WORK_STATUS_DUPLICATE_WINDOW_MS, duplicateWorkStatusTransitionViolation, firstLineOf, parseWorkStatusEvent, workStatusEnvelopeViolation } from "../lib/work-status-envelope.js";
 import { normalizeExactIsoTimestamp } from "../lib/since.js";
 import { PROJECT_LIST_ORDER, pinnedOrderByClause, simpleOrderByClause } from "../lib/list-order.js";
 import { decodeAttachmentUploads } from "../lib/attachments.js";
@@ -1063,6 +1064,53 @@ export function startApiServer(options: StartApiServerOptions = {}) {
 
 // ---- /v1 router -------------------------------------------------------------
 
+/**
+ * Refuse a second lifecycle event for the same task in the same state inside
+ * the dedupe window, on the hosted Postgres path. Mirror of the local
+ * sendMessage guard (messages.ts): same SQL filter (channel = work-status,
+ * reply_to IS NULL, created_at within the window, newest first), same shared
+ * decision logic (duplicateWorkStatusTransitionViolation). Runs inside the
+ * send transaction, so the refused duplicate never reaches the stream; the
+ * thrown error aborts the transaction and surfaces as a 400 with the reason.
+ */
+async function assertNoDuplicateWorkStatusTransitionPg(
+  tx: TypedQueryClient,
+  content: string,
+  eventCreatedAtMs?: number,
+): Promise<void> {
+  const event = parseWorkStatusEvent(firstLineOf(content));
+  if (event === null) return; // envelope already validated before the transaction
+  // Close the check-then-insert race: two concurrent same-task sends could
+  // both observe no duplicate and both INSERT. A transaction-scoped advisory
+  // lock keyed on the task id serializes same-task writers, so the second
+  // writer's recent-events read runs only after the first transaction commits
+  // and observes the inserted event. Cross-task writers never contend; a
+  // hashtext collision only over-serializes two unrelated tasks.
+  await tx.many("SELECT pg_advisory_xact_lock(hashtext($1))", [event.task_id]);
+  // The dedupe window is measured from the event's OWN timestamp: a single
+  // send writes now, but a bulk backfill preserves the original created_at,
+  // and a historical event must be compared against the events around its own
+  // time — not against the present. The window is bounded on BOTH sides
+  // [T - window, T]: a row dated after the event (clock skew, a
+  // future-dated backfill row) must not decide whether this event is a
+  // duplicate, and a future same-state row must not mask the real most-recent
+  // prior event.
+  const eventAtMs = eventCreatedAtMs ?? Date.now();
+  const cutoff = new Date(eventAtMs - WORK_STATUS_DUPLICATE_WINDOW_MS).toISOString();
+  const eventAt = new Date(eventAtMs).toISOString();
+  const rows = await tx.many<{ content: string }>(
+    `SELECT content FROM messages
+     WHERE channel = $1 AND reply_to IS NULL AND created_at >= $2 AND created_at <= $3
+     ORDER BY id DESC`,
+    [WORK_STATUS_CHANNEL, cutoff, eventAt],
+  );
+  const violation = duplicateWorkStatusTransitionViolation(
+    rows.map((row) => row.content),
+    event,
+  );
+  if (violation !== null) throw new Error(violation);
+}
+
 async function handleV1(
   path: string,
   method: string,
@@ -2011,6 +2059,27 @@ async function handleV1(
     // A channel message addresses the channel itself; a DM needs an explicit `to`.
     const toAgent = channelName ?? str(body.to);
     if (!from || !toAgent || !content) return json({ error: "from, to (or channel), and content are required" }, 400);
+    // The single `work-status` channel is an append-only lifecycle event stream
+    // (global-work-status-lifecycle): every event's FIRST LINE must be the exact
+    // machine-parseable envelope, so the shapes measured on the live stream — a
+    // JSON document as the message, an empty event_id, invalid state values,
+    // missing fields — cannot reach the stream through the hosted path either.
+    // A non-reply send to that channel with a violating first line is refused
+    // with the reason. Replies are commentary, not events, and are not
+    // envelope-checked. `!replyParent` is the same predicate the local path
+    // expresses as `!requestedReplyUuid`; the two must stay in step, because a
+    // guard present on only one backend is absent exactly where it matters.
+    if (!replyParent && channelName === WORK_STATUS_CHANNEL) {
+      const violation = workStatusEnvelopeViolation(firstLineOf(content));
+      if (violation !== null) {
+        // The violation echoes caller-controlled field values (event_id,
+        // scope, session, ...); redact before returning so a sensitive value
+        // placed in an envelope field cannot be reflected into the API error,
+        // which clients throw and logs transcribe. The content-safety scan
+        // below runs after this rejection and cannot cover it.
+        return json({ error: redactSensitiveText(`work-status lifecycle event rejected: ${violation}`) }, 400);
+      }
+    }
     // `messages.channel` is free text with no foreign key to `channels`, so a
     // typo'd name wrote an ORPHAN: readable by digest, invisible to
     // `GET /channels` (which selects FROM channels), and unarchivable (todos
@@ -2066,6 +2135,18 @@ async function handleV1(
           }
           projectId = channelRow.project_id;
         }
+      }
+      // Refuse a second lifecycle event for the same task in the same state
+      // inside the dedupe window (see the local sendMessage guard): the
+      // measured defect class — 96 consecutive same-state pairs, 24-57s apart,
+      // each with a fresh event_id — was written through this hosted path, so
+      // the check runs here too, inside the transaction, before the INSERT.
+      // Only the task's MOST RECENT event decides, so BLOCKED -> RESUMED ->
+      // BLOCKED is a real sequence and is not deduped. The decision logic is
+      // shared with the local path (work-status-envelope.ts) so the two cannot
+      // drift apart.
+      if (channelName === WORK_STATUS_CHANNEL && !replyTo) {
+        await assertNoDuplicateWorkStatusTransitionPg(tx, content);
       }
       const inserted = await tx.get<Record<string, unknown>>(
         `INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
@@ -2233,6 +2314,38 @@ async function handleV1(
       channel: string | null;
       sessionId: string;
     }> = [];
+    // Work-status items collected during the loop; their duplicate-transition
+    // guard runs inside the transaction (see the loop and the INSERT below).
+    // `createdAtMs` is the item's effective message timestamp (the preserved
+    // original created_at when present, otherwise NOW — the same fallback the
+    // INSERT applies); the dedupe window is measured from it, so historical
+    // events are not compared against the present.
+    const workStatusItems: Array<{ index: number; uuid: string; content: string; createdAtMs: number }> = [];
+    // Resolve already-stored uuids BEFORE any per-item guard. The bulk
+    // endpoint is an idempotent backfill: ON CONFLICT (uuid) DO NOTHING means
+    // a re-run of a stored batch is a no-op, and that contract must hold even
+    // when the stored rows are legacy events that the envelope or dedupe
+    // guards would refuse today — a malformed envelope stored before the guard
+    // existed, or a legacy same-state pair. An item whose uuid is already
+    // stored is skipped entirely (no envelope check, no dedupe check, no
+    // content-safety scan, no INSERT row): it is the same event re-sent, not a
+    // second event. The lookup runs on committed rows only; a concurrent
+    // insert of the same uuid between this read and the INSERT is still
+    // absorbed by ON CONFLICT.
+    const existingUuids = new Set<string>();
+    {
+      const candidateUuids = items
+        .filter((raw): raw is Record<string, unknown> => !!raw && typeof raw === "object" && !Array.isArray(raw))
+        .map((raw) => str(raw.uuid))
+        .filter((uuid): uuid is string => !!uuid);
+      if (candidateUuids.length > 0) {
+        const existingRows = await client.many<{ uuid: string }>(
+          "SELECT uuid FROM messages WHERE uuid = ANY($1::text[])",
+          [[...new Set(candidateUuids)]],
+        );
+        for (const row of existingRows) existingUuids.add(row.uuid);
+      }
+    }
     const projectIdx = cols.indexOf("project_id");
     for (let i = 0; i < items.length; i++) {
       const raw = items[i];
@@ -2247,16 +2360,53 @@ async function handleV1(
       if (!uuid || !from || !to || content === undefined) {
         return json({ error: `messages[${i}] requires uuid, from, to, and content` }, 400);
       }
+      // Retry of an already-stored item: no-op per the ON CONFLICT contract.
+      // Skipped before every guard (envelope, dedupe, content safety) so a
+      // re-run of a stored batch never returns 400 for rows the guards would
+      // refuse today. The required-field validation above stays first: a
+      // retry re-sends the identical payload, so a payload that fails it was
+      // never a stored batch.
+      if (existingUuids.has(uuid)) continue;
       let priority = str(m.priority)?.toLowerCase() ?? "normal";
       if (!VALID_PRIORITIES.includes(priority)) priority = "normal";
       const sessionId = str(m.session_id) ?? `api:${from}`;
+      // The single-send path normalizes the channel before the work-status
+      // check; the bulk path must do the same or an alias such as
+      // "#WORK-STATUS" would bypass the guard and land under a noncanonical
+      // name. Work-status items are canonicalized for storage as well.
       const channel = str(m.channel);
+      const normalizedChannel = channel ? normalizeChannelName(channel) : null;
       const projectId = str(m.project_id);
       const replyTo = typeof m.reply_to === "number" ? m.reply_to : null;
+      const isWorkStatusNonReply = !replyTo && normalizedChannel === WORK_STATUS_CHANNEL;
+      // Work-status lifecycle events must not reach the stream through the
+      // bulk backfill path either: it is a write surface with the same
+      // conversations:write scope as the single-send path. Same predicates as
+      // the single-send path (non-reply sends only): a malformed envelope is
+      // refused here up front, and work-status items are collected so the
+      // duplicate-transition guard runs inside the transaction, before the
+      // INSERT. The redaction mirrors the single-send rejection so a sensitive
+      // caller value cannot be reflected into the API error.
+      if (isWorkStatusNonReply) {
+        const violation = workStatusEnvelopeViolation(firstLineOf(content));
+        if (violation !== null) {
+          return json({ error: `messages[${i}]: work-status lifecycle event rejected: ${redactSensitiveText(violation)}` }, 400);
+        }
+        // Collected here; the in-request dedupe runs once, after the loop, in
+        // timestamp order (see below) so it cannot depend on request order.
+        const createdAtRaw = str(m.created_at);
+        const createdAtMs = createdAtRaw
+          ? (Number.isFinite(Date.parse(createdAtRaw)) ? Date.parse(createdAtRaw) : Date.now())
+          : Date.now();
+        workStatusItems.push({ index: i, uuid, content, createdAtMs });
+      }
+      // Canonicalize the stored channel for work-status items (see above);
+      // every other channel keeps the raw backfill value.
+      const storedChannel = isWorkStatusNonReply ? WORK_STATUS_CHANNEL : channel;
       assertNoSensitiveContent(content, "Message content");
       assertNoSensitiveContent(from, "Message sender");
       assertNoSensitiveContent(to, "Message recipient");
-      assertNoSensitiveOptionalText(channel, "Message channel");
+      assertNoSensitiveOptionalText(storedChannel, "Message channel");
       assertNoSensitiveOptionalText(projectId, "Message project");
       assertNoSensitiveContent(sessionId, "Message session");
       const values: unknown[] = [
@@ -2264,7 +2414,7 @@ async function handleV1(
         sessionId,
         from,
         to,
-        channel ?? null,
+        storedChannel ?? null,
         projectId ?? null,
         content,
         priority,
@@ -2286,9 +2436,9 @@ async function handleV1(
       );
       rowsSql.push(`(${placeholders.join(", ")})`);
       params.push(...values);
-      if (channel) {
+      if (storedChannel) {
         channelProjectParams.push({
-          channel,
+          channel: storedChannel,
           requestedProjectId: projectId ?? null,
           projectParamIndex: base + projectIdx,
         });
@@ -2301,6 +2451,35 @@ async function handleV1(
           channel: channel ?? null,
           sessionId,
         });
+      }
+    }
+
+    // Every item was already stored: the re-run is a complete no-op. Return
+    // the same summary shape as the empty-batch guard instead of building an
+    // `INSERT ... VALUES` with zero rows.
+    if (rowsSql.length === 0) {
+      return json({ requested: items.length, inserted: 0, skipped: items.length, total: await messageTotal(client) }, 200);
+    }
+
+    // In-request dedupe, run ONCE in timestamp order so it cannot depend on
+    // request order: every item in this request is inserted by one multi-row
+    // INSERT after the transaction guard, so the guard cannot observe this
+    // request's own items as stream rows. Each task's most recent event
+    // decides (the same rule as the stream guard): a same-state pair within
+    // the dedupe window is refused no matter which of the two appears first
+    // in the request, and a pair written more than the window apart is a real
+    // historical sequence and is not refused.
+    if (workStatusItems.length > 1) {
+      const sortedWorkStatus = [...workStatusItems].sort((a, b) => a.createdAtMs - b.createdAtMs);
+      const lastEventByTask = new Map<string, { state: string; content: string; atMs: number }>();
+      for (const item of sortedWorkStatus) {
+        const event = parseWorkStatusEvent(firstLineOf(item.content))!;
+        const prior = lastEventByTask.get(event.task_id);
+        if (prior !== undefined && prior.state === event.state && item.createdAtMs - prior.atMs <= WORK_STATUS_DUPLICATE_WINDOW_MS) {
+          const violation = duplicateWorkStatusTransitionViolation([prior.content], event);
+          return json({ error: `messages[${item.index}]: ${redactSensitiveText(violation ?? "work-status duplicate transition")}` }, 400);
+        }
+        lastEventByTask.set(event.task_id, { state: event.state, content: item.content, atMs: item.createdAtMs });
       }
     }
 
@@ -2361,6 +2540,17 @@ async function handleV1(
             throw new Error(`messages[${reference.itemIndex}].reply_to does not match parent session.`);
           }
         }
+      }
+
+      // Refuse a second lifecycle event for the same task in the same state
+      // inside the dedupe window, per work-status item — the same guard as the
+      // single-send path, run inside the transaction so a bulk request is not
+      // a bypass. The advisory lock inside the guard serializes concurrent
+      // bulk writers for the same task. Items whose uuid is already stored
+      // never reach this point: the pre-loop existing-uuid lookup skips them,
+      // so a replay is a no-op instead of a duplicate-transition refusal.
+      for (const workStatusItem of workStatusItems) {
+        await assertNoDuplicateWorkStatusTransitionPg(tx, workStatusItem.content, workStatusItem.createdAtMs);
       }
 
       return tx.query<{ id: number; from_agent: string; channel: string | null; content: string }>(

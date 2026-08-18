@@ -133,6 +133,25 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       if (/FROM messages WHERE channel = \$1 ORDER BY id ASC/i.test(sql)) {
         return messages.filter((message) => message.channel === _p[0]).slice().sort((a, b) => a.id - b.id);
       }
+      // Work-status dedupe read: apply the channel / reply_to / created_at
+      // predicates (the window is bounded on both sides) so the hosted
+      // timestamp-window behaviour is actually exercised rather than returning
+      // every message.
+      if (/FROM messages\s+WHERE channel = \$1 AND reply_to IS NULL/i.test(sql)) {
+        const channel = String(_p[0] ?? "");
+        const cutoffMatch = sql.match(/created_at >= \$(\d+)/i);
+        const upperMatch = sql.match(/created_at <= \$(\d+)/i);
+        let rows = messages.filter((row) => row.channel === channel && row.reply_to == null);
+        if (cutoffMatch) {
+          const cutoff = String(_p[Number(cutoffMatch[1]) - 1]);
+          rows = rows.filter((row) => row.created_at >= cutoff);
+        }
+        if (upperMatch) {
+          const upper = String(_p[Number(upperMatch[1]) - 1]);
+          rows = rows.filter((row) => row.created_at <= upper);
+        }
+        return rows.slice().sort((a, b) => b.id - a.id);
+      }
       if (/FROM messages/i.test(sql)) return messages.slice().reverse();
       if (/revoked_at IS NOT NULL/i.test(sql)) return [];
       if (/SELECT id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata[\s\S]*AS online\s+FROM agent_presence/i.test(sql)) {
@@ -3088,5 +3107,537 @@ describe("G6 bounded analytics projections on /v1", () => {
         expect(sql).toMatch(/left\(/i);
       }
     }
+  });
+});
+
+describe("POST /v1/messages work-status lifecycle guards (hosted path)", () => {
+  // The hosted /v1/messages handler performs its own inline INSERT and never
+  // reached the local sendMessage guards, so the measured defect classes —
+  // a JSON document as the message (id 701771), an empty event_id (id
+  // 702774), invalid state values, and 96 consecutive same-state duplicate
+  // pairs written 24-57s apart with fresh event_ids — were written through
+  // THIS path (conversations.hasna.xyz). These tests prove the same write-time
+  // envelope and duplicate-transition guards now run here, mirroring the local
+  // send-guard tests.
+  const EVENT_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const TASK_ID = "12345678-1234-4234-8234-123456789abc";
+  const OTHER_TASK_ID = "22345678-1234-4234-8234-123456789abc";
+  const SESSION_ID = "a1b2c3d4-e5f6-47a8-9b0c-1d2e3f4a5b6c";
+  const CLAIM_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+  const workStatusChannelSeed = {
+    id: "chn_00000000000000000000000000000051",
+    name: "work-status",
+    description: null,
+    topic: null,
+    project_id: null,
+    created_by: "test",
+    created_at: "2026-08-17T00:00:00.000Z",
+    archived_at: null,
+    metadata: null,
+    tags: null,
+  };
+
+  function envelope(
+    state = "START",
+    taskId = TASK_ID,
+    eventId = EVENT_ID,
+    at = new Date().toISOString(),
+  ): string {
+    return [
+      state,
+      `event_id=${eventId}`,
+      `task_id=${taskId}`,
+      "scope=todos:open-todos",
+      "agent=test-agent",
+      `session=${SESSION_ID}`,
+      `at=${at}`,
+      `claim=${CLAIM_ID}`,
+      "evidence=-",
+    ].join(" ");
+  }
+
+  function postWorkStatus(content: string, extra: Record<string, unknown> = {}) {
+    return fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ from: "test-agent", channel: "work-status", content, ...extra }),
+    });
+  }
+
+  function workStatusMessageCount(): number {
+    return activeFakeClient!.__debug.messages.filter((row: any) => row.channel === "work-status").length;
+  }
+
+  test("a valid lifecycle envelope is accepted through the hosted path", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const before = workStatusMessageCount();
+    const response = await postWorkStatus(envelope("START", OTHER_TASK_ID));
+    expect(response.status).toBe(201);
+    expect(((await response.json()).message as any).content.startsWith("START event_id=")).toBe(true);
+    expect(workStatusMessageCount()).toBe(before + 1);
+  });
+
+  // (b) — malformed first lines measured on the live stream. Each must be
+  // rejected with a 4xx reason on the hosted path and leave the stream
+  // untouched, mirroring the local send-guard tests.
+  const malformedFirstLines: Array<[string, string]> = [
+    [
+      "an entire JSON document as the message (id 701771, agent-chief-finance)",
+      JSON.stringify({ event: "DONE", task_id: OTHER_TASK_ID }),
+    ],
+    [
+      "empty event_id (id 702774, agent-chief-staff)",
+      `START event_id= task_id=${OTHER_TASK_ID} scope=todos:open-todos agent=test-agent session=${SESSION_ID} at=2026-08-17T10:00:00Z claim=${CLAIM_ID} evidence=-`,
+    ],
+    [
+      "literal template word STATE as the state (ids 685044, 684554)",
+      `STATE event_id=${EVENT_ID} task_id=${OTHER_TASK_ID} scope=todos:open-todos agent=test-agent session=${SESSION_ID} at=2026-08-17T10:00:00Z claim=${CLAIM_ID} evidence=-`,
+    ],
+    [
+      "CONTINUE is not a lifecycle state (id 686051)",
+      `CONTINUE event_id=${EVENT_ID} task_id=${OTHER_TASK_ID} scope=todos:open-todos agent=test-agent session=${SESSION_ID} at=2026-08-17T10:00:00Z claim=${CLAIM_ID} evidence=-`,
+    ],
+    [
+      "IN_PROGRESS is not a lifecycle state (id 684083)",
+      `IN_PROGRESS event_id=${EVENT_ID} task_id=${OTHER_TASK_ID} scope=todos:open-todos agent=test-agent session=${SESSION_ID} at=2026-08-17T10:00:00Z claim=${CLAIM_ID} evidence=-`,
+    ],
+    [
+      "PENDING is not a lifecycle state (id 683838)",
+      `PENDING event_id=${EVENT_ID} task_id=${OTHER_TASK_ID} scope=todos:open-todos agent=test-agent session=${SESSION_ID} at=2026-08-17T10:00:00Z claim=${CLAIM_ID} evidence=-`,
+    ],
+    [
+      "PROGRESS is not a lifecycle state (id 683694)",
+      `PROGRESS event_id=${EVENT_ID} task_id=${OTHER_TASK_ID} scope=todos:open-todos agent=test-agent session=${SESSION_ID} at=2026-08-17T10:00:00Z claim=${CLAIM_ID} evidence=-`,
+    ],
+    [
+      "extra outcome= field with missing claim (id 683973)",
+      `DONE event_id=${EVENT_ID} task_id=${OTHER_TASK_ID} scope=todos:open-todos agent=test-agent session=${SESSION_ID} at=2026-08-17T10:00:00Z outcome=success evidence=-`,
+    ],
+    [
+      "retired [WORKLOG] prefix",
+      `[WORKLOG] ${envelope("START", OTHER_TASK_ID)}`,
+    ],
+    [
+      "free-form prose first line",
+      "blocker cleared, resuming the migration now",
+    ],
+  ];
+
+  for (const [name, firstLine] of malformedFirstLines) {
+    test(`${name} is rejected with a 400 reason on the hosted path`, async () => {
+      const before = workStatusMessageCount();
+      const response = await postWorkStatus(firstLine);
+      expect(response.status).toBe(400);
+      expect(((await response.json()) as any).error).toContain("work-status lifecycle event rejected");
+      expect(workStatusMessageCount()).toBe(before);
+    });
+  }
+
+  test("the hosted-path rejection names the lifecycle envelope as the reason", async () => {
+    const response = await postWorkStatus("prose is not an envelope");
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as any).error).toContain("work-status lifecycle");
+  });
+
+  test("the hosted guard is scoped to work-status: prose on other channels still sends", async () => {
+    activeFakeClient!.__debug.seedChannel({
+      id: "chn_00000000000000000000000000000052",
+      name: "work-status-guard-general",
+      description: null,
+      topic: null,
+      project_id: null,
+      created_by: "test",
+      created_at: "2026-08-17T00:00:00.000Z",
+      archived_at: null,
+      metadata: null,
+      tags: null,
+    }, [], []);
+    const response = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ from: "test-agent", channel: "work-status-guard-general", content: "ordinary prose is fine here" }),
+    });
+    expect(response.status).toBe(201);
+  });
+
+  test("a reply to a work-status message is commentary and is not envelope-checked on the hosted path", async () => {
+    const parentResponse = await postWorkStatus(envelope("BLOCKED", OTHER_TASK_ID));
+    expect(parentResponse.status).toBe(201);
+    const parent = (await parentResponse.json()).message as { id: number; uuid: string };
+    const before = workStatusMessageCount();
+    const reply = await postWorkStatus("why is this blocked?", {
+      reply_to: parent.id,
+      reply_to_uuid: parent.uuid,
+    });
+    expect(reply.status).toBe(201);
+    expect(((await reply.json()).message as any).reply_to).toBe(parent.id);
+    expect(workStatusMessageCount()).toBe(before + 1);
+  });
+
+  // (a) — duplicate transitions. The measured defect class was written through
+  // the hosted path, so the dedupe guard must run there too. Each test uses
+  // its own task id so the shared in-memory store cannot leak a prior event
+  // into the window.
+  test("the same state for the same task within the window is rejected on the hosted path (START double-fire)", async () => {
+    const taskId = "32345678-1234-4234-8234-123456789abc";
+    const first = await postWorkStatus(envelope("START", taskId, EVENT_ID));
+    expect(first.status).toBe(201);
+    const before = workStatusMessageCount();
+    const duplicate = await postWorkStatus(envelope("START", taskId, "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"));
+    expect(duplicate.status).toBe(400);
+    expect(((await duplicate.json()) as any).error).toContain("work-status duplicate transition");
+    expect(workStatusMessageCount()).toBe(before);
+  });
+
+  test("the same state for the same task within the window is rejected on the hosted path (BLOCKED too)", async () => {
+    const taskId = "42345678-1234-4234-8234-123456789abc";
+    const first = await postWorkStatus(envelope("BLOCKED", taskId, EVENT_ID));
+    expect(first.status).toBe(201);
+    const before = workStatusMessageCount();
+    const duplicate = await postWorkStatus(envelope("BLOCKED", taskId, "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"));
+    expect(duplicate.status).toBe(400);
+    expect(((await duplicate.json()) as any).error).toContain("work-status duplicate transition");
+    expect(workStatusMessageCount()).toBe(before);
+  });
+
+  test("a different state for the same task within the window is a real transition on the hosted path", async () => {
+    const taskId = "52345678-1234-4234-8234-123456789abc";
+    const start = await postWorkStatus(envelope("START", taskId, EVENT_ID));
+    expect(start.status).toBe(201);
+    const blocked = await postWorkStatus(envelope("BLOCKED", taskId, "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"));
+    expect(blocked.status).toBe(201);
+  });
+
+  test("BLOCKED -> RESUMED -> BLOCKED is a real sequence and is not deduped on the hosted path", async () => {
+    const taskId = "62345678-1234-4234-8234-123456789abc";
+    for (const [index, state] of ["BLOCKED", "RESUMED", "BLOCKED"].entries()) {
+      const response = await postWorkStatus(
+        envelope(state, taskId, `cccccccc-dddd-${4 + index}eee-8fff-00000000000${index + 1}`),
+      );
+      expect(response.status).toBe(201);
+    }
+  });
+
+  test("a duplicate for a different task within the window is not deduped on the hosted path", async () => {
+    const firstTask = "72345678-1234-4234-8234-123456789abc";
+    const secondTask = "82345678-1234-4234-8234-123456789abc";
+    const first = await postWorkStatus(envelope("START", firstTask, EVENT_ID));
+    expect(first.status).toBe(201);
+    const second = await postWorkStatus(envelope("START", secondTask, "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"));
+    expect(second.status).toBe(201);
+  });
+
+  // (c) — error reflection. The envelope validator echoes caller-controlled
+  // field values into the violation reason, and the hosted handler returns it
+  // before the content-safety scan runs; a sensitive value placed in an
+  // envelope field must not be reflected into the API error, which clients
+  // throw and logs transcribe.
+  test("envelope violation errors do not reflect sensitive caller values on the hosted path", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    // Synthetic detector-positive value (slack-shaped): matches the content
+    // safety redaction patterns, not the staged-secrets scanner's detectors.
+    const leak = "xoxb-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const response = await postWorkStatus(
+      `START event_id=${leak} task_id=${OTHER_TASK_ID} scope=todos:open-todos agent=test-agent ` +
+      `session=${SESSION_ID} at=2026-08-17T10:00:00Z claim=${CLAIM_ID} evidence=-`,
+    );
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as any;
+    expect(body.error).toContain("work-status lifecycle event rejected");
+    expect(body.error).not.toContain(leak);
+  });
+
+  // (d) — the bulk backfill path is a write surface too: a malformed envelope
+  // or a duplicate transition must not be able to reach the stream through it.
+  test("a malformed work-status envelope is refused through the bulk path", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const before = workStatusMessageCount();
+    const response = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-1", from: "test-agent", to: "test-agent", channel: "work-status", content: "not an envelope" },
+        ],
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as any).error).toContain("work-status lifecycle event rejected");
+    expect(workStatusMessageCount()).toBe(before);
+  });
+
+  test("a duplicate work-status transition is refused through the bulk path", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const before = workStatusMessageCount();
+    const taskId = "92345678-1234-4234-8234-123456789abc";
+    const response = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-2", from: "test-agent", to: "test-agent", channel: "work-status", content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001") },
+          { uuid: "bulk-ws-3", from: "test-agent", to: "test-agent", channel: "work-status", content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000002") },
+        ],
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as any).error).toContain("work-status duplicate transition");
+    expect(workStatusMessageCount()).toBe(before);
+  });
+
+  test("a real transition sequence in one bulk request is accepted", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const before = workStatusMessageCount();
+    const taskId = "a3345678-1234-4234-8234-123456789abc";
+    const response = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-4", from: "test-agent", to: "test-agent", channel: "work-status", content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001") },
+          { uuid: "bulk-ws-5", from: "test-agent", to: "test-agent", channel: "work-status", content: envelope("BLOCKED", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000002") },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(workStatusMessageCount()).toBe(before + 2);
+  });
+
+  test("replaying a bulk work-status event with the same uuid is an idempotent skip, not a duplicate error", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const taskId = "b4345678-1234-4234-8234-123456789abc";
+    const item = {
+      uuid: "bulk-ws-replay-1",
+      from: "test-agent",
+      to: "test-agent",
+      channel: "work-status",
+      content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001"),
+    };
+    const first = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [item] }),
+    });
+    expect(first.status).toBe(200);
+    const replay = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [item] }),
+    });
+    expect(replay.status).toBe(200);
+    const body = (await replay.json()) as any;
+    expect(body.skipped).toBe(1);
+  });
+
+  test("a bulk retry of an already-stored legacy malformed work-status event is an idempotent no-op, not a 400", async () => {
+    // Legacy rows written before the envelope guard existed (measured shapes:
+    // a JSON document as the message, an empty event_id) must still be
+    // re-runnable: the idempotent-backfill contract is ON CONFLICT (uuid) DO
+    // NOTHING, and a retry of a stored batch is a no-op. The envelope guard
+    // must not fire on an item whose uuid is already stored.
+    const now = Date.now();
+    const legacyRows = [
+      { id: 9101, uuid: "bulk-ws-legacy-1", from_agent: "test-agent", to_agent: "test-agent", channel: "work-status", content: "not an envelope", created_at: new Date(now - 120_000).toISOString(), reply_to: null, session_id: SESSION_ID, project_id: null },
+    ];
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], legacyRows);
+    const before = workStatusMessageCount();
+    const response = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ uuid: "bulk-ws-legacy-1", from: "test-agent", to: "test-agent", channel: "work-status", content: "not an envelope" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as any;
+    expect(body.inserted).toBe(0);
+    expect(body.skipped).toBe(1);
+    expect(workStatusMessageCount()).toBe(before);
+  });
+
+  test("a bulk retry of an already-stored same-state duplicate pair is an idempotent no-op, not a 400", async () => {
+    // Legacy rows written before the dedupe guard existed (the measured 96
+    // same-state consecutive pairs) must stay re-runnable: the stored pair is
+    // the stream's historical record, and a backfill re-run of those exact
+    // uuids is a no-op per ON CONFLICT (uuid) DO NOTHING — not a duplicate
+    // transition refusal. The in-request dedupe must not fire on items whose
+    // uuids are already stored.
+    const taskId = "c2345678-1234-4234-8234-123456789abc";
+    const now = Date.now();
+    const older = new Date(now - 40_000).toISOString();
+    const newer = new Date(now - 30_000).toISOString();
+    const seededRows = [
+      { id: 9102, uuid: "bulk-ws-pair-1", from_agent: "test-agent", to_agent: "test-agent", channel: "work-status", content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001", older), created_at: older, reply_to: null, session_id: SESSION_ID, project_id: null },
+      { id: 9103, uuid: "bulk-ws-pair-2", from_agent: "test-agent", to_agent: "test-agent", channel: "work-status", content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000002", newer), created_at: newer, reply_to: null, session_id: SESSION_ID, project_id: null },
+    ];
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], seededRows);
+    const before = workStatusMessageCount();
+    const response = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-pair-1", from: "test-agent", to: "test-agent", channel: "work-status", created_at: older, content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001", older) },
+          { uuid: "bulk-ws-pair-2", from: "test-agent", to: "test-agent", channel: "work-status", created_at: newer, content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000002", newer) },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as any;
+    expect(body.inserted).toBe(0);
+    expect(body.skipped).toBe(2);
+    expect(workStatusMessageCount()).toBe(before);
+  });
+
+  test("a bulk retry skips only the already-stored work-status items and still applies the guards to new ones", async () => {
+    // Mixed batch: an existing legacy malformed event (no-op skip) alongside a
+    // genuinely new event (guards apply, then INSERT). Proves the idempotency
+    // skip is per-item, not per-request: the envelope guard must not be
+    // bypassed for new items by the presence of an existing one.
+    const taskId = "b5345678-1234-4234-8234-123456789abc";
+    const now = Date.now();
+    const legacyRows = [
+      { id: 9104, uuid: "bulk-ws-mixed-1", from_agent: "test-agent", to_agent: "test-agent", channel: "work-status", content: "not an envelope", created_at: new Date(now - 120_000).toISOString(), reply_to: null, session_id: SESSION_ID, project_id: null },
+    ];
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], legacyRows);
+    const before = workStatusMessageCount();
+    const response = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-mixed-1", from: "test-agent", to: "test-agent", channel: "work-status", content: "not an envelope" },
+          { uuid: "bulk-ws-mixed-2", from: "test-agent", to: "test-agent", channel: "work-status", content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000003") },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as any;
+    expect(body.inserted).toBe(1);
+    expect(body.skipped).toBe(1);
+    expect(workStatusMessageCount()).toBe(before + 1);
+  });
+
+  test("a same-state bulk pair outside the dedupe window is a historical sequence and is accepted", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const before = workStatusMessageCount();
+    const taskId = "c5345678-1234-4234-8234-123456789abc";
+    const now = Date.now();
+    const older = new Date(now - 10 * 60_000).toISOString();
+    const newer = new Date(now - 8 * 60_000).toISOString();
+    const response = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-hist-1", from: "test-agent", to: "test-agent", channel: "work-status", created_at: older, content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001") },
+          { uuid: "bulk-ws-hist-2", from: "test-agent", to: "test-agent", channel: "work-status", created_at: newer, content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000002") },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(workStatusMessageCount()).toBe(before + 2);
+  });
+
+  test("a bulk channel alias cannot bypass the work-status guard", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const before = workStatusMessageCount();
+    // Malformed envelope through the alias is refused.
+    const malformed = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-alias-1", from: "test-agent", to: "test-agent", channel: "#WORK-STATUS", content: "not an envelope" },
+        ],
+      }),
+    });
+    expect(malformed.status).toBe(400);
+    expect(((await malformed.json()) as any).error).toContain("work-status lifecycle event rejected");
+    expect(workStatusMessageCount()).toBe(before);
+    // A valid envelope through the alias is canonicalized on storage.
+    const taskId = "d6345678-1234-4234-8234-123456789abc";
+    const valid = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-alias-2", from: "test-agent", to: "test-agent", channel: "#WORK-STATUS", content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001") },
+        ],
+      }),
+    });
+    expect(valid.status).toBe(200);
+    const stored = activeFakeClient!.__debug.messages.find((row: any) => row.uuid === "bulk-ws-alias-2");
+    expect(stored.channel).toBe("work-status");
+  });
+
+  test("a same-state bulk pair is refused regardless of request order", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const before = workStatusMessageCount();
+    const taskId = "e7345678-1234-4234-8234-123456789abc";
+    const now = Date.now();
+    const newer = new Date(now - 60_000).toISOString();
+    const older = new Date(now - 120_000).toISOString();
+    // The NEWER event appears FIRST in the request; the in-request dedupe must
+    // not depend on request order.
+    const response = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-rev-1", from: "test-agent", to: "test-agent", channel: "work-status", created_at: newer, content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001") },
+          { uuid: "bulk-ws-rev-2", from: "test-agent", to: "test-agent", channel: "work-status", created_at: older, content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000002") },
+        ],
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as any).error).toContain("work-status duplicate transition");
+    expect(workStatusMessageCount()).toBe(before);
+  });
+
+  test("a future-dated row does not decide the hosted dedupe: an in-window duplicate is still refused", async () => {
+    const taskId = "f8345678-1234-4234-8234-123456789abc";
+    const now = Date.now();
+    const seededRows = [
+      // In-window same-state event for the task.
+      { id: 9001, uuid: "ws-seed-1", from_agent: "test-agent", to_agent: "test-agent", channel: "work-status", content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001", new Date(now - 30_000).toISOString()), created_at: new Date(now - 30_000).toISOString(), reply_to: null, session_id: SESSION_ID, project_id: null },
+      // Future-dated different-state row that must NOT mask the event above.
+      { id: 9002, uuid: "ws-seed-2", from_agent: "test-agent", to_agent: "test-agent", channel: "work-status", content: envelope("BLOCKED", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000003", new Date(now + 300_000).toISOString()), created_at: new Date(now + 300_000).toISOString(), reply_to: null, session_id: SESSION_ID, project_id: null },
+    ];
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], seededRows);
+    const before = workStatusMessageCount();
+    const response = await postWorkStatus(envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000004"));
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as any).error).toContain("work-status duplicate transition");
+    expect(workStatusMessageCount()).toBe(before);
+  });
+
+  test("a future same-state row does not wrongly reject a legitimate current event", async () => {
+    const taskId = "a9345678-1234-4234-8234-123456789abc";
+    const now = Date.now();
+    const seededRows = [
+      { id: 9003, uuid: "ws-seed-3", from_agent: "test-agent", to_agent: "test-agent", channel: "work-status", content: envelope("BLOCKED", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001", new Date(now + 300_000).toISOString()), created_at: new Date(now + 300_000).toISOString(), reply_to: null, session_id: SESSION_ID, project_id: null },
+    ];
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], seededRows);
+    const before = workStatusMessageCount();
+    const response = await postWorkStatus(envelope("BLOCKED", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000002"));
+    expect(response.status).toBe(201);
+    expect(workStatusMessageCount()).toBe(before + 1);
+  });
+
+  // (e) — the dedupe guard must serialize same-task writers: the advisory lock
+  // is taken before the recent-events read, so a concurrent same-state pair
+  // cannot both pass the read.
+  test("the hosted dedupe guard takes a per-task advisory lock before the recent-events read", async () => {
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
+    const mark = activeFakeClient!.__debug.manyCalls.length;
+    const response = await postWorkStatus(envelope("START", "a1345678-1234-4234-8234-123456789abc"));
+    expect(response.status).toBe(201);
+    const calls = activeFakeClient!.__debug.manyCalls.slice(mark);
+    const lockIndex = calls.findIndex((call) => call.sql.includes("pg_advisory_xact_lock"));
+    const recentIndex = calls.findIndex((call) => call.sql.includes("FROM messages"));
+    expect(lockIndex).toBeGreaterThanOrEqual(0);
+    expect(recentIndex).toBeGreaterThan(lockIndex);
   });
 });
