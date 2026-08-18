@@ -2,7 +2,8 @@ export type FilingScope = "workflow_only" | "prepared_packet" | "provider_submit
 export type LegalReviewStatus = "not_required" | "required" | "approved" | "rejected";
 
 export interface DocumentProvenanceRef {
-  sourceApp: "signatures" | "open-contracts" | "open-files" | string;
+  // Legacy "open-contracts"/"open-files" sourceApp values remain accepted via the string member (compat).
+  sourceApp: "signatures" | "contracts" | "files" | string;
   sourceId: string;
   documentHash: string;
   storageUri?: string;

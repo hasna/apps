@@ -10,10 +10,10 @@ function packet(overrides: Partial<LegalBoundaryPacket> = {}): LegalBoundaryPack
     packetVersion: "hasna.legal-boundary.v1",
     workflowId: "workflow-1",
     document: {
-      sourceApp: "open-contracts",
+      sourceApp: "contracts",
       sourceId: "portfolio-doc-1",
       documentHash: "sha256:abc123",
-      storageUri: "open-files://documents/portfolio-doc-1",
+      storageUri: "files://documents/portfolio-doc-1",
       version: "v1",
       createdBy: "agent-ip",
       createdAt: "2026-07-06T00:00:00.000Z",

@@ -16,7 +16,7 @@ workflows, and developer-owned signing flows where local audit evidence is suffi
 
 Hasna Signatures is the signing ceremony and evidence package for Hasna legal/IP
 workflows. It does not by itself file trademark, IP, or legal-office submissions.
-Apps such as the IP, trademark, and signing services, `open-contracts`,
+Apps such as the IP, trademark, and signing services, `contracts`,
 and document/file storage integrations should exchange `hasna.legal-boundary.v1`
 packets from the SDK.
 
@@ -308,11 +308,11 @@ integrations. Connector-backed execution should own that provider-specific behav
 ## REST API
 
 ```bash
-export OPEN_SIGNATURES_ADMIN_TOKEN="$(openssl rand -hex 32)"
+export SIGNATURES_ADMIN_TOKEN="$(openssl rand -hex 32)"
 signatures-serve
 ```
 
-Selected endpoints (see the [complete REST API reference](docs/api.md)):
+`OPEN_SIGNATURES_ADMIN_TOKEN` is accepted as a legacy alias. Selected endpoints (see the [complete REST API reference](docs/api.md)):
 
 - `POST /api/documents/from-markdown`
 - `POST /api/documents/:id/sign`
@@ -327,11 +327,12 @@ Selected endpoints (see the [complete REST API reference](docs/api.md)):
 
 All non-preflight `/api/*` endpoints except `POST /api/sign/:token` require an
 admin token. Supply it as a bearer token or with the
-`X-Open-Signatures-Admin-Token` header:
+`X-Signatures-Admin-Token` header (the legacy `X-Open-Signatures-Admin-Token`
+header is still accepted):
 
 ```bash
 curl http://localhost:19440/api/config \
-  -H "Authorization: Bearer $OPEN_SIGNATURES_ADMIN_TOKEN"
+  -H "Authorization: Bearer $SIGNATURES_ADMIN_TOKEN"
 ```
 
 Signing links remain token-scoped and public at `GET /sign/:token` and
@@ -339,9 +340,11 @@ Signing links remain token-scoped and public at `GET /sign/:token` and
 cross-origin API access is disabled unless the origin is explicitly allowed:
 
 ```bash
-export OPEN_SIGNATURES_ALLOWED_ORIGINS="http://localhost:5173"
+export SIGNATURES_ALLOWED_ORIGINS="http://localhost:5173"
 signatures-serve
 ```
+
+`OPEN_SIGNATURES_ALLOWED_ORIGINS` is accepted as a legacy alias.
 
 The server is designed for trusted local or private deployments by default. If you expose
 it publicly, use authentication, TLS, request logging, and a file access policy.
@@ -351,12 +354,12 @@ it publicly, use authentication, TLS, request logging, and a file access policy.
 The dashboard is a separate Vite app for local operations:
 
 ```bash
-export OPEN_SIGNATURES_ADMIN_TOKEN="$(openssl rand -hex 32)"
-export OPEN_SIGNATURES_ALLOWED_ORIGINS="http://localhost:5173"
+export SIGNATURES_ADMIN_TOKEN="$(openssl rand -hex 32)"
+export SIGNATURES_ALLOWED_ORIGINS="http://localhost:5173"
 signatures-serve
 cd dashboard
 bun install
-OPEN_SIGNATURES_ADMIN_TOKEN="$OPEN_SIGNATURES_ADMIN_TOKEN" bun run dev
+SIGNATURES_ADMIN_TOKEN="$SIGNATURES_ADMIN_TOKEN" bun run dev
 ```
 
 The dashboard dev proxy injects the admin token server-side and is bound to loopback;

@@ -101,6 +101,24 @@ describe("server auth boundaries", () => {
     expect(providerSendWithAuth.status).toBe(404);
   });
 
+  test("accepts the bare SIGNATURES_ADMIN_TOKEN env var and X-Signatures-Admin-Token header, keeping legacy aliases", async () => {
+    const token = "bare-token";
+    const server = await startServer({ SIGNATURES_ADMIN_TOKEN: token });
+
+    const bareHeaderAuth = await fetch(`${server.baseUrl}/api/config`, {
+      headers: { "X-Signatures-Admin-Token": token },
+    });
+    expect(bareHeaderAuth.status).toBe(200);
+
+    const legacyHeaderAuth = await fetch(`${server.baseUrl}/api/config`, {
+      headers: { "X-Open-Signatures-Admin-Token": token },
+    });
+    expect(legacyHeaderAuth.status).toBe(200);
+
+    const noAuth = await fetch(`${server.baseUrl}/api/config`);
+    expect(noAuth.status).toBe(401);
+  });
+
   test("rejects untrusted CORS preflights and echoes configured allowed origins", async () => {
     const allowedOrigin = "http://localhost:5173";
     const server = await startServer({
@@ -129,6 +147,7 @@ describe("server auth boundaries", () => {
     });
     expect(accepted.status).toBe(204);
     expect(accepted.headers.get("access-control-allow-origin")).toBe(allowedOrigin);
+    expect(accepted.headers.get("access-control-allow-headers")).toContain("X-Signatures-Admin-Token");
     expect(accepted.headers.get("access-control-allow-headers")).toContain("X-Open-Signatures-Admin-Token");
 
     const rejectedActual = await fetch(`${server.baseUrl}/api/config`, {

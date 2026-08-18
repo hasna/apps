@@ -3,24 +3,25 @@
 Start the server with an admin token:
 
 ```bash
-export OPEN_SIGNATURES_ADMIN_TOKEN="$(openssl rand -hex 32)"
+export SIGNATURES_ADMIN_TOKEN="$(openssl rand -hex 32)"
 signatures-serve
 ```
 
 The default port is `19440`; set `PORT` or use `signatures serve --port`.
-`SIGNATURES_ADMIN_TOKEN` is accepted as a legacy admin-token variable.
+`OPEN_SIGNATURES_ADMIN_TOKEN` is accepted as a legacy admin-token variable.
 
 ## Authentication and Requests
 
 Every non-preflight `/api/*` route requires the admin token except
 `POST /api/sign/:token`. Send the token with `Authorization: Bearer <token>` or
-`X-Open-Signatures-Admin-Token`. If no admin token is configured, protected API
-routes fail closed with `503`.
+`X-Signatures-Admin-Token` (the legacy `X-Open-Signatures-Admin-Token` header is
+also accepted). If no admin token is configured, protected API routes fail
+closed with `503`.
 
 `POST` and `PUT` API requests require `Content-Type: application/json`.
 Cross-origin requests are rejected unless their origin is same-origin or listed
-in the comma-separated `OPEN_SIGNATURES_ALLOWED_ORIGINS` (or legacy
-`SIGNATURES_ALLOWED_ORIGINS`) value.
+in the comma-separated `SIGNATURES_ALLOWED_ORIGINS` value (the legacy
+`OPEN_SIGNATURES_ALLOWED_ORIGINS` alias is also accepted).
 
 ## Public Routes
 
