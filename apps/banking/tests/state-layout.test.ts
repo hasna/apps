@@ -64,7 +64,7 @@ describe("@hasna/banking state layout", () => {
     process.env.HOME = home;
 
     try {
-      createSqliteDevStore();
+      createSqliteDevStore({ path: ":memory:" });
       expect(readdirSync(home)).toEqual([]);
     } finally {
       if (previousHome === undefined) {

@@ -31,7 +31,7 @@ function paymentEnvelope() {
 
 describe("execution safety workflow", () => {
   test("submit persists the request and stops at approval_required before side effects", async () => {
-    const store = createSqliteDevStore();
+    const store = createSqliteDevStore({ path: ":memory:" });
     const envelope = paymentEnvelope();
     const result = await submitExecutionRequest({ store, envelope, actor: requester, now: new Date("2026-07-06T10:00:00.000Z") });
 
@@ -42,7 +42,7 @@ describe("execution safety workflow", () => {
   });
 
   test("approval queues only a dry-run provider plan with side effects disabled", async () => {
-    const store = createSqliteDevStore();
+    const store = createSqliteDevStore({ path: ":memory:" });
     const envelope = paymentEnvelope();
     await submitExecutionRequest({ store, envelope, actor: requester });
 
@@ -83,7 +83,7 @@ describe("execution safety workflow", () => {
   });
 
   test("execute marks the dry-run outbox sent without provider movement", async () => {
-    const store = createSqliteDevStore();
+    const store = createSqliteDevStore({ path: ":memory:" });
     const envelope = paymentEnvelope();
     await submitExecutionRequest({ store, envelope, actor: requester });
     const approved = await approveExecutionRequest({
@@ -103,7 +103,7 @@ describe("execution safety workflow", () => {
   });
 
   test("cancel, retry, and reconcile produce explicit workflow states", async () => {
-    const store = createSqliteDevStore();
+    const store = createSqliteDevStore({ path: ":memory:" });
     const envelope = paymentEnvelope();
     await submitExecutionRequest({ store, envelope, actor: requester });
     const approved = await approveExecutionRequest({
