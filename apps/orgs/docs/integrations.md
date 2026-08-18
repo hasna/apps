@@ -8,10 +8,10 @@ own source records that belong to sibling packages.
 
 | Domain | Source of Truth | orgs Responsibility |
 | --- | --- | --- |
-| Human, agent, service, and organization identity records | `open-identities` | Store `identityRef` pointers and use public IDs in snapshots. Do not copy documents, contact points, traits, voice, image, or private metadata. |
-| Project/workspace records, locations, and project-agent assignments | `open-projects` | Store `projectRef` pointers and graph ownership/stewardship edges. Do not duplicate workspace state or filesystem locations. |
-| Machine manifests, topology, workspace routes, and machine-project assignment envelopes | `open-machines` | Store `machineRef` pointers plus cacheable dispatch/resolver evidence. Treat stale machine refs as warnings. |
-| Live sessions and transient panes | `open-sessions` | Store optional resolver snapshots only. Do not treat live pane state as durable truth. |
+| Human, agent, service, and organization identity records | `identities` | Store `identityRef` pointers and use public IDs in snapshots. Do not copy documents, contact points, traits, voice, image, or private metadata. |
+| Project/workspace records, locations, and project-agent assignments | `projects` | Store `projectRef` pointers and graph ownership/stewardship edges. Do not duplicate workspace state or filesystem locations. |
+| Machine manifests, topology, workspace routes, and machine-project assignment envelopes | `machines` | Store `machineRef` pointers plus cacheable dispatch/resolver evidence. Treat stale machine refs as warnings. |
+| Live sessions and transient panes | `sessions` | Store optional resolver snapshots only. Do not treat live pane state as durable truth. |
 | Prompt dispatch and target validation | `open-dispatch` | Return candidate machine/target refs and refusal reasons. Dispatch still performs live target checks before delivery. |
 | Task orgs, reports-to fields, project roles, and todo assignments | `open-todos` | Provide bridge/import/export context. `open-todos` remains the task execution source of truth. |
 | Events and webhook delivery | `open-events` | Keep local audit JSONL now; future adapters may emit graph-change events through `open-events`. |
@@ -56,11 +56,11 @@ runtime checks.
 
 Bridge integrations should be explicit and reversible:
 
-- Import from `open-identities` by creating or refreshing member `identityRef`
+- Import from `identities` by creating or refreshing member `identityRef`
   fields.
-- Import from `open-projects` by creating project refs and optional ownership
+- Import from `projects` by creating project refs and optional ownership
   edges.
-- Import from `open-machines` by creating machine refs and resolver evidence.
+- Import from `machines` by creating machine refs and resolver evidence.
 - Import from `open-todos` by mapping task orgs and `reports_to` metadata into
   typed `reports_to` edges.
 - Export to `open-actions` as actor/context refs, not embedded member objects.
