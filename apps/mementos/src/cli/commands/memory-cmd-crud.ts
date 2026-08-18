@@ -639,8 +639,9 @@ export function registerCrudCommands(program: Command): void {
 
         // Try by ID first (exact/partial ID always unambiguous).
         // In api mode there is no local table to prefix-match against, so we
-        // don't open a local SQLite db; a full id is deleted directly below
-        // (via key-lookup fallthrough → direct delete).
+        // don't open a local SQLite db; the input is forwarded to the server
+        // below (via key-lookup fallthrough → direct delete), which resolves
+        // a unique prefix or exact id and 404s otherwise.
         const idMatch = isApiMode()
           ? null
           : resolvePartialId(getDatabase(), "memories", keyOrId);
@@ -658,10 +659,10 @@ export function registerCrudCommands(program: Command): void {
         const matches = getMemoriesByKey(keyOrId, opts.scope, opts.agent, opts.project);
 
         if (matches.length === 0) {
-          // api mode: no key match — the input may be a full cloud id (UUID).
-          // Attempt a direct delete (server returns false if absent).
-          const looksLikeId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(keyOrId);
-          if (isApiMode() && looksLikeId && deleteMemory(keyOrId)) {
+          // api mode: no key match — the input may be a cloud id (full UUID or
+          // a unique prefix). The server resolves it on delete and 404s
+          // otherwise, mirroring the local resolvePartialId path.
+          if (isApiMode() && keyOrId.length > 0 && deleteMemory(keyOrId)) {
             if (globalOpts.json) {
               outputJson({ deleted: keyOrId });
             } else {

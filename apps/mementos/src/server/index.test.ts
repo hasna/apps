@@ -285,6 +285,37 @@ describe("DELETE /api/memories/:id", () => {
     );
     expect(status).toBe(404);
   });
+
+  // The hosted path carries partial-id resolution: `mementos remove`/`forget`
+  // in api mode forward the operator's 8-char prefix to the server, and the
+  // server resolves a UNIQUE prefix exactly like the local path's
+  // resolvePartialId. A prefix that matches nothing (or matches more than one
+  // row) must 404 and delete nothing.
+  test("resolves a unique 8-char prefix id and deletes the row", async () => {
+    const createRes = await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({ key: "delete-prefix-route", value: "v" }),
+    });
+    expect(createRes.status).toBe(201);
+    const id = createRes.data.id as string;
+    const prefix = id.slice(0, 8);
+
+    const { status, data } = await api(`/api/memories/${prefix}`, {
+      method: "DELETE",
+    });
+    expect(status).toBe(200);
+    expect(data.deleted).toBe(true);
+
+    const getRes = await api(`/api/memories/${id}`);
+    expect(getRes.status).toBe(404);
+  });
+
+  test("returns 404 for a prefix that matches nothing", async () => {
+    const { status } = await api("/api/memories/ffffffff", {
+      method: "DELETE",
+    });
+    expect(status).toBe(404);
+  });
 });
 
 // ============================================================================
