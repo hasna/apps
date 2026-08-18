@@ -288,13 +288,14 @@ board:
 }
 ```
 
-Cloud-backed runtime support is explicit in storage status. The local SQLite
-registry and each project's local `project.db` remain the active runtime stores
-by default. A configured `HASNA_PROJECTS_DATABASE_URL` enables explicit global
-registry `projects storage push`, `pull`, and `sync` commands against Postgres;
-it does not move per-project canvases, data records, loop links, or asset files
-out of `$HASNA_PROJECTS_HOME/data/<workspace_id>/`. See
-`docs/cloud-storage-readiness-contract.md` for the migration approval gate.
+Cloud-backed runtime support is the storage flip. By default the client reads
+and writes the local SQLite registry (`HASNA_PROJECTS_DB_PATH` or
+`~/.hasna/projects/projects.db`). When `HASNA_PROJECTS_API_URL` and
+`HASNA_PROJECTS_API_KEY` are set, all registry reads and writes go to the
+hosted API instead; the flip does not move per-project canvases, data records,
+loop links, or asset files out of `$HASNA_PROJECTS_HOME/data/<workspace_id>/`.
+See the Storage Sync section and `docs/cloud-storage-readiness-contract.md` for
+the flip contract.
 
 `projects dashboard *` is the Projects-owned viewer surface for agent-managed
 project folders. It standardizes `.hasna/project/` inside the project path,
@@ -343,25 +344,49 @@ contexts.
 
 ## Storage Sync
 
-Set `HASNA_PROJECTS_DATABASE_URL` to your PostgreSQL connection string for
-runtime or smoke commands, and do not print the value. `PROJECTS_DATABASE_URL`
-remains available as a local/self-hosted fallback. This package ships no default
-database, cluster, or secret-manager identifier — the connection string is
-operator-supplied configuration only, loaded from your own secret store.
+Projects reads and writes either the local SQLite registry or the hosted HTTP
+API, selected entirely by environment.
+
+Local is the default. The client stores the project registry in SQLite at
+`HASNA_PROJECTS_DB_PATH` (or `~/.hasna/projects/projects.db`) and never touches
+Postgres.
+
+The flip routes all registry reads and writes to the hosted API:
 
 ```bash
-export HASNA_PROJECTS_DATABASE_URL="<your PostgreSQL connection string>"
+export HASNA_PROJECTS_API_URL="<base URL of the projects server>"  # /v1 is appended
+export HASNA_PROJECTS_API_KEY="<API key with projects:read and projects:write>"
 ```
 
-`projects storage status --json` includes a `readiness` object that separates
-the global registry sync target from local-only per-project `project.db` and
-local asset directories. `readiness.cloudBackedRuntimeReady` is false until an
-approval-backed migration adds Postgres tables/backfill for `project.db` data
-and an S3 adapter/backfill for project asset files.
+`HASNA_PROJECTS_STORAGE_MODE=cloud` makes the intent explicit. The deprecated
+aliases `self_hosted`, `remote`, and `hybrid` all map to `cloud` (the hyphen
+form `self-hosted` is accepted too). Without any explicit mode, the joint
+presence of `HASNA_PROJECTS_API_URL` plus `HASNA_PROJECTS_API_KEY` IS the flip
+signal and infers cloud. The unprefixed keys `PROJECTS_API_URL`,
+`PROJECTS_API_KEY`, and `PROJECTS_STORAGE_MODE` are accepted, and
+`HASNA_PROJECTS_MODE` / `PROJECTS_MODE` are valid mode keys.
 
-Before cutover, verify `projects storage status --json`, run a read-only smoke
-against the canonical database, and keep legacy sources read-only until the
-central rollback window closes.
+In cloud mode every registry command goes to `<API_URL>/v1` with the API key as
+a bearer token. The client carries only the API key — never a database DSN —
+and the key value is never logged, returned, or embedded in output.
+
+Misconfiguration is fail-closed. Cloud requested without
+`HASNA_PROJECTS_API_KEY` or without `HASNA_PROJECTS_API_URL` refuses to route,
+and commands hard-fail instead of silently reading the local dataset. An
+unknown mode value is an error: `Unknown storage mode: <value>. Use local or
+cloud.` Unsetting either half of the flip pair returns the client to local
+storage.
+
+The flip moves the global project registry only. Machine-local side effects
+(tmux sessions, git operations, directory creation, rendering) and per-project
+data stay on-box in both modes: canvases, data records, loop links, and asset
+files live in `$HASNA_PROJECTS_HOME/data/<workspace_id>/`.
+
+The server side of the flip is `projects-serve`. It runs against PostgreSQL and
+requires `HASNA_PROJECTS_DATABASE_URL` (or `PROJECTS_DATABASE_URL` /
+`DATABASE_URL`), failing fast without it. API keys are verified per request and
+scoped: `projects:read` for reads, `projects:write` for writes. See the HTTP
+API section below for endpoints and key issuance.
 
 `projects create --dry-run` is a true no-write creation plan. It returns planned DB writes, filesystem actions, tmux actions, verification steps, locks, and rollback records without writing rows or files. Creation cleanup remains available through MCP as `projects_cleanup_create`, removing only safe creation artifacts such as the project row, marker file, `.git`, and empty created directory.
 
@@ -530,8 +555,8 @@ directly (Amendment A1, pure-remote — no local cache or sync in the service).
 
 ```sh
 # apply migrations, then serve
-HASNA_PROJECTS_DATABASE_URL=postgres://… projects-serve migrate
-HASNA_PROJECTS_DATABASE_URL=postgres://… HASNA_PROJECTS_API_SIGNING_KEY=… projects-serve   # :8080
+HASNA_PROJECTS_DATABASE_URL=<postgres-connection-string> projects-serve migrate
+HASNA_PROJECTS_DATABASE_URL=<postgres-connection-string> HASNA_PROJECTS_API_SIGNING_KEY=<signing-secret> projects-serve   # :8080
 ```
 
 Endpoints:
