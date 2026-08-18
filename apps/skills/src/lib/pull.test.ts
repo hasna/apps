@@ -737,6 +737,31 @@ describe("pullSkills — verified bundle path", () => {
     }
   });
 
+  test("a bundle-less pull proves the revision against the SKILL.md it actually installs", async () => {
+    const root = tempRoot();
+    const oldMd = "---\nname: md-only-skill\ndescription: first\nkind: instruction\n---\n# v1\n";
+    const newMd = "---\nname: md-only-skill\ndescription: second\nkind: instruction\n---\n# v2\n";
+    // The metadata response carries revision r1 for oldMd, but by the time the pull
+    // fetches the SKILL.md the row has changed (newMd): the separately fetched bytes are
+    // what will be installed, and the declared revision does not identify them. The pull
+    // must fail closed rather than record r1 against newMd.
+    const meta = revisionMetaFor("md-only-skill", oldMd);
+    try {
+      const { results } = await pullSkills({
+        names: ["md-only-skill"],
+        rootDir: root,
+        client: fakeClient({
+          "md-only-skill": { md: newMd, meta },
+        }),
+      });
+      expect(results[0].success).toBe(false);
+      expect(results[0].error).toContain("Revision proof failed");
+      expect(existsSync(join(root, "md-only-skill"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a purged published slug on a bundle-less instance is reported, not reinstalled", async () => {
     const root = tempRoot();
     const source = makeBundleSkill("purged-md-only", BUNDLED_MD);

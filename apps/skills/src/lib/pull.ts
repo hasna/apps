@@ -260,11 +260,21 @@ async function pullOne(
     }
   }
 
-  // A declared revision must be PROVEN against the content actually received: the id is
-  // content-addressed, so recomputing it over the served metadata + this skill's bytes
-  // and comparing is what "pull can prove which revision it installed" means. A declared
-  // id that cannot be recomputed, or that recomputes to something else, fails closed.
-  const provenRevisionId = meta?.revisionId ? provenRevision(meta, slug, {}) : undefined;
+  // A declared revision must be PROVEN against the content actually INSTALLED: the id is
+  // content-addressed, so recomputing it over the served metadata + the exact SKILL.md
+  // bytes being written and comparing is what "pull can prove which revision it
+  // installed" means. The skillMd is fetched separately from the metadata, so the proof
+  // runs over the fetched bytes (the ones installed), never over the metadata's copy —
+  // if the row changed between the two requests, the recompute fails closed.
+  let provenRevisionId: string | undefined;
+  try {
+    provenRevisionId = meta?.revisionId ? provenRevision({ ...meta, skillMd }, slug, {}) : undefined;
+  } catch (error) {
+    if (error instanceof PullSkillError) {
+      return { name: slug, success: false, error: error.message };
+    }
+    throw error;
+  }
 
   const written = writeCorpusSkill({ name: slug, skillMd, meta }, corpusOptions);
   writePullMarker(written.path, {
@@ -284,14 +294,16 @@ async function pullOne(
 }
 
 /**
- * Prove a declared revision id against the content a pull actually received.
+ * Prove a declared revision id against the content a pull actually installs.
  *
  * The revision id is a sha-256 over a canonical serialisation of the row's published
- * content (src/lib/revision.ts). The client received that content as the metadata
- * payload plus the verified bundle bytes, so it can recompute the id and compare.
- * Equality is the proof "the recorded revision identifies the installed content";
- * a declared id that cannot be recomputed (missing canonical fields) or that
- * recomputes to a different value is a broken or lying instance and fails closed.
+ * content (src/lib/revision.ts). The client holds that content as the metadata payload
+ * plus the exact bytes to be written (the verified bundle bytes, or — on the
+ * metadata-only path — the separately fetched SKILL.md passed in via `meta.skillMd`),
+ * so it can recompute the id and compare. Equality is the proof "the recorded revision
+ * identifies the installed content"; a declared id that cannot be recomputed (missing
+ * canonical fields) or that recomputes to a different value is a broken or lying
+ * instance and fails closed.
  *
  * `bundle` carries the verified bytes' sha256 and length (or nothing on the
  * metadata-only path, where the row has no bundle).
