@@ -158,6 +158,53 @@ describe('CLI note commands over the HTTP transport', () => {
     }
   }, 30000);
 
+  test('notes list refuses local-only filters over the HTTP transport (fail closed)', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { spawnSync } = await import('node:child_process');
+    const repo = join(import.meta.dir, '..');
+    const dir = mkdtempSync(join(tmpdir(), 'notes-cli-filter-'));
+    const proc = Bun.spawn(['bun', join(repo, 'server/index.mjs')], {
+      env: {
+        ...process.env,
+        HASNA_NOTES_SERVER_PORT: '0',
+        HASNA_NOTES_SERVER_DB: join(dir, 'server.db'),
+        HASNA_NOTES_SERVER_AUTO_APPROVE: '1',
+        HASNA_NOTES_SERVER_DEV: '1',
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    try {
+      let out = '';
+      const reader = proc.stdout.getReader();
+      const decoder = new TextDecoder();
+      while (!/listening on (http:\/\/\S+)/.test(out)) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        out += decoder.decode(value);
+      }
+      const url = /listening on (http:\/\/\S+)/.exec(out)?.[1];
+      expect(url).toBeTruthy();
+      const started = await (await fetch(`${url}/api/v1/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'filter@example.test' }),
+      })).json();
+      const verified = await (await fetch(`${url}/api/v1/auth/verify`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'filter@example.test', code: started.devCode }),
+      })).json();
+      const res = spawnSync('bun', [join(repo, 'cli/notes.mjs'), 'list', '--query', 'needle', '--json'], {
+        env: { ...process.env, HASNA_NOTES_API_URL: url, HASNA_NOTES_API_KEY: verified.apiKey },
+        encoding: 'utf8',
+      });
+      expect(res.status).toBe(1);
+      expect(`${res.stdout}${res.stderr}`).toMatch(/does not support --query/);
+    } finally {
+      proc.kill();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
   test('notes --version prints the package version', () => {
     const repo = join(import.meta.dir, '..');
     const res = spawnSync('bun', [join(repo, 'cli/notes.mjs'), '--version'], { encoding: 'utf8' });

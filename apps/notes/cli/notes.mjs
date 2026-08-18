@@ -213,6 +213,22 @@ async function bodyFromOpts(opts) {
 
 async function commandList(opts, http) {
   if (http) {
+    // The dialect list endpoint supports limit (+ cursor paging) only. Filters
+    // that exist on the local store must fail loud over the wire rather than
+    // return unfiltered results dressed as filtered ones.
+    const unsupported = [
+      ['offset', opts.offset],
+      ['label', opts.label],
+      ['machine', opts.machine],
+      ['status', opts.status],
+      ['query', opts.query],
+    ].filter(([name, value]) => value !== undefined && value !== null && value !== 0);
+    if (unsupported.length) {
+      throw new Error(
+        `notes list over the HTTP API does not support --${unsupported[0][0]}; ` +
+          'the personalnotes/v1 list endpoint filters by limit only. Unset HASNA_NOTES_API_URL to use the local store filters.',
+      );
+    }
     const dialect = await http.listNotes({ limit: opts.limit || DEFAULT_LIMIT });
     const page = {
       items: dialect.data,
