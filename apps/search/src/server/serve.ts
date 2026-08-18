@@ -773,5 +773,5 @@ export function startServer(port: number, options: StartServerOptions = {}): voi
   // Keep the local file index fresh while the server runs.
   startBackgroundRefresh();
 
-  console.log(`open-search server running at http://${hostname}:${port}`);
+  console.log(`search server running at http://${hostname}:${port}`);
 }

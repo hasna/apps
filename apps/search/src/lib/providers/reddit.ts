@@ -42,7 +42,7 @@ async function getOAuthToken(): Promise<string> {
     headers: {
       Authorization: `Basic ${credentials}`,
       "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": "open-search/0.0.1",
+      "User-Agent": "search/0.0.1",
     },
     body: "grant_type=client_credentials",
   });
@@ -78,7 +78,7 @@ export class RedditProvider implements SearchProvider {
     const res = await fetch(`https://oauth.reddit.com/search?${params}`, {
       headers: {
         Authorization: `Bearer ${token}`,
-        "User-Agent": "open-search/0.0.1",
+        "User-Agent": "search/0.0.1",
       },
     });
 

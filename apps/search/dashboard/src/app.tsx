@@ -51,7 +51,7 @@ export function App() {
       {/* Header */}
       <header className="border-b px-6 py-3 flex items-center justify-between" style={{ borderColor: "var(--border)" }}>
         <div className="flex items-center gap-4">
-          <h1 className="text-lg font-bold">open-search</h1>
+          <h1 className="text-lg font-bold">search</h1>
           <nav className="flex gap-1">
             {tabs.map((t) => (
               <button
