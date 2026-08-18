@@ -400,7 +400,7 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       actor_name: z.string().optional().describe("Actor display name"),
       agent_id: z.string().optional().describe("Agent identifier for agent-created notes"),
       agent_name: z.string().optional().describe("Agent display name for agent-created notes"),
-      source: z.enum(["notes", "agent", "sync", "import", "machines", "unknown", "notes", "machines"]).optional().describe("Provenance source (legacy open-* values accepted on read)"),
+      source: z.enum(["notes", "open-notes", "agent", "sync", "import", "machines", "open-machines", "unknown"]).optional().describe("Provenance source (legacy open-* values open-notes/open-machines accepted on read)"),
       include_tailscale: z.boolean().optional().describe("Whether to probe tailscale while building context"),
     },
     async ({

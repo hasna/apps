@@ -45,7 +45,7 @@
         "source_authority": {
           "enum": [
             "machines",
-            "machines",
+            "open-machines",
             "manifest",
             "manifest_metadata",
             "live_topology",
@@ -1946,13 +1946,13 @@
         "source": {
           "enum": [
             "notes",
+            "open-notes",
             "agent",
             "sync",
             "import",
             "machines",
-            "unknown",
-            "notes",
-            "machines"
+            "open-machines",
+            "unknown"
           ]
         },
         "display_name": {
