@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { serializeOpenApiDocument } from "../api/index.js";
 import { healthPayload, readyPayload, versionPayload } from "./health.js";
 import { registerIdentityRoutes } from "./routes/identities.js";
 import { registerCredentialRoutes } from "./routes/credentials.js";
@@ -69,6 +70,7 @@ export function buildApp(): Hono {
   // System endpoints (§6.2).
   app.get("/health", (c) => c.json(healthPayload()));
   app.get("/version", (c) => c.json(versionPayload()));
+  app.get("/openapi.json", (c) => c.json(JSON.parse(serializeOpenApiDocument())));
   app.get("/ready", (c) => {
     const ready = readyPayload();
     return c.json({ status: ready.ready ? "ready" : "unavailable", ...(ready.reason ? { reason: ready.reason } : {}) }, ready.ready ? 200 : 503);

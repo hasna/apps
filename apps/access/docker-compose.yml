@@ -17,7 +17,6 @@ services:
     # and passes "access-serve" as a bogus arg). --package selects the correct bin.
     command: ["bunx", "--package", "@hasna/access", "access-serve"]
     environment:
-      HASNA_ACCESS_STORAGE_MODE: cloud
       HASNA_ACCESS_DATABASE_URL_FILE: /run/secrets/database_url
       HASNA_ACCESS_PORT: "3483"
       # Bind 0.0.0.0 so the published 3483 is reachable; the default loopback bind is
@@ -36,7 +35,6 @@ services:
     # the CLI and treat "access-mcp" as a bogus argument. (BUILD-SPEC §6.4)
     command: ["bunx", "--package", "@hasna/access", "access-mcp", "--http", "--port", "8887"]
     environment:
-      HASNA_ACCESS_STORAGE_MODE: cloud
       HASNA_ACCESS_DATABASE_URL_FILE: /run/secrets/database_url
       MCP_HTTP: "1"
       MCP_HTTP_PORT: "8887"
