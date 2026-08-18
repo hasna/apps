@@ -144,7 +144,7 @@ feedback stats
 feedback export --format jsonl --until 2026-12-31
 ```
 
-Use `--api-url` and `--token` to target an Hasna Feedback server API instead of
+Use `--api-url` and `--token` to target a Hasna Feedback server API instead of
 the on-box store, or set `FEEDBACK_API_URL` / `FEEDBACK_API_TOKEN` once so every
 command uses that server without retyping the flags. An explicit flag always
 beats the environment. The CLI connects either to its local SQLite-backed

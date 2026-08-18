@@ -8,7 +8,7 @@ import { LocalFeedbackStore } from "./storage.js";
 
 async function createTestClient() {
   const store = new LocalFeedbackStore({
-    dataDir: await mkdtemp(join(tmpdir(), "open-feedback-shipped-")),
+    dataDir: await mkdtemp(join(tmpdir(), "feedback-shipped-")),
     eventSink: null,
     taskSink: null,
   });

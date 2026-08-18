@@ -21,7 +21,7 @@ import type { FeedbackItem } from "./types.js";
  */
 
 async function tempStore(): Promise<LocalFeedbackStore> {
-  const dataDir = await mkdtemp(join(tmpdir(), "open-feedback-helpers-"));
+  const dataDir = await mkdtemp(join(tmpdir(), "feedback-helpers-"));
   return new LocalFeedbackStore({ dataDir });
 }
 

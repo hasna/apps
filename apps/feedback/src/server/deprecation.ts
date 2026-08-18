@@ -35,7 +35,7 @@ export const REMOVAL_VERSION = "0.4.0";
 
 /** Description for the `feedback serve` subcommand, scoped to what it can truthfully do. */
 export const SERVE_DESCRIPTION =
-  "Start the Open Feedback HTTP API for local development (local JSONL store only; no PostgreSQL support)";
+  "Start the Hasna Feedback HTTP API for local development (local JSONL store only; no PostgreSQL support)";
 
 /**
  * The warning text emitted by the deprecated bin.

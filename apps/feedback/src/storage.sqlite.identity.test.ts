@@ -17,7 +17,7 @@ import { SqliteFeedbackStore } from "./storage.sqlite.js";
  * trees, and `notify` is an unknown option pre-fix that is simply ignored.
  */
 async function tempDir(): Promise<string> {
-  return mkdtemp(join(tmpdir(), "open-feedback-ident-"));
+  return mkdtemp(join(tmpdir(), "feedback-ident-"));
 }
 
 function quietStore(dataDir: string): SqliteFeedbackStore {

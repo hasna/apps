@@ -56,7 +56,7 @@ export interface FeedbackApiTarget {
 }
 
 /**
- * Resolve which Open Feedback service a command talks to.
+ * Resolve which Hasna Feedback service a command talks to.
  *
  * `FEEDBACK_API_URL` exists so a fleet can be pointed at a hosted deployment
  * once, in the environment, instead of every agent and human remembering to
@@ -193,12 +193,12 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   const program = new Command();
   program
     .name("feedback")
-    .description("Collect and inspect Open Feedback entries")
+    .description("Collect and inspect Hasna Feedback entries")
     .version(VERSION);
 
   program
     .command("init")
-    .description("Create the local Open Feedback data directory")
+    .description("Create the local Hasna Feedback data directory")
     .action(() => {
       // Report the file the ACTIVE engine uses, not the JSONL log — with
       // SQLite as the default, printing feedback.jsonl here would send an
@@ -211,7 +211,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
 
   program
     .command("doctor")
-    .description("Check Open Feedback installation, storage, task sink, and remote target")
+    .description("Check Hasna Feedback installation, storage, task sink, and remote target")
     // Doctor's only output format is JSON. `--json` is accepted so callers
     // following the fleet-wide convention do not get an "unknown option" error.
     .option("--json", "Output JSON (default, accepted for convention parity)")
@@ -229,7 +229,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         host: options.host,
         port: Number.parseInt(options.port, 10),
       });
-      console.log(`Open Feedback API listening on http://${server.hostname}:${server.port}`);
+      console.log(`Hasna Feedback API listening on http://${server.hostname}:${server.port}`);
     });
 
   program
@@ -251,7 +251,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--app-version <version>", "App version or build id")
     .option("--env <environment>", "App environment")
     .option("--context <key=value...>", "Context key/value; can be repeated")
-    .option("--api-url <url>", "Remote Open Feedback API URL")
+    .option("--api-url <url>", "Remote Hasna Feedback API URL")
     .option("--token <token>", "API bearer token")
     .action(async (message: string, options: Record<string, string | string[] | undefined>) => {
       const metadata = mergeJsonObjects(parseMetadata(options.metadata as string | undefined), parseKeyValue(options.meta as string[] | undefined));
@@ -292,7 +292,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--since <date>", "Only entries created at or after this date")
     .option("--until <date>", "Only entries created at or before this date")
     .option("--limit <n>", "Limit results", "50")
-    .option("--api-url <url>", "Remote Open Feedback API URL")
+    .option("--api-url <url>", "Remote Hasna Feedback API URL")
     .option("--token <token>", "API bearer token")
     .action(async (options: { app?: string; status?: FeedbackStatus; tag?: string; search?: string; since?: string; until?: string; limit?: string; apiUrl?: string; token?: string }) => {
       const filter = commonFilter({ ...options, status: options.status ? parseFeedbackStatus(options.status) : undefined });
@@ -304,7 +304,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .command("show")
     .description("Show one feedback item")
     .argument("<id>", "Feedback id")
-    .option("--api-url <url>", "Remote Open Feedback API URL")
+    .option("--api-url <url>", "Remote Hasna Feedback API URL")
     .option("--token <token>", "API bearer token")
     .action(async (id: string, options: { apiUrl?: string; token?: string }) => {
       const client = maybeClient(options);
@@ -322,7 +322,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .description("Update feedback status")
     .argument("<id>", "Feedback id")
     .argument("<status>", "new, triaged, shipped, or closed")
-    .option("--api-url <url>", "Remote Open Feedback API URL")
+    .option("--api-url <url>", "Remote Hasna Feedback API URL")
     .option("--token <token>", "API bearer token")
     .action(async (id: string, status: string, options: { apiUrl?: string; token?: string }) => {
       const parsedStatus = parseFeedbackStatus(status);
@@ -341,7 +341,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .description("Mark feedback as shipped and link it to the changelog entry that shipped it")
     .argument("<id>", "Feedback id")
     .requiredOption("--changelog-ref <ref>", "Changelog entry id or URI (feedback → changelog linkage)")
-    .option("--api-url <url>", "Remote Open Feedback API URL")
+    .option("--api-url <url>", "Remote Hasna Feedback API URL")
     .option("--token <token>", "API bearer token")
     .action(async (id: string, options: { changelogRef: string; apiUrl?: string; token?: string }) => {
       const client = maybeClient(options);
@@ -413,7 +413,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   program
     .command("stats")
     .description("Show feedback stats")
-    .option("--api-url <url>", "Remote Open Feedback API URL")
+    .option("--api-url <url>", "Remote Hasna Feedback API URL")
     .option("--token <token>", "API bearer token")
     .action(async (options: { apiUrl?: string; token?: string }) => {
       const client = maybeClient(options);
@@ -431,7 +431,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--until <date>", "Only entries created at or before this date")
     .option("--limit <n>", "Limit results", "500")
     .option("--format <format>", "json or jsonl", "jsonl")
-    .option("--api-url <url>", "Remote Open Feedback API URL")
+    .option("--api-url <url>", "Remote Hasna Feedback API URL")
     .option("--token <token>", "API bearer token")
     .action(async (options: { app?: string; status?: FeedbackStatus; tag?: string; search?: string; since?: string; until?: string; limit?: string; format: string; apiUrl?: string; token?: string }) => {
       const filter = commonFilter({ ...options, status: options.status ? parseFeedbackStatus(options.status) : undefined });

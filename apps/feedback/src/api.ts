@@ -170,7 +170,7 @@ export function createFeedbackHandler(options: FeedbackApiOptions = {}): (reques
 
     try {
       if (request.method === "GET" && pathname === "/health") {
-        return withCors(jsonResponse({ ok: true, service: "open-feedback", version: VERSION }), corsOrigin);
+        return withCors(jsonResponse({ ok: true, service: "feedback", version: VERSION }), corsOrigin);
       }
 
       if (request.method === "POST" && pathname === "/v1/feedback") {

@@ -7,7 +7,7 @@ import type { FeedbackTaskRef } from "./types.js";
 import type { FeedbackTaskSink } from "./tasks.js";
 
 async function tempDir(): Promise<string> {
-  return mkdtemp(join(tmpdir(), "open-feedback-regression-"));
+  return mkdtemp(join(tmpdir(), "feedback-regression-"));
 }
 
 /**

@@ -13,7 +13,7 @@ function textFromResult(result: Awaited<ReturnType<ReturnType<typeof buildFeedba
 
 describe("feedback MCP tools", () => {
   test("registers tool definitions and submits feedback", async () => {
-    const store = new LocalFeedbackStore({ dataDir: await mkdtemp(join(tmpdir(), "open-feedback-mcp-")) });
+    const store = new LocalFeedbackStore({ dataDir: await mkdtemp(join(tmpdir(), "feedback-mcp-")) });
     const tools = buildFeedbackMcpTools(store);
     expect(tools.map((tool) => tool.name)).toContain("feedback_diagnostics");
     expect(tools.map((tool) => tool.name)).toContain("submit_feedback");

@@ -7,7 +7,7 @@ import { LocalFeedbackStore, createFeedbackStore, describeFeedbackStoreRuntime }
 import { SqliteFeedbackStore, migrateJsonlIntoSqlite, resolveFeedbackSqlitePath } from "./storage.sqlite.js";
 
 async function tempDir(): Promise<string> {
-  return mkdtemp(join(tmpdir(), "open-feedback-sqlite-"));
+  return mkdtemp(join(tmpdir(), "feedback-sqlite-"));
 }
 
 async function tempStore(): Promise<SqliteFeedbackStore> {

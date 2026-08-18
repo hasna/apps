@@ -7,7 +7,7 @@ import type { FeedbackTaskRef } from "./types.js";
 import type { FeedbackTaskSink } from "./tasks.js";
 
 async function tempDir(): Promise<string> {
-  return mkdtemp(join(tmpdir(), "open-feedback-tasks-"));
+  return mkdtemp(join(tmpdir(), "feedback-tasks-"));
 }
 
 function okSink(taskId = "task-1"): FeedbackTaskSink & { calls: number } {
