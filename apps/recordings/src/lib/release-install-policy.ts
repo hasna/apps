@@ -52,6 +52,27 @@ export type PreparedReleaseInstall = {
   cleanup: () => void;
 };
 
+/**
+ * Recorded strong reason for these release-path refusals (local-only-capability-
+ * removal workflow, 2026-08-18; reviewer-ruled — do not remove or relax this
+ * gate by assumption). The local-only artifact policy — ad-hoc or Developer ID
+ * signed, NON-NOTARIZED builds bound to one approved target machine
+ * (tailscale_node_id_sha256), built on a different authenticated Tailscale
+ * node, with signing acknowledgement and identity-migration controls — is a
+ * native macOS distribution policy, not a data-backend capability. The
+ * two-backend contract (local store vs hosted API) does not reach code
+ * signing: the signing identity is keychain-held on the build Mac
+ * (`security find-identity`, see src/native/Recordings/build.sh), so no
+ * hosted/server path can carry it. The release path IS the notarized
+ * counterpart (README.md: "Explicit local-only alternative when Developer ID
+ * credentials are unavailable"); it must keep rejecting the local-only fields
+ * so that only notarized, Team-ID-pinned, envelope-signed artifacts install
+ * fleet-wide through the root-owned update client. Relaxing this gate would
+ * let a non-notarized or ad-hoc artifact install on any machine — the
+ * supply-chain class this policy blocks. Behavior locks:
+ * src/__tests__/local-only-target-policy.test.ts,
+ * src/__tests__/cli.test.ts, src/__tests__/macos-artifact.test.ts.
+ */
 export function assertReleaseOnlyOptions(options: ReleaseOnlyOptions): void {
   if (options.approvedTarget !== "fleet") {
     throw new Error("release installs require --approved-target fleet");
@@ -220,6 +241,14 @@ function assertReleaseManifest(manifest: JsonObject, input: ReleaseInstallInput)
   ) {
     throw new Error("manifest Team ID does not match the operator-approved Team ID");
   }
+  // Recorded strong reason, same as assertReleaseOnlyOptions above (workflow
+  // 2026-08-18, reviewer-ruled): local-only policy fields describe a native
+  // macOS distribution policy (signing mode, approved machine binding, builder
+  // attestation, non-notarized state) that the release path must never accept,
+  // because a release install is what makes an artifact distributable
+  // fleet-wide through the root-owned update client. The local-only path stays
+  // a separate, acknowledged, single-target install (~/Applications, never the
+  // production root cohort).
   for (const localOnlyField of [
     "artifact_policy",
     "approved_target",
