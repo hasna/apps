@@ -1,5 +1,5 @@
 /**
- * Authenticated `/v1` routing for the open Todos CLI.
+ * Authenticated `/v1` routing for the Hasna Todos CLI.
  *
  * The client seam has exactly two transports: the local SQLite file (default)
  * or the hosted HTTP `/v1` authority. Selecting the http transport requires the
