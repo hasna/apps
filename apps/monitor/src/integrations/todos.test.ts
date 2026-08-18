@@ -32,6 +32,7 @@ interface CallRecord {
 function makeTransport(handlers: {
   [pattern: string]: {
     status: number;
+    method?: string;
     body?: unknown;
   };
 }): {
@@ -53,9 +54,16 @@ function makeTransport(handlers: {
     calls.push({ url, method, body });
 
     // Most specific pattern wins: "/v1/tasks/t1/comments" must match before
-    // the shorter "/v1/tasks" pattern.
+    // the shorter "/v1/tasks" pattern. A handler with an explicit method
+    // matches only that method, so a GET listTasks and a POST createTask on
+    // the same path can be scripted separately.
     const matches = Object.keys(handlers)
       .filter((pattern) => url.includes(pattern))
+      .filter(
+        (pattern) =>
+          handlers[pattern]!.method === undefined ||
+          handlers[pattern]!.method === method
+      )
       .sort((a, b) => b.length - a.length);
     const handler =
       matches.length > 0
@@ -208,6 +216,56 @@ describe("TodosAdapter.createTask", () => {
     expect(second.ok).toBe(false);
     expect(second.applied).toBe(false);
   });
+
+  it("concurrent calls with the same effect key perform exactly one client mutation", async () => {
+    let release: ((value: unknown) => void) | undefined;
+    let fetchCount = 0;
+    const gate = new Promise((r) => {
+      release = r;
+    });
+    const fetchImpl: typeof fetch = (async () => {
+      fetchCount++;
+      await gate;
+      return new Response(
+        JSON.stringify({ task: { id: "task-1", title: "X" } }),
+        { status: 201, headers: { "Content-Type": "application/json" } }
+      );
+    }) as unknown as typeof fetch;
+    const client = new TodosV1Client({ baseUrl: "http://todos.test", fetch: fetchImpl });
+    const adapter = makeAdapter(client);
+
+    const first = adapter.createTask("run-1:alert:cpu", { title: "X" });
+    const second = adapter.createTask("run-1:alert:cpu", { title: "X" });
+    // Give both calls time to enter apply() before the transport resolves.
+    await new Promise((r) => setTimeout(r, 10));
+    release!(undefined);
+
+    const [a, b] = await Promise.all([first, second]);
+    expect(fetchCount).toBe(1);
+    expect(a.ok).toBe(true);
+    expect(a.applied).toBe(true);
+    expect(b.ok).toBe(true);
+    // The joiner issued no client call of its own.
+    expect(b.applied).toBe(false);
+    expect(b.result).toEqual(a.result);
+  });
+
+  it("a replay of a failed REQUIRED effect rejects instead of resolving ok:false", async () => {
+    const transport = makeTransport({
+      "/v1/tasks": { status: 500, body: { error: "boom" } },
+    });
+    const adapter = makeAdapter(makeClient(transport), undefined, true);
+
+    await expect(adapter.createTask("run-1:alert:cpu", { title: "X" })).rejects.toThrow(
+      /500/
+    );
+    // Retrying the same required effect must keep rejecting — a replay that
+    // resolves ok:false would silently accept the earlier failure.
+    await expect(adapter.createTask("run-1:alert:cpu", { title: "X" })).rejects.toThrow(
+      /boom|500/
+    );
+    expect(transport.calls).toHaveLength(1);
+  });
 });
 
 // ── commentTask ────────────────────────────────────────────────────────────
@@ -352,5 +410,157 @@ describe("createTaskForAlert", () => {
       title: expect.stringContaining("ALERT"),
       project_id: "proj-1",
     });
+  });
+
+  it("distinguishes occurrences with the same synthetic id: 0 via triggered_at, so later incidents are not suppressed", async () => {
+    const transport = makeTransport({
+      "/v1/tasks?project_id=proj-1&limit=50&offset=0": {
+        status: 200,
+        method: "GET",
+        body: { tasks: [], total: 0 },
+      },
+      "/v1/tasks": {
+        status: 201,
+        method: "POST",
+        body: { task: { id: "task-N", title: "T" } },
+      },
+    });
+    const client = makeClient(transport);
+
+    // The MCP doctor caller emits every observation with id: 0; only
+    // triggered_at separates one occurrence from the next.
+    const first = makeAlert({ id: 0, triggered_at: 1_752_874_000 });
+    const second = makeAlert({ id: 0, triggered_at: 1_752_874_600 });
+
+    await createTaskForAlert(first, {
+      enabled: true,
+      project_id: "proj-1",
+      base_url: "http://todos.test",
+      client,
+    });
+    await createTaskForAlert(second, {
+      enabled: true,
+      project_id: "proj-1",
+      base_url: "http://todos.test",
+      client,
+    });
+
+    const createCalls = transport.calls.filter(
+      (c) => c.method === "POST" && c.url.includes("/v1/tasks")
+    );
+    expect(createCalls).toHaveLength(2);
+  });
+
+  it("pages past the first listTasks page when hunting for an open task", async () => {
+    const pageOne = Array.from({ length: 50 }, (_, i) => ({
+      id: `other-${i}`,
+      title: `Unrelated task ${i}`,
+      status: "pending",
+    }));
+    const transport = makeTransport({
+      "/v1/tasks?project_id=proj-1&limit=50&offset=0": {
+        status: 200,
+        method: "GET",
+        body: { tasks: pageOne, total: 51 },
+      },
+      "/v1/tasks?project_id=proj-1&limit=50&offset=50": {
+        status: 200,
+        method: "GET",
+        body: {
+          tasks: [
+            {
+              id: "open-51",
+              title: "ALERT: linux-node-a cpu_high — cpu at 98%",
+              status: "in_progress",
+            },
+          ],
+          total: 51,
+        },
+      },
+      "/v1/tasks": {
+        status: 201,
+        method: "POST",
+        body: { task: { id: "task-1", title: "T" } },
+      },
+    });
+    const client = makeClient(transport);
+
+    const out = await createTaskForAlert(makeAlert({ id: 20 }), {
+      enabled: true,
+      project_id: "proj-1",
+      base_url: "http://todos.test",
+      client,
+    });
+
+    const createCalls = transport.calls.filter(
+      (c) => c.method === "POST" && c.url.includes("/v1/tasks")
+    );
+    expect(createCalls).toHaveLength(0);
+    expect(out).toEqual({ ok: true, skipped: true });
+    // Both pages were read: the match lived on the second page.
+    expect(transport.calls.filter((c) => c.method === "GET")).toHaveLength(2);
+  });
+
+  it("stops paging at the reported total and creates when no open task matches", async () => {
+    const pageOne = Array.from({ length: 50 }, (_, i) => ({
+      id: `other-${i}`,
+      title: `Unrelated task ${i}`,
+      status: "pending",
+    }));
+    const transport = makeTransport({
+      "/v1/tasks?project_id=proj-1&limit=50&offset=0": {
+        status: 200,
+        method: "GET",
+        body: { tasks: pageOne, total: 55 },
+      },
+      "/v1/tasks?project_id=proj-1&limit=50&offset=50": {
+        status: 200,
+        method: "GET",
+        body: { tasks: [], total: 55 },
+      },
+      "/v1/tasks": {
+        status: 201,
+        method: "POST",
+        body: { task: { id: "task-1", title: "T" } },
+      },
+    });
+    const client = makeClient(transport);
+
+    const out = await createTaskForAlert(makeAlert({ id: 21 }), {
+      enabled: true,
+      project_id: "proj-1",
+      base_url: "http://todos.test",
+      client,
+    });
+
+    expect(out).toEqual({ ok: true });
+    const createCalls = transport.calls.filter(
+      (c) => c.method === "POST" && c.url.includes("/v1/tasks")
+    );
+    expect(createCalls).toHaveLength(1);
+  });
+
+  it("resolves ok:false with the error when creation fails (integration test gate)", async () => {
+    let calls = 0;
+    const fetchImpl: typeof fetch = (async () => {
+      calls++;
+      return new Response(JSON.stringify({ error: "boom" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const client = new TodosV1Client({ baseUrl: "http://todos.test", fetch: fetchImpl });
+
+    const out = await createTaskForAlert(makeAlert({ id: 22 }), {
+      enabled: true,
+      project_id: "proj-1",
+      base_url: "http://todos.test",
+      client,
+    });
+
+    expect(out.ok).toBe(false);
+    expect(out.error).toContain("500");
+    // The listTasks probe and the create attempt both went out.
+    expect(calls).toBeGreaterThanOrEqual(2);
   });
 });

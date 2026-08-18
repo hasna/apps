@@ -2450,7 +2450,15 @@ integrationsCmd
     try {
       if (name === "todos") {
         const { createTaskForAlert } = await import("../integrations/todos.js");
-        await createTaskForAlert(dummyAlert, integrations.todos!);
+        const out = await createTaskForAlert(dummyAlert, integrations.todos!);
+        if (!out.ok) {
+          console.error(chalk.red(`  Integration 'todos' test failed: ${out.error ?? "unknown error"}`));
+          process.exit(1);
+        }
+        if (out.skipped) {
+          console.log(chalk.dim(`  Integration 'todos' test passed (task creation skipped — an open test task already exists).`));
+          return;
+        }
       } else if (name === "conversations") {
         const { postAlertToSpace } = await import("../integrations/conversations.js");
         await postAlertToSpace(dummyAlert, integrations.conversations!);
