@@ -40,7 +40,7 @@ describe("schema migration", () => {
     expect(rows.map((row) => row.name)).toContain("idx_sessions_source_id");
   });
 
-  it("adds the machine column to a pre-existing DB created before it existed", () => {
+  it("adds machine and session_objects to a pre-existing DB", () => {
     // Simulate an old sessions table without the `machine` column.
     const db = new SqliteAdapter(":memory:");
     // Realistic pre-`machine` schema: every column the current indexes/triggers
@@ -61,6 +61,12 @@ describe("schema migration", () => {
     // Would throw "no such column: machine" if the migration didn't run.
     const row = db.prepare("SELECT machine FROM sessions WHERE id = 'x'").get();
     expect(row).toBeTruthy();
+    const objectTable = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_objects'",
+      )
+      .get();
+    expect(objectTable).toEqual({ name: "session_objects" });
     db.close();
   });
 

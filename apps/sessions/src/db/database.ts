@@ -52,6 +52,23 @@ const SESSION_INDEX_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_sessions_machine ON sessions(machine)`,
 ];
 
+const SESSION_OBJECT_SCHEMA_SQL = [
+  `CREATE TABLE IF NOT EXISTS session_objects (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    object_kind TEXT NOT NULL,
+    object_key TEXT NOT NULL UNIQUE,
+    source_digest TEXT NOT NULL,
+    size INTEGER NOT NULL CHECK(size >= 0),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'uploaded', 'failed')),
+    last_error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (session_id, object_kind)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_session_objects_retry
+     ON session_objects(status, updated_at)`,
+];
+
 /**
  * SQLite schema for the local session index (LocalStore). The self_hosted
  * cloud plane keeps its own Postgres schema under src/db/cloud/migrations.ts.
@@ -148,6 +165,8 @@ const SCHEMA: string[] = [
     synced_to_s3 INTEGER NOT NULL DEFAULT 0,
     UNIQUE(message_id, chunk_index)
   )`,
+
+  ...SESSION_OBJECT_SCHEMA_SQL,
 
   `CREATE TABLE IF NOT EXISTS ingestion_state (
     source TEXT NOT NULL,
@@ -257,6 +276,7 @@ function runMigrations(db: SqliteAdapter): void {
     // Column already exists — nothing to do.
   }
   migrateSessionSourceConstraint(db);
+  ensureSessionObjectsSchema(db);
   ensureSessionIndexes(db);
   for (const trigger of [
     "sessions_ai",
@@ -272,6 +292,10 @@ function runMigrations(db: SqliteAdapter): void {
     db.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
   }
   ensureFtsRowidRefs(db);
+}
+
+function ensureSessionObjectsSchema(db: SqliteAdapter): void {
+  for (const sql of SESSION_OBJECT_SCHEMA_SQL) db.exec(sql);
 }
 
 function ensureSessionIndexes(db: SqliteAdapter): void {
@@ -367,6 +391,7 @@ function countTables(db: SqliteAdapter): Record<string, number> {
     "sessions",
     "messages",
     "tool_calls",
+    "session_objects",
     "sessions_fts",
     "messages_fts",
     "tool_calls_fts",

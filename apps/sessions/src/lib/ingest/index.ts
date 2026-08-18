@@ -10,6 +10,7 @@ import { getFileState, setFileState, updateIngestionStats } from "../../db/inges
 import { registerMachine, recomputeMachineCounts } from "../../db/machines.js";
 import { getSessionsDir } from "../paths.js";
 import { ingestionStateMtime, type SessionParser } from "./types.js";
+import { enqueueStoredSessionObjectIfConfigured } from "../session-content-object.js";
 
 // Register the built-in parsers on import.
 registerParser(new ClaudeParser());
@@ -181,14 +182,18 @@ function ingestSourceUnlocked(source: string, opts: IngestOptions = {}): IngestR
 
         let fileSessions = 0;
         for (const ps of parsed.sessions) {
-          saveParsedSession(ps, { preservePreferredSnapshot: parser.preservePreferredSnapshots });
+          const session = saveParsedSession(ps, {
+            preservePreferredSnapshot: parser.preservePreferredSnapshots,
+          });
+          enqueueStoredSessionObjectIfConfigured(session.id);
           result.sessions++;
           fileSessions++;
         }
         for (const staged of parsed.stagedSessions ?? []) {
-          saveStagedParsedSession(staged, {
+          const saved = saveStagedParsedSession(staged, {
             preservePreferredSnapshot: parser.preservePreferredSnapshots,
           });
+          enqueueStoredSessionObjectIfConfigured(saved.session.id);
           result.sessions++;
           fileSessions++;
         }

@@ -63,6 +63,17 @@
       "openapi": "/openapi.json",
       "auth": "api-key (@hasna/contracts/auth)"
     },
+    "objectStore": {
+      "provider": "s3",
+      "status": "optional",
+      "objectKind": "normalized_content",
+      "bucketEnv": "HASNA_SESSIONS_S3_BUCKET",
+      "regionEnv": "HASNA_SESSIONS_S3_REGION",
+      "endpointEnv": "HASNA_SESSIONS_S3_ENDPOINT",
+      "prefixEnv": "HASNA_SESSIONS_S3_PREFIX",
+      "accessKeyIdSecretEnv": "HASNA_SESSIONS_S3_ACCESS_KEY_ID",
+      "secretAccessKeySecretEnv": "HASNA_SESSIONS_S3_SECRET_ACCESS_KEY"
+    },
     "sessionSources": [
       "claude",
       "codex",

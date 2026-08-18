@@ -20,6 +20,12 @@ export type MessageRole = (typeof MESSAGE_ROLES)[number];
 export const TOOL_CALL_STATUSES = ["success", "error", "timeout"] as const;
 export type ToolCallStatus = (typeof TOOL_CALL_STATUSES)[number];
 
+export const SESSION_OBJECT_KINDS = ["normalized_content"] as const;
+export type SessionObjectKind = (typeof SESSION_OBJECT_KINDS)[number];
+
+export const SESSION_OBJECT_STATUSES = ["pending", "uploaded", "failed"] as const;
+export type SessionObjectStatus = (typeof SESSION_OBJECT_STATUSES)[number];
+
 // ── Session ────────────────────────────────────────────────────────────
 
 export interface Session {
@@ -229,6 +235,28 @@ export interface SessionContentImport extends ParsedSession {
    * import refuses to replace existing cloud content with fewer child rows.
    */
   destructive?: SessionContentDestructiveIntent;
+}
+
+// ── Durable object-sync state ──────────────────────────────────────────
+
+export interface SessionObject {
+  session_id: string;
+  object_kind: SessionObjectKind;
+  object_key: string;
+  source_digest: string;
+  size: number;
+  status: SessionObjectStatus;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SessionObjectInsert {
+  session_id: string;
+  object_kind: SessionObjectKind;
+  object_key: string;
+  source_digest: string;
+  size: number;
 }
 
 // ── Errors ─────────────────────────────────────────────────────────────
