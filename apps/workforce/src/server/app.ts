@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { Context, Next } from "hono";
-import { resolveStorageMode } from "../config.js";
+import { serverBackend } from "../config.js";
 import { SYSTEM_AUTHORIZATION_CONTEXT, type AuthorizationContext } from "../services/authorization.js";
 import { toErrorEnvelope } from "../types/index.js";
 import { authenticateApiRequest, isApiAuthConfigured, toAuthorizationContext, type ApiPrincipal } from "./auth.js";
@@ -38,30 +38,30 @@ export function getCorsOrigins(): string[] {
   return raw.split(",").map((o) => o.trim()).filter(Boolean);
 }
 
-/** Auth is decoupled from storage mode: required on any non-loopback bind or cloud mode. */
+/** Auth is decoupled from the data backend: required on any non-loopback bind or PostgreSQL backend. */
 export function authRequired(): boolean {
   const nonLoopback = !isLoopback(getBindHost());
   let cloud = false;
   try {
-    cloud = resolveStorageMode() === "cloud";
+    cloud = serverBackend() === "postgresql";
   } catch {
     cloud = false;
   }
   return nonLoopback || cloud || isApiAuthConfigured();
 }
 
-/** Fail-closed guard: a cloud/non-loopback deployment MUST configure credentials. */
+/** Fail-closed guard: a PostgreSQL/non-loopback deployment MUST configure credentials. */
 export function assertServeSafety(): void {
   const nonLoopback = !isLoopback(getBindHost());
   let cloud = false;
   try {
-    cloud = resolveStorageMode() === "cloud";
+    cloud = serverBackend() === "postgresql";
   } catch {
     cloud = false;
   }
   if ((nonLoopback || cloud) && !isApiAuthConfigured()) {
     throw new Error(
-      "Refusing to serve /v1 without credentials on a cloud or non-loopback bind. " +
+      "Refusing to serve /v1 without credentials on a PostgreSQL or non-loopback bind. " +
         "Configure HASNA_WORKFORCE_API_CREDENTIALS (deny-by-default).",
     );
   }

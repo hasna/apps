@@ -1,4 +1,4 @@
-import { resolveStorageMode } from "../config.js";
+import { serverBackend } from "../config.js";
 import { getDatabase } from "../db/database.js";
 import { SYSTEM_AUTHORIZATION_CONTEXT, type AuthorizationContext } from "../services/authorization.js";
 import { authenticateApiRequest, toAuthorizationContext } from "../server/auth.js";
@@ -13,7 +13,7 @@ import { UnauthorizedError } from "../types/index.js";
 
 export interface CliContext {
   json: boolean;
-  mode: string;
+  backend: string;
   authCtx: AuthorizationContext;
 }
 
@@ -35,13 +35,13 @@ export function resolveCliAuthContext(): AuthorizationContext {
 export function buildCliContext(json: boolean): CliContext {
   // Touch the DB so schema/migrations are applied before the first command.
   getDatabase();
-  let mode = "local";
+  let backend = "sqlite";
   try {
-    mode = resolveStorageMode();
+    backend = serverBackend();
   } catch {
-    mode = "local";
+    backend = "sqlite";
   }
-  return { json, mode, authCtx: resolveCliAuthContext() };
+  return { json, backend, authCtx: resolveCliAuthContext() };
 }
 
 /** Print a result as canonical JSON (parity mode) or a compact human summary. */

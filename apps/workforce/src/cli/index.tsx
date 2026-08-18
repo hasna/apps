@@ -20,7 +20,7 @@ async function renderDashboard(): Promise<void> {
   const summary = {
     app: "@hasna/workforce",
     version: APP_VERSION,
-    mode: ctx.mode,
+    backend: ctx.backend,
     total_members: members.length,
     by_kind: counts,
   };
@@ -38,7 +38,7 @@ async function renderDashboard(): Promise<void> {
     e(
       Box,
       { flexDirection: "column", padding: 1 },
-      e(Text, { bold: true, color: "cyan" }, `@hasna/workforce v${APP_VERSION}  (mode: ${ctx.mode})`),
+      e(Text, { bold: true, color: "cyan" }, `@hasna/workforce v${APP_VERSION}  (backend: ${ctx.backend})`),
       e(Text, {}, `Members on roster: ${members.length}`),
       ...Object.entries(counts).map(([kind, n]) => e(Text, { key: kind }, `  ${kind}: ${n}`)),
       e(Text, { dimColor: true }, "Run `workforce --help` for commands."),

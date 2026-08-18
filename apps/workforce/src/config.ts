@@ -5,19 +5,22 @@ import { join } from "node:path";
 /**
  * Canonical Hasna Service Contract v1 storage config for @hasna/workforce.
  *
- * The server storage backend is `sqlite | postgresql` only (owner directive
- * 2026-07-29): SQLite at ~/.hasna/workforce/workforce.db when no DATABASE_URL
- * is configured; Postgres (the app-owned cloud store) when one is. The retired
+ * The server has exactly one technical switch: `sqlite | postgresql` (owner
+ * directive 2026-07-29). A configured `HASNA_WORKFORCE_DATABASE_URL` (or the
+ * `_FILE` variant, or the short `WORKFORCE_DATABASE_URL` alias) selects
+ * PostgreSQL; otherwise the on-box SQLite file at
+ * ~/.hasna/workforce/workforce.db is authoritative. The retired
  * HASNA_WORKFORCE_STORAGE_MODE variable is no longer read.
  */
 export const APP_NAME = "workforce";
-export const ENV_TOKEN = "WORKFORCE";
+/** Upper-snake env prefix, e.g. WORKFORCE in HASNA_WORKFORCE_DATABASE_URL. */
+export const ENV_PREFIX = "WORKFORCE";
 
-export type StorageMode = "local" | "cloud";
+export type ServerBackend = "sqlite" | "postgresql";
 
-const DB_URL_KEYS = [`HASNA_${ENV_TOKEN}_DATABASE_URL`, `${ENV_TOKEN}_DATABASE_URL`] as const;
-const DB_URL_FILE_KEYS = [`HASNA_${ENV_TOKEN}_DATABASE_URL_FILE`, `${ENV_TOKEN}_DATABASE_URL_FILE`] as const;
-const DB_PATH_KEYS = [`HASNA_${ENV_TOKEN}_DB_PATH`, `${ENV_TOKEN}_DB_PATH`] as const;
+const DB_URL_KEYS = [`HASNA_${ENV_PREFIX}_DATABASE_URL`, `${ENV_PREFIX}_DATABASE_URL`] as const;
+const DB_URL_FILE_KEYS = [`HASNA_${ENV_PREFIX}_DATABASE_URL_FILE`, `${ENV_PREFIX}_DATABASE_URL_FILE`] as const;
+const DB_PATH_KEYS = [`HASNA_${ENV_PREFIX}_DB_PATH`, `${ENV_PREFIX}_DB_PATH`] as const;
 
 type Env = Record<string, string | undefined>;
 
@@ -29,14 +32,14 @@ function firstEnv(env: Env, keys: readonly string[]): string | undefined {
   return undefined;
 }
 
-/** Whether a cloud DSN is *present* (env var or a file mount). Value is never read here. */
+/** Whether a PostgreSQL DSN is *present* (env var or a file mount). Value is never read here. */
 export function databaseUrlPresent(env: Env = process.env): boolean {
   return firstEnv(env, DB_URL_KEYS) !== undefined || firstEnv(env, DB_URL_FILE_KEYS) !== undefined;
 }
 
-/** Resolve the storage backend from the environment: Postgres when a DATABASE_URL is present, otherwise SQLite. */
-export function resolveStorageMode(env: Env = process.env): StorageMode {
-  return databaseUrlPresent(env) ? "cloud" : "local";
+/** Resolve the server data backend from the environment: PostgreSQL when a DATABASE_URL is present, otherwise SQLite. */
+export function serverBackend(env: Env = process.env): ServerBackend {
+  return databaseUrlPresent(env) ? "postgresql" : "sqlite";
 }
 
 /**

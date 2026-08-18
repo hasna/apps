@@ -9,11 +9,11 @@ export { buildApp } from "./server/app.js";
 export { buildServer } from "./mcp/index.js";
 export {
   APP_NAME,
-  ENV_TOKEN,
-  resolveStorageMode,
+  ENV_PREFIX,
+  serverBackend,
   resolveDbPath,
   databaseUrlPresent,
-  type StorageMode,
+  type ServerBackend,
 } from "./config.js";
 export { openDatabase, getDatabase, closeDatabase, resetDatabase } from "./db/database.js";
 export { ROSTER_EXPORT_SCHEMA, type RosterExport } from "./services/exports.js";

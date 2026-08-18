@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { databaseUrlPresent, resolveDbPath, resolveStorageMode } from "../../config.js";
+import { databaseUrlPresent, resolveDbPath, serverBackend } from "../../config.js";
 import { getDatabase } from "../../db/database.js";
 import { AUDIT_TABLES, SYNCABLE_TABLES } from "../../db/schema.js";
 import { PermissionDeniedError } from "../../types/index.js";
@@ -35,15 +35,15 @@ export function registerStorageTools(server: ToolRegistrar, ctx: ToolContext): v
     "Report redacted storage status (no secret values).",
     {},
     async () => {
-      let mode: string;
+      let backend: string;
       try {
-        mode = resolveStorageMode();
+        backend = serverBackend();
       } catch {
-        mode = "local";
+        backend = "sqlite";
       }
       // REDACTED payload only — never the DSN or full storage config.
       return jsonResult({
-        mode,
+        backend,
         dsn_present: databaseUrlPresent(),
         sqlite_path: resolveDbPath(),
         migrations_applied: migrationsApplied(),
@@ -81,17 +81,17 @@ export function registerStorageTools(server: ToolRegistrar, ctx: ToolContext): v
       const requested = tables ?? [...SYNCABLE_TABLES];
       const excluded = requested.filter((t) => AUDIT_TABLES.has(t));
       const eligible = requested.filter((t) => !AUDIT_TABLES.has(t) && (SYNCABLE_TABLES as readonly string[]).includes(t));
-      let mode: string;
+      let backend: string;
       try {
-        mode = resolveStorageMode();
+        backend = serverBackend();
       } catch {
-        mode = "local";
+        backend = "sqlite";
       }
-      if (mode !== "cloud" || !databaseUrlPresent()) {
+      if (backend !== "postgresql" || !databaseUrlPresent()) {
         return jsonResult({
           ok: false,
           op,
-          reason: "cloud not configured; set HASNA_WORKFORCE_DATABASE_URL to use the Postgres backend for seed/mirror.",
+          reason: "postgres not configured; set HASNA_WORKFORCE_DATABASE_URL to use the Postgres backend for seed/mirror.",
           tables: eligible,
           excluded_audit_tables: excluded,
         });
