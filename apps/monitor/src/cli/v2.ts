@@ -126,12 +126,15 @@ export function registerV2Commands(program: Command): void {
 
   slugCmd
     .command("create <slug>")
-    .description("Create a slug at revision 1")
+    .description("Create a slug at revision 1 (fails if the slug already exists)")
     .requiredOption("--file <path>", "path to the slug definition JSON")
     .option("-j, --json", "Output raw JSON")
     .action((slug: string, opts: { file: string; json?: boolean }) => {
       const definition = readDefinitionFile(opts.file);
-      const result = createService().define(slug, definition, { createdBy: "cli" });
+      const result = createService().define(slug, definition, {
+        createdBy: "cli",
+        createOnly: true,
+      });
       printResult(result, opts.json ?? false);
     });
 

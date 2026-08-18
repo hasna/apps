@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Database, SQLQueryBindings } from "bun:sqlite";
+import { canonicalJson } from "./definition.js";
 
 /**
  * monitor v2 — durable store over the 008_monitor_v2 tables (design §5).
@@ -227,7 +228,7 @@ export class MonitorStore {
         id,
         slugId,
         revision,
-        JSON.stringify(definition),
+        canonicalJson(definition),
         digest,
         Math.floor(Date.now() / 1000),
         createdBy
@@ -268,16 +269,27 @@ export class MonitorStore {
 
   // ── slug_control_requests ────────────────────────────────────────────────
 
-  getControlResult(
+  /**
+   * Look up a stored control result scoped by slug, idempotency key, AND
+   * operation — a key used for `start` must never replay a `stop` result.
+   * Returns the stored result plus the request digest so the caller can
+   * distinguish an exact replay from a conflicting reuse of the key.
+   */
+  getControlRequest(
     slugId: string,
-    idempotencyKey: string
-  ): string | null {
+    idempotencyKey: string,
+    operation: string
+  ): { result_json: string; request_digest: string } | null {
     const row = this.db
-      .prepare<{ result_json: string }, [string, string]>(
-        "SELECT result_json FROM slug_control_requests WHERE slug_id = ? AND idempotency_key = ?"
+      .prepare<
+        { result_json: string; request_digest: string },
+        [string, string, string]
+      >(
+        `SELECT result_json, request_digest FROM slug_control_requests
+         WHERE slug_id = ? AND idempotency_key = ? AND operation = ?`
       )
-      .get(slugId, idempotencyKey);
-    return row?.result_json ?? null;
+      .get(slugId, idempotencyKey, operation);
+    return row ?? null;
   }
 
   insertControlRequest(
@@ -377,6 +389,17 @@ export class MonitorStore {
         "SELECT COUNT(*) AS n FROM slug_runs WHERE slug_id = ? AND state = ?"
       )
       .get(slugId, state);
+    return row?.n ?? 0;
+  }
+
+  countActiveLeases(slugId: string): number {
+    const row = this.db
+      .prepare<{ n: number }, [string]>(
+        `SELECT COUNT(*) AS n FROM leases
+         WHERE revoked_at IS NULL
+           AND run_id IN (SELECT id FROM slug_runs WHERE slug_id = ?)`
+      )
+      .get(slugId);
     return row?.n ?? 0;
   }
 

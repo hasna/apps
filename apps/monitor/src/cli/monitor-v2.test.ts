@@ -20,6 +20,11 @@ let dir: string;
 let defPath: string;
 let invalidNamePath: string;
 let invalidShellPath: string;
+let invalidCronPath: string;
+let invalidTzPath: string;
+let validCronPath: string;
+let envShellBypassPath: string;
+let envBenignPath: string;
 
 type CliResult = {
   rc: number;
@@ -107,6 +112,84 @@ beforeAll(() => {
       2
     )
   );
+
+  invalidCronPath = join(dir, "invalid-cron.json");
+  writeFileSync(
+    invalidCronPath,
+    JSON.stringify(
+      makeDefinition({
+        cadence: { type: "cron", expression: "not a cron", timezone: "UTC" },
+      }),
+      null,
+      2
+    )
+  );
+
+  invalidTzPath = join(dir, "invalid-tz.json");
+  writeFileSync(
+    invalidTzPath,
+    JSON.stringify(
+      makeDefinition({
+        cadence: { type: "cron", expression: "*/5 * * * *", timezone: "Not/AZone" },
+      }),
+      null,
+      2
+    )
+  );
+
+  validCronPath = join(dir, "valid-cron.json");
+  writeFileSync(
+    validCronPath,
+    JSON.stringify(
+      makeDefinition({
+        cadence: { type: "cron", expression: "*/5 * * * *", timezone: "UTC" },
+      }),
+      null,
+      2
+    )
+  );
+
+  envShellBypassPath = join(dir, "env-shell-bypass.json");
+  writeFileSync(
+    envShellBypassPath,
+    JSON.stringify(
+      makeDefinition({
+        checks: [
+          {
+            id: "c1",
+            command: {
+              executable: "env",
+              args: ["bash", "-c", "echo hi"],
+              timeoutSeconds: 10,
+            },
+          },
+        ],
+      }),
+      null,
+      2
+    )
+  );
+
+  envBenignPath = join(dir, "env-benign.json");
+  writeFileSync(
+    envBenignPath,
+    JSON.stringify(
+      makeDefinition({
+        checks: [
+          {
+            id: "c1",
+            command: {
+              executable: "env",
+              args: ["FOO=1", "/bin/true"],
+              timeoutSeconds: 10,
+            },
+          },
+        ],
+      }),
+      null,
+      2
+    )
+  );
 });
 
 afterAll(() => {
@@ -135,6 +218,44 @@ describe("monitor slug lifecycle CLI acceptance fixture", () => {
     const j = asObj(r.json);
     expect(j.valid).toBe(false);
     expect(JSON.stringify(j.errors ?? [])).toMatch(/shell/i);
+  });
+
+  it("validate rejects an invalid cron expression", () => {
+    const r = run(["slug", "validate", invalidCronPath, "--json"]);
+    expect(r.rc).toBe(1);
+    const j = asObj(r.json);
+    expect(j.valid).toBe(false);
+    expect(JSON.stringify(j.errors ?? [])).toMatch(/cron/i);
+  });
+
+  it("validate rejects an invalid cron timezone", () => {
+    const r = run(["slug", "validate", invalidTzPath, "--json"]);
+    expect(r.rc).toBe(1);
+    const j = asObj(r.json);
+    expect(j.valid).toBe(false);
+    expect(JSON.stringify(j.errors ?? [])).toMatch(/cron|timezone/i);
+  });
+
+  it("validate accepts a valid cron cadence", () => {
+    const r = run(["slug", "validate", validCronPath, "--json"]);
+    expect(r.rc).toBe(0);
+    const j = asObj(r.json);
+    expect(j.valid).toBe(true);
+  });
+
+  it("validate rejects shell invocation through the env wrapper", () => {
+    const r = run(["slug", "validate", envShellBypassPath, "--json"]);
+    expect(r.rc).toBe(1);
+    const j = asObj(r.json);
+    expect(j.valid).toBe(false);
+    expect(JSON.stringify(j.errors ?? [])).toMatch(/shell/i);
+  });
+
+  it("validate accepts env with assignments and a non-shell command", () => {
+    const r = run(["slug", "validate", envBenignPath, "--json"]);
+    expect(r.rc).toBe(0);
+    const j = asObj(r.json);
+    expect(j.valid).toBe(true);
   });
 
   it("define creates the slug at revision 1", () => {

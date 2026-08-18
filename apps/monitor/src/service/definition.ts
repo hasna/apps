@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import CronExpressionParser from "cron-parser";
 import { z } from "zod";
 
 /**
@@ -61,20 +62,109 @@ export const commandSpecSchema = z
         message: "args must not invoke a shell ('-c' is shell mode)",
       });
     }
+    // `env` is a sanctioned wrapper that can prefix a real command with
+    // assignments and options. Resolve the effective command and apply the
+    // same shell-mode rejections to it, so 'executable: env, args: [bash,
+    // -c, ...]' cannot smuggle a shell past the checks above.
+    if (base === "env") {
+      if (
+        cmd.args.includes("-S") ||
+        cmd.args.includes("--split-string")
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["args"],
+          message:
+            "env -S splits a string into shell words; shell mode is not part of the v2 definition schema",
+        });
+        return;
+      }
+      const args = cmd.args;
+      let i = 0;
+      // env assignments: NAME=value
+      while (i < args.length) {
+        const assignment = args[i];
+        if (
+          assignment === undefined ||
+          !/^[A-Za-z_][A-Za-z0-9_]*=/.test(assignment)
+        )
+          break;
+        i++;
+      }
+      // env options: -i/--ignore-environment, -u/--unset NAME, -C DIR,
+      // then any remaining -flag, then an explicit --
+      for (;;) {
+        const a = args[i];
+        if (a === "-i" || a === "--ignore-environment") {
+          i += 1;
+          continue;
+        }
+        if (a === "-u" || a === "--unset" || a === "-C") {
+          i += 2;
+          continue;
+        }
+        if (a === "--") {
+          i += 1;
+          break;
+        }
+        if (a !== undefined && a.startsWith("-")) {
+          i += 1;
+          continue;
+        }
+        break;
+      }
+      if (i < args.length) {
+        const effective = args[i];
+        if (effective !== undefined) {
+          const effectiveBase =
+            effective.split("/").pop()?.toLowerCase() ?? "";
+          if (SHELL_EXECUTABLES.has(effectiveBase)) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["args"],
+              message: `executable 'env' resolves to a shell ('${effective}'); shell mode is not part of the v2 definition schema`,
+            });
+          }
+          if (args[i + 1] === "-c") {
+            ctx.addIssue({
+              code: "custom",
+              path: ["args"],
+              message: "args must not invoke a shell ('-c' is shell mode)",
+            });
+          }
+        }
+      }
+    }
   });
 
-export const cadenceSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("interval"),
-    seconds: z.number().int().positive().max(86400 * 7),
-    jitterSeconds: z.number().int().nonnegative().max(86400 * 7).optional(),
-  }),
-  z.object({
-    type: z.literal("cron"),
-    expression: z.string().min(1).max(512),
-    timezone: z.string().min(1).max(128),
-  }),
-]);
+export const cadenceSchema = z
+  .discriminatedUnion("type", [
+    z.object({
+      type: z.literal("interval"),
+      seconds: z.number().int().positive().max(86400 * 7),
+      jitterSeconds: z.number().int().nonnegative().max(86400 * 7).optional(),
+    }),
+    z.object({
+      type: z.literal("cron"),
+      expression: z.string().min(1).max(512),
+      timezone: z.string().min(1).max(128),
+    }),
+  ])
+  .superRefine((cadence, ctx) => {
+    if (cadence.type !== "cron") return;
+    try {
+      CronExpressionParser.parse(cadence.expression, {
+        tz: cadence.timezone,
+        currentDate: new Date(),
+      });
+    } catch (err) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["expression"],
+        message: `invalid cron schedule: ${(err as Error).message}`,
+      });
+    }
+  });
 
 const checkSchema = z
   .object({
@@ -172,9 +262,30 @@ export function validateDefinition(value: unknown): ValidateResult {
 }
 
 /**
- * Canonical definition digest: sha256 of the JSON re-serialization of the
- * validated definition. Immutable per revision.
+ * Canonical JSON serialization: object keys are sorted recursively, arrays
+ * keep their order, primitives serialize exactly. Two definitions that differ
+ * only in key ordering (or in fields a strict schema would have defaulted)
+ * serialize identically.
+ */
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record).sort();
+    return `{${keys
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * Canonical definition digest: sha256 of the canonical JSON re-serialization
+ * of the validated definition. Immutable per definition content; key
+ * reordering or omitted defaulted fields cannot mint a new revision.
  */
 export function definitionDigest(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
 }

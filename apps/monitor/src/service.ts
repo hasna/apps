@@ -1,7 +1,11 @@
+import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import CronExpressionParser from "cron-parser";
 import {
+  SLUG_NAME_PATTERN,
+  canonicalJson,
   definitionDigest,
+  slugDefinitionSchema,
   validateDefinition,
   type SlugDefinition,
   type ValidateResult,
@@ -131,16 +135,40 @@ export class MonitorService {
   define(
     slugName: string,
     definition: unknown,
-    opts: { createdBy?: string; ifRevision?: number } = {}
+    opts: { createdBy?: string; ifRevision?: number; createOnly?: boolean } = {}
   ): DefineResult | ErrorResult {
-    const parsed = validateDefinition(definition);
-    if (!parsed.valid) {
-      return this.error(slugName, `invalid definition: ${parsed.errors.join("; ")}`);
+    if (!SLUG_NAME_PATTERN.test(slugName)) {
+      return this.error(
+        slugName,
+        `invalid slug name: ${slugName} (must match ^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$)`
+      );
     }
 
-    const def = definition as SlugDefinition;
+    const parsed = slugDefinitionSchema.safeParse(definition);
+    if (!parsed.success) {
+      const errors = parsed.error.issues.map((issue) => {
+        const path = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+        return `${path}: ${issue.message}`;
+      });
+      return this.error(slugName, `invalid definition: ${errors.join("; ")}`);
+    }
+
+    // The slug identity is the definition's identity: a definition named
+    // `other-slug` can never be stored under `this-slug`.
+    const def = parsed.data;
+    if (def.name !== slugName) {
+      return this.error(
+        slugName,
+        `definition name '${def.name}' does not match slug '${slugName}'`
+      );
+    }
+
     const digest = definitionDigest(def);
     const existing = this.store.getSlugByName(slugName);
+
+    if (existing && opts.createOnly) {
+      return this.error(slugName, `slug already exists: ${slugName}`);
+    }
 
     if (!existing) {
       if (opts.ifRevision !== undefined && opts.ifRevision !== 1) {
@@ -281,12 +309,16 @@ export class MonitorService {
       return this.error(slugName, `slug not found: ${slugName}`);
     }
 
+    const normalizedStart = { nextCadence: !!opts.nextCadence };
     if (opts.idempotencyKey) {
-      const replayed = this.store.getControlResult(slug.id, opts.idempotencyKey);
-      if (replayed) {
-        const parsed = JSON.parse(replayed) as ControlResult;
-        return { ...parsed, code: "idempotent_replay" };
-      }
+      const replayed = this.replayOrConflict(
+        slug.id,
+        slugName,
+        opts.idempotencyKey,
+        "start",
+        normalizedStart
+      );
+      if (replayed) return replayed;
     }
 
     const active = this.store.getActiveRevision(slug.id);
@@ -337,7 +369,7 @@ export class MonitorService {
         slug.id,
         opts.idempotencyKey,
         "start",
-        `${slug.desired_state}:${revision}`,
+        this.requestDigest("start", normalizedStart),
         JSON.stringify(result)
       );
     }
@@ -359,12 +391,20 @@ export class MonitorService {
       return this.error(slugName, `slug not found: ${slugName}`);
     }
 
+    const normalizedStop = {
+      cancel: !!opts.cancel,
+      wait: !!opts.wait,
+      timeoutMs: opts.timeoutMs ?? null,
+    };
     if (opts.idempotencyKey) {
-      const replayed = this.store.getControlResult(slug.id, opts.idempotencyKey);
-      if (replayed) {
-        const parsed = JSON.parse(replayed) as ControlResult;
-        return { ...parsed, code: "idempotent_replay" };
-      }
+      const replayed = this.replayOrConflict(
+        slug.id,
+        slugName,
+        opts.idempotencyKey,
+        "stop",
+        normalizedStop
+      );
+      if (replayed) return replayed;
     }
 
     const active = this.store.getActiveRevision(slug.id);
@@ -438,7 +478,7 @@ export class MonitorService {
         slug.id,
         opts.idempotencyKey,
         "stop",
-        `${slug.desired_state}:${revision}`,
+        this.requestDigest("stop", normalizedStop),
         JSON.stringify(result)
       );
     }
@@ -460,12 +500,20 @@ export class MonitorService {
       return this.error(slugName, `slug not found: ${slugName}`);
     }
 
+    const normalizedRestart = {
+      cancel: !!opts.cancel,
+      wait: !!opts.wait,
+      timeoutMs: opts.timeoutMs ?? null,
+    };
     if (opts.idempotencyKey) {
-      const replayed = this.store.getControlResult(slug.id, opts.idempotencyKey);
-      if (replayed) {
-        const parsed = JSON.parse(replayed) as ControlResult;
-        return { ...parsed, code: "idempotent_replay" };
-      }
+      const replayed = this.replayOrConflict(
+        slug.id,
+        slugName,
+        opts.idempotencyKey,
+        "restart",
+        normalizedRestart
+      );
+      if (replayed) return replayed;
     }
 
     const active = this.store.getActiveRevision(slug.id);
@@ -474,18 +522,9 @@ export class MonitorService {
     }
     const revision = active.revision;
 
-    if (slug.desired_state === "running") {
-      return {
-        accepted: true,
-        code: "already_running",
-        slug: slugName,
-        revision,
-        state: "running",
-        run_id: null,
-        execution_proven: false,
-      };
-    }
-
+    // --cancel: cancel queued work and revoke active leases before the new
+    // epoch starts. This runs on the running path too — a restart is never a
+    // no-op.
     if (opts.cancel) {
       this.store.setSlugState(slug.id, "stopped");
       this.store.incrementExecutionEpoch(slug.id);
@@ -493,8 +532,29 @@ export class MonitorService {
       this.store.revokeActiveLeasesForSlug(slug.id);
     }
 
-    this.store.setSlugState(slug.id, "running");
+    // --wait: settle in-flight work before claiming a restart. If the drain
+    // does not finish inside the timeout, report drain_pending honestly and
+    // do not claim a restart.
+    if (opts.wait) {
+      const drained = this.waitForDrain(slug.id, slugName, revision, opts.timeoutMs);
+      if (drained.code === "drain_pending") {
+        if (opts.idempotencyKey) {
+          this.store.insertControlRequest(
+            slug.id,
+            opts.idempotencyKey,
+            "restart",
+            this.requestDigest("restart", normalizedRestart),
+            JSON.stringify(drained)
+          );
+        }
+        return drained;
+      }
+    }
+
+    // Fence the previous execution epoch regardless of the previous desired
+    // state: in-flight work under an older epoch is stale by construction.
     this.store.incrementExecutionEpoch(slug.id);
+    this.store.setSlugState(slug.id, "running");
 
     const result: ControlResult = {
       accepted: true,
@@ -511,7 +571,7 @@ export class MonitorService {
         slug.id,
         opts.idempotencyKey,
         "restart",
-        `${slug.desired_state}:${revision}`,
+        this.requestDigest("restart", normalizedRestart),
         JSON.stringify(result)
       );
     }
@@ -598,19 +658,65 @@ export class MonitorService {
     };
   }
 
-  private cancelQueuedRuns(slugId: string): number {
-    const queued = this.store
-      .listRuns(slugId, { cursor: null, limit: MAX_PAGE_LIMIT })
-      .entries.filter((run) => ["admitted", "retry_wait"].includes(run.state));
-    for (const run of queued) {
-      const receipt = this.store.insertReceipt(
-        run.id,
-        "cancelled",
-        "cancelled_before_claim"
+  /**
+   * Operation-scoped idempotency: an idempotency key replays only the exact
+   * stored request (same operation, same normalized request digest). Reusing
+   * a key for a different request is a conflict, not a replay — otherwise a
+   * key captured by `start` would silently replay that start's result for a
+   * later `stop`.
+   */
+  private replayOrConflict(
+    slugId: string,
+    slugName: string,
+    key: string,
+    operation: "start" | "stop" | "restart",
+    normalized: Record<string, unknown>
+  ): ControlResult | ErrorResult | null {
+    const digest = this.requestDigest(operation, normalized);
+    const stored = this.store.getControlRequest(slugId, key, operation);
+    if (!stored) return null;
+    if (stored.request_digest !== digest) {
+      return this.error(
+        slugName,
+        `idempotency key '${key}' was already used for a different ${operation} request`
       );
-      this.store.setRunTerminal(run.id, "cancelled", receipt.id);
     }
-    return queued.length;
+    const parsed = JSON.parse(stored.result_json) as ControlResult;
+    return { ...parsed, code: "idempotent_replay" };
+  }
+
+  private requestDigest(
+    operation: string,
+    normalized: Record<string, unknown>
+  ): string {
+    return createHash("sha256")
+      .update(canonicalJson({ operation, ...normalized }))
+      .digest("hex");
+  }
+
+  private cancelQueuedRuns(slugId: string): number {
+    let cancelled = 0;
+    let cursor: string | null = null;
+    // Follow the cursor to exhaustion: a single page at MAX_PAGE_LIMIT would
+    // leave every queued run beyond the first 1,000 non-terminal while the
+    // slug is reported stopped.
+    do {
+      const page = this.store.listRuns(slugId, { cursor, limit: MAX_PAGE_LIMIT });
+      const queued = page.entries.filter((run) =>
+        ["admitted", "retry_wait"].includes(run.state)
+      );
+      for (const run of queued) {
+        const receipt = this.store.insertReceipt(
+          run.id,
+          "cancelled",
+          "cancelled_before_claim"
+        );
+        this.store.setRunTerminal(run.id, "cancelled", receipt.id);
+      }
+      cancelled += queued.length;
+      cursor = page.next_cursor;
+    } while (cursor);
+    return cancelled;
   }
 
   private waitForDrain(
@@ -637,7 +743,11 @@ export class MonitorService {
         revision,
         state: "draining",
         run_id: null,
-        execution_proven: true,
+        // Zero pending runs is not execution proof: a slug that never ran
+        // would claim a proven worker transition on this branch alone.
+        // Proven only when a terminal receipt independently confirms an
+        // observed worker and run transition.
+        execution_proven: this.store.hasReceiptForSlug(slugId),
         pending_runs: 0,
       };
     }
@@ -664,11 +774,19 @@ export class MonitorService {
     const running = this.store.countRunsByState(slug.id, "running");
     const retryWait = this.store.countRunsByState(slug.id, "retry_wait");
     const terminal = this.store.countRunsByState(slug.id, "terminal");
+    const activeLeases = this.store.countActiveLeases(slug.id);
     const lastReceipt = this.store.getLatestReceipt(slug.id);
+    // observed_state is read from the execution plane (runs and leases),
+    // never from the desired control state: right after start, with no
+    // worker having claimed anything, the slug is observed idle even though
+    // its desired state is running.
+    const executing = running + leased + activeLeases;
+    const observed_state =
+      executing > 0 ? "running" : admitted + retryWait > 0 ? "queued" : "idle";
     return {
       slug: slug.name,
       desired_state: slug.desired_state,
-      observed_state: slug.desired_state,
+      observed_state,
       active_revision: active?.revision ?? null,
       next_due_at: def ? this.nextDueAt(def, nowSec) : null,
       queue_depth: admitted,

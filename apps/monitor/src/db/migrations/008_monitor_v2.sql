@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS slug_control_requests (
   request_digest  TEXT    NOT NULL,
   result_json     TEXT    NOT NULL,
   created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
-  UNIQUE(slug_id, idempotency_key),
+  UNIQUE(slug_id, idempotency_key, operation),
   FOREIGN KEY (slug_id) REFERENCES slugs(id) ON DELETE CASCADE
 );
 
