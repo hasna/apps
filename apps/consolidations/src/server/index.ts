@@ -17,7 +17,35 @@ function assertAuthSafe(): void {
   }
 }
 
+function printHelp(): void {
+  console.log(`Usage: consolidations-serve [options]
+
+Start the @hasna/consolidations HTTP API server.
+
+Options:
+  -V, --version   output the version number
+  -h, --help      display help for command
+
+Environment:
+  HASNA_CONSOLIDATIONS_PORT           HTTP port to bind (default 3488)
+  HASNA_CONSOLIDATIONS_BIND_HOST      Hostname to bind (default 127.0.0.1)
+  HASNA_CONSOLIDATIONS_BACKEND        Data backend: sqlite | postgresql
+  HASNA_CONSOLIDATIONS_DB_PATH        SQLite database path
+  HASNA_CONSOLIDATIONS_DATABASE_URL   PostgreSQL DSN (implies postgresql)
+  HASNA_CONSOLIDATIONS_API_CREDENTIALS  API credentials for non-loopback binds`);
+}
+
 if (import.meta.main) {
+  // Answer --help/--version without binding a socket (recordings pattern).
+  // These must run before assertAuthSafe: help is reachable with no credentials.
+  if (process.argv.includes("--version") || process.argv.includes("-V")) {
+    console.log(APP_VERSION);
+    process.exit(0);
+  }
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    printHelp();
+    process.exit(0);
+  }
   assertAuthSafe();
   const app = createApp();
   const port = getPort();
