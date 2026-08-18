@@ -318,4 +318,152 @@ describe("loops native adapter (MON-V2-12)", () => {
     expect(second.pointer!.id).toBe(first.pointer!.id);
     expect((await client.list()).length).toBe(1);
   });
+
+  test("a held cross-process effect fence fails closed instead of racing the holder", async () => {
+    const store = new Store(":memory:");
+    const client = makeClient(store);
+    const config = makeConfig();
+    const adapter = new LoopsIntegration(client, config);
+
+    // another process holds the fence for this effect key
+    const held = await config.store.claim(loopsEffectKey(ctx()), 60_000);
+    expect(held).not.toBeNull();
+
+    const result = await adapter.register(ctx(), DEFINITION);
+
+    expect(result.state).toBe("failed");
+    expect(result.lastErrorClass).toBe("execution_error");
+    expect(result.pointer).toBeUndefined();
+    // nothing was created while the fence is held
+    expect((await client.list()).length).toBe(0);
+    await config.store.release(loopsEffectKey(ctx()), held!.token);
+  });
+
+  test("concurrent different definitions are not coalesced — the second request lands", async () => {
+    const store = new Store(":memory:");
+    const client = makeClient(store);
+    const config = makeConfig();
+    const adapterA = new LoopsIntegration(client, config);
+    const adapterB = new LoopsIntegration(client, config);
+
+    const [first, second] = await Promise.all([
+      adapterA.register(ctx(), DEFINITION),
+      adapterB.register(ctx(), CHANGED_DEFINITION),
+    ]);
+
+    // each caller receives the outcome of its own request, never the other's
+    expect(first.requestDigest).toBe(loopRequestDigest(DEFINITION));
+    expect(second.requestDigest).toBe(loopRequestDigest(CHANGED_DEFINITION));
+    expect(second.state).toBe("confirmed");
+    // final state: one live loop carrying the changed cadence; the stale
+    // loop retired after the replacement was proven
+    const loops = await client.list({ includeArchived: true });
+    const active = loops.filter((loop) => !loop.archivedAt);
+    expect(active.length).toBe(1);
+    expect(active[0]!.schedule).toEqual({ type: "cron", expression: "*/1 * * * *" });
+    expect(loops.length).toBe(2);
+  });
+
+  test("a timed-out create that committed is adopted on retry — never duplicated", async () => {
+    const store = new Store(":memory:");
+    const client = makeClient(store);
+    const config = makeConfig();
+    const adapter = new LoopsIntegration(client, config);
+
+    // the hosted create COMMITS the loop, then the response times out
+    const createSpy = spyOn(client, "create").mockImplementation(async (input) => {
+      const committed = await new LoopsClient({ store, runnerId: "monitor-test" }).create(input);
+      void committed;
+      const timeout = new Error("operation timed out");
+      timeout.name = "TimeoutError";
+      throw timeout;
+    });
+
+    const first = await adapter.register(ctx(), DEFINITION);
+    expect(first.state).toBe("unknown");
+    expect(first.lastErrorClass).toBe("timeout");
+    expect(first.externalId).toBeNull();
+
+    // retry with the same definition: reconcile by label, do not create again
+    const retry = await adapter.register(ctx(), DEFINITION);
+    expect(retry.state).toBe("confirmed");
+    expect(retry.deduplicated).toBe(true);
+    expect(retry.pointer).toBeDefined();
+    expect((await client.list()).length).toBe(1);
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    // the persisted record now carries the adopted loop id
+    const record = await config.store.get(loopsEffectKey(ctx()));
+    expect(record!.externalId).toBe(retry.pointer!.id);
+  });
+
+  test("a failed replacement never archives the working loop — prove before replace", async () => {
+    const store = new Store(":memory:");
+    const client = makeClient(store);
+    const config = makeConfig();
+    const adapter = new LoopsIntegration(client, config);
+
+    const first = await adapter.register(ctx(), DEFINITION);
+    expect(first.state).toBe("confirmed");
+
+    const createSpy = spyOn(client, "create").mockImplementation(async () => {
+      const err = new Error("invalid schedule");
+      err.name = "ValidationError";
+      throw err;
+    });
+    const replaced = await adapter.register(ctx(), CHANGED_DEFINITION);
+    expect(replaced.state).toBe("failed");
+    expect(replaced.lastErrorClass).toBe("invalid_input");
+
+    // the original loop is still live with its original cadence
+    const still = await client.get(first.pointer!.id);
+    expect(still.archivedAt).toBeUndefined();
+    expect(still.schedule).toEqual({ type: "cron", expression: "*/5 * * * *" });
+
+    // retry with create restored: the stale loop is archived only after the
+    // new loop exists
+    createSpy.mockRestore();
+    const retried = await adapter.register(ctx(), CHANGED_DEFINITION);
+    expect(retried.state).toBe("confirmed");
+    expect(retried.pointer!.id).not.toBe(first.pointer!.id);
+    const stale = await client.get(first.pointer!.id);
+    expect(stale.archivedAt).toBeTruthy();
+    const live = await client.get(retried.pointer!.id);
+    expect(live.archivedAt).toBeFalsy();
+    expect(live.schedule).toEqual({ type: "cron", expression: "*/1 * * * *" });
+  });
+
+  test("timeout reconcile never adopts a live loop carrying a different definition", async () => {
+    const store = new Store(":memory:");
+    const client = makeClient(store);
+    const config = makeConfig();
+    const adapter = new LoopsIntegration(client, config);
+
+    // confirmed five-minute loop
+    const first = await adapter.register(ctx(), DEFINITION);
+    expect(first.state).toBe("confirmed");
+
+    // changed one-minute request times out WITHOUT committing
+    const createSpy = spyOn(client, "create").mockImplementation(async () => {
+      const timeout = new Error("operation timed out");
+      timeout.name = "TimeoutError";
+      throw timeout;
+    });
+    const attempted = await adapter.register(ctx(), CHANGED_DEFINITION);
+    expect(attempted.state).toBe("unknown");
+    expect(attempted.lastErrorClass).toBe("timeout");
+
+    createSpy.mockRestore();
+    // retry of the changed request: the old loop carries the OLD definition,
+    // so it must NOT be adopted as the new effect — a fresh loop is proven,
+    // then the stale one is retired
+    const retried = await adapter.register(ctx(), CHANGED_DEFINITION);
+    expect(retried.state).toBe("confirmed");
+    expect(retried.pointer!.id).not.toBe(first.pointer!.id);
+    const stale = await client.get(first.pointer!.id);
+    expect(stale.archivedAt).toBeTruthy();
+    const live = await client.get(retried.pointer!.id);
+    expect(live.archivedAt).toBeFalsy();
+    expect(live.schedule).toEqual({ type: "cron", expression: "*/1 * * * *" });
+    expect((await client.list({ includeArchived: true })).length).toBe(2);
+  });
 });
