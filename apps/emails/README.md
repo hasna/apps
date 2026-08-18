@@ -4,7 +4,7 @@ Open-source email infrastructure for local SQLite workflows and operator-owned s
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-> **This product is `open-emails`. Mailery is not a name for it.** (Owner
+> **This product is Hasna Emails. Mailery is not a name for it.** (Owner
 > ruling, 2026-07-27 — see [docs/NAMING.md](docs/NAMING.md).)
 >
 > This package publishes as **`@hasna/emails`** and ships the `emails`,

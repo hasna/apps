@@ -10,7 +10,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE_HOST="${REMOTE_HOST:-apple03}"
-REMOTE_PATH="${REMOTE_PATH:-/Users/hasna/Workspace/hasna/opensource/open-emails}"
+REMOTE_PATH="${REMOTE_PATH:-/Users/hasna/workspace/repos/hasna/apps/apps/emails}"
 
 echo "==> rsync $REPO_ROOT -> $REMOTE_HOST:$REMOTE_PATH"
 ssh "$REMOTE_HOST" "mkdir -p '$REMOTE_PATH'"

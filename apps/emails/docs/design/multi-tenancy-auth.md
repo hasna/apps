@@ -1,7 +1,7 @@
 # Design: Multi-Tenancy + User Accounts + Signup/Login for `@hasna/emails`
 
 Status: IMPLEMENTED v3 (integration candidate; production rollout pending). Original author: Marcus (architect).
-Canonical package: `@hasna/emails`. Projects project: `open-emails`. GitHub repository: `hasna/emails`.
+Canonical package: `@hasna/emails`. Projects project: `emails`. GitHub repository: `hasna/apps` (member `apps/emails`).
 
 > Sections 1–14 preserve the reviewed pre-implementation baseline and threat
 > model. Section 15 is the authoritative reconciliation with the implemented

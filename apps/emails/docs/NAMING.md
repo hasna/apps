@@ -1,4 +1,4 @@
-# Naming: this product is open-emails, not Mailery
+# Naming: this product is Hasna Emails, not Mailery
 
 Status: binding. Owner ruling by Andrei Hasna, 2026-07-27.
 
@@ -12,14 +12,14 @@ it verbatim in this file would turn CI red. That is the guard working, not a
 problem to route around.
 
 In substance: Mailery is retired as a brand name for this product, which is
-renamed to open-emails; Mailery becomes a different, unrelated commercial
+renamed to Hasna Emails; Mailery becomes a different, unrelated commercial
 product.
 
 Stated as rules:
 
-1. The OSS email core is **open-emails**. It is the repository
-   `hasna/emails`, the npm package `@hasna/emails`, and the `emails`,
-   `emails-mcp`, and `emails-serve` bins.
+1. The OSS email core is **Hasna Emails**. It is the repository
+   `hasna/apps` (member `apps/emails`), the npm package `@hasna/emails`, and
+   the `emails`, `emails-mcp`, and `emails-serve` bins.
 2. **`@hasna/mailery` is a legacy package name.** It is the abandoned 0.6.x
    line (0.6.20-0.6.116, last published 2026-07-08). It is not this package
    and must never be revived by publishing this tree under that name.
@@ -27,12 +27,13 @@ Stated as rules:
    and **must not be used to refer to the email product** — not in docs, not in
    code, not in commit messages, not in issue titles, not in conversation.
 
-`open-emails` is the product/brand name. It does not change the repository or
-package name: per the org-wide OSS naming convention the GitHub repo is
-`hasna/<name>` and the npm package is `@hasna/<name>` with no `open-` prefix,
-while `open-<name>` is the brand and the local workspace folder name. So
-`open-emails` -> `hasna/emails` -> `@hasna/emails` is already correct and
-consistent, and nothing about this ruling requires renaming either.
+Hasna Emails is the display/brand name. It does not change the repository or
+package name: the member directory is `apps/emails` in the `hasna/apps`
+monorepo, and the npm package is `@hasna/emails` — bare, no `open-` prefix
+(per the org-wide OSS naming convention, which retired the `open-` prefix
+entirely on 2026-08-14). So Hasna Emails -> `apps/emails` -> `@hasna/emails`
+is already correct and consistent, and nothing about this ruling requires
+renaming either.
 
 ## What this ruling does NOT ask you to do
 
