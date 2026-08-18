@@ -16,16 +16,17 @@
  * test runner executes every file in one process, so process.env and the
  * SQLite singleton here must stay untouched.
  *
- * Guarded by CONTEXT_TEST_PG_URL so the default no-Postgres lane skips it:
- *   CONTEXT_TEST_PG_URL=postgres://hasna@127.0.0.1:5432/context_fts_port_test \
- *     bun test src/db/remote-fts.pg.test.ts
+ * Guarded by HASNA_CONTEXT_TEST_DATABASE_URL (legacy alias CONTEXT_TEST_PG_URL)
+ * so the default no-Postgres lane skips it. Point that variable at a Postgres
+ * DSN (e.g. postgres://hasna@127.0.0.1:5432/context_fts_port_test) and run:
+ *   bun test src/db/remote-fts.pg.test.ts
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "crypto";
 import { PgAdapterAsync, buildPrefixTsQuery } from "./remote-storage.js";
 import { runStorageMigrations } from "./storage-sync.js";
 
-const PG_URL = process.env["CONTEXT_TEST_PG_URL"];
+const PG_URL = process.env["HASNA_CONTEXT_TEST_DATABASE_URL"] ?? process.env["CONTEXT_TEST_PG_URL"];
 
 describe("buildPrefixTsQuery", () => {
   test("ANDs prefix terms like the local FTS5 escapeFts", () => {

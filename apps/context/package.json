@@ -33,6 +33,9 @@
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
+    "contracts:check": "bunx @hasna/contracts@0.11.1 repo-conformance .",
+    "scan-artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/context-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan context-artifact-scan.tgz; rc=$?; rm -f \"$PWD/context-artifact-scan.tgz\"; exit $rc",
+    "prepack": "bun run build && bun run scan-artifact",
     "prepublishOnly": "bun run build"
   },
   "keywords": [

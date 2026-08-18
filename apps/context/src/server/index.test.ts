@@ -104,6 +104,33 @@ describe("HTTP source refresh API", () => {
     server.stop(true);
   });
 
+  it("serves GET /ready with status ready", async () => {
+    const response = await handleRequest(new Request("http://context.test/ready"));
+    expect(response.status).toBe(200);
+    const body = await response.json() as { status: string };
+    expect(body.status).toBe("ready");
+  });
+
+  it("serves GET /version with the package version", async () => {
+    const response = await handleRequest(new Request("http://context.test/version"));
+    expect(response.status).toBe(200);
+    const body = await response.json() as { version: string };
+    expect(body.version).toMatch(/^\d+\.\d+\.\d+/);
+  });
+
+  it("keeps /health, /ready, and /version public when HTTP auth is enabled", async () => {
+    process.env["CONTEXT_HTTP_TOKEN"] = "test-token";
+
+    for (const path of ["/health", "/ready", "/version"]) {
+      const response = await handleRequest(new Request(`http://context.test${path}`));
+      expect(response.status).toBe(200);
+    }
+
+    // API routes stay guarded when auth is required.
+    const unauthorized = await handleRequest(new Request("http://context.test/api/libraries"));
+    expect(unauthorized.status).toBe(401);
+  });
+
   it("refreshes documentation through the preferred /refresh route", async () => {
     const baseUrl = serveDocs();
     await createLibrary("HTTP Refresh Route", `${baseUrl}/docs`);

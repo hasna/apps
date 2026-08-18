@@ -131,7 +131,11 @@ function boolEnv(name: string): boolean {
 }
 
 function authenticateRequest(req: Request, path: string): Response | null {
-  if (path === "/api/health") return null;
+  // The standard serve endpoints are public by contract: /api/health for the
+  // legacy surface, and /health, /ready, /version for the fleet serve shape.
+  if (path === "/api/health" || path === "/health" || path === "/ready" || path === "/version") {
+    return null;
+  }
   if (!isHttpAuthRequired()) return null;
 
   const expected = getHttpToken();
@@ -170,6 +174,12 @@ export async function handleRequest(req: Request): Promise<Response> {
   try {
     if (method === "GET" && path === "/health") {
       return json(healthPayload("context"));
+    }
+    if (method === "GET" && path === "/ready") {
+      return json({ status: "ready" });
+    }
+    if (method === "GET" && path === "/version") {
+      return json({ version: pkg.version });
     }
     if (path === "/mcp") {
       return handleMcpRequest(req, buildServer);
