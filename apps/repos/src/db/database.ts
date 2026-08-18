@@ -888,6 +888,63 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    // Per-PR watch state for the `repos pr-monitor` verb, plus the base-ref
+    // column the BASE_MOVED class reads on every pass.
+    //
+    // pr_monitor_state is LOCAL-ONLY by design: monitor cursors are per-machine
+    // (the loop is single-owner on station01), so the table is deliberately
+    // absent from the auto-index SYNC_TABLES list and never propagates to shared
+    // Postgres. Rows are bounded — one per PR ever watched — and are pruned by
+    // the verb's maintenance mode. The pr_key is the lowercased PR url, the
+    // package's stable PR identity; the UNIQUE(gh_owner, gh_repo, number) index
+    // keeps the row's GitHub identity addressable regardless of url casing.
+    version: 15,
+    run(db) {
+      // The column and its index are guarded exactly like v12's gate columns:
+      // the registry reaches this version by different routes, including
+      // fixtures whose earlier markers were recorded without pull_requests
+      // ever being created. A table that does not exist cannot be altered, and
+      // an index over a missing table would fail the whole migration.
+      if (tableExists(db, "pull_requests")) {
+        if (!columnNames(db, "pull_requests").has("base_ref_oid")) {
+          db.exec("ALTER TABLE pull_requests ADD COLUMN base_ref_oid TEXT");
+        }
+        db.exec("CREATE INDEX IF NOT EXISTS idx_prs_base_ref_oid ON pull_requests(base_ref_oid)");
+      }
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS pr_monitor_state (
+          pr_key              TEXT PRIMARY KEY,
+          gh_owner            TEXT NOT NULL,
+          gh_repo             TEXT NOT NULL,
+          number              INTEGER NOT NULL,
+          first_seen_at       TEXT NOT NULL DEFAULT (datetime('now')),
+          last_seen_at        TEXT NOT NULL,
+          last_observed_state TEXT NOT NULL,
+          last_head_sha       TEXT,
+          last_updated_at     TEXT,
+          last_seen_comment_id  INTEGER NOT NULL DEFAULT 0,
+          last_seen_comment_at  TEXT,
+          last_classification TEXT,
+          last_classification_at TEXT,
+          last_emitted_fingerprint TEXT,
+          verdict_json        TEXT,
+          ci_failing_json     TEXT,
+          base_ref_oid        TEXT,
+          current_main_sha    TEXT,
+          UNIQUE(gh_owner, gh_repo, number)
+        );
+        CREATE INDEX idx_pr_monitor_state_owner ON pr_monitor_state(gh_owner, gh_repo);
+        CREATE INDEX idx_pr_monitor_state_class ON pr_monitor_state(last_classification);
+      `);
+    },
+    verifyAfterMarker(db) {
+      if (db.query("PRAGMA foreign_key_check").all().length > 0) {
+        throw new Error("pr monitor migration failed foreign-key verification");
+      }
+    },
+  },
 ];
 
 /**
