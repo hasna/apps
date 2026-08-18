@@ -497,7 +497,7 @@ function chunkResult(row: FtsChunkRow, keywordScore: number): HybridSearchEntry 
   return result;
 }
 
-function legacyItemResult(item: KnowledgeItem, keywordScore: number): HybridSearchEntry {
+function legacyItemResult(item: KnowledgeItem, keywordScore: number | null): HybridSearchEntry {
   const uri = `knowledge://item/${encodeURIComponent(item.id)}`;
   const result: HybridSearchEntry = {
     kind: 'legacy_item',
@@ -505,7 +505,9 @@ function legacyItemResult(item: KnowledgeItem, keywordScore: number): HybridSear
     title: item.title,
     text: item.content,
     score: 0,
-    scores: { keyword: keywordScore },
+    // A null keyword score (deployed unified search envelope) degrades to
+    // zero rather than fabricating a relevance number.
+    scores: { keyword: keywordScore ?? 0 },
     source: {
       uri,
       ref: uri,
@@ -781,9 +783,11 @@ export async function hybridSearchItems(
 /**
  * Adapt an already-ranked, bounded producer page into the public hybrid-search
  * result shape without fetching or re-ranking the collection in the client.
+ * A null hit rank means the producer exposed no score; the keyword score then
+ * degrades to zero.
  */
 export function hybridSearchFromProducerPage(
-  hits: readonly { item: KnowledgeItem; rank: number }[],
+  hits: readonly { item: KnowledgeItem; rank: number | null }[],
   options: Pick<HybridSearchOptions, 'query' | 'limit' | 'offset' | 'semantic'>,
   warnings: string[] = [],
   producerTotal: number = hits.length,
