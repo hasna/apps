@@ -25,4 +25,4 @@ Keep the package CLI-only. Redirect serving is allowed because it is required fo
 
 - GitHub repo: `hasna/shortlinks`
 - npm package: `@hasna/shortlinks`
-- Local folder may be `open-shortlinks`
+- Local folder: `shortlinks`
