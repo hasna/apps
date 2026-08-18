@@ -35,7 +35,8 @@
 // but they must be a deliberate mode decided BEFORE the request, never an error
 // path. Nothing in this module may acquire such a fallback.
 
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync } from "node:fs";
+import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "node:constants";
 import { join } from "node:path";
 import type { Env } from "../env-token.js";
 import {
@@ -127,6 +128,77 @@ const CONFIG_NAMESPACE = "hasna";
 const MAX_CREDENTIAL_FILE_BYTES = 64 * 1024;
 
 /**
+ * The only permission modes a credential or app-config file may carry.
+ *
+ * Owner-only, owner-readable, non-executable. Matched against the FULL 07777
+ * bits — a setuid/setgid/sticky variant such as 04600 is NOT an acceptable
+ * 0600, which is exactly the hole an earlier 0777 mask left open.
+ */
+export function configFileModeAllowed(mode: number): boolean {
+  const bits = mode & 0o7777;
+  return bits === 0o400 || bits === 0o600;
+}
+
+/** The identity of one read of a config file, for change detection. */
+export interface ConfigFileReadIdentity {
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+}
+
+/**
+ * Whether two reads observed the same stable file.
+ *
+ * A config file is read twice (a second content proof); any axis moving
+ * between the reads means the file changed while it was being read, and the
+ * value must be refused. A same-inode, same-size, same-mtime in-place rewrite
+ * is invisible to dev/ino/size alone, which is why mtime AND ctime travel with
+ * the identity, and why the content proof compares the actual bytes.
+ */
+export function configFileReadsCoherent(
+  first: ConfigFileReadIdentity,
+  second: ConfigFileReadIdentity,
+): boolean {
+  return (
+    first.dev === second.dev &&
+    first.ino === second.ino &&
+    first.size === second.size &&
+    first.mtimeMs === second.mtimeMs &&
+    first.ctimeMs === second.ctimeMs
+  );
+}
+
+/**
+ * A credential or app-config file exists but cannot be read safely.
+ *
+ * Thrown with the path and the reason only — the file's contents are never
+ * rendered, because this is the file that holds the secret.
+ */
+export class CredentialFileUnsafeError extends Error {
+  readonly path: string;
+  constructor(path: string, reason: string) {
+    super(`Credential file ${path} is not safe to read: ${reason}`);
+    this.name = "CredentialFileUnsafeError";
+    this.path = path;
+  }
+}
+
+/** What one secure read of a config file observed. */
+export interface ConfigFileRead {
+  /** The parsed key/value lines. */
+  values: Map<string, string>;
+  /**
+   * Keys whose line is present in the file but whose value cannot be used:
+   * blank, whitespace-only, or an unterminated quote. A present-but-unusable
+   * declaration is a deliberate selection that must fail closed — never
+   * "parsed as absent".
+   */
+  unusable: Set<string>;
+}
+
+/**
  * An app name that is safe to put in a filesystem path.
  *
  * Same grammar as the DNS label the transport requires, checked here
@@ -203,8 +275,9 @@ function profileDiskSources(name: string, env: Env, profile: string | null): str
  * authentication in a way that looked like a revoked key rather than a corrupt
  * file.
  */
-function parseEnvFile(text: string): Map<string, string> {
+function parseEnvFile(text: string): ConfigFileRead {
   const values = new Map<string, string>();
+  const unusable = new Set<string>();
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (line.length === 0 || line.startsWith("#")) continue;
@@ -217,46 +290,138 @@ function parseEnvFile(text: string): Map<string, string> {
     const quote = value[0];
     if (quote === '"' || quote === "'") {
       // Opened a quote: it must close, or this line is not a value we can trust.
-      if (value.length < 2 || !value.endsWith(quote)) continue;
+      if (value.length < 2 || !value.endsWith(quote)) {
+        unusable.add(key);
+        continue;
+      }
       value = value.slice(1, -1);
     }
-    if (value.length === 0) continue;
+    if (value.length === 0) {
+      // Present but blank: a deliberate declaration that names the key and
+      // denies it a value. Recording it as unusable (rather than skipping it
+      // as absent) is what lets the resolver fail closed instead of silently
+      // selecting a different authority or credential tier.
+      unusable.add(key);
+      continue;
+    }
     values.set(key, value);
   }
-  return values;
+  return { values, unusable };
 }
 
 /**
- * Read and parse one fleet app-config file. A missing, unreadable, oversized,
- * or non-regular path is simply "nothing here".
+ * Read and parse one fleet app-config file, securely.
  *
- * `statSync` before opening is deliberate: a FIFO planted in the credential
- * directory blocks `open()` FOREVER, and this read now happens on every
- * request, ahead of the transport's own AbortController — so no timeout could
- * rescue it. Stat does not block on a FIFO or a character device, so the type
- * check happens before anything that could hang.
+ * The open is O_NOFOLLOW | O_NONBLOCK on the raw path, then everything is
+ * verified against the OPEN FD:
+ *   - regular file only (O_NOFOLLOW makes a symlink fail the open; a FIFO or
+ *     device fails the fstat, before any read could block),
+ *   - owner-only mode: exactly 0400 or 0600 on the full 07777 bits,
+ *   - owned by the current uid,
+ *   - bounded by the size cap,
+ *   - STABLE: the fd is stat'ed before AND after the read, and the path is
+ *     re-opened and re-read as a second content proof. Any axis moving between
+ *     the observations — dev, ino, size, mtime, ctime, or the bytes themselves
+ *     — refuses the read. A same-inode/same-size in-place rewrite is exactly
+ *     the window this closes.
+ *
+ * A missing path is "nothing here". A path that EXISTS but fails any safety
+ * check throws {@link CredentialFileUnsafeError}, naming the path and the
+ * reason only — never the contents, because this is the file that holds the
+ * secret.
  *
  * Both the credential tier and the non-secret config tier go through here, so
  * there is exactly ONE spelling of those guards. A second reader added beside
- * this one is a second place for the FIFO and size checks to drift out of sync.
+ * this one is a second place for them to drift out of sync.
  */
-function readAppConfigFile(path: string): Map<string, string> | null {
-  let text: string;
+function readAppConfigFile(path: string): ConfigFileRead | null {
+  const unsafe = (reason: string): never => {
+    throw new CredentialFileUnsafeError(path, reason);
+  };
+
+  let fd: number = -1;
   try {
-    const stats = statSync(path);
-    if (!stats.isFile() || stats.size > MAX_CREDENTIAL_FILE_BYTES) return null;
-    text = readFileSync(path, "utf8");
-  } catch {
-    return null;
+    fd = openSync(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    if (code === "ELOOP") unsafe("it is a symlink");
+    unsafe(`it could not be opened (${code ?? "unknown error"})`);
   }
-  return parseEnvFile(text);
+
+  try {
+    const before = fstatSync(fd);
+    if (!before.isFile()) unsafe("it is not a regular file");
+    if (!configFileModeAllowed(before.mode)) {
+      unsafe(`its permission mode ${(before.mode & 0o7777).toString(8).padStart(4, "0")} is not owner-only 0400 or 0600`);
+    }
+    const currentUid = process.getuid?.() ?? process.geteuid?.() ?? -1;
+    if (currentUid !== -1 && before.uid !== currentUid) {
+      unsafe("it is not owned by the current user");
+    }
+    if (before.size > MAX_CREDENTIAL_FILE_BYTES) unsafe("it exceeds the size limit");
+
+    const bytes = readFileSync(fd);
+    const after = fstatSync(fd);
+    if (!configFileReadsCoherent(toIdentity(before), toIdentity(after))) {
+      unsafe("it changed while being read");
+    }
+
+    // Second content proof: re-open the PATH (O_NOFOLLOW again, so a swap to a
+    // symlink is caught), verify the same inode, and compare the bytes. A
+    // same-inode in-place rewrite between the two reads differs in content and
+    // is refused.
+    let fd2: number = -1;
+    try {
+      fd2 = openSync(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    } catch {
+      unsafe("it changed while being read");
+    }
+    try {
+      const before2 = fstatSync(fd2);
+      if (before2.dev !== before.dev || before2.ino !== before.ino) {
+        unsafe("it changed while being read");
+      }
+      if (before2.size > MAX_CREDENTIAL_FILE_BYTES) unsafe("it exceeds the size limit");
+      const bytes2 = readFileSync(fd2);
+      if (!bytes2.equals(bytes)) unsafe("it changed while being read");
+      const after2 = fstatSync(fd2);
+      if (!configFileReadsCoherent(toIdentity(before2), toIdentity(after2))) {
+        unsafe("it changed while being read");
+      }
+    } finally {
+      if (fd2 !== -1) closeSync(fd2);
+    }
+    return parseEnvFile(bytes.toString("utf8"));
+  } finally {
+    if (fd !== -1) closeSync(fd);
+  }
+}
+
+function toIdentity(stats: ReturnType<typeof fstatSync>): ConfigFileReadIdentity {
+  return {
+    dev: Number(stats.dev),
+    ino: Number(stats.ino),
+    size: Number(stats.size),
+    mtimeMs: Number(stats.mtimeMs),
+    ctimeMs: Number(stats.ctimeMs),
+  };
 }
 
 function readCredentialFile(path: string, apiKeyKeys: readonly string[]): string | null {
-  const values = readAppConfigFile(path);
-  if (!values) return null;
+  const read = readAppConfigFile(path);
+  if (!read) return null;
   for (const key of apiKeyKeys) {
-    const value = values.get(key)?.trim();
+    if (read.unusable.has(key)) {
+      // A deliberate declaration that denies the key a value must fail closed,
+      // never fall through to a lower tier — the chain's own doctrine for the
+      // env override, applied to the file that can also be written by hand.
+      throw new CredentialFileUnsafeError(
+        path,
+        `the entry for ${key} is set but blank or malformed; rewrite that line or delete it`,
+      );
+    }
+    const value = read.values.get(key)?.trim();
     if (value) return value;
   }
   return null;
@@ -270,6 +435,12 @@ export interface AppConfigDiskHit {
   value: string;
   /** Absolute path of the file that supplied it, so a diagnostic can name it. */
   path: string;
+  /**
+   * True when the key's line exists but its value is blank or malformed.
+   * The declaration is deliberate; the caller must fail closed rather than
+   * treat the key as absent.
+   */
+  unusable?: boolean;
 }
 
 /**
@@ -317,6 +488,35 @@ const CREDENTIAL_SHAPED_KEY =
  * never asks for it. Throwing on a file's contents would take down every client
  * on the fleet for a stale line nobody reads.
  */
+/**
+ * One parse of one fleet app-config file, with the path it came from.
+ *
+ * The path rides with the parse so a diagnostic can name the file without a
+ * second read; the values and the unusable set come from the SAME parse.
+ */
+export interface ResolvedClientConfigFile extends ConfigFileRead {
+  /** Absolute path of the file that supplied the parse. */
+  path: string;
+}
+
+/**
+ * Read and parse one fleet app-config file, once, for a whole resolution.
+ *
+ * The FIRST existing disk source wins, exactly as the credential chain orders
+ * the paths. The caller receives one {@link ResolvedClientConfigFile} and
+ * derives every field it needs from the SAME parse — this is the coherence
+ * seam that keeps an atomic replacement from being observed as a torn URL+key
+ * pair. A missing file is null; an existing-but-unsafe file throws
+ * {@link CredentialFileUnsafeError}.
+ */
+export function readClientConfigFile(name: string, env: Env): ResolvedClientConfigFile | null {
+  for (const path of credentialDiskSources(name, env)) {
+    const read = readAppConfigFile(path);
+    if (read) return { path, ...read };
+  }
+  return null;
+}
+
 export function appConfigDiskValue(
   name: string,
   env: Env,
@@ -325,10 +525,16 @@ export function appConfigDiskValue(
   const wanted = keys.filter((key) => !CREDENTIAL_SHAPED_KEY.test(key));
   if (wanted.length === 0) return null;
   for (const path of credentialDiskSources(name, env)) {
-    const values = readAppConfigFile(path);
-    if (!values) continue;
+    const read = readAppConfigFile(path);
+    if (!read) continue;
     for (const key of wanted) {
-      const value = values.get(key)?.trim();
+      if (read.unusable.has(key)) {
+        // The line is present but its value cannot be used. The hit reports
+        // unusable: true so the caller can fail closed instead of treating the
+        // declaration as absent.
+        return { key, value: "", path, unusable: true };
+      }
+      const value = read.values.get(key)?.trim();
       if (value) return { key, value, path };
     }
   }
@@ -566,8 +772,19 @@ export function resolveCredential(
   const diskPaths = credentialDiskSources(name, env);
 
   // ---- Tier 1: an explicit argument. -------------------------------------
-  const explicitKey = options.apiKey?.trim();
-  if (explicitKey) {
+  // A PROVIDED-but-blank argument is a deliberate selection that denies the
+  // key a value; it must fail closed, never fall through to a lower tier.
+  // Absence (`undefined`) and presence are distinguished on purpose.
+  if (options.apiKey !== undefined) {
+    const explicitKey = options.apiKey.trim();
+    if (!explicitKey) {
+      throw new CredentialResolutionError(
+        name,
+        `the explicit apiKey argument is set but blank. It is a deliberate selection, so it is not resolved around: ` +
+          `either give it a real key or stop passing it to fall back to the credential on disk.`,
+        [],
+      );
+    }
     assertUsableCredential(name, "the explicit apiKey argument", explicitKey);
     return sealCredential({
       apiKey: explicitKey,

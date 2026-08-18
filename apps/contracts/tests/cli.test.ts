@@ -885,12 +885,15 @@ describe("contracts CLI", () => {
   });
 
   test("scans this package without treating scanner declarations as runtime edges", () => {
+    // The scan is O(total corpus lines): the corpus grows with every source
+    // and test file, so the bare `bun test` 5s default is routinely crossed on
+    // a warm tree. The canonical suite (`bun run test`) already budgets 120s.
     const result = runContracts(["no-cloud-scan", "--json", "."]);
     expect(result.exitCode).toBe(0);
     const payload = parseStdoutJson(result);
     expect(payload.verdict).toBe("passed");
     expect(JSON.stringify(payload)).not.toContain(import.meta.dir);
-  });
+  }, 30000);
 
   test("marker strings buy no exemption; only a copy of the declaration itself does", () => {
     // REPLACES a test that pinned an exemption keyed on FILE PATH plus package

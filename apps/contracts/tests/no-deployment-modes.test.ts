@@ -278,6 +278,7 @@ const FORBIDDEN_PATTERNS: readonly [string, RegExp][] = [
   ["deploymentMode(s)", /deploymentModes?/],
   ["deployment mode prose", /deployment[ -]modes?/i],
   ["self_hosted", /self_hosted/i],
+  ["PURE REMOTE mode label", /\bPURE REMOTE\b/],
   ["self-hosted", /self-hosted/i],
   ["hybrid", /\bhybrid(?:\b|_)/i],
 ];

@@ -816,7 +816,7 @@ describe("credential resolution at the seam", () => {
     const dir = join(home, ".hasna", "cloud");
     mkdirSync(dir, { recursive: true });
     const path = join(dir, `${app}.env`);
-    writeFileSync(path, `HASNA_${app.toUpperCase()}_API_KEY=${key}\n`);
+    writeFileSync(path, `HASNA_${app.toUpperCase()}_API_KEY=${key}\n`, { mode: 0o600 });
     return path;
   }
 
@@ -1195,7 +1195,7 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
     const dir = join(home, ".hasna", "cloud");
     mkdirSync(dir, { recursive: true });
     const path = join(dir, `${app}.env`);
-    writeFileSync(path, body);
+    writeFileSync(path, body, { mode: 0o600 });
     return path;
   }
 
@@ -1204,7 +1204,7 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
     const dir = join(home, ".config", "hasna");
     mkdirSync(dir, { recursive: true });
     const path = join(dir, `${app}-cloud.env`);
-    writeFileSync(path, body);
+    writeFileSync(path, body, { mode: 0o600 });
     return path;
   }
 
@@ -1221,7 +1221,7 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
       home,
       "todos",
       "HASNA_TODOS_API_URL=https://todos.example.invalid\n" +
-        "HASNA_TODOS_API_KEY=synthetic_disk_key\n",
+        "HASNA_TODOS_API_KEY=fx1\n",
     );
 
     const r = resolveClientTransport("todos", { HOME: home });
@@ -1254,7 +1254,7 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
       "knowledge",
       "# fleet config\n" +
         'export HASNA_KNOWLEDGE_API_URL="https://knowledge.example.invalid"\n' +
-        "export HASNA_KNOWLEDGE_API_KEY='synthetic_disk_key'\n",
+        "export HASNA_KNOWLEDGE_API_KEY='fx1'\n",
     );
 
     const r = resolveClientTransport("knowledge", { HOME: home });
@@ -1263,13 +1263,34 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
     expect(r.baseUrl).toBe("https://knowledge.example.invalid/v1");
   });
 
-  // NO OVER-REACH. The disk tier fills what the env leaves absent, never outranks it.
-  test("a URL in the env beats the URL on disk", () => {
+  // NO OVER-REACH. The disk tier fills what the env leaves absent, never
+  // outranks it — and a disk URL that names a DIFFERENT authority than the
+  // env is a conflict, because the credential file was written for that other
+  // authority and must never be sent to the env endpoint.
+  test("a URL in the env beats an IDENTICAL URL on disk", () => {
     const home = cfgHome();
     writeCloudEnv(
       home,
       "todos",
-      "HASNA_TODOS_API_URL=https://disk.example.invalid\nHASNA_TODOS_API_KEY=synthetic_disk_key\n",
+      "HASNA_TODOS_API_URL=https://same.example.invalid\nHASNA_TODOS_API_KEY=fx1\n",
+    );
+
+    const r = resolveClientTransport("todos", {
+      HOME: home,
+      HASNA_TODOS_API_URL: "https://same.example.invalid",
+    });
+
+    expect(r.baseUrl).toBe("https://same.example.invalid/v1");
+    expect(r.apiUrlSource).toBe("HASNA_TODOS_API_URL");
+    expect(r.misconfigured).toBe(false);
+  });
+
+  test("an env URL that differs from the disk URL is a mixed-authority conflict", () => {
+    const home = cfgHome();
+    writeCloudEnv(
+      home,
+      "todos",
+      "HASNA_TODOS_API_URL=https://disk.example.invalid\nHASNA_TODOS_API_KEY=fx1\n",
     );
 
     const r = resolveClientTransport("todos", {
@@ -1277,19 +1298,24 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
       HASNA_TODOS_API_URL: "https://env.example.invalid",
     });
 
-    expect(r.baseUrl).toBe("https://env.example.invalid/v1");
-    expect(r.apiUrlSource).toBe("HASNA_TODOS_API_URL");
+    expect(r.misconfigured).toBe(true);
+    expect(r.warning).toMatch(/different|conflict|authority/i);
+    expect(r.baseUrl).toBeNull();
   });
 
-  test("the second disk layer answers when the first has no URL", () => {
+  test("the first existing disk layer is the coherent authority — its absence of a URL is not filled from the second layer", () => {
+    // The endpoint and the credential must come from ONE parse of ONE file;
+    // combining a URL from the second layer with a key from the first is the
+    // torn-pair shape an atomic replacement must never be observed as.
     const home = cfgHome();
-    writeCloudEnv(home, "todos", "HASNA_TODOS_API_KEY=synthetic_disk_key\n");
-    const second = writeConfigEnv(home, "todos", "HASNA_TODOS_API_URL=https://second.example.invalid\n");
+    writeCloudEnv(home, "todos", "HASNA_TODOS_API_KEY=fx1\n");
+    writeConfigEnv(home, "todos", "HASNA_TODOS_API_URL=https://second.example.invalid\nHASNA_TODOS_API_KEY=second-key\n");
 
     const r = resolveClientTransport("todos", { HOME: home });
 
-    expect(r.transport).toBe("http");
-    expect(r.apiUrlSource).toBe(second);
+    expect(r.transport).toBe("sqlite");
+    expect(r.apiUrlSource).toBeNull();
+    expect(r.misconfigured).toBe(false);
   });
 
   // FAIL LOUDLY. This is the half of the defect that the URL tier does not fix
@@ -1313,7 +1339,7 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
     writeCloudEnv(
       home,
       "todos",
-      "HASNA_TODOS_API_URL=not-an-absolute-url\nHASNA_TODOS_API_KEY=synthetic_disk_key\n",
+      "HASNA_TODOS_API_URL=not-an-absolute-url\nHASNA_TODOS_API_KEY=fx1\n",
     );
 
     const r = resolveClientTransport("todos", { HOME: home });
@@ -1335,7 +1361,7 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
       "todos",
       "HASNA_TODOS_STORAGE_MODE=postgres\n" +
         "HASNA_TODOS_API_URL=https://todos.example.invalid\n" +
-        "HASNA_TODOS_API_KEY=synthetic_disk_key\n",
+        "HASNA_TODOS_API_KEY=fx1\n",
     );
 
     // On disk: tolerated and ignored.
@@ -1354,11 +1380,11 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
     writeCloudEnv(
       home,
       "todos",
-      "HASNA_TODOS_API_URL=https://todos.example.invalid\nHASNA_TODOS_API_KEY=synthetic_disk_key\n",
+      "HASNA_TODOS_API_URL=https://todos.example.invalid\nHASNA_TODOS_API_KEY=fx1\n",
     );
 
     const r = resolveClientTransport("todos", { HOME: home });
 
-    expect(JSON.stringify(r)).not.toContain("synthetic_disk_key");
+    expect(JSON.stringify(r)).not.toContain("fx1");
   });
 });
