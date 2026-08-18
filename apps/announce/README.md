@@ -1,4 +1,4 @@
-# Open Announce
+# Hasna Announce
 
 `@hasna/announce` composes release announcements from release records and changelog refs, renders them per channel (email, Telegram, conversations, SMS), wraps URLs in shortlinks, keeps a per-channel delivery-status ledger, supports scheduling and `--dry-run`, and aggregates engagement into a campaign report.
 

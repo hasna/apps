@@ -1,6 +1,6 @@
 # Contributing
 
-Open Announce is a Bun and TypeScript package.
+Hasna Announce is a Bun and TypeScript package.
 
 ## Development
 
