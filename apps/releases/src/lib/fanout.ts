@@ -64,7 +64,7 @@ export function buildFanoutTasks(release: Release): FanoutTask[] {
       ...base,
       fingerprint: `release-fanout:changelog:${spec}`,
       title: `Publish changelog for ${spec}`,
-      description: `${context}\n\nCollect the changes shipped in this version and publish the changelog entry (open-changelog), then attach the changelogRef to the release record.`,
+      description: `${context}\n\nCollect the changes shipped in this version and publish the changelog entry (changelog), then attach the changelogRef to the release record.`,
       tags: [...base.tags, "release-fanout:changelog"],
     },
     {
