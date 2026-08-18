@@ -14,11 +14,20 @@
  * into agent folders and the on-box snapshot respectively, while this verb reconciles
  * the canonical corpus (T1: resolveCorpusRoot) against the hosted registry's list route.
  *
- * Diff basis: slug + version + bundle sha256. The bundle digest is the content address —
- * packSkillBundle is deterministic (canonical gzip), so a local pack and the registry's
- * stored digest are directly comparable. The version is carried in the manifest inside
- * the bundle, so an equal digest implies equal version; the diff reports both and decides
- * on the digest.
+ * Diff basis: slug + version + bundle sha256, as the plan specifies. The bundle digest is
+ * the content address — packSkillBundle is deterministic (canonical gzip), so a local
+ * pack and the registry's stored digest are directly comparable. Version is diffed as an
+ * axis of its own: a version-only divergence with an identical digest is reported (the
+ * registry row's stored version can be overridden independently of the bundle, so the two
+ * axes carry independent information).
+ *
+ * Pulls here are VERIFIED pulls only: a remote row without a bundle digest (the bundled
+ * corpus, which the instance serves read-only and never with a digest) is not a pull
+ * candidate — the metadata-only fallback is `skills pull --all`'s lane, not the
+ * reconcile verb's. Such rows still participate in the diff when the local side exists: a
+ * local version that diverged from the bundled row, or a baseline marker the local digest
+ * moved away from, classifies as changed-locally and is pushed (a published row overrides
+ * the bundled one).
  *
  * Direction of a change is proven by the per-skill baseline marker (`.hasna-skills.json`,
  * written by pull and by this module after a push — the marker's contentHash is what a
@@ -30,15 +39,36 @@
  * and reported unless --conflict=local (push local over remote) or --conflict=remote (pull
  * remote over local) says otherwise.
  *
+ * Safety properties:
+ * - A dry run performs no writes anywhere: corpus resolution on the dry-run path is
+ *   write-free (the legacy-layout migration that getPortableSkillsRoot performs is a
+ *   write, so the dry-run path resolves the root read-only and reports whether a real run
+ *   would migrate first).
+ * - The registry listing is fail-closed: a non-array response (an error object, a
+ *   truncation, a proxy page) aborts the run rather than being read as "the registry is
+ *   empty" — an empty registry would otherwise be indistinguishable from an
+ *   authentication failure, and every local skill would be planned as a push into the
+ *   void.
+ * - The cursor records a successful sync only: it is not advanced when any push or pull
+ *   failed, so a later reader cannot mistake a failed run for convergence.
+ * - Each push and pull re-checks both sides immediately before mutating. A remote digest
+ *   that moved since the plan (a concurrent publisher) or a local directory that changed
+ *   since the plan (a concurrent editor) skips that skill and reports it, instead of
+ *   overwriting state the plan did not see. True atomicity against a concurrent writer
+ *   requires server-side optimistic concurrency (plan task T8); the re-check closes the
+ *   reachable race for single-writer-per-sync operation and narrows the window for the
+ *   rest.
+ *
  * Push reuses the publish path's own primitives (validatePortableSkillDirectory,
  * packSkillBundle, the RemoteSkillsClient the caller passes) and pull reuses pullSkills'
  * verification + atomic install. There is deliberately no second HTTP client: everything
  * goes through the one RemoteSkillsClient instance.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { pushSkill } from "../cli/commands/publish.js";
+import { getDataDir, INSTALLED_SKILLS_DIRNAME, SKILLS_CACHE_DIRNAME, isOwnerLayoutMigrated } from "./config.js";
 import { resolveCorpusRoot } from "./home-migration.js";
 import { getPortableSkillPath, listPortableSkillMetas, type PortableSkillOptions } from "./portable-skills.js";
 import { pullSkills, writePullMarker, PULL_MARKER_FILE } from "./pull.js";
@@ -125,11 +155,16 @@ export interface ReconcileCursor {
 
 export interface ReconcileRegistryResult {
   corpusRoot: string;
+  /** True when a real run would first migrate the legacy corpus layout into place. */
+  migrationPending: boolean;
   direction: "push" | "pull" | "all";
   dryRun: boolean;
   conflictPolicy: ReconcileConflictPolicy;
+  /** The full declared policy label; identical to conflictPolicy for local/remote. */
+  conflictPolicyDescription: string;
   summary: ReconcileSummary;
   skills: ReconcileSkillEntry[];
+  /** Present only when the run was real and completed without errors. */
   cursor?: Pick<ReconcileCursor, "lastSyncedAt" | "runCount">;
 }
 
@@ -150,6 +185,21 @@ interface RemoteSkill {
   slug: string;
   version?: string;
   sha256?: string;
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** True when a real run would first migrate the legacy corpus layout into place. */
+function migrationNeeded(options: PortableSkillOptions): boolean {
+  if (options.rootDir) return false;
+  const appDir = options.homeDir ? join(options.homeDir, ".hasna", "skills") : getDataDir();
+  return !(isOwnerLayoutMigrated(appDir) && isDirectory(join(appDir, SKILLS_CACHE_DIRNAME)));
 }
 
 function readBaseline(skillDir: string): string | undefined {
@@ -174,6 +224,34 @@ function readCursor(root: string): Pick<ReconcileCursor, "runCount"> {
   }
 }
 
+/**
+ * Write-free corpus resolution for the dry-run path.
+ *
+ * getPortableSkillsRoot() migrates the legacy layout by copying and renaming skill
+ * directories when no migration record exists — a write. A dry run must not write, so
+ * this mirrors the resolution without the migration step, and the caller reports
+ * `migrationPending` so the plan reader knows a real run would first change the corpus.
+ */
+function resolveCorpusRootReadOnly(options: PortableSkillOptions): { root: string; migrationPending: boolean } {
+  if (options.rootDir) return { root: options.rootDir, migrationPending: false };
+  const appDir = options.homeDir ? join(options.homeDir, ".hasna", "skills") : getDataDir();
+  const cache = join(appDir, SKILLS_CACHE_DIRNAME);
+  if (isOwnerLayoutMigrated(appDir) && isDirectory(cache)) {
+    return { root: cache, migrationPending: false };
+  }
+  return { root: join(appDir, INSTALLED_SKILLS_DIRNAME), migrationPending: true };
+}
+
+function remoteRowToSkill(record: Record<string, unknown>): RemoteSkill | undefined {
+  const slug = typeof record.slug === "string" ? record.slug : typeof record.name === "string" ? record.name : undefined;
+  if (!slug) return undefined;
+  return {
+    slug,
+    version: typeof record.version === "string" ? record.version : undefined,
+    sha256: typeof record.bundleSha256 === "string" && record.bundleSha256 ? record.bundleSha256 : undefined,
+  };
+}
+
 function classifySkill(
   local: LocalSkill | undefined,
   remote: RemoteSkill | undefined,
@@ -181,18 +259,41 @@ function classifySkill(
 ): { state: ReconcileSkillState; reason?: string } {
   if (!remote) return { state: "local-only" };
   if (!local) return { state: "remote-only" };
-  if (remote.sha256 && remote.sha256 === local.sha256) return { state: "in-sync" };
-  if (!remote.sha256) {
-    // A registry row without a bundle digest (the bundled corpus) cannot be diffed;
-    // when the local side also exists there is no change signal, so it is stable.
-    return { state: "in-sync", reason: "no remote digest to diff" };
+  if (remote.sha256) {
+    if (remote.sha256 === local.sha256) {
+      // Identical content address. The version axis is still compared: the registry row's
+      // stored version can be overridden independently of the bundle (`push --version`),
+      // so a version-only divergence is real and must not read as synchronized.
+      const localVersion = local.version ?? undefined;
+      const remoteVersion = remote.version ?? undefined;
+      if (localVersion !== undefined && remoteVersion !== undefined && localVersion !== remoteVersion) {
+        return { state: "conflict", reason: "version divergence with identical digest" };
+      }
+      return { state: "in-sync" };
+    }
+    // Digests differ; direction is proven by the baseline marker when one exists.
+    if (!baseline) {
+      return { state: "conflict", reason: "no baseline marker: cannot prove which side changed" };
+    }
+    if (baseline === local.sha256) return { state: "changed-remotely" };
+    if (baseline === remote.sha256) return { state: "changed-locally" };
+    return { state: "conflict", reason: "both sides changed since the baseline marker" };
   }
-  if (!baseline) {
-    return { state: "conflict", reason: "no baseline marker: cannot prove which side changed" };
+  // A registry row without a bundle digest (the bundled corpus) cannot be diffed by
+  // digest. Use the remaining evidence: a baseline that no longer matches the local
+  // pack, or a version that diverged from the bundled row, means the local side moved.
+  if (baseline && baseline !== local.sha256) {
+    return { state: "changed-locally", reason: "local digest moved since the baseline marker" };
   }
-  if (baseline === local.sha256) return { state: "changed-remotely" };
-  if (baseline === remote.sha256) return { state: "changed-locally" };
-  return { state: "conflict", reason: "both sides changed since the baseline marker" };
+  if (local.version !== undefined && remote.version !== undefined && local.version !== remote.version) {
+    return { state: "changed-locally", reason: "version diverged from the bundled row" };
+  }
+  return { state: "in-sync", reason: "no remote digest; no version or baseline evidence of local divergence" };
+}
+
+/** True when the row is the bundled corpus: listed, but served without a bundle digest. */
+function isDigestless(remote: RemoteSkill | undefined): boolean {
+  return remote !== undefined && !remote.sha256;
 }
 
 function resolveAction(
@@ -216,12 +317,26 @@ function resolveAction(
   }
 }
 
+/** Current published digest for a slug, or undefined when the registry serves no bundle for it. */
+async function currentRemoteDigest(client: RemoteSkillsClient, slug: string): Promise<string | undefined> {
+  try {
+    const record = await client.getSkill(slug);
+    if (!record || typeof record !== "object") return undefined;
+    const digest = (record as Record<string, unknown>).bundleSha256;
+    return typeof digest === "string" && digest ? digest : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Run one sync pass.
  *
  * The plan (classification + per-skill action) is computed in full before anything is
  * executed, and a dry run stops at the plan: no publish, no pull, no marker, no cursor —
- * proven by readback in the tests.
+ * proven by readback in the tests. Every executed mutation re-checks both sides first
+ * (see the module header); a side that moved since the plan skips that skill and reports
+ * it rather than overwriting state the plan did not see.
  */
 export async function reconcileRegistry(options: ReconcileRegistryOptions = {}): Promise<ReconcileRegistryResult> {
   const conflict = options.conflict ?? "skip";
@@ -242,7 +357,14 @@ export async function reconcileRegistry(options: ReconcileRegistryOptions = {}):
     );
   }
 
-  const root = resolveCorpusRoot(options);
+  // A dry run resolves the corpus write-free; a real run resolves through the canonical
+  // resolver (which may migrate the legacy layout as part of the work). migrationPending
+  // is true whenever a real run would first change the corpus layout — that is part of
+  // what the report tells the reader.
+  const { root, migrationPending } = dryRun
+    ? resolveCorpusRootReadOnly(options)
+    : { root: resolveCorpusRoot(options), migrationPending: migrationNeeded(options) };
+
   const localSkills = listPortableSkillMetas({ rootDir: root });
   const locals = new Map<string, LocalSkill>();
   for (const meta of localSkills) {
@@ -256,19 +378,25 @@ export async function reconcileRegistry(options: ReconcileRegistryOptions = {}):
     }
   }
 
+  // Fail-closed listing: a non-array response is an authentication failure, a proxy
+  // page, or a truncated body — never "the registry is empty". An empty registry read as
+  // real would plan every local skill as a push into the void and make a dead credential
+  // look like convergence.
   const remoteRowsPayload = await client.listSkills();
-  const remoteRows = Array.isArray(remoteRowsPayload) ? remoteRowsPayload : [];
+  if (!Array.isArray(remoteRowsPayload)) {
+    const shape = remoteRowsPayload && typeof remoteRowsPayload === "object"
+      ? `object with keys [${Object.keys(remoteRowsPayload as object).join(", ")}]`
+      : typeof remoteRowsPayload;
+    throw new ReconcileRegistryError(
+      `Registry listing failed: expected an array of skills, got ${shape}.`,
+      ["Check SKILLS_API_URL and the stored credential; a failed listing must not be read as an empty registry."],
+    );
+  }
   const remotes = new Map<string, RemoteSkill>();
-  for (const row of remoteRows) {
+  for (const row of remoteRowsPayload) {
     if (!row || typeof row !== "object") continue;
-    const record = row as Record<string, unknown>;
-    const slug = typeof record.slug === "string" ? record.slug : typeof record.name === "string" ? record.name : undefined;
-    if (!slug) continue;
-    remotes.set(slug, {
-      slug,
-      version: typeof record.version === "string" ? record.version : undefined,
-      sha256: typeof record.bundleSha256 === "string" && record.bundleSha256 ? record.bundleSha256 : undefined,
-    });
+    const skill = remoteRowToSkill(row as Record<string, unknown>);
+    if (skill) remotes.set(skill.slug, skill);
   }
 
   const allSlugs = [...new Set([...locals.keys(), ...remotes.keys()])].sort();
@@ -279,7 +407,14 @@ export async function reconcileRegistry(options: ReconcileRegistryOptions = {}):
     const remote = remotes.get(slug);
     const baseline = local ? readBaseline(join(root, slug)) : undefined;
     const { state, reason } = classifySkill(local, remote, baseline);
-    const { action, reason: actionReason } = resolveAction(state, direction, conflict);
+    let { action, reason: actionReason } = resolveAction(state, direction, conflict);
+    // Verified pulls only: a remote-only row without a bundle digest cannot be pulled
+    // through the verified path, so it is skipped with a reason instead of falling into
+    // the unverifiable metadata fallback.
+    if (state === "remote-only" && isDigestless(remote)) {
+      action = "skip";
+      actionReason = "no bundle digest; verified pulls only (use `skills pull --all` for metadata-only)";
+    }
     skills.push({
       slug,
       state,
@@ -315,6 +450,16 @@ export async function reconcileRegistry(options: ReconcileRegistryOptions = {}):
   if (!dryRun) {
     for (const slug of pushSlugs) {
       const entry = skills.find((item) => item.slug === slug)!;
+      // Re-check the remote side before mutating: a concurrent publisher that moved the
+      // digest after the plan must not be overwritten under a skip policy.
+      const plannedRemote = remotes.get(slug)?.sha256;
+      const currentRemote = await currentRemoteDigest(client, slug);
+      if (plannedRemote === undefined ? currentRemote !== undefined : currentRemote !== plannedRemote) {
+        entry.result = { ok: false, detail: "remote changed during sync; push skipped" };
+        entry.reason = (entry.reason ? `${entry.reason}; ` : "") + "remote changed during sync";
+        summary.skipped += 1;
+        continue;
+      }
       try {
         await pushSkill(slug, { rootDir: root, client });
         // Record the pushed state as the new baseline so the next sync can prove
@@ -335,9 +480,45 @@ export async function reconcileRegistry(options: ReconcileRegistryOptions = {}):
       }
     }
 
-    if (pullSlugs.length > 0) {
+    // Re-check each pull candidate immediately before the batch: a remote digest that
+    // moved, or a local directory that changed since the plan, drops the skill from the
+    // batch and reports it instead of pulling over state the plan did not see.
+    const verifiedPullSlugs: string[] = [];
+    for (const slug of pullSlugs) {
+      const entry = skills.find((item) => item.slug === slug)!;
+      const plannedRemote = remotes.get(slug)?.sha256;
+      const currentRemote = await currentRemoteDigest(client, slug);
+      if (plannedRemote === undefined ? currentRemote !== undefined : currentRemote !== plannedRemote) {
+        entry.result = { ok: false, detail: "remote changed during sync; pull skipped" };
+        entry.reason = (entry.reason ? `${entry.reason}; ` : "") + "remote changed during sync";
+        summary.skipped += 1;
+        continue;
+      }
+      const plannedLocal = locals.get(slug)?.sha256;
+      let localNow: string | undefined;
       try {
-        const pulled = await pullSkills({ names: pullSlugs, rootDir: root, client, signingKey: options.signingKey });
+        localNow = packSkillBundle(getPortableSkillPath(slug, { rootDir: root })).sha256;
+      } catch {
+        localNow = undefined;
+      }
+      // The local side must match the plan exactly: unchanged when it existed, absent
+      // when it did not (a directory appearing mid-run for a remote-only skill is a
+      // concurrent editor, and pulling over it would replace state the plan did not see).
+      const localMoved = plannedLocal !== undefined
+        ? localNow !== plannedLocal
+        : localNow !== undefined;
+      if (localMoved) {
+        entry.result = { ok: false, detail: "local changed during sync; pull skipped" };
+        entry.reason = (entry.reason ? `${entry.reason}; ` : "") + "local changed during sync";
+        summary.skipped += 1;
+        continue;
+      }
+      verifiedPullSlugs.push(slug);
+    }
+
+    if (verifiedPullSlugs.length > 0) {
+      try {
+        const pulled = await pullSkills({ names: verifiedPullSlugs, rootDir: root, client, signingKey: options.signingKey });
         for (const result of pulled.results) {
           const entry = skills.find((item) => item.slug === result.name);
           if (entry) {
@@ -348,41 +529,52 @@ export async function reconcileRegistry(options: ReconcileRegistryOptions = {}):
         }
       } catch (error) {
         // A wholesale pull failure is one error line, not one per skill.
-        for (const slug of pullSlugs) {
+        for (const slug of verifiedPullSlugs) {
           const entry = skills.find((item) => item.slug === slug);
           if (entry) entry.result = { ok: false, detail: (error as Error).message };
         }
-        summary.errors += pullSlugs.length;
+        summary.errors += verifiedPullSlugs.length;
       }
     }
 
-    const cursor: ReconcileCursor = {
-      schemaVersion: SYNC_CURSOR_SCHEMA_VERSION,
-      managedBy: "@hasna/skills",
-      lastSyncedAt: new Date().toISOString(),
-      runCount: readCursor(root).runCount + 1,
-      summary,
-    };
-    writeFileSync(join(root, SYNC_CURSOR_FILE), `${JSON.stringify(cursor, null, 2)}\n`);
-    return {
-      corpusRoot: root,
-      direction,
-      dryRun: false,
-      conflictPolicy: conflict,
-      summary,
-      skills,
-      cursor: { lastSyncedAt: cursor.lastSyncedAt, runCount: cursor.runCount },
-    };
+    // The cursor records a successful sync. A run with errors must not advance it: a
+    // later reader would mistake the failed run for convergence.
+    if (summary.errors === 0) {
+      const cursor: ReconcileCursor = {
+        schemaVersion: SYNC_CURSOR_SCHEMA_VERSION,
+        managedBy: "@hasna/skills",
+        lastSyncedAt: new Date().toISOString(),
+        runCount: readCursor(root).runCount + 1,
+        summary,
+      };
+      writeFileSync(join(root, SYNC_CURSOR_FILE), `${JSON.stringify(cursor, null, 2)}\n`);
+      return {
+        corpusRoot: root,
+        migrationPending,
+        direction,
+        dryRun: false,
+        conflictPolicy: conflict,
+        conflictPolicyDescription: conflict === "skip" ? DEFAULT_CONFLICT_POLICY : conflict,
+        summary,
+        skills,
+        cursor: { lastSyncedAt: cursor.lastSyncedAt, runCount: cursor.runCount },
+      };
+    }
   }
 
-  // A dry run reports the plan: every action that would execute, counted as planned.
-  summary.pushed = pushSlugs.length;
-  summary.pulled = pullSlugs.length;
+  // Dry run: the plan is reported with every action that would execute counted as
+  // planned, and nothing was written anywhere.
+  if (dryRun) {
+    summary.pushed = pushSlugs.length;
+    summary.pulled = pullSlugs.length;
+  }
   return {
     corpusRoot: root,
+    migrationPending,
     direction,
-    dryRun: true,
+    dryRun,
     conflictPolicy: conflict,
+    conflictPolicyDescription: conflict === "skip" ? DEFAULT_CONFLICT_POLICY : conflict,
     summary,
     skills,
   };

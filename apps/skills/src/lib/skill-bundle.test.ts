@@ -189,19 +189,31 @@ describe("bundle exclusions", () => {
     });
   });
 
-  test("drops tool-owned sync sidecars at the root, keeping the digest stable across a pull", () => {
-    // The pull/sync provenance markers live inside the corpus skill directory. Packing
-    // them would (a) change the bundle digest the moment a skill is pulled, so a pulled
-    // skill would read as changed-locally forever, and (b) upload sync metadata into a
+  test("drops the pull provenance marker at the root, keeping the digest stable across a pull", () => {
+    // The sync provenance marker lives inside the corpus skill directory. Packing it
+    // would (a) change the bundle digest the moment a skill is pulled, so a pulled skill
+    // would read as changed-locally forever, and (b) upload sync metadata into a
     // published bundle when a pulled skill is re-pushed.
     withSkillDir({
       ...MINIMAL,
       ".hasna-skills.json": '{"managedBy":"@hasna/skills","skill":"demo","source":"pull"}\n',
-      ".sync-cursor.json": '{"schemaVersion":1,"managedBy":"@hasna/skills","lastSyncedAt":"2026-08-18T00:00:00.000Z"}\n',
     }, (dir) => {
       const packed = packSkillBundle(dir);
       expect(packed.paths).toEqual(["SKILL.md", "skill.json", "src/index.ts"]);
       expect(packed.sha256).toBe(packSkillBundle(dir).sha256);
+    });
+  });
+
+  test("keeps a corpus-root cursor file inside a skill directory as ordinary content", () => {
+    // The sync cursor is written at the corpus ROOT, never inside a skill directory, so
+    // it is not excluded from packs: a file that a skill author legitimately named this
+    // way must not be silently dropped.
+    withSkillDir({
+      ...MINIMAL,
+      ".sync-cursor.json": '{"schemaVersion":1,"managedBy":"@hasna/skills","lastSyncedAt":"2026-08-18T00:00:00.000Z"}\n',
+    }, (dir) => {
+      const packed = packSkillBundle(dir);
+      expect(packed.paths).toEqual([".sync-cursor.json", "SKILL.md", "skill.json", "src/index.ts"]);
     });
   });
 
