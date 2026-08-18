@@ -185,7 +185,7 @@ export function buildServer(): Server {
       },
       {
         name: "signatures_send_for_signature",
-        description: "Create a signing session and optional open-emails delivery",
+        description: "Create a signing session and optional emails delivery",
         inputSchema: {
           type: "object",
           properties: {

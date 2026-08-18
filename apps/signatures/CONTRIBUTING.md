@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for contributing to Open Signatures.
+Thanks for contributing to Hasna Signatures.
 
 ## Development
 

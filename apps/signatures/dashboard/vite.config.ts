@@ -13,7 +13,7 @@ const loopbackApiProxyGuard: Plugin = {
 
       res.statusCode = 403;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("The Open Signatures API proxy only accepts loopback requests.");
+      res.end("The Hasna Signatures API proxy only accepts loopback requests.");
     });
   },
 };

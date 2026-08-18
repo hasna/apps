@@ -231,7 +231,7 @@ export function buildDocumentHtml(body: string): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Open Signatures Document</title>
+  <title>Hasna Signatures Document</title>
   <style>
     body {
       color: #17202a;

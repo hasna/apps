@@ -58,10 +58,10 @@ if (handleMetadataArgs(process.argv.slice(2), {
   process.exit(0);
 }
 
-const ADMIN_TOKEN_ENV_KEYS = ["OPEN_SIGNATURES_ADMIN_TOKEN", "SIGNATURES_ADMIN_TOKEN"] as const;
-const ALLOWED_ORIGINS_ENV_KEYS = ["OPEN_SIGNATURES_ALLOWED_ORIGINS", "SIGNATURES_ALLOWED_ORIGINS"] as const;
+const ADMIN_TOKEN_ENV_KEYS = ["SIGNATURES_ADMIN_TOKEN", "OPEN_SIGNATURES_ADMIN_TOKEN"] as const;
+const ALLOWED_ORIGINS_ENV_KEYS = ["SIGNATURES_ALLOWED_ORIGINS", "OPEN_SIGNATURES_ALLOWED_ORIGINS"] as const;
 const CORS_ALLOW_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
-const CORS_ALLOW_HEADERS = "Content-Type, Authorization, X-Open-Signatures-Admin-Token";
+const CORS_ALLOW_HEADERS = "Content-Type, Authorization, X-Signatures-Admin-Token, X-Open-Signatures-Admin-Token";
 const ADMIN_AUTH_CHALLENGE = "Bearer realm=\"signatures-admin\"";
 const ADMIN_API_TOKEN = readFirstEnv(ADMIN_TOKEN_ENV_KEYS);
 const ALLOWED_CORS_ORIGINS = resolveAllowedOrigins();
@@ -152,7 +152,11 @@ function readAdminCredential(req: Request): string | undefined {
   const auth = req.headers.get("Authorization");
   const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
   if (bearer) return bearer;
-  return req.headers.get("X-Open-Signatures-Admin-Token")?.trim() || undefined;
+  return (
+    req.headers.get("X-Signatures-Admin-Token")?.trim() ||
+    req.headers.get("X-Open-Signatures-Admin-Token")?.trim() ||
+    undefined
+  );
 }
 
 function constantTimeEqual(actual: string, expected: string): boolean {
@@ -175,7 +179,7 @@ function requireAdminApiAuth(
   if (!isAdminApiRoute(path, method)) return undefined;
   if (!ADMIN_API_TOKEN) {
     return error(
-      "Admin API authentication is not configured. Set OPEN_SIGNATURES_ADMIN_TOKEN or SIGNATURES_ADMIN_TOKEN.",
+      "Admin API authentication is not configured. Set SIGNATURES_ADMIN_TOKEN or OPEN_SIGNATURES_ADMIN_TOKEN.",
       503,
       { "WWW-Authenticate": ADMIN_AUTH_CHALLENGE }
     );
