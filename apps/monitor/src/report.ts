@@ -319,7 +319,7 @@ export async function buildFleetHealthReport(
 }
 
 export function getFleetHealthReportSubject(report: FleetHealthReport): string {
-  return `[open-monitor] ${report.label} fleet health report (${report.overallStatus.toUpperCase()})`;
+  return `[monitor] ${report.label} fleet health report (${report.overallStatus.toUpperCase()})`;
 }
 
 export function formatFleetHealthReportText(report: FleetHealthReport): string {
@@ -392,7 +392,7 @@ export function formatFleetHealthReportHtml(report: FleetHealthReport): string {
     .join("\n");
 
   return [
-    `<h2 style="font-family:system-ui,sans-serif;margin:0 0 12px">open-monitor ${escapeHtml(report.label)} fleet health report</h2>`,
+    `<h2 style="font-family:system-ui,sans-serif;margin:0 0 12px">Hasna Monitor ${escapeHtml(report.label)} fleet health report</h2>`,
     `<p style="font-family:system-ui,sans-serif;color:#374151">Generated ${escapeHtml(new Date(report.generatedAt).toISOString())}<br/>Window start ${escapeHtml(new Date(report.windowStart * 1000).toISOString())}</p>`,
     `<p style="font-family:system-ui,sans-serif"><strong>Overall:</strong> ${escapeHtml(report.overallStatus.toUpperCase())}<br/><strong>Fleet:</strong> ${report.reachableMachineCount}/${report.machineCount} machines reachable<br/><strong>Alerts:</strong> ${report.recentAlerts} recent, ${report.unresolvedAlerts} unresolved<br/><strong>Cloud Runtime:</strong> ${escapeHtml(report.cloudRuntime.overallStatus.toUpperCase())} (${report.cloudRuntime.counts.configured} configured, ${report.cloudRuntime.counts.observed} observed)</p>`,
     `<table style="border-collapse:collapse;font-family:system-ui,sans-serif;width:100%">`,

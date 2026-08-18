@@ -1,7 +1,7 @@
 /**
- * open-mementos integration — saves machine health snapshots as memories.
+ * mementos integration — saves machine health snapshots as memories.
  *
- * Uses the open-mementos HTTP API (POST /api/memories).
+ * Uses the mementos HTTP API (POST /api/memories).
  * Saves a summary of the DoctorReport so AI agents have health context
  * over time.
  */
@@ -36,7 +36,7 @@ function buildMemoryContent(machineId: string, report: DoctorReport): string {
 }
 
 /**
- * Save a health snapshot as a memory in open-mementos.
+ * Save a health snapshot as a memory in mementos.
  */
 export async function saveHealthMemory(
   machineId: string,
@@ -49,7 +49,7 @@ export async function saveHealthMemory(
   const body = {
     content,
     tags: ["monitor", "health", machineId, report.overallStatus],
-    source: "open-monitor",
+    source: "monitor",
     metadata: {
       machine_id: machineId,
       overall_status: report.overallStatus,
@@ -67,7 +67,7 @@ export async function saveHealthMemory(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "(no body)");
-    throw new Error(`open-mementos API returned ${res.status}: ${text}`);
+    throw new Error(`mementos API returned ${res.status}: ${text}`);
   }
 
   console.error(

@@ -1,7 +1,7 @@
 /**
- * open-conversations integration — posts alert messages to a space.
+ * conversations integration — posts alert messages to a space.
  *
- * Uses the open-conversations HTTP API (POST /api/spaces/:space/messages).
+ * Uses the conversations HTTP API (POST /api/spaces/:space/messages).
  * Message format: ⚠️ [machine] | [severity] | [check_name]: [message]
  */
 
@@ -67,7 +67,7 @@ export async function postMessageToSpace(
 
     if (!res2.ok) {
       const text = await res2.text().catch(() => "(no body)");
-      throw new Error(`open-conversations API returned ${res2.status}: ${text}`);
+      throw new Error(`conversations API returned ${res2.status}: ${text}`);
     }
   }
 }

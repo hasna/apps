@@ -1,5 +1,5 @@
 /**
- * Smart retention for open-monitor DB.
+ * Smart retention for the monitor DB.
  *
  * Strategy (per table):
  *

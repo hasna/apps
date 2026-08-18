@@ -6,11 +6,11 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/open-monitor.git"
+    "url": "git+https://github.com/hasna/monitor.git"
   },
-  "homepage": "https://github.com/hasna/open-monitor#readme",
+  "homepage": "https://github.com/hasna/monitor#readme",
   "bugs": {
-    "url": "https://github.com/hasna/open-monitor/issues"
+    "url": "https://github.com/hasna/monitor/issues"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",

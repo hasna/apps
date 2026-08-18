@@ -211,7 +211,7 @@ function isAuthorized(req: Request): boolean {
 
 function unauthorized(): Response {
   return json({ error: "Unauthorized" }, 401, {
-    "WWW-Authenticate": 'Bearer realm="open-monitor"',
+    "WWW-Authenticate": 'Bearer realm="monitor"',
   });
 }
 
@@ -252,7 +252,7 @@ function route(
 // ── GET /health ───────────────────────────────────────────────────────────────
 
 route("GET", "/health", async () =>
-  json({ ok: true, ts: Date.now(), service: "open-monitor" })
+  json({ ok: true, ts: Date.now(), service: "monitor" })
 );
 
 // ── GET /api/machines ─────────────────────────────────────────────────────────

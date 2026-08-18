@@ -1,7 +1,7 @@
 /**
- * open-emails integration — sends email alerts for critical severity only.
+ * emails integration — sends email alerts for critical severity only.
  *
- * Uses the open-emails HTTP API (POST /api/emails/send).
+ * Uses the emails HTTP API (POST /api/emails/send).
  * Only sends for severity === "critical".
  */
 
@@ -44,12 +44,12 @@ async function sendEmailMessage(message: EmailMessage, config: EmailsIntegration
 
   if (!res.ok) {
     const responseText = await res.text().catch(() => "(no body)");
-    throw new Error(`open-emails API returned ${res.status}: ${responseText}`);
+    throw new Error(`emails API returned ${res.status}: ${responseText}`);
   }
 }
 
 /**
- * Send a critical alert email via open-emails.
+ * Send a critical alert email via emails.
  * Silently skips if severity is not "critical".
  */
 export async function sendAlertEmail(
@@ -64,9 +64,9 @@ export async function sendAlertEmail(
 
   await sendEmailMessage(
     {
-      subject: `[CRITICAL] open-monitor: ${alert.machine_id} ${alert.check_name}`,
+      subject: `[CRITICAL] monitor: ${alert.machine_id} ${alert.check_name}`,
       html: [
-        `<h2 style="color:#c0392b">🔴 Critical Alert — open-monitor</h2>`,
+        `<h2 style="color:#c0392b">🔴 Critical Alert — Hasna Monitor</h2>`,
         `<table style="border-collapse:collapse;font-family:monospace">`,
         `  <tr><td style="padding:4px 12px 4px 0"><strong>Machine</strong></td><td>${escapeHtml(alert.machine_id)}</td></tr>`,
         `  <tr><td style="padding:4px 12px 4px 0"><strong>Check</strong></td><td>${escapeHtml(alert.check_name)}</td></tr>`,
@@ -74,10 +74,10 @@ export async function sendAlertEmail(
         `  <tr><td style="padding:4px 12px 4px 0"><strong>Message</strong></td><td>${escapeHtml(alert.message)}</td></tr>`,
         `  <tr><td style="padding:4px 12px 4px 0"><strong>Triggered at</strong></td><td>${ts}</td></tr>`,
         `</table>`,
-        `<p style="margin-top:16px;color:#666;font-size:12px">Sent by open-monitor.</p>`,
+        `<p style="margin-top:16px;color:#666;font-size:12px">Sent by Hasna Monitor.</p>`,
       ].join("\n"),
       text: [
-        "CRITICAL ALERT — open-monitor",
+        "CRITICAL ALERT — Hasna Monitor",
         "",
         `Machine:     ${alert.machine_id}`,
         `Check:       ${alert.check_name}`,

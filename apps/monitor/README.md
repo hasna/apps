@@ -1,4 +1,4 @@
-# open-monitor
+# Hasna Monitor
 
 > System monitor for AI agents and humans — watch multiple machines, detect problems, take action.
 
@@ -16,10 +16,10 @@
 - 📦 **Container monitoring** — inspect Docker/Podman/Nerdctl containers, resource usage, and logs
 - 🚪 **Port scanner** — see which TCP/UDP ports are listening on one machine or across the fleet
 - 🔄 **Cron jobs** — schedule actions per machine with full cron syntax
-- 📨 **Fleet reports** — generate daily/weekly health summaries and deliver them via open-conversations or open-emails
+- 📨 **Fleet reports** — generate daily/weekly health summaries and deliver them via conversations or emails
 - 🌐 **Web dashboard** — dark-themed real-time gauges served at `http://localhost:3848` (like NVIDIA DGX Dashboard)
 - 🔎 **Full-text search** — search across machines, alerts, and processes
-- 🔗 **Integrations** — open-todos, open-conversations, open-mementos, open-emails
+- 🔗 **Integrations** — todos, conversations, mementos, emails
 - 💾 **SQLite by default** — zero-config persistence; optional PostgreSQL for production
 - 🐚 **Shell completions** — zsh and bash completions included
 
@@ -481,9 +481,9 @@ runs.
 
 ## Integrations
 
-open-monitor integrates with the open-* ecosystem to surface alerts where you're already working.
+Hasna Monitor integrates with the wider Hasna app ecosystem to surface alerts where you're already working.
 
-### open-todos
+### todos
 
 Creates tasks when critical alerts fire.
 
@@ -495,7 +495,7 @@ Creates tasks when critical alerts fire.
 }
 ```
 
-### open-conversations
+### conversations
 
 Posts alerts to a team space.
 
@@ -507,7 +507,7 @@ Posts alerts to a team space.
 }
 ```
 
-### open-mementos
+### mementos
 
 Stores alert history as memories for AI agent context.
 
@@ -518,7 +518,7 @@ Stores alert history as memories for AI agent context.
 }
 ```
 
-### open-emails
+### emails
 
 Sends email notifications for critical alerts.
 

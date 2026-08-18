@@ -376,7 +376,7 @@ function compactMcpStatusResult(result: McpStatusResult, args: Record<string, un
 
 export function buildServer(): Server {
 const server = new Server(
-  { name: "open-monitor", version: MONITOR_VERSION },
+  { name: "monitor", version: MONITOR_VERSION },
   { capabilities: { tools: {} } }
 );
 
