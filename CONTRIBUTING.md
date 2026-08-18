@@ -4,9 +4,12 @@ This repo is the public `@hasna/*` apps monorepo. Add one member app per
 directory under `apps/`, named for the package it publishes:
 `apps/<name>` maps to `@hasna/<name>`.
 
-Each member app ships four surfaces: a CLI bin, an MCP server bin, a
-`-serve` server bin, and an importable `./sdk` module. Keep domain logic in
-the member app and route interfaces through that shared implementation.
+Each member app is expected to ship four surfaces: a CLI bin, an MCP server
+bin, a `-serve` server bin, and an importable `./sdk` module. Not every
+member has reached that standard yet — per-member gaps are tracked by the
+manifest lane (todos `41208cbe`) and the SDK lane (todos `c7ce8b75`). Keep
+domain logic in the member app and route interfaces through that shared
+implementation.
 
 All changes land PR-first from a task worktree. Never push directly to `main`.
 

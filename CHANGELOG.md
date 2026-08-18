@@ -8,4 +8,6 @@
   repository.
 - Added root README links for license, security, and contributing guidance.
 
-Member packages keep their own changelogs.
+Member packages are versioned and released independently via changesets;
+this root changelog covers only repo-root housekeeping. Not every member
+maintains its own changelog yet.
