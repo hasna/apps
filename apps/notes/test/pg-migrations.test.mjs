@@ -17,6 +17,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import { MigrationLedger, defineMigration } from '../src/generated/storage-kit/index.js';
 import { notesPgMigrations } from '../server/pg-migrations.ts';
+import { buildMigrationSummary } from '../scripts/apply-postgres-migrations.mjs';
 
 let db;
 let client;
@@ -141,5 +142,62 @@ describe('notes PostgreSQL migration set', () => {
     await extra.migrate();
     const ledger = new MigrationLedger(client, notesPgMigrations());
     expect(ledger.migrate()).rejects.toThrow(/unknown|downgrade|unexpected/i);
+  });
+});
+
+// REGRESSION — migration runner summary (scripts/apply-postgres-migrations.mjs).
+// The runner once derived its report from the ledger's `plan`, which is
+// computed BEFORE the apply loop while `applied` is re-read AFTER it. Measured
+// on a brand-new database against a real postgres:16: the run applied every
+// migration (schema_migrations had all 13 rows) yet printed
+// `{"ok":true,"dryRun":false,"total":13,"alreadyApplied":0,"pending":[all 13]}`
+// at rc=0 — the inverse of the measured outcome. The summary MUST derive from
+// the fresh `result.applied`. Each scenario runs on its own throwaway PGlite
+// database so "brand-new" is real.
+describe('migration runner summary derives from the fresh applied set', () => {
+  function freshLedger() {
+    const pg = new PGlite({ extensions: { pgcrypto } });
+    return { pg, ledger: new MigrationLedger(pgliteClient(pg), notesPgMigrations()) };
+  }
+
+  test('first apply on a brand-new database reports all applied, none pending', async () => {
+    const { pg, ledger } = freshLedger();
+    try {
+      const result = await ledger.migrate();
+      // Instrument sanity: the ledger itself re-read applied AFTER the loop.
+      expect(result.applied.length).toBe(notesPgMigrations().length);
+      const summary = buildMigrationSummary(notesPgMigrations(), result, false);
+      expect(summary.total).toBe(notesPgMigrations().length);
+      expect(summary.alreadyApplied).toBe(notesPgMigrations().length);
+      expect(summary.pending).toEqual([]);
+    } finally {
+      await pg.close();
+    }
+  });
+
+  test('dry-run on a brand-new database reports none applied, all pending', async () => {
+    const { pg, ledger } = freshLedger();
+    try {
+      const result = await ledger.migrate({ dryRun: true });
+      expect(result.applied.length).toBe(0);
+      const summary = buildMigrationSummary(notesPgMigrations(), result, true);
+      expect(summary.alreadyApplied).toBe(0);
+      expect(summary.pending.length).toBe(notesPgMigrations().length);
+    } finally {
+      await pg.close();
+    }
+  });
+
+  test('idempotent re-run reports all applied, none pending', async () => {
+    const { pg, ledger } = freshLedger();
+    try {
+      await ledger.migrate();
+      const result = await ledger.migrate();
+      const summary = buildMigrationSummary(notesPgMigrations(), result, false);
+      expect(summary.alreadyApplied).toBe(notesPgMigrations().length);
+      expect(summary.pending).toEqual([]);
+    } finally {
+      await pg.close();
+    }
   });
 });
