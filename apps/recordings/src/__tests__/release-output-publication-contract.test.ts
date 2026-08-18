@@ -383,11 +383,14 @@ describe("release output publication contract", () => {
   });
 
   test("separates same-version bootstrap and app-update publication identities", () => {
+    // The release-set basename embeds the release subtype (bootstrap and app-update
+    // must separate) and is derived from the bundle naming rule's APP_BASENAME, so the
+    // bar variant names its release sets HasnaRecordings-<v>-macos-<subtype>.
     expect(build).toContain(
-      'release_set_basename="Recordings-${VERSION}-macos-${RELEASE_SUBTYPE}"',
+      'release_set_basename="${APP_BASENAME}-${VERSION}-macos-${RELEASE_SUBTYPE}"',
     );
     expect(build).toContain(
-      'ARTIFACT_BASENAME="Recordings-${VERSION}-macos-${RELEASE_SUBTYPE}"',
+      'ARTIFACT_BASENAME="${APP_BASENAME}-${VERSION}-macos-${RELEASE_SUBTYPE}"',
     );
     expect(build).toContain('initial-bootstrap|app-update');
     expect(build).toContain('release_kind=$RELEASE_SUBTYPE');

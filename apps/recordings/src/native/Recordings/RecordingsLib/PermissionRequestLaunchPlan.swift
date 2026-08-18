@@ -7,10 +7,19 @@ public struct PermissionRequestLaunchPlan: Sendable, Equatable {
     public let runtimeSmokeOutputPath: String?
     public let runtimeSmokeAcknowledgementPath: String?
     public let runtimeSmokeCompletionPath: String?
+    public let isBarOnly: Bool
 
     public var isRuntimeSmoke: Bool { runtimeSmokeMode != nil }
     public var installsGlobalHandlers: Bool { !isHelper && !isRuntimeSmoke }
-    public var declaresMainWindow: Bool { !isHelper && !isRuntimeSmoke }
+    /// The workspace window may be created only when this holds: never for the permission
+    /// helper, never for a bar launch, and regardless of runtime-smoke mode — a full
+    /// build's smoke keeps exercising the window deterministically, and only bar builds
+    /// finish windowless.
+    public var declaresWindow: Bool { !isHelper && !isBarOnly }
+    /// Controls the init auto-open and the reopen handler ONLY. Runtime smoke launches
+    /// are excluded so the smoke controls window creation deterministically, and bar
+    /// launches are excluded so a real bar launch never auto-opens the workspace window.
+    public var declaresMainWindow: Bool { !isHelper && !isRuntimeSmoke && !isBarOnly }
     public var declaresMenuBar: Bool {
         if isRuntimeSmoke { return runtimeSmokeMode == "normal" }
         return !isHelper
@@ -31,6 +40,17 @@ public struct PermissionRequestLaunchPlan: Sendable, Equatable {
             "--runtime-smoke-completion",
             arguments: arguments
         )
+        #if RECORDINGS_BAR_ONLY
+        // A bar build is bar-only by construction on EVERY launch path — installer
+        // relaunch, manual `open`, LaunchAgent, smoke. Relying on the argument alone left
+        // real launches of the installed bar behaviorally identical to the full app
+        // (review lineage hasna/apps#269, cycle-1 P1). The explicit --bar-only argument
+        // remains a belt-and-suspenders self-describing launch record; it is never the
+        // only carrier of the bar property.
+        isBarOnly = true
+        #else
+        isBarOnly = arguments.contains("--bar-only")
+        #endif
     }
 
     private static func optionValue(_ name: String, arguments: [String]) -> String? {

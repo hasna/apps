@@ -83,7 +83,7 @@ fi
 readonly RELEASE_SUBTYPE
 RELEASE_ARCHITECTURES=(arm64 x86_64)
 
-CODESIGN_IDENTITY="${RECORDINGS_CODESIGN_IDENTITY:-}"
+CODESIGN_IDENTITY="${RECORDINGS_CODESIGN_IDENTITY:-${HASNA_CODESIGN_IDENTITY:-}}"
 EXPECTED_TEAM_ID="${RECORDINGS_EXPECTED_TEAM_IDENTIFIER:-}"
 NOTARY_PROFILE="${RECORDINGS_NOTARY_KEYCHAIN_PROFILE:-}"
 INSTALLER_IDENTITY="${RECORDINGS_INSTALLER_CODESIGN_IDENTITY:-}"
@@ -96,6 +96,41 @@ COMPATIBLE_COHORT_MANIFEST="${RECORDINGS_RELEASE_COMPATIBLE_COHORT_MANIFEST:-}"
 LOCAL_APPROVED_TARGET="${RECORDINGS_LOCAL_APPROVED_TARGET:-}"
 LOCAL_APPROVED_TARGET_IDENTITY_KIND="${RECORDINGS_LOCAL_APPROVED_TARGET_IDENTITY_KIND:-}"
 LOCAL_APPROVED_TARGET_IDENTITY_SHA256="${RECORDINGS_LOCAL_APPROVED_TARGET_IDENTITY_SHA256:-}"
+VARIANT="${RECORDINGS_VARIANT:-full}"
+case "$VARIANT" in
+    full|bar) ;;
+    *)
+        echo "RECORDINGS_VARIANT must be full or bar; got: $VARIANT" >&2
+        exit 2
+        ;;
+esac
+if [ "$MODE" = "release" ] && [ "$VARIANT" = "bar" ]; then
+    # The bar variant is a deliberate product change (no workspace window, accessory
+    # launch); a release that carries it must be explicitly marked so a default release
+    # can never silently emit a bar artifact.
+    if [ "${RECORDINGS_RELEASE_BAR_VARIANT_MARKED:-0}" != "1" ]; then
+        echo "release-mode bar-variant builds require RECORDINGS_RELEASE_BAR_VARIANT_MARKED=1 to proceed explicitly." >&2
+        exit 2
+    fi
+fi
+readonly VARIANT
+VARIANT_SWIFT_FLAGS=()
+if [ "$VARIANT" = "bar" ]; then
+    VARIANT_SWIFT_FLAGS=(-Xswiftc -DRECORDINGS_BAR_ONLY)
+fi
+# Fleet naming rule (knowledge k_msxd5rz3_jfvl3i): every Hasna macOS app is
+# Hasna<Name>.app with 'Hasna' at the beginning. The full app keeps its historical
+# Recordings.app name (its rename is the rule's recorded follow-up decision); the
+# bar-only artifact is named per the rule NOW — HasnaRecordings.app. The 'bar' is the
+# variant, never a separate app name: bundle identifier stays com.hasna.recordings so
+# TCC keeps keying on bundle id + signing identity, and the executable inside the
+# bundle stays "Recordings".
+APP_BUNDLE_NAME="Recordings.app"
+if [ "$VARIANT" = "bar" ]; then
+    APP_BUNDLE_NAME="HasnaRecordings.app"
+fi
+readonly APP_BUNDLE_NAME
+APP_BASENAME="${APP_BUNDLE_NAME%.app}"
 PLIST_BUDDY="$(select_executable "/usr/libexec/PlistBuddy" "${RECORDINGS_TEST_PLIST_BUDDY_EXECUTABLE:-${PLIST_BUDDY:-}}")"
 PLUTIL="$(select_executable "/usr/bin/plutil" "${RECORDINGS_TEST_PLUTIL_EXECUTABLE:-${PLUTIL:-}}")"
 BUN_EXECUTABLE="${BUN_EXECUTABLE:-}"
@@ -134,6 +169,48 @@ LIPO_EXECUTABLE="$(select_executable "/usr/bin/lipo" "${RECORDINGS_TEST_LIPO_EXE
 STAT_EXECUTABLE="$(select_executable "/usr/bin/stat" "${RECORDINGS_TEST_STAT_EXECUTABLE:-}")"
 TEST_GIT_EXECUTABLE="$(select_executable "" "${RECORDINGS_TEST_GIT_EXECUTABLE:-}")"
 TEST_SWIFT_EXECUTABLE="$(select_executable "" "${RECORDINGS_TEST_SWIFT_EXECUTABLE:-}")"
+SECURITY_EXECUTABLE="$(select_executable "/usr/bin/security" "${RECORDINGS_TEST_SECURITY_EXECUTABLE:-}")"
+
+# Developer ID signing identity support. The identity comes from RECORDINGS_CODESIGN_IDENTITY
+# (legacy) or HASNA_CODESIGN_IDENTITY (canonical name), and when neither is supplied the
+# keychain is consulted with `security find-identity -v -p codesigning` and the first
+# "Developer ID Application:" identity is used. Signing NEVER silently falls back to ad-hoc
+# when a Developer ID was requested: release builds always require one, and a local build
+# with RECORDINGS_SIGNING_REQUIRED=1 fails loudly when none exists.
+discover_developer_id_identity() {
+    local listing
+    listing="$("$SECURITY_EXECUTABLE" find-identity -v -p codesigning 2>/dev/null)" || return 0
+    printf '%s\n' "$listing" | "$AWK_EXECUTABLE" -F'"' '/Developer ID Application:/ { print $2; exit }'
+}
+
+derive_team_id() {
+    local identity="$1"
+    local team_id
+    team_id="$(printf '%s\n' "$identity" | "$SED_EXECUTABLE" -n 's/.*(\([A-Z0-9]\{10\}\))$/\1/p')"
+    if ! [[ "$team_id" =~ ^[A-Z0-9]{10}$ ]]; then
+        echo "Could not derive a 10-character Developer ID team from the signing identity: $identity" >&2
+        return 1
+    fi
+    printf '%s\n' "$team_id"
+}
+
+resolve_signing_identity() {
+    # Called when no explicit identity was supplied. Fails loudly when a Developer ID
+    # was requested but none can be found; the caller decides whether one was requested.
+    if [ "$HOST_PLATFORM" != "Darwin" ]; then
+        return 0
+    fi
+    local discovered
+    discovered="$(discover_developer_id_identity)"
+    if [ -z "$discovered" ]; then
+        echo "Developer ID signing was requested but no Developer ID Application identity found in the keychain; never silently ad-hoc when a Developer ID is requested." >&2
+        return 1
+    fi
+    CODESIGN_IDENTITY="$discovered"
+    if [ -z "$EXPECTED_TEAM_ID" ]; then
+        EXPECTED_TEAM_ID="$(derive_team_id "$CODESIGN_IDENTITY")" || return 1
+    fi
+}
 
 require_executable() {
     local label="$1"
@@ -253,6 +330,7 @@ require_executable "ID_EXECUTABLE" "$ID_EXECUTABLE"
 require_executable "STAT_EXECUTABLE" "$STAT_EXECUTABLE"
 if [ "$HOST_PLATFORM" = "Darwin" ]; then
     require_executable "LIPO_EXECUTABLE" "$LIPO_EXECUTABLE"
+    require_executable "SECURITY_EXECUTABLE" "$SECURITY_EXECUTABLE"
 fi
 require_bun_executable "$BUN_EXECUTABLE"
 if [ "$MODE" = "release" ]; then
@@ -545,11 +623,23 @@ run_codesign() {
 }
 
 run_swift() {
+    # VARIANT_SWIFT_FLAGS is empty for every full build (the default). A bare
+    # "${arr[@]}" on an EMPTY array under `set -u` aborts bash < 4.4 — macOS
+    # /bin/bash is 3.2.57 — with `unbound variable`, which killed every build the
+    # moment the flags existed. The ${arr[0]+"${arr[@]}"} guard is the script-wide
+    # idiom (see run_bun, run_xcrun, run_release_sensitive_tool); do not reintroduce
+    # a bare expansion here.
+    #
+    # The flags are arguments TO swift (after the executable), never before it:
+    # placed before the executable they would be consumed by /usr/bin/env as its
+    # own options and the build would die with `env: '-Xswiftc': No such file`.
     "$ENV_EXECUTABLE" -i \
         HOME="$BUILD_HOME" \
         PATH="$SANITIZED_PATH" \
         TMPDIR="$BUILD_WORK_DIR" \
-        "$SWIFT_EXECUTABLE" "$@"
+        "$SWIFT_EXECUTABLE" \
+        ${VARIANT_SWIFT_FLAGS[0]+"${VARIANT_SWIFT_FLAGS[@]}"} \
+        "$@"
 }
 
 run_lipo() {
@@ -939,8 +1029,19 @@ BUILDER_IDENTITY_KIND="none"
 BUILDER_IDENTITY_SHA256="none"
 if [ "$MODE" = "release" ]; then
     if [ -z "$CODESIGN_IDENTITY" ] || [ "$CODESIGN_IDENTITY" = "-" ]; then
-        echo "Release builds require RECORDINGS_CODESIGN_IDENTITY for a Developer ID Application identity." >&2
-        exit 1
+        # No explicit identity: discover the Developer ID Application identity from the
+        # keychain. Release signing is never optional, so "requested but not found" fails
+        # loudly instead of degrading to an ad-hoc signature.
+        if [ "$HOST_PLATFORM" = "Darwin" ]; then
+            resolve_signing_identity || {
+                echo "Release builds require a Developer ID Application identity in RECORDINGS_CODESIGN_IDENTITY or HASNA_CODESIGN_IDENTITY." >&2
+                exit 1
+            }
+        fi
+        if [ -z "$CODESIGN_IDENTITY" ] || [ "$CODESIGN_IDENTITY" = "-" ]; then
+            echo "Release builds require RECORDINGS_CODESIGN_IDENTITY or HASNA_CODESIGN_IDENTITY for a Developer ID Application identity." >&2
+            exit 1
+        fi
     fi
     if [ -z "$EXPECTED_TEAM_ID" ]; then
         echo "Release builds require RECORDINGS_EXPECTED_TEAM_IDENTIFIER to pin the Developer ID team." >&2
@@ -1075,6 +1176,31 @@ elif [ "$MODE" = "local" ]; then
     # a release is notarization, the single-target binding, and the builder attestation
     # above, none of which are relaxed. With no identity supplied the old ad-hoc behaviour
     # is kept verbatim, because a Mac without the signing key must still be able to build.
+    if [ -z "$CODESIGN_IDENTITY" ] || [ "$CODESIGN_IDENTITY" = "-" ]; then
+        if [ "${RECORDINGS_SIGNING_REQUIRED:-0}" = "1" ]; then
+            # A Developer ID was explicitly requested for this local build: discover it
+            # from the keychain and fail loudly when none exists.
+            resolve_signing_identity || exit 1
+        elif [ "$HOST_PLATFORM" = "Darwin" ]; then
+            # The DEFAULT route is the keychain: `security find-identity` and use the
+            # Developer ID Application identity when one exists. That is the stable
+            # signing identity TCC grants key on — an ad-hoc signature has no identity
+            # to key on beyond a CDHash that changes on every rebuild, which orphans
+            # the Accessibility grant and breaks the Fn hold-to-talk path. A Mac
+            # without the signing key still builds ad-hoc (the old behaviour), but the
+            # fallback is LOUD, never silent, and RECORDINGS_SIGNING_REQUIRED=1 above
+            # turns it into a hard failure.
+            discovered_identity="$(discover_developer_id_identity)"
+            if [ -n "$discovered_identity" ]; then
+                CODESIGN_IDENTITY="$discovered_identity"
+                if [ -z "$EXPECTED_TEAM_ID" ]; then
+                    EXPECTED_TEAM_ID="$(derive_team_id "$CODESIGN_IDENTITY")" || exit 1
+                fi
+            else
+                echo "WARNING: no Developer ID Application identity found in the keychain; local build falls back to ad-hoc signing (set RECORDINGS_SIGNING_REQUIRED=1 to fail instead)." >&2
+            fi
+        fi
+    fi
     if [ -n "$CODESIGN_IDENTITY" ] && [ "$CODESIGN_IDENTITY" != "-" ]; then
         if [[ "$CODESIGN_IDENTITY" != "Developer ID Application:"* ]]; then
             echo "Local-station signing requires a Developer ID Application identity in RECORDINGS_CODESIGN_IDENTITY." >&2
@@ -1140,9 +1266,9 @@ if [ "$MODE" = "release" ]; then
 else
     OUTPUT_BUILD_DIR="$SCRIPT_DIR/.build/$BUILD_CONFIGURATION"
 fi
-OUTPUT_APP_DIR="$OUTPUT_BUILD_DIR/Recordings.app"
+OUTPUT_APP_DIR="$OUTPUT_BUILD_DIR/$APP_BUNDLE_NAME"
 SWIFT_PRODUCT_DIR="$SWIFT_SCRATCH_PATH/$BUILD_CONFIGURATION"
-APP_DIR="$BUILD_WORK_DIR/Recordings.app"
+APP_DIR="$BUILD_WORK_DIR/$APP_BUNDLE_NAME"
 CONTENTS="$APP_DIR/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
@@ -1300,6 +1426,16 @@ if [ "$MODE" = "release" ] && [ "$HOST_PLATFORM" = "Darwin" ]; then
     fi
 fi
 "$CP_EXECUTABLE" "$SOURCE_NATIVE_DIR/RecordingsLib/Info.plist" "$CONTENTS/Info.plist"
+if [ "$VARIANT" = "bar" ]; then
+    # The bar is an accessory app: LSUIElement keeps it out of the Dock and the app
+    # switcher, and the app's window-declaring control flow (RECORDINGS_BAR_ONLY)
+    # keeps the workspace window absent. The bundle identifier stays com.hasna.recordings
+    # so TCC grants continue to key on bundle id + signing identity, and the bundle is
+    # named per the fleet rule (knowledge k_msxd5rz3_jfvl3i) — HasnaRecordings.app with
+    # the display name "Hasna Recordings"; 'Hasna' at the beginning of the name.
+    "$PLIST_BUDDY" -c 'Add :LSUIElement bool true' "$CONTENTS/Info.plist"
+    "$PLIST_BUDDY" -c 'Set :CFBundleDisplayName Hasna Recordings' "$CONTENTS/Info.plist"
+fi
 VERSION="$("$PLIST_BUDDY" -c 'Print :CFBundleShortVersionString' "$CONTENTS/Info.plist")"
 
 compute_release_publication_identity() {
@@ -1313,6 +1449,7 @@ compute_release_publication_identity() {
         --component "release_sequence=$RELEASE_SEQUENCE"
         --component "key_epoch=$KEY_EPOCH"
         --component "expires_at_utc=$ENVELOPE_EXPIRES_AT_UTC"
+        --component "variant=$VARIANT"
     )
     identity_arguments+=(--component "envelope_public_key_sha256=$ENVELOPE_PUBLIC_KEY_SHA256")
     if [ "$RELEASE_SUBTYPE" = "initial-bootstrap" ]; then
@@ -1331,7 +1468,7 @@ compute_release_publication_identity() {
 
 reserve_release_output() {
     local release_set_basename reserved_output
-    release_set_basename="Recordings-${VERSION}-macos-${RELEASE_SUBTYPE}"
+    release_set_basename="${APP_BASENAME}-${VERSION}-macos-${RELEASE_SUBTYPE}"
     compute_release_publication_identity
     RELEASE_OUTPUT_ROOT="$OUTPUT_BUILD_DIR"
     RELEASE_FINAL_DIR="$RELEASE_OUTPUT_ROOT/${release_set_basename}.release"
@@ -1398,7 +1535,7 @@ reserve_release_output() {
     RELEASE_STAGING_DIR="$($MKTEMP_EXECUTABLE -d "$RELEASE_OUTPUT_ROOT/.${release_set_basename}.staging.XXXXXX")"
     "$CHMOD_EXECUTABLE" 0700 "$RELEASE_STAGING_DIR"
     OUTPUT_BUILD_DIR="$RELEASE_STAGING_DIR"
-    OUTPUT_APP_DIR="$OUTPUT_BUILD_DIR/Recordings.app"
+    OUTPUT_APP_DIR="$OUTPUT_BUILD_DIR/$APP_BUNDLE_NAME"
 }
 
 if [ "$MODE" = "release" ]; then
@@ -1586,6 +1723,7 @@ if [ "$MODE" != "debug" ]; then
         --team-id "$EXPECTED_TEAM_ID" \
         --package-root "$PACKAGE_ROOT" \
         --artifact-policy "$ARTIFACT_POLICY" \
+        --variant "$VARIANT" \
         --approved-target "$APPROVED_TARGET" \
         --approved-target-identity-kind "$APPROVED_TARGET_IDENTITY_KIND" \
         --approved-target-identity-sha256 "$APPROVED_TARGET_IDENTITY_SHA256" \
@@ -1643,7 +1781,7 @@ run_codesign --verify --deep --strict --verbose=2 "$APP_DIR"
     TMPDIR="$BUILD_WORK_DIR" \
     SSH_CONNECTION="${SSH_CONNECTION:-}" \
     ${SMOKE_TEST_ENVIRONMENT[0]+"${SMOKE_TEST_ENVIRONMENT[@]}"} \
-    "$BASH_EXECUTABLE" "$SMOKE_SCRIPT" "$APP_DIR" "$BUN_EXECUTABLE"
+    "$BASH_EXECUTABLE" "$SMOKE_SCRIPT" "$APP_DIR" "$BUN_EXECUTABLE" --variant "$VARIANT"
 
 publish_app_output() {
     local source_tree_digest
@@ -1807,7 +1945,7 @@ publish_complete_release_set() {
     RELEASE_DIRECTORY_PUBLISHED=1
     RELEASE_STAGING_DIR=""
     OUTPUT_BUILD_DIR="$RELEASE_FINAL_DIR"
-    OUTPUT_APP_DIR="$OUTPUT_BUILD_DIR/Recordings.app"
+    OUTPUT_APP_DIR="$OUTPUT_BUILD_DIR/$APP_BUNDLE_NAME"
     run_bun "$SOURCE_PACKAGE_ROOT/scripts/macos_artifact.ts" complete-release-publication \
         --destination "$RELEASE_FINAL_DIR" \
         --reservation "$RELEASE_RESERVATION" \
@@ -1833,7 +1971,7 @@ if [ "$MODE" = "debug" ]; then
 fi
 
 if [ "$MODE" = "local" ]; then
-    ARTIFACT_BASENAME="Recordings-${VERSION}-macos-${APPROVED_TARGET}-local-only"
+    ARTIFACT_BASENAME="${APP_BASENAME}-${VERSION}-macos-${APPROVED_TARGET}-local-only"
     FINAL_ARCHIVE="$OUTPUT_BUILD_DIR/${ARTIFACT_BASENAME}.zip"
     FINAL_MANIFEST="$OUTPUT_BUILD_DIR/${ARTIFACT_BASENAME}.manifest.json"
     "$RM_EXECUTABLE" -f "$FINAL_ARCHIVE" "$FINAL_MANIFEST"
@@ -1846,6 +1984,7 @@ if [ "$MODE" = "local" ]; then
         --archive "$FINAL_ARCHIVE" \
         --manifest "$FINAL_MANIFEST" \
         --package-root "$PACKAGE_ROOT" \
+        --variant "$VARIANT" \
         --approved-target "$APPROVED_TARGET" \
         --approved-target-identity-kind "$APPROVED_TARGET_IDENTITY_KIND" \
         --approved-target-identity-sha256 "$APPROVED_TARGET_IDENTITY_SHA256" \
@@ -1860,7 +1999,7 @@ fi
 
 verify_signed_code "$HELPERS/recordings" "Companion CLI"
 verify_signed_code "$APP_DIR" "Recordings.app"
-ARTIFACT_BASENAME="Recordings-${VERSION}-macos-${RELEASE_SUBTYPE}"
+ARTIFACT_BASENAME="${APP_BASENAME}-${VERSION}-macos-${RELEASE_SUBTYPE}"
 NOTARY_ARCHIVE="$OUTPUT_BUILD_DIR/${ARTIFACT_BASENAME}-notarization.zip"
 FINAL_ARCHIVE="$OUTPUT_BUILD_DIR/${ARTIFACT_BASENAME}.zip"
 FINAL_MANIFEST="$OUTPUT_BUILD_DIR/${ARTIFACT_BASENAME}.manifest.json"
@@ -1923,6 +2062,7 @@ run_bun "$SOURCE_PACKAGE_ROOT/scripts/macos_artifact.ts" finalize \
     --manifest "$FINAL_MANIFEST" \
     --package-root "$PACKAGE_ROOT" \
     --team-id "$EXPECTED_TEAM_ID" \
+    --variant "$VARIANT" \
     --notary-log "$NOTARY_LOG" \
     --notary-submission-id "$NOTARY_ID" \
     --submitted-archive-sha256 "$NOTARY_ARCHIVE_SHA256"

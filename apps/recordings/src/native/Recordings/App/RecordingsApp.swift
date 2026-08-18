@@ -56,6 +56,8 @@ final class RecordingsAppDelegate: NSObject, NSApplicationDelegate {
 final class RecordingsAppState: ObservableObject {
     let store: RecordingsStore?
     let declaresMenuBar: Bool
+    let barOnly: Bool
+    let declaresWindow: Bool
     let runtimeSmokeProbe: RuntimeSmokeProbe?
     private let runtimeSmokeMode: String?
     private let runtimeSmokeOutputPath: String?
@@ -67,6 +69,8 @@ final class RecordingsAppState: ObservableObject {
 
     init(plan: PermissionRequestLaunchPlan) {
         declaresMenuBar = plan.declaresMenuBar
+        barOnly = plan.isBarOnly
+        declaresWindow = plan.declaresWindow
         runtimeSmokeMode = plan.runtimeSmokeMode
         runtimeSmokeOutputPath = plan.runtimeSmokeOutputPath
         runtimeSmokeAcknowledgementPath = plan.runtimeSmokeAcknowledgementPath
@@ -86,6 +90,14 @@ final class RecordingsAppState: ObservableObject {
     }
 
     func openRecordings() {
+        // Bar launches never create the workspace window — on any path, including the
+        // reopen handler and the runtime smoke. Keyed on declaresWindow (NOT on
+        // declaresMainWindow, which excludes every runtime smoke): a full build's
+        // normal-mode smoke must keep exercising the window, and only bar builds finish
+        // windowless. This was the cycle-2 P1 of the terminated PR #269 lineage — a
+        // windowless branch keyed on declaresMainWindow made the FULL smoke fail
+        // deterministically on every build.
+        guard declaresWindow else { return }
         if let store {
             showWindow(contentView: NSHostingView(rootView: ContentView(store: store)))
         } else if runtimeSmokeMode == "normal" {
@@ -181,6 +193,23 @@ final class RecordingsAppState: ObservableObject {
         runtimeSmokeProbe.completed = { [weak self, weak runtimeSmokeProbe] in
             guard let self, let runtimeSmokeProbe else { return }
             let accessibility = RuntimeSmokeAccessibilitySnapshot.processMenuBarExtras()
+            if self.barOnly {
+                // Windowless by construction: the bar smoke must never create the
+                // workspace window, and it reports the windowless state directly. This
+                // branch keys on barOnly, NOT on declaresMainWindow — that property
+                // excludes every runtime smoke and made the FULL build's smoke fail
+                // deterministically in the terminated PR #269 lineage (cycle-2 P1). A
+                // nil-window comparison would also read as a retained window (nil ===
+                // nil), so the windowless result is finished here explicitly.
+                self.finishRuntimeSmoke(
+                    mode: mode,
+                    surfaceCount: runtimeSmokeProbe.surfaceAppearances,
+                    labels: runtimeSmokeProbe.renderedLabels,
+                    accessibility: accessibility,
+                    retainedWindowReused: false
+                )
+                return
+            }
             self.openRecordings()
             let firstWindow = self.mainWindow
             self.openRecordings()
@@ -202,6 +231,9 @@ final class RecordingsAppState: ObservableObject {
         retainedWindowReused: Bool,
         attempt: Int = 0
     ) {
+        // Only the non-bar smoke reaches this (bar launches finish windowless in the
+        // probe completion handler above), so the settled state is exactly the retained
+        // window being key, unchanged from the base contract.
         let windowSettled = NSApplication.shared.isActive && (mainWindow?.isKeyWindow ?? false)
         guard windowSettled || attempt >= 60 else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
@@ -316,7 +348,11 @@ struct RecordingsApp: App {
     @SceneBuilder var body: some Scene {
         MenuBarExtra(isInserted: menuBarInsertion) {
             if let store = state.store {
-                MenuBarStatusView(store: store, openRecordings: state.openRecordings)
+                MenuBarStatusView(
+                    store: store,
+                    openRecordings: state.openRecordings,
+                    barOnly: state.barOnly
+                )
             } else if state.runtimeSmokeProbe != nil {
                 EmptyView()
             }

@@ -151,6 +151,7 @@ function localOnlyApprovedTargetsMessage(policyPath?: string): string {
 }
 
 export type ArtifactPolicy = "release" | "local_only";
+export type ArtifactVariant = "full" | "bar";
 export type TargetIdentityKind =
   | typeof LEGACY_LOCAL_TARGET_IDENTITY_KIND
   | "tailscale_node_id_sha256";
@@ -159,6 +160,7 @@ type OperatorTargetIdentityKind = TargetIdentityKind | "none";
 export type BuildProvenance = {
   schema_version: 3 | 4;
   artifact_policy?: "local_only";
+  variant?: ArtifactVariant;
   approved_target?: string;
   approved_target_identity_kind?: TargetIdentityKind;
   approved_target_identity_sha256?: string;
@@ -181,6 +183,9 @@ export type BuildProvenance = {
 
 export type MacOSArtifactManifest = BuildProvenance & {
   artifact_type: "recordings-macos-app";
+  /// The top-level bundle directory name inside the artifact (Recordings.app for the
+  /// full app, HasnaRecordings.app for the bar variant per the fleet naming rule).
+  bundle_name: string;
   app_sha256: string;
   binding: {
     bundle_tree_sha256: string;
@@ -210,7 +215,7 @@ export type MacOSArtifactManifest = BuildProvenance & {
   };
   container: {
     type: "zip";
-    install_locations: ["/Applications/Recordings.app"] | ["~/Applications/Recordings.app"];
+    install_locations: [string];
   };
   nested_code_policy: {
     allowlist_sha256: string;
@@ -825,6 +830,22 @@ function manifestPolicy(manifest: MacOSArtifactManifest): ArtifactPolicy {
   return manifest.schema_version === LOCAL_ARTIFACT_SCHEMA_VERSION ? "local_only" : "release";
 }
 
+/**
+ * The variant an artifact was built as. Older manifests predate the field; they are
+ * full artifacts by definition ("full" was the only variant that existed).
+ */
+function manifestVariant(manifest: MacOSArtifactManifest): ArtifactVariant {
+  const value = manifest.variant ?? "full";
+  if (value !== "full" && value !== "bar") {
+    throw new Error(`manifest variant is unsupported: ${value}`);
+  }
+  return value;
+}
+
+function manifestBundleName(manifest: MacOSArtifactManifest): string {
+  return manifest.bundle_name ?? "Recordings.app";
+}
+
 function manifestTargetIdentityKind(manifest: MacOSArtifactManifest): OperatorTargetIdentityKind {
   if (manifestPolicy(manifest) === "release") return "none";
   return manifest.approved_target_identity_kind ?? LEGACY_LOCAL_TARGET_IDENTITY_KIND;
@@ -1405,6 +1426,7 @@ export function withPrivatelyExtractedArchiveApp<T>(
   operation: (appPath: string) => T,
   platformArchiveTool = "/usr/bin/ditto",
   expectedArchiveSha256?: string,
+  expectedBundleName = "Recordings.app",
 ): T {
   const privateRoot = mkdtempSync(join(tmpdir(), "recordings-artifact-extract-"));
   chmodSync(privateRoot, 0o700);
@@ -1449,13 +1471,17 @@ export function withPrivatelyExtractedArchiveApp<T>(
     inspectZipArchive(pinnedArchivePath);
     run(platformArchiveTool, ["-x", "-k", pinnedArchivePath, extractionRoot]);
     const rootEntries = readdirSync(extractionRoot);
-    if (rootEntries.length !== 1 || rootEntries[0] !== "Recordings.app") {
-      throw new Error("release archive must contain exactly one top-level Recordings.app");
+    if (rootEntries.length !== 1 || rootEntries[0] !== expectedBundleName) {
+      throw new Error(
+        `release archive must contain exactly one top-level ${expectedBundleName}`,
+      );
     }
-    const extractedAppPath = join(extractionRoot, "Recordings.app");
+    const extractedAppPath = join(extractionRoot, expectedBundleName);
     const appDetails = lstatSync(extractedAppPath);
     if (appDetails.isSymbolicLink() || !appDetails.isDirectory()) {
-      throw new Error("release archive top-level Recordings.app must be a regular directory");
+      throw new Error(
+        `release archive top-level ${expectedBundleName} must be a regular directory`,
+      );
     }
     assertRegularArchiveTree(extractedAppPath);
     return operation(extractedAppPath);
@@ -1478,6 +1504,7 @@ export function extractVerifiedArchiveToStaging(
   expectedApprovedTarget: string,
   expectedApprovedTargetIdentitySha256: string,
   expectedApprovedTargetIdentityKind: OperatorTargetIdentityKind,
+  expectedVariant: ArtifactVariant = "full",
   platformArchiveTool = "/usr/bin/ditto",
 ): void {
   if (resolve(stagingTarget) !== stagingTarget) {
@@ -1510,16 +1537,19 @@ export function extractVerifiedArchiveToStaging(
   withPrivatelyExtractedArchiveApp(
     archivePath,
     (appPath) => {
-      const targetAppPath = join(stagingTarget, "Recordings.app");
+      const targetAppPath = join(stagingTarget, manifestBundleName(manifest));
       renameSync(appPath, targetAppPath);
       assertRegularArchiveTree(targetAppPath);
       const entries = readdirSync(stagingTarget);
-      if (entries.length !== 1 || entries[0] !== "Recordings.app") {
-        throw new Error("archive extraction did not produce exactly Recordings.app in staging");
+      if (entries.length !== 1 || entries[0] !== manifestBundleName(manifest)) {
+        throw new Error(
+          `archive extraction did not produce exactly ${manifestBundleName(manifest)} in staging`,
+        );
       }
     },
     platformArchiveTool,
     manifest.archive.sha256,
+    manifestBundleName(manifest),
   );
 }
 
@@ -1547,6 +1577,20 @@ export function assertManifestShape(manifest: MacOSArtifactManifest): void {
   }
   if (manifest.artifact_type !== "recordings-macos-app") throw new Error("unexpected artifact type");
   if (manifest.bundle_id !== BUNDLE_ID) throw new Error("unexpected bundle identifier");
+  if (
+    manifest.bundle_name !== undefined &&
+    (typeof manifest.bundle_name !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9 .-]*\.app$/.test(manifest.bundle_name))
+  ) {
+    throw new Error("manifest bundle name must be a *.app bundle directory name");
+  }
+  if (
+    manifest.variant !== undefined &&
+    manifest.variant !== "full" &&
+    manifest.variant !== "bar"
+  ) {
+    throw new Error(`manifest variant is unsupported: ${manifest.variant}`);
+  }
   const artifactPolicy = manifestPolicy(manifest);
   for (const [label, value] of [
     ["bundle version", manifest.bundle_version],
@@ -1755,6 +1799,7 @@ export function verifyArchiveManifest(
   expectedApprovedTarget: string = RELEASE_APPROVED_TARGET,
   expectedApprovedTargetIdentitySha256: string = "none",
   expectedApprovedTargetIdentityKind: OperatorTargetIdentityKind = LEGACY_LOCAL_TARGET_IDENTITY_KIND,
+  expectedVariant: ArtifactVariant = "full",
 ): MacOSArtifactManifest {
   if (!expectedTeamId) throw new Error("expected Team ID is required");
   const manifest = readAuthenticatedManifest<MacOSArtifactManifest>(
@@ -1764,6 +1809,11 @@ export function verifyArchiveManifest(
   assertManifestShape(manifest);
   if (manifestPolicy(manifest) !== expectedPolicy) {
     throw new Error("manifest artifact policy does not match the explicit operator selection");
+  }
+  if (manifestVariant(manifest) !== expectedVariant) {
+    throw new Error(
+      `manifest variant ${manifestVariant(manifest)} does not match the explicit operator selection ${expectedVariant}`,
+    );
   }
   const actualApprovedTarget = manifest.approved_target ?? RELEASE_APPROVED_TARGET;
   if (actualApprovedTarget !== expectedApprovedTarget) {
@@ -1817,6 +1867,7 @@ function assertProvenanceMatchesManifest(
     "builder_identity_kind",
     "builder_identity_sha256",
     "non_notarized",
+    "variant",
     "bundle_id",
     "bundle_version",
     "git_sha",
@@ -1989,11 +2040,17 @@ export function verifyExtractedApp(
   expectedApprovedTarget: string = RELEASE_APPROVED_TARGET,
   expectedApprovedTargetIdentitySha256: string = "none",
   expectedApprovedTargetIdentityKind: OperatorTargetIdentityKind = LEGACY_LOCAL_TARGET_IDENTITY_KIND,
+  expectedVariant: ArtifactVariant = "full",
 ): MacOSArtifactManifest {
   const manifest = readAuthenticatedManifest<MacOSArtifactManifest>(
     manifestPath,
     expectedManifestSha256,
   );
+  if (manifestVariant(manifest) !== expectedVariant) {
+    throw new Error(
+      `manifest variant ${manifestVariant(manifest)} does not match the explicit operator selection ${expectedVariant}`,
+    );
+  }
   verifyAppAgainstManifest(
     appPath,
     manifest,
@@ -2063,6 +2120,7 @@ function verifySuppliedAndArchivedApps(
     },
     "/usr/bin/ditto",
     manifest.archive.sha256,
+    manifestBundleName(manifest),
   );
   if (sha256ArchiveFile(archivePath) !== manifest.archive.sha256) {
     throw new Error("release archive changed during exact-byte verification");
@@ -2080,6 +2138,7 @@ function writeProvenance(
   approvedTargetIdentitySha256: string,
   builderIdentityKind: OperatorTargetIdentityKind,
   builderIdentitySha256: string,
+  variant: ArtifactVariant,
 ): void {
   const executablePath = join(appPath, "Contents", "MacOS", "Recordings");
   const helperPath = join(appPath, "Contents", "Helpers", "recordings");
@@ -2089,6 +2148,7 @@ function writeProvenance(
       artifactPolicy === "release"
         ? RELEASE_ARTIFACT_SCHEMA_VERSION
         : LOCAL_ARTIFACT_SCHEMA_VERSION,
+    variant,
     bundle_id: plistValue(appPath, "CFBundleIdentifier"),
     bundle_version: plistValue(appPath, "CFBundleShortVersionString"),
     bundle_build_version: plistValue(appPath, "CFBundleVersion"),
@@ -2151,6 +2211,7 @@ function finalizeArtifact(
   notaryLogPath: string,
   notarySubmissionId: string,
   submittedArchiveSha256: string,
+  expectedVariant: ArtifactVariant = "full",
 ): void {
   assertCurrentSourceRevision(packageRoot, expectedSourceSha);
   const executablePath = join(appPath, "Contents", "MacOS", "Recordings");
@@ -2159,6 +2220,14 @@ function finalizeArtifact(
   const provenance = readJson<BuildProvenance>(embeddedPath);
   if (provenance.git_sha !== expectedSourceSha) {
     throw new Error("embedded provenance does not match the pinned source SHA");
+  }
+  if (expectedVariant !== "full" && expectedVariant !== "bar") {
+    throw new Error(`finalize variant is unsupported: ${expectedVariant}`);
+  }
+  if ((provenance.variant ?? "full") !== expectedVariant) {
+    throw new Error(
+      `finalize variant ${expectedVariant} does not match the embedded provenance variant`,
+    );
   }
   assertExpectedCodeLayout(appPath);
   const outerSigning = signingEvidence(appPath, expectedTeamId, APP_ENTITLEMENTS, executablePath);
@@ -2172,9 +2241,14 @@ function finalizeArtifact(
   const notaryLog = JSON.parse(notaryLogSnapshot.toString("utf8")) as unknown;
   assertAcceptedNotaryLog(notaryLog, notarySubmissionId, submittedArchiveSha256);
   const items = nestedItems(appPath, expectedTeamId, "release", outerSigning, helperSigning);
+  const bundleName = basename(appPath);
+  if (!bundleName.endsWith(".app")) {
+    throw new Error(`release app bundle must be named *.app: ${appPath}`);
+  }
   const manifest: MacOSArtifactManifest = {
     ...provenance,
     artifact_type: "recordings-macos-app",
+    bundle_name: bundleName,
     app_sha256: sha256File(executablePath),
     binding: { bundle_tree_sha256: treeDigest(appPath) },
     provenance_sha256: sha256File(embeddedPath),
@@ -2201,7 +2275,7 @@ function finalizeArtifact(
     },
     container: {
       type: "zip",
-      install_locations: ["/Applications/Recordings.app"],
+      install_locations: [`/Applications/${bundleName}`],
     },
     nested_code_policy: {
       allowlist_sha256: nestedPolicyDigest(items),
@@ -2278,10 +2352,14 @@ function finalizeLocalArtifact(
   approvedTargetIdentityKind: TargetIdentityKind,
   approvedTargetIdentitySha256: string,
   expectedTeamId: string = "ADHOC",
+  expectedVariant: ArtifactVariant = "full",
 ): void {
   assertCurrentSourceRevision(packageRoot, expectedSourceSha);
   if (approvedTargetIdentityKind !== "tailscale_node_id_sha256") {
     throw new Error("new local-only artifacts require a Tailscale node ID identity hash");
+  }
+  if (expectedVariant !== "full" && expectedVariant !== "bar") {
+    throw new Error(`finalize variant is unsupported: ${expectedVariant}`);
   }
   const localSigningMode = localOnlySigningMode(expectedTeamId);
   const executablePath = join(appPath, "Contents", "MacOS", "Recordings");
@@ -2300,6 +2378,11 @@ function finalizeLocalArtifact(
   ) {
     throw new Error("embedded provenance is not approved for this local-only target");
   }
+  if ((provenance.variant ?? "full") !== expectedVariant) {
+    throw new Error(
+      `finalize variant ${expectedVariant} does not match the embedded provenance variant`,
+    );
+  }
   assertExpectedCodeLayout(appPath);
   const outerSigning = signingEvidence(
     appPath,
@@ -2316,9 +2399,14 @@ function finalizeLocalArtifact(
     "local_only",
   );
   const items = nestedItems(appPath, expectedTeamId, "local_only", outerSigning, helperSigning);
+  const bundleName = basename(appPath);
+  if (!bundleName.endsWith(".app")) {
+    throw new Error(`local app bundle must be named *.app: ${appPath}`);
+  }
   const manifest: MacOSArtifactManifest = {
     ...provenance,
     artifact_type: "recordings-macos-app",
+    bundle_name: bundleName,
     app_sha256: sha256File(executablePath),
     binding: { bundle_tree_sha256: treeDigest(appPath) },
     provenance_sha256: sha256File(embeddedPath),
@@ -2346,7 +2434,7 @@ function finalizeLocalArtifact(
     },
     container: {
       type: "zip",
-      install_locations: ["~/Applications/Recordings.app"],
+      install_locations: [`~/Applications/${bundleName}`],
     },
     nested_code_policy: {
       allowlist_sha256: nestedPolicyDigest(items),
@@ -2516,6 +2604,7 @@ function verifyActiveApp(
   expectedApprovedTarget: string,
   expectedApprovedTargetIdentitySha256: string,
   expectedApprovedTargetIdentityKind: OperatorTargetIdentityKind,
+  expectedVariant: ArtifactVariant = "full",
 ): void {
   const manifest = verifyExtractedApp(
     appPath,
@@ -2526,6 +2615,7 @@ function verifyActiveApp(
     expectedApprovedTarget,
     expectedApprovedTargetIdentitySha256,
     expectedApprovedTargetIdentityKind,
+    expectedVariant,
   );
   const helperPath = join(appPath, "Contents", "Helpers", "recordings");
   if (companionVersion(helperPath) !== manifest.companion.version) {
@@ -5188,6 +5278,9 @@ function manifestGet(path: string, expectedManifestSha256: string, field: string
   }
   else if (field === "approved_target_identity_sha256") console.log(manifest.approved_target_identity_sha256);
   else if (field === "builder_identity_kind") console.log(manifestBuilderIdentityKind(manifest));
+  else if (field === "variant") console.log(manifestVariant(manifest));
+  // Pre-variant manifests carry no bundle_name; they are full builds by definition.
+  else if (field === "bundle_name") console.log(manifestBundleName(manifest));
   else throw new Error(`unsupported manifest field: ${field}`);
 }
 
@@ -5212,6 +5305,14 @@ function repeatedArguments(name: string): string[] {
     values.push(value);
   }
   return values;
+}
+
+function variantArgument(defaultVariant: ArtifactVariant): ArtifactVariant {
+  const value = optionalArgument("--variant") ?? defaultVariant;
+  if (value !== "full" && value !== "bar") {
+    throw new Error(`artifact variant must be full or bar; got: ${value}`);
+  }
+  return value;
 }
 
 function artifactPolicyArgument(): ArtifactPolicy {
@@ -5276,6 +5377,7 @@ function main(): void {
       argument("--approved-target-identity-sha256"),
       builderIdentityKindArgument(policy),
       argument("--builder-identity-sha256"),
+      variantArgument("full"),
     );
   } else if (command === "finalize") {
     const sourceSha = argument("--source-sha");
@@ -5290,6 +5392,7 @@ function main(): void {
       argument("--notary-log"),
       argument("--notary-submission-id"),
       argument("--submitted-archive-sha256"),
+      variantArgument("full"),
     );
   } else if (command === "finalize-local") {
     const sourceSha = argument("--source-sha");
@@ -5303,6 +5406,7 @@ function main(): void {
       targetIdentityKindArgument(undefined, true),
       argument("--approved-target-identity-sha256"),
       optionalArgument("--expected-team-id") ?? "ADHOC",
+      variantArgument("full"),
     );
   } else if (command === "verify-archive") {
     const teamId = argument("--team-id");
@@ -5318,6 +5422,7 @@ function main(): void {
       argument("--approved-target"),
       argument("--approved-target-identity-sha256"),
       targetIdentityKindArgument(policy),
+      variantArgument("full"),
     );
   } else if (command === "extract-verified-archive") {
     const teamId = argument("--team-id");
@@ -5334,6 +5439,7 @@ function main(): void {
       argument("--approved-target"),
       argument("--approved-target-identity-sha256"),
       targetIdentityKindArgument(policy),
+      variantArgument("full"),
     );
   } else if (command === "verify-app") {
     const teamId = argument("--team-id");
@@ -5347,6 +5453,7 @@ function main(): void {
       argument("--approved-target"),
       argument("--approved-target-identity-sha256"),
       targetIdentityKindArgument(policy),
+      variantArgument("full"),
     );
   } else if (command === "verify-active") {
     const teamId = argument("--team-id");
@@ -5360,6 +5467,7 @@ function main(): void {
       argument("--approved-target"),
       argument("--approved-target-identity-sha256"),
       targetIdentityKindArgument(policy),
+      variantArgument("full"),
     );
   } else if (command === "assert-release") {
     assertExpectedRelease(

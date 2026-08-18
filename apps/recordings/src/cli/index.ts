@@ -817,6 +817,11 @@ appCommand
   .option("--artifact-policy <policy>", "Artifact policy: release or local-only", "release")
   .option("--approved-target <station>", "Exact approved target; fleet for release artifacts", "fleet")
   .option(
+    "--variant <variant>",
+    "Artifact variant the operator intends to install: full or bar (default: full)",
+    "full",
+  )
+  .option(
     "--approved-target-identity-kind <kind>",
     "Target identity kind: hardware_uuid_sha256 or tailscale_node_id_sha256",
   )
@@ -858,6 +863,7 @@ appCommand
     expectedHostname?: string;
     artifactPolicy: string;
     approvedTarget: string;
+    variant: string;
     approvedTargetIdentityKind?: string;
     approvedTargetIdentitySha256: string;
     acknowledgeLocalSigningAndPermissions?: boolean;
@@ -872,7 +878,24 @@ appCommand
       console.error(chalk.red("Recordings.app installation is only supported on macOS"));
       process.exit(1);
     }
+    if (opts.variant !== "full" && opts.variant !== "bar") {
+      console.error(chalk.red("Artifact variant must be full or bar."));
+      process.exit(1);
+    }
     if (opts.artifactPolicy === "release") {
+      if (opts.variant !== "full") {
+        // The release install path runs through the root-owned update client, whose
+        // install contract is full-app only. A bar release artifact (which requires the
+        // explicit build mark) must not be installed through a path that silently
+        // ignores the variant — fail loudly instead.
+        console.error(
+          chalk.red(
+            "Release installs are always full-app artifacts. The bar variant installs " +
+              "through the local-only path (--artifact-policy local-only --variant bar).",
+          ),
+        );
+        process.exit(1);
+      }
       if (!opts.envelope) {
         console.error(chalk.red("Release installation requires --envelope."));
         process.exit(1);
@@ -991,6 +1014,7 @@ appCommand
     if (opts.expectedHostname) {
       installerArgs.push("--expected-hostname", opts.expectedHostname);
     }
+    installerArgs.push("--variant", opts.variant);
     if (opts.approvedTargetIdentityKind) {
       installerArgs.push("--approved-target-identity-kind", opts.approvedTargetIdentityKind);
     }
@@ -2884,7 +2908,9 @@ function resolveInstalledAppPath(
 ): string {
   const preference = [
     canonicalPath,
+    pathJoin("/", "Applications", "HasnaRecordings.app"),
     pathJoin("/", "Applications", "Recordings.app"),
+    pathJoin(home, ".hasna", "recordings", "HasnaRecordings.app"),
     pathJoin(home, ".hasna", "recordings", "Recordings.app"),
   ];
   for (const candidate of preference) {
@@ -2896,12 +2922,17 @@ function resolveInstalledAppPath(
 function findLegacyMacOSAppPaths(home: string, canonicalPath: string): string[] {
   const candidates = [
     pathJoin(home, ".hasna", "recordings", "Recordings.app"),
+    pathJoin(home, ".hasna", "recordings", "HasnaRecordings.app"),
     pathJoin("/", "Applications", "Recordings.app"),
+    pathJoin("/", "Applications", "HasnaRecordings.app"),
   ];
   const userApplications = pathJoin(home, "Applications");
   if (existsSync(userApplications)) {
     for (const entry of readdirSync(userApplications, { withFileTypes: true })) {
-      if (entry.isDirectory() && entry.name.startsWith("Recordings.app.")) {
+      if (
+        entry.isDirectory() &&
+        (entry.name.startsWith("Recordings.app.") || entry.name.startsWith("HasnaRecordings.app."))
+      ) {
         candidates.push(pathJoin(userApplications, entry.name));
       }
     }

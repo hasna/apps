@@ -193,7 +193,7 @@ function createInstallerFixture() {
   );
   writeExecutable(
     join(root, "scripts", "smoke_macos_app.sh"),
-    "#!/usr/bin/env bash\n[ \"$#\" -eq 2 ] || exit 64\n[ \"$2\" = \"$RECORDINGS_BUN_EXECUTABLE\" ] || exit 65\n[ \"${FAIL_RUNTIME_SMOKE:-0}\" = 0 ] || exit 1\nprintf '%s\\n' \"$1\" >> \"$MARKER_DIRECTORY/runtime-smoke.log\"\n",
+    "#!/usr/bin/env bash\n[ \"$#\" -eq 2 ] || [ \"$#\" -eq 4 ] && [ \"$3\" = \"--variant\" ] || exit 64\n[ \"$2\" = \"$RECORDINGS_BUN_EXECUTABLE\" ] || exit 65\n[ \"${FAIL_RUNTIME_SMOKE:-0}\" = 0 ] || exit 1\nprintf '%s\\n' \"$1\" >> \"$MARKER_DIRECTORY/runtime-smoke.log\"\n",
   );
 
   writeExecutable(
@@ -326,6 +326,7 @@ case "$*" in
   *" manifest-get "*"--field minimum_macos"*) printf '26.0\n'; exit 0 ;;
   *" manifest-get "*"--field architectures"*) printf 'arm64\n'; exit 0 ;;
   *" manifest-get "*"--field identity"*) printf '%064d\n' 0 | tr '0' c; exit 0 ;;
+  *" manifest-get "*"--field bundle_name"*) printf '%s\n' "\${REQUIRED_BUNDLE_NAME:-Recordings.app}"; exit 0 ;;
   *" requirement-digest "*)
     if [ "\${NO_DESIGNATED_REQUIREMENT:-0}" = 1 ]; then
       [[ "$*" == *"--artifact-policy local_only"* ]] || exit 1
