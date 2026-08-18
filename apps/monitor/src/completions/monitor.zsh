@@ -8,7 +8,13 @@ _monitor() {
 
   local -a subcommands
   subcommands=(
+    'config:Edit the monitor configuration'
+    'edit:Edit the monitor configuration'
+    'validate:Validate the monitor configuration'
+    'backup:Back up the monitor database'
+    'restore:Restore the monitor database from a backup'
     'status:Show current system snapshot (CPU, memory, disk, GPU)'
+    'compare:Compare machine snapshots across configured machines'
     'health:Show metadata-only monitor health counts'
     'machines:List all configured machines'
     'add:Add a machine to monitor'
