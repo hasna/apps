@@ -8,7 +8,7 @@ import { LocalChangelogStore } from "./storage.js";
 
 describe("markdown generation and publishing", () => {
   test("generates Keep a Changelog style markdown grouped by version and category", async () => {
-    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "open-changelog-md-")) });
+    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "changelog-md-")) });
     await store.createEntry({
       appId: "changelog",
       version: "0.1.0",
@@ -27,7 +27,7 @@ describe("markdown generation and publishing", () => {
   });
 
   test("sorts semver versions and links repository refs", async () => {
-    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "open-changelog-semver-")) });
+    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "changelog-semver-")) });
     await store.createEntry({
       appId: "app",
       version: "1.9.0",
@@ -53,7 +53,7 @@ describe("markdown generation and publishing", () => {
   });
 
   test("sorts semver prerelease numeric identifiers correctly", async () => {
-    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "open-changelog-prerelease-")) });
+    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "changelog-prerelease-")) });
     await store.createEntry({
       appId: "app",
       version: "1.0.0-beta.2",
@@ -72,8 +72,8 @@ describe("markdown generation and publishing", () => {
   });
 
   test("dry-runs by default and writes only with explicit write mode", async () => {
-    const cwd = await mkdtemp(join(tmpdir(), "open-changelog-publish-"));
-    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "open-changelog-data-")) });
+    const cwd = await mkdtemp(join(tmpdir(), "changelog-publish-"));
+    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "changelog-data-")) });
     await store.createEntry({
       appId: "app",
       version: "1.0.0",
@@ -91,8 +91,8 @@ describe("markdown generation and publishing", () => {
   });
 
   test("can preview diffs and backs up existing files before write", async () => {
-    const cwd = await mkdtemp(join(tmpdir(), "open-changelog-diff-"));
-    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "open-changelog-diff-data-")) });
+    const cwd = await mkdtemp(join(tmpdir(), "changelog-diff-"));
+    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "changelog-diff-data-")) });
     await store.createEntry({
       appId: "app",
       version: "1.0.0",

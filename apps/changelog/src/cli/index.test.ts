@@ -18,7 +18,7 @@ function runCli(args: string[], env: Record<string, string> = {}): string {
 
 describe("changelog CLI", () => {
   test("supports required smoke flow from source", async () => {
-    const dataDir = await mkdtemp(join(tmpdir(), "open-changelog-cli-"));
+    const dataDir = await mkdtemp(join(tmpdir(), "changelog-cli-"));
     const env = { CHANGELOG_DATA_DIR: dataDir };
 
     const help = runCli(["--help"], env);
@@ -30,10 +30,10 @@ describe("changelog CLI", () => {
     expect(help).not.toContain("--token");
 
     expect(runCli(["init"], env)).toContain("entries.jsonl");
-    expect(runCli(["add", "Initial changelog scaffold", "--app", "open-changelog", "--version", "0.1.0", "--kind", "added"], env))
+    expect(runCli(["add", "Initial changelog scaffold", "--app", "changelog", "--version", "0.1.0", "--kind", "added"], env))
       .toContain("\"version\": \"0.1.0\"");
-    runCli(["add", "Fixed changelog bug", "--app", "open-changelog", "--version", "0.1.0", "--kind", "fixed"], env);
-    const markdown = runCli(["generate", "--app", "open-changelog", "--version", "0.1.0", "--kind", "added"], env);
+    runCli(["add", "Fixed changelog bug", "--app", "changelog", "--version", "0.1.0", "--kind", "fixed"], env);
+    const markdown = runCli(["generate", "--app", "changelog", "--version", "0.1.0", "--kind", "added"], env);
     expect(markdown).toContain("## [0.1.0]");
     expect(markdown).toContain("Initial changelog scaffold");
     expect(markdown).not.toContain("Fixed changelog bug");
@@ -47,8 +47,8 @@ describe("changelog CLI", () => {
   });
 
   test("publish --release promotes appId+version and returns a changelogRef", async () => {
-    const dataDir = await mkdtemp(join(tmpdir(), "open-changelog-cli-release-"));
-    const workDir = await mkdtemp(join(tmpdir(), "open-changelog-cli-release-target-"));
+    const dataDir = await mkdtemp(join(tmpdir(), "changelog-cli-release-"));
+    const workDir = await mkdtemp(join(tmpdir(), "changelog-cli-release-target-"));
     const env = { CHANGELOG_DATA_DIR: dataDir };
 
     runCli(["add", "Release entrypoint change", "--app", "@hasna/todos", "--kind", "added"], env);
@@ -78,7 +78,7 @@ describe("changelog CLI", () => {
   });
 
   test("filters accept npm names and match normalized appIds", async () => {
-    const dataDir = await mkdtemp(join(tmpdir(), "open-changelog-cli-filter-"));
+    const dataDir = await mkdtemp(join(tmpdir(), "changelog-cli-filter-"));
     const env = { CHANGELOG_DATA_DIR: dataDir };
 
     runCli(["add", "Filter round-trip entry", "--app", "@hasna/todos", "--kind", "added"], env);
@@ -91,7 +91,7 @@ describe("changelog CLI", () => {
   });
 
   test("publish --release rejects --dry-run instead of silently mutating the store", async () => {
-    const dataDir = await mkdtemp(join(tmpdir(), "open-changelog-cli-release-dry-"));
+    const dataDir = await mkdtemp(join(tmpdir(), "changelog-cli-release-dry-"));
     const env = { CHANGELOG_DATA_DIR: dataDir };
     runCli(["add", "Should stay unreleased", "--app", "todos", "--kind", "added"], env);
 
@@ -110,8 +110,8 @@ describe("changelog CLI", () => {
   });
 
   test("web generates a static site with feeds", async () => {
-    const dataDir = await mkdtemp(join(tmpdir(), "open-changelog-cli-web-"));
-    const outDir = await mkdtemp(join(tmpdir(), "open-changelog-cli-web-out-"));
+    const dataDir = await mkdtemp(join(tmpdir(), "changelog-cli-web-"));
+    const outDir = await mkdtemp(join(tmpdir(), "changelog-cli-web-out-"));
     const env = { CHANGELOG_DATA_DIR: dataDir };
 
     runCli(["add", "Web page entry", "--app", "todos", "--version", "1.0.0", "--kind", "added"], env);

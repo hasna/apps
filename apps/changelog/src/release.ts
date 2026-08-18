@@ -4,8 +4,8 @@ import { LocalChangelogStore } from "./storage.js";
 import type { ChangelogReleaseResult, ChangelogStore, PublishChangelogResult } from "./types.js";
 import { normalizeAppId } from "./validation.js";
 
-// `changelog publish` entrypoint for open-releases (Hasna distribution apps
-// plan): accepts appId + version, promotes pending entries, generates/updates
+// `changelog publish` entrypoint for the releases distribution apps plan:
+// accepts appId + version, promotes pending entries, generates/updates
 // the changelog artifacts, and returns a changelogRef the caller can embed in
 // its hasna.release.v1 document.
 
@@ -26,7 +26,7 @@ export interface ChangelogRefPointer {
 }
 
 export interface PublishReleaseOptions {
-  /** hasna.app.v1 appId (join key), e.g. "open-todos". npm names are normalized. */
+  /** hasna.app.v1 appId (join key), e.g. "todos". npm names are normalized. */
   appId: string;
   /** Released version; pending entries in `fromVersion` are promoted to it. */
   version: string;
@@ -80,7 +80,7 @@ export function changelogSiteAppUrl(baseUrl: string, appId: string): string {
 }
 
 /**
- * Release-publish flow invoked by open-releases: promote the app's pending
+ * Release-publish flow invoked by the releases app: promote the app's pending
  * entries to the released version, regenerate the changelog markdown, and
  * return a `changelogRef` resource pointer for the hasna.release.v1 document.
  * Promoting zero entries is legal (the release simply has no recorded

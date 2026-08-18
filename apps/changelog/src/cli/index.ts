@@ -60,7 +60,7 @@ function localStore(): LocalChangelogStore {
 
 /**
  * Normalize a user-supplied `--app` value the same way entries are normalized
- * on write (`@hasna/todos` -> `open-todos`) so filters match stored appIds.
+ * on write (`@hasna/todos` -> `todos`) so filters match stored appIds.
  * Values that cannot be normalized fall back to the raw string, keeping
  * exact-match behavior for legacy stored ids.
  */
@@ -289,7 +289,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--target <path>", "Target changelog file", "CHANGELOG.md")
     .option("--dry-run", "Preview without writing (the default unless --write is passed; not supported with --release)")
     .option("--write", "Write the target file")
-    .option("--release", "Release-publish for open-releases: promote pending entries to --version, write the changelog, and print a changelogRef")
+    .option("--release", "Release-publish for releases: promote pending entries to --version, write the changelog, and print a changelogRef")
     .option("--from-version <version>", "Source bucket promoted by --release", "Unreleased")
     .option("--date <date>", "Release date as YYYY-MM-DD used by --release")
     .option("--base-url <url>", "Published changelog site base URL used for the changelogRef uri")

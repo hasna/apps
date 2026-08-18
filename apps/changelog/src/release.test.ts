@@ -48,7 +48,7 @@ describe("appId alignment with hasna.app.v1", () => {
 
 describe("publishRelease", () => {
   test("promotes pending entries, writes the changelog, and returns a changelogRef", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "open-changelog-release-"));
+    const dir = await mkdtemp(join(tmpdir(), "changelog-release-"));
     process.env["CHANGELOG_DATA_DIR"] = join(dir, "data");
     const store = await seededStore(dir);
     const target = join(dir, "CHANGELOG.md");
@@ -82,7 +82,7 @@ describe("publishRelease", () => {
   });
 
   test("uses the site base URL for the ref and tolerates zero promoted entries", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "open-changelog-release-empty-"));
+    const dir = await mkdtemp(join(tmpdir(), "changelog-release-empty-"));
     const store = new LocalChangelogStore({ filePath: join(dir, "entries.jsonl") });
     const result = await publishRelease({
       appId: "todos",

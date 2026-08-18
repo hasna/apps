@@ -7,7 +7,7 @@ import { ChangelogClient } from "./client.js";
 import { LocalChangelogStore } from "./storage.js";
 
 async function createTestClient() {
-  const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "open-changelog-api-")) });
+  const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "changelog-api-")) });
   const handler = createChangelogHandler({ store, apiToken: "test-token" });
   const fetchImpl = (input: string | URL | Request, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
@@ -106,15 +106,15 @@ describe("Changelog HTTP API and SDK", () => {
   });
 
   test("rejects requests with missing token when configured", async () => {
-    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "open-changelog-auth-")) });
+    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "changelog-auth-")) });
     const handler = createChangelogHandler({ store, apiToken: "required" });
     const response = await handler(new Request("http://changelog.test/v1/entries"));
     expect(response.status).toBe(401);
   });
 
   test("requires configured token auth for API publish write mode", async () => {
-    const cwd = await mkdtemp(join(tmpdir(), "open-changelog-api-write-"));
-    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "open-changelog-write-data-")) });
+    const cwd = await mkdtemp(join(tmpdir(), "changelog-api-write-"));
+    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "changelog-write-data-")) });
     await store.createEntry({
       appId: "api-app",
       version: "0.1.0",
@@ -132,11 +132,11 @@ describe("Changelog HTTP API and SDK", () => {
   });
 
   test("writes through API only with configured token and safe relative target", async () => {
-    const cwd = await mkdtemp(join(tmpdir(), "open-changelog-api-write-token-"));
+    const cwd = await mkdtemp(join(tmpdir(), "changelog-api-write-token-"));
     const previousCwd = process.cwd();
     process.chdir(cwd);
     try {
-      const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "open-changelog-write-token-data-")) });
+      const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "changelog-write-token-data-")) });
       await store.createEntry({
         appId: "api-app",
         version: "0.1.0",

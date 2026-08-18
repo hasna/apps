@@ -4,7 +4,7 @@ import { parseChangelogEntryInput } from "./validation.js";
 describe("changelog validation", () => {
   test("normalizes tags, defaults version, and maps category to kind", () => {
     const parsed = parseChangelogEntryInput({
-      appId: "open-changelog",
+      appId: "changelog",
       title: " Works ",
       category: "added",
       tags: ["Release", "release", "  api "],

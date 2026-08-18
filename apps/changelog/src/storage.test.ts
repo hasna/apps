@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { LocalChangelogStore } from "./storage.js";
 
 async function tempStore(): Promise<LocalChangelogStore> {
-  const dataDir = await mkdtemp(join(tmpdir(), "open-changelog-"));
+  const dataDir = await mkdtemp(join(tmpdir(), "changelog-"));
   return new LocalChangelogStore({ dataDir });
 }
 

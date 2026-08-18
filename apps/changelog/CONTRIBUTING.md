@@ -1,6 +1,6 @@
 # Contributing
 
-Open Changelog is a Bun and TypeScript package.
+Hasna Changelog is a Bun and TypeScript package.
 
 ## Development
 
