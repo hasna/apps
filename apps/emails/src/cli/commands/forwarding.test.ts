@@ -54,7 +54,7 @@ function configureLocalStore(): void {
 function configureApiStore(): void {
   clearStoreSettings();
   process.env[API_BASE_URL_SETTING] = api.baseUrl;
-  process.env["EMAILS_SELF_HOSTED_API_KEY"] = api.apiKey;
+  process.env["HASNA_EMAILS_API_KEY"] = api.apiKey;
 }
 
 beforeEach(() => {

@@ -1,27 +1,23 @@
 // Live conformance test: drives the domains REPOSITORY (createDomain/getDomain/
-// listDomains/deleteDomain) with the client flipped to self_hosted, proving the
+// listDomains/deleteDomain) with the client flipped to self-hosted, proving the
 // repo layer routes reads+writes to the selfHosted HTTP API. Skips cleanly when the
 // selfHosted env is not configured.
 //
 // Enable by exporting:
-//   EMAILS_MODE=self_hosted
-//   EMAILS_SELF_HOSTED_URL=https://emails.example
-//   EMAILS_SELF_HOSTED_API_KEY=<key>
+//   HASNA_EMAILS_API_URL=https://emails.example
+//   HASNA_EMAILS_API_KEY=<key>
 
 import { describe, expect, test } from "bun:test";
 import { createDomain, deleteDomain, getDomain, getDomainByName, listDomains } from "./domains.js";
 import { resetSelfHostedConfigCache } from "./self-hosted-store.js";
 
-const HAS_CLOUD =
-  Boolean(process.env.EMAILS_SELF_HOSTED_URL || process.env.EMAILS_SELF_HOSTED_URL) &&
-  Boolean(process.env.EMAILS_SELF_HOSTED_API_KEY || process.env.EMAILS_SELF_HOSTED_API_KEY) &&
-  /selfHosted|self_hosted|remote|hybrid/i.test(
-    process.env.EMAILS_MODE ?? process.env.EMAILS_STORAGE_MODE ?? process.env.HASNA_EMAILS_MODE ?? "",
-  );
+const HAS_API =
+  Boolean(process.env.HASNA_EMAILS_API_URL) &&
+  Boolean(process.env.HASNA_EMAILS_API_KEY);
 
-const maybe = HAS_CLOUD ? test : test.skip;
+const maybe = HAS_API ? test : test.skip;
 
-describe("live selfHosted domains CRUD via repository (self_hosted)", () => {
+describe("live selfHosted domains CRUD via repository (self-hosted)", () => {
   maybe("create -> get -> list -> delete round-trips against the selfHosted API", () => {
     resetSelfHostedConfigCache();
     const name = `live-repo-probe-${Date.now()}.example.com`;

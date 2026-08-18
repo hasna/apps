@@ -4,7 +4,7 @@ import { writeSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { resolveResourceId, listResourceIdMatches } from "../db/self-hosted-store.js";
 import { getDatabase, listPartialIdMatches, resolvePartialIdOrThrow } from "../db/database.js";
-import { getEmailsMode, type EmailsMode } from "../lib/mode.js";
+import { isApiClientConfigured } from "../store-resolution.js";
 import { keepAvailableCommands } from "../lib/status-commands.js";
 import { redactSecrets } from "../lib/redaction.js";
 
@@ -218,15 +218,15 @@ function fixCommands(message: string): string[] {
     return ["emails status --json", "emails doctor --json"];
   })();
 
-  let mode: EmailsMode;
+  let backend: "sqlite" | "api";
   try {
-    mode = getEmailsMode();
+    backend = isApiClientConfigured() ? "api" : "sqlite";
   } catch {
-    // Mode resolution itself failed (e.g. the very error being reported). Do not
-    // guess a mode and do not promise a command we cannot vouch for.
+    // Client selection itself failed (e.g. the very error being reported). Do not
+    // guess a backend and do not promise a command we cannot vouch for.
     return ["emails --help"];
   }
-  const runnable = keepAvailableCommands(candidates, mode);
+  const runnable = keepAvailableCommands(candidates, backend);
   // Never return an empty list silently: an empty `fix_commands` reads as "there
   // is nothing you can do". `emails --help` always runs.
   return runnable.length > 0 ? runnable : ["emails --help"];
@@ -279,7 +279,7 @@ function resourceForTable(table: string): string {
 }
 
 export function resolveId(table: string, partialId: string): string {
-  if (getEmailsMode() === "local") {
+  if (!isApiClientConfigured()) {
     try {
       return resolvePartialIdOrThrow(getDatabase(), table, partialId);
     } catch (error) {
@@ -300,7 +300,7 @@ export function resolveId(table: string, partialId: string): string {
 
 function getIdSuggestions(resource: string, partialId: string): string[] {
   try {
-    if (getEmailsMode() === "local") {
+    if (!isApiClientConfigured()) {
       const table = Object.entries(TABLE_TO_RESOURCE).find(([, mapped]) => mapped === resource)?.[0] ?? resource;
       return listPartialIdMatches(getDatabase(), table, partialId, ID_ERROR_SUGGESTION_LIMIT);
     }

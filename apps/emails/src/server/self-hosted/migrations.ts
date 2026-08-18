@@ -1,8 +1,8 @@
-// Schema migrations for the Emails self_hosted service (Postgres).
+// Schema migrations for the Emails self-hosted service (Postgres).
 //
 // These run through the product-owned migration ledger (checksummed,
 // idempotent, drift/downgrade-guarded). They own ONLY the tables the
-// self_hosted /v1 API manages in the operator-owned database.
+// self-hosted /v1 API manages in the operator-owned database.
 
 import { defineMigration, withAcceptedMigrationChecksums, type Migration } from "../../storage-kit/index.js";
 import { apiKeyMigrations } from "@hasna/contracts/auth";
@@ -36,7 +36,7 @@ const LEGACY_TABLE_COMPATIBILITY_SCHEMA = defineMigration(
   `,
 );
 
-/** Emails self_hosted domain schema: sending domains, addresses, message ledger. */
+/** Emails self-hosted domain schema: sending domains, addresses, message ledger. */
 const CORE_SCHEMA = defineMigration(
   "0001_mailery_selfhosted_core",
   `
@@ -122,8 +122,8 @@ const INBOUND_SCHEMA = defineMigration(
  * Address verification support.
  *
  * The client `addresses` resource carries a `verified` flag (the send-readiness
- * gate + `emails address verify` / markVerified flow). The original self_hosted
- * `addresses` table (0001) omitted it, so a client flipped to the self_hosted store
+ * gate + `emails address verify` / markVerified flow). The original self-hosted
+ * `addresses` table (0001) omitted it, so a client flipped to the self-hosted store
  * could not persist verification. This additive column closes that gap so the
  * full address CRUD — including verify — round-trips through /v1/addresses.
  */
@@ -139,7 +139,7 @@ const ADDRESS_VERIFIED_SCHEMA = defineMigration(
  *
  * `emails address quota <id> <perDay>` (setAddressQuota) caps sends per UTC day
  * for an address. A flipped client routes this write to /v1/addresses; without a
- * self_hosted column the quota would silently only persist on the local island
+ * self-hosted column the quota would silently only persist on the local island
  * (split-brain). Nullable: NULL means "no quota" (the CLI's `quota <id> none`).
  */
 const ADDRESS_QUOTA_SCHEMA = defineMigration(
@@ -152,7 +152,7 @@ const ADDRESS_QUOTA_SCHEMA = defineMigration(
 /**
  * Generic list-backed resources for self-hosted clients.
  *
- * Adds the self_hosted tables behind the /v1 resource CRUD used by `contact list`,
+ * Adds the self-hosted tables behind the /v1 resource CRUD used by `contact list`,
  * `provider list`, `template list`, `group list`, `sequence list`, `owner
  * list`, `sendkey list` and `scheduled list`. Without these, a flipped client
  * fails closed (HTTP 404) on those reads rather than silently reading its local
@@ -1760,7 +1760,7 @@ const TENANCY_IDENTITY_AND_BACKFILL = defineMigration(
  * so FORCE ROW LEVEL SECURITY is REQUIRED to subject the owner to its own policies
  * — and FORCE is honored precisely BECAUSE the owner is neither a superuser nor
  * BYPASSRLS. Therefore NO new role and NO second DSN are needed: the SAME
- * `EMAILS_DATABASE_URL`/`emails_app` runs both migrate.ts (owner: can ENABLE/FORCE
+ * `HASNA_EMAILS_DATABASE_URL`/`emails_app` runs both migrate.ts (owner: can ENABLE/FORCE
  * RLS + CREATE POLICY) and serve.ts (subject to the policy). serve.ts additionally
  * asserts at boot that its role cannot bypass RLS (assertServingRoleCannotBypassRls)
  * so this can never silently regress.
@@ -2949,7 +2949,15 @@ const LEGACY_GMAIL_REPLAY_PROVENANCE = defineMigration(
   `,
 );
 
-/** All migrations, in order: api-keys table (auth), the core schema, inbound. */
+
+const SERVER_PROVIDERS_RENAME = defineMigration(
+  "0027_emails_server_providers_rename",
+  `
+  ALTER TABLE self_hosted_providers RENAME TO server_providers;
+  `,
+);
+
+
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
   return [
@@ -2984,5 +2992,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     MAILBOX_FILTERS,
     PRIORITY_SENDER_RULES,
     LEGACY_GMAIL_REPLAY_PROVENANCE,
+    SERVER_PROVIDERS_RENAME,
   ];
 }

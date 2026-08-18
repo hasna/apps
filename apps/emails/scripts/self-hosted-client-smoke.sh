@@ -17,15 +17,15 @@ command -v "$emails_cli" >/dev/null 2>&1 || fail "Emails CLI is not executable: 
 # origin and credential from the vault) or by an explicit service origin plus a
 # credential. Either one is proof the station has been pointed at the service.
 if test -n "${EMAILS_CLIENT_ENV_SECRET:-}"; then
-  : # the client-env pointer supplies EMAILS_SELF_HOSTED_URL and a credential
-elif test -n "${EMAILS_SELF_HOSTED_URL:-}"; then
+  : # the client-env pointer supplies HASNA_EMAILS_API_URL and a credential
+elif test -n "${HASNA_EMAILS_API_URL:-}"; then
   if test -z "${EMAILS_SESSION_TOKEN:-}" &&
     test -z "${EMAILS_IDP_TOKEN:-}" &&
-    test -z "${EMAILS_SELF_HOSTED_API_KEY:-}"; then
-    fail "set EMAILS_SESSION_TOKEN, EMAILS_IDP_TOKEN, or EMAILS_SELF_HOSTED_API_KEY"
+    test -z "${HASNA_EMAILS_API_KEY:-}"; then
+    fail "set EMAILS_SESSION_TOKEN, EMAILS_IDP_TOKEN, or HASNA_EMAILS_API_KEY"
   fi
 else
-  fail "configure the self-hosted client: set EMAILS_CLIENT_ENV_SECRET, or EMAILS_SELF_HOSTED_URL with a credential"
+  fail "configure the self-hosted client: set EMAILS_CLIENT_ENV_SECRET, or HASNA_EMAILS_API_URL with a credential"
 fi
 
 # A database-path setting is evidence of an unresolved two-store configuration,

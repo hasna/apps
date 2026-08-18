@@ -5,7 +5,7 @@ import {
   getMailboxFilter,
   listMailboxFilters,
   updateMailboxFilter,
-} from "../../db/mailbox-filters.local.js";
+} from "../../db/mailbox-filters.sqlite.js";
 import type { MailboxFilterInput } from "../../lib/mailbox-filters.js";
 import { MailboxFilterInputError } from "../../lib/mailbox-filters.js";
 import { badRequest, internalError, json, parseBody, queryPage } from "./helpers.js";

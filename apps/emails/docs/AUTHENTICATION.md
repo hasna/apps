@@ -9,21 +9,21 @@ not use these accounts.
 A self-hosted client sets the service URL and one bearer credential:
 
 ```bash
-export EMAILS_SELF_HOSTED_URL="https://emails.example.com"
-export EMAILS_SELF_HOSTED_API_KEY="..."   # operator or tenant API key
+export HASNA_EMAILS_API_URL="https://emails.example.com"
+export HASNA_EMAILS_API_KEY="..."   # operator or tenant API key
 ```
 
 Setting the service URL is what selects the hosted client store; there is no
-separate deployment-mode variable.
+separate selector variable.
 
 The accepted credential variables, in precedence order, are:
 
 1. `EMAILS_SESSION_TOKEN` — an opaque user session created by `emails auth login`;
 2. `EMAILS_IDP_TOKEN` — an access token from the configured identity provider;
-3. `EMAILS_SELF_HOSTED_API_KEY` — an HMAC application or tenant API key.
+3. `HASNA_EMAILS_API_KEY` — an HMAC application or tenant API key.
 
 `EMAILS_CLIENT_ENV_SECRET` may point to a `secrets` vault entry containing
-`EMAILS_SELF_HOSTED_URL` and any one of those credentials.
+`HASNA_EMAILS_API_URL` and any one of those credentials.
 `emails auth login`, `logout`, and `switch-tenant` update that entry when the
 pointer is configured. Without it, a login token exists only in the current CLI
 process and is not durable across later invocations.

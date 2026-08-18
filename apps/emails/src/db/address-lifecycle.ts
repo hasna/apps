@@ -5,11 +5,11 @@
 // 28-line facade that built a dispatch helper, read the process-wide deployment word, and
 // handed each of six exports to one of two sibling modules:
 //
-//   * `address-lifecycle.local.ts` (153 lines) held THREE implementations, not one — a
+//   * `address-lifecycle.sqlite.ts` (153 lines) held THREE implementations, not one — a
 //     local SQLite path, a second path that noticed the deployment word and wrote to the
 //     operator dataset instead, and (for the two counting exports) a third that returned
 //     0 without reading anything;
-//   * `address-lifecycle.remote.ts` (85 lines) held a fourth: status and quota writes
+//   * `address-lifecycle.api.ts` (85 lines) held a fourth: status and quota writes
 //     through the operator dataset, and send accounting hard-wired to 0.
 //
 // Both arms are gone. This is the FIRST `src/db/*` family to be collapsed, so the shape
@@ -75,12 +75,12 @@
 //     not a runtime label for callers to branch on. There is no branch here on the store
 //     kind, on the descriptor, or on a capability name.
 //  2. It does not reach into another family's arm. The deleted local arm imported
-//     `addresses.local.ts` and the deleted remote arm imported `addresses.remote.ts` —
+//     `addresses.sqlite.ts` and the deleted remote arm imported `addresses.api.ts` —
 //     which is how a lifecycle write ends up landing in the dataset the operator did not
 //     configure. Nothing here imports either; the address rows come from the seam.
-//  3. It does not touch the deployment-mode axis module, the dispatch layer, the curl
+//  3. It does not touch the selector axis module, the dispatch layer, the curl
 //     bridge, or any mode-gated branch in another family. Those are phase 9's, and only
-//     once the ratchet in src/mode-axis-ratchet.test.ts reads zero.
+//     once the source-text guard in src/store-resolution.test.ts reads zero.
 
 import { AddressNotFoundError } from "../types/index.js";
 import { canonicalSender } from "../lib/email-address.js";

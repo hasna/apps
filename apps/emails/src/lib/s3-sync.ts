@@ -4,7 +4,7 @@
 // ─── READ THIS FIRST: THIS FAMILY IS PARTIALLY COLLAPSED ──────────────────────────────
 //
 // Four of the five exports below are now one implementation with no arm to pick. The fifth,
-// `syncS3Inbox`, is STILL DISPATCHED to `s3-sync.local.ts` / `s3-sync.remote.ts`, and both arm
+// `syncS3Inbox`, is STILL DISPATCHED to `s3-sync.sqlite.ts` / `s3-sync.api.ts`, and both arm
 // modules remain in the tree. So a reduced `routedCallExpressions` count must NOT be read as this
 // family being done: `twoArmFamilies` and `remoteArmModules` still count it, correctly.
 //
@@ -39,7 +39,7 @@
 //   * MAKING THEM `async` WOULD BE A BREAK WITH NOTHING BEHIND IT. All 13 of their production call
 //     sites use the value synchronously, and two cannot be fixed with a local `await` at all:
 //     `src/lib/domain-inbound-evidence.ts` uses `listLiveS3Sources()` as a DEFAULT PARAMETER of an
-//     exported synchronous function, and `src/cli/tui/data.local.ts` calls `listS3Sources()` inside
+//     exported synchronous function, and `src/cli/tui/data.sqlite.ts` calls `listS3Sources()` inside
 //     the exported synchronous `listMailboxSources`. A forgotten `await` on a source list reads a
 //     truthy Promise as a populated list, which is the exact failure class this programme exists to
 //     remove. A signature is widened when the work behind it became asynchronous. Theirs did not.
@@ -49,7 +49,7 @@
 //
 // ─── THE TYPES STILL COME FROM THE LOCAL ARM, AND THAT IS UNCHANGED ───────────────────
 //
-// `export type * from "./s3-sync.local.js"` is kept exactly as it was. It is how the weaker arm
+// `export type * from "./s3-sync.sqlite.js"` is kept exactly as it was. It is how the weaker arm
 // became the contract — a star re-export makes one implementation's shapes authoritative silently —
 // and it is not fixed here because the shapes it publishes that MATTER (`S3SyncOptions`,
 // `S3SyncResult`) belong to `syncS3Inbox`, the half that is not collapsing yet.
@@ -62,7 +62,7 @@
 // belongs with the ingestion, whose signature it is; doing it here would change a published type
 // while both implementations behind it still take a `Database`.
 
-import { getEmailsMode } from "./mode.js";
+import { isApiClientConfigured } from "../store-resolution.js";
 import { loadConfig, saveConfig } from "./config.js";
 // `export type *` re-exports but creates NO local binding, so the shapes these four functions
 // are written against are imported explicitly as well. Both arms still declare them; the arms'
@@ -74,9 +74,9 @@ import type {
   S3MailSource,
   S3SyncOptions,
   S3SyncResult,
-} from "./s3-sync.local.js";
+} from "./s3-sync.sqlite.js";
 
-export type * from "./s3-sync.local.js";
+export type * from "./s3-sync.sqlite.js";
 
 const MAIL_SOURCES_CONFIG_KEY = "mail_sources";
 
@@ -257,8 +257,8 @@ export function retireS3Source(sourceIdOrBucket: string): S3MailSource {
  * nothing and the exported signature is unchanged.
  */
 export async function syncS3Inbox(opts: S3SyncOptions): Promise<S3SyncResult> {
-  const implementation = getEmailsMode() === "self_hosted"
-    ? await import("./s3-sync.remote.js")
-    : await import("./s3-sync.local.js");
+  const implementation = isApiClientConfigured()
+    ? await import("./s3-sync.api.js")
+    : await import("./s3-sync.sqlite.js");
   return implementation.syncS3Inbox(opts);
 }

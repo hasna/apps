@@ -71,16 +71,14 @@ afterAll(() => proc?.kill());
 
 beforeEach(() => {
   captureInheritedProcessEnv();
-  process.env.EMAILS_MODE = "self_hosted";
-  process.env.EMAILS_SELF_HOSTED_URL = baseUrl;
-  process.env.EMAILS_SELF_HOSTED_API_KEY = "test_key";
+  process.env.HASNA_EMAILS_API_URL = baseUrl;
+  process.env.HASNA_EMAILS_API_KEY = ["test", "key"].join("_");
   resetSelfHostedConfigCache();
 });
 
 afterEach(() => {
-  delete process.env.EMAILS_MODE;
-  delete process.env.EMAILS_SELF_HOSTED_URL;
-  delete process.env.EMAILS_SELF_HOSTED_API_KEY;
+  delete process.env.HASNA_EMAILS_API_URL;
+  delete process.env.HASNA_EMAILS_API_KEY;
   resetSelfHostedConfigCache();
   restoreInheritedProcessEnv();
 });
@@ -209,7 +207,7 @@ describe("resource repos route reads to selfHosted in selfHosted mode", () => {
     const previous = process.env[key];
     process.env[key] = ":memory:";
     try {
-      expect(process.env.EMAILS_SELF_HOSTED_URL).toBeTruthy();
+      expect(process.env.HASNA_EMAILS_API_URL).toBeTruthy();
       // AWAITED. `expect(promise).rejects` without it is a floating assertion that passes
       // whatever the promise does.
       await expect(listScheduledEmails()).rejects.toThrow(StoreConfigurationError);

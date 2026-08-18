@@ -111,7 +111,7 @@ function req(method: string, path: string, opts: { token?: string; body?: unknow
 const readToken = () => mintApiKey({ app: "emails", scopes: ["emails:read"], signingSecret: SIGNING_SECRET }).token;
 const writeToken = () => mintApiKey({ app: "emails", scopes: ["emails:*"], signingSecret: SIGNING_SECRET }).token;
 
-describe("self_hosted service generic resources", () => {
+describe("self-hosted service generic resources", () => {
   test("migration 0005 is registered", () => {
     expect(emailsSelfHostedMigrations().some((m) => m.id === "0005_mailery_selfhosted_resources")).toBe(true);
     expect(emailsSelfHostedMigrations().some((m) => m.id === "0006_emails_rename_bridge")).toBe(true);

@@ -20,7 +20,7 @@
 
 import { EmailsApiFault } from "./outcome.js";
 import {
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
+  HASNA_EMAILS_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   type EmailsClientCredentialCandidate,
   type EmailsClientCredentialSetting,
@@ -114,7 +114,7 @@ function buildQuery(query: Record<string, QueryValue> | undefined): string {
 
 function credentialCandidates(options: TransportOptions): readonly EmailsClientCredentialCandidate[] {
   return [
-    { setting: options.credentialSetting ?? EMAILS_SELF_HOSTED_API_KEY_ENV, value: options.credential },
+    { setting: options.credentialSetting ?? HASNA_EMAILS_API_KEY_ENV, value: options.credential },
     ...(options.credentialFallbacks ?? []),
   ];
 }

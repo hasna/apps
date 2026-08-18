@@ -74,7 +74,7 @@ export type StatusUnavailableCode = (typeof STATUS_UNAVAILABLE_CODES)[number];
  * construction. Permanent until a route or a data model changes; nothing an
  * operator does today will clear it. Self-hosted always has some of these (no
  * local SQLite dir, no `/v1/senders`, no DNS evidence on the `/v1` domain
- * entity); local mode always has at least one (no server source inventory).
+ * entity); local SQLite client always has at least one (no server source inventory).
  */
 export const STATUS_STRUCTURAL_CODES: readonly StatusUnavailableCode[] = [
   "not_applicable",
@@ -132,7 +132,7 @@ export interface StatusAvailability {
   available: boolean;
   /** `<code>:<detail> — <prose>`, or null when available. */
   reason: string | null;
-  /** Provenance, e.g. `self_hosted_api:/v1/providers`, `local_sqlite:addresses`. */
+  /** Provenance, e.g. `self-hosted_api:/v1/providers`, `local_sqlite:addresses`. */
   source: string;
   basis: StatusBasis | null;
   /**

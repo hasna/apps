@@ -1121,7 +1121,7 @@ set -euo pipefail
 REPAIR_DATABASE_SECRET_ARN="$(jq -er --arg container "$MANIFEST_API_CONTAINER_NAME" '
   .taskDefinition.containerDefinitions[]
   | select(.name == $container)
-  | [.secrets[] | select(.name == "EMAILS_DATABASE_URL") | .valueFrom]
+  | [.secrets[] | select(.name == "HASNA_EMAILS_DATABASE_URL") | .valueFrom]
   | select(length == 1) | .[0]
 ' <<<"$STAGED_API_TASK_JSON")"
 REPAIR_CANONICAL_BUCKET="$(jq -er --arg container "$MANIFEST_WORKER_CONTAINER_NAME" '
@@ -1193,7 +1193,7 @@ REPAIR_TASK_INPUT="$(jq -ce \
             }]
         )
       | .secrets = [
-          {name:"EMAILS_DATABASE_URL",valueFrom:$database_secret},
+          {name:"HASNA_EMAILS_DATABASE_URL",valueFrom:$database_secret},
           {name:"EMAILS_ATTACHMENT_REPAIR_MANIFEST",valueFrom:$manifest_secret}
         ]
       | del(.portMappings, .healthCheck)
@@ -1240,7 +1240,7 @@ jq -e \
       | select(.name == "EMAILS_IMAGE_REVISION" and .value == $revision)]
       | length) == 1
     and ([$repair.secrets[] | {name,valueFrom}] | sort_by(.name)) == ([
-      {name:"EMAILS_DATABASE_URL",valueFrom:$database_secret},
+      {name:"HASNA_EMAILS_DATABASE_URL",valueFrom:$database_secret},
       {name:"EMAILS_ATTACHMENT_REPAIR_MANIFEST",valueFrom:$manifest_secret}
     ] | sort_by(.name)))
 ' <<<"$REPAIR_TASK_DEFINITION_JSON" >/dev/null
@@ -1679,7 +1679,7 @@ jq -e --arg release_version "$RELEASE_VERSION" '
   ((keys | sort) == ["mode","name","status","version"])
   and (.status == "ok")
   and (.name == "emails")
-  and (.mode == "self_hosted")
+  and (.mode == "self-hosted")
   and (.version == $release_version)
 ' <<<"$VERSION_JSON" >/dev/null
 READY_JSON="$(curl --fail --silent --show-error "$EMAILS_ALB_URL/ready")"

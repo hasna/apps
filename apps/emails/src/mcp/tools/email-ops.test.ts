@@ -19,7 +19,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { closeDatabase, getDatabase, resetDatabase } from "../../db/database.js";
 import { suppressContact } from "../../db/contacts.js";
 import { getEmailContent } from "../../db/email-content.js";
-import { createProvider } from "../../db/providers.local.js";
+import { createProvider } from "../../db/providers.sqlite.js";
 import { listSandboxEmails } from "../../db/sandbox.js";
 import { createWarmingSchedule } from "../../db/warming.js";
 import { resetMailDataSource } from "../../lib/mail-data-source.js";
@@ -71,16 +71,13 @@ const FAMILY_TOOLS = [
   "cancel_scheduled",
 ];
 
-const STORE_MODE_ENV = ["EMAILS", "MODE"].join("_");
 const STORE_DB_ENV = ["EMAILS", "DB_PATH"].join("_");
 const STORE_ENV_KEYS = [
-  STORE_MODE_ENV,
-  `HASNA_${STORE_MODE_ENV}`,
   STORE_DB_ENV,
   `HASNA_${STORE_DB_ENV}`,
   "EMAILS_CLIENT_ENV_SECRET",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "EMAILS_SESSION_TOKEN",
   "EMAILS_IDP_TOKEN",
 ] as const;
@@ -94,7 +91,6 @@ beforeEach(() => {
     previousStoreEnv[key] = process.env[key];
     delete process.env[key];
   }
-  process.env[STORE_MODE_ENV] = "local";
   process.env[STORE_DB_ENV] = ":memory:";
   resetDatabase();
   resetMailDataSource();
@@ -203,7 +199,7 @@ describe("collapsed email-ops tool family", () => {
   it("still blocks a send that a warming schedule forbids", async () => {
     // POSITIVE CONTROL for a guard this collapse deleted from THIS module. The
     // deleted local arm re-implemented a warming pre-check here; the single send
-    // path already enforces it downstream (src/lib/send.local.ts:40-52), so the
+    // path already enforces it downstream (src/lib/send.sqlite.ts:40-52), so the
     // duplicate went away. If that reasoning were wrong, this test is where it
     // shows up — an unwarmed domain would send.
     //

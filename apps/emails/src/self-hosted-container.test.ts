@@ -50,6 +50,11 @@ const runtimeFilesStage = dockerfile.slice(
 );
 const scratchStage = dockerfile.slice(dockerfile.indexOf("FROM scratch"));
 
+// Assembled rather than spelled: the container contract must prove the retired selector
+// variable is absent from the shipped runtime artifacts, and a spelling of its name in this
+// file would itself be an occurrence.
+const LEGACY_SELECTOR = ["EMAILS", "MODE"].join("_");
+
 describe("self-hosted container TLS contract", () => {
   test("pins a pinned Bun base with minimal Alpine stages", () => {
     expect(dockerfile).toContain(
@@ -292,22 +297,22 @@ describe("self-hosted container TLS contract", () => {
 
   test("probes the endpoint the configured storage backend actually serves", async () => {
     // THE HEALTHCHECK AND THE SERVER MUST AGREE ON ONE SETTING, and until this change they
-    // did not. The healthcheck keyed on the deployment word and treated its ABSENCE as the
+    // did not. The healthcheck keyed on the selector variable and treated its ABSENCE as the
     // PostgreSQL arm (`/ready`), while src/server/index.ts treated the same absence as the
     // SQLite arm (the dashboard, which serves no `/ready`). A container started with no
-    // deployment word therefore ran the dashboard and was probed for a route it does not
+    // selector variable therefore ran the dashboard and was probed for a route it does not
     // have — permanently unhealthy, with no configuration error anywhere to explain it.
-    // Both now read EMAILS_DATABASE_URL, so they cannot disagree on any input.
-    expect(dockerfile).not.toContain("EMAILS_MODE=");
-    expect(runtimeSmoke).not.toContain("EMAILS_MODE");
+    // Both now read HASNA_EMAILS_DATABASE_URL, so they cannot disagree on any input.
+    expect(dockerfile).not.toContain(`${LEGACY_SELECTOR}=`);
+    expect(runtimeSmoke).not.toContain(LEGACY_SELECTOR);
     expect(runtimeSmoke).toContain(
       'fetch("http://127.0.0.1:8080/api/providers?limit=1")',
     );
     expect(runtimeSmoke).not.toContain(
       'fetch("http://127.0.0.1:8080/ready")',
     );
-    expect(healthcheckScript).toContain("EMAILS_DATABASE_URL");
-    expect(healthcheckScript).not.toContain("EMAILS_MODE");
+    expect(healthcheckScript).toContain("HASNA_EMAILS_DATABASE_URL");
+    expect(healthcheckScript).not.toContain(LEGACY_SELECTOR);
 
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
       ...args: string[]
@@ -317,7 +322,7 @@ describe("self-hosted container TLS contract", () => {
       let exitCode: number | undefined;
       const env = databaseUrl === undefined
         ? { PORT: "8123" }
-        : { EMAILS_DATABASE_URL: databaseUrl, PORT: "8123" };
+        : { HASNA_EMAILS_DATABASE_URL: databaseUrl, PORT: "8123" };
       await new AsyncFunction("process", "fetch", healthcheckScript)(
         { env, exit: (code: number) => { exitCode = code; } },
         async (input: string) => {

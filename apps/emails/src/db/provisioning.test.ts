@@ -43,7 +43,7 @@
 // bound and every consumer reads it as `?? 0` on the way to a readiness verdict.
 // `getProvisioningWorkSummary` REPORTS the bound, because its shape carries a
 // `StatusAvailability` and its one consumer renders `≥N`. There is a case for each, and the
-// renderer itself is pinned in `src/cli/commands/daemon.local.test.ts`.
+// renderer itself is pinned in `src/cli/commands/daemon.sqlite.test.ts`.
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
@@ -546,7 +546,7 @@ describe.each(STORE_VARIANTS)("inventories through the %s", (_label, makeStore) 
 
   it("keys the NAMED addresses' provisioning state by id, and only those", async () => {
     // This export was reached by exactly one assertion — with an EMPTY argument. It is live in
-    // `src/mcp/resources.local.ts`, and its domain twin has four cases.
+    // `src/mcp/resources.sqlite.ts`, and its domain twin has four cases.
     const first = seedAddress("first@example.com");
     const second = seedAddress("second@example.com");
     seedAddress("third@example.com");
@@ -1585,7 +1585,7 @@ describe("the two arms are gone", () => {
     expect(source.length).toBeGreaterThan(4000);
     expect(source).toContain("store-resolution.js");
 
-    expect(existsSync(join(here, "provisioning.local.ts"))).toBe(false);
-    expect(existsSync(join(here, "provisioning.remote.ts"))).toBe(false);
+    expect(existsSync(join(here, "provisioning.sqlite.ts"))).toBe(false);
+    expect(existsSync(join(here, "provisioning.api.ts"))).toBe(false);
   });
 });

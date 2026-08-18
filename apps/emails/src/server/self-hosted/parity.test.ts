@@ -168,16 +168,17 @@ describe("self-hosted parity: new migrations", () => {
     expect(sql).toContain("WHERE provider_id IS NULL");
   });
 
-  test("0026 appends gmail-replay provenance after 0025", () => {
+  test("0027 appends the server-providers rename after 0026", () => {
     const list = emailsSelfHostedMigrations();
     const ids = list.map((migration) => migration.id);
-    expect(ids.at(-1)).toBe("0026_legacy_gmail_replay_provenance");
-    expect(ids.indexOf("0026_legacy_gmail_replay_provenance")).toBeGreaterThan(
-      ids.indexOf("0025_address_provider_binding"),
+    expect(ids.at(-1)).toBe("0027_emails_server_providers_rename");
+    expect(ids.indexOf("0027_emails_server_providers_rename")).toBeGreaterThan(
+      ids.indexOf("0026_legacy_gmail_replay_provenance"),
     );
 
-    const sql = list.find((migration) => migration.id === "0026_legacy_gmail_replay_provenance")!.sql;
-    expect(sql).toContain("established_via IN ('normal_ingest', 'canonical_replay', 'gmail_replay')");
+    const sql = list.find((migration) => migration.id === "0027_emails_server_providers_rename")!.sql;
+    expect(sql).toContain("ALTER TABLE");
+    expect(sql).toContain("RENAME TO server_providers");
   });
 
   test("0026 appends the priority sender rules table after 0025", () => {
@@ -697,7 +698,7 @@ describe("self-hosted parity: address provider binding over /v1/addresses", () =
     const d = deps();
     const providerId = "provider-a";
     await d.client.one(
-      "INSERT INTO self_hosted_providers (id, tenant_id, name, type, active) VALUES ($1, $2, $3, $4, $5)",
+      "INSERT INTO server_providers (id, tenant_id, name, type, active) VALUES ($1, $2, $3, $4, $5)",
       [providerId, DEFAULT_TENANT_ID, "Provider A", "smtp", true],
     );
 
@@ -748,7 +749,7 @@ describe("self-hosted parity: address provider binding over /v1/addresses", () =
   test("POST maps a cross-tenant provider reference to a scoped 404", async () => {
     const d = deps();
     d.store.createAddress = async () => {
-      throw new CrossTenantReferenceError("self_hosted_providers", "provider_id");
+      throw new CrossTenantReferenceError("server_providers", "provider_id");
     };
 
     const res = await handleSelfHostedRequest(d, req("POST", "/v1/addresses", {
@@ -757,7 +758,7 @@ describe("self-hosted parity: address provider binding over /v1/addresses", () =
     }));
     expect(res?.status).toBe(404);
     expect(await res?.json()).toEqual({
-      error: "referenced self_hosted_providers not found",
+      error: "referenced server_providers not found",
       reason: "cross_tenant_reference",
     });
   });

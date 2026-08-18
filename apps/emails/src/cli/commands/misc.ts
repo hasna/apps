@@ -1,25 +1,25 @@
 import type { Command } from "commander";
-import { getEmailsMode } from "../../lib/mode.js";
+import { isApiClientConfigured } from "../../store-resolution.js";
 import {
-  registerMiscCommands as registerLocal,
+  registerMiscCommands as registerSqlite,
   runSchedulerTick as runLocalSchedulerTick,
   type SchedulerTickResult,
-} from "./misc.local.js";
+} from "./misc.sqlite.js";
 import {
-  registerMiscCommands as registerRemote,
+  registerMiscCommands as registerApi,
   runSchedulerTick as runRemoteSchedulerTick,
-} from "./misc.remote.js";
+} from "./misc.api.js";
 
-export type { SchedulerTickResult } from "./misc.local.js";
+export type { SchedulerTickResult } from "./misc.sqlite.js";
 
 export async function runSchedulerTick(
   opts: Parameters<typeof runLocalSchedulerTick>[0] = {},
 ): Promise<SchedulerTickResult> {
-  return getEmailsMode() === "self_hosted"
+  return isApiClientConfigured()
     ? runRemoteSchedulerTick(opts)
     : runLocalSchedulerTick(opts);
 }
 
 export function registerMiscCommands(program: Command, output: (data: unknown, formatted: string) => void): void {
-  return (getEmailsMode() === "self_hosted" ? registerRemote : registerLocal)(program, output);
+  return (isApiClientConfigured() ? registerApi : registerSqlite)(program, output);
 }

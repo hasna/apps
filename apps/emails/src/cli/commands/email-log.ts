@@ -1,8 +1,8 @@
 import type { Command } from "commander";
-import { getEmailsMode } from "../../lib/mode.js";
-import { registerEmailLogCommands as registerLocal } from "./email-log.local.js";
-import { registerEmailLogCommands as registerRemote } from "./email-log.remote.js";
+import { isApiClientConfigured } from "../../store-resolution.js";
+import { registerEmailLogCommands as registerSqlite } from "./email-log.sqlite.js";
+import { registerEmailLogCommands as registerApi } from "./email-log.api.js";
 
 export function registerEmailLogCommands(program: Command, output: (data: unknown, formatted: string) => void): void {
-  return (getEmailsMode() === "self_hosted" ? registerRemote : registerLocal)(program, output);
+  return (isApiClientConfigured() ? registerApi : registerSqlite)(program, output);
 }
