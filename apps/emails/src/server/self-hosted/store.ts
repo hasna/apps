@@ -2522,6 +2522,19 @@ export class TenantScopedStore {
     ]);
   }
 
+  /**
+   * Look up an address by canonical email WITHIN the tenant. Used at send time
+   * to read the address record's display name for the provider call — a null
+   * result means the sender is not registered and the policy gate will refuse
+   * it; the provider call simply stays on the bare canonical address.
+   */
+  async getAddressByEmail(email: string): Promise<AddressRecord | null> {
+    return this.client.get<AddressRecord>(
+      `SELECT * FROM addresses WHERE lower(email) = $1 AND tenant_id = $2`,
+      [email.trim().toLowerCase(), this.tenantId],
+    );
+  }
+
   async createAddress(input: {
     email: string;
     display_name?: string | null;

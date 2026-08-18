@@ -85,7 +85,7 @@ import type { AuthStore } from "./auth/store.js";
 import type { RateLimiter } from "./auth/rate-limit.js";
 import type { AuthMailerConfig } from "./auth/mailer.js";
 import type { SelfHostedKeyStore } from "./keys.js";
-import { canonicalSender } from "../../lib/email-address.js";
+import { canonicalSender, formatSenderDisplayName } from "../../lib/email-address.js";
 import { normalizeAttachmentByteLimit } from "../../lib/attachment-download.js";
 import { canonicalizeSelfHostedPathname } from "../../lib/self-hosted-paths.js";
 
@@ -329,6 +329,21 @@ function safeHeaderValue(label: string, value: string): string {
     }
   }
   return value;
+}
+
+/**
+ * True when a display name may safely decorate the provider From. Same
+ * control-character and Unicode rules as `safeHeaderValue`: the decorated
+ * From reaches the raw-MIME `From:` header verbatim, so CR/LF must be
+ * rejected rather than escaped.
+ */
+function isSafeFromDisplayName(value: string): boolean {
+  try {
+    safeHeaderValue("from display name", value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function parseIdempotencyKey(value: unknown): { ok: true; value: string } | { ok: false; error: string } {
@@ -1477,9 +1492,24 @@ export async function handleSelfHostedRequest(
 
       let messageId: string;
       try {
+        // The provider call is the ONLY surface that may carry the address
+        // record's display name (bug e2578a8a). Authorization, the ledger
+        // (`from_addr`), the idempotency hash and the policy gate all keep the
+        // bare canonical address; a display name is presentational and must not
+        // change what the send is attributed to.
+        const fromRecord = await auth.store.getAddressByEmail(from);
+        // The display name is an unvalidated address-record field, so it must
+        // not be allowed to carry control characters into the provider call
+        // (the raw-MIME path writes `From:` verbatim; CR/LF would be header
+        // injection). A hostile name falls back to the canonical address —
+        // the send still succeeds, attributed to the bare sender.
+        const fromForProvider =
+          fromRecord?.display_name && isSafeFromDisplayName(fromRecord.display_name)
+            ? formatSenderDisplayName(fromRecord.display_name, from)
+            : from;
         messageId = await deps.sender.send({
           provider_id: `self-hosted-${deps.sender.provider}`,
-          from,
+          from: fromForProvider,
           to,
           cc: cc.length ? cc : undefined,
           bcc: bcc.length ? bcc : undefined,
