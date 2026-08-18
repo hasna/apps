@@ -6,7 +6,7 @@
     "targetKind": "shell"
   },
   "session": {
-    "tool": "open-terminal",
+    "tool": "terminal",
     "traceId": "example-destructive-shell"
   }
 }

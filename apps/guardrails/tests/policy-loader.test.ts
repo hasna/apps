@@ -8,7 +8,7 @@ import { loadGuardrailInput, loadPolicySet, parseGuardrailInput, validatePolicyS
 const paths: string[] = [];
 
 async function fixture(name: string, value: unknown): Promise<string> {
-  const path = join(tmpdir(), `open-guardrails-${randomUUID()}-${name}.json`);
+  const path = join(tmpdir(), `guardrails-${randomUUID()}-${name}.json`);
   paths.push(path);
   await Bun.write(path, JSON.stringify(value));
   return path;
@@ -75,7 +75,7 @@ describe("policy loading and validation", () => {
   });
 
   test("rejects invalid JSON and invalid policy files", async () => {
-    const jsonPath = join(tmpdir(), `open-guardrails-${randomUUID()}-invalid.json`);
+    const jsonPath = join(tmpdir(), `guardrails-${randomUUID()}-invalid.json`);
     paths.push(jsonPath);
     await Bun.write(jsonPath, "not json");
     await expect(loadGuardrailInput(jsonPath)).rejects.toThrow();

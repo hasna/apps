@@ -10,7 +10,7 @@
     "estimatedOutputTokens": 8000
   },
   "session": {
-    "tool": "open-router",
+    "tool": "router",
     "traceId": "example-expensive-model"
   }
 }

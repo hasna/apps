@@ -7,7 +7,7 @@
     "contentType": "text/html"
   },
   "session": {
-    "tool": "open-browser",
+    "tool": "browser",
     "traceId": "example-external-source"
   }
 }

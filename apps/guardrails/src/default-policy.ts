@@ -2,7 +2,7 @@ import type { GuardrailPolicySet } from "./types";
 import { defaultSecretRedactionRules } from "./redaction";
 
 export const defaultGuardrailPolicySet: GuardrailPolicySet = {
-  id: "open-guardrails-starter",
+  id: "guardrails-starter",
   version: "1.0.0",
   schemaVersion: "1.0",
   description: "Generic local-first guardrails for OSS agentic tooling.",

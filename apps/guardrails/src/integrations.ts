@@ -92,7 +92,7 @@ export function openActionsGuardrailInput(input: {
     ...(subject ? { subject } : {}),
     ...(input.actorId ? { actor: { id: input.actorId, type: "agent" } } : {}),
     session: {
-      tool: "open-actions",
+      tool: "actions",
       ...(input.traceId ? { traceId: input.traceId } : {}),
     },
     action: {
@@ -114,7 +114,7 @@ export function openDispatchPromptGuardrailInput(input: {
   return promptGuardrailInput({
     prompt: input.prompt,
     target: input.target,
-    tool: "open-dispatch",
+    tool: "dispatch",
     ...(input.actorId ? { actorId: input.actorId } : {}),
     ...(input.traceId ? { traceId: input.traceId } : {}),
     ...(input.metadata ? { metadata: input.metadata } : {}),
@@ -131,7 +131,7 @@ export function openTerminalCommandGuardrailInput(input: GuardrailShellCommandCo
     subject: input.command,
     ...(input.actorId ? { actor: { id: input.actorId, type: "agent" } } : {}),
     session: {
-      tool: "open-terminal",
+      tool: "terminal",
       ...(input.cwd ? { cwd: input.cwd } : {}),
       ...(input.traceId ? { traceId: input.traceId } : {}),
     },
@@ -157,7 +157,7 @@ export function openMcpsToolCallGuardrailInput(input: GuardrailMcpToolCallContex
     subject: input.toolName,
     ...(input.actorId ? { actor: { id: input.actorId, type: "agent" } } : {}),
     session: {
-      tool: "open-mcps",
+      tool: "mcps",
       ...(input.traceId ? { traceId: input.traceId } : {}),
     },
     mcp: {
@@ -173,7 +173,7 @@ export function openMcpsToolCallGuardrailInput(input: GuardrailMcpToolCallContex
 }
 
 export function modelRoutingGuardrailInput(input: GuardrailModelRoutingContext & {
-  tool?: "open-gateway" | "open-router" | (string & {});
+  tool?: "gateway" | "router" | (string & {});
   actorId?: string;
   traceId?: string;
   metadata?: Record<string, unknown>;
@@ -184,7 +184,7 @@ export function modelRoutingGuardrailInput(input: GuardrailModelRoutingContext &
     ...(subject ? { subject } : {}),
     ...(input.actorId ? { actor: { id: input.actorId, type: "agent" } } : {}),
     session: {
-      tool: input.tool ?? "open-router",
+      tool: input.tool ?? "router",
       ...(input.traceId ? { traceId: input.traceId } : {}),
     },
     modelRouting: {

@@ -8,7 +8,7 @@
     "irreversible": true
   },
   "session": {
-    "tool": "open-actions",
+    "tool": "actions",
     "traceId": "example-business-approval"
   }
 }
