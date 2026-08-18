@@ -146,7 +146,7 @@ export interface Event {
   visibility: EventVisibility;
   recurrence_rule: string | null; // RRULE
   recurrence_exception_dates: string[] | null; // ISO dates to skip
-  source_task_id: string | null; // link to open-todos
+  source_task_id: string | null; // link to todos
   created_by: string | null; // agent_id
   metadata: Record<string, unknown>; // video call URL, attachments, etc.
   created_at: string;
