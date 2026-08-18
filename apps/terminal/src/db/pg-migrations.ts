@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-terminal session storage.
+ * PostgreSQL migrations for terminal session storage.
  *
  * Equivalent to the SQLite schema in sessions-db.ts, translated for PostgreSQL.
  */

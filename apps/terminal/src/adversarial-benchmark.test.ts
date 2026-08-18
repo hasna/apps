@@ -64,7 +64,7 @@ describe("adversarial benchmark", () => {
         qualityFailures: 0,
         floorFailures: 0,
         installedBinaryUsed: true,
-        reposCovered: ["open-terminal", "iapp-logos"],
+        reposCovered: ["terminal", "iapp-logos"],
         workflowCount: 12,
       },
     });

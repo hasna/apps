@@ -1,4 +1,4 @@
-// Centralized path resolution for open-terminal global data directory.
+// Centralized path resolution for terminal global data directory.
 // Migrated from ~/.terminal/ to ~/.hasna/terminal/ with backward compat.
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";

@@ -93,7 +93,7 @@ bun benchmarks/benchmark.mjs --real-cli-report=.benchmark-artifacts/real-cli-ben
 There are now two gates:
 
 - the synthetic adversarial suite, which is useful for stress-testing scenarios and implementation assumptions
-- the real installed-CLI suite, which runs equivalent raw shell workflows against the actual `terminal` binary in `open-terminal` and `iapp-logos`
+- the real installed-CLI suite, which runs equivalent raw shell workflows against the actual `terminal` binary in the terminal and iapp-logos checkouts
 
 The official 90% claim requires both gates. Synthetic results alone are not enough.
 

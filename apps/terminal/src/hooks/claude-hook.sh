@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# open-terminal Claude Code PostToolUse hook
-# Compresses Bash tool output through open-terminal's processing pipeline
+# terminal Claude Code PostToolUse hook
+# Compresses Bash tool output through terminal processing pipeline
 # Install: t hook install --claude
 
 # Only process Bash tool results
@@ -20,7 +20,7 @@ fi
 # Count lines
 LINE_COUNT=$(echo "$OUTPUT" | wc -l | tr -d ' ')
 
-# For large outputs, compress through open-terminal
+# For large outputs, compress through terminal
 if [ "$LINE_COUNT" -gt 15 ]; then
   # Try to use bun for speed, fall back to node
   if command -v bun &> /dev/null; then
@@ -34,7 +34,7 @@ if [ "$LINE_COUNT" -gt 15 ]; then
         const result = compress('bash', cleaned, { maxTokens: 500 });
         if (result.tokensSaved > 50) {
           console.log(result.content);
-          console.error('[open-terminal] saved ' + result.tokensSaved + ' tokens (' + result.savingsPercent + '%)');
+          console.error('[terminal] saved ' + result.tokensSaved + ' tokens (' + result.savingsPercent + '%)');
         } else {
           console.log(cleaned);
         }

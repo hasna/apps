@@ -34,7 +34,7 @@ Temperature: 0, Stop: [\n]
 - **gpt-oss-20b (Groq)**: Many empty responses — model sometimes returns nothing with stop:[\n].
 - **Exact match** = normalized string equality. **Fuzzy match** = same binary + args + flags (order-independent).
 - All tests used difficulty=0 (easy) pairs. Medium and hard pairs would show larger gaps.
-- Cost assumes ~350 tokens/call. Actual cost depends on system prompt size (open-terminal sends ~1200 tokens).
+- Cost assumes ~350 tokens/call. Actual cost depends on system prompt size (terminal sends ~1200 tokens).
 
 ## Recommendation
 

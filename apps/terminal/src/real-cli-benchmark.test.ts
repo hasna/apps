@@ -14,7 +14,7 @@ import {
 
 const workflow: RealCliWorkflow = {
   id: "search",
-  repo: "open-terminal",
+  repo: "terminal",
   category: "search",
   weight: 1,
   rawCommand: "rg thing src",
@@ -27,7 +27,7 @@ const workflow: RealCliWorkflow = {
 describe("real CLI benchmark", () => {
   it("predefines workflows across both target repos before execution", () => {
     expect(REAL_CLI_WORKFLOWS.length).toBeGreaterThanOrEqual(10);
-    expect(new Set(REAL_CLI_WORKFLOWS.map((item) => item.repo))).toEqual(new Set(["open-terminal", "iapp-logos"]));
+    expect(new Set(REAL_CLI_WORKFLOWS.map((item) => item.repo))).toEqual(new Set(["terminal", "iapp-logos"]));
     expect(REAL_CLI_WORKFLOWS.every((item) => item.weight > 0 && item.rawCommand && item.terminalCommand)).toBe(true);
   });
 
@@ -109,7 +109,7 @@ describe("real CLI benchmark", () => {
     const report = evaluateRealCliBenchmark({
       terminalRealPath: "/usr/local/bin/terminal",
       terminalVersion: "test",
-      repos: { "open-terminal": "/repo", "iapp-logos": "/logos" },
+      repos: { "terminal": "/repo", "iapp-logos": "/logos" },
       workflows: [pass, weak],
       installedBinaryUsed: true,
     });
@@ -135,7 +135,7 @@ describe("real CLI benchmark", () => {
     const report = evaluateRealCliBenchmark({
       terminalRealPath: "/usr/local/bin/terminal",
       terminalVersion: "test",
-      repos: { "open-terminal": "/repo", "iapp-logos": "/logos" },
+      repos: { "terminal": "/repo", "iapp-logos": "/logos" },
       workflows: [],
       installedBinaryUsed: false,
     });

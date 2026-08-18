@@ -22,7 +22,7 @@ const openTerminalPath = process.argv.find((arg) => arg.startsWith("--open-termi
 const iappLogosPath = process.argv.find((arg) => arg.startsWith("--iapp-logos="))?.split("=")[1];
 
 const repoPaths = {
-  ...(openTerminalPath ? { "open-terminal": openTerminalPath } : {}),
+  ...(openTerminalPath ? { "terminal": openTerminalPath } : {}),
   ...(iappLogosPath ? { "iapp-logos": iappLogosPath } : {}),
 };
 

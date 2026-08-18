@@ -10,7 +10,7 @@ export const REAL_CLI_TINY_MAX_OVERHEAD_TOKENS = 8;
 
 export interface RealCliWorkflow {
   id: string;
-  repo: "open-terminal" | "iapp-logos";
+  repo: "terminal" | "iapp-logos";
   category: string;
   weight: number;
   rawCommand: string;
@@ -99,7 +99,7 @@ export interface RealCliGateEvidence {
 export const REAL_CLI_WORKFLOWS: RealCliWorkflow[] = [
   {
     id: "ot-repo-status",
-    repo: "open-terminal",
+    repo: "terminal",
     category: "git",
     weight: 4,
     rawCommand: "git status --short --branch",
@@ -109,7 +109,7 @@ export const REAL_CLI_WORKFLOWS: RealCliWorkflow[] = [
   },
   {
     id: "ot-project-overview",
-    repo: "open-terminal",
+    repo: "terminal",
     category: "orientation",
     weight: 4,
     rawCommand: "cat package.json && find src -maxdepth 2 -type f | sort",
@@ -119,7 +119,7 @@ export const REAL_CLI_WORKFLOWS: RealCliWorkflow[] = [
   },
   {
     id: "ot-change-summary",
-    repo: "open-terminal",
+    repo: "terminal",
     category: "git",
     weight: 5,
     rawCommand: "git status --short --branch && git diff --stat",
@@ -129,7 +129,7 @@ export const REAL_CLI_WORKFLOWS: RealCliWorkflow[] = [
   },
   {
     id: "ot-test-discovery",
-    repo: "open-terminal",
+    repo: "terminal",
     category: "tests",
     weight: 5,
     rawCommand: "find . \\( -path './node_modules' -o -path './dist' -o -path './.git' \\) -prune -o \\( -name '*.test.ts' -o -name '*.test.tsx' -o -name '*.spec.ts' -o -name '*.spec.tsx' \\) -type f -print | sort",
@@ -140,7 +140,7 @@ export const REAL_CLI_WORKFLOWS: RealCliWorkflow[] = [
   },
   {
     id: "ot-debug-search",
-    repo: "open-terminal",
+    repo: "terminal",
     category: "search",
     weight: 7,
     rawCommand: 'rg -n "TODO|FIXME|throw new|console\\\\.error|describe" src package.json',
@@ -151,7 +151,7 @@ export const REAL_CLI_WORKFLOWS: RealCliWorkflow[] = [
   },
   {
     id: "ot-source-structure",
-    repo: "open-terminal",
+    repo: "terminal",
     category: "files",
     weight: 4,
     rawCommand: "find src -maxdepth 2 -type f | sort",
@@ -237,7 +237,7 @@ export const REAL_CLI_WORKFLOWS: RealCliWorkflow[] = [
 
 export function defaultRealCliRepoPaths(root = process.cwd()): Record<string, string> {
   return {
-    "open-terminal": root,
+    "terminal": root,
     "iapp-logos": process.env.IAPP_LOGOS_PATH ?? "/home/hasna/workspace/hasnaxyz/internalapp/iapp-logos",
   };
 }
@@ -459,7 +459,7 @@ export function evaluateRealCliBenchmark(params: {
         && qualityFailures === 0
         && floorFailures === 0
         && installedBinaryUsed
-        && reposCovered.includes("open-terminal")
+        && reposCovered.includes("terminal")
         && reposCovered.includes("iapp-logos"),
     },
   };
@@ -503,7 +503,7 @@ function pct(value: number): string {
 
 export function formatRealCliBenchmarkReport(report: RealCliBenchmarkReport): string {
   const lines = [
-    "open-terminal real installed-CLI benchmark",
+    "terminal real installed-CLI benchmark",
     `terminal: ${report.terminalVersion} (${report.terminalRealPath})`,
     "",
     "Workflow results:",
