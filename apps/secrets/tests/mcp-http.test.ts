@@ -13,7 +13,7 @@ describe("secrets MCP HTTP transport", () => {
   let testDir: string;
 
   beforeAll(() => {
-    testDir = join(tmpdir(), `open-secrets-http-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    testDir = join(tmpdir(), `secrets-http-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     mkdirSync(testDir, { recursive: true });
     process.env.OPEN_SECRETS_DB = join(testDir, "vault.db");
 

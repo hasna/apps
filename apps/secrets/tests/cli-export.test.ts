@@ -8,7 +8,7 @@ const rootDir = join(import.meta.dir, "..");
 let testDir: string;
 
 beforeEach(() => {
-  testDir = join(tmpdir(), `open-secrets-cli-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  testDir = join(tmpdir(), `secrets-cli-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
 });
 

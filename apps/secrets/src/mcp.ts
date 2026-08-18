@@ -14,7 +14,7 @@ const VAULT_ITEM_KINDS = ["login", "address", "identity", "payment_card", "secur
 
 export function buildServer(): McpServer {
   const server = new McpServer({
-    name: "open-secrets",
+    name: "secrets",
     version: "0.1.0",
   });
 

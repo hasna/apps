@@ -35,7 +35,7 @@ const envKeys = [
 ];
 
 beforeEach(async () => {
-  testDir = join(tmpdir(), `open-secrets-aws-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  testDir = join(tmpdir(), `secrets-aws-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
   process.env.OPEN_SECRETS_DB = join(testDir, "vault.db");
   for (const key of envKeys) delete process.env[key];
@@ -105,7 +105,7 @@ describe("AWS credential resolution", () => {
         roleArn: "arn:aws:iam::123456789012:role/example",
         sourceProfile: "source",
         externalId: "external",
-        sessionName: "open-secrets-test",
+        sessionName: "secrets-test",
       },
       null
     );

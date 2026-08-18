@@ -105,7 +105,7 @@ describe("loop task helpers", () => {
   });
 
   it("writes private loop report JSON and can annotate its report path", () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-secrets-loop-report-"));
+    const dir = mkdtempSync(join(tmpdir(), "secrets-loop-report-"));
     tempDirs.push(dir);
 
     const path = writeSecureLoopReport({ ok: true, loop: {} }, {

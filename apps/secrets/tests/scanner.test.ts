@@ -9,7 +9,7 @@ import { hermeticGit } from "./setup/hermetic-git.js";
 let testDir: string;
 
 beforeEach(() => {
-  testDir = join(tmpdir(), `open-secrets-scan-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  testDir = join(tmpdir(), `secrets-scan-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
 });
 
@@ -143,8 +143,8 @@ describe("exposure scanner", () => {
 
     const value = fakeOpenAiToken();
     git(["init"]);
-    git(["config", "user.name", "Open Secrets Test"]);
-    git(["config", "user.email", "open-secrets-test@example.invalid"]);
+    git(["config", "user.name", "Hasna Secrets Test"]);
+    git(["config", "user.email", "secrets-test@example.invalid"]);
     writeFileSync(join(testDir, "config.env"), `OPENAI_API_KEY=${value}\n`);
     git(["add", "config.env"]);
     git(["commit", "-m", "add config"]);
@@ -166,8 +166,8 @@ describe("exposure scanner", () => {
     if (!gitAvailable()) return;
 
     git(["init"]);
-    git(["config", "user.name", "Open Secrets Test"]);
-    git(["config", "user.email", "open-secrets-test@example.invalid"]);
+    git(["config", "user.name", "Hasna Secrets Test"]);
+    git(["config", "user.email", "secrets-test@example.invalid"]);
     writeFileSync(join(testDir, "config.env"), `OPENAI_API_KEY=${fakeOpenAiToken()}\n`);
     git(["add", "config.env"]);
     git(["commit", "-m", "first config"]);
@@ -212,8 +212,8 @@ describe("exposure scanner", () => {
     mkdirSync(allowedDir, { recursive: true });
 
     git(["init"]);
-    git(["config", "user.name", "Open Secrets Test"]);
-    git(["config", "user.email", "open-secrets-test@example.invalid"]);
+    git(["config", "user.name", "Hasna Secrets Test"]);
+    git(["config", "user.email", "secrets-test@example.invalid"]);
     writeFileSync(join(testDir, "root.env"), `OPENAI_API_KEY=${outside}\n`);
     writeFileSync(join(allowedDir, "config.env"), `PACKAGE_TOKEN=${inside}\n`);
     git(["add", "."]);

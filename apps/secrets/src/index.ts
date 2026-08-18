@@ -1270,7 +1270,7 @@ switch (command) {
         const access_key_id = await ask("AWS Access Key ID: ");
         const secret_access_key = await ask("AWS Secret Access Key: ");
         const region = await ask("AWS Region [us-east-1]: ") || "us-east-1";
-        const prefix = await ask("Key prefix (optional, e.g. open-secrets/prod): ");
+        const prefix = await ask("Key prefix (optional, e.g. secrets/prod): ");
         rl.close();
 
         saveAwsConfig({ access_key_id, secret_access_key, region, prefix: prefix || undefined });

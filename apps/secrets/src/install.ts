@@ -75,7 +75,7 @@ mcp:
   args: [mcp]
 ---
 
-MCP server for open-secrets vault. Use tools: get_secret, set_secret, list_secrets, delete_secret, search_secrets, list_vault_items, search_vault_items, get_vault_item, delete_vault_item, storage_status, storage_push, storage_pull, storage_sync, scan_workspace_exposures, scan_history_exposures, audit_log, register_user, list_users.
+MCP server for the Hasna Secrets vault. Use tools: get_secret, set_secret, list_secrets, delete_secret, search_secrets, list_vault_items, search_vault_items, get_vault_item, delete_vault_item, storage_status, storage_push, storage_pull, storage_sync, scan_workspace_exposures, scan_history_exposures, audit_log, register_user, list_users.
 `
   );
 
