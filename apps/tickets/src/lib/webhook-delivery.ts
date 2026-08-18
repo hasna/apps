@@ -55,7 +55,7 @@ export async function deliverWebhook(
           "X-Tickets-Signature": signature,
           "X-Tickets-Event": event,
           "X-Tickets-Delivery": webhook.id,
-          "User-Agent": "open-tickets/0.1.0",
+          "User-Agent": "tickets/0.1.0",
         },
         body,
         signal: controller.signal,

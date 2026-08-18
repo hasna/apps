@@ -21,7 +21,7 @@ export default function RootLayout() {
       {/* Sidebar */}
       <nav className="w-56 shrink-0 border-r border-gray-200 dark:border-gray-800 flex flex-col py-4 px-3 gap-1">
         <div className="px-3 py-2 mb-2">
-          <span className="font-semibold text-lg tracking-tight">🎫 open-tickets</span>
+          <span className="font-semibold text-lg tracking-tight">🎫 tickets</span>
         </div>
         {NAV.map((item) => (
           <Link

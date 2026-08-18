@@ -40,7 +40,7 @@ function formatTable(rows: string[]) { rows.forEach((r) => console.log(r)); }
 
 const program = new Command()
   .name("tickets")
-  .description("open-tickets — MCP-native ticketing system")
+  .description("tickets — MCP-native ticketing system")
   .version(pkg.version)
   .option("--json", "Output as JSON")
   .hook("preAction", () => { getDatabase(); }); // ensure DB is initialized
@@ -536,7 +536,7 @@ program
     const { execSync } = await import("node:child_process");
     const mcpPath = new URL("../mcp/index.ts", import.meta.url).pathname;
     if (opts.claude || opts.all) {
-      try { execSync(`claude mcp add --transport stdio --scope user open-tickets -- bun run ${mcpPath}`, { stdio: "inherit" }); console.log("✓ Registered with Claude Code"); } catch { console.error("✗ Claude Code: claude CLI not found"); }
+      try { execSync(`claude mcp add --transport stdio --scope user tickets -- bun run ${mcpPath}`, { stdio: "inherit" }); console.log("✓ Registered with Claude Code"); } catch { console.error("✗ Claude Code: claude CLI not found"); }
     }
     if (!opts.claude && !opts.codex && !opts.gemini && !opts.all) {
       console.log("Specify --claude, --codex, --gemini, or --all");

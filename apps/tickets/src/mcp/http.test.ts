@@ -114,7 +114,7 @@ describe("tickets MCP HTTP transport", () => {
     });
     expect(initRes.status).toBe(200);
     const initBody = await initRes.json();
-    expect(initBody.result.serverInfo.name).toBe("open-tickets");
+    expect(initBody.result.serverInfo.name).toBe("tickets");
 
     await fetch(`http://127.0.0.1:${port}/mcp`, {
       method: "POST",
@@ -212,6 +212,6 @@ describe("tickets MCP HTTP transport", () => {
     );
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.result.serverInfo.name).toBe("open-tickets");
+    expect(body.result.serverInfo.name).toBe("tickets");
   });
 });

@@ -1,4 +1,4 @@
-# open-tickets — Architecture & Implementation Plan
+# tickets — Architecture & Implementation Plan
 
 > **What it is:** Open-source ticketing system where people and AI agents can open, triage,
 > and resolve tickets for any product, service, or app. Think GitHub Issues + Linear + Sentry
@@ -8,7 +8,7 @@
 
 ## 1. Product Vision
 
-`open-tickets` is the issue tracker in the `open-*` ecosystem. It is distinct from `open-todos`
+`tickets` is the issue tracker in the Hasna ecosystem. It is distinct from `todos`
 (internal AI agent task management) — this is the **public-facing layer** where:
 
 - End users report bugs and request features
@@ -715,7 +715,7 @@ Migrations tracked in `_migrations` table (same pattern as open-todos).
 ## 12. Package Structure
 
 ```
-open-tickets/
+tickets/
 ├── src/
 │   ├── types/
 │   │   └── index.ts          # Enums, interfaces, error classes
@@ -900,7 +900,7 @@ SES_INBOUND_SNS_TOPIC=arn:aws:sns:...   # for receiving email
 **Inbound SES flow:**
 ```
 Email arrives → SES receives it → SNS notification → POST /email/inbound/ses
-→ open-tickets parses raw MIME → creates ticket or adds comment
+→ tickets parses raw MIME → creates ticket or adds comment
 ```
 
 SES stores raw email in S3 → SNS fires webhook with S3 key → server fetches from S3 → parses.
@@ -917,7 +917,7 @@ RESEND_INBOUND_WEBHOOK_SECRET=...   # for verifying inbound webhooks
 **Inbound Resend flow:**
 ```
 Email arrives → Resend parses it → POST /email/inbound/resend (webhook)
-→ open-tickets processes payload → creates ticket or adds comment
+→ tickets processes payload → creates ticket or adds comment
 ```
 Resend is simpler than SES for inbound — no S3, no SNS, just a webhook.
 
@@ -1059,7 +1059,7 @@ src/
 
 ## 13. Differentiation from open-todos
 
-| | open-todos | open-tickets |
+| | open-todos | tickets |
 |---|---|---|
 | **Purpose** | Internal dev task management for AI agents | Public issue tracking for products/services |
 | **Who opens** | AI agents building software | Anyone — users, agents, monitoring bots |
@@ -1072,7 +1072,7 @@ src/
 | **Bin** | todos, todos-mcp, todos-serve | tickets, tickets-mcp, tickets-serve |
 
 Both systems can integrate: completing a dev ticket in `open-todos` can automatically close the
-corresponding user-facing ticket in `open-tickets` via the SDK or webhook.
+corresponding user-facing ticket in `tickets` via the SDK or webhook.
 
 ---
 

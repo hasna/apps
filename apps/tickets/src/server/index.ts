@@ -445,7 +445,7 @@ const isServerDirectRun = import.meta.main
 
 if (isServerDirectRun) {
   serve({ fetch: app.fetch, port: PORT });
-  console.log(`open-tickets server running on http://localhost:${PORT}`);
+  console.log(`tickets server running on http://localhost:${PORT}`);
 
   // Initialize DB and start background workers
   getDatabase();

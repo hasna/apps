@@ -1,5 +1,5 @@
 /**
- * Verify a webhook signature from open-tickets.
+ * Verify a webhook signature from tickets.
  * The X-Tickets-Signature header contains "sha256=<hmac-hex>".
  *
  * @example
