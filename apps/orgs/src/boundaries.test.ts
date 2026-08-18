@@ -71,7 +71,7 @@ describe("public reference projection", () => {
       kind: "external",
       id: "external_1",
       external: {
-        system: "open-projects",
+        system: "projects",
         kind: "workspace",
         id: "workspace_1",
         href: "https://private.invalid/workspace",
@@ -83,7 +83,7 @@ describe("public reference projection", () => {
       kind: "external",
       id: "external_1",
       external: {
-        system: "open-projects",
+        system: "projects",
         kind: "workspace",
         id: "workspace_1",
         label: undefined,
