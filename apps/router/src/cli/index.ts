@@ -60,7 +60,7 @@ function routeRequestFromFlags(flags: Record<string, string | boolean>): RoutePr
 function help(): string {
   return `router ${routerVersion}
 
-Usage (binary also installed as the legacy alias open-router):
+Usage:
   router route --config router.config.json [--model auto] [--task coding] [--priority quality] --prompt "..."
   router analyze --prompt "..."
   router validate --config router.config.json
