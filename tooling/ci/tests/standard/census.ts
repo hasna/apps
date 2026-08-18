@@ -455,7 +455,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "slides",
-    cause: "kitVersion 0.1.0 predates repo-conformance; no @hasna/contracts dep pinned; validated at latest, manifest is pre-backend-schema era.",
+    cause: "surface_matrix: no supported cli surface declared; library-class cli waivers are not permitted by the kit and slides ships no CLI bin (package.json bin is empty; the SDK is the consumer surface). Declared cli deferred truthfully in the manifest. published_artifact_gate fixed (scan:artifact wired into prepack).",
     task: "todos ccc2e931 (contracts task — slides)",
   },
   {

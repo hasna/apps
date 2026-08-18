@@ -6,7 +6,9 @@
   "kitVersion": "0.11.1",
   "description": "Headless presentation-deck SDK: author slides in Markdown or HTML, model themes/transitions/fragments/vertical stacks, serialize to JSON, and export a self-contained reveal.js HTML deck. Primary consumer surface is the headless SDK (\".\") plus a reveal.js React viewer (\"./react\"). Pure library: no server, no CLI bin, no store.",
   "bins": [],
-  "hosting": ["user-hosted"],
+  "hosting": [
+    "user-hosted"
+  ],
   "serviceSurfaces": [
     {
       "name": "slides-sdk",
@@ -14,6 +16,13 @@
       "status": "supported",
       "authMode": "none",
       "exportSubpath": "."
+    },
+    {
+      "name": "slides-cli",
+      "kind": "cli",
+      "status": "deferred",
+      "authMode": "local-only",
+      "deferReason": "No CLI bin ships in this package (package.json bin is empty); the consumer surface is the headless SDK."
     }
   ],
   "metadata": {
@@ -28,6 +37,11 @@
           "reason": "Headless deck library; MCP execution belongs to consuming applications."
         }
       ]
+    },
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
     }
   }
 }

@@ -662,6 +662,7 @@
         "commander": "^13.1.0",
       },
       "devDependencies": {
+        "@hasna/contracts": "0.11.1",
         "@types/bun": "^1.2.4",
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
@@ -730,6 +731,7 @@
         "nanoid": "^5.1.5",
       },
       "devDependencies": {
+        "@hasna/contracts": "0.11.1",
         "@types/bun": "^1.2.4",
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
@@ -1303,6 +1305,7 @@
       "bin": {
         "monitor": "./bins/monitor.js",
         "monitor-mcp": "./bins/monitor-mcp.js",
+        "monitor-daemon": "./bins/monitor-daemon.js",
         "monitor-server": "./bins/monitor-server.js",
         "monitor-web": "./bins/monitor-web.js",
       },
