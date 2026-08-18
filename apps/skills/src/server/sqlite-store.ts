@@ -631,6 +631,16 @@ export class SqliteSkillsStore implements SkillsProductStore {
       // Only when this publish actually replaced the bundle. `input.bundle` being
       // absent now means "unchanged", so there is nothing superseded to collect.
       if (previousSha && input.bundle && previousSha !== input.bundle.sha256) this.collectOrphanBundle(orgId, previousSha);
+
+      // Keep the tag projection (migration 0005) in step with the upsert, in
+      // the same transaction: replace, never merge, so the projection is
+      // exactly the row's current tags.
+      this.db.run("DELETE FROM skills_tags WHERE org_id = ? AND slug = ?", [orgId, input.slug]);
+      const insertTag = this.db.prepare("INSERT OR IGNORE INTO skills_tags (org_id, slug, tag) VALUES (?, ?, ?)");
+      for (const tag of input.tags) {
+        if (!tag.trim()) continue;
+        insertTag.run(orgId, input.slug, tag);
+      }
       return rowToSkill(row!);
     })();
   }
@@ -655,45 +665,55 @@ export class SqliteSkillsStore implements SkillsProductStore {
       throw new SkillRevisionConflictError(slug, expectedRevisionId, current.revisionId);
     }
     const next = { ...current, ...patch };
-    const revisionId = revisionIdOfRecord(next);
-    const row = this.get(
-      `UPDATE skills_registry
-       SET display_name = ?, description = ?, category = ?, tags_json = ?, kind = ?, version = ?, skill_md = ?,
-           revision_id = ?, revision_number = revision_number + 1, updated_at = ?
-       WHERE org_id = ? AND slug = ? AND tombstoned_at IS NULL AND revision_id = ?
-       RETURNING *`,
-      [
-        next.displayName,
-        next.description,
-        next.category,
-        JSON.stringify(next.tags),
-        next.kind,
-        next.version ?? null,
-        next.skillMd ?? null,
-        revisionId,
-        nowIso(),
-        principal.orgId,
-        slug,
-        current.revisionId,
-      ],
-    );
-    if (!row) {
-      // The WHERE guard matched nothing: between the pre-read above and this UPDATE the
-      // row's revision advanced (a concurrent writer landed) or the row was tombstoned/
-      // purged. A stale write must be a 409 REVISION_CONFLICT, never a 404 that falsely
-      // claims the skill vanished — and never a silent overwrite. The read and UPDATE are
-      // synchronous here, so this is defence for parity with the Postgres twin's race.
-      const nowRow = this.get("SELECT revision_id, tombstoned_at FROM skills_registry WHERE org_id = ? AND slug = ? LIMIT 1", [
-        principal.orgId,
-        slug,
-      ]);
-      if (nowRow && nowRow.tombstoned_at == null) {
-        const currentId = typeof nowRow.revision_id === "string" ? nowRow.revision_id : null;
-        throw new SkillRevisionConflictError(slug, expectedRevisionId, currentId);
+    // Registry row and tag projection move in one transaction so the indexed
+    // tag reads can never see a tags_json that disagrees with skills_tags.
+    return this.db.transaction(() => {
+      const revisionId = revisionIdOfRecord(next);
+      const row = this.get(
+        `UPDATE skills_registry
+         SET display_name = ?, description = ?, category = ?, tags_json = ?, kind = ?, version = ?, skill_md = ?,
+             revision_id = ?, revision_number = revision_number + 1, updated_at = ?
+         WHERE org_id = ? AND slug = ? AND tombstoned_at IS NULL AND revision_id = ?
+         RETURNING *`,
+        [
+          next.displayName,
+          next.description,
+          next.category,
+          JSON.stringify(next.tags),
+          next.kind,
+          next.version ?? null,
+          next.skillMd ?? null,
+          revisionId,
+          nowIso(),
+          principal.orgId,
+          slug,
+          current.revisionId,
+        ],
+      );
+      if (!row) {
+        // The WHERE guard matched nothing: between the pre-read above and this UPDATE the
+        // row's revision advanced (a concurrent writer landed) or the row was tombstoned/
+        // purged. A stale write must be a 409 REVISION_CONFLICT, never a 404 that falsely
+        // claims the skill vanished — and never a silent overwrite. The read and UPDATE are
+        // synchronous here, so this is defence for parity with the Postgres twin's race.
+        const nowRow = this.get("SELECT revision_id, tombstoned_at FROM skills_registry WHERE org_id = ? AND slug = ? LIMIT 1", [
+          principal.orgId,
+          slug,
+        ]);
+        if (nowRow && nowRow.tombstoned_at == null) {
+          const currentId = typeof nowRow.revision_id === "string" ? nowRow.revision_id : null;
+          throw new SkillRevisionConflictError(slug, expectedRevisionId, currentId);
+        }
+        return null;
       }
-      return null;
-    }
-    return rowToSkill(row);
+      this.db.run("DELETE FROM skills_tags WHERE org_id = ? AND slug = ?", [principal.orgId, slug]);
+      const insertTag = this.db.prepare("INSERT OR IGNORE INTO skills_tags (org_id, slug, tag) VALUES (?, ?, ?)");
+      for (const tag of next.tags) {
+        if (!tag.trim()) continue;
+        insertTag.run(principal.orgId, slug, tag);
+      }
+      return rowToSkill(row);
+    })();
   }
 
   async deleteSkill(principal: ApiPrincipal, slug: string, tombstoneWindowMs: number): Promise<ServerSkillRecord | null> {
@@ -729,6 +749,8 @@ export class SqliteSkillsStore implements SkillsProductStore {
       for (const row of expired) {
         const record = rowToSkill(row);
         this.db.run("DELETE FROM skills_registry WHERE org_id = ? AND slug = ?", [principal.orgId, record.slug]);
+        // The tag projection (migration 0005) dies with the purged row.
+        this.db.run("DELETE FROM skills_tags WHERE org_id = ? AND slug = ?", [principal.orgId, record.slug]);
         if (record.bundleSha256) this.collectOrphanBundle(principal.orgId, record.bundleSha256);
         purged.push(record);
       }
@@ -772,6 +794,52 @@ export class SqliteSkillsStore implements SkillsProductStore {
       "SELECT * FROM skills_pins WHERE org_id = ? AND principal = ? ORDER BY slug ASC",
       [principal.orgId, principal.apiKeyId],
     ).map(rowToPin);
+  }
+
+  async listTags(principal: ApiPrincipal): Promise<string[]> {
+    // Indexed: skills_tags_org_tag_idx (org_id, tag) serves the org filter;
+    // the projection is kept in step by every write path below. sqlite cannot
+    // index json_each() over the JSON column, which is why the projection
+    // exists (migration 0005). Expired tombstones are purged first, like every
+    // other read path in this store.
+    await this.purgeExpiredTombstones(principal);
+    return this.all(
+      "SELECT DISTINCT tag FROM skills_tags WHERE org_id = ? ORDER BY tag ASC",
+      [principal.orgId],
+    ).map((row) => String(row.tag));
+  }
+
+  async listSkillsByTag(principal: ApiPrincipal, tag: string): Promise<ServerSkillRecord[]> {
+    await this.purgeExpiredTombstones(principal);
+    return this.all(
+      `SELECT s.* FROM skills_registry s
+       JOIN skills_tags t ON t.org_id = s.org_id AND t.slug = s.slug
+       WHERE t.org_id = ? AND t.tag = ? AND s.tombstoned_at IS NULL
+       ORDER BY s.slug ASC`,
+      [principal.orgId, tag],
+    ).map(rowToSkill);
+  }
+
+  async listPinsByTag(principal: ApiPrincipal, tag: string): Promise<ServerPin[]> {
+    // A pin whose slug has no live registry row (e.g. a bundled-only skill, or
+    // a tombstoned one) carries no tags here; the app layer adds the
+    // bundled-corpus half of that set.
+    await this.purgeExpiredTombstones(principal);
+    return this.all(
+      `SELECT p.* FROM skills_pins p
+       JOIN skills_tags t ON t.org_id = p.org_id AND t.slug = p.slug
+       JOIN skills_registry s ON s.org_id = p.org_id AND s.slug = p.slug
+       WHERE p.org_id = ? AND p.principal = ? AND t.tag = ? AND s.tombstoned_at IS NULL
+       ORDER BY p.slug ASC`,
+      [principal.orgId, principal.apiKeyId, tag],
+    ).map(rowToPin);
+  }
+
+  async listPublishedSlugs(principal: ApiPrincipal): Promise<string[]> {
+    return this.all(
+      "SELECT slug FROM skills_registry WHERE org_id = ? AND tombstoned_at IS NULL ORDER BY slug ASC",
+      [principal.orgId],
+    ).map((row) => String(row.slug));
   }
 
   /**

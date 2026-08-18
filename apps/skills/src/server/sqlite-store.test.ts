@@ -181,11 +181,12 @@ console.log(JSON.stringify({ mode, tables }));
     // full migrated schema. A single "database is locked" here is the bug.
     for (const result of results) {
       expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
-      // 15 since migration 0002 added skills_bundles, 0003 added the two
+      // 16 since migration 0002 added skills_bundles, 0003 added the two
       // governance tables (skills_lifecycle_receipts, skills_credit_reservations),
-      // and 0004 added skills_pins. The count is asserted rather than ranged so
-      // that a migration silently failing to apply is a failure here.
-      expect(JSON.parse(result.stdout.split("\n").at(-1)!)).toEqual({ mode: "wal", tables: 15 });
+      // 0004 added skills_pins, and 0005 added skills_tags. The count is
+      // asserted rather than ranged so that a migration silently failing to
+      // apply is a failure here.
+      expect(JSON.parse(result.stdout.split("\n").at(-1)!)).toEqual({ mode: "wal", tables: 16 });
     }
   }, 60_000);
 

@@ -332,6 +332,96 @@ for (const backend of backends) {
       }
     });
 
+    test("tags list and tag-filtered skills are scoped to the org and exact-match", async () => {
+      const fixture = await seeded(backend);
+      try {
+        await fixture.store.publishSkill(publishInput(fixture.principal, "alpha-skill", "alpha"));
+        await fixture.store.publishSkill(publishInput(fixture.principal, "ops-skill", "ops"));
+        await fixture.store.publishSkill(publishInput(fixture.otherPrincipal, "beta-skill", "beta"));
+
+        // Distinct tags of THIS org's published skills only, sorted, no duplicates.
+        expect(await fixture.store.listTags(fixture.principal)).toEqual(["alpha", "ops"]);
+        expect(await fixture.store.listTags(fixture.otherPrincipal)).toEqual(["beta"]);
+
+        // Tag filter is exact-match and org-scoped.
+        expect((await fixture.store.listSkillsByTag(fixture.principal, "alpha")).map((s) => s.slug)).toEqual(["alpha-skill"]);
+        expect((await fixture.store.listSkillsByTag(fixture.otherPrincipal, "alpha"))).toEqual([]);
+        expect((await fixture.store.listSkillsByTag(fixture.principal, "beta"))).toEqual([]);
+
+        // A tag that exists nowhere matches nothing; a case-twisted tag does not match.
+        expect(await fixture.store.listSkillsByTag(fixture.principal, "zzz-none")).toEqual([]);
+        expect(await fixture.store.listSkillsByTag(fixture.principal, "ALPHA")).toEqual([]);
+
+        // Republishing with changed tags moves the skill between filters. The
+        // revision guard is required on the T8 write path, so it is passed.
+        const before = await fixture.store.getSkill(fixture.principal, "alpha-skill");
+        await fixture.store.updateSkill(fixture.principal, "alpha-skill", { tags: ["ops"] }, before!.revisionId);
+        expect((await fixture.store.listSkillsByTag(fixture.principal, "alpha"))).toEqual([]);
+        expect((await fixture.store.listSkillsByTag(fixture.principal, "ops")).map((s) => s.slug)).toEqual(["alpha-skill", "ops-skill"]);
+        expect(await fixture.store.listTags(fixture.principal)).toEqual(["ops"]);
+      } finally {
+        await fixture.close();
+      }
+    });
+
+    test("pins filter by tag through the tag projection, and purge clears it", async () => {
+      const fixture = await seeded(backend);
+      try {
+        await fixture.store.publishSkill(publishInput(fixture.principal, "alpha-skill", "alpha"));
+        await fixture.store.pinSkill(fixture.principal, "alpha-skill");
+        // A pin of a slug with no registry row carries no tags in the projection.
+        await fixture.store.pinSkill(fixture.principal, "unpublished-skill");
+
+        expect((await fixture.store.listPinsByTag(fixture.principal, "alpha")).map((p) => p.slug)).toEqual(["alpha-skill"]);
+        expect((await fixture.store.listPinsByTag(fixture.otherPrincipal, "alpha"))).toEqual([]);
+        expect(await fixture.store.listPinsByTag(fixture.principal, "zzz-none")).toEqual([]);
+
+        // T8 delete tombstones; with a zero window the tombstone is already
+        // expired, so the next tag read purges the row and drops the projection
+        // with it (live-window behaviour is covered by the tombstone test).
+        await fixture.store.deleteSkill(fixture.principal, "alpha-skill", 0);
+        expect(await fixture.store.listTags(fixture.principal)).toEqual([]);
+        expect(await fixture.store.listPinsByTag(fixture.principal, "alpha")).toEqual([]);
+      } finally {
+        await fixture.close();
+      }
+    });
+
+    test("tag reads purge expired tombstones and exclude live ones", async () => {
+      const fixture = await seeded(backend);
+      try {
+        await fixture.store.publishSkill(publishInput(fixture.principal, "alpha-skill", "alpha"));
+
+        // Live tombstone (60s window): excluded from tag-filtered skills and
+        // published slugs, but its tags stay in the projection until purge -
+        // the same window the merged listing keeps the slug tombstoned.
+        await fixture.store.deleteSkill(fixture.principal, "alpha-skill", 60_000);
+        expect(await fixture.store.listPublishedSlugs(fixture.principal)).toEqual([]);
+        expect(await fixture.store.listSkillsByTag(fixture.principal, "alpha")).toEqual([]);
+        expect(await fixture.store.listTags(fixture.principal)).toEqual(["alpha"]);
+
+        // Expired tombstone (0 window): the next tag read purges the row and
+        // drops the projection with it.
+        await fixture.store.publishSkill(publishInput(fixture.principal, "alpha-skill", "alpha"));
+        await fixture.store.deleteSkill(fixture.principal, "alpha-skill", 0);
+        expect(await fixture.store.listTags(fixture.principal)).toEqual([]);
+        expect(await fixture.store.listSkillsByTag(fixture.principal, "alpha")).toEqual([]);
+      } finally {
+        await fixture.close();
+      }
+    });
+
+    test("duplicate tags publish safely and dedupe in the projection", async () => {
+      const fixture = await seeded(backend);
+      try {
+        await fixture.store.publishSkill({ ...publishInput(fixture.principal, "dup-skill", "alpha"), tags: ["alpha", "alpha"] });
+        expect(await fixture.store.listTags(fixture.principal)).toEqual(["alpha"]);
+        expect((await fixture.store.listSkillsByTag(fixture.principal, "alpha")).map((s) => s.slug)).toEqual(["dup-skill"]);
+      } finally {
+        await fixture.close();
+      }
+    });
+
     test("re-pinning upserts to one row and refreshes pinnedAt", async () => {
       const fixture = await seeded(backend);
       try {

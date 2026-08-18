@@ -163,6 +163,95 @@ for (const backend of backends) {
       }
     });
 
+    test("tag routes: distinct tags, skills?tag=, tags/:tag/skills, pins?tag= (org-scoped)", async () => {
+      const ctx = await testServer(backend);
+      try {
+        const orgA = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
+        const orgB = new RemoteSkillsClient("sk_test_org_b", ctx.baseUrl);
+
+        // Unauthenticated tag reads are refused before any handler runs.
+        for (const path of ["/api/v1/tags", "/api/v1/tags/ops/skills", "/api/v1/skills?tag=ops", "/api/v1/pins?tag=ops"]) {
+          const denied = await fetch(`${ctx.baseUrl}${path}`);
+          expect(denied.status).toBe(401);
+          expect(await denied.json()).toMatchObject({ code: "AUTH_REQUIRED" });
+        }
+
+        const bundle = fixtureBundle("t7");
+        const manifest = manifestFor("team-runbook", "t7marker", bundle.skillMd, bundle.sha256);
+        expect((await orgA.publishSkill(manifest, bundle.bytes)).status).toBe(201);
+
+        // The distinct-tags surface is the org's merged registry view: the published tags
+        // plus the bundled corpus's, scoped so another org never sees this org's tags.
+        const tags = await orgA.listTags();
+        expect(tags).toContain("t7marker");
+        expect(tags).toContain("ops");
+        expect(tags).toContain("api"); // a bundled-corpus tag
+        expect(await orgB.listTags()).not.toContain("t7marker");
+
+        // A skill tagged in the hosted registry appears under its tag filter.
+        const byTag = await orgA.skillsByTag("t7marker");
+        expect(byTag).toContainEqual(expect.objectContaining({ slug: "team-runbook", version: "1.2.3" }));
+        expect(await orgB.skillsByTag("t7marker")).toEqual([]);
+
+        // GET /api/v1/skills?tag= serves the same filtered merged list with full payloads.
+        const withTag = await fetch(`${ctx.baseUrl}/api/v1/skills?tag=t7marker`, { headers: { authorization: "Bearer sk_test_org_a" } });
+        expect(withTag.status).toBe(200);
+        const filtered = (await withTag.json()) as Array<Record<string, unknown>>;
+        expect(filtered.some((s) => s.slug === "team-runbook")).toBe(true);
+        expect(filtered.every((s) => Array.isArray(s.tags) && (s.tags as string[]).includes("t7marker"))).toBe(true);
+
+        // Bundled skills are inside the filtered universe as well.
+        const bundledTag = await fetch(`${ctx.baseUrl}/api/v1/skills?tag=api`, { headers: { authorization: "Bearer sk_test_org_a" } });
+        const bundledFiltered = (await bundledTag.json()) as Array<Record<string, unknown>>;
+        expect(bundledFiltered.length).toBeGreaterThan(0);
+        expect(bundledFiltered.every((s) => Array.isArray(s.tags) && (s.tags as string[]).includes("api"))).toBe(true);
+
+        // Pins carry their skill's tags: pin the tagged skill, then filter by its tag.
+        await orgA.pin("team-runbook", { reason: "tagged" });
+        const pinsByTag = await fetch(`${ctx.baseUrl}/api/v1/pins?tag=t7marker`, { headers: { authorization: "Bearer sk_test_org_a" } });
+        expect(pinsByTag.status).toBe(200);
+        const filteredPins = (await pinsByTag.json()) as Array<Record<string, unknown>>;
+        expect(filteredPins.map((p) => p.slug)).toEqual(["team-runbook"]);
+
+        // A pin of a BUNDLED skill appears under that skill's bundled tag.
+        await orgA.pin("api-test-suite");
+        const bundledPins = await fetch(`${ctx.baseUrl}/api/v1/pins?tag=api`, { headers: { authorization: "Bearer sk_test_org_a" } });
+        expect((await bundledPins.json()) as Array<Record<string, unknown>>).toContainEqual(
+          expect.objectContaining({ slug: "api-test-suite" }),
+        );
+        const pinsOtherTag = await fetch(`${ctx.baseUrl}/api/v1/pins?tag=zzz-none`, { headers: { authorization: "Bearer sk_test_org_a" } });
+        expect((await pinsOtherTag.json()) as unknown[]).toEqual([]);
+        // An empty tag query falls back to the unfiltered pin list (both pins
+        // above: the published team-runbook and the bundled api-test-suite).
+        const pinsNoTag = await fetch(`${ctx.baseUrl}/api/v1/pins`, { headers: { authorization: "Bearer sk_test_org_a" } });
+        expect((await pinsNoTag.json()) as unknown[]).toHaveLength(2);
+
+        // Published-wins precedence: a published row occupying a bundled slug
+        // must not let the bundled copy resurface under a tag filter, in the
+        // tag list, or via pins. Publish an override of api-test-suite whose
+        // tags drop "api".
+        const override = fixtureBundle("override");
+        const overrideManifest = manifestFor("api-test-suite", "override", override.skillMd, override.sha256);
+        expect((await orgA.publishSkill(overrideManifest, override.bytes)).status).toBe(201);
+        const filteredApi = await fetch(`${ctx.baseUrl}/api/v1/skills?tag=api`, { headers: { authorization: "Bearer sk_test_org_a" } });
+        const apiRows = (await filteredApi.json()) as Array<Record<string, unknown>>;
+        expect(apiRows.some((s) => s.slug === "api-test-suite")).toBe(false);
+        expect(await orgA.skillsByTag("api")).not.toContainEqual(expect.objectContaining({ slug: "api-test-suite" }));
+        const pinsAfterOverride = await fetch(`${ctx.baseUrl}/api/v1/pins?tag=api`, { headers: { authorization: "Bearer sk_test_org_a" } });
+        expect((await pinsAfterOverride.json()) as Array<Record<string, unknown>>).not.toContainEqual(
+          expect.objectContaining({ slug: "api-test-suite" }),
+        );
+        // The override's own tags appear in the distinct-tags surface.
+        expect(await orgA.listTags()).toContain("override");
+        // The unfiltered listing still shows the published override (published
+        // wins), so the views cannot disagree about which api-test-suite exists.
+        const afterOverrideList = await orgA.listSkills();
+        expect(afterOverrideList.some((s: Record<string, unknown>) => s.slug === "api-test-suite" && s.publishedSource === "custom")).toBe(true);
+      } finally {
+        await ctx.stop();
+      }
+    });
+
     test("lists skills, runs a deterministic worker path, and downloads authorized artifacts", async () => {
       const ctx = await testServer(backend);
       try {
