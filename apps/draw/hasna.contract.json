@@ -3,18 +3,11 @@
   "name": "draw",
   "class": "library",
   "contractVersion": "v1",
-  "kitVersion": "0.1.0",
+  "kitVersion": "0.11.1",
   "description": "Headless board SDK for quick notes and freehand drawings, like Google Keep. Primary surface is a framework agnostic board and card core (createBoard/loadBoard, note and drawing cards, pin/archive/reorder ops, JSON serialization, query and stats) plus a portable Excalidraw compatible drawing scene interchange with no heavy renderer dependency. An optional React entry point (@hasna/draw/react) ships board, card, and freehand draw surface components. A `draw` CLI performs headless board edits and Excalidraw export over files. MCP and HTTP serve and Postgres persistence are optional scaffolding not yet shipped in this v1.",
   "bins": [
     "draw"
   ],
-  "storage": {
-    "mode": "local",
-    "envPrefix": "HASNA_DRAW_",
-    "aliasEnvPrefix": "DRAW_",
-    "databaseUrlSecretRef": "hasna/oss/draw/database-url",
-    "sqlitePath": "~/.hasna/draw/draw.db"
-  },
   "metadata": {
     "service": {
       "port": 19460,
