@@ -293,8 +293,8 @@ export function authorizeApiRequest(
 ): ApiAuthResult {
   if (requirement.public) return { allowed: true };
   if (!isApiAuthConfigured()) {
-    // Permitted ONLY when bound strictly to loopback in local mode; app.ts
-    // enforces the fail-closed non-loopback / cloud guard at startup.
+    // Permitted ONLY when bound strictly to loopback on the SQLite backend;
+    // app.ts enforces the fail-closed non-loopback / PostgreSQL guard at startup.
     return { allowed: true };
   }
 

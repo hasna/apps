@@ -345,6 +345,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos ee9fbb4d (import row — conversations; reconcile the two bins against the manifest or extend the manifest's bins)",
   },
   {
+    member: "controls",
+    cause: "manifest_valid at pinned 0.4.1 (mode-era validator vs backend-era manifest, modes-removal lane): storage.mode Required; storage Unrecognized key(s) in object: 'backend'. The mode vocabulary is removed from the app; the two-backend schema (storage.backend sqlite|postgresql, no mode) ships with the contracts lane, which also must regenerate the vendor-kit without mode.ts.",
+    task: "todos reconcile task 'Reconcile @hasna/controls contracts conformance: manifest_valid' (auto-filed by the standard suite; resolves when the contracts lane publishes the two-backend validator and controls re-pins)",
+  },
+  {
     member: "datasets",
     cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Manifest imported via delta (hasna/contracts 0.10.6 pin) from org repo; org repo has no artifact-scan script.",
     task: "todos 226bfc01-093a-469a-bc94-57491c08fe1b (contracts task — datasets)",

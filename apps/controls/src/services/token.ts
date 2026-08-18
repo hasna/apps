@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
-import { resolveStorageMode } from "../config.js";
+import { serverBackend } from "../config.js";
 import type { Authorization } from "../types/index.js";
 
 /**
@@ -15,12 +15,12 @@ function secret(): string {
   const configured = process.env["HASNA_CONTROLS_TOKEN_SECRET"] || process.env["CONTROLS_TOKEN_SECRET"];
   if (configured) return configured;
   // Fail-closed: never sign real money-authorization tokens with a source-visible
-  // default secret outside local dev. In cloud mode a real secret is REQUIRED —
-  // otherwise anyone who knows the open-source default plus an authorization's
-  // non-secret fields could forge a valid single-use token.
-  if (resolveStorageMode() === "cloud") {
+  // default secret outside local dev. On the PostgreSQL backend a real secret is
+  // REQUIRED — otherwise anyone who knows the open-source default plus an
+  // authorization's non-secret fields could forge a valid single-use token.
+  if (serverBackend() === "postgresql") {
     throw new Error(
-      "controls: HASNA_CONTROLS_TOKEN_SECRET (or CONTROLS_TOKEN_SECRET) must be set in cloud mode. " +
+      "controls: HASNA_CONTROLS_TOKEN_SECRET (or CONTROLS_TOKEN_SECRET) must be set on the PostgreSQL backend. " +
         "Refusing to sign money-authorization tokens with the built-in local-dev default secret.",
     );
   }

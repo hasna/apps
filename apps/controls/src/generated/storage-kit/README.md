@@ -6,24 +6,32 @@
 - Regenerate: `bunx @hasna/contracts vendor-kit`
 - Verify (CI): `bunx @hasna/contracts vendor-kit --check` — fails on stale or hand-edited files.
 
+> **NOTE (modes-removal lane):** the `mode.ts` module was removed from this
+> vendored kit. The server backend is selected by environment — a configured
+> `HASNA_<NAME>_DATABASE_URL` selects PostgreSQL; otherwise the on-box SQLite
+> file is authoritative. Regenerating with a contracts version that still
+> emits `mode.ts` will resurrect it; the `@hasna/contracts` generator must
+> ship the backend-selection kit first (transitional requirement, recorded on
+> the modes-removal task).
+
 ## What it is
 
-A canonical Postgres storage kit shared across the Hasna fleet:
+A canonical PostgreSQL storage kit shared across the Hasna fleet:
 
 | File            | Purpose                                                              |
 | --------------- | ------------------------------------------------------------------- |
-| `mode.ts`       | Storage-mode + env resolution (`local` \| `cloud`), per the contract |
 | `tls.ts`        | The one correct TLS approach (libpq `sslmode` semantics + RDS CA)    |
-| `pool.ts`       | `pg.Pool` factory with fleet-standard TLS                            |
+| `pool.ts`       | `pg.Pool` factory with fleet-standard TLS; selected by DATABASE_URL presence |
 | `query.ts`      | Typed query wrapper (`query` / `many` / `get` / `one` / `execute`)   |
 | `migrations.ts` | `schema_migrations` ledger with sha256 checksums                     |
 | `health.ts`     | `checkHealth` (SELECT 1) and `checkReady` (migrated?) probes         |
 
-## PURE REMOTE (Amendment A1)
+## Backend selection
 
-Cloud mode = reads **and** writes go directly to cloud Postgres. This kit
-contains **no sync engine, no cache-as-mode, and no merge logic**. In `local`
-mode there is no Postgres pool at all; SQLite is authoritative.
+The server has exactly one technical switch: `sqlite | postgresql`. A
+configured `HASNA_<NAME>_DATABASE_URL` (or the short alias) selects PostgreSQL;
+otherwise the on-box SQLite file is authoritative. This kit contains no sync
+engine and no merge logic.
 
 ## TLS
 

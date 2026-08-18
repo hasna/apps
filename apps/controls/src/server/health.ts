@@ -1,16 +1,16 @@
-import { resolveStorageMode, type StorageMode } from "../config.js";
+import { serverBackend, type ServerBackend } from "../config.js";
 import { getDatabase, migrationsApplied } from "../db/database.js";
 import { APP_VERSION } from "../version.js";
 
 export interface HealthPayload {
   status: "ok" | "degraded" | "unavailable";
   version: string;
-  mode: StorageMode;
+  backend: ServerBackend;
 }
 
-/** GET /health and GET /version share this contract shape { status, version, mode }. */
+/** GET /health and GET /version share this contract shape { status, version, backend }. */
 export function healthPayload(): HealthPayload {
-  return { status: "ok", version: APP_VERSION, mode: resolveStorageMode() };
+  return { status: "ok", version: APP_VERSION, backend: serverBackend() };
 }
 
 export interface ReadyPayload {

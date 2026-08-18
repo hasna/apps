@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { resolveDatabaseUrl, resolveDbPath, resolveStorageMode, scrubDatabaseUrl } from "../config.js";
+import { resolveDatabaseUrl, resolveDbPath, serverBackend, scrubDatabaseUrl } from "../config.js";
 import { ensureControlsAppHome } from "../core/app-home.js";
 import { applySchema } from "./schema.js";
 import { currentMigrationId, MIGRATION_PLAN } from "./migration-plan.js";
@@ -19,34 +19,37 @@ function ensureDir(filePath: string): void {
 /**
  * Open (and cache) the app database.
  *
- * - local: bun:sqlite at the resolved path (or ":memory:" for tests), with
- *   WAL + foreign_keys ON, idempotent schema, and the schema_migrations ledger.
- * - cloud: PURE REMOTE — reads/writes go to cloud Postgres via the vendored
- *   storage-kit (dynamically imported so the SQLite bundle never links pg). The
- *   DSN is fetched then scrubbed from the environment (§2.4).
+ * - SQLite backend (no DATABASE_URL set): bun:sqlite at the resolved path
+ *   (or ":memory:" for tests), with WAL + foreign_keys ON, idempotent schema,
+ *   and the schema_migrations ledger.
+ * - PostgreSQL backend (DATABASE_URL set): reads/writes go to PostgreSQL via
+ *   the vendored storage-kit (dynamically imported so the SQLite bundle never
+ *   links pg). The DSN is fetched then scrubbed from the environment.
  *
  * `getDatabase()` returns the local SQLite handle used by the domain services.
- * Cloud connectivity is provisioned by `provisionCloudStore()` but is not the
- * synchronous handle path — services run against SQLite in local mode.
+ * PostgreSQL connectivity is provisioned by `provisionCloudStore()` but is not
+ * the synchronous handle path — services run against SQLite on the SQLite
+ * backend.
  */
 export function getDatabase(path?: string): Database {
   if (_db && path === undefined) return _db;
 
-  const mode = resolveStorageMode();
+  const backend = serverBackend();
 
-  // Fail-closed (§2.4 / DoD §9). The cloud Postgres domain path is not yet wired
-  // through the (synchronous) service layer, so cloud mode must NOT silently fall
-  // back to an ephemeral in-memory SQLite: doing so would store money
+  // Fail-closed. The PostgreSQL domain path is not yet wired through the
+  // (synchronous) service layer, so a configured DATABASE_URL must NOT silently
+  // fall back to an ephemeral in-memory SQLite: doing so would store money
   // authorizations/caps/freezes/audit in per-instance volatile memory — lost on
   // restart and not shared across Fargate/LWA instances. Refuse instead of
   // degrading. `provisionCloudStore()` is the connection primitive the future
   // async wiring will build on. An explicit `path` (tests/migration tooling) may
   // still open a concrete store.
-  if (mode === "cloud" && path === undefined) {
+  if (backend === "postgresql" && path === undefined) {
     throw new Error(
-      "controls: cloud storage mode is not yet wired for domain data. Refusing to serve reads/writes " +
-        "from ephemeral in-memory SQLite (fail-closed). Use HASNA_CONTROLS_STORAGE_MODE=local for the " +
-        "SQLite store, or wire the cloud Postgres path (provisionCloudStore()) before deploying in cloud mode.",
+      "controls: a DATABASE_URL is set, which selects the PostgreSQL backend, but the PostgreSQL domain " +
+        "path is not yet wired. Refusing to serve reads/writes from ephemeral in-memory SQLite (fail-closed). " +
+        "Unset HASNA_CONTROLS_DATABASE_URL for the SQLite store, or wire the Postgres path " +
+        "(provisionCloudStore()) before deploying with a DATABASE_URL.",
     );
   }
 
@@ -121,15 +124,15 @@ export function uuid(): string {
 }
 
 /**
- * Provision a cloud Postgres store (PURE REMOTE). Dynamically imports the
- * vendored storage-kit so the local SQLite path never bundles `pg`. Returns the
- * typed query client; callers must have resolved mode === "cloud".
+ * Provision a PostgreSQL store. Dynamically imports the vendored storage-kit
+ * so the SQLite path never bundles `pg`. Returns the typed query client;
+ * callers must be on the PostgreSQL backend (a DATABASE_URL is set).
  */
 export async function provisionCloudStore(): Promise<unknown> {
   const dsn = resolveDatabaseUrl();
   if (!dsn) {
     throw new Error(
-      "cloud mode needs HASNA_CONTROLS_DATABASE_URL (or _FILE); PURE REMOTE reads/writes go to cloud Postgres.",
+      "controls: the PostgreSQL backend needs HASNA_CONTROLS_DATABASE_URL (or _FILE).",
     );
   }
   const { createPgPool } = await import("../generated/storage-kit/pool.js");

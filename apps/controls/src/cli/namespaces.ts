@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { writeFileSync, readFileSync } from "node:fs";
 import { getDatabase } from "../db/database.js";
-import { resolveDbPath, resolveStorageMode } from "../config.js";
+import { resolveDbPath, serverBackend } from "../config.js";
 import { OPERATIONS, executeOperation, operationManifest, type OperationDef } from "../services/registry.js";
 import { storageStatus, storageSync } from "../services/storage.js";
 import { openApiDocument } from "../api/index.js";
@@ -138,11 +138,11 @@ export function registerOpenApiCommands(): void {
 export function registerSystemCommands(): void {
   program
     .command("doctor")
-    .description("Show storage mode, database path, health, and the operation manifest size.")
+    .description("Show the data backend, database path, health, and the operation manifest size.")
     .action(() => {
       emit({
         app: "controls",
-        mode: resolveStorageMode(),
+        backend: serverBackend(),
         db_path: resolveDbPath(),
         health: healthPayload(),
         operations: operationManifest().length,
