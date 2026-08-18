@@ -6,7 +6,7 @@ import {
 import { buildServer } from "./server.js";
 
 /**
- * open-telephony MCP transport/port boilerplate — a thin shim over the
+ * telephony MCP transport/port boilerplate — a thin shim over the
  * vendored mcp-harness helpers (`src/generated/mcp-harness.ts`). The public API
  * (names, signatures, health shape) is preserved so `mcp/index.ts` and the
  * tests are unchanged; the `POST /mcp` request handling and env/default port
