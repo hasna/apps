@@ -8,6 +8,10 @@ import { assertStdioSafety } from "../src/mcp/index.js";
 import { resolveBindHost } from "../src/mcp/http.js";
 import { appendAudit, verifyAuditChain } from "../src/db/audit.js";
 import { seedFixture, type Fixture } from "./helpers.js";
+import { listSweeps, getSweep, updateSweepStatus } from "../src/services/sweeps.js";
+import { contextFromPrincipal, type RunContext } from "../src/services/context.js";
+import type { QueryClient } from "../src/db/database.js";
+import type { ApiPrincipal } from "../src/server/auth.js";
 
 const STORAGE_ENV = [
   "HASNA_TREASURY_STORAGE_MODE",
@@ -156,5 +160,66 @@ describe("security fix: audit hash-chain stays linear under concurrency (low)", 
     await appendAudit(fx.db, { entity_id: fx.usId, actor_id: "tester", action: "test.a", detail: "1" });
     await appendAudit(fx.db, { entity_id: fx.usId, actor_id: "tester", action: "test.b", detail: "2" });
     expect((await verifyAuditChain(fx.db)).ok).toBe(true);
+  });
+});
+
+describe("security fix: sweep recommendations are two-entity resources (high)", () => {
+  let fx: Fixture;
+  beforeEach(async () => (fx = await seedFixture()));
+  afterEach(() => fx.cleanup());
+
+  function principal(roles: ApiPrincipal["roles"], scopes: ApiPrincipal["scopes"], entity_ids?: string[]): ApiPrincipal {
+    return { credential_id: "p", credential_type: "api_key", actor_id: "p", roles, scopes, ...(entity_ids ? { entity_ids } : {}) };
+  }
+  function scopedContext(db: QueryClient, p: ApiPrincipal): RunContext {
+    return contextFromPrincipal(db, p);
+  }
+
+  async function sweepSides(): Promise<{ from: string; to: string }> {
+    const row = await fx.db.get<{ from_entity_id: string; to_entity_id: string }>(
+      "SELECT from_entity_id, to_entity_id FROM sweep_recommendations WHERE id = ?",
+      [fx.sweepId],
+    );
+    return { from: row!.from_entity_id, to: row!.to_entity_id };
+  }
+
+  it("listSweeps hides a recommendation when only the donor side is in scope", async () => {
+    const { from } = await sweepSides();
+    const rc = scopedContext(fx.db, principal(["treasurer"], ["treasury:read"], [from]));
+    expect(await listSweeps(rc)).toHaveLength(0);
+  });
+
+  it("listSweeps hides a recommendation when only the recipient side is in scope", async () => {
+    const { to } = await sweepSides();
+    const rc = scopedContext(fx.db, principal(["treasurer"], ["treasury:read"], [to]));
+    expect(await listSweeps(rc)).toHaveLength(0);
+  });
+
+  it("listSweeps shows the recommendation when BOTH sides are in scope", async () => {
+    const { from, to } = await sweepSides();
+    const rc = scopedContext(fx.db, principal(["treasurer"], ["treasury:read"], [from, to]));
+    const rows = await listSweeps(rc);
+    expect(rows.some((r) => r.id === fx.sweepId)).toBe(true);
+  });
+
+  it("getSweep denies a donor-scoped principal whose recipient is out of scope", async () => {
+    const { from } = await sweepSides();
+    const rc = scopedContext(fx.db, principal(["treasurer"], ["treasury:read"], [from]));
+    await expect(getSweep(rc, { id: fx.sweepId })).rejects.toThrow(/Permission denied/);
+  });
+
+  it("updateSweepStatus denies a donor-scoped principal whose recipient is out of scope", async () => {
+    const { from } = await sweepSides();
+    const rc = scopedContext(fx.db, principal(["treasurer"], ["treasury:read", "treasury:recommend"], [from]));
+    await expect(updateSweepStatus(rc, { id: fx.sweepId, status: "dismissed" })).rejects.toThrow(/Permission denied/);
+  });
+
+  it("a principal scoped to both entities can read and update the recommendation", async () => {
+    const { from, to } = await sweepSides();
+    const rc = scopedContext(fx.db, principal(["treasurer"], ["treasury:read", "treasury:recommend"], [from, to]));
+    const got = await getSweep(rc, { id: fx.sweepId });
+    expect(got.id).toBe(fx.sweepId);
+    const updated = await updateSweepStatus(rc, { id: fx.sweepId, status: "acknowledged" });
+    expect(updated.status).toBe("acknowledged");
   });
 });

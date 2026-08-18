@@ -1,6 +1,7 @@
 import { now, uuid } from "../db/database.js";
 import { appendAudit } from "../db/audit.js";
 import { guard, type RunContext } from "./context.js";
+import { authorize } from "./authorization.js";
 import { listEntities } from "./entities.js";
 import { entityRunway } from "./runway.js";
 import { entityFilter } from "./fx.js";
@@ -10,11 +11,19 @@ function hydrate(row: SweepRecommendation): SweepRecommendation {
   return { ...row, requires_controls_authorization: true };
 }
 
-export async function listSweeps(rc: RunContext, input: { status?: SweepStatus }): Promise<SweepRecommendation[]> {
+export async function listSweeps(rc: RunContext, input: { status?: SweepStatus } = {}): Promise<SweepRecommendation[]> {
   guard(rc, "treasury:read", "read");
-  const { clause, params } = entityFilter(rc, "from_entity_id");
+  // A sweep recommendation is a TWO-entity resource (donor -> recipient):
+  // both sides must be inside the principal's scope, deny-by-default.
+  const from = entityFilter(rc, "from_entity_id");
+  const to = entityFilter(rc, "to_entity_id");
+  let clause = "";
+  const args: unknown[] = [];
+  if (from.clause && to.clause) {
+    clause = `${from.clause} AND ${to.clause.replace(/^WHERE\s+/, "")}`;
+    args.push(...from.params, ...to.params);
+  }
   let sql = `SELECT * FROM sweep_recommendations ${clause}`;
-  const args = [...params];
   if (input.status) {
     sql += clause ? " AND status = ?" : "WHERE status = ?";
     args.push(input.status);
@@ -28,15 +37,8 @@ export async function getSweep(rc: RunContext, input: { id: string }): Promise<S
   guard(rc, "treasury:read", "read");
   const row = await rc.db.get<SweepRecommendation>("SELECT * FROM sweep_recommendations WHERE id = ?", [input.id]);
   if (!row) throw new SweepNotFoundError(input.id);
-  guardEntity(rc, row.from_entity_id);
+  authorize("read", rc.auth, { entity_ids: [row.from_entity_id, row.to_entity_id] });
   return hydrate(row);
-}
-
-function guardEntity(rc: RunContext, entity_id: string): void {
-  if (rc.auth.bypass) return;
-  if (!rc.auth.entity_ids?.includes(entity_id)) {
-    throw new SweepNotFoundError("access denied");
-  }
 }
 
 export interface GenerateSweepsInput {
@@ -135,7 +137,7 @@ export async function updateSweepStatus(rc: RunContext, input: UpdateSweepInput)
   }
   const row = await rc.db.get<SweepRecommendation>("SELECT * FROM sweep_recommendations WHERE id = ?", [input.id]);
   if (!row) throw new SweepNotFoundError(input.id);
-  guardEntity(rc, row.from_entity_id);
+  authorize("recommend", rc.auth, { entity_ids: [row.from_entity_id, row.to_entity_id] });
   const updated_at = now();
   await rc.db.run("UPDATE sweep_recommendations SET status = ?, updated_at = ? WHERE id = ?", [input.status, updated_at, input.id]);
   await appendAudit(rc.db, { entity_id: row.from_entity_id, actor_id: rc.auth.actor_id, action: "sweep.status", detail: `${input.id} -> ${input.status}` });
