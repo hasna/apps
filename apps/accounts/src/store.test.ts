@@ -246,7 +246,7 @@ describe("ApiStore routes registry ops to /v1", () => {
 
         expect(JSON.parse(readFileSync(join(profile.dir, "settings.json"), "utf8")).statusLine).toEqual({
           type: "command",
-          command: statuslineBin + " render",
+          command: '"' + statuslineBin + '" render',
           padding: 0,
         });
       } finally {

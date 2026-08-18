@@ -168,6 +168,39 @@ test("a missing shared home leaves no dangling links and does not throw", () => 
   expect(() => lstatSync(join(p.dir, "skills"))).toThrow();
 });
 
+test("a fresh profile still gets the installed statusline when the shared home is missing", () => {
+  process.env.ACCOUNTS_SHARED_HOME_CLAUDE = join(home, "does-not-exist");
+  const binDir = join(home, "bin");
+  const statuslineBin = join(binDir, "statusline");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(statuslineBin, "#!/bin/sh\nexit 0\n");
+  chmodSync(statuslineBin, 0o755);
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${binDir}${delimiter}${previousPath ?? ""}`;
+  try {
+    const p = addProfile({ name: "nohome-statusline" });
+
+    expect(readJson(join(p.dir, "settings.json")).statusLine).toEqual({
+      type: "command",
+      command: `"${statuslineBin}" render`,
+      padding: 0,
+    });
+
+    // The no-sweep property still holds: a non-fresh ensure pass must not
+    // write the default into an existing profile — remove the member first
+    // so only a sweep could restore it.
+    const settingsPath = join(p.dir, "settings.json");
+    const settings = readJson(settingsPath);
+    delete settings.statusLine;
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    ensureSharedCapabilities(p.dir, getTool("claude"));
+    expect((readJson(settingsPath).statusLine as Record<string, unknown> | undefined)).toBeUndefined();
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
+});
+
 test("a profile whose dir IS the shared home is left alone", () => {
   const p = addProfile({ name: "self", dir: sharedHome });
   const result = ensureSharedCapabilities(p.dir, getTool("claude"));
@@ -184,13 +217,32 @@ test("tools that declare no shared entries are untouched", async () => {
 });
 
 test("shared MCP servers are seeded into the profile account file, not settings.json", () => {
-  const p = addProfile({ name: "mcp" });
-  const accountFile = join(p.dir, ".claude.json");
-  const data = readJson(accountFile);
-  expect(Object.keys(data.mcpServers as Record<string, unknown>).sort()).toEqual(["notes", "todos"]);
-  // settings.json is not the file Claude Code reads user-scope MCP servers from;
-  // a fresh Claude profile may still receive the independent statusLine default.
-  expect(readJson(join(p.dir, "settings.json")).statusLine).toBeDefined();
+  // The installed statusLine default is part of a fresh profile's birth, so the
+  // assertion below must not depend on an ambient statusline binary on the
+  // runner: install a fixture in PATH the same way the positive tests do.
+  const binDir = join(home, "bin");
+  const statuslineBin = join(binDir, "statusline");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(statuslineBin, "#!/bin/sh\nexit 0\n");
+  chmodSync(statuslineBin, 0o755);
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${binDir}${delimiter}${previousPath ?? ""}`;
+  try {
+    const p = addProfile({ name: "mcp" });
+    const accountFile = join(p.dir, ".claude.json");
+    const data = readJson(accountFile);
+    expect(Object.keys(data.mcpServers as Record<string, unknown>).sort()).toEqual(["notes", "todos"]);
+    // settings.json is not the file Claude Code reads user-scope MCP servers from;
+    // a fresh Claude profile may still receive the independent statusLine default.
+    expect(readJson(join(p.dir, "settings.json")).statusLine).toEqual({
+      type: "command",
+      command: `"${statuslineBin}" render`,
+      padding: 0,
+    });
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
 });
 
 test("MCP seeding merges without clobbering profile-local state", () => {
@@ -893,7 +945,7 @@ test("a fresh Claude profile gets the installed statusline when shared settings 
 
     expect(readJson(join(p.dir, "settings.json")).statusLine).toEqual({
       type: "command",
-      command: `${statuslineBin} render`,
+      command: `"${statuslineBin}" render`,
       padding: 0,
     });
   } finally {

@@ -356,7 +356,11 @@ function readSharedConfig(
     if (binary) {
       found.statusLine = {
         type: "command",
-        command: `${binary} render`,
+        // The resolved path is interpolated into a shell command by the tool,
+        // so it must be quoted: paths containing spaces (common on Windows)
+        // would otherwise split into separate argv words, and an unquoted
+        // Windows path loses its backslashes under a POSIX shell.
+        command: `"${binary}" render`,
         padding: 0,
       };
     }
@@ -562,6 +566,25 @@ export function ensureSharedCapabilities(
   const ctx = resolveContext(profileDir, tool);
   if ("skip" in ctx) {
     result.skipped.push({ entry: "*", reason: ctx.skip });
+    // A missing shared home must not suppress the fresh-profile statusLine
+    // default: there is no corpus to supply it, and the launch/switch/health
+    // paths deliberately never sweep, so this is the only place it lands.
+    // readSharedConfig safely ignores the nonexistent shared sources and only
+    // the installed-binary default is produced; a machine with no installed
+    // binary still writes nothing (the declared-no-statusLine negative control).
+    if (
+      options.freshProfile === true &&
+      tool.id === "claude" &&
+      existsSync(profileDir) &&
+      !existsSync(sharedHomeFor(tool))
+    ) {
+      const statuslineContext: SharedContext = { sharedHome: sharedHomeFor(tool), profileDir: resolve(profileDir) };
+      for (const config of sharedConfigsFor(tool)) {
+        if (config.keys.includes("statusLine")) {
+          mergeSharedConfig(statuslineContext, config, tool, true, result);
+        }
+      }
+    }
     return result;
   }
 
