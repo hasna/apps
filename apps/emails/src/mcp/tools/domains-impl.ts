@@ -81,27 +81,32 @@ function resolveSelfHostedAddressRef(ref: string): EmailAddress {
 /**
  * Refuse a tool that NO mode can serve, naming the reason.
  *
- * The only two left are `get_dns_records` and `verify_domain`. They do not read a
- * row — they call a provider adapter (`getAdapter(provider).getDnsRecords` /
- * `.verifyDomain`), and in self_hosted mode `getProvider` returns a `/v1/providers`
- * row whose credential columns do not exist server-side, so the adapter would fall
- * back to the CLIENT's own ambient AWS or Cloudflare credentials. That credential
- * fallback is the whole reason, and it stands on its own: neither tool has a `/v1`
- * route, so this is not a guard in front of a working one.
+ * `verify_domain` is the only remaining guard: it calls
+ * `getAdapter(provider).verifyDomain`, and in self_hosted mode `getProvider`
+ * returns a `/v1/providers` row whose credential columns do not exist
+ * server-side (the server schema stores name/type/region/active only — the
+ * operator's sending credentials live in the server environment, selected by
+ * EMAILS_SEND_PROVIDER). The /v1 service exposes no domain verify route. A
+ * client-side adapter call would therefore fall back to the CLIENT's own
+ * ambient AWS or Cloudflare credentials — the exact call this guard exists to
+ * prevent.
+ *
+ * `get_dns_records` is only HALF-guarded: its NO-provider path (the generic
+ * SPF/DMARC pair from `src/lib/dns.ts`) is pure, credential-free local
+ * computation and now runs in both configurations, exactly like its CLI twin
+ * `emails domain dns`. The same guard fires only for its provider-scoped half,
+ * where the credential reason applies — the call sits after the no-provider
+ * return, so the order is the port.
  *
  * The CLI twins are NOT symmetric with it, and saying so is the point:
  *
  *   * `emails domain verify` refuses (`notImplementedAnywhere`) — wiring a WRITE
  *     to `.verifyDomain` behind ambient credentials is the decision nobody made.
  *   * `emails domain dns` RUNS in both configurations. It is a read, and its
- *     no-provider path (the generic SPF/DMARC pair from `src/lib/dns.ts`) needs no
- *     credentials at all; only a resolved provider reaches the adapter. An agent
- *     that hits this refusal should be told to run that command — which is why
- *     `cliEquivalentForTool` still maps the tool to it.
- *
- * So do not "restore symmetry" by re-refusing the CLI command or by deleting this
- * guard on the strength of the CLI running: the two surfaces differ because an MCP
- * client's ambient environment is not the operator's shell.
+ *     no-provider path needs no credentials at all; only a resolved provider
+ *     reaches the adapter, and there the operator's shell is the caller. An
+ *     agent that hits the provider-scoped refusal should be told to run that
+ *     command — which is why `cliEquivalentForTool` still maps the tool to it.
  *
  * Every other tool that used to call this (and the alias-specific variant beside
  * it) had a working `/v1` route, a complete client arm in `src/db/*.remote.ts`, and
@@ -200,10 +205,12 @@ export function registerDomainTools(server: McpServer): void {
   },
   async ({ provider_id, domain }) => {
     try {
-      // Self-hosted (self_hosted) mode: create the domain directly on the self_hosted HTTP
-      // API. Providers are local-only, so `provider_id` is carried through as a
-      // label rather than resolved against the local providers table or passed
-      // to a provider adapter. Mirrors the CLI `domain add` self_hosted passthrough.
+      // Self-hosted (self_hosted) mode: create the domain directly on the
+      // self-hosted HTTP API. `provider_id` is the server-side providers resource
+      // id (the routed providers arm resolves it over /v1/providers); it is
+      // persisted on the domain row server-side and never resolved against a
+      // client-side provider table or passed to a client-side adapter. Mirrors
+      // the CLI `domain add` self_hosted passthrough.
         const existing = getDomainByName(provider_id, domain);
         const d = existing ?? createDomain(provider_id, domain);
         return { content: [{ type: "text", text: JSON.stringify(d, null, 2) }] };
@@ -223,7 +230,6 @@ export function registerDomainTools(server: McpServer): void {
   },
   async ({ domain, provider_id }) => {
     try {
-      assertMcpLocalStateAllowed("get_dns_records", "it uses local provider/domain records and provider adapters");
       let provider;
       if (provider_id) {
         const resolvedId = resolveId("providers", provider_id);
@@ -234,11 +240,35 @@ export function registerDomainTools(server: McpServer): void {
       }
 
       if (!provider) {
-        // Return generic records
+        // No provider resolved: return the generic SPF/DMARC pair. This path is
+        // pure local computation (src/lib/dns.ts) and needs no credentials, so it
+        // runs in BOTH configurations — the CLI twin `emails domain dns` does the
+        // same. In self_hosted mode the /v1 providers resource carries no
+        // credential columns, so a provider that fails to resolve here is simply
+        // absent server-side, exactly as in local mode.
         const { generateSpfRecord, generateDmarcRecord, formatDnsTable } = await import("../../lib/dns.js");
         const records = [generateSpfRecord(domain), generateDmarcRecord(domain)];
         return { content: [{ type: "text", text: formatDnsTable(records) }] };
       }
+
+      // Strong-reason record (reviewed, not assumed): provider-scoped DNS
+      // records are retrieved from the provider API with provider credentials.
+      // On the hosted path the /v1 providers resource has NO credential columns
+      // (the server owns them and selects the outbound provider itself), and
+      // the /v1 service exposes no domain DNS-records route — so a client-side
+      // adapter call would resolve the CALLER's ambient AWS/Cloudflare
+      // credentials. That is the exact call this surface refuses to make; an
+      // MCP client's ambient environment is not the operator's shell. Called
+      // AFTER the credential-free no-provider return above, so only this half
+      // is refused on the hosted path.
+      assertMcpLocalStateAllowed(
+        "get_dns_records",
+        "provider-scoped DNS records need provider credentials, which live only server-side: the /v1 providers "
+          + "resource carries no credential columns and the /v1 service exposes no domain DNS-records route, so a "
+          + "client-side adapter call would fall back to the ambient AWS/Cloudflare credentials of whoever runs it. "
+          + "Use 'emails domain dns <domain>' for the generic SPF/DMARC pair, or read the provider's DKIM records "
+          + "where the credentials live",
+      );
 
       const adapter = getAdapter(provider);
       const records = await adapter.getDnsRecords(domain);
@@ -264,7 +294,11 @@ export function registerDomainTools(server: McpServer): void {
   },
   async ({ domain, provider_id }) => {
     try {
-      assertMcpLocalStateAllowed("verify_domain", "it uses local provider/domain records and provider adapters");
+      assertMcpLocalStateAllowed(
+        "verify_domain",
+        "it calls the provider adapter's verifyDomain with credentials only the server holds: the /v1 providers "
+          + "resource carries no credential columns and the /v1 service exposes no domain verify route",
+      );
       const found = provider_id
         ? getDomainByName(resolveId("providers", provider_id), domain)
         : findDomainsByName(domain)[0] ?? null;
