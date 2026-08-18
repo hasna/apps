@@ -598,12 +598,12 @@ export function installBundleAtomically(
  */
 export function writePullMarker(
   dir: string,
-  record: { skill: string; version?: string; contentHash?: string; sourceCommit?: string; signature?: string; revisionId?: string },
+  record: { skill: string; version?: string; contentHash?: string; sourceCommit?: string; signature?: string; revisionId?: string; source?: "pull" | "sync" },
 ): void {
   const marker = {
     managedBy: "@hasna/skills",
     skill: record.skill,
-    source: "pull",
+    source: record.source ?? "pull",
     ...(record.version ? { version: record.version } : {}),
     ...(record.contentHash ? { contentHash: record.contentHash } : {}),
     ...(record.sourceCommit ? { sourceCommit: record.sourceCommit } : {}),

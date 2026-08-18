@@ -91,6 +91,9 @@ registerFeedback(program);
 const { registerStorage } = await import("./commands/storage.js");
 registerStorage(program);
 
+const { registerRegistryReconcile } = await import("./commands/registry-reconcile.js");
+registerRegistryReconcile(program);
+
 registerEventsCommands(program as any, { source: "skills" });
 
 // A retired deployment-mode setting is an operator error with a one-line fix, and

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "
 import { dirname, join } from "path";
 import { homedir } from "os";
 import { requireApiUrl } from "./api-url.js";
-import { getDataDir } from "./config.js";
+import { getDataDir, getDataDirReadOnly } from "./config.js";
 
 /**
  * auth.json lives at the skills app root, beside config.json.
@@ -24,6 +24,17 @@ import { getDataDir } from "./config.js";
  */
 export function getAuthFilePath(): string {
   return join(getDataDir(), "auth.json");
+}
+
+/**
+ * Write-free credential path resolution for read-only paths (e.g. `sync --dry-run`).
+ *
+ * getAuthFilePath() routes through getDataDir(), which WRITES (mkdirs the app dir,
+ * merges legacy ~/.skills content, copies the legacy config). A dry run must read
+ * the same credential file a real run would without performing any of that.
+ */
+export function getAuthFilePathReadOnly(): string {
+  return join(getDataDirReadOnly(), "auth.json");
 }
 
 function legacyAuthFilePath(): string {
@@ -88,6 +99,32 @@ export function getApiKey(): string | null {
   if (process.env.SKILLS_API_KEY) return process.env.SKILLS_API_KEY;
   if (process.env.SKILL_API_KEY) return process.env.SKILL_API_KEY;
   return getAuthConfig()?.apiKey || null;
+}
+
+/**
+ * Write-free credential read for read-only paths (e.g. `sync --dry-run`).
+ *
+ * getAuthConfig() resolves through getAuthFilePath() -> getDataDir(), which
+ * writes. Reads the same files (canonical auth.json, then the legacy ~/.skills
+ * fallback) without creating or migrating anything, and without touching the
+ * write path's module-level cache.
+ */
+export function getAuthConfigReadOnly(): AuthConfig | null {
+  try {
+    const file = existsSync(getAuthFilePathReadOnly()) ? getAuthFilePathReadOnly() : legacyAuthFilePath();
+    const raw = readFileSync(file, "utf-8");
+    const config = JSON.parse(raw) as AuthConfig;
+    if (!config.apiKey) return null;
+    return config;
+  } catch {
+    return null;
+  }
+}
+
+export function getApiKeyReadOnly(): string | null {
+  if (process.env.SKILLS_API_KEY) return process.env.SKILLS_API_KEY;
+  if (process.env.SKILL_API_KEY) return process.env.SKILL_API_KEY;
+  return getAuthConfigReadOnly()?.apiKey || null;
 }
 
 export function normalizeSkillsApiOrigin(apiUrl: string): string {

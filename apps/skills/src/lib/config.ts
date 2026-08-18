@@ -224,6 +224,66 @@ export function getDataDir(): string {
 }
 
 /**
+ * Write-free data-dir resolution for read-only paths (e.g. `sync --dry-run`).
+ *
+ * getDataDir() itself writes: it mkdirs the app folder, merges legacy ~/.skills
+ * content and copies the legacy config file. A dry run must resolve the SAME
+ * directory a real run would use without performing any of that — mirror the path
+ * logic only, reading $HASNA_SKILLS_DIR and $HOME exactly the way getDataDir does.
+ */
+export function getDataDirReadOnly(): string {
+  const override = process.env[DATA_DIR_ENV];
+  if (override) return override;
+  return join(process.env["HOME"] || process.env["USERPROFILE"] || homedir(), ".hasna", "skills");
+}
+
+/**
+ * Get the config file path for a given scope, write-free (see getDataDirReadOnly).
+ */
+export function getConfigPathReadOnly(scope: ConfigScope): string {
+  if (scope === "global") return join(getDataDirReadOnly(), "config.json");
+  return join(process.cwd(), "skills.config.json");
+}
+
+/**
+ * Load merged config (project-local overrides global) without the writes
+ * getDataDir() performs on the write path.
+ *
+ * The write path folds the legacy ~/.skillsrc into canonical config.json as part of
+ * getDataDir()'s migration — copied ONLY when canonical config.json is absent, and
+ * the legacy migration is skipped entirely when a data-directory override is active.
+ * This mirrors that FILE-LEVEL precedence, never field-level merging: canonical
+ * config.json, when present, is the whole global config; legacy ~/.skillsrc is read
+ * only in the exact situation the write path would copy it (no canonical file, no
+ * override). Field-level merging would inherit a stale legacy origin beneath a
+ * canonical config that omits apiUrl — and the client sends its stored credential to
+ * whatever origin resolves, so divergence from the write path is credential-bearing.
+ */
+export function loadConfigReadOnly(): SkillsConfig {
+  const canonicalConfigPath = getConfigPathReadOnly("global");
+  let globalConfig: SkillsConfig;
+  if (existsSync(canonicalConfigPath)) {
+    globalConfig = readConfigFile(canonicalConfigPath);
+  } else if (process.env[DATA_DIR_ENV] !== undefined) {
+    // Override active: the write path skips the legacy migration entirely, so a
+    // data-directory without config.json has no global config.
+    globalConfig = {};
+  } else {
+    globalConfig = readConfigFile(legacyConfigFilePath());
+  }
+  const projectConfig = readConfigFile(getConfigPathReadOnly("project"));
+  return { ...globalConfig, ...projectConfig };
+}
+
+/**
+ * The legacy ~/.skillsrc config file, resolved write-free from $HOME exactly the
+ * way getDataDir()'s migration reads it.
+ */
+function legacyConfigFilePath(): string {
+  return join(process.env["HOME"] || process.env["USERPROFILE"] || homedir(), ".skillsrc");
+}
+
+/**
  * Get the config file path for a given scope
  */
 export function getConfigPath(scope: ConfigScope): string {

@@ -1,4 +1,6 @@
-import { getApiKey as getStoredApiKey, getApiUrl } from "./auth-store.js";
+import { getApiKey as getStoredApiKey, getApiKeyReadOnly, getApiUrl } from "./auth-store.js";
+import { MissingApiUrlError, resolveApiUrl } from "./api-url.js";
+import { loadConfigReadOnly } from "./config.js";
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
 
 /**
@@ -139,6 +141,23 @@ export class RemoteSkillsClient {
     const res = await this.request(`/api/v1/skills/${slug}`);
     if (!res.ok) return null;
     return res.json();
+  }
+
+  /**
+   * Raw GET for one skill, with the HTTP status surfaced. Used by the reconcile
+   * re-check (registry-reconcile.ts) so it can distinguish "no such skill" (404) from
+   * "the registry failed to answer" (any other non-success status) instead of treating
+   * both as absent.
+   */
+  async getSkillStatus(slug: string): Promise<{ status: number; body: unknown }> {
+    const res = await this.request(`/api/v1/skills/${encodeURIComponent(slug)}`, { method: "GET" });
+    let body: unknown = null;
+    try {
+      body = await res.json();
+    } catch {
+      // A non-JSON body still leaves the status usable.
+    }
+    return { status: res.status, body };
   }
 
   async submitRun(slug: string, input?: Record<string, unknown>, args?: string[]): Promise<RemoteSkillRunContract> {
@@ -397,4 +416,23 @@ export function createRemoteSkillsClient(): RemoteSkillsClient | null {
   const apiKey = getStoredApiKey();
   if (!apiKey) return null;
   return new RemoteSkillsClient(apiKey);
+}
+
+/**
+ * Write-free client resolution for read-only paths (e.g. `sync --dry-run`).
+ *
+ * createRemoteSkillsClient() resolves the stored credential through
+ * getAuthFilePath() and the stored origin through loadConfig() — both route
+ * through getDataDir(), which WRITES (mkdirs the app dir, merges legacy ~/.skills
+ * content, copies the legacy config). A dry run must resolve the same client a
+ * real run would without performing any of that: the credential and the origin
+ * are read from the same files at the same computed paths, and the MissingApiUrl
+ * failure mode is preserved (a key with no origin still fails loudly).
+ */
+export function createRemoteSkillsClientReadOnly(): RemoteSkillsClient | null {
+  const apiKey = getApiKeyReadOnly();
+  if (!apiKey) return null;
+  const apiUrl = resolveApiUrl(loadConfigReadOnly(), process.env);
+  if (!apiUrl) throw new MissingApiUrlError("the cloud group's sync verb (--dry-run)");
+  return new RemoteSkillsClient(apiKey, apiUrl);
 }
