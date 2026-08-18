@@ -12,7 +12,7 @@
  *
  * The session INDEX side (project_path / source_path rows) is owned by the
  * Store, not this module — the CLI routes that through
- * `SessionStore.relocatePaths`, so in self_hosted mode the shared cloud
+ * `SessionStore.relocatePaths`, so with the hosted http store the shared hosted
  * registry is updated (never a raw on-box `new Database(...)` write).
  */
 
@@ -148,7 +148,7 @@ export interface RelocateResult {
  * Relocate the on-box transcript FILES after a project directory move. Does NOT
  * touch the session index — the caller updates that through
  * `SessionStore.relocatePaths` so it lands in whichever store is active
- * (local SQLite or the shared self_hosted cloud registry).
+ * (local SQLite or the shared hosted registry).
  */
 export function relocate(
   oldPath: string,

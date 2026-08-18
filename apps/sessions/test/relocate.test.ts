@@ -161,13 +161,16 @@ describe("relocate", () => {
     expect(session.source_path).toBe("/Users/test/old/project/session.jsonl");
   });
 
-  it("Store.relocatePaths rewrites project_path/source_path/ingestion_state (local mode)", async () => {
+  it("Store.relocatePaths rewrites project_path/source_path/ingestion_state (sqlite store)", async () => {
     const origDbPath = process.env.HASNA_SESSIONS_DB_PATH;
     const origApiUrl = process.env.HASNA_SESSIONS_API_URL;
     const origApiKey = process.env.HASNA_SESSIONS_API_KEY;
-    // Force local mode: unset the cloud flip envs.
+    const origHome = process.env.HOME;
+    // Force the sqlite store: scrub the hosted pair and sandbox HOME so the
+    // disk credential tier cannot select the hosted store.
     delete process.env.HASNA_SESSIONS_API_URL;
     delete process.env.HASNA_SESSIONS_API_KEY;
+    process.env.HOME = join(TEST_DIR, "relocate-home");
     process.env.HASNA_SESSIONS_DB_PATH = join(TEST_DIR, "sessions.db");
     resetDatabase();
 
@@ -187,7 +190,7 @@ describe("relocate", () => {
     );
 
     const store = resolveSessionStore();
-    expect(store.mode).toBe("local");
+    expect(store.transport).toBe("sqlite");
     const res = await store.relocatePaths("/Users/test/old", "/Users/test/new");
 
     const session = getDatabase()
@@ -202,6 +205,8 @@ describe("relocate", () => {
     else process.env.HASNA_SESSIONS_DB_PATH = origDbPath;
     if (origApiUrl !== undefined) process.env.HASNA_SESSIONS_API_URL = origApiUrl;
     if (origApiKey !== undefined) process.env.HASNA_SESSIONS_API_KEY = origApiKey;
+    if (origHome === undefined) delete process.env.HOME;
+    else process.env.HOME = origHome;
 
     expect(res.rowsUpdated).toBe(1);
     expect(session.project_path).toBe("/Users/test/new/project");

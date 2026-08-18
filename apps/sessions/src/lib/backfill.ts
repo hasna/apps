@@ -6,7 +6,6 @@ import type { SessionParser } from "./ingest/types.js";
 import { listParsers } from "./ingest/index.js";
 import { getSessionsDir } from "./paths.js";
 import type { SessionStore } from "../db/session-store.js";
-import { resolveStorageMode } from "../generated/storage-kit/mode.js";
 import type {
   MessageInsert,
   ParsedSession,
@@ -89,7 +88,7 @@ export interface BackfillRunOptions {
 }
 
 export interface BackfillRunResult {
-  target: "self_hosted_api";
+  target: "hosted_api";
   dryRun: boolean;
   mode: "inventory" | "apply";
   inventory: {
@@ -728,12 +727,12 @@ function isProductionLikeUrl(raw: string | undefined, env: Record<string, string
 }
 
 function isProductionLikeTarget(opts: BackfillRunOptions, apiUrl: string | null, env: Record<string, string | undefined>): boolean {
-  return isProductionLikeUrl(apiUrl ?? undefined, env) || Boolean(opts.apply && opts.store?.mode === "cloud" && !apiUrl);
+  return isProductionLikeUrl(apiUrl ?? undefined, env) || Boolean(opts.apply && opts.store?.transport === "http" && !apiUrl);
 }
 
 function productionTargetDescription(opts: BackfillRunOptions, apiUrl: string | null): string {
   if (apiUrl) return `API URL ${apiUrl}`;
-  if (opts.store?.mode === "cloud") return "injected cloud store";
+  if (opts.store?.transport === "http") return "injected hosted store";
   return "target";
 }
 
@@ -749,14 +748,14 @@ function firstEnv(env: Record<string, string | undefined>, keys: string[]): stri
 
 function isApplyStoreModeAllowed(opts: BackfillRunOptions, env: Record<string, string | undefined>): boolean {
   if (!opts.apply) return true;
-  if (opts.store) return opts.store.mode === "cloud";
-  const clientMode = firstEnv(env, ["HASNA_SESSIONS_MODE", "SESSIONS_MODE"]);
-  const storageMode = resolveStorageMode("sessions", env).mode;
-  const normalizedMode = (clientMode ?? storageMode).toLowerCase().replace(/-/g, "_");
-  const cloudLikeMode = normalizedMode === "cloud" || normalizedMode === "self_hosted" || normalizedMode === "remote" || normalizedMode === "hybrid";
+  if (opts.store) return opts.store.transport === "http";
+  // Apply targets the hosted registry: it is allowed only when the client
+  // resolves to the hosted HTTP API — both HASNA_SESSIONS_API_URL and
+  // HASNA_SESSIONS_API_KEY present. Half a pair fails closed inside
+  // resolveSessionStore.
   const apiUrlPresent = Boolean(firstEnv(env, API_URL_ENV_KEYS));
   const apiKeyPresent = Boolean(firstEnv(env, ["HASNA_SESSIONS_API_KEY", "SESSIONS_API_KEY"]));
-  return cloudLikeMode && apiUrlPresent && apiKeyPresent;
+  return apiUrlPresent && apiKeyPresent;
 }
 
 async function resolveApplyStore(opts: BackfillRunOptions): Promise<SessionStore> {
@@ -819,7 +818,7 @@ function createResult(
     backup.reason = "backup command not run because earlier apply preflight gates failed";
   }
   const result: BackfillRunResult = {
-    target: "self_hosted_api",
+    target: "hosted_api",
     dryRun: !apply,
     mode: apply ? "apply" : "inventory",
     inventory: {
@@ -911,7 +910,7 @@ function createResult(
     result.errors.push(result.gates.capacity.reason);
   }
   if (apply && !storeModeAllowed) {
-    result.errors.push("apply requires self_hosted/cloud API mode; local mode is inventory-only");
+    result.errors.push("apply requires the hosted HTTP API store; the sqlite local store is inventory-only");
   }
   if (apply && backup.reason) result.errors.push(backup.reason);
   return result;
@@ -961,8 +960,8 @@ export async function runSessionBackfill(opts: BackfillRunOptions = {}): Promise
   if (!opts.apply || result.errors.length > 0) return result;
 
   const store = await resolveApplyStore(opts);
-  if (store.mode !== "cloud") {
-    result.errors.push("apply requires self_hosted/cloud API mode; local mode is inventory-only");
+  if (store.transport !== "http") {
+    result.errors.push("apply requires the hosted HTTP API store; the sqlite local store is inventory-only");
     return result;
   }
 

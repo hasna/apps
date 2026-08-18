@@ -10,12 +10,26 @@ const PROJECTS_DIR = join(TEST_DIR, "projects");
 const EXPORT_OUTPUT_DIR = join(TEST_DIR, "exports");
 const IMPORT_SOURCE_DIR = join(TEST_DIR, "import-source");
 
+const SESSIONS_CLIENT_ENV_KEYS = [
+  "HASNA_SESSIONS_API_URL",
+  "HASNA_SESSIONS_API_KEY",
+  "SESSIONS_API_URL",
+  "SESSIONS_API_KEY",
+] as const;
+
+/** Spawn env with the ambient hosted-client pair scrubbed, plus overrides. */
+function cliTestEnv(extra: Record<string, string> = {}): Record<string, string> {
+  const env = { ...process.env } as Record<string, string>;
+  for (const key of SESSIONS_CLIENT_ENV_KEYS) delete env[key];
+  return { ...env, ...extra };
+}
+
 function runCli(args: string[]) {
   return Bun.spawnSync({
     cmd: ["bun", "run", "src/cli/index.tsx", ...args],
     cwd: repoRoot,
-    env: {
-      ...process.env,
+    env: cliTestEnv({
+      HOME: join(TEST_DIR, "home"),
       CLAUDE_PATH: TEST_DIR,
       CODEX_PATH: TEST_DIR,
       CODEWITH_PATH: join(TEST_DIR, "codewith"),
@@ -23,15 +37,7 @@ function runCli(args: string[]) {
       HASNA_SESSIONS_DB_PATH: join(TEST_DIR, "sessions.db"),
       SESSIONS_DB_PATH: join(TEST_DIR, "sessions.db"),
       HASNA_SESSIONS_DIR: join(TEST_DIR, "sessions-home"),
-      HASNA_SESSIONS_API_URL: "",
-      HASNA_SESSIONS_API_KEY: "",
-      HASNA_SESSIONS_MODE: "local",
-      HASNA_SESSIONS_STORAGE_MODE: "local",
-      SESSIONS_API_URL: "",
-      SESSIONS_API_KEY: "",
-      SESSIONS_MODE: "local",
-      SESSIONS_STORAGE_MODE: "local",
-    },
+    }),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -41,8 +47,8 @@ function runCliPipe(command: string) {
   return Bun.spawnSync({
     cmd: ["bash", "-o", "pipefail", "-c", command],
     cwd: repoRoot,
-    env: {
-      ...process.env,
+    env: cliTestEnv({
+      HOME: join(TEST_DIR, "home"),
       CLAUDE_PATH: TEST_DIR,
       CODEX_PATH: TEST_DIR,
       CODEWITH_PATH: join(TEST_DIR, "codewith"),
@@ -50,15 +56,7 @@ function runCliPipe(command: string) {
       HASNA_SESSIONS_DB_PATH: join(TEST_DIR, "sessions.db"),
       SESSIONS_DB_PATH: join(TEST_DIR, "sessions.db"),
       HASNA_SESSIONS_DIR: join(TEST_DIR, "sessions-home"),
-      HASNA_SESSIONS_API_URL: "",
-      HASNA_SESSIONS_API_KEY: "",
-      HASNA_SESSIONS_MODE: "local",
-      HASNA_SESSIONS_STORAGE_MODE: "local",
-      SESSIONS_API_URL: "",
-      SESSIONS_API_KEY: "",
-      SESSIONS_MODE: "local",
-      SESSIONS_STORAGE_MODE: "local",
-    },
+    }),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -72,6 +70,7 @@ function parseJsonOutput(result: ReturnType<typeof Bun.spawnSync>) {
 
 function setupProjectFixtures() {
   rmSync(TEST_DIR, { recursive: true, force: true });
+  mkdirSync(join(TEST_DIR, "home"), { recursive: true });
   mkdirSync(PROJECTS_DIR, { recursive: true });
   mkdirSync(EXPORT_OUTPUT_DIR, { recursive: true });
 
@@ -300,7 +299,7 @@ describe("CLI JSON output", () => {
       "utf-8"
     );
 
-    // `paths` now routes through the Store (the on-box index in local mode),
+    // `paths` now routes through the Store (the on-box index on the sqlite store),
     // so it reflects indexed sessions rather than a raw filesystem scan.
     expect(runCli(["ingest", "--source", "claude", "--json"]).exitCode).toBe(0);
 

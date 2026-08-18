@@ -158,7 +158,7 @@ function preCloudSyncBackupRecord(): { artifact: null; created_at: string; note:
   return {
     artifact: null,
     created_at: new Date().toISOString(),
-    note: "user-supplied backup command completed before self_hosted content import push",
+    note: "user-supplied backup command completed before hosted content import push",
   };
 }
 
@@ -266,8 +266,8 @@ program
     });
 
     // Phase 2: the session INDEX (project_path/source_path) — routed through the
-    // Store so self_hosted mode updates the shared cloud registry, not a raw
-    // on-box SQLite write. `--no-db` skips it; dry-run never mutates.
+    // Store so the hosted http transport updates the shared hosted registry, not
+    // a raw on-box SQLite write. `--no-db` skips it; dry-run never mutates.
     const updateDb = opts.db !== false;
     let dbRowsUpdated = 0;
     if (updateDb && !opts.dryRun) {
@@ -1160,12 +1160,13 @@ program
   .description("List all project paths with session counts")
   .option("--json", "Output as JSON")
   .action(async (opts: { json?: boolean }) => {
-    // Route through the Store so this is mode-aware: local mode reads the on-box
-    // index; self_hosted mode hits /v1/stats and reports the SHARED cloud
-    // registry's project paths. Never scan the local filesystem in cloud mode —
-    // that was the split-brain bug (byte-identical local output regardless of
-    // mode). The orphaned-path (`!`) marker is a local-filesystem concern and is
-    // only meaningful for on-box projects, so it is shown in local mode only.
+    // Route through the Store: the sqlite store reads the on-box index; the http
+    // store hits /v1/stats and reports the SHARED hosted registry's project
+    // paths. Never scan the local filesystem when the store is hosted — that
+    // was the split-brain bug (byte-identical local output regardless of the
+    // selected backend). The orphaned-path (`!`) marker is a local-filesystem
+    // concern and is only meaningful for on-box projects, so it is shown for the
+    // sqlite store only.
     const { resolveSessionStore } = await import("../db/session-store.js");
     const store = resolveSessionStore();
     const stats = await store.stats();
@@ -1174,7 +1175,7 @@ program
       .map((p) => {
         const path = p.project_path ?? p.project_name ?? "(unknown)";
         const exists =
-          store.mode === "local" && p.project_path ? existsSync(p.project_path) : true;
+          store.transport === "sqlite" && p.project_path ? existsSync(p.project_path) : true;
         return { path, sessions: p.session_count, exists };
       })
       .sort((a, b) => b.sessions - a.sessions);
@@ -1184,7 +1185,7 @@ program
       return;
     }
 
-    console.log(`Session Paths (${store.mode})\n`);
+    console.log(`Session Paths (${store.transport})\n`);
     const maxPath = Math.max(60, ...projects.map((p) => p.path.length));
 
     for (const p of projects) {
@@ -1193,7 +1194,7 @@ program
       console.log(`${marker} ${p.path.padEnd(maxPath)} ${countStr} sessions`);
     }
 
-    if (store.mode === "local") {
+    if (store.transport === "sqlite") {
       const orphaned = projects.filter((p) => !p.exists);
       if (orphaned.length > 0) {
         console.log(
@@ -1323,7 +1324,7 @@ interface ApiSyncCliOptions {
 }
 
 interface ContentSyncResult {
-  target: "self_hosted_api";
+  target: "hosted_api";
   dryRun: boolean;
   scanned: number;
   attempted: number;
@@ -1348,7 +1349,7 @@ interface ContentSyncResult {
 }
 
 const CLOUD_SYNC_BACKUP_GUIDANCE =
-  "Live self_hosted pushes require a successful --backup-command. Raw SQLite file copies are not treated as a safe backup while the DB may be active.";
+  "Live hosted pushes require a successful --backup-command. Raw SQLite file copies are not treated as a safe backup while the DB may be active.";
 
 // Default number of local sessions scanned per content-sync cycle. A bare `sessions sync`
 // on a large store (~13k sessions) would otherwise scan and parse every session and hang
@@ -1414,7 +1415,7 @@ async function runContentSyncOnce(opts: ApiSyncCliOptions): Promise<ContentSyncR
   const limit = parsePositiveIntOption(opts.limit, DEFAULT_SYNC_LIMIT, "--limit");
   const local = getLocalStore();
   const result: ContentSyncResult = {
-    target: "self_hosted_api",
+    target: "hosted_api",
     dryRun,
     scanned: 0,
     attempted: 0,
@@ -1466,15 +1467,15 @@ async function runContentSyncOnce(opts: ApiSyncCliOptions): Promise<ContentSyncR
   }
 
   const store = resolveSessionStore();
-  if (store.mode === "local") {
+  if (store.transport === "sqlite") {
     result.skipped = result.scanned;
-    result.warnings.push("local mode; on-box index is authoritative. Configure HASNA_SESSIONS_MODE=self_hosted, HASNA_SESSIONS_API_URL, and HASNA_SESSIONS_API_KEY to push to the shared cloud registry.");
+    result.warnings.push("sqlite store: the on-box index is authoritative. Configure HASNA_SESSIONS_API_URL and HASNA_SESSIONS_API_KEY to push to the hosted registry.");
     return result;
   }
 
   result.backup.hook = runBackupCommand(opts.backupCommand, false);
   if (!result.backup.hook.configured) {
-    result.errors.push("live self_hosted sync requires --backup-command to complete a SQLite-safe backup/export before pushing content");
+    result.errors.push("live hosted sync requires --backup-command to complete a SQLite-safe backup/export before pushing content");
     result.failed = 1;
     return result;
   }
@@ -1752,8 +1753,8 @@ program
       console.error(`Session not found (or ambiguous prefix): ${id}`);
       process.exit(1);
     }
-    // Message/tool-call bodies come through the Store: local SQLite in local mode
-    // or the authenticated /v1 content endpoints in self_hosted mode.
+    // Message/tool-call bodies come through the Store: local SQLite, or the
+    // authenticated /v1 content endpoints of the hosted store.
     const n = parseNonNegativeIntOption(opts.messages, 12, "--messages");
     const messages = n === 0 ? [] : await store.messages(s.id);
     const tools = await store.toolCalls(s.id);
@@ -2082,8 +2083,8 @@ addIngestCommand("ingest", "Index AI coding sessions (claude, codex, codewith, g
 addIngestCommand("reindex", "Alias for ingest; refresh the searchable session index");
 
 // Use parseAsync + a single top-level catch so async command actions that throw
-// (e.g. a cloud /v1 HTTP error, or an operation not served by the cloud API like
-// `recall` in self_hosted mode) surface a clean one-line message and a non-zero
+// (e.g. a hosted /v1 HTTP error, or an operation not served by the hosted API
+// like `recall`) surface a clean one-line message and a non-zero
 // exit — never an unhandled-rejection stack trace.
 program.parseAsync().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);

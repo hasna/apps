@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Generate the typed SDK client from sessions-serve's OpenAPI document.
 //
-// The SDK is the single source of truth for self_hosted clients: they need only
+// The SDK is the single source of truth for hosted clients: they need only
 // SESSIONS_API_URL + SESSIONS_API_KEY. Run: `bun run sdk:generate`.
 
 import { mkdirSync, writeFileSync } from "node:fs";

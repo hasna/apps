@@ -534,7 +534,7 @@ describe("cloud import sanitization", () => {
 
 describe("cloud listMachines aggregation", () => {
   // Regression for machines-empty: sessions carry machine tags but the `machines`
-  // table is never populated in self_hosted /v1 mode (upsertSession only writes
+  // table is never populated in hosted /v1 mode (upsertSession only writes
   // sessions.machine). listMachines must aggregate from the sessions table, not
   // silently return [] by reading an empty machines table.
   function clientWithSessions(

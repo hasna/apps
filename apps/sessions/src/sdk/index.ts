@@ -1,5 +1,5 @@
 // Typed SDK for @hasna/sessions, generated from the sessions-serve OpenAPI
-// document by @hasna/contracts. Self_hosted clients need only SESSIONS_API_URL
+// document by @hasna/contracts. Hosted clients need only SESSIONS_API_URL
 // + SESSIONS_API_KEY. Regenerate with `bun run sdk:generate`.
 
 export * from "./client.js";
@@ -9,7 +9,7 @@ import { SessionsApi, type SessionsApiOptions } from "./client.js";
 
 /**
  * Build a SessionsApi client from the environment (SESSIONS_API_URL +
- * SESSIONS_API_KEY), the Hasna self_hosted client convention. Overrides win.
+ * SESSIONS_API_KEY), the hosted client convention. Overrides win.
  */
 export function createSessionsClientFromEnv(
   overrides: Partial<SessionsApiOptions> = {},

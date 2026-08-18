@@ -10,14 +10,13 @@ import { getDatabase, resetDatabase, closeDatabase } from "../src/db/database";
 
 const SIGNING_KEY = ["test", "signing", "fixture", "0123456789abcdef", "0123456789abcdef"].join("-");
 
-describe("/v1 authenticated API (local mode)", () => {
+describe("/v1 authenticated API (sqlite backend)", () => {
   let dir: string;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "sessions-v1-"));
     process.env.SESSIONS_DB_PATH = join(dir, "sessions.db");
     process.env.HASNA_SESSIONS_API_SIGNING_KEY = SIGNING_KEY;
-    delete process.env.HASNA_SESSIONS_STORAGE_MODE;
     resetDatabase();
     resetDataSource();
     resetAuth();

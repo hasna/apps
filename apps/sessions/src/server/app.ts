@@ -1,5 +1,5 @@
 import { getPackageInfo } from "../lib/package.js";
-import { isCloudMode, getCloudClient } from "../db/cloud/client.js";
+import { serverDataBackend, getCloudClient } from "../db/cloud/client.js";
 import { getDataSource, type ListOptions } from "./data-source.js";
 import { getVerifier } from "./auth.js";
 import { buildOpenApiDocument } from "./openapi.js";
@@ -16,7 +16,7 @@ const jsonHeaders = {
 };
 
 export const MAX_REQUEST_BODY_SIZE_ENV = "HASNA_SESSIONS_MAX_REQUEST_BODY_SIZE";
-export const SELF_HOSTED_DEFAULT_MAX_REQUEST_BODY_SIZE = 512 * 1024 * 1024;
+export const DEFAULT_MAX_REQUEST_BODY_SIZE = 512 * 1024 * 1024;
 export const SERVER_IDLE_TIMEOUT_ENV = "HASNA_SESSIONS_IDLE_TIMEOUT_SECONDS";
 export const DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS = 60;
 
@@ -116,7 +116,7 @@ export function resolveMaxRequestBodySize(env: NodeJS.ProcessEnv = process.env):
     );
   }
 
-  return isCloudMode(env) ? SELF_HOSTED_DEFAULT_MAX_REQUEST_BODY_SIZE : undefined;
+  return serverDataBackend(env) === "postgresql" ? DEFAULT_MAX_REQUEST_BODY_SIZE : undefined;
 }
 
 export function resolveServerIdleTimeoutSeconds(
@@ -132,11 +132,6 @@ export function resolveServerIdleTimeoutSeconds(
     );
   }
   return seconds;
-}
-
-/** Serve mode string for the health/version contract. */
-function serveMode(): "cloud" | "local" {
-  return isCloudMode() ? "cloud" : "local";
 }
 
 async function handleV1(url: URL, request: Request): Promise<Response> {
@@ -417,31 +412,29 @@ export function createSessionsServer(options: {
       try {
         // --- Health / readiness / version (unauthenticated) ---
         if (url.pathname === "/health") {
-          return json({ status: "ok", version: pkg.version, mode: serveMode() });
+          return json({ status: "ok", version: pkg.version });
         }
 
         if (url.pathname === "/version") {
-          return json({ status: "ok", version: pkg.version, mode: serveMode() });
+          return json({ status: "ok", version: pkg.version });
         }
 
         if (url.pathname === "/ready") {
-          if (isCloudMode()) {
+          if (serverDataBackend() === "postgresql") {
             const ready = await checkCloudReady();
             if (!ready.ok) {
               return json(
                 {
                   status: "not_ready",
                   version: pkg.version,
-                  mode: "cloud",
                   pendingMigrations: ready.pendingMigrations,
                   error: ready.error ?? null,
                 },
                 503,
               );
             }
-            return json({ status: "ready", version: pkg.version, mode: "cloud" });
           }
-          return json({ status: "ready", version: pkg.version, mode: "local" });
+          return json({ status: "ready", version: pkg.version });
         }
 
         if (url.pathname === "/openapi.json") {
@@ -455,7 +448,7 @@ export function createSessionsServer(options: {
             name: pkg.name,
             version: pkg.version,
             description: pkg.description,
-            mode: serveMode(),
+            backend: serverDataBackend(),
             endpoints: ENDPOINTS,
           });
         }
@@ -495,10 +488,10 @@ export function createSessionsServer(options: {
 }
 
 /**
- * Bootstrap async prerequisites. In cloud mode the api_keys table is created by
- * the owner-run migration (0002), NOT here — the request-path app role has DML
- * rights only. We prime the verifier so a signing-key misconfiguration surfaces
- * at boot rather than per-request.
+ * Bootstrap async prerequisites. With the postgresql backend the api_keys
+ * table is created by the owner-run migration (0002), NOT here — the
+ * request-path app role has DML rights only. We prime the verifier so a
+ * signing-key misconfiguration surfaces at boot rather than per-request.
  */
 export async function bootstrapServer(): Promise<void> {
   getVerifier();

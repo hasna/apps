@@ -9,7 +9,7 @@ import {
   resolveServerIdleTimeoutSeconds,
   resolveMaxRequestBodySize,
   SERVER_IDLE_TIMEOUT_ENV,
-  SELF_HOSTED_DEFAULT_MAX_REQUEST_BODY_SIZE,
+  DEFAULT_MAX_REQUEST_BODY_SIZE,
 } from "../src/server/app";
 import { getPackageInfo } from "../src/lib/package";
 import { getDatabase, resetDatabase, closeDatabase } from "../src/db/database";
@@ -42,13 +42,13 @@ describe("createSessionsServer", () => {
     ).toThrow(SERVER_IDLE_TIMEOUT_ENV);
   });
 
-  it("preserves Bun's default body limit in local mode unless configured", () => {
-    expect(resolveMaxRequestBodySize({ HASNA_SESSIONS_STORAGE_MODE: "local" })).toBeUndefined();
+  it("preserves Bun's default body limit on the sqlite backend unless configured", () => {
+    expect(resolveMaxRequestBodySize({})).toBeUndefined();
   });
 
-  it("uses a self-hosted/cloud default request body limit for large imports", () => {
-    expect(resolveMaxRequestBodySize({ HASNA_SESSIONS_STORAGE_MODE: "cloud" })).toBe(
-      SELF_HOSTED_DEFAULT_MAX_REQUEST_BODY_SIZE,
+  it("uses the postgresql default request body limit for large imports", () => {
+    expect(resolveMaxRequestBodySize({ HASNA_SESSIONS_DATABASE_URL: "postgres://db" })).toBe(
+      DEFAULT_MAX_REQUEST_BODY_SIZE,
     );
   });
 
@@ -116,7 +116,6 @@ describe("createSessionsServer", () => {
       expect(await healthResponse.json()).toEqual({
         status: "ok",
         version: pkg.version,
-        mode: "local",
       });
 
       const readyResponse = await fetch(`${baseUrl}/ready`);

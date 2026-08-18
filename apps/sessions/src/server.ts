@@ -6,7 +6,7 @@
 // the package main (`@hasna/sessions`) — clients use `@hasna/sessions/storage`
 // (the Store) which never touches a DSN. Only a self-hosting server process
 // (the `sessions-serve` bin or an equivalent host) should import this.
-export { isCloudMode, getCloudClient, closeCloudClient, APP_NAME } from "./db/cloud/client.js";
+export { serverDataBackend, getCloudClient, closeCloudClient, APP_NAME } from "./db/cloud/client.js";
 export { runCloudMigrations } from "./db/cloud/migrate.js";
 export { loadMigrations, resolveMigrationsDir } from "./db/cloud/migrations.js";
 export * as cloudStore from "./db/cloud/store.js";

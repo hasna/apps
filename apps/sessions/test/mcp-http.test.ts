@@ -134,10 +134,12 @@ describe("sessions MCP HTTP transport", () => {
     process.env.SESSIONS_DB_PATH = join(dir, "sessions.db");
     const oldApiUrl = process.env.HASNA_SESSIONS_API_URL;
     const oldApiKey = process.env.HASNA_SESSIONS_API_KEY;
-    const oldMode = process.env.HASNA_SESSIONS_MODE;
-    process.env.HASNA_SESSIONS_API_URL = "";
-    process.env.HASNA_SESSIONS_API_KEY = "";
-    process.env.HASNA_SESSIONS_MODE = "";
+    const oldHome = process.env.HOME;
+    // Force the sqlite store: scrub the hosted pair and sandbox HOME so the
+    // disk credential tier cannot select the hosted store.
+    delete process.env.HASNA_SESSIONS_API_URL;
+    delete process.env.HASNA_SESSIONS_API_KEY;
+    process.env.HOME = join(dir, "home");
     resetDatabase();
     getDatabase();
     upsertSession({ source: "codewith", source_id: "sole-session", title: "Original title" });
@@ -163,8 +165,8 @@ describe("sessions MCP HTTP transport", () => {
       else process.env.HASNA_SESSIONS_API_URL = oldApiUrl;
       if (oldApiKey === undefined) delete process.env.HASNA_SESSIONS_API_KEY;
       else process.env.HASNA_SESSIONS_API_KEY = oldApiKey;
-      if (oldMode === undefined) delete process.env.HASNA_SESSIONS_MODE;
-      else process.env.HASNA_SESSIONS_MODE = oldMode;
+      if (oldHome === undefined) delete process.env.HOME;
+      else process.env.HOME = oldHome;
       rmSync(dir, { recursive: true, force: true });
     }
   });

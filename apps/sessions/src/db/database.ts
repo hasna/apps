@@ -70,9 +70,9 @@ const SESSION_OBJECT_SCHEMA_SQL = [
 ];
 
 /**
- * SQLite schema for the local session index (LocalStore). The self_hosted
- * cloud plane keeps its own Postgres schema under src/db/cloud/migrations.ts.
- * FTS5 virtual tables + triggers provide full-text search.
+ * SQLite schema for the local session index (LocalStore). The hosted Postgres
+ * plane keeps its own schema under src/db/cloud/migrations.ts. FTS5 virtual
+ * tables + triggers provide full-text search.
  */
 const SCHEMA: string[] = [
   `CREATE TABLE IF NOT EXISTS sessions (

@@ -24,21 +24,22 @@ const CLAUDE_DIR = join(TEST_DIR, "claude");
 const PROJECT_CWD = join(TEST_DIR, "work", "sample-project");
 
 function testEnv(): NodeJS.ProcessEnv {
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     HOME: HOME_DIR,
     HASNA_SESSIONS_DIR: SESSIONS_DIR,
     CLAUDE_PATH: CLAUDE_DIR,
     PWD: PROJECT_CWD,
-    HASNA_SESSIONS_API_URL: "",
-    HASNA_SESSIONS_API_KEY: "",
-    HASNA_SESSIONS_MODE: "local",
-    HASNA_SESSIONS_STORAGE_MODE: "local",
-    SESSIONS_API_URL: "",
-    SESSIONS_API_KEY: "",
-    SESSIONS_MODE: "local",
-    SESSIONS_STORAGE_MODE: "local",
   };
+  for (const key of [
+    "HASNA_SESSIONS_API_URL",
+    "HASNA_SESSIONS_API_KEY",
+    "SESSIONS_API_URL",
+    "SESSIONS_API_KEY",
+  ]) {
+    delete env[key];
+  }
+  return env;
 }
 
 function runCli(args: string[]) {

@@ -1,12 +1,15 @@
-// Cloud Postgres client for sessions (PURE REMOTE, Amendment A1).
+// Postgres client for sessions-serve (PURE REMOTE).
 //
-// Opens a single pooled connection to the shared RDS via the vendored storage
-// kit. cloud mode reads AND writes go directly to Postgres — there is no sync
-// engine, cache, or local mirror in the service path.
+// Opens a single pooled connection to PostgreSQL via the vendored storage
+// kit. The server has exactly one technical switch: a configured
+// HASNA_SESSIONS_DATABASE_URL selects PostgreSQL; otherwise SQLite is
+// authoritative. With the postgresql backend, reads AND writes go directly to
+// Postgres — there is no sync engine, cache, or local mirror in the service
+// path.
 
 import {
-  createCloudPoolFromEnv,
-  resolveStorageMode,
+  createServerPoolFromEnv,
+  resolveServerDataBackend,
   type PoolQueryClient,
 } from "../../generated/storage-kit/index.js";
 
@@ -14,19 +17,24 @@ export const APP_NAME = "sessions";
 
 let _client: PoolQueryClient | null = null;
 
-/** True when the environment selects cloud storage mode for sessions. */
-export function isCloudMode(env: NodeJS.ProcessEnv = process.env): boolean {
-  return resolveStorageMode(APP_NAME, env).mode === "cloud";
+/**
+ * The server's data backend, selected by the environment:
+ * `HASNA_SESSIONS_DATABASE_URL` present -> "postgresql", else "sqlite".
+ * Legacy storage-mode variables are rejected by the kit's
+ * `resolveServerDataBackend` (they were removed, never mapped).
+ */
+export function serverDataBackend(env: NodeJS.ProcessEnv = process.env): "sqlite" | "postgresql" {
+  return resolveServerDataBackend(APP_NAME, env).backend;
 }
 
 /**
- * Get the process-wide cloud Postgres client, creating it on first use.
- * Throws a clear error (never a silent no-op) when the environment is not in
- * cloud mode or the database URL is missing.
+ * Get the process-wide Postgres client, creating it on first use.
+ * Throws a clear error (never a silent no-op) when no database URL selects
+ * the postgresql backend.
  */
 export function getCloudClient(): PoolQueryClient {
   if (_client) return _client;
-  const { client } = createCloudPoolFromEnv(APP_NAME, {
+  const { client } = createServerPoolFromEnv(APP_NAME, {
     applicationName: "sessions-serve",
     max: 5,
   });
