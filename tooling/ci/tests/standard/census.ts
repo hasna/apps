@@ -217,7 +217,6 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "banking", reason: "Client-shaped (bank data access); no server surface." },
   { member: "bridge", reason: "Client-shaped (bridge to other tools); no server surface." },
   { member: "contracts", reason: "Library-shaped (manifest validator kit); no server surface." },
-  { member: "catalog", reason: "Local read model; the HTTP read API is a documented local dev convenience bound to loopback (README 'Security and deployment scope'), not a supported service surface — the manifest declares the api surface deferred with that reason." },
   { member: "datasets", reason: "CLI-only member; no server surface." },
   { member: "dispatch", reason: "Dispatch daemon surface only; no HTTP serve bin." },
   { member: "docs", reason: "Docs renderer; no server surface." },
@@ -343,9 +342,19 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos f6869bad-0aa9-466a-824b-b4a76a0b9b7b (contracts task — accounts)",
   },
   {
+    member: "automations",
+    cause: "Pinned @hasna/contracts 0.8.1 predates the manifest shape (storage.backend, no deploymentModes); manifest validates clean at 0.9.0. Pinned kit is stale.",
+    task: "todos 99f670fe-246a-48be-80dc-46457d4fc013 (contracts task — automations)",
+  },
+  {
     member: "calendar",
     cause: "manifest_valid at pinned 0.4.2 (mode-era schema vs mixed-era manifest): storage.mode Invalid enum value. Expected 'local' | 'cloud', received 'sqlite'; storage Unrecognized key(s) in object: 'engines', 'pgTestGate'; <root> Unrecognized key(s) in object: 'hosting', 'serviceSurfaces'. The earlier mode_enum_compliance env-var cause no longer fires.",
     task: "todos a967c9bd (contracts task — calendar)",
+  },
+  {
+    member: "catalog",
+    cause: "kitVersion 0.8.3 does not exist on npm and no @hasna/contracts dep is pinned; validated at latest, manifest is pre-backend-schema era: storage.backend Required; storage Unrecognized key(s) in object: 'mode'; serviceSurfaces.* Unrecognized key(s) in object: 'deploymentModes'; metadata.conformance.waivedStorageEngines.0.engine Invalid enum value. Expected 'postgresql', received 'postgres'; <root> Unrecognized key(s) in object: 'deploymentModes'.",
+    task: "todos e4d8cd62 (contracts task — catalog)",
   },
   {
     member: "conversations",
@@ -363,6 +372,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos 2a70ece0-d4af-4aae-bea8-4dff128a38ca (contracts task — economy)",
   },
   {
+    member: "emails",
+    cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. (The earlier no_cloud_guard cause no longer fires at main.)",
+    task: "todos e0ef3e32 (contracts task — emails)",
+  },
+  {
     member: "events",
     cause: "bins_match_package: package.json ships bin hasna-events (alias of events, npm parity with 0.1.15) that the manifest does not declare; hasna-events is not in CANONICAL_HASNA_BIN_ALIASES so it can never be allowlisted. Imported by #160.",
     task: "todos 9b78ba7e-d859-4928-a999-3184fa6baf97 (contracts task — events)",
@@ -374,12 +388,12 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "files",
-    cause: "manifest_valid: service-class manifest declares no service surface (service repos must declare at least one). Imported by #90 after the original census; validated at pinned 0.5.2.",
+    cause: "manifest_valid at pinned 0.5.2 (mode-era validator vs the backend-era 0.11.1 manifest: storage.mode Required; storage Unrecognized 'backend','engines'; surfaces deploymentModes Required; <root> hosting unrecognized). The manifest is schema-valid at kit 0.11.1; the pinned-dep + client-seam migration to 0.11.1 is tracked by the contracts-align wave and the modes-removal lane (PR 411).",
     task: "todos b0845699-4e54-49f7-817e-025d4f6ca270 (contracts task — files)",
   },
   {
     member: "gateway",
-    cause: "surface_matrix: missing sdk surface (no ./sdk export; SDK lane c7ce8b75); self_host_artifact: no Dockerfile/docker-compose; storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required. Manifest schema-valid at kit 0.11.1.",
+    cause: "kitVersion 0.4.1 predates the manifest shape (deploymentModes/serviceSurfaces); validates clean at 0.5.2. kitVersion claim is stale; pinned dep 0.2.2 lacks repo-conformance.",
     task: "todos 9dc0ee28 (contracts task — gateway)",
   },
   {
@@ -456,7 +470,6 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "calendar", kitVersion: "0.8.4", pinned: "0.4.2" },
   { member: "datasets", kitVersion: "0.11.1", pinned: "0.10.6" },
   { member: "domains", kitVersion: "0.4.2", pinned: "0.5.2" },
-  { member: "files", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "gateway", kitVersion: "0.11.1", pinned: "0.2.2" },
   { member: "tenants", kitVersion: "0.10.6", pinned: "0.4.2" },
   { member: "todos", kitVersion: "0.8.4", pinned: "0.5.2" },
