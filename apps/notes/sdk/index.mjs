@@ -12,7 +12,7 @@
 // The local markdown store remains the on-box backend (the app's data
 // contract) and is re-exported from the package root (`.`) via tools/notes-lib.
 
-export {
+import {
   NOTES_APP_SLUG,
   NOTES_API_URL_ENV,
   NOTES_API_KEY_ENV,
@@ -27,10 +27,30 @@ export {
 } from '../client/transport.mjs';
 
 export {
+  NOTES_APP_SLUG,
+  NOTES_API_URL_ENV,
+  NOTES_API_KEY_ENV,
+  NOTES_DATABASE_URL_ENV,
+  NOTES_API_URL_ENV_KEYS,
+  NOTES_API_KEY_ENV_KEYS,
+  RETIRED_SELECTOR_ENV_KEYS,
+  NOTES_CLIENT_TRANSPORTS,
+  resolveNotesClientTransport,
+  assertNoRetiredNotesStorageSelector,
+  RetiredNotesStorageSelectorError,
+};
+
+import {
   NotesHttpStore,
   NotesHttpStoreError,
   createNotesHttpStore,
 } from '../client/http-store.mjs';
+
+export {
+  NotesHttpStore,
+  NotesHttpStoreError,
+  createNotesHttpStore,
+};
 
 /**
  * Resolve the client transport from the environment. `local` means the

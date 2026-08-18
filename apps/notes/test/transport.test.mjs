@@ -10,6 +10,10 @@
 // on-box instead.
 
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   NOTES_API_URL_ENV,
   NOTES_API_KEY_ENV,
@@ -68,5 +72,96 @@ describe('notes client transport selection', () => {
     expect(() =>
       createNotesHttpStore(envWith({ [NOTES_API_URL_ENV]: 'https://notes.example.test/v1' })),
     ).toThrow(new RegExp(NOTES_API_KEY_ENV));
+  });
+});
+
+// ── CLI data path over the wire dialect ─────────────────────────────────────
+// The ship proof: a CLI note command must round-trip through
+// HASNA_NOTES_API_URL + HASNA_NOTES_API_KEY against a real running server —
+// the client is a plain HTTP API client when configured, never a silent
+// local fallback. Boots server/index.mjs in-process-free (real TCP), mints an
+// API key via the OTP login flow, then drives the CLI binary.
+
+describe('CLI note commands over the HTTP transport', () => {
+  test('notes create + list + get round-trip through a real server', async () => {
+    const repo = join(import.meta.dir, '..');
+    const dir = mkdtempSync(join(tmpdir(), 'notes-cli-http-'));
+
+    const proc = Bun.spawn(['bun', join(repo, 'server/index.mjs')], {
+      env: {
+        ...process.env,
+        HASNA_NOTES_SERVER_PORT: '0',
+        HASNA_NOTES_SERVER_DB: join(dir, 'server.db'),
+        HASNA_NOTES_SERVER_AUTO_APPROVE: '1',
+        HASNA_NOTES_SERVER_DEV: '1',
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    let url;
+    try {
+      let out = '';
+      const reader = proc.stdout.getReader();
+      const decoder = new TextDecoder();
+      while (!/listening on (http:\/\/\S+)/.test(out)) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        out += decoder.decode(value);
+      }
+      url = /listening on (http:\/\/\S+)/.exec(out)?.[1];
+      expect(url).toBeTruthy();
+
+      // OTP login mints the api key (auto-approve + dev mode gives devCode).
+      const started = await (await fetch(`${url}/api/v1/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'cli-http@example.test' }),
+      })).json();
+      const verified = await (await fetch(`${url}/api/v1/auth/verify`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'cli-http@example.test', code: started.devCode }),
+      })).json();
+      expect(verified.apiKey).toBeTruthy();
+
+      const cliEnv = {
+        ...process.env,
+        HASNA_NOTES_API_URL: url,
+        HASNA_NOTES_API_KEY: verified.apiKey,
+        HASNA_NOTES_ROOT: join(dir, 'notes-root'),
+      };
+      const run = (args) =>
+        spawnSync('bun', [join(repo, 'cli/notes.mjs'), ...args], { env: cliEnv, encoding: 'utf8' });
+
+      const created = run(['create', '--title', 'over-the-wire', '--body', 'dialect body', '--json']);
+      expect(created.status).toBe(0);
+      const note = JSON.parse(created.stdout);
+      expect(note.id).toBeTruthy();
+      expect(note.title).toBe('over-the-wire');
+      expect(note.bodyMarkdown).toBe('dialect body');
+
+      const listed = run(['list', '--json']);
+      expect(listed.status).toBe(0);
+      const page = JSON.parse(listed.stdout);
+      expect(page.items.some((n) => n.id === note.id)).toBe(true);
+
+      const fetched = run(['get', note.id, '--json']);
+      expect(fetched.status).toBe(0);
+      expect(JSON.parse(fetched.stdout).bodyMarkdown).toBe('dialect body');
+
+      const deleted = run(['delete', note.id, '--yes', '--json']);
+      expect(deleted.status).toBe(0);
+      expect(JSON.parse(deleted.stdout).deleted).toBe(true);
+    } finally {
+      proc.kill();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test('notes --version prints the package version', () => {
+    const repo = join(import.meta.dir, '..');
+    const res = spawnSync('bun', [join(repo, 'cli/notes.mjs'), '--version'], { encoding: 'utf8' });
+    expect(res.status).toBe(0);
+    expect(res.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
   });
 });
