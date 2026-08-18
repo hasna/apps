@@ -142,7 +142,7 @@ describe("Feedback HTTP API and SDK", () => {
     const handler = createFeedbackHandler({ store, tokens: { submit: "submit-scope" }, publicSubmit: true, sharedDeployment: true });
     const response = await handler(new Request("http://feedback.test/v1/feedback"));
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ error: "Open Feedback read access is disabled until a scoped token is configured." });
+    expect(await response.json()).toEqual({ error: "Hasna Feedback read access is disabled until a scoped token is configured." });
   });
 
   test("rate limits, suppresses duplicate submissions, and rejects spammy payloads before storage", async () => {

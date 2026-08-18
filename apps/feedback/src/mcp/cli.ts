@@ -12,7 +12,7 @@ export async function startMcpServer(): Promise<void> {
 function printHelp(): void {
   console.log(`Usage: feedback-mcp [options]
 
-Open Feedback MCP server over stdio.
+Hasna Feedback MCP server over stdio.
 
 Options:
   -V, --version   Display version
