@@ -167,7 +167,7 @@
     },
     "apps/banking": {
       "name": "@hasna/banking",
-      "version": "0.0.7",
+      "version": "0.0.8",
       "bin": {
         "banking": "dist/cli/index.js",
         "banking-mcp": "dist/mcp/index.js",
@@ -431,7 +431,7 @@
     },
     "apps/consolidations": {
       "name": "@hasna/consolidations",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "bin": {
         "consolidations": "dist/cli/index.js",
         "consolidations-mcp": "dist/mcp/index.js",
@@ -1461,7 +1461,7 @@
     },
     "apps/recordings": {
       "name": "@hasna/recordings",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "bin": {
         "recordings": "dist/cli/index.js",
         "recordings-mcp": "dist/mcp/index.js",
