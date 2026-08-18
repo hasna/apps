@@ -224,6 +224,38 @@ export function getDataDir(): string {
 }
 
 /**
+ * Write-free data-dir resolution for read-only paths (e.g. `sync --dry-run`).
+ *
+ * getDataDir() itself writes: it mkdirs the app folder, merges legacy ~/.skills
+ * content and copies the legacy config file. A dry run must resolve the SAME
+ * directory a real run would use without performing any of that — mirror the path
+ * logic only, reading $HASNA_SKILLS_DIR and $HOME exactly the way getDataDir does.
+ */
+export function getDataDirReadOnly(): string {
+  const override = process.env[DATA_DIR_ENV];
+  if (override) return override;
+  return join(process.env["HOME"] || process.env["USERPROFILE"] || homedir(), ".hasna", "skills");
+}
+
+/**
+ * Get the config file path for a given scope, write-free (see getDataDirReadOnly).
+ */
+export function getConfigPathReadOnly(scope: ConfigScope): string {
+  if (scope === "global") return join(getDataDirReadOnly(), "config.json");
+  return join(process.cwd(), "skills.config.json");
+}
+
+/**
+ * Load merged config (project-local overrides global) without the writes
+ * getDataDir() performs on the write path.
+ */
+export function loadConfigReadOnly(): SkillsConfig {
+  const globalConfig = readConfigFile(getConfigPathReadOnly("global"));
+  const projectConfig = readConfigFile(getConfigPathReadOnly("project"));
+  return { ...globalConfig, ...projectConfig };
+}
+
+/**
  * Get the config file path for a given scope
  */
 export function getConfigPath(scope: ConfigScope): string {

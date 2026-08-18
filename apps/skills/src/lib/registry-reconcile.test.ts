@@ -483,6 +483,81 @@ describe("reconcileRegistry", () => {
     }
   });
 
+  test("a stored-auth dry run resolves the client write-free: no app dir, no legacy merge, no config copy", async () => {
+    // Fresh HOME holding ONLY legacy content. The normal client resolver reads the
+    // stored credential through getAuthFilePath() and the stored API origin through
+    // loadConfig() — both route through getDataDir(), which WRITES: it mkdirs the app
+    // dir, merges legacy ~/.skills content and copies ~/.skillsrc as config.json. The
+    // dry run must resolve the same client against the same files without any of that
+    // (review P1: client resolution ran unconditionally before the read-only corpus
+    // branch, so a stored-auth `sync --dry-run` still wrote ~/.hasna/skills).
+    const home = mkdtempSync(join(tmpdir(), "skills-reconcile-home-"));
+    const legacyDir = join(home, ".skills");
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, "auth.json"), JSON.stringify({ apiKey: SYNC_AUTH }));
+    writeFileSync(join(home, ".skillsrc"), JSON.stringify({ apiUrl: "https://legacy.example.test" }));
+
+    const previousHome = process.env.HOME;
+    const previousSkillsDir = process.env.HASNA_SKILLS_DIR;
+    const previousApiKey = process.env.SKILLS_API_KEY;
+    const previousApiKeyAlt = process.env.SKILL_API_KEY;
+    const previousApiUrl = process.env.SKILLS_API_URL;
+    process.env.HOME = home;
+    delete process.env.HASNA_SKILLS_DIR;
+    delete process.env.SKILLS_API_KEY;
+    delete process.env.SKILL_API_KEY;
+    try {
+      // A minimal stub instance answering only the listing. A real in-process skills
+      // server merges the machine's own local registry into its listing
+      // (listMergedSkills -> loadRegistry -> getDataDir), which would write the app
+      // dir as a fixture artifact of the server, not of the dry-run client path this
+      // P1 names. The stub isolates the client path: resolve stored auth + origin,
+      // enumerate, plan — and write nothing.
+      const server = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const url = new URL(req.url);
+          if (req.method === "GET" && url.pathname === "/api/v1/skills") {
+            return Response.json([]);
+          }
+          return new Response("not found", { status: 404 });
+        },
+      });
+      try {
+        // The origin comes from the environment; the credential comes from the stored
+        // legacy auth file. No injected client: the dry run must resolve one itself.
+        process.env.SKILLS_API_URL = `http://127.0.0.1:${server.port}`;
+        const local = makeCorpus({});
+        const result = await reconcileRegistry({ rootDir: local, dryRun: true });
+
+        expect(result.dryRun).toBe(true);
+        // Positive control: the write-free resolution found the stored legacy
+        // credential and the environment origin — the plan enumerated the registry
+        // rather than failing on a missing credential.
+        expect(result.summary.remote).toBe(0);
+
+        // The dry run must not have created the canonical app dir, merged the legacy
+        // tree, or copied the legacy config — the writes getDataDir() performs on any
+        // call. Asserted while the home still exists (before the cleanup below).
+        expect(existsSync(join(home, ".hasna", "skills"))).toBe(false);
+        expect(readdirSync(legacyDir)).toEqual(["auth.json"]);
+      } finally {
+        server.stop(true);
+      }
+    } finally {
+      process.env.HOME = previousHome;
+      if (previousSkillsDir === undefined) delete process.env.HASNA_SKILLS_DIR;
+      else process.env.HASNA_SKILLS_DIR = previousSkillsDir;
+      if (previousApiKey === undefined) delete process.env.SKILLS_API_KEY;
+      else process.env.SKILLS_API_KEY = previousApiKey;
+      if (previousApiKeyAlt === undefined) delete process.env.SKILL_API_KEY;
+      else process.env.SKILL_API_KEY = previousApiKeyAlt;
+      if (previousApiUrl === undefined) delete process.env.SKILLS_API_URL;
+      else process.env.SKILLS_API_URL = previousApiUrl;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("a version-only divergence with identical digest is a conflict, not in-sync", async () => {
     const seed = makeCorpus({ "sync-v": skillFiles("sync-v", "1.0.0", "v1") });
     const local = makeCorpus({ "sync-v": skillFiles("sync-v", "1.0.0", "v1") });

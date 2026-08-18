@@ -65,15 +65,14 @@
  * goes through the one RemoteSkillsClient instance.
  */
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { pushSkill } from "../cli/commands/publish.js";
-import { DATA_DIR_ENV, getDataDir, INSTALLED_SKILLS_DIRNAME, SKILLS_CACHE_DIRNAME, isOwnerLayoutMigrated } from "./config.js";
+import { getDataDir, getDataDirReadOnly, INSTALLED_SKILLS_DIRNAME, SKILLS_CACHE_DIRNAME, isOwnerLayoutMigrated } from "./config.js";
 import { resolveCorpusRoot } from "./home-migration.js";
 import { getPortableSkillPath, listPortableSkillMetas, type PortableSkillOptions } from "./portable-skills.js";
 import { pullSkills, writePullMarker, PULL_MARKER_FILE } from "./pull.js";
-import { RemoteSkillsClient, createRemoteSkillsClient } from "./remote-client.js";
+import { RemoteSkillsClient, createRemoteSkillsClient, createRemoteSkillsClientReadOnly } from "./remote-client.js";
 import { packSkillBundle } from "./skill-bundle.js";
 
 export type ReconcileConflictPolicy = "local" | "remote" | "skip";
@@ -234,30 +233,17 @@ function readCursor(root: string): Pick<ReconcileCursor, "runCount"> {
 }
 
 /**
- * Write-free data-dir computation for the dry-run path.
- *
- * getDataDir() itself writes: it mkdirs the app folder, merges legacy ~/.skills content
- * and copies the legacy config file. A dry run must not write, so this mirrors the path
- * logic only. It deliberately reads $HASNA_SKILLS_DIR and $HOME the same way getDataDir
- * does, so a dry-run plan is computed against the same directory a real run would use.
- */
-function dataDirReadOnly(): string {
-  const override = process.env[DATA_DIR_ENV];
-  if (override) return override;
-  return join(process.env["HOME"] || process.env["USERPROFILE"] || homedir(), ".hasna", "skills");
-}
-
-/**
  * Write-free corpus resolution for the dry-run path.
  *
  * getPortableSkillsRoot() migrates the legacy layout by copying and renaming skill
  * directories when no migration record exists — a write. A dry run must not write, so
  * this mirrors the resolution without the migration step, and the caller reports
  * `migrationPending` so the plan reader knows a real run would first change the corpus.
+ * The app data dir itself is resolved write-free via config.getDataDirReadOnly().
  */
 function resolveCorpusRootReadOnly(options: PortableSkillOptions): { root: string; migrationPending: boolean } {
   if (options.rootDir) return { root: options.rootDir, migrationPending: false };
-  const appDir = options.homeDir ? join(options.homeDir, ".hasna", "skills") : dataDirReadOnly();
+  const appDir = options.homeDir ? join(options.homeDir, ".hasna", "skills") : getDataDirReadOnly();
   const cache = join(appDir, SKILLS_CACHE_DIRNAME);
   if (isOwnerLayoutMigrated(appDir) && isDirectory(cache)) {
     return { root: cache, migrationPending: false };
@@ -273,6 +259,40 @@ function remoteRowToSkill(record: Record<string, unknown>): RemoteSkill | undefi
     version: typeof record.version === "string" ? record.version : undefined,
     sha256: typeof record.bundleSha256 === "string" && record.bundleSha256 ? record.bundleSha256 : undefined,
   };
+}
+
+/**
+ * Re-check the local side of one pull candidate, immediately before the pull batch.
+ *
+ * Packs FIRST, then samples existence: a directory that appeared between the plan and
+ * the pack is provably on disk when the sample runs. Sampling before the pack let a
+ * concurrent editor's partial tree read as "still absent" — the pack then threw on it
+ * while the stale sample stayed false, so localMoved was false and the pull replaced
+ * the newly created directory (review P1). The ops seam exists so a test can pin that
+ * ordering deterministically: pack throws on the partial tree, the post-pack sample
+ * sees it, and the candidate counts as moved.
+ *
+ * Returns true when the local side moved since the plan: a digest different from the
+ * planned one, or a directory present where the plan saw none (a concurrent editor).
+ */
+export function recheckLocalSide(
+  plannedLocal: string | undefined,
+  localDir: string,
+  ops: { pack: (dir: string) => string; exists: (dir: string) => boolean } = {
+    pack: (dir) => packSkillBundle(dir).sha256,
+    exists: existsSync,
+  },
+): boolean {
+  let localNow: string | undefined;
+  try {
+    localNow = ops.pack(localDir);
+  } catch {
+    // An unpackable directory is PRESENT, not absent: a partial or temporary local
+    // tree mid-run counts as changed, never as "still missing".
+    localNow = undefined;
+  }
+  const dirExists = ops.exists(localDir);
+  return plannedLocal !== undefined ? localNow !== plannedLocal : localNow !== undefined || dirExists;
 }
 
 function classifySkill(
@@ -384,7 +404,17 @@ export async function reconcileRegistry(options: ReconcileRegistryOptions = {}):
   const direction = options.pull && !options.push && !options.all ? "pull" : options.push && !options.pull && !options.all ? "push" : "all";
   const dryRun = options.dryRun ?? false;
 
-  const client = options.client !== undefined ? options.client : createRemoteSkillsClient();
+  // A dry run resolves the client write-free: the normal resolver's stored-auth path
+  // (getAuthFilePath -> getDataDir) and stored-origin path (loadConfig -> getDataDir)
+  // WRITE — getDataDir() mkdirs the app dir, merges legacy ~/.skills content and
+  // copies the legacy config. The read-only resolver reads the same files at the same
+  // computed paths without creating or migrating anything, so `--dry-run` with stored
+  // auth/config writes nothing (review P1). An injected client is used as-is either way.
+  const client = options.client !== undefined
+    ? options.client
+    : dryRun
+      ? createRemoteSkillsClientReadOnly()
+      : createRemoteSkillsClient();
   if (!client) {
     throw new ReconcileRegistryError(
       "No API key configured, so there is nowhere to sync to.",
@@ -546,21 +576,9 @@ export async function reconcileRegistry(options: ReconcileRegistryOptions = {}):
       }
       const plannedLocal = locals.get(slug)?.sha256;
       const localDir = getPortableSkillPath(slug, { rootDir: root });
-      const dirExists = existsSync(localDir);
-      let localNow: string | undefined;
-      try {
-        localNow = packSkillBundle(localDir).sha256;
-      } catch {
-        // An unpackable directory is PRESENT, not absent: a partial or temporary local
-        // tree mid-run counts as changed, never as "still missing".
-        localNow = undefined;
-      }
-      // The local side must match the plan exactly: unchanged when it existed, absent
-      // when it did not (a directory appearing mid-run for a remote-only skill is a
-      // concurrent editor, and pulling over it would replace state the plan did not see).
-      const localMoved = plannedLocal !== undefined
-        ? localNow !== plannedLocal
-        : localNow !== undefined || dirExists;
+      // Pack-first, existence-sample-after (see recheckLocalSide): a directory that
+      // appeared between the plan and the pack is provably on disk when sampled.
+      const localMoved = recheckLocalSide(plannedLocal, localDir);
       if (localMoved) {
         entry.result = { ok: false, detail: "local changed during sync; pull skipped" };
         entry.reason = (entry.reason ? `${entry.reason}; ` : "") + "local changed during sync";
