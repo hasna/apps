@@ -1396,7 +1396,7 @@ def prepare_review_jobs(
     timeout: int,
     max_download_bytes: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    script = cwd / ".codewith" / "skills" / "open-files-corpus-reader" / "scripts" / "extract_artifact_for_file.py"
+    script = cwd / ".codewith" / "skills" / "files-corpus-reader" / "scripts" / "extract_artifact_for_file.py"
     prepared: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     artifact_dir.mkdir(parents=True, exist_ok=True)

@@ -16,7 +16,7 @@ Rename metadata, not bytes. Canonical S3 keys under `objects/sha256/` must remai
 
 2. Build evidence.
    - Use metadata first: owner, target path, MIME, modified date, source root, duplicate status.
-   - Use `open-files-corpus-reader` for extraction coverage and content summaries.
+   - Use `files-corpus-reader` for extraction coverage and content summaries.
    - Use `scripts/build_review_manifest.py` to create approval-scoped JSONL work manifests for agents.
    - Use AI to interpret extracted content, not to guess from vague filenames alone.
    - Write bounded AI summaries or semantic metadata to the derived search index with `files search-index add`; do not mutate S3 keys or write SQLite directly.

@@ -272,17 +272,17 @@ def build_packet(
         },
         "commands": {
             "refresh_static_verification": (
-                "python3 .codewith/skills/open-files-corpus-reader/scripts/verify_extraction_worker_image.py "
+                "python3 .codewith/skills/files-corpus-reader/scripts/verify_extraction_worker_image.py "
                 "--output .codewith/private-artifacts/extraction-worker-image-verification.json"
             ),
             "approved_build_smoke_and_inventory": (
-                "python3 .codewith/skills/open-files-corpus-reader/scripts/verify_extraction_worker_image.py "
+                "python3 .codewith/skills/files-corpus-reader/scripts/verify_extraction_worker_image.py "
                 "--build "
                 f"--worker-tool-inventory-output {worker_inventory_path} "
                 "--output .codewith/private-artifacts/extraction-worker-image-verification.json"
             ),
             "rerun_readiness_gate_with_worker_inventory": (
-                "python3 .codewith/skills/open-files-corpus-reader/scripts/extraction_lane_readiness_gate.py "
+                "python3 .codewith/skills/files-corpus-reader/scripts/extraction_lane_readiness_gate.py "
                 "--corpus-map .codewith/private-artifacts/corpus-map/corpus-map-public.json "
                 "--tool-inventory .codewith/private-artifacts/extraction-tool-inventory.json "
                 f"--worker-tool-inventory {worker_inventory_path} "

@@ -50,7 +50,7 @@ Local tools observed on 2026-06-16:
 
 Archive worker image:
 
-- Build with `docker build -f .codewith/skills/open-files-corpus-reader/worker-image/Dockerfile -t open-files-extraction-worker:archive-tools .codewith/skills/open-files-corpus-reader`.
+- Build with `docker build -f .codewith/skills/files-corpus-reader/worker-image/Dockerfile -t open-files-extraction-worker:archive-tools .codewith/skills/files-corpus-reader`.
 - Smoke with `docker run --rm --entrypoint /usr/local/bin/open-files-archive-tools-smoke open-files-extraction-worker:archive-tools`.
 - The image installs `p7zip-full` for `7z`/`7za` and `libarchive-tools` for `bsdtar`, so archive inventory has both `7z_inventory` and `rar_inventory` coverage inside the worker even when the host still lacks those tools.
 - Capture the worker-produced `extraction_tool_inventory.py` output and pass it

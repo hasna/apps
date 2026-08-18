@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-CORPUS_SCRIPT_DIR = Path(__file__).resolve().parents[2] / "open-files-corpus-reader" / "scripts"
+CORPUS_SCRIPT_DIR = Path(__file__).resolve().parents[2] / "files-corpus-reader" / "scripts"
 sys.path.insert(0, str(CORPUS_SCRIPT_DIR))
 from lane_resolver import expected_extension_for, semantic_lane_for  # noqa: E402
 

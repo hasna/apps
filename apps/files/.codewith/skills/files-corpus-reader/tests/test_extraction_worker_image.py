@@ -45,7 +45,7 @@ class ExtractionWorkerImageTests(unittest.TestCase):
     def test_readme_documents_build_from_skill_root(self) -> None:
         text = README.read_text(encoding="utf-8")
 
-        self.assertIn(".codewith/skills/open-files-corpus-reader", text)
+        self.assertIn(".codewith/skills/files-corpus-reader", text)
         self.assertIn("open-files-extraction-worker:archive-tools", text)
         self.assertIn("--network none", text)
         self.assertIn("--read-only", text)

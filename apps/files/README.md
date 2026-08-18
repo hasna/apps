@@ -104,7 +104,7 @@ the configured S3 or local destination for bytes. Use `files resolve` or
 `files download` for those stored copies. `files where` is limited to files
 whose source itself is local.
 
-To organize the migrated Google Drive corpus into the unified open-files
+To organize the migrated Google Drive corpus into the unified files
 taxonomy, run the policy command as a dry-run first:
 
 ```bash

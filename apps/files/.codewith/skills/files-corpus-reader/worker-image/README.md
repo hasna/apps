@@ -1,15 +1,15 @@
-# Open Files Extraction Worker Image
+# Hasna Files Extraction Worker Image
 
 This build context provides the archive-capable extraction worker used by
-`open-files-corpus-reader`.
+`files-corpus-reader`.
 
 Build from the skill root, not from this subdirectory:
 
 ```bash
 docker build \
-  -f .codewith/skills/open-files-corpus-reader/worker-image/Dockerfile \
+  -f .codewith/skills/files-corpus-reader/worker-image/Dockerfile \
   -t open-files-extraction-worker:archive-tools \
-  .codewith/skills/open-files-corpus-reader
+  .codewith/skills/files-corpus-reader
 ```
 
 Smoke the archive tools:
@@ -27,14 +27,14 @@ docker run --rm --network none --read-only \
 Create static/Docker-access verification evidence:
 
 ```bash
-python3 .codewith/skills/open-files-corpus-reader/scripts/verify_extraction_worker_image.py \
+python3 .codewith/skills/files-corpus-reader/scripts/verify_extraction_worker_image.py \
   --output .codewith/private-artifacts/extraction-worker-image-verification.json
 ```
 
 Build the operator approval packet:
 
 ```bash
-python3 .codewith/skills/open-files-corpus-reader/scripts/build_extraction_worker_image_approval_packet.py \
+python3 .codewith/skills/files-corpus-reader/scripts/build_extraction_worker_image_approval_packet.py \
   --verification .codewith/private-artifacts/extraction-worker-image-verification.json \
   --output .codewith/private-artifacts/extraction-worker-image-approval-packet.json
 ```
@@ -43,7 +43,7 @@ When Docker access is available, run the build/smoke verifier and capture
 worker inventory:
 
 ```bash
-python3 .codewith/skills/open-files-corpus-reader/scripts/verify_extraction_worker_image.py \
+python3 .codewith/skills/files-corpus-reader/scripts/verify_extraction_worker_image.py \
   --build \
   --worker-tool-inventory-output .codewith/private-artifacts/extraction-worker-tool-inventory.json \
   --output .codewith/private-artifacts/extraction-worker-image-verification.json

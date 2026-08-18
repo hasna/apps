@@ -23,7 +23,7 @@ from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
-CORPUS_READER_SCRIPTS = SCRIPT_DIR.parent.parent / "open-files-corpus-reader" / "scripts"
+CORPUS_READER_SCRIPTS = SCRIPT_DIR.parent.parent / "files-corpus-reader" / "scripts"
 sys.path.insert(0, str(CORPUS_READER_SCRIPTS))
 
 from global_execution_preflight import build_global_execution_preflight, plan_approval_token  # noqa: E402

@@ -19,7 +19,7 @@ description: "Operate the open-files Google Drive migration safely. Use when Cod
 ```bash
 files organize stats --json
 files organize apply-drive-policy --json
-python3 .codewith/skills/open-files-corpus-reader/scripts/mime_coverage_audit.py
+python3 .codewith/skills/files-corpus-reader/scripts/mime_coverage_audit.py
 ```
 
 Expected local post-policy state as of 2026-06-15:
@@ -41,7 +41,7 @@ high-risk permissions: 0
    - `files organize apply-drive-policy --json` should report `planned_updates: 0`.
 
 2. Audit extraction coverage.
-   - Use `open-files-corpus-reader`.
+   - Use `files-corpus-reader`.
    - Prioritize `intake`, `personal-review`, `archive`, legal, finance, and people.
 
 3. Review semantic renames.
