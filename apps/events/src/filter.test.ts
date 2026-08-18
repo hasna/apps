@@ -27,7 +27,7 @@ describe("event filtering", () => {
     const slashyEvent = createEvent({
       source: "github/repos",
       type: "task.created",
-      subject: "repo/open-events",
+      subject: "repo/events",
       data: {},
     });
 
@@ -42,7 +42,7 @@ describe("event filtering", () => {
       source: "todos",
       type: "task.created",
       data: {},
-      metadata: { project_path: "/home/hasna/workspace/hasna/opensource/open-events" },
+      metadata: { project_path: "/home/hasna/workspace/hasna/opensource/events" },
     });
     const worktreeEvent = createEvent({
       source: "todos",
@@ -66,7 +66,7 @@ describe("event filtering", () => {
     const taskEvent = createEvent({
       source: "todos",
       type: "task.created",
-      data: { tags: ["auto:route", "repo:open-events"] },
+      data: { tags: ["auto:route", "repo:events"] },
       metadata: {},
     });
 
