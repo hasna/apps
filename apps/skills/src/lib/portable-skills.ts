@@ -407,6 +407,12 @@ export interface CorpusSkillMeta {
   tags?: string[];
   version?: string;
   kind?: SkillKind;
+  /**
+   * The hosted registry's revision id for this skill (todos d061fcda), when the
+   * instance reported one. Carried onto the metadata-only pull path so the pull marker
+   * records which revision was installed there too.
+   */
+  revisionId?: string;
 }
 
 export interface WriteCorpusSkillInput {

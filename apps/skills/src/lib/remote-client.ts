@@ -86,16 +86,23 @@ export class RemoteSkillsClient {
    * Note the deliberate absence of `request()`: that helper pins
    * `Content-Type: application/json`, and a multipart body whose Content-Type does not
    * carry the generated boundary is unparseable at the other end.
+   *
+   * Optimistic concurrency (todos d061fcda): pass the revision id this client last read
+   * for the slug (from getSkill().revisionId) as `ifMatch`. The instance refuses a
+   * publish against a live slug that does not name its current revision with 409 — this
+   * is how a push never silently overwrites a newer remote revision.
    */
-  async publishSkill(manifest: Record<string, unknown>, bundle?: Uint8Array): Promise<Response> {
+  async publishSkill(manifest: Record<string, unknown>, bundle?: Uint8Array, ifMatch?: string): Promise<Response> {
     const form = new FormData();
     form.set("manifest", JSON.stringify(manifest));
     if (bundle) {
       form.set("bundle", new Blob([bundle as BlobPart], { type: "application/gzip" }), `${String(manifest.slug ?? "skill")}.tar.gz`);
     }
+    const headers: Record<string, string> = { Authorization: `Bearer ${this.apiKey}` };
+    if (ifMatch) headers["If-Match"] = ifMatch;
     return fetch(`${this.apiUrl}/api/v1/skills`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${this.apiKey}` },
+      headers,
       body: form,
     });
   }

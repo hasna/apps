@@ -9,6 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { ownBytes, type OwnedBytes } from "../lib/skill-bundle.js";
+import { revisionIdOfRecord } from "../lib/revision.js";
 import { publicPrincipal } from "./auth.js";
 import { resolveStoreBackends } from "./store-fixtures.js";
 import type { ApiPrincipal, SkillsProductStore } from "./types.js";
@@ -182,15 +183,23 @@ for (const backend of backends) {
         const alpha = bundleBytes("alpha");
         await fixture.store.publishSkill(publishInput(fixture.principal, "only-mine", "alpha", alpha));
 
-        expect(await fixture.store.deleteSkill(fixture.otherPrincipal, "only-mine")).toBe(false);
+        expect(await fixture.store.deleteSkill(fixture.otherPrincipal, "only-mine", 60_000)).toBeNull();
         expect(await fixture.store.updateSkill(fixture.otherPrincipal, "only-mine", { description: "hijacked" })).toBeNull();
 
         expect(await fixture.store.getSkill(fixture.principal, "only-mine")).toMatchObject({ description: "alpha description" });
         expect(await fixture.store.getSkillBundle(fixture.principal, digestOf(alpha))).toBeTruthy();
 
         // The owning org can, which is what makes the two refusals above mean something.
-        expect(await fixture.store.deleteSkill(fixture.principal, "only-mine")).toBe(true);
-        expect(await fixture.store.getSkill(fixture.principal, "only-mine")).toBeNull();
+        // Under the tombstone contract the row is stamped rather than dropped; the slug
+        // stays hidden from listings and the bundle survives until the purge.
+        const deleted = await fixture.store.deleteSkill(fixture.principal, "only-mine", 60_000);
+        expect(deleted).toBeTruthy();
+        expect(deleted!.tombstonedAt).toBeTruthy();
+        expect(deleted!.tombstonePurgeAfter).toBeTruthy();
+        expect(await fixture.store.getSkill(fixture.principal, "only-mine")).toMatchObject({ tombstonedAt: deleted!.tombstonedAt });
+        expect((await fixture.store.listSkills(fixture.principal)).map((s) => s.slug)).not.toContain("only-mine");
+        // The tombstoned row still references the blob; only the purge collects it.
+        expect(await fixture.store.getSkillBundle(fixture.principal, digestOf(alpha))).toBeTruthy();
       } finally {
         await fixture.close();
       }
@@ -202,9 +211,11 @@ for (const backend of backends) {
         const first = bundleBytes("first");
         const second = bundleBytes("second");
         await fixture.store.publishSkill(publishInput(fixture.principal, "evolving", "first", first));
+        const v1 = await fixture.store.getSkill(fixture.principal, "evolving");
         expect(await fixture.store.getSkillBundle(fixture.principal, digestOf(first))).toBeTruthy();
 
-        await fixture.store.publishSkill(publishInput(fixture.principal, "evolving", "second", second));
+        // A guarded republish: the guard names the revision the client read.
+        await fixture.store.publishSkill({ ...publishInput(fixture.principal, "evolving", "second", second), expectedRevisionId: v1!.revisionId });
         expect(await fixture.store.getSkill(fixture.principal, "evolving")).toMatchObject({ bundleSha256: digestOf(second) });
         expect(await fixture.store.getSkillBundle(fixture.principal, digestOf(second))).toBeTruthy();
         // The superseded blob is gone rather than accumulating on every push.
@@ -224,12 +235,19 @@ for (const backend of backends) {
         await fixture.store.publishSkill(publishInput(fixture.principal, "skill-one", "shared", shared));
         await fixture.store.publishSkill(publishInput(fixture.principal, "skill-two", "shared", shared));
 
-        expect(await fixture.store.deleteSkill(fixture.principal, "skill-one")).toBe(true);
+        // Window 0: the purge is due immediately but runs only when invoked, so the
+        // tombstone semantics stay observable in between.
+        expect(await fixture.store.deleteSkill(fixture.principal, "skill-one", 0)).toBeTruthy();
         // Content addressing means one blob backs both rows; collecting it here would
         // silently empty a skill that was never touched.
         expect(await fixture.store.getSkillBundle(fixture.principal, digestOf(shared))).toBeTruthy();
 
-        expect(await fixture.store.deleteSkill(fixture.principal, "skill-two")).toBe(true);
+        // Both rows are tombstoned (not hard-deleted), so both still reference the blob;
+        // only the purge collects it.
+        expect(await fixture.store.deleteSkill(fixture.principal, "skill-two", 0)).toBeTruthy();
+        expect(await fixture.store.getSkillBundle(fixture.principal, digestOf(shared))).toBeTruthy();
+
+        await fixture.store.purgeExpiredTombstones(fixture.principal);
         expect(await fixture.store.getSkillBundle(fixture.principal, digestOf(shared))).toBeNull();
       } finally {
         await fixture.close();
@@ -245,10 +263,179 @@ for (const backend of backends) {
         expect(record!.bundleSha256).toBeUndefined();
         expect(record!.bundleByteSize).toBeUndefined();
         expect(record!.publishedByUserId).toBe("user_a");
+        expect(record!.revisionId).toBeTruthy();
+        expect(record!.revisionNumber).toBe(1);
 
-        const updated = await fixture.store.updateSkill(fixture.principal, "prose-only", { description: "revised" });
+        // The update is guarded by the revision the client read, like every write to a
+        // live row under the optimistic-concurrency contract.
+        const updated = await fixture.store.updateSkill(fixture.principal, "prose-only", { description: "revised" }, record!.revisionId);
         expect(updated).toMatchObject({ description: "revised", version: "1.0.0", displayName: "prose display" });
+        expect(updated!.revisionId).not.toBe(record!.revisionId);
+        expect(updated!.revisionNumber).toBe(2);
         expect(await fixture.store.updateSkill(fixture.principal, "never-existed", { description: "x" })).toBeNull();
+      } finally {
+        await fixture.close();
+      }
+    });
+
+    test("a second publish without a revision guard is refused and the first survives", async () => {
+      const fixture = await seeded(backend);
+      try {
+        const alpha = bundleBytes("alpha");
+        const beta = bundleBytes("beta");
+        await fixture.store.publishSkill(publishInput(fixture.principal, "contended", "alpha", alpha));
+        const first = await fixture.store.getSkill(fixture.principal, "contended");
+
+        // Missing guard against a live row: refused with a conflict, never a silent overwrite.
+        await expect(fixture.store.publishSkill(publishInput(fixture.principal, "contended", "beta", beta))).rejects.toMatchObject({
+          name: "SkillRevisionConflictError",
+          slug: "contended",
+          currentRevisionId: first!.revisionId,
+        });
+        // A stale guard is refused identically.
+        await expect(
+          fixture.store.publishSkill({ ...publishInput(fixture.principal, "contended", "beta", beta), expectedRevisionId: "0".repeat(64) }),
+        ).rejects.toMatchObject({ name: "SkillRevisionConflictError" });
+
+        // The first publish survived untouched, and the refused bytes were never stored.
+        const after = await fixture.store.getSkill(fixture.principal, "contended");
+        expect(after).toMatchObject({ bundleSha256: digestOf(alpha), revisionId: first!.revisionId, revisionNumber: first!.revisionNumber });
+        expect(await fixture.store.getSkillBundle(fixture.principal, digestOf(beta))).toBeNull();
+      } finally {
+        await fixture.close();
+      }
+    });
+
+    test("a guarded publish lands a new revision and bumps the counter", async () => {
+      const fixture = await seeded(backend);
+      try {
+        const alpha = bundleBytes("alpha");
+        const beta = bundleBytes("beta");
+        await fixture.store.publishSkill(publishInput(fixture.principal, "guarded", "alpha", alpha));
+        const v1 = await fixture.store.getSkill(fixture.principal, "guarded");
+        expect(v1!.revisionNumber).toBe(1);
+
+        const v2 = await fixture.store.publishSkill({ ...publishInput(fixture.principal, "guarded", "beta", beta), expectedRevisionId: v1!.revisionId });
+        expect(v2.revisionId).not.toBe(v1!.revisionId);
+        expect(v2.revisionNumber).toBe(2);
+        expect(v2.bundleSha256).toBe(digestOf(beta));
+        expect(await fixture.store.getSkill(fixture.principal, "guarded")).toMatchObject({ revisionId: v2.revisionId, revisionNumber: 2 });
+      } finally {
+        await fixture.close();
+      }
+    });
+
+    test("a stale update guard is refused; a current guard lands once", async () => {
+      const fixture = await seeded(backend);
+      try {
+        await fixture.store.publishSkill(publishInput(fixture.principal, "patchable", "alpha"));
+        const v1 = await fixture.store.getSkill(fixture.principal, "patchable");
+
+        // No guard, and a stale guard, are both refused.
+        await expect(fixture.store.updateSkill(fixture.principal, "patchable", { description: "stale write" })).rejects.toMatchObject({
+          name: "SkillRevisionConflictError",
+        });
+        await expect(fixture.store.updateSkill(fixture.principal, "patchable", { description: "stale write" }, "0".repeat(64))).rejects.toMatchObject({
+          name: "SkillRevisionConflictError",
+        });
+
+        const updated = await fixture.store.updateSkill(fixture.principal, "patchable", { description: "current write" }, v1!.revisionId);
+        expect(updated!.description).toBe("current write");
+        expect(updated!.revisionId).not.toBe(v1!.revisionId);
+        expect(updated!.revisionNumber).toBe(2);
+
+        // The guard advanced with the write: replaying v1's guard no longer lands.
+        await expect(fixture.store.updateSkill(fixture.principal, "patchable", { description: "replay" }, v1!.revisionId)).rejects.toMatchObject({
+          name: "SkillRevisionConflictError",
+        });
+      } finally {
+        await fixture.close();
+      }
+    });
+
+    test("tombstone lifecycle: delete marks, reads still see the marker, purge removes row and bundle", async () => {
+      const fixture = await seeded(backend);
+      try {
+        const bytes = bundleBytes("gone");
+        await fixture.store.publishSkill(publishInput(fixture.principal, "gone-soon", "alpha", bytes));
+        const before = await fixture.store.getSkill(fixture.principal, "gone-soon");
+
+        // A window long enough to outlive the assertions: the row must stay tombstoned
+        // (visible to the marker, hidden from listings) until the purge is invoked.
+        const deleted = await fixture.store.deleteSkill(fixture.principal, "gone-soon", 60_000);
+        expect(deleted!.tombstonedAt).toBeTruthy();
+        expect(deleted!.tombstonePurgeAfter).toBeTruthy();
+        expect(deleted!.revisionId).toBe(before!.revisionId);
+
+        // The read still sees the row — with the tombstone marker.
+        expect(await fixture.store.getSkill(fixture.principal, "gone-soon")).toMatchObject({ tombstonedAt: deleted!.tombstonedAt });
+        // listSkills hides tombstoned rows.
+        expect((await fixture.store.listSkills(fixture.principal)).map((s) => s.slug)).not.toContain("gone-soon");
+        // An update against a tombstoned row is not-found, not a conflict (nothing live to overwrite).
+        expect(await fixture.store.updateSkill(fixture.principal, "gone-soon", { description: "x" }, before!.revisionId)).toBeNull();
+
+        // Re-delete is idempotent: the same tombstone, the window is NOT extended.
+        const again = await fixture.store.deleteSkill(fixture.principal, "gone-soon", 60_000);
+        expect(again!.tombstonedAt).toBe(deleted!.tombstonedAt);
+        expect(again!.tombstonePurgeAfter).toBe(deleted!.tombstonePurgeAfter);
+
+        // Nothing is expired yet: a purge invocation is a no-op for this row.
+        expect((await fixture.store.purgeExpiredTombstones(fixture.principal)).map((r) => r.slug)).not.toContain("gone-soon");
+        expect(await fixture.store.getSkill(fixture.principal, "gone-soon")).toMatchObject({ tombstonedAt: deleted!.tombstonedAt });
+
+        // A zero-window delete makes the purge due immediately; the next purge drops the
+        // row and collects the bundle it was the last reference to.
+        const purgeableBytes = bundleBytes("purgeable");
+        await fixture.store.publishSkill(publishInput(fixture.principal, "purge-me", "alpha", purgeableBytes));
+        await fixture.store.deleteSkill(fixture.principal, "purge-me", 0);
+        const purged = await fixture.store.purgeExpiredTombstones(fixture.principal);
+        expect(purged.map((r) => r.slug)).toContain("purge-me");
+        expect(await fixture.store.getSkill(fixture.principal, "purge-me")).toBeNull();
+        expect(await fixture.store.getSkillBundle(fixture.principal, digestOf(purgeableBytes))).toBeNull();
+      } finally {
+        await fixture.close();
+      }
+    });
+
+    test("a re-publish over a tombstoned slug revives it without a guard", async () => {
+      const fixture = await seeded(backend);
+      try {
+        const bytes = bundleBytes("revive");
+        await fixture.store.publishSkill(publishInput(fixture.principal, "revived", "alpha", bytes));
+        const before = await fixture.store.getSkill(fixture.principal, "revived");
+        await fixture.store.deleteSkill(fixture.principal, "revived", 60_000);
+
+        // Nothing live exists to overwrite: the publish revives the slug as a fresh
+        // revision, clearing the tombstone. The counter keeps counting writes.
+        const revived = await fixture.store.publishSkill(publishInput(fixture.principal, "revived", "beta"));
+        expect(revived.tombstonedAt).toBeUndefined();
+        expect(revived.revisionNumber).toBe(before!.revisionNumber + 1);
+        expect((await fixture.store.listSkills(fixture.principal)).map((s) => s.slug)).toContain("revived");
+      } finally {
+        await fixture.close();
+      }
+    });
+
+    test("the revision id is the hash of the published content (recompute property)", async () => {
+      const fixture = await seeded(backend);
+      try {
+        const bytes = bundleBytes("provable");
+        await fixture.store.publishSkill(publishInput(fixture.principal, "provable", "alpha", bytes));
+        const v1 = await fixture.store.getSkill(fixture.principal, "provable");
+        expect(revisionIdOfRecord(v1!)).toBe(v1!.revisionId);
+
+        // A metadata-only re-publish carries the stored bundle (digest AND size) into the
+        // hash, so a client holding the payload can recompute the id it was given.
+        await fixture.store.publishSkill({ ...publishInput(fixture.principal, "provable", "alpha2"), expectedRevisionId: v1!.revisionId });
+        const v2 = await fixture.store.getSkill(fixture.principal, "provable");
+        expect(v2!.bundleSha256).toBe(digestOf(bytes));
+        expect(v2!.bundleByteSize).toBe(bytes.byteLength);
+        expect(revisionIdOfRecord(v2!)).toBe(v2!.revisionId);
+        expect(v2!.revisionId).not.toBe(v1!.revisionId);
+
+        const v3 = await fixture.store.updateSkill(fixture.principal, "provable", { description: "edited" }, v2!.revisionId);
+        expect(revisionIdOfRecord(v3!)).toBe(v3!.revisionId);
+        expect(v3!.revisionNumber).toBe(v2!.revisionNumber + 1);
       } finally {
         await fixture.close();
       }

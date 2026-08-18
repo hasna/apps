@@ -40,11 +40,16 @@ import { resolveCorpusRoot } from "./home-migration.js";
 import { sha256Hex, type SkillBundleEntry, unpackSkillBundle } from "./skill-bundle.js";
 import { resolveSigningKey, verifyBundleSignature } from "./skill-bundles.js";
 import type { SkillKind } from "./registry-types.js";
+import { REVISION_ID_PATTERN } from "./revision.js";
 
 /** Header carrying the canonical content digest of the served bundle. */
 export const BUNDLE_DIGEST_HEADER = "X-Skill-Bundle-Sha256";
 /** Header carrying the HMAC signature of the served bundle, when the server can sign. */
 export const BUNDLE_SIGNATURE_HEADER = "X-Skill-Bundle-Signature";
+/** Header carrying the immutable revision identity of the served row (todos d061fcda). */
+export const BUNDLE_REVISION_ID_HEADER = "X-Skill-Revision-Id";
+/** Header carrying the per-slug write counter of the served row. */
+export const BUNDLE_REVISION_NUMBER_HEADER = "X-Skill-Revision-Number";
 
 /** Marker file written inside each corpus skill directory recording pull provenance. */
 export const PULL_MARKER_FILE = ".hasna-skills.json";
@@ -92,6 +97,15 @@ export interface PulledSkillResult {
   sourceCommit?: string;
   /** True when the pull created the corpus entry, false when it updated an existing one. */
   created?: boolean;
+  /**
+   * The revision id (todos d061fcda) this pull installed, when the instance reported one.
+   * Recorded in the marker so a later pull can detect that the remote moved on.
+   */
+  revisionId?: string;
+  /** True when the instance answered 410: the slug was deleted and pull reconciled. */
+  tombstoned?: boolean;
+  /** With `tombstoned`: true when a local corpus entry existed and was removed. */
+  removed?: boolean;
   error?: string;
 }
 
@@ -115,6 +129,10 @@ export interface VerifiedBundle {
   serverHash?: string;
   /** The server-declared signature, when the header was present. */
   signature?: string;
+  /** The server-declared revision id, when the header was present and well-formed. */
+  revisionId?: string;
+  /** The server-declared per-slug write counter, when the header was present. */
+  revisionNumber?: number;
 }
 
 export async function pullSkills(options: PullSkillsOptions = {}): Promise<PullSkillsResult> {
@@ -177,6 +195,12 @@ async function pullOne(
     return { name: slug, success: false, error: `Failed to fetch '${slug}': ${(error as Error).message}` };
   }
   if (bundleResponse && !bundleResponse.ok) {
+    // 410 is the tombstone contract (todos d061fcda): the slug was deleted within the
+    // instance's tombstone window. The pull reconciles by removing the local copy —
+    // that is the point of the window. Any other failure status stays an error.
+    if (bundleResponse.status === 410) {
+      return reconcileTombstone(slug, corpusOptions);
+    }
     return {
       name: slug,
       success: false,
@@ -205,7 +229,11 @@ async function pullOne(
   }
 
   const written = writeCorpusSkill({ name: slug, skillMd, meta }, corpusOptions);
-  writePullMarker(written.path, { skill: slug, version: written.manifest.version });
+  writePullMarker(written.path, {
+    skill: slug,
+    version: written.manifest.version,
+    ...(meta?.revisionId ? { revisionId: meta.revisionId } : {}),
+  });
   return {
     name: slug,
     success: true,
@@ -213,7 +241,20 @@ async function pullOne(
     kind: written.manifest.kind,
     version: written.manifest.version,
     created: written.created,
+    ...(meta?.revisionId ? { revisionId: meta.revisionId } : {}),
   };
+}
+
+/**
+ * The tombstone reconciliation (todos d061fcda): a 410 answers "this slug was deleted
+ * and is still inside its tombstone window — remove the local copy". Success is the
+ * reconcile happening, not an install; `removed` records whether anything was there.
+ */
+function reconcileTombstone(slug: string, corpusOptions: PortableSkillOptions): PulledSkillResult {
+  const target = join(getPortableSkillsRoot(corpusOptions), slug);
+  const existed = existsSync(target);
+  if (existed) rmSync(target, { recursive: true, force: true });
+  return { name: slug, success: true, tombstoned: true, removed: existed };
 }
 
 function installVerifiedBundle(
@@ -238,6 +279,7 @@ function installVerifiedBundle(
       contentHash: verified.contentHash,
       ...(sourceCommit ? { sourceCommit } : {}),
       ...(verified.signature ? { signature: verified.signature } : {}),
+      ...(verified.revisionId ? { revisionId: verified.revisionId } : {}),
     });
     return {
       name: slug,
@@ -247,6 +289,7 @@ function installVerifiedBundle(
       version,
       contentHash: verified.contentHash,
       ...(sourceCommit ? { sourceCommit } : {}),
+      ...(verified.revisionId ? { revisionId: verified.revisionId } : {}),
       created: installed.created,
     };
   });
@@ -311,6 +354,8 @@ export function verifyBundleResponseBytes(
 ): VerifiedBundle {
   const serverHash = response.headers.get(BUNDLE_DIGEST_HEADER);
   const signature = response.headers.get(BUNDLE_SIGNATURE_HEADER);
+  const revisionId = response.headers.get(BUNDLE_REVISION_ID_HEADER);
+  const revisionNumberRaw = response.headers.get(BUNDLE_REVISION_NUMBER_HEADER);
   const bytes = new Uint8Array(buffer.slice(0));
   const contentHash = sha256Hex(bytes);
 
@@ -318,6 +363,23 @@ export function verifyBundleResponseBytes(
     throw new PullSkillError(
       `Bundle digest mismatch: the instance declared ${serverHash} but the received bundle hashes to ${contentHash}.`,
       ["The bundle was tampered with or truncated in transit. Nothing was installed."],
+    );
+  }
+
+  // Revision identity (todos d061fcda): the revision id is the same contract as the
+  // digest. Present and malformed -> fail closed (nothing installed); absent -> an
+  // older instance, proceed and record nothing, exactly like a missing digest header.
+  if (revisionId && !REVISION_ID_PATTERN.test(revisionId)) {
+    throw new PullSkillError(
+      `Malformed revision id: the instance declared '${revisionId}', which is not a 64-character lowercase hex sha-256.`,
+      ["The revision headers were tampered with or the instance is broken. Nothing was installed."],
+    );
+  }
+  const revisionNumber = revisionNumberRaw === null ? undefined : Number(revisionNumberRaw);
+  if (revisionNumberRaw !== null && (!Number.isInteger(revisionNumber) || (revisionNumber as number) < 0)) {
+    throw new PullSkillError(
+      `Malformed revision number: the instance declared '${revisionNumberRaw}', which is not a non-negative integer.`,
+      ["The revision headers were tampered with or the instance is broken. Nothing was installed."],
     );
   }
 
@@ -340,6 +402,8 @@ export function verifyBundleResponseBytes(
     contentHash,
     ...(serverHash ? { serverHash } : {}),
     ...(signature ? { signature } : {}),
+    ...(revisionId ? { revisionId } : {}),
+    ...(revisionNumberRaw === null || revisionNumber === undefined ? {} : { revisionNumber }),
   };
 }
 
@@ -353,7 +417,7 @@ export function installBundleAtomically(
   name: string,
   entries: SkillBundleEntry[],
   options: PortableSkillOptions = {},
-  marker: { version?: string; contentHash?: string; sourceCommit?: string; signature?: string } = {},
+  marker: { version?: string; contentHash?: string; sourceCommit?: string; signature?: string; revisionId?: string } = {},
 ): { path: string; created: boolean } {
   const root = getPortableSkillsRoot(options);
   mkdirSync(root, { recursive: true });
@@ -375,6 +439,7 @@ export function installBundleAtomically(
       ...(marker.contentHash ? { contentHash: marker.contentHash } : {}),
       ...(marker.sourceCommit ? { sourceCommit: marker.sourceCommit } : {}),
       ...(marker.signature ? { signature: marker.signature } : {}),
+      ...(marker.revisionId ? { revisionId: marker.revisionId } : {}),
     });
     if (existsSync(target)) {
       backup = mkdtempSync(join(root, `.pull-backup-${name}-`));
@@ -405,7 +470,7 @@ export function installBundleAtomically(
  */
 export function writePullMarker(
   dir: string,
-  record: { skill: string; version?: string; contentHash?: string; sourceCommit?: string; signature?: string },
+  record: { skill: string; version?: string; contentHash?: string; sourceCommit?: string; signature?: string; revisionId?: string },
 ): void {
   const marker = {
     managedBy: "@hasna/skills",
@@ -415,6 +480,9 @@ export function writePullMarker(
     ...(record.contentHash ? { contentHash: record.contentHash } : {}),
     ...(record.sourceCommit ? { sourceCommit: record.sourceCommit } : {}),
     ...(record.signature ? { signature: record.signature } : {}),
+    // The revision id this pull installed: a later pull (or the sync reconciliation
+    // verb) can compare it against the instance's current revision and detect drift.
+    ...(record.revisionId ? { revisionId: record.revisionId } : {}),
     syncedAt: new Date().toISOString(),
   };
   writeFileSync(join(dir, PULL_MARKER_FILE), `${JSON.stringify(marker, null, 2)}\n`);
@@ -444,6 +512,9 @@ async function safeMeta(client: SkillPullClient, slug: string): Promise<CorpusSk
     ...(tags && tags.length ? { tags } : {}),
     ...(str(record.version) ? { version: str(record.version) } : {}),
     ...(kind ? { kind } : {}),
+    // The revision id the instance serves, carried onto the metadata-only pull path so
+    // the marker records it there too (todos d061fcda).
+    ...(REVISION_ID_PATTERN.test(str(record.revisionId) ?? "") ? { revisionId: str(record.revisionId)! } : {}),
   };
 }
 

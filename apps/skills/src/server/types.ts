@@ -41,6 +41,33 @@ export class StaleLeaseGenerationError extends Error {
   }
 }
 
+/**
+ * A publish or update was refused because it would silently overwrite a newer revision.
+ *
+ * The optimistic-concurrency guard (todos d061fcda): a write to an existing, live row
+ * must carry If-Match naming the current revision_id (the ETag the server issued). A
+ * missing guard, or one naming a different revision, is refused with this error instead
+ * of being applied. `currentRevisionId` is null when the row is absent or tombstoned —
+ * those are the two cases where the guard does not apply — and carries the live
+ * revision otherwise, so the caller can name what the writer was racing against.
+ */
+export class SkillRevisionConflictError extends Error {
+  readonly slug: string;
+  readonly expectedRevisionId: string | null | undefined;
+  readonly currentRevisionId: string | null;
+
+  constructor(slug: string, expectedRevisionId: string | null | undefined, currentRevisionId: string | null) {
+    super(
+      `revision conflict for '${slug}': expected revision ${expectedRevisionId ?? "(none)"}, ` +
+        `current is ${currentRevisionId ?? "(none)"}. Refused rather than silently overwriting a newer revision.`,
+    );
+    this.name = "SkillRevisionConflictError";
+    this.slug = slug;
+    this.expectedRevisionId = expectedRevisionId;
+    this.currentRevisionId = currentRevisionId;
+  }
+}
+
 export interface ApiPrincipal {
   apiKeyId: string;
   orgId: string;
@@ -143,6 +170,26 @@ export interface ServerSkillRecord {
   publishedByUserId?: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Immutable content-addressed revision identity (sha-256 over the published content,
+   * computed in server/revision.ts). Same content -> same id; any content change mints
+   * a new one. This is the ETag every read issues and every guarded write must match.
+   */
+  revisionId: string;
+  /**
+   * Monotonic per-slug write counter. Every publish and every metadata update bumps it,
+   * even when the content hash is unchanged, so "how many writes happened to this slug"
+   * is a number, not a digest comparison.
+   */
+  revisionNumber: number;
+  /**
+   * Present when the slug was deleted within the tombstone window (todos d061fcda).
+   * Reads must answer 410 with the marker so a client's pull can reconcile; the row and
+   * its bundle are purged once tombstonePurgeAfter passes. A re-publish clears both
+   * fields and revives the slug as a fresh revision.
+   */
+  tombstonedAt?: string;
+  tombstonePurgeAfter?: string;
 }
 
 /**
@@ -177,6 +224,15 @@ export interface PublishSkillInput {
   skillMd?: string;
   /** Omitted for a metadata-only publish or update. */
   bundle?: Omit<ServerSkillBundle, "orgId" | "createdAt">;
+  /**
+   * Optimistic-concurrency guard (todos d061fcda): the revision_id (ETag) the writer
+   * read. A publish against an existing, LIVE row requires the guard to name that row's
+   * current revision_id; missing or mismatched is a SkillRevisionConflictError, never a
+   * silent overwrite. The guard is not required for a first publish (no row exists) or
+   * against a tombstoned row (nothing live to overwrite - the publish revives the slug
+   * as a fresh revision).
+   */
+  expectedRevisionId?: string;
 }
 
 /** Metadata-only patch. Never touches the bundle; republish to change bytes. */
@@ -288,8 +344,29 @@ export interface SkillsProductStore {
   publishSkill(input: PublishSkillInput): Promise<ServerSkillRecord>;
   listSkills(principal: ApiPrincipal): Promise<ServerSkillRecord[]>;
   getSkill(principal: ApiPrincipal, slug: string): Promise<ServerSkillRecord | null>;
-  updateSkill(principal: ApiPrincipal, slug: string, patch: UpdateSkillPatch): Promise<ServerSkillRecord | null>;
-  /** False when the org has no skill by that slug. Also drops a bundle nothing else references. */
-  deleteSkill(principal: ApiPrincipal, slug: string): Promise<boolean>;
+  /**
+   * Metadata-only patch, guarded by the same optimistic concurrency as publish: the
+   * row's current revision_id must match `expectedRevisionId` or
+   * SkillRevisionConflictError is thrown (409), never a silent overwrite. The revision
+   * advances on every successful update (new content sha, number + 1). Returns null
+   * when the org has no skill by that slug, or when the row is tombstoned.
+   */
+  updateSkill(principal: ApiPrincipal, slug: string, patch: UpdateSkillPatch, expectedRevisionId?: string): Promise<ServerSkillRecord | null>;
+  /**
+   * Tombstone a skill instead of hard-deleting it (todos d061fcda): the row is stamped
+   * tombstoned_at + tombstone_purge_after (now + tombstoneWindowMs) and kept, so reads
+   * can answer 410 with the marker and a pulling client can reconcile, and the bundle
+   * survives until the purge. Returns the tombstoned record, or null when the org has
+   * no row by that slug. A second delete of an already-tombstoned slug returns the
+   * existing tombstone (idempotent; the window is not extended).
+   */
+  deleteSkill(principal: ApiPrincipal, slug: string, tombstoneWindowMs: number): Promise<ServerSkillRecord | null>;
+  /**
+   * Drop every tombstoned row whose window has expired, collecting the bundles nothing
+   * (live or tombstoned) references. Called on the read paths and by listSkills so the
+   * purge is lazy but does not wait for a slug to be read. Returns the purged records so
+   * the caller can discard their stored objects (S3).
+   */
+  purgeExpiredTombstones(principal: ApiPrincipal): Promise<ServerSkillRecord[]>;
   getSkillBundle(principal: ApiPrincipal, sha256: string): Promise<ServerSkillBundle | null>;
 }
