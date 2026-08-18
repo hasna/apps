@@ -538,7 +538,15 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
     if (path === '/api/ingest' && method === 'POST') {
       const body = await jsonBody(req)
       if (!body) return err('invalid JSON body')
-      return ok(bulkIngest(db, body))
+      const result = bulkIngest(db, body)
+      // Parity with the /api/sync route: fire budget/spike webhooks from the
+      // authoritative store after the data landed. Cloud-client syncs push via
+      // this route, so the webhook side-effect must live here, not on the client.
+      try {
+        const { checkAndFireWebhooks } = await import('../lib/webhooks.js')
+        await checkAndFireWebhooks(db)
+      } catch { /* webhooks are optional */ }
+      return ok(result)
     }
 
     if (path === '/api/usage' && method === 'GET') {

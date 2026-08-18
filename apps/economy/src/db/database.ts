@@ -1909,7 +1909,7 @@ function ingestSpecs(): IngestSpec[] {
         'id', 'agent', 'session_id', 'model', 'input_tokens', 'output_tokens',
         'cache_read_tokens', 'cache_create_tokens', 'cache_create_5m_tokens',
         'cache_create_1h_tokens', 'cost_usd', 'cost_basis', 'duration_ms', 'timestamp',
-        'source_request_id', 'machine_id', 'attribution_tag', 'account_key', 'account_tool',
+        'source_request_id', 'machine_id', 'cost_center_id', 'attribution_tag', 'account_key', 'account_tool',
         'account_name', 'account_email', 'account_source', 'updated_at', 'synced_at',
       ],
       map: (r, now) => [
@@ -1918,6 +1918,7 @@ function ingestSpecs(): IngestSpec[] {
         numOr(r['cache_create_5m_tokens'] ?? r['cache_create_tokens']), numOr(r['cache_create_1h_tokens']),
         numOr(r['cost_usd']), strOr(r['cost_basis'], 'estimated'), numOr(r['duration_ms']), strOr(r['timestamp']),
         r['source_request_id'] == null ? null : strOr(r['source_request_id']), strOr(r['machine_id']),
+        r['cost_center_id'] == null ? null : strOr(r['cost_center_id']),
         strOr(r['attribution_tag']), strOr(r['account_key']), strOr(r['account_tool']),
         strOr(r['account_name']), strOr(r['account_email']), strOr(r['account_source']),
         strOr(r['updated_at'], now), strOr(r['synced_at']),
@@ -1928,7 +1929,7 @@ function ingestSpecs(): IngestSpec[] {
       pk: ['id'],
       columns: [
         'id', 'agent', 'project_path', 'project_name', 'started_at', 'ended_at',
-        'total_cost_usd', 'total_tokens', 'request_count', 'machine_id', 'attribution_tag',
+        'total_cost_usd', 'total_tokens', 'request_count', 'machine_id', 'cost_center_id', 'attribution_tag',
         'account_key', 'account_tool', 'account_name', 'account_email', 'account_source',
         'updated_at', 'synced_at',
       ],
@@ -1936,6 +1937,7 @@ function ingestSpecs(): IngestSpec[] {
         strOr(r['id']), strOr(r['agent']), strOr(r['project_path']), strOr(r['project_name']),
         strOr(r['started_at']), r['ended_at'] == null ? null : strOr(r['ended_at']),
         numOr(r['total_cost_usd']), numOr(r['total_tokens']), numOr(r['request_count']), strOr(r['machine_id']),
+        r['cost_center_id'] == null ? null : strOr(r['cost_center_id']),
         strOr(r['attribution_tag']), strOr(r['account_key']), strOr(r['account_tool']),
         strOr(r['account_name']), strOr(r['account_email']), strOr(r['account_source']),
         strOr(r['updated_at'], now), strOr(r['synced_at']),
