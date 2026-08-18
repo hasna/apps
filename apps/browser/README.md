@@ -146,10 +146,10 @@ browser-serve
 
 The `kernel` engine is explicit-only unless `OPEN_BROWSER_BACKEND=kernel` or
 `OPEN_BROWSER_REMOTE=1` is set. Local fallback remains unchanged for `auto`:
-open-browser still picks Bun, Lightpanda, or Playwright locally unless you ask
+the CLI still picks Bun, Lightpanda, or Playwright locally unless you ask
 for Kernel.
 
-Configure Kernel with the established secret first. open-browser checks the
+Configure Kernel with the established secret first. The CLI checks the
 vault key before `KERNEL_API_KEY` and never prints the key:
 
 ```bash
@@ -204,7 +204,7 @@ MCP tools include `browser_kernel_status`, `browser_kernel_sessions`,
 `sdk.executeKernel(session, code)`, `sdk.kernelFiles(session, "/tmp")`, and
 `sdk.downloadKernelReplay(session, replayId)`.
 
-Kernel create-time `start_url` is best-effort, so open-browser performs an
+Kernel create-time `start_url` is best-effort, so the CLI performs an
 explicit navigation after attaching through CDP when `startUrl` is provided.
 Use headful sessions (`--headed`) when live view or computer controls matter;
 headless is still useful for fast script-only work. Kernel File I/O artifacts
