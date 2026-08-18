@@ -57,7 +57,7 @@ describe("client store: sqlite | http, and nothing else", () => {
         try {
           resolveTransport(APP, {
             [key]: word,
-            HASNA_RECORDINGS_API_URL: "https://recordings.hasna.xyz",
+            HASNA_RECORDINGS_API_URL: "https://api.example.com",
             HASNA_RECORDINGS_API_KEY: "test-key",
           });
         } catch (error) {
@@ -76,7 +76,7 @@ describe("client store: sqlite | http, and nothing else", () => {
   test("the explicit sqlite override still beats a present API url + key", () => {
     const r = resolveTransport(APP, {
       [CLIENT_STORE_KEY]: "sqlite",
-      HASNA_RECORDINGS_API_URL: "https://recordings.hasna.xyz",
+      HASNA_RECORDINGS_API_URL: "https://api.example.com",
       HASNA_RECORDINGS_API_KEY: "test-key",
     });
     expect(r.transport).toBe("sqlite");
@@ -86,11 +86,11 @@ describe("client store: sqlite | http, and nothing else", () => {
   test("http + url + key routes to the /v1 API", () => {
     const r = resolveTransport(APP, {
       [CLIENT_STORE_KEY]: "http",
-      HASNA_RECORDINGS_API_URL: "https://recordings.hasna.xyz",
+      HASNA_RECORDINGS_API_URL: "https://api.example.com",
       HASNA_RECORDINGS_API_KEY: "test-key",
     });
     expect(r.transport).toBe("http");
-    expect(r.baseUrl).toBe("https://recordings.hasna.xyz/v1");
+    expect(r.baseUrl).toBe("https://api.example.com/v1");
   });
 
   test("http without a key is misconfigured, and resolveStorageClient refuses it", () => {
@@ -114,7 +114,7 @@ describe("client store: sqlite | http, and nothing else", () => {
     for (const backend of ["sqlite", "postgresql", "postgres"]) {
       const flipped = resolveTransport(APP, {
         [BACKEND_KEY]: backend,
-        HASNA_RECORDINGS_API_URL: "https://recordings.hasna.xyz",
+        HASNA_RECORDINGS_API_URL: "https://api.example.com",
         HASNA_RECORDINGS_API_KEY: "test-key",
       });
       expect(flipped.transport, `${BACKEND_KEY}=${backend} must not veto the flip`).toBe("http");
@@ -126,7 +126,7 @@ describe("client store: sqlite | http, and nothing else", () => {
     expect(getStore({}).mode).toBe("sqlite");
     expect(
       getStore({
-        HASNA_RECORDINGS_API_URL: "https://recordings.hasna.xyz",
+        HASNA_RECORDINGS_API_URL: "https://api.example.com",
         HASNA_RECORDINGS_API_KEY: "test-key",
       }).mode,
     ).toBe("http");

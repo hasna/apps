@@ -156,7 +156,7 @@ mock.module("./cloud.js", () => ({
 const { handleV1Request } = await import("./v1.js");
 
 function post(path: string, body?: unknown, headers: Record<string, string> = {}): Request {
-  return new Request(`https://recordings.hasna.xyz${path}`, {
+  return new Request(`https://api.example.com${path}`, {
     method: "POST",
     headers: { Authorization: "Bearer test", "Content-Type": "application/json", ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -168,14 +168,14 @@ function postAs(kid: string, path: string, body?: unknown, headers: Record<strin
 }
 
 function get(path: string): Request {
-  return new Request(`https://recordings.hasna.xyz${path}`, {
+  return new Request(`https://api.example.com${path}`, {
     method: "GET",
     headers: { Authorization: "Bearer test" },
   });
 }
 
 function delAs(kid: string, path: string): Request {
-  return new Request(`https://recordings.hasna.xyz${path}`, {
+  return new Request(`https://api.example.com${path}`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${kid}` },
   });
