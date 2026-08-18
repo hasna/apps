@@ -46,7 +46,7 @@ describe("exec command policy", () => {
 │ ⎔  Hasna Codewith (v0.1.42)                             │
 │                                                         │
 │ model:       gpt-5.5 xhigh   fast   /model to change    │
-│ directory:   ~/workspace/hasna/opensource/open-codewith │
+│ directory:   ~/workspace/hasna/opensource/codewith │
 │ permissions: YOLO mode                                  │
 ╰─────────────────────────────────────────────────────────╯
 
@@ -109,7 +109,7 @@ describe("exec command policy", () => {
 ╭─────────────────────────────────────────────────────────╮
 │ ⎔  Hasna Codewith (v0.1.42)                             │
 │ model:       gpt-5.5 xhigh   fast   /model to change    │
-│ directory:   ~/workspace/hasna/opensource/open-codewith │
+│ directory:   ~/workspace/hasna/opensource/codewith │
 │ permissions: YOLO mode                                  │
 ╰─────────────────────────────────────────────────────────╯
 › Find and fix a bug in @filename
@@ -710,7 +710,7 @@ GET /health 200
 │ ⎔  Hasna Codewith (v0.1.42)                             │
 │                                                         │
 │ model:       gpt-5.5 xhigh   fast   /model to change    │
-│ directory:   ~/workspace/hasna/opensource/open-codewith │
+│ directory:   ~/workspace/hasna/opensource/codewith │
 │ permissions: YOLO mode                                  │
 ╰─────────────────────────────────────────────────────────╯
 
@@ -733,14 +733,14 @@ ${"\n".repeat(32)}`;
   });
 
   test("allows builtin safe command prefixes on shell targets", () => {
-    const status = evaluateExecPolicy({ target: "open-mailery:01", targetKind: "shell", command: "mailery status" });
+    const status = evaluateExecPolicy({ target: "mailery:01", targetKind: "shell", command: "mailery status" });
     expect(status.allowed).toBe(true);
     expect(status.code).toBe("allowed_prefix");
 
     const doctor = evaluateExecPolicy({
-      target: "open-mailery:01",
+      target: "mailery:01",
       targetKind: "shell",
-      command: "cd ~/workspace/hasna/opensource/open-emails && mailery doctor",
+      command: "cd ~/workspace/hasna/opensource/emails && mailery doctor",
     });
     expect(doctor.allowed).toBe(true);
     expect(doctor.matchedRule).toBe("mailery doctor");
@@ -748,7 +748,7 @@ ${"\n".repeat(32)}`;
 
   test("requires target policy for non-dry-run exec", () => {
     const blocked = evaluateExecPolicy({
-      target: "open-mailery:01",
+      target: "mailery:01",
       targetKind: "shell",
       command: "mailery status",
       requireTargetOptIn: true,
@@ -757,11 +757,11 @@ ${"\n".repeat(32)}`;
     expect(blocked.code).toBe("blocked_target_policy");
 
     const allowed = evaluateExecPolicy({
-      target: "open-mailery:01",
+      target: "mailery:01",
       targetKind: "shell",
       command: "mailery status",
       requireTargetOptIn: true,
-      policy: { allowTargets: ["open-mailery:*"] },
+      policy: { allowTargets: ["mailery:*"] },
     });
     expect(allowed.allowed).toBe(true);
   });

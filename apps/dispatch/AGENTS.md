@@ -6,7 +6,7 @@ CLI + MCP + SDK + a live daemon. This file orients an agent (or human) contribut
 ## Stack & layout
 
 - **Bun + TypeScript**, `type: module`, strict tsconfig.
-- Surfaces mirror `open-todos`: a **CLI** (`dispatch`), an **MCP server**
+- Surfaces mirror `@hasna/todos`: a **CLI** (`dispatch`), an **MCP server**
   (`dispatch-mcp`), a **daemon** (`dispatch-daemon`), and an **SDK** (`@hasna/dispatch/sdk`).
 
 ```

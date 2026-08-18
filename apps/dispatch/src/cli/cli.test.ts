@@ -475,7 +475,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
         "--machine",
         "spark01",
         "--route",
-        "sessions-query:open-router",
+        "sessions-query:router",
         "--error",
         `unknown option --from with Authorization: Bearer ${apiKey}`,
         "--json",
@@ -699,11 +699,11 @@ describe("CLI read/schedule commands (in-memory client)", () => {
       out: (s) => out.push(s),
     });
 
-    await program.parseAsync(["exec", "--to", "open-mailery:01", "--command", "mailery status", "--dry-run"], {
+    await program.parseAsync(["exec", "--to", "mailery:01", "--command", "mailery status", "--dry-run"], {
       from: "user",
     });
 
-    expect(received).toMatchObject({ target: "open-mailery:01", command: "mailery status", dryRun: true });
+    expect(received).toMatchObject({ target: "mailery:01", command: "mailery status", dryRun: true });
     expect(out.join("\n")).toContain("would paste: \"mailery status\"");
     expect(out.join("\n")).toContain("would send key: Enter");
   });
@@ -728,11 +728,11 @@ describe("CLI read/schedule commands (in-memory client)", () => {
     } as DispatchClient;
     const program = buildProgram({ clientFactory: () => fakeClient, out: (s) => out.push(s) });
 
-    await program.parseAsync(["send", "--to", "open-browser:1.1", "--prompt", "Fix native chat", "--goal", "--json"], {
+    await program.parseAsync(["send", "--to", "browser:1.1", "--prompt", "Fix native chat", "--goal", "--json"], {
       from: "user",
     });
 
-    expect(received).toMatchObject({ target: "open-browser:1.1", prompt: "Fix native chat", goal: true });
+    expect(received).toMatchObject({ target: "browser:1.1", prompt: "Fix native chat", goal: true });
     expect(JSON.parse(out.join("\n")).prompt).toBe("/goal Fix native chat");
   });
 
@@ -758,7 +758,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
     const program = buildProgram({ clientFactory: () => fakeClient, out: () => undefined });
 
     try {
-      await program.parseAsync(["send", "--to", "open-browser:1.1", "--file", f, "--goal"], { from: "user" });
+      await program.parseAsync(["send", "--to", "browser:1.1", "--file", f, "--goal"], { from: "user" });
       expect(received).toMatchObject({ prompt: "Line one\nLine two", goal: true });
     } finally {
       rmSync(f, { force: true });
@@ -833,7 +833,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
       [
         "send",
         "--to",
-        "open-sessions:2.1",
+        "sessions:2.1",
         "--prompt",
         "Inspect",
         "--if-idle",
@@ -846,7 +846,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
     );
 
     expect(received).toMatchObject({
-      target: "open-sessions:2.1",
+      target: "sessions:2.1",
       prompt: "Inspect",
       ifIdle: true,
       dryRun: true,
@@ -1048,7 +1048,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
         "--from",
         "sessions-query",
         "--sessions-query",
-        "open-router",
+        "router",
         "--prompt",
         "Fix native chat",
         "--goal",
@@ -1066,7 +1066,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
 
     expect(received).toMatchObject({
       source: "sessions-query",
-      sessionsQuery: "open-router",
+      sessionsQuery: "router",
       prompt: "Fix native chat",
       goal: true,
       ifIdle: true,
@@ -1102,13 +1102,13 @@ describe("CLI read/schedule commands (in-memory client)", () => {
     } as DispatchClient;
     const program = buildProgram({ clientFactory: () => fakeClient, out: () => undefined });
 
-    await program.parseAsync(["send", "--to", "open-a:1.1,open-b:1.1", "--prompt", "Bulk"], { from: "user" });
+    await program.parseAsync(["send", "--to", "a:1.1,b:1.1", "--prompt", "Bulk"], { from: "user" });
 
     expect(received).toMatchObject({
       source: "explicit",
       targets: [
-        { target: "open-a:1.1", machine: undefined },
-        { target: "open-b:1.1", machine: undefined },
+        { target: "a:1.1", machine: undefined },
+        { target: "b:1.1", machine: undefined },
       ],
       prompt: "Bulk",
       ifIdle: true,
@@ -1141,9 +1141,9 @@ describe("CLI read/schedule commands (in-memory client)", () => {
     } as DispatchClient;
     const program = buildProgram({ clientFactory: () => fakeClient, out: (s) => out.push(s) });
 
-    await program.parseAsync(["key", "--to", "open-browser:1.1", "--key", "Tab", "--json"], { from: "user" });
+    await program.parseAsync(["key", "--to", "browser:1.1", "--key", "Tab", "--json"], { from: "user" });
 
-    expect(received).toEqual({ target: "open-browser:1.1", key: "Tab", machine: undefined });
+    expect(received).toEqual({ target: "browser:1.1", key: "Tab", machine: undefined });
     expect(JSON.parse(out.join("\n"))).toMatchObject({ kind: "key", prompt: "<key:Tab>" });
   });
 
@@ -1171,12 +1171,12 @@ describe("CLI read/schedule commands (in-memory client)", () => {
 
     process.exitCode = 0;
     await program.parseAsync(
-      ["capture", "--to", "open-browser:1.1", "--lines", "120", "--ai", "--transform", "summary", "--json"],
+      ["capture", "--to", "browser:1.1", "--lines", "120", "--ai", "--transform", "summary", "--json"],
       { from: "user" },
     );
 
     expect(received).toMatchObject({
-      target: "open-browser:1.1",
+      target: "browser:1.1",
       lines: 120,
       ai: { enabled: true, transform: "summary" },
     });
@@ -1245,7 +1245,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
       out: (s) => out.push(s),
     });
 
-    await program.parseAsync(["exec", "--to", "open-mailery:01", "--command", "rm -rf /", "--dry-run"], {
+    await program.parseAsync(["exec", "--to", "mailery:01", "--command", "rm -rf /", "--dry-run"], {
       from: "user",
     });
 

@@ -37,7 +37,7 @@ machines. `@hasna/dispatch` makes this a first-class, reliable tool.
    delivered/not-delivered status (with a reason). Expose `dispatch status <id>`.
 5. **Cross-machine.** Using `@hasna/machines`, dispatch to a tmux window on **another machine**
    (`dispatch send --machine spark01 --to <session:window> ...`) over SSH/Tailscale; sync machine
-   inventory via the open-machines SDK. Works for the 5 machines (spark01/02, apple01/03/06).
+   inventory via the @hasna/machines SDK. Works for the 5 machines (spark01/02, apple01/03/06).
 6. **Scheduled dispatches.** `dispatch schedule --at <time>|--cron <expr> --to ... --prompt ...` —
    queue a dispatch to fire later; list/cancel scheduled dispatches.
 7. **Live daemon.** A background daemon that owns the dispatch queue, scheduled dispatches,

@@ -28,7 +28,7 @@ The command redacts common credential shapes and emits a recommended next action
 dispatch self-heal diagnose \
   --to work:agent \
   --machine spark01 \
-  --route "sessions-query:open-router" \
+  --route "sessions-query:router" \
   --error "target not found" \
   --json
 ```

@@ -45,7 +45,7 @@ describe("Store — dispatches", () => {
     const s = mem();
     const rec = s.createDispatch({
       kind: "exec",
-      target: "open-mailery:01",
+      target: "mailery:01",
       prompt: "mailery status",
       status: "skipped",
       commandHash: "0123456789abcdef",
@@ -96,7 +96,7 @@ describe("Store — dispatches", () => {
   test("prompt orchestration audit fields round-trip", () => {
     const s = mem();
     const rec = s.createDispatch({
-      target: "open-sessions:2.1",
+      target: "sessions:2.1",
       prompt: "Inspect this",
       status: "skipped",
       dryRun: true,
@@ -115,7 +115,7 @@ describe("Store — dispatches", () => {
       },
       captureBefore: {
         status: "captured",
-        target: "open-sessions:2.1",
+        target: "sessions:2.1",
         machine: "local",
         requestedLines: 50,
         lines: 50,

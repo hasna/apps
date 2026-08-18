@@ -343,7 +343,7 @@ describe("MCP tool handlers", () => {
     const d = deps();
     const dir = mkdtempSync(join(tmpdir(), "dispatch_mcp_policy_"));
     const policyFile = join(dir, "exec-policy.json");
-    writeFileSync(policyFile, JSON.stringify({ allowPrefixes: ["mailery status"], allowTargets: ["open-mailery:*"] }));
+    writeFileSync(policyFile, JSON.stringify({ allowPrefixes: ["mailery status"], allowTargets: ["mailery:*"] }));
     let received: ExecOptions | undefined;
     d.client.exec = async (opts: ExecOptions): Promise<DispatchRecord> => {
       received = opts;
@@ -362,7 +362,7 @@ describe("MCP tool handlers", () => {
 
     try {
       const result = await tool("dispatch_exec").handler(d, {
-        target: "open-mailery:01",
+        target: "mailery:01",
         command: "mailery status",
         dryRun: true,
         forceInterrupt: true,
@@ -371,11 +371,11 @@ describe("MCP tool handlers", () => {
 
       expect(result).toMatchObject({ compact: true, record: { id: "exec1", kind: "exec" } });
       expect(received).toMatchObject({
-        target: "open-mailery:01",
+        target: "mailery:01",
         command: "mailery status",
         dryRun: true,
         forceInterrupt: true,
-        policy: { allowPrefixes: ["mailery status"], allowTargets: ["open-mailery:*"] },
+        policy: { allowPrefixes: ["mailery status"], allowTargets: ["mailery:*"] },
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -388,7 +388,7 @@ describe("MCP tool handlers", () => {
     const result = await tool("dispatch_self_heal_diagnose").handler(d, {
       target: "work:agent",
       machine: "spark01",
-      route: "sessions-query:open-router",
+      route: "sessions-query:router",
       errorText: `unknown option --from with Authorization: Bearer ${apiKey}`,
     });
 
@@ -543,7 +543,7 @@ describe("MCP tool handlers", () => {
 
     const result = await tool("dispatch_send").handler(d, {
       source: "sessions-query",
-      sessionsQuery: "open-router",
+      sessionsQuery: "router",
       prompt: "Fix native chat",
       goal: true,
       ifIdle: true,
@@ -559,7 +559,7 @@ describe("MCP tool handlers", () => {
     expect((result as { records: unknown[] }).records).toHaveLength(20);
     expect(received).toMatchObject({
       source: "sessions-query",
-      sessionsQuery: "open-router",
+      sessionsQuery: "router",
       prompt: "Fix native chat",
       goal: true,
       ifIdle: true,
