@@ -34,9 +34,9 @@ alone never grants access (deny-by-default).
 
 ## Storage
 
-- **local** (default): SQLite at `~/.hasna/holdings/holdings.db` is authoritative.
-- **cloud** (`HASNA_HOLDINGS_STORAGE_MODE=cloud`): PURE REMOTE Postgres via the vendored
-  `@hasna/contracts` storage-kit (`sslmode=verify-full`).
+- **sqlite** (default): SQLite at `~/.hasna/holdings/holdings.db` is authoritative.
+- **postgres**: Postgres via the vendored `@hasna/contracts` storage-kit
+  (`sslmode=verify-full`), selected by `HASNA_HOLDINGS_DATABASE_URL` presence.
 
 ## Interface parity
 
