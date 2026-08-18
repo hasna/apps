@@ -23,7 +23,7 @@ function posture(overrides: Partial<Parameters<typeof resolveAuthPosture>[0]> = 
     host: "127.0.0.1",
     allowAnonymous: false,
     hosted: false,
-    localPlaneTransport: "cloud-http",
+    localPlaneTransport: "http-api",
     ...overrides,
   });
 }
@@ -112,7 +112,7 @@ describe("split-store guard (defect-2 class, behind a credential)", () => {
   });
 
   test("hosted + serve credential is fine when the local plane routes through /v1", () => {
-    expect(posture({ credential: CREDENTIAL, hosted: true, localPlaneTransport: "cloud-http" }).mode)
+    expect(posture({ credential: CREDENTIAL, hosted: true, localPlaneTransport: "http-api" }).mode)
       .toBe("enforce");
   });
 

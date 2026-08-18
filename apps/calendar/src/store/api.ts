@@ -1,10 +1,8 @@
-// ApiStore — the self_hosted / cloud transport for `CalendarStore`.
+// ApiStore — the hosted `/v1` API transport for `CalendarStore`.
 //
 // Routes every read and write to `https://<host>/v1/<resource>` with the bearer
 // key, then unwraps the `/v1` response envelopes ({ org }, { orgs }, { event },
-// { deleted }, ...) so callers get the same shapes LocalStore returns. Both
-// `self_hosted` and `cloud` use this identical client — only the URL/key differ
-// (that distinction is server-side tenancy, never client code).
+// { deleted }, ...) so callers get the same shapes LocalStore returns.
 //
 // SAFETY: the API key lives only inside the transport closure (set at
 // construction) and travels only in request headers. It is never logged,
@@ -36,11 +34,11 @@ function clean(input: object): Record<string, unknown> {
 }
 
 export class ApiStore implements CalendarStore {
-  readonly mode = "cloud" as const;
+  readonly transport = "api" as const;
 
   constructor(private readonly client: StorageClient) {}
 
-  private get transport() { return this.client.transport; }
+  private get http() { return this.client.transport; }
 
   // ── Orgs ──
   async listOrgs(): Promise<Org[]> {
@@ -79,7 +77,7 @@ export class ApiStore implements CalendarStore {
   }
   async heartbeatAgent(idOrName: string): Promise<Agent | null> {
     try {
-      const res = await this.transport.post<{ agent?: Agent }>(`/agents/${encodeURIComponent(idOrName)}/heartbeat`);
+      const res = await this.http.post<{ agent?: Agent }>(`/agents/${encodeURIComponent(idOrName)}/heartbeat`);
       return pick<Agent>(res, "agent") ?? null;
     } catch (error) {
       if (error instanceof HasnaHttpError && error.status === 404) return null;
@@ -146,11 +144,11 @@ export class ApiStore implements CalendarStore {
     return Boolean(pick<boolean>(res, "deleted") ?? true);
   }
   async searchEvents(query: string, orgId?: string): Promise<Event[]> {
-    const res = await this.transport.get<{ events?: Event[] }>("/events/search", { query: clean({ q: query, org_id: orgId }) as QueryParams });
+    const res = await this.http.get<{ events?: Event[] }>("/events/search", { query: clean({ q: query, org_id: orgId }) as QueryParams });
     return pick<Event[]>(res, "events") ?? [];
   }
   async findConflicts(calendarId: string, range: TimeRange): Promise<Event[]> {
-    const res = await this.transport.get<{ conflicts?: Event[] }>("/events/conflicts", {
+    const res = await this.http.get<{ conflicts?: Event[] }>("/events/conflicts", {
       query: { calendar_id: calendarId, start: range.start, end: range.end },
     });
     return pick<Event[]>(res, "conflicts") ?? [];
@@ -162,7 +160,7 @@ export class ApiStore implements CalendarStore {
     return (pick<EventAttendee>(res, "attendee") ?? (res as EventAttendee));
   }
   async getAttendeesForEvent(eventId: string): Promise<EventAttendee[]> {
-    const res = await this.transport.get<{ attendees?: EventAttendee[] }>("/attendees", { query: { event_id: eventId } });
+    const res = await this.http.get<{ attendees?: EventAttendee[] }>("/attendees", { query: { event_id: eventId } });
     return pick<EventAttendee[]>(res, "attendees") ?? [];
   }
   async updateAttendee(id: string, input: UpdateAttendeeInput): Promise<EventAttendee> {
@@ -176,11 +174,11 @@ export class ApiStore implements CalendarStore {
 
   // ── Availability ──
   async getAvailabilityForAgent(agentId: string, orgId?: string): Promise<Availability[]> {
-    const res = await this.transport.get<{ availability?: Availability[] }>("/availability", { query: clean({ agent_id: agentId, org_id: orgId }) as QueryParams });
+    const res = await this.http.get<{ availability?: Availability[] }>("/availability", { query: clean({ agent_id: agentId, org_id: orgId }) as QueryParams });
     return pick<Availability[]>(res, "availability") ?? [];
   }
   async upsertAgentAvailability(agentId: string, orgId: string, dayOfWeek: number, startTime: string, endTime: string): Promise<Availability> {
-    const res = await this.transport.post<{ availability?: Availability }>("/availability", {
+    const res = await this.http.post<{ availability?: Availability }>("/availability", {
       agent_id: agentId, org_id: orgId, day_of_week: dayOfWeek, start_time: startTime, end_time: endTime,
     });
     return (pick<Availability>(res, "availability") ?? (res as Availability));
@@ -196,15 +194,15 @@ export class ApiStore implements CalendarStore {
     return (pick<OrgMembership>(res, "member") ?? (res as OrgMembership));
   }
   async getMembershipsForOrg(orgId: string): Promise<OrgMembership[]> {
-    const res = await this.transport.get<{ members?: OrgMembership[] }>("/members", { query: { org_id: orgId } });
+    const res = await this.http.get<{ members?: OrgMembership[] }>("/members", { query: { org_id: orgId } });
     return pick<OrgMembership[]>(res, "members") ?? [];
   }
   async getOrgsForAgent(agentId: string): Promise<OrgMembership[]> {
-    const res = await this.transport.get<{ members?: OrgMembership[] }>("/members", { query: { agent_id: agentId } });
+    const res = await this.http.get<{ members?: OrgMembership[] }>("/members", { query: { agent_id: agentId } });
     return pick<OrgMembership[]>(res, "members") ?? [];
   }
   async deleteMembershipByAgentAndOrg(agentId: string, orgId: string): Promise<boolean> {
-    const res = await this.transport.del<{ deleted?: boolean }>("/members", undefined, { query: { agent_id: agentId, org_id: orgId } });
+    const res = await this.http.del<{ deleted?: boolean }>("/members", undefined, { query: { agent_id: agentId, org_id: orgId } });
     return Boolean(pick<boolean>(res, "deleted") ?? true);
   }
 }

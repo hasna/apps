@@ -1,11 +1,13 @@
 /**
- * Cloud (A1 pure-remote) service wiring for `calendar-serve`.
+ * Hosted `/v1` service wiring for `calendar-serve`.
  *
- * Powers the versioned `/v1` API and its API-key auth. Per Amendment A1 the serve
- * process reads and writes the shared RDS Postgres DIRECTLY through the calendar
- * Postgres store — there is NO local sync/cache in the service. Everything here
- * is lazy: nothing touches Postgres or crypto until the first `/v1` (or `/ready`)
- * request, so the local-first CLI/MCP paths keep ZERO cloud dependencies.
+ * Powers the versioned `/v1` API and its API-key auth. The serve process reads
+ * and writes Postgres DIRECTLY through the calendar Postgres store — there is
+ * no local sync/cache in the service. The data backend is selected by
+ * configuration: `HASNA_CALENDAR_DATABASE_URL` (or `CALENDAR_DATABASE_URL`)
+ * present means PostgreSQL, absent means SQLite. Everything here is lazy:
+ * nothing touches Postgres or crypto until the first `/v1` (or `/ready`)
+ * request, so the local-first CLI/MCP paths keep zero hosted dependencies.
  */
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -13,33 +15,49 @@ import { fileURLToPath } from "node:url";
 import { verifyApiKey, ApiKeyStore, type ApiKeyVerifier, type AuthQueryClient } from "@hasna/contracts/auth";
 import { createCalendarCloudQueryClient, type CalendarCloudQueryClient } from "./cloud-client.js";
 import { CalendarPgStore } from "./pg-store.js";
-import { isRemoteMode, resolveConfiguredStorageMode, type StorageMode } from "../store/storage-mode.js";
 
 export const CALENDAR_APP_SLUG = "calendar";
 
-/** Resolve an app-scoped database URL that opts this process into hosted mode. */
+/** Resolve the app-scoped database URL that selects the PostgreSQL backend. */
 function resolveHostedDatabaseUrl(env: NodeJS.ProcessEnv): string | undefined {
   return env.HASNA_CALENDAR_DATABASE_URL || env.CALENDAR_DATABASE_URL || undefined;
 }
 
-function isExplicitHostedStorageMode(env: NodeJS.ProcessEnv): boolean {
-  const configured = resolveConfiguredStorageMode(CALENDAR_APP_SLUG, env as Record<string, string | undefined>);
-  return configured ? isRemoteMode(configured.mode) : false;
+/**
+ * True when this process is configured for the PostgreSQL backend, i.e. an
+ * app-scoped database URL is set. The local SQLite backend is the default;
+ * there is no deployment-mode variable — the backend is a property of the
+ * environment, never of a mode string.
+ */
+export function hasHostedDatabase(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(resolveHostedDatabaseUrl(env));
 }
 
 /**
- * Resolve the remote database URL from the supported env vars (priority order).
+ * The data backend this process uses: `postgres` when an app-scoped database
+ * URL is set, `sqlite` otherwise. Reported on `/health`, `/ready` and
+ * `/version`.
+ */
+export type ServerBackend = "sqlite" | "postgres";
+
+export function resolveBackend(env: NodeJS.ProcessEnv = process.env): ServerBackend {
+  return hasHostedDatabase(env) ? "postgres" : "sqlite";
+}
+
+/**
+ * Resolve the database URL from the supported env vars (priority order).
  *
- * Runtime `/v1` accepts a generic DATABASE_URL only when hosted mode is explicit.
- * `calendar-serve migrate` can opt into the generic fallback because that command
- * is already an explicit database operation rather than a serve-mode signal.
+ * At runtime only the app-scoped variables select the PostgreSQL backend. A
+ * generic `DATABASE_URL` is accepted only via the `includeGenericDatabaseUrl`
+ * opt-in, used by `calendar-serve migrate`, where the command is already an
+ * explicit database operation rather than a backend-selection signal.
  */
 export function resolveCloudDatabaseUrl(
   env: NodeJS.ProcessEnv = process.env,
   options: { includeGenericDatabaseUrl?: boolean } = {},
 ): string | undefined {
   return resolveHostedDatabaseUrl(env)
-    || (options.includeGenericDatabaseUrl || isExplicitHostedStorageMode(env) ? env.DATABASE_URL : undefined)
+    || (options.includeGenericDatabaseUrl ? env.DATABASE_URL : undefined)
     || undefined;
 }
 
@@ -53,34 +71,6 @@ export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): stri
   );
 }
 
-/**
- * True when this process is configured to serve the hosted `/v1` API.
- *
- * Hosted iff an app-scoped remote DSN is configured OR the canonical storage mode is
- * `self_hosted`/`cloud`. This used to test `STORAGE_MODE === "remote"`, a value
- * the client resolver rejects — so the two planes of the same process could
- * (and in calendar-prod did) disagree about which store they were on.
- *
- * THROWS `UnknownStorageModeError` when the mode env var holds a non-canonical
- * value, so the process fails loudly at startup instead of degrading.
- */
-export function isCloudModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (resolveHostedDatabaseUrl(env)) return true;
-  return isExplicitHostedStorageMode(env);
-}
-
-/**
- * The canonical mode label this process reports on `/health`, `/ready` and
- * `/version`. `self_hosted`/`cloud` are reported verbatim; a process with an
- * app-scoped DSN but no explicit mode is `self_hosted` (Hasna-owned infra), never
- * "remote".
- */
-export function resolveServiceMode(env: NodeJS.ProcessEnv = process.env): StorageMode {
-  const configured = resolveConfiguredStorageMode(CALENDAR_APP_SLUG, env as Record<string, string | undefined>);
-  if (configured) return configured.mode;
-  return resolveHostedDatabaseUrl(env) ? "self_hosted" : "local";
-}
-
 let cachedClient: CalendarCloudQueryClient | null = null;
 let cachedStore: CalendarPgStore | null = null;
 let cachedKeyStore: ApiKeyStore | null = null;
@@ -92,7 +82,7 @@ function getClient(): CalendarCloudQueryClient {
   const url = resolveCloudDatabaseUrl();
   if (!url) {
     throw new Error(
-      "Cloud /v1 requires a remote database URL (HASNA_CALENDAR_DATABASE_URL / CALENDAR_DATABASE_URL / DATABASE_URL with explicit hosted storage mode).",
+      "Calendar /v1 requires a database URL (HASNA_CALENDAR_DATABASE_URL / CALENDAR_DATABASE_URL).",
     );
   }
   const max = Number(process.env.HASNA_CALENDAR_DB_POOL_MAX) || 6;
@@ -100,7 +90,7 @@ function getClient(): CalendarCloudQueryClient {
   return cachedClient;
 }
 
-/** The pure-remote Postgres store backing every `/v1` handler. */
+/** The Postgres store backing every `/v1` handler. */
 export function getCloudStore(): CalendarPgStore {
   if (cachedStore) return cachedStore;
   cachedStore = new CalendarPgStore(getClient());
@@ -139,7 +129,7 @@ export function getCloudVerifier(): ApiKeyVerifier {
   const signingSecret = resolveSigningSecret();
   if (!signingSecret) {
     throw new Error(
-      "Cloud /v1 auth requires a signing secret (HASNA_CALENDAR_API_SIGNING_KEY / HASNA_API_SIGNING_KEY / API_KEY_SIGNING_SECRET).",
+      "Calendar /v1 auth requires a signing secret (HASNA_CALENDAR_API_SIGNING_KEY / HASNA_API_SIGNING_KEY / API_KEY_SIGNING_SECRET).",
     );
   }
   cachedVerifier = verifyApiKey({
@@ -184,7 +174,7 @@ export async function ensureCloudSchema(): Promise<void> {
   return schemaEnsured;
 }
 
-/** Cheap readiness probe: round-trips a trivial query to RDS. */
+/** Cheap readiness probe: round-trips a trivial query to Postgres. */
 export async function pingCloud(): Promise<boolean> {
   const res = await getClient().query<{ ok: number }>("select 1 as ok");
   return Number(res.rows[0]?.ok) === 1;

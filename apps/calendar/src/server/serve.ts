@@ -3,7 +3,7 @@ import { closeDatabase } from "../db/database.js";
 import { getPackageVersion } from "./version.js";
 import { buildV1OpenApiDocument } from "./openapi.js";
 import { handleV1Request } from "./v1.js";
-import { isCloudModeEnabled, pingCloud, resolveServiceMode } from "./cloud.js";
+import { hasHostedDatabase, pingCloud, resolveBackend } from "./cloud.js";
 import {
   authorizeLocalPlane,
   describeAuthPosture,
@@ -72,8 +72,8 @@ export interface ServeOptions {
  */
 export function serve(port: number, options: ServeOptions = {}) {
   const hostname = options.host || process.env["CALENDAR_HOST"] || process.env["HOST"] || "127.0.0.1";
-  const mode = resolveServiceMode();
-  const hosted = isCloudModeEnabled();
+  const backend = resolveBackend();
+  const hosted = hasHostedDatabase();
 
   // Resolved ONCE, before the socket is bound. Throws AuthNotConfiguredError
   // rather than binding a port that would serve /mcp anonymously off-box.
@@ -83,8 +83,8 @@ export function serve(port: number, options: ServeOptions = {}) {
     allowAnonymous: options.allowAnonymous ?? isAnonymousOptInEnv(),
     hosted,
     // What getStore() — and therefore every MCP tool — will actually talk to.
-    localPlaneTransport: resolveClientTransport("calendar").transport === "cloud-http"
-      ? "cloud-http"
+    localPlaneTransport: resolveClientTransport("calendar").transport === "http-api"
+      ? "http-api"
       : "local",
   });
 
@@ -100,22 +100,22 @@ export function serve(port: number, options: ServeOptions = {}) {
       // Handled before every guard so the ALB target group and any container
       // healthcheck keep answering 200 in every posture.
       if (path === "/health" && req.method === "GET") {
-        return json({ status: "ok", version: getPackageVersion(), mode });
+        return json({ status: "ok", version: getPackageVersion(), backend });
       }
       if (path === "/version" && req.method === "GET") {
-        return json({ name: "calendar", version: getPackageVersion(), mode });
+        return json({ name: "calendar", version: getPackageVersion(), backend });
       }
       if (path === "/ready" && req.method === "GET") {
         if (!hosted) {
-          return json({ status: "ready", mode, checks: { database: "local" } });
+          return json({ status: "ready", backend, checks: { database: "sqlite" } });
         }
         try {
           const ok = await pingCloud();
           return ok
-            ? json({ status: "ready", mode, checks: { database: "ok" } })
-            : json({ status: "not_ready", mode, checks: { database: "unreachable" } }, 503);
+            ? json({ status: "ready", backend, checks: { database: "ok" } })
+            : json({ status: "not_ready", backend, checks: { database: "unreachable" } }, 503);
         } catch (e) {
-          return json({ status: "not_ready", mode, checks: { database: (e as Error).message } }, 503);
+          return json({ status: "not_ready", backend, checks: { database: (e as Error).message } }, 503);
         }
       }
       if (path === "/openapi.json" && req.method === "GET") {
@@ -153,7 +153,7 @@ export function serve(port: number, options: ServeOptions = {}) {
     },
   });
 
-  console.log(`Calendar server listening on http://${hostname}:${port} (mode=${mode})`);
+  console.log(`Calendar server listening on http://${hostname}:${port} (backend=${backend})`);
   console.log(describeAuthPosture(posture));
 
   // Graceful shutdown

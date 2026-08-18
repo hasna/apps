@@ -37,7 +37,7 @@ import type {
 import type { CalendarStore, EventWithAttendees, ListEventsFilter, TimeRange } from "./types.js";
 
 export class LocalStore implements CalendarStore {
-  readonly mode = "local" as const;
+  readonly transport = "local" as const;
 
   // ── Orgs ──
   async listOrgs(): Promise<Org[]> { return listOrgs(); }

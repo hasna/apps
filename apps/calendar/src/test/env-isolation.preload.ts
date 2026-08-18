@@ -2,23 +2,18 @@
  * Test env isolation — loaded via `[test] preload` in bunfig.toml.
  *
  * The calendar test suite exercises the LOCAL SQLite store and a locally bound
- * server. Any developer or fleet station that has the client-flip env exported
- * (a station with `HASNA_CALENDAR_STORAGE_MODE=cloud` +
- * `HASNA_CALENDAR_API_URL` + `HASNA_CALENDAR_API_KEY` is the normal state) would
- * otherwise have `getStore()` resolve to the ApiStore and every "local" test
- * would silently read and write the LIVE deployment — which is exactly why 11
- * tests failed on a clean checkout before this hotfix.
+ * server. Any developer or fleet station that has the client env exported (a
+ * station with `HASNA_CALENDAR_API_URL` + `HASNA_CALENDAR_API_KEY` is the
+ * normal state) would otherwise have `getStore()` resolve to the ApiStore and
+ * every "local" test would silently read and write the LIVE deployment — which
+ * is exactly why 11 tests failed on a clean checkout before this hotfix.
  *
  * Scrubbing here (and not per-test) also means the CLI tests, which spawn
  * `bun run src/cli/index.tsx` with `{ ...process.env }`, inherit a clean env.
  */
 
 const ISOLATED_ENV_VARS = [
-  // client flip (store/http-storage.ts)
-  "HASNA_CALENDAR_STORAGE_MODE",
-  "HASNA_CALENDAR_MODE",
-  "CALENDAR_STORAGE_MODE",
-  "CALENDAR_MODE",
+  // client env (store/http-storage.ts)
   "HASNA_CALENDAR_API_URL",
   "CALENDAR_API_URL",
   "HASNA_CALENDAR_API_KEY",
