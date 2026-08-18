@@ -1,6 +1,6 @@
 import Foundation
 
-/// Lifecycle status of a note. Mirrors the open-notes / @hasna/notes catalog vocabulary.
+/// Lifecycle status of a note. Mirrors the @hasna/notes catalog vocabulary.
 public enum NoteStatus: String, CaseIterable, Identifiable, Codable {
     case inbox
     case active
