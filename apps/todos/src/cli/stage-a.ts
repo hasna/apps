@@ -2,8 +2,8 @@ import { Command, Help } from "commander";
 import {
   getTodosCloudClient,
   getTodosRemoteAuthorityConfigStatus,
-  resolveTodosCliStorageMode,
-  type TodosCliStorageModeResolution,
+  resolveTodosCliTransport,
+  type TodosCliTransportResolution,
   type TodosRemoteCommandCapability,
 } from "./cloud-router.js";
 
@@ -633,17 +633,13 @@ export function initializeTodosCliAuthority(
   args: string[] = process.argv.slice(2),
   env: Env = process.env as Env,
 ): TodosCliAuthorityInitialization {
-  let mode: TodosCliStorageModeResolution;
+  let resolution: TodosCliTransportResolution;
   try {
-    mode = resolveTodosCliStorageMode(env);
+    resolution = resolveTodosCliTransport(env);
   } catch (error) {
     // A partial API pair (URL without KEY, or KEY without URL) is a hard error
     // for real commands, but DIAGNOSTIC commands must still boot so they can
-    // report the misconfiguration through their own status surface. A retired
-    // storage-mode variable stays a hard error everywhere — the diagnostic
-    // route must not let a stale fragment boot a working session.
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("REMOTE_STORAGE_MODE_REMOVED")) throw error;
+    // report the misconfiguration through their own status surface.
     const invocation = parseInvocation(args);
     if (isMetadataInvocation(args, invocation)) {
       const status = getTodosRemoteAuthorityConfigStatus(env);
@@ -651,7 +647,7 @@ export function initializeTodosCliAuthority(
     }
     throw error;
   }
-  if (!mode.selected) return { route: "local", v1_base_url: null };
+  if (!resolution.selected) return { route: "local", v1_base_url: null };
 
   const invocation = parseInvocation(args);
   if (isMetadataInvocation(args, invocation)) {

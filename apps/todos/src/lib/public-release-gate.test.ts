@@ -312,20 +312,21 @@ describe("public release gate", () => {
     expect(failures.map((failure) => failure.check)).toContain("pack-env");
   });
 
-  test("the bundled storage-mode ratchet vocabulary (PR #171) is exempt per exact emitted occurrence", () => {
-    // PR #171 removed the storage-mode env axis. The removal feature itself must NAME the
-    // retired keys: the ratchet arrays hard-error on their presence, the admitted-local
-    // redaction blanks the unprefixed alias, and the cutover runbook documents the
-    // retirement. The exemptions strip ONLY the exact emitted array-tail / assignment /
-    // retirement-sentence shapes — any other spelling (a bracket-indexed read, a bare token
-    // in a different context, a live assignment with a value) survives and still fails.
-    // Mirrors the source-level exemptions src/no-cloud-boundary.test.ts carries for the
-    // same vocabulary.
+  test("the storage-mode vocabulary is gone from every bundle but the test scrub list and runbook", () => {
+    // The deployment-mode removal is complete: no runtime module may name the
+    // retired storage-mode keys at all. The only surviving surfaces are the
+    // test-isolation scrub list (which must NAME the keys it deletes so tests
+    // never depend on them) and the cutover runbook retirement sentence. The
+    // exemptions strip ONLY the exact emitted array-tail / assignment /
+    // retirement-sentence shapes — any other spelling (a bracket-indexed read,
+    // a bare token in a different context, a live assignment with a value)
+    // survives and still fails. Mirrors the source-level exemptions
+    // src/no-cloud-boundary.test.ts carries for the same vocabulary.
     const boundaryFailures = (files: { path: string; text: string }[]) =>
       validatePublicTextSurfaces(files).filter((failure) => failure.check === "public-text-boundary");
 
-    // The emitted ratchet arrays end in the sibling-key pair on adjacent lines (.js emit)
-    // or a single line (.d.ts emit); both must pass on every module that bundles them.
+    // The retired ratchet array shape is now FORBIDDEN everywhere except the
+    // test-isolation scrub list (dist/testing).
     const ratchetJs = 'const R = [\n  "HASNA_TODOS_STORAGE_MODE",\n  "HASNA_TODOS_MODE",\n  "TODOS_STORAGE_MODE",\n  "TODOS_MODE",\n];';
     const ratchetDts = 'export const R: readonly string[] = ["HASNA_TODOS_STORAGE_MODE", "HASNA_TODOS_MODE", "TODOS_STORAGE_MODE", "TODOS_MODE"];';
     for (const module of [
@@ -338,12 +339,17 @@ describe("public release gate", () => {
       "dist/registry",
       "dist/contracts",
       "dist/project-registration",
-      "dist/testing",
     ]) {
       for (const path of [`package/${module}.js`, `package/${module}.d.ts`, `${module}.js`]) {
-        expect(boundaryFailures([{ path, text: ratchetJs }])).toEqual([]);
-        expect(boundaryFailures([{ path, text: ratchetDts }])).toEqual([]);
+        expect(boundaryFailures([{ path, text: ratchetJs }])).not.toEqual([]);
+        expect(boundaryFailures([{ path, text: ratchetDts }])).not.toEqual([]);
       }
+    }
+
+    // The test-isolation scrub list still names the keys it deletes — exempt in both emits.
+    for (const path of ["package/dist/testing.js", "package/dist/testing.d.ts", "dist/testing.js"]) {
+      expect(boundaryFailures([{ path, text: ratchetJs }])).toEqual([]);
+      expect(boundaryFailures([{ path, text: ratchetDts }])).toEqual([]);
     }
 
     // The admitted-local redaction assignment shape (src/cli/stage-a.ts emit) passes only

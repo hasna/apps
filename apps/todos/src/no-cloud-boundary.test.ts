@@ -44,18 +44,7 @@ describe("OSS no-cloud boundary", () => {
             pattern: /\bTODOS_MODE\b/,
             reason:
               "the REMOVED_TODOS_ENV_KEYS list must NAME the retired storage-mode variables in " +
-              "order to delete them; the mere presence of these keys is a hard error (owner directive 2026-08-15)",
-          },
-        ],
-      ],
-      [
-        "src/cli/cloud-router.ts",
-        [
-          {
-            pattern: /\bTODOS_MODE\b/,
-            reason:
-              "LEGACY_STORAGE_MODE_KEYS must NAME every retired storage-mode variable so the " +
-              "fail-loud ratchet can throw when any of them is set; the reference never accepts a value",
+              "order to delete them from a test environment; the resolver never reads them",
           },
         ],
       ],
@@ -67,17 +56,6 @@ describe("OSS no-cloud boundary", () => {
             reason:
               "the admitted-local redaction must NAME the API-pair aliases in order to blank them; " +
               "it neutralizes hosted routing, it does not reach it",
-          },
-        ],
-      ],
-      [
-        "src/storage/config.ts",
-        [
-          {
-            pattern: /\bTODOS_MODE\b/,
-            reason:
-              "REMOVED_STORAGE_MODE_ENV_KEYS must NAME every retired storage-mode variable so the " +
-              "server backend derivation can hard-error on their presence",
           },
         ],
       ],
