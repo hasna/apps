@@ -40,7 +40,7 @@ function parseArgs(argv) {
         '       [--files-bin files] [--knowledge-bin knowledge] [--evidence-json <path>] [--evidence-md <path>]',
         '',
         'Runs the installed files to knowledge source-boundary smoke:',
-        '  1. create an isolated open-files data dir and source containing a raw sentinel',
+        '  1. create an isolated files data dir and source containing a raw sentinel',
         '  2. use the installed files binary to index, export manifest, doctor, resolve, and extract redacted text',
         '  3. ingest only source refs and redacted extracted text into an isolated knowledge workspace',
         '  4. run knowledge sync doctor, dry-run, push, and follow-up dry-run to a peer workspace',
@@ -164,10 +164,10 @@ function dryRunSummary(options) {
     files_bin: options.filesBin,
     knowledge_bin: options.knowledgeBin,
     checks: [
-      'create isolated open-files source with raw sentinel',
+      'create isolated files source with raw sentinel',
       'run installed files sources/index/manifest/doctor/resolve/extract-text',
       'redact raw sentinel before knowledge ingest',
-      'ingest safe open-files manifest into knowledge',
+      'ingest safe files manifest into knowledge',
       'resolve source through knowledge local catalog',
       'run sync doctor, dry-run, push, and follow-up dry-run',
       'scan source and peer knowledge SQLite/artifacts for raw sentinel and base64',
@@ -201,7 +201,7 @@ function outputSummary(summary, options) {
   if (options.json) console.log(JSON.stringify(summary, null, 2));
   else {
     console.log([
-      `installed open-files boundary smoke: ${summary.ok ? 'ok' : 'failed'}`,
+      `installed files boundary smoke: ${summary.ok ? 'ok' : 'failed'}`,
       `files: ${summary.files_version}`,
       `knowledge: ${summary.knowledge_version}`,
       `raw sentinel absent from knowledge: ${summary.raw_sentinel_absent_from_knowledge}`,
@@ -234,9 +234,9 @@ async function main() {
     mkdirSync(knowledgePeer, { recursive: true });
 
     writeFileSync(join(filesSource, 'boundary-source.md'), [
-      '# Installed open-files boundary source',
+      '# Installed files boundary source',
       allowedExtractedText,
-      `Raw sentinel owned by open-files: ${rawSentinel}`,
+      `Raw sentinel owned by files: ${rawSentinel}`,
       '',
     ].join('\n'));
 
