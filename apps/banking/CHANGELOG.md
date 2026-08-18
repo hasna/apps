@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.0.8 - 2026-08-18
+
+First version published to the public npm registry (2026-08-18). `0.0.7` was
+burned on the registry (published then unpublished 2026-08-15; npm refuses
+republishing it with `E400 Cannot publish over previously published version`),
+so the first actual publish ships as 0.0.8. Contains the full monorepo-import
+tree plus: banking execution safety workflow (97504a8ff), global state
+migration to `~/.hasna/banking`, complete LICENSE, alignment with
+`@hasna/contracts`, docs deep-scan, `.editorconfig`, the mercury `--secret-key`
+fix for the secrets 0.2.9 non-TTY refusal, artifact-scan packing to scratch
+rather than the repo root, and the approval-status fix (a rejected approval
+now reports `denied` instead of `approved`).
+
 ## Unreleased
 
 ### Changed
@@ -10,7 +23,10 @@
 
 ## 0.0.7 - 2026-06-29
 
-First version published to the public npm registry (2026-08-18).
+In-tree release; not a public npm publish. `0.0.7` was published to the public
+registry and then unpublished 2026-08-15; npm refuses to republish it
+(`E400 Cannot publish over previously published version`), so it is burned and
+the first public publish ships as 0.0.8.
 
 ### Added
 
@@ -102,7 +118,7 @@ First version published to the public npm registry (2026-08-18).
 
 ## 0.0.2 - 2026-06-29
 
-In-tree release; not a public npm publish. No version of `@hasna/banking` reached the public registry until 0.0.7 (first npm publish, 2026-08-18). `0.0.1` was skipped because npm refused it as an unavailable previously published version while the public registry still returned 404.
+In-tree release; not a public npm publish. No version of `@hasna/banking` reached the public registry until 0.0.8 (first npm publish, 2026-08-18). `0.0.1` was skipped because npm refused it as an unavailable previously published version while the public registry still returned 404.
 
 ### Added
 

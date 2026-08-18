@@ -19,7 +19,7 @@ describe("banking CLI scaffold", () => {
       console.log = originalLog;
     }
 
-    expect(output).toBe("0.0.70.0.7");
+    expect(output).toBe("0.0.80.0.8");
     expect(output).not.toContain("Usage:");
   });
 
