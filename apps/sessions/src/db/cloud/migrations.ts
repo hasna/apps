@@ -1,4 +1,4 @@
-// Migration loader for open-sessions cloud schema.
+// Migration loader for sessions cloud schema.
 //
 // Reads the ordered `migrations/*.sql` files from the repo's migrations
 // directory and turns them into checksummed `Migration` objects for the

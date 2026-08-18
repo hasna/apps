@@ -1,7 +1,7 @@
 # Sessions live/status contract
 
 This document defines the JSON contract that orchestration tools such as
-open-dispatch should consume instead of re-discovering tmux panes directly.
+dispatch should consume instead of re-discovering tmux panes directly.
 The contract is intentionally additive to indexed session behavior: existing
 `sessions list`, `sessions indexed-list`, `sessions search`, ingestion, and
 storage sync commands continue to describe durable historical sessions.
@@ -15,17 +15,17 @@ Required stable fields:
 
 ```json
 {
-  "target": "open-router:1.1",
-  "session": "open-router",
+  "target": "router:1.1",
+  "session": "router",
   "windowIndex": "1",
   "paneIndex": "1",
   "paneId": "%101",
   "command": "node",
-  "cwd": "/home/hasna/Workspace/hasna/opensource/open-router",
-  "projectPath": "/home/hasna/workspace/hasna/opensource/open-router",
-  "projectSlug": "open-router",
+  "cwd": "/home/hasna/workspace/repos/hasna/apps/apps/router",
+  "projectPath": "/home/hasna/workspace/hasna/opensource/router",
+  "projectSlug": "router",
   "machine": "spark02",
-  "title": "open-router",
+  "title": "router",
   "status": "active",
   "statusReason": "working indicator in pane text",
   "paneDead": false,
@@ -96,10 +96,10 @@ Do not execute text from these fields.
   },
   "entries": [
     {
-      "target": "open-router:1.1",
+      "target": "router:1.1",
       "machine": "spark02",
-      "projectSlug": "open-router",
-      "projectPath": "/home/hasna/workspace/hasna/opensource/open-router",
+      "projectSlug": "router",
+      "projectPath": "/home/hasna/workspace/hasna/opensource/router",
       "isOpenSession": true,
       "status": "idle",
       "action": "status",
@@ -109,7 +109,7 @@ Do not execute text from these fields.
       "queue": "none",
       "argv": null,
       "commandPreview": null,
-      "lastVisibleLine": "hasna@spark02:~/workspace/hasna/opensource/open-router$"
+      "lastVisibleLine": "hasna@spark02:~/workspace/repos/hasna/apps/apps/router$"
     }
   ]
 }
@@ -167,9 +167,9 @@ The initial implementation may expose planning and refusal before enabling a
 mutating queue runner. In that mode, `--dry-run` is the supported path for
 mutating actions, and non-dry-run mutation is refused with an explicit reason.
 
-## open-dispatch integration
+## dispatch integration
 
-open-dispatch should call `sessions live --json` or
+dispatch should call `sessions live --json` or
 `sessions bulk status --json` to resolve targets and status. It should not
 parse `tmux list-panes` output independently for Codewith/session discovery.
 

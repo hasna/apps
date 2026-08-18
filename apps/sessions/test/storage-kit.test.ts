@@ -41,10 +41,10 @@ describe("generated storage kit mode and TLS helpers", () => {
   });
 
   it("builds env keys and resolves default, canonical, alias, warning, and URL precedence", () => {
-    expect(envToken("open-sessions")).toBe("OPEN_SESSIONS");
-    expect(storageEnvKeys("open-sessions")).toEqual({
-      modeKeys: ["HASNA_OPEN_SESSIONS_STORAGE_MODE", "OPEN_SESSIONS_STORAGE_MODE"],
-      databaseUrlKeys: ["HASNA_OPEN_SESSIONS_DATABASE_URL", "OPEN_SESSIONS_DATABASE_URL"],
+    expect(envToken("sessions")).toBe("SESSIONS");
+    expect(storageEnvKeys("sessions")).toEqual({
+      modeKeys: ["HASNA_SESSIONS_STORAGE_MODE", "SESSIONS_STORAGE_MODE"],
+      databaseUrlKeys: ["HASNA_SESSIONS_DATABASE_URL", "SESSIONS_DATABASE_URL"],
     });
     expect(resolveStorageMode("sessions", {})).toEqual({
       mode: "local",
@@ -288,22 +288,22 @@ describe("generated pool factory", () => {
   });
 
   it("validates cloud env configuration and returns a closable query client", async () => {
-    expect(() => createCloudPoolFromEnv("open-sessions", { env: {} })).toThrow("requires open-sessions storage mode 'cloud'");
-    expect(() => createCloudPoolFromEnv("open-sessions", {
-      env: { HASNA_OPEN_SESSIONS_STORAGE_MODE: "cloud" },
+    expect(() => createCloudPoolFromEnv("sessions", { env: {} })).toThrow("requires sessions storage mode 'cloud'");
+    expect(() => createCloudPoolFromEnv("sessions", {
+      env: { HASNA_SESSIONS_STORAGE_MODE: "cloud" },
     })).toThrow("needs a database URL");
 
-    const result = createCloudPoolFromEnv("open-sessions", {
+    const result = createCloudPoolFromEnv("sessions", {
       env: {
-        OPEN_SESSIONS_STORAGE_MODE: "cloud",
-        OPEN_SESSIONS_DATABASE_URL: "postgres://localhost/db",
+        SESSIONS_STORAGE_MODE: "cloud",
+        SESSIONS_DATABASE_URL: "postgres://localhost/db",
       },
       max: 2,
       idleTimeoutMillis: 10,
       connectionTimeoutMillis: 20,
       applicationName: "kit-test",
     });
-    expect(result.connectionSource).toBe("OPEN_SESSIONS_DATABASE_URL");
+    expect(result.connectionSource).toBe("SESSIONS_DATABASE_URL");
     expect((result.client.pool as any).options).toMatchObject({ max: 2, application_name: "kit-test" });
     await result.client.close();
   });

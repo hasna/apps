@@ -84,7 +84,7 @@ if (args.includes("--version") || args.includes("-V")) {
 const _agentReg = new Map<string, { id: string; name: string; last_seen_at: string; project_id?: string }>();
 
 export function buildServer(): McpServer {
-  const server = new McpServer({ name: "open-sessions", version: packageInfo.version });
+  const server = new McpServer({ name: "sessions", version: packageInfo.version });
 
 function jsonResource(uri: URL, value: unknown) {
   return {
@@ -157,13 +157,13 @@ server.registerPrompt(
     },
   },
   async (args: { query: string; limit?: string }) => ({
-    description: "Use open-sessions recall to find the best prior thread.",
+    description: "Use sessions recall to find the best prior thread.",
     messages: [
       {
         role: "user" as const,
         content: {
           type: "text" as const,
-          text: `Use the open-sessions MCP tools to recall prior coding work for this query: ${args.query}\n\nCall recall_session with limit ${args.limit ?? "5"}, inspect the evidence snippets and resume metadata, and answer with the most specific session IDs, project paths, and why each result is relevant.`,
+          text: `Use the sessions MCP tools to recall prior coding work for this query: ${args.query}\n\nCall recall_session with limit ${args.limit ?? "5"}, inspect the evidence snippets and resume metadata, and answer with the most specific session IDs, project paths, and why each result is relevant.`,
         },
       },
     ],
