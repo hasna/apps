@@ -3,7 +3,7 @@
   "name": "servers",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.8.5",
+  "kitVersion": "0.11.1",
   "description": "Server management for AI coding agents — CLI + MCP server over a local SQLite store.",
   "bins": ["servers", "servers-mcp"],
   "hosting": ["user-hosted"],
@@ -31,7 +31,7 @@
     }
   ],
   "storage": {
-    "mode": "sqlite",
+    "backend": "sqlite",
     "engines": ["sqlite"],
     "envPrefix": "HASNA_SERVERS_",
     "aliasEnvPrefix": "SERVERS_",
@@ -46,7 +46,7 @@
     "conformance": {
       "waivedStorageEngines": [
         {
-          "engine": "postgres",
+          "engine": "postgresql",
           "reason": "@hasna/servers is a CLI-only local coordinator: it manages dev/app server processes on one machine and persists that state in SQLite. See docs/database.md."
         }
       ]
