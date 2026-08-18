@@ -1,7 +1,7 @@
 {
   "name": "@hasna/economy",
   "version": "0.3.10",
-  "description": "AI coding cost tracker — CLI + MCP server + REST API + web dashboard for Claude Code, Codex, OpenCode, Cursor, Pi, and Hermes, with legacy Gemini CLI session and Gemini API billing ingestion",
+  "description": "AI coding cost tracker \u2014 CLI + MCP server + REST API + web dashboard for Claude Code, Codex, OpenCode, Cursor, Pi, and Hermes, with legacy Gemini CLI session and Gemini API billing ingestion",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hasna/economy.git"
@@ -46,7 +46,7 @@
     "artifact-scan": "contracts artifact-scan dist",
     "prepack": "bun run build && bun run artifact-scan",
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
+    "test": "bun test --preload ./test-setup.ts",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",

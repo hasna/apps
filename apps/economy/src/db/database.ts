@@ -1873,7 +1873,7 @@ export function dedupeRequests(db: Database): number {
 //
 // Idempotent, dialect-safe importer behind the authed POST /v1/ingest route. It
 // lets a fleet machine push its local rows into the shared cloud DB over
-// HTTPS + API-key — the locked self_hosted architecture forbids a raw RDS DSN on
+// HTTPS + API-key — the locked hosted architecture forbids a raw RDS DSN on
 // clients, and the big time-series tables (requests/sessions) have no other write
 // path, so cloud parity was otherwise impossible.
 //

@@ -529,7 +529,7 @@ export function createHandler(db: Database, options: HandlerOptions = {}) {
     }
 
     // Bulk ingest — import a client's local rows into the cloud DB over the
-    // authed HTTPS API (self_hosted flip forbids a raw RDS DSN on fleet machines,
+    // authed HTTPS API (the hosted flip forbids a raw RDS DSN on fleet machines,
     // and the big time-series tables have no other write path). Merges by primary
     // key via explicit dialect-safe ON CONFLICT upserts, so re-runs are idempotent
     // (no duplicates) on both SQLite and Postgres. Body: { requests?, sessions?,

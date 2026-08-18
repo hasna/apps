@@ -43,7 +43,7 @@ function agentLabel(agent: string): string {
 export async function watchCosts(opts: WatchOptions): Promise<void> {
   const store = getStore()
   const cloud = isCloudStore()
-  // Local ingestion writes to the on-box db; self_hosted/cloud mode streams the
+  // Local ingestion writes to the on-box db; the hosted route streams the
   // shared dataset from the API and never ingests local files.
   const db = cloud ? null : openDatabase()
   let lastCheck = new Date(Date.now() - opts.interval * 1000).toISOString()

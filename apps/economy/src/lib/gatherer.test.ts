@@ -36,7 +36,7 @@ beforeEach(() => {
   originalDbPath = process.env['HASNA_ECONOMY_DB_PATH']
   originalModeEnv = new Map(LOCAL_MODE_ENV_KEYS.map(key => [key, process.env[key]]))
   process.env['HASNA_ECONOMY_DB_PATH'] = join(root, 'economy.db')
-  for (const key of LOCAL_MODE_ENV_KEYS) process.env[key] = 'local'
+  for (const key of LOCAL_MODE_ENV_KEYS) delete process.env[key]
   resetEconomyCloudStorageCache()
 })
 

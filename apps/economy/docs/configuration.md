@@ -41,9 +41,17 @@ export HASNA_ECONOMY_API_URL=https://economy.example.com
 export HASNA_ECONOMY_API_KEY='...'
 ```
 
-URL plus key is itself a cloud-mode signal. You may explicitly set `HASNA_ECONOMY_STORAGE_MODE=cloud`; `self_hosted`, `remote`, and `hybrid` are accepted deprecated aliases. The resolver also accepts `HASNA_ECONOMY_MODE`, `ECONOMY_STORAGE_MODE`, and `ECONOMY_MODE`, plus unprefixed `ECONOMY_API_URL`/`ECONOMY_API_KEY` aliases. An existing `/v1` suffix is normalized, otherwise it is appended. Cloud mode with no key or an invalid URL fails rather than reading an unintended local dataset.
+The client has exactly two stores: the local SQLite store and the hosted HTTP
+API. The hosted route is selected by the joint presence of `HASNA_ECONOMY_API_URL`
+plus `HASNA_ECONOMY_API_KEY`; the unprefixed `ECONOMY_API_URL`/`ECONOMY_API_KEY`
+aliases are accepted too. An existing `/v1` suffix is normalized, otherwise it is
+appended. There is no mode variable: a surviving storage-mode variable is
+rejected with a migration hint, and a partial flip (URL without a key) fails
+rather than reading an unintended local dataset.
 
-In cloud-client mode, data commands use the HTTP API, and local auto-sync, explicit `economy sync`, and `economy billing sync` are skipped. Clients never need or use a Postgres DSN.
+On the hosted route, data commands use the HTTP API, and local auto-sync,
+explicit `economy sync`, and `economy billing sync` are skipped. Clients never
+need or use a Postgres DSN.
 
 ## REST server
 
@@ -56,7 +64,7 @@ economy-serve --port 3456
 
 `ECONOMY_PORT` supplies the `economy-serve` default. `ECONOMY_BIND` (or `ECONOMY_HOST`) controls the local bind host. `ECONOMY_API_TOKEN` (or `HASNA_ECONOMY_API_TOKEN`) enables the local shared-token check; send it as `Authorization: Bearer ...` or `X-Economy-Token`.
 
-Without a local token, the current server defaults to `0.0.0.0` and API routes are unauthenticated. Set a token and an intentional bind address before exposing a local-mode server to another host.
+Without a token, the current server defaults to `0.0.0.0` and API routes are unauthenticated. Set a token and an intentional bind address before exposing the server to another host.
 
 The server serves `dashboard/dist` and falls back to its `index.html` for non-API paths when those assets exist.
 
@@ -70,7 +78,9 @@ ECONOMY_DATABASE_URL
 DATABASE_URL
 ```
 
-`HASNA_ECONOMY_STORAGE_MODE` (and `HASNA_ECONOMY_MODE`, `ECONOMY_STORAGE_MODE`, `ECONOMY_MODE`) no longer selects a backend: the server refuses to start and prints a migration hint. Delete it and set a DSN instead. This is server-only — the CLI/MCP client still reads the mode variable described above.
+A surviving storage-mode variable is a hard error: the server refuses to
+resolve a backend while one is present and prints a migration hint. Delete it
+and set a DSN instead. The CLI/MCP client rejects the same variables.
 
 Apply migrations with `economy-serve migrate`. `ECONOMY_PG_POOL_MAX` defaults to 5. A non-loopback server also requires one of `HASNA_ECONOMY_API_SIGNING_KEY`, `HASNA_API_SIGNING_KEY`, or `API_KEY_SIGNING_SECRET`; API keys are then verified by `@hasna/contracts`. The signing secret belongs only on the server.
 

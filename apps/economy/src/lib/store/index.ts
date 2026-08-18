@@ -6,16 +6,15 @@
 //
 //   • LocalStore — on-box SQLite. Opens the local db lazily and delegates to the
 //     query/upsert/delete helpers in ../../db/database.ts.
-//   • ApiStore   — the self_hosted/cloud HTTP API at `<API_URL>/v1` with a bearer
-//     key. Delegates to the vendored @hasna/contracts storage client.
+//   • ApiStore   — the hosted HTTP API at `<API_URL>/v1` with a bearer
+//     key. Delegates to the @hasna/contracts storage client.
 //
-// `getStore()` resolves which transport to use from the client-flip env
-// (HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY / HASNA_ECONOMY_STORAGE_MODE).
+// `getStore()` resolves which transport to use from the env contract
+// (HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY both set -> hosted, else local).
 // Callers NEVER branch on mode themselves and NEVER touch sqlite or fetch
 // directly — that was the split-brain bug this module eliminates.
 //
-// `self_hosted` and `cloud` are the SAME client code (ApiStore); only the URL and
-// key differ, and that distinction is server-side tenancy. `local` is
+// There is exactly one hosted client implementation (ApiStore); `local` is
 // first-class and fully functional.
 //
 // SAFETY: the API key never leaves the transport; it is never logged, returned,
@@ -213,7 +212,7 @@ export interface SubscriptionInput {
  */
 export interface EconomyStore {
   /** Which transport backs this store (for banners/diagnostics only). */
-  readonly transport: 'local' | 'cloud-http'
+  readonly transport: 'local' | 'http'
 
   // ── Reads ──────────────────────────────────────────────────────────────────
   summary(period: Period, machine?: string): Promise<CostSummary>
@@ -550,7 +549,7 @@ function q(params: Record<string, string | number | boolean | null | undefined>)
 }
 
 export class ApiStore implements EconomyStore {
-  readonly transport = 'cloud-http' as const
+  readonly transport = 'http' as const
   constructor(private readonly cloud: ActiveEconomyCloudStorage) {}
 
   async summary(period: Period, machine?: string): Promise<CostSummary> {
@@ -807,8 +806,8 @@ export class ApiStore implements EconomyStore {
 
 /**
  * Resolve the active {@link EconomyStore} for the current environment. Returns an
- * {@link ApiStore} when the client-flip contract resolves to cloud-http
- * (self_hosted/cloud), else a {@link LocalStore}. Throws if cloud was requested
+ * {@link ApiStore} when the env contract resolves to http (API_URL + API_KEY
+ * both set), else a {@link LocalStore}. Throws if hosted was requested
  * but is misconfigured (so callers can never silently read the wrong dataset).
  */
 export function getStore(env: NodeJS.ProcessEnv = process.env): EconomyStore {

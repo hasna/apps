@@ -9,7 +9,7 @@ function fmt(usd: number): string {
 }
 
 /** Everything the status surfaces need, gathered through the Store (never sqlite
- * directly) so local and self_hosted/cloud render the same numbers. */
+ * directly) so local and hosted render the same numbers. */
 export interface StatusData {
   today: CostSummary
   week: CostSummary
@@ -62,9 +62,9 @@ export async function gatherStatusData(store: EconomyStore = getStore()): Promis
 }
 
 /** Deployment label for the status line, derived purely from the active Store
- * transport: the cloud HTTP transport is self_hosted/cloud, else local. */
+ * transport: the hosted HTTP transport, else local. */
 function modeLabel(transport: EconomyStore['transport']): string {
-  return transport === 'cloud-http' ? 'self_hosted' : 'local'
+  return transport === 'http' ? 'hosted' : 'local'
 }
 
 export function buildStatusLine(data: StatusData): string {
@@ -113,7 +113,7 @@ export async function runTui(opts: { watch?: boolean; interval?: number }): Prom
     console.log(`  Top agent: ${data.topAgent}`)
     if (data.quota) console.log(`  Quota:     ${data.quota}`)
     console.log(`  Fleet:     ${data.machineCount} machines`)
-    console.log(`  Store:     ${data.transport === 'cloud-http' ? 'self_hosted (cloud API)' : 'local'}`)
+    console.log(`  Store:     ${data.transport === 'http' ? 'hosted API' : 'local'}`)
     if (getServeApiToken()) console.log(chalk.dim('  API auth:  ECONOMY_API_TOKEN set'))
     console.log(chalk.dim(`\n  ${opts.watch ? `Refreshing every ${interval}s — Ctrl+C to exit` : 'Run with --watch for live refresh'}`))
   }

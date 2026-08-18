@@ -19,7 +19,6 @@ import { syncAllToCloud, billingSyncToCloud } from './cloud-ingest.js'
  */
 
 const CLOUD_ENV = {
-  HASNA_ECONOMY_STORAGE_MODE: 'cloud',
   HASNA_ECONOMY_API_URL: 'http://localhost:3456',
   HASNA_ECONOMY_API_KEY: 'test-key',
 }

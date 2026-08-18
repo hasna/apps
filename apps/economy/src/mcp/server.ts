@@ -20,7 +20,7 @@ export function buildServer(): any {
 // on-box agent log files and prices its rows from the local table. Every DATA
 // tool — including `send_feedback` — routes through the Store. It is opened
 // lazily and only after `sync` has already confirmed local mode via isCloudStore,
-// so self_hosted/cloud mode never touches (or creates) a local SQLite file — in
+// so the hosted route never touches (or creates) a local SQLite file — in
 // cloud mode the client reads/writes the shared API only.
 let _db: ReturnType<typeof openDatabase> | undefined
 const localDb = (): ReturnType<typeof openDatabase> => {
@@ -32,7 +32,7 @@ const localDb = (): ReturnType<typeof openDatabase> => {
 }
 
 // Every DATA tool routes through the Store. `getStore()` returns an ApiStore
-// (self_hosted/cloud HTTP /v1) when HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY
+// (hosted HTTP /v1) when HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY
 // are set, else a LocalStore over the on-box SQLite — one interface, no per-tool
 // branching, so the MCP shares the same fleet state as the CLI.
 const store = getStore()
@@ -571,7 +571,7 @@ server.tool(
   async ({ sources, json }: { sources?: typeof SYNC_SOURCES[number]; json?: boolean }) => {
     const selected = sources ?? 'all'
     const opts = selected === 'all' ? {} : { [selected]: true } as Record<string, boolean>
-    // self_hosted/cloud mode: the on-box provider files exist on THIS machine, so
+    // hosted route: the on-box provider files exist on THIS machine, so
     // the client reads them and pushes the ingested rows to the shared API
     // (/v1/ingest) instead of a local SQLite the cloud transport never reads.
     if (isCloudStore()) {
@@ -845,7 +845,7 @@ server.tool(
 // @hasna/agent-registry implementation (persistent, shared across services)
 // rather than a hand-rolled in-memory Map. economy's own send_feedback (below)
 // routes through the Store (local feedback table or POST /v1/feedback) so it
-// carries the category enum and never bypasses the cloud in self_hosted mode.
+// carries the category enum and never bypasses the hosted route.
 registerAgentTools(server, { includeFeedback: false })
 
 server.tool(

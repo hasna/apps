@@ -6,13 +6,7 @@ import { openDatabase, upsertCostCenter, upsertRequest, upsertSession } from '..
 
 const root = new URL('../../', import.meta.url).pathname.replace(/\/$/, '')
 const tempRoots: string[] = []
-const localStorageEnv = {
-  HASNA_ACCOUNTS_STORAGE_MODE: 'local',
-  HASNA_ECONOMY_STORAGE_MODE: 'local',
-  HASNA_ECONOMY_MODE: 'local',
-  ECONOMY_STORAGE_MODE: 'local',
-  ECONOMY_MODE: 'local',
-} as const
+const localStorageEnv = {} as const
 
 async function runCli(
   args: string[],

@@ -1,23 +1,27 @@
-// Client-side self_hosted storage resolver for @hasna/economy.
+// Client-side hosted storage resolver for @hasna/economy.
 //
-// When the client-flip contract resolves to `cloud-http` (mode=self_hosted/cloud
-// AND HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY are set), the CLI must route
-// its reads and writes to the app's cloud API at `https://economy.hasna.xyz/v1`
-// with the bearer key — NOT to the local SQLite store, and NEVER to a raw
-// database DSN.
+// The client has exactly two stores: the local SQLite store and the hosted HTTP
+// API. The hosted route is selected by the env contract — both
+// HASNA_ECONOMY_API_URL and HASNA_ECONOMY_API_KEY set — and routes reads/writes
+// to the app's hosted API at `https://economy.hasna.xyz/v1` with the bearer key,
+// NOT to the local SQLite store and NEVER to a raw database DSN.
 //
 // This module is the single seam the CLI consults. It returns a ready
-// `HasnaStorageClient` (from @hasna/contracts) when cloud is active, or
-// `{ active: false }` so the caller falls back to the local store. It throws (via
-// resolveStorageClient) when cloud is requested but misconfigured, so a client can
-// never silently drift back to the wrong dataset.
+// `HasnaStorageClient` (from @hasna/contracts) when the hosted route is active,
+// or `{ active: false }` so the caller falls back to the local store. It throws
+// (via resolveStorageClient) when the hosted route is requested but
+// misconfigured, so a client can never silently drift back to the wrong dataset.
 //
 // SAFETY: never logs or embeds the API key — it lives only inside the transport.
 
-import { resolveStorageClient, type HasnaStorageClient } from "./contracts-client/storage.js";
+import { createClientTransport } from "@hasna/contracts/client";
+import {
+  createHasnaStorageClient,
+  type HasnaStorageClient,
+} from "@hasna/contracts/client/storage";
 
 /** Transport overrides (test injection: fetchImpl, headers, timeout, retry). */
-type StorageClientOverrides = Parameters<typeof resolveStorageClient>[2];
+type StorageClientOverrides = Parameters<typeof createClientTransport>[2];
 
 /** The economy app slug used for the HASNA_<APP>_* env lookups. */
 export const ECONOMY_APP = "economy";
@@ -39,19 +43,27 @@ let cache: EconomyCloudStorage | undefined;
 /**
  * Resolve the economy client storage transport for the current environment.
  *
- * Returns `{ active: true, client }` only when mode=self_hosted/cloud AND
- * HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY are set. Otherwise
- * `{ active: false }` (local store). Throws if cloud was requested but is
+ * Returns `{ active: true, client }` only when HASNA_ECONOMY_API_URL +
+ * HASNA_ECONOMY_API_KEY are both set (hosted route). Otherwise
+ * `{ active: false }` (local store). Throws if hosted was requested but is
  * misconfigured.
  */
 export function resolveEconomyCloudStorage(
   env: NodeJS.ProcessEnv = process.env,
   overrides?: StorageClientOverrides,
 ): EconomyCloudStorage {
-  const resolved = resolveStorageClient(ECONOMY_APP, env, overrides);
-  return resolved.transport === "cloud-http"
-    ? { active: true, client: resolved.client }
-    : { active: false, client: null };
+  const wired = createClientTransport(ECONOMY_APP, env, overrides);
+  if (wired.transport === "http") {
+    return { active: true, client: createHasnaStorageClient(ECONOMY_APP, wired.client) };
+  }
+  // Fail closed: a hosted route requested but not resolvable must not silently
+  // serve the local dataset (regression todos 4704ab9f). The modern resolver
+  // marks the partial-flip case misconfigured instead of throwing, so the
+  // misconfiguration surfaces as the same hard error here.
+  if (wired.resolution.misconfigured) {
+    throw new Error(wired.resolution.warning ?? "economy hosted route is misconfigured.");
+  }
+  return { active: false, client: null };
 }
 
 /** Memoized {@link resolveEconomyCloudStorage} for the process lifetime. */
@@ -85,7 +97,7 @@ function cleanQuery(query?: CloudQuery): CloudQuery | undefined {
  * Read a collection resource from the cloud API and return the extracted array
  * (the serve envelope's `data`/`items`). Used by the read commands (sessions,
  * top, breakdown, accounts) so they render cloud data — never the local store —
- * when the client is in self_hosted/cloud mode.
+ * when the client is on the hosted route.
  */
 export async function cloudListItems<T = unknown>(
   storage: ActiveEconomyCloudStorage,

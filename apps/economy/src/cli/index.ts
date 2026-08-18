@@ -19,7 +19,7 @@ import { syncAllToCloud, billingSyncToCloud } from '../lib/cloud-ingest.js'
 import { economyCloudStorage } from '../lib/cloud-storage.js'
 import { backfillMachineId, recalculateZeroCostRequests } from '../lib/sync-maintenance.js'
 import { billingDeltaPct } from '../lib/billing-diff.js'
-import { HasnaHttpError } from '../lib/contracts-client/transport.js'
+import { HasnaHttpError } from '@hasna/contracts/client'
 import type { AccountBreakdown, CostSummary, CostCenterKind, ProjectBreakdown, Period } from '../types/index.js'
 
 const program = new Command()
@@ -32,7 +32,7 @@ program
 // ── Auto-sync helper ──────────────────────────────────────────────────────────
 
 async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; loops?: boolean; verbose?: boolean; dedupe?: boolean } = {}): Promise<void> {
-  // self_hosted/cloud mode: ingest this machine's on-box provider files into
+  // hosted route: ingest this machine's on-box provider files into
   // the shared API first; the reads that follow come straight from the cloud.
   if (isCloudStore()) {
     const cloud = economyCloudStorage()
@@ -288,7 +288,7 @@ program
   .option('--backfill-machine', 'Tag existing records that have no machine_id with current hostname')
   .option('--recalculate', 'Recalculate costs for all requests with cost_usd = 0')
   .action(async (opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; loops?: boolean; verbose?: boolean; force?: boolean; backfillMachine?: boolean; recalculate?: boolean }) => {
-    // self_hosted/cloud mode: the on-box provider files exist on THIS machine,
+    // hosted route: the on-box provider files exist on THIS machine,
     // so the client reads them and pushes the ingested rows to the shared API
     // (/v1/ingest) instead of a local SQLite the cloud transport never reads.
     if (isCloudStore()) {
@@ -1464,7 +1464,7 @@ billingCmd
   .action(async (opts: { days?: string; anthropic?: boolean; openai?: boolean; gemini?: boolean }) => {
     const days = parsePositiveCliInteger(opts.days ?? '31', '--days')
     if (days > 366) fail('--days must be between 1 and 366')
-    // self_hosted/cloud mode: the provider credentials live on this machine, so
+    // hosted route: the provider credentials live on this machine, so
     // the client fetches the billing and pushes the rows to the shared API
     // (/v1/ingest) instead of a local SQLite the cloud transport never reads.
     if (isCloudStore()) {
@@ -1559,7 +1559,7 @@ registerFleetCommands(program)
 registerEventsCommands(program, { source: 'economy' })
 
 // Render any command failure as a single clean line + exit 1 — never leak a raw
-// bundle stack trace. Cloud (self_hosted) API failures surface as HasnaHttpError;
+// bundle stack trace. Hosted API failures surface as HasnaHttpError;
 // a 404 there means the server is missing the endpoint (stale deploy) rather than
 // a client bug, so we say so instead of dumping the transport internals.
 function reportCliError(err: unknown): never {

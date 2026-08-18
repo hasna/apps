@@ -208,7 +208,7 @@ export function registerExtendedCommands(program: Command): void {
         }
         checks.push({ ok: Boolean(process.env['CURSOR_SESSION_TOKEN']), msg: `cursor token: ${process.env['CURSOR_SESSION_TOKEN'] ? 'set' : 'missing CURSOR_SESSION_TOKEN'}` })
       }
-      checks.push({ ok: true, msg: `storage: ${cloud ? 'self_hosted/cloud (HASNA_ECONOMY_API_URL + key)' : 'local'}` })
+      checks.push({ ok: true, msg: `storage: ${cloud ? 'hosted (HASNA_ECONOMY_API_URL + key)' : 'local'}` })
 
       // Zero-cost tokenized-request detection and dedupe are LOCAL-DB maintenance
       // operations; the cloud serve owns dedup + pricing for its dataset, so run
