@@ -80,18 +80,18 @@ const kitCheck = verifyVendoredKit();
 const checks = [...report.checks, kitCheck];
 
 // Checks whose failure means the purge regressed (manifest shape, kit
-// integrity, health payload, security gates) BLOCK. The remaining five are
+// integrity, health payload, security gates) BLOCK. The remaining three are
 // pending the contracts-align lane for @hasna/fleet (full 0.11.1 compliance:
-// serviceSurfaces incl. ./sdk, pgTestGate, artifactScan, databaseUrlSecretRef
-// removal); they are reported but non-blocking, and the entries must be
-// removed as the align lane closes them. They cannot pass from this lane:
-// the sdk surface requires a real ./sdk export (SDK lane c7ce8b75), and the
-// artifactScan/pgTestGate gates require release/postgres-test wiring.
+// ./sdk surface, pgTestGate, artifactScan); they are reported but
+// non-blocking, and the entries must be removed as the align lane closes
+// them. They cannot pass from this lane: the sdk surface requires a real
+// ./sdk export (SDK lane c7ce8b75), and the artifactScan/pgTestGate gates
+// require release/postgres-test wiring. The align lane has closed
+// service_api_topology (supported API declared) and public_manifest_safety
+// (databaseUrlSecretRef removed).
 const PENDING_ALIGN_CHECKS = new Set([
   "surface_matrix",
-  "service_api_topology",
   "storage_capabilities",
-  "public_manifest_safety",
   "published_artifact_gate",
 ]);
 
