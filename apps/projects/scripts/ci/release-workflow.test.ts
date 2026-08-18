@@ -9,7 +9,7 @@ const packageJson = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "p
 
 describe("npm release workflow publish contract", () => {
   test("keeps normal package lifecycle validation for manual publishes", () => {
-    expect(packageJson.scripts.prepack).toBe("bun run build");
+    expect(packageJson.scripts.prepack).toBe("bun run build && bun run scan:artifact");
     expect(packageJson.scripts.prepublishOnly).toContain("bun run typecheck");
     expect(packageJson.scripts.prepublishOnly).toContain("bun test");
     expect(packageJson.scripts.prepublishOnly).toContain("bun run contracts:conformance");
