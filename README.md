@@ -33,6 +33,12 @@ the import wave (todos `28ac4516`) and land PR-first; per-member gaps against
 the four-surface standard are tracked by the manifest lane (todos `41208cbe`)
 and the SDK lane (todos `c7ce8b75`).
 
+## License / Security / Contributing
+
+- License: [Apache-2.0](LICENSE)
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Security: [SECURITY.md](SECURITY.md)
+
 ## Developer commands
 
 ```bash
