@@ -1,6 +1,6 @@
 ---
 name: monitor
-description: Interact with the open-monitor MCP — check machine health, list processes, kill memory hogs, run doctor, manage cron jobs, trigger cache cleanup
+description: Interact with the monitor MCP — check machine health, list processes, kill memory hogs, run doctor, manage cron jobs, trigger cache cleanup
 user_invocable: true
 ---
 
@@ -13,7 +13,7 @@ Use the `monitor_*` MCP tools from `@hasna/monitor` to help the user manage thei
 If any `monitor_*` tool call fails with "tool not found" or "MCP not connected", tell the user:
 
 ```text
-The open-monitor MCP is not installed. Add it with:
+The monitor MCP is not installed. Add it with:
   claude mcp add monitor -- monitor-mcp
 Then restart Claude Code and try again.
 ```

@@ -14,11 +14,11 @@ siteanalyze <url>
 - Takes a screenshot and analyzes it with Claude Vision
 - Detects UI framework (shadcn/ui, Tailwind CSS, etc.)
 - Extracts color palette, typography scale, and component patterns
-- Outputs an open-styles compatible design profile
+- Outputs a styles compatible design profile
 
 ## Output
 
-Returns a JSON design profile compatible with open-styles format, including:
+Returns a JSON design profile compatible with styles format, including:
 - `colors` — primary, secondary, accent, background, text colors
 - `typography` — font families, sizes, weights
 - `framework` — detected UI framework

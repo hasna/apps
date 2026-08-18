@@ -1,6 +1,6 @@
-# GOAL — Portable skill standard + scaffolding for open-skills (`@hasna/skills`)
+# GOAL — Portable skill standard + scaffolding for skills (`@hasna/skills`)
 
-Improve **open-skills** so anyone can **port and create skills under `~/.hasna/skills/`** with a clear
+Improve **skills** so anyone can **port and create skills under `~/.hasna/skills/`** with a clear
 standard, **scaffold them via the CLI**, and have an agent build them out. Enter goal mode and do not
 stop until it is implemented, tested, working, and published.
 
@@ -24,9 +24,9 @@ stop until it is implemented, tested, working, and published.
    (`skills port <path>` or `skills add <path>`), validating + normalizing it into `~/.hasna/skills/`.
 
 ## How
-- Explore the **current open-skills repo** (CLI, MCP, SDK, package) and the existing **SKILL.md
+- Explore the **current skills repo** (CLI, MCP, SDK, package) and the existing **SKILL.md
   conventions** in this workspace before changing anything. Model structure/conventions on sibling
-  `~/workspace/hasna/opensource/open-*` repos (e.g. open-todos) — keep **CLI ↔ MCP parity**.
+  `~/workspace/repos/hasna/apps/apps/*` repos (e.g. todos) — keep **CLI ↔ MCP parity**.
 - **TDD**: tests first, full suite green, nothing skipped. Secrets scan before every commit/push;
   conventional commits, no Co-Authored-By.
 - **Publish** `@hasna/skills` (public, patch version bump) when done; `bun install -g @hasna/skills`

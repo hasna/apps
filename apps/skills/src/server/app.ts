@@ -77,11 +77,11 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
 
     try {
       if (request.method === "GET" && url.pathname === "/health") {
-        return json({ ok: true, service: "open-skills", time: new Date().toISOString() });
+        return json({ ok: true, service: "skills", time: new Date().toISOString() });
       }
 
       if (request.method === "GET" && url.pathname === "/ready") {
-        return json({ ok: true, service: "open-skills" });
+        return json({ ok: true, service: "skills" });
       }
 
       if (url.pathname.startsWith("/api/")) {

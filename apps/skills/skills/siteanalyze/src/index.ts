@@ -492,7 +492,7 @@ OPTIONS
   --quick                  Skip AI vision analysis — HTML/CSS analysis only
 
 FORMATS
-  profile   Print only the open-styles compatible profile object
+  profile   Print only the styles compatible profile object
   colors    Print only the extracted colors
   full      Print the complete analysis result (default)
 

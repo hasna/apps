@@ -157,7 +157,7 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
   {
     name: "monitor",
     displayName: "Monitor",
-    description: "Operate the open-monitor MCP for machine health, processes, cron jobs, and cleanup workflows",
+    description: "Operate the monitor MCP for machine health, processes, cron jobs, and cleanup workflows",
     category: "Development Tools",
     tags: ["monitoring", "mcp", "processes", "operations"],
   },

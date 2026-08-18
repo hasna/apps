@@ -103,7 +103,7 @@ describe("native storage", () => {
 
     const status = getStorageStatus({ targetDir: tmpDir, env });
     expect(status).toMatchObject({
-      package: "open-skills",
+      package: "skills",
       tables: ["skills_sync_records", "skills_sync_cursors"],
       env: {
         databaseUrl: "HASNA_SKILLS_DATABASE_URL",

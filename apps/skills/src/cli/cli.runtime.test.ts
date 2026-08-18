@@ -288,7 +288,7 @@ describe("CLI runtime and misc commands", () => {
           [theirs]: "cloud",
         });
         expect(allowed.exitCode).toBe(0);
-        expect(JSON.parse(allowed.stdout).package).toBe("open-skills");
+        expect(JSON.parse(allowed.stdout).package).toBe("skills");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }

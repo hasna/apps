@@ -39,7 +39,7 @@ describe("CLI storage", () => {
       expect(result.exitCode).toBe(0);
       const data = JSON.parse(result.stdout);
       expect(data).toMatchObject({
-        package: "open-skills",
+        package: "skills",
         tables: ["skills_sync_records", "skills_sync_cursors"],
         remote: {
           databaseConfigured: false,
@@ -81,7 +81,7 @@ describe("CLI storage", () => {
       expect(result.exitCode).toBe(0);
       const data = JSON.parse(result.stdout);
       expect(data).toMatchObject({
-        package: "open-skills",
+        package: "skills",
         noNetwork: true,
         databaseConfigured: true,
         s3Configured: true,
@@ -106,7 +106,7 @@ describe("CLI storage", () => {
       expect(result.exitCode).toBe(0);
       const data = JSON.parse(result.stdout);
       expect(data).toMatchObject({
-        package: "open-skills",
+        package: "skills",
         env: {
           databaseUrl: "HASNA_SKILLS_DATABASE_URL",
         },

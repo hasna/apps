@@ -24,8 +24,8 @@ Use this skill when you need to add a window and session to an existing group, o
 Examples:
 
 ```text
-workspace/hasna/opensource/opensourcedev/open-todos
-workspace/hasna/opensource/opensourcedev/open-conversations
+workspace/repos/hasna/apps/apps/todos
+workspace/repos/hasna/apps/apps/conversations
 workspace/hasnaxyz/agent/agentdev/agent-claude
 workspace/hasnaxyz/service/servicedev/service-chat
 workspace/hasnastudio/hasnastudio-alumia/platform/platform-alumia
@@ -38,13 +38,13 @@ Local tools live under `~/local/local-[name]/`.
 
 - A source session owns the windows.
 - Named sessions join that source session and lock onto one window index.
-- `tmux attach -t open-economy` should land in the `open-economy` window without manual switching.
+- `tmux attach -t economy` should land in the `economy` window without manual switching.
 
 ## When to open a session
 
 | Work type | Source session | Session/window naming |
 |-----------|----------------|-----------------------|
-| Multiple OSS repos | `opensourcemaintain` | `open-[name]` |
+| Multiple OSS repos | `opensourcemaintain` | `[name]` |
 | Multiple agent repos | `agentdev` | `agent-[name]` |
 | Multiple local tools | `local` | `local-[name]` |
 | Multiple workers on one project | project name | `[project]-01`, `[project]-02`, ... |
@@ -55,8 +55,8 @@ Rule: tmux groups live at the area/team level, not the individual repo level.
 
 ```bash
 SOURCE="opensourcemaintain"
-NAME="open-economy"
-DIR="$HOME/workspace/hasna/opensource/opensourcedev/open-economy"
+NAME="economy"
+DIR="$HOME/workspace/repos/hasna/apps/apps/economy"
 
 tmux new-window -t "$SOURCE" -n "$NAME" -c "$DIR"
 IDX=$(tmux list-windows -t "$SOURCE" -F "#{window_index}:#{window_name}" | grep ":${NAME}$" | cut -d: -f1)
@@ -68,15 +68,15 @@ tmux select-window -t "${NAME}:${IDX}"
 
 ```bash
 SOURCE="opensourcemaintain"
-BASE="$HOME/workspace/hasna/opensource/opensourcedev"
+BASE="$HOME/workspace/repos/hasna/apps/apps"
 
 WINDOWS=(
-  "open-todos:$BASE/open-todos"
-  "open-conversations:$BASE/open-conversations"
-  "open-mementos:$BASE/open-mementos"
+  "todos:$BASE/todos"
+  "conversations:$BASE/conversations"
+  "mementos:$BASE/mementos"
 )
 
-tmux new-session -d -s "$SOURCE" -n "open-todos" -c "$BASE/open-todos"
+tmux new-session -d -s "$SOURCE" -n "todos" -c "$BASE/todos"
 
 for entry in "${WINDOWS[@]:1}"; do
   tmux new-window -t "$SOURCE" -n "$(echo "$entry" | cut -d: -f1)" -c "$(echo "$entry" | cut -d: -f2)"
@@ -92,7 +92,7 @@ done
 
 ## Naming rules
 
-- OSS project: `open-[name]`
+- OSS project: `[name]`
 - Agent repo: `agent-[name]`
 - Service repo: `service-[name]`
 - Local tool: `local-[name]`
@@ -103,7 +103,7 @@ Always use the full prefixed name for both the window name and the session name.
 ## Verification
 
 ```bash
-tmux display-message -t open-economy -p "#{window_index}:#{window_name} @ #{pane_current_path}"
+tmux display-message -t economy -p "#{window_index}:#{window_name} @ #{pane_current_path}"
 tmux list-sessions | grep "(group opensourcemaintain)"
 tmux list-panes -a -F "#{session_name}:#{window_name} dead=#{pane_dead}" | grep "dead=1"
 ```
