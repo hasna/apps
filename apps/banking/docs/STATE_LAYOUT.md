@@ -10,7 +10,7 @@ If package-global state is added later, its only canonical root is:
 ~/.hasna/banking
 ```
 
-The legacy roots `~/.banking` and `~/.open-banking` are not operational read
+The legacy roots `~/.banking` and `~/.open-banking` (the retired `open-`-prefixed name) are not operational read
 paths. The package never copies, moves, rewrites, or deletes them. There is no
 automatic migration because the current package has no global store and no
 known package-owned data at those locations. Files found there must be audited
