@@ -517,3 +517,65 @@ describe("ApiStore end-to-end against the real /v1 server", () => {
     await expect(store.listWorkflowEvents("run-1")).rejects.toThrow("invalid workflow event id");
   });
 });
+
+describe("run-now across both transports (1fb09589)", () => {
+  test("ApiStore.runNow schedules the loop due now through the hosted /v1 endpoint", async () => {
+    const storage = createSqliteLoopStorage(":memory:");
+    const principal = {
+      tenantId: "tenant-test", principalId: "principal-test", requestId: "request-test",
+      kid: "kid-test", agent: "principal-test", scopes: ["loops:*"],
+      roles: ["admin" as const], tokenKind: "api_key" as const,
+      claims: { v: 1, kid: "kid-test", app: "loops", agent: "principal-test", scopes: ["loops:*"], iat: 1, exp: null },
+    };
+    const server = createLoopsApiServer({
+      host: "127.0.0.1", port: 0,
+      authenticator: { authenticate: async () => ({ ok: true as const, status: 200 as const, principal }) },
+      withTenantStorage: (_principal, fn) => fn(storage),
+    });
+    try {
+      const store = apiStoreForServer((server as { port: number }).port);
+      const loop = await store.createLoop({
+        name: "api-run-now-store",
+        schedule: { type: "once", at: "2030-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      await store.updateLoop(loop.id, { status: "paused", nextRunAt: "2030-01-01T00:00:00Z" });
+
+      const result = await store.runNow(loop.id);
+      expect(result.loop.id).toBe(loop.id);
+      expect(result.loop.status).toBe("active");
+      expect(result.loop.nextRunAt).toBe(result.scheduledFor);
+      expect(result.scheduledFor).toBeString();
+
+      const stored = await storage.getLoop(loop.id);
+      expect(stored?.status).toBe("active");
+      expect(stored?.nextRunAt).toBe(result.scheduledFor);
+      await store.close();
+    } finally {
+      server.stop?.(true);
+      await storage.close();
+    }
+  });
+
+  test("LocalStore.runNow marks the loop due now without executing it", async () => {
+    const raw = new Store(":memory:");
+    const store = new LocalStore(raw);
+    try {
+      const loop = raw.createLoop({
+        name: "local-run-now-schedule",
+        schedule: { type: "once", at: "2030-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      raw.updateLoop(loop.id, { status: "paused", nextRunAt: "2030-01-01T00:00:00Z" });
+
+      const result = await store.runNow(loop.id);
+      expect(result.loop.id).toBe(loop.id);
+      expect(result.loop.status).toBe("active");
+      expect(result.loop.nextRunAt).toBe(result.scheduledFor);
+      // Schedule-mode run-now never claims or executes a run in this process.
+      expect(raw.listRuns({ loopId: loop.id })).toHaveLength(0);
+    } finally {
+      await store.close();
+    }
+  });
+});
