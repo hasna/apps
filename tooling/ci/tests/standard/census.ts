@@ -381,7 +381,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "gateway",
-    cause: "kitVersion 0.4.1 predates the manifest shape (deploymentModes/serviceSurfaces); validates clean at 0.5.2. kitVersion claim is stale; pinned dep 0.2.2 lacks repo-conformance.",
+    cause: "surface_matrix: missing sdk surface (no ./sdk export; SDK lane c7ce8b75); self_host_artifact: no Dockerfile/docker-compose; storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required. Manifest schema-valid at kit 0.11.1.",
     task: "todos 9dc0ee28 (contracts task — gateway)",
   },
   {
@@ -498,7 +498,7 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "calendar", kitVersion: "0.8.4", pinned: "0.4.2" },
   { member: "domains", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "files", kitVersion: "0.4.2", pinned: "0.5.2" },
-  { member: "gateway", kitVersion: "0.4.1", pinned: "0.2.2" },
+  { member: "gateway", kitVersion: "0.11.1", pinned: "0.2.2" },
   { member: "instructions", kitVersion: "0.10.6", pinned: "0.4.2" },
   { member: "logs", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "tenants", kitVersion: "0.10.6", pinned: "0.4.2" },
