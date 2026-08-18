@@ -782,7 +782,7 @@ describe("logs events CLI", () => {
 
   test("watches a remote --server stream in api mode without the local-only guard", async () => {
     // Regression: `watch --server` is an explicit out-of-band SSE tail and must
-    // be reachable in self_hosted/cloud (api) mode. Previously the command hit
+    // be reachable in api mode (hosted client env). Previously the command hit
     // requireLocalStore("watch") unconditionally and threw the local-only error
     // before ever reaching the --server branch.
     const dataDir = mkdtempSync(
@@ -837,9 +837,10 @@ describe("logs events CLI", () => {
             HASNA_LOGS_DATA_DIR: dataDir,
             HASNA_LOGS_DB_PATH: join(dataDir, "logs.db"),
             HASNA_LOGS_FSYNC: "0",
-            // Flip the resolved store into api (self_hosted) mode. The URL below
-            // is never contacted (no --project ⇒ no resolveProjectId call); the
-            // tail targets the explicit --server above.
+            // Flip the resolved store into api mode (hosted client env pair).
+            // The URL below is never contacted (no --project ⇒ no
+            // resolveProjectId call); the tail targets the explicit --server
+            // above.
             HASNA_LOGS_API_URL: "https://logs.example.invalid/v1",
             HASNA_LOGS_API_KEY: "test-api-key-unused",
           },

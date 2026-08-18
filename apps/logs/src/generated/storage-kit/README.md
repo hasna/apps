@@ -6,24 +6,31 @@
 - Regenerate: `bunx @hasna/contracts vendor-kit`
 - Verify (CI): `bunx @hasna/contracts vendor-kit --check` — fails on stale or hand-edited files.
 
+> MODES-REMOVAL 2026-08-18: the storage-mode module (`mode.ts`) was removed
+> from this kit; the kit selects the backend from the environment
+> (HASNA_<NAME>_DATABASE_URL present -> PostgreSQL, else no Postgres pool).
+> Regenerate from an updated `@hasna/contracts` generator once it ships the
+> same env-selection contract.
+
 ## What it is
 
 A canonical Postgres storage kit shared across the Hasna fleet:
 
 | File            | Purpose                                                              |
 | --------------- | ------------------------------------------------------------------- |
-| `mode.ts`       | Storage-mode + env resolution (`local` \| `cloud`), per the contract |
 | `tls.ts`        | The one correct TLS approach (libpq `sslmode` semantics + RDS CA)    |
-| `pool.ts`       | `pg.Pool` factory with fleet-standard TLS                            |
+| `pool.ts`       | `pg.Pool` factory with fleet-standard TLS; DATABASE_URL env selection |
 | `query.ts`      | Typed query wrapper (`query` / `many` / `get` / `one` / `execute`)   |
 | `migrations.ts` | `schema_migrations` ledger with sha256 checksums                     |
 | `health.ts`     | `checkHealth` (SELECT 1) and `checkReady` (migrated?) probes         |
 
-## PURE REMOTE (Amendment A1)
+## Backend selection
 
-Cloud mode = reads **and** writes go directly to cloud Postgres. This kit
-contains **no sync engine, no cache-as-mode, and no merge logic**. In `local`
-mode there is no Postgres pool at all; SQLite is authoritative.
+The kit selects the backend from the environment, not from a mode enum: a
+PostgreSQL pool is built only when `HASNA_<NAME>_DATABASE_URL` (or the alias
+`<NAME>_DATABASE_URL`) is present. Without a database URL there is no Postgres
+pool at all; the app's local SQLite store is authoritative. The kit contains
+**no sync engine and no merge logic**.
 
 ## TLS
 

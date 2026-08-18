@@ -34,7 +34,7 @@ exitIfMetadataRequest({
 
 // Best-effort local store for internal self-telemetry (agent lifecycle + tool
 // calls). It is `null` in api mode — the events catalog is a local-only feature
-// (the cloud tier is a shared log sink), so telemetry is silently skipped
+// (the hosted tier is a shared log sink), so telemetry is silently skipped
 // there. Telemetry must NEVER change tool behavior.
 const telemetryStore = localStoreIfAvailable();
 
@@ -129,17 +129,17 @@ export function buildServer(): McpServer {
 
   // The unified data-plane Store: LocalStore (SQLite) or ApiStore (HTTP /v1 +
   // bearer key), resolved from the environment. Every data-plane tool routes
-  // through this — no per-tool `cloud ? : local` branching, no `getDb()` reads
-  // in handlers. Fully reversible: unset HASNA_LOGS_API_URL/KEY -> local.
+  // through this — no per-tool transport branching, no `getDb()` reads in
+  // handlers. Fully reversible: unset HASNA_LOGS_API_URL/KEY -> local.
   const store = resolveStore();
 
   // Resolve a project name-or-id through the live store (local db or /v1).
   const rid = (idOrName?: string): Promise<string | undefined> =>
     store.resolveProjectId(idOrName);
 
-  // On-box analytics/telemetry tools with no cloud data model reach the concrete
-  // LocalStore here; it throws loudly in api mode instead of touching a stale
-  // local db. `getDb()` stays confined to the store implementation.
+  // On-box analytics/telemetry tools with no hosted data model reach the
+  // concrete LocalStore here; it throws loudly in api mode instead of touching
+  // a stale local db. `getDb()` stays confined to the store implementation.
   const local = (tool: string): LocalStore => requireLocalStore(tool);
 
   // Tool registry with param signatures for discoverability

@@ -47,8 +47,8 @@ export interface RunMigrationsOptions {
  * Environment for migrations. Migrations run DDL (CREATE TABLE …), so they need
  * the owning role. When `HASNA_LOGS_OWNER_DATABASE_URL` is set (the ECS
  * migration task injects the owner DSN there) it takes precedence over the
- * least-privileged app DSN the service itself uses. Storage mode is forced to
- * `cloud` for migration runs.
+ * least-privileged app DSN the service itself uses. The pool selects
+ * PostgreSQL from HASNA_LOGS_DATABASE_URL presence.
  */
 function migrationEnv(): Record<string, string | undefined> {
   const owner =
@@ -56,14 +56,13 @@ function migrationEnv(): Record<string, string | undefined> {
     process.env.LOGS_OWNER_DATABASE_URL?.trim();
   return {
     ...process.env,
-    HASNA_LOGS_STORAGE_MODE: "cloud",
     ...(owner ? { HASNA_LOGS_DATABASE_URL: owner } : {}),
   };
 }
 
 /**
- * Build a cloud pool from the environment, run all pending migrations, and
- * close the pool. Requires a cloud database URL (owner DSN preferred).
+ * Build a PostgreSQL pool from the environment, run all pending migrations,
+ * and close the pool. Requires a database URL (owner DSN preferred).
  */
 export async function runLogsCloudMigrations(
   options: RunMigrationsOptions = {},

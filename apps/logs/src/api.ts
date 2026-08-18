@@ -1,8 +1,8 @@
 /**
- * Typed client SDK for the @hasna/logs cloud API (`/v1`).
+ * Typed client SDK for the @hasna/logs hosted API (`/v1`).
  *
  * Generated from the serve OpenAPI document — see `scripts/generate-sdk-api.ts`.
- * Self-hosted usage (Amendment A1 client mode):
+ * Usage:
  *
  *   import { LogsClient } from "@hasna/logs/api";
  *   const logs = new LogsClient({

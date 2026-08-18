@@ -126,8 +126,6 @@ import type {
 
 /** SQLite-backed {@link Store}. Sole owner of the local database handle. */
 export class LocalStore implements Store {
-  readonly mode = "local" as const;
-
   async listLogs(query: LogQuery): Promise<LogRow[]> {
     return searchLogs(getDb(), query);
   }
