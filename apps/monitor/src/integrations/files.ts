@@ -22,11 +22,13 @@
 import { readFileSync } from "node:fs";
 import { FilesClient, ApiError } from "@hasna/files/sdk";
 import { captureCommandOutput, removeCaptureSpool } from "../output-capture.js";
+import { redactOutputText } from "../output-evidence.js";
 
 export interface FilesEvidenceConfig {
   org: string;
   app: string;
-  kind?: string;
+  /** Evidence kind, e.g. "receipt" — required by the files CLI contract (`--kind` is a requiredOption). */
+  kind: string;
   /** Override the `files` binary path (tests inject a stub). */
   binary?: string;
   /** Storage provider passthrough: "s3" | "local". Omitted = package default. */
@@ -87,7 +89,8 @@ export async function uploadEvidenceArtifact(
     config.org,
     "--app",
     config.app,
-    ...(config.kind ? ["--kind", config.kind] : []),
+    "--kind",
+    config.kind,
     ...(config.storage ? ["--storage", config.storage] : []),
     ...(config.localRoot ? ["--local-root", config.localRoot] : []),
     "--json",
@@ -102,11 +105,15 @@ export async function uploadEvidenceArtifact(
 
   try {
     if (result.exitCode !== 0) {
-      const stderrExcerpt = readSpoolExcerpt(result.stderr.path);
+      // The failure message is redacted before it can flow into logs or
+      // receipts: a failed upload whose stderr carries a credential or a
+      // signed URL must never preserve that value verbatim.
+      const stderrExcerpt = redactText(readSpoolExcerpt(result.stderr.path));
+      const errorText = result.error ? redactText(result.error) : "";
       return {
         ok: false,
         code: "upload_failed",
-        message: stderrExcerpt || result.error || `files evidence upload exited ${result.exitCode}`,
+        message: stderrExcerpt || errorText || `files evidence upload exited ${result.exitCode}`,
         exitCode: result.exitCode,
       };
     }
@@ -201,4 +208,8 @@ function readSpoolExcerpt(path: string): string {
   } catch {
     return "";
   }
+}
+
+function redactText(text: string): string {
+  return redactOutputText(text).text;
 }
