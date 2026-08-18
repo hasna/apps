@@ -4,16 +4,46 @@
 
 // Postgres pool factory for the vendored Hasna storage kit.
 //
-// The single sanctioned way to open a cloud Postgres connection. TLS is
-// resolved through `tls.ts` (one correct approach), and env/mode resolution
-// runs through `mode.ts` (the contract). PURE REMOTE (Amendment A1): a Pool is
-// only ever built for `cloud` mode; there is no local/hybrid Postgres path.
+// The single sanctioned way to open a Postgres connection. TLS is resolved
+// through `tls.ts` (one correct approach), and the backend is selected purely
+// from the environment: `HASNA_<NAME>_DATABASE_URL` present selects Postgres,
+// otherwise the app uses SQLite. A pool is only ever built when a database URL
+// is configured.
 
 import pg from "pg";
 import type { Pool, PoolConfig } from "pg";
-import { resolveStorageMode, resolveDatabaseUrl } from "./mode.js";
 import { resolveTlsConfig, type TlsResolveOptions } from "./tls.js";
 import { createQueryClient, type PoolQueryClient } from "./query.js";
+
+export type Env = Record<string, string | undefined>;
+
+function firstEnv(env: Env, keys: readonly string[]): { key: string; value: string } | null {
+  for (const key of keys) {
+    const value = env[key]?.trim();
+    if (value) return { key, value };
+  }
+  return null;
+}
+
+/** Upper-snake env token for an app name, e.g. `todos` -> `TODOS`. */
+function envToken(name: string): string {
+  return name.toUpperCase().replace(/-/g, "_");
+}
+
+/** Database-URL env keys for an app, canonical first. */
+export function databaseUrlKeys(name: string): string[] {
+  const token = envToken(name);
+  return [`HASNA_${token}_DATABASE_URL`, `${token}_DATABASE_URL`];
+}
+
+/**
+ * Resolve the database URL value for an app from the environment. Returns
+ * `null` when unset. The caller is responsible for never logging the value.
+ */
+export function resolveDatabaseUrl(name: string, env: Env = process.env): string | null {
+  const hit = firstEnv(env, databaseUrlKeys(name));
+  return hit ? hit.value : null;
+}
 
 export interface CreatePgPoolOptions extends TlsResolveOptions {
   connectionString: string;
@@ -58,27 +88,22 @@ export interface CloudPoolFromEnv {
 }
 
 /**
- * Resolve mode + database URL from the environment and build a cloud pool.
+ * Resolve the database URL from the environment and build a Postgres pool.
  *
- * Throws when the resolved mode is not `cloud` (PURE REMOTE has no Postgres in
- * `local` mode) or when the database URL is missing. Never logs the URL.
+ * Throws when the database URL is missing (the server selects SQLite when no
+ * DATABASE_URL is configured, so building a pool without one is a caller bug).
+ * Never logs the URL.
  */
 export function createCloudPoolFromEnv(
   appName: string,
   options: CreateCloudPoolFromEnvOptions = {},
 ): CloudPoolFromEnv {
   const env = options.env ?? process.env;
-  const resolution = resolveStorageMode(appName, env);
-  if (resolution.mode !== "cloud") {
-    throw new Error(
-      `createCloudPoolFromEnv requires ${appName} storage mode 'cloud', got '${resolution.mode}'. ` +
-        `Set HASNA_${appName.toUpperCase().replace(/-/g, "_")}_STORAGE_MODE=cloud.`,
-    );
-  }
-  const connectionString = resolveDatabaseUrl(appName, env);
+  const urlHit = firstEnv(env, databaseUrlKeys(appName));
+  const connectionString = urlHit?.value ?? null;
   if (!connectionString) {
     throw new Error(
-      `cloud mode for ${appName} needs a database URL. Set ` +
+      `createCloudPoolFromEnv requires a database URL for ${appName}. Set ` +
         `HASNA_${appName.toUpperCase().replace(/-/g, "_")}_DATABASE_URL.`,
     );
   }
@@ -96,6 +121,6 @@ export function createCloudPoolFromEnv(
   });
   return {
     client: createQueryClient(pool),
-    connectionSource: resolution.databaseUrlSource ?? "unknown",
+    connectionSource: urlHit ? urlHit.key : "unknown",
   };
 }

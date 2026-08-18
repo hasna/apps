@@ -5,15 +5,8 @@
   "class": "service",
   "contractVersion": "v1",
   "kitVersion": "0.4.1",
-  "description": "AI-powered QA testing platform — CLI, MCP, HTTP serve, and generated SDK. serve reads/writes cloud Postgres directly (Amendment A1).",
+  "description": "AI-powered QA testing platform — CLI, MCP, HTTP serve, and generated SDK. serve reads/writes Postgres directly when HASNA_TESTERS_DATABASE_URL is set.",
   "bins": ["testers", "testers-mcp", "testers-serve"],
-  "storage": {
-    "mode": "cloud",
-    "envPrefix": "HASNA_TESTERS_",
-    "aliasEnvPrefix": "TESTERS_",
-    "databaseUrlSecretRef": "hasna/oss/testers/database-url",
-    "sqlitePath": "~/.hasna/testers/testers.db"
-  },
   "metadata": {
     "healthPath": "/health",
     "readyPath": "/ready",

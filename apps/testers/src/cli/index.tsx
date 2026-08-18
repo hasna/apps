@@ -20,7 +20,7 @@ import { compactLimit, compactOffset, pageItems, paginationHint, truncateText } 
 import { loadConfig } from "../lib/config.js";
 import { importFromTodos } from "../lib/todos-connector.js";
 import { installBrowser } from "../lib/browser.js";
-import { getCloudClient, closeCloudClient, isCloudMode } from "../db/cloud.js";
+import { getCloudClient, closeCloudClient, databaseUrlPresent } from "../db/cloud.js";
 import { runPgMigrations } from "../db/pg-migrate.js";
 import { initProject } from "../lib/init.js";
 import { runSmoke, formatSmokeReport } from "../lib/smoke.js";
@@ -870,11 +870,11 @@ async function resolveProject(optProject?: string): Promise<string | undefined> 
 
 /**
  * Resolve the project id for a WRITE (scenario create) in a way that is safe
- * against the local/cloud split. In cloud mode the on-box active-project pointer
- * may reference a project that only exists in the local SQLite store; sending
- * that id to the cloud `/v1` API would violate the scenarios→projects foreign
- * key and 500. When that happens we drop the project (create a global scenario)
- * and tell the user to bind a cloud project with `testers project use`.
+ * against the backend split. With the hosted API the on-box active-project
+ * pointer may reference a project that only exists in the local SQLite store;
+ * sending that id to the hosted `/v1` API would violate the scenarios→projects
+ * foreign key and 500. When that happens we drop the project (create a global
+ * scenario) and tell the user to bind a hosted project with `testers project use`.
  */
 async function resolveWriteProjectId(optProject?: string): Promise<string | undefined> {
   const projectId = await resolveProject(optProject);
@@ -2673,7 +2673,7 @@ program
         !!config.anthropicApiKey || !!process.env["ANTHROPIC_API_KEY"];
       const storage = storageStatus();
       const isCloud = storage.transport === "cloud-http";
-      // TRUTH: in cloud mode reads/writes go to the /v1 API — there is no local db.
+      // TRUTH: on the hosted transport reads/writes go to the /v1 API — there is no local db.
       const dbPath = isCloud
         ? null
         : storage.dbPath || join(getTestersDir(), "testers.db");
@@ -2683,11 +2683,9 @@ program
           JSON.stringify(
             {
               status: hasApiKey ? "ok" : "warn",
-              storageMode: storage.mode,
               transport: storage.transport,
               apiBaseUrl: storage.baseUrl,
               storageApiKey: { set: storage.apiKeyPresent, source: storage.apiKeySource },
-              storageModeSource: storage.modeSource,
               anthropicApiKey: { set: hasApiKey },
               database: { path: dbPath },
               defaultModel: config.defaultModel,
@@ -2704,10 +2702,7 @@ program
       log("");
       log(chalk.bold("  Hasna Testers Status"));
       log("");
-      log(
-        `  Storage mode:      ${isCloud ? chalk.cyan("cloud") : chalk.yellow("local")}` +
-          chalk.dim(` (${storage.modeSource})`),
-      );
+      log(`  Storage:           ${isCloud ? chalk.cyan("hosted API") : chalk.yellow("local SQLite")}`);
       if (isCloud) {
         log(`  API base URL:      ${storage.baseUrl}`);
         log(
@@ -6928,14 +6923,14 @@ program
 
     // 2. Check the resolved storage backend is reachable.
     if (isCloudStore()) {
-      // Cloud/self_hosted: never touch a local sqlite file — probe the API store.
+      // Hosted transport: never touch a local sqlite file — probe the API store.
       try {
         await listProjects();
-        log(chalk.green("✓") + " Cloud storage API reachable (HASNA_TESTERS_API_URL)");
+        log(chalk.green("✓") + " Hosted storage API reachable (HASNA_TESTERS_API_URL)");
       } catch (err) {
         log(
           chalk.red("✗") +
-            ` Cloud storage API not reachable: ${err instanceof Error ? err.message : String(err)}`,
+            ` Hosted storage API not reachable: ${err instanceof Error ? err.message : String(err)}`,
         );
         allPassed = false;
       }
@@ -9475,12 +9470,11 @@ dbCmd
       const ownerUrl = process.env["HASNA_TESTERS_DATABASE_URL_OWNER"];
       if (ownerUrl) {
         process.env["HASNA_TESTERS_DATABASE_URL"] = ownerUrl;
-        if (!process.env["HASNA_TESTERS_STORAGE_MODE"]) process.env["HASNA_TESTERS_STORAGE_MODE"] = "cloud";
       }
-      if (!isCloudMode()) {
+      if (!databaseUrlPresent()) {
         logError(
           chalk.red(
-            "testers db migrate requires cloud mode. Set HASNA_TESTERS_STORAGE_MODE=cloud and HASNA_TESTERS_DATABASE_URL (or _OWNER).",
+            "testers db migrate requires a database URL. Set HASNA_TESTERS_DATABASE_URL (or HASNA_TESTERS_DATABASE_URL_OWNER).",
           ),
         );
         process.exit(1);

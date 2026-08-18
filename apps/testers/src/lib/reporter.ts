@@ -249,7 +249,7 @@ export interface ScenarioRunStats {
 }
 
 export async function getScenarioRunStats(scenarioId: string): Promise<ScenarioRunStats> {
-  // Routed through the Store: local SQLite locally, /v1 aggregate in cloud mode.
+  // Routed through the Store: local SQLite locally, /v1 aggregate on the hosted transport.
   const stats = await getScenarioResultStats(scenarioId);
   return {
     lastStatus: stats.lastStatus as ScenarioRunStats["lastStatus"],

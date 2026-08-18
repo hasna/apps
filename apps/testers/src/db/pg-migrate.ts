@@ -1,5 +1,5 @@
 /**
- * Postgres migration runner for testers cloud mode.
+ * Postgres migration runner for testers.
  *
  * The canonical schema lives in `pg-migrations.ts` (PG_MIGRATIONS) plus the
  * shared api-keys migrations from `@hasna/contracts/auth`. Those are stamped
