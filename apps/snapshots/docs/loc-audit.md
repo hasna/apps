@@ -1,4 +1,4 @@
-# LOC Audit — open-snapshots
+# LOC Audit — snapshots
 
 **Date:** 2026-07-05
 **Task:** SNA-00015
@@ -44,7 +44,7 @@ Largest test file: `tests/restore.test.ts` at 541 LOC — under threshold.
 ## Verification command
 
 ```bash
-cd /path/to/open-snapshots
+cd /path/to/snapshots
 find src -name '*.ts' | xargs wc -l | sort -n | tail
 ```
 
