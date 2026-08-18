@@ -101,10 +101,6 @@ requirements explicitly document local provider use.
 | `skills outdated` | | Compare pinned vs registry versions |
 | `skills auth login --api-key <key>` | | Verify and store a Skills API key |
 | `skills auth login` | | Sign in to a compatible API with browser/device-code auth or email code |
-| `skills billing status` | | Show server account plan and balance |
-| `skills billing checkout` | | Create a checkout session when billing is enabled |
-| `skills billing portal` | | Create a customer portal session when billing is enabled |
-| `skills credits buy <amount>` | | Create a credit-pack checkout session when billing is enabled |
 | `skills setup-info` | | Version, pinned skills, agent configs, paths |
 | `skills export` | | Export pinned skills as JSON |
 | `skills import <file>` | | Pin skills from a JSON export |
@@ -296,10 +292,10 @@ skills mcp --register all       # Register with all supported agents
 ```bash
 skills setup --api-url https://skills.example.com
 skills auth login --api-key "$SKILLS_API_KEY"
-skills billing status
+skills auth whoami
 ```
 
-Account, run, log, artifact, and optional billing commands use the configured
+Account, run, log, and artifact commands use the configured
 Skills API. The public package stores only local configuration
 and CLI credentials. Artifacts can be stored in S3 when `HASNA_SKILLS_S3_BUCKET`
 is configured.
@@ -403,7 +399,8 @@ from this table fails CI:
 | `GET /api/v1/runs/:runId` | Run status (`skills runs status`) | served |
 | `GET /api/v1/runs/:runId/logs` | Run logs | served |
 | `GET /api/v1/runs/:runId/artifacts` | List run artifacts | served |
-| `GET /api/v1/runs/:runId/artifacts/:artifactId` | Download an artifact (`skills exports download`) | served |
+| `GET /api/v1/runs/:runId/artifacts/:artifactId` | Download an artifact (server-served; the handler ignores trailing segments) | served |
+| `GET /api/v1/runs/:runId/artifacts/:artifactId/download` | Download an artifact — the client's canonical route (`skills exports download`, `src/lib/remote-client.ts`) | served |
 | `POST /api/v1/runs/:runId/cancel` | Cancel a run | served |
 | `GET /api/v1/pins` | List remote pins | client-contract (not yet served; fails closed) |
 | `PUT /api/v1/pins/:slug` | Pin a skill remotely | client-contract (not yet served; fails closed) |

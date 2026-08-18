@@ -37,11 +37,14 @@ documented behavior.
 
 ### A) Server-in-OSS is the unified surface (chosen)
 
-The open package is the full user-hosted product: CLI, MCP, server, worker, migrations, and corpus. The
-open-core boundary is drawn between the user-hosted product (in the OSS package) and the hosted SaaS layer
+The open package is the full user-hosted product: CLI, MCP, server, worker, migrations, and the repository
+corpus (`skills/` — the canonical git source; the published npm tarball ships no corpus: distribution is
+CI-built signed bundles plus `skills pull`). The open-core boundary is drawn between the user-hosted product
+(in the OSS package) and the hosted SaaS layer
 (web app, billing, multi-tenant infrastructure, OAuth provider callbacks — outside the OSS package).
 
-Pros: matches the shipped and deployed tree with zero rework; one engine, one corpus, one route table, one
+Pros: matches the shipped and deployed tree with zero rework; one engine, one repository corpus, one route
+table, one
 schema to review; every machine that installs `@hasna/skills` can run the whole product; a hosted wrapper, if
 one is ever built, consumes the released package rather than duplicating it — exactly the consumption model
 `package-ownership-sync-strategy.md` already mandates for wrappers.
@@ -68,7 +71,8 @@ The open-core boundary is:
 
 - **In the OSS package:** local execution, CLI/MCP adapters, the user-hosted server with its org-scoped schema
   (organizations, api keys, published-skill registry, bundles, runs, logs, artifacts, approvals, audit,
-  lifecycle receipts, credit reservations), validation, docs, and the bundled corpus.
+  lifecycle receipts, credit reservations), validation, docs, and the repository corpus (`skills/`; the
+  published npm tarball ships zero corpus — distribution is CI-built signed bundles plus `skills pull`).
 - **Outside the OSS package:** the hosted SaaS layer — web app, billing and entitlement source of truth,
   OAuth provider secrets and callbacks, Stripe webhook handlers, multi-tenant infrastructure beyond the
   org-scoped user-hosted schema, and deployment automation secrets.

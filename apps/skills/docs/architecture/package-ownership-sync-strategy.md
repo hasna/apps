@@ -68,7 +68,8 @@ The OSS package may expose public contracts for server-executed skills:
 - remote run, status, artifact, and receipt contracts.
 - source-free stubs that explain server-side execution.
 
-The OSS package must not expose private provider routing, worker code,
+The OSS package must not expose private provider routing, private hosted-worker
+internals (implementation beyond the shipped `skills-worker` engine),
 moderation internals, private prompts, model selection, server credentials,
 queues, storage credentials, or protected server-side implementation source.
 
@@ -77,11 +78,13 @@ model-provider key and must be documented separately from provider keys such as
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or other
 skill-specific local credentials.
 
-The OSS CLI may include server client commands such as `skills auth login`,
-`skills billing status`, `skills billing checkout`, `skills billing portal`,
-and `skills credits buy`. Those commands are adapters over the server's HTTP API.
+The OSS CLI ships server client commands such as `skills auth login`, `skills run`,
+`skills runs`, `skills exports`, and `skills push`/`skills pull` — and no billing
+or credits namespaces (`no-billing-surface.test.ts` pins the help and MCP surfaces
+to zero billing vocabulary). Those commands are adapters over the server's HTTP API.
 They must not contain Stripe keys, webhook handlers, entitlement ledgers,
-tenant database logic, auth servers, or worker execution logic.
+tenant database logic, auth servers, or private hosted-worker execution logic
+beyond the shipped engine.
 
 Remote execution is configured by API origin, not by a named setup variant. The
 CLI has no vocabulary for a deployment variant a user selects, and no alias table

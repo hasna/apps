@@ -17,7 +17,7 @@ describe("open-core hosted service pattern", () => {
     expect(content).toContain("ships in the OSS package");
     expect(content).toContain("server-aware");
     expect(content).toContain("local");
-    expect(content).toContain("billing status");
+    expect(content).toContain("no billing or credits command namespaces");
     expect(content).toContain("OAuth provider secrets");
     expect(content).toContain("Stripe webhook handlers");
     expect(content).toContain("The hosted web app is the account and billing source of truth");

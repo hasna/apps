@@ -36,9 +36,14 @@ service without making the OSS core depend on one deployment.
 Good OSS commands:
 
 - `auth login`, `auth logout`, `auth whoami`
-- `billing status`, `billing checkout`, `billing portal`
-- `credits buy`
-- remote registry, quote, run status, logs, and artifact commands
+- `run`, `runs`, `exports`, and artifact download commands (server-executed skills)
+- `push`, `pull`, and registry commands (the instance-local registry surface)
+- browse/list commands against the local corpus cache or a configured server
+
+The CLI ships no billing or credits command namespaces: `no-billing-surface.test.ts`
+pins the `--help` surface, the MCP contract, and the server route table to zero
+billing/payments vocabulary. Billing, credits, checkout, and portal are the hosted
+wrapper's surface, never the OSS package's.
 
 These commands only call the configured Skills API, print/open returned URLs, and
 store scoped local credentials.
