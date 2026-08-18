@@ -101,8 +101,10 @@ describe("attachments serve app", () => {
       "/health",
       "/ready",
       "/v1/attachments",
+      "/v1/attachments/presign-upload",
       "/v1/attachments/{id}",
       "/v1/attachments/{id}/link",
+      "/v1/attachments/{id}/presign-upload/complete",
       "/v1/slugs/{slug}",
       "/version",
     ]);

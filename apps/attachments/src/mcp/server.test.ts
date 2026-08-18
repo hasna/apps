@@ -185,6 +185,45 @@ mock.module("../core/s3.js", () => ({
   },
 }));
 
+// Hosted (/v1) path: resolveStore() returns an ApiStore when the cloud env is
+// present, which must route presign through the API transport, not the
+// local-only gate. The mock mirrors the real resolver's env flip.
+const mockV1PresignUpload = mock(async (_filename: string, _contentType: string | undefined, _expiryMs: number) => ({
+  id: "att_cloud1",
+  uploadUrl: "https://bucket.example.com/put?X-Amz-Signature=cloud",
+  contentType: "application/pdf",
+  filename: "report.pdf",
+}));
+const mockV1PresignComplete = mock(async (_id: string, _opts: object) => ({
+  attachment: {
+    id: "att_cloud1",
+    filename: "report.pdf",
+    s3Key: "attachments/2026-08-18/att_cloud1/report.pdf",
+    bucket: "cloud",
+    size: 4096,
+    contentType: "application/pdf",
+    link: "https://has.na/a/abc",
+    expiresAt: Date.now() + 3600000,
+    createdAt: Date.now(),
+    storageBackend: "s3",
+    status: "ready",
+  },
+  link: "https://has.na/a/abc",
+  size: 4096,
+}));
+
+mock.module("../core/cloud-v1.js", () => ({
+  resolveAttachmentsV1: (env: NodeJS.ProcessEnv) => {
+    if (env.HASNA_ATTACHMENTS_API_URL && env.HASNA_ATTACHMENTS_API_KEY) {
+      return {
+        transport: "cloud-http",
+        store: { presignUpload: mockV1PresignUpload, presignComplete: mockV1PresignComplete },
+      };
+    }
+    return { transport: "local", store: null };
+  },
+}));
+
 // Import server AFTER mocks are set up
 const { createServer, getMcpHelp, getToolsForProfile } = await import("./server.js");
 
@@ -1506,5 +1545,65 @@ describe("MCP Server — unknown tool", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain("Unknown tool");
+  });
+});
+describe("MCP Server — presigned upload on the hosted (/v1) backend", () => {
+  function withCloudEnv<T>(fn: () => Promise<T>): Promise<T> {
+    const prevUrl = process.env.HASNA_ATTACHMENTS_API_URL;
+    const prevKey = process.env.HASNA_ATTACHMENTS_API_KEY;
+    process.env.HASNA_ATTACHMENTS_API_URL = "https://attachments.example.com";
+    process.env.HASNA_ATTACHMENTS_API_KEY = "k";
+    return Promise.resolve()
+      .then(fn)
+      .finally(() => {
+        if (prevUrl === undefined) delete process.env.HASNA_ATTACHMENTS_API_URL;
+        else process.env.HASNA_ATTACHMENTS_API_URL = prevUrl;
+        if (prevKey === undefined) delete process.env.HASNA_ATTACHMENTS_API_KEY;
+        else process.env.HASNA_ATTACHMENTS_API_KEY = prevKey;
+      });
+  }
+
+  it("presign_upload works in self_hosted/cloud mode (no local-only gate)", async () => {
+    mockV1PresignUpload.mockClear();
+    await withCloudEnv(async () => {
+      const server = createServer();
+      const result = (await callTool(server, "presign_upload", {
+        filename: "report.pdf",
+        expiry: "1h",
+        content_type: "application/pdf",
+      })) as { content: Array<{ text: string }> };
+
+      expect(mockV1PresignUpload).toHaveBeenCalledTimes(1);
+      const [filename, contentType, expiryMs] = mockV1PresignUpload.mock.calls[0] as [string, string, number];
+      expect(filename).toBe("report.pdf");
+      expect(contentType).toBe("application/pdf");
+      expect(expiryMs).toBe(3600000);
+
+      const parsed = JSON.parse(result.content[0]!.text);
+      expect(parsed.upload_url).toBe("https://bucket.example.com/put?X-Amz-Signature=cloud");
+      expect(parsed.id).toBe("att_cloud1");
+      expect(parsed.finalize_tool).toBe("complete_presigned_upload");
+    });
+  });
+
+  it("complete_presigned_upload works in self_hosted/cloud mode and returns the link", async () => {
+    mockV1PresignComplete.mockClear();
+    await withCloudEnv(async () => {
+      const server = createServer();
+      const result = (await callTool(server, "complete_presigned_upload", {
+        id: "att_cloud1",
+        link_type: "server",
+      })) as { content: Array<{ text: string }> };
+
+      expect(mockV1PresignComplete).toHaveBeenCalledTimes(1);
+      const [id, opts] = mockV1PresignComplete.mock.calls[0] as [string, { linkType: string; maxDownloads: number | undefined }];
+      expect(id).toBe("att_cloud1");
+      expect(opts.linkType).toBe("server");
+
+      const parsed = JSON.parse(result.content[0]!.text);
+      expect(parsed.link).toBe("https://has.na/a/abc");
+      expect(parsed.size).toBe(4096);
+      expect(parsed.id).toBe("att_cloud1");
+    });
   });
 });

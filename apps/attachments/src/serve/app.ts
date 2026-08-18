@@ -543,6 +543,132 @@ export function createServeApp(deps: ServeAppDeps): Hono {
     }
   });
 
+  app.post("/v1/attachments/presign-upload", async (c) => {
+    const denied = await requireScopes(c, [`${APP_SLUG}:write`]);
+    if (denied) return denied;
+    try {
+      const body = (await c.req.json().catch(() => null)) as
+        | { filename?: string; content_type?: string; expiry?: string; size?: number }
+        | null;
+      if (!body?.filename) {
+        return c.json({ error: "filename is required" }, 400);
+      }
+      if (resolveStorageBackend(config) !== "s3") {
+        throw new BadRequestError("presigned upload requires an S3 storage backend");
+      }
+      if (typeof body.size === "number" && body.size > config.storage.maxSizeBytes) {
+        return c.json({ error: `File too large. Maximum size is ${config.storage.maxSizeBytes} bytes.` }, 413);
+      }
+      const filename = sanitizeFilename(body.filename);
+      const contentType =
+        body.content_type ?? ((mimeLookup(filename) || "application/octet-stream") as string);
+      const { milliseconds: expiryMs, never } = parseExpiryOr400(body.expiry ?? "1h");
+      if (never) throw new BadRequestError("Presigned upload expiry cannot be never");
+      const expirySeconds = Math.floor(expiryMs! / 1000);
+      const id = `att_${nanoid(10)}`;
+      const objectKey = createObjectKey(id, filename);
+      const uploadUrl = await new S3Client(config.s3).presignPut(objectKey, contentType, expirySeconds);
+      const now = Date.now();
+      await store.insert({
+        id,
+        filename,
+        s3Key: objectKey,
+        bucket: config.s3.bucket,
+        size: 0,
+        contentType,
+        link: null,
+        tag: null,
+        expiresAt: now + expiryMs!,
+        createdAt: now,
+        storageBackend: "s3",
+        status: "pending",
+        encryptionAlgorithm: null,
+        encryptionSalt: null,
+        encryptionIv: null,
+        encryptionTag: null,
+        downloads: 0,
+      });
+      return c.json(
+        {
+          id,
+          upload_url: uploadUrl,
+          content_type: contentType,
+          filename,
+          expires_at: now + expiryMs!,
+          finalize_url: `/v1/attachments/${id}/presign-upload/complete`,
+        },
+        201,
+      );
+    } catch (err) {
+      return badRequestOrRethrow(c, err);
+    }
+  });
+
+  app.post("/v1/attachments/:id/presign-upload/complete", async (c) => {
+    const denied = await requireScopes(c, [`${APP_SLUG}:write`]);
+    if (denied) return denied;
+    const id = c.req.param("id");
+    let body: { expiry?: string; password?: string; max_downloads?: number; link_type?: "presigned" | "server" } = {};
+    try {
+      body = await c.req.json();
+    } catch {
+      // Body is optional; defaults come from config.
+    }
+    try {
+      const attachment = await store.findById(id);
+      if (!attachment) return c.json({ error: "Pending attachment not found" }, 404);
+      if (attachment.status !== "pending") return c.json({ error: "Attachment upload is already complete" }, 409);
+      if (resolveStorageBackend(config) !== "s3") {
+        throw new BadRequestError("presigned upload requires an S3 storage backend");
+      }
+
+      const s3 = new S3Client(config.s3);
+      const info = await s3.head(attachment.s3Key);
+      if (info.contentLength !== undefined && info.contentLength > config.storage.maxSizeBytes) {
+        await createObjectStore(config).delete(attachment.s3Key).catch(() => undefined);
+        await store.delete(id);
+        return c.json({ error: `File too large. Maximum size is ${config.storage.maxSizeBytes} bytes.` }, 413);
+      }
+      const { milliseconds: expiryMs } = parseExpiryOr400(body.expiry ?? config.defaults.expiry);
+      const expiresAt = expiryMs !== null ? Date.now() + expiryMs : null;
+      const maxDownloads =
+        typeof body.max_downloads === "number" && body.max_downloads > 0 ? Math.floor(body.max_downloads) : undefined;
+      const linkType = resolveDeliverableLinkType({
+        requested: body.link_type ?? getLinkType(config),
+        backend: attachment.storageBackend ?? "s3",
+        expiryMs,
+        password: body.password,
+        maxDownloads,
+      });
+
+      let link: string;
+      if (linkType === "presigned") {
+        link = await generatePresignedLink(s3, attachment.s3Key, expiryMs);
+      } else {
+        const { token } = await store.createShareLink({
+          attachmentId: id,
+          expiresAt,
+          password: body.password,
+          maxUses: maxDownloads ?? null,
+        });
+        link = generateShareLink(token, publicBaseUrl, publicPath);
+        await store.updateLink(id, link, expiresAt);
+      }
+      const size = info.contentLength ?? attachment.size;
+      await store.markReady({
+        id,
+        size,
+        contentType: info.contentType ?? attachment.contentType,
+        link,
+        expiresAt,
+      });
+      const ready = (await store.findById(id)) ?? { ...attachment, size, link };
+      return c.json({ attachment: toApiAttachment(ready), link, size });
+    } catch (err) {
+      return badRequestOrRethrow(c, err);
+    }
+  });
+
   app.post("/v1/feedback", async (c) => {
     const denied = await requireScopes(c, [`${APP_SLUG}:write`]);
     if (denied) return denied;

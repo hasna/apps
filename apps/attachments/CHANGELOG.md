@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Presigned direct upload now works on the hosted `/v1` backend, not only local mode.** `presign-upload` / `presign-complete` (CLI) and `presign_upload` / `complete_presigned_upload` (MCP) previously refused with "only available in local mode". The hosted server now mints the presigned PUT URL (it holds the S3 credentials — the client never needs any) via `POST /v1/attachments/presign-upload` and finalizes via `POST /v1/attachments/:id/presign-upload/complete`, with size checks, expiry handling, and presigned-or-server link selection identical to the local path. The client `Store` surface (`ApiStore`) now implements both verbs through the `/v1` API.
 - Friendly, password-protected share aliases are now supported end to end. Use
   `attachments slug <slug>` for a read-only availability check, then
   `attachments link <id> --regenerate --slug <slug> --password <password>` to

@@ -120,6 +120,24 @@ export interface Store {
   /** Persist a feedback note about the service (on-box in local mode, `<API_URL>/v1/feedback` in api mode). */
   saveFeedback(input: FeedbackInput): Promise<void>;
 
+  /**
+   * Create a presigned S3 PUT URL for a direct client->S3 upload plus a pending
+   * record. The URL is minted by whichever side holds the S3 credentials — the
+   * client's own config in local mode, the `/v1` server in self_hosted/cloud
+   * mode — so the client itself never needs credentials. expiryMs must be > 0.
+   */
+  presignUpload(
+    filename: string,
+    contentType: string | undefined,
+    expiryMs: number,
+  ): Promise<{ id: string; uploadUrl: string; contentType: string; filename: string }>;
+
+  /** Finalize a presigned direct upload: verify size, generate the link, mark ready. */
+  presignComplete(
+    id: string,
+    options: { expiryMs: number | null; password?: string; maxDownloads?: number; linkType: "presigned" | "server" },
+  ): Promise<{ attachment: Attachment; link: string; size: number }>;
+
   /** Release any held resources (DB handles). Always safe to call. */
   close(): void;
 }
@@ -465,6 +483,17 @@ export class ApiStore implements Store {
 
   saveFeedback(input: FeedbackInput): Promise<void> {
     return this.v1.saveFeedback(input);
+  }
+
+  presignUpload(filename: string, contentType: string | undefined, expiryMs: number) {
+    return this.v1.presignUpload(filename, contentType, expiryMs);
+  }
+
+  presignComplete(
+    id: string,
+    options: { expiryMs: number | null; password?: string; maxDownloads?: number; linkType: "presigned" | "server" },
+  ) {
+    return this.v1.presignComplete(id, options);
   }
 
   close(): void {

@@ -205,3 +205,80 @@ describe("cloud upload failures reach the caller with context", () => {
     expect(error!.message).not.toContain(KEY);
   });
 });
+describe("presigned direct upload on the hosted backend (ported from local-only)", () => {
+  test("presignUpload POSTs to /v1/attachments/presign-upload and maps the PUT URL", async () => {
+    const { calls, fetchImpl } = mockFetch((c) => {
+      if (c.url.endsWith("/v1/attachments/presign-upload")) {
+        return {
+          status: 201,
+          body: {
+            id: "att_p1",
+            upload_url: "https://bucket.example.com/put?X-Amz-Signature=abc",
+            content_type: "application/pdf",
+            filename: "report.pdf",
+            expires_at: 123456,
+            finalize_url: "/v1/attachments/att_p1/presign-upload/complete",
+          },
+        };
+      }
+      return { status: 404, body: { error: "nope" } };
+    });
+    const r = resolveAttachmentsV1(cloudEnv, { fetchImpl });
+    if (r.transport !== "cloud-http") throw new Error("expected cloud");
+    const result = await r.store.presignUpload("report.pdf", "application/pdf", 7200000);
+    expect(result.id).toBe("att_p1");
+    expect(result.uploadUrl).toBe("https://bucket.example.com/put?X-Amz-Signature=abc");
+    const call = calls[0]!;
+    expect(call.method).toBe("POST");
+    expect(call.url).toBe(`${BASE}/v1/attachments/presign-upload`);
+    const sent = JSON.parse(call.body!) as Record<string, unknown>;
+    expect(sent.filename).toBe("report.pdf");
+    expect(sent.content_type).toBe("application/pdf");
+    expect(sent.expiry).toBe("2h");
+    expect(call.headers["authorization"]).toBe(`Bearer ${KEY}`);
+  });
+
+  test("presignComplete POSTs to the complete route with link options", async () => {
+    const { calls, fetchImpl } = mockFetch((c) => {
+      if (c.url.endsWith("/att_p1/presign-upload/complete")) {
+        return {
+          status: 200,
+          body: {
+            attachment: {
+              id: "att_p1",
+              filename: "report.pdf",
+              size: 4096,
+              content_type: "application/pdf",
+              link: "https://has.na/a/abc",
+              tag: null,
+              expires_at: 999,
+            },
+            link: "https://has.na/a/abc",
+            size: 4096,
+          },
+        };
+      }
+      return { status: 404, body: { error: "nope" } };
+    });
+    const r = resolveAttachmentsV1(cloudEnv, { fetchImpl });
+    if (r.transport !== "cloud-http") throw new Error("expected cloud");
+    const result = await r.store.presignComplete("att_p1", {
+      expiryMs: null,
+      password: "pw",
+      maxDownloads: 1,
+      linkType: "server",
+    });
+    expect(result.link).toBe("https://has.na/a/abc");
+    expect(result.size).toBe(4096);
+    expect(result.attachment.id).toBe("att_p1");
+    expect(result.attachment.status).toBe("ready");
+    const call = calls[0]!;
+    expect(call.method).toBe("POST");
+    expect(call.url).toBe(`${BASE}/v1/attachments/att_p1/presign-upload/complete`);
+    const sent = JSON.parse(call.body!) as Record<string, unknown>;
+    expect(sent.expiry).toBe("never");
+    expect(sent.password).toBe("pw");
+    expect(sent.max_downloads).toBe(1);
+    expect(sent.link_type).toBe("server");
+  });
+});
