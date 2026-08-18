@@ -1,7 +1,7 @@
 {
   "name": "@hasna/terminal",
   "version": "4.3.19",
-  "description": "Smart terminal wrapper for AI agents and humans — structured output, token compression, MCP server, natural language",
+  "description": "Smart terminal wrapper for AI agents and humans \u2014 structured output, token compression, MCP server, natural language",
   "type": "module",
   "files": [
     "dist/**",
@@ -22,9 +22,10 @@
     "test": "bun test",
     "no-cloud:source": "bun test src/no-cloud-contract.test.ts",
     "no-cloud:pack": "bun run build && bun scripts/no-cloud-artifact-scan.mjs",
-    "prepack": "bun run build && bun scripts/no-cloud-artifact-scan.mjs",
+    "prepack": "bun run build && bun run scan:artifact",
     "prepublishOnly": "bun test && bun run build && bun scripts/no-cloud-artifact-scan.mjs",
-    "postinstall": "mkdir -p $HOME/.hasna/terminal/profiles $HOME/.hasna/terminal/outputs 2>/dev/null || true"
+    "postinstall": "mkdir -p $HOME/.hasna/terminal/profiles $HOME/.hasna/terminal/outputs 2>/dev/null || true",
+    "scan:artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/terminal-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan terminal-artifact-scan.tgz; rc=$?; rm -f \"$PWD/terminal-artifact-scan.tgz\"; exit $rc"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
@@ -51,6 +52,7 @@
     "@types/node": "^20.0.0",
     "@types/react": "^18.2.0",
     "tsx": "^4.0.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "@hasna/contracts": "0.11.1"
   }
 }

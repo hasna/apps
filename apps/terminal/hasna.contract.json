@@ -27,6 +27,13 @@
       "status": "supported",
       "bin": "terminal",
       "authMode": "local-only"
+    },
+    {
+      "name": "terminal-mcp",
+      "kind": "mcp",
+      "status": "deferred",
+      "authMode": "local-only",
+      "deferReason": "No dedicated MCP bin ships (package.json bin is t/terminal); the MCP server is reachable through the CLI subcommand `terminal mcp serve` (stdio, 9 tool modules) and `terminal mcp serve --http` (Streamable HTTP on 8846). Declared deferred because the kit requires a supported MCP surface to carry an mcpBin this package does not provide."
     }
   ],
   "metadata": {
@@ -40,7 +47,7 @@
     },
     "release": {
       "artifactScan": {
-        "script": "no-cloud:pack"
+        "script": "scan:artifact"
       }
     }
   }

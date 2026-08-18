@@ -39,7 +39,12 @@
           "reason": "No HTTP server surface ships: package.json declares no -serve bin and no source file starts an HTTP listener."
         }
       ],
-      "notes": "storage is deliberately absent. The package persists nothing: no database, no config file, no state directory (verified by source read — no sqlite/postgres import and no writeFile/mkdir in src outside a shell-command safety regex). storage.backend admits sqlite | postgresql only, and neither engine is used."
+      "notes": "storage is deliberately absent. The package persists nothing: no database, no config file, no state directory (verified by source read \u2014 no sqlite/postgres import and no writeFile/mkdir in src outside a shell-command safety regex). storage.backend admits sqlite | postgresql only, and neither engine is used."
+    },
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
     }
   }
 }

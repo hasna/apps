@@ -57,6 +57,11 @@
           "reason": "PostgreSQL is not implemented at runtime: src/lib/pg-migrations.ts holds a translated schema but no code path reads a DATABASE_URL or selects a PostgreSQL store; server and client both use the SQLite store at ~/.hasna/styles/styles.db."
         }
       ]
+    },
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
     }
   }
 }

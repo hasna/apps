@@ -21,7 +21,11 @@
     ],
     "envPrefix": "HASNA_TICKETS_",
     "aliasEnvPrefix": "TICKETS_",
-    "sqlitePath": "~/.hasna/tickets/tickets.db"
+    "sqlitePath": "~/.hasna/tickets/tickets.db",
+    "pgTestGate": {
+      "envVar": "TICKETS_TEST_DATABASE_URL",
+      "command": "TICKETS_DATABASE_URL=$TICKETS_TEST_DATABASE_URL bun test"
+    }
   },
   "serviceSurfaces": [
     {
@@ -41,9 +45,10 @@
     {
       "name": "tickets-sdk",
       "kind": "sdk",
-      "status": "supported",
+      "status": "deferred",
       "authMode": "none",
-      "exportSubpath": "."
+      "exportSubpath": ".",
+      "deferReason": "The hand-written ./sdk client is not generated from an OpenAPI document: the API surface is deferred (tickets-serve has no /openapi.json), so the SDK cannot claim a contract-bound supported status with generatedFrom."
     },
     {
       "name": "tickets-api",
@@ -56,7 +61,12 @@
   ],
   "metadata": {
     "conformance": {
-      "notes": "engines declares postgresql because the kit 0.11.1 validator requires both sqlite and postgresql for a cli-with-store shipping tickets-serve and refuses storage waivers for service-capable repos. The postgresql capability is not runtime-wired yet: src/db/pg-migrations.ts holds a translated schema but no code path reads a DATABASE_URL or selects a PostgreSQL store; the server, CLI and MCP all use the SQLite store. No pgTestGate is declared because no PostgreSQL test command exists."
+      "notes": "storage.engines postgresql is validator-forced: the kit refuses a waivedStorageEngines waiver for a service-capable cli-with-store shipping tickets-serve (measured). The PostgreSQL backend is NOT implemented in this repo (no DATABASE_URL handling in src; src/db/pg-migrations.ts is imported by nothing) \u2014 the declaration and its pgTestGate are recorded in the census CONTRACTS_EXCEPTIONS entry and must be removed when the schema permits an honest waiver."
+    },
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
     }
   }
 }
