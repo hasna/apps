@@ -1,0 +1,45 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "tai",
+  "class": "library",
+  "contractVersion": "v1",
+  "kitVersion": "0.11.1",
+  "description": "Terminal AI agent runtime safety and orchestration library: shell-command safety validation, credential redaction, agentic-plan building, and an OpenAI-compatible provider router. Ships the `tai` CLI, a stdio `tai-mcp` server, and the package SDK (main export plus a dedicated ./sdk entry). Stateless: no database, no config store, no server surface.",
+  "bins": [
+    "tai"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "tai-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "tai",
+      "authMode": "local-only"
+    },
+    {
+      "name": "tai-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "."
+    }
+  ],
+  "metadata": {
+    "conformance": {
+      "waivedSurfaces": [
+        {
+          "kind": "mcp",
+          "reason": "The tai-mcp stdio server ships in package.json bin, but the kit 0.11.1 class taxonomy admits no truthful declaration for it: class library forbids -mcp bins and class cli-with-store requires a storage block (sqlite/postgresql) while this app has no database of any kind. The mcp surface is therefore waived with its bin undeclared until the app gains a store or the taxonomy gains a config-file store class."
+        },
+        {
+          "kind": "api",
+          "reason": "No HTTP server surface ships: package.json declares no -serve bin and no source file starts an HTTP listener."
+        }
+      ],
+      "notes": "storage is deliberately absent. The package persists nothing: no database, no config file, no state directory (verified by source read — no sqlite/postgres import and no writeFile/mkdir in src outside a shell-command safety regex). storage.backend admits sqlite | postgresql only, and neither engine is used."
+    }
+  }
+}

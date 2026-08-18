@@ -1,0 +1,62 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "tickets",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.11.1",
+  "description": "Local-first ticket tracking for AI agents: workspaces, agents, tickets, comments, labels, milestones, webhooks, email inbound and full-text search over a user-owned SQLite store. Ships the `tickets` CLI, a `tickets-mcp` server (stdio, or HTTP on request), a `tickets-serve` HTTP API, and the package SDK. The SQLite store lives at ~/.hasna/tickets/tickets.db (HASNA_TICKETS_DB_PATH / TICKETS_DB_PATH override, else the nearest workspace .tickets/tickets.db). The data backend is the only runtime switch.",
+  "bins": [
+    "tickets",
+    "tickets-mcp",
+    "tickets-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "envPrefix": "HASNA_TICKETS_",
+    "aliasEnvPrefix": "TICKETS_",
+    "sqlitePath": "~/.hasna/tickets/tickets.db"
+  },
+  "serviceSurfaces": [
+    {
+      "name": "tickets-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "tickets",
+      "authMode": "local-only"
+    },
+    {
+      "name": "tickets-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "tickets-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "tickets-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "."
+    },
+    {
+      "name": "tickets-api",
+      "kind": "api",
+      "status": "deferred",
+      "bin": "tickets-serve",
+      "authMode": "api-key",
+      "deferReason": "The HTTP API ships (tickets-serve on PORT 19428 by default) and gates /api/* with X-API-Key or Bearer tokens via verifyApiKey, but it does not meet the v1 service topology: routes live under /api (not /vN), there is no GET /ready, no GET /version and no /openapi.json, and the only health endpoint is GET /api/health returning { ok, version } rather than a contract-shaped /health. Declaring this surface supported today would assert routes that do not exist."
+    }
+  ],
+  "metadata": {
+    "conformance": {
+      "notes": "engines declares postgresql because the kit 0.11.1 validator requires both sqlite and postgresql for a cli-with-store shipping tickets-serve and refuses storage waivers for service-capable repos. The postgresql capability is not runtime-wired yet: src/db/pg-migrations.ts holds a translated schema but no code path reads a DATABASE_URL or selects a PostgreSQL store; the server, CLI and MCP all use the SQLite store. No pgTestGate is declared because no PostgreSQL test command exists."
+    }
+  }
+}

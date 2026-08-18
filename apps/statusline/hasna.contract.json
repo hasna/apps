@@ -1,0 +1,45 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "statusline",
+  "class": "library",
+  "contractVersion": "v1",
+  "kitVersion": "0.11.1",
+  "description": "Tiny composable statusline CLI for AI coding agents: pre-built segments (machine name, project + branch, model, context remaining, session cost) rendered as one or more status-bar rows. Ships the `statusline` CLI, a stdio `statusline-mcp` server, and the package SDK (render/format/segment functions exported from the package root). The only persistent state is a user-editable JSON config at $XDG_CONFIG_HOME/statusline/config.json; there is no database and no HTTP server surface.",
+  "bins": [
+    "statusline"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "statusline-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "statusline",
+      "authMode": "local-only"
+    },
+    {
+      "name": "statusline-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "."
+    }
+  ],
+  "metadata": {
+    "conformance": {
+      "waivedSurfaces": [
+        {
+          "kind": "mcp",
+          "reason": "The statusline-mcp stdio server ships in package.json bin, but the kit 0.11.1 class taxonomy admits no truthful declaration for it: class library forbids -mcp bins and class cli-with-store requires a storage block (sqlite/postgresql) while this app has no database of any kind. The mcp surface is therefore waived with its bin undeclared until the app gains a store or the taxonomy gains a config-file store class."
+        },
+        {
+          "kind": "api",
+          "reason": "No HTTP server surface ships: package.json declares no -serve bin and no source file starts an HTTP listener."
+        }
+      ],
+      "notes": "storage is deliberately absent. The package has no database backend: the only persistent state is a JSON config file at $XDG_CONFIG_HOME/statusline/config.json (config.ts) plus read-only access to the Claude accounts state file. storage.backend admits sqlite | postgresql only, and neither engine is used."
+    }
+  }
+}
