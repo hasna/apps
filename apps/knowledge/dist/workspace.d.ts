@@ -1,5 +1,12 @@
 export declare const HASNA_KNOWLEDGE_APP_PATH: string;
 export declare const LEGACY_HASNA_KNOWLEDGE_APP_PATH: string;
+/**
+ * Stable, unique key for a project-scoped knowledge workspace derived from the
+ * project's resolved cwd. The full absolute path is slugified so two repos with
+ * the same basename never collide, and the key is deterministic for the same
+ * checkout path across runs and machines.
+ */
+export declare function projectKey(cwd?: string): string;
 export interface KnowledgeWorkspace {
     home: string;
     configPath: string;
@@ -98,7 +105,19 @@ export declare const EXAMPLE_KNOWLEDGE_CANONICAL: {
 export declare function canonicalExampleKnowledgeStorage(): KnowledgeConfig['storage'];
 export declare function legacyGlobalStorePath(): string;
 export declare function globalKnowledgeHome(): string;
-export declare function projectKnowledgeHome(cwd?: string): string;
+/**
+ * The canonical project-scoped knowledge home: ~/.hasna/knowledge/projects/<key>.
+ * The fleet law places app data under ~/.hasna/<app>/; project-scoped stores
+ * live in a per-project sub-root of the knowledge app's own home rather than
+ * inside the checked-out repository.
+ */
+export declare function projectKnowledgeHome(cwd?: string, home?: string): string;
+/**
+ * The previous project-scoped knowledge home: <cwd>/.hasna/knowledge. This is
+ * the pre-canonical default that a one-time migration moves into
+ * ~/.hasna/knowledge/projects/<key>.
+ */
+export declare function previousProjectKnowledgeHome(cwd?: string): string;
 export declare function legacyGlobalKnowledgeHome(): string;
 export declare function legacyProjectKnowledgeHome(cwd?: string): string;
 export declare function resolveLegacyScopedWorkspace(scope: string | undefined, cwd?: string): KnowledgeWorkspace;

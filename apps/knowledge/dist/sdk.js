@@ -4282,6 +4282,13 @@ import { homedir } from "os";
 import { dirname as dirname2, join as join2, resolve } from "path";
 var HASNA_KNOWLEDGE_APP_PATH = join2(".hasna", "knowledge");
 var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join2(".hasna", "apps", "knowledge");
+function homeRoot() {
+  return process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+}
+function projectKey(cwd = process.cwd()) {
+  const slugified = resolve(cwd).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slugified || "project";
+}
 var EXAMPLE_KNOWLEDGE_CANONICAL = {
   division: "xyz",
   app_type: "opensource",
@@ -4322,9 +4329,12 @@ function legacyGlobalStorePath() {
   return join2(homedir(), ".open-knowledge", "db.json");
 }
 function globalKnowledgeHome() {
-  return join2(homedir(), ".hasna", "knowledge");
+  return join2(homeRoot(), ".hasna", "knowledge");
 }
-function projectKnowledgeHome(cwd = process.cwd()) {
+function projectKnowledgeHome(cwd = process.cwd(), home = homeRoot()) {
+  return join2(home, ".hasna", "knowledge", "projects", projectKey(cwd));
+}
+function previousProjectKnowledgeHome(cwd = process.cwd()) {
   return resolve(cwd, HASNA_KNOWLEDGE_APP_PATH);
 }
 function legacyGlobalKnowledgeHome() {
@@ -19875,7 +19885,7 @@ var package_default = {
     "scripts/lib/remote-temp-dir.mjs",
     "scripts/smoke-machine-sync-release.mjs",
     "scripts/smoke-machines-adapter.mjs",
-    "scripts/smoke-open-files-installed-boundary.mjs",
+    "scripts/smoke-files-installed-boundary.mjs",
     "scripts/strip-generated-trailing-whitespace.mjs",
     "scripts/verify-generated-artifacts.mjs",
     "docs/architecture/ai-native-knowledge-base.md",
@@ -19896,7 +19906,7 @@ var package_default = {
     "release:pack:check": "node scripts/validate-public-package.mjs",
     "smoke:machines-adapter": "bun scripts/smoke-machines-adapter.mjs",
     "smoke:machine-sync-release": "bun scripts/smoke-machine-sync-release.mjs",
-    "smoke:open-files-installed-boundary": "bun scripts/smoke-open-files-installed-boundary.mjs",
+    "smoke:files-installed-boundary": "bun scripts/smoke-files-installed-boundary.mjs",
     "migrate:postgres": "bun scripts/apply-postgres-migrations.mjs",
     "live:private-query": "bun scripts/live-private-query.mjs",
     serve: "bun src/serve-entry.ts",
@@ -21065,6 +21075,25 @@ class KnowledgeService {
   migrateLegacyPath(options = {}) {
     const current = this.workspace;
     const legacy = resolveLegacyScopedWorkspace(this.options.scope, this.options.cwd);
+    const result = migrateLegacyKnowledgeWorkspace({
+      scope: this.scope,
+      current,
+      legacy,
+      approveWrite: options.approveWrite,
+      approvedBy: options.approvedBy
+    });
+    if (!result.dry_run && result.ok) {
+      this.ensuredWorkspace = undefined;
+      this.cachedConfig = undefined;
+    }
+    return result;
+  }
+  migrateProjectPath(options = {}) {
+    if (this.scope === "global") {
+      throw new Error("knowledge storage migrate-project-path only supports --scope project (or local) because <cwd>/.hasna/knowledge is a project-scoped store.");
+    }
+    const current = this.workspace;
+    const legacy = workspaceForHome(previousProjectKnowledgeHome(this.options.cwd));
     const result = migrateLegacyKnowledgeWorkspace({
       scope: this.scope,
       current,
@@ -22523,6 +22552,7 @@ function createKnowledgeClient(options = {}) {
       status: () => service.storageContract(),
       validate: () => service.validateStorage(),
       migrateLegacyPath: (input = {}) => service.migrateLegacyPath(input),
+      migrateProjectPath: (input = {}) => service.migrateProjectPath(input),
       mergeLegacyPath: (input = {}) => service.mergeLegacyPath(input),
       artifactStore: () => service.artifactStore()
     },

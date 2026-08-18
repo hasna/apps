@@ -4243,7 +4243,7 @@ var package_default = {
     "scripts/lib/remote-temp-dir.mjs",
     "scripts/smoke-machine-sync-release.mjs",
     "scripts/smoke-machines-adapter.mjs",
-    "scripts/smoke-open-files-installed-boundary.mjs",
+    "scripts/smoke-files-installed-boundary.mjs",
     "scripts/strip-generated-trailing-whitespace.mjs",
     "scripts/verify-generated-artifacts.mjs",
     "docs/architecture/ai-native-knowledge-base.md",
@@ -4264,7 +4264,7 @@ var package_default = {
     "release:pack:check": "node scripts/validate-public-package.mjs",
     "smoke:machines-adapter": "bun scripts/smoke-machines-adapter.mjs",
     "smoke:machine-sync-release": "bun scripts/smoke-machine-sync-release.mjs",
-    "smoke:open-files-installed-boundary": "bun scripts/smoke-open-files-installed-boundary.mjs",
+    "smoke:files-installed-boundary": "bun scripts/smoke-files-installed-boundary.mjs",
     "migrate:postgres": "bun scripts/apply-postgres-migrations.mjs",
     "live:private-query": "bun scripts/live-private-query.mjs",
     serve: "bun src/serve-entry.ts",
@@ -4331,6 +4331,13 @@ import { homedir } from "os";
 import { dirname, join, resolve } from "path";
 var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "knowledge");
 var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "apps", "knowledge");
+function homeRoot() {
+  return process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+}
+function projectKey(cwd = process.cwd()) {
+  const slugified = resolve(cwd).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slugified || "project";
+}
 var EXAMPLE_KNOWLEDGE_CANONICAL = {
   division: "xyz",
   app_type: "opensource",
@@ -4371,9 +4378,12 @@ function legacyGlobalStorePath() {
   return join(homedir(), ".open-knowledge", "db.json");
 }
 function globalKnowledgeHome() {
-  return join(homedir(), ".hasna", "knowledge");
+  return join(homeRoot(), ".hasna", "knowledge");
 }
-function projectKnowledgeHome(cwd = process.cwd()) {
+function projectKnowledgeHome(cwd = process.cwd(), home = homeRoot()) {
+  return join(home, ".hasna", "knowledge", "projects", projectKey(cwd));
+}
+function previousProjectKnowledgeHome(cwd = process.cwd()) {
   return resolve(cwd, HASNA_KNOWLEDGE_APP_PATH);
 }
 function legacyGlobalKnowledgeHome() {
@@ -20903,6 +20913,25 @@ class KnowledgeService {
     }
     return result;
   }
+  migrateProjectPath(options = {}) {
+    if (this.scope === "global") {
+      throw new Error("knowledge storage migrate-project-path only supports --scope project (or local) because <cwd>/.hasna/knowledge is a project-scoped store.");
+    }
+    const current = this.workspace;
+    const legacy = workspaceForHome(previousProjectKnowledgeHome(this.options.cwd));
+    const result = migrateLegacyKnowledgeWorkspace({
+      scope: this.scope,
+      current,
+      legacy,
+      approveWrite: options.approveWrite,
+      approvedBy: options.approvedBy
+    });
+    if (!result.dry_run && result.ok) {
+      this.ensuredWorkspace = undefined;
+      this.cachedConfig = undefined;
+    }
+    return result;
+  }
   mergeLegacyPath(options = {}) {
     const current = this.workspace;
     const legacy = resolveLegacyScopedWorkspace(this.options.scope, this.options.cwd);
@@ -23110,7 +23139,7 @@ function buildServer() {
       return errorText(error instanceof Error ? error.message : String(error));
     }
   });
-  registerTool(server, "knowledge_machines_topology", "Knowledge machine topology", "Inspect optional open-machines topology and local fallback routes for knowledge sync", {
+  registerTool(server, "knowledge_machines_topology", "Knowledge machine topology", "Inspect optional machines topology and local fallback routes for knowledge sync", {
     scope: scopeField,
     include_tailscale: exports_external.boolean().optional().describe("Include local Tailscale status probing when available")
   }, async ({ scope, include_tailscale }) => {
