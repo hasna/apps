@@ -758,7 +758,7 @@
       "dependencies": {
         "@hasna/accounts": "0.2.23",
         "@hasna/agent-registry": "^0.1.0",
-        "@hasna/contracts": "^0.9.0",
+        "@hasna/contracts": "^0.11.1",
         "@hasna/events": "^0.1.7",
         "@hasna/mcp-harness": "^0.1.0",
         "@hasna/projects": "0.1.95",
@@ -777,7 +777,7 @@
     },
     "apps/emails": {
       "name": "@hasna/emails",
-      "version": "1.3.15",
+      "version": "1.3.16",
       "bin": {
         "emails": "dist/cli/index.js",
         "emails-mcp": "dist/mcp/index.js",
@@ -1992,7 +1992,7 @@
     },
     "apps/terminal": {
       "name": "@hasna/terminal",
-      "version": "4.3.18",
+      "version": "4.3.19",
       "bin": {
         "t": "dist/cli.js",
         "terminal": "dist/cli.js",
@@ -2112,7 +2112,7 @@
     },
     "apps/treasury": {
       "name": "@hasna/treasury",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "bin": {
         "treasury": "dist/cli/index.js",
         "treasury-mcp": "dist/mcp/index.js",
@@ -4844,8 +4844,6 @@
     "@hasna/draw/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/economy/@hasna/accounts": ["@hasna/accounts@0.2.23", "", { "dependencies": { "@hasna/contracts": "0.5.2", "@hasna/events": "^0.1.7", "chalk": "^5.4.1", "commander": "^13.1.0", "pg": "^8.13.1", "zod": "^3.24.2" }, "bin": { "accounts": "dist/cli.js", "accounts-mcp": "dist/mcp.js", "accounts-serve": "dist/server/index.js", "accounts-migrate": "dist/server/migrate.js" } }, "sha512-E+geg18ATPV0d/uvJ5dIvtMJPSyJXUrtBpv23egmaA3E4gmzqAleKAazo6wuM6VpRitjkOzaUWO5r3D3FY8ZaA=="],
-
-    "@hasna/economy/@hasna/contracts": ["@hasna/contracts@0.9.0", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-kmu16+2osOnW4yAbrN6JjWwcB/Jrv37YbS5JtRJCitg5WF3FwzGWdG7DU0ca/y9YEb6Xk+Xd8JYeoQNfnFGYtg=="],
 
     "@hasna/economy/@hasna/projects": ["@hasna/projects@0.1.95", "", { "dependencies": { "@hasna/contracts": "0.4.2", "@hasna/events": "0.1.3", "@json-render/core": "0.19.0", "@modelcontextprotocol/sdk": "^1.12.1", "@openrouter/ai-sdk-provider": "^2.9.0", "ai": "^6.0.197", "chalk": "^5.4.1", "commander": "^13.1.0", "nanoid": "^5.0.9", "pg": "^8.13.3", "zod": "3.25.76" }, "peerDependencies": { "@hasna/loops": ">=0.3.0" }, "optionalPeers": ["@hasna/loops"], "bin": { "projects": "dist/cli/index.js", "projects-mcp": "dist/mcp/index.js", "projects-serve": "dist/serve/index.js" } }, "sha512-mj7A5dwT8L1fhv44cG3gi8ps2FJn/u9BfM+DGMSsiFYayAQfkrh6aiaMDBWDwPcFaVUXtmPGgrCR5KW5zYtGAg=="],
 

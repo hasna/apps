@@ -3,7 +3,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /**
- * Regression guard for the `hasna.contract.json` storage declaration.
+ * Regression guard for the `hasna.contract.json` declaration.
  *
  * `@hasna/contracts` 0.9.0 REMOVED the `storage.mode` enum (`local` | `cloud`)
  * and replaced it with a required `storage.backend` (`sqlite` | `postgresql`),
@@ -16,17 +16,18 @@ import { fileURLToPath } from 'node:url'
  * and no CI job. That is precisely why the declaration was free to drift out of
  * sync with the pinned contract kit. This test closes that gap.
  *
- * Scope is deliberately narrow — it asserts that the manifest raises NO
- * storage-scoped validation issue, rather than that the whole manifest is valid.
- * The manifest currently carries one unrelated, PRE-EXISTING failure: the bin
- * `economy-otel` is outside the allowlist that `@hasna/contracts` hardcodes
- * (`<name>`, `-cli`, `-mcp`, `-serve`, `-worker`, `-runner`, `-daemon`,
- * `-migrate`, `-doctor`). That failure reproduces identically against contract
- * kit 0.4.2, so it predates the 0.9.0 migration and is not this guard's to
- * enforce — resolving it needs either a rename of a published binary or a
- * widening of the allowlist upstream. Asserting whole-manifest validity here
- * would be a check that cannot pass, which is worth no more than one that cannot
- * fail.
+ * The test asserts the WHOLE manifest is valid against the installed contract
+ * kit. It was previously scoped to storage only, because the manifest carried a
+ * PRE-EXISTING bin-allowlist failure — `economy-otel` is outside the allowlist
+ * that `@hasna/contracts` hardcodes (`<name>`, `-cli`, `-mcp`, `-serve`,
+ * `-worker`, `-runner`, `-daemon`, `-migrate`, `-doctor`) — so a whole-manifest
+ * assertion could not pass. That failure was resolved by the 2026-08-18
+ * contracts-alignment by declaring only the allowlisted canonical bins in the
+ * manifest; the OTel metrics sidecar still ships in package.json bin
+ * (`economy-otel` -> dist/otel/index.js) but is deliberately not declared,
+ * matching the fleet pattern for utility bins outside the taxonomy (e.g.
+ * computers-resident, skills-server). A whole-manifest assertion that can now
+ * pass is worth more than the storage-scoped one that could not.
  */
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(HERE, '..')
@@ -55,15 +56,14 @@ describe('hasna.contract.json storage declaration', () => {
     expect(Object.keys(manifest.storage ?? {})).not.toContain('mode')
   })
 
-  test('raises no storage-scoped issue against the installed contract kit', async () => {
+  test('raises no validation issue against the installed contract kit', async () => {
     const { validateServiceContractManifest } = await import('@hasna/contracts/service-contract')
     const manifest = await readManifest()
 
     const result = validateServiceContractManifest(manifest)
     const issues = result.success ? [] : (result.error?.issues ?? [])
-    const storageIssues = issues.filter((issue) => issue.path?.[0] === 'storage')
 
-    expect(storageIssues).toEqual([])
+    expect(issues).toEqual([])
   })
 
   test('kitVersion tracks the installed @hasna/contracts version', async () => {
