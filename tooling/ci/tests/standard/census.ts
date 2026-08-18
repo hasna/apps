@@ -275,7 +275,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "telephony", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "terminal", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #88 after the original census." },
   { member: "tickets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "treasury", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "ui", reason: "Legacy ui.sh mirror; SDK lane (c7ce8b75)." },
   { member: "workforce", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
 ];
@@ -323,11 +322,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "accounts",
     cause: "manifest_valid: pre-backend-schema-era manifest after #122 (deployment-mode vocabulary removal) validated at pinned 0.5.2 — storage.mode Required; storage Unrecognized key(s) in object: 'backend','engines','pgTestGate'; serviceSurfaces.*.deploymentModes Required; serviceSurfaces.* Unrecognized key(s) in object: 'kind'/'exportSubpath'/'generatedFrom'.",
     task: "todos f6869bad-0aa9-466a-824b-b4a76a0b9b7b (contracts task — accounts)",
-  },
-  {
-    member: "automations",
-    cause: "Pinned @hasna/contracts 0.8.1 predates the manifest shape (storage.backend, no deploymentModes); manifest validates clean at 0.9.0. Pinned kit is stale.",
-    task: "todos 99f670fe-246a-48be-80dc-46457d4fc013 (contracts task — automations)",
   },
   {
     member: "calendar",
