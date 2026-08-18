@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.8
+
+### Patch Changes
+
+- First release from the hasna/apps monorepo. The package was imported from hasna/banking with history preserved; it was never published to npm. The delta since the last in-tree release 0.0.7 (ffd15fc32, 2026-06-29) is the monorepo import plus: banking execution safety workflow (97504a8ff), global state migration to ~/.hasna/banking (#2), complete LICENSE replacement (#3), alignment with @hasna/contracts (#4), docs deep-scan (#5), .editorconfig (#6), mercury --secret-key fix for secrets 0.2.9 non-TTY refusal (#7), and artifact-scan packing to scratch rather than the repo root (#46). This patch establishes version ownership under the monorepo and ships 0.0.8 as the first published release.
+
 ## Unreleased
 
 ### Changed
@@ -14,7 +20,7 @@
 
 - Shared provider operation registry derived from conformance contracts, exposed
   through SDK exports, `banking ops list`, `banking ops describe`, `banking ops
-  plan`, and MCP operation discovery/planning tools.
+plan`, and MCP operation discovery/planning tools.
 - Mercury full-surface descriptor coverage for the current official API
   families: accounts, account statements, account-scoped transactions/cards,
   organization-wide transactions/cards, recipients, request-send-money
