@@ -9,7 +9,7 @@
     "/health": {
       "get": {
         "operationId": "getHealth",
-        "summary": "Liveness + version + mode",
+        "summary": "Liveness + version + backend",
         "tags": [
           "system"
         ],
@@ -40,7 +40,7 @@
     "/version": {
       "get": {
         "operationId": "getVersion",
-        "summary": "Version + mode",
+        "summary": "Version + backend",
         "tags": [
           "system"
         ],

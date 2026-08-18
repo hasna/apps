@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { resolveDbPath, resolveStorageMode, scrubDatabaseUrl } from "../config.js";
+import { resolveDbPath, resolveServerBackend, scrubDatabaseUrl } from "../config.js";
 import { backupBeforeMigration } from "./backup.js";
 import { MIGRATION_PLAN } from "./migration-plan.js";
 import { SCHEMA } from "./schema.js";
@@ -16,16 +16,16 @@ let migrationsAppliedCount = 0;
  *
  * - local: `new Database(resolveDbPath())` with WAL + foreign_keys; applies the
  *   idempotent SCHEMA and the forward-only migration plan (backup-on-migration).
- * - cloud: PURE REMOTE via the vendored storage-kit (sslmode=verify-full). Not
+ * - postgresql: PURE REMOTE via the vendored storage-kit (sslmode=verify-full). Not
  *   exercised in local builds — see src/db/cloud.ts.
  *
  * Pass `":memory:"` for tests.
  */
 export function openDatabase(path?: string): Database {
-  const mode = resolveStorageMode();
-  if (mode === "cloud" && path === undefined) {
+  const backend = resolveServerBackend();
+  if (backend === "postgresql" && path === undefined) {
     throw new Error(
-      "cloud storage mode is PURE REMOTE (Postgres via the vendored storage-kit) and is not " +
+      "the postgresql backend is PURE REMOTE (Postgres via the vendored storage-kit) and is not " +
         "exercised in the local build. Remove HASNA_HOLDINGS_DATABASE_URL to use the local SQLite path.",
     );
   }

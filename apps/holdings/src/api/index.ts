@@ -34,13 +34,13 @@ function toOpenApiPath(path: string): string {
 
 const SYSTEM_PATHS: Record<string, Record<string, OpenApiOperation>> = {
   "/health": {
-    get: { operationId: "getHealth", summary: "Liveness + version + mode", tags: ["system"], responses: { "200": { description: "ok" } } },
+    get: { operationId: "getHealth", summary: "Liveness + version + backend", tags: ["system"], responses: { "200": { description: "ok" } } },
   },
   "/ready": {
     get: { operationId: "getReady", summary: "Readiness (DB + migrations)", tags: ["system"], responses: { "200": { description: "ready" }, "503": { description: "not ready" } } },
   },
   "/version": {
-    get: { operationId: "getVersion", summary: "Version + mode", tags: ["system"], responses: { "200": { description: "ok" } } },
+    get: { operationId: "getVersion", summary: "Version + backend", tags: ["system"], responses: { "200": { description: "ok" } } },
   },
 };
 

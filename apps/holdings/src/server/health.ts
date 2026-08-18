@@ -1,22 +1,22 @@
 import type { Database } from "bun:sqlite";
-import { resolveStorageMode, type StorageMode } from "../config.js";
+import { resolveServerBackend, type ServerDataBackend } from "../config.js";
 import { APP_VERSION } from "../version.js";
 
-// System endpoint payloads (§6.2). The { status, version, mode } shape is
+// System endpoint payloads (§6.2). The { status, version, backend } shape is
 // contract-mandated (health_shape conformance) and must not change.
 
 export interface HealthPayload {
   status: "ok" | "degraded" | "unavailable";
   version: string;
-  mode: StorageMode;
+  backend: ServerDataBackend;
 }
 
-export function healthPayload(mode: StorageMode = resolveStorageMode()): HealthPayload {
-  return { status: "ok", version: APP_VERSION, mode };
+export function healthPayload(backend: ServerDataBackend = resolveServerBackend()): HealthPayload {
+  return { status: "ok", version: APP_VERSION, backend };
 }
 
-export function versionPayload(mode: StorageMode = resolveStorageMode()): HealthPayload {
-  return { status: "ok", version: APP_VERSION, mode };
+export function versionPayload(backend: ServerDataBackend = resolveServerBackend()): HealthPayload {
+  return { status: "ok", version: APP_VERSION, backend };
 }
 
 export interface ReadyResult {

@@ -32,7 +32,7 @@ describe("mcp safety", () => {
     expect(text).not.toContain(secretDsn);
     expect(text).not.toContain("sup3rs3cr3t");
     const payload = parseMcp<Record<string, unknown>>(result);
-    expect(Object.keys(payload).sort()).toEqual(["dsn_present", "migrations_applied", "mode", "remote_reachable", "sqlite_path"]);
+    expect(Object.keys(payload).sort()).toEqual(["backend", "dsn_present", "migrations_applied", "remote_reachable", "sqlite_path"]);
   });
 
   it("holdings_storage_status reports remote_reachable honestly (null in the local build, never a hardcoded false)", async () => {
@@ -40,8 +40,8 @@ describe("mcp safety", () => {
     const db = makeDb();
     const handlers = captureMcpHandlers(db);
     const result = await handlers.get("holdings_storage_status")!({});
-    const payload = parseMcp<{ mode: string; remote_reachable: boolean | null }>(result);
-    expect(payload.mode).toBe("local");
+    const payload = parseMcp<{ backend: string; remote_reachable: boolean | null }>(result);
+    expect(payload.backend).toBe("sqlite");
     // Local build has no remote to reach: report unknown/not-applicable, not a fixed boolean.
     expect(payload.remote_reachable).toBeNull();
   });

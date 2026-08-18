@@ -1,7 +1,7 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Database } from "bun:sqlite";
 import { openDatabase } from "../db/database.js";
-import { resolveStorageMode } from "../config.js";
+import { resolveServerBackend } from "../config.js";
 import { authenticateBearer, bearerToken, isApiAuthConfigured } from "../server/auth.js";
 import { LOCAL_DEV_PRINCIPAL } from "../server/principal.js";
 import type { ApiPrincipal } from "../server/auth.js";
@@ -28,21 +28,21 @@ export function getMcpBindHost(): string {
 
 /**
  * FAIL-CLOSED STARTUP THROW (§5.1a). Runs FIRST inside startHttpServer, before
- * Bun.serve binds. A non-loopback bind OR cloud mode with no credentials is a
+ * Bun.serve binds. A non-loopback bind OR the postgresql backend with no credentials is a
  * misconfigured/open-intent deploy — surface it at boot instead of coming up and
  * 401'ing every caller. Mirrors the serve tier's assertServeSafety (§5.1a).
  */
 export function assertMcpServeSafety(hostname: string): void {
   const loopback = hostname === "127.0.0.1" || hostname === "localhost";
-  const cloud = resolveStorageMode() === "cloud";
-  if ((!loopback || cloud) && !isApiAuthConfigured()) {
+  const postgresql = resolveServerBackend() === "postgresql";
+  if ((!loopback || postgresql) && !isApiAuthConfigured()) {
     throw new Error(
       "Refusing to start holdings-mcp: bind=" +
         hostname +
-        " mode=" +
-        (cloud ? "cloud" : "local") +
+        " backend=" +
+        (postgresql ? "postgresql" : "sqlite") +
         " requires API credentials. Set HASNA_HOLDINGS_API_CREDENTIALS (or HASNA_HOLDINGS_API_KEY). " +
-        "Unauthenticated MCP is only allowed on 127.0.0.1 in local mode.",
+        "Unauthenticated MCP is only allowed on 127.0.0.1 on the sqlite backend.",
     );
   }
 }
@@ -92,7 +92,7 @@ export function resolveHttpPort(defaultPort = DEFAULT_MCP_HTTP_PORT): number {
 function authDisabledForLocalDev(bindHost: string): boolean {
   const off = (process.env["HASNA_HOLDINGS_MCP_AUTH"] || process.env["HOLDINGS_MCP_AUTH"])?.toLowerCase() === "off";
   const loopback = bindHost === "127.0.0.1" || bindHost === "localhost" || bindHost === "::1";
-  return off && loopback && resolveStorageMode() === "local";
+  return off && loopback && resolveServerBackend() === "sqlite";
 }
 
 /** Authenticate an MCP HTTP request. Returns a principal or null (=> 401). */
