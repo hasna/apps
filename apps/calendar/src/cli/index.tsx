@@ -2,6 +2,8 @@
 import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import chalk from "chalk";
+import { homedir } from "node:os";
+import { migrateLegacyData, scanLegacyData } from "../db/database.js";
 import { getStore } from "../store/index.js";
 import type { CalendarVisibility, EventStatus, EventBusyType, AttendeeStatus, OrgRole } from "../types/index.js";
 
@@ -436,6 +438,29 @@ listCommand("agent-orgs <agentId>")
         ? `${m.id}  org=${m.org_id}  role=${m.role}  created=${m.created_at}`
         : `${m.org_id}  ${m.role}`,
     });
+  });
+
+// ── Local database ───────────────────────────────────────────────────────────
+
+calendarCommand("db-migrate")
+  .description("One-time migration of legacy non-canonical calendar data into ~/.hasna/calendar")
+  .option("--dry-run", "Report what would migrate without writing anything")
+  .action((opts) => {
+    const scan = scanLegacyData();
+    if (opts.dryRun) {
+      outputJsonOrText(scan, `Legacy data scan: ${scan.reason} (source: ${scan.source ?? "none"}, target: ${scan.target})`, opts);
+      return;
+    }
+    if (!scan.wouldMigrate) {
+      outputJsonOrText(scan, `Nothing to migrate: ${scan.reason}`, opts);
+      return;
+    }
+    if (scan.source === null) {
+      fail("scan reported a migration with no source — refusing to run");
+    }
+    // Trigger the guarded one-time migration (no-op if it already ran).
+    migrateLegacyData(process.cwd(), process.env["HOME"] || homedir(), scan.target);
+    outputJsonOrText({ ...scan, migrated: true }, `Migrated ${scan.source} -> ${scan.target}`, opts);
   });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
