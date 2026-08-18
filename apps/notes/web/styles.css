@@ -166,8 +166,6 @@ a{color:inherit;text-decoration:none;}
 }
 /* Over the purple gradient the accent halo would vanish — sidebar rings go white. */
 .sidebar :focus-visible,.set-sidebar :focus-visible{outline-color:var(--focus-ring-sb);}
-/* …except inside the machines dropdown MENU, which is canvas-colored glass. */
-.machines-dd-menu :focus-visible{outline-color:var(--focus-ring);}
 /* Text canvases: the caret is the focus (spec §3.5). */
 .editor-title:focus-visible,.editor-body:focus-visible{outline:none;}
 /* ONE ring per control: these inputs sit inside a container that draws the ring
@@ -249,35 +247,6 @@ body.native .set-top{padding-top:calc(4px + var(--native-inset));}
 }
 .sidebar.nav-scrolled .sidebar-top::after{opacity:1;}
 
-/* Machines dropdown — the compact filter at the top of the sidebar (no app name).
-   The button is section chrome floating on the gradient → .glass-on-sidebar recipe. */
-.machines-dd{position:relative;}
-.machines-dd-btn{
-  display:flex;align-items:center;gap:8px;width:100%;
-  padding:6px 8px;border:none;border-radius:var(--r-control);
-  font-size:13px;font-weight:500;color:var(--sb-text);cursor:pointer;
-  background:var(--glass-sb-bg);
-  -webkit-backdrop-filter:var(--glass-filter);
-  backdrop-filter:var(--glass-filter);
-  box-shadow:var(--glass-sb-ring);
-}
-.machines-dd-btn:hover{background:rgba(255,255,255,.22);}
-.machines-dd-btn .ico{width:15px;height:15px;color:var(--sb-text-dim);flex:none;}
-.machines-dd-label{flex:1;min-width:0;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.machines-dd-chev{width:12px;height:12px;color:var(--sb-text-dim);flex:none;transition:transform .14s;}
-.machines-dd-btn.open .machines-dd-chev{transform:rotate(180deg);}
-/* The dropdown MENU is a popover floating above the sidebar — the ONE glass plane
-   for that region while open (its rows keep canvas text colors for legibility). */
-.machines-dd-menu{
-  position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:70;
-  border:0.5px solid rgba(0,0,0,.10);border-radius:var(--r-panel);
-  background:var(--glass-menu-bg);
-  -webkit-backdrop-filter:var(--glass-filter);
-  backdrop-filter:var(--glass-filter);
-  box-shadow:var(--glass-canvas-ring),0 10px 30px rgba(0,0,0,.18),0 2px 8px rgba(0,0,0,.08);
-  color:var(--fg);
-  padding:4px;max-height:320px;overflow-y:auto;
-}
 .sidebar-nav{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:1px;}
 /* The sidebar scrollbar sits almost flush to the sidebar's right edge: the nav bleeds
    into the sidebar's right padding (negative margin) so its scrollbar renders ~1px from
@@ -359,14 +328,6 @@ body.native .set-top{padding-top:calc(4px + var(--native-inset));}
   box-shadow:var(--glass-sb-ring);
   color:#fff;font-weight:500;
 }
-/* Rule 2 — one glass plane per region: while the machines dropdown MENU is open, IT is
-   the sidebar region's glass plane, so the glass-selected row beneath it demotes to its
-   plain tint (selection stays visible; the stacked backdrop blur goes). */
-.sidebar:has(.machines-dd-menu:not([hidden])) .nav-item.active,
-.sidebar:has(.machines-dd-menu:not([hidden])) .note-row.active,
-.sidebar:has(.machines-dd-menu:not([hidden])) .label-row.active{
-  -webkit-backdrop-filter:none;backdrop-filter:none;
-}
 /* Rule 20 — dim text inside the brighter glass-selected row loses the 4.5:1 floor the
    plain gradient provides: promote it to full sidebar text there. */
 .note-row.active .note-age,.note-row.active .note-title.untitled,
@@ -386,21 +347,6 @@ body.native .set-top{padding-top:calc(4px + var(--native-inset));}
 /* On the purple gradient the accent is invisible — sidebar copies go white-dim. */
 .sidebar .view-more{color:var(--sb-text-dim);}
 .sidebar .view-more:hover{color:var(--sb-text);}
-
-/* Machine rows inside the machines dropdown menu */
-.machine-row{
-  display:flex;align-items:center;justify-content:space-between;gap:6px;
-  padding:6px 8px;border-radius:var(--r-control);font-size:13px;color:var(--fg-row);cursor:pointer;
-}
-.machine-row:hover{background:var(--bg-hover-elev);}
-.machine-row.active{background:var(--bg-active);font-weight:500;}
-.machine-row .mr-left{display:flex;align-items:center;gap:8px;min-width:0;}
-.machine-row .mr-ico{width:15px;height:15px;color:var(--fg-icon);flex:none;}
-.machine-row .mr-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-/* --fg-2, not --grey: these counts sit on the glass menu over the purple gradient,
-   where --grey fell to ~1.5:1 (Rule 20); --fg-2 also picks up the Increase-Contrast
-   promotion to full text color. */
-.machine-row .mr-count{font-size:11px;color:var(--fg-2);flex:none;}
 
 .sidebar-settings{
   display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:var(--r-control);
@@ -444,7 +390,6 @@ body.native .content-header{padding-top:0;height:var(--native-inset);margin-bott
   display:flex;align-items:center;gap:7px;flex:none;
   height:44px;padding:0 18px 0 22px;font-size:12px;color:var(--grey);
 }
-.em-machine{color:var(--fg-2);font-weight:500;}
 .em-dot{color:var(--placeholder);}
 .em-updated{color:var(--grey);}
 .em-tags{display:flex;align-items:center;gap:6px;}
@@ -716,14 +661,11 @@ body.native .content-header{padding-top:0;height:var(--native-inset);margin-bott
 .np-act.copied{opacity:1;color:var(--green);}
 .np-act-danger:hover{background:var(--danger-bg);color:var(--danger);}
 .np-row-expiry{color:var(--orange);}
-.np-row-age + .np-row-expiry::before,
-.np-row-machine + .np-row-expiry::before{content:"·";margin-right:8px;color:var(--placeholder);}
+.np-row-age + .np-row-expiry::before{content:"·";margin-right:8px;color:var(--placeholder);}
 .np-row-title{font-size:13px;font-weight:550;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .np-row-sub{font-size:12.5px;color:var(--grey2);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .np-row-meta{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:11px;color:var(--fg-3);}
-.np-row-machine{color:var(--fg-2);}
 .np-row-age{font-variant-numeric:tabular-nums;}
-.np-row-machine + .np-row-age::before{content:"·";margin-right:8px;color:var(--placeholder);}
 .np-empty{padding:28px 10px;font-size:13px;color:var(--grey);text-align:center;}
 
 /* ====================== CHAT PAGE ====================== */
@@ -902,24 +844,6 @@ body.native .content-header{padding-top:0;height:var(--native-inset);margin-bott
 .lp-icon svg{width:16px;height:16px;}
 .lp-danger:hover{color:var(--danger);}
 
-/* ====================== MACHINES PAGE (Settings) ====================== */
-.machines-page{display:flex;flex-direction:column;border:1px solid var(--hair2);border-radius:var(--r-panel);overflow:hidden;}
-.mp-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:13px 16px;cursor:pointer;}
-.mp-row:not(:last-child){border-bottom:1px solid var(--hair);}
-.mp-row:hover{background:var(--bg-row-hover);}
-.mp-left{min-width:0;}
-.mp-name{font-size:13px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.mp-sub{font-size:12px;color:var(--grey);margin-top:3px;}
-.mp-count{font-size:12px;color:var(--fg-2);flex:none;font-variant-numeric:tabular-nums;}
-
-/* Sync status row (Settings → Machines): dot color = last outcome. An error
-   state must stay visibly red — never restyled as the green synced state. */
-.sync-status{font-size:12.5px;color:var(--fg-2);padding:12px 14px;border:1px solid var(--hair2);border-radius:var(--r-panel);line-height:1.45;}
-.sync-status::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;background:var(--grey);vertical-align:0.5px;}
-.sync-ok::before{background:var(--green);}
-.sync-error::before{background:var(--danger);}
-.sync-error{color:var(--danger);}
-
 /* Header window controls: chat + minimize (+ editor copy/delete) on the traffic-light
    row. Icon color routes through --fg-icon (Rules 11+12): ≥3:1 non-text contrast on
    the canvas in both themes, and Increase Contrast promotes it to full text color. */
@@ -1016,24 +940,6 @@ body.native .compact-inner{padding-top:calc(14px + var(--native-inset));}
 .ctx-item.ctx-danger{color:var(--danger);}
 .ctx-item.ctx-danger:hover{background:var(--danger);color:#fff;}
 .ctx-sep{height:1px;background:var(--hair);margin:4px 6px;}
-
-/* ====================== MACHINE DETAILS POPOVER ====================== */
-/* Right-click a machine row (vision f8659e18). Same glass chrome as .ctx-menu. */
-.machine-pop{
-  position:fixed;z-index:80;min-width:236px;max-width:320px;
-  border:0.5px solid rgba(0,0,0,.10);border-radius:var(--r-panel);
-  background:var(--glass-canvas-bg);
-  -webkit-backdrop-filter:var(--glass-filter);
-  backdrop-filter:var(--glass-filter);
-  box-shadow:var(--glass-canvas-ring),0 10px 30px rgba(0,0,0,.18),0 2px 8px rgba(0,0,0,.08);
-  padding:10px 12px;display:flex;flex-direction:column;gap:4px;
-}
-.mp-head{display:flex;align-items:center;gap:8px;margin-bottom:4px;}
-.mp-name{font-size:13px;font-weight:600;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.mp-badge{font-size:10px;font-weight:600;color:var(--accent);border:1px solid var(--accent);border-radius:999px;padding:1px 7px;white-space:nowrap;}
-.mp-row{display:flex;align-items:baseline;gap:10px;font-size:12px;}
-.mp-key{flex:0 0 76px;color:var(--grey);}
-.mp-val{color:var(--fg);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
 /* ====================== MARKDOWN POPOVER + SLASH MENU ====================== */
 /* The ONLY formatting UI (no toolbar): a small popover over selected editor text and a

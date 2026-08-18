@@ -26,20 +26,16 @@ function settingsFile(root = dataRoot()) {
   return join(root, 'settings.json');
 }
 
-function machinesManifestFile() {
-  return process.env.HASNA_MACHINES_MANIFEST || join(homedir(), '.hasna', 'machines', 'machines.json');
-}
-
 export const DEFAULT_TRASH_RETENTION_DAYS = 30;
 export const CONTENT_FORMAT_MARKDOWN = 'markdown';
 
 // Frontmatter schema v2: fixed key set and order. `rev` is a per-note monotonic
-// integer bumped on every local mutation — sync orders note versions by rev, never
-// by updatedAt wall clocks. `machine`/`machineFriendlyName` are plain informational
-// attribution ("which note belongs to what machine"); the retired FleetSync/move
-// provenance keys (sourceMachine, originMachine, previousMachine,
-// targetMachineFriendlyName, openedFrom, sourceContext, trashMachine, movedAt)
-// are v1-only and dropped by `migrateStoreToV2`.
+// integer bumped on every local mutation — note versions are ordered by rev,
+// never by updatedAt wall clocks. `machine`/`machineFriendlyName` are plain
+// informational attribution ("which note belongs to what machine"); the
+// retired FleetSync/move provenance keys (sourceMachine, originMachine,
+// previousMachine, targetMachineFriendlyName, openedFrom, sourceContext,
+// trashMachine, movedAt) are v1-only and dropped by `migrateStoreToV2`.
 export const FRONTMATTER_V2_KEYS = [
   'id', 'title', 'labels', 'status', 'folder', 'contentFormat',
   'titleLocked', 'titleSource', 'titleContentFingerprint',
@@ -72,34 +68,8 @@ function parsePositiveInt(value, fallback) {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }
 
-function parseBoolean(value) {
-  if (typeof value === 'boolean') return value;
-  if (value == null || value === '') return null;
-  if (/^(true|1|yes|online)$/i.test(String(value))) return true;
-  if (/^(false|0|no|offline)$/i.test(String(value))) return false;
-  return null;
-}
-
 function objectValue(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-}
-
-function pickString(entry, keys, fallback = '') {
-  for (const key of keys) {
-    const value = entry?.[key];
-    if (value != null && String(value).trim()) return String(value).trim();
-  }
-  return fallback;
-}
-
-function pickTimestamp(entry, keys) {
-  for (const key of keys) {
-    const value = entry?.[key];
-    if (!value) continue;
-    const d = new Date(value);
-    if (!Number.isNaN(d.getTime())) return d.toISOString();
-  }
-  return '';
 }
 
 function hasObjectKeys(value) {
@@ -128,24 +98,6 @@ function paginationFrom(value, fallback = {}) {
     next_offset: nextOffset,
     order: p.order || fallback.order || 'updated_at_desc',
   };
-}
-
-function maxISO(values) {
-  let max = '';
-  for (const value of values) {
-    if (!value) continue;
-    const time = Date.parse(value);
-    if (Number.isNaN(time)) continue;
-    if (!max || time > Date.parse(max)) max = new Date(time).toISOString();
-  }
-  return max;
-}
-
-function normalizeCapabilities(value) {
-  if (Array.isArray(value)) return value.map(v => String(v)).filter(Boolean);
-  if (value && typeof value === 'object') return value;
-  if (value == null || value === '') return [];
-  return [String(value)];
 }
 
 // Any UUID-SHAPED id is accepted as a stable identity (8-4-4-4-12 hex), not just
@@ -602,10 +554,9 @@ function machineFriendlyNameFromFields(fields) {
 }
 
 /// Stable machine identity for note attribution — never a cosmetic display
-/// name (the old cosmetic Computer Name drifted from manifest slugs and
-/// fabricated phantom machine rows). Resolution order:
-///   1. $HASNA_NOTES_MACHINE (explicit override; legacy name honored one release),
-///   2. `machine` in the sync client config (~/.config/hasna-notes/config.json
+/// name. Resolution order:
+///   1. $HASNA_NOTES_MACHINE (explicit override),
+///   2. `machine` in the notes config (~/.config/hasna-notes/config.json
 ///      or $HASNA_NOTES_CONFIG) — the configured identity,
 ///   3. short hostname (pre-first-dot), else 'unknown'.
 export function machineIdentity() {
@@ -613,16 +564,7 @@ export function machineIdentity() {
   if (override) return override;
   try {
     const configPath = hasnaEnv('CONFIG') || join(homedir(), '.config', 'hasna-notes', 'config.json');
-    let configured = '';
-    try {
-      configured = String(JSON.parse(readFileSync(configPath, 'utf8')).machine || '').trim();
-    } catch {
-      // Pre-rename default location, one-release fallback. Assembled from
-      // fragments so the case-insensitive rename gate never matches this
-      // compatibility path itself.
-      const legacy = join(homedir(), '.config', 'pers' + 'onalnotes', 'config.json');
-      configured = String(JSON.parse(readFileSync(legacy, 'utf8')).machine || '').trim();
-    }
+    const configured = String(JSON.parse(readFileSync(configPath, 'utf8')).machine || '').trim();
     if (configured) return configured;
   } catch { /* not configured — fall through to the hostname */ }
   const short = String(hostname() || '').split('.')[0].trim();
@@ -803,149 +745,6 @@ export async function saveSettings(settings, root = dataRoot()) {
   };
   await writeFile(file, JSON.stringify(next, null, 2) + '\n');
   return next;
-}
-
-function machineFromEntry(entry) {
-  const e = objectValue(entry);
-  const id = pickString(e, ['id', 'slug', 'machineId', 'name', 'hostname']);
-  if (!id) return null;
-  const slug = pickString(e, ['slug'], id);
-  const friendlyName = pickString(e, ['friendlyName', 'displayName', 'label', 'title']);
-  const displayName = friendlyName || pickString(e, ['displayName', 'name'], slug || id);
-  const online = parseBoolean(e.online ?? e.isOnline ?? e.reachable);
-  const status = pickString(e, ['status', 'state', 'availability'], online === true ? 'online' : (online === false ? 'offline' : 'unknown'));
-  const updatedAt = pickTimestamp(e, ['updatedAt', 'lastUpdated', 'modifiedAt']);
-  const lastSeenAt = pickTimestamp(e, ['lastSeenAt', 'lastHeartbeatAt', 'heartbeatAt', 'seenAt']);
-  const syncedAt = pickTimestamp(e, ['syncedAt', 'lastSyncedAt', 'notesSyncedAt']);
-  const recentActivityAt = pickTimestamp(e, ['recentActivityAt', 'lastActivityAt', 'activityAt']);
-  return {
-    id,
-    slug,
-    displayName,
-    friendlyName,
-    platform: pickString(e, ['platform', 'os'], 'unknown'),
-    status,
-    online,
-    source: pickString(e, ['source', 'sourceMachine', 'sourceId']),
-    origin: pickString(e, ['origin', 'originMachine', 'originId']),
-    updatedAt,
-    lastSeenAt,
-    syncedAt,
-    recentActivityAt,
-    capabilities: normalizeCapabilities(e.capabilities),
-    metadata: objectValue(e.metadata),
-    provenance: objectValue(e.provenance),
-    sync: objectValue(e.sync),
-  };
-}
-
-export function parseMachineManifestJSON(raw) {
-  let parsed = raw;
-  if (typeof raw === 'string' || Buffer.isBuffer(raw)) {
-    parsed = JSON.parse(String(raw));
-  }
-  const root = Array.isArray(parsed) ? { machines: parsed } : objectValue(parsed);
-  const entries = Array.isArray(root.machines) ? root.machines
-    : Array.isArray(root.items) ? root.items
-      : Array.isArray(root.data) ? root.data
-        : [];
-  return entries.map(machineFromEntry).filter(Boolean);
-}
-
-/// The optional machine manifest file is the ONLY discovery source (friendly
-/// names/slugs for machine rows). The old FleetSync-era fallback that executed
-/// an external `machines` CLI was removed with the rest of the fleet engine —
-/// missing/unreadable manifest simply yields an empty list and machine rows
-/// come purely from note frontmatter.
-export async function loadMachineManifest(opts = {}) {
-  const manifestPath = opts.manifestPath || opts.manifest || machinesManifestFile();
-  const raw = await readFile(manifestPath, 'utf8').catch(() => null);
-  if (!raw) return [];
-  try { return parseMachineManifestJSON(raw); }
-  catch { return []; }
-}
-
-function machineAliases(machine, idOverride = '') {
-  return new Set([idOverride, machine?.id, machine?.slug].filter(Boolean).map(String));
-}
-
-function noteCountsForMachine(notes, aliases) {
-  const set = aliases instanceof Set ? aliases : new Set([aliases].filter(Boolean).map(String));
-  const mine = notes.filter(n => set.has(n.machine));
-  const active = mine.filter(n => n.status !== 'archived' && n.status !== 'trash');
-  return {
-    noteCount: active.length,
-    activeNoteCount: active.length,
-    archivedNoteCount: mine.filter(n => n.status === 'archived').length,
-    trashNoteCount: mine.filter(n => n.status === 'trash').length,
-    totalNoteCount: mine.length,
-    latestNoteUpdatedAt: maxISO(mine.map(n => n.updatedAt)),
-  };
-}
-
-function machineDetailFrom(machine, notes, idOverride = '') {
-  const id = idOverride || machine?.id || '';
-  const aliases = machineAliases(machine, id);
-  const counts = noteCountsForMachine(notes, aliases);
-  const recentActivityAt = maxISO([
-    machine?.recentActivityAt,
-    machine?.syncedAt,
-    machine?.lastSeenAt,
-    machine?.updatedAt,
-    counts.latestNoteUpdatedAt,
-  ]);
-  return {
-    id,
-    slug: machine?.slug || id,
-    displayName: machine?.displayName || machine?.friendlyName || id,
-    friendlyName: machine?.friendlyName || '',
-    platform: machine?.platform || 'unknown',
-    status: machine?.status || 'unknown',
-    online: machine?.online ?? null,
-    source: machine?.source || (machine ? 'open-machines' : 'notes'),
-    origin: machine?.origin || '',
-    updatedAt: machine?.updatedAt || counts.latestNoteUpdatedAt || '',
-    lastSeenAt: machine?.lastSeenAt || '',
-    syncedAt: machine?.syncedAt || '',
-    recentActivityAt,
-    capabilities: machine?.capabilities ?? [],
-    metadata: machine?.metadata ?? {},
-    provenance: machine?.provenance ?? {},
-    sync: machine?.sync ?? {},
-    ...counts,
-  };
-}
-
-export async function listMachineDetails(opts = {}, root = dataRoot()) {
-  const notes = await loadNotes(root);
-  const byId = new Map();
-  const aliasToId = new Map();
-  for (const machine of await loadMachineManifest(opts)) {
-    const detail = machineDetailFrom(machine, notes);
-    byId.set(detail.id, detail);
-    for (const alias of machineAliases(machine, detail.id)) aliasToId.set(alias, detail.id);
-  }
-  for (const note of notes) {
-    if (!note.machine || aliasToId.has(note.machine) || byId.has(note.machine)) continue;
-    const detail = machineDetailFrom(null, notes, note.machine);
-    byId.set(note.machine, detail);
-    aliasToId.set(note.machine, note.machine);
-  }
-  const local = opts.thisMachine || machineIdentity();
-  if (local && !aliasToId.has(local) && !byId.has(local)) byId.set(local, machineDetailFrom(null, notes, local));
-  const items = [...byId.values()].sort((a, b) => {
-    const d = Date.parse(b.recentActivityAt || b.updatedAt || 0) - Date.parse(a.recentActivityAt || a.updatedAt || 0);
-    if (d) return d;
-    return String(a.displayName).localeCompare(String(b.displayName));
-  });
-  return { items, total: items.length };
-}
-
-export async function getMachineDetails(id, opts = {}, root = dataRoot()) {
-  const machineId = String(id || '').trim();
-  if (!machineId) throw new Error('machine_required');
-  const page = await listMachineDetails(opts, root);
-  return page.items.find(m => m.id === machineId || m.slug === machineId) || machineDetailFrom(null, await loadNotes(root), machineId);
 }
 
 function addDays(isoOrDate, days) {

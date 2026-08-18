@@ -1,8 +1,8 @@
 // Hasna Notes self-hosted server — SQLite storage layer (bun:sqlite).
 // Single-file database, WAL mode, zero external services. Schema mirrors the
 // hosted platform tables that are part of the personalnotes/v1 dialect
-// (notes, note_events, sync_batches, api_keys, sessions, device/otp auth)
-// plus the S2 superset: per-tenant monotonic `seq` and `purged_at`.
+// (notes, note_events, api_keys, sessions, device/otp auth) plus the S2
+// superset: per-tenant monotonic `seq` and `purged_at`.
 
 import { Database } from 'bun:sqlite';
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from 'node:fs';
@@ -118,18 +118,6 @@ CREATE TABLE IF NOT EXISTS note_events (
   metadata TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL
 );
-
-CREATE TABLE IF NOT EXISTS sync_batches (
-  id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL,
-  idempotency_key TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'applied',
-  request_hash TEXT NOT NULL,
-  response_json TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS sync_batches_tenant_idem_uq
-  ON sync_batches (tenant_id, idempotency_key);
 
 CREATE TABLE IF NOT EXISTS seq_counters (
   tenant_id TEXT PRIMARY KEY,

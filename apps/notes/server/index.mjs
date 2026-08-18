@@ -7,13 +7,12 @@
 //        HASNA_NOTES_SERVER_DB, HASNA_NOTES_SERVER_URL,
 //        HASNA_NOTES_SERVER_AUTO_APPROVE=1, HASNA_NOTES_SERVER_DEV=1,
 //        HASNA_NOTES_SERVER_JWT_SECRET
-//        (legacy pre-rename server env names still honored one release)
 
 import { openDb } from './db.mjs';
 import { createApp, resolveConfig, SERVICE, VERSION } from './app.mjs';
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
-  console.log(`${SERVICE} v${VERSION} — self-hosted Hasna Notes sync server (personalnotes/v1 dialect)
+  console.log(`${SERVICE} v${VERSION} — self-hosted Hasna Notes server (personalnotes/v1 dialect)
 
 Usage: bun index.mjs [--port <n>] [--host [addr]] [--db <path>] [--auto-approve] [--dev]
 

@@ -6,8 +6,8 @@ forward-compatible with the installable `@hasna/notes` CLI/MCP package.
 
 ## What it is
 
-- A minimal, Google-Keep-simple UI: a slim sidebar (machines dropdown, Home,
-  collapsible Notes/Labels, Archive, Trash) beside one clean content area — a
+- A minimal, Google-Keep-simple UI: a slim sidebar (Home, collapsible
+  Notes/Labels, Archive, Trash) beside one clean content area — a
   centered quick-note composer on Home, a flat notes list, and a plain
   title + body editor.
 - **Voice capture is the core loop**: press record, watch the transcript stream in
@@ -17,8 +17,8 @@ forward-compatible with the installable `@hasna/notes` CLI/MCP package.
   disk is the contract.
 - **Agentic tools** shared by the app's sidecar chat, CLI, and MCP: note search,
   summarization, organization, consolidation, and confirmation-gated writes.
-- Per-note **status / labels / machine attribution** with Archive and per-machine
-  Trash (configurable retention), searchable via a Cmd+K popover.
+- Per-note **status / labels / machine attribution** with Archive and Trash
+  (configurable retention), searchable via a Cmd+K popover.
 
 ## Data format — the contract
 
@@ -73,9 +73,9 @@ The markdown body goes here.
 This is frontmatter **schema v2**. Key order is fixed: `id, title, labels,
 status, folder, contentFormat, title metadata, rev, createdAt, updatedAt,
 author, agent, machine, machineFriendlyName, actor provenance, archive/trash
-timestamps`. `rev` is the sync ordering signal — a per-note monotonic integer
-bumped past the on-disk value on every local mutation; `updatedAt` wall clocks
-are a display hint only and never decide conflicts.
+timestamps`. `rev` is a per-note monotonic integer bumped past the on-disk
+value on every local mutation; `updatedAt` wall clocks are a display hint only
+and never decide version order.
 
 Notes written by older versions still parse without migration (v2 auto-detects
 on read): `tags`, `contentType`, missing `folder`/`contentFormat`/`rev` keys,
@@ -112,7 +112,7 @@ node cli/notes.mjs markdown apply-command bold --text hello --selection-start 0 
 
 Hasna Notes records each new local note as a durable `notes` / `note.created`
 event. It does not run a filesystem watcher or a polling monitor. CLI, MCP,
-notes-agent, consolidation, sync import/conflict-copy, and the native app write
+notes-agent, consolidation, server-applied imports, and the native app write
 the event from their existing create path. The shared JavaScript save boundary
 also emits for every absent target, so direct library callers are covered. Web
 duplicate uses `quickCreate`, so
@@ -126,7 +126,7 @@ Existing notes are marked as a clean baseline on first use and are not replayed
 as new. Baseline creation requires a strict, complete read of every note; an
 enumeration, read, or parse failure leaves the baseline absent rather than
 silently accepting a partial store. A metadata-only pre-save intent plus startup
-and post-sync reconciliation recovers a crash between saving the note and
+and post-write reconciliation recovers a crash between saving the note and
 enqueuing its event. When `<root>/events` is unavailable, the intent is fsynced
 to the owner-only `<root>/notes/.note-created-intents` fallback on the same
 note-store filesystem and migrated after the canonical event state recovers.
@@ -150,11 +150,11 @@ notes events status --json
 ```
 
 Archive and Trash are first-class note states. Normal Delete moves a note to
-per-machine Trash; deleting a note already in Trash, or calling an explicit purge,
+Trash; deleting a note already in Trash, or calling an explicit purge,
 permanently removes the file. Trash retention defaults to 30 days and is stored in
-`~/.hasna/apps/notes/settings.json`. Notes also carry provenance metadata for
-agent-created notes and synced notes: actor type/name, source machine, origin/current
-machine, previous machine, opened-from/source context, and lifecycle timestamps.
+`~/.hasna/apps/notes/settings.json`. Notes also carry provenance metadata:
+actor type/name, machine attribution, opened-from/source context, and lifecycle
+timestamps.
 
 ## Project layout
 
@@ -167,7 +167,6 @@ Sources/HasnaNotesCore/              Pure, UI-free logic (a library product)
   FolderStore.swift                 folders.json persistence (empty folders survive)
   LabelStore.swift                  labels.json persistence + normalization
   SettingsStore.swift               settings.json persistence (trash retention)
-  MachineManifest.swift             machines.json manifest read (machine attribution)
   NoteCreatedEvents.swift           Native crash-safe note.created spool + reconciliation
 Sources/HasnaNotesApp/              Native WKWebView shell (recording, bridges, sidecar)
 Sources/HasnaNotesSmoke/             CLI smoke test for the store + bridges (no Xcode needed)
@@ -231,87 +230,39 @@ notes-mcp
 
 `notes`, `notes-mcp`, and `notes-serve` are the documented binaries. The
 deprecated `hasna-notes` / `hasna-notes-mcp` aliases are dropped, and the
-pre-rename binaries are not shipped — `notes-mcp` is the only MCP entry point
-and API-key presence selects the hosted path.
+pre-rename binaries are not shipped.
 
-> **Wire dialect note.** The sync protocol between this app and any Hasna
+> **Wire dialect note.** The protocol between this app and any Hasna
 > Notes-compatible server is `personalnotes/v1` (the future hosted SaaS keeps
 > that dialect name, so it is preserved verbatim in the codebase and in this
 > README). The protocol is not renamed as part of the `notes` rename — only
 > the app, package, and binary names are.
 
-Server sync is optional. Local mode never calls any API unless explicitly
-configured. The same client speaks to the local server
-(http://127.0.0.1:8788, the default) or a self-hosted server — set
-`HASNA_NOTES_API_URL` (or config `apiUrl`) to switch backends.
+### Talking to a notes server (single-server model)
+
+The client is a plain HTTP API client speaking the `personalnotes/v1` dialect
+to exactly one notes server. Server access is optional: local mode never calls
+any API unless configured. Point the client at a server with
+`HASNA_NOTES_API_URL` (or config `apiUrl`); `HASNA_NOTES_API_KEY` is the
+bearer credential for the self-hosted server. Without an API URL the client
+fails closed — it never guesses a server.
 
 ```bash
-notes auth device                      # device-code sign-in (either backend)
-notes auth login --email you@example.com
-notes auth verify --email you@example.com --code 123456
-notes sync                             # push local notes, pull all machines' notes
-notes sync --dry-run --json            # preview without writing
-notes cloud status
-notes cloud list --json
-HASNA_NOTES_API_KEY=pn_... notes-mcp   # API-key presence selects the hosted path
+# Run the self-hosted server (SQLite by default; PostgreSQL when
+# HASNA_NOTES_DATABASE_URL is set):
+bunx notes-server            # or: bun server/index.mjs --port 8788
 ```
 
-`notes sync` maps the local markdown store to `/api/v1/sync` batches:
-notes from every machine converge on every machine with per-machine attribution
-preserved, purges propagate as tombstones (deletions never resurrect), and
-concurrent edits keep both versions. Design and the conflict policy:
-[docs/sync.md](docs/sync.md).
-
-### Automatic sync (macOS and Linux)
-
-Sync does not need the app open. `notes sync --watch` runs a daemon
-that polls on an interval (config `syncIntervalMinutes`, default 5 minutes,
-floor 1, jittered) AND watches the notes folder, so local edits sync within
-seconds. One daemon per store; every run takes a stale-safe lock so manual
-runs, the daemon, and the macOS app never double-sync.
-
-Install it as a user service — the same two commands on both platforms:
-
-```bash
-notes auth device               # once per machine
-notes sync --install-service    # writes the service file + prints the enable command
-
-# macOS  -> ~/Library/LaunchAgents/com.hasna.notes.sync.plist   (launchctl load ...)
-# Linux  -> ~/.config/systemd/user/notes-sync.service     (systemctl --user enable --now notes-sync)
-
-notes sync status               # last run, server, cursor, errors
-notes sync --uninstall-service  # stop + remove
-```
-
-**macOS gotcha — LAN addresses and Local Network Privacy.** macOS silently
-blocks background launchd agents from LAN (RFC1918/link-local) addresses:
-connections fail with `EHOSTUNREACH` and *no permission prompt ever appears*.
-A self-hosted server reached by a bare hostname or `192.168.x.x` address will
-therefore sync fine when you run `notes sync` by hand — and fail
-under the installed daemon. `sync --install-service` detects this on macOS:
-it resolves the configured API URL and, when the host lands on a LAN address,
-prefers the machine's Tailscale MagicDNS FQDN (e.g.
-`http://my-server.example.ts.net:8788` — mesh-VPN traffic is not LNP-gated)
-and saves it to the config; without Tailscale it prints what to change.
-`sync --install-service --dry-run` previews the check and the service file
-without writing anything. Sync failures also surface the underlying network
-code (`fetch failed (EHOSTUNREACH ...)`) with this explanation attached.
-
-Daemon logs go to `~/Library/Logs/HasnaNotes/sync.log` (macOS) or
-`~/.local/state/hasna-notes/sync.log` (Linux). Every attempt — including
-failures — is recorded in `<data-root>/sync-status.json`; the macOS app shows
-it under Settings → Machines, and a failing sync is always shown as failing,
-never as a green checkmark. The macOS app additionally runs the same CLI sync
-on a background timer while it is open and hydrates the UI after each pull, so
-other machines' notes appear without restarting the app.
+Multi-machine sync machinery (the `notes sync`/`cloud`/`billing` verbs, the
+sync daemon and service install, sync-state files, the machine manifest, and
+the Machines UI surface) was removed in 0.2.0 — see
+[docs/sync.md](docs/sync.md) for the removal note. The `personalnotes/v1`
+dialect and the server's CRUD/export endpoints are unchanged.
 
 The CLI and MCP both default lists to the latest 10 notes and return pagination
 metadata in JSON/MCP responses. CLI/MCP creation supports actor provenance
 (`actorType`, `actorName`) and machine attribution (`targetMachine`, plus a
-friendly display name). Machine details are available through `notes machines
-list`, `notes machines details <id>`, and MCP `machines_list` /
-`machines_details`; details combine machines fields with notes-derived
-fallback counts and activity timestamps.
+friendly display name).
 Markdown helpers are available in MCP as `markdown_commands`, `markdown_render`,
 `markdown_plain_text`, and `markdown_apply_command`.
 

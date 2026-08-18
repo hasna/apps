@@ -16,7 +16,6 @@ The native host injects `window.__BOOT__` before `web/app.js` runs and later cal
 
 ```js
 {
-  thisMachine: "studio-mac",
   listDefaults: { limit: 10 },
   notes: [{
     id: "uuid-or-file-id",
@@ -52,46 +51,8 @@ The native host injects `window.__BOOT__` before `web/app.js` runs and later cal
     titleSource: "default", // default | generated | manual
     titleContentFingerprint: ""
   }],
-	  machines: [{
-	    id: "studio-mac",
-	    slug: "studio-mac",
-	    displayName: "Apple Studio",
-	    friendlyName: "Apple Studio",
-	    platform: "macos",
-	    status: "online",
-	    online: true,
-	    noteCount: 14,
-	    activeNoteCount: 14,
-	    archivedNoteCount: 1,
-	    trashNoteCount: 0,
-	    totalNoteCount: 15,
-	    latestNoteUpdatedAt: "2026-06-22T09:00:00Z",
-	    lastSeenAt: "2026-06-22T09:00:00Z",
-	    recentActivityAt: "2026-06-22T09:00:00Z",
-	    updatedAt: "2026-06-22T09:00:00Z",
-	    // Sync facts are OPTIONAL and never fabricated: hosts/manifests may send
-	    // them; machines.details(...) additionally overlays THIS machine's row
-	    // from the boot `sync` object (syncedAt = lastSuccessAt, capability
-	    // "notes-sync" once a sync client is configured — status ok OR error).
-	    // Rows for machines whose sync state is unknown simply omit/empty them.
-	    syncedAt: "2026-07-02T09:00:00.000Z",
-	    capabilities: ["notes-sync"]
-	  }],
   settings: {
     trashRetentionDays: 30
-  },
-  sync: {
-    // Pass-through of <data-root>/sync-status.json (written by the CLI/daemon
-    // after EVERY sync attempt). Hosts send { status: "never" } when the file
-    // is missing. On "error", `error` holds the failure message and
-    // lastSuccessAt keeps the previous good run.
-    status: "ok", // "never" | "ok" | "error"
-    lastSyncAt: "2026-07-02T09:00:00.000Z",
-    lastSuccessAt: "2026-07-02T09:00:00.000Z",
-    error: "",
-    apiUrl: "http://127.0.0.1:8788",
-    cursor: "2026-07-02T09:00:00.000Z",
-    runner: "daemon" // "cli" | "daemon"
   }
 }
 ```
@@ -123,8 +84,7 @@ omitted when `build` is empty). When the global is absent or `version` is empty
 
 Vision 05007066 ("very simple, like Google Keep") defines the shell:
 
-- Sidebar: NO app name. The machines filter dropdown sits at the top
-  (`#machines-dd-btn` + `#machines-list`), then Home, New Note, the collapsible
+- Sidebar: NO app name. Home, New Note, the collapsible
   Notes section (`#sec-notes` + `#notes-list`), the collapsible Labels filter
   section (`#labels-section` + `#labels-list`), an Archive entry
   (`#nav-archive`), a Trash entry (`#nav-trash`), and Settings at the bottom.
@@ -140,13 +100,10 @@ Vision 05007066 ("very simple, like Google Keep") defines the shell:
   copy feedback is a checkmark icon swap only — never "Copied" text.
 - Search is a Cmd+K-style popover (`#search-pop`), not a page: Cmd+K (Ctrl+K)
   toggles it, typing filters notes, Enter opens the first match, Esc closes.
-  Search ignores the sidebar machine/label/status filters, so opening a match
+  Search ignores the sidebar label/status filters, so opening a match
   (Enter or row click) reconciles those filters to whatever the chosen note
   needs — the editor MUST show the note the user picked, never a substitute.
-  A machine-filter mismatch reconciles by JUMPING the machine filter to the
-  picked note's own machine (vision 9f8fba61: selecting another machine's note
-  navigates to that machine and shows it); label/status filters reset as
-  needed. Notes without machine attribution fall back to All Machines.
+  Label/status filters reset as needed.
 - Home: the quick-note composer is the hero, vertically centered. Below it the
   Recent notes render as a FLAT list (no card borders/backgrounds/shadows, no
   border-bottom between rows) with hover copy whose feedback is a checkmark
@@ -420,7 +377,6 @@ window.HasnaNotes.notes.archive(noteId)
 window.HasnaNotes.notes.trash(noteId)
 window.HasnaNotes.notes.restore(noteId)
 window.HasnaNotes.notes.purge(noteId)
-window.HasnaNotes.notes.moveToMachine(noteId, machine, friendlyName?)
 window.HasnaNotes.notes.info(noteId)
 window.HasnaNotes.notes.setStatusFilter("active" | "archived" | "trash" | "all")
 window.HasnaNotes.notes.cleanupExpiredTrash()
@@ -428,17 +384,11 @@ window.HasnaNotes.notes.settings()
 window.HasnaNotes.notes.setTrashRetentionDays(days)
 ```
 
-`notes.moveToMachine(...)` re-attributes a note to another machine ("Move to
-machine" in the row context menu, shown on active notes). In schema v2 this is
-a plain update of `note.machine` + `note.machineFriendlyName` (no move
-provenance trail is kept). It persists through the native `move` bridge action
-(`window.webkit.messageHandlers.notes.postMessage({ action: "move", note })`),
-switches the machine filter to the destination via `machines.select(...,
-{ reason: "move" })`, and dispatches `hasna:note-move` with `{ targetMachine,
-targetMachineFriendlyName, selectedMachine, selectedNoteId, view }` on top of
-the standard note detail. The fleet rsync engine stays cut — a note's `machine`
-frontmatter is attribution ("which note belongs to what machine"), visible on
-note rows, the editor meta line, and `notes.info(noteId)`.
+A note's `machine` frontmatter is plain informational attribution ("which
+note belongs to what machine"); the machine MANIFEST surface and the
+multi-machine sync machinery were removed in 0.2.0 (see "Machine surface
+removed" below), but the attribution field itself stays on the note model and
+in the wire dialect, visible in `notes.info(noteId)`.
 
 `notes.trash(noteId)` and `notes.purge(noteId)` show the app confirmation before
 mutating state. Normal delete copy should read "Move note to Trash?", while
@@ -477,126 +427,27 @@ hasna:trash-cleanup-ready
 
 All note action event details include `{ noteId, note }`.
 
-## Machine Details API
+## Machine surface removed
 
-Machines render as a compact dropdown at the TOP of the sidebar
-(`#machines-dd-btn` opens the `#machines-list` menu; the button shows the active
-filter's friendly name). Selecting a machine filters the notes list via
-`machines.select(...)`. Machine rows can render from the boot payload
-immediately. For a right-click "View details" flow, use the cached API first and
-optionally request a native refresh:
+The Machines dropdown, the Settings → Machines page, the machine details
+popover, and the `window.HasnaNotes.machines.*` / `sync` APIs were removed in
+0.2.0 together with the machine manifest and the multi-machine sync machinery
+(see docs/sync.md). The boot payload no longer carries `machines`,
+`thisMachine`, or `sync`. Hosts MUST NOT send them; the web layer ignores any
+leftover fields.
 
-```js
-window.HasnaNotes.machines.list()
-window.HasnaNotes.machines.details(machineId)
-window.HasnaNotes.machines.select(machineId, { reason, noteId, statusFilter })
-window.HasnaNotes.machines.requestDetails(machineId).then(detail => ...)
-window.HasnaNotes.view.state()
-```
-
-`machines.select(...)` canonicalizes machine aliases (`id`, `slug`,
-`friendlyName`, `displayName`), switches the main view to Notes, clears the
-sidebar label filter, resets note pagination to the latest 10, selects the
-requested note when supplied, and otherwise selects the newest visible note for
-that machine. Selecting a machine filters purely over the LOCAL synced store —
-every machine's notes are local files after sync, so `machines.select(...)`
-never round-trips the native bridge. The `machineDetails` bridge remains for
-explicit details flows only (`machines.requestDetails(...)`, Settings machine
-rows, right-click "View details").
-
-Selecting a note that belongs to a different machine than the active filter
-(search, Home recent cards, chat source chips) jumps the machine filter to the
-note's own machine and shows the note (vision 9f8fba61) — selection + render
-MUST work across machine filter switches.
-
-Right-clicking a machine row (vision f8659e18) BOTH dispatches
-`hasna:machine-context` (the integration hook, detail
-`{ machineId, machine }`) AND renders the `#machine-pop` details popover:
-display name, a "This machine" badge when the row is this machine, id/slug,
-platform, status, note counts, last activity, and last sync. It fills from the
-cached `machines.details(id)` synchronously, refreshes in place when
-`machines.requestDetails(id)` resolves, and closes on Escape, outside
-pointer-down, scroll, or selecting a machine.
-
-The web layer dispatches:
-
-```js
-window.addEventListener("hasna:machine-context", (event) => event.detail)
-window.addEventListener("hasna:machine-select", (event) => event.detail)
-window.addEventListener("hasna:machine-details-request", (event) => event.detail)
-window.addEventListener("hasna:machine-details", (event) => event.detail)
-```
-
-`hasna:machine-select` detail:
-
-```js
-{
-  machineId: "studio-mac",
-  machine: machineDetail,
-  selectedNoteId: "note-id-or-null",
-  reason: "sidebar" | "settings" | "details" | "native" | "api" | "move",
-  view: window.HasnaNotes.view.state()
-}
-```
-
-`window.HasnaNotes.view.state()` returns `{ screen, machineFilter, labelFilter,
-statusFilter, selectedId, visibleNoteIds, selectedMachine }`.
-
-Native refresh bridge:
-
-```js
-window.webkit.messageHandlers.notes.postMessage({
-  action: "machineDetails",
-  machine: "studio-mac",
-  requestId: "machine-..."
-});
-
-window.HasnaNotes.machines.receiveDetails({
-  requestId: "machine-...",
-  machine: machineDetail
-});
-```
-
-Details include manifest fields when present (`friendlyName`, `slug`/`id`,
-`online`, `status`, `platform`, activity timestamps, `syncedAt`,
-`capabilities`) and notes-derived fallbacks (`noteCount`, archive/trash counts,
-`latestNoteUpdatedAt`). Machine attribution is informational: rows come from
-the optional `~/.hasna/machines/machines.json` manifest (friendly names/slugs)
-plus the `machine` frontmatter seen in notes — the manifest FILE is the only
-discovery source (no external CLI fallback), and there is no fleet sync engine
-behind the rows; notes travel via server sync only (see Sync Status).
-
-A note's `machine` frontmatter records a STABLE identity, never a cosmetic
-display name: `$HASNA_NOTES_MACHINE` override → `machine` in the sync client
-config (`~/.config/hasna-notes/config.json`) → short hostname. The Swift
-shell (`Note.currentMachine`, also the boot `thisMachine`) and the JS lane
-(`machineIdentity()` in tools/notes-lib.mjs) resolve identically. Friendly
-names are display-layer: note rows and the editor meta line show the note's
-own `machineFriendlyName`, else the machines list's friendly name for the
-slug, else the raw slug.
+A note's `machine` frontmatter still records a STABLE identity, never a
+cosmetic display name: `$HASNA_NOTES_MACHINE` override → `machine` in the
+notes config (`~/.config/hasna-notes/config.json`) → short hostname. The Swift
+shell (`Note.currentMachine`) and the JS lane (`machineIdentity()` in
+tools/notes-lib.mjs) resolve identically. The field is attribution only.
 
 ## Sync Status
 
-Server sync is owned by the `notes` CLI (`notes sync`, the
-`sync --watch` daemon, and the shell app's background timer, which spawns the
-same bundled CLI). The web layer only DISPLAYS the outcome — it never runs
-sync itself.
-
-- The boot/hydrate payload carries the `sync` object above; the host reads it
-  from `<data-root>/sync-status.json` and hydrates after every scheduled run,
-  so pulled notes appear without user action.
-- Settings → Machines renders it in the `#sync-status-row` element:
-  - `never` / missing → the off state with a pointer to
-    `notes auth device` + `notes sync --install-service`.
-  - `ok` → "Synced <relative time> · <server host>" (green dot).
-  - `error` → "Sync failing — <error>. Last success <relative time>." (red
-    dot). An error status MUST NEVER render as the green synced state — auth
-    failures stay visible until a run succeeds.
-- The web runtime exposes the raw snapshot:
-
-```js
-window.HasnaNotes.sync.status() // last boot/hydrate `sync` object, or null
-```
+Multi-machine sync status is removed. There is no `notes sync` CLI, no sync
+daemon, no sync-status.json surface, and no Settings sync row. The client is a
+plain HTTP API client; server reachability and auth failures surface through
+the HTTP transport's own errors (see docs/sync.md).
 
 Generated titles must set:
 

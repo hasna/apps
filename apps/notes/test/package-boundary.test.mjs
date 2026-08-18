@@ -1,9 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { CONFIG_PATH, DEFAULT_API_URL } from '../sync/client.mjs';
-import { createCloudClient, NotesCloudClient } from '../cloud/index.mjs';
-import { createClient, NotesClient } from '../sync/index.mjs';
 
 async function readTree(dir, files = []) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -23,16 +20,12 @@ describe('package boundary', () => {
     expect(pkg.bin['notes-mcp']).toBe('bin/notes-mcp.mjs');
     expect(pkg.exports['./events']).toBe('./tools/notes-events.mjs');
     expect(pkg.dependencies['@hasna/events']).toBe('0.1.15');
-    expect(pkg.exports['./sync']).toBe('./sync/index.mjs');
-    // Deprecated shim kept one release for existing importers.
-    expect(pkg.exports['./cloud']).toBe('./cloud/index.mjs');
-    expect(NotesCloudClient).toBe(NotesClient);
-    expect(createCloudClient).toBe(createClient);
-  });
-
-  test('sync client defaults to the local server API and user config path', () => {
-    expect(DEFAULT_API_URL).toBe('http://127.0.0.1:8788');
-    expect(CONFIG_PATH).toContain('.config/hasna-notes/config.json');
+    // Multi-machine sync modules were removed (0.2.0) — no ./sync or ./cloud
+    // exports, and no sync/ or cloud/ files in the package.
+    expect(pkg.exports['./sync']).toBeUndefined();
+    expect(pkg.exports['./cloud']).toBeUndefined();
+    expect(pkg.files).not.toContain('sync');
+    expect(pkg.files).not.toContain('cloud/index.mjs');
   });
 
   test('public package does not include platform-only secrets or deployment code', async () => {

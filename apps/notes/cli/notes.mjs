@@ -11,9 +11,7 @@ import {
   deleteLabelEverywhere,
   deleteNote,
   generateTitle,
-  getMachineDetails,
   getNote,
-  listMachineDetails,
   listNotes,
   loadLabelList,
   loadNotes,
@@ -55,8 +53,6 @@ Usage:
   notes cleanup-trash [--yes|--force]
   notes migrate --to-v2 [--dry-run] [--json]   (alias: migrate-frontmatter)
   notes move <id> <machine>
-  notes machines list [--json]
-  notes machines details <machine> [--json]
   notes markdown commands [--json]
   notes markdown render <id> [--json]
   notes markdown plain-text <id> [--json]
@@ -197,12 +193,6 @@ async function requireDestructiveConfirmation(preview, opts, message) {
   const ok = await promptYesNo(message);
   if (!ok) lineOut('Cancelled');
   return ok;
-}
-
-function machineSummary(machine) {
-  const status = machine.status || (machine.online === true ? 'online' : 'unknown');
-  const activity = machine.recentActivityAt || machine.updatedAt || 'no-activity';
-  return `${activity}  ${machine.id}  ${machine.displayName || machine.friendlyName || machine.id}  ${status}  ${machine.noteCount || 0} active note(s)`;
 }
 
 async function bodyFromOpts(opts) {
@@ -360,27 +350,6 @@ async function commandMove(id, machine, opts) {
   });
   if (opts.json) return jsonOut(note);
   lineOut(noteSummary(note));
-}
-
-async function commandMachines(action, args, opts) {
-  if (action === 'list') {
-    const page = await listMachineDetails({ manifestPath: opts.manifest });
-    if (opts.json) return jsonOut(page);
-    for (const machine of page.items) lineOut(machineSummary(machine));
-    return;
-  }
-  if (action === 'details' || action === 'detail' || action === 'get') {
-    const detail = await getMachineDetails(requireArg(args[0], 'machine'), { manifestPath: opts.manifest });
-    if (opts.json) return jsonOut(detail);
-    lineOut(`${detail.displayName || detail.id} (${detail.id})`);
-    lineOut(`status: ${detail.status || 'unknown'}`);
-    lineOut(`online: ${detail.online == null ? 'unknown' : String(detail.online)}`);
-    lineOut(`platform: ${detail.platform || 'unknown'}`);
-    lineOut(`notes: ${detail.noteCount || 0} active / ${detail.totalNoteCount || 0} total`);
-    lineOut(`recentActivityAt: ${detail.recentActivityAt || '(none)'}`);
-    return;
-  }
-  throw new Error('unknown_machines_command');
 }
 
 async function markdownInput(idOrText, opts) {
@@ -567,7 +536,6 @@ async function main() {
   if (cmd === 'migrate') return commandMigrate(opts);
   if (cmd === 'migrate-frontmatter') return commandMigrate({ ...opts, 'to-v2': true });
   if (cmd === 'move') return commandMove(opts._[0], opts._[1], opts);
-  if (cmd === 'machines') return commandMachines(opts._[0], opts._.slice(1), opts);
   if (cmd === 'markdown') return commandMarkdown(opts._[0], opts._.slice(1), opts);
   if (cmd === 'settings') return commandSettings(opts._[0], opts._.slice(1), opts);
   if (cmd === 'labels') return commandLabels(opts._[0], opts._.slice(1), opts);
