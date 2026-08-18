@@ -4,7 +4,7 @@ import { join } from "path";
 import { loadTestersConfig, discoverScenariosFromFiles } from "./discovery.js";
 import { resetDatabase, closeDatabase } from "../db/database.js";
 
-const tmpDir = "/tmp/open-testers-discovery-test";
+const tmpDir = "/tmp/testers-discovery-test";
 
 function writeFile(name: string, content: string) {
   mkdirSync(join(tmpDir, "tests", "scenarios"), { recursive: true });

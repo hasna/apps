@@ -8,7 +8,7 @@ import { resetDatabase, closeDatabase } from "../db/database.js";
 import { detectFramework, getStarterScenarios } from "./init.js";
 
 describe("init", () => {
-  const testDir = join(tmpdir(), `open-testers-init-test-${Date.now()}`);
+  const testDir = join(tmpdir(), `testers-init-test-${Date.now()}`);
 
   beforeEach(() => {
     resetDatabase();

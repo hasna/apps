@@ -469,7 +469,7 @@ describe("workflow fanout", () => {
         target: "sandbox",
         provider: "e2b",
         env: { ANTHROPIC_API_KEY: "$ANTHROPIC_API_KEY" },
-        appSourceDir: "/tmp/open-testers-missing-app-source",
+        appSourceDir: "/tmp/testers-missing-app-source",
       },
     });
 

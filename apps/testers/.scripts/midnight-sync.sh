@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="/home/hasna/workspace/hasna/opensource/opensourcedev/open-testers"
-LOG="$REPO/.scripts/sync.log"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+LOG="$SCRIPT_DIR/sync.log"
 
 cd "$REPO"
 
