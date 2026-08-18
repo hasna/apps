@@ -54,6 +54,7 @@ function makeApp(opts?: { emailSender?: EmailSender | null }) {
               sentEmails.push(m);
             },
           },
+    keyStatus: async () => "active",
   });
 }
 
