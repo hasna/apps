@@ -20,7 +20,7 @@ own original bytes, storage credentials, source sync state, or file permissions.
 
 - derived chunks, embeddings, lexical indexes, wiki pages, backlinks, agent run
   logs, citations, and provider usage;
-- hybrid semantic search over knowledge chunks;
+- semantic search over knowledge chunks;
 - AI-native workflows such as `knowledge <prompt>`, web search, model routing,
   and wiki maintenance.
 

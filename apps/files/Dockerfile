@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
-# @hasna/files self_hosted service — ARM64 / Bun.
-# Default CMD runs files-serve (cloud / PURE REMOTE per Amendment A1: the serve
+# @hasna/files service — ARM64 / Bun.
+# Default CMD runs files-serve (Postgres backend when HASNA_FILES_DATABASE_URL is set: the serve
 # process reads/writes RDS Postgres directly with @hasna/contracts API-key auth;
 # file bytes stay in S3). The ECS one-shot migration task overrides the command
 # with `bun dist/server/migrate.js`.
@@ -25,7 +25,6 @@ WORKDIR /app
 # (pg-connection-string escalates sslmode=require to verify-full).
 COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
 ENV NODE_ENV=production \
-    HASNA_FILES_STORAGE_MODE=cloud \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
     PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem \
     OPEN_FILES_REST_HOST=0.0.0.0 \

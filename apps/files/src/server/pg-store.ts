@@ -1,7 +1,7 @@
 /**
- * PURE REMOTE (Amendment A1) Postgres data layer for the open-files service.
+ * Postgres data layer for the files service.
  *
- * The HTTP `/v1` surface reads AND writes cloud Postgres directly through the
+ * The HTTP `/v1` surface reads AND writes Postgres directly through the
  * vendored storage kit — there is no local SQLite cache or sync engine in the
  * running service. A missing/invalid DATABASE_URL is a hard, explicit error
  * (never a silent no-op).
@@ -47,7 +47,7 @@ const APP = "files";
 
 let cached: { client: TypedQueryClient; connectionSource: string } | null = null;
 
-/** Lazily build (and memoize) the cloud pool. Throws when not in cloud mode. */
+/** Lazily build (and memoize) the Postgres pool. Throws when the database URL is missing. */
 export function getCloudClient(): TypedQueryClient {
   if (cached) return cached.client;
   const pool = createCloudPoolFromEnv(APP, { applicationName: "files-serve", max: 5 });
@@ -55,12 +55,11 @@ export function getCloudClient(): TypedQueryClient {
   return cached.client;
 }
 
-/** True when the service is configured for cloud (RDS) mode. */
+/** True when the service is configured for Postgres (`HASNA_FILES_DATABASE_URL` set). */
 export function cloudEnabled(): boolean {
   const token = "FILES";
-  const mode = process.env[`HASNA_${token}_STORAGE_MODE`] ?? process.env[`${token}_STORAGE_MODE`];
   const url = process.env[`HASNA_${token}_DATABASE_URL`] ?? process.env[`${token}_DATABASE_URL`];
-  return (mode === "cloud" || mode === "remote" || mode === "hybrid") && Boolean(url);
+  return Boolean(url);
 }
 
 function parseJson<T>(raw: unknown, fallback: T): T {
@@ -1215,7 +1214,7 @@ export async function stats(client: TypedQueryClient): Promise<Record<string, un
 // ── Evidence vault (shared cross-app assets) ────────────────────────────────
 // PG mirror of the on-box `db/evidence.ts` seam. Bound to a client by the `/v1`
 // evidence routes and injected into the shared orchestration in
-// `lib/evidence.ts`, so the self-hosted service and the local CLI run the SAME
+// `lib/evidence.ts`, so the files service and the local CLI run the SAME
 // choreography over their respective stores (never a second code path).
 
 export interface ListFileAssetsQuery {

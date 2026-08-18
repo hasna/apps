@@ -1,5 +1,5 @@
 /**
- * OpenAPI 3 description of the open-files self-hosted `/v1` HTTP surface.
+ * OpenAPI 3 description of the files service `/v1` HTTP surface.
  *
  * This is the single source of truth the typed SDK is generated from
  * (`bun run build:sdk` -> `@hasna/contracts/sdk`). Keep it in sync with
@@ -16,7 +16,7 @@ export const openApiDocument = {
   info: {
     title: "FilesClient",
     version: OPENAPI_VERSION,
-    description: "Agent-first file management — index local folders and S3 buckets, tag, search, organize. Self-hosted HTTP API (PURE REMOTE, API-key auth).",
+    description: "Agent-first file management — index local folders and S3 buckets, tag, search, organize. PostgreSQL-backed HTTP API (API-key auth).",
   },
   servers: [{ url: "/v1" }],
   components: {

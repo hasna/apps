@@ -1,4 +1,4 @@
-# HTTP Service, Client Modes, Migrations, and SDK
+# HTTP Service, Client Transports, Migrations, and SDK
 
 The package ships two HTTP data paths with different purposes:
 
@@ -6,7 +6,7 @@ The package ships two HTTP data paths with different purposes:
   index and are retained for local peers and operators;
 - `/v1/*` is the authenticated service API backed directly by PostgreSQL.
 
-There is no SQLite/PostgreSQL replication, push/pull command, or hybrid cache.
+There is no SQLite/PostgreSQL replication or push/pull command.
 
 ## Shipped Executables
 
@@ -14,7 +14,7 @@ There is no SQLite/PostgreSQL replication, push/pull command, or hybrid cache.
 | --- | --- |
 | `files` | CLI over the local or HTTP data plane |
 | `files-mcp` | MCP server over stdio or Streamable HTTP |
-| `files-serve` | Local/unversioned and cloud `/v1` HTTP service |
+| `files-serve` | Local/unversioned and PostgreSQL-backed `/v1` HTTP service |
 | `files-migrate` | PostgreSQL migration ledger runner |
 
 All four executables use Bun.
@@ -23,14 +23,14 @@ All four executables use Bun.
 
 The `files` CLI and `files-mcp` resolve one store for the process lifetime:
 
-1. `HASNA_FILES_STORAGE_MODE=local` selects local SQLite even when API
-   credentials are present.
-2. `HASNA_FILES_API_URL` plus `HASNA_FILES_API_KEY` select the HTTP API store.
-3. With neither configured, local SQLite is used.
+1. `HASNA_FILES_API_URL` plus `HASNA_FILES_API_KEY` select the hosted HTTP API
+   store.
+2. With neither configured, local SQLite is used.
+3. A URL without a key (or vice versa) is a misconfiguration and fails closed
+   instead of falling back to a local database.
 
-API mode targets `<HASNA_FILES_API_URL>/v1`; callers may provide either the
-service origin or a URL already ending in `/v1`. A requested API/cloud mode
-with missing URL or key fails instead of falling back to a local database.
+The hosted API targets `<HASNA_FILES_API_URL>/v1`; callers may provide either
+the service origin or a URL already ending in `/v1`.
 
 Local storage paths can be overridden with `HASNA_FILES_DATA_DIR` and
 `HASNA_FILES_DB_PATH` (the older `FILES_DATA_DIR` and `FILES_DB_PATH` aliases
@@ -71,7 +71,6 @@ explicit opt-out and should be reserved for controlled deployments.
 Configure the service and migration runner with:
 
 ```bash
-export HASNA_FILES_STORAGE_MODE=cloud
 export HASNA_FILES_DATABASE_URL='postgresql://...'
 export HASNA_FILES_API_SIGNING_KEY='<signing-secret>'
 
@@ -88,22 +87,21 @@ Both check modes ensure that the `schema_migrations` ledger table exists, so a
 first check against a new database still requires permission to create it.
 
 `HASNA_FILES_DATABASE_URL` is service-only. CLI and MCP clients never connect
-to PostgreSQL directly. `FILES_STORAGE_MODE`, `FILES_DATABASE_URL`, and
-`HASNA_API_SIGNING_KEY` are supported aliases, but the `HASNA_FILES_*` names
-are canonical.
+to PostgreSQL directly. `FILES_DATABASE_URL` and `HASNA_API_SIGNING_KEY` are
+supported aliases, but the `HASNA_FILES_*` names are canonical.
 
 For TLS, the PostgreSQL URL follows libpq `sslmode` semantics. `verify-ca` and
 `verify-full` require a CA bundle from `PGSSLROOTCERT` or
 `NODE_EXTRA_CA_CERTS`; the database connection fails rather than silently
 downgrading verification. `files-serve` opens that connection lazily on a
-`/v1` or cloud-readiness request, not when the listener starts.
+`/v1` or readiness request, not when the listener starts.
 
 ## Health and Authentication
 
-`/health` and `/version` report package version and `local` or `remote` service
-mode. `/ready` is read-only: local mode returns ready immediately; cloud mode
-checks PostgreSQL reachability and verifies that the migration ledger has no
-pending entries.
+`/health` and `/version` report package version and the storage backend
+(`sqlite` or `postgres`). `/ready` is read-only: the SQLite backend returns
+ready immediately; the Postgres backend checks PostgreSQL reachability and
+verifies that the migration ledger has no pending entries.
 
 Every `/v1` request requires an API key. Reads require `files:read`; other HTTP
 methods require `files:write`. The built-in API store sends the configured key

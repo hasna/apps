@@ -1,22 +1,23 @@
 # CLI Reference
 
-The `files` executable manages local indexes and the remote files data plane.
+The `files` executable manages local indexes and the hosted files data plane.
 Run `files <command> --help` for the exact options, defaults, and repeatable
 flags for any command. This page mirrors the command hierarchy registered by
 the current CLI.
 
-## Client Modes
+## Client Transports
 
-Local mode is the default and uses `~/.hasna/files/files.db`. API mode is
-selected when `HASNA_FILES_API_URL` and `HASNA_FILES_API_KEY` are configured,
-unless `HASNA_FILES_STORAGE_MODE=local` is set explicitly. API mode sends
-supported data-plane operations to `<API_URL>/v1`; it is not a local cache or a
-SQLite/PostgreSQL synchronization mode.
+The local transport is the default and uses `~/.hasna/files/files.db`. The
+hosted API transport is selected when `HASNA_FILES_API_URL` and
+`HASNA_FILES_API_KEY` are both configured. It sends supported data-plane
+operations to `<API_URL>/v1`; it is not a local cache or a SQLite/PostgreSQL
+synchronization layer.
 
 Commands marked **on-box** require local files, a local SQLite index, or local
-ingestion state and fail explicitly in API mode. Commands marked **data plane**
-route through either the local or API store. **Process-local** commands manage
-configuration, event state, or diagnostics on the machine where they run.
+ingestion state and fail explicitly on the hosted transport. Commands marked
+**data plane** route through either the local or the hosted API store.
+**Process-local** commands manage configuration, event state, or diagnostics on
+the machine where they run.
 
 ## Top-Level Commands
 

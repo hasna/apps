@@ -3,12 +3,11 @@
  * reach the files data plane. {@link resolveStore} inspects the environment once
  * and returns the correct transport:
  *
- *   - `HASNA_FILES_API_URL` + `HASNA_FILES_API_KEY` present (or
- *     `HASNA_FILES_STORAGE_MODE` resolves to a cloud tier) => {@link ApiStore}
- *     (HTTPS `/v1` + bearer). `self_hosted` and `cloud` both land here.
+ *   - `HASNA_FILES_API_URL` + `HASNA_FILES_API_KEY` both present =>
+ *     {@link ApiStore} (HTTPS `/v1` + bearer).
  *   - otherwise => {@link LocalStore} (on-box SQLite, first-class).
  *
- * Throws when the cloud transport is requested but misconfigured, so a client
+ * Throws when the hosted transport is requested but misconfigured, so a client
  * can never silently drift back to the wrong dataset.
  */
 import { resolveFilesCloudStorage } from "../lib/cloud-storage.js";

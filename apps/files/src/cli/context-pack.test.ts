@@ -52,13 +52,14 @@ describe("context-pack CLI", () => {
     expect(existsSync(outPath)).toBe(false);
   });
 
-  test("refuses context-pack and search-pack in cloud (api) mode instead of querying the local island", () => {
+  test("refuses context-pack and search-pack on the hosted transport instead of querying the local island", () => {
     testDir = mkdtempSync(join(tmpdir(), "files-cli-context-pack-api-"));
     const dataDir = join(testDir, "data");
     mkdirSync(dataDir, { recursive: true });
-    // Bind the client to the cloud transport. The pack builders read on-box
-    // SQLite/FTS directly, so in api mode they must refuse (as the MCP tools
-    // already do) rather than silently return results from the wrong island.
+    // Bind the client to the hosted transport. The pack builders read on-box
+    // SQLite/FTS directly, so on the hosted transport they must refuse (as the
+    // MCP tools already do) rather than silently return results from the wrong
+    // island.
     const env = {
       ...process.env,
       HASNA_FILES_DATA_DIR: dataDir,

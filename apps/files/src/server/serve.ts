@@ -34,9 +34,9 @@ import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
 
-/** Storage mode reported by /health, /ready, /version. */
-function serviceMode(): "remote" | "local" {
-  return cloudEnabled() ? "remote" : "local";
+/** Storage backend reported by /health, /ready, /version. */
+function serviceBackend(): "postgres" | "sqlite" {
+  return cloudEnabled() ? "postgres" : "sqlite";
 }
 
 /**
@@ -237,22 +237,22 @@ async function routeRestRequest(req: Request): Promise<Response> {
       const method = req.method;
 
       // ── Liveness / readiness / version (unauthenticated) ───────────────
-      if (path === "/health") return json({ status: "ok", version: pkg.version, mode: serviceMode() });
-      if (path === "/version") return json({ status: "ok", version: pkg.version, mode: serviceMode() });
+      if (path === "/health") return json({ status: "ok", version: pkg.version, storage: serviceBackend() });
+      if (path === "/version") return json({ status: "ok", version: pkg.version, storage: serviceBackend() });
       if (path === "/ready") {
-        if (!cloudEnabled()) return json({ status: "ok", version: pkg.version, mode: "local" });
+        if (!cloudEnabled()) return json({ status: "ok", version: pkg.version, storage: "sqlite" });
         try {
           const ready = await readiness(getCloudClient());
           if (!ready.ok) {
-            return json({ status: "degraded", version: pkg.version, mode: "remote", latency_ms: ready.latencyMs, pending_migrations: ready.pending, error: ready.error }, 503);
+            return json({ status: "degraded", version: pkg.version, storage: "postgres", latency_ms: ready.latencyMs, pending_migrations: ready.pending, error: ready.error }, 503);
           }
-          return json({ status: "ok", version: pkg.version, mode: "remote", latency_ms: ready.latencyMs });
+          return json({ status: "ok", version: pkg.version, storage: "postgres", latency_ms: ready.latencyMs });
         } catch (e) {
-          return json({ status: "error", version: pkg.version, mode: "remote", error: (e as Error).message }, 503);
+          return json({ status: "error", version: pkg.version, storage: "postgres", error: (e as Error).message }, 503);
         }
       }
 
-      // ── Versioned /v1 API (API-key authenticated, PURE REMOTE) ─────────
+      // ── Versioned /v1 API (API-key authenticated) ──────────────────────
       const v1res = await v1.handle(req, url);
       if (v1res) return v1res;
 

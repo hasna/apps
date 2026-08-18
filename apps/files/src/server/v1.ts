@@ -1,10 +1,11 @@
 /**
- * Versioned `/v1` HTTP surface for the open-files self-hosted service.
+ * Versioned `/v1` HTTP surface for the files service.
  *
- * PURE REMOTE: every route reads/writes cloud Postgres through `pg-store`.
- * Guarded by @hasna/contracts stateless API-key auth (scope grammar
- * `files:<action>`) with DB-backed revocation. No route is a silent stub — a
- * missing signing secret or database URL surfaces as an explicit 5xx error.
+ * Every route reads/writes Postgres through `pg-store` when the service is
+ * configured with a database URL. Guarded by @hasna/contracts stateless API-key
+ * auth (scope grammar `files:<action>`) with DB-backed revocation. No route is
+ * a silent stub — a missing signing secret or database URL surfaces as an
+ * explicit 5xx error.
  */
 import { ApiKeyStore, verifyApiKey, type ApiKeyVerifier } from "@hasna/contracts/auth";
 import { getCloudClient } from "./pg-store.js";

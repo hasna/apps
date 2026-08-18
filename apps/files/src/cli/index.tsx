@@ -62,16 +62,17 @@ const DEFAULT_PROD_FILES_SOURCE_NAME = "prod-files-drive";
 const DEFAULT_PROD_FILES_AWS_PROFILE = process.env.HASNA_FILES_AWS_PROFILE ?? "default";
 
 /**
- * Refuse a physical, on-box-only command when the client is bound to the cloud
- * (api) transport. Indexing, Drive sync, uploads, extraction, local FTS/search
- * indexes, peer sync, the change outbox, and on-disk diagnostics are all
- * machine-local side effects the self-hosted service owns; a thin api-mode
+ * Refuse a physical, on-box-only command when the client is bound to the
+ * hosted HTTP transport. Indexing, Drive sync, uploads, extraction, local
+ * FTS/search indexes, peer sync, the change outbox, and on-disk diagnostics
+ * are all machine-local side effects the files service owns; a thin hosted
  * client must never silently read or write the local SQLite island for them.
- * Data-plane reads/writes always route through the Store and work in both modes.
+ * Data-plane reads/writes always route through the Store and work on both
+ * transports.
  */
 function requireLocalTransport(command: string): void {
   if (store().transport !== "local") {
-    console.error(chalk.red(`${command} runs on-box only and is unavailable in cloud (api) mode; the self-hosted service owns ingestion.`));
+    console.error(chalk.red(`${command} runs on-box only and is unavailable on the hosted transport; the files service owns ingestion.`));
     process.exit(1);
   }
 }
@@ -184,9 +185,9 @@ sources
       console.log(chalk.dim("No sources configured. Run: files sources add <path>"));
       return;
     }
-    // In cloud/self_hosted mode there is no single "current machine" for the
+    // On the hosted transport there is no single "current machine" for the
     // client — sources are owned by many machines — so we annotate every row
-    // with its owner. In local mode we only annotate foreign machines.
+    // with its owner. On the local transport we only annotate foreign machines.
     const isCloud = files.transport === "api";
     const currentMachineId = isCloud ? null : (await files.currentMachine()).id;
     for (const s of all) {
@@ -225,9 +226,9 @@ sources
   }) => {
     const files = store();
     const isCloud = files.transport === "api";
-    // No `currentMachine()` preflight: the Store owns machine ownership. In
-    // local mode LocalStore stamps the on-box machine; in cloud mode ApiStore
-    // drops the id and the server assigns the owning machine.
+    // No `currentMachine()` preflight: the Store owns machine ownership. On
+    // the local transport LocalStore stamps the on-box machine; on the hosted
+    // transport ApiStore drops the id and the server assigns the owning machine.
     const persistSource = (input: Parameters<typeof files.createSource>[0]) => files.createSource(input);
 
     if (pathOrS3.startsWith("s3://")) {
@@ -254,8 +255,9 @@ sources
       console.log(chalk.green(`✓ S3 source added${isCloud ? " (cloud)" : ""}: ${source.id} → s3://${bucket}${prefix ? `/${prefix}` : ""}`));
     } else {
       const absPath = resolve(pathOrS3);
-      // In cloud (self_hosted) mode the source path may live on another machine,
-      // so we do not require it to exist on this client. Local mode still checks.
+      // On the hosted transport the source path may live on another machine,
+      // so we do not require it to exist on this client. The local transport
+      // still checks.
       if (!isCloud && !existsSync(absPath)) {
         console.error(chalk.red(`Path does not exist: ${absPath}`));
         process.exit(1);
@@ -1349,8 +1351,8 @@ program
   .description("Show storage statistics")
   .option("--json", "Output as JSON")
   .action(async (opts: { json?: boolean }) => {
-    // Data-plane read: the Store reports the on-box db (local) or the cloud
-    // service (api) — never a stale local island while in api mode.
+    // Data-plane read: the Store reports the on-box db (local) or the hosted
+    // service (api) — never a stale local island on the hosted transport.
     const stats = await store().getStats();
     if (opts.json) { console.log(JSON.stringify(stats, null, 2)); return; }
 
@@ -1905,8 +1907,8 @@ program
       process.exit(1);
     }
 
-    // Data-plane read: routed through the Store so api mode reports the cloud's
-    // recent activity, not the local island.
+    // Data-plane read: routed through the Store so the hosted transport
+    // reports the service's recent activity, not the local island.
     const files = await store().recentFiles(opts.agent, limit);
     if (opts.json) { console.log(JSON.stringify(files, null, 2)); return; }
     for (const f of files) {

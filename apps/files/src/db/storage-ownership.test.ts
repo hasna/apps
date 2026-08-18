@@ -21,7 +21,7 @@
  * package no test coverage.
  *
  * Note also that src/lib/cloud-storage.ts is UNRELATED to this: it is the
- * @hasna/contracts self-hosted API client. The word "cloud" collides; the
+ * @hasna/contracts hosted API client. The word "cloud" collides; the
  * dependency does not.
  *
  * EVERY guard assertion below is paired with a positive control asserting that

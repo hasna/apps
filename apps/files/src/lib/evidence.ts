@@ -39,14 +39,15 @@ import type {
  * The DB seam behind evidence orchestration. There are two implementations:
  *
  *   - the on-box `db/evidence.ts` sqlite functions ({@link sqliteEvidenceDb},
- *     the default — used by the {@link LocalStore} and CLI/MCP in local mode);
- *   - the cloud Postgres functions in `server/pg-store.ts`, bound by the `/v1`
- *     evidence routes so the self-hosted service writes the shared vault.
+ *     the default — used by the {@link LocalStore} and CLI/MCP on the local
+ *     transport);
+ *   - the Postgres functions in `server/pg-store.ts`, bound by the `/v1`
+ *     evidence routes so the files service writes the shared vault.
  *
  * Every orchestration function below routes its metadata reads/writes through
  * this seam so the SAME choreography drives both transports — never a second,
- * mode-specific code path. Methods may be sync (sqlite) or async (Postgres); the
- * orchestration awaits them uniformly.
+ * transport-specific code path. Methods may be sync (sqlite) or async
+ * (Postgres); the orchestration awaits them uniformly.
  */
 export interface CreateUploadIntentInput {
   id?: string;
