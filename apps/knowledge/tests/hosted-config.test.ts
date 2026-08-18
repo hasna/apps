@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -9,24 +9,37 @@ import {
   resolveKnowledgeApiUrl,
 } from '../src/auth';
 import { createKnowledgeService } from '../src/service';
-import { defaultKnowledgeConfig, writeKnowledgeConfig } from '../src/workspace';
+import { defaultKnowledgeConfig, projectKnowledgeHome, writeKnowledgeConfig } from '../src/workspace';
 
 describe('API environment and server contracts', () => {
   test('workspace setup persists neither a selector nor client API placement', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-hosted-config-'));
-    const service = createKnowledgeService({ scope: 'project', cwd: dir });
+    const home = mkdtempSync(join(tmpdir(), 'ok-hosted-config-home-'));
+    const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
+    try {
+      process.env.HOME = home;
+      process.env.USERPROFILE = home;
+      const service = createKnowledgeService({ scope: 'project', cwd: dir });
 
-    const setup = service.setup();
-    expect(setup.storage_type).toBe('local');
-    expect(setup.canonical_example.active).toBe(false);
-    expect(setup.next).toContain('knowledge transport --json');
+      const setup = service.setup();
+      expect(setup.storage_type).toBe('local');
+      expect(setup.canonical_example.active).toBe(false);
+      expect(setup.next).toContain('knowledge transport --json');
 
-    const config = JSON.parse(readFileSync(join(dir, '.hasna', 'knowledge', 'config.json'), 'utf8'));
-    expect(config.mode).toBeUndefined();
-    expect(config.hosted).toBeUndefined();
+      const config = JSON.parse(readFileSync(join(projectKnowledgeHome(dir, home), 'config.json'), 'utf8'));
+      expect(config.mode).toBeUndefined();
+      expect(config.hosted).toBeUndefined();
 
-    const storage = service.storageContract();
-    expect((storage as unknown as Record<string, unknown>).hosted).toBeUndefined();
+      const storage = service.storageContract();
+      expect((storage as unknown as Record<string, unknown>).hosted).toBeUndefined();
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = previousUserProfile;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test('config writes scrub retired placement fields', () => {
@@ -44,32 +57,45 @@ describe('API environment and server contracts', () => {
 
   test('can opt into canonical example S3 artifact storage', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-hosted-canonical-storage-'));
-    const service = createKnowledgeService({ scope: 'project', cwd: dir });
+    const home = mkdtempSync(join(tmpdir(), 'ok-hosted-canonical-storage-home-'));
+    const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
+    try {
+      process.env.HOME = home;
+      process.env.USERPROFILE = home;
+      const service = createKnowledgeService({ scope: 'project', cwd: dir });
 
-    const setup = service.setup({
-      canonicalExample: true,
-    });
+      const setup = service.setup({
+        canonicalExample: true,
+      });
 
-    expect(setup.storage_type).toBe('s3');
-    expect(setup.artifact_uri_prefix).toBe('s3://example-knowledge-prod/.hasna/knowledge/');
-    expect(setup.canonical_example.active).toBe(true);
+      expect(setup.storage_type).toBe('s3');
+      expect(setup.artifact_uri_prefix).toBe('s3://example-knowledge-prod/.hasna/knowledge/');
+      expect(setup.canonical_example.active).toBe(true);
 
-    const config = JSON.parse(readFileSync(join(dir, '.hasna', 'knowledge', 'config.json'), 'utf8'));
-    expect(config.storage).toMatchObject({
-      type: 's3',
-      artifacts_root: 'artifacts',
-      s3: {
-        bucket: 'example-knowledge-prod',
-        prefix: '.hasna/knowledge',
-        region: 'us-east-1',
-        profile: 'example-infra',
-        server_side_encryption: 'AES256',
-      },
-    });
+      const config = JSON.parse(readFileSync(join(projectKnowledgeHome(dir, home), 'config.json'), 'utf8'));
+      expect(config.storage).toMatchObject({
+        type: 's3',
+        artifacts_root: 'artifacts',
+        s3: {
+          bucket: 'example-knowledge-prod',
+          prefix: '.hasna/knowledge',
+          region: 'us-east-1',
+          profile: 'example-infra',
+          server_side_encryption: 'AES256',
+        },
+      });
 
-    const storage = service.storageContract();
-    expect(storage.canonical_example.secrets.s3).toBe('example/knowledge/prod/s3');
-    expect(storage.source_ownership.owner).toBe('open-files');
+      const storage = service.storageContract();
+      expect(storage.canonical_example.secrets.s3).toBe('example/knowledge/prod/s3');
+      expect(storage.source_ownership.owner).toBe('open-files');
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = previousUserProfile;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test('stores auth locally, lets env credentials win, and clears credentials', () => {

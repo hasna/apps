@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CURRENT_SCHEMA_VERSION } from '../src/knowledge-db';
 import { createKnowledgeService } from '../src/service';
+import { projectKnowledgeHome } from '../src/workspace';
 
 function normalizeDarwinPath(path: string): string {
   return path.replace(/^\/private(?=\/var\/)/, '');
@@ -18,7 +19,7 @@ describe('knowledge service facade', () => {
     const sourceRef = `file://${source}`;
 
     const paths = service.paths();
-    expect(normalizeDarwinPath(paths.home)).toBe(normalizeDarwinPath(join(dir, '.hasna', 'knowledge')));
+    expect(normalizeDarwinPath(paths.home)).toBe(normalizeDarwinPath(projectKnowledgeHome(dir)));
     expect(paths.config.storage.type).toBe('local');
     expect(service.storageContract().source_ownership.raw_source_bytes_stored_in_open_knowledge).toBe(false);
     expect(service.validateStorage().ok).toBe(true);

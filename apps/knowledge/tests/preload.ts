@@ -1,4 +1,7 @@
 import { afterAll } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
@@ -36,9 +39,27 @@ const savedKnowledgeRouteEnv = new Map<string, string | undefined>(
 
 for (const key of KNOWLEDGE_TEST_ROUTE_ENV_KEYS) delete process.env[key];
 
+/**
+ * The canonical project-scoped knowledge home resolves under the HOME root
+ * (~/.hasna/knowledge/projects/<key>). Point the whole suite at a throwaway
+ * HOME so project-scope tests that write (initDb, setup, sync, app-wiki)
+ * never touch the developer's real ~/.hasna/knowledge. Tests that set their
+ * own HOME for a fixture restore the preload value afterwards.
+ */
+const savedHome = process.env.HOME;
+const savedUserProfile = process.env.USERPROFILE;
+const isolatedTestHome = mkdtempSync(join(tmpdir(), 'ok-knowledge-suite-home-'));
+process.env.HOME = isolatedTestHome;
+process.env.USERPROFILE = isolatedTestHome;
+
 afterAll(() => {
   for (const [key, value] of savedKnowledgeRouteEnv) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
+  if (savedHome === undefined) delete process.env.HOME;
+  else process.env.HOME = savedHome;
+  if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = savedUserProfile;
+  rmSync(isolatedTestHome, { recursive: true, force: true });
 });

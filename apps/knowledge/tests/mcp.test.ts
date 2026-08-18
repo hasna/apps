@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { delimiter, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -9,6 +9,7 @@ import { CURRENT_SCHEMA_VERSION } from '../src/knowledge-db';
 import { ingestOpenFilesManifest } from '../src/manifest-ingest';
 import { createKnowledgeService } from '../src/service';
 import { recordKnowledgeSyncConflict } from '../src/sync';
+import { projectKnowledgeHome } from '../src/workspace';
 import { budget } from './support/budget';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -31,8 +32,8 @@ function normalizeDarwinPath(path: string): string {
   return path.replace(/^\/private(?=\/var\/)/, '');
 }
 
-function expectedProjectKnowledgeHome(projectDir: string): string {
-  return normalizeDarwinPath(join(realpathSync(projectDir), '.hasna', 'knowledge'));
+function expectedProjectKnowledgeHome(projectDir: string, home = process.env.HOME || homedir()): string {
+  return normalizeDarwinPath(projectKnowledgeHome(realpathSync(projectDir), home));
 }
 
 function writeWindowsCmdShim(bin: string, name: string): void {
@@ -246,6 +247,7 @@ describe('knowledge MCP', () => {
     const dir = makeTempDir('ok-mcp-');
     const store = join(dir, 'db.json');
     const manifest = join(dir, 'manifest.jsonl');
+    const mcpHome = makeTempDir('ok-mcp-home-');
     writeFileSync(manifest, `${JSON.stringify({
       source_ref: 'open-files://file/file_mcp/revision/rev_mcp',
       file_id: 'file_mcp',
@@ -258,7 +260,7 @@ describe('knowledge MCP', () => {
       extracted_text: 'MCP resolver source text from open-files.',
     })}\n`);
     await ingestOpenFilesManifest({
-      dbPath: join(dir, '.hasna', 'knowledge', 'knowledge.db'),
+      dbPath: join(projectKnowledgeHome(dir, mcpHome), 'knowledge.db'),
       input: manifest,
     });
     const targetPath = join(dir, 'mcp-ssh-target.txt');
@@ -272,6 +274,8 @@ describe('knowledge MCP', () => {
       stderr: 'pipe',
       env: {
         ...process.env,
+        HOME: mcpHome,
+        USERPROFILE: mcpHome,
         PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}`,
         ...fakeSshCommandEnv(fakeBin),
         KNOWLEDGE_FAKE_SSH_EXPORT_JSON: JSON.stringify(emptySyncBundle()),
@@ -484,25 +488,40 @@ describe('knowledge MCP', () => {
       }));
       expect(syncConflicts.conflicts).toEqual([]);
 
-      const conflictService = createKnowledgeService({ scope: 'project', cwd: dir });
-      const conflict = recordKnowledgeSyncConflict(conflictService.ensureWorkspace().knowledgeDbPath, {
-        entityKind: 'wiki_pages',
-        entityId: 'wiki/mcp.md',
-        localMachineId: 'linux-node-b',
-        remoteMachineId: 'linux-node-a',
-        localHash: 'sha256:mcp-local',
-        remoteHash: 'sha256:mcp-remote',
-        baseHash: 'sha256:mcp-base',
-        metadata: {
-          reason: 'mcp conflict workflow',
-          remote_row: {
-            id: 'wiki/mcp.md',
-            path: 'wiki/mcp.md',
-            title: 'Remote MCP draft',
-            source_ref: 'open-files://file/mcp_conflict',
+      // The MCP server child resolves its project workspace under its own HOME
+      // (mcpHome), so the conflict must be recorded into that same canonical
+      // project home for knowledge_sync_conflict_get to see it.
+      const conflictPreviousHome = process.env.HOME;
+      const conflictPreviousUserProfile = process.env.USERPROFILE;
+      process.env.HOME = mcpHome;
+      process.env.USERPROFILE = mcpHome;
+      let conflict: Awaited<ReturnType<typeof recordKnowledgeSyncConflict>>;
+      try {
+        const conflictService = createKnowledgeService({ scope: 'project', cwd: dir });
+        conflict = recordKnowledgeSyncConflict(conflictService.ensureWorkspace().knowledgeDbPath, {
+          entityKind: 'wiki_pages',
+          entityId: 'wiki/mcp.md',
+          localMachineId: 'linux-node-b',
+          remoteMachineId: 'linux-node-a',
+          localHash: 'sha256:mcp-local',
+          remoteHash: 'sha256:mcp-remote',
+          baseHash: 'sha256:mcp-base',
+          metadata: {
+            reason: 'mcp conflict workflow',
+            remote_row: {
+              id: 'wiki/mcp.md',
+              path: 'wiki/mcp.md',
+              title: 'Remote MCP draft',
+              source_ref: 'open-files://file/mcp_conflict',
+            },
           },
-        },
-      });
+        });
+      } finally {
+        if (conflictPreviousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = conflictPreviousHome;
+        if (conflictPreviousUserProfile === undefined) delete process.env.USERPROFILE;
+        else process.env.USERPROFILE = conflictPreviousUserProfile;
+      }
 
       const conflictGet = parseToolJson(await client.callTool({
         name: 'knowledge_sync_conflict_get',
@@ -826,7 +845,7 @@ describe('knowledge MCP', () => {
         arguments: { scope: 'project' },
       }));
       expect(appWikiInit.scope).toBe('project');
-      expect(normalizeDarwinPath(appWikiInit.workspace_home)).toBe(expectedProjectKnowledgeHome(dir));
+      expect(normalizeDarwinPath(appWikiInit.workspace_home)).toBe(expectedProjectKnowledgeHome(dir, mcpHome));
 
       const appWikiNote = parseToolJson(await client.callTool({
         name: 'knowledge_app_wiki_note_add',

@@ -8,6 +8,7 @@ import { getKnowledgeDbStats, openKnowledgeDb } from '../src/knowledge-db';
 import { KNOWLEDGE_API_KEY_ENV_KEYS, KNOWLEDGE_API_URL_ENV_KEYS, RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS } from '../src/client-transport';
 import { importRulesProvenance } from '../src/rules-provenance';
 import { redactSecrets } from '../src/safety';
+import { projectKnowledgeHome } from '../src/workspace';
 import { createKnowledgeService } from '../src/service';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -159,7 +160,7 @@ describe('global rules provenance import', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-rules-apply-'));
     mkdirSync(join(dir, '.codewith', 'rules'), { recursive: true });
     writeFileSync(join(dir, '.codewith', 'rules', 'global.md'), '# Codewith Rules\n\nPreserve provenance on imports.');
-    const knowledgeHome = join(dir, '.hasna', 'knowledge');
+    const knowledgeHome = projectKnowledgeHome(dir);
     mkdirSync(knowledgeHome, { recursive: true });
     writeFileSync(join(knowledgeHome, 'db.json'), JSON.stringify({
       items: [{

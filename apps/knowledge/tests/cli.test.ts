@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { delimiter, join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CURRENT_SCHEMA_VERSION, migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
@@ -15,7 +15,7 @@ import { createKnowledgeService } from '../src/service';
 import { parseSourceRef } from '../src/source-ref';
 import { recordStorageObjects } from '../src/storage-contract';
 import { recordKnowledgeSyncConflict } from '../src/sync';
-import { defaultKnowledgeConfig, writeKnowledgeConfig } from '../src/workspace';
+import { defaultKnowledgeConfig, projectKnowledgeHome, writeKnowledgeConfig } from '../src/workspace';
 import { budget } from './support/budget';
 import { KNOWLEDGE_TEST_ROUTE_ENV_KEYS } from './preload';
 
@@ -115,8 +115,8 @@ function normalizeDarwinPath(path: string): string {
   return path.replace(/^\/private(?=\/var\/)/, '');
 }
 
-function expectedProjectKnowledgeHome(projectDir: string): string {
-  return normalizeDarwinPath(join(realpathSync(projectDir), '.hasna', 'knowledge'));
+function expectedProjectKnowledgeHome(projectDir: string, home = process.env.HOME || homedir()): string {
+  return normalizeDarwinPath(projectKnowledgeHome(realpathSync(projectDir), home));
 }
 
 function createSchema7KnowledgeDb(dbPath: string): void {
@@ -1510,7 +1510,7 @@ describe('knowledge cli', () => {
 
     const add = runCli(['add', 'Project scoped', 'Stored in the app workspace', '--scope', 'project', '--json'], dir);
     expect(add.exitCode).toBe(0);
-    expect(existsSync(join(dir, '.hasna', 'knowledge', 'db.json'))).toBe(true);
+    expect(existsSync(join(projectKnowledgeHome(dir), 'db.json'))).toBe(true);
     expect(existsSync(join(dir, '.open-knowledge', 'db.json'))).toBe(false);
   }, budget(20000));
 
@@ -1565,7 +1565,7 @@ describe('knowledge cli', () => {
 
     const add = runCli(['add', 'Canonical item', 'Stored in canonical workspace', '--scope', 'project', '--json'], dir);
     expect(add.exitCode).toBe(0);
-    expect(existsSync(join(dir, '.hasna', 'knowledge', 'db.json'))).toBe(true);
+    expect(existsSync(join(projectKnowledgeHome(dir), 'db.json'))).toBe(true);
     expect(existsSync(join(legacyHome, 'db.json'))).toBe(true);
 
     const list = runCli(['list', '--scope', 'project', '--json'], dir);
@@ -1783,7 +1783,7 @@ describe('knowledge cli', () => {
 
   test('storage validation reports forbidden workspace env and backup artifacts without reading values', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-forbidden-cloud-env-'));
-    const knowledgeHome = join(dir, '.hasna', 'knowledge');
+    const knowledgeHome = projectKnowledgeHome(dir);
     mkdirSync(join(knowledgeHome, 'migration-exports'), { recursive: true });
     writeFileSync(join(knowledgeHome, 'cloud.env'), 'HASNA_KNOWLEDGE_DATABASE_URL=not-a-real-secret\n');
     writeFileSync(join(knowledgeHome, 'knowledge.db.pre-cloud-2026-07-06.bak'), '');
@@ -1807,8 +1807,9 @@ describe('knowledge cli', () => {
 
   test('storage migration safely moves legacy app workspace to canonical knowledge path', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-workspace-migrate-'));
+    const home = mkdtempSync(join(tmpdir(), 'ok-workspace-migrate-home-'));
     const legacyHome = join(dir, '.hasna', 'apps', 'knowledge');
-    const currentHome = join(dir, '.hasna', 'knowledge');
+    const currentHome = projectKnowledgeHome(dir, home);
     mkdirSync(join(legacyHome, 'artifacts'), { recursive: true });
     writeFileSync(join(legacyHome, 'db.json'), JSON.stringify({
       items: [{
@@ -1824,7 +1825,7 @@ describe('knowledge cli', () => {
     writeFileSync(join(legacyHome, 'artifacts', 'wiki.md'), '# Migrated artifact\n');
     migrateKnowledgeDb(join(legacyHome, 'knowledge.db'));
 
-    const preview = runCli(['storage', 'migrate-legacy-path', '--scope', 'project', '--json'], dir);
+    const preview = runCli(['storage', 'migrate-legacy-path', '--scope', 'project', '--json'], dir, isolatedHomeEnv(home));
     expect(preview.exitCode).toBe(0);
     const previewOut = JSON.parse(new TextDecoder().decode(preview.stdout));
     expect(previewOut.dry_run).toBe(true);
@@ -1842,7 +1843,7 @@ describe('knowledge cli', () => {
       '--approved-by',
       'cli-test',
       '--json',
-    ], dir);
+    ], dir, isolatedHomeEnv(home));
     if (applied.exitCode !== 0) {
       throw new Error([
         `migrate-legacy-path failed with exit code ${applied.exitCode}`,
@@ -1870,11 +1871,11 @@ describe('knowledge cli', () => {
     expect(existsSync(join(legacyHome, 'db.json'))).toBe(false);
     expect(existsSync(join(appliedOut.backup_home, 'db.json'))).toBe(true);
 
-    const paths = runCli(['paths', '--scope', 'project', '--json'], dir);
+    const paths = runCli(['paths', '--scope', 'project', '--json'], dir, isolatedHomeEnv(home));
     const pathsOut = JSON.parse(new TextDecoder().decode(paths.stdout));
     expectSameExistingPath(pathsOut.home, currentHome);
 
-    const rerun = runCli(['storage', 'migrate-legacy-path', '--scope', 'project', '--json'], dir);
+    const rerun = runCli(['storage', 'migrate-legacy-path', '--scope', 'project', '--json'], dir, isolatedHomeEnv(home));
     expect(rerun.exitCode).toBe(0);
     const rerunOut = JSON.parse(new TextDecoder().decode(rerun.stdout));
     expect(rerunOut.ok).toBe(true);
@@ -1885,8 +1886,9 @@ describe('knowledge cli', () => {
 
   test('storage migration refuses to overwrite populated canonical workspace', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-workspace-migrate-refuse-'));
+    const home = mkdtempSync(join(tmpdir(), 'ok-workspace-migrate-refuse-home-'));
     const legacyHome = join(dir, '.hasna', 'apps', 'knowledge');
-    const currentHome = join(dir, '.hasna', 'knowledge');
+    const currentHome = projectKnowledgeHome(dir, home);
     mkdirSync(legacyHome, { recursive: true });
     mkdirSync(currentHome, { recursive: true });
     writeFileSync(join(legacyHome, 'db.json'), JSON.stringify({
@@ -1921,7 +1923,7 @@ describe('knowledge cli', () => {
       '--approved-by',
       'cli-test',
       '--json',
-    ], dir);
+    ], dir, isolatedHomeEnv(home));
     expect(result.exitCode).toBe(0);
     const out = JSON.parse(new TextDecoder().decode(result.stdout));
     expect(out.ok).toBe(false);
@@ -1931,10 +1933,121 @@ describe('knowledge cli', () => {
     expect(existsSync(join(legacyHome, 'TOMBSTONE.md'))).toBe(false);
   });
 
+  test('storage migrate-project-path moves the previous cwd-relative project workspace into the canonical project home', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-project-path-migrate-'));
+    const home = mkdtempSync(join(tmpdir(), 'ok-project-path-migrate-home-'));
+    const previousHome = join(dir, '.hasna', 'knowledge');
+    const canonicalHome = projectKnowledgeHome(dir, home);
+    mkdirSync(join(previousHome, 'artifacts'), { recursive: true });
+    writeFileSync(join(previousHome, 'db.json'), JSON.stringify({
+      items: [{
+        id: 'k_previous_project',
+        title: 'Previous project store item',
+        content: 'migrate to canonical project home',
+        url: null,
+        tags: [],
+        created_at: '2026-06-28T00:00:00.000Z',
+        updated_at: '2026-06-28T00:00:00.000Z',
+      }],
+    }, null, 2));
+    writeFileSync(join(previousHome, 'artifacts', 'wiki.md'), '# Project artifact\n');
+
+    const preview = runCli(['storage', 'migrate-project-path', '--scope', 'project', '--json'], dir, isolatedHomeEnv(home));
+    expect(preview.exitCode).toBe(0);
+    const previewOut = JSON.parse(new TextDecoder().decode(preview.stdout));
+    expect(previewOut.dry_run).toBe(true);
+    expect(previewOut.approval_required).toBe(true);
+    expect(previewOut.legacy_before.json_items).toBe(1);
+    expect(existsSync(canonicalHome)).toBe(false);
+
+    const applied = runCli([
+      'storage',
+      'migrate-project-path',
+      '--scope',
+      'project',
+      '--approve-write',
+      '--approved-by',
+      'cli-test',
+      '--json',
+    ], dir, isolatedHomeEnv(home));
+    expect(applied.exitCode).toBe(0);
+    const appliedOut = JSON.parse(new TextDecoder().decode(applied.stdout));
+    expect(appliedOut.ok).toBe(true);
+    expect(appliedOut.dry_run).toBe(false);
+    expect(appliedOut.checks).toMatchObject({
+      backup_matches_legacy: true,
+      migrated_matches_backup: true,
+      tombstone_written: true,
+    });
+    expectSameExistingPath(appliedOut.current_home, canonicalHome);
+    expect(existsSync(join(canonicalHome, 'db.json'))).toBe(true);
+    expect(existsSync(join(canonicalHome, 'artifacts', 'wiki.md'))).toBe(true);
+    expect(existsSync(join(previousHome, 'TOMBSTONE.md'))).toBe(true);
+    expect(existsSync(join(previousHome, 'db.json'))).toBe(false);
+    expect(existsSync(join(appliedOut.backup_home, 'db.json'))).toBe(true);
+
+    const rerun = runCli(['storage', 'migrate-project-path', '--scope', 'project', '--json'], dir, isolatedHomeEnv(home));
+    expect(rerun.exitCode).toBe(0);
+    const rerunOut = JSON.parse(new TextDecoder().decode(rerun.stdout));
+    expect(rerunOut.ok).toBe(true);
+    expect(rerunOut.approval_required).toBe(false);
+    expect(rerunOut.checks.legacy_is_tombstone).toBe(true);
+  });
+
+  test('storage migrate-project-path refuses when the canonical project home already contains data', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-project-path-migrate-refuse-'));
+    const home = mkdtempSync(join(tmpdir(), 'ok-project-path-migrate-refuse-home-'));
+    const previousHome = join(dir, '.hasna', 'knowledge');
+    const canonicalHome = projectKnowledgeHome(dir, home);
+    mkdirSync(previousHome, { recursive: true });
+    mkdirSync(canonicalHome, { recursive: true });
+    writeFileSync(join(previousHome, 'db.json'), JSON.stringify({
+      items: [{
+        id: 'k_previous_project',
+        title: 'Previous project store item',
+        content: 'legacy',
+        url: null,
+        tags: [],
+        created_at: '2026-06-28T00:00:00.000Z',
+        updated_at: '2026-06-28T00:00:00.000Z',
+      }],
+    }, null, 2));
+    writeFileSync(join(canonicalHome, 'db.json'), JSON.stringify({
+      items: [{
+        id: 'k_canonical_project',
+        title: 'Canonical project store item',
+        content: 'canonical',
+        url: null,
+        tags: [],
+        created_at: '2026-06-28T00:00:00.000Z',
+        updated_at: '2026-06-28T00:00:00.000Z',
+      }],
+    }, null, 2));
+
+    const result = runCli([
+      'storage',
+      'migrate-project-path',
+      '--scope',
+      'project',
+      '--approve-write',
+      '--approved-by',
+      'cli-test',
+      '--json',
+    ], dir, isolatedHomeEnv(home));
+    expect(result.exitCode).toBe(0);
+    const out = JSON.parse(new TextDecoder().decode(result.stdout));
+    expect(out.ok).toBe(false);
+    expect(out.warnings).toContain('current_workspace_contains_data');
+    expect(existsSync(join(previousHome, 'db.json'))).toBe(true);
+    expect(existsSync(join(canonicalHome, 'db.json'))).toBe(true);
+    expect(existsSync(join(previousHome, 'TOMBSTONE.md'))).toBe(false);
+  });
+
   test('storage merge safely imports legacy app-folder items into populated canonical store', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-workspace-merge-'));
+    const home = mkdtempSync(join(tmpdir(), 'ok-workspace-merge-home-'));
     const legacyHome = join(dir, '.hasna', 'apps', 'knowledge');
-    const currentHome = join(dir, '.hasna', 'knowledge');
+    const currentHome = projectKnowledgeHome(dir, home);
     mkdirSync(legacyHome, { recursive: true });
     mkdirSync(currentHome, { recursive: true });
     writeFileSync(join(legacyHome, 'db.json'), JSON.stringify({
@@ -1989,7 +2102,7 @@ describe('knowledge cli', () => {
       ],
     }, null, 2));
 
-    const preview = runCli(['storage', 'merge-legacy-path', '--scope', 'project', '--json'], dir);
+    const preview = runCli(['storage', 'merge-legacy-path', '--scope', 'project', '--json'], dir, isolatedHomeEnv(home));
     expect(preview.exitCode).toBe(0);
     const previewOut = JSON.parse(new TextDecoder().decode(preview.stdout));
     expect(previewOut.dry_run).toBe(true);
@@ -2012,7 +2125,7 @@ describe('knowledge cli', () => {
       '--approved-by',
       'cli-test',
       '--json',
-    ], dir);
+    ], dir, isolatedHomeEnv(home));
     expect(applied.exitCode).toBe(0);
     const appliedOut = JSON.parse(new TextDecoder().decode(applied.stdout));
     expect(appliedOut.ok).toBe(true);
@@ -2047,7 +2160,7 @@ describe('knowledge cli', () => {
       '--approved-by',
       'cli-test',
       '--json',
-    ], dir);
+    ], dir, isolatedHomeEnv(home));
     expect(rerun.exitCode).toBe(0);
     const rerunOut = JSON.parse(new TextDecoder().decode(rerun.stdout));
     expect(rerunOut.merge).toMatchObject({
@@ -2059,8 +2172,9 @@ describe('knowledge cli', () => {
 
   test('storage merge refuses conflicting duplicate IDs', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-workspace-merge-conflict-'));
+    const home = mkdtempSync(join(tmpdir(), 'ok-workspace-merge-conflict-home-'));
     const legacyHome = join(dir, '.hasna', 'apps', 'knowledge');
-    const currentHome = join(dir, '.hasna', 'knowledge');
+    const currentHome = projectKnowledgeHome(dir, home);
     mkdirSync(legacyHome, { recursive: true });
     mkdirSync(currentHome, { recursive: true });
     const baseItem = {
@@ -2087,7 +2201,7 @@ describe('knowledge cli', () => {
       '--approved-by',
       'cli-test',
       '--json',
-    ], dir);
+    ], dir, isolatedHomeEnv(home));
     expect(result.exitCode).toBe(0);
     const out = JSON.parse(new TextDecoder().decode(result.stdout));
     expect(out.ok).toBe(false);
@@ -2100,8 +2214,9 @@ describe('knowledge cli', () => {
 
   test('storage merge refuses id and short_id namespace collisions', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-workspace-merge-namespace-conflict-'));
+    const home = mkdtempSync(join(tmpdir(), 'ok-workspace-merge-namespace-home-'));
     const legacyHome = join(dir, '.hasna', 'apps', 'knowledge');
-    const currentHome = join(dir, '.hasna', 'knowledge');
+    const currentHome = projectKnowledgeHome(dir, home);
     mkdirSync(legacyHome, { recursive: true });
     mkdirSync(currentHome, { recursive: true });
     writeFileSync(join(currentHome, 'db.json'), JSON.stringify({
@@ -2151,7 +2266,7 @@ describe('knowledge cli', () => {
       ],
     }, null, 2));
 
-    const result = runCli(['storage', 'merge-legacy-path', '--scope', 'project', '--json'], dir);
+    const result = runCli(['storage', 'merge-legacy-path', '--scope', 'project', '--json'], dir, isolatedHomeEnv(home));
     expect(result.exitCode).toBe(0);
     const out = JSON.parse(new TextDecoder().decode(result.stdout));
     expect(out.ok).toBe(false);
@@ -2164,8 +2279,9 @@ describe('knowledge cli', () => {
 
   test('storage merge refuses duplicate lookup keys inside legacy store', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-workspace-merge-legacy-duplicates-'));
+    const home = mkdtempSync(join(tmpdir(), 'ok-workspace-merge-legacy-dupes-home-'));
     const legacyHome = join(dir, '.hasna', 'apps', 'knowledge');
-    const currentHome = join(dir, '.hasna', 'knowledge');
+    const currentHome = projectKnowledgeHome(dir, home);
     mkdirSync(legacyHome, { recursive: true });
     mkdirSync(currentHome, { recursive: true });
     writeFileSync(join(currentHome, 'db.json'), JSON.stringify({ items: [] }, null, 2));
@@ -2212,7 +2328,7 @@ describe('knowledge cli', () => {
       ],
     }, null, 2));
 
-    const result = runCli(['storage', 'merge-legacy-path', '--scope', 'project', '--json'], dir);
+    const result = runCli(['storage', 'merge-legacy-path', '--scope', 'project', '--json'], dir, isolatedHomeEnv(home));
     expect(result.exitCode).toBe(0);
     const out = JSON.parse(new TextDecoder().decode(result.stdout));
     expect(out.ok).toBe(false);
@@ -2265,7 +2381,7 @@ describe('knowledge cli', () => {
     expect(out.adapter.package).toBe('@hasna/machines');
     expect(typeof out.adapter.available).toBe('boolean');
     expect(out.knowledge.app_path).toBe(join('.hasna', 'knowledge'));
-    expect(normalizeDarwinPath(out.knowledge.workspace_home)).toBe(expectedProjectKnowledgeHome(dir));
+    expect(normalizeDarwinPath(out.knowledge.workspace_home)).toBe(expectedProjectKnowledgeHome(dir, home));
     expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
     expect(out.machines.length).toBeGreaterThanOrEqual(1);
     expect(out.machines.some((machine: any) => machine.local)).toBe(true);
@@ -2694,7 +2810,7 @@ describe('knowledge cli', () => {
     expect(init.exitCode).toBe(0);
     const initOut = JSON.parse(new TextDecoder().decode(init.stdout));
     expect(initOut.schema_version).toBe(CURRENT_SCHEMA_VERSION);
-    expect(existsSync(join(dir, '.hasna', 'knowledge', 'knowledge.db'))).toBe(true);
+    expect(existsSync(join(projectKnowledgeHome(dir), 'knowledge.db'))).toBe(true);
 
     const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
     expect(stats.exitCode).toBe(0);
@@ -2872,7 +2988,7 @@ describe('knowledge cli', () => {
     const dryRunOut = JSON.parse(new TextDecoder().decode(dryRun.stdout));
     expect(dryRunOut.dry_run).toBe(true);
     expect(dryRunOut.push.tables.find((table: any) => table.table === 'sources').inserted).toBe(1);
-    expect(existsSync(join(peerDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(false);
+    expect(existsSync(join(projectKnowledgeHome(peerDir), 'artifacts', 'wiki', 'README.md'))).toBe(false);
 
     const compactDryRun = runCli(['sync', 'dry-run', '--peer-workspace', peerDir, '--scope', 'project'], sourceDir);
     expect(compactDryRun.exitCode).toBe(0);
@@ -2885,7 +3001,7 @@ describe('knowledge cli', () => {
     const pushOut = JSON.parse(new TextDecoder().decode(push.stdout));
     expect(pushOut.ok).toBe(true);
     expect(pushOut.push.artifacts.copied).toBeGreaterThanOrEqual(1);
-    expect(existsSync(join(peerDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
+    expect(existsSync(join(projectKnowledgeHome(peerDir), 'artifacts', 'wiki', 'README.md'))).toBe(true);
 
     const peerStats = runCli(['db', 'stats', '--scope', 'project', '--json'], peerDir);
     expect(peerStats.exitCode).toBe(0);
@@ -2956,7 +3072,7 @@ describe('knowledge cli', () => {
     expect(importedOut.protocol_version).toBe(2);
     expect(importedOut.min_protocol_version).toBe(1);
     expect(importedOut.artifacts.copied).toBe(4);
-    expect(existsSync(join(peerDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
+    expect(existsSync(join(projectKnowledgeHome(peerDir), 'artifacts', 'wiki', 'README.md'))).toBe(true);
   }, budget(10000));
 
   test('ssh sync rejects remote export without protocol handshake', () => {
@@ -3377,7 +3493,7 @@ describe('knowledge cli', () => {
     expect(packOut.budgets.estimated_tokens).toBeLessThanOrEqual(packOut.budgets.max_tokens);
     expect(packOut.evidence[0].citation_ids.length).toBeGreaterThan(0);
 
-    const db = openKnowledgeDb(join(dir, '.hasna', 'knowledge', 'knowledge.db'));
+    const db = openKnowledgeDb(join(projectKnowledgeHome(dir), 'knowledge.db'));
     // Relative to now, NOT a hardcoded date: this row is filtered through `--since 30d`
     // below, so a fixed timestamp is a time bomb. The original '2026-06-25T00:00:00.000Z'
     // aged out of the 30-day window on 2026-07-25 and turned main's CI red on wall clock
@@ -3648,9 +3764,9 @@ describe('knowledge cli', () => {
     expect(initOut.written).toContain('wiki/README.md');
     expect(initOut.artifacts).toHaveLength(4);
     expect(initOut.artifacts.every((entry: any) => entry.hash.startsWith('sha256:'))).toBe(true);
-    expect(existsSync(join(dir, '.hasna', 'knowledge', 'artifacts', 'schemas', 'v1.md'))).toBe(true);
-    expect(existsSync(join(dir, '.hasna', 'knowledge', 'artifacts', 'indexes', 'root.md'))).toBe(true);
-    expect(existsSync(join(dir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
+    expect(existsSync(join(projectKnowledgeHome(dir), 'artifacts', 'schemas', 'v1.md'))).toBe(true);
+    expect(existsSync(join(projectKnowledgeHome(dir), 'artifacts', 'indexes', 'root.md'))).toBe(true);
+    expect(existsSync(join(projectKnowledgeHome(dir), 'artifacts', 'wiki', 'README.md'))).toBe(true);
 
     const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
     expect(stats.exitCode).toBe(0);

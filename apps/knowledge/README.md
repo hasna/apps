@@ -8,7 +8,9 @@
 
 `knowledge` is evolving from a flat note store into a local-first knowledge
 engine for AI agents. It stores simple knowledge items today, creates a Hasna
-project workspace under `.hasna/knowledge`, initializes a versioned
+project workspace under `~/.hasna/knowledge/projects/<key>` (the canonical
+app-data home; the previous `<cwd>/.hasna/knowledge` default migrates into it
+via `knowledge storage migrate-project-path`), initializes a versioned
 `knowledge.db`, writes generated wiki artifacts, and exposes a stdio MCP server.
 
 CLI and MCP workspace operations share a `KnowledgeService` facade for config,
@@ -107,7 +109,8 @@ The top-level SDK also exposes `knowledge.sync.status()`,
 `knowledge.sync.snapshot()`, `knowledge.sync.conflicts()`, and
 `knowledge.sync.machines()` for app-native sync inspection.
 
-The SDK uses the same `.hasna/knowledge` project workspace as the CLI. By
+The SDK uses the same canonical project workspace as the CLI:
+`~/.hasna/knowledge/projects/<key>` (project scope). By
 default it writes the SQLite catalog and generated artifacts under that path.
 Artifact storage can instead point at S3 while keeping raw source ownership
 outside knowledge. Source files remain referenced via
@@ -482,7 +485,8 @@ export records require an explicit machine-readable mode such as
 - [App project wiki standard](docs/examples/app-project-wiki-standard.md):
   SDK/CLI workflow for scoped app notes, source refs, and guarded global writes.
 - [JSON to SQLite migration](docs/migration/json-to-sqlite.md): how legacy
-  JSON notes coexist with the `.hasna/knowledge` workspace and the
+  JSON notes coexist with the canonical knowledge workspace
+  (`~/.hasna/knowledge` global; `~/.hasna/knowledge/projects/<key>` project scope) and the
   versioned SQLite catalog.
 - [AI-native architecture](docs/architecture/ai-native-knowledge-base.md):
   source boundaries, wiki model, search model, provider registry, and non-goals.
@@ -767,10 +771,12 @@ knowledge storage status [--scope project] [--json]
 knowledge storage validate [--scope project] [--json]
 knowledge storage repair-artifact-keys [--approve-write --approved-by <name>] [--scope project] [--json]
 knowledge storage migrate-legacy-path [--approve-write --approved-by <name>] [--scope project] [--json]
+knowledge storage migrate-project-path [--approve-write --approved-by <name>] [--scope project] [--json]
 knowledge storage merge-legacy-path [--approve-write --approved-by <name>] [--scope project] [--json]
 ```
 Show the storage contract for filesystem or S3-backed generated artifacts. Filesystem storage
-uses `.hasna/knowledge` for config, SQLite, indexes, wiki artifacts, logs,
+uses `~/.hasna/knowledge` (global scope) or `~/.hasna/knowledge/projects/<key>`
+(project scope) for config, SQLite, indexes, wiki artifacts, logs,
 runs, and exports. S3 mode stores generated artifacts under the configured
 knowledge bucket/prefix while `open-files` remains the source of truth for raw
 source bytes. The command also reports artifact classes, allowed source ref
@@ -1024,7 +1030,7 @@ knowledge app-wiki query <query> [--scope project] [--json]
 ```
 Use `app-wiki` for app/project wiki notes that must be created through the
 Knowledge CLI/SDK/MCP path. Project scope writes only under
-`.hasna/knowledge`; global app-wiki writes require `--scope global
+`~/.hasna/knowledge/projects/<key>`; global app-wiki writes require `--scope global
 --allow-global`. Do not create loose Markdown under home, `.hasna`, or
 `.husna`.
 
@@ -1202,7 +1208,13 @@ knowledge help [command]
 
 Default global compatibility store: `~/.hasna/knowledge/db.json`
 
-Project workspace: `.hasna/knowledge/`
+Project workspace: `~/.hasna/knowledge/projects/<key>` — the canonical
+project-scoped home under the knowledge app's own `~/.hasna/knowledge/` root.
+`<key>` is a slug of the project's resolved path (stable and unique per
+checkout). The previous project-scoped default `<cwd>/.hasna/knowledge` is
+migrated once with `knowledge storage migrate-project-path --approve-write
+--approved-by <name>`; it refuses when the canonical project home already
+contains data, backs up and verifies before moving, and leaves a tombstone.
 
 The legacy `~/.open-knowledge/db.json` store is only read as a migration source.
 On first global use, or explicitly with `knowledge storage import-legacy`, legacy

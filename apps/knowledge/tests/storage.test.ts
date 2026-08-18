@@ -8,6 +8,7 @@ import {
   parseStorageTables,
   resolveTables,
 } from '../src/storage';
+import { projectKnowledgeHome } from '../src/workspace';
 
 describe('knowledge database storage status (local, read-only)', () => {
   test('exposes durable knowledge tables and excludes local FTS indexes', () => {
@@ -37,7 +38,7 @@ describe('knowledge database storage status (local, read-only)', () => {
       sync: [],
     });
     expect(existsSync(status.databasePath)).toBe(true);
-    expect(realpathSync(status.databasePath)).toBe(realpathSync(join(dir, '.hasna', 'knowledge', 'knowledge.db')));
+    expect(realpathSync(status.databasePath)).toBe(realpathSync(join(projectKnowledgeHome(dir), 'knowledge.db')));
     expect(status.tables).toEqual(STORAGE_TABLES);
   });
 });
