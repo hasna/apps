@@ -146,7 +146,7 @@ describe("dashboard API client", () => {
       return jsonResponse({ data: {} })
     }
 
-    await api.createBudget({ project_path: "/workspace/open-economy", agent: "takumi", period: "weekly", limit_usd: 25, alert_at_percent: 70 })
+    await api.createBudget({ project_path: "/workspace/economy", agent: "takumi", period: "weekly", limit_usd: 25, alert_at_percent: 70 })
     await api.createPricing({
       model: "custom-model",
       input_per_1m: 1,
@@ -158,7 +158,7 @@ describe("dashboard API client", () => {
     })
     const geminiSync = await api.syncSources("gemini")
     const allSync = await api.syncSources()
-    await api.createGoal({ period: "week", limit_usd: 50, project_path: "/workspace/open-economy", agent: "codex" })
+    await api.createGoal({ period: "week", limit_usd: 50, project_path: "/workspace/economy", agent: "codex" })
     await api.createSubscription({ provider: "cursor", plan: "pro", agent: "cursor", monthly_fee_usd: 20, included_usage_usd: 20 })
 
     expect(requestPaths()).toEqual([
@@ -171,7 +171,7 @@ describe("dashboard API client", () => {
     ])
     expect(requests.map((request) => request.init?.method)).toEqual(["POST", "POST", "POST", "POST", "POST", "POST"])
     expect(JSON.parse(String(requests[0].init?.body))).toEqual({
-      project_path: "/workspace/open-economy",
+      project_path: "/workspace/economy",
       agent: "takumi",
       period: "weekly",
       limit_usd: 25,
@@ -193,7 +193,7 @@ describe("dashboard API client", () => {
     expect(JSON.parse(String(requests[4].init?.body))).toEqual({
       period: "week",
       limit_usd: 50,
-      project_path: "/workspace/open-economy",
+      project_path: "/workspace/economy",
       agent: "codex",
     })
     expect(JSON.parse(String(requests[5].init?.body))).toEqual({

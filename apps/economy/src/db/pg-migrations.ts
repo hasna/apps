@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-economy cloud sync.
+ * PostgreSQL migrations for economy cloud sync.
  *
  * Equivalent to the SQLite schema in database.ts, translated for PostgreSQL.
  */

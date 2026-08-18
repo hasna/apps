@@ -41,7 +41,7 @@ final class APIClientTests: XCTestCase {
           {
             "id": "session-1234567890abcdef",
             "agent": "codex",
-            "project_path": "/tmp/open-economy",
+            "project_path": "/tmp/economy",
             "project_name": null,
             "total_cost_usd": 1.25,
             "total_tokens": 1234,
@@ -59,7 +59,7 @@ final class APIClientTests: XCTestCase {
 
     XCTAssertEqual(sessions.count, 1)
     XCTAssertEqual(sessions[0].agent, "codex")
-    XCTAssertEqual(sessions[0].displayProject, "open-economy")
+    XCTAssertEqual(sessions[0].displayProject, "economy")
 
     let requestURL = try XCTUnwrap(capturedRequest?.url)
     let components = try XCTUnwrap(URLComponents(url: requestURL, resolvingAgainstBaseURL: false))
@@ -124,8 +124,8 @@ final class APIClientTests: XCTestCase {
       {
         "data": [
           {
-            "project_path": "/workspace/open-economy",
-            "project_name": "open-economy",
+            "project_path": "/workspace/economy",
+            "project_name": "economy",
             "sessions": 2,
             "requests": 4,
             "total_tokens": 9876,
@@ -141,7 +141,7 @@ final class APIClientTests: XCTestCase {
     let projects = try await client.fetchProjects(period: "week")
 
     XCTAssertEqual(projects.count, 1)
-    XCTAssertEqual(projects[0].displayName, "open-economy")
+    XCTAssertEqual(projects[0].displayName, "economy")
     XCTAssertEqual(projects[0].requests, 4)
     XCTAssertEqual(projects[0].total_tokens, 9876)
 
@@ -519,7 +519,7 @@ final class APIClientTests: XCTestCase {
 
   func testModelDisplayFallbacks() {
     let namedProject = ProjectStat(
-      project_path: "/workspace/hasna/open-economy",
+      project_path: "/workspace/hasna/economy",
       project_name: "Economy",
       sessions: 3,
       requests: 7,
@@ -530,7 +530,7 @@ final class APIClientTests: XCTestCase {
     XCTAssertEqual(namedProject.displayName, "Economy")
 
     let pathProject = ProjectStat(
-      project_path: "/workspace/hasna/open-economy",
+      project_path: "/workspace/hasna/economy",
       project_name: nil,
       sessions: 3,
       requests: 7,
@@ -538,12 +538,12 @@ final class APIClientTests: XCTestCase {
       cost_usd: 12.5,
       last_active: nil
     )
-    XCTAssertEqual(pathProject.displayName, "open-economy")
+    XCTAssertEqual(pathProject.displayName, "economy")
 
     let session = SessionStat(
       id: "session-abcdef1234567890",
       agent: "claude",
-      project_path: "/workspace/hasna/open-economy",
+      project_path: "/workspace/hasna/economy",
       project_name: nil,
       total_cost_usd: 4.2,
       total_tokens: 99_000,
@@ -551,7 +551,7 @@ final class APIClientTests: XCTestCase {
       started_at: "not-a-date",
       ended_at: nil
     )
-    XCTAssertEqual(session.displayProject, "open-economy")
+    XCTAssertEqual(session.displayProject, "economy")
     XCTAssertEqual(session.shortId, "session-abcd")
     XCTAssertEqual(session.startedAtLabel, "not-a-date")
   }

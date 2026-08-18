@@ -41,10 +41,10 @@ describe('ingestGemini', () => {
   })
 
   it('ingests Gemini chat usage as request rows and rolls sessions up', async () => {
-    const projectDir = join(tmpDir, 'open-economy')
+    const projectDir = join(tmpDir, 'economy')
     const chatsDir = join(projectDir, 'chats')
     mkdirSync(chatsDir, { recursive: true })
-    writeFileSync(join(projectDir, '.project_root'), '/tmp/open-economy\n')
+    writeFileSync(join(projectDir, '.project_root'), '/tmp/economy\n')
     writeFileSync(join(chatsDir, 'session-a.json'), JSON.stringify({
       sessionId: 'gemini-session-a',
       startTime: '2026-05-08T12:00:00.000Z',
@@ -89,17 +89,17 @@ describe('ingestGemini', () => {
     expect(exact.cost_usd).toBeCloseTo(0.123)
 
     const session = db.prepare(`SELECT * FROM sessions WHERE id = ?`).get('gemini-session-a') as Record<string, number | string>
-    expect(session['project_path']).toBe('/tmp/open-economy')
+    expect(session['project_path']).toBe('/tmp/economy')
     expect(session['request_count']).toBe(2)
     expect(session['total_tokens']).toBe(1350)
     expect(Number(session['total_cost_usd'])).toBeCloseTo(0.123773)
   })
 
   it('reads history usageMetadata with tool and thinking token fields', async () => {
-    const projectDir = join(historyDir, 'open-economy')
+    const projectDir = join(historyDir, 'economy')
     const chatsDir = join(projectDir, 'chats')
     mkdirSync(chatsDir, { recursive: true })
-    writeFileSync(join(projectDir, '.project_root'), '/tmp/open-economy\n')
+    writeFileSync(join(projectDir, '.project_root'), '/tmp/economy\n')
     writeFileSync(join(chatsDir, 'session-b.json'), JSON.stringify({
       sessionId: 'gemini-session-b',
       model: 'gemini-2.5-pro',

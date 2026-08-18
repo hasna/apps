@@ -726,7 +726,7 @@ describe('queryProjectBreakdown', () => {
     const db = makeDb()
     upsertSession(db, sampleSession({
       id: 'prefixed',
-      project_path: '/home/hasna/workspace/hasna/opensource/open-economy/packages/web',
+      project_path: '/home/hasna/workspace/hasna/opensource/economy/packages/web',
       project_name: '',
       total_cost_usd: 2.00,
     }))
@@ -739,28 +739,28 @@ describe('queryProjectBreakdown', () => {
 
     const names = queryProjectBreakdown(db).map(row => row.project_name)
 
-    expect(names).toContain('open-economy')
+    expect(names).toContain('economy')
     expect(names).toContain('custom-client')
   })
 
   it('groups the same repo across machine-specific home directories', () => {
     const db = makeDb()
     upsertSession(db, sampleSession({
-      id: 'spark-open-economy',
-      project_path: '/home/hasna/workspace/hasna/opensource/open-economy',
-      project_name: 'Economy on Spark',
+      id: 'spark-economy',
+      project_path: '/home/hasna/workspace/hasna/opensource/economy',
+      project_name: '',
       machine_id: 'spark02',
       total_cost_usd: 2.00,
     }))
     upsertSession(db, sampleSession({
-      id: 'apple-open-economy',
-      project_path: '/Users/hasna/Workspace/hasna/opensource/open-economy',
-      project_name: 'Economy on Apple',
+      id: 'apple-economy',
+      project_path: '/Users/hasna/Workspace/hasna/opensource/economy',
+      project_name: '',
       machine_id: 'apple06',
       total_cost_usd: 3.00,
     }))
 
-    const row = queryProjectBreakdown(db).find(project => project.project_name === 'open-economy')
+    const row = queryProjectBreakdown(db).find(project => project.project_name === 'economy')
 
     expect(row?.sessions).toBe(2)
     expect(row?.cost_usd).toBeCloseTo(5)
@@ -1398,8 +1398,8 @@ describe('machine_id support', () => {
     upsertSession(db, sampleSession({
       id: 'spark-session',
       agent: 'claude',
-      project_path: '/workspace/open-economy',
-      project_name: 'open-economy',
+      project_path: '/workspace/economy',
+      project_name: 'economy',
       machine_id: 'spark01',
       total_cost_usd: 1,
       account_key: 'claude:spark',
@@ -1443,7 +1443,7 @@ describe('machine_id support', () => {
     }))
 
     expect(queryAgentBreakdown(db, 'all', 'spark01').map(row => row.agent)).toEqual(['claude'])
-    expect(queryProjectBreakdown(db, 'all', 'spark01').map(row => row.project_name)).toEqual(['open-economy'])
+    expect(queryProjectBreakdown(db, 'all', 'spark01').map(row => row.project_name)).toEqual(['economy'])
     expect(queryAccountBreakdown(db, 'all', 'spark01').map(row => row.account_key)).toEqual(['claude:spark'])
     expect(queryDailyBreakdown(db, 14, 'spark01').reduce((sum, row) => sum + row.cost_usd, 0)).toBeCloseTo(1)
   })
@@ -1452,8 +1452,8 @@ describe('machine_id support', () => {
     const db = makeDb()
     upsertSession(db, sampleSession({
       id: 'legacy-spark-session',
-      project_path: '/home/hasna/open-economy',
-      project_name: 'open-economy',
+      project_path: '/home/hasna/economy',
+      project_name: 'economy',
       machine_id: '',
       account_key: 'claude:spark',
       account_tool: 'claude',
@@ -1475,7 +1475,7 @@ describe('machine_id support', () => {
     const projects = queryProjectBreakdown(db, 'all', 'spark01')
     const accounts = queryAccountBreakdown(db, 'all', 'spark01')
 
-    expect(projects.map(row => row.project_name)).toEqual(['open-economy'])
+    expect(projects.map(row => row.project_name)).toEqual(['economy'])
     expect(projects[0]?.cost_usd).toBeCloseTo(3)
     expect(accounts.map(row => row.account_key)).toEqual(['claude:spark'])
     expect(accounts[0]?.api_equivalent_usd).toBeCloseTo(3)
