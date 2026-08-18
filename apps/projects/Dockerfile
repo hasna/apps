@@ -7,7 +7,7 @@ FROM --platform=linux/arm64 oven/bun:1.2-alpine AS builder
 WORKDIR /app
 COPY package.json bun.lock ./
 # Production-only install: the sole devDependency that matters for a clean
-# container build (@hasna/mcp-harness) is a `file:../open-mcp` link that does not
+# container build (@hasna/mcp-harness) is a `file:../mcps` link that does not
 # exist in the build context, and typescript's `tsc` only emits .d.ts (dead weight
 # in a runtime image). So we install runtime deps and bundle with bun's bundler
 # directly instead of `bun run build`.
