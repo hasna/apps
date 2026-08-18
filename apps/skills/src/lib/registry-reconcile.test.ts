@@ -491,11 +491,16 @@ describe("reconcileRegistry", () => {
     // dry run must resolve the same client against the same files without any of that
     // (review P1: client resolution ran unconditionally before the read-only corpus
     // branch, so a stored-auth `sync --dry-run` still wrote ~/.hasna/skills).
+    //
+    // The ORIGIN comes from the legacy ~/.skillsrc, not from the environment: the
+    // write-free resolution must read the legacy config file directly, exactly as the
+    // write path's migration would fold it into config.json (successor review P1: the
+    // read-only path threw MissingApiUrlError on a legacy-only HOME when no API env
+    // variable was set).
     const home = mkdtempSync(join(tmpdir(), "skills-reconcile-home-"));
     const legacyDir = join(home, ".skills");
     mkdirSync(legacyDir, { recursive: true });
     writeFileSync(join(legacyDir, "auth.json"), JSON.stringify({ apiKey: SYNC_AUTH }));
-    writeFileSync(join(home, ".skillsrc"), JSON.stringify({ apiUrl: "https://legacy.example.test" }));
 
     const previousHome = process.env.HOME;
     const previousSkillsDir = process.env.HASNA_SKILLS_DIR;
@@ -506,6 +511,7 @@ describe("reconcileRegistry", () => {
     delete process.env.HASNA_SKILLS_DIR;
     delete process.env.SKILLS_API_KEY;
     delete process.env.SKILL_API_KEY;
+    delete process.env.SKILLS_API_URL;
     try {
       // A minimal stub instance answering only the listing. A real in-process skills
       // server merges the machine's own local registry into its listing
@@ -524,16 +530,17 @@ describe("reconcileRegistry", () => {
         },
       });
       try {
-        // The origin comes from the environment; the credential comes from the stored
-        // legacy auth file. No injected client: the dry run must resolve one itself.
-        process.env.SKILLS_API_URL = `http://127.0.0.1:${server.port}`;
+        // The origin is stored in the LEGACY config file only; no API environment
+        // variable is set. No injected client: the dry run must resolve one itself,
+        // reading the legacy files write-free.
+        writeFileSync(join(home, ".skillsrc"), JSON.stringify({ apiUrl: `http://127.0.0.1:${server.port}` }));
         const local = makeCorpus({});
         const result = await reconcileRegistry({ rootDir: local, dryRun: true });
 
         expect(result.dryRun).toBe(true);
         // Positive control: the write-free resolution found the stored legacy
-        // credential and the environment origin — the plan enumerated the registry
-        // rather than failing on a missing credential.
+        // credential and the legacy-config origin — the plan enumerated the registry
+        // rather than failing on a missing credential or origin.
         expect(result.summary.remote).toBe(0);
 
         // The dry run must not have created the canonical app dir, merged the legacy

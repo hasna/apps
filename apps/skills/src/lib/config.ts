@@ -248,11 +248,26 @@ export function getConfigPathReadOnly(scope: ConfigScope): string {
 /**
  * Load merged config (project-local overrides global) without the writes
  * getDataDir() performs on the write path.
+ *
+ * The write path folds the legacy ~/.skillsrc into canonical config.json as part of
+ * getDataDir()'s migration (copied only when config.json does not exist yet). A
+ * read-only path reads the legacy file directly with the same precedence — canonical
+ * config.json wins, legacy ~/.skillsrc is the fallback — so a legacy-only HOME
+ * resolves the same effective config without copying anything.
  */
 export function loadConfigReadOnly(): SkillsConfig {
   const globalConfig = readConfigFile(getConfigPathReadOnly("global"));
+  const legacyGlobalConfig = readConfigFile(legacyConfigFilePath());
   const projectConfig = readConfigFile(getConfigPathReadOnly("project"));
-  return { ...globalConfig, ...projectConfig };
+  return { ...legacyGlobalConfig, ...globalConfig, ...projectConfig };
+}
+
+/**
+ * The legacy ~/.skillsrc config file, resolved write-free from $HOME exactly the
+ * way getDataDir()'s migration reads it.
+ */
+function legacyConfigFilePath(): string {
+  return join(process.env["HOME"] || process.env["USERPROFILE"] || homedir(), ".skillsrc");
 }
 
 /**
