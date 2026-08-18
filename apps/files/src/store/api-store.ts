@@ -26,7 +26,10 @@ import type {
   FileAccessEvent,
   FileAsset,
   FileLink,
+  FileSearchDocument,
+  FileSearchDocumentKind,
   FileWithTags,
+  ListFileSearchDocumentsOptions,
   ListFilesOptions,
   Machine,
   Project,
@@ -34,6 +37,7 @@ import type {
   SearchResult,
   Source,
   Tag,
+  UpsertFileSearchDocumentInput,
   ExtractedTextResult,
 } from "../types/index.js";
 import type { AuthenticatedFilesFetch } from "../lib/cloud-storage.js";
@@ -94,6 +98,14 @@ async function deletedOk(p: Promise<unknown>): Promise<boolean> {
   }
 }
 
+/** A server search-result row: the file plus the optional per-row search fields. */
+type RankedFilePayload = FileWithTags & {
+  rank?: number;
+  search_match_sources?: SearchMatchSource[];
+  search_document_kinds?: FileSearchDocumentKind[];
+  search_document_count?: number;
+};
+
 export class ApiStore implements FilesStore {
   readonly transport = "api" as const;
 
@@ -135,18 +147,25 @@ export class ApiStore implements FilesStore {
 
   // ── files ────────────────────────────────────────────────────────────────
   async listFiles(opts: ListFilesOptions = {}): Promise<FileWithTags[]> {
-    // The cloud /v1/files endpoint filters on this subset; richer local-only
-    // filters (collection/date/size/sort) are not part of the API
-    // contract and are intentionally omitted rather than silently ignored.
+    // The cloud /v1/files endpoint now implements the full local filter surface:
+    // collection/date/size/sort are part of the API contract (server-side
+    // WHERE + ORDER BY), so they are forwarded — never dropped on the floor.
     const listPage = async (limit: number | undefined, offset: number | undefined) => (
       await this.client.list<FileWithTags>("files", {
         query: {
           source_id: opts.source_id,
           machine_id: opts.machine_id,
           project_id: opts.project_id,
+          collection_id: opts.collection_id,
           tag: opts.tag,
           ext: opts.ext,
           status: opts.status,
+          after: opts.after,
+          before: opts.before,
+          min_size: opts.min_size,
+          max_size: opts.max_size,
+          sort: opts.sort,
+          sort_dir: opts.sort_dir,
           limit,
           offset,
         },
@@ -186,37 +205,51 @@ export class ApiStore implements FilesStore {
     return orNull(this.http.get<FileWithTags>("/files/by-path", { query: { source_id: sourceId, path } }));
   }
   async searchFiles(query: string, opts: Omit<ListFilesOptions, "query"> = {}): Promise<SearchResult[]> {
-    // The cloud /v1/files endpoint exposes ONE substring filter — `q`, matched
-    // against name and path. There is no derived-content index behind it: the
-    // extracted-text FTS tables live in the on-box SQLite store.
-    //
-    // So a content-scoped search here cannot be served. It used to be accepted
-    // and answered with the metadata matches, which for a term that appears
-    // only inside document bodies is an empty list at rc=0 — indistinguishable
-    // from "no such text anywhere". Refuse it instead, and name the route that
-    // can serve it.
-    const scope = opts.search_scope ?? "all";
-    if (scope === "content") {
-      throw new Error(
-        "--scope content is unavailable in cloud (api) mode: /v1/files matches file name and path only, and the extracted-content index is on-box. Search from a local store, or use --scope metadata to search names and paths.",
-      );
-    }
-    const files = (await this.client.list<FileWithTags>("files", {
+    // The cloud /v1/files endpoint serves ranked search over BOTH surfaces:
+    // metadata (name/path/mime/canonical/description tsvector + ILIKE) and the
+    // server-side derived-content index (file_search_documents tsvector). The
+    // `search_scope` and every search filter reach the server; the server's
+    // per-row rank and match sources pass through unchanged.
+    const files = (await this.client.list<RankedFilePayload>("files", {
       query: {
         q: query,
+        search_scope: opts.search_scope ?? "all",
         source_id: opts.source_id,
         machine_id: opts.machine_id,
         ext: opts.ext,
+        tag: opts.tag,
         limit: opts.limit,
         offset: opts.offset,
       },
     })).items;
-    // Stamp what actually matched. `--scope all` promises names, paths AND
-    // content; over this transport it delivers the first two, so every row says
-    // so rather than letting the caller assume its body was searched. Rank is
-    // defaulted because FTS ranking is local-only.
-    const matchedOn: SearchMatchSource[] = ["metadata"];
-    return files.map((f) => ({ ...f, rank: 0, search_match_sources: [...matchedOn] }));
+    return files.map((f) => ({
+      ...f,
+      // The server stamps rank + match sources per row. A row without them is
+      // a truthful metadata-only result, never an implied content match.
+      rank: f.rank ?? 0,
+      search_match_sources: f.search_match_sources ?? ["metadata"],
+    }));
+  }
+
+  async upsertSearchDocument(input: UpsertFileSearchDocumentInput): Promise<FileSearchDocument> {
+    const { file_id, ...rest } = input;
+    return this.http.post<FileSearchDocument>(`/files/${seg(file_id)}/search-documents`, rest);
+  }
+  async listSearchDocuments(opts: ListFileSearchDocumentsOptions = {}): Promise<FileSearchDocument[]> {
+    return this.http.get<FileSearchDocument[]>("/search-documents", {
+      query: {
+        file_id: opts.file_id,
+        kind: opts.kind,
+        status: opts.status,
+        limit: opts.limit,
+        offset: opts.offset,
+      },
+    });
+  }
+  async deleteSearchDocument(id: string): Promise<boolean> {
+    // The document id is opaque (fsd_...); the owning file cannot be derived
+    // from it client-side, so the server route is id-only.
+    return deletedOk(this.http.del(`/search-documents/${seg(id)}`));
   }
   async recentFiles(agentId?: string, limit = 20): Promise<RecentFile[]> {
     return this.http.get<RecentFile[]>("/files/recent", { query: { agent_id: agentId, limit } });

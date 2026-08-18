@@ -48,8 +48,9 @@ function recordingClient(rowCount = 0) {
       sql.push(text);
       params.push(values);
       // Tag lookups and every non-row-returning statement answer empty; only the
-      // primary SELECT hands back the synthetic page.
-      if (/^SELECT (?:DISTINCT f\.\*|f\.\*|\*) FROM (?:files f|files|agent_activity)/i.test(text.trim())) {
+      // primary SELECT hands back the synthetic page. The ranked-search SELECT
+      // leads with a content_matches CTE, so match on the select proper too.
+      if (/^SELECT (?:DISTINCT )?f\.\*/i.test(text.trim()) || /^WITH content_matches[\s\S]*SELECT DISTINCT f\.\*/i.test(text.trim())) {
         return { rows: rows as never[], rowCount: rows.length };
       }
       return { rows: [] as never[], rowCount: 0 };
@@ -250,5 +251,159 @@ describe("pg-store extension filters", () => {
     await listFiles(client, { q: "entrepreneur" });
 
     expect(params[0]).not.toContain(".pdf");
+  });
+});
+
+describe("pg-store hosted list filters — collection/date/size/sort parity with the local store", () => {
+  // Before the port these options were LocalStore-only: ApiStore dropped them on
+  // the floor and the server route never saw them. Each test pins the SQL clause
+  // that must reach Postgres so the hosted path filters identically to on-box.
+
+  test("collection_id joins collection_files on the exact collection id", async () => {
+    const { client, sql } = recordingClient();
+
+    await listFiles(client, { collection_id: "col_1" });
+
+    expect(sql.some((s) => /JOIN collection_files cf ON cf\.file_id = f\.id AND cf\.collection_id = \$\d+/.test(s))).toBe(true);
+  });
+
+  test("after/before filter on the same modified-or-indexed date the local store uses", async () => {
+    const { client, sql } = recordingClient();
+
+    await listFiles(client, { after: "2026-06-01", before: "2026-06-30" });
+
+    expect(sql.some((s) => /COALESCE\(f\.modified_at, f\.indexed_at\) >=\s*\$\d+/.test(s))).toBe(true);
+    expect(sql.some((s) => /COALESCE\(f\.modified_at, f\.indexed_at\) <=\s*\$\d+/.test(s))).toBe(true);
+  });
+
+  test("min_size/max_size filter on the file size column", async () => {
+    const { client, sql } = recordingClient();
+
+    await listFiles(client, { min_size: 1024, max_size: 2048 });
+
+    expect(sql.some((s) => /f\.size >=\s*\$\d+/.test(s))).toBe(true);
+    expect(sql.some((s) => /f\.size <=\s*\$\d+/.test(s))).toBe(true);
+  });
+
+  test("sort maps name/size/date to the same columns as the local store", async () => {
+    const nameAsc = recordingClient();
+    await listFiles(nameAsc.client, { sort: "name", sort_dir: "asc" });
+    expect(nameAsc.sql.some((s) => /ORDER BY f\.name ASC, f\.id DESC/.test(s))).toBe(true);
+
+    const sizeDesc = recordingClient();
+    await listFiles(sizeDesc.client, { sort: "size", sort_dir: "desc" });
+    expect(sizeDesc.sql.some((s) => /ORDER BY f\.size DESC, f\.id DESC/.test(s))).toBe(true);
+
+    const date = recordingClient();
+    await listFiles(date.client, { sort: "date" });
+    expect(date.sql.some((s) => /ORDER BY f\.indexed_at DESC, f\.id DESC/.test(s))).toBe(true);
+  });
+
+  test("collection and tag filters compose on one DISTINCT query", async () => {
+    const { client, sql } = recordingClient();
+
+    await listFiles(client, { collection_id: "col_1", tag: "legal" });
+
+    expect(sql.some((s) => /JOIN collection_files cf/.test(s))).toBe(true);
+    expect(sql.some((s) => /JOIN file_tags ft_filter/.test(s))).toBe(true);
+    expect(sql.some((s) => /^SELECT DISTINCT f\.\*/.test(s.trim()))).toBe(true);
+  });
+});
+
+describe("pg-store ranked search — content scope served by the hosted store, not refused", () => {
+  // The derived-content FTS index used to be on-box only; the ApiStore refused
+  // --scope content and the server had no content-match path. The server schema
+  // (migration 29) already carries file_search_documents with a generated
+  // tsvector + GIN index; these tests pin the query that serves it.
+
+  test("scope=content matches only file_search_documents — no metadata ILIKE", async () => {
+    const { client, sql } = recordingClient();
+
+    await listFiles(client, { q: "warehouse", search_scope: "content" });
+
+    const statement = sql.join("\n");
+    expect(statement).toContain("file_search_documents");
+    expect(statement).toMatch(/search_vector @@/);
+    expect(statement).not.toMatch(/f\.name ILIKE/);
+  });
+
+  test("scope=metadata matches name/path (ILIKE + tsvector) and never opens the content table", async () => {
+    const { client, sql } = recordingClient();
+
+    await listFiles(client, { q: "warehouse", search_scope: "metadata" });
+
+    const statement = sql.join("\n");
+    expect(statement).toMatch(/f\.name ILIKE \$\d+ OR f\.path ILIKE \$\d+/);
+    expect(statement).not.toContain("file_search_documents");
+  });
+
+  test("scope=all (default) merges metadata and content matches", async () => {
+    const { client, sql } = recordingClient();
+
+    await listFiles(client, { q: "warehouse" });
+
+    const statement = sql.join("\n");
+    expect(statement).toMatch(/f\.name ILIKE \$\d+ OR f\.path ILIKE \$\d+/);
+    expect(statement).toContain("file_search_documents");
+    expect(statement).toMatch(/search_vector @@/);
+  });
+
+  test("a search orders by computed rank first so best matches lead the page", async () => {
+    const { client, sql } = recordingClient();
+
+    await listFiles(client, { q: "warehouse", search_scope: "all" });
+
+    expect(sql.some((s) => /ORDER BY _rank DESC, f\.indexed_at DESC, f\.id DESC/.test(s))).toBe(true);
+  });
+
+  test("plain (non-search) list order is unchanged — no rank in the ORDER BY", async () => {
+    const { client, sql } = recordingClient();
+
+    await listFiles(client, {});
+
+    expect(sql.some((s) => /ORDER BY f\.indexed_at DESC, f\.id DESC/.test(s))).toBe(true);
+    expect(sql.join("\n")).not.toContain("_rank");
+  });
+
+  test("rows map to ranked results with match sources, kinds and document counts", async () => {
+    const contentRow = {
+      id: "f_1", source_id: "src_1", machine_id: "m_1", path: "/docs/lease.pdf",
+      name: "lease.pdf", ext: "pdf", size: 3, mime: "application/pdf",
+      status: "active", indexed_at: "2026-01-01T00:00:00.000Z", created_at: "2026-01-01T00:00:00.000Z",
+      _rank: 0.9, _content_rank: 0.9, _content_kinds: ["llm_summary"], _content_doc_count: 2,
+      _metadata_hit: 0, _metadata_rank: 0,
+    };
+    const metadataOnlyRow = {
+      id: "f_2", source_id: "src_1", machine_id: "m_1", path: "/docs/cert.pdf",
+      name: "cert.pdf", ext: "pdf", size: 1, mime: "application/pdf",
+      status: "active", indexed_at: "2026-01-01T00:00:00.000Z", created_at: "2026-01-01T00:00:00.000Z",
+      _rank: 0.4, _content_rank: null, _content_kinds: null, _content_doc_count: null,
+      _metadata_hit: 1, _metadata_rank: 0.4,
+    };
+    const executor: PgExecutor = {
+      async query(text: string) {
+        if (/^WITH content_matches[\s\S]*SELECT (?:DISTINCT )?f\.\*/i.test(text.trim())) {
+          return { rows: [contentRow, metadataOnlyRow] as never[], rowCount: 2 };
+        }
+        return { rows: [] as never[], rowCount: 0 };
+      },
+    };
+
+    const out = await listFiles(wrapExecutor(executor), { q: "warehouse", search_scope: "all" });
+
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({
+      id: "f_1",
+      rank: 0.9,
+      search_match_sources: ["content"],
+      search_document_kinds: ["llm_summary"],
+      search_document_count: 2,
+    });
+    expect(out[1]).toMatchObject({
+      id: "f_2",
+      rank: 0.4,
+      search_match_sources: ["metadata"],
+    });
+    expect(out[1].search_document_kinds).toBeUndefined();
   });
 });

@@ -61,10 +61,14 @@ configuration, event state, or diagnostics on the machine where they run.
 | `files webhooks` | Manage event webhook/command subscriptions | Process-local |
 | `files remove <source-id>` | Alias for `sources remove` | Data plane |
 
-In API mode, `list` transmits the source, machine, extension, limit, and offset
-subset supported by `/v1/files`; local-only tag, collection, project, date,
-size, and sort filters are not part of the remote route. Remote `search` uses
-the `/v1/files?q=...` substring filter and does not provide local FTS ranking.
+`list` and `search` run identically on both backends. In API mode the full
+local filter surface — source, machine, tag, collection, project, extension,
+date (`--after`/`--before`), size (`--min-size`/`--max-size`), `--sort`
+(name/size/date) and `--asc` — is transmitted to `/v1/files` and applied
+server-side. Remote `search` is a ranked full-text search over metadata
+(name/path/mime/canonical/description) AND the derived-content index
+(`search-index` documents) with `--scope all|metadata|content`; the server
+returns a per-row `rank` and the `search_match_sources` that actually matched.
 
 ## Source Commands
 
@@ -104,6 +108,14 @@ files search-index remove <document-id>
 files search-index stats
 files search-index rebuild-fts
 ```
+
+`search-index add|list|remove` route through the active data plane: the local
+store writes FTS5 rows, the hosted store writes `/v1` search documents — so a
+document indexed on either backend is searchable by `files search --scope
+content` on that backend. `search-index stats` and `search-index rebuild-fts`
+remain on-box: stats is a local-database diagnostic, and rebuild-fts maintains
+the SQLite FTS5 side table (the hosted store's tsvector is a generated column
+with nothing to rebuild).
 
 Context packs default to 5 files, 12 excerpts, 900 characters per excerpt,
 6,000 excerpt characters total, and 262,144 bytes read per file. Secret-like
