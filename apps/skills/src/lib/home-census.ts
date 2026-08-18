@@ -13,7 +13,7 @@
  * `clean` is false whenever any drift entry exists; the CLI maps that to a
  * non-zero exit code.
  */
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -21,6 +21,7 @@ import {
   SYNC_AGENTS,
   SYNC_MARKER_FILE,
   agentGlobalSkillsDir,
+  isPointerSkillMd,
   type SyncAgent,
 } from "./agent-sync.js";
 import { indexCanonicalCorpus, type AdoptionOptions } from "./home-adoption.js";
@@ -36,6 +37,10 @@ export interface DriftEntry {
   path: string;
   homeHash?: string;
   canonicalHash?: string;
+  /** True when the home's SKILL.md is a sync pointer stub rather than real content. */
+  homeStub?: boolean;
+  /** True when the canonical corpus entry renders as a pointer stub (executable skill). */
+  canonicalStub?: boolean;
 }
 
 export interface DriftCensus {
@@ -109,7 +114,24 @@ export function censusHomeDrift(options: AdoptionOptions = {}): DriftCensus {
       }
       const homeHash = hashSkillMarkdownFile(skillMdPath);
       if (homeHash !== canonicalHash) {
-        entries.push({ agent, skill, kind: "diverged", path: dir, homeHash, canonicalHash });
+        // Label which side is a pointer stub so content-vs-stub divergence is readable
+        // (bug 60f2ab27): a stub home under a content canonical is a content-loss
+        // signature; a content home under a stub canonical is an adopted-content home
+        // that the next sync refuses to replace.
+        let homeStub: boolean | undefined;
+        try {
+          homeStub = isPointerSkillMd(readFileSync(skillMdPath, "utf-8"));
+        } catch {
+          homeStub = undefined;
+        }
+        let canonicalStub: boolean | undefined;
+        const canonicalSkillMd = join(corpusRoot, skill, "SKILL.md");
+        try {
+          canonicalStub = isPointerSkillMd(readFileSync(canonicalSkillMd, "utf-8"));
+        } catch {
+          canonicalStub = undefined;
+        }
+        entries.push({ agent, skill, kind: "diverged", path: dir, homeHash, canonicalHash, homeStub, canonicalStub });
       }
     }
 

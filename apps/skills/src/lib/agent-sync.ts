@@ -116,6 +116,22 @@ export function adaptSkillMdForAgent(skillMd: string, agent: string): string {
   return `---\n${lines.join("\n")}\n---\n${body}`;
 }
 
+/**
+ * The sentence every sync pointer stub carries in its body. It survives per-agent
+ * adaptation (adaptSkillMdForAgent only touches `user_invocable`), so it is the stable
+ * fingerprint for "this document is a pointer, not the skill's real content".
+ */
+export const POINTER_MARKER_PHRASE = "This is an executable skill from the @hasna/skills catalog";
+
+/**
+ * True when a SKILL.md is a sync pointer stub: frontmatter declares `kind: executable`
+ * AND the body carries the canonical pointer sentence. A full content document is never
+ * a stub even when it mentions the sentence, because it lacks the kind marker.
+ */
+export function isPointerSkillMd(markdown: string): boolean {
+  return markdown.includes(POINTER_MARKER_PHRASE) && /^kind:\s*executable\b/m.test(markdown);
+}
+
 /** A pointer SKILL.md for an executable skill: what it is and how to actually run it. */
 export function pointerSkillMd(name: string, description: string): string {
   const display = name.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
@@ -345,9 +361,11 @@ export interface WriteManagedAgentSkillParams {
  * Write one skill into one agent's global folder, non-clobbering.
  *
  * A directory this tool has written before carries the marker file and is replaced with
- * an exact mirror. A directory with a SKILL.md but no marker is the user's own skill and
- * is skipped unless `force` explicitly adopts it. Any other pre-existing unmarked
- * directory is always left untouched. A fresh directory is created.
+ * an exact mirror — except that a managed home holding full content is never silently
+ * replaced with an executable pointer stub (that would be data loss; it is refused
+ * unless `force` is passed). A directory with a SKILL.md but no marker is the user's
+ * own skill and is skipped unless `force` explicitly adopts it. Any other pre-existing
+ * unmarked directory is always left untouched. A fresh directory is created.
  */
 export function writeManagedAgentSkill(params: WriteManagedAgentSkillParams): AgentSyncAction {
   const homeDir = params.homeDir ?? homedir();
@@ -415,6 +433,27 @@ export function writeManagedSkillDir(
       path: skillMdPath,
       reason: "an unmanaged SKILL.md already exists here (hand-authored); pass --force to overwrite",
     };
+  }
+
+  // Never silently replace content with a pointer stub (bug 60f2ab27): a managed home may
+  // hold full adopted content while the corpus entry renders as an executable pointer
+  // (kind: executable, or no kind at all). Replacing it was silent data loss — rc=0, no
+  // warning — and the drift census then validated the stub state, so the loss was
+  // invisible. Refuse unless --force explicitly requests the replacement.
+  if (dirExists && managed && hasSkillMd && !options.force && isPointerSkillMd(skillMd)) {
+    let existingIsStub = false;
+    try {
+      existingIsStub = isPointerSkillMd(readFileSync(skillMdPath, "utf-8"));
+    } catch {
+      existingIsStub = false; // unreadable content is treated as content; never replace it
+    }
+    if (!existingIsStub) {
+      return {
+        action: "skip",
+        path: skillMdPath,
+        reason: "refusing to replace a content-bearing managed home with an executable pointer stub (the corpus entry lacks kind: instruction); pass --force to overwrite",
+      };
+    }
   }
 
   const action: SyncActionKind = dirExists ? "update" : "create";
