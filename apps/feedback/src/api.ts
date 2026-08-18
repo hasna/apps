@@ -89,7 +89,7 @@ function authorize(request: Request, scope: FeedbackApiScope, auth: ReturnType<t
   if (scope === "submit" && auth.publicSubmit) return null;
   const required = auth.tokens[scope];
   if (!required) {
-    if (auth.shared) return errorResponse(503, `Open Feedback ${scope} access is disabled until a scoped token is configured.`);
+    if (auth.shared) return errorResponse(503, `Hasna Feedback ${scope} access is disabled until a scoped token is configured.`);
     return null;
   }
   return authTokenFromRequest(request) === required ? null : errorResponse(401, "Unauthorized");
@@ -170,7 +170,7 @@ export function createFeedbackHandler(options: FeedbackApiOptions = {}): (reques
 
     try {
       if (request.method === "GET" && pathname === "/health") {
-        return withCors(jsonResponse({ ok: true, service: "open-feedback", version: VERSION }), corsOrigin);
+        return withCors(jsonResponse({ ok: true, service: "feedback", version: VERSION }), corsOrigin);
       }
 
       if (request.method === "POST" && pathname === "/v1/feedback") {

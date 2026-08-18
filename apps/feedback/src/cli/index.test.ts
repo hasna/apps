@@ -6,7 +6,7 @@ import { buildDoctorReport } from "./index.js";
 
 describe("feedback CLI diagnostics", () => {
   test("reports local runtime readiness", async () => {
-    const dataDir = await mkdtemp(join(tmpdir(), "open-feedback-cli-"));
+    const dataDir = await mkdtemp(join(tmpdir(), "feedback-cli-"));
     const report = await buildDoctorReport({
       FEEDBACK_DATA_DIR: dataDir,
       PATH: "",
@@ -28,7 +28,7 @@ describe("feedback CLI diagnostics", () => {
   });
 
   test("reports the JSONL data file when the legacy engine is selected", async () => {
-    const dataDir = await mkdtemp(join(tmpdir(), "open-feedback-cli-"));
+    const dataDir = await mkdtemp(join(tmpdir(), "feedback-cli-"));
     const report = await buildDoctorReport({
       FEEDBACK_DATA_DIR: dataDir,
       FEEDBACK_STORE: "jsonl",

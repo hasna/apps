@@ -41,7 +41,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
     host: parsed.values.host,
     port: parsed.values.port ? Number.parseInt(parsed.values.port, 10) : undefined,
   });
-  console.log(`Open Feedback API listening on http://${server.hostname}:${server.port}`);
+  console.log(`Hasna Feedback API listening on http://${server.hostname}:${server.port}`);
 }
 
 // Only run when invoked as the bin. Without this guard, importing this module —

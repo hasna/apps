@@ -22,7 +22,7 @@ import type { FeedbackItem } from "./types.js";
  */
 
 async function tempDir(): Promise<string> {
-  return mkdtemp(join(tmpdir(), "open-feedback-conc-"));
+  return mkdtemp(join(tmpdir(), "feedback-conc-"));
 }
 
 function quietStore(options: { dataDir?: string; sqlitePath?: string } = {}): SqliteFeedbackStore {

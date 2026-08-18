@@ -1,6 +1,6 @@
 # Contract Conformance
 
-Open Feedback ships a `hasna.contract.json` describing itself against the
+Hasna Feedback ships a `hasna.contract.json` describing itself against the
 [Hasna Service Contract v1](https://github.com/hasna/contracts). Run the check
 with:
 

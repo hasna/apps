@@ -6,7 +6,7 @@ import { defaultCommandRunner, createTaskSink, resolveTaskSinkConfig } from "./t
 import { LocalFeedbackStore } from "./storage.js";
 
 async function script(body: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "open-feedback-runner-"));
+  const dir = await mkdtemp(join(tmpdir(), "feedback-runner-"));
   const path = join(dir, "fake-todos");
   await writeFile(path, `#!/usr/bin/env bash\n${body}\n`, "utf8");
   await chmod(path, 0o755);
@@ -66,7 +66,7 @@ describe("defaultCommandRunner (the real spawn)", () => {
    */
   test("the whole process exits promptly after a timeout, not when the grandchild finally dies", async () => {
     const hang = await script("sleep 60");
-    const dir = await mkdtemp(join(tmpdir(), "open-feedback-exit-"));
+    const dir = await mkdtemp(join(tmpdir(), "feedback-exit-"));
     const runnerPath = join(dir, "run.ts");
     await writeFile(
       runnerPath,
@@ -102,7 +102,7 @@ describe("environment-resolved sink, end to end through a real store", () => {
     process.env["FEEDBACK_TASK_SINK"] = "todos";
     process.env["FEEDBACK_TASK_BIN"] = fake;
 
-    const dataDir = await mkdtemp(join(tmpdir(), "open-feedback-envwire-"));
+    const dataDir = await mkdtemp(join(tmpdir(), "feedback-envwire-"));
     // No taskSink passed: it must come from resolveTaskSinkConfig().
     const store = new LocalFeedbackStore({ dataDir, eventSink: null });
     const item = await store.createFeedback({ appId: "app-a", message: "env wired" });
@@ -120,7 +120,7 @@ describe("environment-resolved sink, end to end through a real store", () => {
     process.env["FEEDBACK_TASK_SINK"] = "todos";
     process.env["FEEDBACK_TASK_BIN"] = fake;
 
-    const dataDir = await mkdtemp(join(tmpdir(), "open-feedback-envfail-"));
+    const dataDir = await mkdtemp(join(tmpdir(), "feedback-envfail-"));
     const store = new LocalFeedbackStore({ dataDir, eventSink: null });
     const item = await store.createFeedback({ appId: "app-a", message: "verbose crash" });
 
@@ -136,7 +136,7 @@ describe("environment-resolved sink, end to end through a real store", () => {
     process.env["FEEDBACK_TASK_SINK"] = "auto";
     process.env["FEEDBACK_TASK_BIN"] = "definitely-not-a-real-binary-xyz";
 
-    const dataDir = await mkdtemp(join(tmpdir(), "open-feedback-autonone-"));
+    const dataDir = await mkdtemp(join(tmpdir(), "feedback-autonone-"));
     const store = new LocalFeedbackStore({ dataDir, eventSink: null });
     const item = await store.createFeedback({ appId: "app-a", message: "no tracker here" });
 
@@ -151,7 +151,7 @@ describe("environment-resolved sink, end to end through a real store", () => {
     process.env["FEEDBACK_TASK_BIN"] = fake;
     process.env["FEEDBACK_TASK_TIMEOUT_MS"] = "300";
 
-    const dataDir = await mkdtemp(join(tmpdir(), "open-feedback-timeout-"));
+    const dataDir = await mkdtemp(join(tmpdir(), "feedback-timeout-"));
     const store = new LocalFeedbackStore({ dataDir, eventSink: null });
     const item = await store.createFeedback({ appId: "app-a", message: "tracker hung" });
 

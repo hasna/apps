@@ -1,6 +1,6 @@
 # Security
 
-Open Feedback may receive user-submitted text and application context. Treat stored feedback as sensitive product data.
+Hasna Feedback may receive user-submitted text and application context. Treat stored feedback as sensitive product data.
 
 ## Secrets
 

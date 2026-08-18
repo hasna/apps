@@ -18,7 +18,7 @@ import { SqliteFeedbackStore, resolveFeedbackMigrationSource } from "./storage.s
  * behavioural assertion into this file to make an import convenient.
  */
 async function tempDir(): Promise<string> {
-  return mkdtemp(join(tmpdir(), "open-feedback-internals-"));
+  return mkdtemp(join(tmpdir(), "feedback-internals-"));
 }
 
 describe("mutation chain registry", () => {

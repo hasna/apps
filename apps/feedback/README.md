@@ -1,8 +1,8 @@
-# Open Feedback
+# Hasna Feedback
 
 Reusable feedback collection for Hasna-coded apps.
 
-Open Feedback provides a small HTTP API, TypeScript SDK, CLI, MCP server, and
+Hasna Feedback provides a small HTTP API, TypeScript SDK, CLI, MCP server, and
 SQLite storage so apps can collect product feedback without standing up a
 database server first. It has two product stories: **user-hosted**, where a user
 runs the package in their own environment, and **Hasna SaaS** ("cloud"), where
@@ -144,7 +144,7 @@ feedback stats
 feedback export --format jsonl --until 2026-12-31
 ```
 
-Use `--api-url` and `--token` to target an Open Feedback server API instead of
+Use `--api-url` and `--token` to target a Hasna Feedback server API instead of
 the on-box store, or set `FEEDBACK_API_URL` / `FEEDBACK_API_TOKEN` once so every
 command uses that server without retyping the flags. An explicit flag always
 beats the environment. The CLI connects either to its local SQLite-backed
@@ -157,7 +157,7 @@ creates infrastructure.
 
 ### Closing the loop: feedback → task → PR
 
-Feedback is only useful if something picks it up. On the create path, Open Feedback files a task in a task tracker and records the link on the feedback item as `taskRef`:
+Feedback is only useful if something picks it up. On the create path, Hasna Feedback files a task in a task tracker and records the link on the feedback item as `taskRef`:
 
 ```bash
 feedback submit "Export button 500s for orgs over 10k members" --app my-app --kind bug --severity high
@@ -263,7 +263,7 @@ Feedback submitted through the MCP server goes through the same store, so it cre
 
 ## Storage
 
-By default, Open Feedback stores feedback in a local **SQLite** database:
+By default, Hasna Feedback stores feedback in a local **SQLite** database:
 
 ```text
 ~/.hasna/feedback/feedback.db
@@ -350,4 +350,4 @@ bun run build
 
 ## Security
 
-Open Feedback redacts common credential patterns and sensitive metadata keys before storing feedback. Treat feedback exports as potentially sensitive product data. Do not commit feedback JSONL files or API tokens.
+Hasna Feedback redacts common credential patterns and sensitive metadata keys before storing feedback. Treat feedback exports as potentially sensitive product data. Do not commit feedback JSONL files or API tokens.

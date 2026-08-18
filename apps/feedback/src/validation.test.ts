@@ -4,11 +4,11 @@ import { parseFeedbackInput, redactSecretsInText } from "./validation.js";
 describe("feedback validation", () => {
   test("normalizes tags and defaults kind", () => {
     const parsed = parseFeedbackInput({
-      appId: " open-feedback ",
+      appId: " feedback ",
       message: "Works",
       tags: ["Bug", "bug", "  api "],
     });
-    expect(parsed.appId).toBe("open-feedback");
+    expect(parsed.appId).toBe("feedback");
     expect(parsed.kind).toBe("other");
     expect(parsed.tags).toEqual(["api", "bug"]);
   });

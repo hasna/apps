@@ -7,7 +7,7 @@ import { FeedbackClient } from "./client.js";
 import { LocalFeedbackStore } from "./storage.js";
 
 async function createTestClient() {
-  const store = new LocalFeedbackStore({ dataDir: await mkdtemp(join(tmpdir(), "open-feedback-api-")) });
+  const store = new LocalFeedbackStore({ dataDir: await mkdtemp(join(tmpdir(), "feedback-api-")) });
   const tokenValue = ["test", "token"].join("-");
   const handler = createFeedbackHandler({ store, apiToken: tokenValue });
   const fetchImpl = (input: string | URL | Request, init?: RequestInit) => {
@@ -72,14 +72,14 @@ describe("Feedback HTTP API and SDK", () => {
   });
 
   test("rejects requests with missing token when configured", async () => {
-    const store = new LocalFeedbackStore({ dataDir: await mkdtemp(join(tmpdir(), "open-feedback-auth-")) });
+    const store = new LocalFeedbackStore({ dataDir: await mkdtemp(join(tmpdir(), "feedback-auth-")) });
     const handler = createFeedbackHandler({ store, apiToken: "required" });
     const response = await handler(new Request("http://feedback.test/v1/feedback"));
     expect(response.status).toBe(401);
   });
 
   test("allows public submit but requires read scope for shared deployment reads", async () => {
-    const store = new LocalFeedbackStore({ dataDir: await mkdtemp(join(tmpdir(), "open-feedback-shared-")) });
+    const store = new LocalFeedbackStore({ dataDir: await mkdtemp(join(tmpdir(), "feedback-shared-")) });
     const credentials = scopedCredentials();
     const handler = createFeedbackHandler({ store, tokens: credentials, publicSubmit: true, sharedDeployment: true });
 
@@ -101,7 +101,7 @@ describe("Feedback HTTP API and SDK", () => {
   });
 
   test("splits read, triage, and export scopes", async () => {
-    const store = new LocalFeedbackStore({ dataDir: await mkdtemp(join(tmpdir(), "open-feedback-scopes-")) });
+    const store = new LocalFeedbackStore({ dataDir: await mkdtemp(join(tmpdir(), "feedback-scopes-")) });
     const credentials = scopedCredentials();
     const handler = createFeedbackHandler({ store, tokens: credentials, publicSubmit: true, sharedDeployment: true });
     const created = await handler(new Request("http://feedback.test/v1/feedback", {
@@ -138,15 +138,15 @@ describe("Feedback HTTP API and SDK", () => {
   });
 
   test("fails closed for shared deployment reads when read token is missing", async () => {
-    const store = new LocalFeedbackStore({ dataDir: await mkdtemp(join(tmpdir(), "open-feedback-failclosed-")) });
+    const store = new LocalFeedbackStore({ dataDir: await mkdtemp(join(tmpdir(), "feedback-failclosed-")) });
     const handler = createFeedbackHandler({ store, tokens: { submit: "submit-scope" }, publicSubmit: true, sharedDeployment: true });
     const response = await handler(new Request("http://feedback.test/v1/feedback"));
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ error: "Open Feedback read access is disabled until a scoped token is configured." });
+    expect(await response.json()).toEqual({ error: "Hasna Feedback read access is disabled until a scoped token is configured." });
   });
 
   test("rate limits, suppresses duplicate submissions, and rejects spammy payloads before storage", async () => {
-    const store = new LocalFeedbackStore({ dataDir: await mkdtemp(join(tmpdir(), "open-feedback-rate-")) });
+    const store = new LocalFeedbackStore({ dataDir: await mkdtemp(join(tmpdir(), "feedback-rate-")) });
     const handler = createFeedbackHandler({
       store,
       publicSubmit: true,

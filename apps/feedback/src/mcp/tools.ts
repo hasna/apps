@@ -81,7 +81,7 @@ export function buildFeedbackMcpTools(options: FeedbackStore | FeedbackMcpToolsO
   const tools: Omit<FeedbackMcpToolDefinition, "inputSchema">[] = [
     {
       name: "feedback_diagnostics",
-      description: "Return redacted Open Feedback storage runtime diagnostics.",
+      description: "Return redacted Hasna Feedback storage runtime diagnostics.",
       paramsSchema: {},
       run: async () => jsonContent(runtime),
     },

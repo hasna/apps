@@ -1,6 +1,6 @@
 # App Integration
 
-Open Feedback is designed for Hasna-coded apps that need a consistent way to capture user reports, product ideas, and agent-generated feedback.
+Hasna Feedback is designed for Hasna-coded apps that need a consistent way to capture user reports, product ideas, and agent-generated feedback.
 
 ## Recommended App Fields
 
@@ -34,7 +34,7 @@ export async function sendFeedback(message: string) {
 }
 ```
 
-For public browser clients, prefer a short-lived app backend endpoint that adds the Open Feedback API token server-side.
+For public browser clients, prefer a short-lived app backend endpoint that adds the Hasna Feedback API token server-side.
 
 ## Feedback Button and Popover
 
@@ -126,7 +126,7 @@ export const feedbackHandler = createFeedbackHandler({
 Local or single-host deployment:
 
 ```bash
-FEEDBACK_DATA_DIR=/var/lib/open-feedback \
+FEEDBACK_DATA_DIR=/var/lib/feedback \
 FEEDBACK_API_TOKEN="$FEEDBACK_API_TOKEN" \
 feedback serve --host 0.0.0.0 --port 8787
 ```
@@ -180,4 +180,4 @@ The `feedback_diagnostics` MCP tool returns redacted runtime diagnostics. It rep
 
 ## Data Handling
 
-Open Feedback stores newline-delimited JSON in `~/.hasna/feedback/feedback.jsonl` by default. The JSONL format is intentionally portable: teams can archive it, load it into a database later, or pipe it into analysis workflows. Validation redacts common credential patterns from message text, URLs, metadata, and context before persistence in either local or injected cloud storage paths.
+Hasna Feedback stores newline-delimited JSON in `~/.hasna/feedback/feedback.jsonl` by default. The JSONL format is intentionally portable: teams can archive it, load it into a database later, or pipe it into analysis workflows. Validation redacts common credential patterns from message text, URLs, metadata, and context before persistence in either local or injected cloud storage paths.

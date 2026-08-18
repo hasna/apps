@@ -1,6 +1,6 @@
 # Contributing
 
-Open Feedback is a Bun and TypeScript project.
+Hasna Feedback is a Bun and TypeScript project.
 
 ## Local Setup
 

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { createFeedbackStore, describeFeedbackStoreRuntime, LocalFeedbackStore } from "./storage.js";
 
 async function tempStore(): Promise<LocalFeedbackStore> {
-  const dataDir = await mkdtemp(join(tmpdir(), "open-feedback-"));
+  const dataDir = await mkdtemp(join(tmpdir(), "feedback-"));
   return new LocalFeedbackStore({ dataDir });
 }
 
@@ -79,7 +79,7 @@ describe("LocalFeedbackStore", () => {
 
 describe("feedback storage runtime", () => {
   test("uses local SQLite storage by default", async () => {
-    const dataDir = await mkdtemp(join(tmpdir(), "open-feedback-runtime-"));
+    const dataDir = await mkdtemp(join(tmpdir(), "feedback-runtime-"));
     const diagnostics = describeFeedbackStoreRuntime({ env: { FEEDBACK_DATA_DIR: dataDir } });
     expect(diagnostics).toMatchObject({
       mode: "local",
@@ -93,7 +93,7 @@ describe("feedback storage runtime", () => {
   });
 
   test("still uses the JSONL store when it is explicitly selected", async () => {
-    const dataDir = await mkdtemp(join(tmpdir(), "open-feedback-runtime-"));
+    const dataDir = await mkdtemp(join(tmpdir(), "feedback-runtime-"));
     const env = { FEEDBACK_DATA_DIR: dataDir, FEEDBACK_STORE: "jsonl" };
     expect(describeFeedbackStoreRuntime({ env })).toMatchObject({
       mode: "local",
