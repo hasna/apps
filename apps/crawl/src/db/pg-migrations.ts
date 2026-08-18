@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-crawl remote storage sync.
+ * PostgreSQL migrations for crawl remote storage sync.
  *
  * Equivalent to the SQLite schema in migrations.ts, translated for PostgreSQL.
  */

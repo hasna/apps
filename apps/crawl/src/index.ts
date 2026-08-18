@@ -1,4 +1,4 @@
-// open-crawl public SDK API
+// crawl public SDK API
 // @hasna/crawl
 
 // Types

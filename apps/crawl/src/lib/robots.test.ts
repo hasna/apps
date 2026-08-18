@@ -32,11 +32,11 @@ describe("fetchRobotsTxt", () => {
 User-agent: *
 Disallow: /
 
-User-agent: open-crawl
+User-agent: crawl
 Allow: /
 `);
 
-    const robots = await fetchRobotsTxt(domain, "open-crawl/1.0");
+    const robots = await fetchRobotsTxt(domain, "crawl/1.0");
 
     expect(robots.isAllowed(`http://${domain}/private-page`)).toBe(true);
   });
@@ -45,11 +45,11 @@ Allow: /
     const domain = serveRobotsTxt(`
 User-agent: *
 Allow: /private
-User-agent: open-crawl
+User-agent: crawl
 Disallow: /
 `);
 
-    const robots = await fetchRobotsTxt(domain, "open-crawl/1.0");
+    const robots = await fetchRobotsTxt(domain, "crawl/1.0");
 
     expect(robots.isAllowed(`http://${domain}/private`)).toBe(false);
   });
@@ -60,19 +60,19 @@ User-agent: * # all crawlers
 Disallow: /private # keep out
 `);
 
-    const robots = await fetchRobotsTxt(domain, "open-crawl/1.0");
+    const robots = await fetchRobotsTxt(domain, "crawl/1.0");
 
     expect(robots.isAllowed(`http://${domain}/private/page`)).toBe(false);
   });
 
   it("keeps rules in the same group across blank lines", async () => {
     const domain = serveRobotsTxt(`
-User-agent: open-crawl
+User-agent: crawl
 
 Disallow: /private
 `);
 
-    const robots = await fetchRobotsTxt(domain, "open-crawl/1.0");
+    const robots = await fetchRobotsTxt(domain, "crawl/1.0");
 
     expect(robots.isAllowed(`http://${domain}/private/page`)).toBe(false);
   });

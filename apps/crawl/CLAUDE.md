@@ -1,4 +1,4 @@
-# open-crawl — CLAUDE.md
+# crawl — CLAUDE.md
 
 ## Project
 AI-powered web crawler — self-hosted Firecrawl alternative.

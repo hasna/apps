@@ -7,7 +7,7 @@ const CONFIG_DIR = getDataDir();
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 
 const DEFAULT_CONFIG: CrawlConfig = {
-  userAgent: "open-crawl/1.0 (+https://github.com/hasna/crawl)",
+  userAgent: "crawl/1.0 (+https://github.com/hasna/crawl)",
   defaultDelay: 1000,
   maxConcurrent: 5,
   maxDepth: 3,

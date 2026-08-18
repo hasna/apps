@@ -153,7 +153,7 @@ describe("crawl-mcp --http entry", () => {
     });
     processes.push(proc);
 
-    // startCrawlServer writes "open-crawl server running on http://HOST:PORT"
+    // startCrawlServer writes "crawl server running on http://HOST:PORT"
     // to stdout once the socket is bound. Read incrementally until the banner
     // appears, then probe /health on the reported port.
     const port = await new Promise<number | null>((resolve) => {

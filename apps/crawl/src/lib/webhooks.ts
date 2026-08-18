@@ -29,7 +29,7 @@ export async function deliverWebhook(deliveryId: string): Promise<boolean> {
   try {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      "User-Agent": "open-crawl-webhook/1.0",
+      "User-Agent": "crawl-webhook/1.0",
       "X-Crawl-Event": delivery.event,
       "X-Crawl-Delivery": delivery.id,
     };
