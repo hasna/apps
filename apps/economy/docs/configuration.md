@@ -32,7 +32,7 @@ ECONOMY_ACCOUNT_TOOL       / _NAME / _EMAIL
 
 The same agent-specific pattern applies to all eight supported agents. Account keys use the tool plus normalized email when available, otherwise the profile name.
 
-## CLI/MCP cloud client
+## CLI/MCP hosted client
 
 Local is the default. To route CLI and MCP data operations to a shared server, set:
 
@@ -41,9 +41,9 @@ export HASNA_ECONOMY_API_URL=https://economy.example.com
 export HASNA_ECONOMY_API_KEY='...'
 ```
 
-URL plus key is itself a cloud-mode signal. You may explicitly set `HASNA_ECONOMY_STORAGE_MODE=cloud`; `self_hosted`, `remote`, and `hybrid` are accepted deprecated aliases. The resolver also accepts `HASNA_ECONOMY_MODE`, `ECONOMY_STORAGE_MODE`, and `ECONOMY_MODE`, plus unprefixed `ECONOMY_API_URL`/`ECONOMY_API_KEY` aliases. An existing `/v1` suffix is normalized, otherwise it is appended. Cloud mode with no key or an invalid URL fails rather than reading an unintended local dataset.
+The presence of the API key selects the hosted client; an API URL without a key fails rather than silently reading the local dataset, and an invalid URL is refused. The resolver also accepts unprefixed `ECONOMY_API_URL`/`ECONOMY_API_KEY` aliases. An existing `/v1` suffix is normalized, otherwise it is appended.
 
-In cloud-client mode, data commands use the HTTP API, and local auto-sync, explicit `economy sync`, and `economy billing sync` are skipped. Clients never need or use a Postgres DSN.
+With the hosted client, data commands use the HTTP API, and local auto-sync, explicit `economy sync`, and `economy billing sync` are skipped. Clients never need or use a Postgres DSN.
 
 ## REST server
 
@@ -60,7 +60,7 @@ Without a local token, the current server defaults to `0.0.0.0` and API routes a
 
 The server serves `dashboard/dist` and falls back to its `index.html` for non-API paths when those assets exist.
 
-## Self-hosted server
+## Server data backend
 
 The server backend follows the database URL alone — `postgresql` when one of these is set, `sqlite` when none is:
 
@@ -69,8 +69,6 @@ HASNA_ECONOMY_DATABASE_URL
 ECONOMY_DATABASE_URL
 DATABASE_URL
 ```
-
-`HASNA_ECONOMY_STORAGE_MODE` (and `HASNA_ECONOMY_MODE`, `ECONOMY_STORAGE_MODE`, `ECONOMY_MODE`) no longer selects a backend: the server refuses to start and prints a migration hint. Delete it and set a DSN instead. This is server-only — the CLI/MCP client still reads the mode variable described above.
 
 Apply migrations with `economy-serve migrate`. `ECONOMY_PG_POOL_MAX` defaults to 5. A non-loopback server also requires one of `HASNA_ECONOMY_API_SIGNING_KEY`, `HASNA_API_SIGNING_KEY`, or `API_KEY_SIGNING_SECRET`; API keys are then verified by `@hasna/contracts`. The signing secret belongs only on the server.
 

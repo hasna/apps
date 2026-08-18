@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'bun:test'
 import { translateSql, translateParams } from './dialect.js'
 
-// These assertions pin the exact rewrites the self-hosted Postgres path has always
+// These assertions pin the exact rewrites the Postgres path has always
 // performed. They are a regression harness for the translator, not a wish list:
 // changing an expectation here changes what runs against production RDS.
 describe('translateSql', () => {

@@ -1,4 +1,4 @@
-// Forward-only PostgreSQL migration runner for the self-hosted service.
+// Forward-only PostgreSQL migration runner for the PostgreSQL-backed server.
 //
 // Applies `PG_MIGRATIONS` (src/db/pg-migrations.ts) index-wise and records each
 // applied index in `_pg_migrations`. Index == version, so migrations may only

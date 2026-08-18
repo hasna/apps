@@ -1,7 +1,7 @@
 /**
  * Contract regression: the RUNTIME must speak the vocabulary the manifest declares.
  *
- * `@hasna/contracts` 0.9.0 retired the deployment-mode axis. The manifest half of
+ * `@hasna/contracts` 0.9.0 retired the deployment concept. The manifest half of
  * that migration landed in #28 (`storage.mode` -> `storage.backend`), but the
  * runtime kept emitting `mode` on the foundation probes — so economy DECLARED the
  * new vocabulary and DID the old one.
@@ -24,10 +24,6 @@ import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 
 /** Every env key that can steer backend resolution, cleared between cases. */
 const BACKEND_ENV_KEYS = [
-  'HASNA_ECONOMY_STORAGE_MODE',
-  'HASNA_ECONOMY_MODE',
-  'ECONOMY_STORAGE_MODE',
-  'ECONOMY_MODE',
   'HASNA_ECONOMY_DATABASE_URL',
   'ECONOMY_DATABASE_URL',
   'DATABASE_URL',

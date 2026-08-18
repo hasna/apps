@@ -43,7 +43,7 @@ economy dashboard --port 3456
 
 - [CLI reference](docs/cli.md)
 - [Ingestion sources and attribution](docs/ingestion.md)
-- [Configuration, storage modes, and deployment](docs/configuration.md)
+- [Configuration, storage, and deployment](docs/configuration.md)
 - [REST API](docs/rest-api.md)
 - [MCP server](docs/mcp.md)
 - [OTLP/HTTP sidecar](docs/otel.md)
@@ -196,7 +196,7 @@ OpenRouter-style model IDs ending in `:free` are treated as zero-cost variants e
 
 ## Billing
 
-Estimated costs can be reconciled with provider billing in local mode:
+Estimated costs can be reconciled with provider billing for the local store:
 
 ```bash
 economy billing sync --days 31
@@ -276,7 +276,7 @@ Data is stored in `~/.hasna/economy/`.
 
 The main SQLite database lives at `~/.hasna/economy/economy.db`. Older `~/.economy/` data is copied on first open when the new directory does not exist. Override the database path with `HASNA_ECONOMY_DB_PATH` or `ECONOMY_DB`.
 
-For shared deployments, CLI and MCP can use a remote `/v1` API instead of local SQLite by setting `HASNA_ECONOMY_API_URL` and `HASNA_ECONOMY_API_KEY`. See [configuration](docs/configuration.md) for client resolution, server auth, Postgres mode, and all environment variables.
+For shared deployments, CLI and MCP can use the hosted `/v1` API instead of local SQLite by setting `HASNA_ECONOMY_API_URL` and `HASNA_ECONOMY_API_KEY`. See [configuration](docs/configuration.md) for client resolution, server auth, the Postgres backend, and all environment variables.
 
 ## Development
 

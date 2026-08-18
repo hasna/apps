@@ -112,7 +112,7 @@ describe('REST API server', () => {
   })
 
   // The `mode` assertion these cases used to make PASSED, and was deleted rather
-  // than repaired: @hasna/contracts 0.9.0 retired the deployment-mode axis, so a
+  // than repaired: @hasna/contracts 0.9.0 retired the deployment concept, so a
   // test demanding a `mode` key now pins the defect instead of the contract.
   // Shape conformance is asserted against the contract's own schemas in
   // src/server/foundation-probe.contract.test.ts; these keep the local smoke.

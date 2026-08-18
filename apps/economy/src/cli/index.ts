@@ -29,8 +29,8 @@ program
 // ── Auto-sync helper ──────────────────────────────────────────────────────────
 
 async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; loops?: boolean; verbose?: boolean; dedupe?: boolean } = {}): Promise<void> {
-  // self_hosted/cloud mode: reads come straight from the cloud API, so there is
-  // no local DB to ingest into. Skip the local sync entirely.
+  // Hosted API: reads come straight from the hosted API, so there is no local
+  // DB to ingest into. Skip the local sync entirely.
   if (isCloudStore()) return
   const db = openDatabase()
   ensurePricingSeeded(db)
@@ -281,12 +281,12 @@ program
   .option('--backfill-machine', 'Tag existing records that have no machine_id with current hostname')
   .option('--recalculate', 'Recalculate costs for all requests with cost_usd = 0')
   .action(async (opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; loops?: boolean; verbose?: boolean; force?: boolean; backfillMachine?: boolean; recalculate?: boolean }) => {
-    // self_hosted/cloud mode: this client reads and writes the shared cloud API,
-    // it has no local DB to ingest into. Local log ingestion is a local-mode
-    // concept only — skip it here exactly like autoSync does before reads, so we
-    // never write to a local SQLite that the cloud transport will never read.
+    // Hosted API: this client reads and writes the shared API, it has no local
+    // DB to ingest into. Local log ingestion is a local-store concept only —
+    // skip it here exactly like autoSync does before reads, so we never write to
+    // a local SQLite that the hosted transport will never read.
     if (isCloudStore()) {
-      console.log(chalk.yellow('cloud mode: ingest is a local-only operation; nothing to sync (reads/writes route to the cloud API)'))
+      console.log(chalk.yellow('hosted API: ingest is a local-only operation; nothing to sync (reads/writes route to the hosted API)'))
       return
     }
     const db = openDatabase()
@@ -1446,12 +1446,12 @@ billingCmd
   .option('--openai', 'Only sync OpenAI')
   .option('--gemini', 'Only sync Gemini')
   .action(async (opts: { days?: string; anthropic?: boolean; openai?: boolean; gemini?: boolean }) => {
-    // self_hosted/cloud mode: provider billing is pulled into the local DB by the
-    // machine that owns the provider credentials; there is no ApiStore write path
-    // for billing, so writing here would land in a local SQLite the cloud
-    // transport never reads. Skip+warn exactly like the `sync` command.
+    // Hosted API: provider billing is pulled into the local DB by the machine
+    // that owns the provider credentials; there is no ApiStore write path for
+    // billing, so writing here would land in a local SQLite the hosted transport
+    // never reads. Skip+warn exactly like the `sync` command.
     if (isCloudStore()) {
-      console.log(chalk.yellow('cloud mode: billing ingest is a local-only operation; nothing to sync (reads route to the cloud API)'))
+      console.log(chalk.yellow('hosted API: billing ingest is a local-only operation; nothing to sync (reads route to the hosted API)'))
       return
     }
     const days = parsePositiveCliInteger(opts.days ?? '31', '--days')
@@ -1534,15 +1534,15 @@ registerFleetCommands(program)
 registerEventsCommands(program, { source: 'economy' })
 
 // Render any command failure as a single clean line + exit 1 — never leak a raw
-// bundle stack trace. Cloud (self_hosted) API failures surface as HasnaHttpError;
-// a 404 there means the server is missing the endpoint (stale deploy) rather than
-// a client bug, so we say so instead of dumping the transport internals.
+// bundle stack trace. Hosted API failures surface as HasnaHttpError; a 404 there
+// means the server is missing the endpoint (stale deploy) rather than a client
+// bug, so we say so instead of dumping the transport internals.
 function reportCliError(err: unknown): never {
   if (err instanceof HasnaHttpError) {
     if (err.status === 404) {
       fail(
         `economy: the cloud API has no endpoint for this command (${err.method} ${err.path} -> 404). ` +
-          `The self-hosted server is likely running an older build — it needs an ECS redeploy of the current version.`,
+          `The server is likely running an older build — it needs a redeploy of the current version.`,
       )
     }
     if (err.status === 401 || err.status === 403) {

@@ -1,7 +1,7 @@
 // SQLite -> PostgreSQL statement translator.
 //
 // `database.ts` is written once, in SQLite-flavored SQL, and runs unchanged in
-// both storage modes. In self-hosted (Postgres) mode `SyncPgAdapter` pushes
+// both data backends. With the Postgres backend `SyncPgAdapter` pushes
 // every statement through `translateSql` here first. This is a faithful port of
 // the translator economy has always run against production RDS — the rewrite
 // list and its ORDER are behaviour, not style; do not reorder them.

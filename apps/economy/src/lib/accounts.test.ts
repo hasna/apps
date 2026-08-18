@@ -5,6 +5,9 @@ import { join } from 'path'
 import { resolveAccountForAgent, withAccount } from './accounts.js'
 
 const roots: string[] = []
+// ACCOUNTS_STORAGE_MODE / HASNA_ACCOUNTS_STORAGE_MODE stay: the installed
+// @hasna/accounts package still reads them (its own modes removal has not
+// landed), and these fixtures must isolate that dependency's resolution.
 const envKeys = [
   'ACCOUNTS_API_KEY',
   'ACCOUNTS_API_URL',
@@ -13,7 +16,6 @@ const envKeys = [
   'CODEX_HOME',
   'ECONOMY_CODEX_ACCOUNT',
   'ECONOMY_ACCOUNT',
-  'HASNA_ACCOUNTS_MODE',
   'HASNA_ACCOUNTS_API_KEY',
   'HASNA_ACCOUNTS_API_URL',
   'HASNA_ACCOUNTS_STORAGE_MODE',

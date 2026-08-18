@@ -6,20 +6,31 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 const roots: string[] = []
+// HASNA_ACCOUNTS_STORAGE_MODE stays: the installed @hasna/accounts package still
+// reads it (its own modes removal has not landed), and these CLI fixtures must
+// not inherit a hosted-accounts configuration from the ambient environment.
 const localStorageEnv = {
   HASNA_ACCOUNTS_STORAGE_MODE: 'local',
-  HASNA_ECONOMY_STORAGE_MODE: 'local',
-  HASNA_ECONOMY_MODE: 'local',
-  ECONOMY_STORAGE_MODE: 'local',
-  ECONOMY_MODE: 'local',
 } as const
 
+// The spawned MCP server resolves its store from the env contract; a station
+// with the hosted-API vars set would resolve an ApiStore and hit the network.
+// Strip them so these fixtures pin the local store.
+const HOSTED_API_ENV_KEYS = [
+  'HASNA_ECONOMY_API_URL',
+  'HASNA_ECONOMY_API_KEY',
+  'ECONOMY_API_URL',
+  'ECONOMY_API_KEY',
+] as const
+
 function envWith(overrides: Record<string, string>): Record<string, string> {
-  return {
+  const env = {
     ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
     ...localStorageEnv,
     ...overrides,
   }
+  for (const key of HOSTED_API_ENV_KEYS) delete env[key]
+  return env
 }
 
 afterEach(() => {

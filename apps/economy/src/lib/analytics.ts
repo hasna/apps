@@ -2,9 +2,9 @@
 //
 // Pure, Database-in functions that back the analytics CLI surfaces (project
 // show, export, compare, forecast, efficiency). They live here so BOTH the
-// LocalStore transport and the self_hosted/cloud serve endpoints run the exact
-// same SQL — the CLI commands themselves never touch sqlite. This is the seam
-// that keeps local and cloud reads identical (no split-brain).
+// LocalStore transport and the hosted serve endpoints run the exact same SQL —
+// the CLI commands themselves never touch sqlite. This is the seam that keeps
+// local and hosted reads identical (no split-brain).
 
 import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 

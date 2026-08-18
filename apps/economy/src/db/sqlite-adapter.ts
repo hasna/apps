@@ -8,7 +8,7 @@
 // The `DbAdapter` interface below is the ONLY surface `database.ts` and its
 // callers use (run/get/all/exec/prepare/close/transaction). `SyncPgAdapter`
 // (sync-pg.ts) implements the same interface, which is what lets the identical
-// synchronous query layer run against Postgres in self-hosted mode.
+// synchronous query layer run against Postgres on the PostgreSQL-backed server.
 import { Database } from 'bun:sqlite'
 
 export interface RunResult {

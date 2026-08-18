@@ -3,9 +3,9 @@
 export const openApiSpec: Record<string, unknown> = {
   "openapi": "3.0.3",
   "info": {
-    "title": "@hasna/economy self-hosted API",
+    "title": "@hasna/economy API",
     "version": "0.0.0",
-    "description": "AI coding cost tracker — self-hosted control plane. The server data backend is sqlite | postgresql, selected by the presence of a database URL; with postgresql the serve process reads AND writes PostgreSQL directly with API-key auth via @hasna/contracts. All /v1 routes require a valid `economy:*` scoped API key (x-api-key or Authorization: Bearer). The foundation probes /health, /ready, /version are open."
+    "description": "AI coding cost tracker. The server data backend is sqlite | postgresql, selected by the presence of a database URL; with postgresql the serve process reads AND writes PostgreSQL directly with API-key auth via @hasna/contracts. All /v1 routes require a valid `economy:*` scoped API key (x-api-key or Authorization: Bearer). The foundation probes /health, /ready, /version are open."
   },
   "servers": [
     {

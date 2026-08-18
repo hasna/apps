@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
-# @hasna/economy self_hosted control-plane — ARM64 / Bun.
-# Default CMD runs economy-serve (cloud / PURE REMOTE per Amendment A1: the serve
-# process reads/writes RDS Postgres directly with @hasna/contracts API-key auth).
+# @hasna/economy serve control-plane — ARM64 / Bun.
+# Default CMD runs economy-serve (the serve process reads/writes the PostgreSQL
+# backend directly with @hasna/contracts API-key auth).
 # The ECS one-shot migration task overrides the command with `... migrate`.
 
 FROM --platform=linux/arm64 oven/bun:1 AS deps
@@ -29,9 +29,8 @@ WORKDIR /app
 # Amazon RDS global CA bundle so verify-full-capable TLS to the shared RDS
 # succeeds (pg-connection-string escalates sslmode=require to verify-full).
 COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
-# No storage-mode variable: the server data backend is selected by the presence
-# of HASNA_ECONOMY_DATABASE_URL, injected at run time. Baking a retired
-# HASNA_ECONOMY_STORAGE_MODE into the image now fails closed at startup.
+# No mode variable is baked in: the server data backend is selected by the
+# presence of HASNA_ECONOMY_DATABASE_URL, injected at run time.
 ENV NODE_ENV=production \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
     PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem \

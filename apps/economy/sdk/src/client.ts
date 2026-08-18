@@ -31,7 +31,7 @@ import type {
 
 export interface EconomyClientOptions {
   baseUrl?: string
-  /** API key for the self-hosted service (sent as `x-api-key`). Required for
+  /** API key for the hosted service (sent as `x-api-key`). Required for
    * the internet-facing /v1 API; optional for a loopback dev server. */
   apiKey?: string
   retries?: number
@@ -57,8 +57,8 @@ export class EconomyClient {
   }
 
   /**
-   * Self-hosted client config: `ECONOMY_API_URL` + `ECONOMY_API_KEY`
-   * (never a DSN). Falls back to the legacy `ECONOMY_URL` for local dev.
+   * Hosted client config: `ECONOMY_API_URL` + `ECONOMY_API_KEY`
+   * (never a DSN). Falls back to `ECONOMY_URL` for local dev.
    */
   static fromEnv(): EconomyClient {
     const env = typeof process !== 'undefined' ? process.env : {}

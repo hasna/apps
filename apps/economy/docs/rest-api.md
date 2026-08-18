@@ -16,21 +16,21 @@ Errors use `{ "error": "message" }`. Foundation probes return a direct `{ status
 | --- | --- | --- |
 | `GET` | `/health`, `/healthz` | Liveness. |
 | `GET` | `/ready`, `/readyz` | Storage readiness; may return 503. |
-| `GET` | `/version`, `/v1/version` | Version and deployment mode. |
+| `GET` | `/version`, `/v1/version` | Version. |
 | `GET` | `/openapi.json` | Runtime-versioned OpenAPI document. |
 
 These routes are open. The checked-in OpenAPI source is [`openapi/economy.json`](../openapi/economy.json).
 
 ## Authentication
 
-In local mode, set `ECONOMY_API_TOKEN` or `HASNA_ECONOMY_API_TOKEN` and send either:
+For a local server, set `ECONOMY_API_TOKEN` or `HASNA_ECONOMY_API_TOKEN` and send either:
 
 ```text
 Authorization: Bearer <token>
 X-Economy-Token: <token>
 ```
 
-In self-hosted Postgres mode, send a valid Economy API key as `x-api-key` or a bearer token. All non-probe routes require a valid key when the server has an authenticator. Bulk ingest and feedback additionally request the `economy:write` scope.
+With the Postgres backend, send a valid Economy API key as `x-api-key` or a bearer token. All non-probe routes require a valid key when the server has an authenticator. Bulk ingest and feedback additionally request the `economy:write` scope.
 
 ## Read routes
 

@@ -17,7 +17,7 @@ const economy = new EconomyClient({ baseUrl: 'http://127.0.0.1:3456' })
 const summary = await economy.getSummary('today')
 ```
 
-For an authenticated self-hosted service, pass `apiKey`; the client sends it as `x-api-key`:
+For an authenticated hosted service, pass `apiKey`; the client sends it as `x-api-key`:
 
 ```ts
 const economy = new EconomyClient({

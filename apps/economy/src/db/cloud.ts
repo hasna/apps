@@ -1,6 +1,6 @@
-// Cloud (PURE REMOTE, Amendment A1) storage path for economy-serve.
+// PostgreSQL storage path for economy-serve.
 //
-// The self-hosted service reads AND writes the shared RDS Postgres directly.
+// The PostgreSQL-backed server reads AND writes the shared RDS Postgres directly.
 // There is NO local SQLite, NO cache-as-mode, and NO sync engine in the serve
 // process. The core query layer in `database.ts` is dialect-agnostic (it only
 // uses the `DbAdapter` surface: prepare/all/get/run/exec/transaction), so the
@@ -32,12 +32,12 @@ export function getCloudDatabaseUrl(env: Env = process.env): string | undefined 
 /**
  * Resolve the server data backend from database configuration ALONE.
  *
- * `@hasna/contracts` 0.9.0 removed the deployment-mode axis: the only switch is
+ * `@hasna/contracts` 0.9.0 removed the deployment concept: the only switch is
  * the server's data backend, `sqlite | postgresql`, and a present database URL
- * is what selects `postgresql`. Retired `STORAGE_MODE` / `MODE` variables are
- * rejected with a migration hint rather than normalized or silently mapped
- * (CONTRACT.md section 2), so a half-migrated deployment fails loudly at startup
- * instead of quietly serving the wrong store.
+ * is what selects `postgresql`. Retired mode variables are rejected with a
+ * migration hint rather than normalized or silently mapped (CONTRACT.md section
+ * 2), so a half-migrated deployment fails loudly at startup instead of quietly
+ * serving the wrong store.
  *
  * The rejection is delegated to the contract package so the migration hint stays
  * identical to the one the `server_backend_configuration` conformance gate emits.
@@ -73,7 +73,7 @@ export function resolveSigningSecret(): string | undefined {
 export function openCloudDatabase(dsn = getCloudDatabaseUrl()): Database {
   if (!dsn) {
     throw new Error(
-      'economy cloud mode requires a Postgres DSN: set HASNA_ECONOMY_DATABASE_URL (or ECONOMY_DATABASE_URL / DATABASE_URL)',
+      'economy Postgres backend requires a DSN: set HASNA_ECONOMY_DATABASE_URL (or ECONOMY_DATABASE_URL / DATABASE_URL)',
     )
   }
   // SyncPgAdapter: a worker-backed synchronous PG client (see sync-pg.ts). An
@@ -83,7 +83,7 @@ export function openCloudDatabase(dsn = getCloudDatabaseUrl()): Database {
 
 /** A raw pg Pool for auxiliary async work (API-key store, migrations). */
 export function createCloudPool(dsn = getCloudDatabaseUrl()): pg.Pool {
-  if (!dsn) throw new Error('economy cloud mode requires a Postgres DSN (HASNA_ECONOMY_DATABASE_URL)')
+  if (!dsn) throw new Error('economy Postgres backend requires a DSN (HASNA_ECONOMY_DATABASE_URL)')
   const pool = new pg.Pool({ connectionString: dsn, ssl: resolvePgSsl(dsn), max: Number(process.env['ECONOMY_PG_POOL_MAX'] ?? '5'), connectionTimeoutMillis: 10_000 })
   // Idle backends can drop (RDS failover, network blips, idle timeouts). Without
   // a listener, pg re-emits that as an uncaught 'error' and crashes the process.
