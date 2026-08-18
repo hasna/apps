@@ -254,7 +254,7 @@ async function addRecord(group: string, parsed: ParsedArgs, store: JsonOrgStore)
       slug: flagValue(parsed, "slug"),
       description: flagValue(parsed, "description"),
       parentOrgId: resolveOptionalId(data, flagValue(parsed, "parent"), ["org"]),
-      identityRef: parseExternalFlag(parsed, "identity", "open-identities", "organization"),
+      identityRef: parseExternalFlag(parsed, "identity", "identities", "organization"),
       metadata: parseJsonFlag(parsed, "metadata-json"),
     });
   }
@@ -266,7 +266,7 @@ async function addRecord(group: string, parsed: ParsedArgs, store: JsonOrgStore)
       description: flagValue(parsed, "description"),
       parentTeamId: resolveOptionalId(data, flagValue(parsed, "parent"), ["team"]),
       functionIds: resolveManyIds(data, flagValues(parsed, "function"), ["function"]),
-      identityRef: parseExternalFlag(parsed, "identity", "open-identities", "organization"),
+      identityRef: parseExternalFlag(parsed, "identity", "identities", "organization"),
       metadata: parseJsonFlag(parsed, "metadata-json"),
     });
   }
@@ -304,7 +304,7 @@ async function addRecord(group: string, parsed: ParsedArgs, store: JsonOrgStore)
       slug: flagValue(parsed, "slug"),
       displayName: flagValue(parsed, "display-name"),
       description: flagValue(parsed, "description"),
-      identityRef: requiredExternalFlag(parsed, "identity", "open-identities", kind === "service-account" ? "service" : kind),
+      identityRef: requiredExternalFlag(parsed, "identity", "identities", kind === "service-account" ? "service" : kind),
       roleIds: resolveManyIds(data, flagValues(parsed, "role"), ["role"]),
       teamIds: resolveManyIds(data, flagValues(parsed, "team"), ["team"]),
       functionIds: resolveManyIds(data, flagValues(parsed, "function"), ["function"]),
@@ -320,7 +320,7 @@ async function addRecord(group: string, parsed: ParsedArgs, store: JsonOrgStore)
       name: required(flagValue(parsed, "name"), "projects add requires --name"),
       slug: flagValue(parsed, "slug"),
       description: flagValue(parsed, "description"),
-      projectRef: requiredExternalFlag(parsed, "project-ref", "open-projects", "workspace"),
+      projectRef: requiredExternalFlag(parsed, "project-ref", "projects", "workspace"),
       ownerMemberIds: resolveManyIds(data, flagValues(parsed, "owner-member"), ["member"]),
       ownerTeamIds: resolveManyIds(data, flagValues(parsed, "owner-team"), ["team"]),
       stewardRoleIds: resolveManyIds(data, flagValues(parsed, "steward-role"), ["role"]),
@@ -335,7 +335,7 @@ async function addRecord(group: string, parsed: ParsedArgs, store: JsonOrgStore)
       name: required(flagValue(parsed, "name"), "machines add requires --name"),
       slug: flagValue(parsed, "slug"),
       description: flagValue(parsed, "description"),
-      machineRef: requiredExternalFlag(parsed, "machine-ref", "open-machines", "machine"),
+      machineRef: requiredExternalFlag(parsed, "machine-ref", "machines", "machine"),
       assignedMemberIds: resolveManyIds(data, flagValues(parsed, "assigned-member"), ["member"]),
       assignedTeamIds: resolveManyIds(data, flagValues(parsed, "assigned-team"), ["team"]),
       projectIds: resolveManyIds(data, flagValues(parsed, "project"), ["project"]),

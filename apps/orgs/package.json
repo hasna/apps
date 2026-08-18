@@ -55,11 +55,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/open-orgs.git"
+    "url": "git+https://github.com/hasna/orgs.git"
   },
-  "homepage": "https://github.com/hasna/open-orgs",
+  "homepage": "https://github.com/hasna/orgs",
   "bugs": {
-    "url": "https://github.com/hasna/open-orgs/issues"
+    "url": "https://github.com/hasna/orgs/issues"
   },
   "engines": {
     "bun": ">=1.0.0"

@@ -3,13 +3,13 @@
   "orgs": [
     {
       "id": "org_open_tools",
-      "slug": "open-tools",
-      "name": "Open Tools",
+      "slug": "tools",
+      "name": "Tools",
       "description": "A small OSS maintainer org.",
       "identityRef": {
-        "system": "open-identities",
+        "system": "identities",
         "kind": "organization",
-        "id": "open-tools"
+        "id": "tools"
       },
       "metadata": {},
       "createdAt": "2026-01-01T00:00:00.000Z",
@@ -63,7 +63,7 @@
       "orgId": "org_open_tools",
       "kind": "agent",
       "identityRef": {
-        "system": "open-identities",
+        "system": "identities",
         "kind": "agent",
         "id": "review-agent"
       },
@@ -85,7 +85,7 @@
       "orgId": "org_open_tools",
       "kind": "agent",
       "identityRef": {
-        "system": "open-identities",
+        "system": "identities",
         "kind": "agent",
         "id": "build-agent"
       },
@@ -103,13 +103,13 @@
   "projects": [
     {
       "id": "proj_open_orgs",
-      "slug": "open-orgs",
-      "name": "open-orgs",
+      "slug": "orgs",
+      "name": "orgs",
       "orgId": "org_open_tools",
       "projectRef": {
-        "system": "open-projects",
+        "system": "projects",
         "kind": "workspace",
-        "id": "open-orgs"
+        "id": "orgs"
       },
       "ownerMemberIds": ["mem_review_agent"],
       "ownerTeamIds": ["team_core"],
@@ -127,7 +127,7 @@
       "name": "Linux Dev",
       "orgId": "org_open_tools",
       "machineRef": {
-        "system": "open-machines",
+        "system": "machines",
         "kind": "machine",
         "id": "linux-dev"
       },
@@ -137,7 +137,7 @@
       "capabilityIds": [],
       "dispatchTarget": {
         "machine": "linux-dev",
-        "target": "open-orgs:agent.1",
+        "target": "orgs:agent.1",
         "source": "manual",
         "state": "idle",
         "lastSeenAt": "2026-01-01T00:00:00.000Z"
