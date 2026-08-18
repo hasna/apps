@@ -216,8 +216,10 @@ export function addProfile(opts: AddOptions): Profile {
   }
   mkdirSync(dir, { recursive: true });
   // A new profile starts with the machine's shared skills/subagents/MCP servers;
-  // only credentials stay per-profile.
-  ensureSharedCapabilities(dir, tool);
+  // only credentials stay per-profile. `freshProfile` is what allows the
+  // birth-only installed-statusline default: launch/switch/health passes stay
+  // source-driven and never sweep existing profiles.
+  ensureSharedCapabilities(dir, tool, { freshProfile: true });
   // ...and with its live-session registry linked to the machine-shared dir, so
   // native cross-session discovery sees this profile's sessions from birth.
   if (tool.id === "claude") ensureSharedClaudeSessions(dir);

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { resolveLocalStore, resolveStore } from "./lib/store.js";
 import { resolveSupervisorLaunch } from "./lib/supervisor.js";
 import { clearCustomToolsCache, getTool } from "./lib/tools.js";
@@ -208,6 +208,51 @@ describe("ApiStore routes registry ops to /v1", () => {
           JSON.parse(readFileSync(join(profile.dir, "settings.json"), "utf8")).statusLine,
         ).toEqual({ type: "command", command: "/opt/statusline/render", padding: 0 });
       } finally {
+        if (previousSharedHome === undefined) delete process.env.ACCOUNTS_SHARED_HOME_CLAUDE;
+        else process.env.ACCOUNTS_SHARED_HOME_CLAUDE = previousSharedHome;
+      }
+    });
+
+    test("API Claude profile gets the installed statusline when shared settings omit it", async () => {
+      const binDir = join(home, "statusline-bin");
+      const statuslineBin = join(binDir, "statusline");
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(statuslineBin, "#!/bin/sh\nexit 0\n");
+      chmodSync(statuslineBin, 0o755);
+      const previousPath = process.env.PATH;
+      process.env.PATH = binDir + delimiter + (previousPath ?? "");
+      const previousSharedHome = process.env.ACCOUNTS_SHARED_HOME_CLAUDE;
+      const sharedHome = join(home, "shared-claude-without-statusline");
+      mkdirSync(sharedHome, { recursive: true });
+      process.env.ACCOUNTS_SHARED_HOME_CLAUDE = sharedHome;
+
+      try {
+        const { fetchImpl } = mockFetch((c) => {
+          if (c.method === "POST" && c.url.endsWith("/accounts")) {
+            return {
+              status: 201,
+              body: {
+                tool: "claude",
+                name: "statusline-cloud-default",
+                dir: join(home, "profiles", "claude", "statusline-cloud-default"),
+                createdAt: "2020-01-01T00:00:00Z",
+              },
+            };
+          }
+          return { status: 404, body: { error: "not found" } };
+        });
+        const store = resolveStore(cloudEnv, { fetchImpl });
+        const profile = await store.addProfile({ name: "statusline-cloud-default", tool: "claude" });
+
+        expect(JSON.parse(readFileSync(join(profile.dir, "settings.json"), "utf8")).statusLine).toEqual({
+          type: "command",
+          // The resolved path passed the metacharacter gate: plain words, no quotes.
+          command: statuslineBin + " render",
+          padding: 0,
+        });
+      } finally {
+        if (previousPath === undefined) delete process.env.PATH;
+        else process.env.PATH = previousPath;
         if (previousSharedHome === undefined) delete process.env.ACCOUNTS_SHARED_HOME_CLAUDE;
         else process.env.ACCOUNTS_SHARED_HOME_CLAUDE = previousSharedHome;
       }
