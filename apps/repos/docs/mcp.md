@@ -1,6 +1,6 @@
 # MCP server
 
-`repos-mcp` exposes 36 tools. The standalone process uses stateless Streamable
+`repos-mcp` exposes 37 tools. The standalone process uses stateless Streamable
 HTTP on `127.0.0.1:8874` by default:
 
 ```bash
@@ -76,6 +76,12 @@ dry runs unless `todo_apply` is true.
 | `sync_github_prs` | Required `repo`; optional `limit`, `state` | Sync one GitHub remote into all matching local checkouts |
 | `sync_all_github_prs` | `org`, `limit` | Sync all indexed GitHub remotes, optionally by org |
 | `fetch_repo_metadata` | Required `repo`; optional `verbose` | Description, language, stars, forks, topics |
+
+## PR monitor tools
+
+| Tool | Main arguments | Result |
+|---|---|---|
+| `pr_monitor` | Optional `org`, `repo`, `limit`, `sync`, `baseline`, `verbose` | The `open-repos.pr-monitor.v1` envelope: summary counts, `events[]` (new state only), and errors. Sync is on by default (`sync: false` reads the last synced registry only) |
 
 ## Knowledge graph tools
 

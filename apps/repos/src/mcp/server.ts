@@ -18,6 +18,7 @@ import {
 } from "../db/repos.js";
 import { ensureWorkspaceBootstrap, startAutoIndexWorker } from "../lib/auto-index.js";
 import { syncGithubPRs, syncAllGithubPRs, fetchRepoMetadata } from "../lib/github.js";
+import { DEFAULT_MONITOR_LIMIT, runPrMonitor } from "../lib/pr-monitor-run.js";
 import { buildGraph, queryNode, queryRelated, findPath, getDeps, getGraphStats } from "../lib/graph.js";
 import {
   getDocsDrift,
@@ -583,6 +584,37 @@ server.tool("fetch_repo_metadata", "Fetch GitHub metadata (stars, topics, langua
     forks: meta.forks,
     topics: meta.topics.slice(0, 10),
     hint: "Set verbose=true for the full metadata object.",
+  });
+});
+
+// ── PR Monitor ──
+
+server.tool("pr_monitor", "Classify open pull requests and emit state/event deltas (pr-monitor watch)", {
+  org: z.string().optional().describe("Scope to one GitHub owner"),
+  repo: z.string().optional().describe("Scope to one local repo record"),
+  limit: z.number().int().positive().max(1000).optional().describe(`Max PRs to classify (default ${DEFAULT_MONITOR_LIMIT})`),
+  sync: z.boolean().optional().describe("Sync GitHub PR metadata first (default true)"),
+  baseline: z.boolean().optional().describe("First-run mode: record watch state, emit a baseline summary, no per-PR NEW events"),
+  verbose: z.boolean().optional().describe("Include the full per-PR state view"),
+}, async (args) => {
+  const envelope = runPrMonitor({
+    sync: args.sync ?? true,
+    org: args.org,
+    repo: args.repo,
+    limit: args.limit ?? DEFAULT_MONITOR_LIMIT,
+    baseline: Boolean(args.baseline),
+  });
+  if (args.verbose) return textResponse(envelope);
+  return textResponse({
+    schema: envelope.schema,
+    generated_at: envelope.generated_at,
+    filters: envelope.filters,
+    baseline: envelope.baseline,
+    summary: envelope.summary,
+    events: envelope.events,
+    error_count: envelope.errors.length,
+    errors: envelope.errors,
+    hint: "Set verbose=true for the full per-PR state view.",
   });
 });
 
