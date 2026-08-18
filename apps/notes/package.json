@@ -1,7 +1,7 @@
 {
   "name": "@hasna/notes",
   "version": "0.1.1",
-  "description": "Local-first personal notes CLI, MCP server, macOS app, and self-hosted sync server.",
+  "description": "Local-first personal notes CLI, MCP server, macOS app, and self-hosted notes server (SQLite or PostgreSQL).",
   "type": "module",
   "bin": {
     "notes": "bin/notes.mjs",
@@ -10,6 +10,7 @@
   },
   "exports": {
     ".": "./tools/notes-lib.mjs",
+    "./sdk": "./sdk/index.mjs",
     "./events": "./tools/notes-events.mjs",
     "./sync": "./sync/index.mjs",
     "./cloud": "./cloud/index.mjs"
@@ -17,6 +18,11 @@
   "files": [
     "bin",
     "cli/notes.mjs",
+    "client",
+    "sdk/index.mjs",
+    "scripts/apply-postgres-migrations.mjs",
+    "scripts/pg-test-gate.mjs",
+    "src/generated",
     "sync",
     "cloud/index.mjs",
     "mcp/notes-mcp.mjs",
@@ -27,6 +33,9 @@
     "server/http.mjs",
     "server/notes.mjs",
     "server/env.mjs",
+    "server/pg-adapter.mjs",
+    "server/pg-migrations.ts",
+    "server/storage.mjs",
     "tools/notes-agent.mjs",
     "tools/notes-env.mjs",
     "tools/notes-events.mjs",
@@ -36,6 +45,9 @@
   ],
   "scripts": {
     "test": "bun test",
+    "test:pg": "bun scripts/pg-test-gate.mjs",
+    "scan:artifact": "bun scripts/scan-artifact.mjs",
+    "prepack": "bun run scan:artifact",
     "pack:dry": "bun pm pack --dry-run"
   },
   "keywords": [
@@ -61,11 +73,15 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@hasna/contracts": "0.10.6",
     "@hasna/events": "0.1.15",
-    "hono": "^4.6.0"
+    "hono": "^4.6.0",
+    "pg": "^8.16.3"
   },
   "devDependencies": {
-    "@types/bun": "1.2.4"
+    "@electric-sql/pglite": "^0.5.4",
+    "@types/bun": "1.2.4",
+    "@types/pg": "^8.15.6"
   },
   "private": false,
   "workspaces": [

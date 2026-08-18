@@ -13,10 +13,10 @@ import { createApp, resolveConfig } from './app.mjs';
 
 const LOOPBACK = { ip: '127.0.0.1' };
 
-function makeApp(overrides = {}) {
+async function makeApp(overrides = {}) {
   const db = openDb(':memory:');
   const config = { ...resolveConfig({}, []), devMode: true, log: () => {}, ...overrides };
-  return { db, app: createApp({ db, config }) };
+  return { db, app: await createApp({ db, config }) };
 }
 
 function call(app, method, path, { token, idem, body, env = LOOPBACK } = {}) {
@@ -89,7 +89,7 @@ describe('boot', () => {
 
 describe('auth', () => {
   test('unauthenticated API access gets the dialect error envelope', async () => {
-    const { app } = makeApp();
+    const { app } = await makeApp();
     const res = await call(app, 'GET', '/api/v1/notes');
     expect(res.status).toBe(401);
     const body = await res.json();
@@ -98,7 +98,7 @@ describe('auth', () => {
   });
 
   test('OTP first login provisions tenant + owner and returns the API key exactly once', async () => {
-    const { app } = makeApp();
+    const { app } = await makeApp();
     const first = await login(app, 'first@example.com');
     expect(first.token).toBeTruthy();
     expect(first.apiKey).toStartWith('pn_');
@@ -118,7 +118,7 @@ describe('auth', () => {
   });
 
   test('device flow: start → approve (session only) → token completes once, then 410 gone', async () => {
-    const { app } = makeApp();
+    const { app } = await makeApp();
     const { token, apiKey } = await login(app);
 
     const startRes = await call(app, 'POST', '/api/v1/auth/device/start', { body: {} });
@@ -155,7 +155,7 @@ describe('auth', () => {
   });
 
   test('--auto-approve completes loopback device logins without manual approval', async () => {
-    const { app } = makeApp({ autoApprove: true });
+    const { app } = await makeApp({ autoApprove: true });
     const started = await (await call(app, 'POST', '/api/v1/auth/device/start', { body: {} })).json();
     const done = await (await call(app, 'POST', '/api/v1/auth/device/token', { body: { deviceCode: started.deviceCode } })).json();
     expect(done.status).toBe('approved');
@@ -168,7 +168,7 @@ describe('auth', () => {
   });
 
   test('logout revokes the session', async () => {
-    const { app } = makeApp();
+    const { app } = await makeApp();
     const { token } = await login(app, 'bye@example.com');
     expect((await call(app, 'POST', '/api/v1/auth/logout', { token })).status).toBe(200);
     expect((await call(app, 'GET', '/api/v1/auth/whoami', { token })).status).toBe(401);
@@ -177,7 +177,7 @@ describe('auth', () => {
 
 describe('notes CRUD', () => {
   test('create/get/patch/delete with revision bumps and soft-delete 404', async () => {
-    const { app } = makeApp();
+    const { app } = await makeApp();
     const { apiKey } = await login(app);
 
     const createRes = await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: 'crud-1', title: 'Hello', bodyMarkdown: 'World', labels: [' a ', 'a', 'b'] } });
@@ -203,7 +203,7 @@ describe('notes CRUD', () => {
   });
 
   test('duplicate clientId maps to 409 conflict', async () => {
-    const { app } = makeApp();
+    const { app } = await makeApp();
     const { apiKey } = await login(app);
     await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: 'dup-1' } });
     const dup = await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: 'dup-1' } });
@@ -212,7 +212,7 @@ describe('notes CRUD', () => {
   });
 
   test('export returns non-deleted notes with an exportId', async () => {
-    const { app } = makeApp();
+    const { app } = await makeApp();
     const { apiKey } = await login(app);
     await sync(app, apiKey, { items: [{ clientId: 'e1', title: 'Keep' }, { clientId: 'e2', title: 'Drop' }] });
     await sync(app, apiKey, { items: [{ clientId: 'e2', deleted: true }] });
@@ -224,7 +224,7 @@ describe('notes CRUD', () => {
 
 describe('sync round-trip', () => {
   test('push, pull, guarded update, and conflict with full current row', async () => {
-    const { app } = makeApp();
+    const { app } = await makeApp();
     const { apiKey } = await login(app);
 
     const push = await (await sync(app, apiKey, { items: [{ clientId: 'n1', title: 'First', bodyMarkdown: 'body', source: 'local' }] })).json();
@@ -250,7 +250,7 @@ describe('sync round-trip', () => {
   });
 
   test('validation: missing Idempotency-Key, missing clientId, non-array items', async () => {
-    const { app } = makeApp();
+    const { app } = await makeApp();
     const { apiKey } = await login(app);
     const noKey = await call(app, 'POST', '/api/v1/sync', { token: apiKey, body: { items: [] } });
     expect(noKey.status).toBe(400);
@@ -264,7 +264,7 @@ describe('sync round-trip', () => {
 
 describe('idempotent replay', () => {
   test('same key + same body replays the stored response verbatim without re-applying', async () => {
-    const { app } = makeApp();
+    const { app } = await makeApp();
     const { apiKey } = await login(app);
     const body = { items: [{ clientId: 'idem-1', title: 'Once' }] };
 
@@ -278,7 +278,7 @@ describe('idempotent replay', () => {
   });
 
   test('same key + different body → 409 idempotency_conflict', async () => {
-    const { app } = makeApp();
+    const { app } = await makeApp();
     const { apiKey } = await login(app);
     await sync(app, apiKey, { items: [{ clientId: 'idem-2', title: 'A' }] }, 'batch-2');
     const clash = await sync(app, apiKey, { items: [{ clientId: 'idem-2', title: 'B' }] }, 'batch-2');
@@ -289,7 +289,7 @@ describe('idempotent replay', () => {
 
 describe('tombstone, purge, restore', () => {
   test('tombstone propagates via changes; purge scrubs content; upsert restores', async () => {
-    const { app } = makeApp();
+    const { app } = await makeApp();
     const { apiKey } = await login(app);
 
     const created = await (await sync(app, apiKey, { items: [{ clientId: 't1', title: 'Secret', bodyMarkdown: 'sensitive' }] })).json();
@@ -325,7 +325,7 @@ describe('tombstone, purge, restore', () => {
   });
 
   test('deleting or purging a never-seen clientId is silently ignored (no tombstone fabricated)', async () => {
-    const { app } = makeApp();
+    const { app } = await makeApp();
     const { apiKey } = await login(app);
     const res = await (await sync(app, apiKey, { items: [{ clientId: 'ghost', deleted: true }, { clientId: 'ghost2', purged: true }] })).json();
     expect(res.applied).toEqual([]);
@@ -347,7 +347,7 @@ describe('cursor pagination', () => {
   }
 
   test('sync pull pages by seq with hasMore until drained; incremental cursor picks up later edits', async () => {
-    const { app } = makeApp();
+    const { app } = await makeApp();
     const { apiKey } = await login(app);
     await seed(app, apiKey);
 
@@ -378,7 +378,7 @@ describe('cursor pagination', () => {
   });
 
   test('ISO timestamp cursors are accepted with overlap-rewind (hosted-platform backcompat)', async () => {
-    const { app } = makeApp();
+    const { app } = await makeApp();
     const { apiKey } = await login(app);
     await seed(app, apiKey, 120);
 
@@ -406,7 +406,7 @@ describe('cursor pagination', () => {
   });
 
   test('GET /api/v1/notes pages with cursor + nextCursor (list superset)', async () => {
-    const { app } = makeApp();
+    const { app } = await makeApp();
     const { apiKey } = await login(app);
     await seed(app, apiKey);
 

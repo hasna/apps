@@ -1329,18 +1329,22 @@
     },
     "apps/notes": {
       "name": "@hasna/notes",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "bin": {
         "notes": "bin/notes.mjs",
         "notes-mcp": "bin/notes-mcp.mjs",
         "notes-serve": "bin/notes-serve.mjs",
       },
       "dependencies": {
+        "@hasna/contracts": "0.10.6",
         "@hasna/events": "0.1.15",
         "hono": "^4.6.0",
+        "pg": "^8.16.3",
       },
       "devDependencies": {
+        "@electric-sql/pglite": "^0.5.4",
         "@types/bun": "1.2.4",
+        "@types/pg": "^8.15.6",
       },
     },
     "apps/notes/ai-sidecar": {
@@ -1431,13 +1435,14 @@
     },
     "apps/prompts": {
       "name": "@hasna/prompts",
-      "version": "0.3.32",
+      "version": "0.3.33",
       "bin": {
         "prompts": "dist/cli/index.js",
         "prompts-mcp": "dist/mcp/index.js",
         "prompts-serve": "dist/server/index.js",
       },
       "dependencies": {
+        "@hasna/contracts": "0.8.5",
         "@hasna/events": "^0.1.11",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "chalk": "^5.4.1",
@@ -1456,7 +1461,7 @@
     },
     "apps/recordings": {
       "name": "@hasna/recordings",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "bin": {
         "recordings": "dist/cli/index.js",
         "recordings-mcp": "dist/mcp/index.js",
@@ -4967,6 +4972,8 @@
     "@hasna/monitor/commander": ["commander@12.1.0", "", {}, "sha512-Vw8qHK3bZM9y/P10u3Vib8o/DdkvA2OtPtZvD871QKjy74Wj1WSKFILMPRPSdUSx5RFK1arlJzEtA4PkFgnbuA=="],
 
     "@hasna/monitor/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "@hasna/notes/@hasna/contracts": ["@hasna/contracts@0.10.6", "", { "dependencies": { "@hasna/secrets": "^0.2.22", "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-lHGwSjCAJof2868o3xAHbWbq8WR675MNQMnRVaRPHvX0LeSLsEWfV5nqE4KjhDJfDRhXhiSo4pmvI03AW4cMnQ=="],
 
     "@hasna/notes/@types/bun": ["@types/bun@1.2.4", "", { "dependencies": { "bun-types": "1.2.4" } }, "sha512-QtuV5OMR8/rdKJs213iwXDpfVvnskPXY/S0ZiFbsTjQZycuqPbMW8Gf/XhLfwE5njW8sxI2WjISURXPlHypMFA=="],
 

@@ -37,6 +37,14 @@ import {
   runNotesAgent,
 } from '../tools/notes-agent.mjs';
 import { notesEventsStatus, reconcileNoteCreatedEvents } from '../tools/notes-events.mjs';
+import { resolveNotesClientTransport } from '../client/transport.mjs';
+import {
+  MigrationLedger,
+  resolveServerDataBackend,
+  resolveDatabaseUrl,
+} from '../src/generated/storage-kit/index.js';
+import { openPgAdapter } from '../server/pg-adapter.mjs';
+import { notesPgMigrations } from '../server/pg-migrations.ts';
 
 const DEFAULT_LIMIT = 10;
 
@@ -73,6 +81,8 @@ Usage:
   notes labels assign <note-id> <name>
   notes labels unassign <note-id> <name>
   notes title <id> [--apply] [--force] [--sidecar http://127.0.0.1:8765] [--sidecar-token token] [--json]
+  notes storage status [--json]
+  notes storage migrate --dry-run [--json]
   notes events status [--json]
 
 Data root defaults to ${dataRoot()} and can be overridden with HASNA_NOTES_ROOT.`;
@@ -547,6 +557,70 @@ async function commandAgent(args, opts) {
   }
 }
 
+// --- storage verbs -----------------------------------------------------------
+
+async function commandStorage(action, args, opts) {
+  if (action === 'status') return commandStorageStatus(opts);
+  if (action === 'migrate') return commandStorageMigrate(opts);
+  throw new Error('unknown_storage_action');
+}
+
+async function commandStorageStatus(opts) {
+  // Client side: one transport resolver. Server side: the backend selection
+  // from the environment — never the DSN value.
+  const client = resolveNotesClientTransport(process.env);
+  const server = resolveServerDataBackend('notes', process.env);
+  const report = {
+    client: {
+      transport: client.transport,
+      source: client.source,
+      apiUrlPresent: client.api_url_present,
+      apiKeyPresent: client.api_key_present,
+    },
+    server: {
+      backend: server.backend,
+      source: server.source,
+      databaseUrlPresent: server.databaseUrlPresent,
+    },
+    readiness: 'configured',
+  };
+  if (opts.json) return jsonOut(report);
+  lineOut(`client transport : ${client.transport}${client.source !== 'default' ? ` (${client.source})` : ''}`);
+  lineOut(`server backend   : ${server.backend}${server.databaseUrlPresent ? ' (HASNA_NOTES_DATABASE_URL)' : ' (sqlite default)'}`);
+}
+
+async function commandStorageMigrate(opts) {
+  // The migration runner is the mutation path (scripts/apply-postgres-migrations.mjs,
+  // owner DSN). This verb reports the dry-run plan only.
+  if (!opts['dry-run']) throw new Error('storage_migrate_dry_run_required');
+  const connectionString = resolveDatabaseUrl('notes', process.env);
+  if (!connectionString) {
+    throw new Error(
+      'HASNA_NOTES_DATABASE_URL is not set: the postgresql backend is not configured. ' +
+        'Set it to plan migrations, or leave it unset for the sqlite backend (no migrations needed).',
+    );
+  }
+  const db = openPgAdapter({ connectionString, applicationName: '@hasna/notes' });
+  try {
+    const ledger = new MigrationLedger(db.client, notesPgMigrations());
+    const result = await ledger.migrate({ dryRun: true });
+    const pending = result.plan.filter((item) => item.state === 'pending').map((item) => item.migration.id);
+    const summary = {
+      ok: true,
+      dryRun: true,
+      backend: 'postgresql',
+      total: notesPgMigrations().length,
+      alreadyApplied: result.plan.length - pending.length,
+      pending,
+    };
+    if (opts.json) return jsonOut(summary);
+    lineOut(`storage migrate --dry-run: total=${summary.total} already=${summary.alreadyApplied} pending=${pending.length}`);
+    if (pending.length) lineOut(`pending: ${pending.join(', ')}`);
+  } finally {
+    await db.close();
+  }
+}
+
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   const opts = parseArgs(rest);
@@ -572,6 +646,7 @@ async function main() {
   if (cmd === 'settings') return commandSettings(opts._[0], opts._.slice(1), opts);
   if (cmd === 'labels') return commandLabels(opts._[0], opts._.slice(1), opts);
   if (cmd === 'title') return commandTitle(opts._[0], opts);
+  if (cmd === 'storage') return commandStorage(opts._[0], opts._.slice(1), opts);
   if (cmd === 'events' && opts._[0] === 'status') {
     const status = await notesEventsStatus(dataRoot());
     if (opts.json) return jsonOut(status);

@@ -1,0 +1,51 @@
+# @hasna/notes — local development stack.
+#
+# Provides a throwaway PostgreSQL database for exercising the server API,
+# plus the notes-serve HTTP API built from the Dockerfile.
+#
+#   # 1. bring up postgres and apply the schema
+#   docker compose up -d postgres
+#   HASNA_NOTES_DATABASE_URL pointing at postgres://notes@localhost:5432/notes,
+#     then: bun scripts/apply-postgres-migrations.mjs
+#   # 2. build + start the service
+#   docker compose up --build serve
+#
+# The postgres container is a local throwaway: trust auth, no password set
+# (POSTGRES_HOST_AUTH_METHOD=trust), reachable only on the loopback publish.
+# Never point this stack at real data.
+services:
+  postgres:
+    image: postgres:16
+    container_name: hasna-notes-postgres
+    environment:
+      POSTGRES_USER: notes
+      POSTGRES_DB: notes
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - notes-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notes -d notes"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  serve:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hasna-notes-serve
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: "8788"
+      HASNA_NOTES_DATABASE_URL: postgres://notes@postgres:5432/notes?sslmode=disable
+      # Local-only throwaway signing secret. Use a real secret in production.
+      HASNA_NOTES_API_SIGNING_KEY: local-dev-signing-secret-change-me
+    ports:
+      - "8788:8788"
+
+volumes:
+  notes-pgdata:

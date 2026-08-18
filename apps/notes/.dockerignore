@@ -1,0 +1,12 @@
+# Node modules are installed inside the image; the source-tree copies are
+# stale by construction (the app lockfile is maintained at the monorepo root).
+node_modules
+ai-sidecar/node_modules
+server/node_modules
+
+# Not part of the server image.
+test
+web
+Sources
+docs
+.dockerignore
