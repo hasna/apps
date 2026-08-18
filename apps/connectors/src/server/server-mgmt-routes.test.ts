@@ -21,7 +21,7 @@ import { startServer } from "./serve.js";
 
 const TEST_ID = `zzztest${process.pid}m`;
 const ORIGINAL_HOME = process.env.HOME;
-const TEST_HOME = mkdtempSync(join(tmpdir(), "open-connectors-server-mgmt-"));
+const TEST_HOME = mkdtempSync(join(tmpdir(), "connectors-server-mgmt-"));
 
 function testConfigDir(name: string): string {
   return join(TEST_HOME, ".hasna", "connectors", name);

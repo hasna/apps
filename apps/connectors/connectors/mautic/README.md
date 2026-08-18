@@ -1,6 +1,6 @@
 # connect-mautic
 
-Mautic marketing automation connector - part of [open-connectors](https://github.com/hasna/open-connectors).
+Mautic marketing automation connector - part of [connectors](https://github.com/hasna/apps).
 
 ## Installation
 

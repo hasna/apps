@@ -1,6 +1,6 @@
 # @hasna/connect-takecareos
 
-TakeCareOS connector for the [open-connectors](https://github.com/hasna/open-connectors) registry.
+TakeCareOS connector for the [connectors](https://github.com/hasna/apps) registry.
 
 TakeCareOS is a home-care agency operating system. This connector wraps its public
 REST API to manage clients (care recipients), caregivers, shifts, incident reports,
@@ -18,7 +18,7 @@ The connector authenticates with a Bearer API key. Provide it via environment
 variable, a CLI flag, or a stored profile:
 
 ```bash
-export TAKECAREOS_API_KEY=your-api-key
+export TAKECAREOS_API_KEY=<your-api-key>
 # optional, for a dedicated/regional host
 export TAKECAREOS_BASE_URL=https://api.takecareos.com/v1
 ```

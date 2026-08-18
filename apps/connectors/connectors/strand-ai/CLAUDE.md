@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Strand AI connector for the open-connectors monorepo.
+Strand AI connector for the connectors monorepo.
 
 ## Overview
 

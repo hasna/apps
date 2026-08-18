@@ -1,6 +1,6 @@
 # @hasna/connect-you-com
 
-You.com Web Search and Research API connector for the open-connectors monorepo.
+You.com Web Search and Research API connector for the connectors monorepo.
 
 ## Features
 
@@ -14,7 +14,7 @@ You.com Web Search and Research API connector for the open-connectors monorepo.
 ```bash
 cd connectors/you-com
 bun install
-export YDC_API_KEY="your-api-key"  # https://you.com/platform/api-keys
+export YDC_API_KEY="<your-api-key>"  # https://you.com/platform/api-keys
 ```
 
 Or persist the key in a profile:

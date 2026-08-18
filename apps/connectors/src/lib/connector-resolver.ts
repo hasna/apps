@@ -4,7 +4,7 @@ import { getConnectorsHome } from "../db/database.js";
 
 export const LEGACY_CONNECTOR_PREFIX = "connect-";
 
-/** Alumia/registry slug aliases → canonical open-connectors connector id. */
+/** Alumia/registry slug aliases → canonical connector id in the connectors monorepo. */
 export const CONNECTOR_SLUG_ALIASES: Readonly<Record<string, string>> = {
   twitter: "x",
   "x-twitter": "x",

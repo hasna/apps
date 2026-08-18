@@ -2,12 +2,12 @@
 
 Zymbly REST API connector for aircraft maintenance work orders, parts search, maintenance notes, and scoped raw API calls.
 
-This package was rebuilt from the public Zymbly API contract and open-connectors patterns. It is not a copy of internal platform code.
+This package was rebuilt from the public Zymbly API contract and the connectors monorepo patterns. It is not a copy of internal platform code.
 
 ## Configure
 
 ```bash
-export ZYMBLY_API_KEY=REPLACE_ME
+export ZYMBLY_API_KEY=<your-api-key>
 export ZYMBLY_BASE_URL=https://api.zymbly.com/v1
 ```
 

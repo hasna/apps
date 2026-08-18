@@ -1,6 +1,6 @@
 # connect-tiktokads
 
-TikTok Ads Marketing API connector for the open-connectors monorepo.
+TikTok Ads Marketing API connector for the connectors monorepo.
 
 This package targets the **Advertising** category (`tiktokads` slug) and covers campaign management, reporting, pixels, and creative assets via the [TikTok Marketing API](https://business-api.tiktok.com/portal/docs).
 

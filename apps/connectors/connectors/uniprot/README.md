@@ -1,6 +1,6 @@
 # @hasna/connect-uniprot
 
-UniProt protein and proteome search connector for the open-connectors monorepo.
+UniProt protein and proteome search connector for the connectors monorepo.
 
 ## Features
 

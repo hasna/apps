@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Stability Api Platform connector for open-connectors.
+Stability Api Platform connector for the connectors monorepo.
 
 ## Auth
 

@@ -1,5 +1,5 @@
 /**
- * Provider-agnostic LLM client for open-connectors.
+ * Provider-agnostic LLM client for the connectors monorepo.
  *
  * Supports: cerebras, groq, openai, anthropic
  * Config stored at: ~/.hasna/connectors/llm.json

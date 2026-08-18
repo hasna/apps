@@ -1,6 +1,6 @@
 # connect-metabase
 
-Metabase business intelligence connector - part of [open-connectors](https://github.com/hasna/open-connectors).
+Metabase business intelligence connector - part of [connectors](https://github.com/hasna/apps).
 
 ## Installation
 
