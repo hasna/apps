@@ -53,7 +53,6 @@ download caps, email gates, expiry beyond seven days, and `never` expiry.
 
 | Variable | Purpose |
 |----------|---------|
-| `HASNA_ATTACHMENTS_STORAGE_MODE=cloud` | Selects direct Postgres mode |
 | `HASNA_ATTACHMENTS_DATABASE_URL` | Postgres URL |
 | `HASNA_ATTACHMENTS_API_SIGNING_KEY` | App API signing secret |
 | `HASNA_API_SIGNING_KEY` | Fallback signing secret |
