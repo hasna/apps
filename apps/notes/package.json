@@ -1,7 +1,7 @@
 {
   "name": "@hasna/notes",
   "version": "0.1.1",
-  "description": "Local-first personal notes CLI, MCP server, macOS app, and self-hosted sync server.",
+  "description": "Local-first personal notes CLI, MCP server, macOS app, and self-hosted notes server.",
   "type": "module",
   "bin": {
     "notes": "bin/notes.mjs",
@@ -10,15 +10,11 @@
   },
   "exports": {
     ".": "./tools/notes-lib.mjs",
-    "./events": "./tools/notes-events.mjs",
-    "./sync": "./sync/index.mjs",
-    "./cloud": "./cloud/index.mjs"
+    "./events": "./tools/notes-events.mjs"
   },
   "files": [
     "bin",
     "cli/notes.mjs",
-    "sync",
-    "cloud/index.mjs",
     "mcp/notes-mcp.mjs",
     "server/index.mjs",
     "server/app.mjs",

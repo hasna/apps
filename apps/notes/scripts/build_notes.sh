@@ -105,16 +105,14 @@ mkdir -p "$RESOURCES/node_modules/@hasna/events"
 cp "$REPO_ROOT/node_modules/@hasna/events/package.json" "$RESOURCES/node_modules/@hasna/events/"
 cp -RL "$REPO_ROOT/node_modules/@hasna/events/dist" "$RESOURCES/node_modules/@hasna/events/dist"
 
-# Bundle the CLI + sync engine and its Node-safe durable spool dependency so the shell app's background
-# sync timer can spawn `Resources/bin/notes.mjs sync --json` — the SAME
-# engine the `notes sync --watch` daemon uses. Relative imports
-# (../sync, ../cli, ../tools) keep working because the layout mirrors the repo.
-echo "==> Bundling CLI + sync engine -> Resources/{bin,cli,sync}"
-rm -rf "$RESOURCES/bin" "$RESOURCES/cli" "$RESOURCES/sync"
-mkdir -p "$RESOURCES/bin" "$RESOURCES/cli" "$RESOURCES/sync"
+# Bundle the CLI (local note commands; the multi-machine sync engine was
+# removed — the client is a plain HTTP API client). Relative imports
+# (../cli, ../tools) keep working because the layout mirrors the repo.
+echo "==> Bundling CLI -> Resources/{bin,cli}"
+rm -rf "$RESOURCES/bin" "$RESOURCES/cli"
+mkdir -p "$RESOURCES/bin" "$RESOURCES/cli"
 cp "$REPO_ROOT/bin/notes.mjs" "$RESOURCES/bin/"
 cp "$REPO_ROOT/cli/notes.mjs" "$RESOURCES/cli/"
-cp "$REPO_ROOT"/sync/*.mjs "$RESOURCES/sync/"
 # Install the sidecar deps directly into the bundle. The source tree's
 # node_modules is bun-managed: workspace deps are symlinks into a store
 # (.bun/...) and transitive deps are hoisted outside the top-level tree, so

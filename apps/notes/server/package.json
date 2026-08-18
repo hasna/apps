@@ -1,7 +1,7 @@
 {
   "name": "notes-server",
   "version": "0.1.0",
-  "description": "Self-hosted Hasna Notes sync server \u2014 Hono + SQLite (bun:sqlite) reference implementation of the personalnotes/v1 dialect.",
+  "description": "Self-hosted Hasna Notes server \u2014 Hono + SQLite (bun:sqlite) reference implementation of the personalnotes/v1 dialect.",
   "type": "module",
   "bin": {
     "notes-server": "./index.mjs"
@@ -22,7 +22,6 @@
   },
   "keywords": [
     "notes",
-    "sync",
     "self-hosted",
     "sqlite",
     "hono"

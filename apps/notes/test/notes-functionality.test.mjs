@@ -17,13 +17,10 @@ import {
   deleteLabelEverywhere,
   deleteNote,
   generateTitle,
-  getMachineDetails,
   getNote,
-  listMachineDetails,
   listNotes,
   loadLabelList,
   machineIdentity,
-  parseMachineManifestJSON,
   loadNotes,
   loadSettings,
   markdownPlainText,
@@ -991,14 +988,19 @@ test('web chat composer: an Enter that only commits an IME candidate must not se
   assert.equal(input.value, '', 'sending clears the composer');
 });
 
-test('web navigation: chat is a header button, labels manage in Settings, machines dropdown on top', async () => {
+test('web navigation: chat is a header button, labels manage in Settings', async () => {
   const html = await readFile(join(repoRoot, 'web', 'index.html'), 'utf8');
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
   // No app name and no chat/labels entries in the sidebar (vision 05007066).
   assert.doesNotMatch(html, /class="wordmark"|id="nav-chat"|id="nav-labels"/);
-  // Machines are a compact dropdown at the TOP of the sidebar.
-  assert.ok(html.indexOf('id="machines-dd-btn"') < html.indexOf('id="nav-home"'));
-  assert.match(html, /id="machines-list"/);
+  // The multi-machine surface is gone: no machines dropdown, no sync row, no
+  // machine popover, no "Move to machine" context item.
+  assert.doesNotMatch(html, /machines-dd/);
+  assert.doesNotMatch(html, /machines-page/);
+  assert.doesNotMatch(html, /machine-pop/);
+  assert.doesNotMatch(html, /sync-status-row/);
+  assert.doesNotMatch(html, /Move to machine/);
+  assert.doesNotMatch(app, /machines\.list|machines\.select|state\.sync|machineFilter/);
   // Section order: Notes then Labels (collapsible), then Archive, then Trash.
   assert.ok(html.indexOf('id="sec-notes"') < html.indexOf('id="labels-section"'));
   assert.ok(html.indexOf('id="labels-section"') < html.indexOf('id="nav-archive"'));
@@ -1032,12 +1034,10 @@ test('web navigation: chat is a header button, labels manage in Settings, machin
 
   const { windowTarget } = loadWebAppWithFakeDOM(app);
   windowTarget.HasnaNotes.hydrate({
-    thisMachine: 'studio-mac',
     labels: ['empty'],
     notes: [
       { id: 'labels-1', title: 'Labelled', body: 'Body', labels: ['work'], status: 'active', machine: 'studio-mac', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' },
     ],
-    machines: [{ id: 'studio-mac' }],
   });
 
   const labelPairs = JSON.parse(JSON.stringify(windowTarget.HasnaNotes.labels.list().map(item => [item.name, item.count])));
@@ -1280,113 +1280,20 @@ test('web about screen renders the injected real version (Version Bridge contrac
   assert.equal(emptyVersion.document.getElementById('about-version').textContent, '');
 });
 
-test('web surfaces sync status honestly in Settings and via HasnaNotes.sync.status()', async () => {
+test('web ships no sync-status surface (multi-machine sync removed)', async () => {
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
-
-  // No sync payload: off state, no fake success.
-  const off = loadWebAppWithFakeDOM(app, { __BOOT__: { thisMachine: 'studio-mac', notes: [], machines: [] } });
-  assert.equal(off.windowTarget.HasnaNotes.sync.status(), null);
-  assert.match(off.document.getElementById('sync-status-row').textContent, /Not syncing yet/);
-  assert.match(off.document.getElementById('sync-status-row').className, /sync-off/);
-
-  // Successful sync: green state with server + relative time.
-  const okBoot = {
-    thisMachine: 'studio-mac',
-    notes: [],
-    machines: [],
-    sync: {
-      status: 'ok',
-      lastSyncAt: new Date(Date.now() - 60_000).toISOString(),
-      lastSuccessAt: new Date(Date.now() - 60_000).toISOString(),
-      apiUrl: 'http://linux-box.local:8788',
-      error: '',
-    },
-  };
-  const ok = loadWebAppWithFakeDOM(app, { __BOOT__: okBoot });
-  assert.equal(ok.windowTarget.HasnaNotes.sync.status().status, 'ok');
-  const okRow = ok.document.getElementById('sync-status-row');
-  assert.match(okRow.textContent, /^Synced /);
-  assert.match(okRow.className, /sync-ok/);
-
-  // Auth failure via hydrate: MUST become the error state, never stay green
-  // (FleetSync failure mode 6: ssh auth failure shown as a green checkmark).
-  ok.windowTarget.HasnaNotes.hydrate({
-    ...okBoot,
-    sync: { ...okBoot.sync, status: 'error', error: 'unauthorized: key revoked', lastSyncAt: new Date().toISOString() },
+  const html = await readFile(join(repoRoot, 'web', 'index.html'), 'utf8');
+  // No Settings sync row, no sync-status renderer, no HasnaNotes.sync API, and
+  // a leftover boot `sync` payload is ignored rather than rendered.
+  assert.doesNotMatch(html, /sync-status-row/);
+  assert.doesNotMatch(app, /syncStatusLine|renderSyncStatus|state\.sync|HasnaNotes\.sync/);
+  const { windowTarget } = loadWebAppWithFakeDOM(app, {
+    __BOOT__: { notes: [], sync: { status: 'error', error: 'leftover' } },
   });
-  assert.equal(ok.windowTarget.HasnaNotes.sync.status().status, 'error');
-  assert.match(okRow.textContent, /Sync failing — unauthorized: key revoked/);
-  assert.match(okRow.textContent, /Last success/);
-  assert.match(okRow.className, /sync-error/);
-  assert.doesNotMatch(okRow.className, /sync-ok/);
+  assert.equal(windowTarget.HasnaNotes.sync, undefined);
 });
 
-test('web machine right-click renders the details popover (vision f8659e18)', async () => {
-  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
-  const { windowTarget, document } = loadWebAppWithFakeDOM(app, {
-    __BOOT__: {
-      thisMachine: 'studio-mac',
-      notes: [
-        { id: 'mp-1', title: 'Active note', body: 'a', labels: [], status: 'active', machine: 'studio-mac', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' },
-        { id: 'mp-2', title: 'Archived note', body: 'b', labels: [], status: 'archived', machine: 'studio-mac', archivedAt: '2026-06-22T10:00:00Z', updatedAt: '2026-06-22T10:00:00Z', createdAt: '2026-06-22T09:00:00Z' },
-      ],
-      machines: [{ id: 'studio-mac', friendlyName: 'Apple Studio', platform: 'macos', status: 'online', syncedAt: '2026-06-23T10:00:00Z' }],
-    },
-  });
-  const contexts = [];
-  windowTarget.addEventListener('hasna:machine-context', event => contexts.push(event.detail));
 
-  const pop = document.getElementById('machine-pop');
-  pop.hidden = true; // markup default (the fake DOM fabricates elements un-hidden)
-
-  const row = document.getElementById('machines-list').children
-    .find(c => c.className.includes('machine-row') && c.dataset.machine === 'studio-mac');
-  assert.ok(row, 'machine row rendered');
-  let prevented = false;
-  row.dispatchEvent({ type: 'contextmenu', clientX: 24, clientY: 30, preventDefault() { prevented = true; } });
-
-  // The contracted event still fires AND something visible renders (the old defect:
-  // event dispatched, nothing listened, user saw the default nothing).
-  assert.equal(contexts.length, 1);
-  assert.equal(contexts[0].machineId, 'studio-mac');
-  assert.equal(prevented, true);
-  assert.equal(pop.hidden, false);
-  const head = pop.children[0];
-  assert.equal(head.children[0].textContent, 'Apple Studio');
-  assert.equal(head.children[1].textContent, 'This machine');
-  const fields = Object.fromEntries(pop.children.slice(1).map(r => [r.children[0].textContent, r.children[1].textContent]));
-  assert.equal(fields.ID, 'studio-mac');
-  assert.equal(fields.Platform, 'macos');
-  assert.equal(fields.Status, 'online');
-  assert.equal(fields.Notes, '1 active · 1 archived · 0 in trash');
-  assert.ok(fields['Last activity'] && fields['Last activity'] !== '—');
-  assert.ok(fields['Last sync'] && fields['Last sync'] !== '—');
-
-  // The async details refresh must not blank the popover.
-  await delay(20);
-  assert.equal(pop.hidden, false);
-  assert.equal(pop.children[0].children[0].textContent, 'Apple Studio');
-
-  // Selecting a machine closes the popover.
-  windowTarget.HasnaNotes.machines.select('studio-mac');
-  assert.equal(pop.hidden, true);
-
-  // The "All Machines" row never opens details.
-  const allRow = document.getElementById('machines-list').children[0];
-  allRow.dispatchEvent({ type: 'contextmenu', clientX: 5, clientY: 5, preventDefault() {} });
-  assert.equal(pop.hidden, true);
-  assert.equal(contexts.length, 1);
-});
-
-test('web browser-mode empty boot does not fabricate an "unknown" machine row', async () => {
-  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
-  // Plain browser, no boot payload: no real machine identity — the list stays empty.
-  const bare = loadWebAppWithFakeDOM(app);
-  assert.deepEqual(bare.windowTarget.HasnaNotes.machines.list(), []);
-  // A real identity (native boot) still produces this machine's row.
-  const native = loadWebAppWithFakeDOM(app, { __BOOT__: { thisMachine: 'studio-mac', notes: [], machines: [] } });
-  assert.deepEqual(native.windowTarget.HasnaNotes.machines.list().map(m => m.id), ['studio-mac']);
-});
 
 test('web inline markdown placeholder tokens cannot be spoofed by NUL bytes', async () => {
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
@@ -1403,20 +1310,14 @@ test('web filtered-empty editor copy names the filter that caused the miss', asy
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
   const { windowTarget, document } = loadWebAppWithFakeDOM(app, {
     __BOOT__: {
-      thisMachine: 'studio-mac',
       notes: [{ id: 'nm-1', title: 'Only note', body: 'x', labels: [], status: 'active', machine: 'studio-mac', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' }],
-      machines: [{ id: 'studio-mac' }],
     },
   });
   const desc = document.getElementById('nomatch-desc');
 
-  // Machine selected, its only note archived: active-filter miss — must not claim
-  // the machine has no notes (it owns the archived one).
-  windowTarget.HasnaNotes.machines.select('studio-mac');
-  windowTarget.HasnaNotes.notes.archive('nm-1');
-  assert.equal(desc.textContent, 'No active notes on this machine.');
-
-  // Trash view with nothing trashed.
+  // Open the note (notes screen), then filter it out: the editor's nomatch
+  // copy names the status filter that caused the miss.
+  document.getElementById('notes-list').children.find(row => row.dataset.id === 'nm-1').click();
   windowTarget.HasnaNotes.notes.setStatusFilter('trash');
   assert.equal(desc.textContent, 'Trash is empty.');
 });
@@ -1945,84 +1846,6 @@ test('CLI migrate --to-v2 runs the one-shot migrator with dry-run support', asyn
   assert.equal(JSON.parse(alias.stdout).alreadyV2, 1);
 });
 
-test('machine details combine open-machines fields with notes fallback metadata', async (t) => {
-  const root = await tempRoot(t);
-  const manifest = join(root, 'machines.json');
-  await writeFile(manifest, JSON.stringify({
-    machines: [{
-      id: 'studio-mac',
-      slug: 'studio',
-      friendlyName: 'Studio Mac',
-      sshAddress: 'studio-mac.local',
-      platform: 'macos',
-      online: true,
-      status: 'online',
-      source: 'open-machines',
-      origin: 'fleet',
-      lastSeenAt: '2026-06-20T10:00:00Z',
-      syncedAt: '2026-06-20T10:05:00Z',
-      capabilities: ['notes-sync', 'menu-bar'],
-      metadata: { location: 'desk', nested: { rack: 'A' } },
-      provenance: { importedBy: 'test' },
-      sync: { notes: 'ok' },
-    }],
-  }), 'utf8');
-  await saveNote({
-    id: uuidFor(130),
-    title: 'Machine Note',
-    machine: 'studio-mac',
-    status: 'active',
-    updatedAt: '2026-06-21T10:00:00Z',
-    body: 'body',
-  }, root);
-  await saveNote({
-    id: uuidFor(131),
-    title: 'Archived Machine Note',
-    machine: 'studio-mac',
-    status: 'archived',
-    updatedAt: '2026-06-22T10:00:00Z',
-    body: 'body',
-  }, root);
-  await saveNote({
-    id: uuidFor(132),
-    title: 'Fallback Note',
-    machine: 'linux-box',
-    status: 'active',
-    updatedAt: '2026-06-19T10:00:00Z',
-    body: 'body',
-  }, root);
-  await saveNote({
-    id: uuidFor(133),
-    title: 'Slug Owned Note',
-    machine: 'studio',
-    status: 'active',
-    updatedAt: '2026-06-23T10:00:00Z',
-    body: 'body',
-  }, root);
-
-  assert.equal(parseMachineManifestJSON(await readFile(manifest, 'utf8'))[0].friendlyName, 'Studio Mac');
-  const page = await listMachineDetails({ manifestPath: manifest, thisMachine: '' }, root);
-  const studio = page.items.find(m => m.id === 'studio-mac');
-  assert.equal(studio.displayName, 'Studio Mac');
-  assert.equal(studio.online, true);
-  // ssh residue stays retired: machine details never expose ssh addressing.
-  assert.equal(studio.sshAddress, undefined);
-  assert.deepEqual(studio.capabilities, ['notes-sync', 'menu-bar']);
-  assert.deepEqual(studio.metadata.nested, { rack: 'A' });
-  assert.deepEqual(studio.provenance, { importedBy: 'test' });
-  assert.deepEqual(studio.sync, { notes: 'ok' });
-  assert.equal(studio.noteCount, 2);
-  assert.equal(studio.archivedNoteCount, 1);
-  assert.equal(studio.totalNoteCount, 3);
-  assert.equal(studio.latestNoteUpdatedAt, '2026-06-23T10:00:00.000Z');
-  assert.equal(page.items.filter(m => m.id === 'studio').length, 0);
-  assert.equal((await getMachineDetails('studio', { manifestPath: manifest }, root)).id, 'studio-mac');
-
-  const fallback = await getMachineDetails('linux-box', { manifestPath: manifest }, root);
-  assert.equal(fallback.source, 'notes');
-  assert.equal(fallback.noteCount, 1);
-});
-
 test('title generation is capped to four words for heuristic and sidecar paths', async (t) => {
   assert.equal(contentFingerprint('hello world'), '779a65e7023cd2e7');
 
@@ -2069,9 +1892,10 @@ test('CLI creates, lists, and assigns labels with JSON output', async (t) => {
   assert.equal(moved.code, 0, moved.stderr);
   assert.equal(JSON.parse(moved.stdout).machine, 'laptop');
 
-  const machine = await runNode(cliPath, ['machines', 'details', 'laptop', '--json'], env);
-  assert.equal(machine.code, 0, machine.stderr);
-  assert.equal(JSON.parse(machine.stdout).noteCount, 1);
+  // The machine-manifest surface is gone: `notes machines` is an unknown command.
+  const machines = await runNode(cliPath, ['machines', 'details', 'laptop', '--json'], env);
+  assert.equal(machines.code, 1);
+  assert.match(machines.stderr, /unknown_command/);
 
   const render = await runNode(cliPath, ['markdown', 'render', '--text', '# Hi <script>x</script>', '--json'], env);
   assert.equal(render.code, 0, render.stderr);
@@ -2305,7 +2129,9 @@ test('MCP server exposes notes and labels tools over stdio framing', async (t) =
   const listTools = await client.send(2, 'tools/list', {});
   assert.ok(listTools.result.tools.some(tool => tool.name === 'labels_assign'));
   assert.ok(listTools.result.tools.some(tool => tool.name === 'notes_move_to_machine'));
-  assert.ok(listTools.result.tools.some(tool => tool.name === 'machines_details'));
+  // The machine-manifest tools are gone with the machine surface (0.2.0).
+  assert.equal(listTools.result.tools.some(tool => tool.name === 'machines_list'), false);
+  assert.equal(listTools.result.tools.some(tool => tool.name === 'machines_details'), false);
   assert.ok(listTools.result.tools.some(tool => tool.name === 'markdown_render'));
   assert.ok(listTools.result.tools.some(tool => tool.name === 'markdown_apply_command'));
   assert.ok(listTools.result.tools.some(tool => tool.name === 'agent_run'));
@@ -2338,11 +2164,13 @@ test('MCP server exposes notes and labels tools over stdio framing', async (t) =
   });
   assert.equal(parseToolText(moved).machine, 'laptop');
 
+  // machines_details is gone with the machine surface: the tool call must fail.
   const machine = await client.send(7, 'tools/call', {
     name: 'machines_details',
     arguments: { id: 'laptop' },
   });
-  assert.equal(parseToolText(machine).noteCount, 1);
+  assert.equal(machine.error, undefined);
+  assert.equal(machine.result.isError, true);
 
   const rendered = await client.send(8, 'tools/call', {
     name: 'markdown_render',
@@ -2562,10 +2390,6 @@ test('recording and realtime transcription contracts are exposed to UI/native ho
   assert.match(app, /startRealtimeRecording/);
   assert.match(app, /pauseRecording/);
   assert.match(app, /resumeRecording/);
-  assert.match(app, /machineDetails/);
-  assert.match(app, /requestDetails/);
-  assert.match(app, /hasna:machine-details/);
-
   const sidecar = await readFile(join(repoRoot, 'ai-sidecar', 'server.mjs'), 'utf8');
   assert.match(sidecar, /\/realtime-transcribe/);
   assert.match(sidecar, /\/chat/);
@@ -2595,10 +2419,6 @@ test('recording and realtime transcription contracts are exposed to UI/native ho
   assert.match(app, /startToken/);
   assert.match(app, /hasna:note-archive/);
   assert.match(app, /hasna:note-trash/);
-  // Move-to-machine ships in the app too (parity with CLI "move" and MCP
-  // notes_move_to_machine — vision MUST c10b7cf2, quick action 4d696e4b).
-  assert.match(app, /moveToMachine/);
-  assert.match(app, /hasna:note-move/);
   assert.match(app, /setTrashRetentionDays/);
   assert.match(app, /postNative\('settings'/);
   assert.match(app, /open-chat/);
@@ -2753,254 +2573,10 @@ test('Cmd+K search opens the picked note even when sidebar filters hide it', asy
   assert.equal(view.statusFilter, 'active');
   assert.ok(view.visibleNoteIds.includes('active-1'));
 
-  // Same for a stale machine filter — and the reconciliation must JUMP to the
-  // picked note's own machine (vision 9f8fba61), not drop to All Machines.
-  windowTarget.HasnaNotes.machines.select('laptop');
-  assert.equal(windowTarget.HasnaNotes.view.state().selectedId, null);
-  spInput.value = 'Remote plan';
-  enter();
-  view = windowTarget.HasnaNotes.view.state();
-  assert.equal(view.selectedId, 'active-1');
-  assert.equal(view.machineFilter, 'linux-box');
-  assert.equal(view.selectedMachine.id, 'linux-box');
-  assert.ok(view.visibleNoteIds.includes('active-1'));
 });
 
-test('web machines dropdown filters notes and canonicalizes machine aliases', async () => {
-  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
-  const { windowTarget, document } = loadWebAppWithFakeDOM(app);
-  const machineSelections = [];
-  windowTarget.addEventListener('hasna:machine-select', event => machineSelections.push(event.detail));
-  // Selecting a machine filters the LOCAL synced store only — it must never
-  // trigger a machineDetails round-trip (that bridge is for details flows).
-  const detailRequests = [];
-  windowTarget.addEventListener('hasna:machine-details-request', event => detailRequests.push(event.detail));
 
-  windowTarget.HasnaNotes.hydrate({
-    thisMachine: 'studio-mac',
-    machines: [
-      { id: 'studio-mac', slug: 'studio', friendlyName: 'Studio Mac' },
-      { id: 'laptop', slug: 'travel-laptop', friendlyName: 'Travel Laptop', status: 'online' },
-    ],
-    notes: [
-      {
-        id: 'apple-note',
-        title: 'Apple Note',
-        body: 'Local body',
-        labels: [],
-        status: 'active',
-        machine: 'studio-mac',
-        updatedAt: '2026-06-23T10:00:00Z',
-        createdAt: '2026-06-23T09:00:00Z',
-      },
-      {
-        id: 'machine-latest',
-        title: 'Machine Latest',
-        body: 'Destination body',
-        labels: [],
-        status: 'active',
-        machine: 'laptop',
-        updatedAt: '2026-06-22T10:00:00Z',
-        createdAt: '2026-06-22T09:00:00Z',
-      },
-      {
-        id: 'machine-slug',
-        title: 'Machine Slug',
-        body: 'Slug body',
-        labels: [],
-        status: 'active',
-        machine: 'travel-laptop',
-        updatedAt: '2026-06-21T10:00:00Z',
-        createdAt: '2026-06-21T09:00:00Z',
-      },
-    ],
-    listDefaults: { limit: 10 },
-  });
 
-  // Dropdown menu rows render into #machines-list (friendly names + counts); clicking a
-  // row filters the notes list to that machine and jumps to its newest note.
-  const machinesList = document.getElementById('machines-list');
-  const machineRow = machinesList.children.find(row => row.dataset.machine === 'laptop');
-  assert.ok(machineRow, 'expected laptop dropdown row to render');
-  machineRow.click();
-
-  let view = windowTarget.HasnaNotes.view.state();
-  assert.equal(view.screen, 'notes');
-  assert.equal(view.machineFilter, 'laptop');
-  assert.equal(view.selectedId, 'machine-latest');
-  assert.deepEqual(view.visibleNoteIds, ['machine-latest', 'machine-slug']);
-  assert.equal(view.selectedMachine.id, 'laptop');
-  assert.equal(machineSelections.at(-1).reason, 'sidebar');
-  assert.equal(machineSelections.at(-1).view.screen, 'notes');
-  assert.equal(detailRequests.length, 0, 'dropdown select must not round-trip machineDetails');
-  assert.equal(document.getElementById('window').getAttribute('data-active-shell'), 'app');
-  // The dropdown button label reflects the active filter (friendly name shown).
-  assert.equal(document.getElementById('machines-dd-label').textContent, 'Travel Laptop');
-
-  // Move-to-machine parity (CLI/MCP ship the same mutation): re-attributes the note
-  // (schema v2: plain `machine` + friendly name, no move provenance trail) and
-  // follows it to the destination filter.
-  const moveEvents = [];
-  windowTarget.addEventListener('hasna:note-move', event => moveEvents.push(event.detail));
-  const movedNote = windowTarget.HasnaNotes.notes.moveToMachine('apple-note', 'travel-laptop');
-  assert.equal(movedNote.machine, 'laptop');
-  assert.equal(movedNote.machineFriendlyName, 'Travel Laptop');
-  assert.equal(moveEvents.length, 1);
-  assert.equal(moveEvents[0].targetMachine, 'laptop');
-  assert.equal(moveEvents[0].targetMachineFriendlyName, 'Travel Laptop');
-  assert.equal(machineSelections.at(-1).reason, 'move');
-  view = windowTarget.HasnaNotes.view.state();
-  assert.equal(view.machineFilter, 'laptop');
-  assert.equal(view.selectedId, 'apple-note');
-
-  machineSelections.length = 0;
-  windowTarget.HasnaNotes.hydrate({
-    thisMachine: 'studio-mac',
-    machines: [],
-    notes: [{
-      id: 'field-note',
-      title: 'Field Note',
-      body: 'Field body',
-      labels: [],
-      status: 'active',
-      machine: 'field-slug',
-      updatedAt: '2026-06-20T10:00:00Z',
-      createdAt: '2026-06-20T09:00:00Z',
-    }],
-  });
-  windowTarget.HasnaNotes.machines.select('field-slug');
-  assert.equal(windowTarget.HasnaNotes.view.state().machineFilter, 'field-slug');
-  windowTarget.HasnaNotes.machines.receiveDetails({
-    requestId: 'manual',
-    machine: { id: 'field001', slug: 'field-slug', friendlyName: 'Field One' },
-  });
-  view = windowTarget.HasnaNotes.view.state();
-  assert.equal(view.machineFilter, 'field001');
-  assert.equal(view.selectedId, 'field-note');
-  assert.equal(view.selectedMachine.id, 'field001');
-  assert.equal(machineSelections.at(-1).reason, 'details');
-  assert.deepEqual(view.visibleNoteIds, ['field-note']);
-  assert.equal(
-    document.getElementById('machines-list').children.filter(row => row.dataset.machine === 'field001').length,
-    1,
-  );
-  assert.equal(
-    document.getElementById('machines-list').children.filter(row => row.dataset.machine === 'field-slug').length,
-    0,
-  );
-});
-
-test('clicking another machine\'s note jumps to that machine and shows it (vision 9f8fba61)', async () => {
-  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
-  const { windowTarget, document } = loadWebAppWithFakeDOM(app);
-  windowTarget.HasnaNotes.hydrate({
-    thisMachine: 'studio-mac',
-    machines: [
-      { id: 'studio-mac', friendlyName: 'Apple Studio' },
-      { id: 'linux-box', friendlyName: 'Spark Box' },
-    ],
-    notes: [
-      {
-        id: 'local-1', title: 'Local Note', body: 'local body', labels: [],
-        status: 'active', machine: 'studio-mac',
-        updatedAt: '2026-06-24T10:00:00Z', createdAt: '2026-06-24T09:00:00Z',
-      },
-      {
-        id: 'remote-1', title: 'Remote Note', body: 'remote body', labels: [],
-        status: 'active', machine: 'linux-box',
-        updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z',
-      },
-    ],
-  });
-
-  // The bug scenario: filtered to this machine, then a DIFFERENT machine's
-  // note is picked from a surface that ignores the machine filter (Home
-  // recent cards / search / chat chips). All notes are local after sync, so
-  // this must be a pure local filter+select that navigates and renders.
-  windowTarget.HasnaNotes.machines.select('studio-mac');
-  let view = windowTarget.HasnaNotes.view.state();
-  assert.equal(view.machineFilter, 'studio-mac');
-  assert.deepEqual(view.visibleNoteIds, ['local-1']);
-
-  const remoteCard = document.getElementById('home-cards').children
-    .find(card => card.dataset.noteId === 'remote-1');
-  assert.ok(remoteCard, 'expected a Home recent card for the other machine\'s note');
-  remoteCard.click();
-
-  view = windowTarget.HasnaNotes.view.state();
-  assert.equal(view.screen, 'notes');
-  assert.equal(view.selectedId, 'remote-1');
-  assert.equal(view.machineFilter, 'linux-box', 'filter jumps TO the note\'s machine');
-  assert.equal(view.selectedMachine.id, 'linux-box');
-  assert.deepEqual(view.visibleNoteIds, ['remote-1']);
-  // The editor really shows the picked note — never a substitute.
-  assert.equal(document.getElementById('editor').hidden, false);
-  assert.equal(document.getElementById('editor-title').value, 'Remote Note');
-  // Attribution is visible: the note's frontmatter has no friendly name, so the
-  // machines list resolves the slug to its friendly name.
-  assert.equal(document.getElementById('em-machine').textContent, 'Spark Box');
-  assert.equal(document.getElementById('machines-dd-label').textContent, 'Spark Box');
-
-  // And back across the switch: selecting THIS machine's note from the same
-  // surface jumps home again — select + render survive repeated filter hops.
-  const localCard = document.getElementById('home-cards').children
-    .find(card => card.dataset.noteId === 'local-1');
-  localCard.click();
-  view = windowTarget.HasnaNotes.view.state();
-  assert.equal(view.selectedId, 'local-1');
-  assert.equal(view.machineFilter, 'studio-mac');
-  assert.deepEqual(view.visibleNoteIds, ['local-1']);
-  assert.equal(document.getElementById('editor-title').value, 'Local Note');
-  assert.equal(document.getElementById('em-machine').textContent, 'Apple Studio');
-});
-
-test('machine rows carry honest sync facts: syncedAt/capabilities from manifest and S1 client state', async () => {
-  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
-  const { windowTarget } = loadWebAppWithFakeDOM(app);
-  windowTarget.HasnaNotes.hydrate({
-    thisMachine: 'studio-mac',
-    machines: [
-      { id: 'studio-mac', friendlyName: 'Apple Studio' },
-      { id: 'linux-box', syncedAt: '2026-07-01T08:00:00Z', capabilities: ['notes-sync'] },
-      { id: 'shelf-box' },
-    ],
-    notes: [],
-    sync: {
-      status: 'ok',
-      lastSyncAt: '2026-07-02T09:00:00.000Z',
-      lastSuccessAt: '2026-07-02T09:00:00.000Z',
-      apiUrl: 'http://127.0.0.1:8788',
-    },
-  });
-  const details = windowTarget.HasnaNotes.machines.details;
-  // (Array.from: the arrays are built inside the vm realm — normalize before
-  // deepEqual so the assertion holds under node's strict cross-realm compare.)
-  // THIS machine's row is overlaid from the boot `sync` object (S1 client
-  // state): last good run + the notes-sync capability of a configured client.
-  const mine = details('studio-mac');
-  assert.equal(mine.syncedAt, '2026-07-02T09:00:00.000Z');
-  assert.deepEqual(Array.from(mine.capabilities), ['notes-sync']);
-  // Host/manifest-declared sync facts pass through for other machines…
-  const linux = details('linux-box');
-  assert.equal(linux.syncedAt, '2026-07-01T08:00:00Z');
-  assert.deepEqual(Array.from(linux.capabilities), ['notes-sync']);
-  // …and are NEVER fabricated for machines whose sync state is unknown.
-  const shelf = details('shelf-box');
-  assert.equal(shelf.syncedAt, '');
-  assert.deepEqual(Array.from(shelf.capabilities), []);
-
-  // No configured sync client (status "never") ⇒ no capability is invented.
-  const fresh = loadWebAppWithFakeDOM(app);
-  fresh.windowTarget.HasnaNotes.hydrate({
-    thisMachine: 'studio-mac',
-    machines: [{ id: 'studio-mac' }],
-    notes: [],
-    sync: { status: 'never' },
-  });
-  const unsynced = fresh.windowTarget.HasnaNotes.machines.details('studio-mac');
-  assert.equal(unsynced.syncedAt, '');
-  assert.deepEqual(Array.from(unsynced.capabilities), []);
-});
 
 test('machineIdentity: env override, configured identity, stable short-hostname fallback', async (t) => {
   const prevMachine = process.env.HASNA_NOTES_MACHINE;

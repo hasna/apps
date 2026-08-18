@@ -1,7 +1,8 @@
 // notes-server test suite — boots the real entrypoint, then exercises
 // the personalnotes/v1 dialect surface in-process via Hono's app.request:
-// auth (OTP + device flow + auto-approve), notes CRUD, sync round-trip,
-// idempotent replay, tombstone/purge/restore, and cursor pagination.
+// auth (OTP + device flow + auto-approve), notes CRUD, and cursor
+// pagination. The /api/v1/sync round-trip endpoint and its sync_batches
+// table were removed (0.2.0).
 // Run: cd server && bun test
 
 import { describe, expect, test } from 'bun:test';
@@ -31,11 +32,6 @@ async function login(app, email = 'owner@example.com') {
   const res = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: started.devCode } });
   expect(res.status).toBe(200);
   return res.json(); // { token, user, tenant, apiKey? }
-}
-
-let idemCounter = 0;
-async function sync(app, token, body, idem = `test-${++idemCounter}`) {
-  return call(app, 'POST', '/api/v1/sync', { token, idem, body });
 }
 
 describe('boot', () => {
@@ -214,196 +210,22 @@ describe('notes CRUD', () => {
   test('export returns non-deleted notes with an exportId', async () => {
     const { app } = makeApp();
     const { apiKey } = await login(app);
-    await sync(app, apiKey, { items: [{ clientId: 'e1', title: 'Keep' }, { clientId: 'e2', title: 'Drop' }] });
-    await sync(app, apiKey, { items: [{ clientId: 'e2', deleted: true }] });
+    await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: 'e1', title: 'Keep' } });
+    const drop = await (await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: 'e2', title: 'Drop' } })).json();
+    await call(app, 'DELETE', `/api/v1/notes/${drop.id}`, { token: apiKey });
     const exported = await (await call(app, 'POST', '/api/v1/export', { token: apiKey, body: {} })).json();
     expect(exported.exportId).toBeTruthy();
     expect(exported.notes.map((n) => n.clientId)).toEqual(['e1']);
   });
 });
 
-describe('sync round-trip', () => {
-  test('push, pull, guarded update, and conflict with full current row', async () => {
-    const { app } = makeApp();
-    const { apiKey } = await login(app);
-
-    const push = await (await sync(app, apiKey, { items: [{ clientId: 'n1', title: 'First', bodyMarkdown: 'body', source: 'local' }] })).json();
-    expect(push.applied).toEqual([{ clientId: 'n1', id: expect.any(String), revision: 1 }]);
-    expect(push.conflicts).toEqual([]);
-    expect(push.cursor).toBe('s:1');
-    expect(push.hasMore).toBe(false);
-
-    // Fresh device pulls everything from an empty cursor.
-    const pull = await (await sync(app, apiKey, { items: [], cursor: '' })).json();
-    expect(pull.changes).toHaveLength(1);
-    expect(pull.changes[0]).toMatchObject({ clientId: 'n1', title: 'First', revision: 1, seq: 1, source: 'local', deletedAt: null });
-
-    const update = await (await sync(app, apiKey, { items: [{ clientId: 'n1', baseRevision: 1, title: 'Second' }] })).json();
-    expect(update.applied[0].revision).toBe(2);
-
-    // Stale baseRevision → conflict carrying the full current row; not applied.
-    const stale = await (await sync(app, apiKey, { items: [{ clientId: 'n1', baseRevision: 1, title: 'Loser' }] })).json();
-    expect(stale.applied).toEqual([]);
-    expect(stale.conflicts).toHaveLength(1);
-    expect(stale.conflicts[0].clientId).toBe('n1');
-    expect(stale.conflicts[0].current).toMatchObject({ title: 'Second', revision: 2 });
-  });
-
-  test('validation: missing Idempotency-Key, missing clientId, non-array items', async () => {
-    const { app } = makeApp();
-    const { apiKey } = await login(app);
-    const noKey = await call(app, 'POST', '/api/v1/sync', { token: apiKey, body: { items: [] } });
-    expect(noKey.status).toBe(400);
-    const noClientId = await sync(app, apiKey, { items: [{ title: 'nope' }] });
-    expect(noClientId.status).toBe(400);
-    expect((await noClientId.json()).error.message).toContain('clientId');
-    const notArray = await sync(app, apiKey, { items: 'nope' });
-    expect(notArray.status).toBe(400);
-  });
-});
-
-describe('idempotent replay', () => {
-  test('same key + same body replays the stored response verbatim without re-applying', async () => {
-    const { app } = makeApp();
-    const { apiKey } = await login(app);
-    const body = { items: [{ clientId: 'idem-1', title: 'Once' }] };
-
-    const first = await (await sync(app, apiKey, body, 'batch-1')).json();
-    const replay = await (await sync(app, apiKey, body, 'batch-1')).json();
-    expect(replay).toEqual(first); // includes the ORIGINAL cursor/changes snapshot (§5.4)
-
-    // Nothing was re-applied: revision still 1.
-    const state = await (await sync(app, apiKey, { items: [], cursor: '' }, 'peek-1')).json();
-    expect(state.changes[0].revision).toBe(1);
-  });
-
-  test('same key + different body → 409 idempotency_conflict', async () => {
-    const { app } = makeApp();
-    const { apiKey } = await login(app);
-    await sync(app, apiKey, { items: [{ clientId: 'idem-2', title: 'A' }] }, 'batch-2');
-    const clash = await sync(app, apiKey, { items: [{ clientId: 'idem-2', title: 'B' }] }, 'batch-2');
-    expect(clash.status).toBe(409);
-    expect((await clash.json()).error.code).toBe('idempotency_conflict');
-  });
-});
-
-describe('tombstone, purge, restore', () => {
-  test('tombstone propagates via changes; purge scrubs content; upsert restores', async () => {
-    const { app } = makeApp();
-    const { apiKey } = await login(app);
-
-    const created = await (await sync(app, apiKey, { items: [{ clientId: 't1', title: 'Secret', bodyMarkdown: 'sensitive' }] })).json();
-    const noteId = created.applied[0].id;
-
-    const del = await (await sync(app, apiKey, { items: [{ clientId: 't1', baseRevision: 1, deleted: true }] })).json();
-    expect(del.applied).toEqual([{ clientId: 't1', id: noteId, revision: 2, deleted: true }]);
-    expect((await call(app, 'GET', `/api/v1/notes/${noteId}`, { token: apiKey })).status).toBe(404);
-
-    // The tombstone (still full content — GAP-1 dialect behavior) flows to other devices.
-    const pull = await (await sync(app, apiKey, { items: [], cursor: '' })).json();
-    expect(pull.changes).toHaveLength(1);
-    expect(pull.changes[0].deletedAt).not.toBeNull();
-    expect(pull.changes[0].bodyMarkdown).toBe('sensitive');
-
-    // Restore = sync upsert with the tombstone's revision (§7).
-    const restored = await (await sync(app, apiKey, { items: [{ clientId: 't1', baseRevision: 2, title: 'Secret' }] })).json();
-    expect(restored.applied[0].revision).toBe(3);
-    const afterRestore = await (await sync(app, apiKey, { items: [], cursor: '' })).json();
-    expect(afterRestore.changes[0].deletedAt).toBeNull();
-
-    // Purge (S2 superset): content scrubbed, tombstone kept and propagated.
-    const purge = await (await sync(app, apiKey, { items: [{ clientId: 't1', purged: true }] })).json();
-    expect(purge.applied[0]).toMatchObject({ clientId: 't1', deleted: true, purged: true });
-    const afterPurge = await (await sync(app, apiKey, { items: [], cursor: '' })).json();
-    const tomb = afterPurge.changes[0];
-    expect(tomb.title).toBe('');
-    expect(tomb.bodyMarkdown).toBe('');
-    expect(tomb.frontmatterJson).toEqual({});
-    expect(tomb.labels).toEqual([]);
-    expect(tomb.deletedAt).not.toBeNull();
-    expect(tomb.purgedAt).not.toBeNull();
-  });
-
-  test('deleting or purging a never-seen clientId is silently ignored (no tombstone fabricated)', async () => {
-    const { app } = makeApp();
-    const { apiKey } = await login(app);
-    const res = await (await sync(app, apiKey, { items: [{ clientId: 'ghost', deleted: true }, { clientId: 'ghost2', purged: true }] })).json();
-    expect(res.applied).toEqual([]);
-    expect(res.conflicts).toEqual([]);
-    expect(res.changes).toEqual([]);
-  });
-});
-
 describe('cursor pagination', () => {
   async function seed(app, apiKey, count = 250) {
-    for (let offset = 0; offset < count; offset += 100) {
-      const items = [];
-      for (let i = offset; i < Math.min(offset + 100, count); i += 1) {
-        items.push({ clientId: `p${String(i).padStart(3, '0')}`, title: `Note ${i}` });
-      }
-      const res = await sync(app, apiKey, { items });
-      expect(res.status).toBe(200);
+    for (let i = 0; i < count; i += 1) {
+      const res = await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: `p${String(i).padStart(3, '0')}`, title: `Note ${i}` } });
+      expect(res.status).toBe(201);
     }
   }
-
-  test('sync pull pages by seq with hasMore until drained; incremental cursor picks up later edits', async () => {
-    const { app } = makeApp();
-    const { apiKey } = await login(app);
-    await seed(app, apiKey);
-
-    const seen = new Map();
-    let cursor = '';
-    let rounds = 0;
-    let lastSeq = 0;
-    for (;;) {
-      const page = await (await sync(app, apiKey, { items: [], cursor })).json();
-      for (const change of page.changes) {
-        expect(change.seq).toBeGreaterThan(lastSeq); // strict seq ASC ordering
-        lastSeq = change.seq;
-        seen.set(change.clientId, change);
-      }
-      rounds += 1;
-      cursor = page.cursor;
-      if (!page.hasMore) break;
-    }
-    expect(rounds).toBe(3); // 100 + 100 + 50
-    expect(seen.size).toBe(250);
-
-    // Incremental: one edit → exactly one change past the drained cursor.
-    await sync(app, apiKey, { items: [{ clientId: 'p007', baseRevision: 1, title: 'Edited' }] });
-    const delta = await (await sync(app, apiKey, { items: [], cursor })).json();
-    expect(delta.changes.map((c) => c.clientId)).toEqual(['p007']);
-    expect(delta.changes[0].revision).toBe(2);
-    expect(delta.hasMore).toBe(false);
-  });
-
-  test('ISO timestamp cursors are accepted with overlap-rewind (hosted-platform backcompat)', async () => {
-    const { app } = makeApp();
-    const { apiKey } = await login(app);
-    await seed(app, apiKey, 120);
-
-    const oldCursor = await (await sync(app, apiKey, { items: [], cursor: '2000-01-01T00:00:00.000Z' })).json();
-    expect(oldCursor.changes).toHaveLength(100);
-    expect(oldCursor.hasMore).toBe(true);
-    expect(oldCursor.cursor).toMatch(/^s:\d+$/); // client is upgraded to seq paging
-
-    // A "now" ISO cursor still returns just-written rows thanks to the ≥5s
-    // rewind (everything seeded above is inside the window, so drain pages).
-    await sync(app, apiKey, { items: [{ clientId: 'p001', baseRevision: 1, title: 'Fresh' }] });
-    const seen = [];
-    let page = await (await sync(app, apiKey, { items: [], cursor: new Date().toISOString() })).json();
-    seen.push(...page.changes);
-    while (page.hasMore) {
-      page = await (await sync(app, apiKey, { items: [], cursor: page.cursor })).json();
-      seen.push(...page.changes);
-    }
-    expect(seen.find((c) => c.clientId === 'p001')?.revision).toBe(2);
-
-    // Unparseable cursors degrade to a full pull instead of erroring.
-    const garbage = await (await sync(app, apiKey, { items: [], cursor: 'not-a-cursor' })).json();
-    expect(garbage.changes).toHaveLength(100);
-    expect(garbage.hasMore).toBe(true);
-  });
 
   test('GET /api/v1/notes pages with cursor + nextCursor (list superset)', async () => {
     const { app } = makeApp();
