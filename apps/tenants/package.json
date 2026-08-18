@@ -7,7 +7,8 @@
   "types": "dist/index.d.ts",
   "bin": {
     "tenants": "dist/cli.js",
-    "tenants-serve": "dist/server/index.js"
+    "tenants-serve": "dist/server/index.js",
+    "tenants-mcp": "dist/mcp/index.js"
   },
   "exports": {
     ".": {
@@ -34,14 +35,15 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build ./src/index.ts ./src/cli.ts ./src/server/index.ts ./src/sdk/index.ts ./src/db.ts ./src/migrations.ts --outdir dist --target bun --external pg --external @hasna/contracts && tsc --emitDeclarationOnly --outDir dist",
+    "build": "bun run clean && bun build ./src/index.ts ./src/cli.ts ./src/server/index.ts ./src/mcp/index.ts ./src/sdk/index.ts ./src/db.ts ./src/migrations.ts --outdir dist --target bun --external pg --external @hasna/contracts && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json",
     "test": "bun test",
     "dev:cli": "bun run src/cli.ts",
     "dev:serve": "bun run src/server/index.ts",
     "check:artifact": "bun scripts/check-packed-artifact.ts",
     "verify:release": "bun run typecheck && bun test && bun run build && bun run check:artifact",
-    "prepack": "bun run build && bun run check:artifact"
+    "prepack": "bun run build && bun run check:artifact",
+    "test:postgres": "HASNA_TENANTS_REQUIRE_POSTGRES_TEST=1 bun test src/postgres.integration.test.ts"
   },
   "keywords": [
     "tenants",
@@ -79,6 +81,8 @@
   },
   "dependencies": {
     "@hasna/contracts": "0.4.2",
-    "pg": "^8.16.3"
+    "pg": "^8.16.3",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "zod": "^3.25.76"
   }
 }

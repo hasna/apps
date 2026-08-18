@@ -3,16 +3,52 @@
   "name": "tenants",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.10.6",
+  "kitVersion": "0.11.1",
   "description": "Hasna fleet tenant auth / IdP: tenants, users, memberships, service principals, sessions, OTP login front door, and asymmetric-key auth.",
   "hosting": [
     "user-hosted"
   ],
   "bins": [
     "tenants",
-    "tenants-serve"
+    "tenants-serve",
+    "tenants-mcp"
   ],
   "serviceSurfaces": [
+    {
+      "name": "tenants-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "tenants-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true,
+        "description": "Liveness: { status, version, backend }"
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true,
+        "description": "Readiness: DB reachable + migrated (503 when degraded)"
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true,
+        "description": "Version: { status, version, backend }"
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "tenants-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/openapi.json"
+    },
     {
       "name": "tenants-cli",
       "kind": "cli",
@@ -21,18 +57,11 @@
       "authMode": "local-only"
     },
     {
-      "name": "tenants-sdk",
-      "kind": "sdk",
+      "name": "tenants-mcp",
+      "kind": "mcp",
       "status": "supported",
-      "authMode": "api-key",
-      "exportSubpath": "./sdk"
-    },
-    {
-      "name": "tenants-api",
-      "kind": "api",
-      "status": "deferred",
-      "authMode": "api-key",
-      "deferReason": "tenants-serve exists, but contract-standard /ready, /version and published OpenAPI surfaces were not verified in this pass."
+      "mcpBin": "tenants-mcp",
+      "authMode": "api-key"
     }
   ],
   "storage": {
@@ -41,6 +70,18 @@
       "sqlite",
       "postgresql"
     ],
-    "envPrefix": "HASNA_TENANTS_"
+    "envPrefix": "HASNA_TENANTS_",
+    "aliasEnvPrefix": "TENANTS_",
+    "pgTestGate": {
+      "envVar": "HASNA_TENANTS_TEST_DATABASE_URL",
+      "command": "HASNA_TENANTS_DATABASE_URL=$HASNA_TENANTS_TEST_DATABASE_URL bun run test:postgres"
+    }
+  },
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "check:artifact"
+      }
+    }
   }
 }
