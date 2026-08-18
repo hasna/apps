@@ -72,7 +72,7 @@ function runCliAsync(args: string[], dataDir: string) {
 
 describe("logs import-jsonl", () => {
   test("imports structured JSONL logs and preserves stable retry IDs", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "open-logs-import-jsonl-cli-"));
+    const dataDir = mkdtempSync(join(tmpdir(), "logs-import-jsonl-cli-"));
     try {
       const file = join(dataDir, "app.jsonl");
       writeFileSync(
@@ -160,7 +160,7 @@ describe("logs import-jsonl", () => {
 
   test("follows appended structured JSONL logs until idle timeout", async () => {
     const dataDir = mkdtempSync(
-      join(tmpdir(), "open-logs-import-jsonl-follow-"),
+      join(tmpdir(), "logs-import-jsonl-follow-"),
     );
     try {
       const file = join(dataDir, "live.jsonl");
@@ -228,7 +228,7 @@ describe("logs import-jsonl", () => {
 
   test("follow mode enforces max-lines before draining the current file", () => {
     const dataDir = mkdtempSync(
-      join(tmpdir(), "open-logs-import-jsonl-follow-max-"),
+      join(tmpdir(), "logs-import-jsonl-follow-max-"),
     );
     try {
       const file = join(dataDir, "burst.jsonl");
@@ -290,7 +290,7 @@ describe("logs import-jsonl", () => {
 
   test("follow mode preserves UTF-8 split across read buffers", () => {
     const dataDir = mkdtempSync(
-      join(tmpdir(), "open-logs-import-jsonl-follow-utf8-"),
+      join(tmpdir(), "logs-import-jsonl-follow-utf8-"),
     );
     try {
       const file = join(dataDir, "utf8.jsonl");
@@ -332,7 +332,7 @@ describe("logs import-jsonl", () => {
 
   test("rejects invalid format values", () => {
     const dataDir = mkdtempSync(
-      join(tmpdir(), "open-logs-import-jsonl-invalid-"),
+      join(tmpdir(), "logs-import-jsonl-invalid-"),
     );
     try {
       const file = join(dataDir, "app.jsonl");

@@ -2,7 +2,7 @@
 
 Last updated: 2026-06-24
 
-This plan defines the evidence required before open-logs can be considered a robust universal telemetry data substrate.
+This plan defines the evidence required before logs can be considered a robust universal telemetry data substrate.
 
 The validation must use real concurrent sessions, not only unit tests. `tmux` is a good default, but any repeatable multi-terminal harness is acceptable.
 

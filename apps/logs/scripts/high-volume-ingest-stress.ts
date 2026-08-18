@@ -141,7 +141,7 @@ async function runCoordinator(options: StressOptions): Promise<void> {
   const started = performance.now();
   const dataDir = options.dataDir
     ? resolve(options.dataDir)
-    : mkdtempSync(join(tmpdir(), "open-logs-high-volume-stress-"));
+    : mkdtempSync(join(tmpdir(), "logs-high-volume-stress-"));
   const dbPath = join(dataDir, "logs.db");
   const expectedEvents = options.producers * options.eventsPerProducer;
   const commands: CommandResult[] = [];

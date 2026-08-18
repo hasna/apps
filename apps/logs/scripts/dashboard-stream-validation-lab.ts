@@ -124,7 +124,7 @@ const startedAt = new Date().toISOString();
 const validationId = `dashboard-stream-lab-${Date.now()}`;
 const dataDir = options.dataDir
   ? resolve(options.dataDir)
-  : mkdtempSync(join(tmpdir(), "open-logs-dashboard-stream-lab-"));
+  : mkdtempSync(join(tmpdir(), "logs-dashboard-stream-lab-"));
 const dbPath = join(dataDir, "logs.db");
 const apiToken = `dashboard-stream-token-${Date.now()}`;
 const traceId = `${validationId}-trace`;

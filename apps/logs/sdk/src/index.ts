@@ -645,7 +645,7 @@ export function createPinoOpenLogsTransport(opts: StructuredLoggerTransportOptio
   const transport: PinoOpenLogsTransport = {
     write(chunk, encoding, callback) {
       if (stopped) {
-        const error = new Error("open-logs Pino transport is stopped")
+        const error = new Error("logs Pino transport is stopped")
         callbackFromArgs(encoding, callback)?.(error)
         return false
       }

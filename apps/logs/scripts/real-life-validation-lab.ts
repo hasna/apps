@@ -115,7 +115,7 @@ const startedAt = new Date().toISOString();
 const labId = `real-life-lab-${Date.now()}`;
 const dataDir = options.dataDir
   ? resolve(options.dataDir)
-  : mkdtempSync(join(tmpdir(), "open-logs-real-life-lab-"));
+  : mkdtempSync(join(tmpdir(), "logs-real-life-lab-"));
 const dbPath = join(dataDir, "logs.db");
 const token = `lab-token-${Date.now()}`;
 const commands: CommandResult[] = [];
@@ -1469,7 +1469,7 @@ async function callMcpTool(
     stderr: "pipe",
   });
   const client = new Client(
-    { name: "open-logs-real-life-validation", version: "0.0.0" },
+    { name: "logs-real-life-validation", version: "0.0.0" },
     { capabilities: {} },
   );
   try {

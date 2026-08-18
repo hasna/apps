@@ -146,7 +146,7 @@ export function createTestDb(): Database {
   const db = new Database(":memory:");
   setEventStoreDataDir(
     db,
-    mkdtempSync(join(tmpdir(), "open-logs-events-test-")),
+    mkdtempSync(join(tmpdir(), "logs-events-test-")),
   );
   configureDb(db);
   return db;

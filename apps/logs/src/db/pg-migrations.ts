@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-logs storage sync.
+ * PostgreSQL migrations for logs storage sync.
  *
  * Equivalent to the SQLite schema in index.ts + migrations/, translated for PostgreSQL.
  */

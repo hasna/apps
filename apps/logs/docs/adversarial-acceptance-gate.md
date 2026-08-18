@@ -237,5 +237,5 @@ The final review bundle should include:
 - Redaction grep evidence using canary secrets.
 - Larger multi-producer/high-volume evidence beyond the accepted bounded 5,000-event run, including million-event, crash-during-stress, fsync-on durability, and longer soak results.
 - Multi-machine or simulated sync evidence.
-- Dogfood summary for open-logs itself.
+- Dogfood summary for logs itself.
 - Remaining risks and accepted limitations.

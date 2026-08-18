@@ -152,7 +152,7 @@ const startedAt = new Date().toISOString();
 const validationId = `browser-runtime-lab-${Date.now()}`;
 const dataDir = options.dataDir
   ? resolve(options.dataDir)
-  : mkdtempSync(join(tmpdir(), "open-logs-browser-runtime-lab-"));
+  : mkdtempSync(join(tmpdir(), "logs-browser-runtime-lab-"));
 const dbPath = join(dataDir, "logs.db");
 const apiToken = `browser-runtime-token-${Date.now()}`;
 const secret = `OPENLOGS_SECRET_CANARY_browser_runtime_lab_${Date.now()}`;

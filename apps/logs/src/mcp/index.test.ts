@@ -93,7 +93,7 @@ test("logs MCP lists tools over stdio", async () => {
 });
 
 test("logs MCP watches event catalog records by cursor", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "open-logs-mcp-watch-"));
+  const dataDir = mkdtempSync(join(tmpdir(), "logs-mcp-watch-"));
   const { client, transport } = createMcpClient(dataDir);
 
   try {
@@ -197,7 +197,7 @@ test("logs MCP watches event catalog records by cursor", async () => {
 });
 
 test("MCP queries projected test reports", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "open-logs-mcp-test-reports-"));
+  const dataDir = mkdtempSync(join(tmpdir(), "logs-mcp-test-reports-"));
   const { client, transport } = createMcpClient(dataDir);
 
   try {
@@ -331,7 +331,7 @@ test("MCP queries projected test reports", async () => {
 
 test("MCP event_push validates before local identity mutation", async () => {
   const dataDir = mkdtempSync(
-    join(tmpdir(), "open-logs-mcp-invalid-identity-"),
+    join(tmpdir(), "logs-mcp-invalid-identity-"),
   );
   const { client, transport } = createMcpClient(dataDir);
 
@@ -388,7 +388,7 @@ test("MCP event_push validates before local identity mutation", async () => {
 });
 
 test("MCP records tool-call telemetry with safe argument summaries", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "open-logs-mcp-tool-telemetry-"));
+  const dataDir = mkdtempSync(join(tmpdir(), "logs-mcp-tool-telemetry-"));
   const { client, transport } = createMcpClient(dataDir);
   const secret = "OPENLOGS_SECRET_CANARY_mcp_tool_arg_123";
 
@@ -418,7 +418,7 @@ test("MCP records tool-call telemetry with safe argument summaries", async () =>
 });
 
 test("MCP records failed tool-call telemetry", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "open-logs-mcp-tool-error-"));
+  const dataDir = mkdtempSync(join(tmpdir(), "logs-mcp-tool-error-"));
   const { client, transport } = createMcpClient(dataDir);
 
   try {
@@ -448,7 +448,7 @@ test("MCP records failed tool-call telemetry", async () => {
 });
 
 test("MCP event_search and event_watch hide internal tool telemetry by default", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "open-logs-mcp-internal-filter-"));
+  const dataDir = mkdtempSync(join(tmpdir(), "logs-mcp-internal-filter-"));
   const { client, transport } = createMcpClient(dataDir);
 
   try {
@@ -514,7 +514,7 @@ test("MCP event_search and event_watch hide internal tool telemetry by default",
 });
 
 test("MCP records agent session activity as durable events", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "open-logs-mcp-agent-telemetry-"));
+  const dataDir = mkdtempSync(join(tmpdir(), "logs-mcp-agent-telemetry-"));
   const { client, transport } = createMcpClient(dataDir);
 
   try {
@@ -569,7 +569,7 @@ test("MCP records agent session activity as durable events", async () => {
 
 test("MCP event_push skips local discovery when explicit identity is supplied", async () => {
   const dataDir = mkdtempSync(
-    join(tmpdir(), "open-logs-mcp-explicit-identity-"),
+    join(tmpdir(), "logs-mcp-explicit-identity-"),
   );
   const { client, transport } = createMcpClient(dataDir);
 

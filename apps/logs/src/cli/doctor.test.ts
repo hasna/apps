@@ -288,7 +288,7 @@ function findSegmentFiles(dir: string): string[] {
 
 describe("logs doctor CLI", () => {
   test("verifies and rebuilds raw segment indexes", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "open-logs-doctor-cli-"));
+    const dataDir = mkdtempSync(join(tmpdir(), "logs-doctor-cli-"));
     try {
       const push = runCli(
         ["push", "doctor event", "--level", "info", "--service", "cli-test"],
@@ -338,7 +338,7 @@ describe("logs doctor CLI", () => {
   });
 
   test("repairs malformed and partial raw segment lines", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "open-logs-doctor-repair-cli-"));
+    const dataDir = mkdtempSync(join(tmpdir(), "logs-doctor-repair-cli-"));
     try {
       const push = runCli(
         [
@@ -448,7 +448,7 @@ describe("logs doctor CLI", () => {
   });
 
   test("recovers from producer crashes before index and during partial raw writes", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "open-logs-crash-drill-cli-"));
+    const dataDir = mkdtempSync(join(tmpdir(), "logs-crash-drill-cli-"));
     try {
       const crash = await runRawAppendCrashWorker(dataDir);
       expect(crash.status).toBe(42);
@@ -563,7 +563,7 @@ describe("logs doctor CLI", () => {
   });
 
   test("reports segment write errors before inserting log or event records", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "open-logs-write-error-cli-"));
+    const dataDir = mkdtempSync(join(tmpdir(), "logs-write-error-cli-"));
     try {
       writeFileSync(join(dataDir, "segments"), "not a directory");
 
@@ -582,7 +582,7 @@ describe("logs doctor CLI", () => {
   });
 
   test("verifies concurrent CLI producers against one data directory", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "open-logs-concurrent-cli-"));
+    const dataDir = mkdtempSync(join(tmpdir(), "logs-concurrent-cli-"));
     try {
       const runs = await Promise.all(
         Array.from({ length: 12 }, (_, i) =>
@@ -624,7 +624,7 @@ describe("logs doctor CLI", () => {
   });
 
   test("deduplicates concurrent CLI producers with the same producer id", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "open-logs-concurrent-id-cli-"));
+    const dataDir = mkdtempSync(join(tmpdir(), "logs-concurrent-id-cli-"));
     try {
       const runs = await Promise.all(
         Array.from({ length: 8 }, (_, i) =>
@@ -667,7 +667,7 @@ describe("logs doctor CLI", () => {
   });
 
   test("keeps segment pointers exact under concurrent batch producers and rotation", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "open-logs-stress-cli-"));
+    const dataDir = mkdtempSync(join(tmpdir(), "logs-stress-cli-"));
     const workerCount = 10;
     const eventsPerWorker = 12;
     const expectedEvents = workerCount * eventsPerWorker;

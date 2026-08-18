@@ -83,7 +83,7 @@ const startedAt = new Date().toISOString();
 const validationId = `logger-package-lab-${Date.now()}`;
 const dataDir = options.dataDir
   ? resolve(options.dataDir)
-  : mkdtempSync(join(tmpdir(), "open-logs-logger-package-lab-"));
+  : mkdtempSync(join(tmpdir(), "logs-logger-package-lab-"));
 const dbPath = join(dataDir, "logs.db");
 const token = `logger-package-token-${Date.now()}`;
 const commands: CommandResult[] = [];

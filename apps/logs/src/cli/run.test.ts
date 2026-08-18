@@ -21,7 +21,7 @@ function runCli(args: string[], env: Record<string, string | undefined> = {}) {
 
 describe("logs run CLI", () => {
   test("captures a real command into the local store", () => {
-    const home = mkdtempSync(join(tmpdir(), "open-logs-run-cli-"));
+    const home = mkdtempSync(join(tmpdir(), "logs-run-cli-"));
     try {
       const dbPath = join(home, "logs.db");
       const result = runCli(
