@@ -104,7 +104,7 @@ The response is a `RouterDecision` with redacted `selected` and
 `gatewayHints`, and `safetyNotes`. The full provider descriptors remain in
 `gateway` and should be joined by selected model id before execution.
 
-## Open Gateway Changes That May Be Useful Later
+## Gateway Changes That May Be Useful Later
 
 No `gateway` files were changed for this package. A future integration PR
 could add:
