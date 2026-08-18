@@ -589,10 +589,19 @@ configCmd
 
 program
   .command("status [machine]")
-  .description("Show current system snapshot (CPU, memory, disk, GPU)")
+  .description("Show current system snapshot (CPU, memory, disk, GPU), or slug status when the argument names a monitor v2 slug")
   .option("-j, --json", "Output raw JSON")
   .option("--compact", "Output a single-line CPU, memory, and disk summary")
   .action(async (machineArg: string | undefined, opts) => {
+    if (machineArg) {
+      const { slugExists, printSlugStatus } = await import("./v2.js");
+      if (slugExists(machineArg)) {
+        const { MonitorService } = await import("../service.js");
+        const { getDb } = await import("../db/client.js");
+        printSlugStatus(new MonitorService(getDb()).status(machineArg), opts.json === true);
+        return;
+      }
+    }
     const machineId = resolveMachineId(machineArg);
     const collector = getCollectorForMachine(machineId);
     const result = await collector.collect();
@@ -2727,7 +2736,9 @@ completionsCmd
 
 export { program };
 
-export function runCli(): void {
+export async function runCli(): Promise<void> {
   registerEventsCommands(program, { source: "monitor" });
+  const { registerV2Commands } = await import("./v2.js");
+  registerV2Commands(program);
   program.parse(process.argv);
 }
