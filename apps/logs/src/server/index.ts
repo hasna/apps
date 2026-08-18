@@ -6,7 +6,7 @@ import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { cors } from "hono/cors";
 import { getDb } from "../db/index.ts";
-import { resolveStorageMode } from "../generated/storage-kit/index.ts";
+import { resolveServerDataBackend } from "../generated/storage-kit/backend.ts";
 import { getBrowserScript } from "../lib/browser-script.ts";
 import { getHealth } from "../lib/health.ts";
 import {
@@ -54,9 +54,9 @@ const PORT = Number(
 );
 const serverDir = dirname(fileURLToPath(import.meta.url));
 
-// PURE REMOTE (Amendment A1): in cloud mode the serve is a stateless API in
-// front of the shared cloud Postgres — no SQLite, no scheduler, API-key auth.
-const cloudMode = resolveStorageMode("logs", process.env).mode === "cloud";
+// The postgresql backend makes the serve a stateless API in front of the
+// shared cloud Postgres — no SQLite, no scheduler, API-key auth.
+const cloudMode = resolveServerDataBackend("logs", process.env).backend === "postgresql";
 
 function buildLocalServe() {
   const db = getDb();

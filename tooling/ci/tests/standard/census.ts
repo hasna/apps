@@ -395,7 +395,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "logs",
-    cause: "manifest_valid: service-class manifest declares no service surface (service repos must declare at least one). Validated at pinned 0.5.2.",
+    cause: "manifest_valid: service-class manifest declares no service surface (service repos must declare at least one). Validated at pinned 0.11.1.",
     task: "todos d166125e (contracts task — logs)",
   },
   {
@@ -494,7 +494,6 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "files", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "gateway", kitVersion: "0.11.1", pinned: "0.2.2" },
   { member: "instructions", kitVersion: "0.10.6", pinned: "0.4.2" },
-  { member: "logs", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "tenants", kitVersion: "0.10.6", pinned: "0.4.2" },
   { member: "todos", kitVersion: "0.8.4", pinned: "0.5.2" },
 ];

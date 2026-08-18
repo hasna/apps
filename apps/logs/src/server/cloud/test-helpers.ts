@@ -556,5 +556,8 @@ export function buildTestCloudApp() {
     client: fakeClient().client,
     version: "9.9.9",
     signingSecret: SIGNING_SECRET,
+    // Tests mint tokens directly with SIGNING_SECRET; the key-status lookup is
+    // not the subject, so every presented key is treated as active.
+    keyStatus: async (): Promise<"active"> => "active",
   });
 }

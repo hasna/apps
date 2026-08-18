@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,8 +33,37 @@ function testEnv(extra: Record<string, string> = {}): Record<string, string> {
   for (const [key, value] of Object.entries(process.env)) {
     if (typeof value === "string") env[key] = value;
   }
+  // The machine may carry real HASNA_LOGS_API_* vars; the 0.11.1 client
+  // warns on env keys and reconciles them against the disk tier, so the tests
+  // scrub them for hermetic resolution.
+  delete env.HASNA_LOGS_API_URL;
+  delete env.HASNA_LOGS_API_KEY;
+  delete env.HASNA_LOGS_STORAGE_MODE;
   return { ...env, ...extra };
 }
+
+// The in-process MCP server resolves its store from process.env, so the
+// machine's real HASNA_LOGS_API_* vars must be scrubbed for the whole file.
+const SCRUB_SAVED: Record<string, string | undefined> = {
+  HASNA_LOGS_API_URL: process.env.HASNA_LOGS_API_URL,
+  HASNA_LOGS_API_KEY: process.env.HASNA_LOGS_API_KEY,
+  HASNA_LOGS_STORAGE_MODE: process.env.HASNA_LOGS_STORAGE_MODE,
+  HOME: process.env.HOME,
+};
+beforeAll(() => {
+  delete process.env.HASNA_LOGS_API_URL;
+  delete process.env.HASNA_LOGS_API_KEY;
+  delete process.env.HASNA_LOGS_STORAGE_MODE;
+  // Point the client's disk tier at a temp dir so the machine's real cloud
+  // config cannot flip the in-process store to the HTTP transport.
+  process.env.HOME = mkdtempSync(join(tmpdir(), "logs-mcp-home-"));
+});
+afterAll(() => {
+  for (const [key, value] of Object.entries(SCRUB_SAVED)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
 
 function textContent(result: unknown): string {
   const content = (result as { content?: Array<{ text?: string }> }).content;
