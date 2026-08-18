@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
-import type { LogEntry } from "../types/index.ts";
+import type { LogEntry, Page, PerformanceSnapshot } from "../types/index.ts";
+import type { PageAuth } from "./page-auth.ts";
 import { ingestBatch } from "./ingest.ts";
 import { getPageAuth } from "./page-auth.ts";
 import { saveSnapshot } from "./perf.ts";
@@ -11,21 +12,46 @@ export interface ScanResult {
   perfScore: number | null;
 }
 
-export async function scanPage(
-  db: Database,
+/**
+ * The data-plane surface a headless scan needs, independent of the storage
+ * backend. {@link LocalStore} binds it to SQLite; {@link ApiStore} binds it to
+ * the hosted /v1 data plane (the browser itself always runs on the machine
+ * executing the CLI — the transport requires it).
+ */
+export interface ScanContext {
+  getPage(pageId: string): Promise<Pick<Page, "id" | "url"> | null>;
+  getPageAuth(
+    pageId: string,
+  ): Promise<Pick<PageAuth, "type" | "credentials"> | null>;
+  ingest(entries: LogEntry[]): Promise<void>;
+  touchPage(pageId: string): Promise<void>;
+  savePerfSnapshot(
+    snapshot: Omit<PerformanceSnapshot, "id" | "timestamp">,
+  ): Promise<void>;
+}
+
+/**
+ * Run one headless page scan against any backend via {@link ScanContext}.
+ * Identical execution on both tiers: the browser runs here (client-side),
+ * while every result — console logs, page errors, perf metrics — is delivered
+ * through the context's data plane.
+ */
+export async function scanPageWithContext(
+  ctx: ScanContext,
   projectId: string,
   pageId: string,
   urlOverride?: string,
 ): Promise<ScanResult> {
-  const page = getPage(db, pageId);
+  const page = await ctx.getPage(pageId);
   const url = urlOverride || page?.url;
   if (!url) throw new Error(`No URL for page ${pageId}`);
 
   const { chromium } = await import("playwright");
   const browser = await chromium.launch({ headless: true });
 
-  // Apply page auth if configured
-  const auth = getPageAuth(db, pageId);
+  // Apply page auth if configured (the hosted tier has no page-auth store, so
+  // its context returns null and the scan proceeds unauthenticated).
+  const auth = await ctx.getPageAuth(pageId);
   const contextOptions: Parameters<typeof browser.newContext>[0] = {
     userAgent: "Mozilla/5.0 (@hasna/logs scanner) AppleWebKit/537.36",
   };
@@ -144,7 +170,7 @@ export async function scanPage(
       });
       // Store what we can without full Lighthouse
       if (metrics.fcp !== null || metrics.ttfb !== null) {
-        saveSnapshot(db, {
+        await ctx.savePerfSnapshot({
           project_id: projectId,
           page_id: pageId,
           url,
@@ -165,9 +191,39 @@ export async function scanPage(
   }
 
   if (collected.length > 0) {
-    ingestBatch(db, collected);
-    if (page) touchPage(db, pageId);
+    await ctx.ingest(collected);
+    if (page) await ctx.touchPage(pageId);
   }
 
   return { logsCollected: collected.length, errorsFound, perfScore };
+}
+
+/** SQLite-backed {@link ScanContext} (the local tier). */
+function localScanContext(db: Database): ScanContext {
+  return {
+    getPage: async (pageId) => getPage(db, pageId),
+    getPageAuth: async (pageId) => getPageAuth(db, pageId),
+    ingest: async (entries) => {
+      ingestBatch(db, entries);
+    },
+    touchPage: async (pageId) => {
+      touchPage(db, pageId);
+    },
+    savePerfSnapshot: async (snapshot) => {
+      saveSnapshot(db, snapshot);
+    },
+  };
+}
+
+/**
+ * SQLite-backed scan (the local tier). The hosted tier runs the same
+ * execution through {@link ScanContext} via ApiStore.runScanJob.
+ */
+export function scanPage(
+  db: Database,
+  projectId: string,
+  pageId: string,
+  urlOverride?: string,
+): Promise<ScanResult> {
+  return scanPageWithContext(localScanContext(db), projectId, pageId, urlOverride);
 }

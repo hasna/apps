@@ -180,6 +180,14 @@ export interface McpEventWatchArgs extends EventWatchFilter {
   include_raw?: boolean;
   from_start?: boolean;
   include_internal?: boolean;
+  /** Start-window bound (CLI `watch --since`): only events at/after this time. */
+  since?: string;
+  /**
+   * CLI convenience filter: match a service either in metadata or in the
+   * message. The hosted tier filters this client-side over the fetched window
+   * (service is not a column there); the local tier filters in SQL.
+   */
+  service?: string;
 }
 
 interface McpEventCursor {
@@ -188,7 +196,7 @@ interface McpEventCursor {
 }
 
 export interface McpEventWatchResult {
-  events: unknown[];
+  events: EventCatalogEntry[];
   cursor: string | null;
   has_more: boolean;
   overflow: null | { reason: string; last_event_id: string };
@@ -205,6 +213,17 @@ function buildMcpEventWhere(
     params.push(afterRowid);
   }
   addCommonFilters(conditions, params, args);
+  if (args.since) {
+    conditions.push("event_time >= ?");
+    params.push(args.since);
+  }
+  if (args.service) {
+    conditions.push("(metadata LIKE ? OR message LIKE ?)");
+    params.push(
+      `%"service":"${escapeLikeJson(args.service)}"%`,
+      `%${args.service}%`,
+    );
+  }
   if (args.include_internal !== true) {
     conditions.push(
       "NOT (event_type = 'agent' AND source = 'mcp' AND metadata LIKE ?)",
@@ -217,9 +236,21 @@ function buildMcpEventWhere(
   };
 }
 
-function clampMcpWatchLimit(value: number | undefined): number {
+/** Clamp a watch limit to [1, 1000]; shared by the local and hosted stores. */
+export function clampMcpWatchLimit(value: number | undefined): number {
   if (!Number.isFinite(value) || value === undefined) return 100;
   return Math.min(Math.max(1, Math.floor(value)), 1_000);
+}
+
+/** Client-side service filter for hosted rows (service lives in metadata). */
+export function matchesEventService(
+  event: Pick<EventCatalogEntry, "metadata" | "message">,
+  service: string,
+): boolean {
+  const meta = event.metadata as Record<string, unknown> | null;
+  if (meta && typeof meta.service === "string" && meta.service === service)
+    return true;
+  return String(event.message ?? "").includes(service);
 }
 
 function latestMcpEventCursor(
@@ -284,7 +315,7 @@ export function watchEventsForMcp(
   const visibleRows = rows.slice(0, limit);
   const events = visibleRows
     .map((row) => getEvent(db, row.event_id, args.include_raw === true))
-    .filter(Boolean);
+    .filter((e): e is EventCatalogEntry => Boolean(e));
   const last = visibleRows.at(-1);
   if (last) cursor = last.event_id;
 

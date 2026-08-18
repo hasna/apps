@@ -21,6 +21,7 @@
  * SAFETY: never logs, returns, or embeds the API key. The key lives only inside
  * the HTTP transport created by @hasna/contracts.
  */
+import { HasnaHttpError } from "@hasna/contracts/client";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import type { AlertRule } from "../lib/alerts.ts";
 import {
@@ -33,8 +34,19 @@ import type { CompareResult } from "../lib/compare.ts";
 import type { LogCount } from "../lib/count.ts";
 import type { DiagnoseInclude, DiagnosisResult } from "../lib/diagnose.ts";
 import type { EventCatalogEntry, EventCatalogQuery } from "../lib/events.ts";
+import {
+  type McpEventWatchArgs,
+  type McpEventWatchResult,
+  clampMcpWatchLimit,
+  matchesEventService,
+} from "../lib/event-watch.ts";
 import type { HealthResult } from "../lib/health.ts";
 import { computeRuntimeIdentity } from "../lib/identity.ts";
+import {
+  type ScanContext,
+  type ScanResult,
+  scanPageWithContext,
+} from "../lib/scanner.ts";
 import type { Issue } from "../lib/issues.ts";
 import type { SessionContext } from "../lib/session-context.ts";
 import {
@@ -61,6 +73,7 @@ import type {
   PerformanceSnapshot,
   Project,
   ScanJob,
+  ScanRun,
 } from "../types/index.ts";
 import type {
   CountLogsInput,
@@ -136,14 +149,37 @@ function compact(
   return out;
 }
 
+/** Scan executor signature, injectable for tests (browser-free). */
+export type ApiRunScan = (
+  ctx: ScanContext,
+  projectId: string,
+  pageId: string,
+  urlOverride?: string,
+) => Promise<ScanResult>;
+
+export interface ApiStoreOptions {
+  /**
+   * Scan executor used by {@link ApiStore.runScanJob}. Defaults to the shared
+   * `scanPageWithContext` (Playwright runs on this machine on both tiers);
+   * tests inject a browser-free substitute.
+   */
+  runScan?: ApiRunScan;
+}
+
 /** HTTP-backed {@link Store} for `self_hosted` and `cloud` tiers. */
 export class ApiStore implements Store {
   readonly mode: StoreMode;
   private readonly client: HasnaStorageClient;
+  private readonly scanExecutor: ApiRunScan;
 
-  constructor(client: HasnaStorageClient, mode: StoreMode = "self_hosted") {
+  constructor(
+    client: HasnaStorageClient,
+    mode: StoreMode = "self_hosted",
+    options: ApiStoreOptions = {},
+  ) {
     this.client = client;
     this.mode = mode;
+    this.scanExecutor = options.runScan ?? scanPageWithContext;
   }
 
   /** `<origin>/v1` base URL the client targets (never includes the key). */
@@ -395,6 +431,82 @@ export class ApiStore implements Store {
     return events.length;
   }
 
+  async watchEvents(args: McpEventWatchArgs): Promise<McpEventWatchResult> {
+    const limit = clampMcpWatchLimit(args.limit);
+    const query: EventCatalogQuery = {
+      event_type: args.event_type,
+      source: args.source,
+      severity: args.severity,
+      project_id: args.project_id,
+      machine_id: args.machine_id,
+      repo_id: args.repo_id,
+      app_id: args.app_id,
+      process_id: args.process_id,
+      run_id: args.run_id,
+      trace_id: args.trace_id,
+      session_id: args.session_id,
+      environment: args.environment,
+      since: args.since,
+      limit: limit + 1,
+      max_limit: 1_000,
+      exclude_mcp_tool_telemetry: args.include_internal !== true,
+    };
+
+    // No cursor and not from_start: report the latest cursor, emit nothing —
+    // the same "poll from latest" contract the local rowid cursor starts with.
+    if (!args.last_event_id && args.from_start !== true) {
+      const latest = await this.listEvents({ ...query, limit: 1 });
+      return {
+        events: [],
+        cursor: latest[0]?.event_id ?? null,
+        has_more: false,
+        overflow: null,
+      };
+    }
+
+    let anchor: EventCatalogEntry | null = null;
+    if (args.last_event_id) {
+      anchor = await this.getEvent(args.last_event_id, false).catch((error) => {
+        // A missing anchor is an overflow (never replay history), not a crash.
+        if (error instanceof HasnaHttpError && error.status === 404) return null;
+        throw error;
+      });
+      if (!anchor) {
+        const latest = await this.listEvents({ ...query, limit: 1 });
+        return {
+          events: [],
+          cursor: latest[0]?.event_id ?? null,
+          has_more: false,
+          overflow: {
+            reason: "last_event_id_unknown",
+            last_event_id: args.last_event_id,
+          },
+        };
+      }
+      query.after_time = anchor.event_time;
+      query.after_id = anchor.event_id;
+    }
+    // Ascending tail: events arrive oldest-first after the cursor (the hosted
+    // counterpart of the local rowid-ordered query).
+    query.order = "asc";
+
+    let events = await this.listEvents(query);
+    // `service` lives in metadata/message on both tiers; the hosted tier has no
+    // service column, so the filter is applied client-side over the window.
+    const service = args.service;
+    if (service) events = events.filter((e) => matchesEventService(e, service));
+
+    const hasMore = events.length > limit;
+    const visible = events.slice(0, limit);
+    const last = visible.at(-1);
+    return {
+      events: visible,
+      cursor: last?.event_id ?? (args.last_event_id ?? null),
+      has_more: hasMore,
+      overflow: null,
+    };
+  }
+
   async pushEvent(
     input: UniversalEventInput,
     options: PushEventOptions = {},
@@ -502,6 +614,130 @@ export class ApiStore implements Store {
       schedule: input.schedule,
       page_id: input.page_id ?? null,
     });
+  }
+
+  async getScanJob(id: string): Promise<ScanJob | null> {
+    // A missing job maps to `null` (the "job not found" the local tier
+    // reports), not a thrown 404.
+    try {
+      return await this.client.get<ScanJob>("jobs", id);
+    } catch (error) {
+      if (error instanceof HasnaHttpError && error.status === 404) return null;
+      throw error;
+    }
+  }
+
+  /**
+   * Run an immediate headless scan for a job on the hosted path.
+   *
+   * Execution mirrors the local tier: the browser runs on THIS machine (the
+   * transport requires client-side execution — the same reason `logs run`
+   * captures subprocess telemetry locally), while every result is delivered
+   * through the hosted data plane: collected logs via POST /v1/logs, a perf
+   * snapshot via POST /v1/perf/snapshot, a scan-run record via
+   * /v1/jobs/:id/runs, page last_scanned_at via PATCH /v1/pages/:id, and
+   * job last_run_at via PUT /v1/jobs/:id.
+   */
+  async runScanJob(
+    jobId: string,
+    projectId: string,
+    pageId?: string,
+  ): Promise<void> {
+    const pages = pageId
+      ? [{ id: pageId }]
+      : await this.listPages(projectId);
+
+    await Promise.all(
+      pages.map(async (page) => {
+        const run = await this.createScanRun(jobId, page.id);
+        try {
+          const result = await this.scanExecutor(
+            this.buildScanContext(),
+            projectId,
+            page.id,
+          );
+          await this.finishScanRun(jobId, run.id, {
+            status: "completed",
+            logs_collected: result.logsCollected,
+            errors_found: result.errorsFound,
+            perf_score: result.perfScore ?? undefined,
+          });
+        } catch (err) {
+          await this.finishScanRun(jobId, run.id, {
+            status: "failed",
+            logs_collected: 0,
+            errors_found: 0,
+          });
+          // Local parity: a failed page scan is recorded, not thrown.
+          console.error(`Scan failed for page ${page.id}:`, err);
+        }
+      }),
+    );
+
+    await this.updateJobLastRun(jobId);
+  }
+
+  /** Hosted data-plane bindings for the shared headless scan execution. */
+  private buildScanContext(): ScanContext {
+    return {
+      getPage: async (id) => this.client.get<Page>("pages", id),
+      // Page auth (cookie/basic/bearer) is stored only on the local tier;
+      // the hosted tier has no page-auth store, so scans run unauthenticated.
+      getPageAuth: async () => null,
+      ingest: async (entries) => {
+        for (const entry of entries) await this.ingestLog(entry);
+      },
+      touchPage: async (id) => {
+        await this.client.transport.request(
+          "PATCH",
+          `/pages/${encodeURIComponent(id)}`,
+          { last_scanned_at: new Date().toISOString() },
+        );
+      },
+      savePerfSnapshot: async (snapshot) => {
+        await this.client.transport.request(
+          "POST",
+          "/perf/snapshot",
+          snapshot,
+        );
+      },
+    };
+  }
+
+  private async createScanRun(
+    jobId: string,
+    pageId: string,
+  ): Promise<ScanRun> {
+    return this.client.transport.request<ScanRun>(
+      "POST",
+      `/jobs/${encodeURIComponent(jobId)}/runs`,
+      { page_id: pageId },
+    );
+  }
+
+  private async finishScanRun(
+    jobId: string,
+    runId: string,
+    data: {
+      status: "completed" | "failed";
+      logs_collected: number;
+      errors_found: number;
+      perf_score?: number;
+    },
+  ): Promise<void> {
+    await this.client.transport.request(
+      "PATCH",
+      `/jobs/${encodeURIComponent(jobId)}/runs/${encodeURIComponent(runId)}`,
+      data,
+    );
+  }
+
+  private async updateJobLastRun(jobId: string): Promise<void> {
+    await this.client.transport.request(
+      "PUT",
+      `/jobs/${encodeURIComponent(jobId)}`,
+      { last_run_at: new Date().toISOString() },
+    );
   }
 
   // ── performance ─────────────────────────────────────────
@@ -707,6 +943,9 @@ function eventQueryParams(
   assign("limit", query.limit);
   assign("offset", query.offset);
   assign("max_limit", query.max_limit);
+  assign("after_time", query.after_time);
+  assign("after_id", query.after_id);
+  assign("order", query.order);
   if (query.exclude_mcp_tool_telemetry) q.exclude_mcp_tool_telemetry = "true";
   return q;
 }

@@ -16,9 +16,7 @@ import {
   type UniversalEventType,
 } from "../lib/universal-ingest.ts";
 import {
-  type LocalStore,
   localStoreIfAvailable,
-  requireLocalStore,
   resolveStore,
 } from "../store/index.ts";
 import type { LogLevel, LogRow } from "../types/index.ts";
@@ -33,9 +31,11 @@ exitIfMetadataRequest({
 });
 
 // Best-effort local store for internal self-telemetry (agent lifecycle + tool
-// calls). It is `null` in api mode — the events catalog is a local-only feature
-// (the cloud tier is a shared log sink), so telemetry is silently skipped
-// there. Telemetry must NEVER change tool behavior.
+// calls). It is `null` in api mode — MCP tool-call telemetry is deliberately
+// not mirrored into the shared hosted sink (volume), so it is silently skipped
+// there. Telemetry must NEVER change tool behavior. The event catalog itself
+// is a mode-resolved data-plane feature: `event_watch` below works on both
+// tiers through the unified Store.
 const telemetryStore = localStoreIfAvailable();
 
 // register_agent / heartbeat / set_focus / list_agents are the canonical
@@ -136,11 +136,6 @@ export function buildServer(): McpServer {
   // Resolve a project name-or-id through the live store (local db or /v1).
   const rid = (idOrName?: string): Promise<string | undefined> =>
     store.resolveProjectId(idOrName);
-
-  // On-box analytics/telemetry tools with no cloud data model reach the concrete
-  // LocalStore here; it throws loudly in api mode instead of touching a stale
-  // local db. `getDb()` stays confined to the store implementation.
-  const local = (tool: string): LocalStore => requireLocalStore(tool);
 
   // Tool registry with param signatures for discoverability
   const TOOLS: Record<string, { desc: string; params: string }> = {
@@ -983,7 +978,6 @@ export function buildServer(): McpServer {
       include_internal: z.boolean().optional(),
     },
     async (args) => {
-      const store = local("event_watch");
       const watchArgs: McpEventWatchArgs = {
         ...args,
         project_id: await store.resolveProjectId(args.project_id),
@@ -996,7 +990,7 @@ export function buildServer(): McpServer {
         content: [
           {
             type: "text",
-            text: JSON.stringify(store.watchEventsForMcp(watchArgs)),
+            text: JSON.stringify(await store.watchEvents(watchArgs)),
           },
         ],
       };

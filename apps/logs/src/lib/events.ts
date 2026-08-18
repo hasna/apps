@@ -32,6 +32,15 @@ export interface EventCatalogQuery {
   include_raw?: boolean;
   exclude_mcp_tool_telemetry?: boolean;
   max_limit?: number;
+  /**
+   * Exclusive cursor bound for the event-catalog live-tail: return only events
+   * after `(after_time, after_id)` in ascending order (the hosted cursor-watch
+   * counterpart of the local rowid cursor). Both fields are required together.
+   */
+  after_time?: string;
+  after_id?: string;
+  /** Explicit ordering. Defaults to newest-first (`desc`). */
+  order?: "asc" | "desc";
 }
 
 export type EventCatalogEntry = Omit<EventRecord, "metadata"> & {
@@ -46,12 +55,13 @@ export function searchEvents(
   const { where, params } = buildEventWhere(query);
   const limit = clampPositiveInt(query.limit, 100, query.max_limit ?? 1_000);
   const offset = clampNonNegativeInt(query.offset, 0);
+  const ascending = query.order === "asc";
   const rows = db
     .query(`
     SELECT *
     FROM event_records
     ${where}
-    ORDER BY event_time DESC, event_id DESC
+    ORDER BY event_time ${ascending ? "ASC" : "DESC"}, event_id ${ascending ? "ASC" : "DESC"}
     LIMIT ? OFFSET ?
   `)
     .all(...params, limit, offset) as EventRecord[];
@@ -146,6 +156,12 @@ function buildEventWhere(query: EventCatalogQuery): {
       "NOT (event_type = 'agent' AND source = 'mcp' AND metadata LIKE ?)",
     );
     params.push('%"category":"mcp_tool_call"%');
+  }
+  if (query.after_time && query.after_id) {
+    conditions.push(
+      "(event_time > ? OR (event_time = ? AND event_id > ?))",
+    );
+    params.push(query.after_time, query.after_time, query.after_id);
   }
 
   return {

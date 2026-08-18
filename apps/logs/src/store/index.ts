@@ -155,10 +155,25 @@ export function isApiMode(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /**
- * Return the concrete {@link LocalStore} for on-box maintenance/compute
- * operations that have no cloud data model (db repair, subprocess capture,
- * file follow, event-store diagnostics). Throws loudly in api mode instead of
- * silently touching a stale local db. Fully reversible: unset the API vars.
+ * Return the concrete {@link LocalStore} for on-box maintenance operations
+ * whose SUBJECT exists only on the local backend, throwing loudly in api mode
+ * instead of silently touching a stale local db. Fully reversible: unset the
+ * API vars.
+ *
+ * STRONG REASON (recorded 2026-08-18 for the local-only-capability review;
+ * reviewer rules on it): the operations behind this guard — `db doctor
+ * segments`, `db doctor rebuild-index`, `db doctor repair-segments` — verify,
+ * rebuild and repair the raw event store: on-disk JSONL segment files plus
+ * manifests and hashes (`src/lib/event-store.ts` reads those files directly).
+ * The hosted tier deliberately does NOT persist raw envelopes: the cloud
+ * `event_records` rows carry redacted metadata plus a content hash with
+ * `segment_id`/`segment_path` placeholders and `raw: null` by design
+ * (`src/server/cloud/store.ts`). There is therefore no hosted subject for
+ * these operations — no raw segments to verify, no SQLite projections to
+ * rebuild from them, no segment lines to quarantine. Porting would mean
+ * re-architecting the hosted tier to store raw envelopes (a product change
+ * against a documented design choice), not porting this capability; a
+ * Postgres integrity check would be a NEW capability, not this one.
  */
 export function requireLocalStore(
   operation: string,

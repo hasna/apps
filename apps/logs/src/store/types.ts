@@ -21,6 +21,10 @@ import type { CompareResult } from "../lib/compare.ts";
 import type { LogCount } from "../lib/count.ts";
 import type { DiagnoseInclude, DiagnosisResult } from "../lib/diagnose.ts";
 import type { EventCatalogEntry, EventCatalogQuery } from "../lib/events.ts";
+import type {
+  McpEventWatchArgs,
+  McpEventWatchResult,
+} from "../lib/event-watch.ts";
 import type { HealthResult } from "../lib/health.ts";
 import type { Issue } from "../lib/issues.ts";
 import type { SessionContext } from "../lib/session-context.ts";
@@ -185,6 +189,23 @@ export interface Store {
   createPage(input: CreatePageInput): Promise<Page>;
   listJobs(projectId?: string): Promise<ScanJob[]>;
   createJob(input: CreateJobInput): Promise<ScanJob>;
+  /** Fetch one scan job by id (hosted: GET /v1/jobs/:id). */
+  getScanJob(id: string): Promise<ScanJob | null>;
+  /**
+   * Run an immediate headless scan for a job. The browser executes on the
+   * machine running the CLI on BOTH tiers (the transport requires it); every
+   * result — collected logs, perf snapshot, scan-run record, `last_run_at` —
+   * is delivered through the live transport.
+   */
+  runScanJob(jobId: string, projectId: string, pageId?: string): Promise<void>;
+
+  // ── event-catalog live-tail (`watch --events` / MCP `event_watch`) ──
+  /**
+   * Poll event-catalog records after a cursor. Identical semantics on both
+   * tiers: anchored cursors, `from_start`, `last_event_id_unknown` overflow,
+   * `has_more`, and the internal-telemetry exclusion.
+   */
+  watchEvents(args: McpEventWatchArgs): Promise<McpEventWatchResult>;
 
   // ── performance ─────────────────────────────────────────
   latestPerfSnapshot(
