@@ -36,7 +36,7 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === '--help' || arg === '-h') {
       console.log([
-        'Usage: bun scripts/smoke-open-files-installed-boundary.mjs [--json] [--dry-run] [--keep-temp]',
+        'Usage: bun scripts/smoke-files-installed-boundary.mjs [--json] [--dry-run] [--keep-temp]',
         '       [--files-bin files] [--knowledge-bin knowledge] [--evidence-json <path>] [--evidence-md <path>]',
         '',
         'Runs the installed open-files to open-knowledge source-boundary smoke:',

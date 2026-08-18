@@ -922,7 +922,7 @@ export function buildServer() {
     }
   });
 
-  registerTool(server, 'knowledge_machines_topology', 'Knowledge machine topology', 'Inspect optional open-machines topology and local fallback routes for knowledge sync', {
+  registerTool(server, 'knowledge_machines_topology', 'Knowledge machine topology', 'Inspect optional machines topology and local fallback routes for knowledge sync', {
     scope: scopeField,
     include_tailscale: z.boolean().optional().describe('Include local Tailscale status probing when available'),
   }, async ({ scope, include_tailscale }) => {

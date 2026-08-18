@@ -37,7 +37,7 @@ const publicScripts = [
   'scripts/lib/remote-temp-dir.mjs',
   'scripts/smoke-machine-sync-release.mjs',
   'scripts/smoke-machines-adapter.mjs',
-  'scripts/smoke-open-files-installed-boundary.mjs',
+  'scripts/smoke-files-installed-boundary.mjs',
   'scripts/strip-generated-trailing-whitespace.mjs',
   'scripts/verify-generated-artifacts.mjs',
 ].sort();
@@ -98,7 +98,7 @@ describe('public package release safety', () => {
     // task 1eb481d5 - @hasna/contracts is a devDependency only
     'scripts/apply-postgres-migrations.mjs -> @hasna/contracts/auth',
     // task 104f993d - bun:sqlite throws ERR_UNSUPPORTED_ESM_URL_SCHEME under node
-    'scripts/smoke-open-files-installed-boundary.mjs -> bun:sqlite',
+    'scripts/smoke-files-installed-boundary.mjs -> bun:sqlite',
   ]);
 
   test('package files list public docs explicitly', () => {
@@ -317,7 +317,7 @@ describe('public package release safety', () => {
     // added without evidence.
     expect(importsOf('scripts/apply-postgres-migrations.mjs')).toContain('../dist/serve.js');
     expect(importsOf('scripts/apply-postgres-migrations.mjs')).toContain('@hasna/contracts/auth');
-    expect(importsOf('scripts/smoke-open-files-installed-boundary.mjs')).toContain('bun:sqlite');
+    expect(importsOf('scripts/smoke-files-installed-boundary.mjs')).toContain('bun:sqlite');
 
     // ...and each is genuinely unresolvable, not merely unfamiliar.
     expect(packageJson.files).not.toContain('src');
