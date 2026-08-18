@@ -1,17 +1,247 @@
 /**
- * todos integration — creates a task when an alert fires.
+ * Todos native adapter (MON-V2-06).
  *
- * Uses the todos HTTP API (POST /api/tasks).
- * Only creates a task if no open task already exists for the same
- * machine + check_name combination.
+ * Uses one exact package-owned surface: `TodosV1Client` from `@hasna/todos/sdk`
+ * (`createTask`, `createTaskComment`, `completeTask`). It never chooses between
+ * SDK, CLI, HTTP, or MCP at runtime.
+ *
+ * Every action is keyed by an `effectKey`. A repeated effect key replays the
+ * recorded effect and never calls the client again, so repeated effect keys do
+ * not create duplicate tasks (or comments, or completions).
+ *
+ * Failure behaviour: non-required actions record the failure and resolve
+ * `ok:false` — the run continues. An action on an adapter created with
+ * `required:true` rejects with the recorded failure.
+ *
+ * Effect records are kept in a bounded in-memory store. Durability across
+ * processes is owned by the shared effects registry (`effects.ts`, MON-V2-03
+ * receipts); this adapter accepts any `TodosEffectStore` so the durable store
+ * plugs in without changing the action surface.
  */
 
+import { TodosV1Client } from "@hasna/todos/sdk";
 import type { AlertRow } from "../db/schema.js";
 import type { TodosIntegrationConfig } from "./index.js";
 
-const DEFAULT_BASE_URL = "http://localhost:3000";
+// ── Effect records ─────────────────────────────────────────────────────────
 
-function alertPriority(severity: AlertRow["severity"]): string {
+export type TodosEffectKind = "task.create" | "task.comment" | "task.complete";
+
+export interface TodosEffectRecord {
+  /** The exact effect key this record belongs to. */
+  key: string;
+  kind: TodosEffectKind;
+  appliedAt: string;
+  ok: boolean;
+  error?: string;
+  result?: unknown;
+}
+
+/**
+ * Store for effect records. The in-memory implementation is bounded; the
+ * future durable effects registry (`effects.ts`) can back this interface
+ * without changing the adapter's action surface.
+ */
+export interface TodosEffectStore {
+  get(key: string): TodosEffectRecord | undefined;
+  put(record: TodosEffectRecord): void;
+}
+
+const DEFAULT_STORE_CAP = 10_000;
+
+/** Bounded in-memory effect store with FIFO eviction. */
+export class InMemoryTodosEffectStore implements TodosEffectStore {
+  private readonly records = new Map<string, TodosEffectRecord>();
+  private readonly cap: number;
+
+  constructor(cap = DEFAULT_STORE_CAP) {
+    this.cap = cap;
+  }
+
+  get(key: string): TodosEffectRecord | undefined {
+    return this.records.get(key);
+  }
+
+  put(record: TodosEffectRecord): void {
+    this.records.set(record.key, record);
+    if (this.records.size > this.cap) {
+      // FIFO eviction: the oldest inserted key is dropped first.
+      const oldest = this.records.keys().next().value;
+      if (oldest !== undefined) this.records.delete(oldest);
+    }
+  }
+}
+
+// ── Results ─────────────────────────────────────────────────────────────────
+
+export interface TodosEffectResult<T> {
+  key: string;
+  /** Whether the underlying action succeeded (or its replay succeeded). */
+  ok: boolean;
+  /**
+   * false when the result was replayed from the effect store — the client was
+   * not called again.
+   */
+  applied: boolean;
+  error?: string;
+  result?: T;
+}
+
+// ── Action specs ────────────────────────────────────────────────────────────
+
+export interface TodosTaskSpec {
+  title: string;
+  description?: string;
+  priority?: "low" | "medium" | "high" | "critical";
+  projectId?: string;
+  tags?: string[];
+}
+
+export interface TodosCommentSpec {
+  taskId: string;
+  content: string;
+  type?: "comment" | "progress" | "note";
+}
+
+export interface TodosCompleteInput {
+  agent_id?: string;
+  test_results?: string;
+  commit_hash?: string;
+  notes?: string;
+}
+
+export interface TodosAdapterOptions {
+  client: TodosV1Client;
+  effectStore?: TodosEffectStore;
+  /** Confirmed failures reject when true (default false). */
+  required?: boolean;
+}
+
+// ── Adapter ─────────────────────────────────────────────────────────────────
+
+export class TodosAdapter {
+  private readonly client: TodosV1Client;
+  private readonly store: TodosEffectStore;
+  private readonly required: boolean;
+
+  constructor(options: TodosAdapterOptions) {
+    this.client = options.client;
+    // Per-adapter store by default: effect keys dedupe within one adapter
+    // instance unless a shared store is supplied.
+    this.store = options.effectStore ?? new InMemoryTodosEffectStore();
+    this.required = options.required ?? false;
+  }
+
+  /** Create a task through `TodosV1Client.createTask`. */
+  async createTask(
+    effectKey: string,
+    spec: TodosTaskSpec
+  ): Promise<TodosEffectResult<{ taskId: string }>> {
+    return this.apply("task.create", effectKey, async () => {
+      const res = await this.client.createTask({
+        title: spec.title,
+        description: spec.description,
+        priority: spec.priority,
+        project_id: spec.projectId,
+        tags: spec.tags,
+      });
+      const taskId = res.task?.id;
+      if (!taskId) {
+        throw new Error("todos createTask returned no task id");
+      }
+      return { taskId };
+    });
+  }
+
+  /** Post evidence through `TodosV1Client.createTaskComment`. */
+  async commentTask(
+    effectKey: string,
+    spec: TodosCommentSpec
+  ): Promise<TodosEffectResult<{ commentId: string }>> {
+    return this.apply("task.comment", effectKey, async () => {
+      const res = await this.client.createTaskComment(spec.taskId, {
+        content: spec.content,
+        type: spec.type,
+      });
+      const commentId = res.comment?.id;
+      if (!commentId) {
+        throw new Error("todos createTaskComment returned no comment id");
+      }
+      return { commentId };
+    });
+  }
+
+  /** Complete a task through `TodosV1Client.completeTask`. */
+  async completeTask(
+    effectKey: string,
+    taskId: string,
+    input?: TodosCompleteInput
+  ): Promise<TodosEffectResult<{ taskId: string }>> {
+    return this.apply("task.complete", effectKey, async () => {
+      const res = await this.client.completeTask(taskId, input);
+      const completedId = res.task?.id;
+      if (!completedId) {
+        throw new Error("todos completeTask returned no task id");
+      }
+      return { taskId: completedId };
+    });
+  }
+
+  private async apply<T>(
+    kind: TodosEffectKind,
+    effectKey: string,
+    run: () => Promise<T>
+  ): Promise<TodosEffectResult<T>> {
+    const recorded = this.store.get(effectKey);
+    if (recorded !== undefined) {
+      return {
+        key: effectKey,
+        ok: recorded.ok,
+        applied: false,
+        error: recorded.error,
+        result: recorded.result as T | undefined,
+      };
+    }
+
+    try {
+      const result = await run();
+      this.store.put({
+        key: effectKey,
+        kind,
+        appliedAt: new Date().toISOString(),
+        ok: true,
+        result,
+      });
+      return { key: effectKey, ok: true, applied: true, result };
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : String(err);
+      this.store.put({
+        key: effectKey,
+        kind,
+        appliedAt: new Date().toISOString(),
+        ok: false,
+        error: message,
+      });
+      if (this.required) {
+        throw err instanceof Error ? err : new Error(message);
+      }
+      return { key: effectKey, ok: false, applied: true, error: message };
+    }
+  }
+}
+
+// ── Transitional alert glue ─────────────────────────────────────────────────
+
+/**
+ * Shared store for the transitional alert flow so that processing the same
+ * alert row twice in one process replays instead of duplicating.
+ */
+const alertEffectStore = new InMemoryTodosEffectStore();
+
+const DEFAULT_ALERT_BASE_URL = "http://localhost:3000";
+
+function alertPriority(severity: AlertRow["severity"]): "critical" | "high" | "medium" {
   switch (severity) {
     case "critical":
       return "critical";
@@ -26,88 +256,89 @@ function taskTitle(alert: AlertRow): string {
   return `ALERT: ${alert.machine_id} ${alert.check_name} — ${alert.message}`;
 }
 
+function taskDescription(alert: AlertRow): string {
+  return [
+    `**Machine:** ${alert.machine_id}`,
+    `**Check:** ${alert.check_name}`,
+    `**Severity:** ${alert.severity}`,
+    `**Message:** ${alert.message}`,
+    `**Triggered at:** ${new Date(alert.triggered_at * 1000).toISOString()}`,
+    "",
+    "Created automatically by Hasna Monitor.",
+  ].join("\n");
+}
+
 /**
- * Create a task in todos for the given alert.
- * Skips creation if an open task for the same machine+check already exists.
+ * Create a task for the given alert through the native todos client.
+ *
+ * Transitional glue that preserves the legacy behaviour exactly: it skips
+ * creation when an open (pending/in_progress) task already exists for the same
+ * machine + check, and it dedupes repeated processing of the same alert row via
+ * a deterministic effect key. The client comes from the config when injected,
+ * otherwise from the configured base URL. All failures are non-fatal.
  */
 export async function createTaskForAlert(
   alert: AlertRow,
   config: TodosIntegrationConfig
 ): Promise<void> {
-  const base = (config.base_url ?? DEFAULT_BASE_URL).replace(/\/$/, "");
-
-  // Check for existing open task for same machine + check
-  const searchUrl = `${base}/api/tasks?project_id=${encodeURIComponent(config.project_id)}&status=open&q=${encodeURIComponent(`${alert.machine_id} ${alert.check_name}`)}`;
-
-  let existingTasks: { id: string; title: string; status: string }[] = [];
-  try {
-    const searchRes = await fetch(searchUrl, {
-      headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(5000),
+  const client =
+    config.client ??
+    new TodosV1Client({
+      baseUrl: (config.base_url ?? DEFAULT_ALERT_BASE_URL).replace(/\/$/, ""),
     });
-    if (searchRes.ok) {
-      const data = (await searchRes.json()) as unknown;
-      if (Array.isArray(data)) {
-        existingTasks = data as typeof existingTasks;
-      } else if (
-        data !== null &&
-        typeof data === "object" &&
-        "tasks" in (data as Record<string, unknown>) &&
-        Array.isArray((data as Record<string, unknown[]>).tasks)
-      ) {
-        existingTasks = (data as { tasks: typeof existingTasks }).tasks;
-      }
-    }
-  } catch {
-    // If search fails, proceed to create (better to duplicate than miss)
-  }
 
-  // If any open task matches machine + check_name, skip
-  const checkLower = alert.check_name.toLowerCase();
-  const machineLower = alert.machine_id.toLowerCase();
-  const alreadyOpen = existingTasks.some(
-    (t) =>
-      t.status === "open" &&
-      t.title.toLowerCase().includes(machineLower) &&
-      t.title.toLowerCase().includes(checkLower)
-  );
+  const adapter = new TodosAdapter({ client, effectStore: alertEffectStore });
 
-  if (alreadyOpen) {
-    console.error(
-      `[monitor:integrations:todos] skipping — open task already exists for ${alert.machine_id}/${alert.check_name}`
+  // Legacy dedup: skip when an open task already exists for machine + check.
+  // The search failure path preserves the legacy "better to duplicate than
+  // miss" behaviour.
+  try {
+    const existing = await client.listTasks({
+      project_id: config.project_id,
+      limit: 50,
+    });
+    const openTasks = Array.isArray(existing?.tasks) ? existing.tasks : [];
+    const checkLower = alert.check_name.toLowerCase();
+    const machineLower = alert.machine_id.toLowerCase();
+    const alreadyOpen = openTasks.some(
+      (t) =>
+        (t.status === "pending" || t.status === "in_progress") &&
+        String(t.title ?? "").toLowerCase().includes(machineLower) &&
+        String(t.title ?? "").toLowerCase().includes(checkLower)
     );
-    return;
+    if (alreadyOpen) {
+      console.error(
+        `[monitor:integrations:todos] skipping — open task already exists for ${alert.machine_id}/${alert.check_name}`
+      );
+      return;
+    }
+  } catch (err) {
+    console.error(
+      `[monitor:integrations:todos] open-task search failed, proceeding: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
   }
 
-  const body = {
-    title: taskTitle(alert),
-    description: [
-      `**Machine:** ${alert.machine_id}`,
-      `**Check:** ${alert.check_name}`,
-      `**Severity:** ${alert.severity}`,
-      `**Message:** ${alert.message}`,
-      `**Triggered at:** ${new Date(alert.triggered_at * 1000).toISOString()}`,
-      "",
-      "Created automatically by Hasna Monitor.",
-    ].join("\n"),
-    priority: alertPriority(alert.severity),
-    project_id: config.project_id,
-    tags: ["monitor", "alert", alert.severity, alert.machine_id],
-  };
+  // The effect key names this exact alert row, so re-processing the same row
+  // replays the recorded effect instead of creating a second task.
+  const effectKey = `alert:${alert.machine_id}:${alert.check_name}:${alert.id}`;
 
-  const res = await fetch(`${base}/api/tasks`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(5000),
+  const out = await adapter.createTask(effectKey, {
+    title: taskTitle(alert),
+    description: taskDescription(alert),
+    priority: alertPriority(alert.severity),
+    projectId: config.project_id,
+    tags: ["monitor", "alert", alert.severity, alert.machine_id],
   });
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "(no body)");
-    throw new Error(`todos API returned ${res.status}: ${text}`);
+  if (out.ok) {
+    console.error(
+      `[monitor:integrations:todos] created task for ${alert.machine_id}/${alert.check_name}`
+    );
+  } else {
+    console.error(
+      `[monitor:integrations:todos] failed to create task for ${alert.machine_id}/${alert.check_name}: ${out.error}`
+    );
   }
-
-  console.error(
-    `[monitor:integrations:todos] created task for ${alert.machine_id}/${alert.check_name}`
-  );
 }

@@ -8,6 +8,7 @@
 import type { AlertRow } from "../db/schema.js";
 import type { DoctorReport } from "../doctor/index.js";
 import type { FleetHealthReport } from "../report.js";
+import type { TodosV1Client } from "@hasna/todos/sdk";
 
 // ── Config types ──────────────────────────────────────────────────────────────
 
@@ -17,6 +18,8 @@ export interface TodosIntegrationConfig {
   project_id: string;
   /** Base URL of the todos HTTP API. Default: http://localhost:3000 */
   base_url?: string;
+  /** Native client injection seam (tests); defaults to a client from base_url */
+  client?: TodosV1Client;
 }
 
 export interface ConversationsIntegrationConfig {
