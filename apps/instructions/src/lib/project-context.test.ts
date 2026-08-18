@@ -644,7 +644,12 @@ describe("legacy migration and compatibility", () => {
     const contract = JSON.parse(readFileSync(join(repoRoot, "hasna.contract.json"), "utf8")) as { bins: string[] };
     expect(pkg.name).toBe("@hasna/instructions");
     expect(pkg.bin.configs).toBe("dist/cli/index.js");
-    expect(contract.bins).toContain("configs");
+    // The configs aliases ship in package.json for fleet compatibility but are
+    // not contract-declarable (the contract bin allowlist names only
+    // instructions* surfaces), so the manifest must NOT carry them.
+    expect(contract.bins).not.toContain("configs");
+    expect(contract.bins).not.toContain("configs-mcp");
+    expect(contract.bins).toEqual(["instructions", "instructions-mcp", "instructions-serve"]);
   });
 
   test("dual-reads the pre-canonical BEGIN/END marker form without adding a second block", () => {
