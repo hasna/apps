@@ -43,16 +43,17 @@
     ".cursor/hooks/goal-continue.sh"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external pg --external @hasna/contracts --external @hasna/contracts/auth --external @hasna/contracts/schemas && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external pg --external @hasna/contracts --external @hasna/contracts/auth --external @hasna/contracts/schemas && bun build src/serve/index.ts --outdir dist/serve --target bun --external pg --external @hasna/contracts --external @hasna/contracts/auth --external @hasna/contracts/sdk && bun build src/serve/app.ts --outdir dist/serve --target bun --external pg --external @hasna/contracts --external @hasna/contracts/auth --external @hasna/contracts/sdk && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts src/project-store.ts --outdir dist --target bun --external pg --external @hasna/contracts --external @hasna/contracts/auth --external @hasna/contracts/schemas && tsc --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external pg --external @hasna/contracts --external @hasna/contracts/auth --external @hasna/contracts/client --external @hasna/contracts/client/storage --external @hasna/contracts/schemas && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external pg --external @hasna/contracts --external @hasna/contracts/auth --external @hasna/contracts/client --external @hasna/contracts/client/storage --external @hasna/contracts/schemas && bun build src/serve/index.ts --outdir dist/serve --target bun --external pg --external @hasna/contracts --external @hasna/contracts/auth --external @hasna/contracts/client --external @hasna/contracts/client/storage --external @hasna/contracts/sdk && bun build src/serve/app.ts --outdir dist/serve --target bun --external pg --external @hasna/contracts --external @hasna/contracts/auth --external @hasna/contracts/client --external @hasna/contracts/client/storage --external @hasna/contracts/sdk && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts src/project-store.ts --outdir dist --target bun --external pg --external @hasna/contracts --external @hasna/contracts/auth --external @hasna/contracts/client --external @hasna/contracts/client/storage --external @hasna/contracts/schemas && tsc --emitDeclarationOnly --outDir dist",
     "sdk:generate": "bun run scripts/generate-sdk.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "contracts:conformance": "./node_modules/.bin/contracts conformance fixtures",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
-    "prepack": "bun run build",
+    "prepack": "bun run build && bun run scan:artifact",
     "prepublishOnly": "bun run typecheck && bun test && bun run contracts:conformance && contracts no-cloud-scan .",
-    "postinstall": "mkdir -p $HOME/.hasna/projects 2>/dev/null || true"
+    "postinstall": "mkdir -p $HOME/.hasna/projects 2>/dev/null || true",
+    "scan:artifact": "bun scripts/artifact-scan.ts"
   },
   "keywords": [
     "projects",

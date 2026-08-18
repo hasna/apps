@@ -85,6 +85,11 @@
       "projects:read",
       "projects:write"
     ],
-    "openapiPath": "/openapi.json"
+    "openapiPath": "/openapi.json",
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    }
   }
 }
