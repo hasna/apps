@@ -150,7 +150,7 @@ describe("normalizeEmailsMode", () => {
 describe("labelForEmailsMode / getEmailsMode", () => {
   it("labels both canonical modes", () => {
     expect(labelForEmailsMode("local")).toBe("Local");
-    expect(labelForEmailsMode("self_hosted")).toBe("Self-hosted");
+    expect(labelForEmailsMode("self_hosted")).toBe("Server API");
   });
 
   it("defaults to local without loading self-hosted configuration", () => {
@@ -206,7 +206,7 @@ describe("resolveEmailsMode — dual mode", () => {
     setSelfHostedCredentials();
     expect(resolveEmailsMode()).toEqual({
       mode: "self_hosted",
-      label: "Self-hosted",
+      label: "Server API",
       source: { kind: "env", name: EMAILS_MODE_ENV, value: "self_hosted" },
       warning: null,
     });
@@ -220,7 +220,7 @@ describe("resolveEmailsMode — dual mode", () => {
   it("accepts the Hasna-prefixed mode alias", () => {
     process.env[HASNA_EMAILS_MODE_ENV] = "self_hosted";
     setSelfHostedCredentials();
-    expect(resolveEmailsMode()).toMatchObject({ mode: "self_hosted", label: "Self-hosted" });
+    expect(resolveEmailsMode()).toMatchObject({ mode: "self_hosted", label: "Server API" });
   });
 
   it("rejects MAILERY_MODE and names the key", () => {
@@ -240,7 +240,7 @@ describe("resolveEmailsMode — dual mode", () => {
     expect(process.env[EMAILS_MODE_ENV]).toBeUndefined();
     expect(resolveEmailsMode()).toMatchObject({
       mode: "self_hosted",
-      label: "Self-hosted",
+      label: "Server API",
       source: { kind: "config", name: "emails_mode", value: "self_hosted" },
     });
   });
@@ -327,7 +327,7 @@ describe("resolveEmailsMode — EMAILS_CLIENT_ENV_SECRET", () => {
 
     expect(resolveEmailsMode()).toMatchObject({
       mode: "self_hosted",
-      label: "Self-hosted",
+      label: "Server API",
       source: { kind: "env", name: EMAILS_CLIENT_ENV_SECRET_ENV },
       // The pointer was honoured, so nothing is being shadowed.
       warning: null,

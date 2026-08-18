@@ -133,7 +133,7 @@ describe("formatInboxSyncStatus — the pull hint names a real command", () => {
   it("omits the pull hint in self_hosted, where the server owns ingestion", () => {
     const selfHosted = emptyLocalStatus({
       current: "self_hosted",
-      label: "Self-hosted",
+      label: "Server API",
       source: { kind: "env", name: "EMAILS_CLIENT_ENV_SECRET", value: POINTER },
       warning: null,
     });
