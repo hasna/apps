@@ -555,6 +555,34 @@ describe("reconcileRegistry", () => {
     }
   });
 
+  test("--conflict=remote on a version divergence converges on the next run", async () => {
+    const seed = makeCorpus({ "sync-v": skillFiles("sync-v", "1.0.0", "v1") });
+    const local = makeCorpus({ "sync-v": skillFiles("sync-v", "1.0.0", "v1") });
+    try {
+      await withServer(async (ctx) => {
+        const client = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        await pushSkill("sync-v", { rootDir: seed, client, version: "9.9.9" });
+
+        // The declared remote policy pulls: the bundle is identical, so the pull's sidecar
+        // marker records the remote version (9.9.9). The next sync must read that marker
+        // version as the synced local version and report in-sync — the conflict must not
+        // re-report forever.
+        const resolved = await reconcileRegistry({ rootDir: local, client, conflict: "remote" });
+        expect(resolved.summary.conflicts).toBe(1);
+        const entry = resolved.skills.find((item) => item.slug === "sync-v");
+        expect(entry?.action).toBe("pull");
+        expect(readMarker(join(local, "sync-v"))?.version).toBe("9.9.9");
+
+        const after = await reconcileRegistry({ rootDir: local, client });
+        expect(after.summary.conflicts).toBe(0);
+        expect(after.skills.find((item) => item.slug === "sync-v")?.state).toBe("in-sync");
+      });
+    } finally {
+      rmSync(seed, { recursive: true, force: true });
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
+
   test("a failed registry listing fails closed instead of reading as an empty registry", async () => {
     const local = makeCorpus({ "sync-a": skillFiles("sync-a", "1.0.0", "local-a") });
     try {
@@ -599,13 +627,13 @@ describe("reconcileRegistry", () => {
     try {
       await withServer(async (ctx) => {
         // A concurrent publisher lands sync-a on the registry AFTER the listing the plan
-        // was built from: getSkill sees the new digest while listSkills did not.
+        // was built from: the re-check sees the new digest while listSkills did not.
         class RacingClient extends RemoteSkillsClient {
-          override async getSkill(slug: string): Promise<Record<string, unknown> | null> {
+          override async getSkillStatus(slug: string): Promise<{ status: number; body: unknown }> {
             if (slug === "sync-a") {
-              return { slug, name: slug, version: "1.0.0", bundleSha256: "a".repeat(64), source: "remote" };
+              return { status: 200, body: { slug, name: slug, version: "1.0.0", bundleSha256: "a".repeat(64), source: "remote" } };
             }
-            return super.getSkill(slug);
+            return super.getSkillStatus(slug);
           }
         }
         const client = new RacingClient(SYNC_AUTH, ctx.baseUrl);
@@ -635,11 +663,11 @@ describe("reconcileRegistry", () => {
         await seedRemote(base, seed, "sync-b");
         // The remote moves again after the listing the plan was built from.
         class RacingClient extends RemoteSkillsClient {
-          override async getSkill(slug: string): Promise<Record<string, unknown> | null> {
+          override async getSkillStatus(slug: string): Promise<{ status: number; body: unknown }> {
             if (slug === "sync-b") {
-              return { slug, name: slug, version: "2.0.0", bundleSha256: "b".repeat(64), source: "remote" };
+              return { status: 200, body: { slug, name: slug, version: "2.0.0", bundleSha256: "b".repeat(64), source: "remote" } };
             }
-            return super.getSkill(slug);
+            return super.getSkillStatus(slug);
           }
         }
         const client = new RacingClient(SYNC_AUTH, ctx.baseUrl);
@@ -664,36 +692,109 @@ describe("reconcileRegistry", () => {
       await withServer(async (ctx) => {
         const client = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
         await seedRemote(client, seed, "sync-b");
-        // The local side gains a divergent copy of the same slug between plan and pull
-        // (the racing getSkill here is a remote that stays stable; the local edit below
-        // changes the pack digest the pull re-check compares against).
+        // The local side gains a divergent copy of the same slug between plan and pull:
+        // the first re-check call (the remote re-check) triggers the local edit, and the
+        // local re-pack then sees a digest different from the planned absence.
         class LocalRacingClient extends RemoteSkillsClient {
           private edited = false;
-          override async getSkill(slug: string): Promise<Record<string, unknown> | null> {
+          override async getSkillStatus(slug: string): Promise<{ status: number; body: unknown }> {
             if (slug === "sync-b" && !this.edited) {
-              // Simulate the local edit landing after the listing: the FIRST pull
-              // re-check sees the local directory already edited.
               const dir = join(local, "sync-b");
-              if (existsSync(dir)) {
-                const mdPath = join(dir, "SKILL.md");
-                writeFileSync(mdPath, readFileSync(mdPath, "utf-8") + "local edit\n");
+              if (!existsSync(dir)) {
+                mkdirSync(dir, { recursive: true });
+                for (const [path, content] of Object.entries(skillFiles("sync-b", "1.0.0", "concurrent-edit"))) {
+                  const absolute = join(dir, path);
+                  mkdirSync(dirname(absolute), { recursive: true });
+                  writeFileSync(absolute, content);
+                }
+                refillContentHash(dir);
                 this.edited = true;
               }
             }
-            return super.getSkill(slug);
+            return super.getSkillStatus(slug);
           }
         }
         const racing = new LocalRacingClient(SYNC_AUTH, ctx.baseUrl);
         const result = await reconcileRegistry({ rootDir: local, client: racing });
 
         const entry = result.skills.find((item) => item.slug === "sync-b");
-        // The pull was planned; the local edit happened before the pull's re-check, so
-        // the pull was skipped and the local state was not replaced.
+        // The pull was planned; the local directory appeared before the pull's re-check,
+        // so the pull was skipped and the concurrent local state was not replaced.
         expect(entry?.action).toBe("pull");
-        expect(entry?.result).toBeDefined();
-        if (entry?.result && !entry.result.ok) {
-          expect(entry.result.detail).toMatch(/local changed during sync|remote changed during sync/);
+        expect(entry?.result?.ok).toBe(false);
+        expect(entry?.result?.detail).toMatch(/local changed during sync/);
+        // The concurrent content survives untouched.
+        expect(readFileSync(join(local, "sync-b", "SKILL.md"), "utf-8")).toContain("concurrent-edit");
+      });
+    } finally {
+      rmSync(seed, { recursive: true, force: true });
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
+
+  test("a partial unpackable local directory appearing mid-run skips the pull", async () => {
+    const seed = makeCorpus({ "sync-b": skillFiles("sync-b", "1.0.0", "remote-b") });
+    const local = makeCorpus({});
+    try {
+      await withServer(async (ctx) => {
+        const client = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        await seedRemote(client, seed, "sync-b");
+        // The local side gains a directory with NO packable content (only a dotfile) —
+        // packSkillBundle throws for it, and the re-check must treat a present-but-
+        // unpackable tree as "changed", never as "still missing".
+        class PartialClient extends RemoteSkillsClient {
+          private planted = false;
+          override async getSkillStatus(slug: string): Promise<{ status: number; body: unknown }> {
+            if (slug === "sync-b" && !this.planted) {
+              const dir = join(local, "sync-b");
+              if (!existsSync(dir)) {
+                mkdirSync(dir, { recursive: true });
+                writeFileSync(join(dir, ".partial"), "not packable\n");
+                this.planted = true;
+              }
+            }
+            return super.getSkillStatus(slug);
+          }
         }
+        const racing = new PartialClient(SYNC_AUTH, ctx.baseUrl);
+        const result = await reconcileRegistry({ rootDir: local, client: racing });
+
+        const entry = result.skills.find((item) => item.slug === "sync-b");
+        expect(entry?.action).toBe("pull");
+        expect(entry?.result?.ok).toBe(false);
+        expect(entry?.result?.detail).toMatch(/local changed during sync/);
+        // The partial tree was not replaced by a pull.
+        expect(readFileSync(join(local, "sync-b", ".partial"), "utf-8")).toBe("not packable\n");
+      });
+    } finally {
+      rmSync(seed, { recursive: true, force: true });
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
+
+  test("a failing re-check is an error, never a silent skip or a successful run", async () => {
+    const seed = makeCorpus({});
+    const local = makeCorpus({ "sync-a": skillFiles("sync-a", "1.0.0", "local-a") });
+    try {
+      await withServer(async (ctx) => {
+        // The registry answers the listing, then the re-check GET fails (network-level).
+        // Fail-closed: the push is aborted as an ERROR, the cursor is not written, and
+        // the run reports errors so the CLI exits non-zero.
+        class FailingRecheckClient extends RemoteSkillsClient {
+          override async getSkillStatus(slug: string): Promise<{ status: number; body: unknown }> {
+            if (slug === "sync-a") throw new Error("network unreachable");
+            return super.getSkillStatus(slug);
+          }
+        }
+        const client = new FailingRecheckClient(SYNC_AUTH, ctx.baseUrl);
+        const result = await reconcileRegistry({ rootDir: local, client });
+
+        expect(result.summary.errors).toBeGreaterThanOrEqual(1);
+        expect(result.cursor).toBeUndefined();
+        expect(existsSync(join(local, SYNC_CURSOR_FILE))).toBe(false);
+        const entry = result.skills.find((item) => item.slug === "sync-a");
+        expect(entry?.result?.ok).toBe(false);
+        expect(entry?.result?.detail).toMatch(/network unreachable/);
       });
     } finally {
       rmSync(seed, { recursive: true, force: true });

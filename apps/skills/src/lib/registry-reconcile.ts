@@ -65,10 +65,11 @@
  * goes through the one RemoteSkillsClient instance.
  */
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { pushSkill } from "../cli/commands/publish.js";
-import { getDataDir, INSTALLED_SKILLS_DIRNAME, SKILLS_CACHE_DIRNAME, isOwnerLayoutMigrated } from "./config.js";
+import { DATA_DIR_ENV, getDataDir, INSTALLED_SKILLS_DIRNAME, SKILLS_CACHE_DIRNAME, isOwnerLayoutMigrated } from "./config.js";
 import { resolveCorpusRoot } from "./home-migration.js";
 import { getPortableSkillPath, listPortableSkillMetas, type PortableSkillOptions } from "./portable-skills.js";
 import { pullSkills, writePullMarker, PULL_MARKER_FILE } from "./pull.js";
@@ -202,12 +203,20 @@ function migrationNeeded(options: PortableSkillOptions): boolean {
   return !(isOwnerLayoutMigrated(appDir) && isDirectory(join(appDir, SKILLS_CACHE_DIRNAME)));
 }
 
-function readBaseline(skillDir: string): string | undefined {
+interface Baseline {
+  contentHash?: string;
+  version?: string;
+}
+
+function readBaseline(skillDir: string): Baseline | undefined {
   const markerPath = join(skillDir, PULL_MARKER_FILE);
   if (!existsSync(markerPath)) return undefined;
   try {
-    const marker = JSON.parse(readFileSync(markerPath, "utf-8")) as { contentHash?: string };
-    return typeof marker.contentHash === "string" && marker.contentHash ? marker.contentHash : undefined;
+    const marker = JSON.parse(readFileSync(markerPath, "utf-8")) as { contentHash?: string; version?: string };
+    return {
+      ...(typeof marker.contentHash === "string" && marker.contentHash ? { contentHash: marker.contentHash } : {}),
+      ...(typeof marker.version === "string" && marker.version ? { version: marker.version } : {}),
+    };
   } catch {
     return undefined;
   }
@@ -225,6 +234,20 @@ function readCursor(root: string): Pick<ReconcileCursor, "runCount"> {
 }
 
 /**
+ * Write-free data-dir computation for the dry-run path.
+ *
+ * getDataDir() itself writes: it mkdirs the app folder, merges legacy ~/.skills content
+ * and copies the legacy config file. A dry run must not write, so this mirrors the path
+ * logic only. It deliberately reads $HASNA_SKILLS_DIR and $HOME the same way getDataDir
+ * does, so a dry-run plan is computed against the same directory a real run would use.
+ */
+function dataDirReadOnly(): string {
+  const override = process.env[DATA_DIR_ENV];
+  if (override) return override;
+  return join(process.env["HOME"] || process.env["USERPROFILE"] || homedir(), ".hasna", "skills");
+}
+
+/**
  * Write-free corpus resolution for the dry-run path.
  *
  * getPortableSkillsRoot() migrates the legacy layout by copying and renaming skill
@@ -234,7 +257,7 @@ function readCursor(root: string): Pick<ReconcileCursor, "runCount"> {
  */
 function resolveCorpusRootReadOnly(options: PortableSkillOptions): { root: string; migrationPending: boolean } {
   if (options.rootDir) return { root: options.rootDir, migrationPending: false };
-  const appDir = options.homeDir ? join(options.homeDir, ".hasna", "skills") : getDataDir();
+  const appDir = options.homeDir ? join(options.homeDir, ".hasna", "skills") : dataDirReadOnly();
   const cache = join(appDir, SKILLS_CACHE_DIRNAME);
   if (isOwnerLayoutMigrated(appDir) && isDirectory(cache)) {
     return { root: cache, migrationPending: false };
@@ -255,34 +278,39 @@ function remoteRowToSkill(record: Record<string, unknown>): RemoteSkill | undefi
 function classifySkill(
   local: LocalSkill | undefined,
   remote: RemoteSkill | undefined,
-  baseline: string | undefined,
+  baseline: Baseline | undefined,
 ): { state: ReconcileSkillState; reason?: string } {
   if (!remote) return { state: "local-only" };
   if (!local) return { state: "remote-only" };
+  const baselineHash = baseline?.contentHash;
+  const baselineVersion = baseline?.version;
   if (remote.sha256) {
     if (remote.sha256 === local.sha256) {
       // Identical content address. The version axis is still compared: the registry row's
       // stored version can be overridden independently of the bundle (`push --version`),
-      // so a version-only divergence is real and must not read as synchronized.
-      const localVersion = local.version ?? undefined;
+      // so a version-only divergence is real and must not read as synchronized. The
+      // baseline marker's version is the version last synced (a pull writes the remote
+      // version into the marker), so it is the effective local version once a sync
+      // happened — that is what makes a conflict resolved by pull converge.
+      const effectiveLocalVersion = baselineVersion ?? local.version ?? undefined;
       const remoteVersion = remote.version ?? undefined;
-      if (localVersion !== undefined && remoteVersion !== undefined && localVersion !== remoteVersion) {
+      if (effectiveLocalVersion !== undefined && remoteVersion !== undefined && effectiveLocalVersion !== remoteVersion) {
         return { state: "conflict", reason: "version divergence with identical digest" };
       }
       return { state: "in-sync" };
     }
     // Digests differ; direction is proven by the baseline marker when one exists.
-    if (!baseline) {
+    if (!baselineHash) {
       return { state: "conflict", reason: "no baseline marker: cannot prove which side changed" };
     }
-    if (baseline === local.sha256) return { state: "changed-remotely" };
-    if (baseline === remote.sha256) return { state: "changed-locally" };
+    if (baselineHash === local.sha256) return { state: "changed-remotely" };
+    if (baselineHash === remote.sha256) return { state: "changed-locally" };
     return { state: "conflict", reason: "both sides changed since the baseline marker" };
   }
   // A registry row without a bundle digest (the bundled corpus) cannot be diffed by
   // digest. Use the remaining evidence: a baseline that no longer matches the local
   // pack, or a version that diverged from the bundled row, means the local side moved.
-  if (baseline && baseline !== local.sha256) {
+  if (baselineHash && baselineHash !== local.sha256) {
     return { state: "changed-locally", reason: "local digest moved since the baseline marker" };
   }
   if (local.version !== undefined && remote.version !== undefined && local.version !== remote.version) {
@@ -317,16 +345,23 @@ function resolveAction(
   }
 }
 
-/** Current published digest for a slug, or undefined when the registry serves no bundle for it. */
+/**
+ * Current published digest for a slug, read with the HTTP status surfaced so a read
+ * failure can never masquerade as "the skill is absent":
+ *  - 404 means the registry serves no published row for the slug (undefined);
+ *  - any other non-success status, or a network failure, throws — the re-check is
+ *    fail-closed and the caller records an error instead of proceeding or skipping
+ *    silently.
+ */
 async function currentRemoteDigest(client: RemoteSkillsClient, slug: string): Promise<string | undefined> {
-  try {
-    const record = await client.getSkill(slug);
-    if (!record || typeof record !== "object") return undefined;
-    const digest = (record as Record<string, unknown>).bundleSha256;
-    return typeof digest === "string" && digest ? digest : undefined;
-  } catch {
-    return undefined;
+  const { status, body } = await client.getSkillStatus(slug);
+  if (status === 404) return undefined;
+  if (status !== 200) {
+    throw new ReconcileRegistryError(`Registry re-check for '${slug}' failed: HTTP ${status}.`);
   }
+  if (!body || typeof body !== "object") return undefined;
+  const digest = (body as Record<string, unknown>).bundleSha256;
+  return typeof digest === "string" && digest ? digest : undefined;
 }
 
 /**
@@ -451,9 +486,17 @@ export async function reconcileRegistry(options: ReconcileRegistryOptions = {}):
     for (const slug of pushSlugs) {
       const entry = skills.find((item) => item.slug === slug)!;
       // Re-check the remote side before mutating: a concurrent publisher that moved the
-      // digest after the plan must not be overwritten under a skip policy.
+      // digest after the plan must not be overwritten under a skip policy. A re-check
+      // that FAILS (network, non-success status) is an error, never a silent skip.
       const plannedRemote = remotes.get(slug)?.sha256;
-      const currentRemote = await currentRemoteDigest(client, slug);
+      let currentRemote: string | undefined;
+      try {
+        currentRemote = await currentRemoteDigest(client, slug);
+      } catch (error) {
+        entry.result = { ok: false, detail: (error as Error).message };
+        summary.errors += 1;
+        continue;
+      }
       if (plannedRemote === undefined ? currentRemote !== undefined : currentRemote !== plannedRemote) {
         entry.result = { ok: false, detail: "remote changed during sync; push skipped" };
         entry.reason = (entry.reason ? `${entry.reason}; ` : "") + "remote changed during sync";
@@ -487,7 +530,14 @@ export async function reconcileRegistry(options: ReconcileRegistryOptions = {}):
     for (const slug of pullSlugs) {
       const entry = skills.find((item) => item.slug === slug)!;
       const plannedRemote = remotes.get(slug)?.sha256;
-      const currentRemote = await currentRemoteDigest(client, slug);
+      let currentRemote: string | undefined;
+      try {
+        currentRemote = await currentRemoteDigest(client, slug);
+      } catch (error) {
+        entry.result = { ok: false, detail: (error as Error).message };
+        summary.errors += 1;
+        continue;
+      }
       if (plannedRemote === undefined ? currentRemote !== undefined : currentRemote !== plannedRemote) {
         entry.result = { ok: false, detail: "remote changed during sync; pull skipped" };
         entry.reason = (entry.reason ? `${entry.reason}; ` : "") + "remote changed during sync";
@@ -495,10 +545,14 @@ export async function reconcileRegistry(options: ReconcileRegistryOptions = {}):
         continue;
       }
       const plannedLocal = locals.get(slug)?.sha256;
+      const localDir = getPortableSkillPath(slug, { rootDir: root });
+      const dirExists = existsSync(localDir);
       let localNow: string | undefined;
       try {
-        localNow = packSkillBundle(getPortableSkillPath(slug, { rootDir: root })).sha256;
+        localNow = packSkillBundle(localDir).sha256;
       } catch {
+        // An unpackable directory is PRESENT, not absent: a partial or temporary local
+        // tree mid-run counts as changed, never as "still missing".
         localNow = undefined;
       }
       // The local side must match the plan exactly: unchanged when it existed, absent
@@ -506,7 +560,7 @@ export async function reconcileRegistry(options: ReconcileRegistryOptions = {}):
       // concurrent editor, and pulling over it would replace state the plan did not see).
       const localMoved = plannedLocal !== undefined
         ? localNow !== plannedLocal
-        : localNow !== undefined;
+        : localNow !== undefined || dirExists;
       if (localMoved) {
         entry.result = { ok: false, detail: "local changed during sync; pull skipped" };
         entry.reason = (entry.reason ? `${entry.reason}; ` : "") + "local changed during sync";

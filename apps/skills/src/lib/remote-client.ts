@@ -141,6 +141,23 @@ export class RemoteSkillsClient {
     return res.json();
   }
 
+  /**
+   * Raw GET for one skill, with the HTTP status surfaced. Used by the reconcile
+   * re-check (registry-reconcile.ts) so it can distinguish "no such skill" (404) from
+   * "the registry failed to answer" (any other non-success status) instead of treating
+   * both as absent.
+   */
+  async getSkillStatus(slug: string): Promise<{ status: number; body: unknown }> {
+    const res = await this.request(`/api/v1/skills/${encodeURIComponent(slug)}`, { method: "GET" });
+    let body: unknown = null;
+    try {
+      body = await res.json();
+    } catch {
+      // A non-JSON body still leaves the status usable.
+    }
+    return { status: res.status, body };
+  }
+
   async submitRun(slug: string, input?: Record<string, unknown>, args?: string[]): Promise<RemoteSkillRunContract> {
     const res = await this.request(`/api/v1/runs/${slug}`, {
       method: "POST",
