@@ -942,9 +942,9 @@ function browserHtml(input: {
   return [
     "<!doctype html>",
     "<html>",
-    `<head><meta charset="utf-8"><title>Open Logs Browser Runtime Lab</title><link rel="stylesheet" href="/asset.css?token=${encodeURIComponent(input.secret)}"></head>`,
+    `<head><meta charset="utf-8"><title>Hasna Logs Browser Runtime Lab</title><link rel="stylesheet" href="/asset.css?token=${encodeURIComponent(input.secret)}"></head>`,
     "<body>",
-    "<main>Open Logs Browser Runtime Lab</main>",
+    "<main>Hasna Logs Browser Runtime Lab</main>",
     `<script>window.__OPEN_LOGS_BROWSER_RUNTIME_LAB__ = ${JSON.stringify(config)};</script>`,
     '<script type="module" src="/app.js"></script>',
     "</body>",

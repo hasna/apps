@@ -563,9 +563,9 @@ function browserHtml(
   return [
     "<!doctype html>",
     "<html>",
-    '<head><meta charset="utf-8"><title>Open Logs Browser Spool Lab</title></head>',
+    '<head><meta charset="utf-8"><title>Hasna Logs Browser Spool Lab</title></head>',
     "<body>",
-    "<main>Open Logs Browser Spool Lab</main>",
+    "<main>Hasna Logs Browser Spool Lab</main>",
     `<script>window.__OPEN_LOGS_BROWSER_SPOOL_LAB__ = ${JSON.stringify(config)};</script>`,
     '<script type="module" src="/app.js"></script>',
     "</body>",

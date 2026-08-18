@@ -1,4 +1,4 @@
-# Open Logs Planning Docs
+# Hasna Logs Planning Docs
 
 These docs describe the plan to turn `@hasna/logs` into a local-first universal telemetry data substrate for apps, repositories, machines, builds, processes, agents, and frameworks.
 

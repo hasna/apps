@@ -2,7 +2,7 @@
 
 Last updated: 2026-06-17
 
-Open-logs cannot be called a robust universal telemetry data substrate until adversarial reviewers agree that the evidence supports that claim.
+Hasna Logs cannot be called a robust universal telemetry data substrate until adversarial reviewers agree that the evidence supports that claim.
 
 ## Gate Rule
 

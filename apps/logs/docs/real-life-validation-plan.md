@@ -226,7 +226,7 @@ Expected evidence:
 
 ## Scenario 10: One-week Dogfood
 
-Open-logs should capture its own work for at least one week:
+Hasna Logs should capture its own work for at least one week:
 
 - Tests.
 - Builds.
