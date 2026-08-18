@@ -39,6 +39,26 @@ and owned by the release lane, not by a record editor. The former
 release lane did not perform, with a measured record half-life of ~2.5h against
 a longer review cycle.
 
+## Changeset-consuming release PRs are exempt from the version-without-changeset check
+
+`a package.json version change is accompanied by a changeset` diffs
+`apps/*/package.json` against `VERSIONING_BASE_REF` (default `origin/main`) and
+requires every changed member to appear in a PENDING changeset. A
+changeset-consuming release PR (the `changeset version` output: version bumps +
+CHANGELOG.md headings + the applied `.changeset/*.md` files DELETED) fails that
+by construction — the release lane bumps package.json BECAUSE a changeset was
+consumed, so no new changeset accompanies the bump. Measured on hasna/apps#277
+(@hasna/prompts 0.3.33, 2026-08-17) and hasna/apps#154 (hooks 0.6.4).
+
+The exemption is the changeset-versioning DIFF SHAPE, not a blanket
+release-branch carve-out: `consumedChangesetPackages()` reads the
+`.changeset/*.md` files deleted in `base...HEAD` from the base ref and treats
+the packages they named as accompanied — the changeset that backed the bump is
+in the diff, consumed rather than pending. A plain unbacked bump deletes
+nothing under `.changeset/` and stays red. Both arms are pinned as synthetic
+git-repo tests in the suite (a release-shaped diff is recognized; a plain bump
+is not), so the detector cannot silently rot into a pass-everything.
+
 ## The parity lane is a REPORTING lane (f05fe292 design, option a)
 
 The npm-parity keyspace has two independent writers (publishes from other repos
