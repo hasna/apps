@@ -213,14 +213,14 @@ describe("root-owned macOS updater packaging contract", () => {
     expect(preinstall).toContain("/var/db/com.hasna.recordings.updater");
     expect(preinstall).not.toContain("bootout system/com.hasna.recordings.updater");
     expect(cli).toContain(
-      'const updateClientPath = "/Applications/Recordings.app/Contents/Helpers/recordings-update-client"',
+      'const updateClientPath = "/Applications/HasnaRecordings.app/Contents/Helpers/recordings-update-client"',
     );
     expect(cli).toContain('"--envelope"');
     expect(cli).not.toContain("RECORDINGS_TEST_UPDATE_CLIENT");
     expect(managedBootstrap).toContain('"$PAYLOAD_CLIENT" bootstrap');
     expect(managedBootstrap).not.toContain('"$CLIENT" bootstrap');
     expect(managedBootstrap).toContain(
-      'PAYLOAD_CLIENT="$PAYLOAD/Applications/Recordings.app/Contents/Helpers/recordings-update-client"',
+      'PAYLOAD_CLIENT="$PAYLOAD/Applications/HasnaRecordings.app/Contents/Helpers/recordings-update-client"',
     );
     expect(managedBootstrap).toContain('--artifact "$SNAPSHOT_PKG"');
     expect(bootstrapPreflight).toContain("payload.packageSHA256 == packageDigest");
@@ -592,7 +592,7 @@ describe("root-owned macOS updater packaging contract", () => {
     expect(appModeValidator).toBeDefined();
 
     const root = mkdtempSync(join(tmpdir(), "recordings-pkg-modes-"));
-    const app = join(root, "Recordings.app");
+    const app = join(root, "HasnaRecordings.app");
     const main = join(app, "Contents", "MacOS", "Recordings");
     const companion = join(app, "Contents", "Helpers", "recordings");
     const client = join(app, "Contents", "Helpers", "recordings-update-client");
@@ -689,7 +689,7 @@ describe("root-owned macOS updater packaging contract", () => {
     expectOrder(
       pkg,
       'require_safe_signed_app_bundle_modes "$APP"',
-      '/usr/bin/ditto "$APP" "$ROOT/Applications/Recordings.app"',
+      '/usr/bin/ditto "$APP" "$ROOT/Applications/HasnaRecordings.app"',
     );
     expectOrder(pkg, 'require_safe_signed_app_bundle_modes "$STAGED_APP"', "/usr/bin/pkgbuild");
   });

@@ -7,7 +7,7 @@ import RecordingsUpdateProtocol
 /// operation; first installs use exclusive rename semantics and can never replace a
 /// leaf created concurrently in `/Applications`.
 final class ApplicationNamespace {
-    private static let liveLeaf = "Recordings.app"
+    private static let liveLeaf = "HasnaRecordings.app"
     private static let previousLeaf = "previous.app"
     private static let failedCandidateLeaf = "failed-candidate.app"
 
@@ -22,7 +22,7 @@ final class ApplicationNamespace {
             .deletingLastPathComponent
         guard journal.applicationPath == RecordingsUpdateConstants.applicationPath,
               journal.candidateApplicationPath == expectedTransactionDirectory
-                + "/candidate/Recordings.app",
+                + "/candidate/HasnaRecordings.app",
               journal.previousApplicationPath == nil ||
                 journal.previousApplicationPath == expectedTransactionDirectory + "/previous.app"
         else {

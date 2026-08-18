@@ -32,7 +32,7 @@ provides recording controls and access to the main window while it is in the bac
 
 The app embeds a same-version `recordings` CLI as its data layer, so the CLI, MCP, and app
 share one store without depending on a possibly stale global CLI installation. Production
-release installs use a one-time managed bootstrap at `/Applications/Recordings.app`; later
+release installs use a one-time managed bootstrap at `/Applications/HasnaRecordings.app`; later
 release updates replace only that app through the installed root-owned broker.
 
 ```bash
@@ -62,7 +62,7 @@ recordings app status         # show install state
 recordings app snapshot       # write ./desktop-snapshot.png for local UI debugging
 # From this repository, optionally choosing another output path:
 bun run desktop:snapshot -- /tmp/recordings-desktop.png
-/Applications/Recordings.app/Contents/Helpers/recordings-update-client status
+/Applications/HasnaRecordings.app/Contents/Helpers/recordings-update-client status
 
 # Release builds run only as the isolated _recordingsbuild account. Provision these first:
 # - /private/var/recordings-build owned by _recordingsbuild, mode 0700, beneath a
@@ -165,13 +165,13 @@ recordings app install \
 swift test                    # run the native test suite
 ```
 
-The production release location is `/Applications/Recordings.app`. The managed bootstrap installs
+The production release location is `/Applications/HasnaRecordings.app`. The managed bootstrap installs
 one signed/notarized PKG exactly once, including the root broker, no-login verifier, launchd policy,
 release key, and initial app. That root cohort is intentionally immutable:
 `lifecycle=bootstrap-v1-app-updates-only`,
 `root_maintenance_supported=false`, and `key_rotation_supported=false`. Subsequent release
 envelopes must bind the exact installed broker/verifier cohort, protocol version, and pinned key
-epoch, and may replace only `/Applications/Recordings.app`. A second bootstrap PKG, a broker or
+epoch, and may replace only `/Applications/HasnaRecordings.app`. A second bootstrap PKG, a broker or
 verifier mismatch, a broker-protocol incompatibility, or a key-epoch change fails before app
 activation with `unsupported_lifecycle`. Root updater maintenance and release-key rotation require a
 separate managed reprovisioning lifecycle; the current tooling does not run Installer or overwrite
@@ -227,7 +227,7 @@ private, fsynced root journal and anti-rollback state recover interrupted app re
 next install attempt.
 
 The explicit `local-only` development path remains separate and installs
-`~/Applications/Recordings.app`; it never provisions or imitates the production root cohort.
+`~/Applications/HasnaRecordings.app`; it never provisions or imitates the production root cohort.
 For a station-specific deployment, pass `--expected-hostname` so the installer proves the live
 short hostname before taking a lock or mutating state while the release artifact itself remains
 fleet-distributable. Obtain `AUTHENTICATED_MANIFEST_SHA256` from independently authenticated
