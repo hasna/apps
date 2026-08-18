@@ -4,11 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mintApiKey } from "@hasna/contracts/auth";
 import { createSessionsServer } from "../src/server/app";
-import { resetDataSource } from "../src/server/data-source";
+import { resetDataSource, setTestEmbedder } from "../src/server/data-source";
 import { resetAuth } from "../src/server/auth";
 import { getDatabase, resetDatabase, closeDatabase } from "../src/db/database";
 
 const SIGNING_KEY = ["test", "signing", "fixture", "0123456789abcdef", "0123456789abcdef"].join("-");
+
+function keyFor(scopes: string[]): string {
+  return mintApiKey({ app: "sessions", scopes, signingSecret: SIGNING_KEY, ttlSeconds: 3600 }).token;
+}
 
 describe("/v1 authenticated API (local mode)", () => {
   let dir: string;
@@ -33,9 +37,6 @@ describe("/v1 authenticated API (local mode)", () => {
     resetAuth();
   });
 
-  function keyFor(scopes: string[]): string {
-    return mintApiKey({ app: "sessions", scopes, signingSecret: SIGNING_KEY, ttlSeconds: 3600 }).token;
-  }
 
   it("rejects /v1 without a key (401) and with insufficient scope (403)", async () => {
     const server = createSessionsServer({ hostname: "127.0.0.1", port: 0 });
@@ -438,6 +439,149 @@ describe("/v1 authenticated API (local mode)", () => {
       const base = `http://127.0.0.1:${server.port}`;
       const rw = keyFor(["sessions:read"]);
       const res = await fetch(`${base}/v1/machines`, { headers: { authorization: `Bearer ${rw}` } });
+      expect(res.status).toBe(200);
+      expect((await res.json()).ok).toBe(true);
+    } finally {
+      server.stop(true);
+    }
+  });
+});
+
+describe("/v1 recall, semantic, hybrid, embed, machines/recompute (local mode)", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "sessions-v1-recall-"));
+    process.env.SESSIONS_DB_PATH = join(dir, "sessions.db");
+    process.env.HASNA_SESSIONS_API_SIGNING_KEY = SIGNING_KEY;
+    delete process.env.HASNA_SESSIONS_STORAGE_MODE;
+    delete process.env.OPENAI_API_KEY;
+    resetDatabase();
+    resetDataSource();
+    resetAuth();
+    setTestEmbedder(null);
+    getDatabase();
+  });
+
+  afterEach(() => {
+    closeDatabase();
+    rmSync(dir, { recursive: true, force: true });
+    delete process.env.SESSIONS_DB_PATH;
+    delete process.env.HASNA_SESSIONS_API_SIGNING_KEY;
+    delete process.env.OPENAI_API_KEY;
+    resetDataSource();
+    resetAuth();
+    setTestEmbedder(null);
+  });
+
+  function seedStripe(server: { port: number }) {
+    const base = `http://127.0.0.1:${server.port}`;
+    const rw = keyFor(["sessions:read", "sessions:write"]);
+    const H = { "x-api-key": rw, "content-type": "application/json" };
+    return { base, H };
+  }
+
+  it("serves recall through GET /v1/recall with evidence and resume metadata", async () => {
+    const server = createSessionsServer({ hostname: "127.0.0.1", port: 0 });
+    try {
+      const { base, H } = seedStripe(server);
+      const created = await fetch(`${base}/v1/sessions/import`, {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({
+          session: {
+            source: "claude",
+            source_id: "claude-stripe-001",
+            title: "Stripe webhook implementation",
+            project_path: "/repo/web",
+            project_name: "web",
+            git_branch: "feature/stripe-webhook",
+            git_sha: "abc1234",
+            git_origin_url: "https://github.com/example-org/web.git",
+            started_at: "2026-05-01T10:00:00.000Z",
+            machine: "test-machine",
+          },
+          messages: [
+            { id: "msg-1", session_id: "", role: "user", content: "We need to implement the Stripe webhook payment handler and tests.", sequence_num: 0 },
+            { id: "msg-2", session_id: "", role: "assistant", content: "Implemented signature verification in src/routes/stripe-webhook.ts.", sequence_num: 1 },
+          ],
+          toolCalls: [
+            { id: "tool-1", session_id: "", tool_name: "Edit", tool_input: JSON.stringify({ file_path: "src/routes/stripe-webhook.ts" }), tool_output: "updated", status: "success" },
+            { id: "tool-2", session_id: "", tool_name: "Bash", tool_input: JSON.stringify({ command: "bun test test/stripe-webhook.test.ts" }), tool_output: "ok", status: "success" },
+          ],
+        }),
+      });
+      expect(created.status).toBe(201);
+
+      const res = await fetch(`${base}/v1/recall?q=stripe%20webhook&limit=1`, { headers: { "x-api-key": keyFor(["sessions:read"]) } });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.count).toBeGreaterThan(0);
+      const result = body.results[0];
+      expect(result.session_id).toBeTruthy();
+      expect(result.reason).toContain("matched");
+      expect(result.touched_file_paths).toContain("src/routes/stripe-webhook.ts");
+      expect(result.coding_entities.commands).toContain("bun test test/stripe-webhook.test.ts");
+      expect(result.coding_entities.branches).toContain("feature/stripe-webhook");
+      expect(result.related_graph_entities.project).toBe("web");
+      expect(result.resume.shell_command).toBe("claude --resume claude-stripe-001");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("serves semantic and hybrid search through /v1/search/semantic and /v1/search/hybrid", async () => {
+    const server = createSessionsServer({ hostname: "127.0.0.1", port: 0 });
+    try {
+      const { base, H } = seedStripe(server);
+      await fetch(`${base}/v1/sessions/import`, {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({
+          session: { source: "claude", source_id: "sem-1", title: "Payment flow", project_name: "pay", started_at: "2026-05-01T10:00:00.000Z", machine: "m" },
+          messages: [
+            { id: "m1", session_id: "", role: "user", content: "implement payment webhook auth storage handling", sequence_num: 0 },
+            { id: "m2", session_id: "", role: "assistant", content: "done with payment", sequence_num: 1 },
+          ],
+          toolCalls: [],
+        }),
+      });
+
+      const fakeEmbedder = async (texts: string[]) => {
+        const vocab = ["payment", "webhook", "auth", "storage"];
+        return texts.map((text) => vocab.map((word) => ((text.toLowerCase().match(new RegExp(word, "g")) ?? []).length)));
+      };
+      setTestEmbedder(fakeEmbedder);
+
+      const embed = await fetch(`${base}/v1/embed`, { method: "POST", headers: { "x-api-key": keyFor(["sessions:read", "sessions:write"]), "content-type": "application/json" }, body: JSON.stringify({ limit: 50 }) });
+      expect(embed.status).toBe(200);
+      const embedBody = await embed.json();
+      expect(embedBody.messagesProcessed).toBe(2);
+      expect(embedBody.chunksEmbedded).toBe(2);
+
+      const sem = await fetch(`${base}/v1/search/semantic?q=payment%20webhook`, { headers: { "x-api-key": keyFor(["sessions:read"]) } });
+      expect(sem.status).toBe(200);
+      const semBody = await sem.json();
+      expect(semBody.count).toBe(1);
+      expect(semBody.results[0].session_id).toBeTruthy();
+
+      const hybrid = await fetch(`${base}/v1/search/hybrid?q=payment`, { headers: { "x-api-key": keyFor(["sessions:read"]) } });
+      expect(hybrid.status).toBe(200);
+      const hybridBody = await hybrid.json();
+      expect(hybridBody.count).toBeGreaterThanOrEqual(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("serves POST /v1/machines/recompute", async () => {
+    const server = createSessionsServer({ hostname: "127.0.0.1", port: 0 });
+    try {
+      const base = `http://127.0.0.1:${server.port}`;
+      const res = await fetch(`${base}/v1/machines/recompute`, {
+        method: "POST",
+        headers: { "x-api-key": keyFor(["sessions:read", "sessions:write"]) },
+      });
       expect(res.status).toBe(200);
       expect((await res.json()).ok).toBe(true);
     } finally {

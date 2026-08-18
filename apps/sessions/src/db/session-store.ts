@@ -16,19 +16,22 @@
 
 import { resolveStorageClient } from "@hasna/contracts/client/storage";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
+import { existsSync } from "node:fs";
 import { normalizeStorageMode } from "@hasna/contracts/mode";
-import type {
-  Machine,
-  Message,
-  Session,
-  SessionContentImport,
-  SessionLookupOptions,
-  ToolCall,
+import {
+  SESSION_SOURCES,
+  type Machine,
+  type Message,
+  type Session,
+  type SessionContentImport,
+  type SessionLookupOptions,
+  type ToolCall,
 } from "../types/index.js";
 import type { SessionContentImportResult, UpsertSessionInput } from "./cloud/store.js";
 import type { SearchHit, ToolCallHit } from "../lib/search.js";
 import type { Entity, EntityType, RelatedSession, SessionGraph } from "../lib/graph.js";
 import type { RecallOptions, RecallResponse } from "../lib/recall.js";
+import { Database } from "bun:sqlite";
 import type { EmbedResult } from "../lib/embeddings.js";
 import type { MergeResult } from "./merge.js";
 import type { IngestResult } from "../lib/ingest/index.js";
@@ -216,6 +219,177 @@ export function serverStorageMode(normalize: ModeNormalizer = normalizeStorageMo
   );
 }
 
+interface SourceDbRow {
+  id: string;
+  source: string;
+  source_id: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Hosted import-db: read ANOTHER machine's sessions database file (a local
+ * input artifact, never this machine's own index) read-only, and push each
+ * session's content into the shared registry through /v1/sessions/import.
+ * Embeddings are not transferred — the hosted store regenerates them via
+ * `sessions embed` (server-side /v1/embed), which the local merge's raw row
+ * copy cannot express on Postgres.
+ */
+async function mergeFromDbViaApi(
+  t: HasnaStorageClient["transport"],
+  path: string,
+): Promise<MergeResult> {
+  if (!existsSync(path)) throw new Error(`No such database: ${path}`);
+  const src = new Database(path, { readonly: true });
+  try {
+    const sessionRows = src
+      .query(
+        `SELECT id, source, source_id, source_path, title, project_path, project_name,
+                model, model_provider, git_branch, git_sha, git_origin_url, cli_version,
+                is_subagent, parent_session_id, total_input_tokens, total_output_tokens,
+                total_cache_read_tokens, total_cache_write_tokens, total_thinking_tokens,
+                message_count, tool_call_count, started_at, ended_at, duration_seconds,
+                ingested_at, updated_at, source_modified_at, machine, metadata
+           FROM sessions`,
+      )
+      .all() as SourceDbRow[];
+    const messageRows = src
+      .query(
+        `SELECT id, session_id, source_id, parent_message_id, role, content,
+                content_preview, model, is_sidechain, sequence_num, input_tokens,
+                output_tokens, cache_read_tokens, cache_write_tokens, thinking_tokens,
+                timestamp, metadata
+           FROM messages`,
+      )
+      .all() as Record<string, unknown>[];
+    const toolCallRows = src
+      .query(
+        `SELECT id, message_id, session_id, tool_name, tool_input, tool_output,
+                duration_ms, status, timestamp, metadata
+           FROM tool_calls`,
+      )
+      .all() as Record<string, unknown>[];
+
+    const messagesBySession = new Map<string, Record<string, unknown>[]>();
+    for (const m of messageRows) {
+      const key = String(m.session_id);
+      const list = messagesBySession.get(key) ?? [];
+      list.push(m);
+      messagesBySession.set(key, list);
+    }
+    const toolCallsBySession = new Map<string, Record<string, unknown>[]>();
+    for (const tc of toolCallRows) {
+      const key = String(tc.session_id);
+      const list = toolCallsBySession.get(key) ?? [];
+      list.push(tc);
+      toolCallsBySession.set(key, list);
+    }
+
+    let sessions = 0;
+    let messages = 0;
+    let tool_calls = 0;
+    for (const row of sessionRows) {
+      const id = String(row.id);
+      // Existence pre-check so the reported count is "added", like the local merge.
+      // Like the local merge's INSERT OR IGNORE: sessions already in the
+      // registry are left untouched (importContent would replace their content,
+      // which would clobber newer synced rows — not a merge).
+      let exists = false;
+      try {
+        const current = await t.get<{ session: Session | null }>(
+          `/sessions/${encodeURIComponent(id)}`,
+        );
+        exists = Boolean(current.session);
+      } catch (error) {
+        if (!isNotFound(error)) throw error;
+        exists = false; // 404 => new session
+      }
+      if (exists) continue;
+      const source = String(row.source);
+      if (!(SESSION_SOURCES as readonly string[]).includes(source)) {
+        throw new Error(`invalid source '${source}' in ${path} (expected ${SESSION_SOURCES.join("|")})`);
+      }
+      const sessionInput: SessionContentImport = {
+        session: {
+          source: source as Session["source"],
+          source_id: String(row.source_id),
+          source_path: (row.source_path as string | null) ?? null,
+          title: (row.title as string | null) ?? null,
+          project_path: (row.project_path as string | null) ?? null,
+          project_name: (row.project_name as string | null) ?? null,
+          model: (row.model as string | null) ?? null,
+          model_provider: (row.model_provider as string | null) ?? null,
+          git_branch: (row.git_branch as string | null) ?? null,
+          git_sha: (row.git_sha as string | null) ?? null,
+          git_origin_url: (row.git_origin_url as string | null) ?? null,
+          cli_version: (row.cli_version as string | null) ?? null,
+          is_subagent: Boolean(row.is_subagent),
+          parent_session_id: (row.parent_session_id as string | null) ?? null,
+          machine: (row.machine as string | null) ?? null,
+          started_at: (row.started_at as string | null) ?? null,
+          ended_at: (row.ended_at as string | null) ?? null,
+          duration_seconds:
+            row.duration_seconds == null ? null : Number(row.duration_seconds),
+          source_modified_at: (row.source_modified_at as string | null) ?? null,
+          metadata: parseRowMetadata(row.metadata),
+        },
+        messages: (messagesBySession.get(id) ?? []).map((m) => ({
+          id: String(m.id),
+          session_id: String(m.session_id),
+          source_id: (m.source_id as string | null) ?? null,
+          parent_message_id: (m.parent_message_id as string | null) ?? null,
+          role: String(m.role) as Message["role"],
+          content: (m.content as string | null) ?? null,
+          content_preview: (m.content_preview as string | null) ?? null,
+          model: (m.model as string | null) ?? null,
+          is_sidechain: Boolean(m.is_sidechain),
+          sequence_num: m.sequence_num == null ? null : Number(m.sequence_num),
+          input_tokens: Number(m.input_tokens ?? 0),
+          output_tokens: Number(m.output_tokens ?? 0),
+          cache_read_tokens: Number(m.cache_read_tokens ?? 0),
+          cache_write_tokens: Number(m.cache_write_tokens ?? 0),
+          thinking_tokens: Number(m.thinking_tokens ?? 0),
+          timestamp: (m.timestamp as string | null) ?? null,
+          metadata: parseRowMetadata(m.metadata),
+        })),
+        toolCalls: (toolCallsBySession.get(id) ?? []).map((tc) => ({
+          id: String(tc.id),
+          message_id: (tc.message_id as string | null) ?? null,
+          session_id: String(tc.session_id),
+          tool_name: String(tc.tool_name),
+          tool_input: (tc.tool_input as string | null) ?? null,
+          tool_output: (tc.tool_output as string | null) ?? null,
+          duration_ms: tc.duration_ms == null ? null : Number(tc.duration_ms),
+          status: (tc.status as ToolCall["status"]) ?? null,
+          timestamp: (tc.timestamp as string | null) ?? null,
+          metadata: parseRowMetadata(tc.metadata),
+        })),
+      };
+      const res = await t.post<{
+        imported?: { messages?: number; toolCalls?: number };
+      }>("/sessions/import", sessionInput, {
+        idempotencyKey: `${sessionInput.session.source}:${sessionInput.session.source_id}:content`,
+      });
+      sessions++;
+      messages += res.imported?.messages ?? sessionInput.messages.length;
+      tool_calls += res.imported?.toolCalls ?? sessionInput.toolCalls.length;
+    }
+
+    return { sessions, messages, tool_calls, embeddings: 0 };
+  } finally {
+    src.close();
+  }
+}
+
+function parseRowMetadata(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Return an env whose storage mode is explicit.
  *
@@ -387,53 +561,69 @@ function cloudStore(client: HasnaStorageClient): SessionStore {
         throw error;
       }
     },
-    // These require the local embedding/FTS index or a local-to-local DB merge;
-    // recall is intentionally local-only. Fail loudly instead of silently
-    // reading the local SQLite island (that was the split-brain bug).
-    semanticSearch() {
-      return notAvailableInCloud("semantic search");
+    async semanticSearch(query, opts) {
+      const res = await t.get<{ results: SearchHit[] }>("/search/semantic", {
+        query: { q: query, ...listQuery(opts) },
+      });
+      return res.results ?? [];
     },
-    hybridSearch() {
-      return notAvailableInCloud("hybrid search");
+    async hybridSearch(query, opts) {
+      const res = await t.get<{ results: SearchHit[] }>("/search/hybrid", {
+        query: { q: query, ...listQuery(opts) },
+      });
+      return res.results ?? [];
     },
-    async recall() {
-      return recallNotAvailableInCloud();
+    async recall(query, opts) {
+      const queryParams: Record<string, string | number> = { q: query };
+      if (opts.limit !== undefined) queryParams.limit = opts.limit;
+      if (opts.source) queryParams.source = opts.source;
+      if (opts.project_path) queryParams.project = opts.project_path;
+      if (opts.machine) queryParams.machine = opts.machine;
+      if (opts.semantic === false) queryParams.semantic = "0";
+      if (opts.semantic === true) queryParams.semantic = "1";
+      const res = await t.get<RecallResponse>("/recall", { query: queryParams });
+      return {
+        query: res.query,
+        count: res.count ?? 0,
+        results: res.results ?? [],
+        metadata: res.metadata,
+      };
     },
-    embed() {
-      return notAvailableInCloud("embed");
+    async embed(opts) {
+      const res = await t.post<{ messagesProcessed?: number; chunksEmbedded?: number }>(
+        "/embed",
+        { limit: opts.limit ?? 200 },
+      );
+      return {
+        messagesProcessed: res.messagesProcessed ?? 0,
+        chunksEmbedded: res.chunksEmbedded ?? 0,
+      };
     },
-    mergeFromDb() {
-      return notAvailableInCloud("import-db");
+    async mergeFromDb(path) {
+      return mergeFromDbViaApi(t, path);
     },
-    ingest() {
-      return notAvailableInCloud("ingest");
+    // STRONG REASON (recorded, reviewed): `ingest` scans the machine's OWN
+    // transcript files (~/.claude/projects, ~/.codex, ...). The hosted /v1
+    // transport cannot see the client's filesystem, and silently opening the
+    // local SQLite index from the transport is exactly the split-brain bug this
+    // seam eliminated. The capability is NOT lost in hosted mode: `sessions
+    // sync` (and `ingest-watch`) ingest locally via the on-box index and push
+    // every parsed session to the shared registry through /v1/sessions/import.
+    // The guard stays loud so no caller mistakes the transport for a file
+    // scanner; the message names the working hosted route.
+    async ingest() {
+      throw new Error(
+        `'ingest' scans transcript files on the machine where the CLI runs; the hosted /v1 API ` +
+          `cannot read them. On a hosted machine run 'sessions sync' instead: it ingests locally ` +
+          `and pushes every session to the shared registry via /v1/sessions/import.`,
+      );
     },
-    recomputeMachines() {
-      return notAvailableInCloud("recompute-machines");
+    async recomputeMachines() {
+      await t.post<{ ok?: boolean }>("/machines/recompute", {});
     },
   };
 }
 
-/**
- * Loud, explicit failure for operations that are not (yet) served by the cloud
- * `/v1` API. NEVER silently fall back to the local SQLite index in cloud mode —
- * that is exactly the split-brain we are eliminating.
- */
-function notAvailableInCloud(op: string): never {
-  throw new Error(
-    `'${op}' is not available in self_hosted mode: it depends on the local session index ` +
-      `(embeddings / full recall / local DB merge), which the cloud /v1 API does not serve. ` +
-      `Run it on a machine in local mode (unset HASNA_SESSIONS_API_URL/API_KEY).`,
-  );
-}
-
-function recallNotAvailableInCloud(): never {
-  throw new Error(
-    `'recall' is local-only and is not available in hosted/self-hosted mode. ` +
-      `Use 'sessions list', 'sessions show <id>', or 'sessions search <query>' against the hosted store, ` +
-      `or run recall on a machine in local mode.`,
-  );
-}
 
 /** Local store: SQLite index, loaded lazily so cloud-only runs never open the DB. */
 function localStore(): SessionStore {

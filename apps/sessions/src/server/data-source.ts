@@ -15,8 +15,12 @@ import type {
 } from "../types/index.js";
 import type { SearchHit, ToolCallHit } from "../lib/search.js";
 import type { Entity, EntityType, RelatedSession, SessionGraph } from "../lib/graph.js";
+import type { RecallOptions, RecallResponse } from "../lib/recall.js";
+import type { EmbedResult, Embedder } from "../lib/embeddings.js";
 import { isCloudMode } from "../db/cloud/client.js";
 import * as cloud from "../db/cloud/store.js";
+import * as cloudEmbeddings from "../db/cloud/embeddings.js";
+import { cloudRecallSessions } from "../db/cloud/recall.js";
 import { contentShrinkError } from "../lib/content-import-safety.js";
 
 export interface ListOptions {
@@ -57,9 +61,26 @@ export interface DataSource {
   toolCalls(sessionId: string): Promise<ToolCall[]>;
   searchContent(query: string, opts: ListOptions): Promise<SearchHit[]>;
   searchToolCalls(query: string, opts: ListOptions): Promise<ToolCallHit[]>;
+  semanticSearch(query: string, opts: ListOptions): Promise<SearchHit[]>;
+  hybridSearch(query: string, opts: ListOptions): Promise<SearchHit[]>;
+  recall(query: string, opts: RecallOptions): Promise<RecallResponse>;
+  embed(opts: { limit?: number }): Promise<EmbedResult>;
+  recomputeMachines(): Promise<void>;
   graphEntities(type?: EntityType): Promise<Entity[]>;
   graphRelated(type: EntityType, name: string, limit: number): Promise<RelatedSession[]>;
   graphSession(idOrPrefix: string, opts?: SessionLookupOptions): Promise<SessionGraph | null>;
+}
+
+/**
+ * Test hook: swap the embedder used by both data sources so endpoint tests run
+ * deterministically without an OpenAI key. null restores the real embedder.
+ */
+let _testEmbedder: Embedder | null = null;
+export function setTestEmbedder(embedder: Embedder | null): void {
+  _testEmbedder = embedder;
+}
+function embedderOption(): { embedder?: Embedder } {
+  return _testEmbedder ? { embedder: _testEmbedder } : {};
 }
 
 const cloudSource: DataSource = {
@@ -80,6 +101,13 @@ const cloudSource: DataSource = {
   toolCalls: (sessionId) => cloud.getToolCalls(sessionId),
   searchContent: (query, opts) => cloud.searchContent(query, opts),
   searchToolCalls: (query, opts) => cloud.searchToolCalls(query, opts),
+  semanticSearch: (query, opts) =>
+    cloudEmbeddings.cloudSemanticSearch(query, { ...opts, ...embedderOption() }),
+  hybridSearch: (query, opts) =>
+    cloudEmbeddings.cloudHybridSearch(query, { ...opts, ...embedderOption() }),
+  recall: (query, opts) => cloudRecallSessions(query, { ...opts, ...embedderOption() }),
+  embed: (opts) => cloudEmbeddings.cloudEmbedSessions({ ...opts, ...embedderOption() }),
+  recomputeMachines: () => cloud.recomputeMachines(),
   graphEntities: (type) => cloud.graphEntities(type as cloud.CloudEntityType | undefined),
   graphRelated: (type, name, limit) =>
     cloud.graphRelated(type as cloud.CloudEntityType, name, limit),
@@ -206,6 +234,26 @@ function localSource(): DataSource {
     async searchToolCalls(query, opts) {
       const { searchToolCalls } = await import("../lib/search.js");
       return searchToolCalls(query, opts);
+    },
+    async semanticSearch(query, opts) {
+      const { semanticSearch } = await import("../lib/vector-search.js");
+      return semanticSearch(query, { ...opts, ...embedderOption() });
+    },
+    async hybridSearch(query, opts) {
+      const { hybridSearch } = await import("../lib/vector-search.js");
+      return hybridSearch(query, { ...opts, ...embedderOption() });
+    },
+    async recall(query, opts) {
+      const { recallSessions } = await import("../lib/recall.js");
+      return recallSessions(query, { ...opts, ...embedderOption() });
+    },
+    async embed(opts) {
+      const { embedSessions } = await import("../lib/embeddings.js");
+      return embedSessions({ ...opts, ...embedderOption() });
+    },
+    async recomputeMachines() {
+      const { recomputeMachineCounts } = await import("../db/machines.js");
+      recomputeMachineCounts();
     },
     async graphEntities(type) {
       const { listEntities } = await import("../lib/graph.js");

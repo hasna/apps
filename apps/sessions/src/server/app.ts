@@ -39,9 +39,12 @@ const ENDPOINTS = [
   "/v1/search?q=…",
   "/v1/search/content?q=…",
   "/v1/search/tools?q=…",
-  "/v1/graph?type=…|related=type:name|session=id",
-  "/v1/recent",
+  "/v1/search/semantic?q=…",
+  "/v1/search/hybrid?q=…",
+  "/v1/recall?q=…",
+  "/v1/embed",
   "/v1/machines",
+  "/v1/machines/recompute",
   "/v1/stats",
 ];
 
@@ -307,6 +310,26 @@ async function handleV1(url: URL, request: Request): Promise<Response> {
     return json({ ok: false, error: "Method not allowed", allowedMethods: ["GET", "PATCH", "DELETE"] }, 405);
   }
 
+  // POST /v1/embed — generate embeddings for messages without any yet.
+  if (path === "/v1/embed" && method === "POST") {
+    let limit = 200;
+    try {
+      const body = (await request.json()) as Record<string, unknown>;
+      const parsed = typeof body?.limit === "number" ? body.limit : Number(body?.limit);
+      if (Number.isFinite(parsed) && parsed > 0) limit = Math.min(Math.floor(parsed), 5000);
+    } catch {
+      // empty/invalid body -> default limit
+    }
+    const result = await source.embed({ limit });
+    return json({ ok: true, ...result });
+  }
+
+  // POST /v1/machines/recompute — rebuild per-machine session counts.
+  if (path === "/v1/machines/recompute" && method === "POST") {
+    await source.recomputeMachines();
+    return json({ ok: true });
+  }
+
   if (method !== "GET") {
     return json({ ok: false, error: "Method not allowed", allowedMethods: ["GET"] }, 405);
   }
@@ -332,6 +355,36 @@ async function handleV1(url: URL, request: Request): Promise<Response> {
     if (!q) return json({ ok: false, error: "missing query param 'q'" }, 400);
     const results = await source.searchToolCalls(q, listOptionsFromUrl(url, 20));
     return json({ ok: true, query: q, count: results.length, results });
+  }
+
+  // Semantic (embedding) search over the active store.
+  if (path === "/v1/search/semantic") {
+    const q = url.searchParams.get("q");
+    if (!q) return json({ ok: false, error: "missing query param 'q'" }, 400);
+    const results = await source.semanticSearch(q, listOptionsFromUrl(url, 20));
+    return json({ ok: true, query: q, count: results.length, results });
+  }
+
+  // Hybrid full-text + semantic search (RRF).
+  if (path === "/v1/search/hybrid") {
+    const q = url.searchParams.get("q");
+    if (!q) return json({ ok: false, error: "missing query param 'q'" }, 400);
+    const results = await source.hybridSearch(q, listOptionsFromUrl(url, 20));
+    return json({ ok: true, query: q, count: results.length, results });
+  }
+
+  // Natural-language recall with evidence / touched files / resume metadata.
+  if (path === "/v1/recall") {
+    const q = url.searchParams.get("q");
+    if (!q) return json({ ok: false, error: "missing query param 'q'" }, 400);
+    const semanticParam = url.searchParams.get("semantic");
+    const recallOpts: { limit?: number; semantic?: boolean } = {
+      ...listOptionsFromUrl(url, 10),
+    };
+    if (semanticParam === "0" || semanticParam === "false") recallOpts.semantic = false;
+    if (semanticParam === "1" || semanticParam === "true") recallOpts.semantic = true;
+    const response = await source.recall(q, recallOpts);
+    return json({ ok: true, ...response });
   }
 
   // Knowledge graph: ?session=<id> | ?related=<type:name>[&limit] | [?type=<type>]

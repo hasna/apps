@@ -257,14 +257,43 @@ describe("cloud store routes to /v1 with bearer key", () => {
     await expect(broken.graphSession("x")).rejects.toMatchObject({ status: 500 });
   });
 
-  test("fails loudly for every local-only cloud operation", async () => {
+  test("serves the previously local-only operations through the /v1 API", async () => {
+    const { store, calls } = cloudStore((call) => {
+      if (call.method === "GET" && call.url.includes("/search/semantic")) {
+        return { json: { results: [{ session_id: "s1" }] } };
+      }
+      if (call.method === "GET" && call.url.includes("/search/hybrid")) {
+        return { json: { results: [{ session_id: "s1" }] } };
+      }
+      if (call.method === "GET" && call.url.includes("/recall")) {
+        return { json: { query: "q", count: 0, results: [], metadata: {} } };
+      }
+      if (call.method === "POST" && call.url.endsWith("/embed")) {
+        return { json: { messagesProcessed: 0, chunksEmbedded: 0 } };
+      }
+      if (call.method === "POST" && call.url.endsWith("/machines/recompute")) {
+        return { json: { ok: true } };
+      }
+      return { json: {} };
+    });
+
+    expect(await store.semanticSearch("q", {})).toHaveLength(1);
+    expect(await store.hybridSearch("q", {})).toHaveLength(1);
+    expect((await store.recall("q", {})).count).toBe(0);
+    expect(await store.embed({})).toEqual({ messagesProcessed: 0, chunksEmbedded: 0 });
+    await store.recomputeMachines();
+
+    const urls = calls.map((c) => c.url);
+    expect(urls.some((u) => u.includes("/search/semantic"))).toBe(true);
+    expect(urls.some((u) => u.includes("/search/hybrid"))).toBe(true);
+    expect(urls.some((u) => u.includes("/recall"))).toBe(true);
+    expect(urls.some((u) => u.endsWith("/embed"))).toBe(true);
+    expect(urls.some((u) => u.endsWith("/machines/recompute"))).toBe(true);
+  });
+
+  test("keeps the loud guard on the machine-local ingest verb, naming the hosted route", async () => {
     const { store } = cloudStore(() => ({ json: {} }));
-    expect(() => store.semanticSearch("q", {})).toThrow("semantic search");
-    expect(() => store.hybridSearch("q", {})).toThrow("hybrid search");
-    await expect(store.recall("q", {})).rejects.toThrow("recall' is local-only");
-    expect(() => store.embed({})).toThrow("embed");
-    expect(() => store.mergeFromDb("x")).toThrow("import-db");
-    expect(() => store.ingest()).toThrow("ingest");
-    expect(() => store.recomputeMachines()).toThrow("recompute-machines");
+    await expect(store.ingest({})).rejects.toThrow("sessions sync");
+    await expect(store.ingest({})).rejects.toThrow("/v1/sessions/import");
   });
 });
