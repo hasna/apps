@@ -260,7 +260,7 @@ Keep these open planning and implementation tracks:
 - `1248913a`: wire schedule, manual, and API triggers.
 - `050a9c85`: implement per-step `when` condition evaluation.
 
-Do not mutate `open-actions`, `open-events`, `open-loops`, or
-`open-connectors` from this repository plan. Cross-repo integration work should
+Do not mutate `actions`, `events`, `loops`, or
+`connectors` from this repository plan. Cross-repo integration work should
 be tracked as separate todos tasks with explicit acceptance criteria and
 dedupe fingerprints.

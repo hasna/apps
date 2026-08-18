@@ -9,7 +9,7 @@ requests into the same event materialization path used by SDK events.
 automations --json webhooks create tickets.escalate-critical \
   --id tickets \
   --path /webhooks/tickets \
-  --source open-events \
+  --source events \
   --type ticket.created \
   --data-path data \
   --dedupe-key-header X-Hasna-Event-Id \

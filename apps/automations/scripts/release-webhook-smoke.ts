@@ -8,7 +8,7 @@ import process from "node:process";
 const ROUTE_ID = "release-smoke";
 const ROUTE_PATH = "/webhooks/release-smoke";
 const AUTOMATION_ID = "release.webhook-smoke";
-const RUNNER_ID = "open-loops:release-smoke";
+const RUNNER_ID = "loops:release-smoke";
 const SECRET_ENV_KEY = "HASNA_AUTOMATIONS_WEBHOOK_SECRET_RELEASE_SMOKE";
 const DEFAULT_PEERS = ["@hasna/actions@^0.1.0"];
 const RELEASE_0_1_1_PEERS = ["@hasna/actions@0.1.0"];
@@ -547,7 +547,7 @@ Options:
 
 Examples:
   bun run smoke:webhook-release -- --package @hasna/automations@0.1.1
-  bun run smoke:webhook-release -- --package file:$PWD --no-default-peers --peer file:/path/to/open-actions
+  bun run smoke:webhook-release -- --package file:$PWD --no-default-peers --peer file:/path/to/actions
 
 Notes:
   The @hasna/automations@0.1.1 replay uses the known compatible peer set

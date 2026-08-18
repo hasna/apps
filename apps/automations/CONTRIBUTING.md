@@ -10,4 +10,4 @@ bun run build
 ```
 
 Keep control-plane state durable and deterministic. Runtime integrations should
-not move product ownership into `open-loops` or another executor.
+not move product ownership into `loops` or another executor.

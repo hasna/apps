@@ -31,7 +31,7 @@ const store = new AutomationsStore();
 const automation = store.createAutomation(exampleAutomationSpec());
 const materialized = store.materializeEvent({
   id: "evt_1",
-  source: "open-events",
+  source: "events",
   type: "ticket.created",
   data: { priority: "critical" },
 }, { automationId: automation.id });
