@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { ConversationsClient } from "@hasna/conversations/sdk";
 import type { ConversationsIntegrationConfig } from "./index.js";
 import {
+  createConversationsClient,
   postMessageToSpace,
   sendConversationMessage,
 } from "./conversations.js";
@@ -29,6 +30,7 @@ type PostBehavior =
 type GetBehavior =
   | { kind: "found"; id: number }
   | { kind: "not-found" }
+  | { kind: "route-missing" }
   | { kind: "network-error"; message: string };
 
 interface FakeServer {
@@ -39,6 +41,7 @@ interface FakeServer {
   postBehavior: PostBehavior;
   getBehavior: GetBehavior;
   lastApiKeyHeader: string | null;
+  lastRequestUrl: string | null;
 }
 
 function makeFakeServer(): FakeServer {
@@ -50,6 +53,7 @@ function makeFakeServer(): FakeServer {
     postBehavior: { kind: "ok", id: 42 },
     getBehavior: { kind: "not-found" },
     lastApiKeyHeader: null,
+    lastRequestUrl: null,
   };
 
   return server;
@@ -59,9 +63,17 @@ function makeFakeServer(): FakeServer {
 function fakeFetch(server: FakeServer): typeof fetch {
   return (async (input, init) => {
     const url = input instanceof URL ? input : new URL(String(input));
+    server.lastRequestUrl = url.toString();
     const method = (init?.method ?? "GET").toUpperCase();
     const apiKey = (init?.headers as Record<string, string> | undefined)?.["x-api-key"] ?? null;
     if (apiKey !== null) server.lastApiKeyHeader = apiKey;
+
+    if (method === "GET" && url.pathname === "/health") {
+      return new Response(JSON.stringify({ status: "ok" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
 
     if (method === "POST" && url.pathname === "/v1/messages") {
       server.postCount += 1;
@@ -100,7 +112,16 @@ function fakeFetch(server: FakeServer): typeof fetch {
         throw new TypeError(b.message);
       }
       if (b.kind === "not-found") {
+        // The by-uuid route EXISTS and answered: a real row-miss.
         return new Response(JSON.stringify({ error: "Message not found" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (b.kind === "route-missing") {
+        // The hosted shape: no by-uuid route exists, so every probe answers
+        // with the generic unknown-route 404.
+        return new Response(JSON.stringify({ error: "Not found" }), {
           status: 404,
           headers: { "content-type": "application/json" },
         });
@@ -145,6 +166,8 @@ const CONFIG: ConversationsIntegrationConfig = {
 afterEach(() => {
   delete process.env.HASNA_MONITOR_CONVERSATIONS_API_KEY;
   delete process.env.HASNA_MONITOR_CONVERSATIONS_API_URL;
+  delete process.env.HASNA_CONVERSATIONS_API_KEY;
+  delete process.env.HASNA_CONVERSATIONS_API_URL;
 });
 
 describe("sendConversationMessage", () => {
@@ -280,9 +303,10 @@ describe("sendConversationMessage", () => {
     expect(server.queriedUuids).toEqual([firstKey]);
   });
 
-  it("treats a confirmed server error as a failed outcome without reconcile or retry", async () => {
+  it("treats a confirmed server error as a failed outcome when the effect key is not found", async () => {
     const server = makeFakeServer();
     server.postBehavior = { kind: "error", status: 400, error: "bad request" };
+    server.getBehavior = { kind: "not-found" };
     const client = makeClient(server);
 
     const result = await sendConversationMessage("msg", { channelId: "ops", client });
@@ -293,7 +317,36 @@ describe("sendConversationMessage", () => {
       expect(result.attempts).toBe(1);
     }
     expect(server.postCount).toBe(1);
-    expect(server.getCount).toBe(0); // a confirmed failure is not ambiguous
+    // The server answered — a confirmed failure, not an unknown outcome — but
+    // the effect key is still looked up before declaring it, so a duplicate
+    // post of an already-landed message is never reported as a failure.
+    expect(server.getCount).toBe(1);
+  });
+
+  it("treats a duplicate-post ApiError as an idempotent success when the effect key already landed", async () => {
+    const server = makeFakeServer();
+    // The server refused the repeated POST (unique-uuid insert conflict) but
+    // the message landed on an earlier attempt — reconcile must find it.
+    server.postBehavior = {
+      kind: "error",
+      status: 400,
+      error: 'duplicate key value violates unique constraint "idx_messages_uuid"',
+    };
+    server.getBehavior = { kind: "found", id: 77 };
+    const client = makeClient(server);
+
+    const result = await sendConversationMessage("msg", { channelId: "ops", client });
+
+    expect(result.status).toBe("reconciled");
+    if (result.status === "reconciled") {
+      expect(result.messageId).toBe(77);
+      expect(result.reconciled).toBe(true);
+      expect(result.attempts).toBe(1);
+    }
+    expect(server.postCount).toBe(1); // never resent
+    expect(server.getCount).toBe(1); // the existing message was looked up
+    const effectKey = String(server.postedBodies[0]?.["uuid"] ?? "");
+    expect(server.queriedUuids).toEqual([effectKey]);
   });
 
   it("exhausts the attempt bound when reconcile keeps proving absence, and reports the last failure", async () => {
@@ -333,6 +386,50 @@ describe("sendConversationMessage", () => {
     expect(server.getCount).toBe(1);
   });
 
+  it("fails closed when the reconcile 404 is a missing route, not a row-miss (hosted shape)", async () => {
+    const server = makeFakeServer();
+    // Transport error on the POST — the message may have landed. The hosted
+    // service has no /v1/messages/by-uuid route, so the probe answers with the
+    // generic unknown-route 404, indistinguishable by status from a row-miss.
+    server.postBehavior = { kind: "network-error", message: "fetch failed" };
+    server.getBehavior = { kind: "route-missing" };
+    const client = makeClient(server);
+
+    const result = await sendConversationMessage("msg", { channelId: "ops", client });
+
+    // A generic 404 does NOT prove absence: the adapter must not resend a
+    // possibly-landed message. No second POST may follow.
+    expect(result.status).toBe("failed");
+    expect(server.postCount).toBe(1);
+    expect(server.getCount).toBe(1);
+  });
+
+  it("resolves the client from the package-contract env when the app namespace is absent", async () => {
+    process.env.HASNA_CONVERSATIONS_API_URL = "http://contract.test";
+    process.env.HASNA_CONVERSATIONS_API_KEY = "contract-key-value";
+    const server = makeFakeServer();
+    const client = createConversationsClient({ fetch: fakeFetch(server) });
+
+    await client.getHealth();
+
+    expect(server.lastRequestUrl).toContain("http://contract.test");
+    expect(server.lastApiKeyHeader).toBe("contract-key-value");
+  });
+
+  it("prefers the app namespace (HASNA_MONITOR_*) over the package contract env", async () => {
+    process.env.HASNA_MONITOR_CONVERSATIONS_API_URL = "http://monitor.test";
+    process.env.HASNA_MONITOR_CONVERSATIONS_API_KEY = "monitor-key-value";
+    process.env.HASNA_CONVERSATIONS_API_URL = "http://contract.test";
+    process.env.HASNA_CONVERSATIONS_API_KEY = "contract-key-value";
+    const server = makeFakeServer();
+    const client = createConversationsClient({ fetch: fakeFetch(server) });
+
+    await client.getHealth();
+
+    expect(server.lastRequestUrl).toContain("http://monitor.test");
+    expect(server.lastApiKeyHeader).toBe("monitor-key-value");
+  });
+
   it("sends the configured API key header when provided and never surfaces its value in the result", async () => {
     const server = makeFakeServer();
     const client = new ConversationsClient({
@@ -366,11 +463,31 @@ describe("legacy postMessageToSpace", () => {
   it("throws on a confirmed failure so existing non-fatal callers keep their catch", async () => {
     const server = makeFakeServer();
     server.postBehavior = { kind: "error", status: 403, error: "forbidden" };
+    server.getBehavior = { kind: "not-found" };
     const client = makeClient(server);
 
     await expect(
       postMessageToSpace("legacy message", CONFIG, { client })
     ).rejects.toThrow(/403/);
-    expect(server.getCount).toBe(0);
+    // The confirmed failure is looked up by effect key before throwing, but
+    // the row is absent, so the failure stands and nothing is resent.
+    expect(server.getCount).toBe(1);
+  });
+
+  it("passes the config api_key through to the request and never surfaces its value", async () => {
+    const server = makeFakeServer();
+    server.postBehavior = { kind: "ok", id: 55 };
+    const originalFetch = globalThis.fetch;
+    // postMessageToSpace builds its client from config + env, so the fake
+    // transport is injected through the global fetch the SDK falls back to.
+    globalThis.fetch = fakeFetch(server) as typeof fetch;
+    try {
+      await postMessageToSpace("legacy message", { ...CONFIG, api_key: "config-key-value" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(server.postCount).toBe(1);
+    expect(server.lastApiKeyHeader).toBe("config-key-value");
+    expect(JSON.stringify(server.postedBodies)).not.toContain("config-key-value");
   });
 });

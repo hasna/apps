@@ -6,11 +6,26 @@
  *
  * Outcome contract (MON-V2-07):
  * - a successful post records the returned message pointer (id + uuid);
- * - a confirmed server error (ApiError) is a failed outcome, not ambiguous;
+ * - a confirmed server error (ApiError) is reconciled by the stable effect
+ *   key BEFORE it is reported as a failure: a repeated identical post (or a
+ *   racing retry) can be refused by the server's unique-uuid insert while the
+ *   message is already landed, and that is an idempotent success, not a
+ *   failure. Only when the effect-key lookup cannot find the row does the
+ *   confirmed failure stand.
  * - an unknown outcome (transport error, timeout) is reconciled by the stable
  *   effect key BEFORE retrying: if the message already landed, its pointer is
- *   recorded and nothing is resent; only a reconcile that proves absence
- *   permits a retry, and the retry reuses the same effect key.
+ *   recorded and nothing is resent; only a reconcile that PROVES absence
+ *   permits a retry, and the retry reuses the same effect key. A 404 alone
+ *   does not prove absence — the hosted service has no /v1/messages/by-uuid
+ *   route and answers every such probe with a generic "Not found" 404 that is
+ *   indistinguishable by status from a row-miss (apps/conversations CHANGELOG
+ *   0.5.25). Only the by-uuid route's own row-miss signal
+ *   ({"error":"Message not found"}) proves the row is absent; any other 404
+ *   fails closed.
+ * - the client resolves baseUrl/apiKey from the explicit options, then the
+ *   app namespace (HASNA_MONITOR_CONVERSATIONS_*), then the conversations
+ *   package contract (HASNA_CONVERSATIONS_API_URL / HASNA_CONVERSATIONS_API_KEY),
+ *   so a deployment configured per the package contract authenticates.
  *
  * Message format: ⚠️ [machine] | [severity] | [check_name]: [message]
  */
@@ -29,9 +44,9 @@ const DEFAULT_MAX_ATTEMPTS = 2;
 export interface ConversationsSendOptions {
   /** Channel (or space) name to post to. */
   channelId: string;
-  /** Base URL of the conversations API. Default: env HASNA_MONITOR_CONVERSATIONS_API_URL, then localhost:3001. */
+  /** Base URL of the conversations API. Default: env HASNA_MONITOR_CONVERSATIONS_API_URL, then the package contract HASNA_CONVERSATIONS_API_URL, then localhost:3001. */
   baseUrl?: string;
-  /** API key for the conversations API. Resolved from env HASNA_MONITOR_CONVERSATIONS_API_KEY when absent; never stored or logged. */
+  /** API key for the conversations API. Resolved from env HASNA_MONITOR_CONVERSATIONS_API_KEY, then the package contract HASNA_CONVERSATIONS_API_KEY, when absent; never stored or logged. */
   apiKey?: string;
   /** Sender identity; when absent the server derives it from the authenticated principal. */
   from?: string;
@@ -101,16 +116,28 @@ export function deriveEffectKey(channelId: string, content: string): string {
   );
 }
 
-/** Resolve the SDK client from explicit config or the HASNA_MONITOR_ env namespace. */
+/**
+ * Resolve the SDK client from explicit config, then the app-specific
+ * HASNA_MONITOR_ env namespace, then the conversations package contract
+ * (HASNA_CONVERSATIONS_API_URL / HASNA_CONVERSATIONS_API_KEY) so a deployment
+ * configured per the package contract authenticates against /v1.
+ */
 export function createConversationsClient(
-  options: Pick<ConversationsSendOptions, "baseUrl" | "apiKey">
+  options: Pick<ConversationsSendOptions, "baseUrl" | "apiKey"> & {
+    /** Injectable fetch for tests; the SDK client defaults to global fetch. */
+    fetch?: typeof fetch;
+  }
 ): ConversationsClient {
   const baseUrl =
     options.baseUrl ??
     process.env.HASNA_MONITOR_CONVERSATIONS_API_URL ??
+    process.env.HASNA_CONVERSATIONS_API_URL ??
     DEFAULT_BASE_URL;
-  const apiKey = options.apiKey ?? process.env.HASNA_MONITOR_CONVERSATIONS_API_KEY;
-  return new ConversationsClient({ baseUrl, apiKey });
+  const apiKey =
+    options.apiKey ??
+    process.env.HASNA_MONITOR_CONVERSATIONS_API_KEY ??
+    process.env.HASNA_CONVERSATIONS_API_KEY;
+  return new ConversationsClient({ baseUrl, apiKey, ...(options.fetch ? { fetch: options.fetch } : {}) });
 }
 
 /** Extract {id, uuid} from a /v1 message payload ({message: {...}} or bare row). */
@@ -123,6 +150,42 @@ function parseMessagePointer(payload: unknown): { id: number; uuid: string } | n
   const uuid = typeof message["uuid"] === "string" ? (message["uuid"] as string) : "";
   if (!Number.isInteger(id) || id <= 0 || !uuid) return null;
   return { id, uuid };
+}
+
+/**
+ * True only for the by-uuid route's OWN row-miss signal: a 404 whose body
+ * error is "Message not found". This repo's server answers a row-miss on the
+ * existing route that way; the hosted service has no such route and answers
+ * every by-uuid probe with a generic {"error":"Not found"} (apps/conversations
+ * CHANGELOG 0.5.25). A status alone cannot tell a missing route from a missing
+ * row, so only this body proves the message is absent.
+ */
+function isRowMissNotFound(error: ApiError): boolean {
+  if (error.status !== 404) return false;
+  const body = error.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  return (body as Record<string, unknown>)["error"] === "Message not found";
+}
+
+/**
+ * Look up the message by the stable effect key. Returns the pointer only when
+ * the row is parseable AND carries the effect key itself — a server that mints
+ * its own uuid (or cannot answer the by-uuid probe at all) cannot prove the
+ * row landed, so its response is treated as "not provably landed".
+ */
+async function reconcileByEffectKey(
+  client: ConversationsClient,
+  effectKey: string,
+  timeoutMs: number
+): Promise<{ id: number; uuid: string } | null> {
+  const found = await client.getMessageByUuid(effectKey, {
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const pointer = parseMessagePointer(found);
+  if (pointer && pointer.uuid.toLowerCase() === effectKey.toLowerCase()) {
+    return pointer;
+  }
+  return null;
 }
 
 /**
@@ -179,7 +242,29 @@ export async function sendConversationMessage(
     }
 
     if (sendError instanceof ApiError) {
-      // The server answered — a confirmed failure, not an unknown outcome.
+      // The server answered — a confirmed failure. But a repeated identical
+      // post (or a racing retry of one) can be refused by the server's
+      // unique-uuid insert while the message is already landed: the adapter
+      // must look up the existing message before reporting a failure. If the
+      // effect key resolves to a row, the earlier attempt delivered it — an
+      // idempotent success, never a resend. Only a lookup that cannot find
+      // the row keeps the confirmed failure.
+      let duplicate: { id: number; uuid: string } | null = null;
+      try {
+        duplicate = await reconcileByEffectKey(client, effectKey, timeoutMs);
+      } catch {
+        // The probe itself is ambiguous; the confirmed POST failure is the
+        // evidence, and nothing was resent.
+      }
+      if (duplicate) {
+        return {
+          status: "reconciled",
+          messageId: duplicate.id,
+          messageUuid: duplicate.uuid,
+          reconciled: true,
+          attempts: attempt,
+        };
+      }
       return {
         status: "failed",
         error: sendError.message,
@@ -190,38 +275,38 @@ export async function sendConversationMessage(
 
     // Unknown outcome: reconcile by the stable effect key before any retry.
     let reconcileError: unknown;
+    let found: { id: number; uuid: string } | null = null;
     try {
-      const found = await client.getMessageByUuid(effectKey, {
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      const pointer = parseMessagePointer(found);
-      if (pointer) {
-        return {
-          status: "reconciled",
-          messageId: pointer.id,
-          messageUuid: pointer.uuid,
-          reconciled: true,
-          attempts: attempt,
-        };
-      }
-      reconcileError = new Error("reconcile returned no parseable message pointer");
+      found = await reconcileByEffectKey(client, effectKey, timeoutMs);
     } catch (error) {
       reconcileError = error;
     }
-
-    if (reconcileError instanceof ApiError && reconcileError.status === 404) {
-      // Reconcile proves the message is absent: the retry is safe and the
-      // effect key keeps the resend idempotent.
+    if (found) {
+      return {
+        status: "reconciled",
+        messageId: found.id,
+        messageUuid: found.uuid,
+        reconciled: true,
+        attempts: attempt,
+      };
+    }
+    if (reconcileError instanceof ApiError && isRowMissNotFound(reconcileError)) {
+      // The by-uuid route answered that the row is absent: the retry is safe
+      // and the effect key keeps the resend idempotent.
       continue;
     }
-    // The reconcile probe itself is ambiguous (or returned an unparseable
-    // pointer): retrying could duplicate a landed message, so fail closed.
+    // The reconcile probe is ambiguous — a generic 404 (the hosted service has
+    // no by-uuid route), a transport error, or a response that is not the
+    // effect-key row. Retrying could duplicate a landed message, so fail
+    // closed.
     return {
       status: "failed",
       error:
         reconcileError instanceof Error
           ? reconcileError.message
-          : String(reconcileError),
+          : reconcileError !== undefined
+            ? String(reconcileError)
+            : "reconcile returned no parseable message pointer",
       attempts: attempt,
     };
   }
@@ -246,6 +331,7 @@ export async function postMessageToSpace(
   const result = await sendConversationMessage(message, {
     channelId: config.space_id,
     baseUrl: config.base_url,
+    apiKey: config.api_key,
     client: options.client,
   });
   if (result.status === "failed") {

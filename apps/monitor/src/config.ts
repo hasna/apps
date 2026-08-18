@@ -50,6 +50,8 @@ export interface ConversationsIntegrationConfig {
   enabled: boolean;
   space_id: string;
   base_url?: string;
+  /** API key for the conversations /v1 API; falls back to HASNA_MONITOR_CONVERSATIONS_API_KEY, then the package contract HASNA_CONVERSATIONS_API_KEY. Never logged. */
+  api_key?: string;
 }
 
 export interface MementosIntegrationConfig {
@@ -168,6 +170,7 @@ const ConversationsIntegrationZSchema = z.object({
   enabled: z.boolean(),
   space_id: z.string().min(1),
   base_url: z.string().url().optional(),
+  api_key: z.string().min(1).optional(),
 });
 
 const MementosIntegrationZSchema = z.object({
