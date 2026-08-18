@@ -232,9 +232,12 @@ test("shared MCP servers are seeded into the profile account file, not settings.
     const accountFile = join(p.dir, ".claude.json");
     const data = readJson(accountFile);
     expect(Object.keys(data.mcpServers as Record<string, unknown>).sort()).toEqual(["notes", "todos"]);
-    // settings.json is not the file Claude Code reads user-scope MCP servers from;
-    // a fresh Claude profile may still receive the independent statusLine default.
-    expect(readJson(join(p.dir, "settings.json")).statusLine).toEqual({
+    // settings.json is not the file Claude Code reads user-scope MCP servers from:
+    // MCP servers must never land there, while a fresh Claude profile may still
+    // receive the independent statusLine default.
+    const settings = readJson(join(p.dir, "settings.json"));
+    expect(settings.mcpServers as unknown).toBeUndefined();
+    expect(settings.statusLine).toEqual({
       type: "command",
       command: `"${statuslineBin}" render`,
       padding: 0,
@@ -688,7 +691,18 @@ test("sharedCapabilityHealth reports an unguarded profile as a problem", () => {
 test("profileEnv REFUSES a profile missing required shared config", async () => {
   seedSharedHooks(sharedHome, "/opt/guards/env-dump-guard.sh");
   process.env.ACCOUNTS_SHARED_HOME_CLAUDE = join(home, "does-not-exist");
-  const p = addProfile({ name: "bare" });
+  // A missing shared home now still receives the installed statusLine default on
+  // fresh profiles, so pin PATH to a directory without the binary to keep the
+  // profile bare deterministically regardless of the runner's ambient PATH.
+  const previousPath = process.env.PATH;
+  process.env.PATH = join(home, "no-statusline-bin");
+  let p: ReturnType<typeof addProfile>;
+  try {
+    p = addProfile({ name: "bare" });
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
   expect(existsSync(join(p.dir, "settings.json"))).toBe(false);
 
   process.env.ACCOUNTS_SHARED_HOME_CLAUDE = sharedHome;
@@ -1030,7 +1044,17 @@ test("a machine that declares NO statusLine seeds none, and still launches", () 
 test("a machine that declares a statusLine still never refuses a launch for a profile missing it", () => {
   seedSharedStatusLine(sharedHome, "statusline render");
   process.env.ACCOUNTS_SHARED_HOME_CLAUDE = join(home, "does-not-exist");
-  const p = addProfile({ name: "statusline-unseeded" });
+  // Pin PATH to a directory without the binary: the fresh-profile installed
+  // default must not fire here, or the profile would no longer be "missing" it.
+  const previousPath = process.env.PATH;
+  process.env.PATH = join(home, "no-statusline-bin");
+  let p: ReturnType<typeof addProfile>;
+  try {
+    p = addProfile({ name: "statusline-unseeded" });
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
   process.env.ACCOUNTS_SHARED_HOME_CLAUDE = sharedHome;
 
   const row = sharedCapabilityHealth(p.dir, getTool("claude")).config.find((c) => c.key === "statusLine");
