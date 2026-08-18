@@ -1,0 +1,58 @@
+{
+  "$schema": "../contracts/src/hasna.contract.schema.json",
+  "schema": "hasna.service_contract.v1",
+  "name": "computer",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.11.1",
+  "description": "Open-source computer use for AI agents — control a Mac with Anthropic or OpenAI. CLI + MCP server + REST API + SDK; sessions and action logs are stored in SQLite at ~/.hasna/computer/computer.db by default, and HASNA_COMPUTER_DATABASE_URL selects PostgreSQL via the storage-sync adapter.",
+  "bins": [
+    "computer",
+    "computer-mcp",
+    "computer-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "computer-api",
+      "kind": "api",
+      "status": "deferred",
+      "bin": "computer-serve",
+      "authMode": "none",
+      "deferReason": "computer-serve exposes GET /health but not GET /ready or GET /version; the supported-API topology (health, readiness, version) is not yet implemented"
+    },
+    {
+      "name": "computer-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "."
+    },
+    {
+      "name": "computer-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "computer",
+      "authMode": "local-only"
+    },
+    {
+      "name": "computer-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "computer-mcp",
+      "authMode": "local-only"
+    }
+  ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "envPrefix": "HASNA_COMPUTER_",
+    "aliasEnvPrefix": "COMPUTER_",
+    "sqlitePath": "~/.hasna/computer/computer.db"
+  }
+}
