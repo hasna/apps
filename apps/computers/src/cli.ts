@@ -5,6 +5,7 @@ import { ComputersService } from "./service";
 import { SQLiteStorage } from "./storage";
 import { createLocalProviderPortsFromConfigFile } from "./local";
 import { runLocalMacCanary } from "./local-canary";
+import { resolveDbPath } from "./paths";
 
 const LOCAL_CONTEXT: AuthorizationContext = {
   tenantId: "tenant_local", principalId: "principal_local", scopes: ["computers:admin"], authMethod: "loopback_dev",
@@ -28,10 +29,11 @@ function parseJsonFlag<T>(args: string[], name: string): T {
 }
 
 function databasePath(args: string[]): string {
-  const value = flag(args, "db") ?? Bun.env.COMPUTERS_DB ?? "./computers.db";
-  if (value === ":memory:") return value;
-  if (value.includes("\0")) throw new ComputersError("invalid_request", "Invalid database path", 400);
-  return resolve(value);
+  const value = flag(args, "db") ?? Bun.env.COMPUTERS_DB;
+  const path = resolveDbPath(value);
+  if (path === ":memory:") return path;
+  if (path.includes("\0")) throw new ComputersError("invalid_request", "Invalid database path", 400);
+  return path;
 }
 
 function openService(args: string[]): { storage: SQLiteStorage; service: ComputersService } {

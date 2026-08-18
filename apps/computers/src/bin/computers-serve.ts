@@ -5,6 +5,7 @@ import { ComputersService } from "../service";
 import { SQLiteStorage } from "../storage";
 import { createLocalProviderPortsFromConfigFile } from "../local";
 import { resolve } from "node:path";
+import { resolveDbPath } from "../paths";
 
 function principalsFromEnvironment(): BearerPrincipal[] {
   const raw = Bun.env.COMPUTERS_AUTH;
@@ -21,7 +22,7 @@ try {
     const parsed = new URL(origin);
     if (parsed.origin !== origin || !["http:", "https:"].includes(parsed.protocol)) throw new Error("invalid origin");
   }
-  const storage = new SQLiteStorage(Bun.env.COMPUTERS_DB ?? "./computers.db");
+  const storage = new SQLiteStorage(resolveDbPath(Bun.env.COMPUTERS_DB));
   storage.migrate();
   const development = Bun.env.COMPUTERS_DEV_MODE === "loopback";
   const hostname = Bun.env.COMPUTERS_HOST ?? "127.0.0.1";
