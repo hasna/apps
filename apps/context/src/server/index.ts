@@ -52,7 +52,7 @@ const pkg = require("../../package.json") as { version: string };
 function printHelp(): void {
   console.log(`Usage: context-serve [options]
 
-Start the open-context HTTP API server.
+Start the context HTTP API server.
 
 Options:
   -V, --version  output the version number

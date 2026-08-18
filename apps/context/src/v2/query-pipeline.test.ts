@@ -5,7 +5,7 @@ import { insertChunk } from "../db/chunks.js";
 import { upsertDocument } from "../db/documents.js";
 import { createLibrary, updateLibraryCounts } from "../db/libraries.js";
 import { buildV2ContextPack } from "./query-pipeline.js";
-import { createKnowledgeSubstrateAdapterBoundary, toKnowledgeSubstrateContextPack } from "./open-knowledge-adapter.js";
+import { createKnowledgeSubstrateAdapterBoundary, toKnowledgeSubstrateContextPack } from "./knowledge-adapter.js";
 
 beforeEach(() => {
   process.env["CONTEXT_DB_PATH"] = ":memory:";
@@ -37,7 +37,7 @@ describe("v2 context pack pipeline", () => {
     expect(pack.evidence.some((item) => item.channel === "api")).toBe(true);
     expect(pack.citations.length).toBeGreaterThanOrEqual(2);
     expect(pack.citations.some((citation) => citation.source_url === "https://docs.example.com/widgets")).toBe(true);
-    expect(pack.context_text).toContain("# Open Context v2 Context Pack");
+    expect(pack.context_text).toContain("# Hasna Context v2 Context Pack");
     expect(pack.context_text).toContain("POST /widgets");
     expect(pack.synthesis.status).toBe("not_run");
     expect(pack.citation_verification.verified).toBe(true);

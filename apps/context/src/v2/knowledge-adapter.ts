@@ -114,7 +114,7 @@ export function createKnowledgeSubstrateAdapterBoundary(): KnowledgeSubstrateAda
         ok: true,
         stored: false,
         context_pack: toKnowledgeSubstrateContextPack(pack),
-        message: "Open Context v2 produced an open-knowledge-compatible context pack; no open-knowledge write adapter is configured.",
+        message: "Hasna Context v2 produced a knowledge-compatible context pack; no knowledge write adapter is configured.",
       };
     },
   };

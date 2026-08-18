@@ -1,13 +1,13 @@
-# Open Context v2 Context Hub Contract
+# Hasna Context v2 Context Hub Contract
 
-Open Context v2 replatforms the package into a self-hosted context hub for AI
+Hasna Context v2 replatforms the package into a self-hosted context hub for AI
 agents. It keeps the useful v1 acquisition and serving surface, while adding a
 stable contract for source revisions, cited retrieval, freshness, and optional
 knowledge-substrate integration.
 
 ## Product Boundary
 
-Open Context owns public documentation acquisition and agent-facing context
+Hasna Context owns public documentation acquisition and agent-facing context
 serving:
 
 - Source catalog records for libraries, packages, APIs, SDKs, examples, docs
@@ -22,7 +22,7 @@ serving:
 - Context7-compatible library resolution and docs query tools.
 - CLI, MCP, and HTTP compatibility wrappers.
 
-Open Knowledge owns reusable durable knowledge substrate contracts when it is
+Hasna Knowledge owns reusable durable knowledge substrate contracts when it is
 used:
 
 - Artifact storage contracts.
@@ -67,7 +67,7 @@ Phase 1 adds an additive v2 layer under `src/v2`:
   v2 contract.
 - `buildV2ContextPack`: deterministic query pipeline skeleton.
 - Knowledge-substrate adapter types that can map a v2 context pack into an
-  open-knowledge-style context pack without adding a hard dependency.
+  knowledge-style context pack without adding a hard dependency.
 - Remote storage sync includes `api_endpoints` so API evidence does not become
   local-only when users enable remote or hybrid storage.
 
@@ -147,10 +147,10 @@ The stable v2 boundary is intentionally broader than the first implementation:
 - Legacy presenter: render existing CLI/MCP/HTTP-compatible text and JSON
   response shapes from v2 packs.
 
-## Open Knowledge Boundary
+## Hasna Knowledge Boundary
 
-Phase 1 mirrors the open-knowledge context-pack shape at the adapter boundary
-only. Open Context should not require `@hasna/knowledge` to run v1 commands.
+Phase 1 mirrors the knowledge context-pack shape at the adapter boundary
+only. Hasna Context should not require `@hasna/knowledge` to run v1 commands.
 
 Safe to mirror now:
 
@@ -162,8 +162,8 @@ Safe to mirror now:
 
 Keep optional for later:
 
-- Direct writes to open-knowledge `knowledge.db`.
-- Open-files source ownership semantics.
+- Direct writes to knowledge `knowledge.db`.
+- Files source ownership semantics.
 - Hosted/S3 storage policy.
 - Wiki compile and durable answer filing.
 - Permission enforcement beyond public-doc read-only assumptions.
@@ -176,7 +176,7 @@ Keep optional for later:
    interface.
 4. Move context building wrappers to v2 internals while keeping v1 response
    shapes.
-5. Add optional open-knowledge package integration for projects that want the
+5. Add optional knowledge package integration for projects that want the
    shared substrate.
 6. Add worker scheduling and conditional fetch run history.
 
@@ -188,5 +188,5 @@ Phase 1 tests must prove:
 - Existing v1 context building still works.
 - Library version resolution and freshness warnings are deterministic.
 - API endpoints appear as cited evidence with schema summaries.
-- The open-knowledge adapter boundary preserves citations and excerpts.
+- The knowledge adapter boundary preserves citations and excerpts.
 - Typecheck/build do not require a hosted account or external retriever keys.
