@@ -1,6 +1,6 @@
 # @hasna/router
 
-`@hasna/router` (CLI: `router`; also installed as the legacy alias `open-router`) is the smart model router companion for
+`@hasna/router` (CLI: `router`) is the smart model router companion for
 [`gateway`](https://github.com/hasna/gateway). It makes deterministic,
 inspectable route decisions for prompts; it does not execute provider calls,
 hold provider credentials, or expand gateway policy.

@@ -6,8 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "router": "dist/cli/index.js",
-    "open-router": "dist/cli/index.js"
+    "router": "dist/cli/index.js"
   },
   "exports": {
     ".": {
@@ -32,7 +31,9 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "smoke": "bun run src/cli/index.ts smoke --config router.config.example.json",
-    "prepublishOnly": "bun run typecheck && bun run test && bun run build"
+    "prepublishOnly": "bun run typecheck && bun run test && bun run build",
+    "scan:artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/router-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan router-artifact-scan.tgz; rc=$?; rm -f \"$PWD/router-artifact-scan.tgz\"; exit $rc",
+    "prepack": "bun run build && bun run scan:artifact"
   },
   "keywords": [
     "ai",
