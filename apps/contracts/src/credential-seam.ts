@@ -82,7 +82,7 @@ const SKIP_DIRS = new Set([
   "examples",
   "docs",
   // Dev and proof scripts are not shipped behaviour, for the same reason tests
-  // are not. Measured: `open-identities/scripts/proof-roundtrip.ts` was the
+  // are not. Measured: `identities/scripts/proof-roundtrip.ts` was the
   // only finding in that repo and it is a round-trip proof, not a client.
   "scripts",
 ]);
@@ -338,7 +338,7 @@ export function scanCredentialSeam(repoRoot: string, options: CredentialSeamScan
   // half reintroduces precisely that drift, and does so on the app's own
   // canonical alias.
   //
-  // The collision this narrowing was meant to dodge is real — `open-recordings`
+  // The collision this narrowing was meant to dodge is real — `recordings`
   // reads `RECORDINGS_API_KEY` into `config.openai_api_key`, which is an OpenAI
   // key and none of this rule's business — but the remedy for a measured,
   // nameable exception is the waiver comment this rule already ships and echoes

@@ -3,7 +3,7 @@
   "id": "cloud_manifest_shared_runtime_invalid",
   "createdAt": "2026-06-28T20:10:00.000Z",
   "packageName": "@hasna/cloud",
-  "appId": "open-cloud",
+  "appId": "cloud",
   "cloudBoundary": "app_owned",
   "cloudResources": [
     {

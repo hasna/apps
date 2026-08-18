@@ -5,5 +5,5 @@
   "kind": "task",
   "externalId": "868c77df-df31-4de5-8027-5d9e7474cdd3",
   "sourcePackage": "@hasna/todos",
-  "tags": ["open-todos", "contracts"]
+  "tags": ["todos", "contracts"]
 }

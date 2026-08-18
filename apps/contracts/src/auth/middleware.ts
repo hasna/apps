@@ -94,7 +94,7 @@ export interface AuthAuditEvent {
    *                 signed body, so altering it invalidates the signature.
    *
    * Optional rather than required because services construct this object
-   * themselves — `open-emails` and `open-mailery` each build an `AuthAuditEvent`
+   * themselves — `emails` and `mailery` each build an `AuthAuditEvent`
    * literal inside their own API-key verifier — and a required field would break
    * their type-check on upgrade.
    */

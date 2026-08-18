@@ -3,7 +3,7 @@
   "id": "announcement_bad_audience_ref_kind",
   "createdAt": "2026-07-06T11:00:00.000Z",
   "campaignId": "campaign_release_open_todos_0_11_63",
-  "appId": "open-todos",
+  "appId": "todos",
   "channels": [
     {
       "channel": "email",

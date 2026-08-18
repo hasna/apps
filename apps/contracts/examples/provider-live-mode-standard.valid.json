@@ -56,7 +56,7 @@
   "operationCards": [
     {
       "providerId": "ses",
-      "appId": "open-mailery",
+      "appId": "mailery",
       "adapterId": "mailery-ses-outbound",
       "ownerPackage": "@hasna/mailery",
       "modes": ["fixture", "sandbox", "read_only_live", "live_mutating"],
@@ -101,7 +101,7 @@
     },
     {
       "providerId": "twilio",
-      "appId": "open-telephony",
+      "appId": "telephony",
       "adapterId": "telephony-twilio",
       "ownerPackage": "@hasna/telephony",
       "modes": ["fixture", "sandbox", "read_only_live", "live_mutating"],
@@ -146,7 +146,7 @@
     },
     {
       "providerId": "feedback-webhook",
-      "appId": "open-feedback",
+      "appId": "feedback",
       "adapterId": "feedback-forwarder",
       "ownerPackage": "@hasna/feedback",
       "modes": ["mock", "fixture", "sandbox", "live_mutating"],
@@ -181,8 +181,8 @@
   ],
   "firstAdoptionTargets": [
     {
-      "appId": "open-mailery",
-      "repo": "/home/hasna/workspace/hasna/opensource/open-mailery",
+      "appId": "mailery",
+      "repo": "/home/hasna/workspace/repos/hasna/mailery",
       "priority": "p0",
       "requiredEvidence": [
         "canonical root and compatibility matrix",
@@ -191,11 +191,11 @@
         "signed webhook and replay fixtures"
       ],
       "firstOperations": ["send_email", "domain_readiness_check"],
-      "blockedUntil": ["canonical open-mailery/open-emails root decision is recorded"]
+      "blockedUntil": ["canonical mailery/emails root decision is recorded"]
     },
     {
-      "appId": "open-telephony",
-      "repo": "/home/hasna/workspace/hasna/opensource/open-telephony",
+      "appId": "telephony",
+      "repo": "/home/hasna/workspace/hasna/opensource/telephony",
       "priority": "p0",
       "requiredEvidence": [
         "REST auth negative tests",
@@ -206,8 +206,8 @@
       "firstOperations": ["send_sms_or_call", "verify_inbound_webhook"]
     },
     {
-      "appId": "open-feedback",
-      "repo": "/home/hasna/workspace/hasna/opensource/open-feedback",
+      "appId": "feedback",
+      "repo": "/home/hasna/workspace/hasna/opensource/feedback",
       "priority": "p0",
       "requiredEvidence": [
         "public submit versus private read/export auth matrix",

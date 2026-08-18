@@ -256,10 +256,10 @@ Duplicate roots and package identity collisions are flagged, not counted twice.
 
 | Wave | Repos | Focus |
 | --- | --- | --- |
-| Contract kit | `open-contracts`, `open-configs`, `open-deployment`, `open-releases`, `open-testers` | Schema, validators, smoke harnesses, scorecards. |
-| Infra services | `open-backup`, `open-bridge`, `open-domains`, `open-gateway`, `open-hooks`, `open-machines`, `open-releases`, `open-secrets`, `open-servers`, `open-uptime`, `open-monitor`, `open-logs`, `open-repos`, `open-sandboxes`, `open-sessions`, `open-shield`, `open-security` | Serve bins, lifecycle, deployment contracts, auth-negative gates. |
-| Finance/comms/customer | `open-accounting`, `open-banking`, `open-economy`, `open-conversations`, `open-mailery`, `open-telephony`, `open-tickets`, `open-feedback`, `open-contacts`, `open-calendar`, `open-shortlinks` | `/v1`, OpenAPI, webhooks, provider safety, queues, auth. |
-| Data/AI/control | `open-attachments`, `open-files`, `open-knowledge`, `open-mementos`, `open-projects`, `open-search`, `open-todos`, `open-coders`, `open-codewith`, `open-connectors`, `open-dispatch`, `open-mcps`, `open-prompts`, `open-swarm`, `open-testers`, `open-browser`, `open-computer`, `open-terminal` | Parity, provenance, package smoke, operator status. |
+| Contract kit | `open-contracts`, `open-configs`, `deployment`, `releases`, `testers` | Schema, validators, smoke harnesses, scorecards. |
+| Infra services | `backup`, `bridge`, `domains`, `gateway`, `hooks`, `machines`, `releases`, `secrets`, `servers`, `uptime`, `monitor`, `logs`, `repos`, `sandboxes`, `sessions`, `shield`, `security` | Serve bins, lifecycle, deployment contracts, auth-negative gates. |
+| Finance/comms/customer | `accounting`, `banking`, `economy`, `conversations`, `mailery`, `telephony`, `tickets`, `feedback`, `contacts`, `calendar`, `shortlinks` | `/v1`, OpenAPI, webhooks, provider safety, queues, auth. |
+| Data/AI/control | `attachments`, `files`, `knowledge`, `mementos`, `projects`, `search`, `todos`, `coders`, `codewith`, `connectors`, `dispatch`, `mcps`, `prompts`, `swarm`, `testers`, `browser`, `computer`, `terminal` | Parity, provenance, package smoke, operator status. |
 | Internal apps | (internal app catalog — not enumerated here) | Mode declarations, approvals, audit, reconciliation, provider and cost controls. |
 
 ## Reviewer Mapping

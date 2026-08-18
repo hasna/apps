@@ -24,7 +24,7 @@
   "operationCards": [
     {
       "providerId": "twilio",
-      "appId": "open-telephony",
+      "appId": "telephony",
       "adapterId": "telephony-twilio",
       "ownerPackage": "@hasna/telephony",
       "modes": ["fixture", "live_mutating"],
@@ -46,8 +46,8 @@
   ],
   "firstAdoptionTargets": [
     {
-      "appId": "open-mailery",
-      "repo": "/home/hasna/workspace/hasna/opensource/open-mailery",
+      "appId": "mailery",
+      "repo": "/home/hasna/workspace/repos/hasna/mailery",
       "priority": "p0",
       "requiredEvidence": ["no-send smoke"],
       "firstOperations": ["send_email"]

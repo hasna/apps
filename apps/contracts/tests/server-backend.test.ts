@@ -13,7 +13,7 @@ describe("server data backend", () => {
 
   test("derives canonical and alias database URL keys", () => {
     expect(envToken("todos")).toBe("TODOS");
-    expect(envToken("open-mailery")).toBe("OPEN_MAILERY");
+    expect(envToken("mailery")).toBe("MAILERY");
     expect(serverDataBackendEnvKeys("todos")).toEqual({
       databaseUrlKeys: ["HASNA_TODOS_DATABASE_URL", "TODOS_DATABASE_URL"],
     });

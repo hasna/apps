@@ -422,7 +422,7 @@ Identifier](docs/AUTH_RBAC_VERIFIER_CONTRACT.md#tenant-identifier).
 ### The identity seam (offline EdDSA fleet tokens)
 
 A server keeps the API-key path above as its **complete in-repo default**, and
-may *additionally* accept EdDSA tokens from a configured issuer. `open-tenants`
+may *additionally* accept EdDSA tokens from a configured issuer. `tenants`
 is the reference issuer **behind the seam, never a dependency** — nothing here
 imports it, and a repo that never configures the option is fully runnable alone.
 
@@ -450,7 +450,7 @@ if (identity.enabled) {
 }
 ```
 
-Wire shape is `open-tenants`' existing one, standardized rather than invented:
+Wire shape is `tenants`' existing one, standardized rather than invented:
 header `{alg:"EdDSA", kid, typ:"at+jwt"}` over `{iss, aud, sub, tid, pt, scope,
 iat, exp, jti}`. `tid` is **required** here (the API-key claim is optional only
 because it had to be added to a live format).
@@ -739,20 +739,20 @@ Common resource-kind mappings:
 
 | Repo domain | Preferred resource kinds |
 | --- | --- |
-| `open-todos` | `task`, `project`, `verification`, `proof_bundle` |
-| `open-loops` | `loop`, `workflow`, `run`, `artifact` |
-| `open-actions` | `action`, `tool`, `event`; decisions are emitted as `DecisionEnvelope` contracts, not resource kinds |
-| `open-automations` | `action`, `tool`, `event`; deterministic recipe decisions are emitted as `DecisionEnvelope` contracts |
-| `open-sessions` | `session`, `run`, `machine`, `artifact` |
-| `open-context` | `context_pack`, `file`, `url`, `knowledge` |
-| `open-knowledge` / `open-mementos` | `knowledge`, `memento`, `context_pack` |
-| `open-files` | `file`, `document`, `artifact`, `url` |
-| `open-mailery` | `email`, `document`, `artifact` |
-| `open-conversations` | `conversation`, `comment`, `event` |
-| `open-projects` | `project`, `dashboard`, `render`, `panel`, `integration` |
+| `todos` | `task`, `project`, `verification`, `proof_bundle` |
+| `loops` | `loop`, `workflow`, `run`, `artifact` |
+| `actions` | `action`, `tool`, `event`; decisions are emitted as `DecisionEnvelope` contracts, not resource kinds |
+| `automations` | `action`, `tool`, `event`; deterministic recipe decisions are emitted as `DecisionEnvelope` contracts |
+| `sessions` | `session`, `run`, `machine`, `artifact` |
+| `context` | `context_pack`, `file`, `url`, `knowledge` |
+| `knowledge` / `mementos` | `knowledge`, `memento`, `context_pack` |
+| `files` | `file`, `document`, `artifact`, `url` |
+| `mailery` | `email`, `document`, `artifact` |
+| `conversations` | `conversation`, `comment`, `event` |
+| `projects` | `project`, `dashboard`, `render`, `panel`, `integration` |
 | `open-evals` | `eval`, `verification`, `report`, `proof_bundle` |
 | `open-economy` | `cost`, `budget`; budget choices are emitted as `DecisionEnvelope` contracts, not resource kinds |
-| `open-monitor` | `alert`, `incident`, `machine`, `report` |
+| `monitor` | `alert`, `incident`, `machine`, `report` |
 
 ## Task-to-PR projection
 
@@ -931,31 +931,31 @@ projection data, including the complete cumulative provenance ledger.
 `@hasna/contracts` owns schemas, types, validators, examples, and conformance
 helpers. Owning packages still own storage and behavior.
 
-- `open-todos` owns tasks, task plans, locks, comments, and task evidence.
-- `open-loops` owns its own loop and workflow execution. In task-to-PR flows,
+- `todos` owns tasks, task plans, locks, comments, and task evidence.
+- `loops` owns its own loop and workflow execution. In task-to-PR flows,
   its invocation is optional reference-only orchestration context and confers
   no authority over Codewith, Todos, Repos, review, or merge state.
-- `open-events` owns event envelopes, channels, delivery, replay, and
+- `events` owns event envelopes, channels, delivery, replay, and
   notification semantics.
-- `open-actions` owns executable action manifests.
-- `open-automations` owns deterministic product/app automations and
+- `actions` owns executable action manifests.
+- `automations` owns deterministic product/app automations and
   connector/action recipes. It does not own agent workflow invocation,
   admission queues, task/PR/review worker routing, or canonical workflow run
   artifacts.
-- `open-sessions` owns transcript and trajectory ingestion.
-- `open-context` owns context-pack construction and retrieval.
-- `open-knowledge` owns durable knowledge records and promotion workflows under
+- `sessions` owns transcript and trajectory ingestion.
+- `context` owns context-pack construction and retrieval.
+- `knowledge` owns durable knowledge records and promotion workflows under
   `.hasna/knowledge`.
-- `open-files` owns artifact storage, file indexing, and dereference logic.
-- `open-projects` owns project folder discovery, `.hasna/project` conventions,
+- `files` owns artifact storage, file indexing, and dereference logic.
+- `projects` owns project folder discovery, `.hasna/project` conventions,
   dashboard snapshot assembly, render manifest loading, and the local dashboard
   viewer. It validates project manifests, panels, snapshots, and render
   manifests with `@hasna/contracts`.
-- `open-mementos` owns memory lifecycle and recall.
-- `open-reports` owns rendered reports and proof presentation.
+- `mementos` owns memory lifecycle and recall.
+- `reports` owns rendered reports and proof presentation.
 - `open-evals` owns evaluation execution and scored validation results.
 - `open-economy` owns budget, cost, and usage policy decisions.
-- `open-monitor` owns fleet health classification and alerting.
+- `monitor` owns fleet health classification and alerting.
 - The internal scaffold package owns scaffold templates, registry behavior,
   install/setup behavior, MCP tools, CLI UX, and private/internal scaffold
   metadata. It should validate public scaffold manifests and install records
@@ -975,48 +975,48 @@ Adopt contracts as optional compact boundary output first. Prefer `--contract`
 CLI flags, MCP response variants, or SDK adapter functions rather than replacing
 native domain objects immediately.
 
-- `open-files`: emit `ResourceRef`, `EvidenceRef`, and `ContextPack` for file
+- `files`: emit `ResourceRef`, `EvidenceRef`, and `ContextPack` for file
   records, versions, signed URLs, source manifests, and evidence assets.
-- `open-todos`: expose task refs as `ResourceRef`; verification evidence as
+- `todos`: expose task refs as `ResourceRef`; verification evidence as
   `ProofBundle`; task execution receipts as `WorkRun`; review gates as
   `ValidationPlan`; and workflow/run manifest pointers as compact task fields,
   not embedded handoff artifacts.
-- `open-loops`: emit its own loop/workflow runs as `WorkRun`, audit traces as
+- `loops`: emit its own loop/workflow runs as `WorkRun`, audit traces as
   `AgentTrajectory`, logs/artifacts as `EvidenceRef`, and verifier output as
   `ProofBundle`. A task-to-PR adapter may add one redacted
   `openLoopsInvocationRef`, but must not own or mirror the task-to-PR queue,
   Todos history, Codewith admission/runtime state, Repos leases/worktrees,
   review, or merge state.
-- `open-events`: emit and replay validated event envelopes to channels.
-  OpenEvents delivers notifications only; it does not create workflow
+- `events`: emit and replay validated event envelopes to channels.
+  Events delivers notifications only; it does not create workflow
   invocations, own queue state, or retry agent work.
-- `open-sessions`: convert messages/tool calls to `AgentTrajectory`, token
+- `sessions`: convert messages/tool calls to `AgentTrajectory`, token
   usage to `CostEstimate`, and transcript paths to `EvidenceRef`.
-- `open-context`: serialize built context as `ContextPack` with citations as
+- `context`: serialize built context as `ContextPack` with citations as
   `EvidenceRef` and source chunks as `ResourceRef`.
-- `open-knowledge`: return retrieval results as `ContextPack`; write policy and
+- `knowledge`: return retrieval results as `ContextPack`; write policy and
   promotion decisions as `DecisionEnvelope`.
-- `open-mementos`: expose memories as `ResourceRef` kind `memento` or
+- `mementos`: expose memories as `ResourceRef` kind `memento` or
   `knowledge`; reflection runs as `WorkRun`.
 - `open-evals`: map cases/assertions to `ValidationPlan`, runs/results to
   `ProofBundle`, reports to `EvidenceRef`, and judge/baseline choices to
   `DecisionEnvelope`.
 - `open-economy`: own `CostEstimate` production and emit budget decisions as
   `DecisionEnvelope`.
-- `open-monitor`: output doctor checks, fleet triage, and alerts as
+- `monitor`: output doctor checks, fleet triage, and alerts as
   `ValidationPlan`, `ProofBundle`, `EvidenceRef`, `alert`, and `incident`
   resources.
-- `open-actions`: keep domain action manifests, but expose shared `ActorRef`,
+- `actions`: keep domain action manifests, but expose shared `ActorRef`,
   `EvidenceRef`, `CapabilityCard`, `DecisionEnvelope`, and `WorkRun` adapter
   views.
 - Internal scaffold package: emit `ScaffoldManifest` documents for bundled
   templates, write schema-tagged `ScaffoldInstallRecord` receipts for installs,
   and keep template copying, setup wizards, source paths, and private metadata
   inside the scaffold package.
-- `open-automations`: keep deterministic app/product automation recipes and
+- `automations`: keep deterministic app/product automation recipes and
   connector/action recipes. Agentic task, PR, and review flows hand off to the
   canonical Todos/Codewith/Repos owners rather than creating a second queue.
-- `open-reports`: consume `ProofBundle`, `WorkRun`, `ContextPack`,
+- `reports`: consume `ProofBundle`, `WorkRun`, `ContextPack`,
   `CostEstimate`, and `EvidenceRef` to render compact Markdown/JSON/HTML proof
   reports.
 - Every package that implements app-owned cloud support should emit an
@@ -1072,9 +1072,9 @@ SHA-256 hash of the canonical raw `subjectRef`. Reject `.`/`..`, reserved device
 names, path separators, empty keys, and path traversal. Store the raw
 `subjectRef` only inside `manifest.json`.
 
-OpenEvents webhooks/channels are notifications. A `task.created` notification
-can be delivered through OpenEvents, but OpenLoops consumes the envelope and
-upserts/admits work items. OpenEvents must not import OpenLoops or own
+Events webhooks/channels are notifications. A `task.created` notification
+can be delivered through Events, but OpenLoops consumes the envelope and
+upserts/admits work items. Events must not import OpenLoops or own
 admission, retries, leases, verifier execution, or workflow run artifacts.
 
 Every Hasna app stores local state under `.hasna/<app>/...`. The obsolete
