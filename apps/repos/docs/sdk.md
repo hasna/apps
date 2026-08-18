@@ -93,7 +93,7 @@ syncGithubRepoCatalog({ maxPages: 1, resume: true });
 
 const firstPage = enumerateGithubRepoCatalog({
   limit: 25,
-  filter: { org: "hasna", packageScope: "@hasna", tags: ["open-loops"] },
+  filter: { org: "hasna", packageScope: "@hasna", tags: ["loops"] },
 });
 
 for (const repo of iterateGithubRepoCatalog({
@@ -104,7 +104,7 @@ for (const repo of iterateGithubRepoCatalog({
 ```
 
 Synchronization shells out to authenticated `gh`; ordinary enumeration reads
-the cache. Catalog envelopes use `open-repos.github-catalog.v1` and include
+the cache. Catalog envelopes use `repos.github-catalog.v1` and include
 cache completion/cursor/rate-limit metadata.
 
 ## Guarded mutation APIs

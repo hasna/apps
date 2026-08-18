@@ -231,7 +231,7 @@ export const PG_MIGRATIONS = [
  */
 export async function applyPostgresMigrations(client: PostgresMigrationClient): Promise<number[]> {
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
-    "open-repos.postgres-migrations.v1",
+    "repos.postgres-migrations.v1",
   ]);
   await client.query(`
     CREATE TABLE IF NOT EXISTS migrations_log (

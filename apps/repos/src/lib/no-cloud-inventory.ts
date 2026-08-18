@@ -279,7 +279,8 @@ export function enumerateScopeSearch(searchLimit = SEARCH_RESULT_CEILING): Scope
  * `@hasna/coders@0.2.14`, which was in the hardcoded list this module replaced and
  * otherwise dropped out of coverage entirely, plus two packages that declare the
  * retired `@hasna/cloud` today (`@hasna/cli@0.1.0` at `^0.1.5`,
- * `@hasna/open-projects@0.1.1` at `^0.1.28`).
+ * `@hasna/open-projects@0.1.1` at `^0.1.28` — the latter measured under its
+ * retired `open-`-prefixed name; it is now `@hasna/projects`).
  *
  * It needs no credential. `npm access list packages` fails E401 when it sends a
  * token that lacks org read — the failure is caused by *offering* the credential,
@@ -672,25 +673,40 @@ function repoFinding(root: string, base: string, nestedParentPath: string | null
   };
 }
 
-function canonicalPathTier(repo: InternalRepoFinding, expectedOpenName: string, path: string): number {
-  if (expectedOpenName && (path === expectedOpenName || path.endsWith(`/opensource/${expectedOpenName}`))) return 0;
+function isCanonicalCheckoutPath(repo: InternalRepoFinding, expectedName: string, path: string): boolean {
+  if (!expectedName) return false;
+  if (path === expectedName) return true;
+  const org = repo.repo_key?.split("/")[0] ?? "";
+  // Standalone layout: ~/workspace/repos/<org>/<name>, scanned from the repos
+  // root or from a parent. The retired opensource/open-<name> layout is never
+  // canonical.
+  if (org && (path === `${org}/${expectedName}` || path.endsWith(`/repos/${org}/${expectedName}`))) return true;
+  // Monorepo member layout: <monorepo-root>/apps/<name>.
+  if (path.endsWith(`/apps/${expectedName}`)) return true;
+  return false;
+}
+
+function canonicalPathTier(repo: InternalRepoFinding, expectedName: string, path: string): number {
+  if (isCanonicalCheckoutPath(repo, expectedName, path)) return 0;
   if (repo.nested_parent_path) return 3;
   if (auxiliaryPathReason(repo)) return 2;
   return 1;
 }
 
-function expectedOpenCheckoutName(repoName: string): string {
-  return repoName.startsWith("open-") ? repoName : `open-${repoName}`;
+function expectedCheckoutName(repoName: string): string {
+  // The canonical checkout is named after the bare repo name; the retired
+  // `open-` prefix is never minted.
+  return repoName;
 }
 
 function canonicalScore(repo: InternalRepoFinding): [number, number, number, string] {
   const path = repo.path.toLowerCase();
   const repoName = repo.repo_key?.split("/").pop() ?? "";
-  const expectedOpenName = repoName ? expectedOpenCheckoutName(repoName) : "";
-  const pathTier = canonicalPathTier(repo, expectedOpenName, path);
+  const expectedName = repoName ? expectedCheckoutName(repoName) : "";
+  const pathTier = canonicalPathTier(repo, expectedName, path);
   let score = 0;
 
-  if (expectedOpenName && (path === expectedOpenName || path.endsWith(`/opensource/${expectedOpenName}`))) score -= 100;
+  if (isCanonicalCheckoutPath(repo, expectedName, path)) score -= 100;
   if (repo.branch === "main") score -= 20;
   if (repo.dirty > 0) score += 250;
   if (/(^|\/)opensourcedev(\/|$)/.test(path) || repo.policy_path.includes("/opensourcedev/")) score += 180;

@@ -23,7 +23,7 @@ describe("parseVersionFromPackageJson", () => {
 
 describe("getCliVersionFromDir", () => {
   test("finds the package version from dist entrypoint directories", () => {
-    const root = mkdtempSync(join(tmpdir(), "open-repos-version-"));
+    const root = mkdtempSync(join(tmpdir(), "repos-version-"));
     try {
       mkdirSync(join(root, "dist", "cli"), { recursive: true });
       mkdirSync(join(root, "dist", "mcp"), { recursive: true });
@@ -40,7 +40,7 @@ describe("getCliVersionFromDir", () => {
   });
 
   test("ignores unrelated parent package metadata", () => {
-    const root = mkdtempSync(join(tmpdir(), "open-repos-version-"));
+    const root = mkdtempSync(join(tmpdir(), "repos-version-"));
     try {
       const nested = join(root, "outer", "package", "dist");
       mkdirSync(nested, { recursive: true });

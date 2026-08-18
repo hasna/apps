@@ -160,8 +160,8 @@ describe("worktree name and path computation", () => {
   test("the path is computed from the root, never supplied", () => {
     tempDir = mkdtempSync(join(tmpdir(), "repos-worktree-path-"));
     setWorktreeRootForTests(join(tempDir, "worktrees"));
-    expect(computeWorktreePath("open-repos", "a321ba13")).toBe(
-      join(tempDir, "worktrees", "open-repos", "a321ba13"),
+    expect(computeWorktreePath("repos", "a321ba13")).toBe(
+      join(tempDir, "worktrees", "repos", "a321ba13"),
     );
   });
 

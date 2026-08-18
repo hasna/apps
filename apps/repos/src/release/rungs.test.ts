@@ -26,7 +26,7 @@ const tree = "b".repeat(40);
 const digest = (value: Uint8Array) => createHash("sha256").update(value).digest("hex");
 
 const receipt: ReleaseVerificationReceipt = {
-  schema: "open-repos.release-verification.v1",
+  schema: "repos.release-verification.v1",
   exact_commit: commit,
   exact_tree: tree,
   package_name: "@hasna/repos",

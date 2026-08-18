@@ -6,7 +6,7 @@ import { listAllRepos } from "../db/repos.js";
 import type { Repo } from "../types/index.js";
 import { sanitizeRemoteIdentity } from "./remote-identity.js";
 
-export const GITHUB_REPO_CATALOG_SCHEMA_VERSION = "open-repos.github-catalog.v1" as const;
+export const GITHUB_REPO_CATALOG_SCHEMA_VERSION = "repos.github-catalog.v1" as const;
 
 export interface GithubCatalogAccount {
   login: string;

@@ -457,7 +457,7 @@ describe("auto-index", () => {
       remoteClient: remote,
     });
     expect(dryRun).toMatchObject({
-      schema: "open-repos.remote-identity-cleanup.v1",
+      schema: "repos.remote-identity-cleanup.v1",
       version: 1,
       applied: false,
       replayed: false,

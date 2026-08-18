@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-export const RELEASE_PROVENANCE_SCHEMA = "open-repos.release-provenance.v1" as const;
-export const RELEASE_VERIFICATION_SCHEMA = "open-repos.release-verification.v1" as const;
+export const RELEASE_PROVENANCE_SCHEMA = "repos.release-provenance.v1" as const;
+export const RELEASE_VERIFICATION_SCHEMA = "repos.release-verification.v1" as const;
 
 /**
  * The one path inside a release artefact that is ever digested as "the

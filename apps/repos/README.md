@@ -157,8 +157,8 @@ Prose did not hold the layout because every caller re-derived the path. So **`ad
 path option**:
 
 ```bash
-repos worktree add open-repos --task a321ba13      # -> <root>/open-repos/a321ba13
-repos worktree add open-repos --name pr36-review   # the sanctioned fallback when no task exists
+repos worktree add repos --task a321ba13         # -> <root>/repos/a321ba13
+repos worktree add repos --name pr36-review   # the sanctioned fallback when no task exists
 ```
 
 The destination is computed from the repo name and the worktree name. A name must be a
@@ -189,8 +189,8 @@ are all rejected on argument shape, before resolution:
 
 ```bash
 repos worktree remove wt_ebeae57c9eb805ae7f0e44ef
-repos worktree remove open-repos/a321ba13
-repos worktree remove open-repos/a321ba13 --discard-changes   # archives first, then forces
+repos worktree remove repos/a321ba13
+repos worktree remove repos/a321ba13 --discard-changes   # archives first, then forces
 ```
 
 A dirty worktree is `WORKTREE_DIRTY` and a worktree carrying commits that exist on no remote
@@ -321,7 +321,7 @@ rc=1
 
 # on stderr:
 Registry row 'repos' points at a path that is not a usable git checkout (missing-path).
-  /home/.../opensourcedev/open-repos/repos does not exist
+  /home/.../opensourcedev/repos does not exist
   The path is gone. Re-clone it with: git clone https://github.com/hasna/apps <path>
 ```
 
@@ -500,13 +500,13 @@ repos ops global-cli-smoke \
   --json
 
 repos ops release-candidates \
-  --repo ~/workspace/hasna/opensource/open-codewith \
+  --repo ~/workspace/repos/codewith \
   --github-repo hasna/codewith \
   --package @hasna/codewith \
   --branch main \
   --tag-prefix rust-v \
   --version-file codex-rs/Cargo.toml \
-  --report-dir ~/.hasna/loops/reports/open-codewith-release-candidates \
+  --report-dir ~/.hasna/loops/reports/codewith-release-candidates \
   --upsert-tasks \
   --todos-project ~/.hasna/loops \
   --task-list repo-release-candidates \
@@ -514,11 +514,11 @@ repos ops release-candidates \
   --json
 
 repos ops docs-rules-drift \
-  --repo ~/workspace/hasna/opensource/open-codewith \
+  --repo ~/workspace/repos/codewith \
   --github-repo hasna/codewith \
-  --report-dir ~/.hasna/loops/reports/open-codewith-docs-rules-drift \
+  --report-dir ~/.hasna/loops/reports/codewith-docs-rules-drift \
   --upsert-tasks \
-  --todos-project ~/workspace/hasna/opensource/open-codewith \
+  --todos-project ~/workspace/repos/codewith \
   --task-list codewith-product-backlog \
   --max-task-actions 1 \
   --json
@@ -630,7 +630,7 @@ repos gh-catalog --sync --max-pages 1 --json --limit 100
 repos gh-catalog --sync --resume --max-pages 1 --json
 
 # Enumerate cached records only, filtered for sequential multi-repo loop setup.
-repos gh-catalog --json --org hasna --language TypeScript --tags open-loops --limit 25 --offset 0
+repos gh-catalog --json --org hasna --language TypeScript --tags loops --limit 25 --offset 0
 ```
 
 SDK entry points:
@@ -646,7 +646,7 @@ const cache = syncGithubRepoCatalog({ maxPages: 1, resume: true });
 const page = enumerateGithubRepoCatalog({
   limit: 25,
   offset: 0,
-  filter: { org: "hasna", packageScope: "@hasna", tags: ["open-loops"] },
+  filter: { org: "hasna", packageScope: "@hasna", tags: ["loops"] },
 });
 
 for (const repo of iterateGithubRepoCatalog({ filter: { language: "TypeScript" } })) {
@@ -654,7 +654,7 @@ for (const repo of iterateGithubRepoCatalog({ filter: { language: "TypeScript" }
 }
 ```
 
-The JSON envelope uses schema `open-repos.github-catalog.v1` and includes `source.cacheSyncedAt`, `source.staleAt`, `source.completed`, `source.nextCursor`, `page.nextOffset`, GitHub rate-limit metadata, discovered accounts/orgs, and repository records. Each record includes owner/account, org, repo name/full name, default branch, visibility, archived/disabled/fork flags, topics, description, safe HTTPS/SSH clone URLs, pushed/updated timestamps, primary language, package hints, local path and branch/dirty/ahead/behind status when matched, and loop tags.
+The JSON envelope uses schema `repos.github-catalog.v1` and includes `source.cacheSyncedAt`, `source.staleAt`, `source.completed`, `source.nextCursor`, `page.nextOffset`, GitHub rate-limit metadata, discovered accounts/orgs, and repository records. Each record includes owner/account, org, repo name/full name, default branch, visibility, archived/disabled/fork flags, topics, description, safe HTTPS/SSH clone URLs, pushed/updated timestamps, primary language, package hints, local path and branch/dirty/ahead/behind status when matched, and loop tags.
 
 The catalog is cacheable and resumable. By default `repos gh-catalog` reads the cache and does not call GitHub; add `--sync` when OpenLoops intentionally wants to refresh data. The cache path defaults to `~/.hasna/repos/github-catalog.json` and can be overridden with `HASNA_REPOS_GITHUB_CACHE_PATH` or `--cache`.
 

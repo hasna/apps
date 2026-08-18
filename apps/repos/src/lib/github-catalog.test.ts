@@ -55,7 +55,7 @@ function repoPayload(overrides: Record<string, unknown> = {}): Record<string, un
     archived: false,
     disabled: false,
     fork: false,
-    topics: ["open-loops", "sdk"],
+    topics: ["loops", "sdk"],
     description: "Repository catalog",
     html_url: "https://github.com/hasna/repos",
     clone_url: "https://github.com/hasna/repos.git",
@@ -294,11 +294,11 @@ describe("github catalog SDK", () => {
       includeLocal: false,
       limit: 1,
       offset: 0,
-      filter: { org: "hasna", language: "TypeScript", tags: ["open-loops"] },
+      filter: { org: "hasna", language: "TypeScript", tags: ["loops"] },
       now: new Date("2026-06-24T06:30:00.000Z"),
     });
 
-    expect(envelope.schemaVersion).toBe("open-repos.github-catalog.v1");
+    expect(envelope.schemaVersion).toBe("repos.github-catalog.v1");
     expect(envelope.page.total).toBe(1);
     expect(envelope.page.count).toBe(1);
     expect(envelope.repositories[0]!.full_name).toBe("hasna/repos");

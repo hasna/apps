@@ -37,8 +37,8 @@ afterAll(() => {
 describe("ops producers", () => {
   test("builds normalized PR queue items with task seeds", () => {
     const repo = upsertRepo({
-      path: "/workspace/open-loops",
-      name: "open-loops",
+      path: "/workspace/loops",
+      name: "loops",
       org: "hasna",
       remote_url: "git@github.com:hasna/loops.git",
     });
@@ -64,14 +64,14 @@ describe("ops producers", () => {
 
     const result = buildPrQueue({ org: "hasna" });
 
-    expect(result.schema).toBe("open-repos.pr-queue.v1");
+    expect(result.schema).toBe("repos.pr-queue.v1");
     expect(result.summary.items).toBe(1);
     expect(result.items[0]!.repo.full_name).toBe("hasna/loops");
     expect(result.items[0]!.task_seed.fingerprint).toBe("github-pr:hasna/loops#12");
     expect(result.items[0]!.task_seed.tags).toContain("auto:route");
     expect(result.items[0]!.task_seed.body).toContain("GitHub author is andrei-hasna");
     expect(result.items[0]!.task_seed.metadata["github_author"]).toBe("andrei-hasna");
-    // pr_author + pr_state must be seeded into metadata so the open-loops
+    // pr_author + pr_state must be seeded into metadata so the loops
     // freshness gate / bot-login fast path avoids a per-task live `gh pr view`.
     expect(result.items[0]!.task_seed.metadata["pr_author"]).toBe("andrei-hasna");
     expect(result.items[0]!.task_seed.metadata["pr_state"]).toBe("open");
@@ -85,7 +85,7 @@ describe("ops producers", () => {
     // out N times produced N copies of every PR and `limit` was spent entirely
     // on duplicates — on the live index a 50-item queue held 2 distinct PRs.
     const paths = [
-      "/workspace/open-codewith",
+      "/workspace/codewith",
       "/home/u/.hasna/repos/worktrees/codewith/a",
       "/home/u/.hasna/repos/worktrees/codewith/b",
     ];
@@ -124,9 +124,9 @@ describe("ops producers", () => {
     // The surviving copy must be the primary clone. The seed body's
     // `Repository: <path>` line routes an agent to this directory, and a
     // worktree belongs to some other task — operating rule 8.
-    expect(result.items[0]!.repo.path).toBe("/workspace/open-codewith");
+    expect(result.items[0]!.repo.path).toBe("/workspace/codewith");
     expect(result.items[0]!.repo.path).not.toContain("/worktrees/");
-    expect(result.items[0]!.task_seed.body).toContain("/workspace/open-codewith");
+    expect(result.items[0]!.task_seed.body).toContain("/workspace/codewith");
   });
 
   test("names the repository that owns the PR, not the checkout it was recorded against", () => {
@@ -202,8 +202,8 @@ describe("ops producers", () => {
 
   test("an unresolvable --repo filter matches nothing rather than everything", () => {
     const repo = upsertRepo({
-      path: "/workspace/open-loops-scope",
-      name: "open-loops-scope",
+      path: "/workspace/loops-scope",
+      name: "loops-scope",
       org: "hasna",
       remote_url: "git@github.com:hasna/loops.git",
     });
@@ -226,18 +226,18 @@ describe("ops producers", () => {
     }]);
 
     expect(buildPrQueue({ repo: "no-such-repo-anywhere" }).summary.items).toBe(0);
-    expect(buildPrQueue({ repo: "open-loops-scope" }).summary.items).toBe(1);
+    expect(buildPrQueue({ repo: "loops-scope" }).summary.items).toBe(1);
   });
 
-  test("seed body State/Author lines are gate-parseable (cross-package contract with open-loops)", () => {
+  test("seed body State/Author lines are gate-parseable (cross-package contract with loops)", () => {
     // CONTRACT TEST — guards against "seed-body cross-package format drift"
     // (review-repos-pr11 BLOCK finding; tracked as task 21261ad4): a presence
     // assertion (`toContain`) passed CI while the gate could not PARSE the
     // line. These regexes are copied VERBATIM from @hasna/loops 0.4.11
-    // open-loops src/lib/route/pr-review.ts — authorFromPrText (:278-290)
+    // loops src/lib/route/pr-review.ts — authorFromPrText (:278-290)
     // and the prStateFromEvidence text fallback (:191). The todos CLI drops
     // task_seed.metadata, so the persisted todos task description is the ONLY
-    // channel the gate can read; if open-loops changes these patterns, this
+    // channel the gate can read; if loops changes these patterns, this
     // test must be updated in lockstep (and vice versa).
     const AUTHOR_FROM_PR_TEXT_PATTERNS = [
       /\bauthor\s+(?:is\s+also|is|=|:)\s+@?([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/i,
@@ -248,8 +248,8 @@ describe("ops producers", () => {
       /\b(?:pr[_\s-]?state|pull[_\s-]?request[_\s-]?state|state)\s*[:=]\s*(MERGED|CLOSED|OPEN)\b/i;
 
     const repo = upsertRepo({
-      path: "/workspace/open-loops-contract",
-      name: "open-loops-contract",
+      path: "/workspace/loops-contract",
+      name: "loops-contract",
       org: "hasna",
       remote_url: "git@github.com:hasna/loops-contract.git",
     });
@@ -273,7 +273,7 @@ describe("ops producers", () => {
       },
     ]);
 
-    const body = buildPrQueue({ org: "hasna", repo: "open-loops-contract" }).items[0]!.task_seed.body;
+    const body = buildPrQueue({ org: "hasna", repo: "loops-contract" }).items[0]!.task_seed.body;
 
     // Author fast path: at least one gate pattern must EXTRACT the login.
     const authorMatch = AUTHOR_FROM_PR_TEXT_PATTERNS
@@ -295,8 +295,8 @@ describe("ops producers", () => {
 
   test("keeps large PR queue JSON stable with escaped task seed content", () => {
     const repo = upsertRepo({
-      path: "/workspace/open-repos",
-      name: "open-repos",
+      path: "/workspace/repos",
+      name: "repos",
       org: "hasna",
       remote_url: "https://github.com/hasna/repos.git",
     });
@@ -323,7 +323,7 @@ describe("ops producers", () => {
     const json = JSON.stringify(result, null, 2);
     const parsed = JSON.parse(json) as typeof result;
 
-    expect(parsed.schema).toBe("open-repos.pr-queue.v1");
+    expect(parsed.schema).toBe("repos.pr-queue.v1");
     expect(parsed.summary.items).toBe(500);
     expect(parsed.items).toHaveLength(500);
     expect(parsed.items[0]!.pr.title).toContain('"quoted"');
@@ -416,7 +416,7 @@ describe("ops producers", () => {
       runner,
     });
 
-    expect(result.schema).toBe("open-repos.release-candidates.v1");
+    expect(result.schema).toBe("repos.release-candidates.v1");
     expect(result.summary.status).toBe("candidate");
     expect(result.state.intended_tag).toBe("rust-v0.2.0");
     expect(result.summary.task_seeds).toBe(1);
@@ -850,7 +850,7 @@ describe("ops producers", () => {
 
     const result = buildDocsRulesDrift({ repo: repoPath, fetch: false, runner });
 
-    expect(result.schema).toBe("open-repos.docs-rules-drift.v1");
+    expect(result.schema).toBe("repos.docs-rules-drift.v1");
     expect(result.summary.status).toBe("drift");
     expect(result.task_suggestions[0]!.tags).toContain("docs-rules-drift");
     expect(result.task_suggestions[0]!.body).toContain("CHANGELOG/README/docs");
@@ -866,18 +866,18 @@ describe("ops producers", () => {
 
     const result = buildDependencyRefresh({ repo: repoPath, runner });
 
-    expect(result.schema).toBe("open-repos.dependency-refresh.v1");
+    expect(result.schema).toBe("repos.dependency-refresh.v1");
     expect(result.summary.status).toBe("needs-refresh");
     expect(result.checks.find((check) => check.id === "bun-outdated")?.count).toBe(1);
     expect(result.task_suggestions[0]!.tags).toContain("dependency-refresh");
   });
 
   test("detects stale dirty workspace worktrees under the configured root", () => {
-    const root = mkdtempSync(join(tmpdir(), "open-repos-worktree-root-"));
+    const root = mkdtempSync(join(tmpdir(), "repos-worktree-root-"));
     tempDirs.push(root);
-    const repoPath = join(root, "open-codewith");
+    const repoPath = join(root, "codewith");
     const worktreeRoot = join(root, "worktrees");
-    const worktreePath = join(worktreeRoot, "open-codewith", "task-123");
+    const worktreePath = join(worktreeRoot, "codewith", "task-123");
     mkdirSync(join(repoPath, ".git"), { recursive: true });
     mkdirSync(worktreePath, { recursive: true });
     const runner: CommandRunner = (command, args) => {
@@ -904,7 +904,7 @@ describe("ops producers", () => {
 
     const result = buildWorkspaceWorktreeHygiene({ roots: [root], worktreeRoot, staleDays: 1, runner });
 
-    expect(result.schema).toBe("open-repos.workspace-worktree-hygiene.v1");
+    expect(result.schema).toBe("repos.workspace-worktree-hygiene.v1");
     expect(result.summary.repos_checked).toBe(1);
     expect(result.summary.issue_worktrees).toBe(1);
     expect(result.worktrees[0]!.issues).toContain("dirty-worktree");
@@ -918,9 +918,9 @@ describe("ops producers", () => {
       return { status: 1, stdout: "", stderr: "bad" };
     };
 
-    const result = buildTaskRouteHealth({ routerLoop: "machine-repo-open-codewith-task-lifecycle-router", project: "/repo", runner });
+    const result = buildTaskRouteHealth({ routerLoop: "machine-repo-codewith-task-lifecycle-router", project: "/repo", runner });
 
-    expect(result.schema).toBe("open-repos.task-route-health.v1");
+    expect(result.schema).toBe("repos.task-route-health.v1");
     expect(result.summary.status).toBe("issue");
     expect(result.task_suggestions[0]!.fingerprint).toContain("task-route-health");
   });
@@ -943,15 +943,15 @@ describe("ops producers", () => {
 
     const result = buildProtectedRelease({ repo: repoPath, githubRepo: "hasna/repos", fetch: false, runner });
 
-    expect(result.schema).toBe("open-repos.protected-release.v1");
+    expect(result.schema).toBe("repos.protected-release.v1");
     expect(result.summary.status).toBe("ready");
     expect(result.task_suggestions[0]!.tags).toContain("protected-release");
     expect(result.task_suggestions[0]!.priority).toBe("critical");
   });
 
   test("release pipeline parity flags repos without the standard workflow pair", () => {
-    const compliant = mkdtempSync(join(tmpdir(), "open-repos-parity-ok-"));
-    const missing = mkdtempSync(join(tmpdir(), "open-repos-parity-gap-"));
+    const compliant = mkdtempSync(join(tmpdir(), "repos-parity-ok-"));
+    const missing = mkdtempSync(join(tmpdir(), "repos-parity-gap-"));
     tempDirs.push(compliant, missing);
     for (const dir of [compliant, missing]) {
       writeFileSync(join(dir, "package.json"), JSON.stringify({ name: `@hasna/${basename(dir)}`, version: "1.0.0" }));
@@ -962,7 +962,7 @@ describe("ops producers", () => {
 
     const result = buildReleasePipelineParity({ paths: [compliant, missing], includeRegistry: false });
 
-    expect(result.schema).toBe("open-repos.release-pipeline-parity.v1");
+    expect(result.schema).toBe("repos.release-pipeline-parity.v1");
     expect(result.summary).toMatchObject({ repos: 2, flagged: 1, task_seeds: 1 });
     const seed = result.task_suggestions[0]!;
     expect(seed.fingerprint).toBe(`release-pipeline-parity:${basename(missing)}`);
@@ -975,7 +975,7 @@ describe("ops producers", () => {
   });
 
   test("release pipeline parity emits high priority seeds for npm tag drift", () => {
-    const repo = mkdtempSync(join(tmpdir(), "open-repos-parity-drift-"));
+    const repo = mkdtempSync(join(tmpdir(), "repos-parity-drift-"));
     tempDirs.push(repo);
     writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "@hasna/parity-drift", version: "1.0.0" }));
     mkdirSync(join(repo, ".github", "workflows"), { recursive: true });
@@ -1005,7 +1005,7 @@ describe("ops producers", () => {
   });
 
   test("release pipeline parity does not raise a high priority drift seed for an unrelated npm package", () => {
-    const repo = mkdtempSync(join(tmpdir(), "open-repos-parity-collision-"));
+    const repo = mkdtempSync(join(tmpdir(), "repos-parity-collision-"));
     tempDirs.push(repo);
     writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "@hasna/parity-collision", version: "1.0.0" }));
     mkdirSync(join(repo, ".github", "workflows"), { recursive: true });
@@ -1074,13 +1074,13 @@ describe("resolveRepoPath", () => {
 
   test("still resolves the org/name form to a real checkout when one exists", () => {
     upsertRepo({
-      path: "/home/u/workspace/hasna/opensource/open-repos-fixture",
-      name: "open-repos-fixture",
+      path: "/home/u/workspace/hasna/opensource/repos-fixture",
+      name: "repos-fixture",
       org: "hasna",
       remote_url: "github.com/hasna/repos-fixture",
     });
-    expect(resolveRepoPath("hasna/open-repos-fixture")).toBe(
-      "/home/u/workspace/hasna/opensource/open-repos-fixture"
+    expect(resolveRepoPath("hasna/repos-fixture")).toBe(
+      "/home/u/workspace/hasna/opensource/repos-fixture"
     );
   });
 
@@ -1100,7 +1100,7 @@ describe("resolveRepoPath", () => {
 });
 
 function writeCargoVersion(version: string): string {
-  const repoPath = mkdtempSync(join(tmpdir(), "open-repos-release-test-"));
+  const repoPath = mkdtempSync(join(tmpdir(), "repos-release-test-"));
   tempDirs.push(repoPath);
   mkdirSync(join(repoPath, "codex-rs"), { recursive: true });
   writeFileSync(join(repoPath, "codex-rs", "Cargo.toml"), `[package]\nname = "codewith"\nversion = "${version}"\n`);
@@ -1108,7 +1108,7 @@ function writeCargoVersion(version: string): string {
 }
 
 function writePackageJsonVersion(name: string, version: string, extra: Record<string, unknown> = {}): string {
-  const repoPath = mkdtempSync(join(tmpdir(), "open-repos-release-test-"));
+  const repoPath = mkdtempSync(join(tmpdir(), "repos-release-test-"));
   tempDirs.push(repoPath);
   writeFileSync(join(repoPath, "package.json"), JSON.stringify({ name, version, ...extra }, null, 2));
   return repoPath;

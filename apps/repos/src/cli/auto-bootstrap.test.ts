@@ -73,7 +73,7 @@ afterEach(() => {
 
 describe("cli auto bootstrap", () => {
   it("indexes the workspace on first read command", () => {
-    tempDir = mkdtempSync(join(tmpdir(), "open-repos-cli-"));
+    tempDir = mkdtempSync(join(tmpdir(), "repos-cli-"));
     const homeDir = join(tempDir, "home");
     const workspaceRoot = join(homeDir, "workspace");
     mkdirSync(workspaceRoot, { recursive: true });
@@ -102,7 +102,7 @@ describe("cli auto bootstrap", () => {
   });
 
   it("stays local for implicit bootstrap even when remote database env is present", () => {
-    tempDir = mkdtempSync(join(tmpdir(), "open-repos-cli-remote-"));
+    tempDir = mkdtempSync(join(tmpdir(), "repos-cli-remote-"));
     const homeDir = join(tempDir, "home");
     const workspaceRoot = join(homeDir, "workspace");
     mkdirSync(workspaceRoot, { recursive: true });

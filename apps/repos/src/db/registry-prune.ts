@@ -69,8 +69,8 @@ import { isAbsolute, resolve } from "node:path";
 import type { Database } from "bun:sqlite";
 import { getDb, getDbPath } from "./database.js";
 
-export const REGISTRY_PRUNE_SCHEMA = "open-repos.registry-prune.v1" as const;
-export const REGISTRY_PRUNE_RECEIPT_SCHEMA = "open-repos.registry-prune-receipt.v1" as const;
+export const REGISTRY_PRUNE_SCHEMA = "repos.registry-prune.v1" as const;
+export const REGISTRY_PRUNE_RECEIPT_SCHEMA = "repos.registry-prune-receipt.v1" as const;
 const OPERATION = "registry_prune" as const;
 
 const HASH_PATTERN = /^[0-9a-f]{64}$/;

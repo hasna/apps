@@ -49,7 +49,7 @@ describe("graph name resolution does not resolve to a factory scratch clone", ()
       org: "hasna",
       remote_url: "github.com/hasna/loops",
     });
-    const other = upsertRepo({ path: "/ws/hasna/opensource/open-other", name: "open-other", org: "hasna" });
+    const other = upsertRepo({ path: "/ws/hasna/opensource/other", name: "other", org: "hasna" });
 
     // A relationship recorded against the MIRROR's id -- the wrong node. The
     // whole point of the fix is that a bare-name query must not surface it.
@@ -62,11 +62,11 @@ describe("graph name resolution does not resolve to a factory scratch clone", ()
   });
 
   test("queryRelated still resolves and returns edges for a name that is not ambiguous with a scratch clone", () => {
-    const canonical = upsertRepo({ path: "/ws/open-canonical", name: "open-canonical", org: "hasna" });
-    const other = upsertRepo({ path: "/ws/open-other2", name: "open-other2", org: "hasna" });
+    const canonical = upsertRepo({ path: "/ws/canonical", name: "canonical", org: "hasna" });
+    const other = upsertRepo({ path: "/ws/other2", name: "other2", org: "hasna" });
     insertEdge(String(canonical.id), "similar_to", String(other.id), 3.0);
 
-    const related = queryRelated("open-canonical");
+    const related = queryRelated("canonical");
     expect(related.length).toBe(1);
     expect(related[0]!.repo_id).toBe(String(other.id));
     expect(related[0]!.weight).toBe(3.0);
@@ -85,7 +85,7 @@ describe("graph name resolution does not resolve to a factory scratch clone", ()
       org: "hasna",
       remote_url: "github.com/hasna/loops",
     });
-    const dep = upsertRepo({ path: "/ws/hasna/opensource/open-dep", name: "open-dep", org: "hasna" });
+    const dep = upsertRepo({ path: "/ws/hasna/opensource/dep", name: "dep", org: "hasna" });
 
     insertEdge(String(mirror.id), "depends_on", String(dep.id));
 
@@ -95,11 +95,11 @@ describe("graph name resolution does not resolve to a factory scratch clone", ()
   });
 
   test("getDeps still walks real depends_on edges for an unambiguous name", () => {
-    const consumer = upsertRepo({ path: "/ws/open-consumer", name: "open-consumer", org: "hasna" });
-    const dep = upsertRepo({ path: "/ws/open-real-dep", name: "open-real-dep", org: "hasna" });
+    const consumer = upsertRepo({ path: "/ws/consumer", name: "consumer", org: "hasna" });
+    const dep = upsertRepo({ path: "/ws/real-dep", name: "real-dep", org: "hasna" });
     insertEdge(String(consumer.id), "depends_on", String(dep.id));
 
-    const deps = getDeps("open-consumer");
+    const deps = getDeps("consumer");
     expect(deps.length).toBe(1);
     expect(deps[0]!.repo_id).toBe(String(dep.id));
   });
@@ -111,17 +111,17 @@ describe("graph name resolution does not resolve to a factory scratch clone", ()
     // A raw (non-@hasna-scoped) dependency name is passed through by
     // extractDeps() unchanged, so a package literally depending on a package
     // named "loops" is the realistic trigger for this: the canonical checkout
-    // is indexed as "open-loops" (never matches), while the factory scratch
-    // clone is indexed under the bare "loops" (the exact match).
+    // and the factory scratch clone are both indexed under the bare "loops",
+    // and the derived-checkout filter is what excludes the mirror.
     writeFileSync(
       join(consumerDir, "package.json"),
       JSON.stringify({ name: "consumer", dependencies: { loops: "*" } })
     );
 
-    const consumer = upsertRepo({ path: consumerDir, name: "open-consumer-fixture", org: "hasna" });
+    const consumer = upsertRepo({ path: consumerDir, name: "consumer-fixture", org: "hasna" });
     upsertRepo({
-      path: "/ws/hasna/opensource/open-loops",
-      name: "open-loops",
+      path: "/ws/hasna/opensource/loops",
+      name: "loops",
       org: "hasna",
       remote_url: "github.com/hasna/loops",
     });

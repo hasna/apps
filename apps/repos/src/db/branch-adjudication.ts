@@ -4,8 +4,8 @@ import type { Database } from "bun:sqlite";
 import { isAbsolute } from "node:path";
 import { getDb, openNonMigratingDb } from "./database.js";
 
-const SCHEMA = "open-repos.branch-adjudication.v1" as const;
-const AUDIT_SCHEMA = "open-repos.branch-adjudication-receipt.v1" as const;
+const SCHEMA = "repos.branch-adjudication.v1" as const;
+const AUDIT_SCHEMA = "repos.branch-adjudication-receipt.v1" as const;
 const OPERATION = "branch_adjudication" as const;
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const SAFE_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$/;

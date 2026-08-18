@@ -3,7 +3,7 @@
   "schedules": [
     {
       "id": "reminder-open-repos-1774525588630",
-      "name": "open-repos reminder",
+      "name": "repos reminder",
       "skill": "reminder-open-repos",
       "cron": "* * * * *",
       "enabled": true,

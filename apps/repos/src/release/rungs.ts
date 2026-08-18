@@ -18,7 +18,7 @@ import {
   type ReleaseVerificationReceipt,
 } from "./provenance.js";
 
-export const SHIP_CHAIN_SCHEMA = "open-repos.ship-chain-report.v1" as const;
+export const SHIP_CHAIN_SCHEMA = "repos.ship-chain-report.v1" as const;
 
 /**
  * The four rungs of the ship chain. Merged is not published, published is not

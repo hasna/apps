@@ -23,7 +23,7 @@ export interface UpsertTaskSeedsOptions {
 }
 
 export interface UpsertTaskSeedsResult {
-  schema: "open-repos.loop-task-upsert.v1";
+  schema: "repos.loop-task-upsert.v1";
   generated_at: string;
   project: string;
   task_list: string;
@@ -53,7 +53,7 @@ export function upsertTaskSeeds(seeds: TaskSeed[], options: UpsertTaskSeedsOptio
   const timeoutMs = normalizePositiveInteger(options.timeoutMs, 15_000);
   const maxActions = normalizePositiveInteger(options.maxActions, 20);
   const result: UpsertTaskSeedsResult = {
-    schema: "open-repos.loop-task-upsert.v1",
+    schema: "repos.loop-task-upsert.v1",
     generated_at: new Date().toISOString(),
     project: options.project,
     task_list: options.taskList,

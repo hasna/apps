@@ -17,7 +17,7 @@ let testDir = "";
 let configPath = "";
 
 beforeEach(() => {
-  testDir = join(tmpdir(), `open-repos-config-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  testDir = join(tmpdir(), `repos-config-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
   configPath = join(testDir, "config.json");
   process.env["HASNA_REPOS_CONFIG_PATH"] = configPath;

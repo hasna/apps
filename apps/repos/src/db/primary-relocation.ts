@@ -23,10 +23,10 @@ import type { Repo } from "../types/index.js";
 
 export { sanitizeGitRemoteUrl } from "../lib/remote-identity.js";
 
-const SCHEMA = "open-repos.primary-relocation.v2" as const;
+const SCHEMA = "repos.primary-relocation.v2" as const;
 // The receipt payload remains v6. Migration 7 changes only the storage FK so
 // exact replays of already-issued receipts are not silently re-labelled.
-const AUDIT_SCHEMA = "open-repos.primary-relocation-receipt.v6" as const;
+const AUDIT_SCHEMA = "repos.primary-relocation-receipt.v6" as const;
 const OPERATION = "primary_relocation" as const;
 const SHA_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const ABBREVIATED_SHA_PATTERN = /^[0-9a-f]{4,64}$/;

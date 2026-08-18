@@ -112,10 +112,9 @@ export function buildGraph(opts: { onProgress?: (msg: string) => void } = {}): {
         // Find if dep is a local repo. Excludes derived checkouts (todos
         // f3c7ecb6, same class as getRepo()'s c357a1f3 fix): a raw dependency
         // name is passed through unchanged, so a package literally depending
-        // on e.g. "loops" would otherwise attribute the edge to a
+        // on e.g. "loops" would otherwise attribute the edge to the
         // `_factory_src/loops` scratch clone -- the exact bare name it is
-        // indexed under -- while the canonical checkout ("open-loops") never
-        // matches at all.
+        // indexed under -- rather than the canonical checkout.
         const localRepo = db
           .query(`SELECT id FROM repos WHERE name = ? AND ${nonDerivedCheckoutSql("path")}`)
           .get(dep) as { id: number } | null;
@@ -179,8 +178,8 @@ function extractDeps(repoPath: string): string[] {
       ...pkg.devDependencies,
     };
     return Object.keys(allDeps || {}).map((d) => {
-      // @hasna/todos → open-todos, @hasna/repos → open-repos
-      if (d.startsWith("@hasna/")) return `open-${d.replace("@hasna/", "")}`;
+      // @hasna/todos → todos, @hasna/repos → repos (bare-name checkout layout)
+      if (d.startsWith("@hasna/")) return d.replace("@hasna/", "");
       return d;
     });
   } catch {

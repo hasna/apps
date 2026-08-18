@@ -56,9 +56,9 @@ import { getConfig } from "./config.js";
 import { scanRepoPaths } from "./scanner.js";
 import { redactGitDiagnostics } from "./worktrees.js";
 
-export const REPO_CREATE_SCHEMA = "open-repos.repo-create.v1" as const;
-export const REPO_CLONE_SCHEMA = "open-repos.repo-clone.v1" as const;
-export const REPO_ARCHIVE_SCHEMA = "open-repos.repo-archive.v1" as const;
+export const REPO_CREATE_SCHEMA = "repos.repo-create.v1" as const;
+export const REPO_CLONE_SCHEMA = "repos.repo-clone.v1" as const;
+export const REPO_ARCHIVE_SCHEMA = "repos.repo-archive.v1" as const;
 
 const GH_TIMEOUT_MS = 60_000;
 const GH_CLONE_TIMEOUT_MS = 300_000;

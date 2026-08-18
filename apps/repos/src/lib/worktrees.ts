@@ -78,9 +78,9 @@ import { classifyCheckout, describeCheckoutRemedy } from "./checkout-health.js";
 import { getSourceMachineId } from "./machine-id.js";
 import { sanitizeRemoteIdentity } from "./remote-identity.js";
 
-export const WORKTREE_LEASE_SCHEMA = "open-repos.worktree-lease.v1" as const;
-export const WORKTREE_LIST_SCHEMA = "open-repos.worktree-list.v1" as const;
-export const WORKTREE_ADOPT_SCHEMA = "open-repos.worktree-adopt.v1" as const;
+export const WORKTREE_LEASE_SCHEMA = "repos.worktree-lease.v1" as const;
+export const WORKTREE_LIST_SCHEMA = "repos.worktree-list.v1" as const;
+export const WORKTREE_ADOPT_SCHEMA = "repos.worktree-adopt.v1" as const;
 
 const GIT_TIMEOUT_MS = 30_000;
 const GIT_FETCH_TIMEOUT_MS = 120_000;
@@ -403,9 +403,9 @@ interface ParentCheckout {
  * on top of it. Checkout health is classified structurally in one place; this
  * lifecycle only translates that verdict into its own error contract.
  *
- * The live counter-example: registry row 92 points at
- * `/home/hasna/workspace/hasna/opensource/open-repos`, whose `.git` holds only
- * `hooks/` and `worktrees/`. `git rev-parse` there exits 128 with "not a git
+ * The live counter-example: registry row 92 points at a checkout under the
+ * retired `opensource/open-<name>` layout, whose `.git` holds only `hooks/`
+ * and `worktrees/`. `git rev-parse` there exits 128 with "not a git
  * repository", and a verb that assumes health turns that into an opaque git
  * failure two calls later.
  */
@@ -1889,8 +1889,8 @@ export function listWorktrees(options: WorktreeListOptions = {}): WorktreeListRe
 
   for (const lease of leases) {
     // The repo segment comes from the lease's position under the root, not from
-    // the parent checkout's directory name — those differ (`open-repos` under
-    // the root, `clones/open-repos` on disk) and a listing keyed on the wrong
+    // the parent checkout's directory name — those differ (`repos` under
+    // the root, `clones/repos` on disk) and a listing keyed on the wrong
     // one cannot be filtered by the same name `add` was given.
     const relativeToRoot = isWithin(root, lease.worktree_path)
       ? relative(root, lease.worktree_path).split(sep)
