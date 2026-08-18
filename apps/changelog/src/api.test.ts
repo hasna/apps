@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { createChangelogHandler } from "./api.js";
 import { ChangelogClient } from "./client.js";
 import { LocalChangelogStore } from "./storage.js";
+import { VERSION } from "./version.js";
 
 async function createTestClient() {
   const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "changelog-api-")) });
@@ -105,11 +106,48 @@ describe("Changelog HTTP API and SDK", () => {
     expect(await client.generate({ appId: "release-ok", version: "1.0.0" })).toContain("## [1.0.0] - 2026-07-01");
   });
 
+  test("serves contract GET /health, GET /ready, and GET /version endpoints", async () => {
+    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "changelog-contract-")) });
+    const handler = createChangelogHandler({ store });
+
+    const health = await handler(new Request("http://changelog.test/health"));
+    expect(health.status).toBe(200);
+    expect(await health.json()).toMatchObject({ ok: true, service: "changelog", version: VERSION });
+
+    const ready = await handler(new Request("http://changelog.test/ready"));
+    expect(ready.status).toBe(200);
+    expect(await ready.json()).toEqual({ ready: true });
+
+    const version = await handler(new Request("http://changelog.test/version"));
+    expect(version.status).toBe(200);
+    expect(await version.json()).toEqual({ version: VERSION });
+  });
+
   test("rejects requests with missing token when configured", async () => {
     const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "changelog-auth-")) });
     const handler = createChangelogHandler({ store, apiToken: "required" });
     const response = await handler(new Request("http://changelog.test/v1/entries"));
     expect(response.status).toBe(401);
+  });
+
+  test("serves contract liveness endpoints publicly when token auth is configured", async () => {
+    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "changelog-auth-")) });
+    const handler = createChangelogHandler({ store, apiToken: "required" });
+
+    const health = await handler(new Request("http://changelog.test/health"));
+    expect(health.status).toBe(200);
+    expect(await health.json()).toMatchObject({ ok: true, service: "changelog" });
+
+    const ready = await handler(new Request("http://changelog.test/ready"));
+    expect(ready.status).toBe(200);
+    expect(await ready.json()).toEqual({ ready: true });
+
+    const version = await handler(new Request("http://changelog.test/version"));
+    expect(version.status).toBe(200);
+    expect(await version.json()).toEqual({ version: VERSION });
+
+    const protectedRoute = await handler(new Request("http://changelog.test/v1/entries"));
+    expect(protectedRoute.status).toBe(401);
   });
 
   test("requires configured token auth for API publish write mode", async () => {

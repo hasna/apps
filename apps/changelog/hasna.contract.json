@@ -3,7 +3,7 @@
   "name": "changelog",
   "class": "library",
   "contractVersion": "v1",
-  "kitVersion": "0.10.6",
+  "kitVersion": "0.11.1",
   "description": "Reusable changelog collection, generation, publishing, CLI, API, SDK, and MCP server for Hasna-coded apps.",
   "hosting": [
     "user-hosted"
@@ -18,6 +18,25 @@
       "status": "supported",
       "bin": "changelog",
       "authMode": "local-only"
+    },
+    {
+      "name": "changelog-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "."
     }
-  ]
+  ],
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    },
+    "conformance": {
+      "notes": [
+        "bins_match_package and surface_matrix (api/mcp) remain open: the current kit forbids a library repo from declaring -serve/-mcp bins (schemas.ts RepoClassSchema), and surface bins must be declared in bins, so changelog-mcp and changelog-serve cannot be declared while class is library. Reclassifying to cli-with-store would require asserting sqlite+postgresql engines, a pgTestGate, an OpenAPI document and a generated SDK that the JSONL-file store does not implement — the same honest refusal documented in apps/feedback/docs/contract-conformance.md."
+      ]
+    }
+  }
 }

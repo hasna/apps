@@ -77,9 +77,10 @@
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
-    "prepack": "bun run build",
+    "prepack": "bun run build && bun run scan:artifact",
     "prepublishOnly": "bun run typecheck && bun test",
-    "postinstall": "mkdir -p $HOME/.hasna/changelog 2>/dev/null || true"
+    "postinstall": "mkdir -p $HOME/.hasna/changelog 2>/dev/null || true",
+    "scan:artifact": "bun scripts/scan-artifact.ts"
   },
   "keywords": [
     "changelog",
@@ -108,6 +109,7 @@
   "author": "Hasna",
   "license": "Apache-2.0",
   "dependencies": {
+    "@hasna/contracts": "0.11.1",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "commander": "^13.1.0",
     "zod": "^3.25.76"

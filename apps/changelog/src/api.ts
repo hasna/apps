@@ -106,13 +106,26 @@ export function createChangelogHandler(options: ChangelogApiOptions = {}): (requ
 
     if (request.method === "OPTIONS") return withCors(new Response(null, { status: 204 }), corsOrigin);
 
-    if (apiToken && authTokenFromRequest(request) !== apiToken) {
+    // Contract liveness endpoints (/health, /ready, /version) are served
+    // publicly even when token auth is configured; the hasna.contract.json
+    // api surface declares them public: true.
+    const isPublicEndpoint =
+      request.method === "GET" && (pathname === "/health" || pathname === "/ready" || pathname === "/version");
+    if (apiToken && !isPublicEndpoint && authTokenFromRequest(request) !== apiToken) {
       return withCors(errorResponse(401, "Unauthorized"), corsOrigin);
     }
 
     try {
       if (request.method === "GET" && pathname === "/health") {
         return withCors(jsonResponse({ ok: true, service: "changelog", version: VERSION }), corsOrigin);
+      }
+
+      if (request.method === "GET" && pathname === "/ready") {
+        return withCors(jsonResponse({ ready: true }), corsOrigin);
+      }
+
+      if (request.method === "GET" && pathname === "/version") {
+        return withCors(jsonResponse({ version: VERSION }), corsOrigin);
       }
 
       if (request.method === "POST" && pathname === "/v1/entries") {
