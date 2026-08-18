@@ -10,7 +10,7 @@ import { EventEmitter } from "events";
 let tempDir: string;
 
 beforeEach(() => {
-  tempDir = join(tmpdir(), `open-recordings-test-rec-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  tempDir = join(tmpdir(), `recordings-test-rec-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(tempDir, { recursive: true });
 });
 

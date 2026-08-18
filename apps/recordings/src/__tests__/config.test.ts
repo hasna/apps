@@ -46,7 +46,7 @@ const envKeys = [
 ];
 
 beforeEach(() => {
-  tempDir = join(tmpdir(), `open-recordings-test-config-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  tempDir = join(tmpdir(), `recordings-test-config-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(tempDir, { recursive: true });
 
   // Save env vars

@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 function scratchHome(label: string): string {
-  const home = mkdtempSync(join(tmpdir(), `open-recordings-trigger-${label}-`));
+  const home = mkdtempSync(join(tmpdir(), `recordings-trigger-${label}-`));
   temporaryDirectories.push(home);
   return home;
 }

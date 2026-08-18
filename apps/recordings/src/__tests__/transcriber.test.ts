@@ -18,7 +18,7 @@ let tempAudioFile: string;
 
 beforeEach(() => {
   resetClient();
-  tempDir = join(tmpdir(), `open-recordings-test-trans-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  tempDir = join(tmpdir(), `recordings-test-trans-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(tempDir, { recursive: true });
   // Mock file path without creating actual file
   tempAudioFile = join(tempDir, "test.wav");
