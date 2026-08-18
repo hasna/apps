@@ -70,7 +70,7 @@
   "homepage": "https://github.com/hasna/apps#readme",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "bun": ">=1.0"
   },
   "dependencies": {
     "@hasna/contracts": "0.10.6",

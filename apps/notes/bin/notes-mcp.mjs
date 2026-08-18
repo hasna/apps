@@ -1,4 +1,5 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
+// @bun
 import { createCloudClient } from '../cloud/index.mjs';
 import { assertNoRetiredModeSelector, hasnaEnv } from '../tools/notes-env.mjs';
 

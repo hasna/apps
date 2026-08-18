@@ -1,4 +1,5 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
+// @bun
 import { readFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import {

@@ -1,4 +1,5 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
+// @bun
 import { fileURLToPath } from 'node:url';
 import {
   CONFIG_PATH,
