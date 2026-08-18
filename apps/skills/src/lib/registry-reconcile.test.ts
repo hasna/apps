@@ -1,0 +1,437 @@
+/**
+^ * The two-way reconcile between the canonical local corpus and the
+ * hosted registry, against a real server over HTTP.
+ *
+ * The corpus is redirected with `rootDir` rather than by moving $HOME: these tests must
+ * be identical on a clean machine and on a developer's, and a suite that reads the real
+ * ~/.hasna/skills would pass or fail depending on what the operator happens to have
+ * written there.
+ */
+import { describe, expect, test } from "bun:test";
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+
+import { pushSkill } from "../cli/commands/publish.js";
+import { createSkillsFetchHandler } from "../server/app.js";
+import { MemorySkillsStore } from "../server/store.js";
+import { computeContentHash } from "./skill-hash.js";
+import { PULL_MARKER_FILE } from "./pull.js";
+import { RemoteSkillsClient } from "./remote-client.js";
+import { packSkillBundle } from "./skill-bundle.js";
+import { reconcileRegistry, SYNC_CURSOR_FILE } from "./registry-reconcile.js";
+
+const SYNC_AUTH = "test-sync-token";
+const PRINCIPAL = {
+  orgId: "org_sync",
+  orgSlug: "org-sync",
+  orgName: "Sync Org",
+  userId: "user_sync",
+  email: "sync@example.com",
+  apiKeyId: "key_sync",
+};
+
+/**
+ * A minimal but valid skill: SKILL.md with frontmatter, skill.json, and one source file.
+ * Changing `flavor` changes the packed bundle digest deterministically (canonical gzip).
+ */
+function skillFiles(slug: string, version: string, flavor: string): Record<string, string> {
+  return {
+    "SKILL.md": `---\nname: ${slug}\ndescription: Sync fixture ${flavor}\nversion: ${version}\n---\n\n# ${slug}\n\n${flavor}\n`,
+    "skill.json": JSON.stringify(
+      {
+        $schema: "https://hasna.dev/schemas/skill.v1.json",
+        standard: "hasna.skill.v1",
+        name: slug,
+        description: `Sync fixture ${flavor}`,
+        version,
+        displayName: slug,
+        category: "Development Tools",
+        tags: ["custom", "sync"],
+        commands: [{ name: slug, entry: "src/index.ts" }],
+        runtime: {
+          runtime: "bun",
+          entrypoint: "src/index.ts",
+          timeout: 900,
+          needs_network: false,
+          env: [],
+          sandbox: "readonly-fs",
+          system_deps: [],
+          artifacts: [],
+        },
+        // Filled with the real canonical content hash by makeCorpus; the value here is
+        // only a placeholder because the hash input canonicalizes the manifest (the
+        // content_hash field is normalized away), so the final value is independent of
+        // the placeholder.
+        provenance: { source_commit: "unknown", content_hash: "0".repeat(64) },
+      },
+      null,
+      2,
+    ),
+    "AGENTS.md": `# Agent Build Instructions\n\nBuild ${slug}.\n`,
+    "package.json": JSON.stringify({ name: slug, version, type: "module", bin: { [slug]: "src/index.ts" } }, null, 2),
+    "src/index.ts": `console.log('${flavor}');\n`,
+  };
+}
+
+/** Fill skill.json's provenance.content_hash with the canonical hash of the directory. */
+function refillContentHash(skillDir: string): void {
+  const manifestPath = join(skillDir, "skill.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as { provenance: { content_hash: string } };
+  // computeContentHash canonicalizes the manifest (content_hash excluded from the
+  // input), so filling the field afterwards does not change the value.
+  manifest.provenance.content_hash = computeContentHash(skillDir);
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+}
+
+function makeCorpus(skills: Record<string, Record<string, string>>): string {
+  const root = mkdtempSync(join(tmpdir(), "skills-reconcile-corpus-"));
+  for (const [name, files] of Object.entries(skills)) {
+    const skillDir = join(root, name);
+    for (const [path, content] of Object.entries(files)) {
+      const absolute = join(skillDir, path);
+      mkdirSync(dirname(absolute), { recursive: true });
+      writeFileSync(absolute, content);
+    }
+    refillContentHash(skillDir);
+  }
+  return root;
+}
+
+function packDigest(skillDir: string): string {
+  return packSkillBundle(skillDir).sha256;
+}
+
+function readMarker(dir: string): Record<string, unknown> | null {
+  const path = join(dir, PULL_MARKER_FILE);
+  if (!existsSync(path)) return null;
+  return JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+}
+
+async function withServer(fn: (ctx: { baseUrl: string; store: MemorySkillsStore }) => Promise<void>): Promise<void> {
+  const store = new MemorySkillsStore();
+  await store.ensureBootstrapApiKey(SYNC_AUTH, PRINCIPAL);
+  const fetchHandler = await createSkillsFetchHandler({
+    store,
+    config: { inlineWorker: false, allowEphemeralStore: true },
+  });
+  const server = Bun.serve({ port: 0, fetch: fetchHandler });
+  try {
+    await fn({ baseUrl: `http://127.0.0.1:${server.port}`, store });
+  } finally {
+    server.stop(true);
+  }
+}
+
+/** Seed one skill onto the instance through the real publish path. */
+async function seedRemote(client: RemoteSkillsClient, seedCorpus: string, slug: string): Promise<string> {
+  const result = await pushSkill(slug, { rootDir: seedCorpus, client });
+  expect(result.published).toBe(true);
+  return result.sha256;
+}
+
+async function findRemote(client: RemoteSkillsClient, slug: string): Promise<Record<string, unknown> | undefined> {
+  const listed = await client.listSkills();
+  return listed.find((skill) => (skill.slug ?? skill.name) === slug);
+}
+
+describe("reconcileRegistry", () => {
+  test("converges a divergent corpus and registry with no conflicts, and is idempotent", async () => {
+    const seed = makeCorpus({ "sync-b": skillFiles("sync-b", "1.0.0", "remote-b") });
+    const local = makeCorpus({ "sync-a": skillFiles("sync-a", "1.0.0", "local-a") });
+    try {
+      await withServer(async (ctx) => {
+        const client = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        const seedDigest = await seedRemote(client, seed, "sync-b");
+        const localDigest = packDigest(join(local, "sync-a"));
+
+        const result = await reconcileRegistry({ rootDir: local, client });
+
+        expect(result.summary.conflicts).toBe(0);
+        expect(result.summary.pushed).toBe(1);
+        expect(result.summary.pulled).toBeGreaterThanOrEqual(1);
+        const entryA = result.skills.find((entry) => entry.slug === "sync-a");
+        expect(entryA?.action).toBe("push");
+        const entryB = result.skills.find((entry) => entry.slug === "sync-b");
+        expect(entryB?.action).toBe("pull");
+
+        // Local-only skill reached the registry with the local digest.
+        const reader = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        const remoteA = await findRemote(reader, "sync-a");
+        expect(remoteA?.bundleSha256).toBe(localDigest);
+
+        // Remote-only skill landed in the corpus with a verified marker.
+        const pulledDir = join(local, "sync-b");
+        expect(existsSync(join(pulledDir, "SKILL.md"))).toBe(true);
+        const marker = readMarker(pulledDir);
+        expect(marker?.contentHash).toBe(seedDigest);
+
+        // The cursor records the run.
+        const cursor = JSON.parse(readFileSync(join(local, SYNC_CURSOR_FILE), "utf-8"));
+        expect(cursor.runCount).toBe(1);
+        expect(typeof cursor.lastSyncedAt).toBe("string");
+
+        // A second run is a no-op: the corpus and the registry agree.
+        const second = await reconcileRegistry({ rootDir: local, client });
+        expect(second.summary.pushed).toBe(0);
+        expect(second.summary.pulled).toBe(0);
+        expect(second.summary.conflicts).toBe(0);
+        const cursor2 = JSON.parse(readFileSync(join(local, SYNC_CURSOR_FILE), "utf-8"));
+        expect(cursor2.runCount).toBe(2);
+      });
+    } finally {
+      rmSync(seed, { recursive: true, force: true });
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
+
+  test("--dry-run writes nothing: no corpus change, no remote change, no markers, no cursor", async () => {
+    const seed = makeCorpus({ "sync-b": skillFiles("sync-b", "1.0.0", "remote-b") });
+    const local = makeCorpus({ "sync-a": skillFiles("sync-a", "1.0.0", "local-a") });
+    try {
+      await withServer(async (ctx) => {
+        const client = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        await seedRemote(client, seed, "sync-b");
+
+        const result = await reconcileRegistry({ rootDir: local, client, dryRun: true });
+
+        // The plan is complete and honest...
+        expect(result.summary.pushed).toBe(1);
+        expect(result.summary.pulled).toBeGreaterThanOrEqual(1);
+        expect(result.summary.conflicts).toBe(0);
+        expect(result.dryRun).toBe(true);
+
+        // ...and nothing was written anywhere. Readback, not inference.
+        expect(existsSync(join(local, "sync-b"))).toBe(false);
+        expect(existsSync(join(local, "sync-a", PULL_MARKER_FILE))).toBe(false);
+        expect(existsSync(join(local, SYNC_CURSOR_FILE))).toBe(false);
+        const reader = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        expect(await findRemote(reader, "sync-a")).toBeUndefined();
+      });
+    } finally {
+      rmSync(seed, { recursive: true, force: true });
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
+
+  test("a same-slug divergence with no baseline is a conflict, skipped and reported by default", async () => {
+    const seed = makeCorpus({ "sync-c": skillFiles("sync-c", "1.0.0", "remote-c") });
+    const local = makeCorpus({ "sync-c": skillFiles("sync-c", "2.0.0", "local-c") });
+    try {
+      await withServer(async (ctx) => {
+        const client = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        const seedDigest = await seedRemote(client, seed, "sync-c");
+
+        const result = await reconcileRegistry({ rootDir: local, client });
+
+        expect(result.summary.conflicts).toBe(1);
+        const entry = result.skills.find((item) => item.slug === "sync-c");
+        expect(entry?.state).toBe("conflict");
+        expect(entry?.action).toBe("skip");
+        expect(entry?.reason).toMatch(/cannot prove|changed/i);
+
+        // Neither side moved.
+        const reader = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        expect((await findRemote(reader, "sync-c"))?.bundleSha256).toBe(seedDigest);
+        expect(readFileSync(join(local, "sync-c", "SKILL.md"), "utf-8")).toContain("local-c");
+      });
+    } finally {
+      rmSync(seed, { recursive: true, force: true });
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
+
+  test("--conflict=local resolves the divergence by pushing local over remote", async () => {
+    const seed = makeCorpus({ "sync-c": skillFiles("sync-c", "1.0.0", "remote-c") });
+    const local = makeCorpus({ "sync-c": skillFiles("sync-c", "2.0.0", "local-c") });
+    try {
+      await withServer(async (ctx) => {
+        const client = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        await seedRemote(client, seed, "sync-c");
+        const localDigest = packDigest(join(local, "sync-c"));
+
+        const result = await reconcileRegistry({ rootDir: local, client, conflict: "local" });
+
+        expect(result.summary.conflicts).toBe(1);
+        const entry = result.skills.find((item) => item.slug === "sync-c");
+        expect(entry?.state).toBe("conflict");
+        expect(entry?.action).toBe("push");
+
+        const reader = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        expect((await findRemote(reader, "sync-c"))?.bundleSha256).toBe(localDigest);
+
+        // The pushed baseline is recorded as a per-skill marker with the sync source.
+        const marker = readMarker(join(local, "sync-c"));
+        expect(marker?.contentHash).toBe(localDigest);
+        expect(marker?.source).toBe("sync");
+      });
+    } finally {
+      rmSync(seed, { recursive: true, force: true });
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
+
+  test("--conflict=remote resolves the divergence by pulling remote over local", async () => {
+    const seed = makeCorpus({ "sync-c": skillFiles("sync-c", "1.0.0", "remote-c") });
+    const local = makeCorpus({ "sync-c": skillFiles("sync-c", "2.0.0", "local-c") });
+    try {
+      await withServer(async (ctx) => {
+        const client = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        const seedDigest = await seedRemote(client, seed, "sync-c");
+
+        const result = await reconcileRegistry({ rootDir: local, client, conflict: "remote" });
+
+        expect(result.summary.conflicts).toBe(1);
+        const entry = result.skills.find((item) => item.slug === "sync-c");
+        expect(entry?.state).toBe("conflict");
+        expect(entry?.action).toBe("pull");
+
+        // The local copy was replaced by the verified remote bundle.
+        expect(readFileSync(join(local, "sync-c", "SKILL.md"), "utf-8")).toContain("remote-c");
+        const marker = readMarker(join(local, "sync-c"));
+        expect(marker?.contentHash).toBe(seedDigest);
+      });
+    } finally {
+      rmSync(seed, { recursive: true, force: true });
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
+
+  test("a locally-changed skill pushes without a conflict", async () => {
+    const seedV1 = makeCorpus({ "sync-d": skillFiles("sync-d", "1.0.0", "v1") });
+    const seedV2 = makeCorpus({ "sync-d": skillFiles("sync-d", "2.0.0", "v2") });
+    const local = makeCorpus({});
+    try {
+      await withServer(async (ctx) => {
+        const client = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        await seedRemote(client, seedV1, "sync-d");
+
+        // First sync establishes the baseline: sync-d is pulled with a verified marker.
+        await reconcileRegistry({ rootDir: local, client });
+        const v1Digest = packDigest(join(local, "sync-d"));
+        expect(readMarker(join(local, "sync-d"))?.contentHash).toBe(v1Digest);
+
+        // Local edits the pulled skill (content_hash must be re-computed, exactly as an
+        // author re-hashing after a content change — the push path validates it).
+        for (const [path, content] of Object.entries(skillFiles("sync-d", "2.0.0", "v2"))) {
+          const absolute = join(local, "sync-d", path);
+          mkdirSync(dirname(absolute), { recursive: true });
+          writeFileSync(absolute, content);
+        }
+        refillContentHash(join(local, "sync-d"));
+        const v2Digest = packDigest(join(local, "sync-d"));
+
+        const result = await reconcileRegistry({ rootDir: local, client });
+        expect(result.summary.conflicts).toBe(0);
+        const entry = result.skills.find((item) => item.slug === "sync-d");
+        expect(entry?.state).toBe("changed-locally");
+        expect(entry?.action).toBe("push");
+
+        const reader = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        expect((await findRemote(reader, "sync-d"))?.bundleSha256).toBe(v2Digest);
+        expect(readMarker(join(local, "sync-d"))?.contentHash).toBe(v2Digest);
+      });
+    } finally {
+      rmSync(seedV1, { recursive: true, force: true });
+      rmSync(seedV2, { recursive: true, force: true });
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
+
+  test("a remotely-changed skill pulls without a conflict", async () => {
+    const seedV1 = makeCorpus({ "sync-e": skillFiles("sync-e", "1.0.0", "v1") });
+    const seedV2 = makeCorpus({ "sync-e": skillFiles("sync-e", "2.0.0", "v2") });
+    const local = makeCorpus({});
+    try {
+      await withServer(async (ctx) => {
+        const client = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        await seedRemote(client, seedV1, "sync-e");
+        await reconcileRegistry({ rootDir: local, client });
+
+        // The remote advances past the baseline.
+        const v2Digest = await seedRemote(client, seedV2, "sync-e");
+
+        const result = await reconcileRegistry({ rootDir: local, client });
+        expect(result.summary.conflicts).toBe(0);
+        const entry = result.skills.find((item) => item.slug === "sync-e");
+        expect(entry?.state).toBe("changed-remotely");
+        expect(entry?.action).toBe("pull");
+
+        expect(readFileSync(join(local, "sync-e", "SKILL.md"), "utf-8")).toContain("v2");
+        expect(readMarker(join(local, "sync-e"))?.contentHash).toBe(v2Digest);
+      });
+    } finally {
+      rmSync(seedV1, { recursive: true, force: true });
+      rmSync(seedV2, { recursive: true, force: true });
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
+
+  test("--push does not pull, and --pull does not push", async () => {
+    const seed = makeCorpus({ "sync-b": skillFiles("sync-b", "1.0.0", "remote-b") });
+    const local = makeCorpus({ "sync-a": skillFiles("sync-a", "1.0.0", "local-a") });
+    try {
+      await withServer(async (ctx) => {
+        const client = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        await seedRemote(client, seed, "sync-b");
+
+        const pushed = await reconcileRegistry({ rootDir: local, client, push: true });
+        expect(pushed.summary.pushed).toBe(1);
+        expect(pushed.summary.pulled).toBe(0);
+        expect(existsSync(join(local, "sync-b"))).toBe(false);
+
+        const reader = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        expect(await findRemote(reader, "sync-a")).toBeDefined();
+      });
+    } finally {
+      rmSync(seed, { recursive: true, force: true });
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
+
+  test("identical digests are in-sync and written nothing", async () => {
+    const seed = makeCorpus({ "sync-f": skillFiles("sync-f", "1.0.0", "same") });
+    const local = makeCorpus({ "sync-f": skillFiles("sync-f", "1.0.0", "same") });
+    try {
+      await withServer(async (ctx) => {
+        const client = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        await seedRemote(client, seed, "sync-f");
+
+        const result = await reconcileRegistry({ rootDir: local, client });
+        expect(result.summary.pushed).toBe(0);
+        expect(result.summary.conflicts).toBe(0);
+        const entry = result.skills.find((item) => item.slug === "sync-f");
+        expect(entry?.state).toBe("in-sync");
+        expect(entry?.action).toBe("none");
+        expect(readMarker(join(local, "sync-f"))).toBeNull();
+      });
+    } finally {
+      rmSync(seed, { recursive: true, force: true });
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed with no configured client", async () => {
+    const local = makeCorpus({ "sync-a": skillFiles("sync-a", "1.0.0", "local-a") });
+    try {
+      await expect(reconcileRegistry({ rootDir: local, client: null })).rejects.toThrow(/No API key/);
+    } finally {
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an unknown conflict policy", async () => {
+    const local = makeCorpus({ "sync-a": skillFiles("sync-a", "1.0.0", "local-a") });
+    try {
+      await withServer(async (ctx) => {
+        const client = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
+        await expect(reconcileRegistry({ rootDir: local, client, conflict: "bogus" as never })).rejects.toThrow(/conflict/i);
+      });
+    } finally {
+      rmSync(local, { recursive: true, force: true });
+    }
+  });
+});

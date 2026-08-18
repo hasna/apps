@@ -189,6 +189,22 @@ describe("bundle exclusions", () => {
     });
   });
 
+  test("drops tool-owned sync sidecars at the root, keeping the digest stable across a pull", () => {
+    // The pull/sync provenance markers live inside the corpus skill directory. Packing
+    // them would (a) change the bundle digest the moment a skill is pulled, so a pulled
+    // skill would read as changed-locally forever, and (b) upload sync metadata into a
+    // published bundle when a pulled skill is re-pushed.
+    withSkillDir({
+      ...MINIMAL,
+      ".hasna-skills.json": '{"managedBy":"@hasna/skills","skill":"demo","source":"pull"}\n',
+      ".sync-cursor.json": '{"schemaVersion":1,"managedBy":"@hasna/skills","lastSyncedAt":"2026-08-18T00:00:00.000Z"}\n',
+    }, (dir) => {
+      const packed = packSkillBundle(dir);
+      expect(packed.paths).toEqual(["SKILL.md", "skill.json", "src/index.ts"]);
+      expect(packed.sha256).toBe(packSkillBundle(dir).sha256);
+    });
+  });
+
   test("never packs a credential file, whatever it is called or where it sits", () => {
     // Every name here was demonstrated by adversarial review to reach the tarball under
     // the first version of this filter, which matched `.env`/`.env.*` and six exact
