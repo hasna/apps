@@ -34,8 +34,8 @@ import { join } from "node:path";
 
 const PROBE = new URL("../test/fixtures/resolve-store-probe.ts", import.meta.url).pathname;
 
-/** Fixture cloud credentials. Unresolvable host, non-credential key. */
-const CLOUD_FIXTURE = {
+/** Fixture hosted-client env. Unresolvable host, non-credential key. */
+const HOSTED_FIXTURE = {
   HASNA_DOMAINS_API_URL: "https://domains.example.invalid",
   HASNA_DOMAINS_API_KEY: "not-a-real-key-fixture-only",
 };
@@ -58,7 +58,7 @@ function runUnprotected(extra: Record<string, string>): ProbeResult {
     env: {
       PATH: process.env["PATH"] ?? "",
       HOME: process.env["HOME"] ?? "",
-      ...CLOUD_FIXTURE,
+      ...HOSTED_FIXTURE,
       ...extra,
     },
     stdout: "pipe",
@@ -114,12 +114,13 @@ describe("production-write guard outside a test run", () => {
     }
   });
 
-  test("the refusal names a route that actually works: STORAGE_MODE=local takes the path", () => {
+  test("the refusal names a route that actually works: unsetting the API vars takes the path", () => {
     const dir = mkdtempSync(join(tmpdir(), "domains-guard-"));
     try {
       const probe = runUnprotected({
         DOMAINS_DB_PATH: join(dir, "scratch.db"),
-        HASNA_DOMAINS_STORAGE_MODE: "local",
+        HASNA_DOMAINS_API_URL: "",
+        HASNA_DOMAINS_API_KEY: "",
       });
       expect(probe.outcome).toBe("local");
     } finally {
@@ -127,7 +128,7 @@ describe("production-write guard outside a test run", () => {
     }
   });
 
-  test("ESCAPE HATCH: an explicit opt-out keeps cloud despite the local path", () => {
+  test("ESCAPE HATCH: an explicit opt-out keeps the hosted store despite the local path", () => {
     const dir = mkdtempSync(join(tmpdir(), "domains-guard-"));
     try {
       const probe = runUnprotected({

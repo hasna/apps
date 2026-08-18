@@ -65,7 +65,7 @@ function stubTask(index: number): Record<string, unknown> {
 }
 
 /**
- * Run the CLI in self_hosted mode against a stub `/v1` authority that records every
+ * Run the CLI against a stub hosted `/v1` authority that records every
  * query it is asked, and DELIBERATELY ignores `limit` — the assertion is about what
  * the client REQUESTS, so a stub that honoured the limit would hide the defect.
  *

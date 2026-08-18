@@ -9,7 +9,7 @@ import {
   REMOVED_TODOS_ENV_KEYS,
   SHARED_TODOS_STORE_ENV_KEYS,
 } from "./testing.js";
-import { resolveTodosCliStorageMode } from "./cli/cloud-router.js";
+import { resolveTodosCliTransport } from "./cli/cloud-router.js";
 
 describe("localTodosTestEnv", () => {
   test("blanks every shared-store pointer and deletes the retired storage-mode variables", () => {
@@ -25,7 +25,7 @@ describe("localTodosTestEnv", () => {
       HASNA_TODOS_API_URL: "",
       HASNA_TODOS_API_KEY: "",
     });
-    expect(resolveTodosCliStorageMode(env).mode).toBe("sqlite");
+    expect(resolveTodosCliTransport(env).transport).toBe("sqlite");
   });
 
   test("still resolves http when a test opts back in explicitly", () => {
@@ -33,7 +33,7 @@ describe("localTodosTestEnv", () => {
       HASNA_TODOS_API_URL: "http://127.0.0.1:3901",
       HASNA_TODOS_API_KEY: "throwaway",
     });
-    expect(resolveTodosCliStorageMode(env).mode).toBe("http");
+    expect(resolveTodosCliTransport(env).transport).toBe("http");
   });
 
   test("overrides are applied after the scrub, not before", () => {

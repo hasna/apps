@@ -17,11 +17,13 @@ import {
   getCloudProjectRegistrationAuthority,
   getCloudStorageAdapter,
   getCloudTaskManifestAuthority,
+  getCloudTaskSubtreeTransferAuthority,
   getCloudVerifier,
 } from "./cloud.js";
 import { handlePrGroupHttpRequest } from "./pr-groups.js";
 import { handleTodosProjectRegistrationHttpRequest } from "../project-registration/index.js";
 import { handleTodosTaskManifestHttpRequest } from "../task-manifest/index.js";
+import { handleTodosTaskSubtreeTransferHttpRequest } from "../task-subtree-transfer/index.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
 import { decodeCommentCursor, encodeCommentCursor } from "../lib/comment-cursor.js";
@@ -51,6 +53,7 @@ export interface V1RequestDependencies {
   getPrGroupLedger?: typeof getCloudPrGroupLedger;
   getProjectRegistrationAuthority?: typeof getCloudProjectRegistrationAuthority;
   getTaskManifestAuthority?: typeof getCloudTaskManifestAuthority;
+  getTaskSubtreeTransferAuthority?: typeof getCloudTaskSubtreeTransferAuthority;
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
@@ -620,6 +623,13 @@ export async function handleV1Request(
       req,
       url,
       (dependencies.getTaskManifestAuthority ?? getCloudTaskManifestAuthority)(),
+    );
+  }
+  if (path === "/v1/task-subtree-transfer" || path.startsWith("/v1/task-subtree-transfer/")) {
+    return handleTodosTaskSubtreeTransferHttpRequest(
+      req,
+      url,
+      (dependencies.getTaskSubtreeTransferAuthority ?? getCloudTaskSubtreeTransferAuthority)(),
     );
   }
   const store = (dependencies.getStorageAdapter ?? getCloudStorageAdapter)();

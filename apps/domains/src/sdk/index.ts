@@ -1,7 +1,7 @@
 /**
  * @hasna/domains SDK — typed HTTP client generated from the domains-serve
  * OpenAPI document (see `src/server/openapi.ts`, regenerate via the `sdk:gen`
- * script). Client self_hosted convention: `DOMAINS_API_URL` + `DOMAINS_API_KEY`
+ * script). Client hosted convention: `DOMAINS_API_URL` + `DOMAINS_API_KEY`
  * (a key, never a DSN).
  */
 

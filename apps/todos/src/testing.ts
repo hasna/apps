@@ -36,7 +36,7 @@
 /**
  * Every environment variable that can point this client at a store shared with other
  * people. Blanking all of them is what makes a test physically unable to reach the
- * hosted authority — `resolveTodosCliStorageMode` refuses `http` without a URL and key,
+ * hosted authority — `resolveTodosCliTransport` refuses `http` without a URL and key,
  * and there is no fallback path that reintroduces one.
  *
  * Keep this in sync with the resolver by adding to it, never by deleting from it:
@@ -69,10 +69,10 @@ export const LOCAL_ONLY_TODOS_ENV_KEYS = [
 ] as const;
 
 /**
- * The retired storage-mode variables (owner directive 2026-08-15). They are
- * banned: if any is present the resolver THROWS, so a test env must DELETE them,
- * never blank them — a blank leftover is still a stale fragment. They are listed
- * here so the scrub-coverage assertion treats them as handled.
+ * The retired storage-mode variables. The resolver never reads them — they are
+ * inert — but a test env DELETES them so a test can never depend on a stale
+ * fragment from the host environment. They are listed here so the
+ * scrub-coverage assertion treats them as handled.
  */
 export const REMOVED_TODOS_ENV_KEYS = [
   "HASNA_TODOS_STORAGE_MODE",
@@ -93,8 +93,8 @@ export type TodosTestEnv = Record<string, string | undefined>;
  *
  * Blank string, not `delete`, for the shared-store pointers: a blanked URL/key
  * is treated as absent, and there is no partial-config fallback. The retired
- * `*_STORAGE_MODE` variables are DELETED, not blanked, because their mere
- * presence is a hard error.
+ * `*_STORAGE_MODE` variables are DELETED, not blanked, so a test never
+ * inherits a stale fragment from the host environment.
  */
 export function localTodosTestEnv(overrides: TodosTestEnv = {}): TodosTestEnv {
   const env: TodosTestEnv = { ...process.env };

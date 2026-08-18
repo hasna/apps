@@ -1,8 +1,8 @@
-// Regression: the cloud/API transport (ApiStore) must resolve the UUID-*prefix*
+// Regression: the hosted/API transport (ApiStore) must resolve the UUID-*prefix*
 // short ids that the CLI's list/create output prints for resources with no
 // dedicated shortId field (flows, workflows, agents) — mirroring LocalStore's
 // resolvePartialId — AND must never report a false-success delete for an id that
-// never resolved. Both were live failures against the deployed self_hosted server.
+// never resolved. Both were live failures against the deployed hosted server.
 import { describe, expect, test } from "bun:test";
 import { ApiStore } from "./index.js";
 import { HasnaHttpError } from "../generated/storage-client/index.js";

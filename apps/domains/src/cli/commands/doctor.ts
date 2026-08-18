@@ -59,7 +59,7 @@ export function registerDoctorCommand(program: Command): void {
       } catch (error) {
         fail(
           `Store not resolvable: ${error instanceof Error ? error.message.split(". ")[0] : String(error)}`,
-          "Pick one store: HASNA_DOMAINS_STORAGE_MODE=local, or unset the local path variable",
+          "Pick one store: unset HASNA_DOMAINS_API_URL/API_KEY to use the local path, or unset the local path variable to use the hosted store",
         );
       }
 

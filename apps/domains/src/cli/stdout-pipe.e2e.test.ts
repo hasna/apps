@@ -140,7 +140,6 @@ describe("domains --json over a pipe", () => {
     return {
       ...process.env,
       DOMAINS_DB_PATH: dbPath,
-      HASNA_DOMAINS_STORAGE_MODE: "local",
       // Any API pointer flips the client onto the HTTP store, which would
       // measure the wrong process and write to the shared fleet store.
       HASNA_DOMAINS_API_URL: undefined,

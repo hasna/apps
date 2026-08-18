@@ -15,9 +15,12 @@ function runCli(args: string[], dataDir: string) {
     encoding: "utf8",
     env: {
       ...process.env,
+      HASNA_LOGS_API_URL: undefined,
+      HASNA_LOGS_API_KEY: undefined,
       HASNA_LOGS_DATA_DIR: dataDir,
       HASNA_LOGS_DB_PATH: join(dataDir, "logs.db"),
       HASNA_LOGS_FSYNC: "0",
+      HOME: dataDir,
     },
   });
 }
@@ -695,9 +698,12 @@ describe("logs events CLI", () => {
       cwd: repoRoot,
       env: {
         ...process.env,
+      HASNA_LOGS_API_URL: undefined,
+      HASNA_LOGS_API_KEY: undefined,
         HASNA_LOGS_DATA_DIR: dataDir,
         HASNA_LOGS_DB_PATH: join(dataDir, "logs.db"),
         HASNA_LOGS_FSYNC: "0",
+      HOME: dataDir,
         HASNA_LOGS_API_TOKEN: token,
         LOGS_PORT: String(port),
       },
@@ -735,9 +741,12 @@ describe("logs events CLI", () => {
           cwd: repoRoot,
           env: {
             ...process.env,
+      HASNA_LOGS_API_URL: undefined,
+      HASNA_LOGS_API_KEY: undefined,
             HASNA_LOGS_DATA_DIR: dataDir,
             HASNA_LOGS_DB_PATH: join(dataDir, "logs.db"),
             HASNA_LOGS_FSYNC: "0",
+      HOME: dataDir,
           },
           stdio: ["ignore", "pipe", "pipe"],
         },
@@ -794,9 +803,12 @@ describe("logs events CLI", () => {
       cwd: repoRoot,
       env: {
         ...process.env,
+      HASNA_LOGS_API_URL: undefined,
+      HASNA_LOGS_API_KEY: undefined,
         HASNA_LOGS_DATA_DIR: dataDir,
         HASNA_LOGS_DB_PATH: join(dataDir, "logs.db"),
         HASNA_LOGS_FSYNC: "0",
+      HOME: dataDir,
         HASNA_LOGS_API_TOKEN: token,
         LOGS_PORT: String(port),
       },
@@ -834,9 +846,12 @@ describe("logs events CLI", () => {
           cwd: repoRoot,
           env: {
             ...process.env,
+      HASNA_LOGS_API_URL: undefined,
+      HASNA_LOGS_API_KEY: undefined,
             HASNA_LOGS_DATA_DIR: dataDir,
             HASNA_LOGS_DB_PATH: join(dataDir, "logs.db"),
             HASNA_LOGS_FSYNC: "0",
+      HOME: dataDir,
             // Flip the resolved store into api (self_hosted) mode. The URL below
             // is never contacted (no --project ⇒ no resolveProjectId call); the
             // tail targets the explicit --server above.
@@ -910,9 +925,12 @@ describe("logs events CLI", () => {
         cwd: repoRoot,
         env: {
           ...process.env,
+      HASNA_LOGS_API_URL: undefined,
+      HASNA_LOGS_API_KEY: undefined,
           HASNA_LOGS_DATA_DIR: dataDir,
           HASNA_LOGS_DB_PATH: join(dataDir, "logs.db"),
           HASNA_LOGS_FSYNC: "0",
+      HOME: dataDir,
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -931,9 +949,12 @@ describe("logs events CLI", () => {
         cwd: repoRoot,
         env: {
           ...process.env,
+      HASNA_LOGS_API_URL: undefined,
+      HASNA_LOGS_API_KEY: undefined,
           HASNA_LOGS_DATA_DIR: dataDir,
           HASNA_LOGS_DB_PATH: join(dataDir, "logs.db"),
           HASNA_LOGS_FSYNC: "0",
+      HOME: dataDir,
           HASNA_LOGS_API_TOKEN: token,
           LOGS_PORT: String(port),
         },

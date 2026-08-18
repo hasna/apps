@@ -40,7 +40,7 @@
     "build:dashboard": "cd dashboard && bun install --frozen-lockfile && bun run build",
     "build:ext": "cd extension && bun run build",
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
+    "test": "bun test --preload ./test-setup.ts",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",

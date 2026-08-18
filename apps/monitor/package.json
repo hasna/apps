@@ -1,6 +1,6 @@
 {
   "name": "@hasna/monitor",
-  "version": "0.1.26",
+  "version": "0.1.27",
   "description": "System monitoring tool for multiple computers \u2014 local, SSH, EC2",
   "type": "module",
   "license": "Apache-2.0",
@@ -57,6 +57,7 @@
     "@aws-sdk/client-ec2": "^3.600.0",
     "@aws-sdk/client-ssm": "^3.1017.0",
     "@hasna/events": "^0.1.6",
+    "@hasna/hooks": "^0.6.8",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "chalk": "^5.6.2",
     "commander": "^12.1.0",

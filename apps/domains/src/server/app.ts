@@ -2,9 +2,9 @@
  * domains-serve HTTP application — framework-agnostic request handler.
  *
  * Surfaces:
- *   GET /health   — liveness ({status,version,mode})
+ *   GET /health   — liveness ({status,version})
  *   GET /ready    — readiness (DB reachable + schema migrated)
- *   GET /version  — {status,version,mode}
+ *   GET /version  — {status,version}
  *   GET /openapi.json — the OpenAPI 3.1 document
  *   /v1/*         — API-key authenticated CRUD over the portfolio
  *
@@ -12,8 +12,8 @@
  * scope grammar `domains:<action>`, revocation via the ApiKeyStore). Reads need
  * `domains:read`; writes need `domains:write`. A `domains:*` key covers both.
  *
- * PURE REMOTE (Amendment A1): every request reads/writes the cloud Postgres
- * directly. No cache, no local mirror.
+ * Every request reads/writes the PostgreSQL backend directly. No cache, no
+ * local mirror.
  */
 
 import { verifyApiKey, type ApiKeyVerifier, type AuthAuditEvent } from "@hasna/contracts/auth";
@@ -54,7 +54,6 @@ export interface ServeAppOptions {
   db: TypedQueryClient;
   signingSecret: string;
   version: string;
-  mode?: string;
   /** Revocation predicate (return true to DENY). Typically store.isRevoked. */
   isRevoked?: (kid: string) => boolean | Promise<boolean>;
   audit?: (e: AuthAuditEvent) => void;
@@ -79,7 +78,6 @@ function json(data: unknown, status = 200): Response {
 
 export function createServeApp(options: ServeAppOptions): ServeApp {
   const { db, version } = options;
-  const mode = options.mode ?? "self_hosted";
   const repo = new DomainsRepo(db);
   const migrationIds = buildMigrations().map((m) => m.id);
   const spec = buildOpenApiSpec(version);
@@ -122,7 +120,7 @@ export function createServeApp(options: ServeAppOptions): ServeApp {
       if (method === "GET" && path === "/health") {
         const h = await checkHealth(db);
         return json(
-          { status: h.ok ? "ok" : "error", version, mode, latencyMs: h.latencyMs, ...(h.error ? { error: h.error } : {}) },
+          { status: h.ok ? "ok" : "error", version, latencyMs: h.latencyMs, ...(h.error ? { error: h.error } : {}) },
           h.ok ? 200 : 503,
         );
       }
@@ -132,7 +130,6 @@ export function createServeApp(options: ServeAppOptions): ServeApp {
           {
             status: r.ok ? "ok" : "not_ready",
             version,
-            mode,
             pendingMigrations: r.pendingMigrations,
             ...(r.error ? { error: r.error } : {}),
           },
@@ -140,7 +137,7 @@ export function createServeApp(options: ServeAppOptions): ServeApp {
         );
       }
       if (method === "GET" && (path === "/version" || path === "/v1/version")) {
-        return json({ status: "ok", version, mode });
+        return json({ status: "ok", version });
       }
       if (method === "GET" && (path === "/openapi.json" || path === "/v1/openapi.json")) {
         return json(spec);

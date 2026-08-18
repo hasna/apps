@@ -55,6 +55,8 @@ const allowedCompatibilityMarkers = new Set([
   // correct fleet TLS approach (and rejects blanket rejectUnauthorized:false); the
   // marker fires on the word in its comments/type, which is a false positive.
   "src/generated/storage-kit/tls.ts: disabled TLS",
+  "src/generated/storage-kit/README.md: disabled TLS",
+  "src/generated/storage-kit/own.ts: disabled TLS",
 ]);
 
 function collectFiles(dir: string): string[] {

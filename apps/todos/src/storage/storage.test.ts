@@ -33,7 +33,7 @@ import {
   getCanonicalTodosRdsConfig,
   getStorageDatabaseEnv,
   getStorageDatabaseUrl,
-  getStorageMode,
+  getTodosStorageBackend,
   loadTodosStorageConfig,
   loadStorageConfig,
   ensurePostgresScopedSlugUniqueIndexes,
@@ -793,7 +793,7 @@ describe("storage adapter contracts", () => {
     expect(STORAGE_TABLES).toEqual(["todos_sync_records", "todos_sync_cursors"]);
     expect(TODOS_STORAGE_ENV.databaseUrl).toBe("HASNA_TODOS_DATABASE_URL");
     expect(TODOS_STORAGE_FALLBACK_ENV.databaseUrl).toBe("TODOS_DATABASE_URL");
-    expect(getStorageMode(env)).toBe("postgres");
+    expect(getTodosStorageBackend(env)).toBe("postgres");
     expect(getStorageDatabaseEnv(env)).toBe("TODOS_DATABASE_URL");
     expect(getStorageDatabaseUrl(env)).toBe("postgres://todos@rds.example/fallback");
   });
@@ -2651,13 +2651,14 @@ describe("storage adapter contracts", () => {
     expect(calls.some((call) => call.values?.includes("apple06"))).toBe(true);
   });
 
-  test("rejects the retired storage-mode variables outright", () => {
-    expect(() =>
-      loadTodosStorageConfig({ HASNA_TODOS_STORAGE_MODE: "remote" }),
-    ).toThrow("Deployment modes no longer exist");
-    expect(() =>
-      loadTodosStorageConfig({ TODOS_STORAGE_MODE: "postgres", HASNA_TODOS_DATABASE_URL: "postgres://todos@rds.example/todos" }),
-    ).toThrow("Deployment modes no longer exist");
+  test("retired storage-mode variables are inert: the DSN alone selects the backend", () => {
+    expect(loadTodosStorageConfig({ HASNA_TODOS_STORAGE_MODE: "remote" }).mode).toBe("sqlite");
+    expect(
+      loadTodosStorageConfig({
+        TODOS_STORAGE_MODE: "postgres",
+        HASNA_TODOS_DATABASE_URL: "postgres://todos@rds.example/todos",
+      }).mode,
+    ).toBe("postgres");
   });
 
   test("defines RDS-friendly Postgres sync schema without unsafe identifiers", () => {

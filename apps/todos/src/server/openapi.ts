@@ -272,6 +272,301 @@ const taskManifestApplyResponseSchema = {
   properties: { result: { $ref: "#/components/schemas/TaskManifestApplyResult" } },
 } as const;
 
+const taskSubtreeTransferExpectedTaskSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["task_id", "version"],
+  properties: {
+    task_id: { type: "string", format: "uuid" },
+    version: { type: "integer", minimum: 1 },
+  },
+} as const;
+
+const taskSubtreeTransferSharedPlanSplitSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["source_plan_id", "destination_plan_id"],
+  properties: {
+    source_plan_id: { type: "string", format: "uuid" },
+    destination_plan_id: { type: "string", format: "uuid" },
+  },
+} as const;
+
+const taskSubtreeTransferInspectRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "source_project_id",
+    "destination_project_id",
+    "destination_task_list_id",
+    "root_task_id",
+    "destination_parent_id",
+  ],
+  properties: {
+    source_project_id: { type: "string", format: "uuid" },
+    destination_project_id: { type: "string", format: "uuid" },
+    destination_task_list_id: { type: "string", format: "uuid" },
+    root_task_id: { type: "string", format: "uuid" },
+    destination_parent_id: { type: "string", format: "uuid", nullable: true },
+  },
+} as const;
+
+const taskSubtreeTransferInspectionSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "source_project_id",
+    "destination_project_id",
+    "destination_task_list_id",
+    "root_task_id",
+    "destination_parent_id",
+    "expected_root_parent_id",
+    "source_population_digest",
+    "expected_tasks",
+    "contained_plan_ids",
+    "shared_plan_ids",
+    "complete",
+  ],
+  properties: {
+    ...taskSubtreeTransferInspectRequestSchema.properties,
+    expected_root_parent_id: { type: "string", format: "uuid", nullable: true },
+    source_population_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    expected_tasks: {
+      type: "array",
+      minItems: 1,
+      items: { $ref: "#/components/schemas/TaskSubtreeTransferExpectedTask" },
+    },
+    contained_plan_ids: {
+      type: "array",
+      items: { type: "string", format: "uuid" },
+    },
+    shared_plan_ids: {
+      type: "array",
+      items: { type: "string", format: "uuid" },
+    },
+    complete: { type: "boolean", enum: [true] },
+  },
+} as const;
+
+const taskSubtreeTransferApplyRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "version",
+    "operation_id",
+    "step_id",
+    "idempotency_key",
+    "precondition_digest",
+    "source_project_id",
+    "destination_project_id",
+    "destination_task_list_id",
+    "root_task_id",
+    "destination_parent_id",
+    "expected_root_parent_id",
+    "source_population_digest",
+    "expected_tasks",
+    "shared_plan_splits",
+  ],
+  properties: {
+    ...taskSubtreeTransferInspectRequestSchema.properties,
+    version: { type: "integer", enum: [1] },
+    operation_id: { type: "string", minLength: 1, maxLength: 200 },
+    step_id: { type: "string", minLength: 1, maxLength: 200 },
+    idempotency_key: { type: "string", minLength: 1, maxLength: 240 },
+    precondition_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    expected_root_parent_id: { type: "string", format: "uuid", nullable: true },
+    source_population_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    expected_tasks: {
+      type: "array",
+      minItems: 1,
+      items: { $ref: "#/components/schemas/TaskSubtreeTransferExpectedTask" },
+    },
+    shared_plan_splits: {
+      type: "array",
+      items: { $ref: "#/components/schemas/TaskSubtreeTransferSharedPlanSplit" },
+    },
+  },
+} as const;
+
+const taskSubtreeTransferTaskImageSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "task_id",
+    "project_id",
+    "parent_id",
+    "plan_id",
+    "task_list_id",
+    "version",
+    "updated_at",
+  ],
+  properties: {
+    task_id: { type: "string", format: "uuid" },
+    project_id: { type: "string", format: "uuid", nullable: true },
+    parent_id: { type: "string", format: "uuid", nullable: true },
+    plan_id: { type: "string", format: "uuid", nullable: true },
+    task_list_id: { type: "string", format: "uuid", nullable: true },
+    version: { type: "integer", minimum: 1 },
+    updated_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const taskSubtreeTransferPlanImageSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["plan_id", "project_id", "task_list_id", "updated_at"],
+  properties: {
+    plan_id: { type: "string", format: "uuid" },
+    project_id: { type: "string", format: "uuid", nullable: true },
+    task_list_id: { type: "string", format: "uuid", nullable: true },
+    updated_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const taskSubtreeTransferImageSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["tasks", "plans"],
+  properties: {
+    tasks: {
+      type: "array",
+      items: { $ref: "#/components/schemas/TaskSubtreeTransferTaskImage" },
+    },
+    plans: {
+      type: "array",
+      items: { $ref: "#/components/schemas/TaskSubtreeTransferPlanImage" },
+    },
+  },
+} as const;
+
+const taskSubtreeTransferReceiptSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "receipt_id",
+    "authority",
+    "route",
+    "schema_version",
+    "kind",
+    "operation_id",
+    "step_id",
+    "idempotency_key",
+    "request_digest",
+    "precondition_digest",
+    "result_digest",
+    "apply_receipt_id",
+    "source_project_id",
+    "destination_project_id",
+    "destination_task_list_id",
+    "root_task_id",
+    "source_population_digest",
+    "prior_image",
+    "post_image",
+    "shared_plan_splits",
+    "created_at",
+  ],
+  properties: {
+    receipt_id: { type: "string", format: "uuid" },
+    authority: { type: "string", enum: ["todos"] },
+    route: { type: "string", enum: ["todos.task-subtree-transfer.v1"] },
+    schema_version: { type: "integer", enum: [1] },
+    kind: { type: "string", enum: ["apply", "rollback"] },
+    operation_id: { type: "string" },
+    step_id: { type: "string" },
+    idempotency_key: { type: "string" },
+    request_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    precondition_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    result_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    apply_receipt_id: { type: "string", format: "uuid", nullable: true },
+    source_project_id: { type: "string", format: "uuid" },
+    destination_project_id: { type: "string", format: "uuid" },
+    destination_task_list_id: { type: "string", format: "uuid" },
+    root_task_id: { type: "string", format: "uuid" },
+    source_population_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    prior_image: { $ref: "#/components/schemas/TaskSubtreeTransferImage" },
+    post_image: { $ref: "#/components/schemas/TaskSubtreeTransferImage" },
+    shared_plan_splits: {
+      type: "array",
+      items: { $ref: "#/components/schemas/TaskSubtreeTransferSharedPlanSplit" },
+    },
+    created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const taskSubtreeTransferResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["duplicate", "receipt", "moved_task_ids", "moved_plan_ids", "complete"],
+  properties: {
+    duplicate: { type: "boolean" },
+    receipt: { $ref: "#/components/schemas/TaskSubtreeTransferReceipt" },
+    moved_task_ids: { type: "array", items: { type: "string", format: "uuid" } },
+    moved_plan_ids: { type: "array", items: { type: "string", format: "uuid" } },
+    complete: { type: "boolean", enum: [true] },
+  },
+} as const;
+
+const taskSubtreeTransferCapabilitySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "authority",
+    "route",
+    "schema_version",
+    "tenant_id",
+    "backend",
+    "exact_descendant_closure",
+    "complete_source_population_digest",
+    "per_task_version_cas",
+    "explicit_shared_plan_splits",
+    "atomic_apply",
+    "immutable_forward_inverse_receipts",
+    "prior_image_receipts",
+    "cas_protected_rollback",
+    "preserves_descendant_parent_ids",
+    "preserves_task_and_relation_identities",
+  ],
+  properties: {
+    authority: { type: "string", enum: ["todos"] },
+    route: { type: "string", enum: ["todos.task-subtree-transfer.v1"] },
+    schema_version: { type: "integer", enum: [1] },
+    tenant_id: { type: "string", minLength: 1, maxLength: 200 },
+    backend: { type: "string", enum: ["sqlite", "postgresql", "http"] },
+    exact_descendant_closure: { type: "boolean", enum: [true] },
+    complete_source_population_digest: { type: "boolean", enum: [true] },
+    per_task_version_cas: { type: "boolean", enum: [true] },
+    explicit_shared_plan_splits: { type: "boolean", enum: [true] },
+    atomic_apply: { type: "boolean", enum: [true] },
+    immutable_forward_inverse_receipts: { type: "boolean", enum: [true] },
+    prior_image_receipts: { type: "boolean", enum: [true] },
+    cas_protected_rollback: { type: "boolean", enum: [true] },
+    preserves_descendant_parent_ids: { type: "boolean", enum: [true] },
+    preserves_task_and_relation_identities: { type: "boolean", enum: [true] },
+  },
+} as const;
+
+const taskSubtreeTransferRollbackRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["receipt_id", "operation_id", "step_id", "idempotency_key", "precondition_digest"],
+  properties: {
+    receipt_id: { type: "string", format: "uuid" },
+    operation_id: { type: "string", minLength: 1, maxLength: 200 },
+    step_id: { type: "string", minLength: 1, maxLength: 200 },
+    idempotency_key: { type: "string", minLength: 1, maxLength: 240 },
+    precondition_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+  },
+} as const;
+
+const taskSubtreeTransferReadExactRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["receipt_id"],
+  properties: {
+    receipt_id: { type: "string", format: "uuid" },
+  },
+} as const;
+
 const taskManifestCompensateRequestSchema = {
   type: "object",
   additionalProperties: false,
@@ -904,6 +1199,19 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         TaskManifestReceipt: taskManifestReceiptSchema,
         TaskManifestApplyResult: taskManifestApplyResultSchema,
         TaskManifestApplyResponse: taskManifestApplyResponseSchema,
+        TaskSubtreeTransferExpectedTask: taskSubtreeTransferExpectedTaskSchema,
+        TaskSubtreeTransferSharedPlanSplit: taskSubtreeTransferSharedPlanSplitSchema,
+        TaskSubtreeTransferInspectRequest: taskSubtreeTransferInspectRequestSchema,
+        TaskSubtreeTransferInspection: taskSubtreeTransferInspectionSchema,
+        TaskSubtreeTransferApplyRequest: taskSubtreeTransferApplyRequestSchema,
+        TaskSubtreeTransferTaskImage: taskSubtreeTransferTaskImageSchema,
+        TaskSubtreeTransferPlanImage: taskSubtreeTransferPlanImageSchema,
+        TaskSubtreeTransferImage: taskSubtreeTransferImageSchema,
+        TaskSubtreeTransferReceipt: taskSubtreeTransferReceiptSchema,
+        TaskSubtreeTransferResult: taskSubtreeTransferResultSchema,
+        TaskSubtreeTransferCapability: taskSubtreeTransferCapabilitySchema,
+        TaskSubtreeTransferRollbackRequest: taskSubtreeTransferRollbackRequestSchema,
+        TaskSubtreeTransferReadExactRequest: taskSubtreeTransferReadExactRequestSchema,
         TaskManifestCompensateRequest: taskManifestCompensateRequestSchema,
         TaskManifestCompensationResult: taskManifestCompensationResultSchema,
         TaskManifestCompensateResponse: taskManifestCompensateResponseSchema,
@@ -2017,6 +2325,160 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                           digest: { type: "string" },
                         },
                       },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-subtree-transfer/capability": {
+        get: {
+          operationId: "getTaskSubtreeTransferCapability",
+          summary: "Read the current task-subtree-transfer authority capability and tenant",
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["capability"],
+                    properties: {
+                      capability: { $ref: "#/components/schemas/TaskSubtreeTransferCapability" },
+                    },
+                  },
+                },
+              },
+            },
+            "401": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "503": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-subtree-transfer/inspect": {
+        post: {
+          operationId: "inspectTaskSubtreeTransfer",
+          summary: "Inspect one exact task subtree and complete source population snapshot",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TaskSubtreeTransferInspectRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["inspection"],
+                    properties: {
+                      inspection: { $ref: "#/components/schemas/TaskSubtreeTransferInspection" },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-subtree-transfer/apply": {
+        post: {
+          operationId: "applyTaskSubtreeTransfer",
+          summary: "Apply one exact task subtree transfer atomically with CAS and immutable receipt",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TaskSubtreeTransferApplyRequest" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["result"],
+                    properties: {
+                      result: { $ref: "#/components/schemas/TaskSubtreeTransferResult" },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "503": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-subtree-transfer/read-exact": {
+        post: {
+          operationId: "readExactTaskSubtreeTransfer",
+          summary: "Read one exact immutable task-subtree-transfer receipt",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TaskSubtreeTransferReadExactRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["result"],
+                    properties: {
+                      result: { $ref: "#/components/schemas/TaskSubtreeTransferResult" },
+                    },
+                  },
+                },
+              },
+            },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-subtree-transfer/rollback": {
+        post: {
+          operationId: "rollbackTaskSubtreeTransfer",
+          summary: "Rollback one exact task-subtree-transfer receipt with CAS protection",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TaskSubtreeTransferRollbackRequest" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["result"],
+                    properties: {
+                      result: { $ref: "#/components/schemas/TaskSubtreeTransferResult" },
                     },
                   },
                 },

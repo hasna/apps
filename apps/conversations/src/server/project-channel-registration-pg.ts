@@ -12,6 +12,8 @@ import {
   projectChannelRegistrationChannelRecord,
   projectChannelRegistrationDigest,
   projectChannelRegistrationMessageOwnershipMatches,
+  messageOwnershipSnapshot,
+  messageOwnershipSnapshotMatches,
   ProjectChannelCollectionChangedError,
   projectChannelRegistrationResponseControl,
   sameProjectChannelRegistrationReceipt,
@@ -29,6 +31,8 @@ import {
   type ProjectChannelRegistrationLookupRequest,
   type ProjectChannelRegistrationLookupResult,
   type ProjectChannelRegistrationPriorState,
+  type ProjectChannelRegistrationPriorStateUnion,
+  type ProjectChannelRegistrationAdoptionState,
   type ProjectChannelRegistrationReadRequest,
   type ProjectChannelRegistrationReceipt,
   type ProjectChannelRegistrationRecord,
@@ -44,7 +48,7 @@ import {
 
 type PgReceiptRow = Omit<ProjectChannelRegistrationReceipt, "created_at" | "prior_state"> & {
   created_at: string | Date;
-  prior_state: ProjectChannelRegistrationPriorState | string | null;
+  prior_state: ProjectChannelRegistrationPriorStateUnion | string | null;
 };
 
 type PgChannelRow = Record<string, unknown> & {
@@ -402,6 +406,93 @@ export async function registerProjectChannelPg(
       "SELECT * FROM channels WHERE name = $1 FOR UPDATE",
       [validated.channel],
     );
+    if (validated.adoption) {
+      if (!preexistingRaw) {
+        const receipt = await insertReceipt(tx, buildProjectChannelRegistrationReceipt({
+          capability: cap,
+          request,
+          outcome: "terminal_nonacceptance",
+          reason: "adopt_target_missing",
+        }));
+        assertTime(startedAt, request.time_budget_ms);
+        return receipt;
+      }
+      const preexisting = parseChannel(preexistingRaw);
+      const current = projectChannelRegistrationChannelRecord(preexisting);
+      if (
+        preexisting.id !== validated.adoption.target_id
+        || preexisting.project_id !== validated.adoption.expected_project_id
+        || current.revision !== validated.adoption.expected_revision
+        || current.digest !== validated.adoption.expected_digest
+      ) {
+        const receipt = await insertReceipt(tx, buildProjectChannelRegistrationReceipt({
+          capability: cap,
+          request,
+          outcome: "terminal_nonacceptance",
+          reason: "adopt_precondition_conflict",
+          targetId: preexisting.id,
+          resultRevision: current.revision,
+          resultDigest: current.digest,
+          createdByOperation: false,
+        }));
+        assertTime(startedAt, request.time_budget_ms);
+        return receipt;
+      }
+      const messageRows = await readMessageOwnershipRows(tx, preexisting.name, true);
+      if (messageRows.some((row) => (row.project_id ?? null) !== request.project_id)) {
+        const receipt = await insertReceipt(tx, buildProjectChannelRegistrationReceipt({
+          capability: cap,
+          request,
+          outcome: "terminal_nonacceptance",
+          reason: "adopt_message_owner_conflict",
+          targetId: preexisting.id,
+          resultRevision: current.revision,
+          resultDigest: current.digest,
+          createdByOperation: false,
+        }));
+        assertTime(startedAt, request.time_budget_ms);
+        return receipt;
+      }
+      const snapshot = messageOwnershipSnapshot(
+        messageRows,
+        await messageProjectDigest(tx, preexisting.name),
+      );
+      if (!messageOwnershipSnapshotMatches(snapshot, validated.adoption.expected_message_ownership)) {
+        const receipt = await insertReceipt(tx, buildProjectChannelRegistrationReceipt({
+          capability: cap,
+          request,
+          outcome: "terminal_nonacceptance",
+          reason: "adopt_message_precondition_conflict",
+          targetId: preexisting.id,
+          resultRevision: current.revision,
+          resultDigest: current.digest,
+          createdByOperation: false,
+        }));
+        assertTime(startedAt, request.time_budget_ms);
+        return receipt;
+      }
+      const priorState: ProjectChannelRegistrationAdoptionState = {
+        adoption: true,
+        target_id: preexisting.id,
+        project_id: request.project_id,
+        revision: current.revision,
+        digest: current.digest,
+        message_ownership: snapshot,
+      };
+      const receipt = buildProjectChannelRegistrationReceipt({
+        capability: cap,
+        request,
+        outcome: "accepted",
+        reason: "adopted_preexisting",
+        targetId: preexisting.id,
+        resultRevision: current.revision,
+        resultDigest: current.digest,
+        createdByOperation: false,
+        priorState,
+      });
+      assertTime(startedAt, request.time_budget_ms);
+      return insertReceipt(tx, receipt);
+    }
     if (validated.binding) {
       if (!preexistingRaw) {
         const receipt = await insertReceipt(tx, buildProjectChannelRegistrationReceipt({
@@ -922,7 +1013,42 @@ export async function compensateProjectChannelRegistrationPg(
       assertTime(startedAt, request.time_budget_ms);
       return receipt;
     }
-    if (accepted.prior_state) {
+    if (accepted.prior_state && "adoption" in accepted.prior_state) {
+      const currentMessages = await readMessageOwnershipRows(tx, row.name, true);
+      const snapshot = messageOwnershipSnapshot(
+        currentMessages,
+        await messageProjectDigest(tx, row.name),
+      );
+      if (
+        parseChannel(row).project_id !== accepted.prior_state.project_id
+        || !messageOwnershipSnapshotMatches(snapshot, accepted.prior_state.message_ownership)
+      ) {
+        const receipt = await terminalInverse(
+          tx,
+          cap,
+          request,
+          "message_ownership_drifted",
+          accepted,
+          current,
+        );
+        assertTime(startedAt, request.time_budget_ms);
+        return receipt;
+      }
+      const receipt = buildProjectChannelRegistrationReceipt({
+        capability: cap,
+        request,
+        outcome: "accepted",
+        targetId: accepted.target_id,
+        resultRevision: current.revision,
+        resultDigest: current.digest,
+        acceptedReceiptId: accepted.receipt_id,
+        createdByOperation: false,
+        priorState: accepted.prior_state,
+      });
+      assertTime(startedAt, request.time_budget_ms);
+      return insertReceipt(tx, receipt);
+    }
+    if (accepted.prior_state && !("adoption" in accepted.prior_state)) {
       const prior = accepted.prior_state;
       const currentMessages = await readMessageOwnershipRows(tx, row.name, true);
       if (
@@ -1062,7 +1188,25 @@ export async function verifyProjectChannelRegistrationInversePg(
     "SELECT * FROM channels WHERE id = $1",
     [accepted.target_id],
   );
-  if (accepted.prior_state) {
+  if (accepted.prior_state && "adoption" in accepted.prior_state) {
+    if (!target) {
+      throw new Error("project channel registration inverse verification did not find the adopted target.");
+    }
+    const parsed = parseChannel(target);
+    const record = projectChannelRegistrationChannelRecord(parsed);
+    const snapshot = messageOwnershipSnapshot(
+      await readMessageOwnershipRows(client, parsed.name),
+      await messageProjectDigest(client, parsed.name),
+    );
+    if (
+      parsed.project_id !== accepted.prior_state.project_id
+      || record.revision !== accepted.prior_state.revision
+      || record.digest !== accepted.prior_state.digest
+      || !messageOwnershipSnapshotMatches(snapshot, accepted.prior_state.message_ownership)
+    ) {
+      throw new Error("project channel registration inverse verification found a drifted adopted target.");
+    }
+  } else if (accepted.prior_state) {
     if (!target) {
       throw new Error("project channel registration inverse verification did not find the restored target.");
     }
@@ -1100,6 +1244,7 @@ export async function verifyProjectChannelRegistrationInversePg(
         project_id: accepted.prior_state.project_id,
         revision: accepted.prior_state.revision,
         digest: accepted.prior_state.digest,
+        ...("adoption" in accepted.prior_state ? { adopted: true as const } : {}),
       }
     : {
         target_id: accepted.target_id!,

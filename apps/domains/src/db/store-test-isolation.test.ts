@@ -1,12 +1,12 @@
 /**
- * Regression: a test run must never resolve the PRODUCTION (cloud-http) store.
+ * Regression: a test run must never resolve the PRODUCTION (hosted HTTP) store.
  *
  * The defect this pins: `src/db/domains.test.ts` (and eight sibling suites) set
  * `DOMAINS_DIR` to a mkdtemp directory believing that isolates them. It does
  * not. `DOMAINS_DIR` is read only by `getDbPath()` in `database.ts`, which is
  * reached only from `LocalStore` — i.e. only AFTER the transport has already
  * been chosen. The transport is chosen by `getStore()` from
- * `HASNA_DOMAINS_API_URL` + `HASNA_DOMAINS_API_KEY` + `HASNA_DOMAINS_STORAGE_MODE`.
+ * `HASNA_DOMAINS_API_URL` + `HASNA_DOMAINS_API_KEY`.
  * Those two sets of variables are disjoint, so on a box where the API vars are
  * exported every `createDomain()` in the suite wrote to the production API.
  * Measured evidence: 122 rows created in the hour 2026-07-11T18, and twelve more
@@ -20,41 +20,36 @@
 import { describe, expect, test } from "bun:test";
 import { getStore, isCloudStore } from "./store.js";
 
-const CLOUD_ENV = {
+const HOSTED_ENV = {
   HASNA_DOMAINS_API_URL: "https://domains.example.invalid",
   HASNA_DOMAINS_API_KEY: "not-a-real-key-fixture-only",
 };
 
 describe("store isolation under test", () => {
-  test("BUG PINNED: cloud env + NODE_ENV=test must NOT resolve the production store", () => {
-    const env = { ...CLOUD_ENV, NODE_ENV: "test", DOMAINS_DIR: "/tmp/whatever" };
+  test("BUG PINNED: hosted env + NODE_ENV=test must NOT resolve the production store", () => {
+    const env = { ...HOSTED_ENV, NODE_ENV: "test", DOMAINS_DIR: "/tmp/whatever" };
     expect(isCloudStore(env)).toBe(false);
     expect((getStore(env) as unknown as { transport: string }).transport).toBe("local");
   });
 
-  test("BUG PINNED: the deprecated self_hosted mode alias is also refused under test", () => {
-    const env = { ...CLOUD_ENV, HASNA_DOMAINS_STORAGE_MODE: "self_hosted", NODE_ENV: "test" };
-    expect(isCloudStore(env)).toBe(false);
-  });
-
-  test("NO REGRESSION: outside a test run, cloud env still resolves cloud-http", () => {
-    const env = { ...CLOUD_ENV, NODE_ENV: "production" };
+  test("NO REGRESSION: outside a test run, hosted env still resolves cloud-http", () => {
+    const env = { ...HOSTED_ENV, NODE_ENV: "production" };
     expect(isCloudStore(env)).toBe(true);
     expect((getStore(env) as unknown as { transport: string }).transport).toBe("cloud-http");
   });
 
-  test("NEGATIVE CONTROL: no cloud env resolves local whether or not under test", () => {
+  test("NEGATIVE CONTROL: no hosted env resolves local whether or not under test", () => {
     expect(isCloudStore({ NODE_ENV: "test" })).toBe(false);
     expect(isCloudStore({ NODE_ENV: "production" })).toBe(false);
   });
 
-  test("ESCAPE HATCH: an explicit opt-out re-enables cloud under test", () => {
-    const env = { ...CLOUD_ENV, NODE_ENV: "test", HASNA_DOMAINS_ALLOW_CLOUD_IN_TESTS: "1" };
+  test("ESCAPE HATCH: an explicit opt-out re-enables the hosted store under test", () => {
+    const env = { ...HOSTED_ENV, NODE_ENV: "test", HASNA_DOMAINS_ALLOW_CLOUD_IN_TESTS: "1" };
     expect(isCloudStore(env)).toBe(true);
   });
 
   test("the guard names the variable an operator must act on", () => {
-    const env = { ...CLOUD_ENV, NODE_ENV: "test", HASNA_DOMAINS_TEST_GUARD: "throw" };
+    const env = { ...HOSTED_ENV, NODE_ENV: "test", HASNA_DOMAINS_TEST_GUARD: "throw" };
     expect(() => getStore(env)).toThrow(/HASNA_DOMAINS_ALLOW_CLOUD_IN_TESTS/);
   });
 });

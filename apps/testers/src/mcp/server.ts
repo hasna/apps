@@ -968,13 +968,12 @@ server.tool(
       const hasApiKey = !!(config.anthropicApiKey || process.env["ANTHROPIC_API_KEY"]);
       const storage = storageStatus();
       return json({
-        // TRUTH about where reads/writes actually go. In cloud mode there is no
-        // local db, so dbPath is null and the cloud /v1 base URL is reported.
-        storageMode: storage.mode,
+        // TRUTH about where reads/writes actually go. On the hosted transport
+        // there is no local db, so dbPath is null and the hosted /v1 base URL
+        // is reported.
         transport: storage.transport,
         apiBaseUrl: storage.baseUrl,
         storageApiKey: storage.apiKeyPresent ? "configured" : "not set",
-        storageModeSource: storage.modeSource,
         dbPath:
           storage.transport === "cloud-http"
             ? null

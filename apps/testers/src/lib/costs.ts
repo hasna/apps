@@ -46,7 +46,7 @@ function periodCutoffMs(period: Period): number | null {
 /**
  * Collect every result (across the store's runs, optionally scoped to a project)
  * that falls within the requested period. Routes entirely through the Store so
- * cloud mode reads the cloud dataset, not on-box SQLite.
+ * the hosted transport reads the hosted dataset, not on-box SQLite.
  */
 async function collectResults(projectId: string | undefined, period: Period): Promise<Result[]> {
   const cutoff = periodCutoffMs(period);

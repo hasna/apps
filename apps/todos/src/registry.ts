@@ -29,7 +29,8 @@ export interface TodosPackageExportContract {
     | "./storage"
     | "./testing"
     | "./project-registration"
-    | "./task-manifest";
+    | "./task-manifest"
+    | "./task-subtree-transfer";
   import: string;
   types: string;
   description: string;
@@ -110,6 +111,13 @@ export const TODOS_PACKAGE_EXPORTS: TodosPackageExportContract[] = [
     import: "./dist/task-manifest.js",
     types: "./dist/task-manifest.d.ts",
     description: "Transactional package-owned authority for deterministic plan and task graph manifests.",
+    stability: "stable",
+  },
+  {
+    subpath: "./task-subtree-transfer",
+    import: "./dist/task-subtree-transfer.js",
+    types: "./dist/task-subtree-transfer.d.ts",
+    description: "Atomic package-owned authority for existing task-subtree project transfers and rollback.",
     stability: "stable",
   },
 ];

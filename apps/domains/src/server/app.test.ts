@@ -84,20 +84,20 @@ function appWithKey(scopes: string[]) {
 }
 
 describe("domains-serve app", () => {
-  test("GET /health is public and returns status+version+mode", async () => {
+  test("GET /health is public and returns status+version", async () => {
     const { app } = appWithKey(["domains:*"]);
     const res = await app.handle(new Request("http://x/health"));
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body["status"]).toBe("ok");
     expect(body["version"]).toBe("9.9.9");
-    expect(body["mode"]).toBeDefined();
+    expect(body["mode"]).toBeUndefined();
   });
 
-  test("GET /version returns {status,version,mode}", async () => {
+  test("GET /version returns {status,version}", async () => {
     const { app } = appWithKey(["domains:*"]);
     const body = (await (await app.handle(new Request("http://x/version"))).json()) as Record<string, unknown>;
-    expect(body).toEqual({ status: "ok", version: "9.9.9", mode: "self_hosted" });
+    expect(body).toEqual({ status: "ok", version: "9.9.9" });
   });
 
   test("GET /openapi.json exposes the /v1 spec", async () => {
@@ -151,7 +151,7 @@ describe("domains-serve app", () => {
   // PATCH route must be WIRED, not fall through to the catch-all 404. A stale
   // server build lacking these routes returns {error:"Not found"} (the catch-all)
   // and hard-fails `domain get`, `domain emails`, `alert set/list`, MCP
-  // get_domain/create_alert/list_alerts/update_dns_record in cloud mode.
+  // get_domain/create_alert/list_alerts/update_dns_record on the hosted client.
   test("per-domain emails route is wired (routed 200, not catch-all 404)", async () => {
     const { app, token } = appWithKey(["domains:read", "domains:write"]);
     const h = { "x-api-key": token, "content-type": "application/json" };
