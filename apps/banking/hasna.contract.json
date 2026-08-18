@@ -4,7 +4,7 @@
   "name": "banking",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.8.5",
+  "kitVersion": "0.11.1",
   "description": "Agent-safe banking control plane for Hasna infrastructure and AI agents. Ships intent, policy, and provider types plus CLI and MCP surfaces; production storage is supplied by the host through the BankingCoreStore interface.",
   "bins": [
     "banking",
@@ -37,13 +37,13 @@
     }
   ],
   "storage": {
-    "mode": "sqlite",
     "engines": [
       "sqlite"
     ],
     "envPrefix": "HASNA_BANKING_",
     "aliasEnvPrefix": "BANKING_",
-    "sqlitePath": "~/.hasna/banking/banking.db"
+    "sqlitePath": "~/.hasna/banking/banking.db",
+    "backend": "sqlite"
   },
   "metadata": {
     "release": {
@@ -54,7 +54,7 @@
     "conformance": {
       "waivedStorageEngines": [
         {
-          "engine": "postgres",
+          "engine": "postgresql",
           "reason": "The bundled SQLite adapter is a development fixture that defaults to an in-memory database; hosts supply production storage, PostgreSQL included, through the BankingCoreStore interface in src/core/store.ts.",
           "reviewedBy": "platform-storage",
           "expiresAt": "2027-01-01T00:00:00.000Z"
