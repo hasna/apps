@@ -41,6 +41,12 @@ COPY server ./server
 COPY src/generated ./src/generated
 COPY tools ./tools
 
+# Amazon RDS global CA bundle (public AWS artifact, truststore.pki.rds.amazonaws.com)
+# so the storage kit's verified TLS (sslmode=require -> rejectUnauthorized:true)
+# can validate the RDS server certificate. The kit also honours PGSSLROOTCERT.
+RUN wget -q -O /etc/ssl/certs/rds-global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+  && chmod 644 /etc/ssl/certs/rds-global-bundle.pem
+
 # Drop privileges (the bun base image ships a non-root `bun` user).
 USER bun
 

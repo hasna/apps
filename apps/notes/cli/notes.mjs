@@ -36,7 +36,7 @@ import {
   runNotesAgent,
 } from '../tools/notes-agent.mjs';
 import { notesEventsStatus, reconcileNoteCreatedEvents } from '../tools/notes-events.mjs';
-import { resolveNotesClientTransport } from '../client/transport.mjs';
+import { resolveNotesClientStore, resolveNotesClientTransport } from '../sdk/index.mjs';
 import {
   MigrationLedger,
   resolveServerDataBackend,
@@ -211,7 +211,38 @@ async function bodyFromOpts(opts) {
   return String(opts.body || '');
 }
 
-async function commandList(opts) {
+async function commandList(opts, http) {
+  if (http) {
+    // The dialect list endpoint supports limit (+ cursor paging) only. Filters
+    // that exist on the local store must fail loud over the wire rather than
+    // return unfiltered results dressed as filtered ones.
+    const unsupported = [
+      ['offset', opts.offset],
+      ['label', opts.label],
+      ['machine', opts.machine],
+      ['status', opts.status],
+      ['query', opts.query],
+    ].filter(([name, value]) => value !== undefined && value !== null && value !== 0);
+    if (unsupported.length) {
+      throw new Error(
+        `notes list over the HTTP API does not support --${unsupported[0][0]}; ` +
+          'the personalnotes/v1 list endpoint filters by limit only. Unset HASNA_NOTES_API_URL to use the local store filters.',
+      );
+    }
+    const dialect = await http.listNotes({ limit: opts.limit || DEFAULT_LIMIT });
+    const page = {
+      items: dialect.data,
+      limit: opts.limit || DEFAULT_LIMIT,
+      offset: 0,
+      total: dialect.nextCursor ? null : dialect.data.length,
+      hasMore: !!dialect.nextCursor,
+      nextOffset: dialect.data.length,
+    };
+    if (opts.json) return jsonOut(page);
+    for (const note of page.items) lineOut(noteSummary(note));
+    if (page.hasMore) lineOut(`View more: --limit ${page.limit}`);
+    return;
+  }
   const page = await listNotes({
     limit: opts.limit || DEFAULT_LIMIT,
     offset: opts.offset || 0,
@@ -227,8 +258,21 @@ async function commandList(opts) {
   if (page.hasMore) lineOut(`View more: --offset ${page.nextOffset} --limit ${page.limit}`);
 }
 
-async function commandGet(id, opts) {
-  const note = await getNote(requireArg(id, 'id'));
+async function commandGet(id, opts, http) {
+  const noteId = requireArg(id, 'id');
+  if (http) {
+    const note = await http.getNote(noteId);
+    if (!note) throw new Error('note_not_found');
+    if (opts.json) return jsonOut(note);
+    lineOut(`# ${note.title || 'Untitled Note'}`);
+    lineOut(`id: ${note.id}`);
+    lineOut(`labels: ${(note.labels || []).join(', ') || '(none)'}`);
+    lineOut(`updatedAt: ${note.updatedAt}`);
+    lineOut('');
+    lineOut(note.bodyMarkdown || '');
+    return;
+  }
+  const note = await getNote(noteId);
   if (!note) throw new Error('note_not_found');
   if (opts.json) return jsonOut(note);
   lineOut(`# ${note.title || 'Untitled Note'}`);
@@ -239,9 +283,19 @@ async function commandGet(id, opts) {
   lineOut(note.body || '');
 }
 
-async function commandCreate(opts) {
-  const now = new Date().toISOString();
+async function commandCreate(opts, http) {
   const title = String(opts.title || '').trim();
+  if (http) {
+    const note = await http.createNote({
+      title: title || 'Untitled Note',
+      bodyMarkdown: await bodyFromOpts(opts),
+      labels: normalizeLabels(opts.label || []),
+    });
+    if (opts.json) return jsonOut(note);
+    lineOut(noteSummary(note));
+    return;
+  }
+  const now = new Date().toISOString();
   const note = await saveNote({
     title: title || 'Untitled Note',
     body: await bodyFromOpts(opts),
@@ -262,8 +316,29 @@ async function commandCreate(opts) {
   lineOut(noteSummary(note));
 }
 
-async function commandDelete(id, opts) {
-  const note = await getNote(requireArg(id, 'id'));
+async function commandDelete(id, opts, http) {
+  const noteId = requireArg(id, 'id');
+  if (http) {
+    if (opts.permanent) {
+      throw new Error(
+        'notes delete --permanent is a local-store operation; the personalnotes/v1 ' +
+          'dialect has no permanent delete (DELETE soft-deletes via deletedAt). ' +
+          'Unset HASNA_NOTES_API_URL to purge from the local store.',
+      );
+    }
+    if (!opts['yes'] && !opts.force) {
+      const note = await http.getNote(noteId);
+      if (!note) throw new Error('note_not_found');
+      const preview = moveToTrashPreview({ title: note.title, status: note.deletedAt ? 'trash' : 'active' }, 'delete');
+      const message = `Delete "${preview.preview.title}"? The dialect deletes softly (deletedAt); there is no REST restore.`;
+      if (!(await requireDestructiveConfirmation(preview, opts, message))) return;
+    }
+    const result = await http.deleteNote(noteId);
+    if (opts.json) return jsonOut({ ok: true, deleted: true });
+    lineOut('Deleted');
+    return;
+  }
+  const note = await getNote(noteId);
   if (!note) throw new Error('note_not_found');
   const permanent = opts.permanent || note.status === 'trash';
   if (permanent) {
@@ -599,10 +674,17 @@ async function main() {
     lineOut(usage());
     return;
   }
-  if (cmd === 'list') return commandList(opts);
-  if (cmd === 'get') return commandGet(opts._[0], opts);
-  if (cmd === 'create') return commandCreate(opts);
-  if (cmd === 'delete') return commandDelete(opts._[0], opts);
+  if (cmd === '--version' || cmd === '-v') {
+    const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+    lineOut(pkg.version);
+    return;
+  }
+  const store = resolveNotesClientStore(process.env);
+  const http = store.transport === 'http' ? store.httpStore : null;
+  if (cmd === 'list') return commandList(opts, http);
+  if (cmd === 'get') return commandGet(opts._[0], opts, http);
+  if (cmd === 'create') return commandCreate(opts, http);
+  if (cmd === 'delete') return commandDelete(opts._[0], opts, http);
   if (cmd === 'archive') return commandArchive(opts._[0], opts);
   if (cmd === 'trash') return commandTrash(opts._[0], opts);
   if (cmd === 'restore') return commandRestore(opts._[0], opts);
