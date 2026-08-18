@@ -31,8 +31,9 @@
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
-    "prepack": "bun run build",
-    "prepublishOnly": "bun run typecheck && bun test"
+    "prepack": "bun run build && bun run scan:artifact",
+    "prepublishOnly": "bun run typecheck && bun test",
+    "scan:artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/releases-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan releases-artifact-scan.tgz; rc=$?; rm -f \"$PWD/releases-artifact-scan.tgz\"; exit $rc"
   },
   "keywords": [
     "releases",
