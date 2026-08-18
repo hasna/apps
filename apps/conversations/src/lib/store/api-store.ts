@@ -237,7 +237,7 @@ export class ApiStore implements ConversationsStore {
   }
 
   // ── health ──────────────────────────────────────────────────────────────────
-  // Cloud-mode probe for `doctor`: an authenticated, cheap count round-trips the
+  // Hosted-API probe for `doctor`: an authenticated, cheap count round-trips the
   // /v1 API so a flipped client verifies reachability AND that its bearer key
   // works. The bearer key never leaves the transport.
   //
@@ -669,10 +669,10 @@ export class ApiStore implements ConversationsStore {
 
   // ── projects ────────────────────────────────────────────────────────────────
   // Project rows come back raw from the API (tags/metadata/settings as JSON text).
-  // Normalize through the shared `parseProject` so cloud mode returns the identical
-  // contract as local — `tags` is always an array, never a raw string/null (that
-  // mismatch crashed `project get`). `channel_count` is surfaced as ProjectInfo when
-  // the server provides it, defaulting to 0.
+  // Normalize through the shared `parseProject` so the hosted API returns the
+  // identical contract as local — `tags` is always an array, never a raw
+  // string/null (that mismatch crashed `project get`). `channel_count` is
+  // surfaced as ProjectInfo when the server provides it, defaulting to 0.
   private static asProject(row: unknown): Record<string, unknown> {
     return parseProject((row ?? {}) as Record<string, unknown>) as unknown as Record<string, unknown>;
   }
@@ -874,8 +874,8 @@ export class ApiStore implements ConversationsStore {
       metadata: opts.metadata,
       blocking: opts.blocking === true,
       // This is an explicit field whitelist, so anything missing here is
-      // silently dropped on the cloud path. reply_to was missing, which
-      // unthreaded every reply sent in API mode while the local
+      // silently dropped on the hosted-API path. reply_to was missing, which
+      // unthreaded every reply sent through the API while the local
       // SQLite path (and its tests) stayed correct.
       reply_to: opts.reply_to ?? undefined,
       reply_to_uuid: replyUuid ?? undefined,

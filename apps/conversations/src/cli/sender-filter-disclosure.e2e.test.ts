@@ -47,7 +47,7 @@ function runCli(args: string[], agent: string) {
     env: {
       ...process.env,
       // Precedence rule 1 in src/lib/store/index.ts: an explicit DB path wins
-      // over an exported cloud mode, so fleet credentials in the ambient
+      // over exported API credentials, so fleet credentials in the ambient
       // environment cannot pull this suite onto the production store. Verified
       // by measurement, not assumed — see the task record.
       CONVERSATIONS_DB_PATH: TEST_DB,

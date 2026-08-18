@@ -10,9 +10,8 @@
 // banned on this fleet (see ~/.claude/rules/no-mcps.md: an `emails` MCP returning
 // `{"email": null}` for a mailbox holding 170,609 messages).
 //
-// Deployment modes no longer exist (owner directive 2026-07-29; knowledge
-// k_ms5wv466_u0jidq): client transport is the API pair alone, and any retired
-// storage-mode variable is a fail-loud error naming the variable.
+// Client transport is the API pair alone (owner directive 2026-07-29; knowledge
+// k_ms5wv466_u0jidq).
 //
 // These tests use explicit `env` objects and never read the ambient process env,
 // so they are hermetic and cannot be perturbed by fleet configuration. No key
@@ -29,7 +28,6 @@ import {
 
 const URL_VAR = "HASNA_CONVERSATIONS_API_URL";
 const KEY_VAR = "HASNA_CONVERSATIONS_API_KEY";
-const MODE_VAR = "HASNA_CONVERSATIONS_STORAGE_MODE";
 const DB_VAR = "HASNA_CONVERSATIONS_DB_PATH";
 
 const API_URL = "https://conversations.hasna.xyz";
@@ -80,46 +78,6 @@ describe("store resolution — API expected but unbuildable must ERROR, not fall
   });
 });
 
-describe("store resolution — retired storage-mode variables are fail-loud errors", () => {
-  // (d) The fail-loud ratchet: a storage-mode variable set is an error naming the
-  // variable, whatever its value claims. It is never a selector, never a hint.
-  for (const modeKey of [
-    "HASNA_CONVERSATIONS_STORAGE_MODE",
-    "HASNA_CONVERSATIONS_MODE",
-    "CONVERSATIONS_STORAGE_MODE",
-    "CONVERSATIONS_MODE",
-  ]) {
-    test(`${modeKey} set (even beside a valid API pair) throws naming the variable`, () => {
-      const env = { [modeKey]: "local", [URL_VAR]: API_URL, [KEY_VAR]: FAKE_KEY };
-
-      expect(() => getStore(env)).toThrow(ConversationsStoreConfigError);
-      expect(() => getStore(env)).toThrow(new RegExp(modeKey));
-    });
-
-    test(`${modeKey} set alone throws naming the variable`, () => {
-      expect(() => getStore({ [modeKey]: "cloud" })).toThrow(new RegExp(modeKey));
-    });
-  }
-
-  test("a blank leftover storage-mode variable still throws (stale fragment)", () => {
-    expect(() => getStore({ [MODE_VAR]: "" })).toThrow(new RegExp(MODE_VAR));
-    expect(() => getStore({ [MODE_VAR]: "   " })).toThrow(new RegExp(MODE_VAR));
-  });
-
-  test("assertUnambiguousStoreEnv is the reusable guard and agrees with getStore", () => {
-    expect(() => assertUnambiguousStoreEnv({ [URL_VAR]: API_URL })).toThrow(
-      ConversationsStoreConfigError,
-    );
-    expect(() => assertUnambiguousStoreEnv({})).not.toThrow();
-    expect(() => assertUnambiguousStoreEnv({ [MODE_VAR]: "local" })).toThrow(
-      ConversationsStoreConfigError,
-    );
-    expect(() =>
-      assertUnambiguousStoreEnv({ [URL_VAR]: API_URL, [KEY_VAR]: FAKE_KEY }),
-    ).not.toThrow();
-  });
-});
-
 describe("store resolution — explicit, unambiguous local configuration keeps working", () => {
   // (c) Single-operator local SQLite is legitimate and documented. The bug is the
   // SILENT DOWNGRADE from an expected API store, not local storage itself.
@@ -152,8 +110,7 @@ describe("store resolution — explicit, unambiguous local configuration keeps w
   // Blank and whitespace-only API values must count as UNSET, exactly as the
   // transport resolver's own `firstEnv` treats them. A guard that classified these
   // differently from the resolver it guards would become its own source of
-  // wrong-store bugs. Storage-mode variables are the exception: SET is SET, even
-  // blank, because they are retired rather than selectors (asserted above).
+  // wrong-store bugs.
   for (const [label, blank] of [
     ["empty", ""],
     ["whitespace-only", "   "],
@@ -173,7 +130,7 @@ describe("store resolution — explicit, unambiguous local configuration keeps w
 });
 
 describe("store resolution — a complete API configuration still routes to the API", () => {
-  test("API URL + API key with no mode => cloud-http", () => {
+  test("API URL + API key => cloud-http", () => {
     const env = { [URL_VAR]: API_URL, [KEY_VAR]: FAKE_KEY };
 
     expect(getStore(env).transport).toBe("cloud-http");

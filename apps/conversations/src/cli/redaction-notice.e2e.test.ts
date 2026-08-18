@@ -43,14 +43,9 @@ function runCli(args: string[], agent = "e2e-sender") {
     CONVERSATIONS_AGENT_ID: agent,
     FORCE_COLOR: "0",
   };
-  // Retired storage-mode variables would trip the fail-loud ratchet in the
-  // child; scrub any ambient leftovers so this suite tests the local store.
-  for (const key of [
-    "HASNA_CONVERSATIONS_STORAGE_MODE",
-    "HASNA_CONVERSATIONS_MODE",
-    "CONVERSATIONS_STORAGE_MODE",
-    "CONVERSATIONS_MODE",
-  ]) {
+  // Scrub any ambient store credentials so this suite tests the local store.
+  for (const key of ["HASNA_CONVERSATIONS_API_URL", "CONVERSATIONS_API_URL",
+    "HASNA_CONVERSATIONS_API_KEY", "CONVERSATIONS_API_KEY"]) {
     delete env[key];
   }
   const result = Bun.spawnSync({

@@ -32,8 +32,8 @@ const agentFocus = new Map<string, { project_id: string | null }>();
 
 async function getAgentFocus(agentId: string): Promise<string | null> {
   if (agentFocus.has(agentId)) return agentFocus.get(agentId)!.project_id;
-  // Route presence through the Store so cloud mode reads cloud presence, not
-  // stale local sqlite.
+  // Route presence through the Store so the hosted API reads cloud presence,
+  // not stale local sqlite.
   const presence = await getStore().getPresence(agentId);
   return presence?.project_id ?? null;
 }

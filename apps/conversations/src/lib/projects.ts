@@ -8,7 +8,7 @@ import { PROJECT_LIST_ORDER, simpleOrderByClause } from "./list-order.js";
  * `tags`/`metadata`/`settings` parsed from their JSON-text columns, nullable
  * fields normalized. Pure (no sqlite); shared by the local lib and the ApiStore so
  * both transports return the identical contract — `tags` is ALWAYS an array, never
- * a raw JSON string or null (that mismatch crashed `project get` in cloud mode).
+ * a raw JSON string or null (that mismatch crashed `project get` through the hosted API).
  */
 export function parseProject(row: Record<string, unknown>): Project {
   // Columns are JSON text (sqlite + the Postgres TEXT columns), but tolerate an

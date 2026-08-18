@@ -75,7 +75,7 @@ final class StoreResolutionMatrixTests: XCTestCase {
     func testFixtureIsNotEmpty() throws {
         // A matrix-driven suite that silently loads zero arms passes vacuously.
         let matrix = try loadMatrix()
-        XCTAssertGreaterThanOrEqual(matrix.arms.count, 19, "fixture lost arms")
+        XCTAssertGreaterThanOrEqual(matrix.arms.count, 16, "fixture lost arms")
 
         // The arm count alone is not enough. `assertChildStoreEnv` returns early
         // when an arm carries no `childStoreEnv`, so stripping that field from
@@ -84,19 +84,16 @@ final class StoreResolutionMatrixTests: XCTestCase {
         // divergence lived in. The TypeScript side guards the same floor; each
         // suite must hold its own, because either can be run alone.
         let started = matrix.arms.filter { $0.childStoreEnv != nil }
-        XCTAssertGreaterThanOrEqual(started.count, 14, "fixture lost its child-env expectations")
+        XCTAssertGreaterThanOrEqual(started.count, 12, "fixture lost its child-env expectations")
 
         // And the fixture must not be satisfiable by a constant.
         XCTAssertEqual(Set(matrix.arms.map(\.shell)), ["cloud", "local", "unresolved"])
     }
 
     /// EVERY key that can select local has an arm — stated against the contract
-    /// rather than as a count, so a seventh key added to `StoreEnvContract` fails
-    /// here until someone writes its arm. One key (`CONVERSATIONS_STORAGE_MODE`)
-    /// had no arm at all, which is the shape this replaces: a coverage claim that
-    /// nothing re-derives goes stale the moment the contract grows. Deployment
-    /// modes are gone, so local is selected by a DB path alone (or by the absence
-    /// of an API pair); the retired mode keys are covered by the refuse-arm test.
+    /// rather than as a count, so a third key added to `StoreEnvContract` fails
+    /// here until someone writes its arm. Local is selected by a DB path (or by
+    /// the absence of an API pair).
     func testEveryLocalSelectingKeyHasAnArm() throws {
         let covered = Set(try loadMatrix().arms.compactMap {
             $0.shell == "local" ? $0.expectedSelectedBy : nil
@@ -106,21 +103,6 @@ final class StoreResolutionMatrixTests: XCTestCase {
             selectable.subtracting(covered), [],
             "these keys can select local and no fixture arm exercises them"
         )
-    }
-
-    /// EVERY retired mode key must have an arm that refuses naming it. Without
-    /// this, a mode key added to the contract could be dropped from the ratchet
-    /// without any fixture noticing.
-    func testEveryLegacyModeKeyHasARefuseArm() throws {
-        let covered = Set(try loadMatrix().arms.compactMap {
-            $0.shell == "unresolved" ? $0.reasonContains : nil
-        })
-        for key in StoreEnvContract.legacyModeKeys {
-            XCTAssertTrue(
-                covered.contains { $0.contains(key) },
-                "no unresolved arm names the retired mode key \(key)"
-            )
-        }
     }
 
     func testEveryArm() throws {
@@ -197,17 +179,12 @@ final class StoreResolutionMatrixTests: XCTestCase {
 final class StoreGuardPropertyTests: XCTestCase {
 
     /// Whatever the shell announces, the environment it hands the child must
-    /// contain no key that could select the other store — and no retired mode key
-    /// at all, because a mode key in the child would trip the resolver's
-    /// fail-loud ratchet. This is the invariant the divergence broke, asserted
-    /// independently of any single arm.
+    /// contain no key that could select the other store. This is the invariant
+    /// the divergence broke, asserted independently of any single arm.
     func testCloudChildEnvCarriesNoLocalSelectingKey() throws {
         let hostileEnv = [
             "HASNA_CONVERSATIONS_DB_PATH": "/tmp/should-not-survive.db",
             "CONVERSATIONS_DB_PATH": "/tmp/should-not-survive.db",
-            "HASNA_CONVERSATIONS_MODE": "local",
-            "CONVERSATIONS_STORAGE_MODE": "local",
-            "CONVERSATIONS_MODE": "local",
             "PATH": "/usr/bin",
         ]
         let configPath = try writeConfigFile([
@@ -220,9 +197,6 @@ final class StoreGuardPropertyTests: XCTestCase {
         }
         for key in StoreEnvContract.dbPathKeys {
             XCTAssertNil(env[key], "\(key) survived into the child environment")
-        }
-        for key in StoreEnvContract.legacyModeKeys {
-            XCTAssertNil(env[key], "retired \(key) survived into the child environment")
         }
         // Unrelated inherited variables are untouched — the shell strips the
         // store-selecting keys, not the environment.
@@ -248,7 +222,7 @@ final class StoreGuardPropertyTests: XCTestCase {
 
     /// Explicit local is supported and announced as local — the guard refuses
     /// ambiguity, not local storage. Local is selected by a DB path (or by the
-    /// absence of an API pair); retired mode tokens are errors, not selectors.
+    /// absence of an API pair).
     func testExplicitLocalIsAnnouncedAsLocal() throws {
         let configPath = try writeConfigFile(["HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture.db"])
         guard case .explicitLocal(let env, let selectedBy) =
@@ -256,21 +230,7 @@ final class StoreGuardPropertyTests: XCTestCase {
             return XCTFail("explicit local must resolve to explicitLocal")
         }
         XCTAssertEqual(env["HASNA_CONVERSATIONS_DB_PATH"], "/tmp/fixture.db")
-        XCTAssertNil(env["HASNA_CONVERSATIONS_STORAGE_MODE"])
         XCTAssertEqual(selectedBy, "HASNA_CONVERSATIONS_DB_PATH")
-    }
-
-    /// A retired storage-mode variable in the fleet config is an error naming
-    /// the variable — never a local selector, never silently ignored.
-    func testRetiredStorageModeVariableRefusesByName() throws {
-        let configPath = try writeConfigFile(["HASNA_CONVERSATIONS_STORAGE_MODE": "local"])
-        guard case .unresolved(let reason) = resolveStore(environment: [:], configPath: configPath) else {
-            return XCTFail("a retired storage-mode variable must refuse, not resolve")
-        }
-        XCTAssertTrue(
-            reason.contains("HASNA_CONVERSATIONS_STORAGE_MODE"),
-            "reason must name the retired variable — got: \(reason)"
-        )
     }
 
     /// A debug description must never carry the API key value: XCTest prints it
@@ -439,13 +399,13 @@ final class EnvFileTests: XCTestCase {
         # a comment
 
         export HASNA_CONVERSATIONS_API_URL="https://conversations.hasna.xyz/v1"
-        HASNA_CONVERSATIONS_API_KEY='fixture-not-a-real-credential'
+        HASNA_CONVERSATIONS_AUTH='fixture-not-a-real-credential'
         NOT_AN_ASSIGNMENT
         """.write(toFile: path, atomically: true, encoding: .utf8)
 
         let parsed = try parseEnvFile(at: path)
         XCTAssertEqual(parsed["HASNA_CONVERSATIONS_API_URL"], "https://conversations.hasna.xyz/v1")
-        XCTAssertEqual(parsed["HASNA_CONVERSATIONS_API_KEY"], "fixture-not-a-real-credential")
+        XCTAssertEqual(parsed["HASNA_CONVERSATIONS_AUTH"], "fixture-not-a-real-credential")
         XCTAssertNil(parsed["NOT_AN_ASSIGNMENT"])
     }
 
@@ -455,7 +415,7 @@ final class EnvFileTests: XCTestCase {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let path = dir.appendingPathComponent("conversations.env").path
         let body = "HASNA_CONVERSATIONS_API_URL=https://conversations.hasna.xyz/v1\r\n"
-            + "HASNA_CONVERSATIONS_API_KEY=fixture-not-a-real-credential\r\n"
+            + "HASNA_CONVERSATIONS_AUTH=fixture-not-a-real-credential\r\n"
         try body.write(toFile: path, atomically: true, encoding: .utf8)
 
         guard case .cloud(_, let url) = resolveStore(environment: [:], configPath: path) else {
@@ -475,7 +435,7 @@ final class EnvFileTests: XCTestCase {
             .appendingPathComponent("hasna-envfile-unreadable-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let path = dir.appendingPathComponent("conversations.env").path
-        try "HASNA_CONVERSATIONS_API_KEY=fixture-not-a-real-credential\n"
+        try "HASNA_CONVERSATIONS_AUTH=fixture-not-a-real-credential\n"
             .write(toFile: path, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path)
 

@@ -121,13 +121,12 @@ describe("createHasnaStorageClient", () => {
 });
 
 describe("resolveStorageClient", () => {
-  test("returns no client for local mode", () => {
+  test("returns no client when nothing is configured", () => {
     expect(resolveStorageClient("conversations", {})).toEqual({ transport: "local", client: null });
   });
 
-  test("returns a ready client for valid cloud configuration", () => {
+  test("returns a ready client for the API url + key pair", () => {
     const result = resolveStorageClient("conversations", {
-      HASNA_CONVERSATIONS_STORAGE_MODE: "cloud",
       HASNA_CONVERSATIONS_API_URL: "https://api.example.test/root",
       HASNA_CONVERSATIONS_API_KEY: "secret",
     });
@@ -139,9 +138,9 @@ describe("resolveStorageClient", () => {
     }
   });
 
-  test("throws instead of silently falling back when cloud auth is missing", () => {
+  test("throws instead of silently falling back when only the URL is set", () => {
     expect(() =>
-      resolveStorageClient("conversations", { HASNA_CONVERSATIONS_STORAGE_MODE: "cloud" }),
+      resolveStorageClient("conversations", { HASNA_CONVERSATIONS_API_URL: "https://api.example.test" }),
     ).toThrow("no API key is set");
   });
 });

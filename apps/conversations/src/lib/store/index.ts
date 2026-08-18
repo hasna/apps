@@ -12,13 +12,12 @@
 //     the vendored @hasna/contracts storage transport.
 //
 // `getStore()` resolves which transport to use from the API env pair
-// (HASNA_CONVERSATIONS_API_URL + HASNA_CONVERSATIONS_API_KEY). There are no
-// deployment modes (owner directive 2026-07-29; knowledge k_ms5wv466_u0jidq):
-// both variables set selects the HTTP API, an incomplete pair is an error that
-// names the missing variable, and neither set selects the on-box SQLite store.
-// Any retired storage-mode variable is rejected by the fail-loud ratchet below.
-// Callers NEVER branch on mode themselves and NEVER touch sqlite or fetch
-// directly — that was the split-brain bug this module eliminates.
+// (HASNA_CONVERSATIONS_API_URL + HASNA_CONVERSATIONS_API_KEY): both variables
+// set selects the HTTP API, an incomplete pair is an error that names the
+// missing variable, and neither set selects the on-box SQLite store (owner
+// directive 2026-07-29; knowledge k_ms5wv466_u0jidq). Callers NEVER branch on
+// the transport themselves and NEVER touch sqlite or fetch directly — that was
+// the split-brain bug this module eliminates.
 //
 // `local` is first-class and fully functional; the server backend switch
 // (`sqlite | postgresql`) lives server-side via HASNA_CONVERSATIONS_DATABASE_URL.
@@ -28,8 +27,7 @@
 
 import { resolveStorageClient, type HasnaStorageClient } from "../contracts-client/storage.js";
 import { assertAmbientCloudAllowed } from "./test-runtime.js";
-import { clientTransportEnvKeys } from "../contracts-client/transport.js";
-import { envToken } from "../contracts-client/mode.js";
+import { clientTransportEnvKeys, envToken } from "../contracts-client/transport.js";
 import { normalizeChannelName } from "../channel-names.js";
 import { localHealthChecks } from "../db.js";
 import { ApiStore } from "./api-store.js";
@@ -141,47 +139,12 @@ const LOCAL_ESCAPE_HATCH =
   `(or unset ${ENV_KEYS.apiUrlKeys[0]} and ${ENV_KEYS.apiKeyKeys[0]}).`;
 
 /**
- * The retired storage-mode variables. Any of them being SET — even to a blank
- * value — is an error, never a hint: silently ignoring it would keep the
- * split-brain drift the mode vocabulary caused (owner directive 2026-07-29;
- * knowledge k_ms5wv466_u0jidq). Derived from the shared transport contract so a
- * key renamed there reaches this ratchet without a second copy.
- */
-const LEGACY_STORAGE_MODE_KEYS: readonly string[] = ENV_KEYS.modeKeys;
-
-/**
- * Throw when a retired storage-mode variable is set. Naming the retired var and
- * the supported switches makes the error actionable without accepting the value.
- * Fires on SET, not on non-blank: a blank leftover variable is still a stale
- * fragment that must be deleted, exactly as the fleet-wide ratchet
- * (`@hasna/contracts` `assertNoLegacyStorageMode`) treats it.
- */
-export function assertNoLegacyStorageMode(env: Env = process.env): void {
-  for (const key of LEGACY_STORAGE_MODE_KEYS) {
-    if (Object.hasOwn(env, key) && env[key] !== undefined) {
-      throw new ConversationsStoreConfigError(
-        `${key} was removed. Deployment modes no longer exist: delete the storage-mode variable. ` +
-          `The client uses the on-box SQLite store, or the HTTP API selected by ` +
-          `${ENV_KEYS.apiUrlKeys[0]} + ${ENV_KEYS.apiKeyKeys[0]}. ` +
-          `On the server, set HASNA_CONVERSATIONS_DATABASE_URL to select the postgresql backend, ` +
-          `or leave it unset for sqlite.`,
-      );
-    }
-  }
-}
-
-/**
  * Throw unless `env` unambiguously selects exactly one store.
  *
  * See {@link getStore} for the full precedence table. Never reads, logs, or embeds
  * a credential value — only variable NAMES appear in any message.
  */
 export function assertUnambiguousStoreEnv(env: Env = process.env): void {
-  // 0. The fail-loud ratchet: a retired storage-mode variable is an error, never
-  //    a selector. This must run BEFORE anything else — a stale mode variable
-  //    does not get rescued by a DB path or a complete API pair.
-  assertNoLegacyStorageMode(env);
-
   // 1. An explicit local SQLite path is the narrowest, most specific signal and wins.
   if (firstSet(env, DB_PATH_KEYS)) return;
 
@@ -248,16 +211,15 @@ function assertUsableApiUrl(urlHit: { key: string; value: string } | null): void
  * are exported globally.
  *
  * Throws {@link ConversationsStoreConfigError} when the env does not unambiguously
- * select one store, so no caller can drift onto the wrong dataset. Retired
- * storage-mode variables throw first via the ratchet.
+ * select one store, so no caller can drift onto the wrong dataset.
  */
 export function conversationsCloudEnv(env: Env = process.env): Env {
   assertUnambiguousStoreEnv(env);
 
   if (firstSet(env, DB_PATH_KEYS)) {
     // Explicit local: strip the API credentials so the vendored resolver cannot
-    // flip on them. Mode tokens are gone, so local is expressed by absence of an
-    // API pair (plus the DB path, which the resolver honours on its own).
+    // flip on them. Local is expressed by absence of an API pair (plus the DB
+    // path, which the resolver honours on its own).
     const local: Env = { ...env };
     for (const key of ENV_KEYS.apiUrlKeys) delete local[key];
     for (const key of ENV_KEYS.apiKeyKeys) delete local[key];
@@ -318,7 +280,7 @@ export function isCloudStore(env: Env = process.env): boolean {
   return resolveCloudClientUnguarded(env) !== null;
 }
 
-/** The resolved cloud API base URL when in cloud mode (else null). */
+/** The resolved cloud API base URL when the hosted API is selected (else null). */
 export function cloudApiUrl(env: Env = process.env): string | null {
   if (!isCloudStore(env)) return null;
   return env.HASNA_CONVERSATIONS_API_URL ?? env.CONVERSATIONS_API_URL ?? null;
@@ -794,20 +756,16 @@ export function resetStoreForTests(): void {
  * land unambiguously on one store raises {@link ConversationsStoreConfigError}
  * rather than answering from the other one.
  *
- * 1. A retired storage-mode variable set (`HASNA_CONVERSATIONS_STORAGE_MODE`,
- *    `HASNA_CONVERSATIONS_MODE`, `CONVERSATIONS_STORAGE_MODE`, `CONVERSATIONS_MODE`)
- *    → ERROR naming the variable. Deployment modes no longer exist; a stale
- *    fragment is never a hint (owner directive 2026-07-29; k_ms5wv466_u0jidq).
- * 2. `HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH` set → LOCAL. A
+ * 1. `HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH` set → LOCAL. A
  *    command-level SQLite path is the narrowest, most specific signal, so local
  *    dev and test commands cannot write to the API when fleet credentials are
  *    exported globally.
- * 3. Both API URL and API key set → API. This pair IS the fleet flip signal;
+ * 2. Both API URL and API key set → API. This pair IS the fleet flip signal;
  *    removing both reverts to local.
- * 4. Exactly ONE of API URL / API key set → ERROR naming the missing variable.
+ * 3. Exactly ONE of API URL / API key set → ERROR naming the missing variable.
  *    Half an API configuration is ambiguous, and answering it from the on-box
  *    SQLite store means serving a different dataset with no signal.
- * 5. Nothing configured → LOCAL. The documented single-operator default.
+ * 4. Nothing configured → LOCAL. The documented single-operator default.
  *
  * An API URL that cannot be parsed is an ERROR wherever the API is expected, never
  * a quiet fall-back. No error message ever contains a credential value — only

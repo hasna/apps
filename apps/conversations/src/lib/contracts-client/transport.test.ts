@@ -25,12 +25,6 @@ describe("transport configuration helpers", () => {
 
   test("builds env keys in precedence order from a normalized token", () => {
     expect(clientTransportEnvKeys("agent-tools")).toEqual({
-      modeKeys: [
-        "HASNA_AGENT_TOOLS_STORAGE_MODE",
-        "HASNA_AGENT_TOOLS_MODE",
-        "AGENT_TOOLS_STORAGE_MODE",
-        "AGENT_TOOLS_MODE",
-      ],
       apiUrlKeys: ["HASNA_AGENT_TOOLS_API_URL", "AGENT_TOOLS_API_URL"],
       apiKeyKeys: ["HASNA_AGENT_TOOLS_API_KEY", "AGENT_TOOLS_API_KEY"],
     });
@@ -53,9 +47,6 @@ describe("resolveClientTransport", () => {
   test("defaults to local without configuration", () => {
     expect(resolveClientTransport("conversations", {})).toEqual({
       transport: "local",
-      mode: "local",
-      deprecatedAlias: null,
-      modeSource: "default",
       baseUrl: null,
       apiUrlSource: null,
       apiKeyPresent: false,
@@ -65,50 +56,35 @@ describe("resolveClientTransport", () => {
     });
   });
 
-  test("honors explicit local mode despite cloud credentials and key precedence", () => {
-    const resolution = resolveClientTransport("conversations", {
-      HASNA_CONVERSATIONS_STORAGE_MODE: "local",
-      CONVERSATIONS_MODE: "cloud",
-      HASNA_CONVERSATIONS_API_URL: "https://ignored.example.test",
-      HASNA_CONVERSATIONS_API_KEY: "primary",
-      CONVERSATIONS_API_KEY: "secondary",
-    });
-
-    expect(resolution.transport).toBe("local");
-    expect(resolution.modeSource).toBe("HASNA_CONVERSATIONS_STORAGE_MODE");
-    expect(resolution.apiKeyPresent).toBe(true);
-    expect(resolution.apiKeySource).toBe("HASNA_CONVERSATIONS_API_KEY");
-  });
-
-  test("infers cloud from URL plus key and accepts deprecated aliases with warnings", () => {
+  test("selects the hosted API from the URL plus key pair", () => {
     const inferred = resolveClientTransport("conversations", {
       CONVERSATIONS_API_URL: "https://api.example.test",
       CONVERSATIONS_API_KEY: "secret",
     });
     expect(inferred.transport).toBe("cloud-http");
-    expect(inferred.modeSource).toBe("CONVERSATIONS_API_URL+CONVERSATIONS_API_KEY");
+    expect(inferred.apiUrlSource).toBe("CONVERSATIONS_API_URL");
+    expect(inferred.apiKeySource).toBe("CONVERSATIONS_API_KEY");
     expect(inferred.baseUrl).toBe("https://api.example.test/v1");
-
-    const aliased = resolveClientTransport("conversations", {
-      HASNA_CONVERSATIONS_MODE: "self-hosted",
-      HASNA_CONVERSATIONS_API_KEY: "secret",
-    });
-    expect(aliased.transport).toBe("cloud-http");
-    expect(aliased.deprecatedAlias).toBe("self_hosted");
-    expect(aliased.baseUrl).toBe("https://conversations.hasna.xyz/v1");
-    expect(aliased.warning).toContain("Deprecated mode 'self_hosted'");
   });
 
-  test("refuses cloud mode with missing auth or an invalid API URL", () => {
+  test("flags half a configuration as misconfigured instead of picking a store", () => {
     const missingKey = resolveClientTransport("conversations", {
-      HASNA_CONVERSATIONS_STORAGE_MODE: "cloud",
+      HASNA_CONVERSATIONS_API_URL: "https://api.example.test",
     });
     expect(missingKey.transport).toBe("local");
     expect(missingKey.misconfigured).toBe(true);
-    expect(missingKey.warning).toContain("no API key is set");
+    expect(missingKey.warning).toContain("HASNA_CONVERSATIONS_API_KEY");
 
+    const missingUrl = resolveClientTransport("conversations", {
+      HASNA_CONVERSATIONS_API_KEY: "secret",
+    });
+    expect(missingUrl.transport).toBe("local");
+    expect(missingUrl.misconfigured).toBe(true);
+    expect(missingUrl.warning).toContain("HASNA_CONVERSATIONS_API_URL");
+  });
+
+  test("refuses an invalid API URL and never leaks the key value", () => {
     const invalidUrl = resolveClientTransport("conversations", {
-      HASNA_CONVERSATIONS_STORAGE_MODE: "cloud",
       HASNA_CONVERSATIONS_API_URL: "file:///tmp/data",
       HASNA_CONVERSATIONS_API_KEY: "secret",
     });
@@ -117,12 +93,6 @@ describe("resolveClientTransport", () => {
     expect(invalidUrl.apiKeyPresent).toBe(true);
     expect(invalidUrl.warning).toContain("Invalid API URL");
     expect(invalidUrl.warning).not.toContain("secret");
-  });
-
-  test("rejects unknown storage modes", () => {
-    expect(() =>
-      resolveClientTransport("conversations", { HASNA_CONVERSATIONS_STORAGE_MODE: "sometimes" }),
-    ).toThrow("Unknown storage mode");
   });
 });
 
@@ -358,10 +328,13 @@ describe("createClientTransport", () => {
     expect(result.client).toBeNull();
   });
 
-  test("throws for requested cloud transport without auth", () => {
+  test("throws for a half-configured API pair", () => {
     expect(() =>
-      createClientTransport("conversations", { HASNA_CONVERSATIONS_STORAGE_MODE: "cloud" }),
-    ).toThrow("no API key is set");
+      createClientTransport("conversations", { HASNA_CONVERSATIONS_API_URL: "https://api.example.test" }),
+    ).toThrow("HASNA_CONVERSATIONS_API_KEY");
+    expect(() =>
+      createClientTransport("conversations", { HASNA_CONVERSATIONS_API_KEY: "secret" }),
+    ).toThrow("HASNA_CONVERSATIONS_API_URL");
   });
 
   test("constructs an authenticated cloud client with overrides", async () => {
@@ -369,7 +342,6 @@ describe("createClientTransport", () => {
     const result = createClientTransport(
       "conversations",
       {
-        HASNA_CONVERSATIONS_STORAGE_MODE: "cloud",
         HASNA_CONVERSATIONS_API_URL: "https://api.example.test",
         HASNA_CONVERSATIONS_API_KEY: "secret",
       },

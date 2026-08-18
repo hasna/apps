@@ -45,7 +45,7 @@ export interface PollHandle {
 /**
  * Start polling for new messages. Returns readiness and stop handles. Reads
  * flow through the active {@link getStore} transport, so the same loop works
- * in local and cloud modes.
+ * for the local store and the hosted API.
  */
 export function startPolling(opts: PollOptions): PollHandle {
   const interval = opts.interval_ms ?? 200;

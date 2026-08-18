@@ -11,7 +11,7 @@ describe("public API exports", () => {
     expect(typeof index.LocalStore).toBe("function");
   });
 
-  test("exports the mode resolvers", () => {
+  test("exports the transport resolvers", () => {
     expect(typeof index.isCloudStore).toBe("function");
     expect(typeof index.cloudApiUrl).toBe("function");
     expect(typeof index.resolveConversationsCloud).toBe("function");
