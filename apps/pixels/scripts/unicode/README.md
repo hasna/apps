@@ -1,7 +1,7 @@
 # Unicode confusable data
 
 `confusables-17.0.0.txt` is the pinned Unicode Security Mechanisms data file
-used to generate Open Pixels' browser-safe sensitive-key skeleton table.
+used to generate Hasna Pixels' browser-safe sensitive-key skeleton table.
 
 - Standard/data version: Unicode 17.0.0 / UTS #39
 - Source: <https://www.unicode.org/Public/17.0.0/security/confusables.txt>
