@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { listOpenMachines, refreshLoopMachine, resolveLoopMachine } from "./machines.js";
+import { listOpenMachines, refreshLoopMachine, resolveLoopMachine, resolveMachineCommand } from "./machines.js";
 
 const LOCAL_ID = "openloops-test-local-a71";
 const REMOTE_ID = "openloops-test-remote-b82";
@@ -94,5 +94,31 @@ describe("machines", () => {
     expect(refreshed.id).toBe(REMOTE_ID);
     expect(refreshed.route).toBe("ssh");
     expect(refreshed.workspacePath).toBe("/workspace/remote");
+  });
+
+  test("resolveMachineCommand fails closed instead of degrading to raw ssh for unknown machines", () => {
+    // Regression: preflight must resolve the target machine through the
+    // package-owned Machines canonical route. An id the topology cannot
+    // resolve must fail with a route error, never silently become
+    // `ssh <machine-id>` (which fails DNS on canonical machine names such as
+    // the apple03 -> station03 alias in the original defect).
+    expect(() => resolveMachineCommand("openloops-test-missing-zz9", "bash -s")).toThrow(
+      "OpenMachines route not found for machine: openloops-test-missing-zz9",
+    );
+  });
+
+  test("resolveMachineCommand targets the canonical route for manifest remotes", () => {
+    const plan = resolveMachineCommand(REMOTE_ID, "bash -s");
+    expect(plan.command).toBe("ssh");
+    expect(plan.args[0]).toBe("tester@openloops-remote.example");
+    expect(plan.args[1]).toBe("bash -s");
+    expect(plan.source).toBe("ssh");
+  });
+
+  test("resolveMachineCommand keeps local machine plans local", () => {
+    const plan = resolveMachineCommand(LOCAL_ID, "echo hi");
+    expect(plan.command).toBe("bash");
+    expect(plan.args).toEqual(["-c", "echo hi"]);
+    expect(plan.source).toBe("local");
   });
 });
