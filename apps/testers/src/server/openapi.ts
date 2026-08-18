@@ -39,18 +39,17 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       schemas: {
         Health: {
           type: "object",
-          properties: { status: { type: "string" }, version: { type: "string" }, mode: { type: "string" } },
-          required: ["status", "version", "mode"],
+          properties: { status: { type: "string" }, version: { type: "string" } },
+          required: ["status", "version"],
         },
         Ready: {
           type: "object",
           properties: {
             status: { type: "string" },
             version: { type: "string" },
-            mode: { type: "string" },
             pendingMigrations: { type: "array", items: { type: "string" } },
           },
-          required: ["status", "version", "mode"],
+          required: ["status", "version"],
         },
         Project: {
           type: "object",
