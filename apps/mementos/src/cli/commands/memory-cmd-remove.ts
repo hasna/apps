@@ -15,7 +15,8 @@ export function registerRemoveCommand(program: Command): void {
       const globalOpts = program.opts<GlobalOpts>();
       const agentId = opts.agent || globalOpts.agent;
 
-      // Try by partial ID first (local only; api mode trusts full ids below).
+      // Try by partial ID first (local only; api mode forwards to the server
+      // below, which resolves the prefix the same way).
       let id = isApiMode() ? null : resolvePartialId(getDatabase(), "memories", nameOrId);
 
       // Fall back to key lookup (cloud-routed in api mode).
@@ -24,8 +25,10 @@ export function registerRemoveCommand(program: Command): void {
         if (mem) id = mem.id;
       }
 
-      // api mode: no key match — the input may be a full cloud id (UUID).
-      if (!id && isApiMode() && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nameOrId)) {
+      // api mode: no key match — the input may be a cloud id (full UUID or a
+      // unique prefix). The server resolves it on delete and 404s otherwise,
+      // mirroring the local resolvePartialId path. No local table is opened.
+      if (!id && isApiMode() && nameOrId.length > 0) {
         id = nameOrId;
       }
 
