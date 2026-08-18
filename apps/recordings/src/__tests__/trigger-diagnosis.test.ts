@@ -507,7 +507,6 @@ describe("recordings check exit contract", () => {
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: home,
-        HASNA_RECORDINGS_CLIENT_STORE: "sqlite",
         HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
         RECORDINGS_AUDIO_DIR: join(home, "audio"),
         OPENAI_API_KEY: "test-openai-key",
@@ -580,7 +579,6 @@ printf '%s\\n' "$value"
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: home,
-        HASNA_RECORDINGS_CLIENT_STORE: "sqlite",
         HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
         OPENAI_API_KEY: "test-openai-key",
         ...fakeDefaults(home, "0", "0"),
@@ -717,8 +715,7 @@ printf '%s\\n' "$value"
         env: {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
           HOME: home,
-          HASNA_RECORDINGS_CLIENT_STORE: "sqlite",
-          HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
+            HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
           OPENAI_API_KEY: "test-openai-key",
           ...fakeDefaults(home, STORED_F5, "1"),
         },

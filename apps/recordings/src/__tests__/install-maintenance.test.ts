@@ -281,13 +281,12 @@ globalThis.fetch = async () => new Response(JSON.stringify({ agents: [] }), {
   status: 200,
   headers: { "content-type": "application/json" },
 });
-const cloud = getStore({
-  HASNA_RECORDINGS_CLIENT_STORE: "http",
+const apiStore = getStore({
   HASNA_RECORDINGS_API_URL: "https://recordings.invalid/v1",
   HASNA_RECORDINGS_API_KEY: "fixture-only",
 });
-const agents = await cloud.listAgents();
-console.log(JSON.stringify({ blocked, cloudMode: cloud.mode, cloudCount: agents.length }));
+const agents = await apiStore.listAgents();
+console.log(JSON.stringify({ blocked, storeMode: apiStore.mode, storeCount: agents.length }));
 `,
     );
     const child = Bun.spawn([process.execPath, probe], {
@@ -301,7 +300,7 @@ console.log(JSON.stringify({ blocked, cloudMode: cloud.mode, cloudCount: agents.
       new Response(child.stderr).text(),
     ]);
     expect(exitCode, stderr).toBe(0);
-    expect(JSON.parse(stdout)).toEqual({ blocked: 16, cloudMode: "http", cloudCount: 0 });
+    expect(JSON.parse(stdout)).toEqual({ blocked: 16, storeMode: "http", storeCount: 0 });
   });
 });
 

@@ -75,6 +75,29 @@ self-hosted endpoint (`http://localhost:8874`, the `recordings-serve` default
 port), and the configured `HASNA_<APP>_API_URL` always wins. The
 internal-infra string can no longer reach a published tarball.
 
+### Selection is the environment contract alone
+
+The `0.3.0` breaking change shipped an interim rejection layer that named the
+retired placement words so a stale value would fail loudly, plus two explicit
+selection variables. Both are removed in this release: the placement
+vocabulary no longer exists anywhere in the package, nothing is mapped, and
+nothing throws on a stale word — the word simply selects nothing because
+nothing reads it.
+
+Selection is the environment contract only:
+
+- the server's backend is `sqlite | postgresql`, selected by the presence of a
+  PostgreSQL DSN (`HASNA_RECORDINGS_DATABASE_URL` / `RECORDINGS_DATABASE_URL` /
+  `DATABASE_URL`);
+- the client's store is `sqlite | http`, selected by the presence of BOTH
+  `HASNA_RECORDINGS_API_URL` and `HASNA_RECORDINGS_API_KEY`; a partial hosted
+  setup (one of the two set) fails closed instead of silently reading the
+  wrong dataset.
+
+`defaultApiBaseUrl` is removed with it: a hosted client is selected only by a
+configured API URL, never by a defaulted hostname.
+
+
 ## 0.3.0 — unreleased
 
 **This release is breaking.** It is numbered `0.3.0` rather than `0.2.15`

@@ -49,8 +49,7 @@ Commands:
   migrate         Apply the PostgreSQL schema, then exit. Idempotent.
 
 Environment:
-  HASNA_RECORDINGS_STORAGE_MODE     Data backend: sqlite | postgresql
-  HASNA_RECORDINGS_DATABASE_URL     PostgreSQL DSN (implies postgresql)
+  HASNA_RECORDINGS_DATABASE_URL     PostgreSQL DSN (present -> postgresql backend, else sqlite)
   HASNA_RECORDINGS_API_SIGNING_KEY  HMAC signing secret for API-key auth`);
 }
 
@@ -60,11 +59,11 @@ async function runMigrate(): Promise<void> {
     getCloudPg,
     migrateCloudSchema,
     pingCloudConnectivity,
-    resolveCloudDatabaseUrl,
+    resolveDatabaseUrl,
   } = await import("./cloud.js");
   const { assertCloudSchemaContract } = await import("./cloud-readiness.js");
   const { runCloudMigration } = await import("./migrate-command.js");
-  if (!resolveCloudDatabaseUrl()) {
+  if (!resolveDatabaseUrl()) {
     console.error(
       "migrate: no database URL (HASNA_RECORDINGS_DATABASE_URL / RECORDINGS_DATABASE_URL / DATABASE_URL)",
     );

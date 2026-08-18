@@ -14,7 +14,6 @@ export {
   createHttpTransport,
   createStorageClient,
   toV1BaseUrl,
-  defaultApiBaseUrl,
   HasnaHttpError,
 } from "./http/client.js";
 export type {

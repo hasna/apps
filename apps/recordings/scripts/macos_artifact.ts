@@ -2626,8 +2626,6 @@ function verifyActiveApp(
     const environment: NodeJS.ProcessEnv = {
       HOME: contractHome,
       PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-      HASNA_RECORDINGS_CLIENT_STORE: "sqlite",
-      RECORDINGS_CLIENT_STORE: "sqlite",
       HASNA_RECORDINGS_DB_PATH: join(contractHome, "recordings.db"),
       RECORDINGS_AUDIO_DIR: join(contractHome, "audio"),
     };

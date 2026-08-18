@@ -15,7 +15,7 @@ import { ApiKeyStore, type AuthQueryClient } from "@hasna/contracts/auth";
 import { PgAdapterAsync } from "../db/remote-storage.js";
 import {
   requireSigningSecret,
-  resolveCloudDatabaseUrl,
+  resolveDatabaseUrl,
 } from "./cloud-config.js";
 import {
   assertCloudSchemaReady,
@@ -28,9 +28,8 @@ export const RECORDINGS_APP_SLUG = "recordings";
 export {
   isPostgresBackendEnabled,
   resolveDataBackend,
-  configuredDataBackend,
   requireSigningSecret,
-  resolveCloudDatabaseUrl,
+  resolveDatabaseUrl,
   resolveSigningSecret,
 } from "./cloud-config.js";
 export type { DataBackend } from "./cloud-config.js";
@@ -43,7 +42,7 @@ let schemaEnsured: Promise<void> | null = null;
 /** The pure-remote Postgres adapter backing every `/v1` handler. */
 export function getCloudPg(): PgAdapterAsync {
   if (cachedPg) return cachedPg;
-  const url = resolveCloudDatabaseUrl();
+  const url = resolveDatabaseUrl();
   if (!url) {
     throw new Error(
       "The /v1 API requires a PostgreSQL database URL (HASNA_RECORDINGS_DATABASE_URL / RECORDINGS_DATABASE_URL / DATABASE_URL).",

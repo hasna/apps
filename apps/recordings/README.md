@@ -432,23 +432,19 @@ Endpoints: `GET /health` → `{"status":"ok","name":"recordings"}`, MCP at `/mcp
 
 ## HTTP API (`recordings-serve`)
 
-`recordings-serve` is the HTTP API. Its data backend is a single two-value
-switch, `HASNA_RECORDINGS_STORAGE_MODE=sqlite | postgresql` (a
-`HASNA_RECORDINGS_DATABASE_URL` on its own implies `postgresql`). On
-`postgresql` the process reads/writes that database directly with API-key auth
-via [`@hasna/contracts`](https://www.npmjs.com/package/@hasna/contracts).
+`recordings-serve` is the HTTP API. Its data backend is selected by the
+environment: a `HASNA_RECORDINGS_DATABASE_URL` (or `RECORDINGS_DATABASE_URL`,
+or `DATABASE_URL`) selects `postgresql`; any other environment serves from the
+on-box `sqlite` file. On `postgresql` the process reads/writes that database
+directly with API-key auth via
+[`@hasna/contracts`](https://www.npmjs.com/package/@hasna/contracts).
 
-There are no deployment modes. `local`, `self-hosted`, `cloud`, `remote` and
-`hybrid` no longer select anything, and passing one is an error that names the
-variable and value to use instead. Where the server runs, and who operates it,
-never changed how it stored data.
-
-The CLI and MCP client are a separate, two-value switch:
-`HASNA_RECORDINGS_CLIENT_STORE=sqlite | http`. Setting
-`HASNA_RECORDINGS_API_URL` + `HASNA_RECORDINGS_API_KEY` selects `http` on its
-own; `HASNA_RECORDINGS_CLIENT_STORE=sqlite` forces the on-box file even when
-both are set. The client never opens Postgres — it reaches the shared dataset
-only through this API.
+The CLI and MCP client have exactly two stores and never open Postgres — they
+read the on-box `sqlite` file, or call the server's `/v1` HTTP API. The
+presence of BOTH `HASNA_RECORDINGS_API_URL` and `HASNA_RECORDINGS_API_KEY`
+selects the API; any other environment reads the on-box file. A partial setup
+(one of the two variables set) fails closed rather than silently reading the
+wrong dataset.
 
 ```bash
 recordings-serve --port 8874          # start the API
@@ -469,9 +465,9 @@ Versioned API (`/v1/*`, API-key auth via `x-api-key` or `Authorization: Bearer`)
 | GET/POST | `/v1/agents` · GET `/v1/agents/:id` | `recordings:read` / `recordings:write` |
 | GET/POST | `/v1/projects` · GET `/v1/projects/:id` | `recordings:read` / `recordings:write` |
 
-Env: `HASNA_RECORDINGS_STORAGE_MODE` (`sqlite` | `postgresql`),
-`HASNA_RECORDINGS_DATABASE_URL` (PostgreSQL DSN — implies `postgresql`) and
-`HASNA_RECORDINGS_API_SIGNING_KEY` (HMAC signing secret for API-key auth).
+Env: `HASNA_RECORDINGS_DATABASE_URL` (PostgreSQL DSN — selects the
+`postgresql` backend) and `HASNA_RECORDINGS_API_SIGNING_KEY` (HMAC signing
+secret for API-key auth).
 
 ## SDK
 

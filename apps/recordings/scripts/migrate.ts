@@ -34,11 +34,11 @@ async function main() {
     getCloudPg,
     migrateCloudSchema,
     pingCloudConnectivity,
-    resolveCloudDatabaseUrl,
+    resolveDatabaseUrl,
   } = await import("../src/server/cloud.js");
   const { assertCloudSchemaContract } = await import("../src/server/cloud-readiness.js");
   const { runCloudMigration } = await import("../src/server/migrate-command.js");
-  const url = resolveCloudDatabaseUrl();
+  const url = resolveDatabaseUrl();
   if (!url) {
     console.error(
       "migrate: no database URL (HASNA_RECORDINGS_DATABASE_URL / RECORDINGS_DATABASE_URL / DATABASE_URL)",
