@@ -20,7 +20,7 @@
       "postgresql"
     ],
     "envPrefix": "HASNA_NOTES_",
-    "sqlitePath": "~/.hasna/apps/notes-server/server.db",
+    "sqlitePath": "~/.hasna/notes/server.db",
     "pgTestGate": {
       "envVar": "NOTES_TEST_DATABASE_URL",
       "command": "bun run test:pg"

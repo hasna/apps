@@ -25,6 +25,7 @@
     "server/index.mjs",
     "server/app.mjs",
     "server/auth.mjs",
+    "server/paths.mjs",
     "server/db.mjs",
     "server/http.mjs",
     "server/notes.mjs",

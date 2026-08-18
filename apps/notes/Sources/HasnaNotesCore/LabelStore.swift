@@ -1,6 +1,6 @@
 import Foundation
 
-/// Persists the user's known labels to `~/.hasna/apps/notes/labels.json`.
+/// Persists the user's known labels to `~/.hasna/notes/labels.json`.
 /// Note-label assignment itself lives in each note's `labels` frontmatter; this file
 /// preserves labels that currently have no notes and keeps rename/delete lightweight.
 public struct LabelStore {

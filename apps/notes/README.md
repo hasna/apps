@@ -25,10 +25,10 @@ forward-compatible with the installable `@hasna/notes` CLI/MCP package.
 The Markdown files are the **source of truth**. Hasna Notes reads and writes them so any
 other tool, including the `@hasna/notes` CLI/MCP package, can index the same directory.
 
-- Data root: `~/.hasna/apps/notes/`
+- Data root: `~/.hasna/notes/` (the pre-rename `~/.hasna/apps/notes/` root is copied forward once on first use)
 - Preferred override: `HASNA_NOTES_ROOT`
 - Legacy override: `HASNA_NOTES_ROOT`
-- Notes: `~/.hasna/apps/notes/notes/<id>.md` (id is a lowercased UUID)
+- Notes: `~/.hasna/notes/notes/<id>.md` (id is a lowercased UUID)
 - Writes are **atomic** (temp file in the same dir, then `rename`).
 - A missing/empty directory is created automatically.
 - Files without frontmatter are treated as a body with a title derived from the first line.
@@ -88,8 +88,8 @@ describe the note's own machine. To rewrite a store to v2 in one pass, run
 supported): it is idempotent, backs originals up once to
 `<root>/backup-frontmatter-v1/`, rewrites atomically per file, preserves the
 body byte-for-byte, and logs every dropped v1/unknown key. The user's folder
-list is persisted separately in `~/.hasna/apps/notes/folders.json`; labels can
-also be persisted in `~/.hasna/apps/notes/labels.json` so empty labels survive.
+list is persisted separately in `~/.hasna/notes/folders.json`; labels can
+also be persisted in `~/.hasna/notes/labels.json` so empty labels survive.
 
 AI-generated titles are concise, capped to 3-4 words, and use the local sidecar's
 cheap OpenAI title model by default (`HASNA_NOTES_TITLE_MODEL`, default
@@ -152,7 +152,7 @@ notes events status --json
 Archive and Trash are first-class note states. Normal Delete moves a note to
 Trash; deleting a note already in Trash, or calling an explicit purge,
 permanently removes the file. Trash retention defaults to 30 days and is stored in
-`~/.hasna/apps/notes/settings.json`. Notes also carry provenance metadata:
+`~/.hasna/notes/settings.json`. Notes also carry provenance metadata:
 actor type/name, machine attribution, opened-from/source context, and lifecycle
 timestamps.
 

@@ -26,8 +26,8 @@ is gone: absent means local.
 ## Server: the data backend is the only switch
 
 `HASNA_NOTES_DATABASE_URL` present selects the **PostgreSQL** backend;
-absent selects **SQLite** (unchanged default at
-`~/.hasna/apps/notes-server/server.db`). No mode enums. The DSN is never
+absent selects **SQLite** (canonical default at
+`~/.hasna/notes/server.db`). No mode enums. The DSN is never
 logged, printed, or echoed in errors.
 
 The PostgreSQL schema (`server/pg-migrations.ts`) is the SQLite schema
