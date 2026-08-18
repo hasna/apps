@@ -90,7 +90,7 @@ describe("v2 context pack pipeline", () => {
     expect(pack.citation_verification.checked_at).toBe("2026-01-01T00:00:00.000Z");
   });
 
-  it("maps v2 packs to the open-knowledge-compatible adapter boundary", async () => {
+  it("maps v2 packs to the knowledge-compatible adapter boundary", async () => {
     const { library } = seedV1Docs();
     const pack = await buildV2ContextPack({
       prompt: "widget authentication",

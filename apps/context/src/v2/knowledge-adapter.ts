@@ -26,7 +26,7 @@ export interface KnowledgeSubstrateSearchEntry {
     shard_key: string | null;
   } | null;
   provenance: {
-    source_owner: "open-context";
+    source_owner: "context";
     source_ref: string | null;
     source_uri: string | null;
     source_kind: string | null;
@@ -98,7 +98,7 @@ export interface KnowledgeSubstrateAdapterResult {
 }
 
 export interface KnowledgeSubstrateAdapter {
-  readonly name: "open-knowledge-compatible";
+  readonly name: "knowledge-compatible";
   readonly write_enabled: false;
   toContextPack(pack: V2ContextPack): KnowledgeSubstrateContextPack;
   putContextPack(pack: V2ContextPack): Promise<KnowledgeSubstrateAdapterResult>;
@@ -106,7 +106,7 @@ export interface KnowledgeSubstrateAdapter {
 
 export function createKnowledgeSubstrateAdapterBoundary(): KnowledgeSubstrateAdapter {
   return {
-    name: "open-knowledge-compatible",
+    name: "knowledge-compatible",
     write_enabled: false,
     toContextPack: toKnowledgeSubstrateContextPack,
     async putContextPack(pack: V2ContextPack): Promise<KnowledgeSubstrateAdapterResult> {
@@ -187,7 +187,7 @@ function toSearchEntry(item: V2RetrievalEvidence): KnowledgeSubstrateSearchEntry
       shard_key: citation.artifact_path,
     } : null,
     provenance: citation ? {
-      source_owner: "open-context",
+      source_owner: "context",
       source_ref: citation.source_url,
       source_uri: citation.source_url,
       source_kind: citation.source_type,
