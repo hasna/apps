@@ -4,17 +4,15 @@
 //   - LocalProjectStore  -> on-box sqlite (src/db/workspaces.ts)
 //   - ApiProjectStore    -> HTTP `<API_URL>/v1` + bearer key (src/http/client.ts)
 //
-// `resolveProjectStore()` picks the transport from the environment: presence of
-// HASNA_PROJECTS_API_URL + HASNA_PROJECTS_API_KEY (and/or
-// HASNA_PROJECTS_STORAGE_MODE) => api transport; else local. `self_hosted` and
-// `cloud` BOTH resolve to the ApiProjectStore (identical client code; only the
-// URL/key differ — that distinction is server-side tenancy, not the client).
+// `resolveProjectStore()` picks the transport from the environment: the joint
+// presence of HASNA_PROJECTS_API_URL + HASNA_PROJECTS_API_KEY selects the http
+// transport; otherwise local. There is no third placement axis and no
+// deployment-mode variable.
 //
-// This eliminates the per-command `if (cloud) {...} else {...local...}`
-// split-brain branching: every registry command/tool/method calls the same
-// Store methods. Machine-local runtime side effects (tmux, git, directory
-// creation, rendering) are NOT shared state and stay local by design; callers
-// gate those on `store.mode === "local"`.
+// This eliminates the per-command split-brain branching: every registry
+// command/tool/method calls the same Store methods. Machine-local runtime side
+// effects (tmux, git, directory creation, rendering) are NOT shared state and
+// stay local by design; callers gate those on `store.transport === "local"`.
 //
 // SAFETY: the api transport carries a bearer key ONLY (never a DB DSN). The key
 // value is never logged or embedded in output.
@@ -216,7 +214,7 @@ import type {
 const APP = "projects";
 const RESOURCE = "projects";
 
-export type ProjectStoreMode = "local" | "api";
+export type ProjectStoreTransport = "local" | "http";
 
 /** Mutation provenance carried on every write (agent + audit trail). */
 export interface MutationContext {
@@ -300,12 +298,13 @@ export interface AcquireLockInput {
 
 /**
  * Operations that only exist on-box (agent assignments, extra disk locations,
- * mutation locks). The api transport does not model them; calling a write in
- * api mode throws this rather than silently writing local sqlite (split-brain).
+ * mutation locks). The http transport does not model them; calling a write on
+ * the hosted backend throws this rather than silently writing local sqlite
+ * (split-brain).
  */
 class LocalOnlyOperationError extends Error {
   constructor(operation: string) {
-    super(`${operation} is a local-only operation and is not available in api/cloud mode.`);
+    super(`${operation} is a local-only operation and is not available on the hosted backend.`);
     this.name = "LocalOnlyOperationError";
   }
 }
@@ -340,8 +339,8 @@ export interface CompleteProjectPopulation {
 }
 
 export interface ProjectStore {
-  readonly mode: ProjectStoreMode;
-  /** Base `<url>/v1` for api mode; null for local. Never contains the key. */
+  readonly transport: ProjectStoreTransport;
+  /** Base `<url>/v1` for the hosted transport; null for local. Never contains the key. */
   readonly baseUrl: string | null;
   /**
    * List projects. With no `limit` this returns EVERY matching row — the store
@@ -386,13 +385,13 @@ export interface ProjectStore {
    * transport does not model it server-side and returns an empty list.
    */
   getProjectAgents(id: string): Promise<WorkspaceAgentAssignment[]>;
-  /** Assign a registered agent to a project role. Local-only (throws in api mode). */
+  /** Assign a registered agent to a project role. Local-only (throws on the hosted backend). */
   assignAgent(idOrSlug: string, input: AssignAgentInput): Promise<WorkspaceAgentAssignment>;
   /** Per-project registered locations. Readable from both registry transports. */
   getProjectLocations(id: string): Promise<WorkspaceLocation[]>;
   /** Registry of canonical machines (roles: mirror-hub | assignable | avoid). */
   listMachines(): Promise<Machine[]>;
-  /** Register another on-disk location for a project. Local-only (throws in api mode). */
+  /** Register another on-disk location for a project. Local-only (throws on the hosted backend). */
   addLocation(idOrSlug: string, input: AddLocationInput): Promise<AddLocationResult>;
 
   // ---- Mutation locks (machine-local coordination) ----
@@ -422,7 +421,7 @@ export interface ProjectStore {
   // ---- Prompt-agent run ledger (on-box sub-resource) ----
   // Agent runs are recorded on-box during local prompt-agent execution; the
   // projects API server does not model them, so the api transport returns an
-  // empty list rather than reading a local sqlite file the cloud project does
+  // empty list rather than reading a local sqlite file the hosted project does
   // not own. This keeps the runs/handoff surfaces from split-brain reads.
   listAgentRuns(filter?: AgentRunFilter): Promise<AgentRun[]>;
 
@@ -450,7 +449,7 @@ export interface ProjectStore {
   // tmux is a machine-local construct: a tmux server runs on THIS box, so saved
   // window-layout profiles live on the box that runs tmux and resolve against
   // local sqlite in BOTH transports. They are deliberately NOT part of the
-  // shared cloud registry (there is no `/v1/tmux-profiles` endpoint), but every
+  // shared hosted registry (there is no `/v1/tmux-profiles` endpoint), but every
   // command still routes through the Store so nothing touches sqlite directly.
   listTmuxProfiles(): Promise<TmuxProfile[]>;
   getTmuxProfile(idOrSlug: string): Promise<TmuxProfile | null>;
@@ -461,7 +460,7 @@ export interface ProjectStore {
   // ---- Conversations channel (works in BOTH transports) ----
   // Channel derivation is pure and channel creation is a machine-local side
   // effect. Ensure does not write the project record; the audit event routes
-  // through the Store so it lands wherever the project lives (local or cloud).
+  // through the Store so it lands wherever the project lives (local or hosted).
   ensureChannel(project: Workspace, options?: StoreEnsureChannelOptions): Promise<ProjectChannelEnsureResult>;
 }
 
@@ -473,7 +472,7 @@ function withLock<T>(workspaceId: string, ctx: MutationContext | undefined, reas
   const key = `workspace:${workspaceId}`;
   // `workspace_locks.workspace_id` is FK-constrained to the machine-local
   // `workspaces` table (db/schema.ts). Since the app-store methods are now also
-  // reachable in api mode, the project may be cloud-only and have no local
+  // reachable only on the hosted backend, the project may not exist on-box and have no local
   // registry row, in which case supplying the id fails the FK and the write
   // never reaches the local project.db.
   //
@@ -506,10 +505,10 @@ function withLock<T>(workspaceId: string, ctx: MutationContext | undefined, reas
 /**
  * tmux profiles are a machine-local runtime resource. tmux always runs on THIS
  * box, so its saved window-layout profiles resolve against local sqlite in
- * BOTH transports (local and api/cloud) — they are not shared cloud state.
+ * BOTH transports (local and http) — they are not shared hosted state.
  * Both Store transports delegate here so the "route through the Store"
  * invariant holds (no command touches sqlite directly) without pretending
- * profiles live in the cloud.
+ * profiles live on the hosted backend.
  */
 /**
  * The per-project app store is a machine-local sqlite FILE at
@@ -519,7 +518,7 @@ function withLock<T>(workspaceId: string, ctx: MutationContext | undefined, reas
  *
  * So both transports resolve it against local sqlite, exactly as tmux profiles
  * do above. The api transport previously answered these reads from a hardcoded
- * empty summary on the premise that the file "does not hold the cloud project's
+ * empty summary on the premise that the file "does not hold the hosted project's
  * data"; that premise was wrong (same id, same file), and it made every read
  * vacuous — `loops list` returned `loops: []` and `store inspect` reported
  * `exists: false` / `loop_links: 0` against stores holding real rows, at rc=0,
@@ -621,7 +620,7 @@ async function prepareLocalProducerEvidenceVerifier(
 }
 
 class LocalProjectStore implements ProjectStore {
-  readonly mode = "local" as const;
+  readonly transport = "local" as const;
   readonly baseUrl = null;
 
   constructor(
@@ -1028,16 +1027,16 @@ function listQuery(filter?: WorkspaceFilter): QueryParams {
 }
 
 /**
- * The shared cloud registry resolves a project only by id or slug. Path,
+ * The shared hosted registry resolves a project only by id or slug. Path,
  * marker and relative targets (".", "..", "/abs", "~/x", "a/b") are a
- * machine-local concept the cloud does not model — and, worse, sending "." or
+ * machine-local concept the hosted backend does not model — and, worse, sending "." or
  * ".." lets the URL parser collapse the dot-segment so `/projects/.` becomes
  * the collection route `/projects/`, returning a LIST payload that then
  * masquerades as a single project (and crashes renderers that read
  * `project.metadata`). We never send those to the API; callers fall back to
  * their local path/marker handling when this returns false.
  */
-function isCloudResolvableId(idOrSlug: string): boolean {
+function isHostedRegistryResolvableId(idOrSlug: string): boolean {
   const target = idOrSlug.trim();
   if (!target) return false;
   if (target === "." || target === "..") return false;
@@ -1086,7 +1085,7 @@ function normalizeApiWorkspace(raw: unknown): Workspace | null {
 }
 
 class ApiProjectStore implements ProjectStore {
-  readonly mode = "api" as const;
+  readonly transport = "http" as const;
   readonly baseUrl: string;
   private readonly client: StorageClient;
 
@@ -1217,8 +1216,8 @@ class ApiProjectStore implements ProjectStore {
 
   async getProject(idOrSlug: string): Promise<Workspace | null> {
     // Path/marker/relative targets are machine-local and not resolvable by the
-    // cloud registry; never send them to the API (see isCloudResolvableId).
-    if (!isCloudResolvableId(idOrSlug)) return null;
+    // hosted registry; never send them to the API (see isHostedRegistryResolvableId).
+    if (!isHostedRegistryResolvableId(idOrSlug)) return null;
     return normalizeApiWorkspace(await this.client.get<Workspace>(RESOURCE, idOrSlug));
   }
 
@@ -1509,7 +1508,7 @@ class ApiProjectStore implements ProjectStore {
     throw new LocalOnlyOperationError("add project location");
   }
 
-  // Mutation locks are a machine-local coordination primitive; cloud writes are
+  // Mutation locks are a machine-local coordination primitive; hosted writes are
   // atomic server-side so there is no shared lock table to expose.
   async listLocks(): Promise<WorkspaceLock[]> {
     return [];
@@ -1581,7 +1580,7 @@ class ApiProjectStore implements ProjectStore {
   }
 
   // Agent runs are an on-box ledger the projects API server does not model;
-  // returning empty avoids reading a local sqlite file the cloud project does
+  // returning empty avoids reading a local sqlite file the hosted project does
   // not own (the split-brain the runs/handoff surfaces would otherwise hit).
   async listAgentRuns(): Promise<AgentRun[]> {
     return [];
@@ -1621,8 +1620,8 @@ class ApiProjectStore implements ProjectStore {
   }
 
   // tmux profiles are a machine-local runtime resource (tmux runs on THIS box),
-  // so even in api/cloud mode they resolve against local sqlite rather than a
-  // nonexistent cloud endpoint. See machineLocalTmuxProfiles.
+  // so even on the hosted backend they resolve against local sqlite rather than a
+  // nonexistent hosted endpoint. See machineLocalTmuxProfiles.
   listTmuxProfiles = machineLocalTmuxProfiles.listTmuxProfiles;
   getTmuxProfile = machineLocalTmuxProfiles.getTmuxProfile;
   createTmuxProfile = machineLocalTmuxProfiles.createTmuxProfile;
@@ -1631,7 +1630,7 @@ class ApiProjectStore implements ProjectStore {
 
   // Channel derivation is pure and ensure writes no project record; the audit
   // event routes through this same api transport (recordEvent) so it lands on
-  // the cloud project.
+  // the hosted project.
   async ensureChannel(project: Workspace, options?: StoreEnsureChannelOptions): Promise<ProjectChannelEnsureResult> {
     return ensureProjectChannelViaStore(this, project, options);
   }
@@ -1650,9 +1649,9 @@ export interface ResolveProjectStoreOptions {
 
 /**
  * Resolve the active projects Store from the environment. Returns an
- * ApiProjectStore when the flip resolves to cloud (mode=self_hosted/cloud +
- * API_URL + API_KEY), else a LocalProjectStore. Throws if cloud was requested
- * but is misconfigured (so callers never silently read the wrong dataset).
+ * ApiProjectStore when HASNA_PROJECTS_API_URL + HASNA_PROJECTS_API_KEY are
+ * both present, else a LocalProjectStore. Throws if the hosted pairing is
+ * half-configured (so callers never silently read the wrong dataset).
  */
 export function resolveProjectStore(
   env: Env = process.env,
@@ -1665,7 +1664,7 @@ export function resolveProjectStore(
   if (cacheable && cached) return cached;
   const resolved = resolveStorageClient(APP, env, fetchImpl);
   const store: ProjectStore =
-    resolved.transport === "cloud-http"
+    resolved.transport === "http"
       ? new ApiProjectStore(resolved.client)
       : new LocalProjectStore(
         createProductionProjectResourceLinkProducerEvidenceVerifier({

@@ -110,15 +110,16 @@ and `client:foo` are metadata/query filters only. Labels must not become source
 of truth for directory layout. Optional aliases may exist only when they are
 rebuildable from metadata.
 
-Cloud-backed runtime storage must be selected explicitly. Local SQLite and local
-files are the active runtime stores today: the global registry uses
-`projects.db`, and per-project canvases, data records, and OpenLoops links use
-`data/<workspace_id>/project.db`. A configured Projects Postgres URL enables
-explicit global registry sync commands only; it does not make `project.db`
-cloud-backed. `workspaces.s3_bucket` and `workspaces.s3_prefix` are registry
+The client has exactly two runtime stores, selected by the environment: the
+local SQLite registry (`projects.db`) by default, or the hosted API when
+`HASNA_PROJECTS_API_URL` plus `HASNA_PROJECTS_API_KEY` are both set. Per-project
+canvases, data records, and OpenLoops links use
+`data/<workspace_id>/project.db` and stay on-box either way. The server's
+Postgres URL configures `projects-serve`; it does not make `project.db`
+hosted. `workspaces.s3_bucket` and `workspaces.s3_prefix` are registry
 metadata until a separate approved S3 adapter/backfill task exists. The detailed
 readiness and migration approval contract lives in
-`docs/cloud-storage-readiness-contract.md`.
+`docs/hosted-backend-readiness-contract.md`.
 
 Slugs, names, org labels, and client labels are mutable. They must not require a
 canonical folder move. Existing explicit `--path` projects, imports, and

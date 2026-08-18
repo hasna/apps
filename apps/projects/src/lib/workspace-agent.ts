@@ -960,7 +960,7 @@ async function runMockPrompt(
   };
 
   const store = resolveProjectStore();
-  if (store.mode === "api") {
+  if (store.transport === "http") {
     // Cloud project rows are created through the Store (shared registry), never
     // the local sqlite island. Machine-local runtime does not apply to a cloud
     // row, so this mirrors the projects_create tool's api-mode path.
@@ -1136,7 +1136,7 @@ interface WorkspaceAgentToolContext {
 /**
  * Build the prompt-agent tool set bound to the active ProjectStore. Extracted
  * from runWorkspaceAgentPrompt so the mutation handlers can be unit-tested
- * against a fake Store. In api/cloud mode every shared-registry mutation
+ * against a fake Store. On the hosted backend every shared-registry mutation
  * (create/update/archive/unarchive/delete/tag/untag/unlink/event/agent/location)
  * routes through the Store (cloud HTTP), never local sqlite; local mode is
  * byte-for-byte unchanged.
@@ -1155,11 +1155,11 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
   } = ctx;
   let inspectedTmuxProfiles = false;
   // Attribution agent for a mutation: local uses the on-box actor agent;
-  // api/cloud leaves attribution to the server (derived from the bearer key),
+  // the hosted backend leaves attribution to the server (derived from the bearer key),
   // never sending a local agent id the cloud registry does not know.
-  const mutationAgentId = store.mode === "local" ? actorAgent.id : undefined;
+  const mutationAgentId = store.transport === "local" ? actorAgent.id : undefined;
   // Resolve a caller-supplied target through the active Store (cloud-aware in
-  // api mode; on-disk path/marker aware in local mode). store.resolveTarget
+  // on the hosted backend; on-disk path/marker aware on the local transport). store.resolveTarget
   // THROWS when nothing matches, whereas the prompt-agent tools expect a null
   // so they can surface their existing friendly "Project not found" error.
   const resolveStoreTargetOrNull = async (target: string | undefined): Promise<Workspace | null> => {
@@ -1355,7 +1355,7 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
         }
         // Route the assignment (and its audit event) through the Store so it
         // lands wherever the project lives. Per-project agent assignments are an
-        // on-box sub-resource: in api/cloud mode the Store throws
+        // on-box sub-resource: on the hosted backend the Store throws
         // LocalOnlyOperationError rather than silently writing local sqlite —
         // surface that as a clean tool error, not an unhandled crash.
         try {
@@ -1490,7 +1490,7 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
         };
         if (!approve) return projectPayload({ status: "planned", project: compactProject(workspace), location: locationInput, note: "Run again with --yes to register this project location." });
         // Extra on-disk locations are an on-box sub-resource: route through the
-        // Store so local mode writes sqlite as before, while api/cloud mode
+        // Store so the local transport writes sqlite as before, while the hosted backend
         // throws LocalOnlyOperationError instead of silently writing local —
         // surface that as a clean tool error.
         try {
@@ -1548,7 +1548,7 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
         };
         if (!approve) return projectPayload({ status: "planned", event: eventInput, note: "Run again with --yes to record this event." });
         // A project-scoped event routes through the Store so it lands wherever
-        // the project lives (cloud in api mode). A project-less system event has
+        // the project lives (hosted on the http transport). A project-less system event has
         // no shared-registry home and stays machine-local telemetry, as today.
         const event = workspace
           ? await store.recordEvent(workspace.id, {
@@ -1573,8 +1573,8 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
       execute: async (input) => {
         const workspace = await resolveStoreTargetOrNull(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
-        const doctor = () => doctorWorkspace(workspace, { fix: Boolean(input.fix && approve), dryRun: !approve, storageMode: store.mode });
-        return projectPayload(input.fix && approve && store.mode === "local"
+        const doctor = () => doctorWorkspace(workspace, { fix: Boolean(input.fix && approve), dryRun: !approve, transport: store.transport });
+        return projectPayload(input.fix && approve && store.transport === "local"
           ? withAgentWorkspaceLock(workspace, actorAgent.id, "project doctor fix", doctor)
           : doctor());
       },
@@ -2123,7 +2123,7 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
         tmux_profile: z.string().optional().describe("Existing tmux profile id or slug to apply"),
       }),
       execute: async (input) => {
-        if (store.mode === "api") {
+        if (store.transport === "http") {
           // Cloud project rows are created through the Store so they land in
           // the shared registry (not the local sqlite island). Machine-local
           // runtime (directory/git/tmux/marker) and the on-box run ledger do

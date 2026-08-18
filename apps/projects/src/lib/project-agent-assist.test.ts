@@ -31,7 +31,7 @@ beforeEach(() => {
   process.env[PROJECTS_DB_PATH_ENV] = ":memory:";
   delete process.env["HASNA_PROJECTS_API_URL"];
   delete process.env["HASNA_PROJECTS_API_KEY"];
-  delete process.env["HASNA_PROJECTS_STORAGE_MODE"];
+  // hosted-api selectors are stripped by testSpawnEnv; no mode variable exists
   closeDatabase();
   __resetProjectStore();
 });
@@ -294,12 +294,12 @@ describe("project-agent-assist: runs", () => {
 });
 
 // Regression for the review's split-brain READ finding: on a machine flipped
-// to api/cloud, `projects context` / `projects next` MUST resolve and read the
+// on the hosted backend, `projects context` / `projects next` MUST resolve and read the
 // SHARED cloud dataset through the Store's api transport — never the stale
 // local sqlite island. We seed a LOCAL project with the same slug but a
 // different id, drive the api store through a stub fetch, and assert the
 // api-mode context returns the CLOUD id (proving no local read leaked in).
-describe("project-agent-assist: api mode routes through the Store (no split-brain)", () => {
+describe("project-agent-assist: the hosted backend routes through the Store (no split-brain)", () => {
   const CLOUD_ENV = {
     HASNA_PROJECTS_API_URL: "https://projects.hasna.xyz",
     HASNA_PROJECTS_API_KEY: "secret-key",
@@ -385,7 +385,7 @@ describe("project-agent-assist: api mode routes through the Store (no split-brai
     }
   });
 
-  test("next reads events over HTTP and skips machine-local doctor in api mode", async () => {
+  test("next reads events over HTTP and skips machine-local doctor on the hosted backend", async () => {
     makeProject();
     const { store, calls } = apiStore((method, path) => {
       if (method === "GET" && path === "/v1/projects/agent-project") return cloudProject;

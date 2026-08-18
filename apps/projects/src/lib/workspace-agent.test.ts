@@ -143,14 +143,14 @@ describe("project agent system prompt", () => {
 });
 
 // --------------------------------------------------------------------------
-// Cloud-mode split-brain regression: in api/cloud mode the prompt-agent's
+// Split-brain regression: on the hosted backend the prompt-agent's
 // shared-registry mutations MUST route through the ProjectStore (cloud HTTP),
 // never local sqlite. These tests inject a fake api-mode Store and assert the
 // tool handlers call the corresponding store method and surface the cloud
 // result — a local-sqlite write would instead throw / miss the cloud project.
 // --------------------------------------------------------------------------
 
-const LOCAL_ONLY_SENTINEL = "is a local-only operation and is not available in api/cloud mode.";
+const LOCAL_ONLY_SENTINEL = "is a local-only operation and is not available on the hosted backend.";
 
 function makeCloudProject(overrides: Partial<Workspace> = {}): Workspace {
   return {
@@ -190,7 +190,7 @@ function makeFakeApiStore() {
   // Any method NOT explicitly modelled here would be undefined and throw if a
   // handler tried to call it — a strong signal it took an unexpected path.
   const store = {
-    mode: "api" as const,
+    transport: "http" as const,
     baseUrl: "https://projects.hasna.xyz/v1",
     listProjects: track("listProjects", () => []),
     matchRoots: track("matchRoots", () => []),
@@ -223,7 +223,7 @@ function makeFakeApiStore() {
       source: "agent",
       created_at: "2026-01-01T00:00:00.000Z",
     } as unknown as WorkspaceEvent)),
-    // On-box sub-resource: api mode throws LocalOnlyOperationError instead of
+    // On-box sub-resource: the hosted backend throws LocalOnlyOperationError instead of
     // silently writing local sqlite.
     addLocation: async (...args: unknown[]) => {
       calls.push({ method: "addLocation", args });
@@ -252,7 +252,7 @@ async function invoke(toolDef: unknown, input: Record<string, unknown>): Promise
   return (await execute(input, { toolCallId: "test", messages: [] })) as Record<string, unknown>;
 }
 
-describe("prompt-agent mutations route through the Store in api/cloud mode", () => {
+describe("prompt-agent mutations route through the Store on the hosted backend", () => {
   afterEach(() => {
     closeDatabase();
     delete process.env["HASNA_PROJECTS_DB_PATH"];
@@ -295,7 +295,7 @@ describe("prompt-agent mutations route through the Store in api/cloud mode", () 
     const updateCall = calls.find((c) => c.method === "updateProject");
     expect(updateCall).toBeDefined();
     expect(updateCall!.args[0]).toBe("wks_cloud");
-    // api mode leaves attribution to the server (derived from the bearer key).
+    // the hosted backend leaves attribution to the server (derived from the bearer key).
     expect((updateCall!.args[1] as { agent_id?: string }).agent_id).toBeUndefined();
     expect(calls.some((c) => c.method === "resolveTarget")).toBe(true);
   });
@@ -472,7 +472,7 @@ describe("prompt-agent mutations route through the Store in api/cloud mode", () 
     const tools = apiTools(store);
     const result = await invoke(tools.projects_locations_add, { project: "cloud-proj", path: "/tmp/x" });
 
-    // The write is attempted through the Store (which throws in api mode) and
+    // The write is attempted through the Store (which throws on the hosted backend) and
     // the loud failure is returned as a clean tool error, never a local write.
     expect(calls.some((c) => c.method === "addLocation")).toBe(true);
     expect(String(result.error)).toContain(LOCAL_ONLY_SENTINEL);

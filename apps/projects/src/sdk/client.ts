@@ -133,7 +133,7 @@ export interface DeleteResult { "deleted": boolean; "hard"?: boolean; "id"?: str
 
 export interface Health { "status": string; "version": string }
 
-export interface LegacyVersionResponse { "status": string; "version": string; "mode": string }
+export interface LegacyVersionResponse { "status": string; "version": string }
 
 export interface Error { "error": string; "reason"?: string }
 

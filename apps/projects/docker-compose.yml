@@ -1,4 +1,4 @@
-# Local self_hosted stack for projects-serve: a Postgres and the HTTP API.
+# Local stack for projects-serve: a Postgres and the HTTP API.
 # Mirrors the cloud (Amendment A1 pure-remote) shape for local testing.
 #   docker compose up --build
 #   # then: curl localhost:8080/health

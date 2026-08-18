@@ -106,18 +106,16 @@ const terminalFixture: GuardedProjectMutationResult = {
 };
 
 describe("generated Projects SDK server parity", () => {
-  test("keeps the legacy getVersion mode type and exact response", async () => {
+  test("getVersion returns status/version without a deployment mode", async () => {
     const client = new ProjectsClient({
       baseUrl: "https://projects.example.test",
       fetch: (async (_input: string | URL | Request, _init?: RequestInit) =>
-        Response.json({ status: "ok", version: "9.9.9", mode: "cloud" })) as typeof fetch,
+        Response.json({ status: "ok", version: "9.9.9" })) as typeof fetch,
     });
 
     const response: LegacyVersionResponse = await client.getVersion();
-    const mode: string = response.mode;
 
-    expect(response).toEqual({ status: "ok", version: "9.9.9", mode: "cloud" });
-    expect(mode).toBe("cloud");
+    expect(response).toEqual({ status: "ok", version: "9.9.9" });
   });
 
   test("accepts full workspace storage timestamps and terminal nullable fields", () => {

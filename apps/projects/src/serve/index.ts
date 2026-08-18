@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// projects-serve — self-hosted HTTP API for @hasna/projects.
+// projects-serve — HTTP API server for @hasna/projects.
 //
 // Amendment A1 pure-remote: reads and writes go directly to cloud Postgres via
 // the vendored storage kit. Two entrypoints:
@@ -144,11 +144,10 @@ async function main(): Promise<void> {
         console.error(`api_auth deny kid=${e.kid ?? "-"} reason=${e.reason ?? "-"} ${e.method} ${e.path}`);
       }
     },
-    mode: "cloud",
   });
 
   Bun.serve({ hostname, port, fetch: handler, idleTimeout: 60 });
-  console.error(`projects-serve v${version} listening on http://${hostname}:${port} (cloud/pure-remote)`);
+  console.error(`projects-serve v${version} listening on http://${hostname}:${port}`);
 }
 
 if (import.meta.main) {

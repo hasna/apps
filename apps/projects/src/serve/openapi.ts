@@ -1173,17 +1173,12 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
         },
         LegacyVersionResponse: {
           type: "object",
-          description: "Legacy compatibility response for /version.",
+          description: "Compatibility response for /version.",
           properties: {
             status: { type: "string" },
             version: { type: "string" },
-            mode: {
-              type: "string",
-              deprecated: true,
-              description: "Deprecated compatibility field; do not use it for deployment branching.",
-            },
           },
-          required: ["status", "version", "mode"],
+          required: ["status", "version"],
         },
         Error: {
           type: "object",

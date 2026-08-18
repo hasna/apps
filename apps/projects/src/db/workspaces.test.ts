@@ -84,11 +84,11 @@ describe("workspace schema", () => {
         JSON.stringify({ schema_version: 1, id: workspace.id, slug: "stale-local-doctor" }, null, 2) + "\n",
       );
 
-      const dryRun = doctorWorkspace(workspace, { fix: true, dryRun: true, storageMode: "local" }, db);
+      const dryRun = doctorWorkspace(workspace, { fix: true, dryRun: true, transport: "local" }, db);
       expect(dryRun.fixes.map((fix) => fix.code).sort()).toEqual(["FIX_WORKSPACE_LOCATION", "FIX_WORKSPACE_MARKER"]);
       expect(listWorkspaceLocations(workspace.id, db)).toHaveLength(0);
 
-      const fixed = doctorWorkspace(workspace, { fix: true, storageMode: "local" }, db);
+      const fixed = doctorWorkspace(workspace, { fix: true, transport: "local" }, db);
       expect(fixed.fixes.map((fix) => fix.code).sort()).toEqual(["FIX_WORKSPACE_LOCATION", "FIX_WORKSPACE_MARKER"]);
       expect(JSON.parse(readFileSync(workspaceMarkerPath(workspace), "utf-8")).slug).toBe("local-doctor");
       expect(listWorkspaceLocations(workspace.id, db)).toHaveLength(1);
@@ -1011,7 +1011,7 @@ describe("workspace domain services", () => {
       process.env[PROJECTS_DB_PATH_ENV] = ":memory:";
       delete process.env["HASNA_PROJECTS_API_URL"];
       delete process.env["HASNA_PROJECTS_API_KEY"];
-      delete process.env["HASNA_PROJECTS_STORAGE_MODE"];
+      // hosted-api selectors are stripped by testSpawnEnv; no mode variable exists
       closeDatabase();
       __resetProjectStore();
       const store = resolveProjectStore({});
@@ -1223,7 +1223,7 @@ describe("workspace domain services", () => {
     db.close();
   });
 
-  // Regression: in api/cloud mode a prompt run creates the project in the cloud
+  // Regression: on the hosted backend a prompt run creates the project there
   // registry, so its id is NOT present in the local workspaces table. The on-box
   // run ledger must record the run without FK-failing on that cloud id (it nulls
   // the workspace_id rather than throwing "FOREIGN KEY constraint failed").
@@ -1479,7 +1479,7 @@ describe("workspace domain services", () => {
     process.env[PROJECTS_DB_PATH_ENV] = ":memory:";
     delete process.env["HASNA_PROJECTS_API_URL"];
     delete process.env["HASNA_PROJECTS_API_KEY"];
-    delete process.env["HASNA_PROJECTS_STORAGE_MODE"];
+    // hosted-api selectors are stripped by testSpawnEnv; no mode variable exists
     closeDatabase();
     __resetProjectStore();
     const db = getDatabase();

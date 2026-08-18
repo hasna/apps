@@ -4059,7 +4059,7 @@ export async function registerFullProject(
   // A local Store is only a facade over this same SQLite authority. Keep the
   // original transactional creation path in local mode; only the API Store is
   // a distinct Projects authority that must replace local project mutations.
-  const authorityStore = options.projectStore?.mode === "api" ? options.projectStore : undefined;
+  const authorityStore = options.projectStore?.transport === "http" ? options.projectStore : undefined;
   const transportBlockers = projectRegistrationAuthorityTransportBlockers(
     authorities,
     authorityStore ? "api" : "local",
