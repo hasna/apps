@@ -616,6 +616,12 @@ describe("hook PATH sanitization (reviewer P2)", () => {
     expect(parts).not.toContain("relative/bin");
   });
 
+  test("does not confuse a sibling home prefix with the configured home", () => {
+    const sibling = `${FAKE_HOME}-archive/bin`;
+    const env = buildHookEnv({ PATH: `${sibling}:/usr/bin:/bin`, HOME: FAKE_HOME });
+    expect(env.PATH).toContain(sibling);
+  });
+
   test("a world-writable PATH entry is dropped even outside HOME and /tmp", () => {
     const wwDir = "/dev/shm/hooks-ww-" + Math.random().toString(36).slice(2);
     let created = false;

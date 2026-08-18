@@ -10,6 +10,8 @@ function expectParsedTime(value: string): string {
 describe("parseTime", () => {
   it("returns undefined for undefined input", () =>
     expect(parseTime(undefined)).toBeUndefined());
+  it("returns undefined for an empty input", () =>
+    expect(parseTime("")).toBeUndefined());
   it("returns ISO string unchanged", () => {
     const iso = "2026-01-01T00:00:00.000Z";
     expect(parseTime(iso)).toBe(iso);
@@ -36,6 +38,17 @@ describe("parseTime", () => {
     const result = expectParsedTime("1w");
     const diff = Date.now() - new Date(result).getTime();
     expect(diff).toBeGreaterThan(6.9 * 86400 * 1000);
+  });
+  it("supports fractional relative durations", () => {
+    const result = expectParsedTime("1.5h");
+    const diff = Date.now() - new Date(result).getTime();
+    expect(diff).toBeGreaterThan(89 * 60 * 1000);
+    expect(diff).toBeLessThan(91 * 60 * 1000);
+  });
+  it("leaves signed, spaced, and unsupported units unchanged", () => {
+    expect(parseTime("-1h")).toBe("-1h");
+    expect(parseTime("1 h")).toBe("1 h");
+    expect(parseTime("1mo")).toBe("1mo");
   });
   it("returns unknown strings unchanged", () => {
     expect(parseTime("yesterday")).toBe("yesterday");

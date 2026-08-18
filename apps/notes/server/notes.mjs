@@ -1,22 +1,12 @@
-// Hasna Notes self-hosted server — notes CRUD, sync, export.
-// Implements the personalnotes/v1 dialect (§3-§7 of the sync protocol
-// contract) plus the S2 superset: per-tenant monotonic `seq` cursor with
-// `hasMore` (fixes gate doc GAP-4/GAP-5), list pagination (GAP-6), purge
-// tombstones (GAP-1) and restore/archive audit events (GAP-2).
+// Hasna Notes self-hosted server — notes CRUD, export.
+// Implements the personalnotes/v1 dialect (§3-§7 of the protocol contract)
+// plus the S2 superset: per-tenant monotonic `seq` cursor with `hasMore`
+// (fixes gate doc GAP-4/GAP-5), list pagination (GAP-6), purge tombstones
+// (GAP-1) and restore/archive audit events (GAP-2).
 
 import { createHash, randomUUID } from 'node:crypto';
 import { ApiError } from './http.mjs';
-import { nextSeq, currentSeq, nowIso } from './db.mjs';
-
-export const SYNC_MAX_ITEMS = 100;
-export const SYNC_MAX_BYTES = 2 * 1024 * 1024;
-// Backward-compat window applied when a client hands us a wall-clock cursor.
-// PLATFORM-GAP (GAP-5, gate doc /tmp/pn-sync-protocol.md §0/§6.1): the hosted
-// platform's cursor is server wall-clock `updatedAt`, which can skip rows
-// committed out of timestamp order. The dialect therefore requires S2 to
-// accept ISO cursors as an overlap-rewound timestamp filter before switching
-// the client to the lossless seq cursor.
-const ISO_CURSOR_REWIND_MS = 5000;
+import { nextSeq, nowIso } from './db.mjs';
 
 function hash(content) {
   return createHash('sha256').update(content).digest('hex');
@@ -91,9 +81,9 @@ async function insertRow(db, tenantId, input, { source }) {
 }
 
 /**
- * Field-wise merge update shared by PATCH and sync upsert (dialect §4/§5.2
- * step 3): absent fields keep current values; `folder` uses `=== undefined`
- * so an explicit null clears it; revision +1; seq restamped; updatedAt = now.
+ * Field-wise merge update (dialect §4): absent fields keep current values;
+ * `folder` uses `=== undefined` so an explicit null clears it; revision +1;
+ * seq restamped; updatedAt = now.
  */
 async function updateRow(db, tenantId, current, input, { restore = false, keepContentHash = false } = {}) {
   const title = input.title?.trim() || current.title;
@@ -155,7 +145,7 @@ export async function listNotes(db, tenantId, { limit, includeDeleted, cursor })
 export async function getNote(db, tenantId, id) {
   const row = await getRow(db, tenantId, id);
   // PLATFORM-GAP (GAP-2): the dialect 404s soft-deleted notes here, which is
-  // what makes REST restore impossible — restore only exists as a sync upsert.
+  // what makes REST restore impossible.
   if (!row || row.deleted_at) throw new ApiError('not_found', 'note not found', 404);
   return serializeNote(row);
 }
@@ -180,8 +170,8 @@ export async function updateNote(db, tenantId, id, input, actor) {
 export async function deleteNote(db, tenantId, id, actor) {
   const current = await getRow(db, tenantId, id);
   if (!current) throw new ApiError('not_found', 'note not found', 404);
-  // PLATFORM-GAP (GAP-1): DELETE is soft-only; the full content keeps being
-  // served in sync `changes` until the client purges via the sync superset.
+  // PLATFORM-GAP (GAP-1): DELETE is soft-only; a deleted row still answers
+  // the list feed until the client purges via the dialect superset.
   await db.query('UPDATE notes SET deleted_at = ?, revision = revision + 1, seq = ?, updated_at = ? WHERE tenant_id = ? AND id = ?').run(
     nowIso(), await nextSeq(db, tenantId), nowIso(), tenantId, id,
   );
@@ -195,145 +185,9 @@ export async function exportNotes(db, tenantId) {
   return { exportId: randomUUID(), notes: rows.map(serializeNote) };
 }
 
-// --- sync (dialect §5 + §6.2 superset) ----------------------------------------
+// --- cursor paging (dialect superset) -----------------------------------------
 
 function parseSeqCursor(cursor) {
   const m = /^s:(\d+)$/.exec(String(cursor ?? ''));
   return m ? Number(m[1]) : null;
-}
-
-async function pullChanges(db, tenantId, cursor) {
-  const seqCursor = parseSeqCursor(cursor);
-  let rows;
-  if (seqCursor !== null) {
-    rows = await db
-      .query('SELECT * FROM notes WHERE tenant_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?')
-      .all(tenantId, seqCursor, SYNC_MAX_ITEMS + 1);
-  } else {
-    // ISO-timestamp cursor (hosted-platform shape) or empty/invalid cursor.
-    // PLATFORM-GAP (GAP-4/GAP-5): the hosted feed is `updatedAt > cursor`
-    // capped at 100 DESC with cursor = now(), which silently loses rows.
-    // Backward-compat here: rewind the timestamp by 5s, filter on
-    // updatedAt/deletedAt, but order by seq ASC and hand back a seq cursor so
-    // the client is upgraded to lossless paging after one round-trip.
-    const parsed = cursor ? Date.parse(cursor) : 0;
-    const since = Number.isNaN(parsed) ? new Date(0).toISOString() : new Date(Math.max(0, parsed - ISO_CURSOR_REWIND_MS)).toISOString();
-    rows = await db
-      .query('SELECT * FROM notes WHERE tenant_id = ? AND (updated_at > ? OR (deleted_at IS NOT NULL AND deleted_at > ?)) ORDER BY seq ASC LIMIT ?')
-      .all(tenantId, since, since, SYNC_MAX_ITEMS + 1);
-  }
-  const hasMore = rows.length > SYNC_MAX_ITEMS;
-  const page = rows.slice(0, SYNC_MAX_ITEMS);
-  const lastSeq = page.length ? page[page.length - 1].seq : (seqCursor ?? await currentSeq(db, tenantId));
-  return { changes: page.map(serializeNote), cursor: `s:${lastSeq}`, hasMore };
-}
-
-export async function syncNotes(db, tenantId, input, idempotencyKey, actor) {
-  // The PostgreSQL backend drops sync_batches (multi-machine sync is being
-  // removed fleet-wide); the SQLite backend keeps the dialect's sync until
-  // the sync-removal lane lands. Fail cleanly instead of a missing-table 500.
-  if (db.backend === 'postgresql') {
-    throw new ApiError('sync_unavailable', 'sync is not supported on the postgresql backend', 501);
-  }
-  if (!idempotencyKey) throw new ApiError('bad_request', 'Idempotency-Key header is required', 400);
-  if (new TextEncoder().encode(JSON.stringify(input)).byteLength > SYNC_MAX_BYTES) {
-    throw new ApiError('payload_too_large', 'sync body exceeds configured size limit', 413);
-  }
-  if (!Array.isArray(input.items) || input.items.length > SYNC_MAX_ITEMS) {
-    throw new ApiError('bad_request', `sync supports at most ${SYNC_MAX_ITEMS} items`, 400);
-  }
-  const requestHash = hash(JSON.stringify(input));
-
-  // Idempotency (§5.4): same key + same body → verbatim replay of the stored
-  // response (including the ORIGINAL cursor/changes snapshot — dialect-
-  // mandated); same key + different body → 409 idempotency_conflict;
-  // concurrent duplicates → unique-index race → generic 409 conflict
-  // (mapped in http.mjs). Keys are per tenant and never expire.
-  const existing = await db.query('SELECT * FROM sync_batches WHERE tenant_id = ? AND idempotency_key = ? LIMIT 1').get(tenantId, idempotencyKey);
-  if (existing) {
-    if (existing.request_hash !== requestHash) {
-      throw new ApiError('idempotency_conflict', 'Idempotency-Key was already used for a different sync request', 409);
-    }
-    return JSON.parse(existing.response_json);
-  }
-
-  // The apply runs inside an explicit BEGIN/COMMIT on the SQLite backend
-  // (bun:sqlite's native transaction cannot hold async bodies).
-  await db.query('BEGIN').run();
-  try {
-    const response = await applySyncBatch(db, tenantId, input, requestHash, idempotencyKey, actor);
-    await db.query('COMMIT').run();
-    return response;
-  } catch (err) {
-    await db.query('ROLLBACK').run();
-    throw err;
-  }
-}
-
-async function applySyncBatch(db, tenantId, input, requestHash, idempotencyKey, actor) {
-  const applied = [];
-  const conflicts = [];
-  for (const item of input.items) {
-    if (!item.clientId) throw new ApiError('bad_request', 'sync item clientId is required', 400);
-    const current = await getRowByClientId(db, tenantId, item.clientId);
-    // §5.2 step 1: optimistic-concurrency guard.
-    if (current && item.baseRevision !== undefined && current.revision !== item.baseRevision) {
-      conflicts.push({ clientId: item.clientId, id: current.id, current: serializeNote(current) });
-      continue;
-    }
-    if (item.purged) {
-      // S2 dialect superset (§7). PLATFORM-GAP (GAP-1): the hosted platform
-      // has no purge — deleted content keeps flowing in `changes` forever.
-      // Here: scrub content, keep only a tombstone that still propagates.
-      if (current) {
-        const now = nowIso();
-        await db.query(
-          `UPDATE notes SET title = '', body_markdown = '', frontmatter_json = '{}', labels = '[]',
-             content_hash = ?, deleted_at = COALESCE(deleted_at, ?), purged_at = ?,
-             revision = revision + 1, seq = ?, updated_at = ?
-           WHERE tenant_id = ? AND id = ?`,
-        ).run(noteHash({ title: '', bodyMarkdown: '', frontmatterJson: {} }), now, now, await nextSeq(db, tenantId), now, tenantId, current.id);
-        const purged = await getRow(db, tenantId, current.id);
-        await logEvent(db, { tenantId, noteId: current.id, actor, action: 'note.purged' });
-        applied.push({ clientId: item.clientId, id: purged.id, revision: purged.revision, deleted: true, purged: true });
-      }
-      // PLATFORM-GAP (GAP-1, same as delete below): purging a never-seen
-      // clientId is silently ignored — the dialect creates no tombstone
-      // for notes the server never had.
-      continue;
-    }
-    if (item.deleted) {
-      // §5.2 step 2: tombstone push. A delete for a clientId the server has
-      // never seen is silently ignored (dialect-mandated; no tombstone row
-      // is fabricated).
-      if (current) {
-        const now = nowIso();
-        await db.query('UPDATE notes SET deleted_at = ?, revision = revision + 1, seq = ?, updated_at = ? WHERE tenant_id = ? AND id = ?').run(
-          now, await nextSeq(db, tenantId), now, tenantId, current.id,
-        );
-        const deleted = await getRow(db, tenantId, current.id);
-        applied.push({ clientId: item.clientId, id: deleted.id, revision: deleted.revision, deleted: true });
-      }
-      continue;
-    }
-    if (current) {
-      // §5.2 step 3: upsert merge. PLATFORM-GAP (GAP-2): clearing deletedAt
-      // here is the ONLY restore path in the dialect (no REST restore);
-      // S2 additionally emits note.restored.
-      const updated = await updateRow(db, tenantId, current, item, { restore: true, keepContentHash: true });
-      await emitTransitionEvents(db, tenantId, current, updated, actor);
-      applied.push({ clientId: item.clientId, id: updated.id, revision: updated.revision });
-    } else {
-      const created = await insertRow(db, tenantId, item, { source: 'local' });
-      applied.push({ clientId: item.clientId, id: created.id, revision: created.revision });
-    }
-  }
-
-  const pull = await pullChanges(db, tenantId, input.cursor);
-  const response = { applied, conflicts, cursor: pull.cursor, changes: pull.changes, hasMore: pull.hasMore };
-  await db.query('INSERT INTO sync_batches (id, tenant_id, idempotency_key, request_hash, response_json, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
-    randomUUID(), tenantId, idempotencyKey, requestHash, JSON.stringify(response), nowIso(),
-  );
-  await logEvent(db, { tenantId, actor, action: 'notes.synced', metadata: { applied: applied.length, conflicts: conflicts.length } });
-  return response;
 }

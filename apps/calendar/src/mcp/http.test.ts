@@ -12,7 +12,7 @@ import { healthPayload, startMcpHttpServer } from "./http.js";
 
 describe("calendar MCP HTTP transport", () => {
   afterEach(() => {
-    resetDatabase();
+    resetDatabase(":memory:");
     closeDatabase();
   });
 
@@ -45,7 +45,7 @@ describe("calendar MCP HTTP transport", () => {
   });
 
   test("list_events uses compact paged output unless verbose is requested", async () => {
-    resetDatabase();
+    resetDatabase(":memory:");
     const org = createOrg({ name: "MCP Output Org", slug: "mcp-output" });
     const calendar = createCalendar({ name: "MCP Output Calendar", org_id: org.id });
     const longDescription = "Long MCP details ".repeat(40);
@@ -87,7 +87,7 @@ describe("calendar MCP HTTP transport", () => {
   });
 
   test("bootstrap returns paged compact sections by default", async () => {
-    resetDatabase();
+    resetDatabase(":memory:");
     const org = createOrg({ name: "Bootstrap Org", slug: "bootstrap" });
     const agent = registerAgent({ name: "bootstrap-agent" });
     createMembership({ org_id: org.id, agent_id: agent.id, role: "admin" });

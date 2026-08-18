@@ -280,6 +280,36 @@ describe("policy matcher coverage", () => {
     ).toBe("allow");
   });
 
+  test("derives source trust and domain from an external browser URL", () => {
+    const rule = policy("browser-source", "warn", {
+      when: { source: { trustLevels: ["external"], domains: ["example.invalid"] } },
+    });
+
+    const decision = evaluateGuardrail(
+      {
+        operationType: "browser_operation",
+        browser: { url: "https://example.invalid/report", externalSource: true },
+      },
+      policySet([rule]),
+    );
+
+    expect(decision.status).toBe("warn");
+    expect(decision.rationaleTrace[0]).toMatchObject({ matched: true, effective: true, selected: true });
+  });
+
+  test("recognizes destructive flags in either order while allowing a non-destructive command", () => {
+    const destructive = ["rm -fr ./placeholder-output", "git clean -df ./placeholder-output"];
+    for (const command of destructive) {
+      expect(evaluateGuardrail({ operationType: "shell_command", shell: { command } }).status).toBe(
+        "approval_required",
+      );
+    }
+
+    expect(
+      evaluateGuardrail({ operationType: "shell_command", shell: { command: "rm -f ./placeholder-output" } }).status,
+    ).toBe("allow");
+  });
+
   test("matches business, action, secret, runtime, browser, and computer rules", () => {
     const cases: Array<[GuardrailInput, GuardrailPolicy]> = [
       [

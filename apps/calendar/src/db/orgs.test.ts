@@ -5,10 +5,10 @@ import { ConflictError, NotFoundError } from "../types/index.js";
 
 describe("orgs", () => {
   beforeEach(() => {
-    resetDatabase();
+    resetDatabase(":memory:");
   });
 
-  afterEach(() => resetDatabase());
+  afterEach(() => resetDatabase(":memory:"));
 
   test("create and get org", () => {
     const org = createOrg({ name: "Acme Corp", slug: "acme" });

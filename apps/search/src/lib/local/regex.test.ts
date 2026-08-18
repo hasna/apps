@@ -86,6 +86,19 @@ describe("extractRegexLiterals", () => {
     expect(literals("(?<g>foo)\\k<g>barbaz")).toEqual([["foo", "barbaz"]]);
     expect(literals("\\p{L}+abcdef")).toEqual([["abcdef"]]);
   });
+
+  test("nested groups keep required literals after a non-capturing wrapper", () => {
+    expect(literals("(?:before(?:middle))after")).toEqual([["before", "middle", "after"]]);
+  });
+
+  test("lookbehind literals are not treated as required file content", () => {
+    expect(literals("(?<=prefix)target")).toEqual([["target"]]);
+    expect(literals("(?<!prefix)target")).toEqual([["target"]]);
+  });
+
+  test("unmatched braces flush literal runs", () => {
+    expect(literals("prefix{broken")).toEqual([["prefix", "broken"]]);
+  });
 });
 
 describe("buildFtsQueryFromRegex", () => {
@@ -103,6 +116,10 @@ describe("buildFtsQueryFromRegex", () => {
 
   test("escapes embedded quotes", () => {
     expect(buildFtsQueryFromRegex('say"hello"')).toBe('"say""hello"""');
+  });
+
+  test("removes NUL characters from FTS literals", () => {
+    expect(buildFtsQueryFromRegex("safe\u0000value")).toBe('"safevalue"');
   });
 });
 

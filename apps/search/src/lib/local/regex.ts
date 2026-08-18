@@ -159,11 +159,27 @@ function extractSequenceLiterals(seq: string): string[] {
       continue;
     }
 
-    if (ch === "*" || ch === "?" || ch === "+" || ch === "{") {
+    if (ch === "*" || ch === "?" || ch === "+") {
       // Quantifier with no tracked atom (e.g. after a group we already
       // handled): just skip it.
       const q = quantifierAt(seq, i);
       i += Math.max(1, q.length);
+      continue;
+    }
+
+    if (ch === "{") {
+      const q = quantifierAt(seq, i);
+      if (q.length > 0) {
+        // Quantifier with no tracked atom (e.g. at the start of a branch):
+        // just skip it.
+        i += q.length;
+      } else {
+        // An unmatched opening brace is a literal in JavaScript regexes.
+        // Flush around it so the FTS prefilter never invents a contiguous
+        // literal that the real regex can match only with the brace present.
+        flush();
+        i++;
+      }
       continue;
     }
 

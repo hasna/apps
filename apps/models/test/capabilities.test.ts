@@ -29,6 +29,44 @@ test("capability validation rejects missing pricing and unknown tool support", (
   expect(validateModelCapability(unknownTools).errors).toContain("toolUse must be yes, no, or partial");
 });
 
+test("capability validation rejects boundary values instead of coercing them", () => {
+  const base = structuredClone(MODEL_CAPABILITY_FIXTURES[0]!) as ModelCapability;
+
+  const invalid = {
+    ...base,
+    contextWindowTokens: 0,
+    maxOutputTokens: -1,
+    modalities: { input: [], output: ["text", "fax"] },
+    pricing: { ...base.pricing, inputPerMillionTokens: -0.01 },
+    runtime: { ...base.runtime, kind: "unsupported" as ModelCapability["runtime"]["kind"] },
+  };
+
+  const result = validateModelCapability(invalid);
+  expect(result.ok).toBe(false);
+  expect(result.errors).toEqual(expect.arrayContaining([
+    "contextWindowTokens must be a positive integer",
+    "maxOutputTokens must be a positive integer",
+    "modalities.input must include at least one modality",
+    "modalities.output contains unsupported modality: fax",
+    "pricing.inputPerMillionTokens must be null or a non-negative number",
+    "runtime.kind is invalid",
+  ]));
+  expect(result.errors).toHaveLength(6);
+});
+
+test("capability validation requires every runtime file format to be a non-empty string", () => {
+  const base = structuredClone(MODEL_CAPABILITY_FIXTURES[0]!) as ModelCapability;
+  const invalid = {
+    ...base,
+    runtime: { ...base.runtime, fileFormats: ["gguf", "", 42] as unknown as string[] },
+  };
+
+  expect(validateModelCapability(invalid)).toEqual({
+    ok: false,
+    errors: ["runtime.fileFormats must be an array of non-empty strings"],
+  });
+});
+
 test("stores and resolves capabilities by model id and alias", () => {
   const dir = mkdtempSync(join(tmpdir(), "models-capabilities-"));
   const store = new ModelsStore(join(dir, "models.db"));

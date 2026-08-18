@@ -1,15 +1,16 @@
 # notes-server
 
-Self-hosted Hasna Notes sync server. A small reference implementation of the
+Self-hosted Hasna Notes server. A small reference implementation of the
 `personalnotes/v1` wire dialect — the same protocol the hosted platform
-speaks — backed by a single SQLite file. The `notes` CLI/app talks to either
-backend unchanged: one protocol, two backends.
+speaks — backed by SQLite (PostgreSQL via `HASNA_NOTES_DATABASE_URL`). The
+`notes` client talks to it over HTTP: one protocol.
 
 - **Stack**: [Bun](https://bun.sh) + [Hono](https://hono.dev) + `bun:sqlite`. One runtime dependency.
 - **Storage**: one SQLite file (default `~/.hasna/apps/notes-server/server.db`). Back it up by copying the file.
-- **Scope**: notes CRUD, event-batch sync with idempotency and a lossless
-  monotonic pull cursor, device-code auth, export, health. No billing, no
-  multi-tenant admin, no email service — those are hosted-platform concerns.
+- **Scope**: notes CRUD, device-code auth, export, health. The multi-machine
+  sync round-trip endpoint and its `sync_batches` table were removed in 0.2.0.
+  No billing, no multi-tenant admin, no email service — those are
+  hosted-platform concerns.
 
 ## Quickstart
 
@@ -21,10 +22,10 @@ bun index.mjs --auto-approve
 # → [notes-server] database: ~/.hasna/apps/notes-server/server.db
 ```
 
-Point the client at it:
+Point a client at it:
 
 ```sh
-HASNA_NOTES_API_URL=http://127.0.0.1:8788 notes cloud login --device
+HASNA_NOTES_API_URL=http://127.0.0.1:8788 HASNA_NOTES_API_KEY=pn_... notes ...
 ```
 
 With `--auto-approve`, device logins coming from this machine (loopback) are
@@ -62,17 +63,12 @@ The server binds loopback by default. If you expose it (`--host`), put a TLS
 reverse proxy (Caddy, nginx, or your mesh VPN's proxy) in front — bearer keys must
 not travel over plain HTTP outside your machine.
 
-**macOS clients: do not point the sync daemon at a LAN address.** macOS Local
-Network Privacy silently blocks background launchd agents from
-RFC1918/link-local addresses — `EHOSTUNREACH`, and no permission prompt ever
-appears for a background agent — so a client configured with
-`http://192.168.x.x:8788` (or a bare hostname that resolves there) syncs fine
-when run manually and fails under the installed daemon. Give macOS clients a
-non-LAN address: a Tailscale MagicDNS FQDN (`http://<host>.<tailnet>.ts.net:8788`
-— mesh-VPN traffic rides utun and is not LNP-gated) or a public hostname behind
-your proxy. `notes sync --install-service` detects this on macOS and
-rewrites the URL to the tailnet FQDN when one is available (`--dry-run` to
-preview).
+If a client reaches this server over the LAN, keep the address out of any
+background/service context: macOS Local Network Privacy silently blocks
+background launchd agents from RFC1918/link-local addresses (`EHOSTUNREACH`,
+no permission prompt). Give clients a non-LAN address — a Tailscale MagicDNS
+FQDN (`http://<host>.<tailnet>.ts.net:8788`, mesh traffic is not LNP-gated) or
+a public hostname behind your TLS proxy.
 
 ## API surface (personalnotes/v1 dialect)
 
@@ -84,21 +80,21 @@ POST /api/v1/auth/device/approve      (session-authenticated)
 GET  /api/v1/auth/whoami              POST /api/v1/auth/logout
 GET|POST /api/v1/api-keys
 GET|POST /api/v1/notes                GET|PATCH|DELETE /api/v1/notes/:id
-POST /api/v1/sync                     (Idempotency-Key required)
 POST /api/v1/export
 ```
+
+The `POST /api/v1/sync` round-trip endpoint was removed with the multi-machine
+sync machinery (0.2.0); the client is a plain HTTP API client using CRUD and
+export.
 
 Dialect supersets over the hosted platform (each degrades gracefully; see the
 `PLATFORM-GAP` comments in the source):
 
-- **Lossless pull cursor**: sync `changes` are ordered by a per-tenant
-  monotonic `seq`, the cursor is opaque (`s:<seq>`), and responses carry
-  `hasMore`. ISO-timestamp cursors (the hosted platform's shape) are still
-  accepted with a 5-second overlap rewind.
-- **List pagination**: `GET /api/v1/notes?cursor=&limit=` → `{data, nextCursor}`.
-- **Purge**: sync item `{"clientId":..., "purged":true}` scrubs
-  title/body/frontmatter/labels, stamps `purgedAt`, and keeps propagating only
-  the empty tombstone.
+- **List pagination**: `GET /api/v1/notes?cursor=&limit=` → `{data, nextCursor}`
+  (opaque `s:<seq>` cursor; ISO-timestamp cursors accepted with a 5-second
+  overlap rewind).
+- **Purge**: a `purgedAt` tombstone scrubs title/body/frontmatter/labels and
+  keeps deleted content from flowing in feeds.
 - **Audit events**: `note.purged`, `note.restored`, `note.archived`,
   `note.unarchived` recorded in `note_events`.
 
@@ -109,7 +105,7 @@ Dialect supersets over the hosted platform (each degrades gracefully; see the
 ```ini
 # /etc/systemd/system/notes-server.service
 [Unit]
-Description=Hasna Notes self-hosted sync server
+Description=Hasna Notes self-hosted server
 After=network.target
 
 [Service]
@@ -156,7 +152,5 @@ cd server && bun test
 ```
 
 Covers boot (real `bun index.mjs` process), auth (OTP, device flow,
-auto-approve, logout), notes CRUD, sync round-trip with `baseRevision`
-conflicts, idempotent replay (same key/same body → verbatim replay; same
-key/different body → `409 idempotency_conflict`), tombstone/purge/restore
-propagation, and cursor pagination (seq paging, ISO backcompat, list cursor).
+auto-approve, logout), notes CRUD, purge/restore propagation, and cursor
+pagination.

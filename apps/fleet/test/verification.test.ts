@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { verifyFleet } from "../src/core/verification";
-import { assertNoNumeratorKeys } from "../src/core/fraction";
+import { exitCodeForResult, normalizeHostId, verifyFleet } from "../src/core/verification";
+import { assertNoNumeratorKeys, formatFraction } from "../src/core/fraction";
 
 describe("fleet verification", () => {
   it("reports the measured 14/21 failure shape without hiding unsampled hosts", () => {
@@ -55,5 +55,55 @@ describe("fleet verification", () => {
 
     expect(result.status).toBe("pass");
     expect(result.fraction).toBe("1/1");
+  });
+
+  it("normalizes host identity and de-duplicates inventory across sources", () => {
+    const result = verifyFleet({
+      observedAt: "2026-08-01T09:00:00.000Z",
+      sources: [
+        { name: "manifest", hosts: [{ id: " Station01 " }, { id: "station02" }] },
+        { name: "aws-ec2", hosts: [{ id: "station01" }] },
+        { name: "tailscale", hosts: [{ id: "STATION01" }] },
+      ],
+      probes: [{ host: " STATION01 ", ok: true }],
+    });
+
+    expect(normalizeHostId("  Station01 ")).toBe("station01");
+    expect(result.totalHosts).toEqual(["station01", "station02"]);
+    expect(result.coveredHosts).toEqual(["station01"]);
+    expect(result.missingHosts).toEqual(["station02"]);
+    expect(result.fraction).toBe("1/2");
+  });
+
+  it("maps every terminal verification status to its documented exit code", () => {
+    const base = {
+      sources: [
+        { name: "manifest", hosts: [{ id: "station01", reachable: true }] },
+        { name: "aws-ec2", hosts: [{ id: "station01", reachable: true }] },
+        { name: "tailscale", hosts: [{ id: "station01", reachable: true }] },
+      ],
+    };
+    const pass = verifyFleet(base);
+    const incomplete = verifyFleet({ ...base, probes: [{ host: "missing", ok: true }] });
+    const controlFailed = verifyFleet({ ...base, sources: [{ name: "manifest", hosts: [] }, ...base.sources.slice(1)] });
+    const invalid = verifyFleet({
+      sources: [],
+      requiredSources: [],
+      positiveControls: [{ source: "fleet-union", observed: true, evidence: "empty fixture" }],
+    });
+
+    expect(exitCodeForResult(pass)).toBe(0);
+    expect(exitCodeForResult(incomplete)).toBe(1);
+    expect(exitCodeForResult(invalid)).toBe(2);
+    expect(exitCodeForResult(controlFailed)).toBe(3);
+  });
+
+  it("rejects impossible fractions before formatting provenance", () => {
+    expect(() => formatFraction({ numerator: 2, denominator: 1, source: "test", observedAt: "now", axes: [], omittedAxis: "none" })).toThrow(
+      /cannot exceed/,
+    );
+    expect(() => formatFraction({ numerator: -1, denominator: 1, source: "test", observedAt: "now", axes: [], omittedAxis: "none" })).toThrow(
+      /non-negative integer/,
+    );
   });
 });

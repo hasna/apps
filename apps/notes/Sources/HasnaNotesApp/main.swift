@@ -7,8 +7,8 @@
 //      desktop-frame chrome and fills the OS window edge-to-edge, and
 //   3. bridges REAL notes data between the on-disk Markdown store
 //      (`HasnaNotesCore.MarkdownStore`) and the web UI:
-//        - reads the store + the fleet manifest at launch and injects
-//          `window.__BOOT__ = { notes, machines, thisMachine }` as a
+//        - reads the store at launch and injects
+//          `window.__BOOT__ = { notes, labels, settings }` as a
 //          document-start user script (available before the page's JS runs),
 //        - receives `{action, note}` messages on the `notes` message handler
 //          (save / create / delete), writes them to disk, then pushes fresh
@@ -68,7 +68,7 @@ final class AISidecar {
     }
 
     /// Candidate absolute node paths, then a PATH lookup via `/usr/bin/env`.
-    /// Internal (not private) because SyncScheduler reuses the same resolution.
+    /// Internal (not private) so callers can reuse the same resolution.
     static func findNode() -> String? {
         let candidates = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"]
         for p in candidates where FileManager.default.isExecutableFile(atPath: p) {
@@ -247,210 +247,6 @@ final class AISidecar {
     }
 }
 
-// MARK: - Sync scheduler
-
-/// Thread-safe byte sink: collects a child's stderr from the FileHandle
-/// readability callback (which runs on its own queue) while the owning thread
-/// drains stdout to EOF — the two pipes must never be read sequentially from
-/// one thread (see SyncScheduler.runTick).
-private final class PipeBuffer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var data = Data()
-
-    func append(_ chunk: Data) {
-        lock.lock()
-        defer { lock.unlock() }
-        data.append(chunk)
-    }
-
-    var bytes: Data {
-        lock.lock()
-        defer { lock.unlock() }
-        return data
-    }
-}
-
-/// Background timer that keeps the local store fresh while the GUI is open by
-/// running the bundled CLI (`Resources/bin/notes.mjs sync --json`) —
-/// the SAME sync engine the `notes sync --watch` daemon and manual CLI
-/// runs use. Sync never REQUIRES the GUI: the installed daemon/service is the
-/// primary scheduler; the pid-based run lock in the data root keeps the two
-/// from double-running (a colliding run reports `skipped`, not an error).
-///
-/// `@unchecked Sendable`: `timer` is created/cancelled on the main thread only
-/// (start/stop from app lifecycle); `child` is touched only on the private
-/// serial `queue` where ticks run; `onDidSync` is an immutable @Sendable value.
-final class SyncScheduler: @unchecked Sendable {
-    /// Serial background queue (the notesQueue pattern): each tick spawns the
-    /// CLI and waits for it HERE — never on the main thread.
-    private let queue = DispatchQueue(label: "Hasna Notes.sync-scheduler", qos: .utility)
-    private var timer: DispatchSourceTimer?
-    private var child: Process?
-    /// Called on `queue` after every completed (non-skipped) run so the host
-    /// can rebuild the boot payload and hydrate the web UI.
-    private let onDidSync: @Sendable () -> Void
-
-    init(onDidSync: @escaping @Sendable () -> Void) {
-        self.onDidSync = onDidSync
-    }
-
-    /// `~/.config/notes/config.json` (or $HASNA_NOTES_CONFIG) — the
-    /// sync client config written by `notes auth ...`. Read-only here.
-    private static func clientConfig() -> [String: Any] {
-        let env = ProcessInfo.processInfo.environment
-        let url: URL
-        if let override = env["HASNA_NOTES_CONFIG"], !override.isEmpty {
-            url = URL(fileURLWithPath: override)
-        } else {
-            url = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".config/hasna-notes/config.json")
-        }
-        guard let data = try? Data(contentsOf: url),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return [:]
-        }
-        return obj
-    }
-
-    private static func isSignedIn(_ config: [String: Any]) -> Bool {
-        let candidates = [config["apiKey"] as? String, config["token"] as? String,
-                          HasnaNotesCore.Note.notesEnv("API_KEY"), HasnaNotesCore.Note.notesEnv("TOKEN")]
-        return candidates.contains { !($0 ?? "").isEmpty }
-    }
-
-    /// Interval in minutes from config `syncIntervalMinutes` — default 5,
-    /// floor 1 — mirroring `resolveSyncInterval` in sync/daemon.mjs.
-    static func intervalMinutes(_ config: [String: Any]) -> Double {
-        var minutes = 5.0
-        if let n = config["syncIntervalMinutes"] as? NSNumber {
-            minutes = n.doubleValue
-        } else if let s = config["syncIntervalMinutes"] as? String, let n = Double(s) {
-            minutes = n
-        }
-        if !minutes.isFinite || minutes <= 0 { minutes = 5.0 }
-        return max(1.0, minutes)
-    }
-
-    /// Locate the bundled CLI entry (`Resources/bin/notes.mjs`).
-    private static func cliScript() -> URL? {
-        guard let res = Bundle.main.resourceURL else { return nil }
-        let script = res.appendingPathComponent("bin/notes.mjs")
-        return FileManager.default.fileExists(atPath: script.path) ? script : nil
-    }
-
-    /// Start the timer (called once at launch, main thread). No-ops — with an
-    /// NSLog explaining why — when the user is not signed in, the bundled CLI
-    /// is missing, or node cannot be found; the app works fine without sync.
-    func start() {
-        let config = SyncScheduler.clientConfig()
-        guard SyncScheduler.isSignedIn(config) else {
-            NSLog("Hasna Notes sync: not signed in (run: notes auth device) — GUI sync timer off")
-            return
-        }
-        guard let script = SyncScheduler.cliScript() else {
-            NSLog("Hasna Notes sync: bundled CLI missing — GUI sync timer off")
-            return
-        }
-        guard let node = AISidecar.findNode() else {
-            NSLog("Hasna Notes sync: no node binary found — GUI sync timer off")
-            return
-        }
-        let interval = SyncScheduler.intervalMinutes(config) * 60.0
-        let t = DispatchSource.makeTimerSource(queue: queue)
-        // First run shortly after launch, then every interval. The leeway is
-        // the scheduler-level jitter (≤10% of the interval), mirroring the
-        // daemon's jittered ticks.
-        t.schedule(deadline: .now() + 20,
-                   repeating: interval,
-                   leeway: .seconds(max(1, Int(interval * 0.1))))
-        t.setEventHandler { [weak self] in
-            self?.runTick(node: node, script: script)
-        }
-        timer = t
-        t.resume()
-        NSLog("Hasna Notes sync: GUI timer on (every \(Int(interval))s via bundled CLI)")
-    }
-
-    /// Cancel the timer (app terminate, main thread). An in-flight CLI run is
-    /// deliberately left to finish on its own: it holds the run lock, persists
-    /// its pending batch, and exits — killing it mid-run would only exercise
-    /// the crash-resume path for no benefit.
-    func stop() {
-        timer?.cancel()
-        timer = nil
-    }
-
-    /// Runs ON `queue` (timer handler). Spawns one CLI sync run and waits for
-    /// it; a tick that fires while a run is still active is skipped.
-    private func runTick(node: String, script: URL) {
-        guard child == nil else { return }
-        let proc = Process()
-        if node == "/usr/bin/env" {
-            proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            proc.arguments = ["node", script.path, "sync", "--json"]
-        } else {
-            proc.executableURL = URL(fileURLWithPath: node)
-            proc.arguments = [script.path, "sync", "--json"]
-        }
-        let out = Pipe(), err = Pipe()
-        proc.standardOutput = out
-        proc.standardError = err
-        do {
-            try proc.run()
-        } catch {
-            NSLog("Hasna Notes sync: failed to launch CLI: \(error.localizedDescription)")
-            return
-        }
-        child = proc
-        // Two pipes, one thread: reading them SEQUENTIALLY can deadlock — if
-        // the child fills the ~64 KB stderr pipe buffer (a Node stack trace,
-        // deprecation spew) while we are still blocked draining stdout, the
-        // child stalls on its stderr write and never closes stdout, wedging
-        // this serial queue (and every future tick) forever. Collect stderr
-        // concurrently on the pipe's callback queue; drain stdout here.
-        let errBuffer = PipeBuffer()
-        let errDone = DispatchSemaphore(value: 0)
-        err.fileHandleForReading.readabilityHandler = { @Sendable handle in
-            let chunk = handle.availableData
-            if chunk.isEmpty { // EOF
-                handle.readabilityHandler = nil
-                errDone.signal()
-                return
-            }
-            errBuffer.append(chunk)
-        }
-        let outData = out.fileHandleForReading.readDataToEndOfFile()
-        proc.waitUntilExit()
-        // Bounded wait for the stderr EOF callback (imminent once the child
-        // exited — Process closed our copy of the write end at launch); a
-        // timeout can only truncate an error message, never wedge the queue.
-        _ = errDone.wait(timeout: .now() + 10)
-        err.fileHandleForReading.readabilityHandler = nil
-        let errData = errBuffer.bytes
-        child = nil
-
-        let summary = (try? JSONSerialization.jsonObject(with: outData)) as? [String: Any]
-        if let summary, (summary["skipped"] as? Bool) == true {
-            return // another runner (the daemon) is already syncing this store
-        }
-        if proc.terminationStatus != 0 {
-            let message = String(data: errData, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            NSLog("Hasna Notes sync: CLI exited \(proc.terminationStatus) \(message)")
-        } else if let summary {
-            let pulled = summary["pulled"] as? [String: Any]
-            let total = ["created", "updated", "purged"]
-                .compactMap { (pulled?[$0] as? NSNumber)?.intValue }
-                .reduce(0, +)
-            NSLog("Hasna Notes sync: ok (pulled \(total) change(s))")
-        }
-        // Refresh the UI after success AND failure: pulled rows must appear,
-        // and the Settings sync row must reflect what sync-status.json now
-        // records (an auth failure must surface, never stay a stale green).
-        onDidSync()
-    }
-}
-
 // MARK: - JSON helpers
 
 /// Encode a Swift value graph (dictionaries/arrays/strings/numbers) into a compact
@@ -514,85 +310,6 @@ private func noteJSON(_ note: Note) -> [String: Any] {
     ]
 }
 
-private func machineAliases(_ machine: FleetMachine, fallbackID: String? = nil) -> Set<String> {
-    var aliases = Set<String>()
-    let id = fallbackID ?? machine.id
-    if !id.isEmpty { aliases.insert(id) }
-    if !machine.id.isEmpty { aliases.insert(machine.id) }
-    if let slug = machine.slug, !slug.isEmpty { aliases.insert(slug) }
-    return aliases
-}
-
-private func machineJSON(_ machine: FleetMachine, notes: [Note], fallbackID: String? = nil) -> [String: Any] {
-    let id = fallbackID ?? machine.id
-    let aliases = machineAliases(machine, fallbackID: fallbackID)
-    let machineNotes = notes.filter { aliases.contains($0.machine) }
-    let activeNotes = machineNotes.filter { $0.status != .archived && $0.status != .trash }
-    let latestNoteDate = machineNotes
-        .map(\.updatedAt)
-        .max()
-    let updatedAt = machine.updatedAt ?? latestNoteDate
-    let recentActivityAt = [machine.recentActivityAt, machine.lastSeenAt, updatedAt, latestNoteDate]
-        .compactMap { $0 }
-        .max()
-    var obj: [String: Any] = [
-        "id": id,
-        "slug": machine.slug ?? id,
-        "displayName": machine.displayName,
-        "platform": machine.platform,
-        "status": machine.status ?? (machine.online == true ? "online" : (machine.online == false ? "offline" : "unknown")),
-        "noteCount": activeNotes.count,
-        "activeNoteCount": activeNotes.count,
-        "archivedNoteCount": machineNotes.filter { $0.status == .archived }.count,
-        "trashNoteCount": machineNotes.filter { $0.status == .trash }.count,
-        "totalNoteCount": machineNotes.count,
-    ]
-    if let friendlyName = machine.friendlyName, !friendlyName.isEmpty {
-        obj["friendlyName"] = friendlyName
-    }
-    if let online = machine.online {
-        obj["online"] = online
-    }
-    if let updatedAt {
-        obj["updatedAt"] = MarkdownStore.iso8601(updatedAt)
-    }
-    if let latestNoteDate {
-        obj["latestNoteUpdatedAt"] = MarkdownStore.iso8601(latestNoteDate)
-    }
-    if let lastSeenAt = machine.lastSeenAt {
-        obj["lastSeenAt"] = MarkdownStore.iso8601(lastSeenAt)
-    }
-    if let recentActivityAt {
-        obj["recentActivityAt"] = MarkdownStore.iso8601(recentActivityAt)
-    }
-    return obj
-}
-
-// MARK: - Machine manifest cache
-
-/// Process-wide cache in front of `FleetManifest.load` (a plain read of
-/// `~/.hasna/machines/machines.json` — friendly names/slugs for machine rows).
-/// `bootJSON()` runs after EVERY autosave, so the file is re-read at most once per TTL.
-/// No manifest file just means machine rows come purely from note frontmatter.
-/// `@unchecked Sendable`: all state is guarded by `lock`.
-final class ManifestCache: @unchecked Sendable {
-    static let shared = ManifestCache()
-    private let lock = NSLock()
-    private var machines: [FleetMachine]?
-    private var loadedAt = Date.distantPast
-    private let ttl: TimeInterval = 60
-
-    func fleet() -> [FleetMachine] {
-        lock.lock()
-        defer { lock.unlock() }
-        if let machines, Date().timeIntervalSince(loadedAt) < ttl { return machines }
-        let parsed = FleetManifest.load()
-        machines = parsed
-        loadedAt = Date()
-        return parsed
-    }
-}
-
 // MARK: - Notes bridge
 
 /// Owns the on-disk store and the boot/hydrate/save/delete round-trip. Kept separate
@@ -600,7 +317,7 @@ final class ManifestCache: @unchecked Sendable {
 /// stays clean.
 /// `@unchecked Sendable`: every stored property is an immutable value (the stores are
 /// stateless wrappers over the on-disk files); mutations are serialized by the app
-/// delegate's `notesQueue`, and the manifest cache carries its own lock.
+/// delegate's `notesQueue`.
 final class NotesBridge: @unchecked Sendable {
     let store = MarkdownStore()
     let labelStore: LabelStore
@@ -612,11 +329,9 @@ final class NotesBridge: @unchecked Sendable {
         self.labelStore = LabelStore(root: store.rootURL)
         self.settingsStore = SettingsStore(root: store.rootURL)
         self.noteCreatedEvents = NoteCreatedEventSpool(root: store.rootURL)
-        // The BOOT payload's `thisMachine` and every new note's `machine:` field
-        // share ONE stable identity — `Note.currentMachine` ($HASNA_NOTES_MACHINE
-        // → sync client config `machine` → short hostname). The old cosmetic
-        // Computer Name fabricated phantom machine rows that never matched
-        // manifest slugs.
+        // Every new note's `machine:` field uses ONE stable identity —
+        // `Note.currentMachine` ($HASNA_NOTES_MACHINE → configured identity
+        // → short hostname). Informational attribution only.
         self.thisMachine = Note.currentMachine
     }
 
@@ -626,73 +341,13 @@ final class NotesBridge: @unchecked Sendable {
         (try? store.loadAll()) ?? []
     }
 
-    /// Build the machine list: manifest first, then any machine ids seen in notes
-    /// (so a note from a machine missing from the manifest still gets a row), then
-    /// guarantee `thisMachine` is present.
-    func machinePayloads(notes: [Note]) -> [[String: Any]] {
-        var machinesByID: [String: FleetMachine] = [:]
-        var aliases = Set<String>()
-        let manifest = ManifestCache.shared.fleet()
-        for m in manifest {
-            machinesByID[m.id] = m
-            aliases.formUnion(machineAliases(m))
-        }
-        // Machines fabricated from note frontmatter (not in the manifest) carry
-        // platform "unknown" — hardcoding "macos" invented facts for rows the
-        // manifest never described (synced Linux notes included).
-        for n in notes where !n.machine.isEmpty && !aliases.contains(n.machine) && machinesByID[n.machine] == nil {
-            machinesByID[n.machine] = FleetMachine(id: n.machine, platform: "unknown")
-            aliases.insert(n.machine)
-        }
-        // This machine's own row IS known to be macOS (the shell only runs there).
-        if !thisMachine.isEmpty && !aliases.contains(thisMachine) && machinesByID[thisMachine] == nil {
-            machinesByID[thisMachine] = FleetMachine(id: thisMachine, platform: "macos")
-        }
-        return machinesByID.values
-            .sorted { a, b in
-                let lhsAliases = machineAliases(a)
-                let rhsAliases = machineAliases(b)
-                let lhs = (a.recentActivityAt ?? a.lastSeenAt ?? a.updatedAt ?? notes.filter { note in lhsAliases.contains(note.machine) }.map(\.updatedAt).max()) ?? .distantPast
-                let rhs = (b.recentActivityAt ?? b.lastSeenAt ?? b.updatedAt ?? notes.filter { note in rhsAliases.contains(note.machine) }.map(\.updatedAt).max()) ?? .distantPast
-                if lhs != rhs { return lhs > rhs }
-                return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
-            }
-            .map { machineJSON($0, notes: notes) }
-    }
-
-    func machineDetails(id rawID: String) -> [String: Any] {
-        let id = rawID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let notes = loadNotes()
-        let machines = machinePayloads(notes: notes)
-        if let match = machines.first(where: { ($0["id"] as? String) == id || ($0["slug"] as? String) == id }) {
-            return match
-        }
-        return machineJSON(FleetMachine(id: id, platform: "unknown"), notes: notes)
-    }
-
-    /// Last sync outcome, written by the CLI/daemon/GUI timer to
-    /// `<root>/sync-status.json` (see sync/daemon.mjs). Missing or unreadable
-    /// means never synced. Passed through verbatim so the web Settings row can
-    /// render it honestly — an `error` status must never display as synced.
-    func syncStatusJSON() -> [String: Any] {
-        let url = store.rootURL.appendingPathComponent("sync-status.json")
-        guard let data = try? Data(contentsOf: url),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return ["status": "never"]
-        }
-        return obj
-    }
-
-    /// The `{notes, machines, thisMachine}` boot payload as a JSON string.
+    /// The `{notes, labels, settings}` boot payload as a JSON string.
     func bootJSON() -> String {
         let notes = loadNotes()
         let payload: [String: Any] = [
             "notes": notes.map(noteJSON),
-            "machines": machinePayloads(notes: notes),
             "labels": labelStore.load(),
-            "thisMachine": thisMachine,
             "settings": ["trashRetentionDays": settingsStore.load().trashRetentionDays],
-            "sync": syncStatusJSON(),
             "listDefaults": ["limit": 10],
         ]
         return jsonString(payload)
@@ -703,7 +358,7 @@ final class NotesBridge: @unchecked Sendable {
     /// Build a `Note` from a JS message payload. New notes (create) get a fresh UUID,
     /// `machine = thisMachine`, and `agent = Note.appAgent`. Saves preserve the id and
     /// (for existing notes) the original createdAt/machine on disk.
-    private func note(from dict: [String: Any], isCreate: Bool, allowMachineChange: Bool = false) -> Note {
+    private func note(from dict: [String: Any], isCreate: Bool) -> Note {
         let id = (dict["id"] as? String).flatMap { UUID(uuidString: $0) } ?? UUID()
         let title = (dict["title"] as? String) ?? ""
         let body = (dict["body"] as? String) ?? ""
@@ -716,8 +371,7 @@ final class NotesBridge: @unchecked Sendable {
             ?? (titleSource == .manual && !Note.isDefaultTitle(title))
         let titleContentFingerprint = (dict["titleContentFingerprint"] as? String) ?? ""
 
-        // Preserve the existing on-disk createdAt + machine when saving an existing note,
-        // except for the explicit move-to-machine action.
+        // Preserve the existing on-disk createdAt + machine when saving an existing note.
         let existing: Note? = isCreate ? nil : loadNotes().first(where: { $0.id == id })
         let createdAt = existing?.createdAt
             ?? (dict["createdAt"] as? String).flatMap(MarkdownStore.parseDate)
@@ -728,12 +382,13 @@ final class NotesBridge: @unchecked Sendable {
         // echo — including stale echoes of earlier queued saves — and stomped
         // keystrokes still in flight. Callers that send no stamp keep the old behavior.
         let updatedAt = (dict["updatedAt"] as? String).flatMap(MarkdownStore.parseDate) ?? Date()
-        let machine = allowMachineChange
-            ? ((dict["machine"] as? String) ?? existing?.machine ?? thisMachine)
-            : (existing?.machine ?? (dict["machine"] as? String) ?? thisMachine)
-        let machineFriendlyName = allowMachineChange
-            ? ((dict["machineFriendlyName"] as? String) ?? existing?.machineFriendlyName ?? "")
-            : (existing?.machineFriendlyName ?? (dict["machineFriendlyName"] as? String) ?? "")
+        // Empty string counts as absent: the web layer no longer knows the
+        // machine identity (the machine surface was removed), so attribution
+        // falls back to this machine's stable identity here in the host.
+        let machine = existing?.machine
+            ?? (dict["machine"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            ?? thisMachine
+        let machineFriendlyName = existing?.machineFriendlyName ?? (dict["machineFriendlyName"] as? String) ?? "" 
         let author = (dict["author"] as? String) ?? existing?.author ?? Note.currentAuthor
         let agent = (dict["agent"] as? String) ?? existing?.agent ?? Note.appAgent
         // `rev` is advisory here: MarkdownStore.save bumps past the on-disk value.
@@ -808,27 +463,6 @@ final class NotesBridge: @unchecked Sendable {
         } catch {
             NSLog("Hasna Notes: note.created reconciliation pending")
         }
-    }
-
-    @discardableResult
-    func move(_ dict: [String: Any]) -> Bool {
-        guard let idStr = dict["id"] as? String,
-              let id = UUID(uuidString: idStr),
-              var existing = loadNotes().first(where: { $0.id == id }) else { return false }
-        let target = (dict["machine"] as? String) ?? (dict["targetMachine"] as? String) ?? ""
-        guard !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-        let changed = existing.machine != target
-        existing.machine = target
-        // Attribution only (schema v2): a stale friendly name must not describe the
-        // old machine, so it is replaced or cleared alongside `machine`.
-        let friendlyName = (dict["machineFriendlyName"] as? String)
-            ?? (dict["targetMachineFriendlyName"] as? String) ?? ""
-        existing.machineFriendlyName = friendlyName.isEmpty
-            ? (changed ? "" : existing.machineFriendlyName)
-            : friendlyName
-        existing.updatedAt = Date()
-        do { try store.save(existing); return true }
-        catch { NSLog("Hasna Notes: move failed: \(error.localizedDescription)"); return false }
     }
 
     @discardableResult
@@ -1010,9 +644,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private var dragStrip: WindowDragStrip?
     let bridge = NotesBridge()
     let sidecar = AISidecar()
-    /// Background sync timer (bundled CLI, same engine as the daemon). Created
-    /// at launch; nil until then.
-    private var syncScheduler: SyncScheduler?
     /// Serial queue for note mutations + the follow-up bootJSON rebuild. Script messages
     /// arrive on the main thread; running the disk-heavy save/boot work there froze
     /// typing (2 full store scans + manifest per autosave). The queue keeps saves ordered
@@ -1067,34 +698,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         notesQueue.async {
             startupBridge.reconcileNoteCreatedEvents()
         }
-
-        // Background sync: keeps the store fresh while the app is open by
-        // running the bundled CLI sync on a timer (never on the main thread).
-        // Sync does not require the GUI — the `notes sync --watch`
-        // service is the primary scheduler; the store-level run lock keeps the
-        // two from double-running. No-ops when the CLI is not signed in.
-        //
-        // After each run: rebuild the boot payload off-main and push it into
-        // the page — the exact hydrate path every note mutation uses — so
-        // pulled notes appear and the Settings sync row reflects the recorded
-        // sync-status.json (success AND failure; errors must stay visible).
-        // `bridge`/`notesQueue` are bound locally so the scheduler's closure
-        // touches `self` only inside the main-thread hop, mirroring the
-        // mutation path above.
-        let syncBridge = bridge
-        let syncNotesQueue = notesQueue
-        let scheduler = SyncScheduler { [weak self] in
-            syncNotesQueue.async { [weak self] in
-                let fresh = syncBridge.bootJSON()
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, let web = self.web else { return }
-                    self.installUserScripts(into: web.configuration.userContentController, boot: fresh)
-                    web.evaluateJavaScript("window.Hasna Notes && window.Hasna Notes.hydrate(\(fresh))", completionHandler: nil)
-                }
-            }
-        }
-        syncScheduler = scheduler
-        scheduler.start()
 
         let frame = NSRect(x: 0, y: 0, width: 1280, height: 820)
         window = NSWindow(
@@ -1300,23 +903,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         }
 
         guard message.name == notesHandlerName else { return }
-        if action == "machineDetails" {
-            let machineID = (payload["machine"] as? String) ?? (payload["id"] as? String) ?? bridge.thisMachine
-            let requestID = (payload["requestId"] as? String) ?? ""
-            let bridge = self.bridge
-            // machineDetails re-scans the whole store; compute off-main on the serial
-            // notes queue (keeps ordering with mutations), hop back only to deliver.
-            notesQueue.async { [weak self] in
-                let details = jsonString([
-                    "requestId": requestID,
-                    "machine": bridge.machineDetails(id: machineID),
-                ])
-                DispatchQueue.main.async { [weak self] in
-                    self?.web.evaluateJavaScript("window.Hasna Notes && window.Hasna Notes.machines && window.Hasna Notes.machines.receiveDetails(\(details))", completionHandler: nil)
-                }
-            }
-            return
-        }
         let noteDict = (payload["note"] as? [String: Any]) ?? [:]
         let destructiveConfirmed = (payload["confirmed"] as? Bool) == true || (noteDict["confirmed"] as? Bool) == true
 
@@ -1338,7 +924,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             switch action {
             case "create": changed = bridge.save(note.dict, isCreate: true)
             case "save":   changed = bridge.save(note.dict, isCreate: false)
-            case "move":   changed = bridge.move(note.dict)
             case "archive": changed = bridge.archive(note.dict)
             case "trash":
                 guard allowDestructive(action) else { return }
@@ -1491,7 +1076,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     // WKWebView renders NO UI for window.alert/confirm/prompt — without these handlers
     // confirm() silently resolves false and prompt() returns null, so every
     // confirm-gated destructive action in the web layer (note delete, label delete,
-    // expired-trash cleanup) and the prompt-driven machine move would no-op.
+    // expired-trash cleanup) would no-op.
     // Each dialog runs as a sheet on the web view's window, never app-modal. The same
     // web view serves compact/quick-note mode, so both modes are covered.
 
@@ -1558,9 +1143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         notesQueue.sync { }
         // Remove the menu-bar status item (and its ticker) so it never outlives the app.
         hideStatusItem()
-        // Stop the sync timer (an in-flight CLI run finishes on its own — see
-        // SyncScheduler.stop) and the AI sidecar child.
-        syncScheduler?.stop()
+        // Stop the AI sidecar child.
         sidecar.stop()
         // Remove the message handlers so the proxies (and thus the controller→delegate
         // edge) are released cleanly. Belt-and-suspenders alongside the weak proxy.

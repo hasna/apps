@@ -11,9 +11,7 @@
   "exports": {
     ".": "./tools/notes-lib.mjs",
     "./sdk": "./sdk/index.mjs",
-    "./events": "./tools/notes-events.mjs",
-    "./sync": "./sync/index.mjs",
-    "./cloud": "./cloud/index.mjs"
+    "./events": "./tools/notes-events.mjs"
   },
   "files": [
     "bin",
@@ -23,8 +21,6 @@
     "scripts/apply-postgres-migrations.mjs",
     "scripts/pg-test-gate.mjs",
     "src/generated",
-    "sync",
-    "cloud/index.mjs",
     "mcp/notes-mcp.mjs",
     "server/index.mjs",
     "server/app.mjs",

@@ -17,7 +17,7 @@ import {
   listApiKeys, pollDeviceAuth, resolveSigningSecret, revokeSession, startDeviceAuth, startOtpLogin,
   validateApiKey, validateSession, verifyOtp,
 } from './auth.mjs';
-import { createNote, deleteNote, exportNotes, getNote, listNotes, syncNotes, updateNote } from './notes.mjs';
+import { createNote, deleteNote, exportNotes, getNote, listNotes, updateNote } from './notes.mjs';
 
 export const VERSION = '0.1.0';
 export const SERVICE = 'notes-server';
@@ -284,12 +284,6 @@ export async function createApp({ db, config }) {
   app.delete('/api/v1/notes/:id', async (c) => {
     requireScope(c, 'notes_write');
     return c.json(await deleteNote(db, c.get('tenantId'), c.req.param('id'), c.get('actor')));
-  });
-
-  app.post('/api/v1/sync', async (c) => {
-    requireScope(c, 'notes_write');
-    rateLimit(c, 'sync', 120);
-    return c.json(await syncNotes(db, c.get('tenantId'), await jsonBody(c), c.req.header('idempotency-key'), c.get('actor')));
   });
 
   app.post('/api/v1/export', async (c) => {

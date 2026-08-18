@@ -10,7 +10,7 @@ describe("availability", () => {
   let orgId: string;
 
   beforeEach(() => {
-    resetDatabase();
+    resetDatabase(":memory:");
     getDatabase(":memory:");
     const org = createOrg({ name: "Test", slug: "test" });
     orgId = org.id;
@@ -18,7 +18,7 @@ describe("availability", () => {
     agentId = agent.id;
   });
 
-  afterEach(() => resetDatabase());
+  afterEach(() => resetDatabase(":memory:"));
 
   test("create availability", () => {
     const av = createAvailability({

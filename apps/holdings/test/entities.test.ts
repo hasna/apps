@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { makeDb, sysCtx } from "./helpers/harness.js";
-import { getEntityRef, listEntityRefs, seedEntity } from "../src/services/entities.js";
+import { assertValidEntityId, getEntityRef, listEntityRefs, seedEntity } from "../src/services/entities.js";
 
 describe("entities service (entity anchoring)", () => {
   it("seeds an entity with a generated UUIDv4 id", () => {
@@ -25,5 +25,12 @@ describe("entities service (entity anchoring)", () => {
     seedEntity(ctx, { name: "One" });
     seedEntity(ctx, { name: "Two" });
     expect(listEntityRefs(ctx).length).toBe(2);
+  });
+
+  it("accepts only UUIDv4 entity ids at the validation boundary", () => {
+    const v4 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    expect(assertValidEntityId(v4)).toBe(v4);
+    expect(() => assertValidEntityId("aaaaaaaa-aaaa-1aaa-8aaa-aaaaaaaaaaaa")).toThrow(/UUIDv4/);
+    expect(() => assertValidEntityId("not-an-id")).toThrow(/UUIDv4/);
   });
 });

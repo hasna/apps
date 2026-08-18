@@ -10,7 +10,10 @@ import { requireEntity, type ServiceContext } from "./runtime.js";
 // is @hasna/entities via entity_get; locally we keep a seeded cache. entity_id
 // values are unguessable UUIDv4 (generated when not supplied).
 
-const uuidV4 = z.string().uuid();
+const uuidV4 = z.string().regex(
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  "entity_id must be a UUIDv4",
+);
 
 const seedSchema = z.object({
   entity_id: uuidV4.optional(),

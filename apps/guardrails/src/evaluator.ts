@@ -36,11 +36,11 @@ type PolicyMatch = {
 };
 
 const DESTRUCTIVE_COMMAND_PATTERNS = [
-  /\brm\b(?=[^\n\r;&|]*\s-[^\n\r;&|]*[rR])(?=[^\n\r;&|]*\s-[^\n\r;&|]*[fF])/,
+  /\brm\b(?=[^\n\r;&|]*\s-[^\s]*[rR])(?=[^\n\r;&|]*\s-[^\s]*[fF])/,
   /\bmkfs(?:\.[\w-]+)?\b/,
   /\bdd\s+.*\bof=\/dev\//,
   /\bgit\s+reset\s+--hard\b/,
-  /\bgit\s+clean\b(?=[^\n\r;&|]*\s-[^\n\r;&|]*[fF])(?=[^\n\r;&|]*\s-[^\n\r;&|]*[dDxX])/,
+  /\bgit\s+clean\b(?=[^\n\r;&|]*\s-[^\s]*[fF])(?=[^\n\r;&|]*\s-[^\s]*[dDxX])/,
   /\b(?:shutdown|reboot|halt|poweroff)\b/,
   /\b(?:killall|pkill)\b/,
   /:\s*\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/,

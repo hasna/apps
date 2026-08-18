@@ -179,7 +179,7 @@ do {
         stale.rev = 1
         try store.save(stale)
         check(try store.loadAll().first?.rev == 4, "stale rev still bumps past on-disk rev")
-        // Sync-applied writes preserve the server-assigned rev.
+        // Server-applied writes preserve the server-assigned rev.
         var synced = secondEdit
         synced.rev = 9
         try store.save(synced, preserveRev: true)
@@ -457,29 +457,6 @@ do {
         let runs = RichTextMarkdown.parseInline("a **b** c *d*")
         check(runs.contains(where: { $0.text == "b" && $0.bold }), "bold run detected")
         check(runs.contains(where: { $0.text == "d" && $0.italic }), "italic run detected")
-    }
-
-    print("== machine manifest parsing ==")
-    do {
-        let json = """
-        {"machines":[
-          {"id":"m1","slug":"studio","platform":"macos","friendlyName":"Studio","online":true,"status":"online","lastSeenAt":"2026-06-20T10:00:00Z"},
-          {"id":"m2","platform":"linux"},
-          {"name":"m3"}
-        ]}
-        """
-        let machines = FleetManifest.parse(jsonData: Data(json.utf8))
-        check(machines.count == 3, "three machines parsed")
-        check(machines[0].slug == "studio", "slug parsed")
-        check(machines[0].friendlyName == "Studio", "friendlyName parsed")
-        check(machines[0].displayName == "Studio", "displayName prefers friendlyName")
-        check(machines[0].online == true && machines[0].status == "online", "online/status parsed")
-        check(machines[0].lastSeenAt != nil, "activity timestamp parsed")
-        check(machines[1].platform == "linux", "platform parsed")
-        check(machines[2].id == "m3", "name alias honored")
-        check(FleetManifest.parse(jsonData: Data("{}".utf8)).isEmpty, "empty manifest parses to []")
-        check(FleetManifest.load(manifestURL: tempRoot.appendingPathComponent("missing-machines.json")).isEmpty,
-              "missing manifest file loads as []")
     }
 
     print("== FolderStore persists folder list ==")

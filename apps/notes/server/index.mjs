@@ -14,7 +14,6 @@
 //        HASNA_NOTES_DATABASE_URL (selects the postgresql backend),
 //        HASNA_NOTES_API_SIGNING_KEY (postgresql backend api-key auth;
 //        fallbacks API_KEY_SIGNING_SECRET, HASNA_API_SIGNING_KEY)
-//        (legacy pre-rename server env names still honored one release)
 
 import { openStorage } from './storage.mjs';
 import { createApp, resolveConfig, SERVICE, VERSION } from './app.mjs';

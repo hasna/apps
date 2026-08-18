@@ -12,7 +12,7 @@ describe("events", () => {
   let calendarId: string;
 
   beforeEach(() => {
-    resetDatabase();
+    resetDatabase(":memory:");
     getDatabase(":memory:");
     const org = createOrg({ name: "Test", slug: "test" });
     orgId = org.id;
@@ -20,7 +20,7 @@ describe("events", () => {
     calendarId = cal.id;
   });
 
-  afterEach(() => resetDatabase());
+  afterEach(() => resetDatabase(":memory:"));
 
   test("create and get event", () => {
     const evt = createEvent({

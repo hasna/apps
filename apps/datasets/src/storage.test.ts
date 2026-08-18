@@ -13,6 +13,7 @@ import {
   listProjections,
   listSources,
   previewDataset,
+  slugify,
   storageStatus,
 } from "./storage.js";
 
@@ -122,5 +123,52 @@ describe("open-datasets storage", () => {
     expect(listProjections(dataset.id)).toHaveLength(1);
     expect(getDataset(dataset.slug, "swiss-bank-account")?.id).toBe(dataset.id);
     expect(storageStatus()).toMatchObject({ sources: 0, datasets: 1, records: 1, exists: true });
+  });
+
+  test("filters, sorts, paginates, and selects columns in one bounded preview", () => {
+    ingestDataset({
+      name: "Scores",
+      projectId: "alpha",
+      classification: "public",
+      rows: [
+        { id: "one", status: "ready", score: 2 },
+        { id: "two", status: "review", score: 10 },
+        { id: "three", status: "review", score: 1 },
+      ],
+    });
+
+    const preview = previewDataset("scores", {
+      filters: { status: "review" },
+      sort: [{ column: "score", direction: "desc" }],
+      offset: 1,
+      limit: 1,
+      columns: ["id", "score"],
+      redact: false,
+    }, "alpha");
+
+    expect(preview.rows).toEqual([{ id: "three", score: 1 }]);
+    expect(preview.columns).toEqual(["id", "score"]);
+    expect(preview.total).toBe(2);
+    expect(preview.truncated).toBe(false);
+  });
+
+  test("marks an offset preview truncated against the full dataset", () => {
+    ingestDataset({
+      name: "Rows",
+      projectId: "alpha",
+      classification: "public",
+      rows: [{ id: "one" }, { id: "two" }, { id: "three" }],
+    });
+
+    const preview = previewDataset("rows", { offset: 1, limit: 1, redact: false }, "alpha");
+
+    expect(preview.rows).toEqual([{ id: "two" }]);
+    expect(preview.total).toBe(3);
+    expect(preview.truncated).toBe(true);
+  });
+
+  test("slugifies empty and punctuation-only names to a stable fallback", () => {
+    expect(slugify(" A/B  C ")).toBe("a-b-c");
+    expect(slugify("!!!")).toBe("dataset");
   });
 });

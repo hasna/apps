@@ -10,7 +10,7 @@ describe("memberships", () => {
   let agentId: string;
 
   beforeEach(() => {
-    resetDatabase();
+    resetDatabase(":memory:");
     getDatabase(":memory:");
     const org = createOrg({ name: "Test", slug: "test" });
     orgId = org.id;
@@ -18,7 +18,7 @@ describe("memberships", () => {
     agentId = agent.id;
   });
 
-  afterEach(() => resetDatabase());
+  afterEach(() => resetDatabase(":memory:"));
 
   test("create membership", () => {
     const m = createMembership({ org_id: orgId, agent_id: agentId });

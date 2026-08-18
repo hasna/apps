@@ -4,7 +4,7 @@
 // style. Data arrives one of two ways:
 //
 //   1. Native macOS host (WKWebView): the Swift shell injects `window.__BOOT__` at
-//      document-start (notes + machines + this machine's id) read from the on-disk
+//      document-start (notes + labels + settings) read from the on-disk
 //      Markdown store, and later calls `window.HasnaNotes.hydrate(boot)` after any
 //      save/create/delete so the UI re-renders from fresh data. Writes are sent back
 //      to Swift via `window.webkit.messageHandlers.notes.postMessage({action,note})`.
@@ -25,10 +25,7 @@
   const state = {
     notes: [],            // [{id,title,body,labels,status,folder,machine,updatedAt,createdAt}]
     labels: [],           // persisted labels from labels.json; note labels are still source for counts
-    machines: [],         // [{id}]
-    thisMachine: 'unknown',
     selectedId: null,     // currently-open note id (or null = empty state)
-    machineFilter: ALL,   // ALL or a machine id
     labelFilter: ALL,     // ALL or a label name (UI-only forward-compatible filter)
     screen: 'home',       // 'home' | 'chat' | 'notes' | 'noteslist' | 'settings' | 'compact'
     settingsReturnScreen: 'home', // screen to restore when leaving Settings via "Back to app"
@@ -36,7 +33,6 @@
     noteListLimit: 10,    // sidebar Notes list (contract: latest 10); "View more" opens the full Notes page
     recentLimit: 3,       // Home recent rows — kept deliberately light (no inline expand)
     settings: { trashRetentionDays: 30 },
-    sync: null,           // last sync outcome from the host boot payload (sync-status.json)
     chat: {
       id: 'chat-local',
       status: 'ready',
@@ -51,8 +47,6 @@
 
   // Sidebar section collapse state (Notes / Labels) — session-only UI state.
   const collapsedSections = { notes: false, labels: false };
-  // Machines dropdown open state (top of the sidebar).
-  let machinesMenuOpen = false;
   // Chat chrome is session-only: the conversation state remains the source of truth,
   // while these flags only control its view and inspector panel.
   let chatPanelOpen = true;
@@ -66,7 +60,6 @@
   const titleManuallyEdited = Object.create(null);
   // Per-note auto-title state so we only fire once per default-titled note.
   const autoTitled = Object.create(null);
-  const machineDetailWaiters = Object.create(null);
 
   const native = () =>
     !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.notes);
@@ -163,12 +156,10 @@
     return out;
   }
 
-  function defaultProvenance(machine) {
-    const m = machine || state.thisMachine || 'unknown';
-    const row = machineById(m);
+  function defaultProvenance() {
     return {
       rev: 1,
-      machineFriendlyName: (row && row.friendlyName) || '',
+      machineFriendlyName: '',
       createdByActorType: 'human',
       createdByName: '',
       archivedAt: '',
@@ -456,7 +447,6 @@
 	  // Notes after machine-filter + label-filter + status-filter, newest first. The list the user sees.
 	  function visibleNotes() {
 	    return sortNotes(state.notes.filter(n => {
-	      if (state.machineFilter !== ALL && !noteMatchesMachine(n, state.machineFilter)) return false;
 	      if (state.labelFilter !== ALL && noteLabels(n).indexOf(state.labelFilter) < 0) return false;
       if (state.statusFilter === 'active' && (n.status === 'archived' || n.status === 'trash')) return false;
       if (state.statusFilter === 'archived' && n.status !== 'archived') return false;
@@ -477,226 +467,6 @@
 
 	  function noteById(id) { return state.notes.find(n => n.id === id) || null; }
 
-	  function noteMatchesMachine(note, machineId) {
-	    if (!note || machineId === ALL) return true;
-	    return machineAliases(machineId).has(note.machine);
-	  }
-
-  function latestISO(values) {
-    let latest = '';
-    values.forEach(value => {
-      const time = Date.parse(value || 0);
-      if (!Number.isNaN(time) && (!latest || time > Date.parse(latest))) latest = new Date(time).toISOString();
-    });
-    return latest;
-  }
-
-	  function machineAliases(machineOrId) {
-	    const m = typeof machineOrId === 'string' ? machineById(machineOrId) : machineOrId;
-	    return new Set([
-	      typeof machineOrId === 'string' ? machineOrId : '',
-	      m && m.id,
-	      m && m.slug,
-	      m && m.friendlyName,
-	      m && m.displayName,
-	    ].filter(Boolean).map(String));
-	  }
-
-  // The user-facing machine attribution for a note (vision MUST: every note
-  // shows which machine it belongs to). The note's own frontmatter friendly
-  // name wins; otherwise the machines list (manifest/host-supplied friendly
-  // names) resolves the slug; the raw slug is the last resort.
-  function machineLabelFor(note) {
-    if (!note) return '';
-    if (note.machineFriendlyName) return note.machineFriendlyName;
-    const row = machineById(note.machine);
-    if (row && (row.friendlyName || row.displayName)) return row.friendlyName || row.displayName;
-    return note.machine || '';
-  }
-
-  function machineNoteCounts(machineOrId) {
-    const aliases = machineAliases(machineOrId);
-    const notes = state.notes.filter(n => aliases.has(n.machine));
-    const active = notes.filter(n => n.status !== 'trash' && n.status !== 'archived');
-    return {
-      noteCount: active.length,
-      activeNoteCount: active.length,
-      archivedNoteCount: notes.filter(n => n.status === 'archived').length,
-      trashNoteCount: notes.filter(n => n.status === 'trash').length,
-      totalNoteCount: notes.length,
-      latestNoteUpdatedAt: latestISO(notes.map(n => n.updatedAt)),
-    };
-  }
-
-	  function machineById(id) {
-	    const needle = String(id || '');
-	    return state.machines.find(m =>
-	      m.id === needle ||
-	      m.slug === needle ||
-	      m.friendlyName === needle ||
-	      m.displayName === needle
-	    ) || null;
-	  }
-
-  function machineDetails(id) {
-    const machineId = String(id || '').trim();
-    const source = machineById(machineId) || { id: machineId, slug: machineId, displayName: machineId };
-    const counts = machineNoteCounts(source);
-    // Sync facts are never fabricated: `syncedAt`/`capabilities` pass through
-    // from the host/manifest row, and THIS machine's row is overlaid from the
-    // boot `sync` object (the S1 client state) — a configured sync client is
-    // the "notes-sync" capability, its last good run is `syncedAt`.
-    let syncedAt = source.syncedAt || '';
-    let capabilities = Array.isArray(source.capabilities) ? source.capabilities.map(String).filter(Boolean) : [];
-    if (state.sync && state.sync.status && state.sync.status !== 'never'
-        && state.thisMachine && machineAliases(source).has(state.thisMachine)) {
-      syncedAt = latestISO([syncedAt, state.sync.lastSuccessAt]);
-      if (capabilities.indexOf('notes-sync') < 0) capabilities = capabilities.concat('notes-sync');
-    }
-    const recentActivityAt = latestISO([
-      source.recentActivityAt,
-      syncedAt,
-      source.lastSeenAt,
-      source.updatedAt,
-      counts.latestNoteUpdatedAt,
-    ]);
-    return Object.assign({}, source, counts, {
-      id: source.id || machineId,
-      slug: source.slug || source.id || machineId,
-      displayName: source.displayName || source.friendlyName || source.id || machineId,
-      friendlyName: source.friendlyName || '',
-      status: source.status || (source.online === true ? 'online' : (source.online === false ? 'offline' : 'unknown')),
-      online: source.online == null ? null : !!source.online,
-      syncedAt,
-      capabilities,
-      recentActivityAt,
-    });
-  }
-
-  function machineDetailsList() {
-    const ids = new Set(state.machines.map(m => m.id).filter(Boolean));
-    state.notes.forEach(n => {
-      if (!n.machine) return;
-      const existing = machineById(n.machine);
-      ids.add(existing ? existing.id : n.machine);
-    });
-    // THIS machine joins the list only when it has a real identity: the browser/dev
-    // fallback 'unknown' would otherwise fabricate a bogus "unknown" machine row on an
-    // empty boot (native hosts always inject a real id, so this guard is web-only).
-    if (state.thisMachine && state.thisMachine !== 'unknown') ids.add(machineDetails(state.thisMachine).id);
-    return [...ids].map(machineDetails).sort((a, b) => {
-      const d = Date.parse(b.recentActivityAt || b.updatedAt || 0) - Date.parse(a.recentActivityAt || a.updatedAt || 0);
-      if (d) return d;
-      return String(a.displayName).localeCompare(String(b.displayName));
-    });
-  }
-
-  function requestMachineDetails(id) {
-    const fallback = machineDetails(id);
-    const requestId = 'machine-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-    const promise = new Promise(resolve => {
-      machineDetailWaiters[requestId] = resolve;
-      setTimeout(() => {
-        if (!machineDetailWaiters[requestId]) return;
-        delete machineDetailWaiters[requestId];
-        resolve(fallback);
-      }, 1500);
-    });
-    window.dispatchEvent(new CustomEvent('hasna:machine-details-request', { detail: { requestId, machineId: fallback.id, machine: fallback } }));
-    if (native()) {
-      try { window.webkit.messageHandlers.notes.postMessage({ action: 'machineDetails', machine: fallback.id, requestId }); }
-      catch (e) { /* host gone */ }
-    } else {
-      setTimeout(() => receiveMachineDetails({ requestId, machine: fallback }), 0);
-    }
-    return promise;
-  }
-
-	  function receiveMachineDetails(payload) {
-    const p = payload || {};
-    const detail = normalizeMachine(p.machine || p);
-    const incomingAliases = machineAliases(detail);
-    const idx = state.machines.findIndex(m => {
-      const aliases = machineAliases(m);
-      return [...incomingAliases].some(alias => aliases.has(alias));
-    });
-    if (idx >= 0) state.machines[idx] = Object.assign({}, state.machines[idx], detail);
-    else if (detail.id) state.machines.push(detail);
-    const resolved = machineDetails(detail.id);
-    let canonicalizedSelection = false;
-    const resolvedAliases = machineAliases(resolved);
-    if (state.machineFilter !== ALL && resolvedAliases.has(state.machineFilter) && state.machineFilter !== resolved.id) {
-      state.machineFilter = resolved.id;
-      const selected = noteById(state.selectedId);
-      if (!selected || !noteMatchesMachine(selected, resolved.id)) {
-        const v = visibleNotes();
-        state.selectedId = v.length ? v[0].id : null;
-      }
-      canonicalizedSelection = true;
-    }
-    window.dispatchEvent(new CustomEvent('hasna:machine-details', { detail: { requestId: p.requestId || '', machineId: resolved.id, machine: resolved } }));
-    if (canonicalizedSelection) {
-      window.dispatchEvent(new CustomEvent('hasna:machine-select', {
-        detail: {
-          machineId: resolved.id,
-          machine: resolved,
-          selectedNoteId: state.selectedId,
-          reason: 'details',
-          view: viewSnapshot(),
-        },
-      }));
-    }
-    const waiter = p.requestId && machineDetailWaiters[p.requestId];
-    if (waiter) {
-      delete machineDetailWaiters[p.requestId];
-      waiter(resolved);
-    }
-	    if (canonicalizedSelection) render();
-	    else renderMachines();
-	    return resolved;
-	  }
-
-	  function selectMachine(machineId, opts) {
-	    const options = opts || {};
-	    commitEdit();
-	    closeMachinePop();
-	    const isAll = machineId === ALL;
-	    const detail = isAll ? null : machineDetails(machineId);
-	    const target = isAll ? ALL : (detail.id || String(machineId || '').trim());
-	    if (!isAll && !target) return null;
-
-	    state.machineFilter = target;
-	    state.statusFilter = options.statusFilter || 'active';
-	    state.labelFilter = ALL;
-	    state.noteListLimit = 10;
-	    state.screen = 'notes';
-	    showApp();
-
-	    const preferred = options.noteId ? noteById(options.noteId) : null;
-	    if (preferred && (isAll || noteMatchesMachine(preferred, target))) {
-	      state.selectedId = preferred.id;
-	    } else {
-	      const v = visibleNotes();
-	      state.selectedId = v.length ? v[0].id : null;
-	    }
-
-	    const selectedMachine = isAll ? null : machineDetails(target);
-	    window.dispatchEvent(new CustomEvent('hasna:machine-select', {
-	      detail: {
-	        machineId: target,
-	        machine: selectedMachine,
-	        selectedNoteId: state.selectedId,
-	        reason: options.reason || 'sidebar',
-	        view: viewSnapshot(),
-	      },
-	    }));
-	    // Filtering is purely local: after sync every machine's notes are local
-	    // files, so selecting a machine never round-trips the native bridge. The
-	    // machineDetails bridge remains for explicit details flows
-	    // (machines.requestDetails / Settings machine rows).
-	    render();
-	    return selectedMachine;
-	  }
 
 	  // ------------------------------------------------------------------ persistence bridge
   // Send a write to the native host (or, in-browser, just keep the in-memory model).
@@ -764,13 +534,11 @@
   function render() {
     renderLabels();
     renderNotesList();
-    renderMachines();
     renderContent();
     renderSettingsMeta();
     renderHome();
     renderNavActive();
     renderLabelsPage(); // Settings → Labels management list stays in sync
-    renderSyncStatus(); // Settings → Machines sync row follows every hydrate
     renderRecPill();    // recording indicator follows the active screen (hidden on Home)
     syncHeaderScrollEdge(); // header scroll-edge fade tracks the now-visible scroller
   }
@@ -1000,10 +768,6 @@
       : (state.statusFilter === 'archived' ? 'Archived' : 'Notes');
     if (countEl) {
       const bits = [list.length === 1 ? '1 note' : list.length + ' notes'];
-      if (state.machineFilter !== ALL) {
-        const m = machineById(state.machineFilter);
-        bits.push((m && m.displayName) || state.machineFilter);
-      }
       if (state.labelFilter !== ALL) bits.push(state.labelFilter);
       if (state.statusFilter !== 'active') bits.push(state.statusFilter);
       countEl.textContent = bits.join(' · ');
@@ -1020,11 +784,9 @@
       const body = (n.body || n.content || '').replace(/\s+/g, ' ').trim();
       row.appendChild(el('div', 'np-row-title', (n.title && n.title.trim()) || 'Untitled Note'));
       row.appendChild(el('div', 'np-row-sub', body.slice(0, 120) || 'No content'));
-      // Third row: machine + friendly relative time, kept compact and muted. Trash rows
+      // Third row: friendly relative time, kept compact and muted. Trash rows
       // add the retention countdown from trashExpiresAt.
       const meta = el('div', 'np-row-meta');
-      const machine = machineLabelFor(n).trim();
-      if (machine && machine !== 'unknown') meta.appendChild(el('span', 'np-row-machine', machine));
       const age = relTime(n.updatedAt);
       if (age) meta.appendChild(el('span', 'np-row-age', age));
       if (n.status === 'trash') {
@@ -1089,66 +851,6 @@
       actions.appendChild(delBtn);
     }
     return actions;
-  }
-
-  // ------------------------------------------------------------------ Machines page
-  // The fuller machines list lives under Settings → Machines (kept off the Home page).
-  function renderMachinesPage() {
-    const host = $('machines-page');
-    const emptyEl = $('machines-page-empty');
-    if (!host) return;
-    host.innerHTML = '';
-    const machines = machineDetailsList();
-    if (emptyEl) emptyEl.hidden = machines.length !== 0;
-    machines.forEach(m => {
-      const card = el('div', 'mp-row');
-      const left = el('div', 'mp-left');
-      const name = (m.displayName || m.id || 'Unknown machine').trim();
-      keyboardRow(card, 'Filter notes by machine: ' + name);
-      left.appendChild(el('div', 'mp-name', name));
-      const sub = [];
-      if (m.platform) sub.push(m.platform);
-      const seen = m.recentActivityAt || m.latestNoteUpdatedAt || m.updatedAt;
-      if (seen) sub.push('Active ' + relTime(seen));
-      left.appendChild(el('div', 'mp-sub', sub.join(' · ') || 'No recent activity'));
-      card.appendChild(left);
-      const count = Number(m.noteCount || 0);
-      card.appendChild(el('span', 'mp-count', count === 1 ? '1 note' : count + ' notes'));
-      // Clicking a machine filters the sidebar list to it and returns to the app.
-      card.addEventListener('click', () => { selectMachine(m.id, { reason: 'settings' }); showApp(); });
-      host.appendChild(card);
-    });
-  }
-
-  // ------------------------------------------------------------------ Sync status row
-  // Settings → Machines shows the last sync outcome (host boot payload `sync`,
-  // read from <data-root>/sync-status.json). Contract: an error status must
-  // NEVER render as the green synced state — auth failures stay visible.
-  function syncStatusLine(sync) {
-    if (!sync || sync.status === 'never' || (!sync.lastSyncAt && sync.status !== 'error')) {
-      return {
-        status: 'off',
-        text: 'Not syncing yet — sign in with "notes auth device", then "notes sync --install-service".',
-      };
-    }
-    let server = String(sync.apiUrl || '');
-    try { server = new URL(sync.apiUrl).host || server; } catch (err) { /* show raw value */ }
-    if (sync.status === 'error') {
-      const last = sync.lastSuccessAt ? ' Last success ' + relTime(sync.lastSuccessAt) + '.' : '';
-      return { status: 'error', text: 'Sync failing — ' + (sync.error || 'unknown error') + '.' + last };
-    }
-    return {
-      status: 'ok',
-      text: 'Synced ' + relTime(sync.lastSyncAt) + (server ? ' · ' + server : ''),
-    };
-  }
-
-  function renderSyncStatus() {
-    const row = $('sync-status-row');
-    if (!row) return;
-    const line = syncStatusLine(state.sync);
-    row.textContent = line.text;
-    row.className = 'sync-status sync-' + line.status;
   }
 
   // ------------------------------------------------------------------ Labels page
@@ -1277,7 +979,7 @@
     if (list.length === 0) {
       if (emptySide) {
         emptySide.hidden = false;
-        emptySide.textContent = state.machineFilter === ALL ? 'No notes' : 'No notes on this machine';
+        emptySide.textContent = 'No notes';
       }
       return;
     }
@@ -1310,71 +1012,6 @@
       more.addEventListener('click', showNotesPage);
       host.appendChild(more);
     }
-  }
-
-  // Machines dropdown (top of the sidebar): a compact filter. The button shows the
-  // current filter (friendly name); the menu lists "All Machines" + one row per machine
-  // (manifest ∪ machines seen in notes). Attribution is informational — no fleet UI.
-  function renderMachines() {
-    const host = $('machines-list');
-    if (!host) return;
-    const label = $('machines-dd-label');
-    if (label) {
-      label.textContent = state.machineFilter === ALL
-        ? 'All Machines'
-        : machineDetails(state.machineFilter).displayName;
-    }
-    const btn = $('machines-dd-btn');
-    if (btn) btn.classList.toggle('open', machinesMenuOpen);
-    host.hidden = !machinesMenuOpen;
-    host.innerHTML = '';
-
-    // "All Machines" row first, then one row per machine (friendly names, note counts).
-    host.appendChild(machineRow(ALL, 'All Machines', state.notes.filter(n => n.status !== 'trash' && n.status !== 'archived').length, true));
-    machineDetailsList().forEach(m => host.appendChild(machineRow(m.id, m.displayName, m.noteCount, false, m)));
-  }
-
-  function setMachinesMenu(open) {
-    machinesMenuOpen = !!open;
-    renderMachines();
-  }
-
-  function machineRow(id, label, count, isAll, machine) {
-    const row = el('div', 'machine-row');
-    row.dataset.machine = id;
-    keyboardRow(row, 'Filter notes by machine: ' + label);
-    if (machine && machine.updatedAt) row.dataset.updatedAt = machine.updatedAt;
-    if (machine && machine.status) row.dataset.status = machine.status;
-    if (machine && machine.online != null) row.dataset.online = String(!!machine.online);
-    if (machine && machine.friendlyName) row.dataset.friendlyName = machine.friendlyName;
-    if (state.machineFilter === id) row.classList.add('active');
-
-    const left = el('div', 'mr-left');
-    const ico = document.createElement('span');
-    ico.className = 'mr-ico';
-    // "All": layered-stack glyph. Single machine: a small desktop/monitor glyph.
-    ico.innerHTML = isAll
-      ? '<svg viewBox="0 0 16 16" fill="none"><path d="M2.5 5.5L8 2.5l5.5 3L8 8.5 2.5 5.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M2.5 8.5L8 11.5l5.5-3" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>'
-      : '<svg viewBox="0 0 16 16" fill="none"><rect x="2.2" y="3" width="11.6" height="8" rx="1.4" stroke="currentColor" stroke-width="1.2"/><path d="M6 13.3h4M8 11v2.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>';
-    left.appendChild(ico);
-    left.appendChild(el('span', 'mr-name', label));
-    row.appendChild(left);
-    row.appendChild(el('span', 'mr-count', String(count)));
-
-    row.addEventListener('click', () => {
-      machinesMenuOpen = false;
-      selectMachine(id, { reason: 'sidebar' });
-    });
-    row.addEventListener('contextmenu', (e) => {
-      if (id === ALL) return;
-      if (e && e.preventDefault) e.preventDefault();
-      const detail = machineDetails(id);
-      window.dispatchEvent(new CustomEvent('hasna:machine-context', { detail: { machineId: id, machine: detail } }));
-      // Vision f8659e18: right-click a machine SHOWS its details (the event above is
-      // the contracted API; this popover is the user-visible rendering of it).
-      openMachinePop(e, detail);
-    });
-    return row;
   }
 
   function renderEditor() {
@@ -1410,7 +1047,6 @@
         if (state.statusFilter === 'archived') desc.textContent = 'No archived notes here yet.';
         else if (state.statusFilter === 'trash') desc.textContent = 'Trash is empty.';
         else if (state.labelFilter !== ALL) desc.textContent = 'No notes with the label “' + state.labelFilter + '” here.';
-        else if (state.machineFilter !== ALL) desc.textContent = 'No active notes on this machine.';
         else desc.textContent = 'No notes match the current filters.';
       }
     } else {
@@ -1445,7 +1081,6 @@
       if (bodyEl.value !== note.body) bodyEl.value = note.body || '';
     }
 
-    $('em-machine').textContent = machineLabelFor(note) || state.thisMachine;
     $('em-updated').textContent = 'updated ' + relTime(note.updatedAt);
 
     const tags = $('em-tags');
@@ -1633,16 +1268,12 @@
         : 'local-' + Date.now() + '-' + Math.random().toString(16).slice(2),
       title: '', body: '', labels: [], status: 'active', folder: '',
       contentFormat: 'markdown',
-      machine: state.thisMachine, updatedAt: nowIso, createdAt: nowIso,
-      ...defaultProvenance(state.thisMachine),
+      machine: '', updatedAt: nowIso, createdAt: nowIso,
+      ...defaultProvenance(),
       titleLocked: false, titleSource: 'default', titleContentFingerprint: '',
     };
     state.notes.push(note);
     state.selectedId = note.id;
-    // New notes always belong to this machine; if the filter would hide it, reset to All.
-    if (state.machineFilter !== ALL && state.machineFilter !== note.machine) {
-      state.machineFilter = ALL;
-    }
     state.labelFilter = ALL;
     state.statusFilter = 'active';
     state.noteListLimit = 10;
@@ -1664,8 +1295,8 @@
         : 'local-' + Date.now() + '-' + Math.random().toString(16).slice(2)),
       title: title || '', body: body || '', labels: noteLabels(extra), status: extra.status || 'active', folder: extra.folder || '',
       contentFormat: 'markdown',
-      machine: extra.machine || state.thisMachine, updatedAt: nowIso, createdAt: nowIso,
-      ...defaultProvenance(state.thisMachine),
+      machine: extra.machine || '', updatedAt: nowIso, createdAt: nowIso,
+      ...defaultProvenance(),
       ...extra,
       titleLocked: !!(title && title.trim()), titleSource: title && title.trim() ? 'manual' : 'default',
       titleContentFingerprint: '',
@@ -1697,15 +1328,6 @@
     // renderEditor() silently swaps the selection to the newest visible note.
     const note = noteById(id);
     if (note) {
-      if (state.machineFilter !== ALL && !noteMatchesMachine(note, state.machineFilter)) {
-        // Vision bug 9f8fba61: selecting another machine's note must navigate —
-        // jump the machine filter TO the note's own machine (canonical id) and
-        // show it. All machines' notes are local files after sync, so this is a
-        // pure local filter+select. Unattributed notes fall back to All Machines.
-        state.machineFilter = (note.machine && note.machine !== 'unknown')
-          ? machineDetails(note.machine).id
-          : ALL;
-      }
       if (state.labelFilter !== ALL && noteLabels(note).indexOf(state.labelFilter) < 0) state.labelFilter = ALL;
       const status = note.status === 'archived' ? 'archived' : (note.status === 'trash' ? 'trash' : 'active');
       if (state.statusFilter !== 'all' && state.statusFilter !== status) state.statusFilter = status;
@@ -1717,7 +1339,7 @@
   }
 
   // ------------------------------------------------------------------ settings + theme
-  const SETTINGS_TABS = ['appearance', 'labels', 'machines', 'about'];
+  const SETTINGS_TABS = ['appearance', 'labels', 'about'];
   const win = $('window');
 
   function showSettings(tab) {
@@ -1737,7 +1359,6 @@
     document.querySelectorAll('.set-page').forEach(p => p.classList.remove('active'));
     const page = document.querySelector('.set-page[data-tab="' + t + '"]');
     if (page) page.classList.add('active');
-    if (t === 'machines') renderMachinesPage();
     if (t === 'labels') renderLabelsPage();
     // The visible header controls differ per shell — refresh the native drag holes.
     scheduleDragExclusions();
@@ -1840,7 +1461,6 @@
   }
 
   function renderSettingsMeta() {
-    const m = $('about-machine'); if (m) m.textContent = state.thisMachine || '—';
     const c = $('about-count'); if (c) c.textContent = String(state.notes.length);
     // Real version from the native host (window.__VERSION__ = Info.plist values,
     // see docs/ui-contracts.md "Version Bridge"). Without it (plain browser,
@@ -1849,64 +1469,6 @@
     const ver = window.__VERSION__ || {};
     if (v && ver.version) v.textContent = 'Version ' + ver.version + (ver.build ? ' (' + ver.build + ')' : '');
     renderRetentionRow(); // keep the 7/30/90 picker in sync with boot/API settings
-  }
-
-  // ------------------------------------------------------------- machine details popover
-  // Vision MUST f8659e18: right-clicking a machine row shows its details. Renders
-  // synchronously from the cached machineDetails(id), then refreshes in place when the
-  // async requestMachineDetails(...) bridge answers (native hosts may hold fresher rows).
-  let machinePopId = null;
-
-  function openMachinePop(e, detail) {
-    const pop = $('machine-pop');
-    if (!pop || !detail || !detail.id) return;
-    machinePopId = detail.id;
-    fillMachinePop(pop, detail);
-    pop.hidden = false;
-    // Position at the cursor, clamped to the viewport (same rule as #ctx-menu).
-    const mw = pop.offsetWidth || 260, mh = pop.offsetHeight || 190;
-    let x = (e && e.clientX) || 0, y = (e && e.clientY) || 0;
-    if (x + mw > window.innerWidth - 8) x = Math.max(8, window.innerWidth - mw - 8);
-    if (y + mh > window.innerHeight - 8) y = Math.max(8, window.innerHeight - mh - 8);
-    pop.style.left = x + 'px';
-    pop.style.top = y + 'px';
-    const shownFor = machinePopId;
-    requestMachineDetails(detail.id).then(fresh => {
-      if (pop.hidden || machinePopId !== shownFor || !fresh || fresh.id !== shownFor) return;
-      fillMachinePop(pop, fresh);
-    });
-  }
-
-  function fillMachinePop(pop, m) {
-    pop.innerHTML = '';
-    const head = el('div', 'mp-head');
-    head.appendChild(el('span', 'mp-name', m.displayName || m.id));
-    if (state.thisMachine && machineAliases(m).has(state.thisMachine)) {
-      head.appendChild(el('span', 'mp-badge', 'This machine'));
-    }
-    pop.appendChild(head);
-    const extraCounts = (m.archivedNoteCount || 0) + (m.trashNoteCount || 0);
-    const rows = [
-      ['ID', m.id + (m.slug && m.slug !== m.id ? ' · ' + m.slug : '')],
-      ['Platform', m.platform || '—'],
-      ['Status', m.status || 'unknown'],
-      ['Notes', String(m.noteCount || 0) + ' active' + (extraCounts
-        ? ' · ' + (m.archivedNoteCount || 0) + ' archived · ' + (m.trashNoteCount || 0) + ' in trash' : '')],
-      ['Last activity', m.recentActivityAt ? relTime(m.recentActivityAt) : '—'],
-      ['Last sync', m.syncedAt ? relTime(m.syncedAt) : '—'],
-    ];
-    rows.forEach(pair => {
-      const row = el('div', 'mp-row');
-      row.appendChild(el('span', 'mp-key', pair[0]));
-      row.appendChild(el('span', 'mp-val', pair[1]));
-      pop.appendChild(row);
-    });
-  }
-
-  function closeMachinePop() {
-    const pop = $('machine-pop');
-    if (pop && !pop.hidden) pop.hidden = true;
-    machinePopId = null;
   }
 
   // ------------------------------------------------------------------ context menu (Feature 3)
@@ -1923,7 +1485,6 @@
     menu.querySelectorAll('.ctx-item[data-act]').forEach(item => {
       const act = item.getAttribute('data-act');
       if (act === 'archive') item.hidden = status !== 'active';
-      if (act === 'move') item.hidden = status !== 'active';
       if (act === 'restore') item.hidden = status === 'active';
       if (act === 'delete') item.textContent = status === 'trash' ? 'Delete permanently' : 'Delete';
     });
@@ -1952,7 +1513,6 @@
     if (!note) return;
     if (act === 'rename') startInlineRename(id);
     else if (act === 'duplicate') duplicateNote(note);
-    else if (act === 'move') promptMoveNote(note.id);
     else if (act === 'copy') copyNoteText(note);
     else if (act === 'archive') archiveNote(note.id);
     else if (act === 'restore') restoreNote(note.id);
@@ -2077,44 +1637,6 @@
     dispatchNoteEvent('hasna:note-purge', note);
     render();
   }
-
-  // Quick action "move to a machine" (vision 4d696e4b): re-attribute a note to another
-  // machine — a plain informational update of `machine` (+ friendly name) in schema v2.
-  // The same mutation ships in the CLI ("notes move") and MCP (notes_move_to_machine) —
-  // app parity is a vision MUST.
-  function moveNoteToMachine(id, machine, friendlyName) {
-    const note = noteById(id);
-    const requested = String(machine || '').trim();
-    if (!note || !requested) return null;
-    const destination = machineDetails(requested);
-    const target = destination.id || requested;
-    const targetMachineFriendlyName = friendlyName || destination.friendlyName || destination.displayName || '';
-    if (note.machine === target) {
-      selectMachine(target, { noteId: id, reason: 'move' });
-      return note;
-    }
-    note.machine = target;
-    note.machineFriendlyName = targetMachineFriendlyName;
-    note.updatedAt = new Date().toISOString();
-    postNative('move', serializeNote(note));
-    const selectedMachine = selectMachine(target, { noteId: note.id, reason: 'move' });
-    dispatchNoteEvent('hasna:note-move', note, {
-      targetMachine: target,
-      targetMachineFriendlyName,
-      selectedMachine,
-      selectedNoteId: state.selectedId,
-      view: viewSnapshot(),
-    });
-    return note;
-  }
-
-  function promptMoveNote(id) {
-    const note = noteById(id);
-    const suggestion = machineDetailsList().map(m => m.id).find(m => !note || m !== note.machine);
-    const target = window.prompt('Move to machine', suggestion || state.thisMachine);
-    if (target) moveNoteToMachine(id, target);
-  }
-
   function dispatchNoteEvent(name, note, extra) {
     window.dispatchEvent(new CustomEvent(name, {
       detail: Object.assign({ note: serializeNote(note), noteId: note.id }, extra || {}),
@@ -3076,11 +2598,6 @@
     collapsedSections.labels = !collapsedSections.labels;
     renderLabels();
   }
-  // Machines dropdown (top of the sidebar).
-  function onMachinesMenuToggle(e) {
-    if (e) e.preventDefault();
-    setMachinesMenu(!machinesMenuOpen);
-  }
   function onChatSubmit(e) {
     if (e) e.preventDefault();
     const input = $('chat-input');
@@ -3270,20 +2787,14 @@
     }
     if (e.key === 'Escape') {
       closeContextMenu();
-      closeMachinePop();
       closeSearchPop();
       closeMdPop();
       setChatMoreMenu(false);
-      if (machinesMenuOpen) setMachinesMenu(false);
     }
   }
   function onGlobalPointerDown(e) {
     const menu = $('ctx-menu');
     if (menu && !menu.hidden && !menu.contains(e.target)) closeContextMenu();
-    const mpop = $('machine-pop');
-    if (mpop && !mpop.hidden && !mpop.contains(e.target)) closeMachinePop();
-    const dd = $('machines-dd');
-    if (machinesMenuOpen && dd && !dd.contains(e.target)) setMachinesMenu(false);
     const pop = $('search-pop');
     if (pop && !pop.hidden && e.target === pop) closeSearchPop();
     const mdPop = $('md-pop');
@@ -3324,7 +2835,7 @@
     content.classList.toggle('scrolled', !!el && (el.scrollTop || 0) > 0);
   }
   function onWindowScroll(e) {
-    closeContextMenu(); closeMachinePop(); closeMdPop(); closeSlashMenu();
+    closeContextMenu(); closeMdPop(); closeSlashMenu();
     const node = (e && e.target && e.target.nodeType === 1) ? e.target : null;
     markScrolling(node);
     if (node && node.matches(PAGE_SCROLLERS)) syncHeaderScrollEdge(node);
@@ -3422,7 +2933,6 @@
     const pillPause = $('rec-pill-pause'); if (pillPause) pillPause.addEventListener('click', onRecPauseToggle);
     const pillStop = $('rec-pill-stop'); if (pillStop) pillStop.addEventListener('click', onRecPillStop);
     const viewAll = $('home-view-all'); if (viewAll) viewAll.addEventListener('click', onViewAllNotes);
-    const ddBtn = $('machines-dd-btn'); if (ddBtn) ddBtn.addEventListener('click', onMachinesMenuToggle);
     const secNotes = $('sec-notes'); if (secNotes) secNotes.addEventListener('click', onToggleNotesSection);
     const secLabels = $('labels-section'); if (secLabels) secLabels.addEventListener('click', onToggleLabelsSection);
     const spInput = $('search-pop-input');
@@ -3504,7 +3014,6 @@
     const pillPause = $('rec-pill-pause'); if (pillPause) pillPause.removeEventListener('click', onRecPauseToggle);
     const pillStop = $('rec-pill-stop'); if (pillStop) pillStop.removeEventListener('click', onRecPillStop);
     const viewAll = $('home-view-all'); if (viewAll) viewAll.removeEventListener('click', onViewAllNotes);
-    const ddBtn = $('machines-dd-btn'); if (ddBtn) ddBtn.removeEventListener('click', onMachinesMenuToggle);
     const secNotes = $('sec-notes'); if (secNotes) secNotes.removeEventListener('click', onToggleNotesSection);
     const secLabels = $('labels-section'); if (secLabels) secLabels.removeEventListener('click', onToggleLabelsSection);
     const spInput = $('search-pop-input');
@@ -3533,14 +3042,9 @@
     const b = boot || {};
     state.notes = Array.isArray(b.notes) ? b.notes.map(normalizeNote) : [];
     state.labels = normalizeLabelList([].concat(Array.isArray(b.labels) ? b.labels : [], state.notes.flatMap(note => note.labels || [])));
-    state.machines = Array.isArray(b.machines)
-      ? b.machines.map(normalizeMachine).filter(m => m.id)
-      : [];
-    state.thisMachine = b.thisMachine || state.thisMachine || 'unknown';
     if (b.settings && Number(b.settings.trashRetentionDays) > 0) {
       state.settings.trashRetentionDays = Number(b.settings.trashRetentionDays);
     }
-    if (b.sync && typeof b.sync === 'object') state.sync = b.sync;
     // List defaults apply on the initial boot only (contract: latest 10). The host
     // hydrates after EVERY write — re-applying here would reset the user's pagination.
     if (!adopt.booted) {
@@ -3555,31 +3059,6 @@
       state.selectedId = v.length ? v[0].id : null;
     }
     notifyExpiredTrashReady();
-  }
-
-  function normalizeMachine(m) {
-    if (typeof m === 'string') m = { id: m };
-    m = m || {};
-    return {
-      id: String(m.id || m.slug || ''),
-      slug: m.slug || m.id || '',
-      displayName: m.displayName || m.friendlyName || m.id || m.slug || '',
-      friendlyName: m.friendlyName || '',
-      platform: m.platform || m.os || '',
-      status: m.status || (m.online === true ? 'online' : (m.online === false ? 'offline' : 'unknown')),
-      online: m.online == null ? null : !!m.online,
-      updatedAt: m.updatedAt || '',
-      lastSeenAt: m.lastSeenAt || '',
-      syncedAt: m.syncedAt || '',
-      recentActivityAt: m.recentActivityAt || '',
-      capabilities: Array.isArray(m.capabilities) ? m.capabilities.map(String).filter(Boolean) : [],
-      noteCount: Number(m.noteCount || 0),
-      activeNoteCount: Number(m.activeNoteCount || m.noteCount || 0),
-      archivedNoteCount: Number(m.archivedNoteCount || 0),
-      trashNoteCount: Number(m.trashNoteCount || 0),
-      totalNoteCount: Number(m.totalNoteCount || m.noteCount || 0),
-      latestNoteUpdatedAt: m.latestNoteUpdatedAt || '',
-    };
   }
 
   function normalizeNote(n) {
@@ -3645,7 +3124,6 @@
     stopStream();
     try { if (rec.ws && rec.ws.readyState === WebSocket.OPEN) rec.ws.close(); } catch (e) {}
     closeContextMenu();
-    closeMachinePop();
     started = false;
   }
 
@@ -4218,12 +3696,10 @@
 	  function viewSnapshot() {
 	    return {
 	      screen: state.screen,
-	      machineFilter: state.machineFilter,
 	      labelFilter: state.labelFilter,
 	      statusFilter: state.statusFilter,
 	      selectedId: state.selectedId,
 	      visibleNoteIds: visibleNotes().map(n => n.id),
-	      selectedMachine: state.machineFilter === ALL ? null : machineDetails(state.machineFilter),
 	    };
 	  }
 
@@ -4290,7 +3766,6 @@
 		      trash: trashNoteWithConfirmation,
 		      restore: restoreNote,
 	      purge: purgeNoteWithConfirmation,
-      moveToMachine: moveNoteToMachine,
       info: noteInfo,
       setStatusFilter: setStatusFilter,
       cleanupExpiredTrash: cleanupExpiredTrash,
@@ -4299,17 +3774,6 @@
         return setTrashRetentionDays(days);
       },
 	    },
-	    machines: {
-	      list: machineDetailsList,
-	      details: machineDetails,
-	      select: selectMachine,
-	      requestDetails: requestMachineDetails,
-	      receiveDetails: receiveMachineDetails,
-	    },
-    sync: {
-      // Last sync outcome from the boot payload (null = host never reported).
-      status: function () { return state.sync ? Object.assign({}, state.sync) : null; },
-    },
     labels: {
       list: function () { return allLabels(); },
       create: createLabelLocal,

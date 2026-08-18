@@ -10,9 +10,7 @@ import {
   deleteLabelEverywhere,
   deleteNote,
   generateTitle,
-  getMachineDetails,
   getNote,
-  listMachineDetails,
   listNotes,
   loadLabelList,
   loadNotes,
@@ -150,20 +148,6 @@ const tools = [
     name: 'settings_set_trash_retention',
     description: 'Set Trash retention in days.',
     inputSchema: { type: 'object', properties: { days: { type: 'number' } }, required: ['days'] },
-  },
-  {
-    name: 'machines_list',
-    description: 'List machine details for the notes app, combining open-machines manifest fields with notes-derived fallback data.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'machines_details',
-    description: 'Fetch details for one machine by id or slug.',
-    inputSchema: {
-      type: 'object',
-      properties: { id: { type: 'string' } },
-      required: ['id'],
-    },
   },
   {
     name: 'markdown_commands',
@@ -529,8 +513,6 @@ async function callTool(name, args) {
   }
   if (name === 'settings_get') return textResult(await loadSettings());
   if (name === 'settings_set_trash_retention') return textResult(await saveSettings({ trashRetentionDays: requireArg(args, 'days') }));
-  if (name === 'machines_list') return textResult(await listMachineDetails());
-  if (name === 'machines_details') return textResult(await getMachineDetails(requireArg(args, 'id')));
   if (name === 'markdown_commands') return textResult({ commands: MARKDOWN_COMMANDS });
   if (name === 'markdown_render') {
     const markdown = await markdownFromArgs(args);
