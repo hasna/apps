@@ -8,7 +8,7 @@
  */
 import { createHash } from "node:crypto";
 import { nanoid } from "nanoid";
-import { createCloudPoolFromEnv } from "../generated/storage-kit/index.js";
+import { createServerPoolFromEnv } from "../generated/storage-kit/index.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import { sanitizeSourceConfig } from "../db/sources.js";
 import { generateCanonicalName } from "../lib/normalize.js";
@@ -50,7 +50,7 @@ let cached: { client: TypedQueryClient; connectionSource: string } | null = null
 /** Lazily build (and memoize) the Postgres pool. Throws when the database URL is missing. */
 export function getCloudClient(): TypedQueryClient {
   if (cached) return cached.client;
-  const pool = createCloudPoolFromEnv(APP, { applicationName: "files-serve", max: 5 });
+  const pool = createServerPoolFromEnv(APP, { applicationName: "files-serve", max: 5 });
   cached = { client: pool.client, connectionSource: pool.connectionSource };
   return cached.client;
 }
