@@ -302,6 +302,132 @@ export function buildOpenApiDocument(): Record<string, unknown> {
           },
           required: ["ok", "results"],
         },
+        SearchHitListResponse: {
+          type: "object",
+          properties: {
+            ok: { type: "boolean" },
+            query: { type: "string" },
+            count: { type: "integer" },
+            results: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  session_id: { type: "string" },
+                  source: { type: "string" },
+                  title: { type: "string", nullable: true },
+                  project_name: { type: "string", nullable: true },
+                  project_path: { type: "string", nullable: true },
+                  started_at: { type: "string", nullable: true },
+                  snippet: { type: "string" },
+                  rank: { type: "number" },
+                },
+                required: ["session_id", "source", "snippet", "rank"],
+              },
+            },
+          },
+          required: ["ok", "results"],
+        },
+        RecallEvidenceResponse: {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["message", "session", "tool_call", "semantic", "graph"] },
+            signal: { type: "string" },
+            snippet: { type: "string" },
+            score: { type: "number" },
+          },
+          required: ["kind", "signal", "snippet"],
+        },
+        RecallResultResponse: {
+          type: "object",
+          properties: {
+            session_id: { type: "string" },
+            source: { type: "string" },
+            source_id: { type: "string" },
+            source_path: { type: "string", nullable: true },
+            title: { type: "string", nullable: true },
+            project_name: { type: "string", nullable: true },
+            project_path: { type: "string", nullable: true },
+            started_at: { type: "string", nullable: true },
+            updated_at: { type: "string", nullable: true },
+            rank: { type: "integer" },
+            score: { type: "number" },
+            reason: { type: "string" },
+            evidence: {
+              type: "array",
+              items: { $ref: "#/components/schemas/RecallEvidenceResponse" },
+            },
+            touched_file_paths: { type: "array", items: { type: "string" } },
+            coding_entities: {
+              type: "object",
+              properties: {
+                file_paths: { type: "array", items: { type: "string" } },
+                tool_names: { type: "array", items: { type: "string" } },
+                commands: { type: "array", items: { type: "string" } },
+                repos: { type: "array", items: { type: "string" } },
+                branches: { type: "array", items: { type: "string" } },
+                commits: { type: "array", items: { type: "string" } },
+              },
+            },
+            resume: {
+              type: "object",
+              properties: {
+                available: { type: "boolean" },
+                command: { type: "array", items: { type: "string" }, nullable: true },
+                shell_command: { type: "string", nullable: true },
+                reason: { type: "string", nullable: true },
+              },
+              required: ["available"],
+            },
+          },
+          required: ["session_id", "source", "source_id", "rank", "reason"],
+        },
+        RecallResponse: {
+          type: "object",
+          properties: {
+            ok: { type: "boolean" },
+            query: { type: "string" },
+            count: { type: "integer" },
+            results: {
+              type: "array",
+              items: { $ref: "#/components/schemas/RecallResultResponse" },
+            },
+            metadata: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+                query_variants: { type: "array", items: { type: "string" } },
+                significant_terms: { type: "array", items: { type: "string" } },
+                semantic: {
+                  type: "object",
+                  properties: {
+                    attempted: { type: "boolean" },
+                    status: { type: "string", enum: ["used", "skipped", "failed"] },
+                    stored_embeddings: { type: "integer" },
+                    openai_api_key_present: { type: "boolean" },
+                    reason: { type: "string", nullable: true },
+                  },
+                },
+                signals: { type: "object", additionalProperties: { type: "integer" } },
+              },
+            },
+          },
+          required: ["ok", "query", "count", "results"],
+        },
+        EmbedResponse: {
+          type: "object",
+          properties: {
+            ok: { type: "boolean" },
+            messagesProcessed: { type: "integer" },
+            chunksEmbedded: { type: "integer" },
+          },
+          required: ["ok"],
+        },
+        MachinesRecomputeResponse: {
+          type: "object",
+          properties: { ok: { type: "boolean" } },
+          required: ["ok"],
+        },
         MachinesResponse: {
           type: "object",
           properties: {
@@ -528,6 +654,83 @@ export function buildOpenApiDocument(): Record<string, unknown> {
             ...json200("SearchResponse", "Search results"),
             "400": jsonRef("ErrorResponse", "Missing query"),
           },
+        },
+      },
+      "/v1/search/semantic": {
+        get: {
+          operationId: "semanticSearch",
+          summary: "Semantic (embedding) search",
+          parameters: [
+            queryParam("q", "string", true),
+            queryParam("source", "string"),
+            queryParam("project", "string"),
+            queryParam("machine", "string"),
+            queryParam("limit", "integer"),
+          ],
+          responses: {
+            ...json200("SearchHitListResponse", "Semantic search results"),
+            "400": jsonRef("ErrorResponse", "Missing query"),
+          },
+        },
+      },
+      "/v1/search/hybrid": {
+        get: {
+          operationId: "hybridSearch",
+          summary: "Hybrid full-text + semantic search (RRF)",
+          parameters: [
+            queryParam("q", "string", true),
+            queryParam("source", "string"),
+            queryParam("project", "string"),
+            queryParam("machine", "string"),
+            queryParam("limit", "integer"),
+          ],
+          responses: {
+            ...json200("SearchHitListResponse", "Hybrid search results"),
+            "400": jsonRef("ErrorResponse", "Missing query"),
+          },
+        },
+      },
+      "/v1/recall": {
+        get: {
+          operationId: "recallSessions",
+          summary: "Natural-language recall with evidence, touched files, graph context, and resume metadata",
+          parameters: [
+            queryParam("q", "string", true),
+            queryParam("source", "string"),
+            queryParam("project", "string"),
+            queryParam("machine", "string"),
+            queryParam("limit", "integer"),
+            queryParam("semantic", "string"),
+          ],
+          responses: {
+            ...json200("RecallResponse", "Recall results"),
+            "400": jsonRef("ErrorResponse", "Missing query"),
+          },
+        },
+      },
+      "/v1/embed": {
+        post: {
+          operationId: "embedMessages",
+          summary: "Generate embeddings for messages that have none yet",
+          requestBody: {
+            required: false,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: { limit: { type: "integer" } },
+                },
+              },
+            },
+          },
+          responses: json200("EmbedResponse", "Embedding run result"),
+        },
+      },
+      "/v1/machines/recompute": {
+        post: {
+          operationId: "recomputeMachines",
+          summary: "Rebuild per-machine session counts",
+          responses: json200("MachinesRecomputeResponse", "Recompute result"),
         },
       },
       "/v1/recent": {

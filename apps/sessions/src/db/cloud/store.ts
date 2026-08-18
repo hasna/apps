@@ -418,6 +418,25 @@ export async function listMachines(client: TypedQueryClient = getCloudClient()):
   }));
 }
 
+/**
+ * Rebuild the `machines` table's session counts from the sessions table.
+ * Mirrors the local `recomputeMachineCounts`; the per-machine read path
+ * (`listMachines`) derives counts from sessions either way, so this keeps the
+ * optional metadata table current after bulk imports/merges.
+ */
+export async function recomputeMachines(
+  client: TypedQueryClient = getCloudClient(),
+): Promise<void> {
+  await client.execute(
+    `INSERT INTO machines (name, session_count)
+     SELECT machine AS name, COUNT(*) AS session_count
+       FROM sessions
+      WHERE machine IS NOT NULL AND machine != ''
+      GROUP BY machine
+     ON CONFLICT (name) DO UPDATE SET session_count = EXCLUDED.session_count`,
+  );
+}
+
 export interface CloudStats {
   session_count: number;
   message_count: number;
@@ -872,7 +891,7 @@ export interface ContentSearchHit {
   rank: number;
 }
 
-function sessionFilterClauses(opts: ListOptions, params: unknown[], alias = "s"): string {
+export function sessionFilterClauses(opts: ListOptions, params: unknown[], alias = "s"): string {
   const clauses: string[] = [];
   if (opts.source) {
     params.push(opts.source);

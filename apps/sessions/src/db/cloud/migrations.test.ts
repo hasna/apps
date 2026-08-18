@@ -37,7 +37,8 @@ describe("cloud migration ledger", () => {
         (migration) =>
           migration.id !== "0004_codewith_session_source" &&
           migration.id !== "0005_session_source_id_lookup_index" &&
-          migration.id !== "0006_session_objects",
+          migration.id !== "0006_session_objects" &&
+          migration.id !== "0007_embeddings",
       )
       .map((migration) =>
         applied({
@@ -82,6 +83,7 @@ describe("cloud migration ledger", () => {
       ["0004_codewith_session_source", "pending"],
       ["0005_session_source_id_lookup_index", "pending"],
       ["0006_session_objects", "pending"],
+      ["0007_embeddings", "pending"],
     ]);
   });
 });

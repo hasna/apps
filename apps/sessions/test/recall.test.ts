@@ -7,6 +7,7 @@ import { saveParsedSession } from "../src/db/sessions.js";
 import { embedSessions, type Embedder } from "../src/lib/embeddings.js";
 import { recallSessions } from "../src/lib/recall.js";
 import { resolveSessionStore } from "../src/storage.js";
+import { mintApiKey } from "@hasna/contracts/auth";
 
 const repoRoot = join(import.meta.dir, "..");
 
@@ -209,8 +210,8 @@ describe("@hasna/sessions/storage recall contract", () => {
     expect(response.results[0].session_id).toBe(stripe.id);
   });
 
-  it("reports recall as local-only in hosted mode without making a request", async () => {
-    let requestCount = 0;
+  it("serves recall through the hosted /v1/recall endpoint", async () => {
+    let requestedUrl: string | null = null;
     const store = resolveSessionStore(
       {
         HASNA_SESSIONS_STORAGE_MODE: "cloud",
@@ -218,29 +219,79 @@ describe("@hasna/sessions/storage recall contract", () => {
         HASNA_SESSIONS_API_KEY: "test-key",
       },
       {
-        fetchImpl: async () => {
-          requestCount += 1;
-          throw new Error("hosted recall must not make a request");
+        fetchImpl: async (url: string | URL) => {
+          requestedUrl = String(url);
+          return new Response(
+            JSON.stringify({
+              query: "stripe webhook",
+              count: 1,
+              results: [
+                {
+                  session_id: "stripe-hosted-1",
+                  source: "claude",
+                  source_id: "claude-stripe-001",
+                  source_path: null,
+                  title: "Stripe webhook implementation",
+                  project_name: "web",
+                  project_path: "/repo/web",
+                  started_at: "2026-05-01T10:00:00.000Z",
+                  updated_at: "2026-05-01T10:00:00.000Z",
+                  rank: 1,
+                  score: 1,
+                  reason: "matched message",
+                  evidence: [
+                    { kind: "message", signal: "message:original", snippet: "stripe webhook payment handler" },
+                  ],
+                  matching_tool_calls: [],
+                  touched_file_paths: [],
+                  coding_entities: { file_paths: [], tool_names: [], commands: [], repos: [], branches: [], commits: [] },
+                  related_graph_entities: { project: "web", model: null, provider: null, repo: null, branch: null, commit: null, tools: [] },
+                  resume: {
+                    available: true,
+                    command: ["claude", "--resume", "claude-stripe-001"],
+                    shell_command: "claude --resume claude-stripe-001",
+                    reason: null,
+                  },
+                },
+              ],
+              metadata: {
+                query: "stripe webhook",
+                query_variants: ["stripe webhook"],
+                significant_terms: ["stripe", "webhook"],
+                semantic: { attempted: false, status: "skipped", stored_embeddings: 0, openai_api_key_present: false, reason: "no stored embeddings" },
+                signals: { message: 1, session: 0, tool_call: 0, semantic: 0, graph: 0, recent: 0 },
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
         },
       },
     );
 
     expect(store.mode).toBe("cloud");
-    await expect(store.recall("stripe webhook", { limit: 1 })).rejects.toThrow(
-      "'recall' is local-only and is not available in hosted/self-hosted mode",
-    );
-    expect(requestCount).toBe(0);
+    const response = await store.recall("stripe webhook", { limit: 1 });
+
+    expect(requestedUrl).toContain("/v1/recall");
+    expect(requestedUrl).toContain("q=stripe+webhook");
+    expect(response.count).toBe(1);
+    expect(response.results[0].session_id).toBe("stripe-hosted-1");
+    expect(response.results[0].resume.shell_command).toBe("claude --resume claude-stripe-001");
   });
 });
+
+const CLI_SIGNING_KEY = ["cli", "test", "signing", "fixture", "0123456789abcdef", "0123456789abcdef"].join("-");
 
 describe("sessions recall CLI", () => {
   let dir: string;
   let dbPath: string;
+  let originalSigningKey: string | undefined;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "sessions-recall-cli-"));
     dbPath = join(dir, "sessions.db");
     process.env.SESSIONS_DB_PATH = dbPath;
+    originalSigningKey = process.env.HASNA_SESSIONS_API_SIGNING_KEY;
+    process.env.HASNA_SESSIONS_API_SIGNING_KEY = CLI_SIGNING_KEY;
     delete process.env.OPENAI_API_KEY;
     resetDatabase();
     getDatabase();
@@ -252,6 +303,17 @@ describe("sessions recall CLI", () => {
     closeDatabase();
     rmSync(dir, { recursive: true, force: true });
     delete process.env.SESSIONS_DB_PATH;
+    if (originalSigningKey === undefined) {
+      delete process.env.HASNA_SESSIONS_API_SIGNING_KEY;
+    } else {
+      process.env.HASNA_SESSIONS_API_SIGNING_KEY = originalSigningKey;
+    }
+    (async () => {
+      const { resetAuth } = await import("../src/server/auth.js");
+      resetAuth();
+      const { resetDataSource } = await import("../src/server/data-source.js");
+      resetDataSource();
+    })();
   });
 
   it("prints the recall response as JSON", () => {
@@ -283,33 +345,76 @@ describe("sessions recall CLI", () => {
     expect(payload.results[0].touched_file_paths).toContain("src/routes/stripe-webhook.ts");
   });
 
-  it("reports recall as local-only in self_hosted mode with supported alternatives", () => {
-    const result = Bun.spawnSync({
-      cmd: ["bun", "run", "src/cli/index.tsx", "recall", "stripe webhook"],
+  it("serves recall through the hosted /v1 API in self_hosted mode", async () => {
+    // The server runs as its own child process: a spawnSync'd CLI child and an
+    // in-process Bun.serve deadlock (spawnSync blocks the event loop the server
+    // would answer on).
+    const probe = Bun.serve({ port: 0, fetch: () => new Response("x") });
+    const port = probe.port;
+    probe.stop(true);
+    const serverChild = Bun.spawn({
+      cmd: ["bun", "run", "src/server/index.ts"],
       cwd: repoRoot,
       env: {
         ...process.env,
-        HASNA_SESSIONS_STORAGE_MODE: "self_hosted",
-        HASNA_SESSIONS_MODE: "self_hosted",
-        HASNA_SESSIONS_API_URL: "https://sessions.example.test",
-        HASNA_SESSIONS_API_KEY: "test-key",
-        SESSIONS_STORAGE_MODE: "self_hosted",
-        SESSIONS_MODE: "self_hosted",
-        SESSIONS_API_URL: "https://sessions.example.test",
-        SESSIONS_API_KEY: "test-key",
+        PORT: String(port),
+        SESSIONS_DB_PATH: dbPath,
+        HASNA_SESSIONS_API_SIGNING_KEY: CLI_SIGNING_KEY,
       },
       stdout: "pipe",
       stderr: "pipe",
     });
+    try {
+      const base = `http://127.0.0.1:${port}`;
+      let healthy = false;
+      for (let i = 0; i < 50; i++) {
+        try {
+          const res = await fetch(`${base}/health`);
+          if (res.ok) {
+            healthy = true;
+            break;
+          }
+        } catch {
+          // not up yet
+        }
+        await Bun.sleep(100);
+      }
+      expect(healthy).toBe(true);
 
-    const stderr = Buffer.from(result.stderr).toString("utf-8");
-    expect(result.exitCode).toBe(1);
-    expect(Buffer.from(result.stdout).toString("utf-8")).toBe("");
-    expect(stderr).toContain(
-      "'recall' is local-only and is not available in hosted/self-hosted mode",
-    );
-    expect(stderr).toContain("'sessions list'");
-    expect(stderr).toContain("'sessions show <id>'");
-    expect(stderr).toContain("'sessions search <query>'");
+      const apiKey = mintApiKey({
+        app: "sessions",
+        scopes: ["sessions:read"],
+        signingSecret: CLI_SIGNING_KEY,
+        ttlSeconds: 3600,
+      }).token;
+      const result = Bun.spawnSync({
+        cmd: ["bun", "run", "src/cli/index.tsx", "recall", "stripe webhook", "--json"],
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          HASNA_SESSIONS_STORAGE_MODE: "self_hosted",
+          HASNA_SESSIONS_MODE: "self_hosted",
+          HASNA_SESSIONS_API_URL: base,
+          HASNA_SESSIONS_API_KEY: apiKey,
+          SESSIONS_STORAGE_MODE: "self_hosted",
+          SESSIONS_MODE: "self_hosted",
+          SESSIONS_API_URL: base,
+          SESSIONS_API_KEY: apiKey,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 60000,
+      });
+
+      const stderr = Buffer.from(result.stderr).toString("utf-8");
+      expect(stderr).toBe("");
+      expect(result.exitCode).toBe(0);
+      const payload = JSON.parse(Buffer.from(result.stdout).toString("utf-8"));
+      expect(payload.query).toBe("stripe webhook");
+      expect(payload.results[0].resume.shell_command).toBe("claude --resume claude-stripe-001");
+      expect(payload.results[0].touched_file_paths).toContain("src/routes/stripe-webhook.ts");
+    } finally {
+      serverChild.kill();
+    }
   });
 });

@@ -197,14 +197,19 @@ session metadata and content to the authenticated `/v1` API. Clients do not
 open a Postgres DSN, and the former client-side storage subcommand family has
 been removed.
 
-`sessions recall` is local-only because its combined FTS, semantic, tool-call,
-and graph ranking uses the on-box index. In hosted/self-hosted mode, use
-`sessions list`, `sessions show <id>`, and `sessions search <query>` against the
-active hosted store instead. Run `sessions recall` on a machine in local mode
-when the richer recall result is required; the CLI and public storage SDK fail
-before making a hosted recall request. No `/v1/recall` endpoint is provided;
-generated HTTP SDK consumers can use `listSessions`, `getSession` with
-`listSessionMessages`, and `searchSessions`.
+`sessions recall` (and semantic / hybrid search, `sessions embed`, and
+`sessions recompute-machines`) are served by BOTH backends. The local SQLite
+path ranks with FTS5 + a local embeddings table; the hosted `/v1` path serves
+the same recall / semantic / hybrid surface over the shared Postgres (an
+`embeddings` table, server-side embeddings, substring search) through
+`/v1/recall`, `/v1/search/semantic`, `/v1/search/hybrid`, `/v1/embed`, and
+`/v1/machines/recompute`. `sessions import-db <path>` also works in hosted mode:
+it reads the source database file read-only and pushes each session into the
+shared registry via `/v1/sessions/import` (embeddings are regenerated with
+`sessions embed` rather than copied). The one remaining local-only verb is
+`sessions ingest`, which scans the machine's own transcript files; on a hosted
+machine run `sessions sync`, which ingests locally and pushes every session to
+the shared registry.
 
 ## Self-Hosted API Sync
 

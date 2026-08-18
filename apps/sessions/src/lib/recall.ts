@@ -17,14 +17,14 @@ import {
 } from "./search.js";
 import { semanticSearch } from "./vector-search.js";
 
-const MAX_VARIANT_TERMS = 8;
-const MAX_EVIDENCE_PER_RESULT = 8;
-const MAX_TOOL_CALLS_PER_RESULT = 8;
+export const MAX_VARIANT_TERMS = 8;
+export const MAX_EVIDENCE_PER_RESULT = 8;
+export const MAX_TOOL_CALLS_PER_RESULT = 8;
 const MAX_TOUCHED_FILES = 16;
 const MAX_ENTITY_VALUES = 16;
-const MAX_CONTEXT_MESSAGES_PER_RESULT = 24;
-const MAX_CONTEXT_TOOL_CALLS_PER_RESULT = 64;
-const MAX_RECENT_TOOL_CALLS_PER_RESULT = 12;
+export const MAX_CONTEXT_MESSAGES_PER_RESULT = 24;
+export const MAX_CONTEXT_TOOL_CALLS_PER_RESULT = 64;
+export const MAX_RECENT_TOOL_CALLS_PER_RESULT = 12;
 const MAX_ENTITY_SCAN_CHARS = 8_000;
 const MAX_JSON_PARSE_CHARS = 24_000;
 
@@ -179,7 +179,7 @@ interface QueryVariant {
   weight: number;
 }
 
-interface Candidate {
+export interface Candidate {
   sessionId: string;
   score: number;
   signals: Record<string, number>;
@@ -414,7 +414,7 @@ export function extractCodingEntities(
   };
 }
 
-function addSearchHits(
+export function addSearchHits(
   candidates: Map<string, Candidate>,
   hits: SearchHit[],
   options: {
@@ -438,7 +438,7 @@ function addSearchHits(
   }
 }
 
-function addToolHits(
+export function addToolHits(
   candidates: Map<string, Candidate>,
   hits: ToolCallHit[],
   options: { signal: string; weight: number }
@@ -457,7 +457,7 @@ function addToolHits(
   }
 }
 
-function addCandidate(
+export function addCandidate(
   candidates: Map<string, Candidate>,
   sessionId: string,
   score: number,
@@ -476,7 +476,7 @@ function addCandidate(
   return candidate;
 }
 
-function addEvidence(evidence: RecallEvidence[], next: RecallEvidence): void {
+export function addEvidence(evidence: RecallEvidence[], next: RecallEvidence): void {
   if (!next.snippet.trim()) return;
   const key = `${next.kind}:${next.signal}:${next.snippet}`;
   if (evidence.some((item) => `${item.kind}:${item.signal}:${item.snippet}` === key)) return;
@@ -638,7 +638,7 @@ function graphSnippet(row: Record<string, unknown>): string {
   return parts.join("; ");
 }
 
-function shouldUseRecentFallback(query: string, terms: string[]): boolean {
+export function shouldUseRecentFallback(query: string, terms: string[]): boolean {
   if (terms.length === 0) return true;
   return /\b(resume|continue|pick up|where did we leave|building this|this thing)\b/i.test(query);
 }
@@ -846,7 +846,7 @@ function rowToToolCall(row: Record<string, unknown>): ToolCall {
   };
 }
 
-function buildReason(
+export function buildReason(
   candidate: Candidate,
   evidence: RecallEvidence[],
   toolCalls: RecallToolCall[],
@@ -863,7 +863,7 @@ function buildReason(
   return parts.join("; ") || "matched recall signals";
 }
 
-function evidencePriority(kind: RecallEvidence["kind"]): number {
+export function evidencePriority(kind: RecallEvidence["kind"]): number {
   switch (kind) {
     case "message":
       return 0;
@@ -878,7 +878,7 @@ function evidencePriority(kind: RecallEvidence["kind"]): number {
   }
 }
 
-function selectMatchingToolCalls(
+export function selectMatchingToolCalls(
   toolCalls: ToolCall[],
   terms: string[],
   query: string,
@@ -915,12 +915,12 @@ function selectMatchingToolCalls(
   return matches;
 }
 
-function snippetForToolCall(toolCall: ToolCall, terms: string[], query: string): string {
+export function snippetForToolCall(toolCall: ToolCall, terms: string[], query: string): string {
   const text = [toolCall.tool_name, toolCall.tool_input ?? "", toolCall.tool_output ?? ""].join("\n");
   return snippetAround(text, [query, ...terms]) || preview(text) || toolCall.tool_name;
 }
 
-function snippetAround(text: string, needles: string[]): string {
+export function snippetAround(text: string, needles: string[]): string {
   const compact = text.replace(/\s+/g, " ").trim();
   const lower = compact.toLowerCase();
   const needle = needles
@@ -934,14 +934,14 @@ function snippetAround(text: string, needles: string[]): string {
   return compact.slice(start, end);
 }
 
-function preview(value: string | null | undefined, max = 220): string | null {
+export function preview(value: string | null | undefined, max = 220): string | null {
   if (!value) return null;
   const compact = value.replace(/\s+/g, " ").trim();
   if (!compact) return null;
   return compact.length > max ? `${compact.slice(0, max - 3)}...` : compact;
 }
 
-function buildResumeMetadata(session: Session): RecallResume {
+export function buildResumeMetadata(session: Session): RecallResume {
   const metadataCommand = metadataResumeCommand(session.metadata);
   if (metadataCommand) return metadataCommand;
 
@@ -1111,6 +1111,6 @@ function unique(values: string[]): string[] {
   return out;
 }
 
-function stripFtsMarkers(value: string): string {
+export function stripFtsMarkers(value: string): string {
   return value.replace(/\[|\]/g, "");
 }

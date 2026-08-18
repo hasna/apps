@@ -1,5 +1,5 @@
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: SessionsApi 0.12.10
+// Source: SessionsApi 0.12.13
 
 export interface Session { "id": string; "source": "claude" | "codex" | "codewith" | "gemini"; "source_id": string; "source_path"?: string | null; "title"?: string | null; "project_path"?: string | null; "project_name"?: string | null; "model"?: string | null; "model_provider"?: string | null; "git_branch"?: string | null; "git_sha"?: string | null; "git_origin_url"?: string | null; "cli_version"?: string | null; "is_subagent": boolean; "parent_session_id"?: string | null; "total_input_tokens"?: number; "total_output_tokens"?: number; "total_cache_read_tokens"?: number; "total_cache_write_tokens"?: number; "total_thinking_tokens"?: number; "message_count"?: number; "tool_call_count"?: number; "started_at"?: string | null; "ended_at"?: string | null; "duration_seconds"?: number | null; "ingested_at"?: string; "updated_at"?: string; "source_modified_at"?: string | null; "machine"?: string | null; "metadata"?: Record<string, unknown> }
 
@@ -30,6 +30,18 @@ export interface ToolCallListResponse { "ok": boolean; "count"?: number; "toolCa
 export interface SessionListResponse { "ok": boolean; "count"?: number; "sessions": Array<Session> }
 
 export interface SearchResponse { "ok": boolean; "query"?: string; "count"?: number; "results": Array<{ "session": Session; "match": string; "snippet"?: string }> }
+
+export interface SearchHitListResponse { "ok": boolean; "query"?: string; "count"?: number; "results": Array<{ "session_id": string; "source": string; "title"?: string | null; "project_name"?: string | null; "project_path"?: string | null; "started_at"?: string | null; "snippet": string; "rank": number }> }
+
+export interface RecallEvidenceResponse { "kind": "message" | "session" | "tool_call" | "semantic" | "graph"; "signal": string; "snippet": string; "score"?: number }
+
+export interface RecallResultResponse { "session_id": string; "source": string; "source_id": string; "source_path"?: string | null; "title"?: string | null; "project_name"?: string | null; "project_path"?: string | null; "started_at"?: string | null; "updated_at"?: string | null; "rank": number; "score"?: number; "reason": string; "evidence"?: Array<RecallEvidenceResponse>; "touched_file_paths"?: Array<string>; "coding_entities"?: { "file_paths"?: Array<string>; "tool_names"?: Array<string>; "commands"?: Array<string>; "repos"?: Array<string>; "branches"?: Array<string>; "commits"?: Array<string> }; "resume"?: { "available": boolean; "command"?: Array<string> | null; "shell_command"?: string | null; "reason"?: string | null } }
+
+export interface RecallResponse { "ok": boolean; "query": string; "count": number; "results": Array<RecallResultResponse>; "metadata"?: { "query"?: string; "query_variants"?: Array<string>; "significant_terms"?: Array<string>; "semantic"?: { "attempted"?: boolean; "status"?: "used" | "skipped" | "failed"; "stored_embeddings"?: number; "openai_api_key_present"?: boolean; "reason"?: string | null }; "signals"?: Record<string, number> } }
+
+export interface EmbedResponse { "ok": boolean; "messagesProcessed"?: number; "chunksEmbedded"?: number }
+
+export interface MachinesRecomputeResponse { "ok": boolean }
 
 export interface MachinesResponse { "ok": boolean; "machines": Array<Machine> }
 
@@ -142,11 +154,38 @@ export class SessionsApi {
       });
     }
 
+    /** Generate embeddings for messages that have none yet */
+    async embedMessages(body?: { "limit"?: number }, init?: RequestInit): Promise<EmbedResponse> {
+      return this.request("POST", `/v1/embed`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List known machines */
     async listMachines(init?: RequestInit): Promise<MachinesResponse> {
       return this.request("GET", `/v1/machines`, {
         body: undefined,
         query: undefined,
+        init,
+      });
+    }
+
+    /** Rebuild per-machine session counts */
+    async recomputeMachines(init?: RequestInit): Promise<MachinesRecomputeResponse> {
+      return this.request("POST", `/v1/machines/recompute`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Natural-language recall with evidence, touched files, graph context, and resume metadata */
+    async recallSessions(query?: { "q": string; "source"?: string; "project"?: string; "machine"?: string; "limit"?: number; "semantic"?: string }, init?: RequestInit): Promise<RecallResponse> {
+      return this.request("GET", `/v1/recall`, {
+        body: undefined,
+        query,
         init,
       });
     }
@@ -163,6 +202,24 @@ export class SessionsApi {
     /** Search sessions by title/project */
     async searchSessions(query?: { "q": string; "source"?: string; "project"?: string; "machine"?: string; "limit"?: number }, init?: RequestInit): Promise<SearchResponse> {
       return this.request("GET", `/v1/search`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Hybrid full-text + semantic search (RRF) */
+    async hybridSearch(query?: { "q": string; "source"?: string; "project"?: string; "machine"?: string; "limit"?: number }, init?: RequestInit): Promise<SearchHitListResponse> {
+      return this.request("GET", `/v1/search/hybrid`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Semantic (embedding) search */
+    async semanticSearch(query?: { "q": string; "source"?: string; "project"?: string; "machine"?: string; "limit"?: number }, init?: RequestInit): Promise<SearchHitListResponse> {
+      return this.request("GET", `/v1/search/semantic`, {
         body: undefined,
         query,
         init,

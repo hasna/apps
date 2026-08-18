@@ -69,7 +69,7 @@ The JSON schemas and guard semantics are defined in the
 | `sessions migrate <source-project> <target-project>` | Move Claude project session files. Supports `--dry-run` and `--verbose`. |
 | `sessions transfer export` | Export raw files. Supports `--project`, `--output`, `--name`, `--dry-run`, `--verbose`, and `--json`. |
 | `sessions transfer import <path>` | Import an export. Supports `--remap-home`, `--remap <from:to>`, `--reingest`, `--overwrite`, `--dry-run`, `--verbose`, and `--json`. |
-| `sessions import-db <path>` | Merge another local sessions database, preserving machine tags; supports `--json`. This operation is local-only. |
+| `sessions import-db <path>` | Merge another sessions database, preserving machine tags; supports `--json`. Local mode merges into the on-box index; hosted mode reads the source DB read-only and pushes each session to the shared registry via `/v1/sessions/import`. |
 | `sessions handoff [target]` | Create an `ExternalHandoffBundleV1`. Source/context flags: `--source-agent`, `--source-session`, `--source-transcript`, `--cwd`, `--idempotency-key`, and `--context-summary`. Repeatable fields: `--auth-ref`, `--verification`, and `--blocker`. Codewith settings: `--codewith-auth-profile` and `--codewith-mode` (default `interactive`). Size limits: `--max-turns` (default `8`) and `--max-turn-chars` (default `1200`). Output/action flags: `--dry-run`, `--print-command`, `--launch`, `--emit-skill`, and `--json`. |
 
 ## Self-hosted sync
