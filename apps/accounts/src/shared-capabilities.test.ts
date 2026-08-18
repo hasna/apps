@@ -1,5 +1,6 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -13,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { addProfile, purgeProfileDir, removeProfile } from "./lib/profiles.js";
 import { addCustomTool, getTool } from "./lib/tools.js";
 import { profileEnv } from "./lib/env.js";
@@ -183,12 +184,35 @@ test("tools that declare no shared entries are untouched", async () => {
 });
 
 test("shared MCP servers are seeded into the profile account file, not settings.json", () => {
-  const p = addProfile({ name: "mcp" });
-  const accountFile = join(p.dir, ".claude.json");
-  const data = readJson(accountFile);
-  expect(Object.keys(data.mcpServers as Record<string, unknown>).sort()).toEqual(["notes", "todos"]);
-  // settings.json is not the file Claude Code reads user-scope MCP servers from.
-  expect(existsSync(join(p.dir, "settings.json"))).toBe(false);
+  // The installed statusLine default is part of a fresh profile's birth, so the
+  // assertion below must not depend on an ambient statusline binary on the
+  // runner: install a fixture in PATH the same way the positive tests do.
+  const binDir = join(home, "bin");
+  const statuslineBin = join(binDir, "statusline");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(statuslineBin, "#!/bin/sh\nexit 0\n");
+  chmodSync(statuslineBin, 0o755);
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${binDir}${delimiter}${previousPath ?? ""}`;
+  try {
+    const p = addProfile({ name: "mcp" });
+    const accountFile = join(p.dir, ".claude.json");
+    const data = readJson(accountFile);
+    expect(Object.keys(data.mcpServers as Record<string, unknown>).sort()).toEqual(["notes", "todos"]);
+    // settings.json is not the file Claude Code reads user-scope MCP servers from:
+    // MCP servers must never land there, while a fresh Claude profile may still
+    // receive the independent statusLine default.
+    const settings = readJson(join(p.dir, "settings.json"));
+    expect(settings.mcpServers as unknown).toBeUndefined();
+    expect(settings.statusLine).toEqual({
+      type: "command",
+      command: `"${statuslineBin}" render`,
+      padding: 0,
+    });
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
 });
 
 test("MCP seeding merges without clobbering profile-local state", () => {
@@ -880,7 +904,17 @@ test("a profile is BORN with the machine's statusLine in its own settings.json",
 test("a profile created before the statusLine spec is repaired through the same code path", () => {
   // The 10 profiles already on disk: minted while the machine declared no
   // status line, then repaired by the ensure pass that runs on env/launch/switch.
-  const p = addProfile({ name: "statusline-legacy" });
+  // Pin PATH to a directory without the binary: the fresh-profile installed
+  // default must not fire here, or the profile would no longer be "missing" it.
+  const previousPath = process.env.PATH;
+  process.env.PATH = join(home, "no-statusline-bin");
+  let p: ReturnType<typeof addProfile>;
+  try {
+    p = addProfile({ name: "statusline-legacy" });
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
   const settingsPath = join(p.dir, "settings.json");
   const born = existsSync(settingsPath) ? readJson(settingsPath).statusLine : undefined;
   expect(born).toBeUndefined();
@@ -917,7 +951,17 @@ test("a machine that declares NO statusLine seeds none, and still launches", () 
   // The negative control. Without it this spec could be satisfied by a rule that
   // writes a statusLine unconditionally, which would author policy in code and
   // put a broken command into every profile on a machine that wants none.
-  const p = addProfile({ name: "no-statusline-machine" });
+  // Pin PATH to a directory without the binary: the fresh-profile installed
+  // default must not fire here, or the profile would no longer be "missing" it.
+  const previousPath = process.env.PATH;
+  process.env.PATH = join(home, "no-statusline-bin");
+  let p: ReturnType<typeof addProfile>;
+  try {
+    p = addProfile({ name: "no-statusline-machine" });
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
 
   const settingsPath = join(p.dir, "settings.json");
   // Nothing to seed from either spec, so the file is not created at all; if some
@@ -932,7 +976,17 @@ test("a machine that declares NO statusLine seeds none, and still launches", () 
 test("a machine that declares a statusLine still never refuses a launch for a profile missing it", () => {
   seedSharedStatusLine(sharedHome, "statusline render");
   process.env.ACCOUNTS_SHARED_HOME_CLAUDE = join(home, "does-not-exist");
-  const p = addProfile({ name: "statusline-unseeded" });
+  // Pin PATH to a directory without the binary: the fresh-profile installed
+  // default must not fire here, or the profile would no longer be "missing" it.
+  const previousPath = process.env.PATH;
+  process.env.PATH = join(home, "no-statusline-bin");
+  let p: ReturnType<typeof addProfile>;
+  try {
+    p = addProfile({ name: "statusline-unseeded" });
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
   process.env.ACCOUNTS_SHARED_HOME_CLAUDE = sharedHome;
 
   const row = sharedCapabilityHealth(p.dir, getTool("claude")).config.find((c) => c.key === "statusLine");
@@ -941,4 +995,118 @@ test("a machine that declares a statusLine still never refuses a launch for a pr
   expect(row!.target).toBe(join(p.dir, "settings.json"));
   // reported by doctor, never fatal
   expect(() => assertProfileGuarded(p.dir, getTool("claude"))).not.toThrow();
+});
+
+// --- the installed statusline default (hasna/apps#272 successor) --------------
+//
+// When the machine's shared home declares no statusLine AND the `statusline`
+// binary is installed on PATH, a FRESH Claude profile is born with the resolved
+// binary as its status line — the same measured hole the seeding spec above
+// closes for machines that DO declare one, on machines that declare none.
+// Existing profiles are never swept: launch/switch/health passes call
+// `ensureSharedCapabilities` without `freshProfile`, and only the fresh-profile
+// path provisions the installed default.
+//
+// The persisted command is a shell string Claude Code executes at status
+// refresh. The resolved binary path is therefore validated BEFORE it is
+// quoted-and-stored: a hostile or unusual PATH entry (a directory whose name
+// carries `$()`, backticks, `$VAR`, embedded quotes, or backslashes) must never
+// become a persisted command — double quotes protect spaces and globbing but
+// not command substitution. An unsafe seed is refused and the profile is born
+// without a status line, a cosmetic loss exactly like a machine that declares
+// none.
+
+function installStatuslineFixture(binDir: string): string {
+  const statuslineBin = join(binDir, "statusline");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(statuslineBin, "#!/bin/sh\nexit 0\n");
+  chmodSync(statuslineBin, 0o755);
+  return statuslineBin;
+}
+
+function withPath(pathValue: string, fn: () => void): void {
+  const previousPath = process.env.PATH;
+  process.env.PATH = pathValue;
+  try {
+    fn();
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
+}
+
+test("a fresh Claude profile gets the installed statusline when shared settings omit it", () => {
+  const statuslineBin = installStatuslineFixture(join(home, "bin"));
+  withPath(`${join(home, "bin")}${delimiter}${process.env.PATH ?? ""}`, () => {
+    const p = addProfile({ name: "statusline-default-at-birth" });
+
+    expect(readJson(join(p.dir, "settings.json")).statusLine).toEqual({
+      type: "command",
+      command: `"${statuslineBin}" render`,
+      padding: 0,
+    });
+  });
+});
+
+test("a fresh profile still gets the installed statusline when the shared home is missing", () => {
+  process.env.ACCOUNTS_SHARED_HOME_CLAUDE = join(home, "does-not-exist");
+  const statuslineBin = installStatuslineFixture(join(home, "bin"));
+  withPath(`${join(home, "bin")}${delimiter}${process.env.PATH ?? ""}`, () => {
+    const p = addProfile({ name: "nohome-statusline" });
+
+    expect(readJson(join(p.dir, "settings.json")).statusLine).toEqual({
+      type: "command",
+      command: `"${statuslineBin}" render`,
+      padding: 0,
+    });
+
+    // The no-sweep property still holds: a non-fresh ensure pass must not
+    // write the default into an existing profile — remove the member first
+    // so only a sweep could restore it.
+    const settingsPath = join(p.dir, "settings.json");
+    const settings = readJson(settingsPath);
+    delete settings.statusLine;
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    ensureSharedCapabilities(p.dir, getTool("claude"));
+    expect(readJson(settingsPath).statusLine as Record<string, unknown> | undefined).toBeUndefined();
+  });
+});
+
+test("a fresh Claude profile refuses a shell-expandable statusline seed from a hostile PATH entry", () => {
+  // P1 regression (hasna/apps#272 successor): the resolved binary path is
+  // persisted into `statusLine.command`, which Claude Code executes through a
+  // shell at status refresh. A PATH entry whose directory name carries `$()`
+  // or backticks must NEVER become a persisted command — double quotes do not
+  // neutralize command substitution. The seed is refused instead.
+  const hostileDir = join(home, "evil$(touch pwn)`echo`");
+  installStatuslineFixture(hostileDir);
+  withPath(`${hostileDir}${delimiter}${process.env.PATH ?? ""}`, () => {
+    const p = addProfile({ name: "statusline-hostile-path" });
+
+    const settingsPath = join(p.dir, "settings.json");
+    const statusLine = existsSync(settingsPath) ? readJson(settingsPath).statusLine : undefined;
+    expect(statusLine).toBeUndefined();
+    // Belt and braces: whatever ends up persisted must contain no expansion
+    // sequence at all.
+    if (existsSync(settingsPath)) {
+      const raw = readFileSync(settingsPath, "utf8");
+      expect(raw).not.toContain("$(");
+      expect(raw).not.toContain("`");
+    }
+  });
+});
+
+test("a fresh Claude profile seeds the installed statusline when the resolved path is shell-safe (spaces quoted)", () => {
+  const binDir = join(home, "with space", "bin");
+  const statuslineBin = installStatuslineFixture(binDir);
+  withPath(`${binDir}${delimiter}${process.env.PATH ?? ""}`, () => {
+    const p = addProfile({ name: "statusline-safe-space" });
+
+    // Double quotes survive for the one class they DO cover: whitespace.
+    expect(readJson(join(p.dir, "settings.json")).statusLine).toEqual({
+      type: "command",
+      command: `"${statuslineBin}" render`,
+      padding: 0,
+    });
+  });
 });
