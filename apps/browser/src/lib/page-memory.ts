@@ -1,5 +1,5 @@
 /**
- * open-mementos integration — cache page facts to avoid re-scraping.
+ * mementos integration — cache page facts to avoid re-scraping.
  * Agents call browser_remember after extracting data, browser_recall before navigating.
  */
 

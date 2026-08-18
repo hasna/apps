@@ -15,7 +15,7 @@ export function registerIntegrationAndMeta(server: McpServer) {
 
   registerTool(server,
     "browser_secrets_login",
-    "Login to a service using credentials from open-secrets vault or ~/.secrets.",
+    "Login to a service using credentials from the @hasna/secrets vault or ~/.secrets.",
     { session_id: z.string().optional(), service: z.string(), login_url: z.string().optional(), save_profile: z.boolean().optional().default(true) },
     async ({ session_id, service, login_url, save_profile }) => {
       try {
@@ -36,7 +36,7 @@ export function registerIntegrationAndMeta(server: McpServer) {
 
   registerTool(server,
     "browser_remember",
-    "Store page facts in open-mementos for future recall.",
+    "Store page facts in @hasna/mementos for future recall.",
     { session_id: z.string().optional(), facts: z.record(z.unknown()), tags: z.array(z.string()).optional() },
     async ({ session_id, facts, tags }) => {
       try {
@@ -52,7 +52,7 @@ export function registerIntegrationAndMeta(server: McpServer) {
 
   registerTool(server,
     "browser_recall",
-    "Retrieve cached page facts from open-mementos.",
+    "Retrieve cached page facts from @hasna/mementos.",
     { url: z.string(), max_age_hours: z.number().optional().default(24) },
     async ({ url, max_age_hours }) => {
       try {
@@ -65,7 +65,7 @@ export function registerIntegrationAndMeta(server: McpServer) {
 
   registerTool(server,
     "browser_session_announce",
-    "Announce to other agents via open-conversations what this session is browsing.",
+    "Announce to other agents via @hasna/conversations what this session is browsing.",
     { session_id: z.string().optional(), message: z.string().optional() },
     async ({ session_id, message }) => {
       try {

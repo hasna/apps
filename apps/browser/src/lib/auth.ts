@@ -1,5 +1,5 @@
 /**
- * open-secrets integration for browser login automation.
+ * secrets integration for browser login automation.
  * Reads credentials from @hasna/secrets vault or ~/.secrets file as fallback.
  */
 
