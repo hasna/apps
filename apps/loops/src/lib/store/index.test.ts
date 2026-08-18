@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createLoopsApiServer } from "../../api/index.js";
 import { createSqliteLoopStorage } from "../storage/sqlite.js";
-import { createHasnaStorageClient, type HasnaStorageClient } from "../cloud/storage.js";
-import { createHasnaHttpTransport, HasnaHttpError } from "../cloud/transport.js";
+import { createHasnaStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
+import { createHasnaHttpTransport, HasnaHttpError } from "@hasna/contracts/client";
 import { ApiStore, CloudUnsupportedError, getStore, isCloudStore, LocalStore } from "./index.js";
 import { Store } from "../store.js";
 import type { CreateLoopInput, CreateWorkflowInput } from "../../types.js";

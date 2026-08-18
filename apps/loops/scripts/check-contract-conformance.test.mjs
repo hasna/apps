@@ -11,7 +11,6 @@ import {
   formatContractConformance,
   repoRoot,
   runContractConformance,
-  vendoredSeamWaiver,
 } from "./check-contract-conformance.mjs";
 import { contractHealthResponse } from "../src/api/index.ts";
 
@@ -36,7 +35,7 @@ function conformanceFixture(mutatePackage) {
 }
 
 describe("Loops repository contract conformance", () => {
-  test("passes official bin conformance without a loops-api compatibility waiver", () => {
+  test("passes official bin conformance with no seam adjudication", () => {
     const report = runContractConformance();
     const rawBinCheck = report.official.checks.find(
       ({ id }) => id === "bins_match_package",
@@ -58,7 +57,7 @@ describe("Loops repository contract conformance", () => {
       class: "service",
     });
     expect(report.official).toMatchObject({
-      ok: false,
+      ok: true,
       repoRoot,
       name: "loops",
       class: "service",
@@ -69,45 +68,21 @@ describe("Loops repository contract conformance", () => {
       detail: "declared bins match package.json bin",
     });
     expect(adjudicatedBinCheck).toEqual(rawBinCheck);
-    expect(report.adjudications).toEqual([
-      {
-        checkId: "credential_seam_compliance",
-        taskId: "d295c91e",
-        kind: "vendored-seam",
-        detail: officialSeamCheck.detail,
-      },
-    ]);
+    expect(report.adjudications).toEqual([]);
     expect(
       report.checks.find(({ id }) => id === "health_shape"),
     ).toMatchObject({ status: "pass" });
-    // Known, tracked debt: @hasna/contracts 0.10.6's new credential_seam_compliance
-    // gate flags loops' vendored client seam (src/lib/cloud/transport.ts,
-    // src/lib/cloud/storage.ts define resolveClientTransport /
-    // createClientTransport / createHasnaHttpTransport / resolveStorageClient).
-    // The loops seam deliberately speaks the doctrine-clean `file | api`
-    // vocabulary while @hasna/contracts/client 0.10.6 still speaks
-    // `sqlite | http` with disk-tier credential resolution; adopting the shared
-    // seam changes client connection semantics and is the tracked cloud/-domain
-    // follow-up d295c91e. The waiver is pinned to the exact four-seam detail
-    // (see vendoredSeamWaiver), so any OTHER conformance regression — or any
-    // change to the seam findings themselves — fails loudly.
-    expect(seamCheck).toEqual({
-      id: "credential_seam_compliance",
-      status: "pass",
-      detail:
-        "vendored client seam debt adjudicated; follow-up todos d295c91e — " +
-        "import from @hasna/contracts/client",
-    });
-    expect(officialSeamCheck.status).toBe("fail");
-    expect(officialSeamCheck.detail).toContain(
-      "vendored copy of the @hasna/contracts client seam",
+    // The vendored client seam is gone: the shared seam is imported from
+    // @hasna/contracts/client, so the official check itself passes and no
+    // adjudication (follow-up d295c91e) is needed.
+    expect(seamCheck).toEqual(officialSeamCheck);
+    expect(officialSeamCheck.status).toBe("pass");
+    expect(report.checks.filter(({ status }) => status === "fail").map(({ id }) => id)).toEqual(
+      [],
     );
-    expect(
-      report.checks.filter(({ status }) => status === "fail").map(({ id }) => id),
-    ).toEqual([]);
   });
 
-  test("leaves an unwaived extra package bin fatal", () => {
+test("leaves an unwaived extra package bin fatal", () => {
     const root = conformanceFixture((packageJson) => {
       packageJson.bin["loops-unwaived"] = "dist/unwaived/index.js";
     });
@@ -125,38 +100,6 @@ describe("Loops repository contract conformance", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
-
-  test("seam waiver fires only on the exact known four-seam detail", () => {
-    const realSeam = runContractConformance().official.checks.find(
-      ({ id }) => id === "credential_seam_compliance",
-    );
-    const official = (detail, status = "fail") => ({
-      checks: [{ id: "credential_seam_compliance", status, detail }],
-    });
-
-    expect(vendoredSeamWaiver(official(realSeam.detail))?.officialCheck).toEqual(
-      realSeam,
-    );
-
-    const extraSeam = `${realSeam.detail}; src/lib/cloud/transport.ts:400 extraClientSeam is DEFINED here — this is a vendored copy of the @hasna/contracts client seam, not a use of it.`;
-    expect(vendoredSeamWaiver(official(extraSeam))).toBeNull();
-
-    const reworded = realSeam.detail.replace(
-      "resolveStorageClient",
-      "renamedStorageClient",
-    );
-    expect(vendoredSeamWaiver(official(reworded))).toBeNull();
-
-    expect(vendoredSeamWaiver(official(realSeam.detail, "pass"))).toBeNull();
-
-    expect(
-      vendoredSeamWaiver({
-        checks: [
-          { id: "other_check", status: "fail", detail: realSeam.detail },
-        ],
-      }),
-    ).toBeNull();
   });
 
   test("does not retain a loops-api compatibility waiver", () => {
