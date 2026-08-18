@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { hashApiKey, publicPrincipal } from "./auth.js";
 import { SQLITE_MEMORY_PATH } from "./database-url.js";
 import { resolveMigrationsDir } from "./migrations-dir.js";
-import { nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToRun, rowToSkill, rowToSkillBundle, runId } from "./rows.js";
+import { nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToPin, rowToRun, rowToSkill, rowToSkillBundle, runId } from "./rows.js";
 import type {
   ApiPrincipal,
   ClaimRunInput,
@@ -27,6 +27,7 @@ import type {
   PublishSkillInput,
   RunTransitionPatch,
   ServerArtifact,
+  ServerPin,
   ServerRunLog,
   ServerRunRecord,
   ServerSkillBundle,
@@ -600,6 +601,39 @@ export class SqliteSkillsStore implements SkillsProductStore {
   async getSkillBundle(principal: ApiPrincipal, sha256: string): Promise<ServerSkillBundle | null> {
     const row = this.get("SELECT * FROM skills_bundles WHERE org_id = ? AND sha256 = ? LIMIT 1", [principal.orgId, sha256]);
     return row ? rowToSkillBundle(row) : null;
+  }
+
+  /*
+   * Pins. Mirrors the Postgres twin statement for statement; the schema is
+   * shared and the ON CONFLICT target is the composite primary key in both
+   * dialects. Single statements, so no transaction is needed for atomicity.
+   */
+  async pinSkill(principal: ApiPrincipal, slug: string, metadata: Record<string, unknown> = {}): Promise<ServerPin> {
+    const row = this.get(
+      `INSERT INTO skills_pins (org_id, principal, slug, pinned_at, metadata_json)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (org_id, principal, slug) DO UPDATE SET
+         pinned_at = excluded.pinned_at,
+         metadata_json = excluded.metadata_json
+       RETURNING *`,
+      [principal.orgId, principal.apiKeyId, slug, nowIso(), JSON.stringify(metadata)],
+    );
+    return rowToPin(row!);
+  }
+
+  async unpinSkill(principal: ApiPrincipal, slug: string): Promise<boolean> {
+    const result = this.db.run(
+      "DELETE FROM skills_pins WHERE org_id = ? AND principal = ? AND slug = ?",
+      [principal.orgId, principal.apiKeyId, slug],
+    );
+    return result.changes > 0;
+  }
+
+  async listPins(principal: ApiPrincipal): Promise<ServerPin[]> {
+    return this.all(
+      "SELECT * FROM skills_pins WHERE org_id = ? AND principal = ? ORDER BY slug ASC",
+      [principal.orgId, principal.apiKeyId],
+    ).map(rowToPin);
   }
 
   /**

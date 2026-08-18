@@ -118,6 +118,25 @@ describe("SqliteSkillsStore durability and schema", () => {
     store = new SqliteSkillsStore(dbPath);
   });
 
+  test("a pin set survives closing and reopening the database file", async () => {
+    const a = publicPrincipal(ORG_A);
+    await store.pinSkill(a, "deploy-notes", { reason: "team default" });
+    await store.pinSkill(a, "pdf-generate");
+    await store.close();
+
+    // A restart is not a data-loss event for pins either: the hosted pin set is
+    // read back from the same file by a fresh store instance.
+    const reopened = new SqliteSkillsStore(dbPath);
+    try {
+      const pins = await reopened.listPins(a);
+      expect(pins.map((pin) => pin.slug).sort()).toEqual(["deploy-notes", "pdf-generate"]);
+      expect(pins.find((pin) => pin.slug === "deploy-notes")).toMatchObject({ metadata: { reason: "team default" } });
+    } finally {
+      await reopened.close();
+    }
+    store = new SqliteSkillsStore(dbPath);
+  });
+
   test("concurrent first opens of a brand-new database all succeed", async () => {
     // The zero-config topology starts `skills-server` and `skills-worker` against a file
     // that does not exist yet. Converting a fresh database to WAL takes an exclusive
@@ -162,11 +181,11 @@ console.log(JSON.stringify({ mode, tables }));
     // full migrated schema. A single "database is locked" here is the bug.
     for (const result of results) {
       expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
-      // 14 since migration 0002 added skills_bundles and 0003 added the two
-      // governance tables (skills_lifecycle_receipts, skills_credit_reservations).
-      // The count is asserted rather than ranged so that a migration silently
-      // failing to apply is a failure here.
-      expect(JSON.parse(result.stdout.split("\n").at(-1)!)).toEqual({ mode: "wal", tables: 14 });
+      // 15 since migration 0002 added skills_bundles, 0003 added the two
+      // governance tables (skills_lifecycle_receipts, skills_credit_reservations),
+      // and 0004 added skills_pins. The count is asserted rather than ranged so
+      // that a migration silently failing to apply is a failure here.
+      expect(JSON.parse(result.stdout.split("\n").at(-1)!)).toEqual({ mode: "wal", tables: 15 });
     }
   }, 60_000);
 

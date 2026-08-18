@@ -253,5 +253,58 @@ for (const backend of backends) {
         await fixture.close();
       }
     });
+
+    test("pins round-trip and are scoped to org and principal", async () => {
+      const fixture = await seeded(backend);
+      try {
+        const pin = await fixture.store.pinSkill(fixture.principal, "deploy-notes", { reason: "team default" });
+        expect(pin).toMatchObject({ orgId: "org_a", principal: "key_a", slug: "deploy-notes", metadata: { reason: "team default" } });
+        expect(pin.pinnedAt).toBeTruthy();
+
+        // Same slug, another org: a distinct pin, not the same row.
+        await fixture.store.pinSkill(fixture.otherPrincipal, "deploy-notes");
+        expect((await fixture.store.listPins(fixture.principal)).map((p) => p.slug)).toEqual(["deploy-notes"]);
+        expect((await fixture.store.listPins(fixture.otherPrincipal)).map((p) => p.slug)).toEqual(["deploy-notes"]);
+
+        // Another API key in the SAME org is a different principal: its pin set is its own.
+        const sameOrgOtherKey = publicPrincipal({ ...ORG, apiKeyId: "key_a2" });
+        expect(await fixture.store.listPins(sameOrgOtherKey)).toEqual([]);
+        await fixture.store.pinSkill(sameOrgOtherKey, "deploy-notes", { scope: "personal" });
+        expect((await fixture.store.listPins(sameOrgOtherKey)).map((p) => p.slug)).toEqual(["deploy-notes"]);
+
+        // Cross-org read of a slug known to exist in org A returns nothing.
+        expect((await fixture.store.listPins(fixture.otherPrincipal)).map((p) => p.slug)).toEqual(["deploy-notes"]);
+        expect((await fixture.store.listPins(fixture.otherPrincipal))[0]).toMatchObject({ orgId: "org_b", principal: "key_b" });
+      } finally {
+        await fixture.close();
+      }
+    });
+
+    test("re-pinning upserts to one row and refreshes pinnedAt", async () => {
+      const fixture = await seeded(backend);
+      try {
+        const first = await fixture.store.pinSkill(fixture.principal, "notes");
+        const second = await fixture.store.pinSkill(fixture.principal, "notes", { v: 2 });
+        expect((await fixture.store.listPins(fixture.principal)).map((p) => p.slug)).toEqual(["notes"]);
+        expect(second.metadata).toEqual({ v: 2 });
+        // Upsert, not append: the row count does not grow, and the timestamp moves.
+        expect(second.pinnedAt >= first.pinnedAt).toBe(true);
+      } finally {
+        await fixture.close();
+      }
+    });
+
+    test("unpinning removes the pin and reports false for a missing one", async () => {
+      const fixture = await seeded(backend);
+      try {
+        await fixture.store.pinSkill(fixture.principal, "gone-later");
+        expect(await fixture.store.unpinSkill(fixture.principal, "gone-later")).toBe(true);
+        expect(await fixture.store.unpinSkill(fixture.principal, "gone-later")).toBe(false);
+        expect(await fixture.store.unpinSkill(fixture.otherPrincipal, "never-pinned")).toBe(false);
+        expect(await fixture.store.listPins(fixture.principal)).toEqual([]);
+      } finally {
+        await fixture.close();
+      }
+    });
   });
 }

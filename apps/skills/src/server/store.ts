@@ -6,6 +6,7 @@ import type {
   PublishSkillInput,
   RunTransitionPatch,
   ServerArtifact,
+  ServerPin,
   ServerRunLog,
   ServerRunRecord,
   ServerSkillBundle,
@@ -17,7 +18,7 @@ import type {
 import { StaleLeaseGenerationError } from "./types.js";
 import { hashApiKey, publicPrincipal } from "./auth.js";
 import { resolveDatabaseTarget, type DatabaseTarget } from "./database-url.js";
-import { artifactId, nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToRun, rowToSkill, rowToSkillBundle, parseJsonArray, runId } from "./rows.js";
+import { artifactId, nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToPin, rowToRun, rowToSkill, rowToSkillBundle, parseJsonArray, runId } from "./rows.js";
 import { SqliteSkillsStore, type SqliteStoreOptions } from "./sqlite-store.js";
 
 type SqlTag = {
@@ -104,6 +105,7 @@ export class MemorySkillsStore implements SkillsProductStore {
   private idempotency = new Map<string, string>();
   private skills = new Map<string, ServerSkillRecord>();
   private bundles = new Map<string, ServerSkillBundle>();
+  private pins = new Map<string, ServerPin>();
 
   constructor(apiKeys: Array<{ token: string; principal?: Partial<ApiPrincipal> }> = []) {
     for (const key of apiKeys) this.addApiKey(key.token, key.principal);
@@ -312,6 +314,24 @@ export class MemorySkillsStore implements SkillsProductStore {
     return bundle && bundle.orgId === principal.orgId ? bundle : null;
   }
 
+  async pinSkill(principal: ApiPrincipal, slug: string, metadata: Record<string, unknown> = {}): Promise<ServerPin> {
+    // Upsert, matching the SQL backends' ON CONFLICT DO UPDATE: re-pinning
+    // refreshes pinned_at and replaces the metadata with what was sent.
+    const pin: ServerPin = { orgId: principal.orgId, principal: principal.apiKeyId, slug, pinnedAt: nowIso(), metadata: { ...metadata } };
+    this.pins.set(pinKey(principal.orgId, principal.apiKeyId, slug), pin);
+    return pin;
+  }
+
+  async unpinSkill(principal: ApiPrincipal, slug: string): Promise<boolean> {
+    return this.pins.delete(pinKey(principal.orgId, principal.apiKeyId, slug));
+  }
+
+  async listPins(principal: ApiPrincipal): Promise<ServerPin[]> {
+    return Array.from(this.pins.values())
+      .filter((pin) => pin.orgId === principal.orgId && pin.principal === principal.apiKeyId)
+      .sort((a, b) => a.slug.localeCompare(b.slug));
+  }
+
   private collectOrphanBundle(orgId: string, sha256: string): void {
     const referenced = Array.from(this.skills.values()).some((skill) => skill.orgId === orgId && skill.bundleSha256 === sha256);
     if (!referenced) this.bundles.delete(skillKey(orgId, sha256));
@@ -343,6 +363,19 @@ export class MemorySkillsStore implements SkillsProductStore {
  */
 function skillKey(orgId: string, slug: string): string {
   return `${orgId.length}:${orgId}:${slug}`;
+}
+
+/**
+ * Composite map key for a pin: org + principal + slug, length-prefixed for the
+ * same reason skillKey's org id is. Each variable-length field is prefixed with
+ * its own length, so no combination of separators-in-field-values can collide:
+ * org "a:b" + principal "c" + slug "d" and org "a" + principal "b:c" + slug "d"
+ * are different keys. (Slug needs no prefix: everything before it is
+ * length-delimited, so the first two fields split unambiguously and the rest of
+ * the string is the slug.)
+ */
+function pinKey(orgId: string, principal: string, slug: string): string {
+  return `${orgId.length}:${orgId}:${principal.length}:${principal}:${slug}`;
 }
 
 export class PostgresSkillsStore implements SkillsProductStore {
@@ -771,6 +804,39 @@ export class PostgresSkillsStore implements SkillsProductStore {
   async getSkillBundle(principal: ApiPrincipal, sha256: string): Promise<ServerSkillBundle | null> {
     const rows = await this.sql`SELECT * FROM skills_bundles WHERE org_id = ${principal.orgId} AND sha256 = ${sha256} LIMIT 1`;
     return rows[0] ? rowToSkillBundle(rows[0]) : null;
+  }
+
+  /*
+   * Pins. Same pattern as the registry surface: the org/principal predicates
+   * live in the store, and no withContext() is needed because skills_pins is
+   * not under RLS - it is written and read only by the API under the
+   * requesting principal's org, exactly like skills_registry.
+   */
+  async pinSkill(principal: ApiPrincipal, slug: string, metadata: Record<string, unknown> = {}): Promise<ServerPin> {
+    const rows = await this.sql`
+      INSERT INTO skills_pins (org_id, principal, slug, pinned_at, metadata_json)
+      VALUES (${principal.orgId}, ${principal.apiKeyId}, ${slug}, now(), ${JSON.stringify(metadata)}::jsonb)
+      ON CONFLICT (org_id, principal, slug) DO UPDATE SET
+        pinned_at = now(),
+        metadata_json = EXCLUDED.metadata_json
+      RETURNING *
+    `;
+    return rowToPin(rows[0]!);
+  }
+
+  async unpinSkill(principal: ApiPrincipal, slug: string): Promise<boolean> {
+    const rows = await this.sql`
+      DELETE FROM skills_pins WHERE org_id = ${principal.orgId} AND principal = ${principal.apiKeyId} AND slug = ${slug}
+      RETURNING 1 AS present
+    `;
+    return rows.length > 0;
+  }
+
+  async listPins(principal: ApiPrincipal): Promise<ServerPin[]> {
+    const rows = await this.sql`
+      SELECT * FROM skills_pins WHERE org_id = ${principal.orgId} AND principal = ${principal.apiKeyId} ORDER BY slug ASC
+    `;
+    return rows.map(rowToPin);
   }
 
   /** Drop a bundle no remaining skill in the org points at. See the SQLite twin. */
