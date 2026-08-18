@@ -7,6 +7,7 @@ import {
   CODEWITH_NATIVE_IMPORTS_ENV,
   SESSION_INSTRUCTION_LAYERS,
   SESSION_LAYER_RANK,
+  getRawStoreRoot,
   planSessionRender,
   resolveSessionPath,
   sourcesFromIdentityExport,
@@ -1431,5 +1432,35 @@ describe("session render planner", () => {
         sources,
       })
     ).toThrow("Duplicate instruction rule path");
+  });
+});
+
+describe("raw render store root", () => {
+  test("defaults to ~/.hasna/instructions under a fake HOME", () => {
+    const previousRawHome = process.env["HASNA_CONFIGS_HOME"];
+    const previousHome = process.env["HOME"];
+    try {
+      delete process.env["HASNA_CONFIGS_HOME"];
+      const home = makeTempRoot("ok-instructions-raw-store-");
+      process.env["HOME"] = home;
+      expect(getRawStoreRoot()).toBe(join(home, ".hasna", "instructions"));
+      rmSync(home, { recursive: true, force: true });
+    } finally {
+      restoreEnv("HASNA_CONFIGS_HOME", previousRawHome);
+      restoreEnv("HOME", previousHome);
+    }
+  });
+
+  test("HASNA_CONFIGS_HOME env override still wins", () => {
+    const previousRawHome = process.env["HASNA_CONFIGS_HOME"];
+    try {
+      const home = makeTempRoot("ok-instructions-raw-store-override-");
+      process.env["HOME"] = home;
+      process.env["HASNA_CONFIGS_HOME"] = join(home, ".hasna", "configs");
+      expect(getRawStoreRoot()).toBe(join(home, ".hasna", "configs"));
+      rmSync(home, { recursive: true, force: true });
+    } finally {
+      restoreEnv("HASNA_CONFIGS_HOME", previousRawHome);
+    }
   });
 });

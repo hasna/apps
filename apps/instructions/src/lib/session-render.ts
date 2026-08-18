@@ -733,8 +733,8 @@ function yamlQuote(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
-function getRawStoreRoot(): string {
-  return resolve(process.env[RAW_STORE_ROOT_ENV] || join(process.env["HOME"] || homedir(), ".hasna", "configs"));
+export function getRawStoreRoot(): string {
+  return resolve(process.env[RAW_STORE_ROOT_ENV] || join(process.env["HOME"] || homedir(), ".hasna", "instructions"));
 }
 
 function defaultTargetHome(tool: SessionRenderTool, profile: string, sessionId?: string): string {
