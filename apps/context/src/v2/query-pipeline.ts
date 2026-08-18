@@ -303,7 +303,7 @@ function formatContextText(input: {
   maxTokens: number;
 }): string {
   const lines = [
-    "# Open Context v2 Context Pack",
+    "# Hasna Context v2 Context Pack",
     "",
     `Query: ${input.prompt}`,
     `Intent: ${input.intent.needs_api ? "api" : "docs"}${input.intent.wants_latest ? ", latest" : ""}`,

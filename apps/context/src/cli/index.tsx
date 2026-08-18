@@ -167,7 +167,7 @@ program
     const providers = getAiProviderStatuses();
     const configuredProviders = providers.filter((provider) => provider.configured);
 
-    console.log(chalk.bold("\nopen-context status\n"));
+    console.log(chalk.bold("\ncontext status\n"));
     console.log(`  DB:              ${db}`);
     console.log(`  Libraries:       ${libraries.length}`);
     console.log(`  Pages:           ${totalDocs}`);

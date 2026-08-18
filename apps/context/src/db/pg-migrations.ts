@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-context remote storage sync.
+ * PostgreSQL migrations for context remote storage sync.
  *
  * Equivalent to the SQLite schema in database.ts, translated for PostgreSQL.
  * FTS5 virtual tables and SQLite triggers are omitted (not available in PostgreSQL).

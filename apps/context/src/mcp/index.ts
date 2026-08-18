@@ -35,7 +35,7 @@ const pkg = require("../../package.json") as { version: string };
 function printHelp(): void {
   console.log(`Usage: context-mcp [options]
 
-Start the open-context MCP server over stdio.
+Start the context MCP server over stdio.
 
 Options:
   -V, --version  output the version number

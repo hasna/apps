@@ -126,7 +126,7 @@ describe("database path resolution", () => {
     const root = isolateHome();
     const otherDbDir = join(root, ".hasna", "apps", "knowledge");
     mkdirSync(otherDbDir, { recursive: true });
-    writeFileSync(join(otherDbDir, "knowledge.db"), "not an open-context database");
+    writeFileSync(join(otherDbDir, "knowledge.db"), "not a context database");
 
     expect(getDbPath()).toBe(join(root, "home", ".hasna", "context", "context.db"));
   });
