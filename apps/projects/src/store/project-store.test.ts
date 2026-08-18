@@ -392,13 +392,13 @@ describe("projects store api transport (roots/agents/recipes)", () => {
   };
 
   function stubStore(handler: (method: string, path: string, body: unknown) => unknown) {
-    const calls: Array<{ method: string; path: string; auth: string | null }> = [];
+    const calls: Array<{ method: string; path: string; auth: string | null; body?: unknown }> = [];
     const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
       const method = (init?.method ?? "GET").toUpperCase();
       const url = new URL(input);
       const headers = new Headers(init?.headers);
-      calls.push({ method, path: `${url.pathname}${url.search}`, auth: headers.get("authorization") });
       const body = init?.body ? JSON.parse(init.body as string) : undefined;
+      calls.push({ method, path: `${url.pathname}${url.search}`, auth: headers.get("authorization"), body });
       const result = handler(method, `${url.pathname}${url.search}`, body);
       return new Response(JSON.stringify(result ?? {}), { status: 200, headers: { "content-type": "application/json" } });
     };
@@ -503,20 +503,79 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls).toEqual([{ method: "GET", path: "/v1/projects/p/locations", auth: "Bearer secret-key" }]);
   });
 
-  test("on-box sub-resource reads return empty in api mode (no sqlite)", async () => {
-    const { store, calls } = stubStore(() => ({}));
-    expect(await store.getProjectAgents("p")).toEqual([]);
-    expect(await store.listLocks()).toEqual([]);
-    expect(await store.listAgentRuns({ workspace_id: "p" })).toEqual([]);
-    expect(await store.releaseLock("k")).toBe(false);
-    expect(calls).toHaveLength(0); // never hit the network or local sqlite
+  test("project agent assignments and locks route through the api in api mode", async () => {
+    const { store, calls } = stubStore((method, path, body) => {
+      if (method === "GET" && path === "/v1/projects/p/agents") {
+        return { assignments: [{ id: "wa1", workspace_id: "p", agent_id: "a1", role: "contributor", assigned_by: null, metadata: {}, created_at: "2026-08-01 00:00:00", agent: null }] };
+      }
+      if (method === "GET" && path === "/v1/locks") {
+        return { locks: [{ id: "lk1", lock_key: "k", workspace_id: "p", agent_id: "a1", reason: null, created_at: "2026-08-01 00:00:00", expires_at: null }] };
+      }
+      if (method === "DELETE" && path === "/v1/locks/k") return { released: true };
+      return {};
+    });
+    expect(await store.getProjectAgents("p")).toEqual([{
+      id: "wa1", workspace_id: "p", agent_id: "a1", role: "contributor", assigned_by: null, metadata: {}, created_at: "2026-08-01 00:00:00", agent: null,
+    }]);
+    expect(await store.listLocks()).toEqual([{
+      id: "lk1", lock_key: "k", workspace_id: "p", agent_id: "a1", reason: null, created_at: "2026-08-01 00:00:00", expires_at: null,
+    }]);
+    expect(await store.releaseLock("k")).toBe(true);
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).toMatchObject({ method: "GET", path: "/v1/projects/p/agents", auth: "Bearer secret-key" });
+    expect(calls[1]).toMatchObject({ method: "GET", path: "/v1/locks", auth: "Bearer secret-key" });
+    expect(calls[2]).toMatchObject({ method: "DELETE", path: "/v1/locks/k", auth: "Bearer secret-key" });
   });
 
-  test("local-only writes throw in api mode instead of writing local sqlite", async () => {
-    const { store } = stubStore(() => ({}));
-    await expect(store.assignAgent("p", { agentId: "a" })).rejects.toThrow(/local-only/);
-    await expect(store.addLocation("p", { path: "/x" })).rejects.toThrow(/local-only/);
-    await expect(store.acquireLock({ key: "k" })).rejects.toThrow(/local-only/);
+  test("project agent assignment writes POST to the api in api mode", async () => {
+    const { store, calls } = stubStore((method, _p, body) => {
+      if (method === "POST") {
+        return { assignment: { id: "wa2", workspace_id: "p", agent_id: (body as { agent_id: string }).agent_id, role: (body as { role: string }).role, assigned_by: null, metadata: {}, created_at: "2026-08-01 00:00:00", agent: null } };
+      }
+      return {};
+    });
+    const assignment = await store.assignAgent("p", { agentId: "a1", role: "owner" });
+    expect(assignment).toMatchObject({ id: "wa2", role: "owner", agent_id: "a1" });
+    expect(calls.at(-1)).toMatchObject({ method: "POST", path: "/v1/projects/p/agents", auth: "Bearer secret-key" });
+  });
+
+  test("addLocation POSTs to /v1/projects/{id}/locations in api mode", async () => {
+    const { store, calls } = stubStore((method, _p, body) => {
+      if (method === "POST") {
+        const location = {
+          id: "loc2",
+          workspace_id: "p",
+          path: (body as { path: string }).path,
+          machine_id: "machine01",
+          label: "extra",
+          kind: "local",
+          is_primary: false,
+          exists_at_create: false,
+          metadata: {},
+          created_at: "2026-08-01 00:00:00",
+        };
+        return { project: { id: "p", slug: "proj" }, location };
+      }
+      return {};
+    });
+    const result = await store.addLocation("p", { path: "/x", label: "extra", machineId: "machine01" });
+    expect(result.location).toMatchObject({ path: "/x", label: "extra", machine_id: "machine01" });
+    expect(result.project).toMatchObject({ id: "p" });
+    expect(calls.at(-1)).toMatchObject({ method: "POST", path: "/v1/projects/p/locations", auth: "Bearer secret-key" });
+    expect(calls.at(-1)!.body).toMatchObject({ path: "/x", label: "extra", machine_id: "machine01" });
+  });
+
+  test("acquireLock POSTs to /v1/locks in api mode", async () => {
+    const { store, calls } = stubStore((method, _p, body) => {
+      if (method === "POST") {
+        return { lock: { id: "lk2", lock_key: (body as { lock_key: string }).lock_key, workspace_id: "p", agent_id: null, reason: null, created_at: "2026-08-01 00:00:00", expires_at: null } };
+      }
+      return {};
+    });
+    const lock = await store.acquireLock({ key: "workspace:p", workspaceId: "p", ttlSeconds: 600 });
+    expect(lock).toMatchObject({ lock_key: "workspace:p", workspace_id: "p" });
+    expect(calls.at(-1)).toMatchObject({ method: "POST", path: "/v1/locks", auth: "Bearer secret-key" });
+    expect(calls.at(-1)!.body).toMatchObject({ lock_key: "workspace:p", workspace_id: "p", ttl_seconds: 600 });
   });
 
   // Regression for the vacuous-read defect (todos 4c17afb1): the per-project app

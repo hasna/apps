@@ -23,7 +23,14 @@ import {
   preconditionDigest,
   requestDigest,
 } from "./guarded-project-mutation.js";
-import { prepareWorkspaceDirectory } from "./workspace-runtime.js";
+import {
+  applyWorkspaceTmux,
+  applyWorkspaceTmuxProfile,
+  prepareWorkspaceDirectory,
+  type WorkspaceRuntimeAction,
+  type WorkspaceTmuxResult,
+  type WorkspaceTmuxWindowSpec,
+} from "./workspace-runtime.js";
 import {
   getProjectsHome,
   isProjectWorkspaceStorePath,
@@ -657,4 +664,192 @@ export function migrateProjectToStore(
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(rollbackErrors.length ? `${message}; rollback errors: ${rollbackErrors.join("; ")}` : message);
   }
+}
+
+/**
+ * Store-routed migration for api/cloud mode. The file half (moving the
+ * machine-local primary directory into the canonical workspace store) runs on
+ * the invoking machine — the server cannot move files on a client box — while
+ * the registry half (previous + canonical locations, migration event) routes
+ * through the Store so it lands on the hosted project. Mirrors the local
+ * `migrateProjectToStore` semantics: same plan, same verification, same
+ * file-move rollback with a primary-location restore.
+ */
+export async function migrateProjectToStoreViaStore(
+  store: ProjectStore,
+  project: Workspace,
+  options: { apply?: boolean; agentId?: string; source?: EventSource; command?: string } = {},
+): Promise<ProjectStoreMigrationResult> {
+  const dryRun = !options.apply;
+  const plan = planProjectStoreMigration(project, { dryRun });
+  if (dryRun) {
+    return { ...plan, plan_artifact_path: null, verified: false, previous_location: null, primary_location: null };
+  }
+  if (!plan.can_apply) {
+    throw new Error(`Cannot migrate project store: ${plan.warnings.join("; ")}`);
+  }
+
+  const created = ensureDataDirs(plan.paths, false);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const planArtifactPath = join(plan.paths.data_path, `migration-plan-${timestamp}.json`);
+  writeFileSync(planArtifactPath, JSON.stringify(plan, null, 2) + "\n", "utf-8");
+  let movedDirectory = false;
+
+  try {
+    if (plan.source_path && plan.source_path !== plan.target_path) {
+      if (existsSync(plan.target_path) && isEmptyDirectory(plan.target_path)) rmdirSync(plan.target_path);
+      renameSync(plan.source_path, plan.target_path);
+      movedDirectory = true;
+    } else if (!existsSync(plan.target_path)) {
+      mkdirSync(plan.target_path, { recursive: true });
+    }
+
+    let previousLocation: WorkspaceLocation | null = null;
+    if (plan.source_path && plan.source_path !== plan.target_path) {
+      const previous = await store.addLocation(project.id, {
+        path: plan.source_path,
+        label: "previous-primary",
+        kind: "migrated-from",
+        metadata: { migrated_to: plan.target_path, plan_artifact_path: planArtifactPath },
+        agentId: options.agentId,
+        source: options.source,
+        command: options.command,
+      });
+      previousLocation = previous.location;
+    }
+
+    const primary = await store.addLocation(project.id, {
+      path: plan.target_path,
+      label: "canonical",
+      kind: "store",
+      isPrimary: true,
+      metadata: { canonical: true, data_path: plan.paths.data_path, created, plan_artifact_path: planArtifactPath },
+      agentId: options.agentId,
+      source: options.source,
+      command: options.command,
+    });
+    const primaryLocation = primary.location;
+
+    const updated = (await store.getProject(project.id)) ?? project;
+    prepareWorkspaceDirectory(updated, {
+      writeMarker: true,
+      recordEvents: false,
+      agentId: options.agentId,
+      source: options.source,
+      command: options.command,
+    });
+    const verified = isProjectWorkspaceStorePath(updated.id, updated.primary_path) && existsSync(plan.target_path);
+    if (!verified) throw new Error("Migration verification failed: canonical primary path was not recorded and present.");
+
+    await store.recordEvent(project.id, {
+      event_type: "store_migrated",
+      source: options.source ?? "cli",
+      agentId: options.agentId,
+      command: options.command,
+      before: project as unknown as JsonObject,
+      after: { project: updated, plan_artifact_path: planArtifactPath, verified } as unknown as JsonObject,
+    });
+
+    return {
+      ...plan,
+      project: updated,
+      dry_run: false,
+      actions: plan.actions.map((action) => ({ ...action, status: "completed" })),
+      plan_artifact_path: planArtifactPath,
+      verified,
+      previous_location: previousLocation,
+      primary_location: primaryLocation,
+    };
+  } catch (err) {
+    const rollbackErrors: string[] = [];
+    if (movedDirectory && plan.source_path && existsSync(plan.target_path) && !existsSync(plan.source_path)) {
+      try {
+        renameSync(plan.target_path, plan.source_path);
+      } catch (rollbackErr) {
+        rollbackErrors.push(`move-back failed: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`);
+      }
+    }
+    if (plan.source_path && existsSync(plan.source_path)) {
+      try {
+        await store.addLocation(project.id, {
+          path: plan.source_path,
+          label: "main",
+          kind: "local",
+          isPrimary: true,
+          metadata: { failed_store_migration: true, rollback_from: plan.target_path, plan_artifact_path: planArtifactPath },
+          agentId: options.agentId,
+          source: options.source,
+          command: options.command,
+        });
+      } catch (rollbackErr) {
+        rollbackErrors.push(`primary-restore failed: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`);
+      }
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(rollbackErrors.length ? `${message}; rollback errors: ${rollbackErrors.join("; ")}` : message);
+  }
+}
+
+/**
+ * Machine-local runtime half of a cloud create (api mode). The registry row is
+ * created through the Store by the caller; this applies the on-invoking-box
+ * effects — directory, git init, marker, tmux session — with events routed to
+ * the hosted project through `store.recordEvent`. Tmux profiles resolve through
+ * the machine-local store methods (the established api-mode precedent: tmux is
+ * a runtime resource of THIS box even when the registry is cloud).
+ */
+export async function applyMachineLocalCreationRuntime(
+  store: ProjectStore,
+  project: Workspace,
+  input: {
+    createDirectory?: boolean;
+    gitInit?: boolean;
+    writeMarker?: boolean;
+    tmux?: { session?: string; windows?: WorkspaceTmuxWindowSpec[] };
+    tmuxProfile?: string;
+    agentId?: string;
+    source?: EventSource;
+    command?: string;
+  } = {},
+): Promise<{ actions: WorkspaceRuntimeAction[]; tmux: WorkspaceTmuxResult | null }> {
+  const actions = prepareWorkspaceDirectory(project, {
+    createDirectory: input.createDirectory,
+    gitInit: input.gitInit,
+    writeMarker: input.writeMarker,
+    recordEvents: false,
+    agentId: input.agentId,
+    source: input.source,
+    command: input.command,
+  });
+
+  let tmux: WorkspaceTmuxResult | null = null;
+  if (input.tmuxProfile) {
+    const profile = await store.getTmuxProfile(input.tmuxProfile);
+    if (!profile) throw new Error(`Tmux profile not found: ${input.tmuxProfile}`);
+    const windows = await store.listTmuxProfileWindows(profile.id);
+    tmux = applyWorkspaceTmuxProfile(project, profile, windows, {
+      recordEvents: false,
+      agentId: input.agentId,
+      source: input.source,
+      command: input.command,
+    });
+  } else if (input.tmux?.session || input.tmux?.windows) {
+    tmux = applyWorkspaceTmux(project, {
+      session: input.tmux.session,
+      windows: input.tmux.windows,
+      recordEvents: false,
+      agentId: input.agentId,
+      source: input.source,
+      command: input.command,
+    });
+  }
+
+  await store.recordEvent(project.id, {
+    event_type: "creation_executed",
+    source: input.source ?? "cli",
+    agentId: input.agentId,
+    command: input.command,
+    after: { actions, tmux } as unknown as JsonObject,
+  });
+  return { actions, tmux };
 }

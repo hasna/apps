@@ -56,10 +56,12 @@ import {
 import { importWorkspace, importWorkspaceBulk } from "../../lib/workspace-import.js";
 import { runWorkspaceLegacyMigration } from "../../lib/workspace-migration.js";
 import {
+  applyMachineLocalCreationRuntime,
   ensureProjectStore as ensureCanonicalProjectStore,
   ensureProjectStoreForTarget,
   inspectProjectStore as inspectCanonicalProjectStore,
   migrateProjectToStore,
+  migrateProjectToStoreViaStore,
   planProjectStoreMigration,
 } from "../../lib/project-store.js";
 import { repairProjectPermissions } from "../../lib/project-permissions.js";
@@ -650,18 +652,6 @@ function resolveAgentId(idOrSlug: string | undefined): string {
 function mutationAgentId(store: ProjectStore, optAgent?: string): string | undefined {
   if (store.mode !== "local") return undefined;
   return optAgent ? resolveAgentId(optAgent) : ensureCliAgent().id;
-}
-
-// Guard for writes that only exist on the machine-local sqlite store. When a
-// cloud/self-hosted projects backend is active, the /v1 API exposes no matching
-// write route (e.g. it serves GET /projects/:id/events but not POST), so calling
-// through would either leak a raw upstream 404 or silently persist to the local
-// store instead of the cloud project. Fail fast with a clear, actionable message
-// that mirrors the sibling registry commands' cloud awareness.
-function assertLocalOnlyWrite(operation: string): void {
-  if (resolveProjectStore().mode !== "local") {
-    throw new Error(`${operation} is a local-only operation and is not available in api/cloud mode.`);
-  }
 }
 
 function printRows(rows: Array<Record<string, unknown>>, columns: string[]): void {
@@ -2055,23 +2045,21 @@ function registerProjectCommands(program: Command): void {
         // the remote create entirely and fall through to the local planner,
         // which builds the plan without writing to any registry (local or cloud).
         if (store.mode === "api" && !opts.dryRun) {
-          // Machine-local runtime (directory/git/marker/tmux) cannot be applied
-          // to a remote row, and there is no api-mode command that can apply it
-          // afterwards. Refuse BEFORE the create so a rejected request never
-          // leaves a partial, row-only project behind in the cloud registry.
-          const unsupported = [
-            opts.mkdir ? "--mkdir" : null,
-            opts.gitInit ? "--git-init" : null,
-            opts.marker ? "--marker" : null,
-            opts.tmuxSession ? "--tmux-session" : null,
-            opts.tmuxWindowsJson ? "--tmux-windows-json" : null,
-            opts.tmuxProfile ? "--tmux-profile" : null,
-          ].filter((flag): flag is string => Boolean(flag));
-          if (unsupported.length) {
+          // Machine-local runtime flags (directory/git/marker/tmux) apply on
+          // THIS machine while the row lives in the cloud registry — the same
+          // machine-local runtime precedent tmux profiles already follow in api
+          // mode. The registry half routes through the Store; the runtime half
+          // runs on the invoking box. The one input requirement is a primary
+          // path (the runtime needs a directory to prepare), refused BEFORE the
+          // create so a rejected request never leaves a partial row behind.
+          const runtimeRequested = Boolean(
+            opts.mkdir || opts.gitInit || opts.marker || opts.tmuxSession || opts.tmuxWindowsJson || opts.tmuxProfile,
+          );
+          if (runtimeRequested && !opts.path) {
+
             throw new Error(
-              `create with machine-local runtime flags (${unsupported.join(", ")}) is a local-only operation and is not available in api/cloud mode. `
-              + "No project was created. Re-run without those flags (registry fields such as --path, --git-remote, --stage and --priority are honored in api/cloud mode), "
-              + "or preview the full local plan with --dry-run.",
+              "create with machine-local runtime flags (--mkdir/--git-init/--marker/--tmux-*) in api/cloud mode requires --path: the runtime half applies on this machine and needs a primary path. "
+              + "No project was created. Re-run with --path, or preview the full local plan with --dry-run.",
             );
           }
           // Cloud project rows are created through the Store. Root/recipe are
@@ -2109,6 +2097,37 @@ function registerProjectCommands(program: Command): void {
             metadata: Object.keys(managementMetadata).length ? managementMetadata : undefined,
             integrations: Object.keys(integrations).length ? integrations : undefined,
           });
+          if (runtimeRequested) {
+            if (!project.primary_path) {
+              throw new Error(
+                "create with machine-local runtime flags requires a project primary path; the server did not return one. No runtime was applied.",
+              );
+            }
+            const runtime = await applyMachineLocalCreationRuntime(store, project, {
+              createDirectory: opts.mkdir || opts.gitInit,
+              gitInit: opts.gitInit,
+              writeMarker: opts.marker,
+              tmux: opts.tmuxSession || tmuxWindows ? { session: opts.tmuxSession, windows: tmuxWindows } : undefined,
+              tmuxProfile: opts.tmuxProfile,
+              agentId: mutationAgentId(store, opts.agent),
+              source: "cli",
+              command: process.argv.join(" "),
+            });
+            if (wantsJson(opts)) {
+              printObject({ project, runtime: { actions: runtime.actions, tmux: runtime.tmux } }, opts);
+              return;
+            }
+            console.log(chalk.green(`✓ Project created (cloud): ${project.slug}`));
+            if (project.primary_path) console.log(`  ${chalk.dim("path:")} ${project.primary_path}`);
+            for (const action of runtime.actions) {
+              console.log(`  ${chalk.dim(action.type + ":")} ${action.status} ${action.target}`);
+            }
+            if (runtime.tmux) {
+              const status = runtime.tmux.success ? runtime.tmux.session_action : "failed";
+              console.log(`  ${chalk.dim("tmux:")} ${status} ${runtime.tmux.session_name}`);
+            }
+            return;
+          }
           if (wantsJson(opts)) { printObject({ project }, opts); return; }
           console.log(chalk.green(`✓ Project created (cloud): ${project.slug}`));
           if (project.primary_path) console.log(`  ${chalk.dim("path:")} ${project.primary_path}`);
@@ -2726,7 +2745,6 @@ function registerProjectCommands(program: Command): void {
     .option("-j, --json", "Output JSON")
     .action(async (projectTarget, type, opts) => {
       try {
-        assertLocalOnlyWrite("Recording project audit events");
         const store = resolveProjectStore();
         const project = await store.resolveTarget(projectTarget);
         const event = await store.recordEvent(project.id, {
@@ -3925,19 +3943,12 @@ function registerProjectCommands(program: Command): void {
 
 /**
  * `store migrate` moves an existing machine-local primary path and rewrites the
- * local registry's location history. The API registry cannot own or coordinate
- * that source directory, so migration remains local-only. `store ensure` is
- * intentionally excluded: it provisions the exact-id machine-local app store
- * after a bounded guarded API read and uses guarded registry mutation only when
- * the hosted row has no primary path.
+ * location history. In api/cloud mode the file move still runs on the invoking
+ * machine (the server cannot move files on a client box), while the location
+ * history and the migration event route through the Store to the hosted
+ * project via `migrateProjectToStoreViaStore` — the same split the api-mode
+ * `store ensure` path already establishes.
  */
-function assertLocalOnlyStoreOperation(store: ReturnType<typeof resolveProjectStore>, operation: string): void {
-  if (store.mode === "api") {
-    throw new Error(
-      `${operation} is a local-only operation: the canonical on-box store is a machine-local resource the cloud project does not own. Run it in local mode on the machine that holds the files.`,
-    );
-  }
-}
 
 function registerPermissionsCommand(program: Command): void {
   const cmd = program.command("permissions").description("Inspect and repair local Projects file permissions");
@@ -4059,17 +4070,25 @@ function registerStoreCommand(program: Command): void {
     .action(async (projectIdOrSlug, opts) => {
       try {
         const store = resolveProjectStore();
-        assertLocalOnlyStoreOperation(store, "store migrate");
         const project = await store.resolveTarget(projectIdOrSlug);
-        const agentId = opts.agent ? resolveAgentId(opts.agent) : ensureCliAgent().id;
         const apply = Boolean(opts.apply || opts.yes);
+        // Local resolves/creates an on-box agent identity; api mode leaves
+        // attribution to the server (derived from the bearer key).
+        const agentId = store.mode === "local" ? (opts.agent ? resolveAgentId(opts.agent) : ensureCliAgent().id) : opts.agent;
         const result = apply
-          ? await withWorkspaceLock(store, project, agentId, "project store migrate", () => migrateProjectToStore(project, {
-              apply: true,
-              agentId,
-              source: "cli",
-              command: process.argv.join(" "),
-            }))
+          ? store.mode === "api"
+            ? await migrateProjectToStoreViaStore(store, project, {
+                apply: true,
+                agentId,
+                source: "cli",
+                command: process.argv.join(" "),
+              })
+            : await withWorkspaceLock(store, project, agentId, "project store migrate", () => migrateProjectToStore(project, {
+                apply: true,
+                agentId,
+                source: "cli",
+                command: process.argv.join(" "),
+              }))
           : planProjectStoreMigration(project, { dryRun: true });
         if (wantsJson(opts)) { printObject(result, opts); return; }
         const marker = apply ? chalk.green("✓") : chalk.dim("[dry-run]");
@@ -4615,8 +4634,9 @@ function registerAgentsCommand(program: Command): void {
     .option("-j, --json", "Output JSON")
     .action(async (opts) => {
       if (opts.project) {
-        // Per-project assignments are an on-box sub-resource (not modeled by the
-        // /v1 API); this view is local-only, matching the Store contract.
+        // Per-project assignments are registry data modeled by the /v1 API
+        // (GET /projects/:id/agents); this view routes through the Store in
+        // both transports.
         const store = resolveProjectStore();
         const project = await store.resolveTarget(opts.project);
         const assignments = await store.getProjectAgents(project.id);

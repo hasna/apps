@@ -571,6 +571,71 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             "is_primary", "exists_at_create", "metadata", "created_at",
           ],
         },
+        AddWorkspaceLocation: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            path: { type: "string" },
+            machine_id: { type: "string" },
+            label: { type: "string" },
+            kind: { type: "string" },
+            is_primary: { type: "boolean" },
+            metadata: { type: "object", additionalProperties: true },
+          },
+          required: ["path"],
+        },
+        WorkspaceAgentAssignment: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            id: { type: "string" },
+            workspace_id: { type: "string" },
+            agent_id: { type: "string" },
+            role: { type: "string" },
+            assigned_by: { type: "string", nullable: true },
+            metadata: { type: "object", additionalProperties: true },
+            created_at: { type: "string" },
+            agent: ref("Agent"),
+          },
+          required: ["id", "workspace_id", "agent_id", "role", "metadata", "created_at"],
+        },
+        AssignWorkspaceAgent: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            agent_id: { type: "string" },
+            role: { type: "string" },
+            assigned_by: { type: "string" },
+            metadata: { type: "object", additionalProperties: true },
+          },
+          required: ["agent_id"],
+        },
+        WorkspaceLock: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            id: { type: "string" },
+            lock_key: { type: "string" },
+            workspace_id: { type: "string", nullable: true },
+            agent_id: { type: "string", nullable: true },
+            reason: { type: "string", nullable: true },
+            created_at: { type: "string" },
+            expires_at: { type: "string", nullable: true },
+          },
+          required: ["id", "lock_key", "created_at"],
+        },
+        AcquireWorkspaceLock: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            lock_key: { type: "string" },
+            workspace_id: { type: "string" },
+            agent_id: { type: "string" },
+            reason: { type: "string" },
+            ttl_seconds: { type: "integer" },
+          },
+          required: ["lock_key"],
+        },
         ProjectQuarantineSnapshot: {
           type: "object",
           additionalProperties: false,
@@ -1142,6 +1207,31 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
           properties: { events: { type: "array", items: ref("WorkspaceEvent") }, count: { type: "integer" } },
           required: ["events", "count"],
         },
+        LocationList: {
+          type: "object",
+          properties: { locations: { type: "array", items: ref("WorkspaceLocation") }, count: { type: "integer" } },
+          required: ["locations", "count"],
+        },
+        LocationAdded: {
+          type: "object",
+          properties: { project: ref("Workspace"), location: ref("WorkspaceLocation") },
+          required: ["project", "location"],
+        },
+        AgentAssignmentList: {
+          type: "object",
+          properties: { assignments: { type: "array", items: ref("WorkspaceAgentAssignment") }, count: { type: "integer" } },
+          required: ["assignments", "count"],
+        },
+        LockList: {
+          type: "object",
+          properties: { locks: { type: "array", items: ref("WorkspaceLock") }, count: { type: "integer" } },
+          required: ["locks", "count"],
+        },
+        LockRelease: {
+          type: "object",
+          properties: { released: { type: "boolean" } },
+          required: ["released"],
+        },
         RecordEvent: {
           type: "object",
           properties: {
@@ -1591,6 +1681,63 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
           parameters: [ID_PARAM],
           requestBody: jsonBody("RecordEvent"),
           responses: { "201": jsonResp("EventRecorded", "Created"), "400": jsonResp("Error", "Invalid"), "404": jsonResp("Error", "Not found") },
+        },
+      },
+      "/v1/projects/{id}/locations": {
+        get: {
+          operationId: "listProjectLocations",
+          summary: "List a project's registered folder locations",
+          parameters: [ID_PARAM],
+          responses: { "200": jsonResp("LocationList"), "404": jsonResp("Error", "Not found") },
+        },
+        post: {
+          operationId: "addProjectLocation",
+          summary: "Register an extra folder location for a project",
+          parameters: [ID_PARAM],
+          requestBody: jsonBody("AddWorkspaceLocation"),
+          responses: { "201": jsonResp("LocationAdded", "Created"), "400": jsonResp("Error", "Invalid"), "404": jsonResp("Error", "Not found") },
+        },
+      },
+      "/v1/projects/{id}/agents": {
+        get: {
+          operationId: "listProjectAgents",
+          summary: "List a project's agent assignments",
+          parameters: [ID_PARAM],
+          responses: { "200": jsonResp("AgentAssignmentList"), "404": jsonResp("Error", "Not found") },
+        },
+        post: {
+          operationId: "assignProjectAgent",
+          summary: "Assign a registered agent to a project role",
+          parameters: [ID_PARAM],
+          requestBody: jsonBody("AssignWorkspaceAgent"),
+          responses: { "201": jsonResp("AgentAssignment", "Created"), "400": jsonResp("Error", "Invalid"), "404": jsonResp("Error", "Not found") },
+        },
+      },
+      "/v1/locks": {
+        get: {
+          operationId: "listLocks",
+          summary: "List active project mutation locks",
+          responses: { "200": jsonResp("LockList") },
+        },
+        post: {
+          operationId: "acquireLock",
+          summary: "Acquire a project mutation lock",
+          requestBody: jsonBody("AcquireWorkspaceLock"),
+          responses: { "201": jsonResp("Lock", "Created"), "400": jsonResp("Error", "Invalid or held") },
+        },
+      },
+      "/v1/locks/{key}": {
+        delete: {
+          operationId: "releaseLock",
+          summary: "Release a project mutation lock by key",
+          parameters: [{
+            name: "key",
+            in: "path",
+            required: true,
+            description: "Lock key",
+            schema: { type: "string" },
+          } as const],
+          responses: { "200": jsonResp("LockRelease"), "404": jsonResp("Error", "Not found") },
         },
       },
       "/v1/roots": {

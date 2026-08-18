@@ -1354,10 +1354,8 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
           };
         }
         // Route the assignment (and its audit event) through the Store so it
-        // lands wherever the project lives. Per-project agent assignments are an
-        // on-box sub-resource: in api/cloud mode the Store throws
-        // LocalOnlyOperationError rather than silently writing local sqlite —
-        // surface that as a clean tool error, not an unhandled crash.
+        // lands wherever the project lives — local sqlite or the hosted /v1
+        // project.
         try {
           const assignment = await store.assignAgent(workspace.id, {
             agentId: assignedAgent.id,
@@ -1489,10 +1487,8 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
           command,
         };
         if (!approve) return projectPayload({ status: "planned", project: compactProject(workspace), location: locationInput, note: "Run again with --yes to register this project location." });
-        // Extra on-disk locations are an on-box sub-resource: route through the
-        // Store so local mode writes sqlite as before, while api/cloud mode
-        // throws LocalOnlyOperationError instead of silently writing local —
-        // surface that as a clean tool error.
+        // Extra on-disk locations are registry data: route through the Store so
+        // the write lands on the local sqlite or the hosted /v1 project.
         try {
           const { project: updated, location } = await store.addLocation(workspace.id, locationInput);
           return projectPayload({ status: "registered", project: compactProject(updated), location });
