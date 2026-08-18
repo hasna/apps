@@ -1,13 +1,12 @@
 #!/usr/bin/env bun
 /**
- * domains-serve — standalone HTTP API server (self_hosted / cloud).
+ * domains-serve — standalone HTTP API server, PostgreSQL backend.
  *
  * Usage: domains-serve [--port 8080] [--host 0.0.0.0]
  *
- * PURE REMOTE (Amendment A1): talks to the app's cloud Postgres directly via
- * the vendored storage kit. Requires:
- *   HASNA_DOMAINS_DATABASE_URL      app-role DSN (RDS)
- *   HASNA_DOMAINS_STORAGE_MODE      "cloud"
+ * The server backend is selected by the environment:
+ *   HASNA_DOMAINS_DATABASE_URL      Postgres DSN -> PostgreSQL backend
+ *                                   (unset -> SQLite backend)
  *   HASNA_DOMAINS_API_SIGNING_KEY   HMAC signing secret for API keys
  * Falls back to the generic DATABASE_URL / API_KEY_SIGNING_SECRET env names the
  * hasna-app Terraform module injects.
@@ -30,9 +29,6 @@ export const SIGNING_KEY_ENVS = [
 export function normalizeEnv(env: NodeJS.ProcessEnv = process.env): void {
   if (!env["HASNA_DOMAINS_DATABASE_URL"] && env["DATABASE_URL"]) {
     env["HASNA_DOMAINS_DATABASE_URL"] = env["DATABASE_URL"];
-  }
-  if (!env["HASNA_DOMAINS_STORAGE_MODE"] && env["HASNA_DOMAINS_DATABASE_URL"]) {
-    env["HASNA_DOMAINS_STORAGE_MODE"] = "cloud";
   }
 }
 
@@ -79,7 +75,6 @@ async function main(): Promise<void> {
     db: client,
     signingSecret,
     version,
-    mode: process.env["HASNA_APP_MODE"] ?? "self_hosted",
     isRevoked: store.isRevoked,
     audit: (e) => {
       if (e.outcome === "deny") {

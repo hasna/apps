@@ -2,11 +2,12 @@
  * Routed data facade for @hasna/domains.
  *
  * Every data operation below routes through the single {@link DomainsStore}
- * resolved by {@link getStore}: LocalStore (on-box sqlite) in local mode, or
- * ApiStore (HTTPS `/v1` + bearer key) in self_hosted/cloud mode. There is NO
- * per-command local fallback and NO direct sqlite access here — the transport is
- * chosen once, centrally, by the env. This is the module CLI commands, MCP
- * tools, and the SDK import; none of them touch sqlite or fetch directly.
+ * resolved by {@link getStore}: LocalStore (on-box sqlite) when no hosted
+ * client env is set, or ApiStore (HTTPS `/v1` + bearer key) for the hosted
+ * backend. There is NO per-command local fallback and NO direct sqlite access
+ * here — the transport is chosen once, centrally, by the env. This is the
+ * module CLI commands, MCP tools, and the SDK import; none of them touch
+ * sqlite or fetch directly.
  *
  * Types and enum constants are re-exported from the underlying record modules
  * (they carry no storage behaviour). The sqlite-backed record modules

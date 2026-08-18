@@ -1,7 +1,7 @@
 # =============================================================================
 # Local docker-compose for @hasna/domains — the domains-serve HTTP API backed by
-# a local Postgres. Mirrors the cloud (Amendment A1 pure-remote) shape so you
-# can exercise the service without RDS.
+# a local Postgres. Mirrors the hosted shape (Postgres-backed serve) so you can
+# exercise the service without RDS.
 #
 #   docker compose up --build
 #   # then: curl localhost:8080/health
@@ -30,7 +30,6 @@ services:
     build: .
     command: ["bun", "dist/cli/index.js", "db", "migrate"]
     environment:
-      HASNA_DOMAINS_STORAGE_MODE: cloud
       HASNA_DOMAINS_DATABASE_URL_OWNER: postgresql://domains:domains@postgres:5432/domains
       NODE_EXTRA_CA_CERTS: ""
     depends_on:
@@ -43,7 +42,6 @@ services:
     environment:
       PORT: "8080"
       HOST: 0.0.0.0
-      HASNA_DOMAINS_STORAGE_MODE: cloud
       HASNA_DOMAINS_DATABASE_URL: postgresql://domains:domains@postgres:5432/domains
       HASNA_DOMAINS_API_SIGNING_KEY: ${HASNA_DOMAINS_API_SIGNING_KEY:-dev-only-signing-secret-change-me}
       NODE_EXTRA_CA_CERTS: ""

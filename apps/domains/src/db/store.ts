@@ -8,18 +8,15 @@
 //     ../db/* modules (domain-records, dns-records, alerts, domain-owners,
 //     domain-history, domain-reputation). Those modules are the sqlite backing
 //     of this transport and are ONLY reached through LocalStore.
-//   • ApiStore   — the self_hosted/cloud HTTP API at `<API_URL>/v1` with a
-//     bearer key. Delegates to the vendored @hasna/contracts storage client and
-//     its transport escape hatch for nested resources.
+//   • ApiStore   — the hosted HTTP API at `<API_URL>/v1` with a bearer key.
+//     Delegates to the vendored @hasna/contracts storage client and its
+//     transport escape hatch for nested resources.
 //
-// `getStore()` resolves which transport to use from the client-flip env
-// (HASNA_DOMAINS_API_URL + HASNA_DOMAINS_API_KEY / HASNA_DOMAINS_STORAGE_MODE).
-// Callers NEVER branch on mode themselves and NEVER touch sqlite or fetch
+// `getStore()` resolves which transport to use from the client env contract:
+// BOTH HASNA_DOMAINS_API_URL and HASNA_DOMAINS_API_KEY set -> hosted ApiStore;
+// neither set -> local SQLite; exactly one set -> hard error (fail-closed).
+// Callers NEVER branch on a mode themselves and NEVER touch sqlite or fetch
 // directly — that split-brain bug is exactly what this module eliminates.
-//
-// `self_hosted` and `cloud` are the SAME client code (ApiStore); only the URL
-// and key differ, and that distinction is server-side tenancy. `local` is
-// first-class and fully functional.
 //
 // SAFETY: the API key never leaves the transport; it is never logged, returned,
 // or embedded in any value produced here. Only the HTTP transport ever holds it.
@@ -29,7 +26,6 @@ import {
   resolveStorageClient,
   type HasnaStorageClient,
 } from "@hasna/contracts/client/storage";
-import { normalizeStorageMode } from "@hasna/contracts/mode";
 
 import * as records from "./domain-records.js";
 import * as dns from "./dns-records.js";
@@ -700,72 +696,48 @@ export class ApiStore implements DomainsStore {
 
 // ── Resolver ──────────────────────────────────────────────────────────────────
 
-/**
- * The value that means "use the server" in the INSTALLED @hasna/contracts.
- *
- * Derived, never hardcoded, and that is load-bearing rather than tidy. The
- * storage-mode enum has already changed once: contracts <=0.8.5 accepts `cloud`
- * plus the deprecated aliases `self_hosted`/`remote`/`hybrid`, while contracts
- * after the inference removal (hasna/contracts#63) accepts ONLY
- * `sqlite`/`postgres` and THROWS on everything else. The two valid sets are
- * DISJOINT, so any literal pinned here is a bet on which side of that change a
- * machine is on, and the bet loses on one side or the other.
- *
- * Measured 2026-07-30 against contracts 0.5.2: `postgres` throws, `self_hosted`
- * normalizes. Against contracts main (0.8.6): `postgres` normalizes,
- * `self_hosted` throws. Probing newest-first therefore yields the right token on
- * both generations, and on the next one provided it keeps a server token here.
- *
- * The probe runs through the library's own `normalizeStorageMode`, which THROWS
- * on an unknown token rather than returning a sentinel, so the test is exact
- * rather than heuristic. The answer comes from the installed code rather than
- * from our belief about it.
- */
-export const SERVER_MODE_CANDIDATES = ["postgres", "self_hosted", "cloud"] as const;
+/** The retired storage-mode env keys. They are NOT read: the client flip is the env contract only. */
+export const RETIRED_MODE_KEYS = [
+  "HASNA_DOMAINS_STORAGE_MODE",
+  "DOMAINS_STORAGE_MODE",
+  "HASNA_DOMAINS_MODE",
+  "DOMAINS_MODE",
+] as const;
 
-/** Accepts a mode token or throws. Injectable so both enum generations are testable. */
-export type ModeNormalizer = (value: string) => unknown;
+/** Drop the retired storage-mode keys so a stale operator env can never select a backend. */
+function withoutRetiredModeKeys(env: Env): Env {
+  const out: Env = { ...env };
+  for (const key of RETIRED_MODE_KEYS) delete out[key];
+  return out;
+}
 
-let cachedServerMode: string | null = null;
-
-export function serverStorageMode(normalize: ModeNormalizer = normalizeStorageMode): string {
-  // Only memoise the real normalizer: caching a custom one would poison later
-  // calls in a test that simulates the other enum generation.
-  const useCache = normalize === (normalizeStorageMode as ModeNormalizer);
-  if (useCache && cachedServerMode !== null) return cachedServerMode;
-  for (const candidate of SERVER_MODE_CANDIDATES) {
-    try {
-      normalize(candidate);
-      if (useCache) cachedServerMode = candidate;
-      return candidate;
-    } catch {
-      // Not a token this generation of @hasna/contracts understands.
-    }
-  }
-  // Every candidate was rejected: the enum changed again and this list is stale.
-  // Fail loudly rather than guess -- guessing is the defect class this pin exists
-  // to remove, and a wrong mode silently reads the wrong dataset.
-  throw new Error(
-    `No known server storage mode is accepted by the installed @hasna/contracts ` +
-      `(tried ${SERVER_MODE_CANDIDATES.join(", ")}). The storage-mode enum has changed; ` +
-      `add the new server token to SERVER_MODE_CANDIDATES in src/db/store.ts.`,
-  );
+export interface ClientFlip {
+  /** True when both API URL and key are set: the hosted HTTP client. */
+  readonly hosted: boolean;
+  /** The env key the API URL came from, or null. */
+  readonly urlSource: string | null;
+  /** The env key the API key came from, or null. */
+  readonly keySource: string | null;
 }
 
 /**
- * Return an env in which the server mode is implied when the API URL + key are
- * present but no explicit storage mode is set. Leaves an explicit mode
- * (including `local`) untouched, so the flip stays reversible. The fleet flip
- * writes only the two `HASNA_DOMAINS_API_URL` + `HASNA_DOMAINS_API_KEY` vars.
+ * Resolve the client transport from the env contract:
+ * `HASNA_DOMAINS_API_URL` + `HASNA_DOMAINS_API_KEY` (or the unprefixed
+ * aliases) BOTH set -> hosted; NEITHER set -> local. Exactly one set is
+ * misconfiguration and throws — fail-closed, so a partial flip can never
+ * silently read the wrong dataset.
  */
-export function domainsCloudEnv(env: Env = process.env): Env {
-  const url = env.HASNA_DOMAINS_API_URL ?? env.DOMAINS_API_URL;
-  const key = env.HASNA_DOMAINS_API_KEY ?? env.DOMAINS_API_KEY;
-  const mode = env.HASNA_DOMAINS_STORAGE_MODE ?? env.HASNA_DOMAINS_MODE;
-  if (url && key && !mode) {
-    return { ...env, HASNA_DOMAINS_STORAGE_MODE: serverStorageMode() };
+export function resolveClientFlip(env: Env): ClientFlip {
+  const urlKey = env.HASNA_DOMAINS_API_URL ? "HASNA_DOMAINS_API_URL" : env.DOMAINS_API_URL ? "DOMAINS_API_URL" : null;
+  const keyKey = env.HASNA_DOMAINS_API_KEY ? "HASNA_DOMAINS_API_KEY" : env.DOMAINS_API_KEY ? "DOMAINS_API_KEY" : null;
+  if (Boolean(urlKey) !== Boolean(keyKey)) {
+    throw new Error(
+      `Misconfigured domains client: ${urlKey ?? keyKey} is set without the other. ` +
+        `The hosted client needs BOTH HASNA_DOMAINS_API_URL and HASNA_DOMAINS_API_KEY. ` +
+        `With neither set the client uses local SQLite.`,
+    );
   }
-  return env;
+  return { hosted: urlKey !== null, urlSource: urlKey, keySource: keyKey };
 }
 
 /** Env var that deliberately re-enables the cloud transport inside a test run. */
@@ -864,11 +836,11 @@ function cloudAllowedHere(env: Env): boolean {
   if (env[ALLOW_CLOUD_IN_TESTS]) return true;
   if (env.HASNA_DOMAINS_TEST_GUARD === "throw") {
     throw new Error(
-      "Refusing to resolve the cloud/self_hosted domains store inside a test run: " +
+      "Refusing to resolve the hosted domains store inside a test run: " +
         "a test would read and write the PRODUCTION portfolio. Note that DOMAINS_DIR and " +
         "DOMAINS_DB_PATH do not affect this decision — they only choose the sqlite file " +
         `AFTER a local transport has been selected. Unset HASNA_DOMAINS_API_URL/API_KEY, or set ${ALLOW_CLOUD_IN_TESTS}=1 ` +
-        "if you really intend this test to hit the cloud API.",
+        "if you really intend this test to hit the hosted API.",
     );
   }
   if (!warnedCloudDowngrade) {
@@ -905,46 +877,69 @@ function cloudAllowedHere(env: Env): boolean {
  * guard has already downgraded to local, which is unambiguously what a suite
  * meant, so a test that sets both never reaches this error.
  *
- * Escape: set `HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH=1` to keep cloud, or
- * `HASNA_DOMAINS_STORAGE_MODE=local` to take the path. Both are measured to
- * work; the second is the one `src/test/setup.ts` already uses.
+ * Escape: set `HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH=1` to keep the hosted
+ * store, or unset the two API vars (`HASNA_DOMAINS_API_URL` +
+ * `HASNA_DOMAINS_API_KEY`) to take the path. Both routes are measured to work
+ * in `store-runner-context.test.ts`.
  */
 function assertNoStoreConflict(env: Env): void {
   if (enabled(env[ALLOW_CLOUD_WITH_LOCAL_PATH])) return;
   const pathVar = explicitLocalPathVar(env);
   if (!pathVar) return;
   throw new Error(
-    `Refusing to resolve the cloud domains store while ${pathVar} is set: that variable ` +
+    `Refusing to resolve the hosted domains store while ${pathVar} is set: that variable ` +
       `names a local sqlite file, so the configuration asks for BOTH stores at once and ` +
       `nothing here can tell which you meant. Writing to the wrong one is silent — a plain ` +
       `\`bun run\` script that set ${pathVar} put 230 rows into the production portfolio on ` +
-      `2026-08-07 while reporting success. Pick one: set HASNA_DOMAINS_STORAGE_MODE=local to ` +
-      `use ${pathVar}; unset ${pathVar} to use the cloud store; or set ` +
-      `${ALLOW_CLOUD_WITH_LOCAL_PATH}=1 if you really intend cloud with that variable present.`,
+      `2026-08-07 while reporting success. Pick one: unset HASNA_DOMAINS_API_URL and ` +
+      `HASNA_DOMAINS_API_KEY to use ${pathVar}; unset ${pathVar} to use the hosted store; or set ` +
+      `${ALLOW_CLOUD_WITH_LOCAL_PATH}=1 if you really intend the hosted store with that variable present.`,
   );
 }
 
 /**
  * Resolve the active {@link DomainsStore} for the current environment. Returns an
- * {@link ApiStore} when the client-flip contract resolves to cloud-http
- * (self_hosted/cloud), else a {@link LocalStore}. Throws if cloud was requested
- * but is misconfigured (so callers can never silently read the wrong dataset).
- * Inside a test run the cloud transport is refused — see {@link cloudAllowedHere}.
- * Outside one, a local path set alongside cloud is refused — see
+ * {@link ApiStore} when the client env contract resolves to the hosted HTTP
+ * transport (HASNA_DOMAINS_API_URL + HASNA_DOMAINS_API_KEY), else a
+ * {@link LocalStore}. Throws when the flip is misconfigured (exactly one of
+ * URL/key set) so callers can never silently read the wrong dataset. The
+ * retired storage-mode env keys are never read. Inside a test run the hosted
+ * transport is refused — see {@link cloudAllowedHere}. Outside one, a local
+ * path set alongside the hosted transport is refused — see
  * {@link assertNoStoreConflict}.
  */
-export function getStore(env: Env = process.env): DomainsStore {
-  const resolved = resolveStorageClient(APP, domainsCloudEnv(env));
-  if (resolved.transport !== "cloud-http") return new LocalStore();
-  if (!cloudAllowedHere(env)) return new LocalStore();
-  assertNoStoreConflict(env);
-  return new ApiStore(resolved.client);
+/**
+ * Resolve the hosted storage client for an env whose flip already said hosted.
+ * Fail-closed: if the installed @hasna/contracts does not resolve the client
+ * to the hosted transport, THROW — silently falling back to local while the
+ * operator configured the hosted store is the store-substitution defect this
+ * module exists to remove.
+ */
+function requireHostedClient(env: Env, flip: ClientFlip): HasnaStorageClient {
+  const resolved = resolveStorageClient(APP, withoutRetiredModeKeys(env));
+  if (resolved.transport !== "cloud-http") {
+    throw new Error(
+      `Hosted domains client was requested (${flip.urlSource} + ${flip.keySource}) but ` +
+        `@hasna/contracts resolved transport '${resolved.transport}'. Refusing to read the wrong dataset.`,
+    );
+  }
+  return resolved.client;
 }
 
-/** True when the resolved store is the cloud HTTP transport. */
+export function getStore(env: Env = process.env): DomainsStore {
+  const flip = resolveClientFlip(env);
+  if (!flip.hosted) return new LocalStore();
+  if (!cloudAllowedHere(env)) return new LocalStore();
+  assertNoStoreConflict(env);
+  return new ApiStore(requireHostedClient(env, flip));
+}
+
+/** True when the resolved store is the hosted HTTP transport. */
 export function isCloudStore(env: Env = process.env): boolean {
-  if (resolveStorageClient(APP, domainsCloudEnv(env)).transport !== "cloud-http") return false;
+  const flip = resolveClientFlip(env);
+  if (!flip.hosted) return false;
   if (!cloudAllowedHere(env)) return false;
   assertNoStoreConflict(env);
+  requireHostedClient(env, flip);
   return true;
 }

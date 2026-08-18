@@ -39,7 +39,7 @@ export function buildOpenApiSpec(version: string): OpenApiDoc {
       title: "domains",
       version,
       description:
-        "Domain portfolio, registrar, marketplace, and DNS management HTTP API (self_hosted). API-key authenticated.",
+        "Domain portfolio, registrar, marketplace, and DNS management HTTP API. API-key authenticated.",
     },
     security: [{ apiKey: [] }],
     paths: {
@@ -193,29 +193,26 @@ export function buildOpenApiSpec(version: string): OpenApiDoc {
           properties: {
             status: { type: "string" },
             version: { type: "string" },
-            mode: { type: "string" },
             latencyMs: { type: "number" },
           },
-          required: ["status", "version", "mode"],
+          required: ["status", "version"],
         },
         ReadyResponse: {
           type: "object",
           properties: {
             status: { type: "string" },
             version: { type: "string" },
-            mode: { type: "string" },
             pendingMigrations: { type: "array", items: { type: "string" } },
           },
-          required: ["status", "version", "mode"],
+          required: ["status", "version"],
         },
         VersionResponse: {
           type: "object",
           properties: {
             status: { type: "string" },
             version: { type: "string" },
-            mode: { type: "string" },
           },
-          required: ["status", "version", "mode"],
+          required: ["status", "version"],
         },
         DeleteResult: {
           type: "object",
