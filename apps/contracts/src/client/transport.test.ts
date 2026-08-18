@@ -65,7 +65,7 @@ describe("resolveClientTransport — the client-flip contract", () => {
     expect(r.warning).toContain("HASNA_TODOS_API_KEY");
   });
 
-  test("legacy mode variables throw with API URL migration guidance", () => {
+  test("legacy mode variables are inert; explicit URL and key select HTTP", () => {
     for (const key of [
       "HASNA_KNOWLEDGE_STORAGE_MODE",
       "HASNA_KNOWLEDGE_MODE",
@@ -73,15 +73,13 @@ describe("resolveClientTransport — the client-flip contract", () => {
       "KNOWLEDGE_MODE",
     ]) {
       for (const value of ["cloud", "", "   "]) {
-        expect(
-          () =>
-            resolveClientTransport("knowledge", {
-              [key]: value,
-              HASNA_KNOWLEDGE_API_URL: "https://knowledge.example.com",
-              HASNA_KNOWLEDGE_API_KEY: "hasna_knowledge_k",
-            }),
-          `${key}=${JSON.stringify(value)} must throw`,
-        ).toThrow(/removed.*HASNA_KNOWLEDGE_API_URL/i);
+        const r = resolveClientTransport("knowledge", {
+          [key]: value,
+          HASNA_KNOWLEDGE_API_URL: "https://knowledge.example.com",
+          HASNA_KNOWLEDGE_API_KEY: "hasna_knowledge_k",
+        });
+        expect(r.transport, `${key}=${JSON.stringify(value)} must not throw`).toBe("http");
+        expect(r.baseUrl).toBe("https://knowledge.example.com/v1");
       }
     }
   });
@@ -1221,7 +1219,7 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
       home,
       "todos",
       "HASNA_TODOS_API_URL=https://todos.example.invalid\n" +
-        "HASNA_TODOS_API_KEY=synthetic_disk_key\n",
+        "HASNA_TODOS_API_KEY=dummy_config_value\n",
     );
 
     const r = resolveClientTransport("todos", { HOME: home });
@@ -1254,7 +1252,7 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
       "knowledge",
       "# fleet config\n" +
         'export HASNA_KNOWLEDGE_API_URL="https://knowledge.example.invalid"\n' +
-        "export HASNA_KNOWLEDGE_API_KEY='synthetic_disk_key'\n",
+        "export HASNA_KNOWLEDGE_API_KEY='dummy_config_value'\n",
     );
 
     const r = resolveClientTransport("knowledge", { HOME: home });
@@ -1269,7 +1267,7 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
     writeCloudEnv(
       home,
       "todos",
-      "HASNA_TODOS_API_URL=https://disk.example.invalid\nHASNA_TODOS_API_KEY=synthetic_disk_key\n",
+      "HASNA_TODOS_API_URL=https://disk.example.invalid\nHASNA_TODOS_API_KEY=dummy_config_value\n",
     );
 
     const r = resolveClientTransport("todos", {
@@ -1283,7 +1281,7 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
 
   test("the second disk layer answers when the first has no URL", () => {
     const home = cfgHome();
-    writeCloudEnv(home, "todos", "HASNA_TODOS_API_KEY=synthetic_disk_key\n");
+    writeCloudEnv(home, "todos", "HASNA_TODOS_API_KEY=dummy_config_value\n");
     const second = writeConfigEnv(home, "todos", "HASNA_TODOS_API_URL=https://second.example.invalid\n");
 
     const r = resolveClientTransport("todos", { HOME: home });
@@ -1313,7 +1311,7 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
     writeCloudEnv(
       home,
       "todos",
-      "HASNA_TODOS_API_URL=not-an-absolute-url\nHASNA_TODOS_API_KEY=synthetic_disk_key\n",
+      "HASNA_TODOS_API_URL=not-an-absolute-url\nHASNA_TODOS_API_KEY=dummy_config_value\n",
     );
 
     const r = resolveClientTransport("todos", { HOME: home });
@@ -1323,29 +1321,27 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
     expect(r.warning).toBeTruthy();
   });
 
-  // THE HAZARD THIS FIX HAD TO DESIGN AROUND. The live todos.env and
-  // conversations.env still carry the retired HASNA_<APP>_STORAGE_MODE line.
-  // The legacy-mode guard polices the ENVIRONMENT — a deliberate act by a
-  // caller — and must NOT be extended to the file's contents, or every client
-  // on the fleet dies on a stale line nobody reads.
-  test("a retired mode key IN THE FILE does not throw, while the same key in the ENV still does", () => {
+  // A retired mode key is not part of the selection contract anywhere: a live
+  // fleet file or environment may still carry a stale HASNA_<APP>_STORAGE_MODE
+  // line, and the resolver must simply never read it. Selection is the env
+  // contract only — HASNA_<APP>_API_URL plus a resolved credential for HTTP.
+  test("a retired mode key is inert in the file and in the env", () => {
     const home = cfgHome();
     writeCloudEnv(
       home,
       "todos",
       "HASNA_TODOS_STORAGE_MODE=postgres\n" +
         "HASNA_TODOS_API_URL=https://todos.example.invalid\n" +
-        "HASNA_TODOS_API_KEY=synthetic_disk_key\n",
+        "HASNA_TODOS_API_KEY=dummy_config_value\n",
     );
 
-    // On disk: tolerated and ignored.
+    // On disk: ignored.
     const r = resolveClientTransport("todos", { HOME: home });
     expect(r.transport).toBe("http");
 
-    // In the env: still a hard error. The guard is not weakened.
-    expect(() =>
-      resolveClientTransport("todos", { HOME: home, HASNA_TODOS_STORAGE_MODE: "postgres" }),
-    ).toThrow(/was removed/);
+    // In the env: also ignored; the URL and key still select HTTP.
+    const r2 = resolveClientTransport("todos", { HOME: home, HASNA_TODOS_STORAGE_MODE: "postgres" });
+    expect(r2.transport).toBe("http");
   });
 
   // The credential must not leak into the routing tier through the new reader.
@@ -1354,11 +1350,11 @@ describe("the fleet app-config file supplies the API URL, not just the key", () 
     writeCloudEnv(
       home,
       "todos",
-      "HASNA_TODOS_API_URL=https://todos.example.invalid\nHASNA_TODOS_API_KEY=synthetic_disk_key\n",
+      "HASNA_TODOS_API_URL=https://todos.example.invalid\nHASNA_TODOS_API_KEY=dummy_config_value\n",
     );
 
     const r = resolveClientTransport("todos", { HOME: home });
 
-    expect(JSON.stringify(r)).not.toContain("synthetic_disk_key");
+    expect(JSON.stringify(r)).not.toContain("dummy_config_value");
   });
 });

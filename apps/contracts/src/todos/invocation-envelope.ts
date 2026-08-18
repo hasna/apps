@@ -1,6 +1,5 @@
 import * as z from "zod/v4";
 import {
-  TodosModeSchema,
   TodosOwnerIdSchema,
   TodosSha256DigestSchema,
 } from "./common";
@@ -17,7 +16,6 @@ const TodosOperationIdSchema = z.string().regex(/^todos\.[a-z0-9_]+(?:\.[a-z0-9_
  * The public TodosOperationInvocationSchema adds canonical runtime refinements.
  */
 export const TodosOperationInvocationEnvelopeSchema = z.strictObject({
-  mode: TodosModeSchema,
   authorityId: TodosOwnerIdSchema,
   contractDigest: TodosSha256DigestSchema,
   manifestDigest: TodosSha256DigestSchema,

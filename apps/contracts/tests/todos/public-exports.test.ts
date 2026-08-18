@@ -80,7 +80,6 @@ function canonicalEmptyBundle() {
     createdAt: timestamp,
     source: {
       authorityId: "tenant-a",
-      mode: "local",
     },
     records: Object.fromEntries(
       todos.TODOS_TRANSFER_SECTION_NAMES.map((name) => [name, []]),

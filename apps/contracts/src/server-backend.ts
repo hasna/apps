@@ -24,46 +24,12 @@ export function serverDataBackendEnvKeys(name: string): ServerDataBackendEnvKeys
   };
 }
 
-function legacyModeKeys(name: string): string[] {
-  const token = envToken(name);
-  return [
-    `HASNA_${token}_STORAGE_MODE`,
-    `HASNA_${token}_MODE`,
-    `${token}_STORAGE_MODE`,
-    `${token}_MODE`,
-  ];
-}
-
 function firstEnv(env: Env, keys: readonly string[]): { key: string; value: string } | null {
   for (const key of keys) {
     const value = env[key]?.trim();
     if (value) return { key, value };
   }
   return null;
-}
-
-function firstDefinedEnvKey(env: Env, keys: readonly string[]): string | null {
-  for (const key of keys) {
-    if (Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined) return key;
-  }
-  return null;
-}
-
-/**
- * Fail closed when an old mode variable survives deployment.
- *
- * This is a bounded migration guard, not a compatibility mode: the old value
- * is never parsed or mapped. The message names the replacement configuration.
- */
-export function assertNoLegacyStorageMode(name: string, env: Env = process.env): void {
-  const legacyKey = firstDefinedEnvKey(env, legacyModeKeys(name));
-  if (!legacyKey) return;
-  const canonicalDatabaseUrl = serverDataBackendEnvKeys(name).databaseUrlKeys[0];
-  throw new Error(
-    `${legacyKey} was removed. Delete the storage-mode variable; ` +
-      `set ${canonicalDatabaseUrl} to select the postgresql server backend, ` +
-      `or leave it unset for sqlite.`,
-  );
 }
 
 export interface ServerDataBackendResolution {
@@ -83,7 +49,6 @@ export function resolveServerDataBackend(
   name: string,
   env: Env = process.env,
 ): ServerDataBackendResolution {
-  assertNoLegacyStorageMode(name, env);
   const { databaseUrlKeys } = serverDataBackendEnvKeys(name);
   const databaseUrl = firstEnv(env, databaseUrlKeys);
   if (!databaseUrl) {
@@ -104,7 +69,6 @@ export function resolveServerDataBackend(
 
 /** Resolve the database URL without logging it. Returns `null` when unset. */
 export function resolveDatabaseUrl(name: string, env: Env = process.env): string | null {
-  assertNoLegacyStorageMode(name, env);
   const hit = firstEnv(env, serverDataBackendEnvKeys(name).databaseUrlKeys);
   return hit?.value ?? null;
 }

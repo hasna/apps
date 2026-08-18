@@ -43,8 +43,8 @@
     },
     {
       "category": "authority",
-      "description": "Local authorities have no endpoint and cloud authorities require one HTTPS endpoint.",
-      "id": "todos.authority.mode_binding",
+      "description": "A network authority endpoint must be HTTPS; a null endpoint is the on-box installation.",
+      "id": "todos.authority.endpoint_https_rule",
       "jsonSchemaExpressible": false,
       "runtimeValidatorIds": [
         "authority.config_semantics",
@@ -241,8 +241,8 @@
     },
     {
       "category": "invocation",
-      "description": "The operation, mode, scopes, idempotency, and typed request all match the manifest.",
-      "id": "todos.invocation.operation_mode_scope_request",
+      "description": "The operation, scopes, idempotency, and typed request all match the manifest.",
+      "id": "todos.invocation.operation_scope_request",
       "jsonSchemaExpressible": false,
       "runtimeValidatorIds": [
         "invocation.operation_binding",

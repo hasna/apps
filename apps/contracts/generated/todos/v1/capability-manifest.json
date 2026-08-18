@@ -6,10 +6,6 @@
       ],
       "availability": "core",
       "id": "activity",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.activity.list",
         "todos.history.list",
@@ -22,10 +18,6 @@
       ],
       "availability": "core",
       "id": "agents",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.agents.get",
         "todos.agents.heartbeat",
@@ -40,10 +32,6 @@
       ],
       "availability": "gated",
       "id": "approvals",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.approvals.approve",
         "todos.approvals.expire",
@@ -60,10 +48,6 @@
       ],
       "availability": "core",
       "id": "authority",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.authority.get",
         "todos.capabilities.get",
@@ -84,10 +68,6 @@
       ],
       "availability": "core",
       "id": "comments",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.comments.create",
         "todos.comments.list"
@@ -100,10 +80,6 @@
       ],
       "availability": "core",
       "id": "cursor-pagination",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.activity.list",
         "todos.agents.list",
@@ -144,10 +120,6 @@
       ],
       "availability": "core",
       "id": "deletion-history",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.deletion_records.get",
         "todos.deletion_records.list"
@@ -159,10 +131,6 @@
       ],
       "availability": "core",
       "id": "dependencies",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.dependencies.create",
         "todos.dependencies.delete",
@@ -176,10 +144,6 @@
       ],
       "availability": "core",
       "id": "git-traceability",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.git_commits.find",
         "todos.git_commits.link",
@@ -198,10 +162,6 @@
       ],
       "availability": "core",
       "id": "idempotency",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.agents.heartbeat",
         "todos.agents.register",
@@ -271,10 +231,6 @@
       ],
       "availability": "core",
       "id": "optimistic-concurrency",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.agents.heartbeat",
         "todos.agents.release",
@@ -310,10 +266,6 @@
       ],
       "availability": "core",
       "id": "plans",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.plans.create",
         "todos.plans.delete",
@@ -329,10 +281,6 @@
       ],
       "availability": "core",
       "id": "projects",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.projects.create",
         "todos.projects.delete",
@@ -349,10 +297,6 @@
       ],
       "availability": "gated",
       "id": "reports",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.reports.generate"
       ]
@@ -363,10 +307,6 @@
       ],
       "availability": "core",
       "id": "runs",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.run_artifacts.create",
         "todos.run_artifacts.list",
@@ -390,10 +330,6 @@
       ],
       "availability": "core",
       "id": "saved-views",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.saved_views.create",
         "todos.saved_views.delete",
@@ -409,10 +345,6 @@
       ],
       "availability": "core",
       "id": "search",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.search.execute"
       ]
@@ -423,10 +355,6 @@
       ],
       "availability": "core",
       "id": "task-files",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.task_files.list",
         "todos.task_files.record"
@@ -438,10 +366,6 @@
       ],
       "availability": "core",
       "id": "task-lists",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.task_lists.create",
         "todos.task_lists.delete",
@@ -456,10 +380,6 @@
       ],
       "availability": "gated",
       "id": "task-templates",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.task_templates.create",
         "todos.task_templates.delete",
@@ -476,10 +396,6 @@
       ],
       "availability": "core",
       "id": "task-to-pr-projection",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.task_to_pr_projection.get",
         "todos.task_to_pr_projection.list",
@@ -492,10 +408,6 @@
       ],
       "availability": "core",
       "id": "tasks",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.tasks.batch",
         "todos.tasks.claim_next",
@@ -526,10 +438,6 @@
       ],
       "availability": "core",
       "id": "transfer",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.database.backup",
         "todos.database.check",
@@ -550,10 +458,6 @@
       ],
       "availability": "core",
       "id": "typed-errors",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.activity.list",
         "todos.agents.get",
@@ -688,10 +592,6 @@
       ],
       "availability": "core",
       "id": "verification-evidence",
-      "modes": [
-        "local",
-        "cloud"
-      ],
       "operationIds": [
         "todos.verification_evidence.create",
         "todos.verification_evidence.export",
@@ -700,7 +600,7 @@
       ]
     }
   ],
-  "manifestDigest": "f46ed342b97d84d3d4d076a62bc11f9dc0bdb0ccda57047b61bb96bd97c6bc4a",
+  "manifestDigest": "bdc14b6741c4bb8341d63128b33e727e0ddfe00ef6e2a8909455dac768a48fae",
   "schema": "hasna.todos.capability_manifest.v1",
   "version": "1"
 }

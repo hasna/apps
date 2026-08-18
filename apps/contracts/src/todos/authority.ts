@@ -2,7 +2,6 @@ import * as z from "zod/v4";
 import {
   TODOS_CONTRACT_VERSION,
   TODOS_MANIFEST_VERSION,
-  TodosModeSchema,
   TodosOwnerIdSchema,
   TodosSha256DigestSchema,
   TodosTimestampSchema,
@@ -16,13 +15,11 @@ export const TODOS_AUTHORITY_SCHEMA_IDS = {
 
 export const TodosAuthorityDescriptorSchema = z.strictObject({
   id: TodosOwnerIdSchema,
-  kind: z.enum(["local_installation", "cloud_tenant"]),
   endpoint: z.url().nullable(),
 });
 export type TodosAuthorityDescriptor = z.infer<typeof TodosAuthorityDescriptorSchema>;
 
 const TodosAuthorityConfigShape = {
-  mode: TodosModeSchema,
   authority: TodosAuthorityDescriptorSchema,
   contractVersion: z.literal(TODOS_CONTRACT_VERSION),
   contractDigest: TodosSha256DigestSchema,
@@ -42,23 +39,16 @@ function enforceTodosAuthorityInvariants(
       path: ["capabilityIds"],
     });
   }
-  if (value.mode === "local") {
-    if (value.authority.kind !== "local_installation" || value.authority.endpoint !== null) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Local mode requires a local installation authority without a network endpoint",
-        path: ["authority"],
-      });
-    }
-  } else if (
-    value.authority.kind !== "cloud_tenant"
-    || value.authority.endpoint === null
-    || !value.authority.endpoint.startsWith("https://")
+  // An authority's reachable endpoint must be HTTPS; a null endpoint is the
+  // on-box installation with no network authority.
+  if (
+    value.authority.endpoint !== null
+    && !value.authority.endpoint.startsWith("https://")
   ) {
     ctx.addIssue({
       code: "custom",
-      message: "Cloud mode requires a tenant authority with an HTTPS endpoint",
-      path: ["authority"],
+      message: "A network authority endpoint must be HTTPS",
+      path: ["authority", "endpoint"],
     });
   }
 }
@@ -80,7 +70,6 @@ export type TodosAuthorityHandshake = z.infer<typeof TodosAuthorityHandshakeSche
 
 export const TodosServiceStatusSchema = z.strictObject({
   status: z.enum(["healthy", "ready", "unavailable"]),
-  mode: TodosModeSchema,
   authorityId: TodosOwnerIdSchema,
   contractVersion: z.literal(TODOS_CONTRACT_VERSION),
   manifestVersion: z.literal(TODOS_MANIFEST_VERSION),

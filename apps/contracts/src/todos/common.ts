@@ -6,9 +6,6 @@ export const TODOS_CONTRACT_VERSION = "1.0.0" as const;
 export const TODOS_MANIFEST_VERSION = "1" as const;
 export const TODOS_TRANSFER_VERSION = "1" as const;
 
-export const TodosModeSchema = z.enum(["local", "cloud"]);
-export type TodosMode = z.infer<typeof TodosModeSchema>;
-
 export const TodosAudienceSchema = z.enum(["customer", "tenant_admin"]);
 export type TodosAudience = z.infer<typeof TodosAudienceSchema>;
 

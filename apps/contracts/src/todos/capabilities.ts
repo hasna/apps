@@ -35,11 +35,6 @@ function operationsForCapability(
   }
 }
 
-function orderedModes(operations: readonly TodosOperation[]): Array<"local" | "cloud"> {
-  const modes = new Set(operations.flatMap((operation) => operation.supportedModes));
-  return (["local", "cloud"] as const).filter((mode) => modes.has(mode));
-}
-
 function orderedAudiences(operations: readonly TodosOperation[]): Array<"customer" | "tenant_admin"> {
   const audiences = new Set(operations.map((operation) => operation.audience));
   return (["customer", "tenant_admin"] as const).filter((audience) => audiences.has(audience));
@@ -63,7 +58,6 @@ export function deriveTodosCapabilities(
         ? "gated"
         : "core",
       operationIds: operations.map((operation) => operation.id).sort((left, right) => left.localeCompare(right)),
-      modes: orderedModes(operations),
       audiences: orderedAudiences(operations),
     });
   });

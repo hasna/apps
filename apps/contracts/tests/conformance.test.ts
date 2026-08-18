@@ -189,18 +189,21 @@ describe("repo conformance kit", () => {
     expect(health?.status).toBe("skip");
   });
 
-  test("fails when a retired storage-mode env is set", () => {
+  test("retired storage-mode env vars are inert in the backend configuration check", () => {
     const report = runRepoConformance(repoRoot, { env: { HASNA_CONTRACTS_STORAGE_MODE: "sync" } });
     const backend = report.checks.find((c) => c.id === "server_backend_configuration");
-    expect(backend?.status).toBe("fail");
-    expect(report.ok).toBe(false);
+    expect(backend?.status).toBe("pass");
+    expect(report.ok).toBe(true);
   });
 
-  test("fails a removed placement word in a retired storage-mode env", () => {
-    const report = runRepoConformance(repoRoot, { env: { HASNA_CONTRACTS_STORAGE_MODE: "self_hosted" } });
+  test("DATABASE_URL selects the postgresql backend in the configuration check", () => {
+    const report = runRepoConformance(repoRoot, {
+      env: { HASNA_CONTRACTS_DATABASE_URL: "postgres://user@host/db" },
+    });
     const backend = report.checks.find((c) => c.id === "server_backend_configuration");
-    expect(backend?.status).toBe("fail");
+    expect(backend?.status).toBe("pass");
     expect(backend?.detail).toContain("HASNA_CONTRACTS_DATABASE_URL");
+    expect(backend?.detail).toContain("postgresql");
   });
 
   test("validates a serve health sample shape", () => {

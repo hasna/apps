@@ -376,7 +376,6 @@ describe("Todos deterministic artifacts", () => {
       if (!document) continue;
       const headers = new Map(document.parameters.map((parameter) => [parameter.name, parameter]));
       for (const name of [
-        "X-Todos-Mode",
         "X-Todos-Authority-Id",
         "X-Todos-Contract-Digest",
         "X-Todos-Manifest-Digest",
@@ -395,7 +394,7 @@ describe("Todos deterministic artifacts", () => {
       expect(document["x-todos-invocation-context-schema"].$ref).toContain("operation_invocation");
       const bindings = document["x-todos-invocation-bindings"];
       expect(bindings.schema.$ref).toContain("operation_invocation");
-      expect(bindings.fields.mode?.source).toEqual({ in: "header", name: "X-Todos-Mode" });
+      expect(bindings.fields.mode).toBeUndefined();
       expect(bindings.fields.authorityId?.source).toEqual({ in: "header", name: "X-Todos-Authority-Id" });
       expect(bindings.fields.contractDigest?.source).toEqual({ in: "header", name: "X-Todos-Contract-Digest" });
       expect(bindings.fields.manifestDigest?.source).toEqual({ in: "header", name: "X-Todos-Manifest-Digest" });

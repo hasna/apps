@@ -11,6 +11,11 @@
 // manifest carrying `deploymentMode`/`deploymentModes` FAILS validation. A
 // schema that merely ignored the field would have removed the word and kept
 // the hole.
+//
+// The retired `HASNA_<NAME>_STORAGE_MODE` / `HASNA_<NAME>_MODE` environment
+// variables are a different class: they are not part of the selection
+// contract at all, so the resolvers never read them and a stale variable is
+// inert rather than rejected.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -205,12 +210,18 @@ describe("server data backend is sqlite|postgresql", () => {
     }).backend).toBe("postgresql");
   });
 
-  test("retired server mode variables fail closed with migration guidance", () => {
+  test("retired server mode variables are inert; DATABASE_URL is the only selector", () => {
     for (const word of ["", "   ", "sqlite", "postgres", ...REMOVED_MODE_WORDS]) {
+      expect(resolveServerDataBackend("demo", { HASNA_DEMO_STORAGE_MODE: word }).backend).toBe(
+        "sqlite",
+      );
       expect(
-        () => resolveServerDataBackend("demo", { HASNA_DEMO_STORAGE_MODE: word }),
-        `${word} must throw`,
-      ).toThrow(/HASNA_DEMO_DATABASE_URL|removed/i);
+        resolveServerDataBackend("demo", {
+          HASNA_DEMO_STORAGE_MODE: word,
+          HASNA_DEMO_DATABASE_URL: "postgres://user@host/db",
+        }).backend,
+      ).toBe("postgresql");
+      expect(resolveServerDataBackend("demo", { HASNA_DEMO_MODE: word }).backend).toBe("sqlite");
     }
   });
 
@@ -231,12 +242,12 @@ describe("server data backend is sqlite|postgresql", () => {
 });
 
 describe("client seam is sqlite|http, never placement words", () => {
-  test("removed mode words in the client env throw", () => {
+  test("removed mode words in the client env are inert", () => {
     for (const word of ["", "   ", "local", "cloud", "self_hosted", "self-hosted", "remote", "hybrid"]) {
-      expect(
-        () => resolveClientTransport("demo", { HASNA_DEMO_STORAGE_MODE: word }),
-        `${word} must throw`,
-      ).toThrow();
+      expect(() => resolveClientTransport("demo", { HASNA_DEMO_STORAGE_MODE: word })).not.toThrow();
+      expect(resolveClientTransport("demo", { HASNA_DEMO_STORAGE_MODE: word }).transport).toBe(
+        "sqlite",
+      );
     }
   });
 
@@ -258,11 +269,17 @@ describe("client seam is sqlite|http, never placement words", () => {
     expect(resolved.baseUrl).toBeNull();
   });
 
-  test("retired client mode variables fail closed even for old valid values", () => {
+  test("retired client mode variables never select HTTP by themselves", () => {
     for (const value of ["sqlite", "postgres"]) {
-      expect(() => resolveClientTransport("demo", {
+      expect(resolveClientTransport("demo", { HASNA_DEMO_STORAGE_MODE: value }).transport).toBe(
+        "sqlite",
+      );
+      const withUrl = resolveClientTransport("demo", {
         HASNA_DEMO_STORAGE_MODE: value,
-      })).toThrow(/HASNA_DEMO_API_URL|removed/i);
+        HASNA_DEMO_API_URL: "https://demo.example.com",
+        HASNA_DEMO_API_KEY: "test-key-not-a-secret",
+      });
+      expect(withUrl.transport).toBe("http");
     }
   });
 });
@@ -280,6 +297,7 @@ const FORBIDDEN_PATTERNS: readonly [string, RegExp][] = [
   ["self_hosted", /self_hosted/i],
   ["self-hosted", /self-hosted/i],
   ["hybrid", /\bhybrid(?:\b|_)/i],
+  ["storage-mode env vars", /STORAGE_MODE/],
 ];
 
 // A line carrying a 64-hex digest cell is a hash-anchored evidence row — a

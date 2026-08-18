@@ -344,13 +344,11 @@ function validProjection() {
     provenanceLedger: [],
     adapterExtensions: [
       {
-        mode: "local",
         schema: "hasna.task_to_pr_adapter_extension.v1",
         ref: ref("adapter_extension", "adapter", "a", "partial"),
         digest: sha("b")
       },
       {
-        mode: "cloud",
         schema: "hasna.task_to_pr_adapter_extension.v1",
         ref: ref("adapter_extension", "adapter", "c", "full"),
         digest: sha("d")
@@ -3983,9 +3981,11 @@ describe("task-to-PR projection v1", () => {
     ).toBe(false);
   });
 
-  test("accepts local and cloud extensions only as redacted referenced digests", () => {
+  test("adapter extensions carry no mode and only redacted referenced digests", () => {
     const projection = validProjection();
-    expect(TaskToPrProjectionSchema.parse(projection).adapterExtensions.map((extension) => extension.mode)).toEqual(["local", "cloud"]);
+    const parsed = TaskToPrProjectionSchema.parse(projection);
+    expect(parsed.adapterExtensions.length).toBe(2);
+    expect(parsed.adapterExtensions.every((extension) => !("mode" in extension))).toBe(true);
     expect(TaskToPrAdapterExtensionSchema.safeParse(projection.adapterExtensions[0]).success).toBe(true);
     for (const schema of Object.values(SCHEMA_IDS)) {
       expect(
@@ -4014,34 +4014,36 @@ describe("task-to-PR projection v1", () => {
     ).toBe(false);
 
     const { adapterExtensions: _ignored, ...core } = projection;
-    const local = parseProjection({ ...core, adapterExtensions: [projection.adapterExtensions[0]] });
-    const cloud = parseProjection({ ...core, adapterExtensions: [projection.adapterExtensions[1]] });
-    expect(validateTaskToPrAdapterCoreEquivalence(local, cloud)).toEqual({ success: true, issues: [] });
-    expect(validateTaskToPrAdapterCoreEquivalence(cloud, local).success).toBe(false);
-    expect(validateTaskToPrAdapterCoreEquivalence({ ...local, adapterExtensions: [] }, cloud).success).toBe(false);
-    expect(validateTaskToPrAdapterCoreEquivalence(local, { ...cloud, adapterExtensions: [] }).success).toBe(false);
+    const first = parseProjection({ ...core, adapterExtensions: [projection.adapterExtensions[0]] });
+    const second = parseProjection({ ...core, adapterExtensions: [projection.adapterExtensions[1]] });
+    // Adapter extensions do not participate: projections with equal cores are
+    // equivalent regardless of how many extensions each side carries.
+    expect(validateTaskToPrAdapterCoreEquivalence(first, second)).toEqual({ success: true, issues: [] });
+    expect(validateTaskToPrAdapterCoreEquivalence(second, first).success).toBe(true);
+    expect(validateTaskToPrAdapterCoreEquivalence({ ...first, adapterExtensions: [] }, second).success).toBe(true);
+    expect(validateTaskToPrAdapterCoreEquivalence(first, { ...second, adapterExtensions: [] }).success).toBe(true);
     expect(
       validateTaskToPrAdapterCoreEquivalence(
-        { ...local, adapterExtensions: [projection.adapterExtensions[0], projection.adapterExtensions[1]] },
-        cloud
+        { ...first, adapterExtensions: [projection.adapterExtensions[0], projection.adapterExtensions[1]] },
+        second
       ).success
-    ).toBe(false);
+    ).toBe(true);
     expect(
-      validateTaskToPrAdapterCoreEquivalence(local, {
-        ...cloud,
+      validateTaskToPrAdapterCoreEquivalence(first, {
+        ...second,
         events: {
-          ...cloud.events,
-          sequence: cloud.events.sequence + 1,
+          ...second.events,
+          sequence: second.events.sequence + 1,
           replayCursorRef: ref("replay_cursor", "todos", "9"),
           prefixDigest: sha("8")
         }
       }).success
     ).toBe(false);
     expect(
-      validateTaskToPrAdapterCoreEquivalence(local, {
-        ...cloud,
+      validateTaskToPrAdapterCoreEquivalence(first, {
+        ...second,
         provenanceLedger: [
-          ...cloud.provenanceLedger,
+          ...second.provenanceLedger,
           {
             category: "recovery",
             ref: ref("recovery", "todos", "adapter-history")
@@ -4049,7 +4051,7 @@ describe("task-to-PR projection v1", () => {
         ]
       }).success
     ).toBe(false);
-    expect(validateTaskToPrAdapterCoreEquivalence(local, { ...cloud, mutableProviderPayload: true }).success).toBe(false);
+    expect(validateTaskToPrAdapterCoreEquivalence(first, { ...second, mutableProviderPayload: true }).success).toBe(false);
   });
 
   test("binds the expected and provider-observed PR base through exact-head, review, guard, and outcome facts", () => {

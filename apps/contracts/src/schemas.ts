@@ -3700,7 +3700,6 @@ export const TASK_TO_PR_V1_ADAPTER_EXTENSION_SCHEMA_PREFIX =
 
 export const TaskToPrAdapterExtensionSchema = z
   .object({
-    mode: z.enum(["local", "cloud"]),
     schema: SchemaIdSchema,
     ref: taskToPrRefFor("adapter_extension"),
     digest: LowerSha256DigestSchema
@@ -4639,11 +4638,11 @@ export const TaskToPrProjectionSchema = z
     }
     const extensionKeys = new Set<string>();
     for (const [index, extension] of value.adapterExtensions.entries()) {
-      const key = `${extension.mode}:${extension.schema}`;
+      const key = `${extension.schema}:${extension.ref.id}`;
       if (extensionKeys.has(key)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "Adapter extensions must be unique per local/cloud mode and schema",
+          message: "Adapter extensions must be unique per schema and referenced object",
           path: ["adapterExtensions", index]
         });
       }
@@ -4745,7 +4744,7 @@ const TASK_TO_PR_LEGAL_STATE_TRANSITIONS: Record<TaskToPrProjectionState, readon
 };
 
 function taskToPrParseIssues(
-  prefix: "previous" | "current" | "local" | "cloud",
+  prefix: "previous" | "current" | "first" | "second",
   issues: z.ZodIssue[]
 ): TaskToPrTransitionIssue[] {
   return issues.map((issue) => ({
@@ -5208,51 +5207,30 @@ export function validateTaskToPrProjectionTransition(
 }
 
 export function validateTaskToPrAdapterCoreEquivalence(
-  localInput: unknown,
-  cloudInput: unknown
+  firstInput: unknown,
+  secondInput: unknown
 ): TaskToPrTransitionResult {
   const issues: TaskToPrTransitionIssue[] = [];
-  const parsedLocal = TaskToPrProjectionSchema.safeParse(localInput);
-  const parsedCloud = TaskToPrProjectionSchema.safeParse(cloudInput);
-  if (!parsedLocal.success) {
-    issues.push(...taskToPrParseIssues("local", parsedLocal.error.issues));
+  const parsedFirst = TaskToPrProjectionSchema.safeParse(firstInput);
+  const parsedSecond = TaskToPrProjectionSchema.safeParse(secondInput);
+  if (!parsedFirst.success) {
+    issues.push(...taskToPrParseIssues("first", parsedFirst.error.issues));
   }
-  if (!parsedCloud.success) {
-    issues.push(...taskToPrParseIssues("cloud", parsedCloud.error.issues));
+  if (!parsedSecond.success) {
+    issues.push(...taskToPrParseIssues("second", parsedSecond.error.issues));
   }
-  if (!parsedLocal.success || !parsedCloud.success) {
+  if (!parsedFirst.success || !parsedSecond.success) {
     return { success: false, issues };
   }
-  if (
-    parsedLocal.data.adapterExtensions.length === 0 ||
-    parsedLocal.data.adapterExtensions.some((extension) => extension.mode !== "local")
-  ) {
-    issues.push({
-      path: "local.adapterExtensions",
-      message: "The first adapter projection must contain one or more local-only extensions"
-    });
-  }
-  if (
-    parsedCloud.data.adapterExtensions.length === 0 ||
-    parsedCloud.data.adapterExtensions.some((extension) => extension.mode !== "cloud")
-  ) {
-    issues.push({
-      path: "cloud.adapterExtensions",
-      message: "The second adapter projection must contain one or more cloud-only extensions"
-    });
-  }
-  if (issues.length > 0) {
-    return { success: false, issues };
-  }
-  const { adapterExtensions: _localExtensions, ...localCore } = parsedLocal.data;
-  const { adapterExtensions: _cloudExtensions, ...cloudCore } = parsedCloud.data;
-  if (JSON.stringify(localCore) !== JSON.stringify(cloudCore)) {
+  const { adapterExtensions: _firstExtensions, ...firstCore } = parsedFirst.data;
+  const { adapterExtensions: _secondExtensions, ...secondCore } = parsedSecond.data;
+  if (JSON.stringify(firstCore) !== JSON.stringify(secondCore)) {
     return {
       success: false,
       issues: [
         {
           path: "core",
-          message: "Local and cloud adapters must serialize byte-equivalent task-to-PR core projections"
+          message: "Adapter projections must serialize byte-equivalent task-to-PR core projections"
         }
       ]
     };

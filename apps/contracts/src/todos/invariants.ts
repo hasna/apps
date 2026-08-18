@@ -89,13 +89,13 @@ export const TODOS_RUNTIME_INVARIANTS: readonly TodosRuntimeInvariant[] = Object
     runtimeValidatorIds: ["identity.authorization_binding"],
   }),
   invariant({
-    id: "todos.authority.mode_binding",
+    id: "todos.authority.endpoint_https_rule",
     category: "authority",
     schemaIds: [
       "hasna.todos.authority_config.v1",
       "hasna.todos.authority_handshake.v1",
     ],
-    description: "Local authorities have no endpoint and cloud authorities require one HTTPS endpoint.",
+    description: "A network authority endpoint must be HTTPS; a null endpoint is the on-box installation.",
     jsonSchemaExpressible: false,
     runtimeValidatorIds: [
       "authority.config_semantics",
@@ -222,10 +222,10 @@ export const TODOS_RUNTIME_INVARIANTS: readonly TodosRuntimeInvariant[] = Object
     ],
   }),
   invariant({
-    id: "todos.invocation.operation_mode_scope_request",
+    id: "todos.invocation.operation_scope_request",
     category: "invocation",
     schemaIds: ["hasna.todos.operation_invocation.v1"],
-    description: "The operation, mode, scopes, idempotency, and typed request all match the manifest.",
+    description: "The operation, scopes, idempotency, and typed request all match the manifest.",
     jsonSchemaExpressible: false,
     runtimeValidatorIds: [
       "invocation.operation_binding",

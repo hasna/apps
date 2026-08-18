@@ -81,7 +81,7 @@ export const TODOS_RUNTIME_VALIDATOR_BINDINGS =
       symbol: "TodosAuthorityConfigSchema",
       kind: "refinement",
       invariantIds: [
-        "todos.authority.mode_binding",
+        "todos.authority.endpoint_https_rule",
         "todos.authority.capability_uniqueness",
       ],
       schemaIds: ["hasna.todos.authority_config.v1"],
@@ -92,7 +92,7 @@ export const TODOS_RUNTIME_VALIDATOR_BINDINGS =
       symbol: "TodosAuthorityHandshakeSchema",
       kind: "refinement",
       invariantIds: [
-        "todos.authority.mode_binding",
+        "todos.authority.endpoint_https_rule",
         "todos.authority.capability_uniqueness",
       ],
       schemaIds: ["hasna.todos.authority_handshake.v1"],
@@ -201,7 +201,7 @@ export const TODOS_RUNTIME_VALIDATOR_BINDINGS =
       invariantIds: [
         "todos.invocation.canonical_digests",
         "todos.invocation.authority_identity_binding",
-        "todos.invocation.operation_mode_scope_request",
+        "todos.invocation.operation_scope_request",
       ],
       schemaIds: ["hasna.todos.operation_invocation.v1"],
     }),
@@ -213,7 +213,7 @@ export const TODOS_RUNTIME_VALIDATOR_BINDINGS =
       invariantIds: [
         "todos.invocation.canonical_digests",
         "todos.invocation.authority_identity_binding",
-        "todos.invocation.operation_mode_scope_request",
+        "todos.invocation.operation_scope_request",
       ],
       schemaIds: ["hasna.todos.operation_invocation.v1"],
     }),

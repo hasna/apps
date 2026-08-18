@@ -11,7 +11,6 @@
     ],
     "errorVocabulary": "typed",
     "localTopologyHttpSurface": null,
-    "modeSelection": "explicit",
     "sharedHttpPrefix": "/v1/"
   },
   "localTopologyOperationIds": [
@@ -26,11 +25,7 @@
     "todos.task_to_pr_projection.rebuild"
   ],
   "manifestVersion": "1",
-  "modes": [
-    "local",
-    "cloud"
-  ],
-  "schema": "hasna.todos.local_cloud_conformance.v1",
+  "schema": "hasna.todos.conformance.v1",
   "sharedCustomerOperationIds": [
     "todos.service.health",
     "todos.service.ready",

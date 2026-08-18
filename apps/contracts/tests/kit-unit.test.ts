@@ -39,11 +39,17 @@ describe("kit server backend resolution", () => {
     expect(aliasEnv.databaseUrlSource).toBe("TODOS_DATABASE_URL");
   });
 
-  test("legacy mode variables fail with migration guidance", () => {
+  test("legacy mode variables are inert; DATABASE_URL is the only selector", () => {
     for (const value of ["cloud", "", "   "]) {
-      expect(() =>
-        resolveServerDataBackend("todos", { HASNA_TODOS_STORAGE_MODE: value }),
-      ).toThrow(/removed.*HASNA_TODOS_DATABASE_URL/i);
+      expect(resolveServerDataBackend("todos", { HASNA_TODOS_STORAGE_MODE: value }).backend).toBe(
+        "sqlite",
+      );
+      expect(
+        resolveServerDataBackend("todos", {
+          HASNA_TODOS_STORAGE_MODE: value,
+          HASNA_TODOS_DATABASE_URL: "postgres://user@host/db",
+        }).backend,
+      ).toBe("postgresql");
     }
   });
 

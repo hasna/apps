@@ -190,12 +190,6 @@ function requestParameters(
 function invocationHeaderParameters(operation: TodosOperation) {
   const parameters: Array<Record<string, unknown>> = [
     {
-      name: "X-Todos-Mode",
-      in: "header",
-      required: true,
-      schema: { type: "string", enum: operation.supportedModes },
-    },
-    {
       name: "X-Todos-Authority-Id",
       in: "header",
       required: true,
@@ -255,10 +249,6 @@ function invocationContextBindings(operation: TodosOperation) {
   return {
     schema: schemaRef(TODOS_OPERATION_INVOCATION_SCHEMA_ID),
     fields: {
-      mode: {
-        source: { in: "header", name: "X-Todos-Mode" },
-        target: "mode",
-      },
       authorityId: {
         source: { in: "header", name: "X-Todos-Authority-Id" },
         target: "authorityId",
@@ -354,7 +344,6 @@ export function buildTodosOpenApi(): Record<string, unknown> {
         },
       },
       "x-todos-audience": operation.audience,
-      "x-todos-modes": operation.supportedModes,
       "x-todos-required-scopes": operation.requiredScopes,
       "x-todos-identity-context-schema": schemaRef(TODOS_IDENTITY_SCHEMA_ID),
       "x-todos-invocation-context-schema": schemaRef(TODOS_OPERATION_INVOCATION_SCHEMA_ID),
@@ -414,17 +403,15 @@ export function buildTodosConformanceProfile(): Record<string, unknown> {
     .filter((operation) => operation.classification === "local_topology_only")
     .map((operation) => operation.id);
   return {
-    schema: "hasna.todos.local_cloud_conformance.v1",
+    schema: "hasna.todos.conformance.v1",
     contractVersion: TODOS_CONTRACT_VERSION,
     manifestVersion: TODOS_MANIFEST_VERSION,
-    modes: ["local", "cloud"],
     authority: {
       count: 1,
     },
     sharedCustomerOperationIds: shared,
     localTopologyOperationIds: localTopology,
     invariants: {
-      modeSelection: "explicit",
       sharedHttpPrefix: "/v1/",
       localTopologyHttpSurface: null,
       customerAudiences: ["customer", "tenant_admin"],
@@ -624,7 +611,6 @@ function sampleTransferBundle(): TodosTransferBundle {
     createdAt: "2026-07-24T00:00:00.000Z",
     source: {
       authorityId: "tenant-a",
-      mode: "local",
     },
     records: transferRecords(),
   });
@@ -632,19 +618,15 @@ function sampleTransferBundle(): TodosTransferBundle {
 
 export function buildTodosFixtures(): Record<string, unknown> {
   const localAuthority = createTodosAuthorityHandshake({
-    mode: "local",
     authority: {
       id: "tenant-a-local",
-      kind: "local_installation",
       endpoint: null,
     },
     issuedAt: "2026-07-24T00:00:00.000Z",
   });
   const cloudAuthority = createTodosAuthorityHandshake({
-    mode: "cloud",
     authority: {
       id: "tenant-a-cloud",
-      kind: "cloud_tenant",
       endpoint: "https://todos.example.invalid/v1",
     },
     issuedAt: "2026-07-24T00:00:00.000Z",
@@ -703,7 +685,7 @@ function baseArtifactValues(): Record<string, unknown> {
     "schema-bundle.json": buildTodosSchemaBundle(),
     "surface-map.json": buildTodosSurfaceMap(),
     "transfer-classification.json": TODOS_TRANSFER_CLASSIFICATION,
-    "local-cloud-conformance-profile.json": buildTodosConformanceProfile(),
+    "conformance-profile.json": buildTodosConformanceProfile(),
     "source-freeze.json": TODOS_SOURCE_FREEZE,
     ...buildTodosFixtures(),
   };

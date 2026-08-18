@@ -1,8 +1,7 @@
 {
   "authority": {
     "endpoint": "https://todos.example.invalid/v1",
-    "id": "tenant-a-cloud",
-    "kind": "cloud_tenant"
+    "id": "tenant-a-cloud"
   },
   "capabilityIds": [
     "activity",
@@ -31,10 +30,9 @@
     "typed-errors",
     "verification-evidence"
   ],
-  "contractDigest": "bb6191ab073853755b6abc4e48211f1c066e5bad4414e34f122df8ec01f41820",
+  "contractDigest": "84ff3d0baefd1218fc2422c2fa411dd549d490197fdab6573f35c4f3bc724d40",
   "contractVersion": "1.0.0",
   "issuedAt": "2026-07-24T00:00:00.000Z",
-  "manifestDigest": "f46ed342b97d84d3d4d076a62bc11f9dc0bdb0ccda57047b61bb96bd97c6bc4a",
-  "manifestVersion": "1",
-  "mode": "cloud"
+  "manifestDigest": "bdc14b6741c4bb8341d63128b33e727e0ddfe00ef6e2a8909455dac768a48fae",
+  "manifestVersion": "1"
 }

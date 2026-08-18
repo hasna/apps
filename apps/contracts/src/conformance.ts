@@ -942,21 +942,16 @@ export function runRepoConformance(repoRoot: string, options: RepoConformanceOpt
 
   // Check 6: server backend configuration.
   const env = options.env ?? process.env;
-  try {
-    const resolution = resolveServerDataBackend(manifest.name, env);
-    const keys = serverDataBackendEnvKeys(manifest.name).databaseUrlKeys;
-    checks.push({
-      id: "server_backend_configuration",
-      status: "pass",
-      detail:
-        resolution.backend === "postgresql"
-          ? `${resolution.databaseUrlSource} selects postgresql`
-          : `no database URL set; defaults to sqlite (keys: ${keys.join(", ")})`,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    checks.push({ id: "server_backend_configuration", status: "fail", detail: message });
-  }
+  const resolution = resolveServerDataBackend(manifest.name, env);
+  const keys = serverDataBackendEnvKeys(manifest.name).databaseUrlKeys;
+  checks.push({
+    id: "server_backend_configuration",
+    status: "pass",
+    detail:
+      resolution.backend === "postgresql"
+        ? `${resolution.databaseUrlSource} selects postgresql`
+        : `no database URL set; defaults to sqlite (keys: ${keys.join(", ")})`,
+  });
 
   // Check 7: health shape when a serve bin exists.
   if (!hasServeBin) {

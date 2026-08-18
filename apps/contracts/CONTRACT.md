@@ -59,9 +59,9 @@ directly**: a client whose data lives in the server's PostgreSQL reaches it
 over the HTTP `/v1` API (see `resolveClientTransport`). There is no
 client-side Postgres store.
 
-Retired `STORAGE_MODE` and `MODE` variables are **rejected with a migration
-hint**, never normalized or silently mapped. Backend resolution lives in
-`src/server-backend.ts` and depends only on database configuration.
+Backend resolution lives in `src/server-backend.ts` and depends only on
+database configuration. There are no deployment or storage modes; the two
+backends are selected by the environment contract alone.
 
 ---
 
@@ -583,7 +583,7 @@ Checks:
    compliant behaviour is how a mandatory check gets switched off.
 10. `hosting_story` — public OSS cores include the user-hosted product story;
    `saas` repos include the `hasna-saas` story.
-11. `server_backend_configuration` — DATABASE_URL presence selects `postgresql`; retired mode variables fail closed.
+11. `server_backend_configuration` — DATABASE_URL presence selects `postgresql`; otherwise sqlite.
 12. `health_shape` — when a serve bin exists, a sampled `/health` payload matches `{ status, version, backend }`.
 13. `no_cloud_guard` — no forbidden shared cloud runtime edges (reuses `scanNoCloudTarget`).
 14. `published_artifact_gate` — a repo that publishes declares
@@ -871,9 +871,9 @@ The deployment-placement field is **rejected, not ignored**: a manifest that
 still carries it — top-level or on a service surface, in any spelling — fails
 validation with an error naming the field, and `storage.backend` accepts only
 `sqlite | postgresql`. Migration is deletion plus rename: delete the placement
-arrays, rename `storage.mode` to `storage.backend`, and map the old file-backed
-value to `sqlite` and the old server-backed value to `postgresql`. Missing `hosting`
-and `serviceSurfaces` still receive compatible defaults. The current schema
+arrays, rename the old storage selector to `storage.backend`, and map the old
+file-backed value to `sqlite` and the old server-backed value to `postgresql`.
+Missing `hosting` and `serviceSurfaces` still receive compatible defaults. The current schema
 intentionally rejects a declared non-`.db` `storage.sqlitePath`, a SaaS store
 without `storage.envPrefix`, and a declared supported API that omits the
 health/readiness/version endpoints or uses a method other than `GET`.

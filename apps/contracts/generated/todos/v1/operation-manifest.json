@@ -19,10 +19,6 @@
       ],
       "resource": "service",
       "responseSchemaId": "hasna.todos.response.service_status.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos service health",
@@ -67,10 +63,6 @@
       ],
       "resource": "service",
       "responseSchemaId": "hasna.todos.response.service_status.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos service ready",
@@ -115,10 +107,6 @@
       ],
       "resource": "service",
       "responseSchemaId": "hasna.todos.response.artifact_document.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos service version",
@@ -163,10 +151,6 @@
       ],
       "resource": "authority",
       "responseSchemaId": "hasna.todos.response.authority.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos authority get",
@@ -211,10 +195,6 @@
       ],
       "resource": "manifest",
       "responseSchemaId": "hasna.todos.response.artifact_document.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos manifest get",
@@ -259,10 +239,6 @@
       ],
       "resource": "openapi",
       "responseSchemaId": "hasna.todos.response.artifact_document.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos openapi get",
@@ -307,10 +283,6 @@
       ],
       "resource": "capabilities",
       "responseSchemaId": "hasna.todos.response.capability_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos capabilities list",
@@ -355,10 +327,6 @@
       ],
       "resource": "capabilities",
       "responseSchemaId": "hasna.todos.response.capability.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos capabilities get",
@@ -403,10 +371,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.task_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks list",
@@ -451,10 +415,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.count.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks count",
@@ -499,10 +459,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.exists_many.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks exists-many",
@@ -547,10 +503,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.task.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks create",
@@ -597,10 +549,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.task.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks upsert",
@@ -645,10 +593,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.task.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks get",
@@ -695,10 +639,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.task.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks update",
@@ -745,10 +685,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.mutation.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks delete",
@@ -795,10 +731,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.batch.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks batch",
@@ -845,10 +777,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.task.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks start",
@@ -898,10 +826,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.task.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks complete",
@@ -951,10 +875,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.task.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks fail",
@@ -1004,10 +924,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.task.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks claim-next",
@@ -1052,10 +968,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.task.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks next",
@@ -1100,10 +1012,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.task_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks list-ready",
@@ -1148,10 +1056,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.task_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks list-active",
@@ -1196,10 +1100,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.task_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks list-changed",
@@ -1247,10 +1147,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.mutation.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks lock",
@@ -1298,10 +1194,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.mutation.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks unlock",
@@ -1346,10 +1238,6 @@
       ],
       "resource": "tasks",
       "responseSchemaId": "hasna.todos.response.task_context.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos tasks get-context",
@@ -1394,10 +1282,6 @@
       ],
       "resource": "history",
       "responseSchemaId": "hasna.todos.response.activity_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos history list",
@@ -1442,10 +1326,6 @@
       ],
       "resource": "comments",
       "responseSchemaId": "hasna.todos.response.comment_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos comments list",
@@ -1490,10 +1370,6 @@
       ],
       "resource": "comments",
       "responseSchemaId": "hasna.todos.response.comment.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos comments create",
@@ -1538,10 +1414,6 @@
       ],
       "resource": "dependencies",
       "responseSchemaId": "hasna.todos.response.dependency_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos dependencies list",
@@ -1586,10 +1458,6 @@
       ],
       "resource": "dependencies",
       "responseSchemaId": "hasna.todos.response.dependency_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos dependencies list-all",
@@ -1634,10 +1502,6 @@
       ],
       "resource": "dependencies",
       "responseSchemaId": "hasna.todos.response.dependency.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos dependencies create",
@@ -1684,10 +1548,6 @@
       ],
       "resource": "dependencies",
       "responseSchemaId": "hasna.todos.response.mutation.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos dependencies delete",
@@ -1732,10 +1592,6 @@
       ],
       "resource": "projects",
       "responseSchemaId": "hasna.todos.response.project_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos projects list",
@@ -1780,10 +1636,6 @@
       ],
       "resource": "projects",
       "responseSchemaId": "hasna.todos.response.project.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos projects create",
@@ -1828,10 +1680,6 @@
       ],
       "resource": "projects",
       "responseSchemaId": "hasna.todos.response.project.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos projects get",
@@ -1878,10 +1726,6 @@
       ],
       "resource": "projects",
       "responseSchemaId": "hasna.todos.response.project.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos projects update",
@@ -1928,10 +1772,6 @@
       ],
       "resource": "projects",
       "responseSchemaId": "hasna.todos.response.project.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos projects rename",
@@ -1978,10 +1818,6 @@
       ],
       "resource": "projects",
       "responseSchemaId": "hasna.todos.response.mutation.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos projects delete",
@@ -2026,10 +1862,6 @@
       ],
       "resource": "task_lists",
       "responseSchemaId": "hasna.todos.response.task_list_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos task-lists list",
@@ -2074,10 +1906,6 @@
       ],
       "resource": "task_lists",
       "responseSchemaId": "hasna.todos.response.task_list.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos task-lists create",
@@ -2122,10 +1950,6 @@
       ],
       "resource": "task_lists",
       "responseSchemaId": "hasna.todos.response.task_list.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos task-lists get",
@@ -2172,10 +1996,6 @@
       ],
       "resource": "task_lists",
       "responseSchemaId": "hasna.todos.response.task_list.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos task-lists update",
@@ -2222,10 +2042,6 @@
       ],
       "resource": "task_lists",
       "responseSchemaId": "hasna.todos.response.mutation.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos task-lists delete",
@@ -2270,10 +2086,6 @@
       ],
       "resource": "plans",
       "responseSchemaId": "hasna.todos.response.plan_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos plans list",
@@ -2318,10 +2130,6 @@
       ],
       "resource": "plans",
       "responseSchemaId": "hasna.todos.response.plan.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos plans create",
@@ -2366,10 +2174,6 @@
       ],
       "resource": "plans",
       "responseSchemaId": "hasna.todos.response.plan.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos plans get",
@@ -2416,10 +2220,6 @@
       ],
       "resource": "plans",
       "responseSchemaId": "hasna.todos.response.plan.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos plans update",
@@ -2466,10 +2266,6 @@
       ],
       "resource": "plans",
       "responseSchemaId": "hasna.todos.response.mutation.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos plans delete",
@@ -2514,10 +2310,6 @@
       ],
       "resource": "agents",
       "responseSchemaId": "hasna.todos.response.agent_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos agents list",
@@ -2562,10 +2354,6 @@
       ],
       "resource": "agents",
       "responseSchemaId": "hasna.todos.response.agent.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos agents register",
@@ -2610,10 +2398,6 @@
       ],
       "resource": "agents",
       "responseSchemaId": "hasna.todos.response.agent.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos agents get",
@@ -2660,10 +2444,6 @@
       ],
       "resource": "agents",
       "responseSchemaId": "hasna.todos.response.agent.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos agents heartbeat",
@@ -2710,10 +2490,6 @@
       ],
       "resource": "agents",
       "responseSchemaId": "hasna.todos.response.agent.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos agents release",
@@ -2758,10 +2534,6 @@
       ],
       "resource": "activity",
       "responseSchemaId": "hasna.todos.response.activity_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos activity list",
@@ -2806,10 +2578,6 @@
       ],
       "resource": "stats",
       "responseSchemaId": "hasna.todos.response.stats.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos stats get",
@@ -2854,10 +2622,6 @@
       ],
       "resource": "search",
       "responseSchemaId": "hasna.todos.response.task_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos search execute",
@@ -2902,10 +2666,6 @@
       ],
       "resource": "saved_views",
       "responseSchemaId": "hasna.todos.response.saved_view_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos saved-views list",
@@ -2950,10 +2710,6 @@
       ],
       "resource": "saved_views",
       "responseSchemaId": "hasna.todos.response.saved_view.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos saved-views create",
@@ -2998,10 +2754,6 @@
       ],
       "resource": "saved_views",
       "responseSchemaId": "hasna.todos.response.saved_view.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos saved-views get",
@@ -3048,10 +2800,6 @@
       ],
       "resource": "saved_views",
       "responseSchemaId": "hasna.todos.response.saved_view.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos saved-views update",
@@ -3098,10 +2846,6 @@
       ],
       "resource": "saved_views",
       "responseSchemaId": "hasna.todos.response.mutation.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos saved-views delete",
@@ -3146,10 +2890,6 @@
       ],
       "resource": "saved_views",
       "responseSchemaId": "hasna.todos.response.task_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos saved-views execute",
@@ -3194,10 +2934,6 @@
       ],
       "resource": "verification_evidence",
       "responseSchemaId": "hasna.todos.response.verification_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos verification-evidence list",
@@ -3242,10 +2978,6 @@
       ],
       "resource": "verification_evidence",
       "responseSchemaId": "hasna.todos.response.verification.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos verification-evidence create",
@@ -3290,10 +3022,6 @@
       ],
       "resource": "verification_evidence",
       "responseSchemaId": "hasna.todos.response.verification.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos verification-evidence get",
@@ -3338,10 +3066,6 @@
       ],
       "resource": "verification_evidence",
       "responseSchemaId": "hasna.todos.response.verification_export.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos verification-evidence export",
@@ -3386,10 +3110,6 @@
       ],
       "resource": "task_files",
       "responseSchemaId": "hasna.todos.response.task_file_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos task-files list",
@@ -3434,10 +3154,6 @@
       ],
       "resource": "task_files",
       "responseSchemaId": "hasna.todos.response.task_file.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos task-files record",
@@ -3482,10 +3198,6 @@
       ],
       "resource": "runs",
       "responseSchemaId": "hasna.todos.response.run_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos runs list",
@@ -3530,10 +3242,6 @@
       ],
       "resource": "runs",
       "responseSchemaId": "hasna.todos.response.run.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos runs start",
@@ -3578,10 +3286,6 @@
       ],
       "resource": "runs",
       "responseSchemaId": "hasna.todos.response.run.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos runs get",
@@ -3628,10 +3332,6 @@
       ],
       "resource": "runs",
       "responseSchemaId": "hasna.todos.response.run.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos runs finish",
@@ -3676,10 +3376,6 @@
       ],
       "resource": "runs",
       "responseSchemaId": "hasna.todos.response.run_ledger.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos runs get-ledger",
@@ -3724,10 +3420,6 @@
       ],
       "resource": "run_events",
       "responseSchemaId": "hasna.todos.response.run_event_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos run-events list",
@@ -3772,10 +3464,6 @@
       ],
       "resource": "run_events",
       "responseSchemaId": "hasna.todos.response.run_event.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos run-events create",
@@ -3820,10 +3508,6 @@
       ],
       "resource": "run_commands",
       "responseSchemaId": "hasna.todos.response.run_command_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos run-commands list",
@@ -3868,10 +3552,6 @@
       ],
       "resource": "run_commands",
       "responseSchemaId": "hasna.todos.response.run_command.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos run-commands create",
@@ -3916,10 +3596,6 @@
       ],
       "resource": "run_files",
       "responseSchemaId": "hasna.todos.response.run_file_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos run-files list",
@@ -3964,10 +3640,6 @@
       ],
       "resource": "run_files",
       "responseSchemaId": "hasna.todos.response.run_file.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos run-files create",
@@ -4012,10 +3684,6 @@
       ],
       "resource": "run_artifacts",
       "responseSchemaId": "hasna.todos.response.run_artifact_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos run-artifacts list",
@@ -4060,10 +3728,6 @@
       ],
       "resource": "run_artifacts",
       "responseSchemaId": "hasna.todos.response.run_artifact.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos run-artifacts create",
@@ -4110,10 +3774,6 @@
       ],
       "resource": "run_artifacts",
       "responseSchemaId": "hasna.todos.response.run_artifact.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos run-artifacts verify",
@@ -4158,10 +3818,6 @@
       ],
       "resource": "git_commits",
       "responseSchemaId": "hasna.todos.response.git_commit_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos git-commits list",
@@ -4206,10 +3862,6 @@
       ],
       "resource": "git_commits",
       "responseSchemaId": "hasna.todos.response.git_commit.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos git-commits link",
@@ -4256,10 +3908,6 @@
       ],
       "resource": "git_commits",
       "responseSchemaId": "hasna.todos.response.mutation.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos git-commits unlink",
@@ -4304,10 +3952,6 @@
       ],
       "resource": "git_commits",
       "responseSchemaId": "hasna.todos.response.git_commit.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos git-commits find",
@@ -4352,10 +3996,6 @@
       ],
       "resource": "git_refs",
       "responseSchemaId": "hasna.todos.response.git_ref_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos git-refs list",
@@ -4400,10 +4040,6 @@
       ],
       "resource": "git_refs",
       "responseSchemaId": "hasna.todos.response.git_ref.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos git-refs link",
@@ -4448,10 +4084,6 @@
       ],
       "resource": "git_refs",
       "responseSchemaId": "hasna.todos.response.git_ref.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos git-refs find",
@@ -4496,10 +4128,6 @@
       ],
       "resource": "traceability",
       "responseSchemaId": "hasna.todos.response.traceability.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos traceability get",
@@ -4544,10 +4172,6 @@
       ],
       "resource": "task_to_pr_projection",
       "responseSchemaId": "hasna.todos.response.projection_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos task-to-pr-projection list",
@@ -4592,10 +4216,6 @@
       ],
       "resource": "task_to_pr_projection",
       "responseSchemaId": "hasna.todos.response.projection.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos task-to-pr-projection get",
@@ -4640,10 +4260,6 @@
       ],
       "resource": "transfer",
       "responseSchemaId": "hasna.todos.response.transfer_bundle.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos transfer export",
@@ -4688,10 +4304,6 @@
       ],
       "resource": "transfer",
       "responseSchemaId": "hasna.todos.response.transfer_validation.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos transfer validate",
@@ -4736,10 +4348,6 @@
       ],
       "resource": "transfer",
       "responseSchemaId": "hasna.todos.response.transfer_import_preview.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos transfer import-preview",
@@ -4787,10 +4395,6 @@
       ],
       "resource": "transfer",
       "responseSchemaId": "hasna.todos.response.migration_receipt.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos transfer import-execute",
@@ -4835,10 +4439,6 @@
       ],
       "resource": "migration_receipts",
       "responseSchemaId": "hasna.todos.response.migration_receipt_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos migration-receipts list",
@@ -4883,10 +4483,6 @@
       ],
       "resource": "migration_receipts",
       "responseSchemaId": "hasna.todos.response.migration_receipt.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos migration-receipts get",
@@ -4931,10 +4527,6 @@
       ],
       "resource": "deletion_records",
       "responseSchemaId": "hasna.todos.response.deletion_record_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos deletion-records list",
@@ -4979,10 +4571,6 @@
       ],
       "resource": "deletion_records",
       "responseSchemaId": "hasna.todos.response.deletion_record.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos deletion-records get",
@@ -5027,10 +4615,6 @@
       ],
       "resource": "approvals",
       "responseSchemaId": "hasna.todos.response.approval_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos approvals list",
@@ -5075,10 +4659,6 @@
       ],
       "resource": "approvals",
       "responseSchemaId": "hasna.todos.response.approval.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos approvals get",
@@ -5123,10 +4703,6 @@
       ],
       "resource": "approvals",
       "responseSchemaId": "hasna.todos.response.approval.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos approvals request",
@@ -5173,10 +4749,6 @@
       ],
       "resource": "approvals",
       "responseSchemaId": "hasna.todos.response.approval.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos approvals approve",
@@ -5223,10 +4795,6 @@
       ],
       "resource": "approvals",
       "responseSchemaId": "hasna.todos.response.approval.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos approvals reject",
@@ -5273,10 +4841,6 @@
       ],
       "resource": "approvals",
       "responseSchemaId": "hasna.todos.response.approval.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos approvals expire",
@@ -5321,10 +4885,6 @@
       ],
       "resource": "task_templates",
       "responseSchemaId": "hasna.todos.response.task_template_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos task-templates list",
@@ -5369,10 +4929,6 @@
       ],
       "resource": "task_templates",
       "responseSchemaId": "hasna.todos.response.task_template.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos task-templates create",
@@ -5417,10 +4973,6 @@
       ],
       "resource": "task_templates",
       "responseSchemaId": "hasna.todos.response.task_template.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos task-templates get",
@@ -5467,10 +5019,6 @@
       ],
       "resource": "task_templates",
       "responseSchemaId": "hasna.todos.response.task_template.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos task-templates update",
@@ -5517,10 +5065,6 @@
       ],
       "resource": "task_templates",
       "responseSchemaId": "hasna.todos.response.mutation.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos task-templates delete",
@@ -5565,10 +5109,6 @@
       ],
       "resource": "task_templates",
       "responseSchemaId": "hasna.todos.response.task_page.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos task-templates instantiate",
@@ -5613,10 +5153,6 @@
       ],
       "resource": "reports",
       "responseSchemaId": "hasna.todos.response.report.v1",
-      "supportedModes": [
-        "local",
-        "cloud"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos reports generate",
@@ -5661,9 +5197,6 @@
       ],
       "resource": "workspace",
       "responseSchemaId": "hasna.todos.response.project.v1",
-      "supportedModes": [
-        "local"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos workspace bootstrap",
@@ -5705,9 +5238,6 @@
       ],
       "resource": "server",
       "responseSchemaId": "hasna.todos.response.server_start.v1",
-      "supportedModes": [
-        "local"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos server start",
@@ -5747,9 +5277,6 @@
       ],
       "resource": "database",
       "responseSchemaId": "hasna.todos.response.artifact_document.v1",
-      "supportedModes": [
-        "local"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos database backup",
@@ -5791,9 +5318,6 @@
       ],
       "resource": "database",
       "responseSchemaId": "hasna.todos.response.mutation.v1",
-      "supportedModes": [
-        "local"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos database restore",
@@ -5833,9 +5357,6 @@
       ],
       "resource": "database",
       "responseSchemaId": "hasna.todos.response.artifact_document.v1",
-      "supportedModes": [
-        "local"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos database check",
@@ -5877,9 +5398,6 @@
       ],
       "resource": "database",
       "responseSchemaId": "hasna.todos.response.mutation.v1",
-      "supportedModes": [
-        "local"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos database compact",
@@ -5919,9 +5437,6 @@
       ],
       "resource": "offline_upgrade",
       "responseSchemaId": "hasna.todos.response.artifact_document.v1",
-      "supportedModes": [
-        "local"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos offline-upgrade validate",
@@ -5963,9 +5478,6 @@
       ],
       "resource": "offline_upgrade",
       "responseSchemaId": "hasna.todos.response.mutation.v1",
-      "supportedModes": [
-        "local"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos offline-upgrade execute",
@@ -6007,9 +5519,6 @@
       ],
       "resource": "task_to_pr_projection",
       "responseSchemaId": "hasna.todos.response.batch.v1",
-      "supportedModes": [
-        "local"
-      ],
       "surfaces": {
         "cli": {
           "command": "todos task-to-pr-projection rebuild",

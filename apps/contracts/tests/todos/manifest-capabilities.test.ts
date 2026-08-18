@@ -184,12 +184,10 @@ describe("Todos operation manifest", () => {
   test("enforces shared and local-topology surface boundaries", () => {
     for (const operation of TODOS_OPERATION_MANIFEST.operations) {
       if (operation.classification === "shared_customer") {
-        expect(operation.supportedModes).toEqual(["local", "cloud"]);
         expect(operation.surfaces.http).not.toBeNull();
         expect(operation.surfaces.http?.path.startsWith("/v1/")).toBe(true);
         expect(operation.surfaces.http?.path).not.toContain("/api");
       } else {
-        expect(operation.supportedModes).toEqual(["local"]);
         expect(operation.surfaces.http).toBeNull();
       }
       expect(["customer", "tenant_admin"]).toContain(operation.audience);
@@ -301,7 +299,6 @@ describe("Todos operation manifest", () => {
     )!;
     expect(serverStart).toMatchObject({
       classification: "local_topology_only",
-      supportedModes: ["local"],
       concurrency: "precondition",
       concurrencyFields: ["expectedState"],
       requestSchemaId: TODOS_REQUEST_SCHEMA_IDS.serverStart,
