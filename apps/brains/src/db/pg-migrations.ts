@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-brains remote storage sync.
+ * PostgreSQL migrations for brains remote storage sync.
  *
  * Equivalent to the SQLite schema in schema.ts + index.ts, translated for PostgreSQL.
  * Timestamps are stored as BIGINT (Unix epoch milliseconds) to match SQLite integer columns.

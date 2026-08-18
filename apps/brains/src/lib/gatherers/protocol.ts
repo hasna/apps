@@ -1,18 +1,18 @@
 // Shared contract for SDK-based training data gatherers.
-// Every open-* repo exports a `gatherTrainingData` function matching this interface.
-// open-brains imports it directly — no direct DB reads, no schema coupling.
+// Every `@hasna/*` repo exports a `gatherTrainingData` function matching this interface.
+// brains imports it directly — no direct DB reads, no schema coupling.
 
 import type { GathererOptions, GatherResult } from "./types.js";
 
 /**
  * A function that gathers training examples from a data source.
- * Implemented by each open-* repo and exported from their SDK.
+ * Implemented by each `@hasna/*` repo and exported from their SDK.
  *
  * @example
- * // In open-styles:
+ * // In styles:
  * export const gatherTrainingData: GatherTrainingDataFn = async (options) => { ... }
  *
- * // In open-brains gatherer registry:
+ * // In the brains gatherer registry:
  * import { gatherTrainingData } from "@hasnaxyz/styles";
  * registerGatherer("styles", gatherTrainingData);
  */
