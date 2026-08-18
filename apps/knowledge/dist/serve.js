@@ -1066,6 +1066,13 @@ import { homedir } from "os";
 import { dirname, join, resolve } from "path";
 var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "knowledge");
 var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "apps", "knowledge");
+function homeRoot() {
+  return process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+}
+function projectKey(cwd = process.cwd()) {
+  const slugified = resolve(cwd).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slugified || "project";
+}
 var EXAMPLE_KNOWLEDGE_CANONICAL = {
   division: "xyz",
   app_type: "opensource",
@@ -1106,9 +1113,12 @@ function legacyGlobalStorePath() {
   return join(homedir(), ".open-knowledge", "db.json");
 }
 function globalKnowledgeHome() {
-  return join(homedir(), ".hasna", "knowledge");
+  return join(homeRoot(), ".hasna", "knowledge");
 }
-function projectKnowledgeHome(cwd = process.cwd()) {
+function projectKnowledgeHome(cwd = process.cwd(), home = homeRoot()) {
+  return join(home, ".hasna", "knowledge", "projects", projectKey(cwd));
+}
+function previousProjectKnowledgeHome(cwd = process.cwd()) {
   return resolve(cwd, HASNA_KNOWLEDGE_APP_PATH);
 }
 function legacyGlobalKnowledgeHome() {

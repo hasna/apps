@@ -421,6 +421,18 @@ export declare class KnowledgeService {
         approveWrite?: boolean;
         approvedBy?: string;
     }): KnowledgeLegacyPathMigrationResult;
+    /**
+     * One-time migration of the previous project-scoped workspace
+     * (<cwd>/.hasna/knowledge) into the canonical project home
+     * (~/.hasna/knowledge/projects/<key>). Dry-run by default; requires
+     * --approve-write --approved-by to move. Reuses the same backup, verify,
+     * move, verify and tombstone machinery as migrate-legacy-path. Refuses when
+     * the canonical project home already contains data.
+     */
+    migrateProjectPath(options?: {
+        approveWrite?: boolean;
+        approvedBy?: string;
+    }): KnowledgeLegacyPathMigrationResult;
     mergeLegacyPath(options?: {
         approveWrite?: boolean;
         approvedBy?: string;
