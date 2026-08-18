@@ -425,7 +425,7 @@ export function deleteMachine(id: string, db?: Database): boolean {
  * Runs on startup after migrations. Idempotent — skips if all rows already stamped.
  */
 const TABLES_WITH_MACHINE_ID = [
-  "projects", "tasks", "agents", "task_lists", "plans", "task_comments",
+  "projects", "tasks", "agents", "task_lists", "plans", "task_comments", "plan_comments",
   "sessions", "task_history", "webhooks", "task_templates", "orgs",
   "handoffs", "task_checklists", "project_sources", "task_files",
   "task_relationships", "kg_edges", "project_agent_roles", "dispatches",

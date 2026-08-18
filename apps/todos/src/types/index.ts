@@ -1049,6 +1049,31 @@ export interface CreateCommentInput {
   progress_pct?: number;
 }
 
+// Plan comment — the plan-row analogue of TaskComment. Plans previously had no
+// comment surface at all, so plan-level outcomes could not be recorded on the
+// plan row (todos task 04ee08fd). The task and plan comment stores are separate
+// tables by design: a comment belongs to exactly one surface, and neither list
+// verb may surface the other's rows.
+export interface PlanComment {
+  id: string;
+  plan_id: string;
+  agent_id: string | null;
+  session_id: string | null;
+  content: string;
+  type: 'comment' | 'progress' | 'note';
+  progress_pct: number | null;
+  created_at: string;
+}
+
+export interface CreatePlanCommentInput {
+  plan_id: string;
+  content: string;
+  agent_id?: string;
+  session_id?: string;
+  type?: 'comment' | 'progress' | 'note';
+  progress_pct?: number;
+}
+
 // Session
 export interface Session {
   id: string;

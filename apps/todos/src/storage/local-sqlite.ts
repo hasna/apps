@@ -36,6 +36,10 @@ import {
   deletePlan,
 } from "../db/plans.js";
 import {
+  addPlanComment,
+  listPlanComments,
+} from "../db/plan-comments.js";
+import {
   registerAgent,
   getAgent,
   getAgentByName,
@@ -247,6 +251,22 @@ export function createLocalSqliteTodosStorageAdapter(
       completeAtRevision: (id, expectedUpdatedAt) =>
         completePlanAtRevision(id, expectedUpdatedAt, database()),
       delete: (id) => deletePlan(id, database()),
+      addComment: (input) => addPlanComment(input, database()),
+      getComments: (planId) => listPlanComments(planId, database()),
+      getCommentsPage: (planId, options) => {
+        if (options?.limit !== undefined &&
+            (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 1_001)) {
+          throw new Error("Plan comment limit must be an integer between 1 and 1001");
+        }
+        let comments = listPlanComments(planId, database());
+        comments = comments.sort(compareCommentKeyset);
+        if (options?.before) {
+          const before = options.before;
+          comments = comments.filter((comment) => isStrictlyOlder(comment, before));
+        }
+        const limit = options?.limit ?? 100;
+        return comments.slice(-limit);
+      },
     },
     planProjectLinks: {
       apply: (input) => applyPlanProjectLinkSqlite(input, database()),

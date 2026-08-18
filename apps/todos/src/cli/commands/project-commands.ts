@@ -12,7 +12,10 @@ import {
   updateProject,
 } from "../../db/projects.js";
 import { addComment } from "../../db/comments.js";
-import { getTodosCloudClient, cloudAddComment, cloudApplyProjectTaskListEnsure, cloudCreateProject, cloudDeleteProject, cloudListProjects, cloudListTasks, cloudPlanProjectTaskListEnsure, cloudResolveProject, cloudResolveProjectRef, cloudRollbackProjectTaskListEnsure, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudGetTaskRelations, cloudRenameProject } from "../cloud-router.js";
+import { addPlanComment } from "../../db/plan-comments.js";
+import { getPlan, resolvePlanRefDetailed } from "../../db/plans.js";
+import { getTask } from "../../db/tasks.js";
+import { getTodosCloudClient, cloudAddComment, cloudAddPlanComment, cloudApplyProjectTaskListEnsure, cloudCreateProject, cloudDeleteProject, cloudListProjects, cloudListTasks, cloudPlanProjectTaskListEnsure, cloudResolvePlan, cloudResolveProject, cloudResolveProjectRef, cloudRollbackProjectTaskListEnsure, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudGetTaskRelations, cloudRenameProject } from "../cloud-router.js";
 import { resolveWritableIdentity } from "../../lib/creator-identity.js";
 import {
   buildProjectDependencyGraph,
@@ -22,7 +25,8 @@ import {
   type DependencyEdge,
   type ProjectDependencyGraph,
 } from "../../lib/dependency-graph.js";
-import type { Task } from "../../types/index.js";
+import type { PlanComment, Task, TaskComment } from "../../types/index.js";
+import { TaskNotFoundError } from "../../types/index.js";
 import { searchTasks } from "../../lib/search.js";
 import {
   deleteSearchView,
@@ -38,6 +42,9 @@ import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../../lib/sync
 import { getAgentTaskListId } from "../../lib/config.js";
 import { autoProject, autoDetectProject, handleError, output, outputRecord, formatTaskLine, parseEnumFlag, parseEnumFlagList, resolveExplicitProject, resolveTaskId, resolveTaskIdForCommand, TASK_PRIORITY_FLAG, TASK_STATUS_FLAG } from "../helpers.js";
 import { redactBroadOutput, redactBroadTasks } from "../output-redaction.js";
+
+/** Full UUID shape used by the comment target resolver (task vs plan). */
+const COMMENT_TARGET_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { createLocalSqliteTodosStorageAdapter } from "../../storage/local-sqlite.js";
 import {
   applyProjectTaskListEnsure,
@@ -321,6 +328,129 @@ export function registerProjectCommands(program: Command) {
       }
     });
 
+  // ── comment target resolution (task first, plan fallback) ──
+  // `todos comment <plan-id>` previously 404'd with "task not found": the verb
+  // only resolved task references and only wrote task comments, so plan-level
+  // outcomes could not be recorded on the plan row (todos task 04ee08fd,
+  // measured by multiple skills-plan lanes 2026-08-18). Task comments keep
+  // their exact prior behavior — task resolution first, and in cloud mode the
+  // task route is tried before any plan lookup so existing task flows get zero
+  // extra round-trips. Only a task-not-found outcome falls through to the plan
+  // surface.
+  interface CommentTargetWrite {
+    content: string;
+    progressPct?: number;
+    agent_id?: string;
+    session_id?: string;
+  }
+
+  async function addCommentToTarget(
+    cloud: ReturnType<typeof getTodosCloudClient>,
+    id: string,
+    input: CommentTargetWrite,
+  ): Promise<TaskComment | PlanComment> {
+    if (!cloud) {
+      const target = resolveLocalCommentTarget(id);
+      if (!target) throw new TaskNotFoundError(id);
+      if (target.kind === "plan") {
+        if (input.progressPct !== undefined) {
+          throw new Error("--pct is not supported on plan comments; progress percentages are task-scoped.");
+        }
+        return addPlanComment({
+          plan_id: target.id,
+          content: input.content,
+          agent_id: input.agent_id,
+          session_id: input.session_id,
+        });
+      }
+      return addComment({
+        task_id: target.id,
+        content: input.content,
+        agent_id: input.agent_id,
+        session_id: input.session_id,
+        ...(input.progressPct !== undefined ? { type: "progress", progress_pct: input.progressPct } : {}),
+      });
+    }
+
+    // Cloud mode: task path first. A full UUID is passed straight to the task
+    // comment route (zero detour for tasks); a short ref resolves over /v1.
+    let resolvedId: string;
+    try {
+      resolvedId = await resolveTaskIdForCommand(id, cloud);
+    } catch (taskRefError) {
+      const plan = await cloudResolvePlan(cloud, id);
+      if (!plan) throw taskRefError;
+      return writeCloudPlanComment(cloud, plan.id, input);
+    }
+    try {
+      return await cloudAddComment(cloud, resolvedId, {
+        content: input.content,
+        agent_id: input.agent_id,
+        session_id: input.session_id,
+        ...(input.progressPct !== undefined ? { type: "progress", progress_pct: input.progressPct } : {}),
+      });
+    } catch (taskCommentError) {
+      // The measured defect: POST /tasks/:id/comments answers 404 "task not
+      // found" for a plan id. That exact outcome falls back to the plan row;
+      // anything else (auth, 5xx, validation) is rethrown unchanged.
+      if (!isTaskNotFoundStatus(taskCommentError)) throw taskCommentError;
+      const plan = await cloudResolvePlan(cloud, id);
+      if (!plan) throw taskCommentError;
+      return writeCloudPlanComment(cloud, plan.id, input);
+    }
+  }
+
+  async function writeCloudPlanComment(
+    cloud: NonNullable<ReturnType<typeof getTodosCloudClient>>,
+    planId: string,
+    input: CommentTargetWrite,
+  ): Promise<PlanComment> {
+    if (input.progressPct !== undefined) {
+      throw new Error("--pct is not supported on plan comments; progress percentages are task-scoped.");
+    }
+    return cloudAddPlanComment(cloud, planId, {
+      content: input.content,
+      agent_id: input.agent_id,
+      session_id: input.session_id,
+    });
+  }
+
+  /**
+   * Local task-or-plan resolution that does NOT exit the process. The shared
+   * `resolveTaskId` helper calls handleError (process.exit) on an unresolvable
+   * short ref, which would make plan slugs unreachable; this mirrors its rules
+   * but returns null so the caller can fall back to the plan surface.
+   */
+  function resolveLocalCommentTarget(id: string): { kind: "task" | "plan"; id: string } | null {
+    const raw = (id ?? "").trim();
+    if (!raw) return null;
+    const db = getDatabase();
+    if (COMMENT_TARGET_UUID_RE.test(raw)) {
+      const lower = raw.toLowerCase();
+      if (getTask(lower, db)) return { kind: "task", id: lower };
+      if (getPlan(lower, db)) return { kind: "plan", id: lower };
+      return null;
+    }
+    let taskId: string | null = null;
+    let taskError: unknown;
+    try {
+      taskId = resolvePartialId(db, "tasks", raw);
+    } catch (error) {
+      taskError = error;
+    }
+    if (taskId) return { kind: "task", id: taskId };
+    const planRef = resolvePlanRefDetailed(raw, db);
+    if (planRef.id) return { kind: "plan", id: planRef.id };
+    if (taskError) throw taskError;
+    return null;
+  }
+
+  function isTaskNotFoundStatus(error: unknown): boolean {
+    return Boolean(
+      error && typeof error === "object" && (error as { status?: unknown }).status === 404,
+    );
+  }
+
   // comment (aliased as log-progress so documented progress commands work)
   program
     .command("comment <id> [text]")
@@ -361,7 +491,6 @@ export function registerProjectCommands(program: Command) {
 
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
-      const resolvedId = await resolveTaskIdForCommand(id, cloud);
       let progressPct: number | undefined;
       if (opts.pct !== undefined) {
         const pct = parseInt(opts.pct, 10);
@@ -381,19 +510,12 @@ export function registerProjectCommands(program: Command) {
       const router = resolveWritableIdentity(globalOpts.agent);
       const agentId = globalOpts.agent || router.agent_id || undefined;
       try {
-        const comment = cloud
-          ? await cloudAddComment(cloud, resolvedId, {
-              content,
-              agent_id: agentId,
-              session_id: globalOpts.session,
-              ...(progressPct !== undefined ? { type: "progress", progress_pct: progressPct } : {}),
-            })
-          : addComment({
-              task_id: resolvedId,
-              content,
-              agent_id: agentId,
-              session_id: globalOpts.session,
-            });
+        const comment = await addCommentToTarget(cloud, id, {
+          content,
+          progressPct,
+          agent_id: agentId,
+          session_id: globalOpts.session,
+        });
 
         if (globalOpts.json) {
           output(comment, true);
