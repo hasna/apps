@@ -137,13 +137,20 @@ export class DispatchClient {
 
   /** Dispatch one prompt to multiple targets with idle guards/concurrency controls. */
   async bulkSend(options: BulkDispatchOptions): Promise<BulkDispatchResult> {
-    if (this.backend(options.backend) === "mosaic") {
-      throw new Error("bulk Mosaic dispatch is not supported in this backend slice; send one Mosaic target at a time");
-    }
+    const backend = this.backend(options.backend);
     let targets = options.targets ?? [];
     if (options.source === "sessions-query") {
       const runner = await createRunner(options.machine);
       targets = await resolveSessionsTargets({ runner, machine: options.machine, query: options.sessionsQuery });
+    }
+    if (backend === "mosaic") {
+      return performBulkDispatch(
+        { ...options, targets },
+        {
+          store: this.store,
+          makeMosaic: async (machine?: string) => new Mosaic(await createRunner(machine)),
+        },
+      );
     }
     return performBulkDispatch(
       { ...options, targets },

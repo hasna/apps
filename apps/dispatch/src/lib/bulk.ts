@@ -1,11 +1,15 @@
-import type { BulkDispatchOptions, BulkDispatchResult, DispatchRecord, DispatchTargetRef } from "../types.js";
+import type { BulkDispatchOptions, BulkDispatchResult, DispatchOptions, DispatchRecord, DispatchTargetRef } from "../types.js";
 import type { Store } from "./store.js";
 import { applyGoalPrefix, performDispatch } from "./engine.js";
 import { genId, nowIso } from "./ids.js";
 import { Tmux } from "./tmux.js";
+import { Mosaic, performMosaicDispatch } from "./mosaic.js";
 
 export interface BulkDispatchDeps {
-  makeTmux: (machine?: string) => Promise<Tmux>;
+  /** Tmux slice: fan out through tmux per-target dispatch when provided. */
+  makeTmux?: (machine?: string) => Promise<Tmux>;
+  /** Mosaic slice: bulk fans out through mosaic prompt.send when provided. */
+  makeMosaic?: (machine?: string) => Promise<Mosaic>;
   store?: Store;
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
@@ -67,6 +71,9 @@ export async function performBulkDispatch(
 ): Promise<BulkDispatchResult> {
   const requested = options.targets.length;
   if (requested === 0) return emptyResult(options, "no targets resolved");
+  if (!deps.makeMosaic && !deps.makeTmux) {
+    return emptyResult(options, "bulk dispatch needs a per-target executor: pass makeTmux or makeMosaic");
+  }
 
   const maxConcurrency = normalizePositive(options.maxConcurrency, 1);
   const perMachineLimit = normalizePositive(options.perMachineLimit, maxConcurrency);
@@ -75,6 +82,7 @@ export async function performBulkDispatch(
   const sleep = deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const records: DispatchRecord[] = [];
   const tmuxByMachine = new Map<string, Promise<Tmux>>();
+  const mosaicByMachine = new Map<string, Promise<Mosaic>>();
   const activeByMachine = new Map<string, number>();
   const pending = [...options.targets];
   const defaultIfIdle = options.queue === true || options.forceActive === true ? false : true;
@@ -83,8 +91,18 @@ export async function performBulkDispatch(
     const key = machine ?? "local";
     let existing = tmuxByMachine.get(key);
     if (!existing) {
-      existing = deps.makeTmux(machine);
+      existing = deps.makeTmux!(machine);
       tmuxByMachine.set(key, existing);
+    }
+    return existing;
+  };
+
+  const mosaicFor = (machine?: string): Promise<Mosaic> => {
+    const key = machine ?? "local";
+    let existing = mosaicByMachine.get(key);
+    if (!existing) {
+      existing = deps.makeMosaic!(machine);
+      mosaicByMachine.set(key, existing);
     }
     return existing;
   };
@@ -109,27 +127,26 @@ export async function performBulkDispatch(
       const machine = ref.machine ?? options.machine;
       try {
         if (jitterMs > 0) await sleep(Math.floor(random() * jitterMs));
-        const tmux = await tmuxFor(machine);
-        const record = await performDispatch(
-          {
-            target: ref.target,
-            prompt: options.prompt,
-            goal: options.goal,
-            machine,
-            submitDelayMs: options.submitDelayMs,
-            submit: options.submit,
-            submitKey: options.submitKey,
-            confirm: options.confirm,
-            maxSubmitRetries: options.maxSubmitRetries,
-            mode: options.mode,
-            ifIdle: options.ifIdle ?? defaultIfIdle,
-            queue: options.queue,
-            forceActive: options.forceActive,
-            dryRun: options.dryRun,
-            captureBeforeLines: options.captureBeforeLines,
-          },
-          { tmux, store: deps.store, sleep },
-        );
+        const dispatchOptions: DispatchOptions = {
+          target: ref.target,
+          prompt: options.prompt,
+          goal: options.goal,
+          machine,
+          submitDelayMs: options.submitDelayMs,
+          submit: options.submit,
+          submitKey: options.submitKey,
+          confirm: options.confirm,
+          maxSubmitRetries: options.maxSubmitRetries,
+          mode: options.mode,
+          ifIdle: options.ifIdle ?? defaultIfIdle,
+          queue: options.queue,
+          forceActive: options.forceActive,
+          dryRun: options.dryRun,
+          captureBeforeLines: options.captureBeforeLines,
+        };
+        const record = deps.makeMosaic
+          ? await performMosaicDispatch(dispatchOptions, { mosaic: await mosaicFor(machine), store: deps.store })
+          : await performDispatch(dispatchOptions, { tmux: await tmuxFor(machine), store: deps.store, sleep });
         records.push(record);
       } catch (err) {
         const now = nowIso();
