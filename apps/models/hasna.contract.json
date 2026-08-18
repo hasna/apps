@@ -3,7 +3,7 @@
   "name": "models",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.8.5",
+  "kitVersion": "0.11.1",
   "description": "Local model catalog and install manager: searches provider catalogs, records capabilities, and installs models into a user-scoped store.",
   "bins": [
     "models"
@@ -28,7 +28,7 @@
     }
   ],
   "storage": {
-    "mode": "sqlite",
+    "backend": "sqlite",
     "engines": [
       "sqlite"
     ],
@@ -39,7 +39,7 @@
     "conformance": {
       "waivedStorageEngines": [
         {
-          "engine": "postgres",
+          "engine": "postgresql",
           "reason": "models is a single-operator local CLI whose catalog and install state are user-scoped; it ships no serve bin and no hasna-saas story, so there is no multi-tenant deployment that would require PostgreSQL.",
           "reviewedBy": "platform-storage",
           "expiresAt": "2027-01-01T00:00:00.000Z"
