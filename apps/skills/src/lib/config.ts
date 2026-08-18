@@ -127,6 +127,34 @@ export const DATA_DIR_ENV = "HASNA_SKILLS_DIR";
 export const INSTALLED_SKILLS_DIRNAME = "installed";
 
 /**
+ * Subfolder of the data directory holding the migrated corpus cache — the
+ * owner-layout replacement for installed/ after `skills storage migrate`
+ * (~/.hasna/skills/{skills,logs,outputs}).
+ *
+ * The marker file inside it (LAYOUT_MIGRATION_RECORD) is the authority: a
+ * skills/ directory someone created by hand is not the corpus and never will
+ * be treated as one (see isOwnerLayoutMigrated).
+ */
+export const SKILLS_CACHE_DIRNAME = "skills";
+
+/**
+ * Marker file inside the corpus cache proving the owner-layout migration ran;
+ * also its record (see migrateOwnerLayout in home-migration.ts).
+ */
+export const LAYOUT_MIGRATION_RECORD = ".layout-migration.json";
+
+/**
+ * True once the owner layout has been migrated (the record is the authority).
+ *
+ * Lives here — rather than in home-migration.ts — because the canonical corpus
+ * resolver in portable-skills.ts must consult it too, and home-migration.ts
+ * depends on portable-skills.ts; this module sits below both.
+ */
+export function isOwnerLayoutMigrated(appDir: string): boolean {
+  return existsSync(join(appDir, SKILLS_CACHE_DIRNAME, LAYOUT_MIGRATION_RECORD));
+}
+
+/**
  * Get the data directory for skills global config/data.
  * Default: ~/.hasna/skills/, overridable with $HASNA_SKILLS_DIR.
  * Auto-migrates from ~/.skills/ and ~/.skillsrc without deleting legacy data.

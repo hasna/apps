@@ -1,6 +1,7 @@
 /**
  * `skills pull` — fetch skills from the configured Skills instance into this machine's
- * corpus (~/.hasna/skills/installed/<name>/).
+ * corpus (the canonical root: <app folder>/installed/<name>/ before the owner-layout
+ * migration, <app folder>/skills/<name>/ after it).
  *
  * This is the read half of the dogfooding loop. `skills push` sends a corpus skill up to
  * an instance; `skills pull` brings instance skills back down. Because loadRegistry()
@@ -35,7 +36,7 @@ import {
   type CorpusSkillMeta,
   type PortableSkillOptions,
 } from "./portable-skills.js";
-import { getDataDir } from "./config.js";
+import { resolveCorpusRoot } from "./home-migration.js";
 import { sha256Hex, type SkillBundleEntry, unpackSkillBundle } from "./skill-bundle.js";
 import { resolveSigningKey, verifyBundleSignature } from "./skill-bundles.js";
 import type { SkillKind } from "./registry-types.js";
@@ -47,15 +48,6 @@ export const BUNDLE_SIGNATURE_HEADER = "X-Skill-Bundle-Signature";
 
 /** Marker file written inside each corpus skill directory recording pull provenance. */
 export const PULL_MARKER_FILE = ".hasna-skills.json";
-
-/**
- * Canonical corpus cache subfolder of the app folder (owner layout). Mirrors
- * home-migration (PR #116): after `skills storage migrate` the corpus cache is
- * <app folder>/skills and `skills sync` reads from there.
- */
-const SKILLS_CACHE_DIRNAME = "skills";
-/** Marker file inside skills/ proving the layout migration ran; also its record. */
-const LAYOUT_MIGRATION_RECORD = ".layout-migration.json";
 
 /**
  * The slice of RemoteSkillsClient that `pullSkills` needs. Narrowed to an interface so a
@@ -456,34 +448,13 @@ async function safeMeta(client: SkillPullClient, slug: string): Promise<CorpusSk
 }
 
 function pickCorpusOptions(options: PullSkillsOptions): PortableSkillOptions {
-  // Resolve the corpus root once, here: portable-skills' getPortableSkillsRoot()
-  // only knows installed/, but after the owner-layout migration (PR #116) the
-  // corpus cache is <app folder>/skills and sync reads from there. Passing the
-  // resolved root as rootDir makes writeCorpusSkill() and installBundleAtomically()
-  // write to the same root sync reads — a pulled skill is invisible to sync if it
-  // lands anywhere else.
-  return { rootDir: resolvePullCorpusRoot(options) };
-}
-
-/**
- * Resolve the corpus root `skills pull` writes to.
- *
- * Interlock with the owner-layout migration (PR #116, origin/home-migration),
- * whose resolveCorpusRoot this mirrors exactly:
- *
- *   1. options.rootDir — the corpus, named outright, no suffix (unchanged contract)
- *   2. migrated owner layout — <app folder>/skills when the migration record
- *      exists there (the record is the authority; a skills/ directory someone
- *      created by hand is not the corpus)
- *   3. the pre-migration corpus — getPortableSkillsRoot() (installed/, with the
- *      legacy auto-copy migration)
- */
-function resolvePullCorpusRoot(options: PortableSkillOptions): string {
-  if (options.rootDir) return options.rootDir;
-  const appDir = options.homeDir ? join(options.homeDir, ".hasna", "skills") : getDataDir();
-  const cache = join(appDir, SKILLS_CACHE_DIRNAME);
-  if (existsSync(join(cache, LAYOUT_MIGRATION_RECORD)) && existsSync(cache)) return cache;
-  return getPortableSkillsRoot(options);
+  // Resolve the corpus root once, here, through the ONE canonical resolver
+  // (resolveCorpusRoot()/getPortableSkillsRoot()): after the owner-layout
+  // migration (PR #116) the corpus cache is <app folder>/skills and sync reads
+  // from there. Passing the resolved root as rootDir makes writeCorpusSkill()
+  // and installBundleAtomically() write to the same root sync reads — a pulled
+  // skill is invisible to sync if it lands anywhere else.
+  return { rootDir: resolveCorpusRoot(options) };
 }
 
 function extractSlug(entry: unknown): string | undefined {

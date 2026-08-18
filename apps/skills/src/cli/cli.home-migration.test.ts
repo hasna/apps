@@ -63,6 +63,20 @@ describe("skills storage migrate", () => {
     expect(after.exitCode).toBe(0);
     expect(JSON.parse(after.stdout).actions.some((a: any) => a.skill === "alpha")).toBe(true);
 
+    // Every local discovery surface reads the migrated cache too — list/search/info
+    // were silently blind to skills/ before the fix (bug 170b0e9b, todos 50229cf1).
+    const listed = await runCli(["list", "--all", "--json"], { HOME: home });
+    expect(listed.exitCode).toBe(0);
+    expect(JSON.parse(listed.stdout).some((s: any) => s.name === "alpha")).toBe(true);
+
+    const searched = await runCli(["search", "alpha", "--all", "--json"], { HOME: home });
+    expect(searched.exitCode).toBe(0);
+    expect(JSON.parse(searched.stdout).some((s: any) => s.name === "alpha")).toBe(true);
+
+    const info = await runCli(["info", "alpha", "--json"], { HOME: home });
+    expect(info.exitCode).toBe(0);
+    expect(JSON.parse(info.stdout).name).toBe("alpha");
+
     // Idempotent from the CLI too.
     const again = await runCli(["storage", "migrate", "--json"], { HOME: home });
     expect(JSON.parse(again.stdout).status).toBe("already-migrated");

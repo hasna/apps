@@ -136,12 +136,15 @@ function registryRootKey(): string {
 
 /**
  * Load the full registry: official skills merged with a configured private
- * extension checkout and global custom skills from ~/.hasna/skills/installed/<name>/
- * (plus the legacy ~/.hasna/skills/custom/<name>/ migration safety net).
+ * extension checkout and global custom skills from the canonical local corpus
+ * — <app folder>/installed/<name>/ before the owner-layout migration, <app
+ * folder>/skills/<name>/ after it (resolveCorpusRoot(), the one resolution
+ * every discovery path shares) — plus the legacy ~/.hasna/skills/custom/<name>/
+ * migration safety net.
  *
  * Custom skills take precedence over extensions, which take precedence over
- * official skills. Extension skills are read in place and never copied into installed/.
- * Results are cached for 5 seconds.
+ * official skills. Extension skills are read in place and never copied into the
+ * corpus. Results are cached for 5 seconds.
  */
 export function loadRegistry(cwd?: string): SkillMeta[] {
   const now = Date.now();
@@ -160,9 +163,10 @@ export function loadRegistry(cwd?: string): SkillMeta[] {
   const extensions = config.extensionsDir
     ? discoverSkillsInDir(config.extensionsDir, "extension")
     : [];
-  // No rootDir: let getPortableSkillsRoot() resolve <dataDir>/installed and run
-  // the layout migration. Passing the app folder as rootDir would read app data
-  // as if it were the corpus.
+  // No rootDir: let getPortableSkillsRoot() resolve the canonical corpus
+  // (<dataDir>/skills when the layout migration ran, else <dataDir>/installed
+  // with the legacy auto-copy). Passing the app folder as rootDir would read
+  // app data as if it were the corpus.
   const portableCustom = listPortableSkillMetas();
   // Kept as a safety net, not as a second home: migration copies custom/<name>
   // into installed/, but if it ever fails (unreadable, out of space) those skills
