@@ -24,6 +24,32 @@ export interface TaskManifestApplyResult { "duplicate": boolean; "receipt": Task
 
 export interface TaskManifestApplyResponse { "result": TaskManifestApplyResult }
 
+export interface TaskSubtreeTransferExpectedTask { "task_id": string; "version": number }
+
+export interface TaskSubtreeTransferSharedPlanSplit { "source_plan_id": string; "destination_plan_id": string }
+
+export interface TaskSubtreeTransferInspectRequest { "source_project_id": string; "destination_project_id": string; "destination_task_list_id": string; "root_task_id": string; "destination_parent_id": string | null }
+
+export interface TaskSubtreeTransferInspection { "source_project_id": string; "destination_project_id": string; "destination_task_list_id": string; "root_task_id": string; "destination_parent_id": string | null; "expected_root_parent_id": string | null; "source_population_digest": string; "expected_tasks": Array<TaskSubtreeTransferExpectedTask>; "contained_plan_ids": Array<string>; "shared_plan_ids": Array<string>; "complete": true }
+
+export interface TaskSubtreeTransferApplyRequest { "source_project_id": string; "destination_project_id": string; "destination_task_list_id": string; "root_task_id": string; "destination_parent_id": string | null; "version": 1; "operation_id": string; "step_id": string; "idempotency_key": string; "precondition_digest": string; "expected_root_parent_id": string | null; "source_population_digest": string; "expected_tasks": Array<TaskSubtreeTransferExpectedTask>; "shared_plan_splits": Array<TaskSubtreeTransferSharedPlanSplit> }
+
+export interface TaskSubtreeTransferTaskImage { "task_id": string; "project_id": string | null; "parent_id": string | null; "plan_id": string | null; "task_list_id": string | null; "version": number; "updated_at": string }
+
+export interface TaskSubtreeTransferPlanImage { "plan_id": string; "project_id": string | null; "task_list_id": string | null; "updated_at": string }
+
+export interface TaskSubtreeTransferImage { "tasks": Array<TaskSubtreeTransferTaskImage>; "plans": Array<TaskSubtreeTransferPlanImage> }
+
+export interface TaskSubtreeTransferReceipt { "receipt_id": string; "authority": "todos"; "route": "todos.task-subtree-transfer.v1"; "schema_version": 1; "kind": "apply" | "rollback"; "operation_id": string; "step_id": string; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "result_digest": string; "apply_receipt_id": string | null; "source_project_id": string; "destination_project_id": string; "destination_task_list_id": string; "root_task_id": string; "source_population_digest": string; "prior_image": TaskSubtreeTransferImage; "post_image": TaskSubtreeTransferImage; "shared_plan_splits": Array<TaskSubtreeTransferSharedPlanSplit>; "created_at": string }
+
+export interface TaskSubtreeTransferResult { "duplicate": boolean; "receipt": TaskSubtreeTransferReceipt; "moved_task_ids": Array<string>; "moved_plan_ids": Array<string>; "complete": true }
+
+export interface TaskSubtreeTransferCapability { "authority": "todos"; "route": "todos.task-subtree-transfer.v1"; "schema_version": 1; "tenant_id": string; "backend": "sqlite" | "postgresql" | "http"; "exact_descendant_closure": true; "complete_source_population_digest": true; "per_task_version_cas": true; "explicit_shared_plan_splits": true; "atomic_apply": true; "immutable_forward_inverse_receipts": true; "prior_image_receipts": true; "cas_protected_rollback": true; "preserves_descendant_parent_ids": true; "preserves_task_and_relation_identities": true }
+
+export interface TaskSubtreeTransferRollbackRequest { "receipt_id": string; "operation_id": string; "step_id": string; "idempotency_key": string; "precondition_digest": string }
+
+export interface TaskSubtreeTransferReadExactRequest { "receipt_id": string }
+
 export interface TaskManifestCompensateRequest { "receipt_id": string; "operation_id": string; "step_id": string; "idempotency_key": string; "precondition_digest": string; "if_binding_version": number }
 
 export interface TaskManifestCompensationResult { "duplicate": boolean; "receipt": TaskManifestReceipt; "absent": true; "readback": Record<string, unknown> }
@@ -597,6 +623,51 @@ export class TodosV1Client {
     /** Read one exact immutable task-manifest apply receipt */
     async readExactTaskManifest(body: TaskManifestReadExactRequest, init?: RequestInit): Promise<TaskManifestApplyResponse> {
       return this.request("POST", `/v1/task-manifest/read-exact`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Apply one exact task subtree transfer atomically with CAS and immutable receipt */
+    async applyTaskSubtreeTransfer(body: TaskSubtreeTransferApplyRequest, init?: RequestInit): Promise<{ "result": TaskSubtreeTransferResult }> {
+      return this.request("POST", `/v1/task-subtree-transfer/apply`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read the current task-subtree-transfer authority capability and tenant */
+    async getTaskSubtreeTransferCapability(init?: RequestInit): Promise<{ "capability": TaskSubtreeTransferCapability }> {
+      return this.request("GET", `/v1/task-subtree-transfer/capability`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Inspect one exact task subtree and complete source population snapshot */
+    async inspectTaskSubtreeTransfer(body: TaskSubtreeTransferInspectRequest, init?: RequestInit): Promise<{ "inspection": TaskSubtreeTransferInspection }> {
+      return this.request("POST", `/v1/task-subtree-transfer/inspect`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read one exact immutable task-subtree-transfer receipt */
+    async readExactTaskSubtreeTransfer(body: TaskSubtreeTransferReadExactRequest, init?: RequestInit): Promise<{ "result": TaskSubtreeTransferResult }> {
+      return this.request("POST", `/v1/task-subtree-transfer/read-exact`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Rollback one exact task-subtree-transfer receipt with CAS protection */
+    async rollbackTaskSubtreeTransfer(body: TaskSubtreeTransferRollbackRequest, init?: RequestInit): Promise<{ "result": TaskSubtreeTransferResult }> {
+      return this.request("POST", `/v1/task-subtree-transfer/rollback`, {
         body,
         query: undefined,
         init,
