@@ -1,18 +1,45 @@
+// The store transport is resolved ONCE per process from the environment, so
+// this suite must pin its own transport instead of inheriting whatever the
+// shell happens to export. These tests assume the LOCAL transport (they write
+// fixtures through the `db/*` modules directly and expect the sandbox bundle
+// to carry a `testers.db` snapshot); with ambient HASNA_TESTERS_API_URL +
+// HASNA_TESTERS_API_KEY set, the same tests would resolve cloud-http and fail
+// on split-brain reads and the (intentionally local-only) snapshot verb. The
+// cloud-transport counterpart is exercised explicitly in the
+// "cloud transport:" test below, which sets the env and resets the cached
+// store itself.
+const ambientApiUrl = process.env.HASNA_TESTERS_API_URL;
+const ambientApiKey = process.env.HASNA_TESTERS_API_KEY;
+const ambientUrlAlias = process.env.TESTERS_API_URL;
+const ambientKeyAlias = process.env.TESTERS_API_KEY;
+delete process.env.HASNA_TESTERS_API_URL;
+delete process.env.HASNA_TESTERS_API_KEY;
+delete process.env.TESTERS_API_URL;
+delete process.env.TESTERS_API_KEY;
+delete process.env.HASNA_TESTERS_STORAGE_MODE;
+delete process.env.HASNA_TESTERS_MODE;
 process.env.TESTERS_DB_PATH = ":memory:";
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase, resetDatabase } from "../db/database.js";
 import { createProject } from "../db/projects.js";
 import { createTestingWorkflow } from "../db/workflows.js";
+import { resetStore, snapshotToFile } from "../store/index.js";
 import { buildWorkflowRunPlan, createWorkflowDatabaseBundle, runTestingWorkflow } from "./workflow-runner.js";
 
 const cleanupPaths: string[] = [];
 
+function restoreEnv(key: string, original: string | undefined): void {
+  if (original === undefined) delete process.env[key];
+  else process.env[key] = original;
+}
+
 describe("workflow runner", () => {
   beforeEach(() => {
+    resetStore();
     resetDatabase();
   });
 
@@ -21,6 +48,14 @@ describe("workflow runner", () => {
     for (const dir of cleanupPaths.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  afterAll(() => {
+    restoreEnv("HASNA_TESTERS_API_URL", ambientApiUrl);
+    restoreEnv("HASNA_TESTERS_API_KEY", ambientApiKey);
+    restoreEnv("TESTERS_API_URL", ambientUrlAlias);
+    restoreEnv("TESTERS_API_KEY", ambientKeyAlias);
+    resetStore();
   });
 
   test("builds local run options from a saved workflow", () => {
@@ -219,7 +254,7 @@ describe("workflow runner", () => {
   test("runs sandbox workflows through the sandboxes SDK with a portable DB bundle", async () => {
     const originalSmokePassword = process.env.SMOKE_TEST_PASSWORD;
     const originalOpenAIKey = process.env.OPENAI_API_KEY;
-    process.env.SMOKE_TEST_PASSWORD = "sandbox-secret";
+    process.env.SMOKE_TEST_PASSWORD = "fixture";
     delete process.env.OPENAI_API_KEY;
     const project = createProject({ name: "sandbox project" });
     const workflow = createTestingWorkflow({
@@ -282,7 +317,7 @@ describe("workflow runner", () => {
         image: "node-bun-playwright",
         sandboxTimeout: 120,
         commandTimeoutMs: 120,
-        sandboxEnvVars: { APP_ENV: "preview", SMOKE_TEST_PASSWORD: "sandbox-secret" },
+        sandboxEnvVars: { APP_ENV: "preview", SMOKE_TEST_PASSWORD: "fixture" },
         cleanup: "delete",
         upload: {
           localDir: "/tmp/testers-db",
@@ -399,5 +434,98 @@ describe("workflow runner", () => {
     expect(existsSync(join(bundle.localDir, "app", ".npmrc"))).toBe(false);
     expect(existsSync(join(bundle.localDir, "app", ".aws"))).toBe(false);
     expect(existsSync(join(bundle.localDir, "app", "node_modules"))).toBe(false);
+  });
+
+  test("cloud transport: sandbox workflows provision API credentials instead of a database snapshot", async () => {
+    const originalApiUrl = process.env.HASNA_TESTERS_API_URL;
+    const originalApiKey = process.env.HASNA_TESTERS_API_KEY;
+    const originalUrlAlias = process.env.TESTERS_API_URL;
+    const originalKeyAlias = process.env.TESTERS_API_KEY;
+
+    const project = createProject({ name: "cloud sandbox project" });
+    const workflow = createTestingWorkflow({
+      name: "cloud sandbox",
+      projectId: project.id,
+      scenarioFilter: { scenarioIds: ["S1"] },
+      execution: {
+        target: "sandbox",
+        provider: "e2b",
+        sandboxRemoteDir: "/workspace/testers",
+      },
+    });
+
+    // Faithful stand-in for the deployed /v1 server: strict full-id lookups
+    // (the exact shape the ApiStore client pages against).
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (req.method === "GET" && url.pathname === `/v1/workflows/${workflow.id}`) {
+          return Response.json(workflow);
+        }
+        if (req.method === "GET" && url.pathname === "/v1/workflows") {
+          return Response.json({ items: [workflow], total: 1 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const serverUrl = server.url.href.replace(/\/$/, "");
+    const fixtureKey = "cloud-sandbox-test-fixture-key";
+
+    try {
+      process.env.HASNA_TESTERS_API_URL = serverUrl;
+      process.env.HASNA_TESTERS_API_KEY = fixtureKey;
+      delete process.env.TESTERS_API_URL;
+      delete process.env.TESTERS_API_KEY;
+      resetStore();
+
+      // The dump verb itself stays local-only by design — recorded strong
+      // reason: a cloud/self_hosted dataset lives on the server and cannot be
+      // dumped to a client-side file; the sandbox-seeding capability is
+      // delivered on the hosted path by API credentials instead (below).
+      await expect(snapshotToFile("/tmp/never-written.db")).rejects.toThrow(
+        "cannot be dumped to a local SQLite file",
+      );
+
+      // Plan: the sandbox command must NOT reference a local DB path.
+      const plan = buildWorkflowRunPlan(workflow, { url: "https://preview.example" });
+      expect(plan.sandbox?.command).not.toContain("HASNA_TESTERS_DB_PATH");
+
+      // Bundle: no database snapshot file is produced (and no throw).
+      const bundle = await createWorkflowDatabaseBundle(workflow, plan);
+      cleanupPaths.push(bundle.localDir);
+      expect(existsSync(join(bundle.localDir, ".testers-state", "testers.db"))).toBe(false);
+
+      // Run: the sandbox receives the API URL + key instead of a snapshot file.
+      const calls: unknown[] = [];
+      const output = await runTestingWorkflow(workflow.id, { url: "https://preview.example" }, {
+        sandboxes: {
+          async runCommandInSandbox(input) {
+            calls.push(input);
+            return {
+              sandbox: { id: "sb_cloud" },
+              session: { id: "sess_cloud" },
+              result: { exit_code: 0, stdout: "{}", stderr: "" },
+              cleanup: "deleted",
+            };
+          },
+        },
+      });
+      expect(output.sandboxResult?.exitCode).toBe(0);
+      expect(calls[0]).toMatchObject({
+        sandboxEnvVars: {
+          HASNA_TESTERS_API_URL: `${serverUrl}/v1`,
+          HASNA_TESTERS_API_KEY: fixtureKey,
+        },
+      });
+      expect((calls[0] as { command: string }).command).not.toContain("HASNA_TESTERS_DB_PATH");
+    } finally {
+      server.stop(true);
+      restoreEnv("HASNA_TESTERS_API_URL", originalApiUrl);
+      restoreEnv("HASNA_TESTERS_API_KEY", originalApiKey);
+      restoreEnv("TESTERS_API_URL", originalUrlAlias);
+      restoreEnv("TESTERS_API_KEY", originalKeyAlias);
+      resetStore();
+    }
   });
 });

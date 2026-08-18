@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix as pathPosix } from "node:path";
-import { getTestingWorkflow, getPersona, snapshotToFile } from "../store/index.js";
+import { getTestingWorkflow, getPersona, isCloudStore, snapshotToFile, storageStatus } from "../store/index.js";
 import { runByFilter, type RunOptions } from "./runner.js";
 import { parseCredentialEnvReference, resolveCredential } from "./secrets-resolver.js";
 import { buildSandboxAppUploadExcludes } from "./sandbox-app.js";
@@ -171,7 +171,12 @@ export async function createWorkflowDatabaseBundle(
   const localDir = mkdtempSync(join(tmpdir(), `testers-workflow-${workflow.id.slice(0, 8)}-`));
   const stateDir = join(localDir, ".testers-state");
   mkdirSync(stateDir, { recursive: true });
-  await writeDatabaseSnapshot(join(stateDir, "testers.db"));
+  if (!isCloudStore()) {
+    // Local transport: seed the sandbox with a snapshot of the on-box dataset.
+    // Cloud/self_hosted: the dataset lives on the server — no snapshot file;
+    // runViaSandbox provisions the sandbox with API credentials instead.
+    await writeDatabaseSnapshot(join(stateDir, "testers.db"));
+  }
 
   if (plan.sandbox.appSourceDir && plan.sandbox.appRemoteDir) {
     const relativeAppDir = relativeRemotePath(plan.sandbox.remoteDir, plan.sandbox.appRemoteDir);
@@ -241,6 +246,34 @@ async function writeDatabaseSnapshot(targetPath: string): Promise<void> {
   await snapshotToFile(targetPath);
 }
 
+/**
+ * Cloud/self_hosted sandbox provisioning: the dataset lives on the server, so
+ * the sandbox is handed API credentials instead of a database snapshot file.
+ * The URL is the non-secret normalized `<origin>/v1` base the client itself
+ * resolved; the key is the SAME client-flip credential the client's own
+ * transport used to resolve to cloud (HASNA_TESTERS_API_KEY / TESTERS_API_KEY)
+ * — the sandboxed `@hasna/testers run` therefore reaches the identical dataset
+ * through the identical authenticated surface. Values are delivered only via
+ * the sandbox runtime's env-vars channel; they never appear in the command
+ * text, in the uploaded bundle, or in any log. Fail-loud if the credential is
+ * missing: a sandbox that silently fell back to an empty local dataset would
+ * be a wrong-answer test run, not a helpful one.
+ */
+function resolveCloudSandboxEnv(): Record<string, string> | undefined {
+  if (!isCloudStore()) return undefined;
+  const status = storageStatus();
+  if (!status.baseUrl) {
+    throw new Error("cloud store resolved without a base URL; cannot provision the sandbox");
+  }
+  const apiKey = process.env["HASNA_TESTERS_API_KEY"] || process.env["TESTERS_API_KEY"];
+  if (!apiKey) {
+    throw new Error(
+      "cloud store resolved but the API key is missing from the environment; cannot provision the sandbox",
+    );
+  }
+  return { HASNA_TESTERS_API_URL: status.baseUrl, HASNA_TESTERS_API_KEY: apiKey };
+}
+
 function buildSandboxPlan(
   workflow: TestingWorkflow,
   execution: WorkflowExecutionConfig,
@@ -278,7 +311,7 @@ function buildSandboxPlan(
       appUrl: execution.appUrl,
       appWaitUrl: execution.appWaitUrl,
       appWaitTimeoutMs: execution.appWaitTimeoutMs,
-      dbPath: `${stateRemoteDir}/testers.db`,
+      dbPath: isCloudStore() ? undefined : `${stateRemoteDir}/testers.db`,
       setupCommand: execution.setupCommand,
       packageSpec: execution.packageSpec ?? "@hasna/testers",
     }),
@@ -320,7 +353,7 @@ function buildSandboxCommand(input: {
   appUrl?: string;
   appWaitUrl?: string;
   appWaitTimeoutMs?: number;
-  dbPath: string;
+  dbPath?: string;
   setupCommand?: string;
   packageSpec: string;
 }): string {
@@ -361,7 +394,11 @@ function buildSandboxCommand(input: {
     input.setupCommand,
     buildAppStartCommand(input),
     buildSandboxBrowserInstallCommand(installBrowserArgs),
-    `HASNA_TESTERS_DB_PATH=${shellQuote(input.dbPath)} ${args.map(shellQuote).join(" ")}`,
+    // Local transport: the run reads the seeded snapshot file. Cloud/self_hosted:
+    // no dbPath is set and the sandbox reaches the dataset through the API env
+    // vars handed to it by runViaSandbox (resolveCloudSandboxEnv) — never via
+    // a file baked into the command.
+    `${input.dbPath ? `HASNA_TESTERS_DB_PATH=${shellQuote(input.dbPath)} ` : ""}${args.map(shellQuote).join(" ")}`,
   ].filter(Boolean).join("\n");
 }
 
@@ -450,7 +487,7 @@ async function runViaSandbox(
         workflowId: plan.workflow.id,
         workflowName: plan.workflow.name,
       },
-      sandboxEnvVars: resolveSandboxEnv(plan.sandbox.env),
+      sandboxEnvVars: { ...resolveSandboxEnv(plan.sandbox.env), ...resolveCloudSandboxEnv() },
       cleanup: plan.sandbox.cleanup,
       upload: {
         localDir: bundle.localDir,
