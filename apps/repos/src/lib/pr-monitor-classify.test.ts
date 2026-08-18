@@ -308,6 +308,22 @@ describe("classifyPullRequest — BASE_MOVED", () => {
     expect(outcome.cls).toBe("BASE_MOVED");
     expect(outcome.detail).toContain("merge-tree diverged");
   });
+
+  it("classifies objects-absent + GO + stale base as BASE_MOVED — the equality leg outranks the absent merge-tree leg", () => {
+    // Design section 6: when the merge-tree probe degrades to
+    // `{ok:false, reason:"objects-absent"}` the monitor falls back to
+    // `base_ref_oid == current_main_sha` equality; a stale base must still
+    // classify BASE_MOVED, never READY_TO_MERGE.
+    const outcome = classify({
+      watch: watch(),
+      verdicts: [verdict("GO")],
+      pr: { baseRefOid: OLDER_SHA },
+      mergeTree: { ok: false, reason: "objects-absent", stderr: null },
+    });
+    expect(outcome.cls).toBe("BASE_MOVED");
+    expect(outcome.detail).toBe("main moved past last sync");
+    expectEvent(outcome, "BASE_MOVED", "main moved past last sync");
+  });
 });
 
 describe("classifyPullRequest — READY_TO_MERGE", () => {
@@ -328,6 +344,33 @@ describe("classifyPullRequest — READY_TO_MERGE", () => {
       mergeTree: { ok: true, fresh: true, treeSha: HEAD },
     });
     expect(outcome.cls).toBe("READY_TO_MERGE");
+  });
+
+  it("degrades to READY_TO_MERGE when the merge-tree probe reports objects-absent — design section 6 equality fallback", () => {
+    // Design section 6: the merge-tree leg runs only when the head/base
+    // objects exist in a local checkout; otherwise the monitor degrades to
+    // `base_ref_oid == current_main_sha` equality. `objects-absent` must be
+    // treated like a probe that was never run.
+    const outcome = classify({
+      watch: watch(),
+      verdicts: [verdict("GO")],
+      mergeTree: { ok: false, reason: "objects-absent", stderr: null },
+    });
+    expect(outcome.cls).toBe("READY_TO_MERGE");
+    expect(outcome.detail).toBe("GO by silvanus");
+    expectEvent(outcome, "READY_TO_MERGE", "GO by silvanus");
+  });
+
+  it("is not READY when the merge-tree probe failed for a real git error — only objects-absent degrades", () => {
+    // A genuine probe failure (git-failed) is not evidence of freshness; the
+    // READY condition must stay undecided, never guessed.
+    const outcome = classify({
+      watch: watch(),
+      verdicts: [verdict("GO")],
+      mergeTree: { ok: false, reason: "git-failed", stderr: "fatal: not a git repository" },
+    });
+    expect(outcome.cls).toBeNull();
+    expect(outcome.event).toBeNull();
   });
 
   it("is not READY when the PR is CONFLICTING", () => {

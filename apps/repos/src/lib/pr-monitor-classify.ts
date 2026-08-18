@@ -303,7 +303,17 @@ export function classifyPullRequest(input: ClassifyPrInput): PrClassification {
       && pr.mergeable === "MERGEABLE"
       && baseFresh
       && !ciFailing
-      && (input.mergeTree === null || input.mergeTree.ok)
+      && (
+        input.mergeTree === null
+        || input.mergeTree.ok
+        // Design section 6: the merge-tree leg runs only when the head/base
+        // objects exist in a local checkout. `objects-absent` is not a probe
+        // failure — the probe could not run — so the monitor degrades to the
+        // `base_ref_oid == current_main_sha` equality leg, exactly as if the
+        // probe had never been attempted. A genuine `git-failed` result stays
+        // a blocker: READY is never decided on a failed probe.
+        || input.mergeTree.reason === "objects-absent"
+      )
     ) {
       cls = "READY_TO_MERGE";
       detail = `GO by ${verdictAtHead.reviewer ?? "reviewer"}`;
