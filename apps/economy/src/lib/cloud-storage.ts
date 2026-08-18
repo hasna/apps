@@ -1,16 +1,16 @@
-// Client-side self_hosted storage resolver for @hasna/economy.
+// Client-side hosted-API storage resolver for @hasna/economy.
 //
-// When the client-flip contract resolves to `cloud-http` (mode=self_hosted/cloud
-// AND HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY are set), the CLI must route
-// its reads and writes to the app's cloud API at `https://economy.hasna.xyz/v1`
-// with the bearer key — NOT to the local SQLite store, and NEVER to a raw
-// database DSN.
+// When the env contract resolves to `cloud-http` (HASNA_ECONOMY_API_URL +
+// HASNA_ECONOMY_API_KEY set), the CLI must route its reads and writes to the
+// app's hosted API at `https://economy.hasna.xyz/v1` with the bearer key — NOT
+// to the local SQLite store, and NEVER to a raw database DSN.
 //
 // This module is the single seam the CLI consults. It returns a ready
-// `HasnaStorageClient` (from @hasna/contracts) when cloud is active, or
+// `HasnaStorageClient` (from @hasna/contracts) when the hosted API is active, or
 // `{ active: false }` so the caller falls back to the local store. It throws (via
-// resolveStorageClient) when cloud is requested but misconfigured, so a client can
-// never silently drift back to the wrong dataset.
+// resolveStorageClient) when the hosted client is requested but misconfigured
+// (API URL without a key), so a client can never silently drift back to the
+// wrong dataset.
 //
 // SAFETY: never logs or embeds the API key — it lives only inside the transport.
 
@@ -39,10 +39,10 @@ let cache: EconomyCloudStorage | undefined;
 /**
  * Resolve the economy client storage transport for the current environment.
  *
- * Returns `{ active: true, client }` only when mode=self_hosted/cloud AND
- * HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY are set. Otherwise
- * `{ active: false }` (local store). Throws if cloud was requested but is
- * misconfigured.
+ * Returns `{ active: true, client }` only when HASNA_ECONOMY_API_URL +
+ * HASNA_ECONOMY_API_KEY are set. Otherwise `{ active: false }` (local store).
+ * Throws if the hosted client is requested but misconfigured (API URL without
+ * a key).
  */
 export function resolveEconomyCloudStorage(
   env: NodeJS.ProcessEnv = process.env,
@@ -82,10 +82,10 @@ function cleanQuery(query?: CloudQuery): CloudQuery | undefined {
 }
 
 /**
- * Read a collection resource from the cloud API and return the extracted array
+ * Read a collection resource from the hosted API and return the extracted array
  * (the serve envelope's `data`/`items`). Used by the read commands (sessions,
- * top, breakdown, accounts) so they render cloud data — never the local store —
- * when the client is in self_hosted/cloud mode.
+ * top, breakdown, accounts) so they render the hosted dataset — never the local
+ * store — when the client uses the hosted API.
  */
 export async function cloudListItems<T = unknown>(
   storage: ActiveEconomyCloudStorage,

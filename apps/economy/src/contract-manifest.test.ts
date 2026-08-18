@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
  *
  * `@hasna/contracts` 0.9.0 REMOVED the `storage.mode` enum (`local` | `cloud`)
  * and replaced it with a required `storage.backend` (`sqlite` | `postgresql`),
- * per the owner directive that deleted deployment modes. The storage object is
+ * per the owner directive that removed the deployment concept. The storage object is
  * `additionalProperties: false`, so a manifest that still declares `mode` is not
  * merely stale — it is INVALID on arrival and every consumer of the manifest
  * rejects it.

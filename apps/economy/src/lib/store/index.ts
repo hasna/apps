@@ -1,22 +1,18 @@
 // ── The economy Store abstraction ────────────────────────────────────────────
 //
-// ONE interface, TWO transports. Every CLI command, MCP tool, and SDK caller
+// ONE interface, TWO backends. Every CLI command, MCP tool, and SDK caller
 // that reads or writes economy DATA goes through `EconomyStore`. There are
 // exactly two implementations:
 //
 //   • LocalStore — on-box SQLite. Opens the local db lazily and delegates to the
 //     query/upsert/delete helpers in ../../db/database.ts.
-//   • ApiStore   — the self_hosted/cloud HTTP API at `<API_URL>/v1` with a bearer
-//     key. Delegates to the vendored @hasna/contracts storage client.
+//   • ApiStore   — the hosted HTTP API at `<API_URL>/v1` with a bearer key.
+//     Delegates to the vendored @hasna/contracts storage client.
 //
-// `getStore()` resolves which transport to use from the client-flip env
-// (HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY / HASNA_ECONOMY_STORAGE_MODE).
-// Callers NEVER branch on mode themselves and NEVER touch sqlite or fetch
+// `getStore()` resolves which transport to use from the env contract alone
+// (HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY set → hosted API, else local).
+// Callers never branch on transport themselves and NEVER touch sqlite or fetch
 // directly — that was the split-brain bug this module eliminates.
-//
-// `self_hosted` and `cloud` are the SAME client code (ApiStore); only the URL and
-// key differ, and that distinction is server-side tenancy. `local` is
-// first-class and fully functional.
 //
 // SAFETY: the API key never leaves the transport; it is never logged, returned,
 // or embedded in any value produced here. Only the HTTP transport ever holds it.
@@ -807,9 +803,10 @@ export class ApiStore implements EconomyStore {
 
 /**
  * Resolve the active {@link EconomyStore} for the current environment. Returns an
- * {@link ApiStore} when the client-flip contract resolves to cloud-http
- * (self_hosted/cloud), else a {@link LocalStore}. Throws if cloud was requested
- * but is misconfigured (so callers can never silently read the wrong dataset).
+ * {@link ApiStore} when the env contract resolves to cloud-http (API_URL +
+ * API_KEY set), else a {@link LocalStore}. Throws if the hosted client was
+ * requested but is misconfigured (API URL without a key), so callers can never
+ * silently read the wrong dataset.
  */
 export function getStore(env: NodeJS.ProcessEnv = process.env): EconomyStore {
   const cloud = economyCloudStorage(env)

@@ -15,34 +15,38 @@ import { gatherTrainingData } from './gatherer.js'
 import type { EconomyRequest, EconomySession } from '../types/index.js'
 
 const NOW = new Date().toISOString()
-const LOCAL_MODE_ENV_KEYS = [
-  'HASNA_ECONOMY_STORAGE_MODE',
-  'HASNA_ECONOMY_MODE',
-  'ECONOMY_STORAGE_MODE',
-  'ECONOMY_MODE',
+
+// gatherTrainingData resolves the Store from the env contract. A station with
+// the hosted-API vars set would resolve an ApiStore and hit the network, so
+// these tests strip them and pin the local store.
+const API_ENV_KEYS = [
+  'HASNA_ECONOMY_API_URL',
+  'HASNA_ECONOMY_API_KEY',
+  'ECONOMY_API_URL',
+  'ECONOMY_API_KEY',
 ] as const
 
 let root: string
 let originalDbPath: string | undefined
-let originalModeEnv: Map<(typeof LOCAL_MODE_ENV_KEYS)[number], string | undefined>
-
-function restoreEnv(name: string, value: string | undefined): void {
-  if (value === undefined) delete process.env[name]
-  else process.env[name] = value
-}
+let originalApiEnv: Map<string, string | undefined>
 
 beforeEach(() => {
   root = join(tmpdir(), `economy-gatherer-test-${Date.now()}-${Math.random().toString(16).slice(2)}`)
   originalDbPath = process.env['HASNA_ECONOMY_DB_PATH']
-  originalModeEnv = new Map(LOCAL_MODE_ENV_KEYS.map(key => [key, process.env[key]]))
+  originalApiEnv = new Map(API_ENV_KEYS.map(key => [key, process.env[key]]))
+  for (const key of API_ENV_KEYS) delete process.env[key]
   process.env['HASNA_ECONOMY_DB_PATH'] = join(root, 'economy.db')
-  for (const key of LOCAL_MODE_ENV_KEYS) process.env[key] = 'local'
   resetEconomyCloudStorageCache()
 })
 
 afterEach(() => {
-  restoreEnv('HASNA_ECONOMY_DB_PATH', originalDbPath)
-  for (const key of LOCAL_MODE_ENV_KEYS) restoreEnv(key, originalModeEnv.get(key))
+  if (originalDbPath === undefined) delete process.env['HASNA_ECONOMY_DB_PATH']
+  else process.env['HASNA_ECONOMY_DB_PATH'] = originalDbPath
+  for (const key of API_ENV_KEYS) {
+    const original = originalApiEnv.get(key)
+    if (original === undefined) delete process.env[key]
+    else process.env[key] = original
+  }
   resetEconomyCloudStorageCache()
   if (existsSync(root)) rmSync(root, { recursive: true, force: true })
 })

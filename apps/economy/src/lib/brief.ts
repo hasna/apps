@@ -1,7 +1,7 @@
 // Fleet brief data layer for @hasna/economy.
 //
 // Pure, Database-in report builder behind `economy brief`. It lives in lib (not
-// the CLI command) so BOTH the LocalStore transport and the self_hosted/cloud
+// the CLI command) so BOTH the LocalStore transport and the hosted
 // serve `/api/brief` endpoint build the brief from the same SQL — the CLI command
 // never touches sqlite directly (no split-brain). Text rendering stays in the CLI.
 

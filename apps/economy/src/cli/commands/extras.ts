@@ -193,7 +193,7 @@ export function registerExtendedCommands(program: Command): void {
       const checks: Array<{ ok: boolean; msg: string }> = []
 
       // Agent log directories and the Cursor token are inputs to LOCAL ingestion
-      // only; in cloud mode this client never ingests, so these checks do not apply.
+      // only; with the hosted API this client never ingests, so these checks do not apply.
       if (!cloud) {
         const paths: Array<[string, string]> = [
           ['claude', agentPaths().claudeProjects],
@@ -208,11 +208,11 @@ export function registerExtendedCommands(program: Command): void {
         }
         checks.push({ ok: Boolean(process.env['CURSOR_SESSION_TOKEN']), msg: `cursor token: ${process.env['CURSOR_SESSION_TOKEN'] ? 'set' : 'missing CURSOR_SESSION_TOKEN'}` })
       }
-      checks.push({ ok: true, msg: `storage: ${cloud ? 'self_hosted/cloud (HASNA_ECONOMY_API_URL + key)' : 'local'}` })
+      checks.push({ ok: true, msg: `storage: ${cloud ? 'hosted (HASNA_ECONOMY_API_URL + key)' : 'local'}` })
 
       // Zero-cost tokenized-request detection and dedupe are LOCAL-DB maintenance
-      // operations; the cloud serve owns dedup + pricing for its dataset, so run
-      // them only against the local SQLite in local mode.
+      // operations; the hosted server owns dedup + pricing for its dataset, so
+      // run them only against the local SQLite.
       if (!cloud) {
         const db = openDatabase()
         ensurePricingSeeded(db)
@@ -254,7 +254,7 @@ export function registerExtendedCommands(program: Command): void {
     .description('First-run setup wizard hints')
     .action(async () => {
       console.log(chalk.bold.cyan('\n  Economy Init\n'))
-      console.log('  Local mode (on-box SQLite):')
+      console.log('  Local (on-box SQLite):')
       console.log('  1. Set machine id:  export ECONOMY_MACHINE_ID=spark01')
       console.log('  2. Cursor token:    export CURSOR_SESSION_TOKEN=...')
       console.log('  3. Run ingest:      economy sync --verbose')
@@ -263,7 +263,7 @@ export function registerExtendedCommands(program: Command): void {
       console.log('  6. OTel sidecar:    economy-otel --port 4318')
       console.log('  7. Linux status:    economy tui --watch  |  economy waybar')
       console.log()
-      console.log('  Self-hosted/cloud mode (shared cloud API — reads/writes route to it):')
+      console.log('  Hosted API (reads/writes route to the shared API):')
       console.log('  a. API URL:         export HASNA_ECONOMY_API_URL=https://economy.hasna.xyz/v1')
       console.log('  b. API key:         export HASNA_ECONOMY_API_KEY=<bearer key>   (never a DB DSN)')
       console.log()

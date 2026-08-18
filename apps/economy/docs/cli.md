@@ -6,7 +6,7 @@ Installing `@hasna/economy` provides four binaries:
 | --- | --- |
 | `economy` | Ingest, query, and manage Economy data. |
 | `economy-mcp` | Run the MCP server over stdio or Streamable HTTP. |
-| `economy-serve` | Serve the REST API and built dashboard, or migrate a self-hosted database. |
+| `economy-serve` | Serve the REST API and built dashboard, or migrate a server database. |
 | `economy-otel` | Ingest OTLP/HTTP metrics or simplified cost events into local SQLite. |
 
 Use `<binary> --help` and `economy <command> --help` for the exact help emitted by the installed version.

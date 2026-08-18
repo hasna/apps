@@ -143,8 +143,8 @@ export function registerBriefCommand(program: Command, deps: BriefCommandDeps = 
     .option('--json', 'Output JSON')
     .action(async (opts: { since?: string; machine?: string; json?: boolean }) => {
       try {
-        // Local mode ingests fresh data before reading; cloud mode reads the
-        // shared dataset straight from the API (beforeRead no-ops there).
+        // A local store ingests fresh data before reading; the hosted API reads
+        // the shared dataset straight from the API (beforeRead no-ops there).
         let localSyncAt: Date | undefined
         if (deps.beforeRead) {
           await deps.beforeRead()

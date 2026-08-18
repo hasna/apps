@@ -17,9 +17,9 @@ export function buildServer(): any {
 // The local db is used ONLY by the inherently-local `sync` tool, which ingests
 // on-box agent log files and prices its rows from the local table. Every DATA
 // tool — including `send_feedback` — routes through the Store. It is opened
-// lazily and only after `sync` has already confirmed local mode via isCloudStore,
-// so self_hosted/cloud mode never touches (or creates) a local SQLite file — in
-// cloud mode the client reads/writes the shared API only.
+// lazily and only after `sync` has already confirmed a local store via
+// isCloudStore, so the hosted API never touches (or creates) a local SQLite
+// file — reads/writes route to the shared API only.
 let _db: ReturnType<typeof openDatabase> | undefined
 const localDb = (): ReturnType<typeof openDatabase> => {
   if (!_db) {
@@ -30,8 +30,8 @@ const localDb = (): ReturnType<typeof openDatabase> => {
 }
 
 // Every DATA tool routes through the Store. `getStore()` returns an ApiStore
-// (self_hosted/cloud HTTP /v1) when HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY
-// are set, else a LocalStore over the on-box SQLite — one interface, no per-tool
+// (hosted HTTP /v1) when HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY are set,
+// else a LocalStore over the on-box SQLite — one interface, no per-tool
 // branching, so the MCP shares the same fleet state as the CLI.
 const store = getStore()
 
@@ -567,12 +567,12 @@ server.tool(
   `Ingest new cost data. sources: ${SYNC_SOURCES.join('|')}. Set json=true for the full result object.`,
   { sources: z.enum([...SYNC_SOURCES] as [string, ...string[]]).optional(), json: z.boolean().optional() },
   async ({ sources, json }: { sources?: typeof SYNC_SOURCES[number]; json?: boolean }) => {
-    // self_hosted/cloud mode: this client reads and writes the shared cloud API
-    // and has no local DB to ingest into. Local log ingestion is a local-mode
-    // concept only — skip it here exactly like the CLI `sync` command, so we
-    // never write to a local SQLite that the cloud transport will never read.
+    // Hosted API: this client reads and writes the shared API and has no local
+    // DB to ingest into. Local log ingestion is a local-store concept only —
+    // skip it here exactly like the CLI `sync` command, so we never write to a
+    // local SQLite that the hosted transport will never read.
     if (isCloudStore()) {
-      return text('cloud mode: ingest is a local-only operation; nothing to sync (reads/writes route to the cloud API)')
+      return text('hosted API: ingest is a local-only operation; nothing to sync (reads/writes route to the hosted API)')
     }
     const selected = sources ?? 'all'
     const opts = selected === 'all' ? {} : { [selected]: true } as Record<string, boolean>
@@ -822,7 +822,7 @@ server.tool(
 // @hasna/agent-registry implementation (persistent, shared across services)
 // rather than a hand-rolled in-memory Map. economy's own send_feedback (below)
 // routes through the Store (local feedback table or POST /v1/feedback) so it
-// carries the category enum and never bypasses the cloud in self_hosted mode.
+// carries the category enum and never bypasses the hosted API.
 registerAgentTools(server, { includeFeedback: false })
 
 server.tool(
@@ -845,7 +845,7 @@ server.tool(
 
 // The economy_cloud_status/push/pull tools that used to be registered here were
 // removed: they existed only to sync this machine's local SQLite into a shared
-// Postgres, a pattern economy no longer has. Self-hosted mode reads and writes
+// Postgres, a pattern economy no longer has. The hosted server reads and writes
 // Postgres directly (src/db/cloud.ts), so there is nothing to sync.
 return server
 }

@@ -1,4 +1,4 @@
-# Runtime-only image for the economy self_hosted serve, assembled from
+# Runtime-only image for the economy serve process, assembled from
 # host-built artifacts (dist + node_modules) rather than installing in the build
 # context. The serve bundle only needs @hasna/contracts and pg at runtime, both
 # present in the host node_modules; host and target are both linux/arm64 so the
@@ -12,9 +12,8 @@
 FROM --platform=linux/arm64 oven/bun:1 AS runner
 WORKDIR /app
 COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
-# No storage-mode variable: the server data backend is selected by the presence
-# of HASNA_ECONOMY_DATABASE_URL, injected at run time. Baking a retired
-# HASNA_ECONOMY_STORAGE_MODE into the image now fails closed at startup.
+# No mode variable is baked in: the server data backend is selected by the
+# presence of HASNA_ECONOMY_DATABASE_URL, injected at run time.
 ENV NODE_ENV=production \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
     PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem \

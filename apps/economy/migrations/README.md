@@ -1,6 +1,6 @@
 # economy migrations
 
-Cloud (PURE REMOTE, Amendment A1) Postgres schema for the self-hosted service.
+Postgres schema for the PostgreSQL-backed serve process.
 
 - **Runner:** `economy-serve migrate` — applies the `PG_MIGRATIONS` array from
   `src/db/pg-migrations.ts` via `applyPgMigrations` (`src/db/pg-migrate.ts`,

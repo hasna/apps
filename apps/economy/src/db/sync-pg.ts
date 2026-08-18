@@ -7,7 +7,7 @@
 // starves pg's socket IO and always times out.
 //
 // It lets the entire existing synchronous query layer (database.ts) run
-// unchanged against RDS Postgres for the self-hosted serve (Amendment A1: PURE
+// unchanged against RDS Postgres for the PostgreSQL-backed serve (Amendment A1: PURE
 // REMOTE — direct reads/writes, no cache, no sync engine).
 import { Worker, MessageChannel, receiveMessageOnPort, type MessagePort } from 'node:worker_threads'
 import { fileURLToPath } from 'node:url'

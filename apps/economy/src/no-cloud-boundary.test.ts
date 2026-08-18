@@ -121,7 +121,7 @@ describe('no_cloud_guard boundary', () => {
 
   test('the CLI and MCP server register no retired cloud-sync surface', () => {
     // Deliberately NOT "PgAdapter": economy's own worker-backed `SyncPgAdapter`
-    // contains that substring and is the live self-hosted Postgres client.
+    // contains that substring and is the live Postgres client.
     const forbiddenSymbols = [
       'registerCloudTools',
       'registerCloudCommands',

@@ -1,23 +1,21 @@
 /**
- * Contract regression: backend resolution depends ONLY on database configuration,
- * and the retired mode variables fail closed.
+ * Contract regression: backend resolution depends ONLY on database configuration.
  *
- * CONTRACT.md section 2 (`@hasna/contracts` 0.9.0): "Retired `STORAGE_MODE` and
- * `MODE` variables are rejected with a migration hint, never normalized or
- * silently mapped." The `server_backend_configuration` conformance gate enforces
- * this by calling `resolveServerDataBackend`, which throws when one survives.
+ * CONTRACT.md section 2 (`@hasna/contracts` 0.9.0) removed the deployment
+ * concept. The contracts package's `server_backend_configuration` conformance gate
+ * rejects the retired mode variables with a migration hint; economy invokes that
+ * gate via `assertNoLegacyStorageMode` in `./cloud.ts`, and the rejection
+ * behaviour itself is owned and tested by the contracts package.
  *
- * Pre-fix, `isCloudMode()` READ `HASNA_ECONOMY_STORAGE_MODE` and branched on it,
- * which is the exact "normalized or silently mapped" behaviour the contract bans.
+ * This file pins economy's own part of the selection contract: the sqlite
+ * default and the three database-URL forms it resolves. The bare `DATABASE_URL`
+ * alias is economy-specific (the contract's own resolver does not read it), so
+ * it is pinned here to prevent a silent downgrade to sqlite.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { resolveEconomyServerBackend } from './cloud.js'
 
 const BACKEND_ENV_KEYS = [
-  'HASNA_ECONOMY_STORAGE_MODE',
-  'HASNA_ECONOMY_MODE',
-  'ECONOMY_STORAGE_MODE',
-  'ECONOMY_MODE',
   'HASNA_ECONOMY_DATABASE_URL',
   'ECONOMY_DATABASE_URL',
   'DATABASE_URL',
@@ -64,22 +62,4 @@ describe('server backend resolution depends only on database configuration', () 
     expect(resolveEconomyServerBackend()).toBe('postgresql')
   })
 
-  // Fail closed. The message match is load-bearing: asserting only `.toThrow()`
-  // would also be satisfied by a missing export throwing "is not a function",
-  // which is a broken import rather than the behaviour under test.
-  it.each([
-    ['HASNA_ECONOMY_STORAGE_MODE', 'cloud'],
-    ['HASNA_ECONOMY_MODE', 'cloud'],
-    ['ECONOMY_STORAGE_MODE', 'local'],
-    ['ECONOMY_MODE', 'local'],
-  ])('rejects the retired %s with a migration hint', (key, value) => {
-    process.env[key] = value
-    expect(() => resolveEconomyServerBackend()).toThrow(/was removed/)
-  })
-
-  it('rejects a retired mode variable even when a valid database URL is present', () => {
-    process.env['HASNA_ECONOMY_DATABASE_URL'] = 'postgres://user@host:5432/economy'
-    process.env['HASNA_ECONOMY_STORAGE_MODE'] = 'cloud'
-    expect(() => resolveEconomyServerBackend()).toThrow(/was removed/)
-  })
 })
