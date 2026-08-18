@@ -70,7 +70,7 @@ export interface TypedActionRunOptions {
   onSettled?: () => void;
 }
 
-export type TypedActionWorkerRunStatus = "enqueued" | "running" | "succeeded" | "failed";
+export type TypedActionWorkerRunStatus = "admitted" | "running" | "succeeded" | "failed";
 
 export interface TypedActionRunReceipt {
   status: TypedActionWorkerRunStatus;
@@ -131,7 +131,7 @@ export class TypedActionWorker {
         requestedVersion: version,
       },
     });
-    const actions = automation.spec.actions.map((step) => this.store.enqueueAction({
+    const actions = automation.spec.actions.map((step) => this.store.admitAction({
       automationRunId: run.id,
       stepId: step.id,
       actionId: step.actionId,
@@ -156,7 +156,7 @@ export class TypedActionWorker {
       version,
       actionIds: actions.map((action) => action.id),
     };
-    if (options.detach) return { status: "enqueued", ...baseReceipt, actions };
+    if (options.detach) return { status: "admitted", ...baseReceipt, actions };
     if (options.timeoutMs === 0) {
       return { status: "running", ...baseReceipt, run: this.store.startRun(run.id) };
     }
@@ -180,12 +180,12 @@ export class TypedActionWorker {
 
   /** Re-execute one persisted partial typed receipt, preserving its source audit. */
   async replayPartial(actionId: string, options: Omit<TypedActionRunOptions, "detach"> = {}): Promise<TypedActionRunReceipt> {
-    const source = this.store.requireQueuedAction(actionId);
+    const source = this.store.requireQueueEntry(actionId);
     if (source.status !== "succeeded" || source.result?.metadata?.deliveryStatus !== "partial") {
       throw new Error(`queued action is not a typed partial receipt: ${actionId}`);
     }
     assertConfiguredActor(this.#authority.actor, options.actor);
-    const replay = this.store.requeuePartialAction(actionId);
+    const replay = this.store.readmitPartialAction(actionId);
     const run = this.store.requireRun(replay.automationRunId);
     const automation = this.store.requireAutomation(run.automationId);
     try {
@@ -202,11 +202,11 @@ export class TypedActionWorker {
   ): Promise<TypedActionRunReceipt> {
     this.store.startRun(runId);
     while (true) {
-      const action = this.store.claimNextActionForRun(runId, { runnerId: this.runnerId });
+      const action = this.store.leaseNextActionForRun(runId, { runnerId: this.runnerId });
       if (!action) break;
       const definition = this.#definitions.get(actionKey(action.actionId, action.invocation.manifestVersion ?? "1.0.0"));
-      const fenceToken = action.fenceToken;
-      if (fenceToken === undefined) throw new Error(`typed action claim has no fence token: ${action.id}`);
+      const fencingToken = action.leaseGeneration;
+      if (fencingToken === undefined) throw new Error(`typed action lease has no fencing token: ${action.id}`);
       const leaseMs = options.leaseMs ?? 30_000;
       const renewalMs = Math.max(10, Math.floor(leaseMs / 3));
       const executionController = new AbortController();
@@ -218,7 +218,7 @@ export class TypedActionWorker {
       let leaseLost: unknown;
       const renewal = setInterval(() => {
         try {
-          this.store.renewActionLease({ actionId: action.id, runnerId: this.runnerId, fenceToken, leaseMs, now: new Date() });
+          this.store.renewActionLease({ actionId: action.id, runnerId: this.runnerId, fencingToken, leaseMs, now: new Date() });
         } catch (error) {
           leaseLost = error;
           executionController.abort(error);
@@ -242,7 +242,7 @@ export class TypedActionWorker {
           input: materializeStepOutputs(
             action.invocation.input,
             automation,
-            this.store.listQueuedActions().filter((candidate) => candidate.automationRunId === runId),
+            this.store.listQueueEntries().filter((candidate) => candidate.automationRunId === runId),
           ),
           priorReceipts,
           replayOnlySinks,
@@ -269,16 +269,16 @@ export class TypedActionWorker {
           : normalized;
         const result = resultForQueue(settled);
         if (settled.status === "failed" && !settled.receipts?.length) {
-          await this.store.failAction({ actionId: action.id, runnerId: this.runnerId, fenceToken, error: settled.error ?? typedActionError("TYPED_ACTION_FAILED", settled.summary ?? "typed action failed", false) });
+          await this.store.failAction({ actionId: action.id, runnerId: this.runnerId, fencingToken, error: settled.error ?? typedActionError("TYPED_ACTION_FAILED", settled.summary ?? "typed action failed", false) });
         } else {
-          await this.store.completeActionFenced({ actionId: action.id, runnerId: this.runnerId, fenceToken, result });
+          await this.store.completeActionFenced({ actionId: action.id, runnerId: this.runnerId, fencingToken, result });
         }
       } catch (error) {
         const actionError = isActionError(error)
           ? error
           : typedActionError("TYPED_ACTION_FAILED", error instanceof Error ? error.message : String(error), false);
         try {
-          await this.store.failAction({ actionId: action.id, runnerId: this.runnerId, fenceToken, error: actionError });
+          await this.store.failAction({ actionId: action.id, runnerId: this.runnerId, fencingToken, error: actionError });
         } catch (settlementError) {
           throw settlementError;
         }
@@ -288,7 +288,7 @@ export class TypedActionWorker {
       }
     }
     const run = this.store.settleRun(runId);
-    const actions = this.store.listQueuedActions().filter((action) => action.automationRunId === runId);
+    const actions = this.store.listQueueEntries().filter((action) => action.automationRunId === runId);
     const partial = actions.flatMap((action) => {
       const receipts = action.result?.metadata?.deliveryReceipts;
       return Array.isArray(receipts) ? receipts as unknown as TypedActionDeliveryReceipt[] : [];

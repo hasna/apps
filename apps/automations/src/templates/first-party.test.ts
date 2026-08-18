@@ -136,12 +136,12 @@ describe("first-party automation templates", () => {
       const source = first.actions?.[0];
       expect(source?.metadata?.replayOnlySinks).toBeUndefined();
       const runsBeforeRejectedReplay = store.listRuns();
-      const actionsBeforeRejectedReplay = store.listQueuedActions();
+      const actionsBeforeRejectedReplay = store.listQueueEntries();
       await expect(actionWorker.replayPartial(source!.id, {
         actor: { id: "agent-replay-mismatch", type: "agent" },
       })).rejects.toThrow("supplied actor does not match configured authority actor");
       expect(store.listRuns()).toEqual(runsBeforeRejectedReplay);
-      expect(store.listQueuedActions()).toEqual(actionsBeforeRejectedReplay);
+      expect(store.listQueueEntries()).toEqual(actionsBeforeRejectedReplay);
       expect(conversationsCalls).toBe(1);
 
       const replayed = await actionWorker.replayPartial(source!.id);
@@ -151,8 +151,8 @@ describe("first-party automation templates", () => {
       expect(conversationsCalls).toBe(2);
       expect(replayed.run?.status).toBe("succeeded");
       expect(replayed.actions?.find((action) => action.id.endsWith(":partial-replay"))?.result?.metadata?.deliveryStatus).toBe("succeeded");
-      expect(store.requireQueuedAction(source!.id).result?.metadata?.deliveryStatus).toBe("partial");
-      expect(store.requireQueuedAction(`${source!.id}:partial-replay`).metadata?.replayOnlySinks).toEqual(["conversations"]);
+      expect(store.requireQueueEntry(source!.id).result?.metadata?.deliveryStatus).toBe("partial");
+      expect(store.requireQueueEntry(`${source!.id}:partial-replay`).metadata?.replayOnlySinks).toEqual(["conversations"]);
     } finally {
       store.close();
     }
@@ -255,7 +255,7 @@ describe("first-party automation templates", () => {
         mementos: 2,
         repository: 1,
       });
-      expect(store.requireQueuedAction(`${first.actions![0]!.id}:partial-replay`).metadata?.replayOnlySinks).toEqual(["mementos"]);
+      expect(store.requireQueueEntry(`${first.actions![0]!.id}:partial-replay`).metadata?.replayOnlySinks).toEqual(["mementos"]);
       expect(replayed.actions?.find((action) => action.id.endsWith(":partial-replay"))?.result?.output).toMatchObject({
         snapshot: {
           projects: [{ id: "project-1" }],
@@ -439,7 +439,7 @@ describe("first-party automation templates", () => {
       expect(identityActionIds).toHaveLength(2);
       expect(new Set(identityActionIds).size).toBe(1);
       expect([...liveBindings].filter((bindingId) => bindingId.startsWith("identity-"))).toHaveLength(1);
-      expect(store.requireQueuedAction(secondAction.id).metadata?.partialReplayRootActionId).toBe(first.actions![0]!.id);
+      expect(store.requireQueueEntry(secondAction.id).metadata?.partialReplayRootActionId).toBe(first.actions![0]!.id);
       const thirdAction = third.actions!.find((action) => action.id.endsWith(":partial-replay:partial-replay"))!;
       expect(thirdAction.metadata?.partialReplayRootActionId).toBe(first.actions![0]!.id);
     } finally {

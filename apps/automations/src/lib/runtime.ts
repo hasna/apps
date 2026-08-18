@@ -5,12 +5,12 @@ export function createOpenLoopsRuntimeBinding(metadata: JsonObject = {}): Automa
   return {
     kind: "open-loops",
     name: "open-loops-runtime",
-    description: "OpenLoops may claim queued deterministic OpenAutomations actions or consume explicitly exported event envelopes through opt-in handoff commands. Agent workflow invocation remains owned by OpenLoops.",
-    handoff: "claim-queue",
+    description: "OpenLoops may lease admitted deterministic OpenAutomations actions or consume explicitly exported event envelopes through opt-in handoff commands. Agent workflow invocation remains owned by OpenLoops.",
+    handoff: "lease-queue",
     metadata: {
       queueClaim: {
         statusCommand: "automations status",
-        claimCommand: "automations queue claim --runner open-loops:<worker-id>",
+        claimCommand: "automations queue lease --runner open-loops:<worker-id>",
         completeCommand: "automations queue complete <action-id> --runner open-loops:<worker-id>",
         failCommand: "automations queue fail <action-id> --runner open-loops:<worker-id> --code <code> --message <message>",
       },

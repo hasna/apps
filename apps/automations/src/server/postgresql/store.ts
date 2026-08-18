@@ -19,7 +19,7 @@ import type {
   EventEnvelopeLike,
   MaterializedEventRun,
   MaterializedWebhookRequest,
-  QueueClaimOptions,
+  QueueLeaseOptions,
   QueuedAction,
   WebhookRequestInput,
   WebhookRoute,
@@ -28,16 +28,16 @@ import type {
 } from "../../types.js";
 import { AUTOMATION_SCHEMA_VERSION, WEBHOOK_ROUTE_STATUSES } from "../../types.js";
 import type { ActionQueueApprovalDecision, ActionQueueApprovalGate } from "../../lib/action-queue.js";
-import { isTerminalActionQueueStatus } from "../../lib/action-queue.js";
+import { isTerminalQueueEntryStatus } from "../../lib/action-queue.js";
 import {
-  CLAIM_CANDIDATE_BUDGET,
+  LEASE_CANDIDATE_BUDGET,
   automationSpecForPersistence,
-  compareClaimCandidates,
+  compareLeaseCandidates,
   jsonValuesEqual,
   normalizeWebhookRequestToEvent,
   validateAutomationSpec,
   type CreateWebhookRouteInput,
-  type EnqueueActionInput,
+  type AdmitActionInput,
 } from "../../lib/store.js";
 import type {
   CreateReplayRequestInput,
@@ -57,16 +57,16 @@ type JsonSql = Pick<ReturnType<typeof postgres>, "json">;
 type Sql = PostgreSqlExecutor & JsonSql;
 
 export const POSTGRESQL_READY_CLAIM_CANDIDATES_SQL = `
-  SELECT id,automation_run_id,available_at,created_at,available_at AS claimable_at
+  SELECT id,automation_run_id,available_at,created_at,available_at AS ready_at
   FROM automation_actions
-  WHERE status IN ('queued','retrying') AND available_at <= $1 AND unmet_dependencies=0
+  WHERE status IN ('admitted','admitted') AND available_at <= $1 AND unmet_dependencies=0
   ORDER BY available_at,available_at,created_at,id
   LIMIT $2
 `;
 export const POSTGRESQL_EXPIRED_CLAIM_CANDIDATES_SQL = `
-  SELECT id,automation_run_id,available_at,created_at,lease_expires_at AS claimable_at
+  SELECT id,automation_run_id,available_at,created_at,lease_expires_at AS ready_at
   FROM automation_actions
-  WHERE status='claimed' AND lease_expires_at IS NOT NULL
+  WHERE status='leased' AND lease_expires_at IS NOT NULL
     AND lease_expires_at <= $1 AND available_at <= $1 AND unmet_dependencies=0
   ORDER BY lease_expires_at,available_at,created_at,id
   LIMIT $2
@@ -267,11 +267,11 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
     return rows.map(runFromRow);
   }
 
-  async enqueueAction(input: EnqueueActionInput): Promise<QueuedAction> {
-    return this.sql.begin(async (transaction) => this.enqueueActionWith(transaction as unknown as Sql, input));
+  async admitAction(input: AdmitActionInput): Promise<QueuedAction> {
+    return this.sql.begin(async (transaction) => this.admitActionWith(transaction as unknown as Sql, input));
   }
 
-  private async enqueueActionWith(sql: Sql, input: EnqueueActionInput): Promise<QueuedAction> {
+  private async admitActionWith(sql: Sql, input: AdmitActionInput): Promise<QueuedAction> {
     await sql.unsafe("SELECT id FROM automation_runs WHERE id=$1 FOR UPDATE", [input.automationRunId]);
     const context = requireRawRow(
       await sql.unsafe(
@@ -313,22 +313,22 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
        ON CONFLICT (automation_run_id,step_id) DO UPDATE
          SET step_id=excluded.step_id,unmet_dependencies=excluded.unmet_dependencies
       RETURNING *`,
-      [input.id ?? randomUUID(), input.automationRunId, input.stepId, input.actionId, idempotencyKey, input.status ?? "queued",
+      [input.id ?? randomUUID(), input.automationRunId, input.stepId, input.actionId, idempotencyKey, input.status ?? "admitted",
         json(sql, input.invocation), input.attempt ?? 0, input.maxAttempts ?? 3, toDate(input.availableAt), now,
         json(sql, input.approvalGate), json(sql, input.result), json(sql, input.error), json(sql, input.deadLetter), json(sql, input.metadata),
         count(unmet[0]?.count ?? "0")],
     );
-    if (existing.length === 0 && (input.status ?? "queued") === "succeeded") {
+    if (existing.length === 0 && (input.status ?? "admitted") === "succeeded") {
       await settleDependentDependencies(sql, input.automationRunId, input.stepId, now);
     }
     return actionFromRow(rows[0]!);
   }
 
-  async requireQueuedAction(id: string): Promise<QueuedAction> {
-    return requireRow(await this.sql.unsafe("SELECT * FROM automation_actions WHERE id=$1", [id]), `queued action not found: ${id}`, actionFromRow);
+  async requireQueueEntry(id: string): Promise<QueuedAction> {
+    return requireRow(await this.sql.unsafe("SELECT * FROM automation_actions WHERE id=$1", [id]), `queue entry not found: ${id}`, actionFromRow);
   }
 
-  async listQueuedActions(options: ListPageOptions = {}): Promise<QueuedAction[]> {
+  async listQueueEntries(options: ListPageOptions = {}): Promise<QueuedAction[]> {
     const page = normalizePageOptions(options);
     const rows = page.afterAt
       ? await this.sql.unsafe(
@@ -341,7 +341,7 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
     return rows.map(actionFromRow);
   }
 
-  async listDeadActions(options: ListPageOptions = {}): Promise<QueuedAction[]> {
+  async listDeadLetterActions(options: ListPageOptions = {}): Promise<QueuedAction[]> {
     const page = normalizePageOptions(options);
     const rows = page.afterAt
       ? await this.sql.unsafe(
@@ -357,23 +357,23 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
     return rows.map(actionFromRow);
   }
 
-  async claimNextAction(options: QueueClaimOptions): Promise<LeasedQueuedAction | undefined> {
+  async leaseNextAction(options: QueueLeaseOptions): Promise<LeasedQueuedAction | undefined> {
     const now = toDate(options.now);
     const expiresAt = new Date(now.getTime() + (options.leaseMs ?? 30_000));
     return this.sql.begin(async (transaction) => {
       const sql = transaction as unknown as Sql;
-      const ready = await sql.unsafe(POSTGRESQL_READY_CLAIM_CANDIDATES_SQL, [now, CLAIM_CANDIDATE_BUDGET]);
-      const expired = await sql.unsafe(POSTGRESQL_EXPIRED_CLAIM_CANDIDATES_SQL, [now, CLAIM_CANDIDATE_BUDGET]);
+      const ready = await sql.unsafe(POSTGRESQL_READY_CLAIM_CANDIDATES_SQL, [now, LEASE_CANDIDATE_BUDGET]);
+      const expired = await sql.unsafe(POSTGRESQL_EXPIRED_CLAIM_CANDIDATES_SQL, [now, LEASE_CANDIDATE_BUDGET]);
       const candidateIds = [...ready, ...expired]
         .map((candidate) => ({
           id: String(candidate.id),
           runId: String(candidate.automation_run_id),
           available_at: candidate.available_at as string | Date,
           created_at: candidate.created_at as string | Date,
-          claimable_at: candidate.claimable_at as string | Date,
+          ready_at: candidate.ready_at as string | Date,
         }))
-        .sort(compareClaimCandidates)
-        .slice(0, CLAIM_CANDIDATE_BUDGET)
+        .sort(compareLeaseCandidates)
+        .slice(0, LEASE_CANDIDATE_BUDGET)
         .map(({ id, runId }) => ({ id, runId }));
         for (const { id: candidateId, runId } of candidateIds) {
           await sql.unsafe("SELECT id FROM automation_runs WHERE id=$1 FOR UPDATE", [runId]);
@@ -383,8 +383,8 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
            JOIN automation_runs run ON run.id=action.automation_run_id
            JOIN automations automation ON automation.id=run.automation_id
            WHERE action.id=$1
-             AND (action.status IN ('queued','retrying')
-               OR (action.status='claimed' AND action.lease_expires_at IS NOT NULL AND action.lease_expires_at <= $2))
+             AND (action.status IN ('admitted','admitted')
+               OR (action.status='leased' AND action.lease_expires_at IS NOT NULL AND action.lease_expires_at <= $2))
              AND action.available_at <= $2
              AND action.unmet_dependencies=0
            FOR UPDATE OF action SKIP LOCKED`,
@@ -402,11 +402,11 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
           if (concurrencyKey && !(await acquireConcurrencyLock(sql, concurrencyKey, String(candidate.automation_run_id), now, expiresAt))) continue;
           const rows = await sql.unsafe(
           `UPDATE automation_actions SET
-             status='claimed',claimed_by=$2,claimed_at=$3,lease_expires_at=$4,
-             claim_version=claim_version+1,updated_at=$3
+             status='leased',leased_by=$2,leased_at=$3,lease_expires_at=$4,
+             lease_generation=lease_generation+1,updated_at=$3
            WHERE id=$1
-             AND (status IN ('queued','retrying')
-               OR (status='claimed' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $3))
+             AND (status IN ('admitted','admitted')
+               OR (status='leased' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $3))
            RETURNING *`,
           [candidate.id, options.runnerId, now, expiresAt],
         );
@@ -430,14 +430,14 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
         "SELECT automation_run_id FROM automation_actions WHERE id=$1",
         [options.actionId],
       );
-      const runId = String(requireRawRow(actionRows, `queued action not found: ${options.actionId}`).automation_run_id);
+      const runId = String(requireRawRow(actionRows, `queue entry not found: ${options.actionId}`).automation_run_id);
       await sql.unsafe("SELECT id FROM automation_runs WHERE id=$1 FOR UPDATE", [runId]);
       const rows = await sql.unsafe(
         `UPDATE automation_actions SET lease_expires_at=$5,updated_at=$4
-         WHERE id=$1 AND status='claimed' AND claimed_by=$2 AND claim_version=$3
+         WHERE id=$1 AND status='leased' AND leased_by=$2 AND lease_generation=$3
            AND lease_expires_at IS NOT NULL AND lease_expires_at > $4
          RETURNING *`,
-        [options.actionId, options.runnerId, options.fenceToken, now, expiresAt],
+        [options.actionId, options.runnerId, options.fencingToken, now, expiresAt],
       );
       const row = assertFencedRow(rows, options.actionId);
       await renewConcurrencyLock(sql, String(row.automation_run_id), now, expiresAt);
@@ -450,7 +450,7 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
   }
 
   async failActionFenced(options: FencedActionFailureOptions): Promise<QueuedAction> {
-    const current = await this.requireQueuedAction(options.actionId);
+    const current = await this.requireQueueEntry(options.actionId);
     const nextAttempt = current.attempt + 1;
     const retrying = options.error.retryable !== false && nextAttempt < current.maxAttempts;
     const now = toDate(options.now);
@@ -464,12 +464,12 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
       attempts: nextAttempt,
       replayable: true,
     };
-    return this.writeFenced(options, retrying ? "retrying" : "dead", undefined, options.error, nextAttempt, availableAt, deadLetter);
+    return this.writeFenced(options, retrying ? "admitted" : "dead", undefined, options.error, nextAttempt, availableAt, deadLetter);
   }
 
   private async writeFenced(
     options: FencedActionCompletionOptions | FencedActionFailureOptions,
-    status: "succeeded" | "retrying" | "dead",
+    status: "succeeded" | "admitted" | "dead",
     result?: ActionResult,
     error?: ActionError,
     attempt?: number,
@@ -483,19 +483,19 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
         "SELECT automation_run_id FROM automation_actions WHERE id=$1",
         [options.actionId],
       );
-      const runId = String(requireRawRow(actionRows, `queued action not found: ${options.actionId}`).automation_run_id);
+      const runId = String(requireRawRow(actionRows, `queue entry not found: ${options.actionId}`).automation_run_id);
       await sql.unsafe("SELECT id FROM automation_runs WHERE id=$1 FOR UPDATE", [runId]);
       const rows = await sql.unsafe(
         `UPDATE automation_actions SET
            status=$5,result_json=$6::jsonb,error_json=$7::jsonb,dead_letter_json=$8::jsonb,
            attempt=COALESCE($9,attempt),available_at=COALESCE($10,available_at),lease_expires_at=NULL,updated_at=$4
-         WHERE id=$1 AND status='claimed' AND claimed_by=$2 AND claim_version=$3
+         WHERE id=$1 AND status='leased' AND leased_by=$2 AND lease_generation=$3
            AND lease_expires_at IS NOT NULL AND lease_expires_at > $4
          RETURNING *`,
         [
           options.actionId,
           options.runnerId,
-          options.fenceToken,
+          options.fencingToken,
           now,
           status,
           json(sql, result),
@@ -514,14 +514,14 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
     });
   }
 
-  async requeueDeadAction(id: string, options: { now?: string | Date; requestedBy?: string; reason?: string } = {}): Promise<QueuedAction> {
+  async readmitDeadAction(id: string, options: { now?: string | Date; requestedBy?: string; reason?: string } = {}): Promise<QueuedAction> {
     const now = toDate(options.now);
     return this.sql.begin(async (transaction) => {
       const sql = transaction as unknown as Sql;
       const rows = await sql.unsafe("SELECT * FROM automation_actions WHERE id=$1 FOR UPDATE", [id]);
-      const action = actionFromRow(requireRawRow(rows, `queued action not found: ${id}`));
-      if (action.status !== "dead") throw new Error(`queued action is not dead: ${id}`);
-      if (action.deadLetter?.replayable === false) throw new Error(`queued action is not replayable: ${id}`);
+      const action = actionFromRow(requireRawRow(rows, `queue entry not found: ${id}`));
+      if (action.status !== "dead") throw new Error(`queue entry is not dead: ${id}`);
+      if (action.deadLetter?.replayable === false) throw new Error(`queue entry is not replayable: ${id}`);
       await this.createReplayRequestWith(sql, {
         sourceRunId: action.automationRunId,
         mode: "dead-actions",
@@ -531,8 +531,8 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
         metadata: { actionId: id },
       });
       const updated = await sql.unsafe(
-        `UPDATE automation_actions SET status='queued',attempt=0,available_at=$2,
-           claimed_by=NULL,claimed_at=NULL,lease_expires_at=NULL,result_json=NULL,error_json=NULL,
+        `UPDATE automation_actions SET status='admitted',attempt=0,available_at=$2,
+           leased_by=NULL,leased_at=NULL,lease_expires_at=NULL,result_json=NULL,error_json=NULL,
            dead_letter_json=NULL,updated_at=$2
          WHERE id=$1 AND status='dead' RETURNING *`,
         [id, now],
@@ -558,7 +558,7 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
     const now = toDate(options.now);
     return this.sql.begin(async (transaction) => {
       const sql = transaction as unknown as Sql;
-      const row = requireRawRow(await sql.unsafe("SELECT * FROM automation_actions WHERE id=$1 FOR UPDATE", [id]), `queued action not found: ${id}`);
+      const row = requireRawRow(await sql.unsafe("SELECT * FROM automation_actions WHERE id=$1 FOR UPDATE", [id]), `queue entry not found: ${id}`);
       const action = actionFromRow(row);
       assertApprovalTransition(action, decisionStatus === "approved" ? "approve" : "reject");
       const decision: ActionQueueApprovalDecision = {
@@ -576,9 +576,9 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
       } : undefined;
       const updated = await sql.unsafe(
         `UPDATE automation_actions SET status=$2,approval_gate_json=$3::jsonb,dead_letter_json=$4::jsonb,updated_at=$5
-         WHERE id=$1 AND status IN ('queued','waiting_approval')
-           AND claimed_by IS NULL AND claimed_at IS NULL AND lease_expires_at IS NULL RETURNING *`,
-        [id, decisionStatus === "approved" ? "queued" : "dead", json(sql, gate), json(sql, deadLetter), now],
+         WHERE id=$1 AND status IN ('admitted','waiting_approval')
+           AND leased_by IS NULL AND leased_at IS NULL AND lease_expires_at IS NULL RETURNING *`,
+        [id, decisionStatus === "approved" ? "admitted" : "dead", json(sql, gate), json(sql, deadLetter), now],
       );
       return actionFromRow(assertFencedRow(updated, id));
     });
@@ -613,7 +613,7 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
         });
         const actions: QueuedAction[] = [];
         for (const step of automation.spec.actions) {
-          const action = await this.enqueueActionWith(sql, {
+          const action = await this.admitActionWith(sql, {
             automationRunId: run.id, stepId: step.id, actionId: step.actionId,
             invocation: {
               id: deterministicInvocationId(run.id, step.id), actionId: step.actionId,
@@ -698,8 +698,11 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
       this.sql.unsafe(`SELECT
         (SELECT count(*) FROM automations)::text AS automations,
         (SELECT count(*) FROM automation_runs)::text AS runs,
-        (SELECT count(*) FROM automation_actions)::text AS queued_actions,
-        (SELECT count(*) FROM automation_actions WHERE status='dead')::text AS dead_actions,
+        (SELECT count(*) FROM automation_actions)::text AS queue_depth,
+        (SELECT count(*) FROM automation_actions WHERE status='admitted')::text AS admitted,
+        (SELECT count(*) FROM automation_actions WHERE status='leased')::text AS leased,
+        (SELECT count(*) FROM automation_actions WHERE status IN ('succeeded','failed','dead','cancelled'))::text AS terminal,
+        (SELECT count(*) FROM automation_actions WHERE status='dead')::text AS dead_letter,
         (SELECT count(*) FROM automation_replay_requests)::text AS replay_requests,
         (SELECT count(*) FROM webhook_routes)::text AS webhook_routes`),
       this.latestDaemonLease(),
@@ -709,8 +712,9 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
       service: "automations", schemaVersion: AUTOMATION_SCHEMA_VERSION,
       dataDir: "postgresql", dbPath: "postgresql",
       counts: {
-        automations: count(row.automations), runs: count(row.runs), queuedActions: count(row.queued_actions),
-        deadActions: count(row.dead_actions), replayRequests: count(row.replay_requests), webhookRoutes: count(row.webhook_routes),
+        automations: count(row.automations), runs: count(row.runs), queueDepth: count(row.queue_depth),
+        admitted: count(row.admitted), leased: count(row.leased), terminal: count(row.terminal),
+        deadLetter: count(row.dead_letter), replayRequests: count(row.replay_requests), webhookRoutes: count(row.webhook_routes),
       },
       daemon: {
         leaseId: lease?.id, pid: lease?.pid, hostname: lease?.hostname,
@@ -773,7 +777,7 @@ async function settleDependentDependencies(sql: Sql, runId: string, dependencySt
      SET unmet_dependencies=dependent.unmet_dependencies-1,updated_at=$3
      WHERE dependent.automation_run_id=$1
        AND dependent.unmet_dependencies>0
-       AND dependent.status IN ('queued','retrying','claimed')
+       AND dependent.status IN ('admitted','leased')
        AND EXISTS (
          SELECT 1
          FROM automation_action_step_dependencies edge
@@ -813,11 +817,11 @@ function approvalAllowsClaim(gate?: ActionQueueApprovalGate): boolean {
 }
 
 function assertApprovalTransition(action: QueuedAction, operation: "approve" | "reject"): void {
-  if (!action.approvalGate) throw new Error(`queued action has no approval gate: ${action.id}`);
-  if (isTerminalActionQueueStatus(action.status)) throw new Error(`cannot ${operation} terminal queued action: ${action.id}`);
-  if (action.status === "claimed" || action.claimedBy || action.claimedAt || action.leaseExpiresAt) throw new Error(`cannot ${operation} claimed queued action: ${action.id}`);
-  if (action.status !== "queued" && action.status !== "waiting_approval") throw new Error(`queued action is not awaiting approval: ${action.id}`);
-  if (action.approvalGate.decision?.status !== "pending") throw new Error(`queued action approval decision is not pending: ${action.id}`);
+  if (!action.approvalGate) throw new Error(`queue entry has no approval gate: ${action.id}`);
+  if (isTerminalQueueEntryStatus(action.status)) throw new Error(`cannot ${operation} terminal queue entry: ${action.id}`);
+  if (action.status === "leased" || action.leasedBy || action.leasedAt || action.leaseExpiresAt) throw new Error(`cannot ${operation} leased queue entry: ${action.id}`);
+  if (action.status !== "admitted" && action.status !== "waiting_approval") throw new Error(`queue entry is not awaiting approval: ${action.id}`);
+  if (action.approvalGate.decision?.status !== "pending") throw new Error(`queue entry approval decision is not pending: ${action.id}`);
 }
 
 function eventRunMetadata(event: EventEnvelopeLike): JsonObject {
@@ -971,11 +975,11 @@ function runFromRow(row: Row): AutomationRun {
 }
 
 function actionFromRow(row: Row): QueuedAction {
-  return { id: String(row.id), automationRunId: String(row.automation_run_id), stepId: String(row.step_id), actionId: String(row.action_id), idempotencyKey: String(row.idempotency_key), status: String(row.status) as QueuedAction["status"], invocation: object(row.invocation_json), attempt: count(row.attempt), maxAttempts: count(row.max_attempts), availableAt: iso(row.available_at), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at), claimedBy: row.claimed_by == null ? undefined : String(row.claimed_by), claimedAt: row.claimed_at == null ? undefined : iso(row.claimed_at), leaseExpiresAt: row.lease_expires_at == null ? undefined : iso(row.lease_expires_at), approvalGate: nullableObject(row.approval_gate_json), result: nullableObject(row.result_json), error: nullableObject(row.error_json), deadLetter: nullableObject(row.dead_letter_json), metadata: nullableObject(row.metadata_json) };
+  return { id: String(row.id), automationRunId: String(row.automation_run_id), stepId: String(row.step_id), actionId: String(row.action_id), idempotencyKey: String(row.idempotency_key), status: String(row.status) as QueuedAction["status"], invocation: object(row.invocation_json), attempt: count(row.attempt), maxAttempts: count(row.max_attempts), availableAt: iso(row.available_at), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at), leasedBy: row.leased_by == null ? undefined : String(row.leased_by), leasedAt: row.leased_at == null ? undefined : iso(row.leased_at), leaseExpiresAt: row.lease_expires_at == null ? undefined : iso(row.lease_expires_at), leaseGeneration: count(row.lease_generation), approvalGate: nullableObject(row.approval_gate_json), result: nullableObject(row.result_json), error: nullableObject(row.error_json), deadLetter: nullableObject(row.dead_letter_json), metadata: nullableObject(row.metadata_json) };
 }
 
 function leasedActionFromRow(row: Row): LeasedQueuedAction {
-  return { ...actionFromRow(row), fenceToken: count(row.claim_version) };
+  return { ...actionFromRow(row), fencingToken: count(row.lease_generation) };
 }
 
 function replayFromRow(row: Row): AutomationReplayRequest {

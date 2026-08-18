@@ -167,10 +167,40 @@ CREATE INDEX automation_action_step_dependencies_lookup_idx
   ON automation_action_step_dependencies(automation_run_id,action_step_id,dependency_step_id);
 `;
 
+const TAXONOMY_VOCABULARY_SQL = `
+-- Queue-entry lifecycle vocabulary aligned to the fleet daemon/queue taxonomy
+-- (global-hasna-daemon-worker-taxonomy): 'admitted' replaces 'queued'/'retrying'
+-- (bounded retries re-admit the entry with a distinguishable attempt number),
+-- 'leased' replaces 'claimed', and the lease-generation counter replaces
+-- claim_version. Column names, status values and the partial indexes that
+-- encoded the old vocabulary are renamed; no data is deleted.
+ALTER TABLE automation_actions RENAME COLUMN claimed_by TO leased_by;
+ALTER TABLE automation_actions RENAME COLUMN claimed_at TO leased_at;
+ALTER TABLE automation_actions RENAME COLUMN claim_version TO lease_generation;
+UPDATE automation_actions SET status = CASE status
+  WHEN 'queued' THEN 'admitted'
+  WHEN 'retrying' THEN 'admitted'
+  WHEN 'claimed' THEN 'leased'
+  ELSE status END
+WHERE status IN ('queued','retrying','claimed');
+ALTER TABLE automation_actions DROP CONSTRAINT IF EXISTS automation_actions_status_check;
+ALTER TABLE automation_actions ADD CONSTRAINT automation_actions_status_check
+  CHECK (status IN ('admitted','waiting_approval','leased','succeeded','failed','dead','rejected','cancelled'));
+DROP INDEX automation_actions_ready_order_idx;
+DROP INDEX automation_actions_expired_claim_order_idx;
+CREATE INDEX automation_actions_ready_order_idx
+  ON automation_actions(available_at,available_at,created_at,id,automation_run_id,step_id)
+  WHERE status='admitted' AND unmet_dependencies=0;
+CREATE INDEX automation_actions_expired_lease_order_idx
+  ON automation_actions(lease_expires_at,available_at,created_at,id,automation_run_id,step_id)
+  WHERE status='leased' AND lease_expires_at IS NOT NULL AND unmet_dependencies=0;
+`;
+
 const migrations: Migration[] = [
   { id: "0001_server_schema", sql: SCHEMA_SQL, checksum: checksum(SCHEMA_SQL) },
   { id: "0002_scale_indexes", sql: SCALE_INDEXES_SQL, checksum: checksum(SCALE_INDEXES_SQL) },
   { id: "0003_bounded_claim_candidates", sql: BOUNDED_CLAIM_CANDIDATES_SQL, checksum: checksum(BOUNDED_CLAIM_CANDIDATES_SQL) },
+  { id: "0004_taxonomy_queue_vocabulary", sql: TAXONOMY_VOCABULARY_SQL, checksum: checksum(TAXONOMY_VOCABULARY_SQL) },
 ];
 const LEDGER = "hasna_automations_schema_migrations";
 const LOCK_KEY = 7_104_510_021;

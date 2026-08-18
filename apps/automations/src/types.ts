@@ -9,7 +9,7 @@ import type {
 import type {
   ActionQueueApprovalGate,
   ActionQueueApprovalRequirement,
-  ActionQueueStatus,
+  QueueEntryStatus,
 } from "./lib/action-queue.js";
 
 export const AUTOMATION_SCHEMA_VERSION = "1.0" as const;
@@ -193,21 +193,30 @@ export interface QueuedAction {
   stepId: string;
   actionId: string;
   idempotencyKey: string;
-  status: ActionQueueStatus;
+  status: QueueEntryStatus;
   invocation: ActionInvocation<JsonValue>;
+  /** Distinguishable attempt identity: bounded retries advance this number. */
   attempt: number;
   maxAttempts: number;
   availableAt: string;
   createdAt: string;
   updatedAt: string;
-  claimedBy?: string;
-  claimedAt?: string;
+  /** The worker holding the exclusive lease, when the entry is leased. */
+  leasedBy?: string;
+  leasedAt?: string;
   leaseExpiresAt?: string;
-  /** Current claim fence used by supervised workers for renewal/settlement. */
-  fenceToken?: number;
+  /**
+   * Monotonic lease generation, incremented on every lease acquisition.
+   * A lease holder presents the generation it observed at lease time as the
+   * fencing token; a stale generation is rejected by the store.
+   */
+  leaseGeneration?: number;
+  /** The fencing token of the current lease (equals `leaseGeneration`). */
+  fencingToken?: number;
   approvalGate?: ActionQueueApprovalGate;
   result?: ActionResult;
   error?: ActionError;
+  /** Dead-letter terminal receipt for entries settled as `dead`. */
   deadLetter?: ActionDeadLetter;
   metadata?: JsonObject;
 }
@@ -230,8 +239,16 @@ export interface AutomationsStatus {
   counts: {
     automations: number;
     runs: number;
-    queuedActions: number;
-    deadActions: number;
+    /** Total queue entries (admitted + leased + terminal). */
+    queueDepth: number;
+    /** Entries admitted and awaiting an exclusive lease. */
+    admitted: number;
+    /** Entries leased to a worker and in flight. */
+    leased: number;
+    /** Entries in a terminal state (succeeded/failed/dead/cancelled). */
+    terminal: number;
+    /** Dead-letter terminal entries awaiting replay. */
+    deadLetter: number;
     replayRequests: number;
     webhookRoutes: number;
   };
@@ -246,7 +263,7 @@ export interface AutomationsStatus {
   };
 }
 
-export interface QueueClaimOptions {
+export interface QueueLeaseOptions {
   runnerId: string;
   leaseMs?: number;
   now?: string | Date;
@@ -255,7 +272,7 @@ export interface QueueClaimOptions {
 export interface ActionFailureOptions {
   actionId: string;
   runnerId: string;
-  fenceToken?: number;
+  fencingToken?: number;
   error: ActionError;
   now?: string | Date;
   retryBackoffMs?: number;
@@ -264,7 +281,7 @@ export interface ActionFailureOptions {
 export interface ActionLeaseRenewalOptions {
   actionId: string;
   runnerId: string;
-  fenceToken: number;
+  fencingToken: number;
   leaseMs?: number;
   now?: string | Date;
 }
@@ -286,7 +303,7 @@ export interface AutomationRuntimeBinding {
   kind: "open-loops" | "local" | "external";
   name: string;
   description?: string;
-  handoff: "claim-queue" | "webhook" | "sdk";
+  handoff: "lease-queue" | "webhook" | "sdk";
   metadata?: JsonObject;
 }
 

@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AutomationsStore,
-  CLAIM_CANDIDATE_BUDGET,
+  LEASE_CANDIDATE_BUDGET,
   exampleAutomationSpec,
-  SQLITE_CLAIM_CANDIDATES_SQL,
+  SQLITE_LEASE_CANDIDATES_SQL,
   validateAutomationSpec,
 } from "./store.js";
 
@@ -34,8 +34,11 @@ describe("AutomationsStore", () => {
         counts: {
           automations: 0,
           runs: 0,
-          queuedActions: 0,
-          deadActions: 0,
+          queueDepth: 0,
+          admitted: 0,
+          leased: 0,
+          terminal: 0,
+          deadLetter: 0,
           replayRequests: 0,
           webhookRoutes: 0,
         },
@@ -70,7 +73,7 @@ describe("AutomationsStore", () => {
       });
       expect(duplicateRun.id).toBe(run.id);
 
-      const action = store.enqueueAction({
+      const action = store.admitAction({
         id: "act_1",
         automationRunId: run.id,
         stepId: "create-escalation-task",
@@ -85,9 +88,9 @@ describe("AutomationsStore", () => {
           idempotencyKey: "evt_1:act_1",
         },
       });
-      expect(action.status).toBe("queued");
+      expect(action.status).toBe("admitted");
       expect(action.idempotencyKey).toBe("evt_1:act_1");
-      const duplicateAction = store.enqueueAction({
+      const duplicateAction = store.admitAction({
         id: "act_duplicate",
         automationRunId: run.id,
         stepId: "create-escalation-task",
@@ -116,10 +119,10 @@ describe("AutomationsStore", () => {
 
       const lease = store.heartbeatDaemon({ leaseId: "daemon:test", now: new Date("2026-06-28T00:00:00.000Z") });
       expect(lease.id).toBe("daemon:test");
-      expect((store.db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(6);
+      expect((store.db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(7);
 
-      const claimed = store.claimNextAction({ runnerId: "tester", now: "2026-06-28T00:00:01.000Z" });
-      expect(claimed).toMatchObject({ id: action.id, status: "claimed", claimedBy: "tester" });
+      const claimed = store.leaseNextAction({ runnerId: "tester", now: "2026-06-28T00:00:01.000Z" });
+      expect(claimed).toMatchObject({ id: action.id, status: "leased", leasedBy: "tester" });
 
       const retrying = store.failAction({
         actionId: action.id,
@@ -128,10 +131,10 @@ describe("AutomationsStore", () => {
         retryBackoffMs: 0,
         error: { code: "UPSTREAM_500", message: "upstream failed", retryable: true },
       });
-      expect(retrying).toMatchObject({ status: "retrying", attempt: 1 });
+      expect(retrying).toMatchObject({ status: "admitted", attempt: 1 });
 
-      const secondClaim = store.claimNextAction({ runnerId: "tester", now: "2026-06-28T00:00:03.000Z" });
-      expect(secondClaim).toMatchObject({ id: action.id, status: "claimed" });
+      const secondClaim = store.leaseNextAction({ runnerId: "tester", now: "2026-06-28T00:00:03.000Z" });
+      expect(secondClaim).toMatchObject({ id: action.id, status: "leased" });
       store.failAction({
         actionId: action.id,
         runnerId: "tester",
@@ -139,8 +142,8 @@ describe("AutomationsStore", () => {
         retryBackoffMs: 0,
         error: { code: "UPSTREAM_500", message: "upstream failed", retryable: true },
       });
-      const thirdClaim = store.claimNextAction({ runnerId: "tester", now: "2026-06-28T00:00:05.000Z" });
-      expect(thirdClaim).toMatchObject({ id: action.id, status: "claimed" });
+      const thirdClaim = store.leaseNextAction({ runnerId: "tester", now: "2026-06-28T00:00:05.000Z" });
+      expect(thirdClaim).toMatchObject({ id: action.id, status: "leased" });
       const dead = store.failAction({
         actionId: action.id,
         runnerId: "tester",
@@ -148,12 +151,12 @@ describe("AutomationsStore", () => {
         error: { code: "UPSTREAM_500", message: "upstream failed", retryable: true },
       });
       expect(dead).toMatchObject({ status: "dead", attempt: 3, deadLetter: { replayable: true } });
-      expect(store.listDeadActions()).toHaveLength(1);
+      expect(store.listDeadLetterActions()).toHaveLength(1);
 
-      const requeued = store.requeueDeadAction(action.id, { now: "2026-06-28T00:00:07.000Z", requestedBy: "tester" });
-      expect(requeued).toMatchObject({ status: "queued", attempt: 0 });
-      const completedClaim = store.claimNextAction({ runnerId: "tester", now: "2026-06-28T00:00:08.000Z" });
-      expect(completedClaim).toMatchObject({ id: action.id, status: "claimed" });
+      const requeued = store.readmitDeadAction(action.id, { now: "2026-06-28T00:00:07.000Z", requestedBy: "tester" });
+      expect(requeued).toMatchObject({ status: "admitted", attempt: 0 });
+      const completedClaim = store.leaseNextAction({ runnerId: "tester", now: "2026-06-28T00:00:08.000Z" });
+      expect(completedClaim).toMatchObject({ id: action.id, status: "leased" });
       const completed = store.completeAction({
         actionId: action.id,
         runnerId: "tester",
@@ -166,14 +169,17 @@ describe("AutomationsStore", () => {
         runnerId: "tester",
         now: "2026-06-28T00:00:10.000Z",
         error: { code: "TOO_LATE", message: "already done" },
-      })).toThrow("cannot fail terminal queued action");
+      })).toThrow("cannot fail terminal queue entry");
 
       expect(store.status(new Date("2026-06-28T00:00:01.000Z"))).toMatchObject({
         counts: {
           automations: 1,
           runs: 1,
-          queuedActions: 1,
-          deadActions: 0,
+          queueDepth: 1,
+          admitted: 0,
+          leased: 0,
+          terminal: 1,
+          deadLetter: 0,
           replayRequests: 2,
           webhookRoutes: 0,
         },
@@ -210,7 +216,7 @@ describe("AutomationsStore", () => {
       });
       expect(duplicate[0]?.run.id).toBe(materialized[0]?.run.id);
       expect(store.listRuns()).toHaveLength(1);
-      expect(store.listQueuedActions()).toHaveLength(1);
+      expect(store.listQueueEntries()).toHaveLength(1);
     } finally {
       store.close();
     }
@@ -355,7 +361,7 @@ describe("AutomationsStore", () => {
       });
       expect(duplicate.materialized[0]?.run.id).toBe(materialized.materialized[0]?.run.id);
       expect(store.listRuns()).toHaveLength(1);
-      expect(store.listQueuedActions()).toHaveLength(1);
+      expect(store.listQueueEntries()).toHaveLength(1);
       expect(store.status()).toMatchObject({ counts: { webhookRoutes: 1 } });
     } finally {
       store.close();
@@ -433,7 +439,7 @@ describe("AutomationsStore", () => {
         data: {},
       });
 
-      const first = store.claimNextAction({ runnerId: "dep", now: "2026-06-28T00:00:01.000Z" });
+      const first = store.leaseNextAction({ runnerId: "dep", now: "2026-06-28T00:00:01.000Z" });
       expect(first?.stepId).toBe("first");
       store.completeAction({
         actionId: first!.id,
@@ -441,7 +447,7 @@ describe("AutomationsStore", () => {
         now: "2026-06-28T00:00:02.000Z",
       });
 
-      const second = store.claimNextAction({ runnerId: "dep", now: "2026-06-28T00:00:03.000Z" });
+      const second = store.leaseNextAction({ runnerId: "dep", now: "2026-06-28T00:00:03.000Z" });
       expect(second?.stepId).toBe("second");
       store.completeAction({
         actionId: second!.id,
@@ -449,8 +455,8 @@ describe("AutomationsStore", () => {
         now: "2026-06-28T00:00:04.000Z",
       });
 
-      expect(store.claimNextAction({ runnerId: "dep", now: "2026-06-28T00:00:05.000Z" })).toBeUndefined();
-      const approvalAction = store.listQueuedActions().find((action) => action.stepId === "approved");
+      expect(store.leaseNextAction({ runnerId: "dep", now: "2026-06-28T00:00:05.000Z" })).toBeUndefined();
+      const approvalAction = store.listQueueEntries().find((action) => action.stepId === "approved");
       expect(approvalAction).toMatchObject({
         status: "waiting_approval",
         approvalGate: {
@@ -461,9 +467,9 @@ describe("AutomationsStore", () => {
       store.approveAction(approvalAction!.id, { now: "2026-06-28T00:00:06.000Z", decidedBy: "tester" });
       expect(() => store.approveAction(approvalAction!.id, { now: "2026-06-28T00:00:06.500Z" })).toThrow("approval decision is not pending");
       expect(() => store.rejectAction(approvalAction!.id, { now: "2026-06-28T00:00:06.750Z" })).toThrow("approval decision is not pending");
-      const approved = store.claimNextAction({ runnerId: "dep", now: "2026-06-28T00:00:07.000Z" });
+      const approved = store.leaseNextAction({ runnerId: "dep", now: "2026-06-28T00:00:07.000Z" });
       expect(approved?.stepId).toBe("approved");
-      expect(() => store.rejectAction(approved!.id, { now: "2026-06-28T00:00:08.000Z" })).toThrow("claimed queued action");
+      expect(() => store.rejectAction(approved!.id, { now: "2026-06-28T00:00:08.000Z" })).toThrow("leased queue entry");
     } finally {
       store.close();
     }
@@ -490,8 +496,8 @@ describe("AutomationsStore", () => {
         data: {},
       });
 
-      expect(store.claimNextAction({ runnerId: "approval", now: "2026-06-28T00:00:01.000Z" })).toBeUndefined();
-      const waiting = store.listQueuedActions().find((action) => action.stepId === "needs-approval")!;
+      expect(store.leaseNextAction({ runnerId: "approval", now: "2026-06-28T00:00:01.000Z" })).toBeUndefined();
+      const waiting = store.listQueueEntries().find((action) => action.stepId === "needs-approval")!;
       expect(waiting).toMatchObject({ status: "waiting_approval", approvalGate: { decision: { status: "pending" } } });
 
       const rejected = store.rejectAction(waiting.id, {
@@ -500,8 +506,8 @@ describe("AutomationsStore", () => {
         reason: "not safe",
       });
       expect(rejected).toMatchObject({ status: "dead", deadLetter: { replayable: false } });
-      expect(() => store.requeueDeadAction(rejected.id, { now: "2026-06-28T00:00:03.000Z" })).toThrow("not replayable");
-      expect(() => store.approveAction(rejected.id, { now: "2026-06-28T00:00:04.000Z" })).toThrow("terminal queued action");
+      expect(() => store.readmitDeadAction(rejected.id, { now: "2026-06-28T00:00:03.000Z" })).toThrow("not replayable");
+      expect(() => store.approveAction(rejected.id, { now: "2026-06-28T00:00:04.000Z" })).toThrow("terminal queue entry");
     } finally {
       store.close();
     }
@@ -510,7 +516,7 @@ describe("AutomationsStore", () => {
   test("continues scanning past dependency-blocked actions when claiming", () => {
     const store = new AutomationsStore();
     try {
-      const blockedActions = Array.from({ length: CLAIM_CANDIDATE_BUDGET + 1 }, (_, index) => ({
+      const blockedActions = Array.from({ length: LEASE_CANDIDATE_BUDGET + 1 }, (_, index) => ({
         id: `blocked-${String(index).padStart(3, "0")}`,
         actionId: "actions.blocked",
         dependsOn: ["missing-success"],
@@ -533,7 +539,7 @@ describe("AutomationsStore", () => {
         trigger: { kind: "manual" },
       });
       for (const step of blockedActions) {
-        store.enqueueAction({
+        store.admitAction({
           id: step.id,
           automationRunId: run.id,
           stepId: step.id,
@@ -548,7 +554,7 @@ describe("AutomationsStore", () => {
           },
         });
       }
-      store.enqueueAction({
+      store.admitAction({
         id: "ready-after-blocked",
         automationRunId: run.id,
         stepId: "ready-after-blocked",
@@ -563,8 +569,8 @@ describe("AutomationsStore", () => {
         },
       });
 
-      const claimed = store.claimNextAction({ runnerId: "scanner", now: "2026-06-28T00:00:01.000Z" });
-      expect(claimed).toMatchObject({ id: "ready-after-blocked", stepId: "ready-after-blocked", status: "claimed" });
+      const claimed = store.leaseNextAction({ runnerId: "scanner", now: "2026-06-28T00:00:01.000Z" });
+      expect(claimed).toMatchObject({ id: "ready-after-blocked", stepId: "ready-after-blocked", status: "leased" });
     } finally {
       store.close();
     }
@@ -573,27 +579,27 @@ describe("AutomationsStore", () => {
   test("uses both bounded claim indexes and rejects the legacy unindexed order", () => {
     const store = new AutomationsStore({ dbPath: ":memory:" });
     try {
-      const plan = store.db.query(`EXPLAIN QUERY PLAN ${SQLITE_CLAIM_CANDIDATES_SQL}`).all({
+      const plan = store.db.query(`EXPLAIN QUERY PLAN ${SQLITE_LEASE_CANDIDATES_SQL}`).all({
         $now: "2026-08-12T00:00:00.000Z",
-        $limit: CLAIM_CANDIDATE_BUDGET,
+        $limit: LEASE_CANDIDATE_BUDGET,
       }) as Array<{ detail: string }>;
       const details = plan.map(({ detail }) => detail);
       expect(details).toContain("MERGE (UNION ALL)");
       expect(details.some((detail) => detail.includes("automation_actions_ready_order_idx"))).toBe(true);
-      expect(details.some((detail) => detail.includes("automation_actions_expired_claim_order_idx"))).toBe(true);
+      expect(details.some((detail) => detail.includes("automation_actions_expired_lease_order_idx"))).toBe(true);
       expect(details.some((detail) => detail === "SCAN automation_actions")).toBe(false);
       expect(details.some((detail) => detail.includes("USE TEMP B-TREE"))).toBe(false);
 
       const legacy = store.db.query(`EXPLAIN QUERY PLAN
         SELECT id FROM automation_actions
         WHERE (
-          status IN ('queued','retrying')
-          OR (status='claimed' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $now)
+          status = 'admitted'
+          OR (status='leased' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $now)
         ) AND available_at <= $now
         ORDER BY available_at,created_at,id LIMIT $limit
       `).all({
         $now: "2026-08-12T00:00:00.000Z",
-        $limit: CLAIM_CANDIDATE_BUDGET,
+        $limit: LEASE_CANDIDATE_BUDGET,
       }) as Array<{ detail: string }>;
       expect(legacy.some(({ detail }) => detail.includes("USE TEMP B-TREE"))).toBe(true);
     } finally {
@@ -616,7 +622,7 @@ describe("AutomationsStore", () => {
       ],
     });
     const run = first.createRun({ id: "schema-v4-run", automationId: "schema-v4", trigger: { kind: "manual" } });
-    first.enqueueAction({
+    first.admitAction({
       id: "schema-v4-dependent",
       automationRunId: run.id,
       stepId: "dependent",
@@ -626,16 +632,16 @@ describe("AutomationsStore", () => {
     first.db.exec(`
       DROP TABLE automation_action_dependencies;
       DROP INDEX automation_actions_ready_order_idx;
-      DROP INDEX automation_actions_expired_claim_order_idx;
+      DROP INDEX automation_actions_expired_lease_order_idx;
       PRAGMA user_version = 4;
     `);
     first.close();
 
     for (let reopen = 0; reopen < 2; reopen += 1) {
       const upgraded = new AutomationsStore({ dbPath });
-      expect((upgraded.db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(6);
+      expect((upgraded.db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(7);
       expect((upgraded.db.query("SELECT count(*) AS count FROM automation_action_dependencies").get() as { count: number }).count).toBe(1);
-      expect(upgraded.claimNextAction({ runnerId: "upgrade", now: "2026-08-12T00:00:01.000Z" })).toBeUndefined();
+      expect(upgraded.leaseNextAction({ runnerId: "upgrade", now: "2026-08-12T00:00:01.000Z" })).toBeUndefined();
       upgraded.close();
     }
   });
@@ -655,7 +661,7 @@ describe("AutomationsStore", () => {
         ],
       });
       const run = store.createRun({ id: "counter-run", automationId: "counter-settlement", trigger: { kind: "manual" } });
-      const dependent = store.enqueueAction({
+      const dependent = store.admitAction({
         id: "counter-dependent",
         automationRunId: run.id,
         stepId: "dependent",
@@ -664,9 +670,9 @@ describe("AutomationsStore", () => {
         invocation: { id: "counter-dependent-invocation", actionId: "actions.dependent", manifestVersion: "1.0.0", input: {}, requestedAt: "2026-08-12T00:00:00.000Z" },
       });
       expect((store.db.query("SELECT unmet_dependencies FROM automation_actions WHERE id=$id").get({ $id: dependent.id }) as { unmet_dependencies: number }).unmet_dependencies).toBe(1);
-      expect(store.claimNextAction({ runnerId: "counter-runner", now: "2026-08-12T00:00:01.000Z" })).toBeUndefined();
+      expect(store.leaseNextAction({ runnerId: "counter-runner", now: "2026-08-12T00:00:01.000Z" })).toBeUndefined();
 
-      const required = store.enqueueAction({
+      const required = store.admitAction({
         id: "counter-required",
         automationRunId: run.id,
         stepId: "required",
@@ -674,11 +680,11 @@ describe("AutomationsStore", () => {
         availableAt: "2026-08-12T00:00:00.000Z",
         invocation: { id: "counter-required-invocation", actionId: "actions.required", manifestVersion: "1.0.0", input: {}, requestedAt: "2026-08-12T00:00:00.000Z" },
       });
-      const claimed = store.claimNextAction({ runnerId: "counter-runner", now: "2026-08-12T00:00:02.000Z" });
+      const claimed = store.leaseNextAction({ runnerId: "counter-runner", now: "2026-08-12T00:00:02.000Z" });
       expect(claimed?.id).toBe(required.id);
       store.completeAction({ actionId: required.id, runnerId: "counter-runner", now: "2026-08-12T00:00:03.000Z" });
       expect((store.db.query("SELECT unmet_dependencies FROM automation_actions WHERE id=$id").get({ $id: dependent.id }) as { unmet_dependencies: number }).unmet_dependencies).toBe(0);
-      expect(store.claimNextAction({ runnerId: "counter-runner", now: "2026-08-12T00:00:04.000Z" })?.id).toBe(dependent.id);
+      expect(store.leaseNextAction({ runnerId: "counter-runner", now: "2026-08-12T00:00:04.000Z" })?.id).toBe(dependent.id);
     } finally {
       store.close();
     }
@@ -693,7 +699,7 @@ describe("AutomationsStore", () => {
         automationId: "tickets.escalate-critical",
         trigger: { kind: "manual" },
       });
-      const action = store.enqueueAction({
+      const action = store.admitAction({
         id: "act_stale_claim",
         automationRunId: run.id,
         stepId: "create-escalation-task",
@@ -707,19 +713,19 @@ describe("AutomationsStore", () => {
           requestedAt: "2026-06-28T00:00:00.000Z",
         },
       });
-      const claimed = store.claimNextAction({
+      const claimed = store.leaseNextAction({
         runnerId: "runner-a",
         leaseMs: 30000,
         now: "2026-06-28T00:00:01.000Z",
       });
-      expect(claimed).toMatchObject({ id: action.id, status: "claimed", claimedBy: "runner-a" });
+      expect(claimed).toMatchObject({ id: action.id, status: "leased", leasedBy: "runner-a" });
 
-      const originalRequire = store.requireQueuedAction.bind(store);
+      const originalRequire = store.requireQueueEntry.bind(store);
       const stealClaimDuringPrecheck = (): void => {
         store.db.query(`
           UPDATE automation_actions
-          SET claimed_by = 'runner-b',
-              claimed_at = '2026-06-28T00:00:02.000Z',
+          SET leased_by = 'runner-b',
+              leased_at = '2026-06-28T00:00:02.000Z',
               lease_expires_at = '2026-06-28T00:00:32.000Z',
               updated_at = '2026-06-28T00:00:02.000Z'
           WHERE id = $id
@@ -727,14 +733,14 @@ describe("AutomationsStore", () => {
       };
       const injectClaimSteal = (): void => {
         let injected = false;
-        store.requireQueuedAction = ((id: string) => {
+        store.requireQueueEntry = ((id: string) => {
           const snapshot = originalRequire(id);
           if (!injected && id === action.id) {
             injected = true;
             stealClaimDuringPrecheck();
           }
           return snapshot;
-        }) as AutomationsStore["requireQueuedAction"];
+        }) as AutomationsStore["requireQueueEntry"];
       };
 
       try {
@@ -745,8 +751,8 @@ describe("AutomationsStore", () => {
           now: "2026-06-28T00:00:03.000Z",
         })).toThrow("lease is no longer active");
 
-        store.requireQueuedAction = originalRequire;
-        expect(originalRequire(action.id)).toMatchObject({ status: "claimed", claimedBy: "runner-a", attempt: 0 });
+        store.requireQueueEntry = originalRequire;
+        expect(originalRequire(action.id)).toMatchObject({ status: "leased", leasedBy: "runner-a", attempt: 0 });
 
         injectClaimSteal();
         expect(() => store.failAction({
@@ -756,9 +762,9 @@ describe("AutomationsStore", () => {
           error: { code: "STALE", message: "stale runner" },
         })).toThrow("lease is no longer active");
       } finally {
-        store.requireQueuedAction = originalRequire;
+        store.requireQueueEntry = originalRequire;
       }
-      expect(store.requireQueuedAction(action.id)).toMatchObject({ status: "claimed", claimedBy: "runner-a", attempt: 0 });
+      expect(store.requireQueueEntry(action.id)).toMatchObject({ status: "leased", leasedBy: "runner-a", attempt: 0 });
     } finally {
       store.close();
     }

@@ -6,7 +6,7 @@ export {
   validateAutomationSpec,
   type AutomationsStoreOptions,
   type CreateWebhookRouteInput,
-  type EnqueueActionInput,
+  type AdmitActionInput,
 } from "./lib/store.js";
 export {
   automationsDataDir,
@@ -40,7 +40,7 @@ export {
   automationRunToWorkRun,
   evidencePointerFromString,
   evidenceRefFromString,
-  queuedActionDecisionEnvelopes,
+  actionDecisionEnvelopes,
   type ApprovalDecisionContractOptions,
   type AutomationRunContractOptions,
   type EvidenceRefContractOptions,

@@ -44,7 +44,7 @@ automations --json list
 automations --json simulate automation.json --persist --event-json '{"id":"evt_1","source":"events","type":"ticket.created","data":{"priority":"critical"}}'
 automations --json runs list --contract
 automations --json runs show <run-id> --contract
-automations --json queue claim --runner worker-1
+automations --json queue lease --runner worker-1
 automations --json queue complete <action-id> --runner worker-1 --result-json '{"ok":true}'
 automations --json queue fail <action-id> --runner worker-1 --code UPSTREAM_500 --message "upstream failed"
 automations --json queue approve <action-id>
@@ -93,7 +93,7 @@ For the historical `@hasna/automations@0.1.1` replay it pins
 `@hasna/actions@0.1.0`; other package specs use `@hasna/actions@^0.1.0` unless
 `--no-default-peers` is passed. It uses disposable `HASNA_AUTOMATIONS_DIR`
 state, creates a fixture automation and signed webhook route, records daemon
-heartbeat and `/healthz` checks, sends a signed HTTP `POST`, claims the queued
+heartbeat and `/healthz` checks, sends a signed HTTP `POST`, leases the admitted
 action as an OpenLoops runner, and exports a normalized webhook event as dry-run
 OpenLoops handoff evidence. It prints JSON evidence with secrets and signatures
 redacted, then removes temp directories unless `--keep` is passed.
@@ -143,7 +143,7 @@ Platform semantics the pack is written against:
 - `actions` defines portable action manifests and invocation contracts.
 - `events` is trigger ingress.
 - `automations` materializes triggers into durable automation runs and
-  queued deterministic action work.
+  admitted deterministic action work.
 - `loops` owns agent workflow invocation, admission, and workflow run
   artifacts. It can consume explicit event envelopes from OpenAutomations, but
   it is not the automation product.
@@ -168,10 +168,10 @@ dead action.
 
 OpenLoops is an optional runtime binding for deterministic OpenAutomations
 actions, not the scheduler or control plane for automations. A runtime worker
-claims queued deterministic actions with:
+leases admitted deterministic actions with:
 
 ```sh
-automations queue claim --runner loops:<worker-id>
+automations queue lease --runner loops:<worker-id>
 ```
 
 It must complete or fail the same action with the same runner id before the
@@ -183,7 +183,7 @@ automations queue fail <action-id> --runner loops:<worker-id> --code <code> --me
 ```
 
 The queue enforces runner ownership and live leases for completion/failure, so
-stale workers cannot finalize reclaimed actions.
+stale workers cannot finalize reclaimed actions (fencing token).
 
 Webhook ingress uses the same materialization path. The daemon accepts `POST`
 requests on registered webhook paths, verifies HMAC SHA-256 signatures over the

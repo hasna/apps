@@ -66,7 +66,7 @@ The `automations` CLI should remain the stable local operator surface for:
 - `spec example`.
 - `validate`, `create`, `list`, and `simulate`.
 - `runs list` and `runs show`, including shared-contract output.
-- `queue claim`, `queue complete`, `queue fail`, `queue approve`, and
+- `queue lease`, `queue complete`, `queue fail`, `queue approve`, and
   `queue reject`.
 - `dlq list` and `dlq replay`.
 - `webhooks create`, `list`, `show`, `enable`, `disable`, `archive`,
@@ -114,7 +114,7 @@ Future SDK work should split along stable boundaries:
 - An optional OpenEvents adapter can compile subscriptions or normalize
   deliveries, but should not make OpenEvents the source of durable automation
   state.
-- An optional OpenLoops adapter can claim queue rows or consume exported event
+- An optional OpenLoops adapter can lease queue rows or consume exported event
   envelopes, but should not make Automations call agent workflows implicitly.
 - Optional connector/provider adapters can resolve external capabilities into
   action manifests or secret references, but Automations should not own raw
@@ -174,7 +174,7 @@ Direction: optional runtime and workflow handoff boundary.
 
 OpenLoops owns agent workflow invocation, admission, run artifacts, and loop
 scheduling. OpenAutomations may expose deterministic action queue rows that an
-OpenLoops worker claims, or export normalized event envelopes for explicit
+OpenLoops worker leases, or export normalized event envelopes for explicit
 operator routing into `loops events handle generic`. OpenAutomations should not
 embed OpenLoops scheduling or control-plane logic.
 
@@ -225,7 +225,7 @@ Current test coverage:
   routes, idempotency, dependencies, approval gates, stale runner guards, and
   spec validation.
 - CLI help parity, status, spec examples, daemon status/run, concurrent fresh
-  DB initialization, create/list/simulate/claim/fail/replay, shared-contract
+  DB initialization, create/list/simulate/lease/fail/replay, shared-contract
   run output, runtime listing, recipe rendering, and webhook route commands.
 - Daemon HTTP webhook serving, raw-body HMAC verification, and deterministic
   failure responses.

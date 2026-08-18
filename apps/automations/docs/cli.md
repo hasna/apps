@@ -44,7 +44,7 @@ The default data root is `~/.hasna/automations`. The environment variables
 ```text
 automations runs list [--contract]
 automations runs show <run-id> [--contract]
-automations queue claim [--runner <id>]
+automations queue lease [--runner <id>]
 automations queue complete <action-id> [--runner <id>] [--result-json <json>]
 automations queue fail <action-id> [--runner <id>] [--code <code>] [--message <text>] [--retryable false] [--retry-backoff-ms <ms>]
 automations queue approve <action-id>
@@ -54,7 +54,7 @@ automations dlq replay <action-id>
 ```
 
 `runs --contract` converts run records to `@hasna/contracts` `work_run`
-documents and includes persisted queue approval decisions. Queue claims default
+documents and includes persisted queue approval decisions. Queue leases default
 to runner id `cli:<pid>` and a 30-second lease. Completion and failure must use
 the same runner id while its lease is live. Failures are retryable by default;
 an action becomes dead after its maximum attempts. `dlq replay` requeues only
