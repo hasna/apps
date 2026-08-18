@@ -44,7 +44,7 @@ describe("relationship activity boundaries", () => {
 describe("public reference projection", () => {
   test("preserves public evidence fields while removing href and metadata", () => {
     const projected = publicExternalRef({
-      system: "open-identities",
+      system: "identities",
       kind: "agent",
       id: "agent_1",
       label: "Worker",
@@ -55,7 +55,7 @@ describe("public reference projection", () => {
     });
 
     expect(projected).toEqual({
-      system: "open-identities",
+      system: "identities",
       kind: "agent",
       id: "agent_1",
       label: "Worker",

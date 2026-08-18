@@ -12,18 +12,18 @@ own source records that belong to sibling packages.
 | Project/workspace records, locations, and project-agent assignments | `projects` | Store `projectRef` pointers and graph ownership/stewardship edges. Do not duplicate workspace state or filesystem locations. |
 | Machine manifests, topology, workspace routes, and machine-project assignment envelopes | `machines` | Store `machineRef` pointers plus cacheable dispatch/resolver evidence. Treat stale machine refs as warnings. |
 | Live sessions and transient panes | `sessions` | Store optional resolver snapshots only. Do not treat live pane state as durable truth. |
-| Prompt dispatch and target validation | `open-dispatch` | Return candidate machine/target refs and refusal reasons. Dispatch still performs live target checks before delivery. |
-| Task orgs, reports-to fields, project roles, and todo assignments | `open-todos` | Provide bridge/import/export context. `open-todos` remains the task execution source of truth. |
-| Events and webhook delivery | `open-events` | Keep local audit JSONL now; future adapters may emit graph-change events through `open-events`. |
-| Action actor context | `open-actions` | Use `actor_context` edges and member refs. No hard dependency while `open-actions` is still a placeholder. |
-| Guardrail policy context | `open-guardrails` | Use `policy_context` edges and external refs. No hard dependency while `open-guardrails` is still a placeholder. |
+| Prompt dispatch and target validation | `dispatch` | Return candidate machine/target refs and refusal reasons. Dispatch still performs live target checks before delivery. |
+| Task orgs, reports-to fields, project roles, and todo assignments | `todos` | Provide bridge/import/export context. `todos` remains the task execution source of truth. |
+| Events and webhook delivery | `events` | Keep local audit JSONL now; future adapters may emit graph-change events through `events`. |
+| Action actor context | `actions` | Use `actor_context` edges and member refs. No hard dependency while `actions` is still a placeholder. |
+| Guardrail policy context | `guardrails` | Use `policy_context` edges and external refs. No hard dependency while `guardrails` is still a placeholder. |
 
 ## Delegation Resolution
 
 Delegation is intentionally two-stage:
 
 1. `orgs` answers who is allowed or recommended for a scoped delegation.
-2. `open-dispatch` verifies live machine and tmux target safety before typing
+2. `dispatch` verifies live machine and tmux target safety before typing
    anything.
 
 `orgs resolve` returns:
@@ -61,10 +61,10 @@ Bridge integrations should be explicit and reversible:
 - Import from `projects` by creating project refs and optional ownership
   edges.
 - Import from `machines` by creating machine refs and resolver evidence.
-- Import from `open-todos` by mapping task orgs and `reports_to` metadata into
+- Import from `todos` by mapping task orgs and `reports_to` metadata into
   typed `reports_to` edges.
-- Export to `open-actions` as actor/context refs, not embedded member objects.
-- Export to `open-guardrails` as policy-context refs, not embedded policy
+- Export to `actions` as actor/context refs, not embedded member objects.
+- Export to `guardrails` as policy-context refs, not embedded policy
   bodies.
 
 If a bridge cannot prove freshness or authority, it should set `stale: true`

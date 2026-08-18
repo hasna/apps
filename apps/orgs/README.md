@@ -47,9 +47,9 @@ confidence in the release contents.
 ```bash
 orgs init
 orgs orgs add --name "Open Maintainers"
-orgs teams add --org open-maintainers --name "Core"
-orgs agents add --org open-maintainers --name "Review Agent" --identity agent:review-agent
-orgs capabilities add --org open-maintainers --namespace repo --key review
+orgs teams add --org maintainers --name "Core"
+orgs agents add --org maintainers --name "Review Agent" --identity agent:review-agent
+orgs capabilities add --org maintainers --namespace repo --key review
 orgs relationships add --kind delegates_to --from member:review-agent --to member:build-agent --authority execute
 orgs snapshot review-agent --format markdown
 orgs resolve --actor review-agent --capability repo:review --json

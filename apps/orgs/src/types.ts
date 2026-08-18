@@ -3,15 +3,15 @@ export const ORG_GRAPH_SCHEMA_VERSION = 1 as const;
 export type JsonObject = Record<string, unknown>;
 
 export type ExternalSystem =
-  | "open-identities"
-  | "open-projects"
-  | "open-machines"
-  | "open-sessions"
-  | "open-dispatch"
-  | "open-todos"
-  | "open-events"
-  | "open-actions"
-  | "open-guardrails"
+  | "identities"
+  | "projects"
+  | "machines"
+  | "sessions"
+  | "dispatch"
+  | "todos"
+  | "events"
+  | "actions"
+  | "guardrails"
   | (string & {});
 
 export interface ExternalRef {
@@ -125,7 +125,7 @@ export type DispatchTargetState = "idle" | "active" | "unknown" | "stale" | "una
 export interface DispatchTargetRef {
   machine?: string;
   target?: string;
-  source?: "open-dispatch" | "open-sessions" | "manual" | (string & {});
+  source?: "dispatch" | "sessions" | "manual" | (string & {});
   state?: DispatchTargetState;
   lastSeenAt?: string;
   detail?: string;

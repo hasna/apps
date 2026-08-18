@@ -24,14 +24,14 @@ afterEach(async () => {
 describe("orgs graph", () => {
   test("creates org graph records and exports a privacy-safe agent snapshot", async () => {
     const store = new JsonOrgStore({ filePath: join(dir, "orgs.json"), auditPath: join(dir, "audit.jsonl") });
-    const org = await store.createOrg({ name: "Open Tools", identityRef: { system: "open-identities", kind: "organization", id: "open-tools", metadata: { secret: "hidden" } } });
+    const org = await store.createOrg({ name: "Tools", identityRef: { system: "identities", kind: "organization", id: "tools", metadata: { secret: "hidden" } } });
     const team = await store.createTeam({ orgId: org.id, name: "Maintainers" });
     const capability = await store.createCapability({ orgId: org.id, namespace: "repo", key: "review" });
     const lead = await store.createMember({
       orgId: org.id,
       kind: "agent",
       name: "Lead Agent",
-      identityRef: { system: "open-identities", kind: "agent", id: "lead-agent", metadata: { token: "secret" } },
+      identityRef: { system: "identities", kind: "agent", id: "lead-agent", metadata: { token: "secret" } },
       teamIds: [team.id],
       capabilities: [`${capability.namespace}:${capability.key}`],
       responsibilities: ["Review incoming changes"],
@@ -40,13 +40,13 @@ describe("orgs graph", () => {
       orgId: org.id,
       kind: "agent",
       name: "Worker Agent",
-      identityRef: { system: "open-identities", kind: "agent", id: "worker-agent" },
+      identityRef: { system: "identities", kind: "agent", id: "worker-agent" },
       teamIds: [team.id],
     });
     await store.createMachine({
       orgId: org.id,
       name: "Linux Dev",
-      machineRef: { system: "open-machines", kind: "machine", id: "linux-dev" },
+      machineRef: { system: "machines", kind: "machine", id: "linux-dev" },
       assignedMemberIds: [worker.id],
       dispatchTarget: { machine: "linux-dev", target: "work:agent.1", source: "manual", state: "idle" },
     });
@@ -66,7 +66,7 @@ describe("orgs graph", () => {
     });
 
     const snapshot = createAgentSnapshot(await store.exportData(), lead.id);
-    expect(snapshot.identity.identityRef).toEqual({ system: "open-identities", kind: "agent", id: "lead-agent" });
+    expect(snapshot.identity.identityRef).toEqual({ system: "identities", kind: "agent", id: "lead-agent" });
     expect(JSON.stringify(snapshot)).not.toContain("secret");
     expect(snapshot.allowedDelegationTargets[0]).toMatchObject({
       memberId: worker.id,
@@ -79,8 +79,8 @@ describe("orgs graph", () => {
   test("rejects active reporting cycles", async () => {
     const store = new JsonOrgStore({ filePath: join(dir, "orgs.json"), auditPath: join(dir, "audit.jsonl") });
     const org = await store.createOrg({ name: "Cycle Org" });
-    const one = await store.createMember({ orgId: org.id, kind: "agent", name: "One", identityRef: { system: "open-identities", kind: "agent", id: "one" } });
-    const two = await store.createMember({ orgId: org.id, kind: "agent", name: "Two", identityRef: { system: "open-identities", kind: "agent", id: "two" } });
+    const one = await store.createMember({ orgId: org.id, kind: "agent", name: "One", identityRef: { system: "identities", kind: "agent", id: "one" } });
+    const two = await store.createMember({ orgId: org.id, kind: "agent", name: "Two", identityRef: { system: "identities", kind: "agent", id: "two" } });
     await store.createRelationship({ kind: "reports_to", source: { kind: "member", id: one.id }, target: { kind: "member", id: two.id } });
 
     await expect(store.createRelationship({ kind: "reports_to", source: { kind: "member", id: two.id }, target: { kind: "member", id: one.id } })).rejects.toThrow(/Reporting cycle/);
@@ -96,12 +96,12 @@ describe("orgs graph", () => {
   test("resolves delegation targets with dispatch refusal semantics", async () => {
     const store = new JsonOrgStore({ filePath: join(dir, "orgs.json"), auditPath: join(dir, "audit.jsonl") });
     const org = await store.createOrg({ name: "Resolve Org" });
-    const lead = await store.createMember({ orgId: org.id, kind: "agent", name: "Lead", identityRef: { system: "open-identities", kind: "agent", id: "lead" } });
-    const busy = await store.createMember({ orgId: org.id, kind: "agent", name: "Busy", identityRef: { system: "open-identities", kind: "agent", id: "busy" } });
+    const lead = await store.createMember({ orgId: org.id, kind: "agent", name: "Lead", identityRef: { system: "identities", kind: "agent", id: "lead" } });
+    const busy = await store.createMember({ orgId: org.id, kind: "agent", name: "Busy", identityRef: { system: "identities", kind: "agent", id: "busy" } });
     await store.createMachine({
       orgId: org.id,
       name: "Busy Machine",
-      machineRef: { system: "open-machines", kind: "machine", id: "busy-machine" },
+      machineRef: { system: "machines", kind: "machine", id: "busy-machine" },
       assignedMemberIds: [busy.id],
       dispatchTarget: { machine: "busy-machine", target: "work:busy.1", state: "active" },
     });
@@ -135,7 +135,7 @@ describe("orgs graph", () => {
         displayName: "Bad Member",
         orgId: "org_bad",
         kind: "robot" as "agent",
-        identityRef: { system: "open-identities", kind: "agent", id: "bad" },
+        identityRef: { system: "identities", kind: "agent", id: "bad" },
         roleIds: [],
         teamIds: [],
         functionIds: [],
@@ -186,12 +186,12 @@ describe("orgs graph", () => {
       orgId: org.id,
       kind: "agent",
       name: "Private Agent",
-      identityRef: { system: "open-identities", kind: "agent", id: "private-agent", href: "https://private.example/token", metadata: { token: "secret" } },
+      identityRef: { system: "identities", kind: "agent", id: "private-agent", href: "https://private.example/token", metadata: { token: "secret" } },
     });
     await store.createMachine({
       orgId: org.id,
       name: "Private Machine",
-      machineRef: { system: "open-machines", kind: "machine", id: "private-machine", href: "ssh://secret-host" },
+      machineRef: { system: "machines", kind: "machine", id: "private-machine", href: "ssh://secret-host" },
       assignedMemberIds: [agent.id],
       dispatchTarget: { machine: "private-machine", target: "secret-session:agent.1", state: "idle", detail: "secret payload" },
     });
@@ -208,8 +208,8 @@ describe("orgs graph", () => {
     const org = await store.createOrg({ name: "Role Capability Org" });
     await store.createCapability({ id: "cap_review", orgId: org.id, namespace: "repo", key: "review" });
     const role = await store.createRole({ orgId: org.id, name: "Reviewer", requiredCapabilities: ["repo:review"] });
-    const lead = await store.createMember({ orgId: org.id, kind: "agent", name: "Lead", identityRef: { system: "open-identities", kind: "agent", id: "lead" } });
-    const reviewer = await store.createMember({ orgId: org.id, kind: "agent", name: "Reviewer", identityRef: { system: "open-identities", kind: "agent", id: "reviewer" }, roleIds: [role.id] });
+    const lead = await store.createMember({ orgId: org.id, kind: "agent", name: "Lead", identityRef: { system: "identities", kind: "agent", id: "lead" } });
+    const reviewer = await store.createMember({ orgId: org.id, kind: "agent", name: "Reviewer", identityRef: { system: "identities", kind: "agent", id: "reviewer" }, roleIds: [role.id] });
     await store.createRelationship({ kind: "delegates_to", source: { kind: "member", id: lead.id }, target: { kind: "member", id: reviewer.id }, authority: "execute", scope: [{ capabilityId: "cap_review" }] });
 
     const resolution = resolveDelegationTargets(await store.exportData(), { actor: lead.id, capability: "repo:review" });

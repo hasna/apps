@@ -114,7 +114,7 @@ describe("orgs CLI", () => {
     const fullJsonList = JSON.parse(out.pop()!);
     expect(Array.isArray(fullJsonList)).toBe(true);
     expect(fullJsonList).toHaveLength(2);
-    expect(fullJsonList[0].identityRef.system).toBe("open-identities");
+    expect(fullJsonList[0].identityRef.system).toBe("identities");
 
     out.length = 0;
     await runCli(["--store", storePath, "--json", "members", "list", "--limit", "1"], { out: (text) => out.push(text), throwOnError: true });

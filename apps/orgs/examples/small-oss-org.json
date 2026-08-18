@@ -3,13 +3,13 @@
   "orgs": [
     {
       "id": "org_open_tools",
-      "slug": "open-tools",
+      "slug": "tools",
       "name": "Open Tools",
       "description": "A small OSS maintainer org.",
       "identityRef": {
-        "system": "open-identities",
+        "system": "identities",
         "kind": "organization",
-        "id": "open-tools"
+        "id": "tools"
       },
       "metadata": {},
       "createdAt": "2026-01-01T00:00:00.000Z",
@@ -63,7 +63,7 @@
       "orgId": "org_open_tools",
       "kind": "agent",
       "identityRef": {
-        "system": "open-identities",
+        "system": "identities",
         "kind": "agent",
         "id": "review-agent"
       },
@@ -85,7 +85,7 @@
       "orgId": "org_open_tools",
       "kind": "agent",
       "identityRef": {
-        "system": "open-identities",
+        "system": "identities",
         "kind": "agent",
         "id": "build-agent"
       },
@@ -107,7 +107,7 @@
       "name": "orgs",
       "orgId": "org_open_tools",
       "projectRef": {
-        "system": "open-projects",
+        "system": "projects",
         "kind": "workspace",
         "id": "orgs"
       },
@@ -127,7 +127,7 @@
       "name": "Linux Dev",
       "orgId": "org_open_tools",
       "machineRef": {
-        "system": "open-machines",
+        "system": "machines",
         "kind": "machine",
         "id": "linux-dev"
       },
