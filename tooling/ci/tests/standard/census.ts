@@ -385,7 +385,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "instructions",
-    cause: "manifest_valid at pinned 0.4.2 (mode-era validator vs backend-era manifest): storage.mode Required; storage Unrecognized key(s) in object: 'backend'. (The earlier bins-allowlist cause no longer fires at main.)",
+    cause: "bins_match_package: package.json ships legacy alias bins configs/configs-mcp (fleet-compat, not contract-allowlisted — same class as the recorded economy hasna-events precedent); surface_matrix: missing sdk surface (no ./sdk export; SDK lane c7ce8b75); storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required; credential_seam_compliance: src/db/database.ts reads HASNA_INSTRUCTIONS_API_KEY from the process environment. Manifest schema-valid at kit 0.11.1.",
     task: "todos c15cca18 (contracts task — instructions)",
   },
   {
@@ -493,7 +493,6 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "domains", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "files", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "gateway", kitVersion: "0.11.1", pinned: "0.2.2" },
-  { member: "instructions", kitVersion: "0.10.6", pinned: "0.4.2" },
   { member: "tenants", kitVersion: "0.10.6", pinned: "0.4.2" },
   { member: "todos", kitVersion: "0.8.4", pinned: "0.5.2" },
 ];

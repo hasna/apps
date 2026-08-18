@@ -3,20 +3,64 @@
   "name": "instructions",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.10.6",
-  "description": "AI coding agent instruction & configuration manager (formerly @hasna/configs). CLI + MCP + HTTP API (instructions-serve) + generated SDK. Server data backend is postgresql when HASNA_INSTRUCTIONS_DATABASE_URL is set, else sqlite. The serve process reads/writes the shared Postgres directly with API-key auth via @hasna/contracts. The MCP server keeps the legacy name 'configs' aliased for the existing fleet.",
+  "kitVersion": "0.11.1",
+  "description": "AI coding agent instruction & configuration manager (formerly @hasna/configs). CLI + MCP + HTTP API (instructions-serve). Server data backend is postgresql when HASNA_INSTRUCTIONS_DATABASE_URL is set, else sqlite. The serve process reads/writes the shared Postgres directly with API-key auth via @hasna/contracts. The MCP server keeps the legacy name 'configs' aliased for the existing fleet.",
   "bins": [
     "instructions",
-    "configs",
     "instructions-mcp",
-    "instructions-serve",
-    "configs-mcp"
+    "instructions-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "http-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "instructions-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "instructions",
+      "authMode": "local-only"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "instructions-mcp",
+      "authMode": "local-only"
+    }
   ],
   "storage": {
-    "backend": "postgresql",
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
     "envPrefix": "HASNA_INSTRUCTIONS_",
     "aliasEnvPrefix": "INSTRUCTIONS_",
-    "databaseUrlSecretRef": "hasna/oss/instructions/database-url",
     "sqlitePath": "~/.hasna/instructions/instructions.db"
   },
   "metadata": {
@@ -27,8 +71,7 @@
       "versionPath": "/version",
       "openapiPath": "/openapi.json",
       "apiVersion": "v1",
-      "auth": "api-key",
-      "signingSecretSecretRef": "hasna/oss/instructions/api-key-signing-secret"
+      "auth": "api-key"
     },
     "client": {
       "apiUrlEnv": "INSTRUCTIONS_API_URL",
