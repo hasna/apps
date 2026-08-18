@@ -357,6 +357,12 @@ unset the server opens `<data dir>/server.db` and migrates it itself. Postgres i
 alternative and must be migrated explicitly with `skills-migrate` — several replicas
 must not race to migrate a shared database.
 
+`HASNA_SKILLS_DATABASE_URL` and `DATABASE_URL` are server-only. CLI, MCP, and SDK
+clients never read them and never open a database connection: a client reaches the
+cloud only through `SKILLS_API_URL` plus an API key. The repo-native storage sync
+(`src/lib/native-storage.ts`) is the deliberate exception — an operator tool, not an
+API client path.
+
 **The server refuses to start on a non-durable store.** `assertDurableTarget()` runs
 against the *pure resolved target* before any file or connection is opened, so a
 rejected configuration never creates a database. `MemorySkillsStore` still exists but
@@ -385,11 +391,12 @@ is now the identity function and is kept only so call sites do not have to chang
 The installed corpus is `~/.hasna/skills/installed/<name>/`, with app data
 (`config.json`, `auth.json`, `skills.db`) at the app root — matching every sibling
 Hasna app. `$HASNA_SKILLS_DIR` relocates everything resolved through `getDataDir()`
-and outranks `$HOME` there. **Two paths are not yet routed through it and stay
-`$HOME`-rooted regardless**: `src/lib/auth-store.ts` (its paths are frozen as
-import-time constants from `homedir()`, so `auth.json` ignores the override) and
-`create-sync-config.ts`. Both are tracked follow-ups; the caveat matters because it
-also means the hermetic-test override below does not isolate `auth.json`.
+and outranks `$HOME` there; `auth-store.ts` resolves `auth.json` through the same
+function, so the credential file moves with the app folder too. There is no
+separate local-skills-folder override — the corpus is always
+`<app folder>/installed` — and `create-sync-config.ts` composes paths from
+`getPortableSkillsRoot()` / `getDataDir()`, so no remaining path is composed from
+`homedir()`.
 
 The legacy `~/.hasna/skills/custom/` path is still read as a migration safety net,
 and `~/.skills` / `~/.skillsrc` are merged forward without deleting the originals.
@@ -457,8 +464,8 @@ re-points it per test. Without it the suite reads and writes the developer's rea
 resolution branch opt out with `withHomeDataDir()` / `withTempHome()`; child
 processes that must resolve from a given `$HOME` use `withoutDataDirOverrideEnv()`.
 
-The isolation is only as wide as `getDataDir()`, so it does not cover the
-`$HOME`-frozen paths noted above — notably `~/.hasna/skills/auth.json`.
+The isolation is as wide as `getDataDir()`, which now covers every app-root path
+including `auth.json`.
 
 Set `NO_COLOR=1` for deterministic CLI output in tests.
 

@@ -344,6 +344,13 @@ HASNA_SKILLS_DATABASE_URL=postgres://… skills-migrate
 `skills-migrate` fails if no database is configured rather than migrating a default
 SQLite file, so it stays usable as a deploy gate.
 
+`HASNA_SKILLS_DATABASE_URL` and `DATABASE_URL` are server-only. CLI, MCP, and SDK
+clients never read them and never open a database connection: a client reaches
+the cloud only through `SKILLS_API_URL` plus an API key (the `apiKey` stored by
+`skills auth`, or `SKILLS_API_KEY`). The one exception is the repo-native storage
+sync under [Storage Boundary](#storage-boundary), an operator tool that
+intentionally reads the same variables.
+
 Three things the server will not do:
 
 - Fall back to another backend when a configured Postgres URL cannot be reached.
@@ -450,7 +457,8 @@ folders are never used as skill libraries.
 └── tmp/
 ```
 
-Auth stays global in `~/.hasna/skills/auth.json`. Registry and doc caches
+Auth stays global in `<app folder>/auth.json` (default
+`~/.hasna/skills/auth.json`). Registry and doc caches
 belong in `~/.cache/skills` or the Skills API, not inside project
 `.skills`.
 
@@ -513,7 +521,15 @@ overridden folder. `skills config path` reports the config file actually in use.
 | Installed skills | `<app folder>/installed/<name>/` | yes |
 | Global config | `<app folder>/config.json` | yes |
 | Feedback database | `<app folder>/skills.db` | yes |
-| Auth | `~/.hasna/skills/auth.json` | no (resolved at startup) |
+| Auth | `<app folder>/auth.json` | yes |
+
+There is no separate local-skills-folder override, and none is needed: one
+variable relocates the whole app folder, so the corpus is always
+`<app folder>/installed`. With the default app folder that is exactly the
+migrated corpus location — the former `~/.skills` and `custom/` trees are folded
+into `<app folder>/installed` on first resolution (see "Migrating from the older
+layout"). Extension corpora are a separate concern and keep their own
+`extensionsDir` config key.
 
 ### Migrating from the older layout
 
