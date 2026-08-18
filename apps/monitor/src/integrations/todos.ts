@@ -88,7 +88,7 @@ export async function createTaskForAlert(
       `**Message:** ${alert.message}`,
       `**Triggered at:** ${new Date(alert.triggered_at * 1000).toISOString()}`,
       "",
-      "Created automatically by open-monitor.",
+      "Created automatically by Hasna Monitor.",
     ].join("\n"),
     priority: alertPriority(alert.severity),
     project_id: config.project_id,

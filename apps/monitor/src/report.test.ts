@@ -102,7 +102,7 @@ describe("report formatting", () => {
   it("formats HTML and escapes error content", () => {
     const html = formatFleetHealthReportHtml(makeReport());
 
-    expect(html).toContain("open-monitor Daily fleet health report");
+    expect(html).toContain("Hasna Monitor Daily fleet health report");
     expect(html).toContain("Cloud Runtime");
     expect(html).toContain("linux-node-a.local");
     expect(html).toContain("ssh timeout &lt;bad&gt;");

@@ -20,7 +20,7 @@ export default function App() {
             <div className="w-2 h-2 rounded-full bg-green-500" />
           </div>
           <span className="font-mono text-sm font-semibold text-zinc-200 tracking-widest uppercase select-none">
-            open-monitor
+            Hasna Monitor
           </span>
         </div>
 

@@ -91,7 +91,7 @@ export default function Dashboard({ machineId }: DashboardProps) {
           <p className="text-red-400 text-sm mb-1">Unable to connect to monitor API</p>
           <p className="text-zinc-500 text-xs">
             Make sure{" "}
-            <code className="font-mono bg-zinc-800 px-1 rounded">open-monitor server</code> is
+            <code className="font-mono bg-zinc-800 px-1 rounded">monitor server</code> is
             running on port 3847
           </p>
         </div>

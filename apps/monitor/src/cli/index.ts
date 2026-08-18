@@ -2489,7 +2489,7 @@ integrationsCmd
       resolved_at: null as null,
       severity: "critical" as const,
       check_name: "test",
-      message: "This is a test alert from open-monitor CLI",
+      message: "This is a test alert from the monitor CLI",
       auto_resolved: 0,
     };
 
@@ -2502,7 +2502,7 @@ integrationsCmd
           name: "test",
           severity: "critical" as const,
           status: "critical" as const,
-          message: "This is a test alert from open-monitor CLI",
+          message: "This is a test alert from the monitor CLI",
           value: 99,
           threshold: 90,
         },
