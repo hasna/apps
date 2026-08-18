@@ -30,7 +30,7 @@ def write_manifest(path: Path, rows: int) -> None:
 
 
 def write_fake_runner(root: Path) -> None:
-    runner = root / ".codewith" / "skills" / "open-files-semantic-renamer" / "scripts" / "run_llm_review_batch.py"
+    runner = root / ".codewith" / "skills" / "files-semantic-renamer" / "scripts" / "run_llm_review_batch.py"
     runner.parent.mkdir(parents=True, exist_ok=True)
     runner.write_text(
         """#!/usr/bin/env python3

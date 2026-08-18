@@ -291,7 +291,7 @@ def build_packet(
                 f"--output {gate_output_path}"
             ),
             "rebuild_adversarial_packet": (
-                "python3 .codewith/skills/open-files-semantic-renamer/scripts/build_adversarial_review_packet.py "
+                "python3 .codewith/skills/files-semantic-renamer/scripts/build_adversarial_review_packet.py "
                 "--output-dir .codewith/private-artifacts/adversarial-review "
                 "--search-index-packet .codewith/private-artifacts/search-index-current-plan/search-index-approval-packet.json "
                 "--search-index-validation .codewith/private-artifacts/search-index-current-plan/search-index-plan-validation.json "

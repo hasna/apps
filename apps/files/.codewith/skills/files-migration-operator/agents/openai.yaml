@@ -1,0 +1,4 @@
+interface:
+  display_name: "Files Migration Operator"
+  short_description: "Operate the files Google Drive migration safely."
+  default_prompt: "Use this skill to continue the files Google Drive migration with metadata-only organization and audit guardrails."

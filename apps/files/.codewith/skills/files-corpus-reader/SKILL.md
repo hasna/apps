@@ -1,13 +1,13 @@
 ---
 name: files-corpus-reader
-description: "Read, extract, classify, and audit large open-files corpora across text, PDF, Office, image, audio, video, archive, raw/design, and unknown MIME types. Use when Codewith needs to inspect migrated Google Drive files, build extraction coverage, decide which tools or AI passes are required, create redacted corpus reports, or prepare semantic classification without exposing private filenames, object keys, or file contents."
+description: "Read, extract, classify, and audit large files corpora across text, PDF, Office, image, audio, video, archive, raw/design, and unknown MIME types. Use when Codewith needs to inspect migrated Google Drive files, build extraction coverage, decide which tools or AI passes are required, create redacted corpus reports, or prepare semantic classification without exposing private filenames, object keys, or file contents."
 ---
 
-# Open Files Corpus Reader
+# Files Corpus Reader
 
 ## Core Rule
 
-Treat open-files as the source-of-truth byte layer. Read through open-files scheme refs, `files` CLI/MCP, or canonical S3 mappings. Do not paste private filenames, object keys, extracted text, OCR text, transcripts, ACL payloads, or row payloads into user-facing output unless the user explicitly approves that disclosure.
+Treat files as the source-of-truth byte layer. Read through `open-files://` scheme refs, `files` CLI/MCP, or canonical S3 mappings. Do not paste private filenames, object keys, extracted text, OCR text, transcripts, ACL payloads, or row payloads into user-facing output unless the user explicitly approves that disclosure.
 
 ## Workflow
 

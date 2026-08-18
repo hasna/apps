@@ -1,6 +1,6 @@
 # Agentic File Naming Standard
 
-This standard is for open-files virtual names and target paths. It is based on current file-management, metadata, and RAG guidance reviewed on 2026-06-16.
+This standard is for files virtual names and target paths. It is based on current file-management, metadata, and RAG guidance reviewed on 2026-06-16.
 
 ## Online Guidance Used
 

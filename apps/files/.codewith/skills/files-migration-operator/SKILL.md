@@ -1,9 +1,9 @@
 ---
-name: open-files-migration-operator
-description: "Operate the open-files Google Drive migration safely. Use when Codewith needs to continue files-first migration work, inspect or update organization metadata, verify canonical S3 mappings, run redacted audits, preserve legacy buckets, coordinate local SQLite/Postgres sync, or explain what remains after metadata organization."
+name: files-migration-operator
+description: "Operate the files Google Drive migration safely. Use when Codewith needs to continue files-first migration work, inspect or update organization metadata, verify canonical S3 mappings, run redacted audits, preserve legacy buckets, coordinate local SQLite/Postgres sync, or explain what remains after metadata organization."
 ---
 
-# Open Files Migration Operator
+# Files Migration Operator
 
 ## Current Invariants
 
@@ -45,7 +45,7 @@ high-risk permissions: 0
    - Prioritize `intake`, `personal-review`, `archive`, legal, finance, and people.
 
 3. Review semantic renames.
-   - Use `open-files-semantic-renamer`.
+   - Use `files-semantic-renamer`.
    - Apply only reviewed metadata updates.
 
 4. Push/sync to production metadata store only after DB/RDS path is approved.

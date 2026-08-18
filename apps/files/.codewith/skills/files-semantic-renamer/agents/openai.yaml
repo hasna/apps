@@ -1,0 +1,4 @@
+interface:
+  display_name: "Files Semantic Renamer"
+  short_description: "Design and apply AI-ready file naming patterns."
+  default_prompt: "Use this skill to propose safe semantic file names and target paths for files records."

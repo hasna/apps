@@ -17,7 +17,7 @@ DEFAULT_OUTPUT = ".codewith/private-artifacts/operator-approval-evidence-bundle-
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILLS_DIR = SCRIPT_DIR.parents[1]
-SEMANTIC_RENAMER_SCRIPT_DIR = SKILLS_DIR / "open-files-semantic-renamer" / "scripts"
+SEMANTIC_RENAMER_SCRIPT_DIR = SKILLS_DIR / "files-semantic-renamer" / "scripts"
 
 MODULE_PATHS = {
     "dashboard": SCRIPT_DIR / "verify_extraction_approval_dashboard.py",

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 
-RUNNER = ".codewith/skills/open-files-semantic-renamer/scripts/run_llm_review_batch.py"
+RUNNER = ".codewith/skills/files-semantic-renamer/scripts/run_llm_review_batch.py"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DIRECT_ALLOWED_EGRESS_HOSTS = ("openrouter.ai",)
 SENSITIVE_KEYS = {

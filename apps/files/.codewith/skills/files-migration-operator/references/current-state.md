@@ -1,4 +1,4 @@
-# Open Files Migration Current State
+# Files Migration Current State
 
 Last recorded local execution: 2026-06-15.
 

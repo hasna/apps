@@ -1,4 +1,4 @@
-# Open Files Extractor Matrix
+# Files Extractor Matrix
 
 Use this as the coverage matrix before reading or classifying a corpus.
 
