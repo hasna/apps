@@ -130,6 +130,7 @@ import {
   type NoteActorType,
   type NoteMachineContext,
   type NoteMachineContextSource,
+  type NoteMachineContextSourceInput,
 } from "../notes.js";
 import { resolveMachineDetails, type MachineDetails } from "../details.js";
 import { getBrowserPlanFleet, type BrowserPlanFleet } from "../browserplan.js";
@@ -2168,7 +2169,7 @@ notesCommand
         actor_name: options.actorName,
         agent_id: options.agentId,
         agent_name: options.agentName,
-        source: options.source as NoteMachineContextSource | undefined,
+        source: options.source as NoteMachineContextSourceInput | undefined,
       },
     });
     printJsonOrText(result, renderNoteMachineContext(result), options.json);

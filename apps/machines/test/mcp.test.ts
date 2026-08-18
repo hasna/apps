@@ -560,6 +560,23 @@ test("MCP note contract tools expose provenance and trash metadata", async () =>
     expect(context.target_machine).toMatchObject({ machine_id: "missing-target", known: false });
     expect(context.actor).toMatchObject({ actor_type: "agent", display_name: "Notes Agent" });
 
+    const legacyResult = await client.callTool({
+      name: "machines_notes_context",
+      arguments: {
+        origin_machine_id: "origin-node",
+        actor_type: "agent",
+        agent_id: "legacy-agent",
+        source: "open-machines",
+      },
+    });
+    const legacyText = (legacyResult.content as Array<{ type: string; text: string }>)[0]?.text;
+    const legacyContext = JSON.parse(legacyText);
+    expect(legacyContext.actor).toMatchObject({
+      actor_type: "agent",
+      agent_id: "legacy-agent",
+      source: "machines",
+    });
+
     const detailsResult = await client.callTool({
       name: "machines_details",
       arguments: { machine_id: "origin-node", include_tailscale: false },

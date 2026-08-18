@@ -53,6 +53,10 @@
  * stale-entry failure under the two-sided contract; and the loops
  * credential_seam_compliance violation (unrecorded at the 0.10.6
  * validator) auto-files its reconcile task rather than failing the suite.
+ * 2026-08-18 (this change): treasury's SDK exception entry DELETED — the
+ * member now ships ./sdk, so the recorded exception that passes was a
+ * stale-entry failure under the two-sided contract (main-gate repair,
+ * todos b66b3f04).
  * The exception registry is DATA, not prose: every entry
  * is keyed to a measured violation class and carries the reason and the
  * tracked remediation task. When a violation is fixed, DELETE its exception
