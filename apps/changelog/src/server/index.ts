@@ -44,7 +44,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
     host: parsed.values.host,
     port: parsed.values.port ? Number.parseInt(parsed.values.port, 10) : undefined,
   });
-  console.log(`Open Changelog API listening on http://${server.hostname}:${server.port}`);
+  console.log(`Hasna Changelog API listening on http://${server.hostname}:${server.port}`);
 }
 
 const isDirectRun =

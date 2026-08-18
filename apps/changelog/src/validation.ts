@@ -53,14 +53,14 @@ const changelogDateSchema = z
 /**
  * hasna.app.v1 AppId slug (mirror of `AppIdSchema` from `@hasna/contracts`
  * branch `feat/distribution-schemas`): the join key across all distribution
- * documents, e.g. `open-todos`.
+ * documents, e.g. `todos`.
  */
 export const appIdSchema = z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "appId must be a lowercase slug (hasna.app.v1 AppId)");
 
 /**
  * Normalize an app identifier to the hasna.app.v1 AppId slug. npm names in
- * the `@hasna/*` scope map to the `open-<name>` repo-folder convention
- * (`@hasna/todos` -> `open-todos`); other values are slugified.
+ * the `@hasna/*` scope map to the bare member name (`@hasna/todos` -> `todos`);
+ * other values are slugified.
  */
 export function normalizeAppId(value: string): string {
   const trimmed = value.trim();
@@ -71,9 +71,6 @@ export function normalizeAppId(value: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   if (!slug) throw new Error(`Cannot derive a hasna.app.v1 appId from "${value}"`);
-  if (scoped && scoped[1] === "hasna" && !slug.startsWith("open-")) {
-    return `open-${slug}`;
-  }
   return slug;
 }
 

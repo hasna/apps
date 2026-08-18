@@ -10,7 +10,7 @@ describe("markdown generation and publishing", () => {
   test("generates Keep a Changelog style markdown grouped by version and category", async () => {
     const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "open-changelog-md-")) });
     await store.createEntry({
-      appId: "open-changelog",
+      appId: "changelog",
       version: "0.1.0",
       kind: "added",
       title: "Initial scaffold",
@@ -18,8 +18,8 @@ describe("markdown generation and publishing", () => {
       tasks: ["731aace9"],
     }, { now: new Date("2026-07-01T00:00:00.000Z") });
 
-    const markdown = generateChangelogMarkdown(await store.listEntries({ appId: "open-changelog" }), { appId: "open-changelog" });
-    expect(markdown).toContain("# open-changelog Changelog");
+    const markdown = generateChangelogMarkdown(await store.listEntries({ appId: "changelog" }), { appId: "changelog" });
+    expect(markdown).toContain("# changelog Changelog");
     expect(markdown).toContain("## [0.1.0] - 2026-07-01");
     expect(markdown).toContain("### Added");
     expect(markdown).toContain("- Initial scaffold");
