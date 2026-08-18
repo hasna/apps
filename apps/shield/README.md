@@ -238,9 +238,8 @@ metadata plus a rule-specific fixture path for any narrow fixture allowlist.
 Shield stores local state in `~/.hasna/security/` by default. Set
 `SECURITY_DB=/path/to/shield.db` to use a specific SQLite database file.
 
-`HASNA_SHIELD_STORAGE_MODE` and `HASNA_SECURITY_STORAGE_MODE` currently accept
-only `local`. Remote storage must be implemented through shield-owned adapters,
-not through a shared runtime package.
+The retired `HASNA_SHIELD_STORAGE_MODE` / `HASNA_SECURITY_STORAGE_MODE`
+variables are no longer read; the store is always local SQLite.
 
 ## HTTP mode
 

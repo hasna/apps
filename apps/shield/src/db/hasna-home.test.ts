@@ -16,16 +16,12 @@ describe("hasna home database", () => {
     const originalHome = process.env.HOME;
     const originalUserProfile = process.env.USERPROFILE;
     const originalSecurityDb = process.env.SECURITY_DB;
-    const originalShieldMode = process.env.HASNA_SHIELD_STORAGE_MODE;
-    const originalSecurityMode = process.env.HASNA_SECURITY_STORAGE_MODE;
     const home = mkdtempSync(join(tmpdir(), "security-home-"));
     const workDir = join(home, "work");
     try {
       process.env.HOME = home;
       delete process.env.USERPROFILE;
       delete process.env.SECURITY_DB;
-      delete process.env.HASNA_SHIELD_STORAGE_MODE;
-      delete process.env.HASNA_SECURITY_STORAGE_MODE;
       mkdirSync(workDir, { recursive: true });
       const legacyDir = join(home, ".hasna", "shield");
       mkdirSync(legacyDir, { recursive: true });
@@ -44,10 +40,6 @@ describe("hasna home database", () => {
       else process.env.USERPROFILE = originalUserProfile;
       if (originalSecurityDb === undefined) delete process.env.SECURITY_DB;
       else process.env.SECURITY_DB = originalSecurityDb;
-      if (originalShieldMode === undefined) delete process.env.HASNA_SHIELD_STORAGE_MODE;
-      else process.env.HASNA_SHIELD_STORAGE_MODE = originalShieldMode;
-      if (originalSecurityMode === undefined) delete process.env.HASNA_SECURITY_STORAGE_MODE;
-      else process.env.HASNA_SECURITY_STORAGE_MODE = originalSecurityMode;
       rmSync(home, { recursive: true, force: true });
     }
   });
@@ -98,22 +90,19 @@ describe("hasna home database", () => {
     }
   });
 
-  test("rejects unsupported shared storage modes", () => {
-    const originalShieldMode = process.env.HASNA_SHIELD_STORAGE_MODE;
-    const originalSecurityMode = process.env.HASNA_SECURITY_STORAGE_MODE;
+  test("ignores the retired storage-mode variables (legacy retirement)", () => {
     const originalSecurityDb = process.env.SECURITY_DB;
     try {
       process.env.HASNA_SHIELD_STORAGE_MODE = "remote";
-      delete process.env.HASNA_SECURITY_STORAGE_MODE;
+      process.env.HASNA_SECURITY_STORAGE_MODE = "shared";
       delete process.env.SECURITY_DB;
       closeDb();
-      expect(() => getDb()).toThrow("Unable to initialize Shield database safely");
+      // The retired mode variables are deliberately not read: the store is
+      // always local SQLite, so setting them changes nothing.
+      const db = getDb();
+      expect(db.prepare("SELECT 1 AS value").get()?.value).toBe(1);
     } finally {
       closeDb();
-      if (originalShieldMode === undefined) delete process.env.HASNA_SHIELD_STORAGE_MODE;
-      else process.env.HASNA_SHIELD_STORAGE_MODE = originalShieldMode;
-      if (originalSecurityMode === undefined) delete process.env.HASNA_SECURITY_STORAGE_MODE;
-      else process.env.HASNA_SECURITY_STORAGE_MODE = originalSecurityMode;
       if (originalSecurityDb === undefined) delete process.env.SECURITY_DB;
       else process.env.SECURITY_DB = originalSecurityDb;
     }
