@@ -3,7 +3,7 @@
   "name": "mcps",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.8.5",
+  "kitVersion": "0.11.1",
   "description": "Meta-MCP registry and CLI. Discovers, manages, and proxies MCP servers from a local SQLite registry; ships a CLI, an MCP server, and an SDK. PostgreSQL is a push/pull synchronization boundary only, never the runtime backend.",
   "bins": [
     "mcps",
@@ -13,7 +13,7 @@
     "user-hosted"
   ],
   "storage": {
-    "mode": "sqlite",
+    "backend": "sqlite",
     "engines": [
       "sqlite"
     ],
@@ -53,7 +53,7 @@
     "conformance": {
       "waivedStorageEngines": [
         {
-          "engine": "postgres",
+          "engine": "postgresql",
           "reason": "mcps owns a local SQLite registry only; resolveStorageMode() accepts the local backend alone and PostgreSQL appears solely as an optional push/pull synchronization target in src/lib/storage-sync.ts."
         }
       ]
