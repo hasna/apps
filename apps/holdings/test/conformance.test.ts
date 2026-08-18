@@ -18,9 +18,7 @@ const runRepoConformance = (contracts as {
 
 const PENDING_ALIGN_CHECKS = new Set([
   "surface_matrix",
-  "service_api_topology",
   "storage_capabilities",
-  "public_manifest_safety",
   "published_artifact_gate",
 ]);
 
