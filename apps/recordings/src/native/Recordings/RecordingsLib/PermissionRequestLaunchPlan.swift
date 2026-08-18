@@ -3,6 +3,7 @@ import Foundation
 public struct PermissionRequestLaunchPlan: Sendable, Equatable {
     public let isHelper: Bool
     public let opensPermissionSettings: Bool
+    public let isBarOnly: Bool
     public let runtimeSmokeMode: String?
     public let runtimeSmokeOutputPath: String?
     public let runtimeSmokeAcknowledgementPath: String?
@@ -10,7 +11,10 @@ public struct PermissionRequestLaunchPlan: Sendable, Equatable {
 
     public var isRuntimeSmoke: Bool { runtimeSmokeMode != nil }
     public var installsGlobalHandlers: Bool { !isHelper && !isRuntimeSmoke }
-    public var declaresMainWindow: Bool { !isHelper && !isRuntimeSmoke }
+    // Bar-only launch never creates the workspace window: the app exists solely for its
+    // menu-bar record controls, fn/Globe hold-to-talk, live transcription, paste delivery,
+    // and settings. The helper and runtime-smoke launches keep the existing gating above it.
+    public var declaresMainWindow: Bool { !isHelper && !isRuntimeSmoke && !isBarOnly }
     public var declaresMenuBar: Bool {
         if isRuntimeSmoke { return runtimeSmokeMode == "normal" }
         return !isHelper
@@ -21,6 +25,19 @@ public struct PermissionRequestLaunchPlan: Sendable, Equatable {
     public init(arguments: [String]) {
         isHelper = arguments.contains("--request-permissions")
         opensPermissionSettings = isHelper && arguments.contains("--open-permission-settings")
+#if RECORDINGS_BAR_ONLY
+        // Bar builds are bar-only by construction. The compile-time define (build.sh passes
+        // -Xswiftc -DRECORDINGS_BAR_ONLY for RECORDINGS_VARIANT=bar) is the guarantee that
+        // the workspace window never exists, on every launch path: the installer relaunch,
+        // a manual `open`, or a LaunchAgent. Relying on the launch argument alone left the
+        // installed bar binary behaviorally identical to the full app, because no real
+        // launch path passed `--bar-only` and only the runtime smoke did. `isHelper` and
+        // `isRuntimeSmoke` still win the gating above, so the permission helper and the
+        // runtime smoke run unchanged on a bar build.
+        isBarOnly = true
+#else
+        isBarOnly = arguments.contains("--bar-only")
+#endif
         runtimeSmokeMode = Self.optionValue("--runtime-smoke", arguments: arguments)
         runtimeSmokeOutputPath = Self.optionValue("--runtime-smoke-output", arguments: arguments)
         runtimeSmokeAcknowledgementPath = Self.optionValue(

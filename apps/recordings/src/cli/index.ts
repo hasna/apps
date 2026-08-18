@@ -807,6 +807,7 @@ appCommand
   .requiredOption("--manifest <path>", "Artifact provenance manifest")
   .option("--envelope <path>", "Signed release envelope (required for release artifacts)")
   .option("--expected-team-id <team>", "Required Developer ID TeamIdentifier for release artifacts")
+  .option("--variant <bar>", "Build variant to verify at runtime (bar = menu-bar-only, no workspace window)")
   .requiredOption("--manifest-sha256 <sha256>", "Authenticated release-manifest SHA-256")
   .requiredOption("--expected-source-sha <sha>", "Exact approved 40-character source commit")
   .requiredOption("--expected-version <version>", "Exact approved release version")
@@ -852,6 +853,7 @@ appCommand
     manifest: string;
     envelope?: string;
     expectedTeamId?: string;
+    variant?: string;
     manifestSha256: string;
     expectedSourceSha: string;
     expectedVersion: string;
@@ -1000,6 +1002,13 @@ appCommand
     );
     if (opts.expectedTeamId) {
       installerArgs.push("--expected-team-id", opts.expectedTeamId);
+    }
+    if (opts.variant !== undefined) {
+      if (opts.variant !== "bar") {
+        console.error(chalk.red("--variant must be bar."));
+        process.exit(1);
+      }
+      installerArgs.push("--variant", opts.variant);
     }
     if (opts.acknowledgeLocalSigningAndPermissions) {
       installerArgs.push("--acknowledge-local-signing-and-permissions");

@@ -24,6 +24,7 @@ struct MenuBarStatusLabel: View {
 struct MenuBarStatusView: View {
     @ObservedObject var store: RecordingsStore
     let openRecordings: () -> Void
+    var barOnly: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -50,11 +51,13 @@ struct MenuBarStatusView: View {
 
             Divider()
 
-            Button(action: openRecordings) {
-                Label("Open Recordings", systemImage: "macwindow")
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if !barOnly {
+                Button(action: openRecordings) {
+                    Label("Open Recordings", systemImage: "macwindow")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
 
             SettingsLink {
                 Label("Settings", systemImage: "gearshape")

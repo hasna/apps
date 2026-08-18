@@ -165,6 +165,8 @@ Artifact and version:
   --expected-source-sha <sha>          Approved 40-character source commit
   --expected-version <version>         Version the artifact must declare
   --expected-team-id <team-id>         Required Apple Developer team identifier
+  --variant <bar>                      Build variant to verify at runtime (bar = no workspace
+                                       window; passed to the runtime smoke verifier)
 
 Target selection:
   --expected-hostname <name>           Require this live short hostname before mutating
@@ -222,6 +224,7 @@ ALLOW_IDENTITY_MIGRATION=0
 ALLOW_ADHOC_IDENTITY_MIGRATION=0
 LAUNCH_APP=0
 LAUNCH_TIMEOUT_SECONDS="${RECORDINGS_LAUNCH_TIMEOUT_SECONDS:-10}"
+INSTALL_VARIANT="${RECORDINGS_VARIANT:-}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -247,6 +250,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --expected-version)
       EXPECTED_VERSION="${2:-}"
+      shift 2
+      ;;
+    --variant)
+      INSTALL_VARIANT="${2:-}"
       shift 2
       ;;
     --expected-hostname)
@@ -315,6 +322,14 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+case "$INSTALL_VARIANT" in
+  ""|bar) ;;
+  *)
+    echo "Install variant must be empty or bar: $INSTALL_VARIANT" >&2
+    exit 2
+    ;;
+esac
 
 if [ "$REAL_HOST_KERNEL" = "Darwin" ] && [ "$ARTIFACT_POLICY" = "release" ]; then
   echo "Release installation requires the root-owned Recordings updater broker; the user-owned shell installer is local-development only." >&2
@@ -2031,7 +2046,8 @@ fi
   --approved-target-identity-kind "$APPROVED_TARGET_IDENTITY_KIND" \
   --approved-target-identity-sha256 "$APPROVED_TARGET_IDENTITY_SHA256"
 SMOKE_TOOL_PATH="/usr/bin:/bin:/usr/sbin:/sbin:$("$DIRNAME_EXECUTABLE" "$BUN_EXECUTABLE")"
-PATH="$SMOKE_TOOL_PATH" "$RUNTIME_SMOKE" "$APP_DEST" "$BUN_EXECUTABLE"
+PATH="$SMOKE_TOOL_PATH" "$RUNTIME_SMOKE" "$APP_DEST" "$BUN_EXECUTABLE" \
+  ${INSTALL_VARIANT:+"--variant"} ${INSTALL_VARIANT:+"$INSTALL_VARIANT"}
 write_journal activated
 
 write_journal committed
@@ -2043,7 +2059,14 @@ STOPPED_RUNNING_APP=0
 if [ "$LAUNCH_APP" -eq 1 ] || [ "$was_running" -eq 1 ]; then
   EXPECTED_EXECUTABLE="$APP_DEST/Contents/MacOS/Recordings"
   RUNNING_EXECUTABLES+=("$EXPECTED_EXECUTABLE")
-  "$OPEN_EXECUTABLE" -n "$APP_DEST"
+  # Bar installs relaunch with --bar-only even though the bar build defaults to bar-only at
+  # compile time: the argument keeps the launch record self-describing and is harmless for
+  # a build that already consumes -DRECORDINGS_BAR_ONLY.
+  if [ "$INSTALL_VARIANT" = "bar" ]; then
+    "$OPEN_EXECUTABLE" -n "$APP_DEST" --args --bar-only
+  else
+    "$OPEN_EXECUTABLE" -n "$APP_DEST"
+  fi
   attempts=$((LAUNCH_TIMEOUT_SECONDS * 10))
   launched_pid=""
   launched_start_identity=""
@@ -2070,7 +2093,11 @@ if [ "$LAUNCH_APP" -eq 1 ] || [ "$was_running" -eq 1 ]; then
 fi
 
 if [ "$ARTIFACT_POLICY" = "local_only" ]; then
-  echo "Installed local-only Recordings.app for ${APPROVED_TARGET}; this artifact is ad-hoc signed and non-notarized."
+  if [ -n "$EXPECTED_TEAM_ID" ] && [ "$EXPECTED_TEAM_ID" != "ADHOC" ]; then
+    echo "Installed local-only Recordings.app for ${APPROVED_TARGET}; this artifact is Developer ID signed (team ${EXPECTED_TEAM_ID}) and non-notarized."
+  else
+    echo "Installed local-only Recordings.app for ${APPROVED_TARGET}; this artifact is ad-hoc signed and non-notarized."
+  fi
   if [ "$identity_migration" -eq 1 ]; then
     # Not a maybe: the designated requirement did change, under an explicit approval.
     echo "Code identity changed under --allow-adhoc-identity-migration; the Microphone and Accessibility grants held by the replaced app no longer apply and must be reauthorized."
