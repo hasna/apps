@@ -343,7 +343,7 @@ export const RULES: Rule[] = [
  * is not:
  *   - An npm package name (`@hasna/widget`) is on a public registry. Naming it
  *     discloses nothing, so it is NOT a class.
- *   - A workspace checkout folder (`open-widget`) is the maintainer's local
+ *   - A workspace checkout folder (`widget`) is the maintainer's local
  *     layout. A list of them is a map of the org's working tree, so it IS one.
  *   - `iapp-*`, `platform-*`, and the `@hasnaxyz/*` scope are internal-only
  *     naming conventions and never appear in public distribution.

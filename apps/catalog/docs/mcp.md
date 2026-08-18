@@ -48,7 +48,7 @@ Consequently, filters can reduce the returned count below `limit`.
 Input:
 
 ```json
-{ "app_id": "open-example" }
+{ "app_id": "example" }
 ```
 
 `app_id` is a required non-empty string. A match returns
