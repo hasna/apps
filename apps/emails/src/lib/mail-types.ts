@@ -271,6 +271,12 @@ export function emptyMailboxCounts(): MailboxCounts {
   return { inbox: 0, unread: 0, priority: 0, starred: 0, sent: 0, archived: 0, spam: 0, trash: 0 };
 }
 
+/** One row of a per-recipient unread inbox rollup (`inbox unread-count --by-address`). */
+export interface UnreadByAddressRow {
+  address: string;
+  unread: number;
+}
+
 export interface MailboxFolderStatus {
   id: Mailbox;
   folder: Mailbox;

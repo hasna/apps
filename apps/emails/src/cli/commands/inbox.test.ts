@@ -1665,13 +1665,38 @@ describe("inbox open blocks in the self-hosted client", () => {
   });
 });
 
-describe("inbox unread-count --by-address blocks in the self-hosted client", () => {
-  it("fails closed pointing at the total unread count", async () => {
-    const result = await runInboxCommandExpectingExit(["inbox", "unread-count", "--by-address"]);
-    expect(result.error).toBe("process.exit:1");
-    expect(result.stderr).toContain("inbox unread-count --by-address");
-    expect(result.stderr).toContain("not available in the self-hosted client");
-    expect(result.stderr).toContain("emails inbox unread-count");
+describe("inbox unread-count --by-address", () => {
+  it("returns per-address unread counts from /v1", async () => {
+    await stub.seed({ messages: [
+      msgRow({ to_addrs: ["first@example.com", "second@example.com"] }),
+      msgRow({ to_addrs: ["first@example.com"] }),
+      msgRow({ to_addrs: ["first@example.com"], is_read: true }),
+      msgRow({ to_addrs: ["archived@example.com"], labels: ["archived"] }),
+      msgRow({ direction: "outbound", labels: ["sent"], to_addrs: ["first@example.com"] }),
+    ] });
+
+    const { data, out } = await runInboxCommand(["inbox", "unread-count", "--by-address"]);
+    expect(data).toEqual([
+      { address: "first@example.com", unread: 2 },
+      { address: "second@example.com", unread: 1 },
+    ]);
+    expect(out).toBe("first@example.com\t2\nsecond@example.com\t1");
+  });
+
+  it("honours --limit and --offset against the server rollup", async () => {
+    await stub.seed({ messages: [
+      msgRow({ to_addrs: ["a@example.com"] }),
+      msgRow({ to_addrs: ["a@example.com"] }),
+      msgRow({ to_addrs: ["b@example.com"] }),
+      msgRow({ to_addrs: ["c@example.com"] }),
+    ] });
+
+    // unread DESC, address ASC -> a(2), b(1), c(1); window [1,3) -> b, c.
+    const { data } = await runInboxCommand(["inbox", "unread-count", "--by-address", "--limit", "2", "--offset", "1"]);
+    expect(data).toEqual([
+      { address: "b@example.com", unread: 1 },
+      { address: "c@example.com", unread: 1 },
+    ]);
   });
 });
 

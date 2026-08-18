@@ -21344,6 +21344,107 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
   },
   {
     "method": "GET",
+    "operationId": "getUnreadCountByAddress",
+    "path": "/v1/messages/unread-by-address",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "unread": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "address",
+              "unread"
+            ]
+          }
+        }
+      },
+      "required": [
+        "rows"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getUnreadCountByAddress",
+    "path": "/v1/messages/unread-by-address",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getUnreadCountByAddress",
+    "path": "/v1/messages/unread-by-address",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getUnreadCountByAddress",
+    "path": "/v1/messages/unread-by-address",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
     "operationId": "getVersionedOpenApiDocument",
     "path": "/v1/openapi.json",
     "status": 200,

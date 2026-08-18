@@ -19,7 +19,6 @@ import { createSqliteEmailStore } from "../../store-sqlite/index.js";
 import { findAddressesByEmail } from "../../db/addresses.local.js";
 import { findDomainsByName } from "../../db/domains.local.js";
 import { listAddressProvisioningByIds, listDomainProvisioningByIds, listReadyAddressCountsByDomains } from "../../db/provisioning.js";
-import { sqlEmailAddress } from "../../db/email-address-sql.js";
 import { assessDomainReadiness } from "../../lib/domain-readiness.js";
 import { domainInboundReadinessSignals } from "../../lib/domain-inbound-evidence.js";
 import { resolveEmailsMode } from "../../lib/mode.js";
@@ -528,44 +527,23 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--offset <n>", "Number of grouped addresses to skip", "0")
     .action(async (opts: { byAddress?: boolean; limit?: string; offset?: string }) => {
       try {
+        const ds = resolveMailDataSource();
         if (!opts.byAddress) {
-          const counts = await resolveMailDataSource().mailboxCounts();
+          const counts = await ds.mailboxCounts();
           output({ unread: counts.unread }, String(counts.unread));
           return;
         }
-        // --by-address is a local-only SQL rollup over inbound_recipients; there is no
-        // server endpoint for it. In self_hosted mode fail cleanly instead of querying the
-        // empty local DB (which would misleadingly report zero unread).
-        if (resolveMailDataSource().mode !== "local") {
-          handleError(new Error("`inbox unread-count --by-address` is not available in self_hosted mode. Use `emails inbox unread-count` for the total unread count."));
-          return;
-        }
-        const db = getDatabase();
+        // The per-address rollup is a backend method now: the local SQLite
+        // implementation runs the SQL over inbound_recipients and the
+        // self-hosted data source delegates to the server endpoint, so the
+        // capability is identical on both backends.
         const limit = parsePositiveIntOption(opts.limit, 50);
         const offset = parseNonNegativeIntOption(opts.offset);
-        const recipientSql = sqlEmailAddress("r.address");
-        const rows = db.query(
-          `SELECT address, unread
-             FROM (
-               SELECT ${recipientSql} AS address, COUNT(*) AS unread
-                 FROM inbound_emails e
-                 JOIN inbound_recipients r ON r.inbound_email_id = e.id
-                WHERE e.is_sent = 0
-                  AND e.is_read = 0
-                  AND e.is_archived = 0
-                GROUP BY ${recipientSql}
-             )
-            WHERE instr(address, '@') > 1
-            ORDER BY unread DESC, address ASC
-            LIMIT ? OFFSET ?`,
-        ).all(limit, offset) as Array<{ address: string; unread: unknown }>;
-        const outputRows = rows
-          .map((row) => ({ address: row.address, unread: Number(row.unread) || 0 }))
-          .filter((row) => row.unread > 0);
-        const formatted = outputRows.length
-          ? outputRows.map((row) => `${row.address}\t${row.unread}`).join("\n")
+        const rows = await ds.unreadByAddress({ limit, offset });
+        const formatted = rows.length
+          ? rows.map((row) => `${row.address}\t${row.unread}`).join("\n")
           : chalk.dim("No unread mail.");
-        output(outputRows, formatted);
+        output(rows, formatted);
       } catch (e) {
         handleError(e);
       }

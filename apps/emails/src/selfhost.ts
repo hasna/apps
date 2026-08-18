@@ -1378,6 +1378,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Per-recipient unread inbox counts (the client's `inbox unread-count --by-address`); covers every parsed recipient address, not only registered ones */
+    async getUnreadCountByAddress(query?: { "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "rows": Array<{ "address": string; "unread": number }> }> {
+      return this.request("GET", `/v1/messages/unread-by-address`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     async getMessage(id: string, init?: RequestInit): Promise<{ "message": Message }> {
       return this.request("GET", `/v1/messages/${encodeURIComponent(String(id))}`, {
         body: undefined,

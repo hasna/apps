@@ -135,8 +135,10 @@ describe("refusal registry covers every CLI refusal call site", () => {
     // Real refusals in the file, invisible because the literal omits the `emails ` prefix.
     expect(inbox).toContain('serverOnly("sync-s3")');
     expect(refusals.map((r) => r.command)).not.toContain("emails inbox sync-s3");
-    // A flag-conditional refusal: no matchable literal at all.
-    expect(inbox).toContain("`inbox unread-count --by-address` is not available");
+    // `inbox unread-count --by-address` USED to be a flag-conditional refusal here;
+    // it is now served by the /v1 endpoint, so the refusal literal must be gone and
+    // the flag form must never appear on any refusal-derived suggestion list.
+    expect(inbox).not.toContain("`inbox unread-count --by-address` is not available");
     expect(refusals.map((r) => r.command)).not.toContain("emails inbox unread-count --by-address");
   });
 

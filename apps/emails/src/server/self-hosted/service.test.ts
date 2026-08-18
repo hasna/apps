@@ -387,6 +387,27 @@ describe("Emails self-hosted service", () => {
     expect((await res!.json()).counts).toMatchObject({ inbox: 4, sent: 2, unread: 3, total: 6 });
   });
 
+  test("per-address unread counts are served from the store with limit/offset forwarded", async () => {
+    const d = deps();
+    const seen: Array<{ limit?: number; offset?: number }> = [];
+    d.store.unreadByAddress = async (opts?: { limit?: number; offset?: number }) => {
+      seen.push({ limit: opts?.limit, offset: opts?.offset });
+      return [
+        { address: "first@example.com", unread: 2 },
+        { address: "second@example.com", unread: 1 },
+      ];
+    };
+    const token = mintApiKey({ app: "emails", scopes: ["emails:read"], signingSecret: SIGNING_SECRET }).token;
+    const res = await handleSelfHostedRequest(d, req("GET", "/v1/messages/unread-by-address?limit=2&offset=1", { token }));
+
+    expect(res?.status).toBe(200);
+    expect((await res!.json()).rows).toEqual([
+      { address: "first@example.com", unread: 2 },
+      { address: "second@example.com", unread: 1 },
+    ]);
+    expect(seen).toEqual([{ limit: 2, offset: 1 }]);
+  });
+
   test("attachment repair is authenticated, dry-run by default, bounded, and resumable by tenant-scoped run id", async () => {
     const d = deps();
     const scoped = d.store as any;
