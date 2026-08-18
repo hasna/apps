@@ -49,7 +49,6 @@ function makeApp() {
       server: { baseUrl: "https://has.na", publicPath: "/a" },
     }),
     version: "test",
-    mode: "self_hosted",
     signingSecret: SIGNING_SECRET,
   });
   return { app, store };

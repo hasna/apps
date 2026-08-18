@@ -32,8 +32,18 @@ describe("resolveAttachmentsV1", () => {
     expect(r.store).toBeNull();
   });
 
-  test("throws when only URL set (key missing) — the seam reports misconfigured", () => {
+  test("throws when only URL set (key missing) — fail closed, never silent local drift", () => {
     expect(() => resolveAttachmentsV1({ HASNA_ATTACHMENTS_API_URL: BASE } as NodeJS.ProcessEnv)).toThrow();
+  });
+
+  test("throws when only KEY set (URL missing) — fail closed, never silent local drift", () => {
+    expect(() => resolveAttachmentsV1({ HASNA_ATTACHMENTS_API_KEY: KEY } as NodeJS.ProcessEnv)).toThrow();
+  });
+
+  test("a surviving storage-mode variable is rejected (no-compat mandate)", () => {
+    expect(() =>
+      resolveAttachmentsV1({ ...cloudEnv, HASNA_ATTACHMENTS_STORAGE_MODE: "local" } as NodeJS.ProcessEnv),
+    ).toThrow(/removed/i);
   });
 
   test("returns cloud-http when URL+KEY set", () => {

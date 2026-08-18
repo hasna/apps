@@ -24,8 +24,7 @@ RUN rm -rf node_modules && bun install --frozen-lockfile --production --ignore-s
 FROM oven/bun:1-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
-    PORT=8080 \
-    HASNA_ATTACHMENTS_STORAGE_MODE=cloud
+    PORT=8080
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist

@@ -2,12 +2,12 @@
 // client seam.
 //
 // LOCKED ARCHITECTURE: when `HASNA_ATTACHMENTS_API_URL` + `HASNA_ATTACHMENTS_API_KEY`
-// are set, every read and write routes to the app's cloud HTTP API at
+// are set, every read and write routes to the app's hosted HTTP API at
 // `<API_URL>/v1` with the bearer key — never the local SQLite store, never a raw
-// DSN. The toggle is the presence of the two env vars (that is what the fleet
-// flip tool writes): the contracts client resolves the http transport when the
-// pair is present, and the local store otherwise. There is no storage-mode
-// variable; the 0.11.1 seam refuses one.
+// DSN. The selection is the env contract alone: both env vars set -> hosted;
+// neither set -> local SQLite; exactly one set -> a hard error (fail closed,
+// never a silent drift to the wrong dataset). A surviving storage-mode variable
+// is rejected outright (no-compat mandate).
 //
 // SAFETY: the API key never appears in logs or return values. It lives only
 // inside the contracts transport (and, for the binary download stream that the
@@ -150,6 +150,32 @@ export function resolveAttachmentsV1(
   env: NodeJS.ProcessEnv = process.env,
   overrides?: ResolveStorageClientOverrides,
 ): ResolveAttachmentsV1Result {
+  // No-compat mandate: a surviving storage-mode variable is a hard error, never
+  // a selector and never silently ignored.
+  const legacyModeKey = env.HASNA_ATTACHMENTS_STORAGE_MODE || env.HASNA_ATTACHMENTS_MODE;
+  if (legacyModeKey !== undefined && legacyModeKey !== "") {
+    throw new Error(
+      "HASNA_ATTACHMENTS_STORAGE_MODE was removed. Set HASNA_ATTACHMENTS_API_URL with HASNA_ATTACHMENTS_API_KEY " +
+        "to select the hosted API, or leave both unset for local SQLite.",
+    );
+  }
+  // Fail closed on a partial flip: exactly one of the URL/key pair set must not
+  // silently drift to the wrong dataset. The seam already throws for URL without
+  // key; the key-without-URL direction is caught here.
+  const apiUrl = env.HASNA_ATTACHMENTS_API_URL || env.ATTACHMENTS_API_URL;
+  const apiKey = env.HASNA_ATTACHMENTS_API_KEY || env.ATTACHMENTS_API_KEY;
+  if (apiUrl && !apiKey) {
+    throw new Error(
+      "HASNA_ATTACHMENTS_API_URL is set without HASNA_ATTACHMENTS_API_KEY. Set both to select the hosted API, " +
+        "or leave both unset for local SQLite.",
+    );
+  }
+  if (apiKey && !apiUrl) {
+    throw new Error(
+      "HASNA_ATTACHMENTS_API_KEY is set without HASNA_ATTACHMENTS_API_URL. Set both to select the hosted API, " +
+        "or leave both unset for local SQLite.",
+    );
+  }
   const resolved = resolveStorageClient(APP_SLUG, env, overrides);
   if (resolved.transport !== "http") return { transport: "local", store: null };
   return { transport: "cloud-http", store: makeStore(resolved.client, env) };

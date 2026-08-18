@@ -56,7 +56,7 @@ export function registerUpload(program: Command): void {
       if (options.clientMode && options.clientMode !== "local" && options.clientMode !== "cloud") {
         exitError("--client-mode must be local or cloud");
       }
-      // Env drives self_hosted/cloud vs local; `--client-mode local` pins on-box.
+      // Env drives hosted vs local; `--client-mode local` pins on-box.
       const store = resolveStore(process.env, { forceLocal: options.clientMode === "local" });
       const cloudMode = store.transport === "cloud-http";
 
