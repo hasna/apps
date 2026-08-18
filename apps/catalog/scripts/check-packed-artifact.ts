@@ -343,7 +343,7 @@ export const RULES: Rule[] = [
  * is not:
  *   - An npm package name (`@hasna/widget`) is on a public registry. Naming it
  *     discloses nothing, so it is NOT a class.
- *   - A workspace checkout folder (`open-widget`) is the maintainer's local
+ *   - A workspace checkout folder (`widget`) is the maintainer's local
  *     layout. A list of them is a map of the org's working tree, so it IS one.
  *   - `iapp-*`, `platform-*`, and the `@hasnaxyz/*` scope are internal-only
  *     naming conventions and never appear in public distribution.
@@ -413,7 +413,8 @@ export const ORG_ASSET_CLASSES: OrgAssetClass[] = [
  * is not an inventory of anything.
  */
 export const ALLOWED_ORG_IDENTIFIERS: ReadonlyMap<string, string> = new Map([
-  ["open-catalog", "this package's own repo checkout folder; self-reference is unavoidable and discloses nothing new"],
+  ["open-catalog", "this package's own repo checkout folder under the retired open- name; self-reference is unavoidable and discloses nothing new"],
+  ["catalog", "this package's own repo checkout folder (current name); self-reference is unavoidable and discloses nothing new"],
   ["open-source", "the English compound, not a checkout folder — it appears in prose in every OSS repository"],
   ["open-sourced", "as above"],
   ["open-sourcing", "as above"],
