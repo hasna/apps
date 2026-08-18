@@ -39,7 +39,7 @@ export function buildOpenApiSpec(version: string): OpenApiDoc {
       title: "domains",
       version,
       description:
-        "Domain portfolio, registrar, marketplace, and DNS management HTTP API (self_hosted). API-key authenticated.",
+        "Domain portfolio, registrar, marketplace, and DNS management HTTP API. API-key authenticated.",
     },
     security: [{ apiKey: [] }],
     paths: {
