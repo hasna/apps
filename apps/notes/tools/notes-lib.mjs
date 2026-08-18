@@ -906,7 +906,6 @@ export async function generateTitle(text, opts = {}) {
     const headers = { 'Content-Type': 'application/json' };
     if (token) {
       headers['X-Hasna-Notes-Token'] = token;
-      headers['X-Hasna-Notes-Token'] = token; // legacy header; removed next release
     }
     const res = await fetch(String(opts.sidecar).replace(/\/$/, '') + '/title', {
       method: 'POST',

@@ -2436,6 +2436,17 @@ test('recording and realtime transcription contracts are exposed to UI/native ho
   assert.match(buildScript, /node_modules\/@hasna\/events/);
 });
 
+test('notes-lib sidecar title call carries no retired compat header line', async () => {
+  // P2 follow-up from PR 270 review: the retired-name (X-PersonalNotes-Token era)
+  // compat surface in the sidecar title call was scheduled for removal "next release".
+  // The old name is already gone (PR 273 rename); the leftover duplicate legacy line
+  // in tools/notes-lib.mjs must not survive. Source-level guard: the duplicate line is
+  // behaviorally inert (same header, same value), so only its absence is assertable.
+  const lib = await readFile(join(repoRoot, 'tools', 'notes-lib.mjs'), 'utf8');
+  assert.doesNotMatch(lib, /legacy header; removed next release/);
+  assert.match(lib, /headers\['X-Hasna-Notes-Token'\] = token;/);
+});
+
 test('sidecar keeps bounded and realtime transcription models in separate slots', async (t) => {
   const guarded = await startSidecar(t, {
     HASNA_NOTES_TRANSCRIBE_MODEL: 'gpt-realtime-whisper',
