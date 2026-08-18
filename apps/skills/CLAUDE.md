@@ -232,10 +232,12 @@ exactly four path segments after `/api/v1`.
 | GET | `/health` | Liveness. Deliberately reports no deployment variant. |
 | GET | `/ready` | |
 | GET | `/api/auth/whoami` | Under `/api/auth`, not `/api/v1`. |
-| GET | `/api/v1/skills` | |
+| GET | `/api/v1/skills` | `?tag=` filters the merged list to skills carrying that exact tag |
 | GET | `/api/v1/skills/:slug` | |
 | GET | `/api/v1/skills/:slug/skill.md` | `text/markdown` |
 | POST | `/api/v1/skills/:slug/quote` | |
+| GET | `/api/v1/tags` | Distinct tags across the org's registry view (published + bundled), sorted `string[]` |
+| GET | `/api/v1/tags/:tag/skills` | Merged skills carrying the exact tag, as `RemoteSkillSummary[]` |
 | GET | `/api/v1/runs` | `?limit=` default 20, clamped to 100 |
 | POST | `/api/v1/runs/:slug` | `:slug` is a **skill** slug. Enqueues, returns 202. Honours `idempotency-key`. |
 | GET | `/api/v1/runs/:runId` | |

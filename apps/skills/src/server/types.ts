@@ -399,4 +399,28 @@ export interface SkillsProductStore {
   /** False when this principal has no pin by that slug. */
   unpinSkill(principal: ApiPrincipal, slug: string): Promise<boolean>;
   listPins(principal: ApiPrincipal): Promise<ServerPin[]>;
+
+  /*
+   * Tag surface (T7).
+   *
+   * Distinct tags across the org's published skills, the published skills
+   * carrying an exact tag, and the principal's pins whose published skill
+   * carries it. These are the store half of the hosted tag routes, and every
+   * query runs against the skills_tags projection (migration 0005) whose
+   * (org_id, tag) index makes the membership lookup an indexed read in both
+   * dialects; the app layer merges the result with the bundled corpus the way
+   * it does for every other registry read. Tags match exactly - the value as
+   * stored - so the tag list returned by listTags() is the vocabulary callers
+   * can filter with.
+   */
+  listTags(principal: ApiPrincipal): Promise<string[]>;
+  listSkillsByTag(principal: ApiPrincipal, tag: string): Promise<ServerSkillRecord[]>;
+  listPinsByTag(principal: ApiPrincipal, tag: string): Promise<ServerPin[]>;
+  /**
+   * The slugs of the org's live (non-tombstoned) published skills. The tag
+   * routes use this to resolve merged-view precedence: a bundled skill whose
+   * slug a published row occupies must not resurface under a tag filter or in
+   * the tag list. A single-column scan of the (org_id, slug) primary key.
+   */
+  listPublishedSlugs(principal: ApiPrincipal): Promise<string[]>;
 }

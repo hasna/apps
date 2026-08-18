@@ -405,6 +405,49 @@ export class MemorySkillsStore implements SkillsProductStore {
       .sort((a, b) => a.slug.localeCompare(b.slug));
   }
 
+  async listTags(principal: ApiPrincipal): Promise<string[]> {
+    // Mirror the durable backends: expired tombstones are purged before the
+    // read, and live tombstones keep their tags until purge (the projection
+    // retains them), so the memory answer matches the SQL backends' exactly.
+    await this.purgeExpiredTombstones(principal);
+    const tags = new Set<string>();
+    for (const skill of this.skills.values()) {
+      if (skill.orgId !== principal.orgId) continue;
+      for (const tag of skill.tags) {
+        if (tag.trim()) tags.add(tag);
+      }
+    }
+    return [...tags].sort();
+  }
+
+  async listSkillsByTag(principal: ApiPrincipal, tag: string): Promise<ServerSkillRecord[]> {
+    await this.purgeExpiredTombstones(principal);
+    return Array.from(this.skills.values())
+      .filter((skill) => skill.orgId === principal.orgId && !skill.tombstonedAt && skill.tags.includes(tag))
+      .sort((a, b) => a.slug.localeCompare(b.slug));
+  }
+
+  async listPinsByTag(principal: ApiPrincipal, tag: string): Promise<ServerPin[]> {
+    // The durable backends resolve this through the skills_tags projection;
+    // the memory store has no tables, so the same predicate runs over its
+    // maps. Behaviour parity is what the parity suite asserts.
+    await this.purgeExpiredTombstones(principal);
+    const taggedSlugs = new Set<string>();
+    for (const skill of this.skills.values()) {
+      if (skill.orgId === principal.orgId && !skill.tombstonedAt && skill.tags.includes(tag)) taggedSlugs.add(skill.slug);
+    }
+    return Array.from(this.pins.values())
+      .filter((pin) => pin.orgId === principal.orgId && pin.principal === principal.apiKeyId && taggedSlugs.has(pin.slug))
+      .sort((a, b) => a.slug.localeCompare(b.slug));
+  }
+
+  async listPublishedSlugs(principal: ApiPrincipal): Promise<string[]> {
+    return Array.from(this.skills.values())
+      .filter((skill) => skill.orgId === principal.orgId && !skill.tombstonedAt)
+      .map((skill) => skill.slug)
+      .sort();
+  }
+
   private collectOrphanBundle(orgId: string, sha256: string): void {
     const referenced = Array.from(this.skills.values()).some((skill) => skill.orgId === orgId && skill.bundleSha256 === sha256);
     if (!referenced) this.bundles.delete(skillKey(orgId, sha256));
@@ -893,6 +936,18 @@ export class PostgresSkillsStore implements SkillsProductStore {
             AND NOT EXISTS (SELECT 1 FROM skills_registry WHERE org_id = ${orgId} AND bundle_sha256 = ${previousSha})
         `;
       }
+
+      // Keep the tag projection (migration 0005) in step with the upsert, in
+      // the same transaction: replace, never merge, so the projection is
+      // exactly the row's current tags.
+      await tx`DELETE FROM skills_tags WHERE org_id = ${orgId} AND slug = ${input.slug}`;
+      for (const tag of input.tags) {
+        if (!tag.trim()) continue;
+        await tx`
+          INSERT INTO skills_tags (org_id, slug, tag) VALUES (${orgId}, ${input.slug}, ${tag})
+          ON CONFLICT DO NOTHING
+        `;
+      }
       return rowToSkill(rows[0]!);
     });
   }
@@ -917,36 +972,50 @@ export class PostgresSkillsStore implements SkillsProductStore {
       throw new SkillRevisionConflictError(slug, expectedRevisionId, current.revisionId);
     }
     const next = { ...current, ...patch };
-    const revisionId = revisionIdOfRecord(next);
-    const rows = await this.sql`
-      UPDATE skills_registry
-      SET display_name = ${next.displayName}, description = ${next.description}, category = ${next.category},
-          tags_json = ${JSON.stringify(next.tags)}::jsonb, kind = ${next.kind}, version = ${next.version ?? null},
-          skill_md = ${next.skillMd ?? null}, revision_id = ${revisionId}, revision_number = revision_number + 1, updated_at = now()
-      WHERE org_id = ${principal.orgId} AND slug = ${slug} AND tombstoned_at IS NULL AND revision_id = ${current.revisionId}
-      RETURNING *
-    `;
-    if (!rows[0]) {
-      // The WHERE guard matched nothing: between the pre-read above and this UPDATE the
-      // row's revision advanced (a concurrent writer landed) or the row was tombstoned/
-      // purged. A stale write must be a 409 REVISION_CONFLICT, never a 404 that falsely
-      // claims the skill vanished — and never a silent overwrite.
-      const nowRows = await this.sql`
-        SELECT revision_id, tombstoned_at FROM skills_registry WHERE org_id = ${principal.orgId} AND slug = ${slug} LIMIT 1
+    // Registry row and tag projection move in one transaction so the indexed
+    // tag reads can never see a tags_json that disagrees with skills_tags.
+    return await this.sql.begin(async (tx) => {
+      const revisionId = revisionIdOfRecord(next);
+      const updated = await tx`
+        UPDATE skills_registry
+        SET display_name = ${next.displayName}, description = ${next.description}, category = ${next.category},
+            tags_json = ${JSON.stringify(next.tags)}::jsonb, kind = ${next.kind}, version = ${next.version ?? null},
+            skill_md = ${next.skillMd ?? null}, revision_id = ${revisionId}, revision_number = revision_number + 1, updated_at = now()
+        WHERE org_id = ${principal.orgId} AND slug = ${slug} AND tombstoned_at IS NULL AND revision_id = ${current.revisionId}
+        RETURNING *
       `;
-      if (nowRows[0] && nowRows[0].tombstoned_at == null) {
-        const currentId = String(nowRows[0].revision_id);
-        throw new SkillRevisionConflictError(slug, expectedRevisionId, currentId);
+      if (!updated[0]) {
+        // The WHERE guard matched nothing: between the pre-read above and this UPDATE the
+        // row's revision advanced (a concurrent writer landed) or the row was tombstoned/
+        // purged. A stale write must be a 409 REVISION_CONFLICT, never a 404 that falsely
+        // claims the skill vanished — and never a silent overwrite.
+        const nowRows = await tx`
+          SELECT revision_id, tombstoned_at FROM skills_registry WHERE org_id = ${principal.orgId} AND slug = ${slug} LIMIT 1
+        `;
+        if (nowRows[0] && nowRows[0].tombstoned_at == null) {
+          const currentId = String(nowRows[0].revision_id);
+          throw new SkillRevisionConflictError(slug, expectedRevisionId, currentId);
+        }
+        return null;
       }
-      return null;
-    }
-    return rowToSkill(rows[0]!);
+      await tx`DELETE FROM skills_tags WHERE org_id = ${principal.orgId} AND slug = ${slug}`;
+      for (const tag of next.tags) {
+        if (!tag.trim()) continue;
+        await tx`
+          INSERT INTO skills_tags (org_id, slug, tag) VALUES (${principal.orgId}, ${slug}, ${tag})
+          ON CONFLICT DO NOTHING
+        `;
+      }
+      return rowToSkill(updated[0]);
+    });
   }
 
   async deleteSkill(principal: ApiPrincipal, slug: string, tombstoneWindowMs: number): Promise<ServerSkillRecord | null> {
     // One transaction, matching the SQLite twin. As two statements on the pooled tag the
-    // UPDATE and the orphan collection could land on different connections with a
-    // concurrent publish in between.
+    // As a single transaction on the pooled tag, the read and the write cannot land on
+    // different connections with a concurrent publish in between. Tombstoning keeps the
+    // row (and its tag projection) alive for the tombstone window; the purge path below
+    // drops both together.
     return await this.sql.begin(async (tx) => {
       const existingRows = await tx`
         SELECT tombstoned_at FROM skills_registry WHERE org_id = ${principal.orgId} AND slug = ${slug} LIMIT 1
@@ -977,6 +1046,11 @@ export class PostgresSkillsStore implements SkillsProductStore {
       const purged: ServerSkillRecord[] = [];
       for (const row of expiredRows) {
         const record = rowToSkill(row);
+        await tx`
+          DELETE FROM skills_registry WHERE org_id = ${principal.orgId} AND slug = ${record.slug} AND tombstone_purge_after <= now()
+        `;
+        // The tag projection (migration 0005) dies with the purged row.
+        await tx`DELETE FROM skills_tags WHERE org_id = ${principal.orgId} AND slug = ${record.slug}`;
         await tx`
           DELETE FROM skills_registry WHERE org_id = ${principal.orgId} AND slug = ${record.slug} AND tombstone_purge_after <= now()
         `;
@@ -1029,6 +1103,55 @@ export class PostgresSkillsStore implements SkillsProductStore {
       SELECT * FROM skills_pins WHERE org_id = ${principal.orgId} AND principal = ${principal.apiKeyId} ORDER BY slug ASC
     `;
     return rows.map(rowToPin);
+  }
+
+  async listTags(principal: ApiPrincipal): Promise<string[]> {
+    // Indexed: the skills_tags_org_tag_idx (org_id, tag) index serves the org
+    // filter, and the projection is kept in step by every write path. Expired
+    // tombstones are purged first, like every other read path in this store.
+    await this.purgeExpiredTombstones(principal);
+    const rows = await this.sql`
+      SELECT DISTINCT tag FROM skills_tags WHERE org_id = ${principal.orgId} ORDER BY tag ASC
+    `;
+    return rows.map((row) => String(row.tag));
+  }
+
+  async listSkillsByTag(principal: ApiPrincipal, tag: string): Promise<ServerSkillRecord[]> {
+    // Indexed: the projection's (org_id, slug, tag) primary key / org_tag index
+    // resolves membership; the registry row is then fetched by its own key.
+    // Tombstoned rows are excluded, matching listSkills.
+    await this.purgeExpiredTombstones(principal);
+    const rows = await this.sql`
+      SELECT s.* FROM skills_registry s
+      JOIN skills_tags t ON t.org_id = s.org_id AND t.slug = s.slug
+      WHERE t.org_id = ${principal.orgId} AND t.tag = ${tag} AND s.tombstoned_at IS NULL
+      ORDER BY s.slug ASC
+    `;
+    return rows.map(rowToSkill);
+  }
+
+  async listPinsByTag(principal: ApiPrincipal, tag: string): Promise<ServerPin[]> {
+    // Indexed: membership via the projection, pins via their own composite key.
+    // A pin whose slug has no live registry row (e.g. a bundled-only skill, or
+    // a tombstoned one) carries no tags here; the app layer adds the
+    // bundled-corpus half of that set.
+    await this.purgeExpiredTombstones(principal);
+    const rows = await this.sql`
+      SELECT p.* FROM skills_pins p
+      JOIN skills_tags t ON t.org_id = p.org_id AND t.slug = p.slug
+      JOIN skills_registry s ON s.org_id = p.org_id AND s.slug = p.slug
+      WHERE p.org_id = ${principal.orgId} AND p.principal = ${principal.apiKeyId}
+        AND t.tag = ${tag} AND s.tombstoned_at IS NULL
+      ORDER BY p.slug ASC
+    `;
+    return rows.map(rowToPin);
+  }
+
+  async listPublishedSlugs(principal: ApiPrincipal): Promise<string[]> {
+    const rows = await this.sql`
+      SELECT slug FROM skills_registry WHERE org_id = ${principal.orgId} AND tombstoned_at IS NULL ORDER BY slug ASC
+    `;
+    return rows.map((row) => String(row.slug));
   }
 
   /** Drop a bundle no remaining skill in the org points at. See the SQLite twin. */

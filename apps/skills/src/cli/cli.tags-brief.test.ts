@@ -136,6 +136,20 @@ describe("CLI tags and brief output", () => {
       expect(data).toEqual([]);
     });
 
+    test("--tag is an alias for --tags", async () => {
+      const { stdout: viaTags, exitCode: tagsCode } = await runCli(["list", "--tags", "api", "--all", "--json"]);
+      expect(tagsCode).toBe(0);
+      const { stdout: viaTag, exitCode: tagCode } = await runCli(["list", "--tag", "api", "--all", "--json"]);
+      expect(tagCode).toBe(0);
+      expect(viaTag).toBe(viaTags);
+      const data = JSON.parse(viaTag);
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBeGreaterThan(0);
+      for (const s of data) {
+        expect(s.tags.map((t: string) => t.toLowerCase())).toContain("api");
+      }
+    });
+
     test("works with --category and --tags together", async () => {
       const { stdout, exitCode } = await runCli(["list", "--category", "Development Tools", "--tags", "api", "--all", "--json"]);
       expect(exitCode).toBe(0);

@@ -40,6 +40,7 @@ export function registerBrowse(parent: Command) {
     .option("-c, --category <category>", "Filter by category")
     .option("-p, --pinned", "Show only pinned skills", false)
     .option("-t, --tags <tags>", "Filter by comma-separated tags (OR logic, case-insensitive)")
+    .option("--tag <tags>", "Filter by comma-separated tags (alias for --tags)")
     .option("--all", "Show the full skill registry instead of the default basic set", false)
     .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
     .option("--json", "Output as JSON", false)
@@ -240,7 +241,10 @@ async function handleList(options: any) {
     return;
   }
 
-  const tagFilter = options.tags ? options.tags.split(",").map((t: string) => t.trim().toLowerCase()).filter(Boolean) : null;
+  // --tag is the documented alias for --tags; whichever the caller used, the
+  // filter below behaves identically.
+  const tagsOption = options.tags ?? options.tag;
+  const tagFilter = tagsOption ? tagsOption.split(",").map((t: string) => t.trim().toLowerCase()).filter(Boolean) : null;
 
   if (options.category) {
     const categories = availableCategories(options, registry);
@@ -380,6 +384,7 @@ function listCommand(options: any): string {
   if (options.remote) parts.push("--remote");
   if (options.category) parts.push("--category", quoteArg(options.category));
   if (options.tags) parts.push("--tags", quoteArg(options.tags));
+  else if (options.tag) parts.push("--tag", quoteArg(options.tag));
   if (options.pinned) parts.push("--pinned");
   return parts.join(" ");
 }

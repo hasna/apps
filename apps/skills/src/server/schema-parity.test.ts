@@ -62,6 +62,7 @@ const EXPECTED_TABLES = [
   "skills_registry",
   "skills_run_logs",
   "skills_runs",
+  "skills_tags",
   "users",
 ];
 

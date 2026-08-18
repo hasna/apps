@@ -11,6 +11,9 @@ import {
   getMergedSkill,
   getMergedSkillMd,
   listMergedSkills,
+  listMergedSkillsByTag,
+  listOrgTags,
+  listPinsByTag,
   parseIfMatch,
   parsePublishRequest,
   pinMetadataField,
@@ -21,6 +24,7 @@ import {
   storePublishedSkill,
   deletePublishedSkill,
   publishedPayload,
+  skillSummary,
 } from "./skills-api.js";
 import { createStore, type MemorySkillsStore } from "./store.js";
 import { SkillRevisionConflictError, type ApiPrincipal, type ServerRunRecord, type SkillsProductStore } from "./types.js";
@@ -181,7 +185,11 @@ async function handleApiV1(
   }
 
   if (resource === "skills") {
-    if (request.method === "GET" && !id) return json(await listMergedSkills(store, principal));
+    if (request.method === "GET" && !id) {
+      const tag = new URL(request.url).searchParams.get("tag");
+      if (tag !== null && tag !== "") return json(await listMergedSkillsByTag(store, principal, tag));
+      return json(await listMergedSkills(store, principal));
+    }
 
     // Publish. The only route that reads config.skillBundleLimitBytes. Guarded by the
     // optimistic-concurrency contract (todos d061fcda): a publish against a slug this
@@ -279,6 +287,8 @@ async function handleApiV1(
 
   if (resource === "pins") {
     if (request.method === "GET" && !id) {
+      const tag = new URL(request.url).searchParams.get("tag");
+      if (tag !== null && tag !== "") return json(await listPinsByTag(store, principal, tag));
       return json((await store.listPins(principal)).map(pinPayload));
     }
 
@@ -299,6 +309,19 @@ async function handleApiV1(
       return removed
         ? json({ deleted: true, slug: id })
         : json({ error: "pin not found", code: "PIN_NOT_FOUND" }, { status: 404 });
+    }
+  }
+
+  if (resource === "tags") {
+    if (request.method === "GET" && !id) {
+      return json(await listOrgTags(store, principal));
+    }
+
+    if (request.method === "GET" && id && subresource === "skills") {
+      // The tag is a decoded path segment (traversal-checked at the router
+      // boundary) but not slug-validated: a tag is free text, and the store
+      // filters exact-match. Empty results, never an error, for an unknown tag.
+      return json((await listMergedSkillsByTag(store, principal, id)).map(skillSummary));
     }
   }
 
