@@ -292,18 +292,26 @@ export class MonitorStore {
     return row ?? null;
   }
 
-  insertControlRequest(
+  /**
+   * Atomically claim an idempotency key. The claim is ONE statement: INSERT
+   * OR IGNORE against the UNIQUE(slug_id, idempotency_key, operation)
+   * constraint, with a provisional empty result. A check-then-insert is not
+   * atomic — a second writer between the two statements would both pass the
+   * check and both execute the operation. With a claim, exactly one writer
+   * wins (created: true) and executes; every other writer sees the existing
+   * row and must NOT execute.
+   */
+  claimControlRequest(
     slugId: string,
     idempotencyKey: string,
     operation: string,
-    requestDigest: string,
-    resultJson: string
-  ): void {
-    this.db
+    requestDigest: string
+  ): { created: boolean; existing: { result_json: string; request_digest: string } } {
+    const res = this.db
       .prepare(
         `INSERT OR IGNORE INTO slug_control_requests
            (id, idempotency_key, slug_id, operation, request_digest, result_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, '', ?)`
       )
       .run(
         newId(),
@@ -311,9 +319,33 @@ export class MonitorStore {
         slugId,
         operation,
         requestDigest,
-        resultJson,
         Math.floor(Date.now() / 1000)
       );
+    const existing =
+      this.getControlRequest(slugId, idempotencyKey, operation) ?? {
+        result_json: "",
+        request_digest: requestDigest,
+      };
+    return { created: res.changes === 1, existing };
+  }
+
+  /**
+   * Record the result on the row this caller claimed. Only the claim winner
+   * calls this; losers never write to the row.
+   */
+  completeControlRequest(
+    slugId: string,
+    idempotencyKey: string,
+    operation: string,
+    resultJson: string
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE slug_control_requests
+         SET result_json = ?
+         WHERE slug_id = ? AND idempotency_key = ? AND operation = ?`
+      )
+      .run(resultJson, slugId, idempotencyKey, operation);
   }
 
   // ── slug_runs ────────────────────────────────────────────────────────────

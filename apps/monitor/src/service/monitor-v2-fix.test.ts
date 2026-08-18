@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "../db/client.js";
@@ -9,7 +10,7 @@ import {
   type SlugStatus,
 } from "../service.js";
 import { MonitorStore } from "./store.js";
-import { definitionDigest, validateDefinition } from "./definition.js";
+import { canonicalJson, definitionDigest, validateDefinition } from "./definition.js";
 
 /**
  * MON-V2-05 remediation regression suite (PR #492 cycle 1).
@@ -140,6 +141,79 @@ describe("idempotency keys are scoped by operation and request", () => {
     });
     expect(conflict.accepted).toBe(false);
     expect((conflict as ErrorResult).error).toMatch(/different start request/i);
+  });
+});
+
+/** Digest the service itself computes for a start request (see requestDigest). */
+function startRequestDigest(nextCadence = false): string {
+  return createHash("sha256")
+    .update(canonicalJson({ operation: "start", nextCadence }))
+    .digest("hex");
+}
+
+describe("idempotency claims are atomic — a second writer never executes", () => {
+  it("two writers claiming the same key produce one row and one winner", () => {
+    defineOk("atomic-idem-slug");
+    const row = store.getSlugByName("atomic-idem-slug")!;
+    const first = store.claimControlRequest(row.id, "atomic-key-1", "start", "digest-a");
+    expect(first.created).toBe(true);
+    const second = store.claimControlRequest(row.id, "atomic-key-1", "start", "digest-a");
+    expect(second.created).toBe(false);
+    // The winner's result is provisional while it is still executing.
+    expect(second.existing.result_json).toBe("");
+    const count = db
+      .query<{ n: number }, [string, string]>(
+        `SELECT COUNT(*) AS n FROM slug_control_requests
+         WHERE slug_id = ? AND idempotency_key = ?`
+      )
+      .get(row.id, "atomic-key-1")!.n;
+    expect(count).toBe(1);
+  });
+
+  it("the losing writer does not execute the operation while the winner is in flight", () => {
+    defineOk("atomic-idem-slug");
+    const row = store.getSlugByName("atomic-idem-slug")!;
+    // Writer 1 wins the claim and is mid-execution (result not yet recorded).
+    const claim = store.claimControlRequest(
+      row.id,
+      "atomic-key-2",
+      "start",
+      startRequestDigest(false)
+    );
+    expect(claim.created).toBe(true);
+    // Writer 2 arrives between claim and completion: must NOT execute.
+    const r = svc.start("atomic-idem-slug", { idempotencyKey: "atomic-key-2" });
+    expect(r.accepted).toBe(false);
+    expect((r as ErrorResult).error).toMatch(/already executing/i);
+    // No side effect: the slug is still stopped and no run was admitted.
+    expect(store.getSlugByName("atomic-idem-slug")!.desired_state).toBe("stopped");
+    expect(store.countNonTerminalRuns(row.id)).toBe(0);
+  });
+
+  it("after the winner completes, the same key replays the recorded result", () => {
+    defineOk("atomic-idem-slug");
+    const row = store.getSlugByName("atomic-idem-slug")!;
+    const claim = store.claimControlRequest(
+      row.id,
+      "atomic-key-3",
+      "start",
+      startRequestDigest(false)
+    );
+    expect(claim.created).toBe(true);
+    const winner: ControlResult = {
+      accepted: true,
+      code: "started",
+      slug: "atomic-idem-slug",
+      revision: 1,
+      state: "running",
+      run_id: null,
+      execution_proven: false,
+    };
+    store.completeControlRequest(row.id, "atomic-key-3", "start", JSON.stringify(winner));
+    const replay = svc.start("atomic-idem-slug", { idempotencyKey: "atomic-key-3" });
+    expect(replay.accepted).toBe(true);
+    expect((replay as ControlResult).code).toBe("idempotent_replay");
+    expect((replay as ControlResult).state).toBe("running");
   });
 });
 
@@ -380,6 +454,120 @@ describe("shell execution cannot bypass validation through env", () => {
             command: {
               executable: "env",
               args: ["FOO=1", "/bin/true"],
+              timeoutSeconds: 10,
+            },
+          },
+        ],
+      })
+    );
+    expect(r.valid).toBe(true);
+  });
+
+  it("rejects env nested inside env resolving to a shell (env env bash -c)", () => {
+    const r = validateDefinition(
+      makeDefinition("env-slug", {
+        checks: [
+          {
+            id: "c1",
+            command: {
+              executable: "env",
+              args: ["env", "bash", "-c", "echo hi"],
+              timeoutSeconds: 10,
+            },
+          },
+        ],
+      })
+    );
+    expect(r.valid).toBe(false);
+    expect(r.errors.join("; ")).toMatch(/shell/i);
+  });
+
+  it("rejects env -i nested inside env -i resolving to a shell", () => {
+    const r = validateDefinition(
+      makeDefinition("env-slug", {
+        checks: [
+          {
+            id: "c1",
+            command: {
+              executable: "env",
+              args: ["-i", "env", "-i", "sh", "-c", "echo hi"],
+              timeoutSeconds: 10,
+            },
+          },
+        ],
+      })
+    );
+    expect(r.valid).toBe(false);
+    expect(r.errors.join("; ")).toMatch(/shell/i);
+  });
+
+  it("rejects env -- env -- /bin/sh -c through an explicit separator", () => {
+    const r = validateDefinition(
+      makeDefinition("env-slug", {
+        checks: [
+          {
+            id: "c1",
+            command: {
+              executable: "env",
+              args: ["--", "env", "--", "/bin/sh", "-c", "echo hi"],
+              timeoutSeconds: 10,
+            },
+          },
+        ],
+      })
+    );
+    expect(r.valid).toBe(false);
+    expect(r.errors.join("; ")).toMatch(/shell/i);
+  });
+
+  it("rejects env -S nested inside env", () => {
+    const r = validateDefinition(
+      makeDefinition("env-slug", {
+        checks: [
+          {
+            id: "c1",
+            command: {
+              executable: "env",
+              args: ["env", "-S", "bash -c 'echo hi'"],
+              timeoutSeconds: 10,
+            },
+          },
+        ],
+      })
+    );
+    expect(r.valid).toBe(false);
+    expect(r.errors.join("; ")).toMatch(/shell/i);
+  });
+
+  it("rejects env chains nested past the resolution bound", () => {
+    const nested = Array(12).fill("env");
+    const r = validateDefinition(
+      makeDefinition("env-slug", {
+        checks: [
+          {
+            id: "c1",
+            command: {
+              executable: "env",
+              args: [...nested, "/usr/bin/true"],
+              timeoutSeconds: 10,
+            },
+          },
+        ],
+      })
+    );
+    expect(r.valid).toBe(false);
+    expect(r.errors.join("; ")).toMatch(/shell/i);
+  });
+
+  it("accepts a multi-level env chain ending in a non-shell command", () => {
+    const r = validateDefinition(
+      makeDefinition("env-slug", {
+        checks: [
+          {
+            id: "c1",
+            command: {
+              executable: "env",
+              args: ["FOO=1", "env", "BAR=2", "env", "-i", "/usr/bin/true"],
               timeoutSeconds: 10,
             },
           },

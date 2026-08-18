@@ -311,14 +311,14 @@ export class MonitorService {
 
     const normalizedStart = { nextCadence: !!opts.nextCadence };
     if (opts.idempotencyKey) {
-      const replayed = this.replayOrConflict(
+      const gate = this.beginIdempotent(
         slug.id,
         slugName,
         opts.idempotencyKey,
         "start",
         normalizedStart
       );
-      if (replayed) return replayed;
+      if (gate.status !== "proceed") return gate.result;
     }
 
     const active = this.store.getActiveRevision(slug.id);
@@ -365,13 +365,7 @@ export class MonitorService {
     }
 
     if (opts.idempotencyKey) {
-      this.store.insertControlRequest(
-        slug.id,
-        opts.idempotencyKey,
-        "start",
-        this.requestDigest("start", normalizedStart),
-        JSON.stringify(result)
-      );
+      this.finishIdempotent(slug.id, opts.idempotencyKey, "start", result);
     }
     return result;
   }
@@ -397,14 +391,14 @@ export class MonitorService {
       timeoutMs: opts.timeoutMs ?? null,
     };
     if (opts.idempotencyKey) {
-      const replayed = this.replayOrConflict(
+      const gate = this.beginIdempotent(
         slug.id,
         slugName,
         opts.idempotencyKey,
         "stop",
         normalizedStop
       );
-      if (replayed) return replayed;
+      if (gate.status !== "proceed") return gate.result;
     }
 
     const active = this.store.getActiveRevision(slug.id);
@@ -474,13 +468,7 @@ export class MonitorService {
     }
 
     if (opts.idempotencyKey) {
-      this.store.insertControlRequest(
-        slug.id,
-        opts.idempotencyKey,
-        "stop",
-        this.requestDigest("stop", normalizedStop),
-        JSON.stringify(result)
-      );
+      this.finishIdempotent(slug.id, opts.idempotencyKey, "stop", result);
     }
     return result;
   }
@@ -506,14 +494,14 @@ export class MonitorService {
       timeoutMs: opts.timeoutMs ?? null,
     };
     if (opts.idempotencyKey) {
-      const replayed = this.replayOrConflict(
+      const gate = this.beginIdempotent(
         slug.id,
         slugName,
         opts.idempotencyKey,
         "restart",
         normalizedRestart
       );
-      if (replayed) return replayed;
+      if (gate.status !== "proceed") return gate.result;
     }
 
     const active = this.store.getActiveRevision(slug.id);
@@ -539,13 +527,7 @@ export class MonitorService {
       const drained = this.waitForDrain(slug.id, slugName, revision, opts.timeoutMs);
       if (drained.code === "drain_pending") {
         if (opts.idempotencyKey) {
-          this.store.insertControlRequest(
-            slug.id,
-            opts.idempotencyKey,
-            "restart",
-            this.requestDigest("restart", normalizedRestart),
-            JSON.stringify(drained)
-          );
+          this.finishIdempotent(slug.id, opts.idempotencyKey, "restart", drained);
         }
         return drained;
       }
@@ -567,13 +549,7 @@ export class MonitorService {
     };
 
     if (opts.idempotencyKey) {
-      this.store.insertControlRequest(
-        slug.id,
-        opts.idempotencyKey,
-        "restart",
-        this.requestDigest("restart", normalizedRestart),
-        JSON.stringify(result)
-      );
+      this.finishIdempotent(slug.id, opts.idempotencyKey, "restart", result);
     }
     return result;
   }
@@ -659,30 +635,68 @@ export class MonitorService {
   }
 
   /**
-   * Operation-scoped idempotency: an idempotency key replays only the exact
-   * stored request (same operation, same normalized request digest). Reusing
-   * a key for a different request is a conflict, not a replay — otherwise a
-   * key captured by `start` would silently replay that start's result for a
-   * later `stop`.
+   * Operation-scoped, CLAIM-FIRST idempotency: an idempotency key replays
+   * only the exact stored request (same operation, same normalized request
+   * digest); reusing a key for a different request is a conflict, not a
+   * replay — otherwise a key captured by `start` would silently replay that
+   * start's result for a later `stop`.
+   *
+   * The claim is one atomic INSERT OR IGNORE against the unique
+   * (slug_id, idempotency_key, operation) constraint, so a second writer
+   * racing between a check and an insert can never both execute: exactly one
+   * writer wins the claim and proceeds; the loser must NOT execute and
+   * instead replays the winner's recorded result, reports a conflict for a
+   * different request digest, or reports in-flight while the winner has not
+   * completed yet.
    */
-  private replayOrConflict(
+  private beginIdempotent(
     slugId: string,
     slugName: string,
     key: string,
     operation: "start" | "stop" | "restart",
     normalized: Record<string, unknown>
-  ): ControlResult | ErrorResult | null {
+  ):
+    | { status: "proceed" }
+    | {
+        status: "replay" | "conflict" | "in_flight";
+        result: ControlResult | ErrorResult;
+      } {
     const digest = this.requestDigest(operation, normalized);
-    const stored = this.store.getControlRequest(slugId, key, operation);
-    if (!stored) return null;
+    const claim = this.store.claimControlRequest(slugId, key, operation, digest);
+    if (claim.created) return { status: "proceed" };
+    const stored = claim.existing;
     if (stored.request_digest !== digest) {
-      return this.error(
-        slugName,
-        `idempotency key '${key}' was already used for a different ${operation} request`
-      );
+      return {
+        status: "conflict",
+        result: this.error(
+          slugName,
+          `idempotency key '${key}' was already used for a different ${operation} request`
+        ),
+      };
+    }
+    if (stored.result_json === "") {
+      // The winning writer has claimed but not yet completed. The loser must
+      // not execute the operation a second time.
+      return {
+        status: "in_flight",
+        result: this.error(
+          slugName,
+          `idempotency key '${key}' is already executing this ${operation} request`
+        ),
+      };
     }
     const parsed = JSON.parse(stored.result_json) as ControlResult;
-    return { ...parsed, code: "idempotent_replay" };
+    return { status: "replay", result: { ...parsed, code: "idempotent_replay" } };
+  }
+
+  /** Record the result on the row this caller claimed (claim winner only). */
+  private finishIdempotent(
+    slugId: string,
+    key: string,
+    operation: "start" | "stop" | "restart",
+    result: ControlResult
+  ): void {
+    this.store.completeControlRequest(slugId, key, operation, JSON.stringify(result));
   }
 
   private requestDigest(

@@ -30,6 +30,77 @@ const SHELL_EXECUTABLES = new Set([
   "pwsh",
 ]);
 
+/** Cap on `env` wrapper nesting; a deeper chain is not resolvable safely. */
+const MAX_ENV_NESTING = 8;
+
+interface ResolvedCommand {
+  executable: string;
+  args: string[];
+}
+
+/**
+ * Recursively resolve `env` wrappers down to the effective command, applying
+ * the bare-argv contract at every level of the chain. A single-level check
+ * lets `executable: env, args: [env, bash, -c, ...]` smuggle a shell past
+ * validation: the inner `env` is itself a wrapper, so the chain must be
+ * resolved until the first non-`env` executable and checked there.
+ *
+ * Returns null when the chain cannot be resolved safely: `env -S` /
+ * `--split-string` anywhere in the chain (it re-splits into shell words), or
+ * nesting deeper than MAX_ENV_NESTING.
+ */
+function resolveEnvChain(
+  executable: string,
+  args: string[],
+  depth: number
+): ResolvedCommand | null {
+  const base = executable.split("/").pop()?.toLowerCase() ?? "";
+  if (base !== "env") return { executable, args };
+  if (depth >= MAX_ENV_NESTING) return null;
+  if (args.includes("-S") || args.includes("--split-string")) return null;
+  let i = 0;
+  // env assignments: NAME=value
+  while (i < args.length) {
+    const assignment = args[i];
+    if (
+      assignment === undefined ||
+      !/^[A-Za-z_][A-Za-z0-9_]*=/.test(assignment)
+    )
+      break;
+    i++;
+  }
+  // env options: -i/--ignore-environment, -u/--unset NAME, -C DIR, then any
+  // remaining -flag, then an explicit --
+  for (;;) {
+    const a = args[i];
+    if (a === "-i" || a === "--ignore-environment") {
+      i += 1;
+      continue;
+    }
+    if (a === "-u" || a === "--unset" || a === "-C") {
+      i += 2;
+      continue;
+    }
+    if (a === "--") {
+      i += 1;
+      break;
+    }
+    if (a !== undefined && a.startsWith("-")) {
+      i += 1;
+      continue;
+    }
+    break;
+  }
+  if (i >= args.length) {
+    // `env` with no command prints the environment — a benign, non-shell
+    // invocation, identical to running `env` directly.
+    return { executable, args };
+  }
+  const effective = args[i];
+  if (effective === undefined) return null;
+  return resolveEnvChain(effective, args.slice(i + 1), depth + 1);
+}
+
 export const commandSpecSchema = z
   .object({
     executable: z.string().min(1).max(4096),
@@ -63,76 +134,43 @@ export const commandSpecSchema = z
       });
     }
     // `env` is a sanctioned wrapper that can prefix a real command with
-    // assignments and options. Resolve the effective command and apply the
-    // same shell-mode rejections to it, so 'executable: env, args: [bash,
-    // -c, ...]' cannot smuggle a shell past the checks above.
+    // assignments and options. Resolve the WHOLE wrapper chain recursively
+    // (env env ... sh -c ... must not smuggle a shell past a single-level
+    // check) and apply the same shell-mode rejections to the effective
+    // command at the end of the chain.
     if (base === "env") {
-      if (
-        cmd.args.includes("-S") ||
-        cmd.args.includes("--split-string")
-      ) {
+      const resolved = resolveEnvChain(cmd.executable, cmd.args, 0);
+      if (resolved === null) {
         ctx.addIssue({
           code: "custom",
           path: ["args"],
           message:
-            "env -S splits a string into shell words; shell mode is not part of the v2 definition schema",
+            "env wrapper chain is not resolvable (nesting limit, or env -S/--split-string anywhere in the chain); shell mode is not part of the v2 definition schema",
         });
         return;
       }
-      const args = cmd.args;
-      let i = 0;
-      // env assignments: NAME=value
-      while (i < args.length) {
-        const assignment = args[i];
-        if (
-          assignment === undefined ||
-          !/^[A-Za-z_][A-Za-z0-9_]*=/.test(assignment)
-        )
-          break;
-        i++;
+      const effectiveBase =
+        resolved.executable.split("/").pop()?.toLowerCase() ?? "";
+      if (SHELL_METACHARS.test(resolved.executable)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["args"],
+          message: `executable 'env' resolves to a command with shell syntax ('${resolved.executable}'); shell mode is not part of the v2 definition schema`,
+        });
       }
-      // env options: -i/--ignore-environment, -u/--unset NAME, -C DIR,
-      // then any remaining -flag, then an explicit --
-      for (;;) {
-        const a = args[i];
-        if (a === "-i" || a === "--ignore-environment") {
-          i += 1;
-          continue;
-        }
-        if (a === "-u" || a === "--unset" || a === "-C") {
-          i += 2;
-          continue;
-        }
-        if (a === "--") {
-          i += 1;
-          break;
-        }
-        if (a !== undefined && a.startsWith("-")) {
-          i += 1;
-          continue;
-        }
-        break;
+      if (SHELL_EXECUTABLES.has(effectiveBase)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["args"],
+          message: `executable 'env' resolves to a shell ('${resolved.executable}'); shell mode is not part of the v2 definition schema`,
+        });
       }
-      if (i < args.length) {
-        const effective = args[i];
-        if (effective !== undefined) {
-          const effectiveBase =
-            effective.split("/").pop()?.toLowerCase() ?? "";
-          if (SHELL_EXECUTABLES.has(effectiveBase)) {
-            ctx.addIssue({
-              code: "custom",
-              path: ["args"],
-              message: `executable 'env' resolves to a shell ('${effective}'); shell mode is not part of the v2 definition schema`,
-            });
-          }
-          if (args[i + 1] === "-c") {
-            ctx.addIssue({
-              code: "custom",
-              path: ["args"],
-              message: "args must not invoke a shell ('-c' is shell mode)",
-            });
-          }
-        }
+      if (resolved.args[0] === "-c") {
+        ctx.addIssue({
+          code: "custom",
+          path: ["args"],
+          message: "args must not invoke a shell ('-c' is shell mode)",
+        });
       }
     }
   });
