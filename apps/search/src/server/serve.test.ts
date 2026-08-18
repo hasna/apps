@@ -364,3 +364,45 @@ describe("REST API", () => {
     expect(after.length).toBe(0);
   });
 });
+
+describe("contract status surface (hasna.service_contract.v1)", () => {
+  it("GET /health returns status/version/backend with no mode vocabulary", async () => {
+    const res = await fetch(`${baseUrl}/health`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveProperty("status");
+    expect(["ok", "degraded", "unavailable"]).toContain(body.status);
+    expect(typeof body.version).toBe("string");
+    expect(body.version.length).toBeGreaterThan(0);
+    expect(["sqlite", "postgresql"]).toContain(body.backend);
+    expect(body).not.toHaveProperty("mode");
+    expect(JSON.stringify(body)).not.toContain("cloud");
+  });
+
+  it("GET /ready returns a ready boolean", async () => {
+    const res = await fetch(`${baseUrl}/ready`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(typeof body.ready).toBe("boolean");
+  });
+
+  it("GET /version returns name and version", async () => {
+    const res = await fetch(`${baseUrl}/version`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.name).toBe("search");
+    expect(typeof body.version).toBe("string");
+    expect(body.version.length).toBeGreaterThan(0);
+  });
+
+  it("GET /openapi.json returns an OpenAPI 3 document covering /api/search", async () => {
+    const res = await fetch(`${baseUrl}/openapi.json`);
+    expect(res.status).toBe(200);
+    const doc = await res.json();
+    expect(doc.openapi).toMatch(/^3\./);
+    expect(doc.info.title).toBeTruthy();
+    expect(doc.paths).toHaveProperty("/api/search");
+    expect(JSON.stringify(doc)).not.toContain("cloud");
+    expect(JSON.stringify(doc)).not.toContain("mode");
+  });
+});
