@@ -52,6 +52,33 @@ export function isStrictlyOlder(
     || (comment.created_at === before.created_at && comment.id < before.id);
 }
 
+/**
+ * The ascending sort matching `isStrictlyOlder` BY CONSTRUCTION.
+ *
+ * Ordering a page and deciding what a cursor excludes are the same question,
+ * so they must not be answered by two different comparators. They previously
+ * were: the sort used `localeCompare` (locale collation) while the filter used
+ * `<` (UTF-16 code-unit order). Those disagree on ordinary inputs — measured,
+ * `'a'.localeCompare('B') === -1` while `'a' < 'B'` is false — and wherever
+ * they disagree the page window and the cursor filter describe different
+ * orderings, which is how a row falls through the gap between two pages.
+ *
+ * Today's ids are lowercase-hex UUIDs, and over that alphabet the two agree:
+ * exhaustively checked, 83,521 two-character pairs over `[0-9a-f-]`, zero
+ * disagreements (with `'a'` vs `'B'` as the positive control proving the check
+ * can fire). So this is latent rather than live — it is fixed here because the
+ * cost is one comparator and the alternative is depending on a property of the
+ * id alphabet that nothing states or enforces.
+ */
+export function compareCommentKeyset(
+  left: Pick<TaskComment, "created_at" | "id">,
+  right: Pick<TaskComment, "created_at" | "id">,
+): number {
+  if (isStrictlyOlder(left, right)) return -1;
+  if (isStrictlyOlder(right, left)) return 1;
+  return 0;
+}
+
 export interface CommentPageResult<T> {
   comments: T[];
   count: number;
@@ -70,8 +97,7 @@ export function pageComments<T extends Pick<TaskComment, "created_at" | "id">>(
   all: readonly T[],
   options: { limit: number; before?: CommentCursor },
 ): CommentPageResult<T> {
-  const ascending = [...all].sort((left, right) =>
-    left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
+  const ascending = [...all].sort(compareCommentKeyset);
   const scoped = options.before
     ? ascending.filter((comment) => isStrictlyOlder(comment, options.before!))
     : ascending;
