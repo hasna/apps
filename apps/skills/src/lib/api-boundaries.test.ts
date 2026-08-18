@@ -1,10 +1,32 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { mergeRemoteRegistry } from "./remote-registry.js";
+import type { SkillMeta } from "./registry.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
+
+const LOCAL_ONLY_FIXTURE: SkillMeta[] = [
+  {
+    name: "local-skill",
+    displayName: "Local Skill",
+    description: "Written on this machine",
+    category: "Development Tools",
+    tags: [],
+    source: "custom",
+  },
+  {
+    name: "bundled-skill",
+    displayName: "Bundled Skill",
+    description: "Ships with the CLI",
+    category: "Development Tools",
+    tags: [],
+    source: "official",
+  },
+];
 
 describe("API-first boundary contract", () => {
   const doc = readFileSync(join(process.cwd(), "docs/architecture/api-first-boundaries.md"), "utf8");
@@ -37,5 +59,80 @@ describe("API-first boundary contract", () => {
     expect(doc).toContain("MCP tools should not bypass approval gates");
     expect(doc).toContain("Clients observe worker state through API reads");
     expect(doc).toMatch(/They do not enqueue privileged\s+jobs directly/);
+  });
+
+  describe("remote merge boundary (R1 fail-closed default read)", () => {
+    const originalSkillsApiUrl = process.env.SKILLS_API_URL;
+    const originalSkillsApiKey = process.env.SKILLS_API_KEY;
+    const originalSkillApiKey = process.env.SKILL_API_KEY;
+
+    afterEach(() => {
+      if (originalSkillsApiUrl === undefined) delete process.env.SKILLS_API_URL;
+      else process.env.SKILLS_API_URL = originalSkillsApiUrl;
+      if (originalSkillsApiKey === undefined) delete process.env.SKILLS_API_KEY;
+      else process.env.SKILLS_API_KEY = originalSkillsApiKey;
+      if (originalSkillApiKey === undefined) delete process.env.SKILL_API_KEY;
+      else process.env.SKILL_API_KEY = originalSkillApiKey;
+    });
+
+    test("an unconfigured install keeps the exact local registry — byte for byte", async () => {
+      delete process.env.SKILLS_API_URL;
+      delete process.env.SKILLS_API_KEY;
+      const merged = await mergeRemoteRegistry(LOCAL_ONLY_FIXTURE, {
+        fetchImpl: async () => {
+          throw new Error("must not fetch when unconfigured");
+        },
+      });
+      expect(merged).toEqual(LOCAL_ONLY_FIXTURE);
+      expect(JSON.stringify(merged)).toBe(JSON.stringify(LOCAL_ONLY_FIXTURE));
+    });
+
+    test("an origin without a credential keeps the exact local registry and never throws", async () => {
+      process.env.SKILLS_API_URL = "https://skills.example.com/api/v1";
+      // authToken: null exercises the auth-missing branch deterministically.
+      // The getApiKey() env-driven path cannot be asserted in-process: the
+      // auth-store module cache is shared across the test process and is
+      // primed by auth-store.test.ts, so a later read would not reflect the
+      // env alone. That path is covered hermetically by the CLI subprocess
+      // test in cli.discovery.test.ts ("keeps the default local list when an
+      // origin is set but no credential exists").
+      const merged = await mergeRemoteRegistry(LOCAL_ONLY_FIXTURE, {
+        authToken: null,
+        fetchImpl: async () => {
+          throw new Error("must not fetch without a credential");
+        },
+      });
+      expect(merged).toEqual(LOCAL_ONLY_FIXTURE);
+    });
+
+    test("a rejected authenticated read surfaces a clear error, never a silent empty", async () => {
+      process.env.SKILLS_API_URL = "https://skills.example.com/api/v1";
+      process.env["SKILLS_API_KEY"] = "fixture-revoked";
+      let error: Error | null = null;
+      try {
+        await mergeRemoteRegistry(LOCAL_ONLY_FIXTURE, {
+          fetchImpl: async () => new Response("nope", { status: 403, statusText: "Forbidden" }),
+        });
+      } catch (caught) {
+        error = caught as Error;
+      }
+      expect(error).not.toBeNull();
+      expect(error?.message).toContain("Remote registry request failed: 403");
+    });
+
+    test("a successful authenticated read merges remote rows tagged source=remote", async () => {
+      process.env.SKILLS_API_URL = "https://skills.example.com/api/v1";
+      process.env["SKILLS_API_KEY"] = "fixture-valid";
+      const merged = await mergeRemoteRegistry(LOCAL_ONLY_FIXTURE, {
+        fetchImpl: async (input, init) => {
+          expect(String(input)).toBe("https://skills.example.com/api/v1/skills");
+          expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture-valid");
+          return Response.json({ skills: [{ name: "remote-only-skill", displayName: "Remote Only" }] });
+        },
+      });
+      const remote = merged.find((skill) => skill.name === "remote-only-skill");
+      expect(remote).toMatchObject({ source: "remote" });
+      expect(merged).toHaveLength(LOCAL_ONLY_FIXTURE.length + 1);
+    });
   });
 });

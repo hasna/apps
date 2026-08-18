@@ -4,9 +4,11 @@ import {
   getConfiguredApiUrl,
   loadRemoteRegistry,
   loadRemoteSkill,
+  mergeRemoteRegistry,
   parseRemoteRegistryPayload,
   parseRemoteSkillPayload,
 } from "./remote-registry.js";
+import type { SkillMeta } from "./registry.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -298,5 +300,133 @@ describe("remote registry", () => {
       .toThrow("Remote registry payload did not match the expected skills contract");
     expect(() => parseRemoteSkillPayload({ skill: { displayName: "Missing slug" } }))
       .toThrow("Remote skill payload did not match the expected skills contract");
+  });
+
+  describe("mergeRemoteRegistry (default-read merge, R1 fail-closed)", () => {
+    const originalSkillsApiKey = process.env.SKILLS_API_KEY;
+    const originalSkillApiKey = process.env.SKILL_API_KEY;
+
+    const localFixture: SkillMeta[] = [
+      {
+        name: "local-skill",
+        displayName: "Local Skill",
+        description: "Written on this machine",
+        category: "Development Tools",
+        tags: [],
+        source: "custom",
+      },
+      {
+        name: "bundled-skill",
+        displayName: "Bundled Skill",
+        description: "Ships with the CLI",
+        category: "Development Tools",
+        tags: [],
+        source: "official",
+      },
+    ];
+
+    afterEach(() => {
+      if (originalSkillsApiKey === undefined) delete process.env.SKILLS_API_KEY;
+      else process.env.SKILLS_API_KEY = originalSkillsApiKey;
+      if (originalSkillApiKey === undefined) delete process.env.SKILL_API_KEY;
+      else process.env.SKILL_API_KEY = originalSkillApiKey;
+    });
+
+    test("returns the local list unchanged when no origin is configured and never fetches", async () => {
+      delete process.env.SKILLS_API_URL;
+      let fetched = false;
+      const result = await mergeRemoteRegistry(localFixture, {
+        authToken: "fixture-key",
+        fetchImpl: async () => {
+          fetched = true;
+          throw new Error("must not fetch without an origin");
+        },
+      });
+      expect(result).toEqual(localFixture);
+      expect(fetched).toBe(false);
+    });
+
+    test("returns the local list unchanged when auth is missing and never fetches or throws", async () => {
+      process.env.SKILLS_API_URL = "https://skills.example.com/api/v1";
+      // authToken: null exercises the auth-missing branch deterministically;
+      // the getApiKey() env-driven path is covered hermetically by the CLI
+      // subprocess test in cli.discovery.test.ts (the in-process auth-store
+      // module cache is shared across test files and not isolatable here).
+      let fetched = false;
+      const result = await mergeRemoteRegistry(localFixture, {
+        authToken: null,
+        fetchImpl: async () => {
+          fetched = true;
+          throw new Error("must not fetch without a credential");
+        },
+      });
+      expect(result).toEqual(localFixture);
+      expect(fetched).toBe(false);
+    });
+
+    test("merges the authenticated remote registry into the local list when configured", async () => {
+      process.env.SKILLS_API_URL = "https://skills.example.com/api/v1";
+      process.env["SKILLS_API_KEY"] = "fixture-registry-merge";
+      const result = await mergeRemoteRegistry(localFixture, {
+        fetchImpl: async (input, init) => {
+          expect(String(input)).toBe("https://skills.example.com/api/v1/skills");
+          expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture-registry-merge");
+          return Response.json({
+            skills: [
+              {
+                name: "remote-only-skill",
+                displayName: "Remote Only",
+                description: "Lives on the hosted instance",
+                category: "Remote Tools",
+                tags: ["remote"],
+              },
+            ],
+          });
+        },
+      });
+
+      const names = result.map((skill) => skill.name);
+      expect(names).toContain("local-skill");
+      expect(names).toContain("bundled-skill");
+      expect(names).toContain("remote-only-skill");
+      expect(result.find((skill) => skill.name === "remote-only-skill")).toMatchObject({
+        source: "remote",
+        category: "Remote Tools",
+      });
+    });
+
+    test("keeps local precedence over remote on collisions while remote beats official", async () => {
+      process.env.SKILLS_API_URL = "https://skills.example.com/api/v1";
+      process.env["SKILLS_API_KEY"] = "fixture-key";
+      const result = await mergeRemoteRegistry(localFixture, {
+        fetchImpl: async () => Response.json([
+          {
+            name: "local-skill",
+            displayName: "Remote Local",
+            description: "Remote copy of a local skill",
+            category: "Remote Tools",
+          },
+          {
+            name: "bundled-skill",
+            displayName: "Remote Bundled",
+            description: "Instance-published override of a bundled skill",
+            category: "Remote Tools",
+          },
+        ]),
+      });
+
+      const localSkill = result.find((skill) => skill.name === "local-skill");
+      const bundledSkill = result.find((skill) => skill.name === "bundled-skill");
+      expect(localSkill).toMatchObject({ source: "custom", description: "Written on this machine" });
+      expect(bundledSkill).toMatchObject({ source: "remote", description: "Instance-published override of a bundled skill" });
+    });
+
+    test("surfaces an auth failure as a clear error instead of a silent local list", async () => {
+      process.env.SKILLS_API_URL = "https://skills.example.com/api/v1";
+      process.env["SKILLS_API_KEY"] = "fixture-expired-key";
+      await expect(mergeRemoteRegistry(localFixture, {
+        fetchImpl: async () => new Response("nope", { status: 401, statusText: "Unauthorized" }),
+      })).rejects.toThrow("Remote registry request failed: 401 Unauthorized");
+    });
   });
 });

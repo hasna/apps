@@ -14,7 +14,7 @@ import {
   type SkillRegistryProfile,
 } from "../../lib/registry.js";
 import { mergeSkillRegistryLists } from "../../lib/registry-merge.js";
-import { loadRemoteRegistry } from "../../lib/remote-registry.js";
+import { loadRemoteRegistry, mergeRemoteRegistry } from "../../lib/remote-registry.js";
 import { getInstalledSkills, getInstallMeta } from "../../lib/installer.js";
 import {
   getPublicSkillDiscovery,
@@ -145,28 +145,38 @@ async function writeJson(value: unknown, space?: number) {
 /**
  * The registry a browsing command should show.
  *
+ * The default read path is folder UNION cloud: whenever the install is pointed
+ * at a hosted instance (SKILLS_API_URL or config apiUrl) and holds a
+ * credential, the authenticated remote registry joins the local listing even
+ * without `--remote`. Unconfigured or auth-missing installs keep today's exact
+ * local output (fail-closed R1 — see mergeRemoteRegistry()).
+ *
  * `--remote` used to REPLACE the local registry: `skills list --remote` returned exactly
  * what the instance served and nothing else, so the bundled corpus and every skill the
  * operator had written locally disappeared from the listing the moment they pointed the
  * CLI at their own server. It now MERGES, under the precedence documented in
- * src/lib/registry-merge.ts: custom > remote > official, "whichever copy this machine
- * would actually use wins the listing".
+ * src/lib/registry-merge.ts: custom > extension > local > remote > official, "whichever
+ * copy this machine would actually use wins the listing".
  *
  * The profile (`--all` vs the curated basic set) applies to the local half only. The
  * instance's skills are never filtered by it: the basic profile is a hand-written list of
  * ten bundled names, so applying it to remote entries would drop every published skill
  * from `skills list --remote` - the same disappearance this change exists to fix.
  *
- * A remote failure is still fatal. `--remote` is an explicit request, and silently
- * returning the local half of a merge the user asked to include the remote half in would
- * report success for a listing that is missing entries.
+ * A remote failure is still fatal. An explicit `--remote` request (and a configured,
+ * authenticated default read) that fails surfaces a clear error, and silently returning
+ * the local half of a merge the user asked to include the remote half in would report
+ * success for a listing that is missing entries.
  */
 async function getBrowseRegistry(options: { all?: boolean; remote?: boolean }): Promise<SkillMeta[]> {
   const profile: SkillRegistryProfile = options.all ? "all" : "basic";
   const local = loadRegistryProfile(profile);
-  if (!options.remote) return local;
-  const remote = await loadRemoteRegistry();
-  return mergeSkillRegistryLists(local, remote);
+  if (options.remote) {
+    // Explicit request: the merge is mandatory, and a missing origin is an error.
+    const remote = await loadRemoteRegistry();
+    return mergeSkillRegistryLists(local, remote);
+  }
+  return mergeRemoteRegistry(local);
 }
 
 function registryCategories(registry: SkillMeta[]): string[] {
@@ -178,7 +188,20 @@ function registryCategories(registry: SkillMeta[]): string[] {
 }
 
 function availableCategories(options: { remote?: boolean }, registry: SkillMeta[]): string[] {
-  return options.remote ? registryCategories(registry) : [...CATEGORIES];
+  // The default read path merges remote rows when the install is configured,
+  // so the categories the union contributes must be filterable — otherwise
+  // `skills categories` lists a category that `list --category` rejects as
+  // "Unknown category". The static CATEGORIES list stays the floor: entries in
+  // it are always valid (even when no skill in the current profile carries
+  // them), and categories the merged registry contributes are appended. A
+  // registry with no remote rows keeps today's exact list (fail-closed R1).
+  if (options.remote) return registryCategories(registry);
+  const hasRemoteRows = registry.some((skill) => skill.source === "remote");
+  if (!hasRemoteRows) return [...CATEGORIES];
+  const extras = Array.from(new Set(registry.map((skill) => skill.category)))
+    .filter((category) => !CATEGORIES.includes(category as (typeof CATEGORIES)[number]))
+    .sort();
+  return [...CATEGORIES, ...extras];
 }
 
 async function handleList(options: any) {

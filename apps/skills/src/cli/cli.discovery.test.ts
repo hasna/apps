@@ -363,6 +363,181 @@ describe("CLI discovery", () => {
       expect(data.length).toBe(EXPECTED_ALL_SKILL_COUNT);
     });
 
+    test("shows remote-only rows in the DEFAULT list path when an origin and key are set", async () => {
+      // T5: the remote registry joins the default read path (no --remote flag)
+      // whenever the install is pointed at a hosted instance and holds a key.
+      const server = Bun.serve({
+        port: 0,
+        fetch: (req) => {
+          expect(new URL(req.url).pathname).toBe("/api/v1/skills");
+          expect(req.headers.get("authorization")).toBe("Bearer fixture-default-key");
+          return Response.json({
+            skills: [
+              {
+                name: "remote-only-skill",
+                displayName: "Remote Only",
+                description: "Lives only on the hosted instance",
+                category: "Remote Tools",
+                tags: ["remote"],
+              },
+            ],
+          });
+        },
+      });
+
+      try {
+        const { stdout, exitCode } = await runCli(["list", "--all", "--json"], {
+          SKILLS_API_URL: `http://localhost:${server.port}`,
+          SKILLS_API_KEY: "fixture-default-key",
+        });
+        const data = JSON.parse(stdout);
+        expect(exitCode).toBe(0);
+        const names = data.map((skill: any) => skill.name);
+        expect(names).toContain("remote-only-skill");
+        expect(names).toContain("blog-article");
+        const remote = data.find((skill: any) => skill.name === "remote-only-skill");
+        expect(remote).toMatchObject({
+          source: "remote",
+          category: "Remote Tools",
+        });
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test("default list without an origin is byte-identical to an unconfigured run and exits 0", async () => {
+      // No SKILLS_API_URL anywhere: the merge must not change a single byte of
+      // today's output, and the command must still exit 0.
+      const first = await runCli(["list", "--all", "--json"]);
+      const second = await runCli(["list", "--all", "--json"]);
+      expect(first.exitCode).toBe(0);
+      expect(second.exitCode).toBe(0);
+      expect(first.stdout).toBe(second.stdout);
+      const data = JSON.parse(first.stdout);
+      expect(data.length).toBe(EXPECTED_ALL_SKILL_COUNT);
+      expect(data.every((skill: any) => skill.source !== "remote")).toBe(true);
+    }, SLOW_TEST_TIMEOUT);
+
+    test("keeps the default local list when an origin is set but no credential exists", async () => {
+      // T5 fail-closed: an origin without a credential must not change the
+      // default output at all, must not throw, and must not even attempt the
+      // request. Hermetic via a fresh subprocess with a clean home — the
+      // in-process auth-store module cache cannot leak in here.
+      let requests = 0;
+      const server = Bun.serve({
+        port: 0,
+        fetch: () => {
+          requests += 1;
+          return Response.json({ skills: [{ name: "should-not-appear" }] });
+        },
+      });
+
+      try {
+        const { stdout, exitCode } = await runCli(["list", "--all", "--json"], {
+          SKILLS_API_URL: `http://localhost:${server.port}`,
+        });
+        expect(exitCode).toBe(0);
+        const data = JSON.parse(stdout);
+        expect(data.length).toBe(EXPECTED_ALL_SKILL_COUNT);
+        expect(data.every((skill: any) => skill.source !== "remote")).toBe(true);
+        expect(requests).toBe(0);
+      } finally {
+        server.stop(true);
+      }
+    }, SLOW_TEST_TIMEOUT);
+
+    test("surfaces an auth failure on the default read path as a clear error, never a silent empty", async () => {
+      const server = Bun.serve({
+        port: 0,
+        fetch: () => new Response("nope", { status: 401, statusText: "Unauthorized" }),
+      });
+
+      try {
+        const { stdout, stderr, exitCode } = await runCli(["list", "--all", "--json"], {
+          SKILLS_API_URL: `http://localhost:${server.port}`,
+          SKILLS_API_KEY: "fixture-revoked-key",
+        });
+        expect(exitCode).not.toBe(0);
+        expect(stderr).toContain("Remote registry request failed: 401");
+        // Never a silent empty: the listing must not degrade to the local half
+        // while reporting success.
+        expect(stdout).not.toContain("blog-article");
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test("default --category filter accepts categories the merged remote registry contributes", async () => {
+      // T5 union coherence: `skills categories` lists "Remote Tools" because the
+      // default read path merges the remote registry, so `list --category` must
+      // be able to filter by it instead of failing with "Unknown category".
+      const server = Bun.serve({
+        port: 0,
+        fetch: (req) => {
+          expect(new URL(req.url).pathname).toBe("/api/v1/skills");
+          expect(req.headers.get("authorization")).toBe("Bearer fixture-default-key");
+          return Response.json({
+            skills: [
+              {
+                name: "remote-only-skill",
+                displayName: "Remote Only",
+                description: "Lives only on the hosted instance",
+                category: "Remote Tools",
+                tags: ["remote"],
+              },
+            ],
+          });
+        },
+      });
+
+      try {
+        const { stdout, stderr, exitCode } = await runCli(
+          ["list", "--all", "--json", "--category", "Remote Tools"],
+          { SKILLS_API_URL: `http://localhost:${server.port}`, SKILLS_API_KEY: "fixture-default-key" },
+        );
+        expect(exitCode).toBe(0);
+        expect(stderr).toBe("");
+        const names = JSON.parse(stdout).map((skill: any) => skill.name);
+        expect(names).toContain("remote-only-skill");
+      } finally {
+        server.stop(true);
+      }
+    }, SLOW_TEST_TIMEOUT);
+
+    test("default search --category accepts categories the merged remote registry contributes", async () => {
+      const server = Bun.serve({
+        port: 0,
+        fetch: (req) => {
+          expect(new URL(req.url).pathname).toBe("/api/v1/skills");
+          expect(req.headers.get("authorization")).toBe("Bearer fixture-default-key");
+          return Response.json({
+            skills: [
+              {
+                name: "remote-only-skill",
+                displayName: "Remote Only",
+                description: "Lives only on the hosted instance",
+                category: "Remote Tools",
+                tags: ["remote"],
+              },
+            ],
+          });
+        },
+      });
+
+      try {
+        const { stdout, stderr, exitCode } = await runCli(
+          ["search", "remote", "--category", "Remote Tools", "--json"],
+          { SKILLS_API_URL: `http://localhost:${server.port}`, SKILLS_API_KEY: "fixture-default-key" },
+        );
+        expect(exitCode).toBe(0);
+        expect(stderr).toBe("");
+        const names = JSON.parse(stdout).map((skill: any) => skill.name);
+        expect(names).toContain("remote-only-skill");
+      } finally {
+        server.stop(true);
+      }
+    }, SLOW_TEST_TIMEOUT);
+
     test("outputs complete full JSON when stdout is piped repeatedly", async () => {
       for (let attempt = 0; attempt < 5; attempt += 1) {
         const { stdout, exitCode } = await runCli(["list", "--all", "--json"]);
