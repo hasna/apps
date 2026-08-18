@@ -70,7 +70,7 @@ export const REQUIRED_MUTABLE_RUNTIME_ERROR_CODES = Object.fromEntries(
 
 export const RUNTIME_ERROR_CODES = [
   "authentication_required", "authorization_denied", "not_found", "conflict", "invalid_request", "request_too_large",
-  "provider_not_configured", "provider_outcome_unknown", "unsupported_operation", "sandbox_disabled", "replay_detected",
+  "provider_not_configured", "provider_outcome_ambiguous", "unsupported_operation", "sandbox_disabled", "replay_detected",
   "stale_fence", "expired", "policy_generation_mismatch", "quota_exceeded", "storage_error",
 ] as const;
 

@@ -220,7 +220,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
     if (operation === undefined) throw new Error("Missing create operation");
     const crashedClaim = firstStorage.claimProviderAttempt(operation);
     expect(crashedClaim.mode).toBe("perform");
-    firstStorage.database.query("UPDATE operation_attempts SET execution_owner_expires_at = ? WHERE tenant_id = ? AND id = ?")
+    firstStorage.database.query("UPDATE operation_attempts SET lease_expires_at = ? WHERE tenant_id = ? AND id = ?")
       .run("1970-01-01T00:00:00.000Z", admin.tenantId, crashedClaim.attempt.id);
 
     let creates = 0; let reconciles = 0;
@@ -232,7 +232,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
     try {
       expect(await new OperationWorker(secondStorage, providers).runTenant(admin.tenantId)).toBe(1);
       expect(creates).toBe(0); expect(reconciles).toBe(1);
-      expect(secondStorage.getProviderAttempt(admin.tenantId, operation.id)?.executionOwnerGeneration).toBe(crashedClaim.attempt.executionOwnerGeneration + 1);
+      expect(secondStorage.getProviderAttempt(admin.tenantId, operation.id)?.leaseGeneration).toBe(crashedClaim.attempt.leaseGeneration + 1);
       expect(() => firstStorage.completeProviderOperation(operation, crashedClaim.attempt, {
         kind: "success", resource: { resourceId: "resource_stale" }, result: {},
       })).toThrow("does not match");
@@ -246,15 +246,15 @@ describe("reviewer lifecycle and atomicity blockers", () => {
     try {
       const operation = storage.listOperations(admin.tenantId, computer.id)[0]; if (operation === undefined) throw new Error("missing operation");
       const stale = storage.claimProviderAttempt(operation).attempt;
-      storage.database.query("UPDATE operation_attempts SET execution_owner_expires_at = ? WHERE tenant_id = ? AND id = ?")
+      storage.database.query("UPDATE operation_attempts SET lease_expires_at = ? WHERE tenant_id = ? AND id = ?")
         .run("1970-01-01T00:00:00.000Z", stale.tenantId, stale.id);
       const reclaimed = storage.claimProviderAttempt(operation); expect(reclaimed.mode).toBe("reconcile");
-      expect(reclaimed.attempt.executionOwnerGeneration).toBe(stale.executionOwnerGeneration + 1);
+      expect(reclaimed.attempt.leaseGeneration).toBe(stale.leaseGeneration + 1);
       storage.recordProviderOwnershipLost(stale, { resourceId: "resource_stale_owner" });
-      expect(storage.getOperation(admin.tenantId, operation.id)?.status).toBe("unknown");
+      expect(storage.getOperation(admin.tenantId, operation.id)?.status).toBe("ambiguous");
       expect(storage.getComputer(admin.tenantId, computer.id)?.status).toBe("quarantined");
       expect(() => storage.assertProviderAttemptOwnership(reclaimed.attempt)).not.toThrow();
-      expect(storage.getProviderAttempt(admin.tenantId, operation.id)?.executionOwnerToken).toBe(reclaimed.attempt.executionOwnerToken);
+      expect(storage.getProviderAttempt(admin.tenantId, operation.id)?.leaseToken).toBe(reclaimed.attempt.leaseToken);
     } finally { storage.close(); }
   });
 
@@ -294,7 +294,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
       const stop = service.requestLifecycle(owner, computer.id, "stop", "reclaimed-observed-quarantine-001");
       const abandoned = storage.claimProviderAttempt(stop);
       expect(abandoned.mode).toBe("perform");
-      storage.database.query("UPDATE operation_attempts SET execution_owner_expires_at = ? WHERE tenant_id = ? AND id = ?")
+      storage.database.query("UPDATE operation_attempts SET lease_expires_at = ? WHERE tenant_id = ? AND id = ?")
         .run("1970-01-01T00:00:00.000Z", admin.tenantId, abandoned.attempt.id);
 
       let stopCalls = 0; let reconcileCalls = 0;
@@ -312,7 +312,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
       expect(await new OperationWorker(storage, providers).runTenant(admin.tenantId)).toBe(1);
       expect(stopCalls).toBe(0); expect(reconcileCalls).toBe(1);
       expect(storage.getComputer(admin.tenantId, computer.id)?.status).toBe("quarantined");
-      expect(storage.getOperation(admin.tenantId, stop.id)).toMatchObject({ status: "succeeded", result: { lifecycle: "quarantined" } });
+      expect(storage.getOperation(admin.tenantId, stop.id)).toMatchObject({ status: "succeeded", receipt: { lifecycle: "quarantined" } });
       expect(storage.getProviderAttempt(admin.tenantId, stop.id)?.status).toBe("succeeded");
       expect(storage.getProviderBinding(admin.tenantId, computer.id)).toMatchObject({
         operationId: stop.id, state: "active", resource: { resourceId: `resource_${computer.id}` },
@@ -344,15 +344,15 @@ describe("reviewer lifecycle and atomicity blockers", () => {
 
       expect(await new OperationWorker(storage, providers).runTenant(admin.tenantId)).toBe(1);
       expect(stopCalls).toBe(1); expect(reconcileCalls).toBe(0);
-      expect(storage.getOperation(admin.tenantId, stop.id)).toMatchObject({ status: "unknown", errorCode: "provider_outcome_unknown" });
-      expect(storage.getProviderAttempt(admin.tenantId, stop.id)?.status).toBe("unknown");
+      expect(storage.getOperation(admin.tenantId, stop.id)).toMatchObject({ status: "ambiguous", errorCode: "provider_outcome_ambiguous" });
+      expect(storage.getProviderAttempt(admin.tenantId, stop.id)?.status).toBe("ambiguous");
       expect(storage.getComputer(admin.tenantId, computer.id)?.status).toBe("running");
       expect(storage.getProviderBinding(admin.tenantId, computer.id)?.state).toBe("unknown");
       expect(await new OperationWorker(storage, providers).runTenant(admin.tenantId)).toBe(1);
       expect(stopCalls).toBe(1); expect(reconcileCalls).toBe(1);
-      expect((storage.database.query("SELECT COUNT(*) AS count FROM audit_events WHERE action = 'computer.stop.unknown'").get() as { count: number }).count).toBe(1);
+      expect((storage.database.query("SELECT COUNT(*) AS count FROM audit_events WHERE action = 'computer.stop.ambiguous'").get() as { count: number }).count).toBe(1);
       expect((storage.database.query(`SELECT COUNT(*) AS count FROM outbox_events o JOIN audit_events a
-        ON json_extract(o.payload_json, '$.auditEventId') = a.id WHERE a.action = 'computer.stop.unknown'`).get() as { count: number }).count).toBe(1);
+        ON json_extract(o.payload_json, '$.auditEventId') = a.id WHERE a.action = 'computer.stop.ambiguous'`).get() as { count: number }).count).toBe(1);
     } finally { storage.close(); }
   });
 
@@ -394,11 +394,11 @@ describe("reviewer lifecycle and atomicity blockers", () => {
         const completed = storage.completeProviderOperation(operation, claim.attempt, {
           kind: "success", resource: { resourceId: `resource_invalid_${item.kind}` }, result: item.result(),
         } as never);
-        expect(completed).toMatchObject({ status: "unknown", errorCode: "provider_outcome_unknown" });
-        expect(storage.getProviderAttempt(admin.tenantId, operation.id)?.status).toBe("unknown");
+        expect(completed).toMatchObject({ status: "ambiguous", errorCode: "provider_outcome_ambiguous" });
+        expect(storage.getProviderAttempt(admin.tenantId, operation.id)?.status).toBe("ambiguous");
         expect(storage.getComputer(admin.tenantId, computer.id)?.status).toBe(beforeStatus);
         expect(storage.getProviderBinding(admin.tenantId, computer.id)?.state).toBe("unknown");
-        expect((storage.database.query("SELECT COUNT(*) AS count FROM audit_events WHERE action = ?").get(`computer.${item.kind}.unknown`) as { count: number }).count).toBe(1);
+        expect((storage.database.query("SELECT COUNT(*) AS count FROM audit_events WHERE action = ?").get(`computer.${item.kind}.ambiguous`) as { count: number }).count).toBe(1);
       } finally { storage.close(); }
     }
   });
@@ -413,7 +413,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
       const completed = storage.completeProviderOperation(callerCopy, storage.beginProviderAttempt(persisted), {
         kind: "success", resource: { resourceId: "resource_persisted_lifecycle" }, result: {},
       });
-      expect(completed).toMatchObject({ status: "unknown", errorCode: "provider_outcome_unknown" });
+      expect(completed).toMatchObject({ status: "ambiguous", errorCode: "provider_outcome_ambiguous" });
       expect(storage.getComputer(admin.tenantId, computer.id)?.status).toBe("provisioning");
       expect(storage.getProviderBinding(admin.tenantId, computer.id)?.state).toBe("unknown");
     } finally { storage.close(); }
@@ -508,12 +508,12 @@ describe("reviewer lifecycle and atomicity blockers", () => {
         provider.start = async () => item.outcome() as never;
         const providers = createProviderPorts(); providers.local_machine = provider;
         expect(await new OperationWorker(storage, providers).runTenant(admin.tenantId)).toBe(1);
-        expect(storage.getOperation(admin.tenantId, start.id)).toMatchObject({ status: "unknown", errorCode: "provider_outcome_unknown" });
-        expect(storage.getProviderAttempt(admin.tenantId, start.id)?.status).toBe("unknown");
+        expect(storage.getOperation(admin.tenantId, start.id)).toMatchObject({ status: "ambiguous", errorCode: "provider_outcome_ambiguous" });
+        expect(storage.getProviderAttempt(admin.tenantId, start.id)?.status).toBe("ambiguous");
         expect(storage.getComputer(admin.tenantId, computer.id)?.status).toBe("stopped");
         expect(storage.getProviderBinding(admin.tenantId, computer.id)?.state).toBe("unknown");
         expect(malformedCalls).toBe(1);
-        const audit = storage.database.query("SELECT data_json FROM audit_events WHERE action = 'computer.start.unknown' ORDER BY sequence DESC LIMIT 1")
+        const audit = storage.database.query("SELECT data_json FROM audit_events WHERE action = 'computer.start.ambiguous' ORDER BY sequence DESC LIMIT 1")
           .get() as { data_json: string };
         expect(JSON.parse(audit.data_json).provenance).toBe("malformed_provider_outcome");
       } finally { storage.close(); }
@@ -605,13 +605,13 @@ describe("reviewer lifecycle and atomicity blockers", () => {
         provider.start = async () => item.outcome(counters) as never;
         const providers = createProviderPorts(); providers.local_machine = provider;
         expect(await new OperationWorker(storage, providers).runTenant(admin.tenantId)).toBe(1);
-        expect(storage.getOperation(admin.tenantId, start.id)).toMatchObject({ status: "unknown", errorCode: "provider_outcome_unknown" });
+        expect(storage.getOperation(admin.tenantId, start.id)).toMatchObject({ status: "ambiguous", errorCode: "provider_outcome_ambiguous" });
         expect(storage.getComputer(admin.tenantId, computer.id)?.status).toBe("stopped");
         expect(storage.getProviderBinding(admin.tenantId, computer.id)?.state).toBe("unknown");
         expectZeroExecutions(counters);
         expect(malformedCalls).toBe(item.malformedAtProviderBoundary ? 1 : 0);
         expect(recordedResourceId).toBe(item.expectedResourceId);
-        const audit = storage.database.query("SELECT data_json FROM audit_events WHERE action = 'computer.start.unknown' ORDER BY sequence DESC LIMIT 1")
+        const audit = storage.database.query("SELECT data_json FROM audit_events WHERE action = 'computer.start.ambiguous' ORDER BY sequence DESC LIMIT 1")
           .get() as { data_json: string };
         expect(JSON.parse(audit.data_json).provenance).toBe(item.malformedAtProviderBoundary ? "malformed_provider_outcome" : undefined);
       } finally { storage.close(); }
@@ -641,7 +641,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
         const completed = storage.completeProviderOperation(start, claim.attempt, {
           kind: "success", resource: { resourceId: `resource_storage_${item.name}_proxy` }, result: item.result(counters),
         });
-        expect(completed).toMatchObject({ status: "unknown", errorCode: "provider_outcome_unknown" });
+        expect(completed).toMatchObject({ status: "ambiguous", errorCode: "provider_outcome_ambiguous" });
         expect(storage.getComputer(admin.tenantId, computer.id)?.status).toBe("stopped");
         expect(storage.getProviderBinding(admin.tenantId, computer.id)).toMatchObject({
           state: "unknown", resource: { resourceId: `resource_storage_${item.name}_proxy` },
@@ -690,7 +690,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
         const start = service.requestLifecycle(owner, computer.id, "start", `storage-${item.name}-001`);
         const claim = storage.claimProviderAttempt(start);
         const completed = storage.completeProviderOperation(start, claim.attempt, item.complete(counters) as never);
-        expect(completed).toMatchObject({ status: "unknown", errorCode: "provider_outcome_unknown" });
+        expect(completed).toMatchObject({ status: "ambiguous", errorCode: "provider_outcome_ambiguous" });
         expect(storage.getComputer(admin.tenantId, computer.id)?.status).toBe("stopped");
         expect(storage.getProviderBinding(admin.tenantId, computer.id)?.state).toBe("unknown");
         expectZeroExecutions(counters);
@@ -709,7 +709,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
         message: "Provider returned a malformed outcome",
         resource: trackedProxy({ resourceId: "resource_storage_malformed_proxy" }, counters, true, true),
       });
-      expect(storage.getOperation(admin.tenantId, start.id)).toMatchObject({ status: "unknown", errorCode: "provider_outcome_unknown" });
+      expect(storage.getOperation(admin.tenantId, start.id)).toMatchObject({ status: "ambiguous", errorCode: "provider_outcome_ambiguous" });
       expectZeroExecutions(counters);
     } finally { storage.close(); }
   });
@@ -735,7 +735,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
         const completed = storage.completeProviderOperation(start, claim.attempt, {
           kind: "success", resource: { resourceId: `resource_storage_bound_${item.name}` }, result: item.result,
         } as never);
-        expect(completed).toMatchObject({ status: "unknown", errorCode: "provider_outcome_unknown" });
+        expect(completed).toMatchObject({ status: "ambiguous", errorCode: "provider_outcome_ambiguous" });
         expect(completed.result).toBeUndefined();
         expect(storage.getComputer(admin.tenantId, computer.id)?.status).toBe("stopped");
       } finally { storage.close(); }
@@ -837,7 +837,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
       provider.stop = async () => ({ kind: "success", resource: { resourceId: "resource_review" }, result }) as never;
       const providers = createProviderPorts(); providers.local_machine = provider;
       expect(await new OperationWorker(storage, providers).runTenant(admin.tenantId)).toBe(1);
-      expect(storage.getOperation(admin.tenantId, stop.id)).toMatchObject({ status: "unknown", errorCode: "provider_outcome_unknown" });
+      expect(storage.getOperation(admin.tenantId, stop.id)).toMatchObject({ status: "ambiguous", errorCode: "provider_outcome_ambiguous" });
       expect(storage.getComputer(admin.tenantId, computer.id)?.status).toBe("running");
       expect(storage.getProviderBinding(admin.tenantId, computer.id)?.state).toBe("unknown");
       expect(storage.getResidentBinding(admin.tenantId, computer.id)).toBeUndefined();
@@ -858,7 +858,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
       provider.stop = async () => ({ kind: "success", resource: { resourceId: "resource_review" }, result: { lifecycle: 1 } }) as never;
       const providers = createProviderPorts(); providers.local_machine = provider;
       expect(await new OperationWorker(storage, providers).runTenant(admin.tenantId)).toBe(1);
-      expect(storage.getOperation(admin.tenantId, stop.id)).toMatchObject({ status: "unknown", errorCode: "provider_outcome_unknown" });
+      expect(storage.getOperation(admin.tenantId, stop.id)).toMatchObject({ status: "ambiguous", errorCode: "provider_outcome_ambiguous" });
       expect(storage.getComputer(admin.tenantId, computer.id)?.status).toBe("running");
       expect(storage.getProviderBinding(admin.tenantId, computer.id)?.state).toBe("unknown");
       expect(storage.getResidentBinding(admin.tenantId, computer.id)).toBeUndefined();
@@ -887,7 +887,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
       const completed = storage.completeProviderOperation(operation, storage.beginProviderAttempt(operation), {
         kind: "success", resource: { resourceId: "resource_missing_create_lifecycle" },
       } as never);
-      expect(completed).toMatchObject({ status: "unknown", errorCode: "provider_outcome_unknown" });
+      expect(completed).toMatchObject({ status: "ambiguous", errorCode: "provider_outcome_ambiguous" });
       expect(storage.getComputer(admin.tenantId, child.id)?.status).toBe("provisioning");
       expect(storage.getProviderBinding(admin.tenantId, child.id)).toMatchObject({ state: "unknown", resource: { resourceId: "resource_missing_create_lifecycle" } });
       expect((storage.database.query("SELECT state FROM child_reservations WHERE grant_id = ? AND child_computer_id = ?").get(grant.id, child.id) as { state: string }).state).toBe("active");
@@ -907,7 +907,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
       if (capability === undefined) throw new Error("Missing restore home capability");
       const now = new Date().toISOString();
       const restore: Operation = {
-        id: "opn_restore_observed_lifecycle", tenantId: admin.tenantId, computerId: computer.id, kind: "restore", status: "pending",
+        id: "opn_restore_observed_lifecycle", tenantId: admin.tenantId, computerId: computer.id, kind: "restore", status: "admitted",
         policyGeneration: computer.policyGeneration, idempotencyKey: "restore-observed-lifecycle-001", request: {},
         priorComputerStatus: "stopped", desiredComputerStatus: "running", fence: 0, createdAt: now, updatedAt: now,
       };
@@ -919,7 +919,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
       const missing = storage.completeProviderOperation(restore, claim.attempt, {
         kind: "success", resource: { resourceId: `resource_${computer.id}` }, result: {},
       });
-      expect(missing).toMatchObject({ status: "unknown", errorCode: "provider_outcome_unknown" });
+      expect(missing).toMatchObject({ status: "ambiguous", errorCode: "provider_outcome_ambiguous" });
       expect(storage.getComputer(admin.tenantId, computer.id)?.status).toBe("stopped");
       expect(storage.getProviderBinding(admin.tenantId, computer.id)?.state).toBe("unknown");
     } finally { storage.close(); }
@@ -932,7 +932,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
       if (capability === undefined) throw new Error("Missing restore home capability");
       const now = new Date().toISOString();
       const restore: Operation = {
-        id: "opn_restore_valid_lifecycle", tenantId: admin.tenantId, computerId: valid.computer.id, kind: "restore", status: "pending",
+        id: "opn_restore_valid_lifecycle", tenantId: admin.tenantId, computerId: valid.computer.id, kind: "restore", status: "admitted",
         policyGeneration: valid.computer.policyGeneration, idempotencyKey: "restore-valid-lifecycle-001", request: {},
         priorComputerStatus: "stopped", desiredComputerStatus: "running", fence: 0, createdAt: now, updatedAt: now,
       };
@@ -944,7 +944,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
         kind: "success", resource: { resourceId: `resource_${valid.computer.id}` }, result: { lifecycle: "running" },
       });
       expect(valid.storage.getComputer(admin.tenantId, valid.computer.id)?.status).toBe("running");
-      expect(valid.storage.getOperation(admin.tenantId, restore.id)).toMatchObject({ status: "succeeded", result: { lifecycle: "running" } });
+      expect(valid.storage.getOperation(admin.tenantId, restore.id)).toMatchObject({ status: "succeeded", receipt: { lifecycle: "running" } });
     } finally { valid.storage.close(); }
   });
 
@@ -1001,7 +1001,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
         idempotencyKey: "unknown-child-001",
       } as never);
       let creates = 0; let reconciles = 0;
-      const provider = outcomeProvider({ kind: "unknown", providerOperationId: "provider_attempt_one", resource: { resourceId: "resource_child" }, message: "timeout" });
+      const provider = outcomeProvider({ kind: "ambiguous", providerOperationId: "provider_attempt_one", resource: { resourceId: "resource_child" }, message: "timeout" });
       const originalCreate = provider.create.bind(provider);
       provider.create = async (request) => { creates += 1; return originalCreate(request); };
       provider.reconcile = async () => {
@@ -1009,7 +1009,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
       };
       const providers = createProviderPorts(); providers.local_machine = provider;
       await new OperationWorker(storage, providers).runTenant(admin.tenantId);
-      expect(storage.listOperations(admin.tenantId, child.id)[0]?.status).toBe("unknown");
+      expect(storage.listOperations(admin.tenantId, child.id)[0]?.status).toBe("ambiguous");
       expect(storage.getProviderAttempt(admin.tenantId, storage.listOperations(admin.tenantId, child.id)[0]?.id ?? "")?.providerIdempotencyKey).toStartWith("provider:");
       expect(storage.getProviderBinding(admin.tenantId, child.id)?.state).toBe("unknown");
       expect(() => service.createComputer(delegated, {
@@ -1042,7 +1042,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
       provider.reconcile = async () => { reconciles += 1; return { kind: "definite_failure", code: "not_created", message: "provider confirms no resource" }; };
       const providers = createProviderPorts(); providers.local_machine = provider;
       await new OperationWorker(storage, providers).runTenant(admin.tenantId);
-      expect(storage.listOperations(admin.tenantId, timedOut.id)[0]?.status).toBe("unknown");
+      expect(storage.listOperations(admin.tenantId, timedOut.id)[0]?.status).toBe("ambiguous");
       expect(() => service.createComputer(delegated, { ...fields, slug: "blocked", provider: "local_machine", ownerPrincipalId: "principal_after_cleanup", idempotencyKey: "blocked-before-cleanup" } as never)).toThrow("quota");
       await new OperationWorker(storage, providers).runTenant(admin.tenantId);
       expect(creates).toBe(1); expect(reconciles).toBe(1);
@@ -1053,7 +1053,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
       const createOperation = storage.listOperations(admin.tenantId, afterCleanup.id)[0];
       if (createOperation === undefined) throw new Error("missing create operation");
       const crashedAttempt = storage.beginProviderAttempt(createOperation);
-      storage.database.query("UPDATE operation_attempts SET execution_owner_expires_at = ? WHERE tenant_id = ? AND id = ?")
+      storage.database.query("UPDATE operation_attempts SET lease_expires_at = ? WHERE tenant_id = ? AND id = ?")
         .run("1970-01-01T00:00:00.000Z", createOperation.tenantId, crashedAttempt.id);
       let crashCreates = 0; let crashReconciles = 0;
       provider.create = async () => { crashCreates += 1; return { kind: "success", resource: { resourceId: "duplicate_resource" }, result: {} }; };
@@ -1116,7 +1116,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
         storage.updateOperation(admin.tenantId, first.id, "succeeded", { lifecycle: lifecycle.kind });
         storage.updateComputerStatus(admin.tenantId, computer.id, lifecycle.completedStatus);
         const completedReplay = service.requestLifecycle(admin, computer.id, lifecycle.kind, key);
-        expect(completedReplay).toMatchObject({ id: first.id, status: "succeeded", result: { lifecycle: lifecycle.kind } });
+        expect(completedReplay).toMatchObject({ id: first.id, status: "succeeded", receipt: { lifecycle: lifecycle.kind } });
         expect((storage.database.query("SELECT COUNT(*) AS count FROM audit_events WHERE action = ?").get(`computer.${lifecycle.kind}.requested`) as { count: number }).count).toBe(1);
       } finally { storage.close(); }
     }
@@ -1263,7 +1263,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
       const worker = new OperationWorker(storage, providers);
       await worker.runTenant(admin.tenantId);
       expect(starts).toBe(1);
-      expect(storage.getOperation(admin.tenantId, start.id)?.status).toBe("unknown");
+      expect(storage.getOperation(admin.tenantId, start.id)?.status).toBe("ambiguous");
       await worker.runTenant(admin.tenantId);
       expect(reconciles).toBe(1); expect(quarantines).toBe(1);
       expect(storage.getOperation(admin.tenantId, start.id)).toMatchObject({ status: "failed", errorCode: "stale_fence" });
@@ -1289,10 +1289,10 @@ describe("reviewer lifecycle and atomicity blockers", () => {
       const providers = createProviderPorts(); providers.local_machine = provider;
       const worker = new OperationWorker(storage, providers);
       expect(await worker.runTenant(admin.tenantId)).toBe(1);
-      expect(storage.getOperation(admin.tenantId, start.id)?.status).toBe("unknown");
+      expect(storage.getOperation(admin.tenantId, start.id)?.status).toBe("ambiguous");
       expect(storage.getComputer(admin.tenantId, computer.id)?.status).toBe("stopped");
       expect(await worker.runTenant(admin.tenantId)).toBe(1);
-      expect(storage.getOperation(admin.tenantId, start.id)).toMatchObject({ status: "unknown", errorCode: "provider_outcome_unknown" });
+      expect(storage.getOperation(admin.tenantId, start.id)).toMatchObject({ status: "ambiguous", errorCode: "provider_outcome_ambiguous" });
       expect(storage.getComputer(admin.tenantId, computer.id)?.status).toBe("stopped");
       expect(storage.getProviderBinding(admin.tenantId, computer.id)?.state).toBe("unknown");
     } finally { storage.close(); }
@@ -1358,14 +1358,14 @@ describe("reviewer lifecycle and atomicity blockers", () => {
       const start = service.requestLifecycle({ ...ownerBase, boundComputerId: computer.id, policyGeneration: current.policyGeneration }, computer.id, "start", "strict-loss-start");
       let starts = 0; let reconciles = 0; let quarantines = 0;
       const provider: ProviderPort = { ...outcomeProvider({ kind: "definite_failure", code: "unused", message: "unused" }), kind: "aws_ec2" };
-      provider.start = async () => { starts += 1; return { kind: "unknown", providerOperationId: "strict-start", message: "proof unavailable" }; };
+      provider.start = async () => { starts += 1; return { kind: "ambiguous", providerOperationId: "strict-start", message: "proof unavailable" }; };
       provider.reconcile = async () => { reconciles += 1; return { kind: "success", resource: { resourceId: "resource_strict" }, result: { lifecycle: "running", running: true } }; };
       provider.quarantine = async () => { quarantines += 1; return { kind: "success", resource: { resourceId: "resource_strict" }, result: { lifecycle: "quarantined", quarantined: true } }; };
       const providers = createProviderPorts(); providers.aws_ec2 = provider;
       const worker = new OperationWorker(storage, providers);
       await worker.runTenant(admin.tenantId);
       expect(starts).toBe(1); expect(quarantines).toBe(1);
-      expect(storage.getOperation(admin.tenantId, start.id)?.status).toBe("unknown");
+      expect(storage.getOperation(admin.tenantId, start.id)?.status).toBe("ambiguous");
       expect(storage.getComputer(admin.tenantId, computer.id)).toMatchObject({ status: "quarantined", confinementClass: "unverified_vm" });
       expect(storage.getProviderAssurance(admin.tenantId, computer.id)?.confinementClass).toBe("unverified_vm");
       expect(storage.getResidentBinding(admin.tenantId, computer.id)).toBeUndefined();
@@ -1549,7 +1549,7 @@ describe("reviewer lifecycle and atomicity blockers", () => {
       storage.database.exec("CREATE TRIGGER fail_policy_fence_audit BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'audit sink failed'); END;");
       await expect(worker.runTenant(admin.tenantId)).rejects.toThrow("audit sink failed");
       const rolledBack = storage.getOperation(admin.tenantId, operation.id);
-      expect(rolledBack?.status).toBe("pending");
+      expect(rolledBack?.status).toBe("admitted");
       expect(rolledBack?.errorCode).toBeUndefined();
       expect(counts()).toEqual(rollbackBefore);
     } finally { storage.close(); }

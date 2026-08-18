@@ -28,4 +28,4 @@ The resident is a narrow typed capability executor, not controller authority. En
 
 ## Residual risk
 
-This slice validates resident state but does not issue certificates or implement mTLS transport. It defines and tests provider unknown-outcome reconciliation, but ships no concrete provider adapter capable of adopting or cleaning a real resource. It does not implement snapshot scanning/quarantine, signed image rollback protection, human takeover, a configured external audit sink, or egress enforcement. Broad internet profiles cannot prevent data exfiltration, and no such claim is made.
+This slice validates resident state but does not issue certificates or implement mTLS transport. It defines and tests provider ambiguous-outcome reconciliation, but ships no concrete provider adapter capable of adopting or cleaning a real resource. It does not implement snapshot scanning/quarantine, signed image rollback protection, human takeover, a configured external audit sink, or egress enforcement. Broad internet profiles cannot prevent data exfiltration, and no such claim is made.

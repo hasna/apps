@@ -18,7 +18,7 @@ export class OperationWorker {
 
   async runTenant(tenantId: string): Promise<number> {
     let handled = 0;
-    const candidates = this.#storage.listOperations(tenantId).filter((item) => ["pending", "accepted", "running", "unknown"].includes(item.status));
+    const candidates = this.#storage.listOperations(tenantId).filter((item) => ["admitted", "leased", "running", "ambiguous"].includes(item.status));
     for (const operation of candidates) {
       const computer = this.#storage.getComputer(tenantId, operation.computerId);
       if (computer === undefined) continue;
@@ -66,7 +66,7 @@ export class OperationWorker {
       const request: ProviderOperationRequest = {
         computer, operation: providerOperation, attempt,
         execution: {
-          ownerGeneration: attempt.executionOwnerGeneration,
+          ownerGeneration: attempt.leaseGeneration,
           signal: abortController.signal,
           assertCurrent: () => this.#storage.assertProviderAttemptOwnership(attempt),
         },
@@ -112,27 +112,27 @@ export class OperationWorker {
           outcome = fenced.outcome;
           malformedOutcome = fenced.malformed;
         } else if (malformedOutcome === undefined && awsStrictContinuityRequired && ["create", "start", "restore"].includes(operation.kind)
-          && (outcome.kind === "unknown" || (outcome.kind === "success" && !this.#preservesStrictAssurance(outcome)))) {
+          && (outcome.kind === "ambiguous" || (outcome.kind === "success" && !this.#preservesStrictAssurance(outcome)))) {
           const observed = outcome;
           try {
             const compensation = this.#resolveProviderResult(await provider.quarantine({ ...request, compensatingQuarantine: true }), attempt);
             if (compensation.malformed !== undefined) {
               const resource = compensation.malformed.resource ?? observed.resource;
               malformedOutcome = { ...compensation.malformed, ...(resource === undefined ? {} : { resource }) };
-              outcome = { kind: "unknown", providerOperationId: malformedOutcome.providerOperationId,
+              outcome = { kind: "ambiguous", providerOperationId: malformedOutcome.providerOperationId,
                 ...(resource === undefined ? {} : { resource }), message: malformedOutcome.message };
             } else {
               const resource = compensation.outcome.resource ?? observed.resource;
               const quarantineObserved = this.#observesLifecycle(compensation.outcome, "quarantined");
               outcome = {
-                kind: "unknown", providerOperationId: attempt.providerOperationId ?? attempt.providerIdempotencyKey,
+                kind: "ambiguous", providerOperationId: attempt.providerOperationId ?? attempt.providerIdempotencyKey,
                 ...(resource === undefined ? {} : { resource }), message: quarantineObserved
                   ? "Strict provider proof was lost; the external runtime was quarantined"
                   : "Strict provider proof was lost and quarantine is indeterminate",
               };
             }
           } catch {
-            outcome = { kind: "unknown", providerOperationId: attempt.providerOperationId ?? attempt.providerIdempotencyKey,
+            outcome = { kind: "ambiguous", providerOperationId: attempt.providerOperationId ?? attempt.providerIdempotencyKey,
               ...(observed.resource === undefined ? {} : { resource: observed.resource }), message: "Strict-provider compensation is indeterminate" };
           }
         }
@@ -141,9 +141,9 @@ export class OperationWorker {
         if (error instanceof ComputersError && error.code === "conflict") {
           ownershipLost = true;
           abortController.abort();
-          outcome = { kind: "unknown", providerOperationId: attempt.providerOperationId ?? attempt.providerIdempotencyKey, message: "Provider execution ownership was lost" };
+          outcome = { kind: "ambiguous", providerOperationId: attempt.providerOperationId ?? attempt.providerIdempotencyKey, message: "Provider lease was lost" };
         } else {
-          outcome = { kind: "unknown", providerOperationId: attempt.providerOperationId ?? attempt.providerIdempotencyKey, message: "Provider outcome is indeterminate" };
+          outcome = { kind: "ambiguous", providerOperationId: attempt.providerOperationId ?? attempt.providerIdempotencyKey, message: "Provider outcome is indeterminate" };
         }
       } finally { clearInterval(heartbeat); }
       if (ownershipLost || abortController.signal.aborted) {
@@ -153,19 +153,19 @@ export class OperationWorker {
       }
       try {
         if (malformedOutcome !== undefined) this.#storage.recordProviderMalformed(attempt, malformedOutcome);
-        else if (outcome.kind === "unknown") this.#storage.recordProviderUnknown(attempt, outcome);
+        else if (outcome.kind === "ambiguous") this.#storage.recordProviderAmbiguous(attempt, outcome);
         else {
           try { this.#storage.completeProviderOperation(operation, attempt, outcome); }
           catch (error) {
             if (outcome.kind === "success" && error instanceof ComputersError && error.code === "invalid_request"
               && ["Provider returned an invalid observed lifecycle", "Provider returned an incompatible observed lifecycle"].includes(error.message)) {
-              this.#storage.recordProviderUnknown(attempt, {
-                kind: "unknown", providerOperationId: attempt.providerOperationId ?? attempt.providerIdempotencyKey,
+              this.#storage.recordProviderAmbiguous(attempt, {
+                kind: "ambiguous", providerOperationId: attempt.providerOperationId ?? attempt.providerIdempotencyKey,
                 resource: outcome.resource, message: "Provider returned an invalid observed lifecycle",
               });
             } else if (outcome.kind === "success" && error instanceof ComputersError && ["policy_generation_mismatch", "stale_fence"].includes(error.code)) {
-              this.#storage.recordProviderUnknown(attempt, {
-                kind: "unknown", providerOperationId: attempt.providerOperationId ?? attempt.providerIdempotencyKey,
+              this.#storage.recordProviderAmbiguous(attempt, {
+                kind: "ambiguous", providerOperationId: attempt.providerOperationId ?? attempt.providerIdempotencyKey,
                 resource: outcome.resource, message: "Provider succeeded after the operation was fenced; reconciliation and compensation are required",
               });
             } else throw error;
@@ -197,7 +197,7 @@ export class OperationWorker {
 
   async #resolveFencedOutcome(provider: ProviderPort, request: ProviderOperationRequest, outcome: ProviderOutcome,
     fenceCode: "policy_generation_mismatch" | "stale_fence"): Promise<ProviderOutcomeResolution> {
-    if (outcome.kind === "unknown") return { outcome };
+    if (outcome.kind === "ambiguous") return { outcome };
     if (outcome.kind === "definite_failure") return { outcome: { ...outcome, code: fenceCode } };
     if (["stop", "quarantine", "delete"].includes(request.operation.kind)) {
       return { outcome: { kind: "definite_failure", code: fenceCode, message: "Fenced operation reconciled to a restrictive external state", resource: outcome.resource } };
@@ -206,7 +206,7 @@ export class OperationWorker {
     if (compensation.malformed !== undefined) {
       const resource = compensation.malformed.resource ?? outcome.resource;
       return {
-        outcome: { kind: "unknown", providerOperationId: compensation.malformed.providerOperationId,
+        outcome: { kind: "ambiguous", providerOperationId: compensation.malformed.providerOperationId,
           ...(resource === undefined ? {} : { resource }), message: compensation.malformed.message },
         malformed: { ...compensation.malformed, ...(resource === undefined ? {} : { resource }) },
       };
@@ -215,7 +215,7 @@ export class OperationWorker {
       return { outcome: { kind: "definite_failure", code: fenceCode, message: "Fenced external state was quarantined", resource: compensation.outcome.resource ?? outcome.resource } };
     }
     return { outcome: {
-      kind: "unknown", providerOperationId: request.attempt.providerOperationId ?? request.attempt.providerIdempotencyKey,
+      kind: "ambiguous", providerOperationId: request.attempt.providerOperationId ?? request.attempt.providerIdempotencyKey,
       resource: compensation.outcome.resource ?? outcome.resource, message: "Fenced external state could not be proven quarantined",
     } };
   }
@@ -229,7 +229,7 @@ export class OperationWorker {
     };
     return {
       malformed,
-      outcome: { kind: "unknown", providerOperationId: malformed.providerOperationId,
+      outcome: { kind: "ambiguous", providerOperationId: malformed.providerOperationId,
         ...(malformed.resource === undefined ? {} : { resource: malformed.resource }), message: malformed.message },
     };
   }

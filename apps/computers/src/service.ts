@@ -510,7 +510,7 @@ export class ComputersService {
       create: "stopped", start: "running", stop: "stopped", quarantine: "quarantined", delete: "deleted",
     };
     const operation: Operation = {
-      id: makeId("opn"), tenantId: computer.tenantId, computerId: computer.id, kind, status: "pending",
+      id: makeId("opn"), tenantId: computer.tenantId, computerId: computer.id, kind, status: "admitted",
       policyGeneration: computer.policyGeneration, idempotencyKey, request, fence: 0, createdAt: now, updatedAt: now,
     };
     if (desired[kind] !== undefined) {

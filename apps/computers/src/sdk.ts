@@ -44,7 +44,7 @@ function normalizeBaseUrl(value: string): string {
 
 const ERROR_CODES = new Set<ErrorCode>([
   "authentication_required", "authorization_denied", "not_found", "conflict", "invalid_request", "request_too_large",
-  "provider_not_configured", "provider_outcome_unknown", "unsupported_operation", "sandbox_disabled", "replay_detected",
+  "provider_not_configured", "provider_outcome_ambiguous", "unsupported_operation", "sandbox_disabled", "replay_detected",
   "stale_fence", "expired", "policy_generation_mismatch", "quota_exceeded", "storage_error",
 ]);
 const MAX_SDK_RESPONSE_BYTES = 1024 * 1024;
@@ -59,7 +59,7 @@ const ERROR_CODES_BY_STATUS = new Map<number, ReadonlySet<ErrorCode>>([
   [500, new Set(["storage_error"])],
   [501, new Set(["unsupported_operation", "sandbox_disabled"])],
   [502, new Set(["storage_error"])],
-  [503, new Set(["provider_not_configured", "provider_outcome_unknown"])],
+  [503, new Set(["provider_not_configured", "provider_outcome_ambiguous"])],
 ]);
 
 async function boundedResponseText(response: Response): Promise<string> {

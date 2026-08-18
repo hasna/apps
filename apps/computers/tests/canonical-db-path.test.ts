@@ -184,7 +184,7 @@ describe("canonical database root", () => {
     const db = new Database(target, { readonly: true });
     try {
       const version = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-      expect(version.version).toBe(3); // the legacy database's schema travelled with it
+      expect(version.version).toBe(4); // the legacy database's schema travelled with it
     } finally {
       db.close();
     }

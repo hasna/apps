@@ -33,26 +33,26 @@ describe("CLI and binary envelopes", () => {
     const binary = await run("src/bin/computers-migrate.ts", ["--db", binaryDatabase]);
     expect(binary.code).toBe(0); expect(binary.stderr).toBe("");
     expect(JSON.parse(binary.stdout)).toEqual({ migrated: true, database: binaryDatabase, schemaVersion: migratedSchemaVersion(binaryDatabase) });
-    expect(migratedSchemaVersion(cliDatabase)).toBe(3);
-    expect(migratedSchemaVersion(binaryDatabase)).toBe(3);
+    expect(migratedSchemaVersion(cliDatabase)).toBe(4);
+    expect(migratedSchemaVersion(binaryDatabase)).toBe(4);
   });
 
   test("help and unsupported commands use stable stdout/stderr/exit contracts", async () => {
     const help = await run("src/bin/computers.ts", ["--help"]);
-    expect(help.code).toBe(0); expect(help.stderr).toBe(""); expect(help.stdout).toContain("Requests return a truthful pending operation");
+    expect(help.code).toBe(0); expect(help.stderr).toBe(""); expect(help.stdout).toContain("Requests return a truthful admitted operation");
     const directory = mkdtempSync(join(process.cwd(), ".test-data-cli-")); directories.push(directory);
     const unsupported = await run("src/bin/computers.ts", ["unsupported", "--db", join(directory, "unsupported.db")]);
     expect(unsupported.code).toBe(2); expect(unsupported.stdout).toBe("");
     expect(JSON.parse(unsupported.stderr)).toEqual({ error: { code: "unsupported_operation", message: "Unsupported command" } });
   });
 
-  test("create is pending until worker records a truthful unconfigured-provider failure", async () => {
+  test("create is admitted until worker records a truthful unconfigured-provider failure", async () => {
     const directory = mkdtempSync(join(process.cwd(), ".test-data-cli-")); directories.push(directory);
     const database = join(directory, "controller.db");
     const created = await run("src/bin/computers.ts", ["computer", "create", "--db", database, "--slug", "cli-pending", "--provider", "local_machine", "--idempotency-key", "cli-pending-create"]);
     expect(created.code).toBe(0); expect(created.stderr).toBe("");
     const payload = JSON.parse(created.stdout) as { computer: { id: string; status: string }; operation: { status: string } };
-    expect(payload.computer.status).toBe("provisioning"); expect(payload.operation.status).toBe("pending");
+    expect(payload.computer.status).toBe("provisioning"); expect(payload.operation.status).toBe("admitted");
     const worker = await run("src/bin/computers-worker.ts", [], { COMPUTERS_DB: database, COMPUTERS_TENANT: "tenant_local" });
     expect(worker.code).toBe(0); expect(worker.stderr).toBe("");
     expect(JSON.parse(worker.stdout)).toEqual({ handled: 1, providerAdaptersConfigured: false });

@@ -100,7 +100,7 @@ describe("security contract regressions", () => {
       expect(() => storage.database.query("UPDATE computers SET confinement_class = 'strict_vm' WHERE tenant_id = ? AND id = ?").run(admin.tenantId, "cmp_stock_vm")).toThrow("unverified_vm");
       storage.database.query(`INSERT INTO operations (id, tenant_id, computer_id, kind, status, policy_generation, idempotency_key, request_json, fence, created_at, updated_at)
         VALUES ('opn_stock_vm', ?, 'cmp_stock_vm', 'create', 'running', 1, 'stock-vm-create', '{}', 0, ?, ?)`).run(admin.tenantId, now, now);
-      storage.database.query(`INSERT INTO operation_attempts (id, tenant_id, operation_id, attempt_number, provider_idempotency_key, status, fence, execution_owner_generation, started_at)
+      storage.database.query(`INSERT INTO operation_attempts (id, tenant_id, operation_id, attempt_number, provider_idempotency_key, status, fence, lease_generation, started_at)
         VALUES ('pat_stock_vm', ?, 'opn_stock_vm', 1, 'provider:opn_stock_vm', 'running', 0, 1, ?)`).run(admin.tenantId, now);
       expect(() => storage.database.query(`INSERT INTO provider_assurance
         (tenant_id, computer_id, provider, confinement_class, evidence_json, operation_id, attempt_id, binding_fence, generation, verified_at)
@@ -110,7 +110,7 @@ describe("security contract regressions", () => {
         VALUES ('cmp_stock_vm_other', ?, 'stock-vm-other', 'local_vm', 'unverified_vm', 'stopped', 'principal_stock_vm_other', 1, 0, ?, ?)`).run(admin.tenantId, now, now);
       storage.database.query(`INSERT INTO operations (id, tenant_id, computer_id, kind, status, policy_generation, idempotency_key, request_json, fence, created_at, updated_at)
         VALUES ('opn_stock_vm_other', ?, 'cmp_stock_vm_other', 'create', 'running', 1, 'stock-vm-other-create', '{}', 0, ?, ?)`).run(admin.tenantId, now, now);
-      storage.database.query(`INSERT INTO operation_attempts (id, tenant_id, operation_id, attempt_number, provider_idempotency_key, status, fence, execution_owner_generation, started_at)
+      storage.database.query(`INSERT INTO operation_attempts (id, tenant_id, operation_id, attempt_number, provider_idempotency_key, status, fence, lease_generation, started_at)
         VALUES ('pat_stock_vm_other', ?, 'opn_stock_vm_other', 1, 'provider:opn_stock_vm_other', 'running', 0, 1, ?)`).run(admin.tenantId, now);
       expect(() => storage.database.query(`INSERT INTO provider_assurance
         (tenant_id, computer_id, provider, confinement_class, evidence_json, operation_id, attempt_id, binding_fence, generation, verified_at)
@@ -133,7 +133,7 @@ describe("security contract regressions", () => {
           VALUES (?, ?, ?, ?, ?, 1, ?, '{}', 0, ?, ?)`)
           .run(id, admin.tenantId, valid.id, kind, status, `${id}-key`, now, now);
       };
-      expect(() => insertOperation("opn_invalid_kind", "invented", "pending")).toThrow();
+      expect(() => insertOperation("opn_invalid_kind", "invented", "admitted")).toThrow();
       expect(() => insertOperation("opn_invalid_status", "exec", "invented")).toThrow();
     } finally { storage.close(); }
   });
@@ -201,7 +201,7 @@ describe("security contract regressions", () => {
         VALUES ('cmp_post', 'tenant_post', 'post', 'local_vm', 'unverified_vm', 'running', 'principal_post', 12, 0, ?, ?)`).run(now, now);
       upgraded.database.query(`INSERT INTO operations (id, tenant_id, computer_id, kind, status, policy_generation, idempotency_key, request_json, fence, created_at, updated_at)
         VALUES ('opn_post','tenant_post','cmp_post','create','running',12,'post','{}',9,?,?)`).run(now, now);
-      upgraded.database.query(`INSERT INTO operation_attempts (id, tenant_id, operation_id, attempt_number, provider_idempotency_key, status, fence, execution_owner_token, execution_owner_generation, execution_owner_expires_at, started_at)
+      upgraded.database.query(`INSERT INTO operation_attempts (id, tenant_id, operation_id, attempt_number, provider_idempotency_key, status, fence, lease_token, lease_generation, lease_expires_at, started_at)
         VALUES ('pat_post','tenant_post','opn_post',1,'provider:post','running',9,'owner_post',4,?,?)`).run(future, now);
       upgraded.database.query("INSERT INTO home_leases VALUES ('tenant_post','cmp_post','holder_post',9,?,?)").run(future, now);
       upgraded.database.query("INSERT INTO operation_home_leases VALUES ('tenant_post','opn_post','cmp_post','home:cmp_post','holder_post',9,?)").run(future);
@@ -218,7 +218,7 @@ describe("security contract regressions", () => {
       upgraded.migrate();
       const replayAfter = replayRelations.map((relation) => JSON.stringify(upgraded.database.query(`SELECT * FROM ${relation} WHERE tenant_id='tenant_post' ORDER BY rowid`).all()));
       expect(replayAfter).toEqual(replayBefore);
-      expect(upgraded.database.query("SELECT count(*) AS count, max(version) AS version FROM schema_migrations").get()).toEqual({ count: 3, version: 3 });
+      expect(upgraded.database.query("SELECT count(*) AS count, max(version) AS version FROM schema_migrations").get()).toEqual({ count: 4, version: 4 });
       expect(upgraded.ready()).toBe(true);
     } finally { upgraded.close(); }
   });
@@ -236,7 +236,7 @@ describe("security contract regressions", () => {
     expect(database.query("SELECT confinement_class, status, policy_generation FROM computers WHERE id='cmp_rollback'").get()).toEqual({ confinement_class: "unverified_vm", status: "running", policy_generation: 11 });
     expect(database.query("SELECT count(*) AS count FROM home_leases WHERE computer_id='cmp_rollback'").get()).toEqual({ count: 1 });
     expect(database.query("SELECT max(version) AS version FROM schema_migrations").get()).toEqual({ version: 1 });
-    expect(database.query("SELECT 1 FROM pragma_table_info('operation_attempts') WHERE name='execution_owner_token'").get()).toBeNull();
+    expect(database.query("SELECT 1 FROM pragma_table_info('operation_attempts') WHERE name='lease_token'").get()).toBeNull();
     expect(database.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='provider_assurance'").get()).toBeNull();
     expect(database.query("SELECT 1 FROM sqlite_temp_master WHERE type='table' AND name='provider_assurance_legacy_local_vm'").get()).toBeNull();
     database.close();
@@ -283,16 +283,19 @@ describe("security contract regressions", () => {
     expect(() => new SQLiteStorage(missingCheckPath)).toThrow("Storage initialization failed");
   });
 
-  test("schema readiness rejects a comment-substituted execution owner generation check", () => {
+  test("schema readiness rejects a comment-substituted lease generation check", () => {
     const directory = mkdtempSync(join(process.cwd(), ".test-data-v2-owner-generation-check-")); temporaryDirectories.push(directory);
     const path = join(directory, "comment-substituted-check.db");
     const database = new Database(path);
-    const expectedDefinition = "execution_owner_generation INTEGER NOT NULL DEFAULT 0 CHECK (execution_owner_generation >= 0);";
-    const commentSubstitution = "execution_owner_generation INTEGER NOT NULL DEFAULT 0 /* execution_owner_generation INTEGER NOT NULL DEFAULT 0 CHECK (execution_owner_generation >= 0) */;";
-    const migration = readFileSync("migrations/sqlite/0002_provider_assurance.sql", "utf8");
+    const expectedDefinition = "lease_generation INTEGER NOT NULL DEFAULT 0 CHECK (lease_generation >= 0),";
+    const commentSubstitution = "lease_generation INTEGER NOT NULL DEFAULT 0 /* CHECK (lease_generation >= 0) */,";
+    const migration = readFileSync("migrations/sqlite/0004_taxonomy_vocabulary.sql", "utf8");
     expect(migration.includes(expectedDefinition)).toBe(true);
+    database.exec("PRAGMA foreign_keys = ON");
     database.exec(readFileSync("migrations/sqlite/0001_initial.sql", "utf8"));
-    database.exec(migration.replace(expectedDefinition, commentSubstitution));
+    database.exec(readFileSync("migrations/sqlite/0002_provider_assurance.sql", "utf8"));
+    database.exec(readFileSync("migrations/sqlite/0003_provider_binding_provenance.sql", "utf8"));
+    database.exec(migration.replaceAll(expectedDefinition, commentSubstitution));
     const now = new Date().toISOString();
     database.query(`INSERT INTO computers
       (id, tenant_id, slug, provider, confinement_class, status, owner_principal_id, policy_generation, data_exfiltration_protection, created_at, updated_at)
@@ -303,11 +306,13 @@ describe("security contract regressions", () => {
       VALUES ('opn_owner_generation_probe', 'tenant_owner_generation_probe', 'cmp_owner_generation_probe', 'create', 'running', 1, 'owner-generation-probe', '{}', 0, ?, ?)`)
       .run(now, now);
     database.query(`INSERT INTO operation_attempts
-      (id, tenant_id, operation_id, attempt_number, provider_idempotency_key, status, fence, execution_owner_generation, started_at)
+      (id, tenant_id, operation_id, attempt_number, provider_idempotency_key, status, fence, lease_generation, started_at)
       VALUES ('pat_owner_generation_probe', 'tenant_owner_generation_probe', 'opn_owner_generation_probe', 1, 'provider:owner-generation-probe', 'running', 0, -7, ?)`)
       .run(now);
-    expect(database.query("SELECT execution_owner_generation FROM operation_attempts WHERE id = 'pat_owner_generation_probe'").get())
-      .toEqual({ execution_owner_generation: -7 });
+    expect(database.query("SELECT lease_generation FROM operation_attempts WHERE id = 'pat_owner_generation_probe'").get())
+      .toEqual({ lease_generation: -7 });
+    // The migrations themselves recorded versions 1-4 in the ledger, so the
+    // readiness verification is what rejects the database (not the missing-ledger guard).
     database.close();
 
     expect(() => new SQLiteStorage(path)).toThrow("Storage initialization failed");
@@ -350,7 +355,7 @@ describe("security contract regressions", () => {
       expect(upgraded.getProviderBinding("tenant_binding", "cmp_binding_a")).toMatchObject({
         provider: "local_machine", operationId: "opn_binding_a", attemptId: "pat_binding_a",
       });
-      expect(upgraded.database.query("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 3 });
+      expect(upgraded.database.query("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 4 });
     } finally { upgraded.close(); }
 
     const invalidPath = join(directory, "invalid.db");
@@ -443,8 +448,8 @@ describe("security contract regressions", () => {
       expect(() => storage.completeProviderOperation(operation, attempt, {
         kind: "success", resource: { resourceId: "resource_policy_fence" }, result: { lifecycle: "stopped" },
       })).toThrow("fenced");
-      storage.recordProviderUnknown(attempt, {
-        kind: "unknown", providerOperationId: attempt.providerIdempotencyKey,
+      storage.recordProviderAmbiguous(attempt, {
+        kind: "ambiguous", providerOperationId: attempt.providerIdempotencyKey,
         resource: { resourceId: "resource_policy_fence" }, message: "Original owner observed a fenced provider completion",
       });
       await worker.runTenant(admin.tenantId);
@@ -479,7 +484,7 @@ describe("security contract regressions", () => {
       const worker = new OperationWorker(storage, providers);
       await worker.runTenant(admin.tenantId);
       expect(storage.getComputer(admin.tenantId, computer.id)?.status).toBe("stopped");
-      expect(storage.getOperation(admin.tenantId, start.id)?.status).toBe("unknown");
+      expect(storage.getOperation(admin.tenantId, start.id)?.status).toBe("ambiguous");
       expect(storage.getProviderBinding(admin.tenantId, computer.id)?.state).toBe("unknown");
       await worker.runTenant(admin.tenantId);
       expect(reconciles).toBe(1);

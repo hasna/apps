@@ -111,7 +111,7 @@ describe("real multi-connection quota concurrency", () => {
     legacy.exec(readFileSync("migrations/sqlite/0001_initial.sql", "utf8")); legacy.close();
     const results = await runWorkers(Array.from({ length: 20 }, () => ({ mode: "initialize", database })));
     expect(results.filter((result) => !result.ok)).toEqual([]);
-    expect(results.every((result) => result.version === 3 && result.foreignKeys === 1 && result.journalMode === "wal")).toBe(true);
+    expect(results.every((result) => result.version === 4 && result.foreignKeys === 1 && result.journalMode === "wal")).toBe(true);
     const storage = new SQLiteStorage(database); try {
       expect(storage.ready()).toBe(true);
       expect((storage.database.query("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 3").get() as { count: number }).count).toBe(1);
@@ -245,7 +245,7 @@ describe("real multi-connection quota concurrency", () => {
         const operationId = results[0]?.id;
         expect(operationId).toBeString();
         expect(observer.query("SELECT status FROM operations WHERE tenant_id = ? AND id = ?").get(admin.tenantId, operationId ?? "missing"))
-          .toEqual({ status: "pending" });
+          .toEqual({ status: "admitted" });
         expect(observer.query("SELECT computer_id, holder_id, fence FROM operation_home_leases WHERE tenant_id = ? AND operation_id = ?")
           .get(admin.tenantId, operationId ?? "missing")).toEqual({
           computer_id: computer.id, holder_id: "controller_lifecycle_atomic", fence: 1,
@@ -307,7 +307,7 @@ describe("real multi-connection quota concurrency", () => {
         expect(results.filter((result) => !result.ok), `${state} repetition ${repetition + 1}: ${results.filter((result) => !result.ok).map((result) => result.message).join(", ")}`).toEqual([]);
         expect(results.every((result) => result.journalMode === "wal")).toBe(true);
         expect(results.every((result) => result.foreignKeys === 1)).toBe(true);
-        expect(results.every((result) => result.version === 3)).toBe(true);
+        expect(results.every((result) => result.version === 4)).toBe(true);
         expect(results.every((result) => (result.fileModes?.length ?? 0) >= 1 && result.fileModes?.every((mode) => mode === 0o600))).toBe(true);
       }
     }

@@ -216,11 +216,11 @@ function validateProviderOutcomeSnapshot(value: unknown): ProviderOutcome {
     if (item.resource !== undefined) outcome.resource = resource(item.resource);
     return outcome;
   }
-  if (item.kind === "unknown") {
+  if (item.kind === "ambiguous") {
     exact(item, ["kind", "providerOperationId", "message", "resource"]);
     if (typeof item.providerOperationId !== "string" || !PROVIDER_REFERENCE.test(item.providerOperationId)
       || typeof item.message !== "string" || item.message.length < 1 || item.message.length > 512) throw new ComputersError("invalid_request", "Provider returned an invalid outcome", 500);
-    const outcome: Extract<ProviderOutcome, { kind: "unknown" }> = { kind: "unknown", providerOperationId: item.providerOperationId, message: item.message };
+    const outcome: Extract<ProviderOutcome, { kind: "ambiguous" }> = { kind: "ambiguous", providerOperationId: item.providerOperationId, message: item.message };
     if (item.resource !== undefined) outcome.resource = resource(item.resource);
     return outcome;
   }
