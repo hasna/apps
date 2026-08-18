@@ -2321,6 +2321,31 @@ async function handleV1(
     // INSERT applies); the dedupe window is measured from it, so historical
     // events are not compared against the present.
     const workStatusItems: Array<{ index: number; uuid: string; content: string; createdAtMs: number }> = [];
+    // Resolve already-stored uuids BEFORE any per-item guard. The bulk
+    // endpoint is an idempotent backfill: ON CONFLICT (uuid) DO NOTHING means
+    // a re-run of a stored batch is a no-op, and that contract must hold even
+    // when the stored rows are legacy events that the envelope or dedupe
+    // guards would refuse today — a malformed envelope stored before the guard
+    // existed, or a legacy same-state pair. An item whose uuid is already
+    // stored is skipped entirely (no envelope check, no dedupe check, no
+    // content-safety scan, no INSERT row): it is the same event re-sent, not a
+    // second event. The lookup runs on committed rows only; a concurrent
+    // insert of the same uuid between this read and the INSERT is still
+    // absorbed by ON CONFLICT.
+    const existingUuids = new Set<string>();
+    {
+      const candidateUuids = items
+        .filter((raw): raw is Record<string, unknown> => !!raw && typeof raw === "object" && !Array.isArray(raw))
+        .map((raw) => str(raw.uuid))
+        .filter((uuid): uuid is string => !!uuid);
+      if (candidateUuids.length > 0) {
+        const existingRows = await client.many<{ uuid: string }>(
+          "SELECT uuid FROM messages WHERE uuid = ANY($1::text[])",
+          [[...new Set(candidateUuids)]],
+        );
+        for (const row of existingRows) existingUuids.add(row.uuid);
+      }
+    }
     const projectIdx = cols.indexOf("project_id");
     for (let i = 0; i < items.length; i++) {
       const raw = items[i];
@@ -2335,6 +2360,13 @@ async function handleV1(
       if (!uuid || !from || !to || content === undefined) {
         return json({ error: `messages[${i}] requires uuid, from, to, and content` }, 400);
       }
+      // Retry of an already-stored item: no-op per the ON CONFLICT contract.
+      // Skipped before every guard (envelope, dedupe, content safety) so a
+      // re-run of a stored batch never returns 400 for rows the guards would
+      // refuse today. The required-field validation above stays first: a
+      // retry re-sends the identical payload, so a payload that fails it was
+      // never a stored batch.
+      if (existingUuids.has(uuid)) continue;
       let priority = str(m.priority)?.toLowerCase() ?? "normal";
       if (!VALID_PRIORITIES.includes(priority)) priority = "normal";
       const sessionId = str(m.session_id) ?? `api:${from}`;
@@ -2422,6 +2454,13 @@ async function handleV1(
       }
     }
 
+    // Every item was already stored: the re-run is a complete no-op. Return
+    // the same summary shape as the empty-batch guard instead of building an
+    // `INSERT ... VALUES` with zero rows.
+    if (rowsSql.length === 0) {
+      return json({ requested: items.length, inserted: 0, skipped: items.length, total: await messageTotal(client) }, 200);
+    }
+
     // In-request dedupe, run ONCE in timestamp order so it cannot depend on
     // request order: every item in this request is inserted by one multi-row
     // INSERT after the transaction guard, so the guard cannot observe this
@@ -2507,23 +2546,11 @@ async function handleV1(
       // inside the dedupe window, per work-status item — the same guard as the
       // single-send path, run inside the transaction so a bulk request is not
       // a bypass. The advisory lock inside the guard serializes concurrent
-      // bulk writers for the same task; rows inserted by earlier items in this
-      // same transaction are visible to the guard's recent-events read, so two
-      // same-state items in one request refuse the second as well.
-      if (workStatusItems.length > 0) {
-        // Replays preserve the endpoint's documented idempotency: an item
-        // whose uuid already exists is skipped by ON CONFLICT (uuid) DO
-        // NOTHING, so it must not be refused as a duplicate transition here —
-        // it is the same event, re-sent, not a second event.
-        const existingRows = await tx.many<{ uuid: string }>(
-          "SELECT uuid FROM messages WHERE uuid = ANY($1::text[])",
-          [[...new Set(workStatusItems.map((item) => item.uuid))]],
-        );
-        const existingUuids = new Set(existingRows.map((row) => row.uuid));
-        for (const workStatusItem of workStatusItems) {
-          if (existingUuids.has(workStatusItem.uuid)) continue;
-          await assertNoDuplicateWorkStatusTransitionPg(tx, workStatusItem.content, workStatusItem.createdAtMs);
-        }
+      // bulk writers for the same task. Items whose uuid is already stored
+      // never reach this point: the pre-loop existing-uuid lookup skips them,
+      // so a replay is a no-op instead of a duplicate-transition refusal.
+      for (const workStatusItem of workStatusItems) {
+        await assertNoDuplicateWorkStatusTransitionPg(tx, workStatusItem.content, workStatusItem.createdAtMs);
       }
 
       return tx.query<{ id: number; from_agent: string; channel: string | null; content: string }>(

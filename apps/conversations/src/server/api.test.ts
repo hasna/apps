@@ -3430,6 +3430,95 @@ describe("POST /v1/messages work-status lifecycle guards (hosted path)", () => {
     expect(body.skipped).toBe(1);
   });
 
+  test("a bulk retry of an already-stored legacy malformed work-status event is an idempotent no-op, not a 400", async () => {
+    // Legacy rows written before the envelope guard existed (measured shapes:
+    // a JSON document as the message, an empty event_id) must still be
+    // re-runnable: the idempotent-backfill contract is ON CONFLICT (uuid) DO
+    // NOTHING, and a retry of a stored batch is a no-op. The envelope guard
+    // must not fire on an item whose uuid is already stored.
+    const now = Date.now();
+    const legacyRows = [
+      { id: 9101, uuid: "bulk-ws-legacy-1", from_agent: "test-agent", to_agent: "test-agent", channel: "work-status", content: "not an envelope", created_at: new Date(now - 120_000).toISOString(), reply_to: null, session_id: SESSION_ID, project_id: null },
+    ];
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], legacyRows);
+    const before = workStatusMessageCount();
+    const response = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ uuid: "bulk-ws-legacy-1", from: "test-agent", to: "test-agent", channel: "work-status", content: "not an envelope" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as any;
+    expect(body.inserted).toBe(0);
+    expect(body.skipped).toBe(1);
+    expect(workStatusMessageCount()).toBe(before);
+  });
+
+  test("a bulk retry of an already-stored same-state duplicate pair is an idempotent no-op, not a 400", async () => {
+    // Legacy rows written before the dedupe guard existed (the measured 96
+    // same-state consecutive pairs) must stay re-runnable: the stored pair is
+    // the stream's historical record, and a backfill re-run of those exact
+    // uuids is a no-op per ON CONFLICT (uuid) DO NOTHING — not a duplicate
+    // transition refusal. The in-request dedupe must not fire on items whose
+    // uuids are already stored.
+    const taskId = "c2345678-1234-4234-8234-123456789abc";
+    const now = Date.now();
+    const older = new Date(now - 40_000).toISOString();
+    const newer = new Date(now - 30_000).toISOString();
+    const seededRows = [
+      { id: 9102, uuid: "bulk-ws-pair-1", from_agent: "test-agent", to_agent: "test-agent", channel: "work-status", content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001", older), created_at: older, reply_to: null, session_id: SESSION_ID, project_id: null },
+      { id: 9103, uuid: "bulk-ws-pair-2", from_agent: "test-agent", to_agent: "test-agent", channel: "work-status", content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000002", newer), created_at: newer, reply_to: null, session_id: SESSION_ID, project_id: null },
+    ];
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], seededRows);
+    const before = workStatusMessageCount();
+    const response = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-pair-1", from: "test-agent", to: "test-agent", channel: "work-status", created_at: older, content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000001", older) },
+          { uuid: "bulk-ws-pair-2", from: "test-agent", to: "test-agent", channel: "work-status", created_at: newer, content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000002", newer) },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as any;
+    expect(body.inserted).toBe(0);
+    expect(body.skipped).toBe(2);
+    expect(workStatusMessageCount()).toBe(before);
+  });
+
+  test("a bulk retry skips only the already-stored work-status items and still applies the guards to new ones", async () => {
+    // Mixed batch: an existing legacy malformed event (no-op skip) alongside a
+    // genuinely new event (guards apply, then INSERT). Proves the idempotency
+    // skip is per-item, not per-request: the envelope guard must not be
+    // bypassed for new items by the presence of an existing one.
+    const taskId = "b5345678-1234-4234-8234-123456789abc";
+    const now = Date.now();
+    const legacyRows = [
+      { id: 9104, uuid: "bulk-ws-mixed-1", from_agent: "test-agent", to_agent: "test-agent", channel: "work-status", content: "not an envelope", created_at: new Date(now - 120_000).toISOString(), reply_to: null, session_id: SESSION_ID, project_id: null },
+    ];
+    activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], legacyRows);
+    const before = workStatusMessageCount();
+    const response = await fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { uuid: "bulk-ws-mixed-1", from: "test-agent", to: "test-agent", channel: "work-status", content: "not an envelope" },
+          { uuid: "bulk-ws-mixed-2", from: "test-agent", to: "test-agent", channel: "work-status", content: envelope("START", taskId, "aaaaaaaa-cccc-4ddd-8eee-000000000003") },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as any;
+    expect(body.inserted).toBe(1);
+    expect(body.skipped).toBe(1);
+    expect(workStatusMessageCount()).toBe(before + 1);
+  });
+
   test("a same-state bulk pair outside the dedupe window is a historical sequence and is accepted", async () => {
     activeFakeClient!.__debug.seedChannel(workStatusChannelSeed, [], []);
     const before = workStatusMessageCount();
