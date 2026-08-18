@@ -32,20 +32,14 @@ describe("resolveAttachmentsV1", () => {
     expect(r.store).toBeNull();
   });
 
-  test("returns local when only URL set (key missing)", () => {
-    const r = resolveAttachmentsV1({ HASNA_ATTACHMENTS_API_URL: BASE } as NodeJS.ProcessEnv);
-    expect(r.transport).toBe("local");
+  test("throws when only URL set (key missing) — the seam reports misconfigured", () => {
+    expect(() => resolveAttachmentsV1({ HASNA_ATTACHMENTS_API_URL: BASE } as NodeJS.ProcessEnv)).toThrow();
   });
 
-  test("returns cloud-http when URL+KEY set (mode implied self_hosted)", () => {
+  test("returns cloud-http when URL+KEY set", () => {
     const r = resolveAttachmentsV1(cloudEnv);
     expect(r.transport).toBe("cloud-http");
     if (r.transport === "cloud-http") expect(r.store.baseUrl).toBe(`${BASE}/v1`);
-  });
-
-  test("explicit STORAGE_MODE=local forces local even with URL+KEY", () => {
-    const r = resolveAttachmentsV1({ ...cloudEnv, HASNA_ATTACHMENTS_STORAGE_MODE: "local" } as NodeJS.ProcessEnv);
-    expect(r.transport).toBe("local");
   });
 
   test("list routes GET /v1/attachments with bearer key and maps the envelope", async () => {
@@ -236,8 +230,9 @@ describe("cloud upload failures reach the caller with context", () => {
       .then(() => null)
       .catch((err: Error) => err);
     expect(error).not.toBeNull();
-    expect(error!.message).toContain("POST /v1/attachments");
-    expect(error!.message).toContain("HTTP 500");
+    // The seam transport reports the route and status of the failed call.
+    expect(error!.message).toContain("POST /attachments");
+    expect(error!.message).toContain("500");
     expect(error!.message).not.toBe("Internal Server Error");
     expect(error!.message).not.toContain(KEY);
   });

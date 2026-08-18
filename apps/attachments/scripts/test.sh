@@ -8,14 +8,11 @@ set -e
 # Keep unit tests hermetic even when the operator's shell is configured to target
 # the production cloud API.
 #
-# ATTACHMENTS_CLIENT_MODE is read by nothing in this codebase — it never made the
-# suite hermetic. The client flip actually looks at HASNA_ATTACHMENTS_STORAGE_MODE
-# / _MODE and at the API URL + key pair (see core/cloud-v1.ts:resolveStorageClient),
-# so with those exported the CLI/MCP tests silently ran against the real service
-# and 8 test files failed for environmental reasons on a clean checkout.
-export HASNA_ATTACHMENTS_STORAGE_MODE=local
-export ATTACHMENTS_CLIENT_MODE=local
-unset HASNA_ATTACHMENTS_MODE
+# The contracts 0.11.1 client selects the http transport purely from the API
+# URL + key pair (storage-mode variables are retired and the seam refuses
+# them), so the hermetic mechanism is clearing the pair: with neither set the
+# resolver stays on the local store. HOME is left intact; the fleet app-config
+# disk tier only applies to the process that exports the API URL.
 unset HASNA_ATTACHMENTS_API_URL
 unset HASNA_ATTACHMENTS_API_KEY
 unset ATTACHMENTS_API_URL

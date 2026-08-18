@@ -51,7 +51,6 @@ export interface ServeAppDeps {
   store: PgAttachmentsStore;
   config: AttachmentsConfig;
   version: string;
-  mode: string;
   signingSecret: string;
   isRevoked?: (kid: string) => boolean | Promise<boolean>;
   audit?: (event: unknown) => void;
@@ -274,7 +273,7 @@ function encryptBuffer(
 
 export function createServeApp(deps: ServeAppDeps): Hono {
   const app = new Hono();
-  const { store, client, config, version, mode } = deps;
+  const { store, client, config, version } = deps;
   const publicBaseUrl = getPublicBaseUrl(config);
 
   const verifier: ApiKeyVerifier = verifyApiKey({
@@ -330,7 +329,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
   app.get("/health", async (c) => {
     const health = await checkHealth(client);
     return c.json(
-      { status: health.ok ? "ok" : "degraded", version, mode, db_latency_ms: health.latencyMs },
+      { status: health.ok ? "ok" : "degraded", version, db_latency_ms: health.latencyMs },
       health.ok ? 200 : 503,
     );
   });
@@ -341,7 +340,6 @@ export function createServeApp(deps: ServeAppDeps): Hono {
       {
         status: ready.ok ? "ready" : "not_ready",
         version,
-        mode,
         pending_migrations: ready.pendingMigrations,
         ...(ready.error ? { error: ready.error } : {}),
       },
@@ -349,7 +347,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
     );
   });
 
-  app.get("/version", (c) => c.json({ status: "ok", version, mode, name: `@hasna/${APP_SLUG}` }));
+  app.get("/version", (c) => c.json({ status: "ok", version, name: `@hasna/${APP_SLUG}` }));
 
   app.get("/openapi.json", (c) => c.json(buildOpenApiDocument(version)));
 

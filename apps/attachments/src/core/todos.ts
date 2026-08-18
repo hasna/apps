@@ -1,3 +1,5 @@
+import { resolveCredential } from "@hasna/contracts/client";
+
 const DEFAULT_TODOS_ORIGIN = new URL("http://localhost:3000").origin;
 
 function parseOrigin(url: string | URL | undefined): string | null {
@@ -22,7 +24,10 @@ export function withTodosAuth(
   requestUrl?: string | URL,
   init?: RequestInit
 ): RequestInit | undefined {
-  const apiKey = process.env.HASNA_TODOS_API_KEY || process.env.TODOS_API_KEY;
+  // Resolve the todos API key through the contracts client seam (the same
+  // credential chain the todos client uses), never by hand from the process
+  // environment.
+  const apiKey = resolveCredential("todos", process.env)?.apiKey;
   if (!apiKey) return init;
 
   const requestOrigin = parseOrigin(requestUrl);
