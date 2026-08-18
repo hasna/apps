@@ -135,6 +135,7 @@ import {
   defaultKnowledgeConfig,
   ensureKnowledgeWorkspace,
   legacyGlobalStorePath,
+  previousProjectKnowledgeHome,
   projectKnowledgeHome,
   readKnowledgeConfig,
   resolveLegacyScopedWorkspace,
@@ -1818,6 +1819,34 @@ export class KnowledgeService {
   migrateLegacyPath(options: { approveWrite?: boolean; approvedBy?: string } = {}): KnowledgeLegacyPathMigrationResult {
     const current = this.workspace;
     const legacy = resolveLegacyScopedWorkspace(this.options.scope, this.options.cwd);
+    const result = migrateLegacyKnowledgeWorkspace({
+      scope: this.scope,
+      current,
+      legacy,
+      approveWrite: options.approveWrite,
+      approvedBy: options.approvedBy,
+    });
+    if (!result.dry_run && result.ok) {
+      this.ensuredWorkspace = undefined;
+      this.cachedConfig = undefined;
+    }
+    return result;
+  }
+
+  /**
+   * One-time migration of the previous project-scoped workspace
+   * (<cwd>/.hasna/knowledge) into the canonical project home
+   * (~/.hasna/knowledge/projects/<key>). Dry-run by default; requires
+   * --approve-write --approved-by to move. Reuses the same backup, verify,
+   * move, verify and tombstone machinery as migrate-legacy-path. Refuses when
+   * the canonical project home already contains data.
+   */
+  migrateProjectPath(options: { approveWrite?: boolean; approvedBy?: string } = {}): KnowledgeLegacyPathMigrationResult {
+    if (this.scope === 'global') {
+      throw new Error('knowledge storage migrate-project-path only supports --scope project (or local) because <cwd>/.hasna/knowledge is a project-scoped store.');
+    }
+    const current = this.workspace;
+    const legacy = workspaceForHome(previousProjectKnowledgeHome(this.options.cwd));
     const result = migrateLegacyKnowledgeWorkspace({
       scope: this.scope,
       current,

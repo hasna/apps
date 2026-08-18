@@ -457,7 +457,7 @@ Commands:
   guarded execute-descriptor   Execute an opaque descriptor over inherited process IPC
   setup                        Initialize config or canonical example S3 storage
   auth login|whoami|logout     Manage HTTP API credentials
-  storage status|validate|repair-artifact-keys|migrate-legacy-path|merge-legacy-path|import-legacy
+  storage status|validate|repair-artifact-keys|migrate-legacy-path|migrate-project-path|merge-legacy-path|import-legacy
                                Inspect, migrate, or repair local/S3 artifact storage metadata
   machines topology|preflight  Inspect optional machine topology/sync readiness
   sync status|doctor|snapshot|conflicts
@@ -604,7 +604,7 @@ function printCommandHelp(command: string): void {
   if (command === 'guarded') { console.log('Usage:\n  knowledge guarded capabilities [--json]\n  knowledge guarded execute-descriptor --ipc [--json]\n\n  execute-descriptor is an internal package-owned worker. Private requests and results use the\n  runtime-owned child-process IPC channel, never argv, stdin, environment variables, files, stdout,\n  or stderr. Direct shell invocation has no IPC channel and fails closed. Use the exported opaque-\n  descriptor helpers rather than invoking this worker directly from a shell.'); return; }
   if (command === 'setup') { console.log('Usage: knowledge setup [--canonical-example] [--scope local|global|project] [--json]\nClient routing is controlled only by HASNA_KNOWLEDGE_API_URL presence.'); return; }
   if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
-  if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys|migrate-legacy-path|merge-legacy-path [--approve-write --approved-by <name>] [--scope local|global|project] [--json]\n       knowledge storage import-legacy [--dry-run] [--scope global] [--json]'); return; }
+  if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys|migrate-legacy-path|migrate-project-path|merge-legacy-path [--approve-write --approved-by <name>] [--scope local|global|project] [--json]\n       knowledge storage import-legacy [--dry-run] [--scope global] [--json]\n       migrate-project-path moves <cwd>/.hasna/knowledge into ~/.hasna/knowledge/projects/<key> (canonical); dry-run by default'); return; }
   if (command === 'machines') { console.log('Usage: knowledge machines topology [--no-tailscale] | preflight [machine] [--workspace <repo>] [--scope local|global|project] [--verbose] [--json]'); return; }
   if (command === 'sync') { console.log('Usage: knowledge sync status|doctor|readiness|snapshot|machines|conflicts [show|propose|resolve] [id] | dry-run|pull|push|sync|export|import [--peer-workspace <path>] [--machine <ssh-alias>] [--tables <names>] [--dry-run] [--limit <n>] [--approve-write] [--approved-by <name>] [--strategy <name>] [--mode deterministic|ai] [--model <alias|provider:model>] [--fake] [--no-tailscale] [--scope local|global|project] [--verbose] [--json]\n\nRemote machine sync resolves peer paths through @hasna/machines when --peer-workspace is omitted.'); return; }
   if (command === 'db') { console.log('Usage: knowledge db init|stats|storage status [--scope local|global|project] [--json]'); return; }
@@ -1112,6 +1112,15 @@ async function run(argv: string[]): Promise<void> {
       if (!migration.ok && !flags.json) process.exitCode = 1;
       return;
     }
+    if (storageAction === 'migrate-project-path') {
+      const migration = service.migrateProjectPath({
+        approveWrite: flags.approveWrite,
+        approvedBy: flags.approvedBy,
+      });
+      output(migration, flags.json);
+      if (!migration.ok && !flags.json) process.exitCode = 1;
+      return;
+    }
     if (storageAction === 'merge-legacy-path' || storageAction === 'merge-legacy' || storageAction === 'merge-path') {
       const merge = service.mergeLegacyPath({
         approveWrite: flags.approveWrite,
@@ -1530,6 +1539,15 @@ async function run(argv: string[]): Promise<void> {
       if (!migration.ok && !flags.json) process.exitCode = 1;
       return;
     }
+    if (action === 'migrate-project-path') {
+      const migration = service.migrateProjectPath({
+        approveWrite: flags.approveWrite,
+        approvedBy: flags.approvedBy,
+      });
+      output(migration, flags.json);
+      if (!migration.ok && !flags.json) process.exitCode = 1;
+      return;
+    }
     if (action === 'merge-legacy-path' || action === 'merge-legacy' || action === 'merge-path') {
       const merge = service.mergeLegacyPath({
         approveWrite: flags.approveWrite,
@@ -1539,7 +1557,7 @@ async function run(argv: string[]): Promise<void> {
       if (!merge.ok && !flags.json) process.exitCode = 1;
       return;
     }
-    throw new Error("Invalid storage action. Use 'status', 'validate', 'repair-artifact-keys', 'migrate-legacy-path', 'merge-legacy-path', or 'import-legacy'.");
+    throw new Error("Invalid storage action. Use 'status', 'validate', 'repair-artifact-keys', 'migrate-legacy-path', 'migrate-project-path', 'merge-legacy-path', or 'import-legacy'.");
   }
 
   if (command === 'machines') {

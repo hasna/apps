@@ -16,7 +16,7 @@ import {
   syncTablesFromSnapshot,
 } from '../src/sync';
 import type { KnowledgeMachineTopology } from '../src/machines';
-import { defaultKnowledgeConfig, writeKnowledgeConfig } from '../src/workspace';
+import { defaultKnowledgeConfig, projectKnowledgeHome, writeKnowledgeConfig } from '../src/workspace';
 import { budget } from './support/budget';
 
 class FakeS3ArtifactStore implements ArtifactStore {
@@ -328,7 +328,7 @@ describe('knowledge machine sync ledger', () => {
     expect(dryRun.push?.dry_run).toBe(true);
     expect(dryRun.push?.tables.find((table) => table.table === 'sources')?.inserted).toBe(1);
     expect(peerService.dbStats().sources).toBe(0);
-    expect(existsSync(join(peerDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(false);
+    expect(existsSync(join(projectKnowledgeHome(peerDir), 'artifacts', 'wiki', 'README.md'))).toBe(false);
 
     const push = await sourceService.syncPeer({
       peerWorkspace: peerDir,
@@ -346,7 +346,7 @@ describe('knowledge machine sync ledger', () => {
     expect(peerStats.sources).toBe(1);
     expect(peerStats.chunks).toBeGreaterThanOrEqual(1);
     expect(peerStats.storage_objects).toBe(4);
-    expect(existsSync(join(peerDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
+    expect(existsSync(join(projectKnowledgeHome(peerDir), 'artifacts', 'wiki', 'README.md'))).toBe(true);
 
     const secondDryRun = await sourceService.syncPeer({
       peerWorkspace: peerDir,
@@ -511,7 +511,7 @@ describe('knowledge machine sync ledger', () => {
     const artifactSecret = ['sk', 'syncartifactsecretvalue1234567890'].join('-');
     const artifactDbUrl = ['postgres', '://user:pass@example.test/knowledge'].join('');
     writeFileSync(
-      join(sourceDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'),
+      join(projectKnowledgeHome(sourceDir), 'artifacts', 'wiki', 'README.md'),
       `Generated artifact cites ${sourceDir} token=${artifactSecret} db=${artifactDbUrl}`,
     );
 

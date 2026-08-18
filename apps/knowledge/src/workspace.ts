@@ -5,6 +5,29 @@ import { dirname, join, resolve } from 'node:path';
 export const HASNA_KNOWLEDGE_APP_PATH = join('.hasna', 'knowledge');
 export const LEGACY_HASNA_KNOWLEDGE_APP_PATH = join('.hasna', 'apps', 'knowledge');
 
+/**
+ * Home root for path resolution. Env wins over os.homedir() because Bun
+ * caches homedir() at first call, so a subprocess or test that overrides HOME
+ * must see its override reflected in every resolved data root.
+ */
+function homeRoot(): string {
+  return process.env['HOME'] || process.env['USERPROFILE'] || homedir();
+}
+
+/**
+ * Stable, unique key for a project-scoped knowledge workspace derived from the
+ * project's resolved cwd. The full absolute path is slugified so two repos with
+ * the same basename never collide, and the key is deterministic for the same
+ * checkout path across runs and machines.
+ */
+export function projectKey(cwd = process.cwd()): string {
+  const slugified = resolve(cwd)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slugified || 'project';
+}
+
 export interface KnowledgeWorkspace {
   home: string;
   configPath: string;
@@ -122,10 +145,25 @@ export function legacyGlobalStorePath(): string {
 }
 
 export function globalKnowledgeHome(): string {
-  return join(homedir(), '.hasna', 'knowledge');
+  return join(homeRoot(), '.hasna', 'knowledge');
 }
 
-export function projectKnowledgeHome(cwd = process.cwd()): string {
+/**
+ * The canonical project-scoped knowledge home: ~/.hasna/knowledge/projects/<key>.
+ * The fleet law places app data under ~/.hasna/<app>/; project-scoped stores
+ * live in a per-project sub-root of the knowledge app's own home rather than
+ * inside the checked-out repository.
+ */
+export function projectKnowledgeHome(cwd = process.cwd(), home = homeRoot()): string {
+  return join(home, '.hasna', 'knowledge', 'projects', projectKey(cwd));
+}
+
+/**
+ * The previous project-scoped knowledge home: <cwd>/.hasna/knowledge. This is
+ * the pre-canonical default that a one-time migration moves into
+ * ~/.hasna/knowledge/projects/<key>.
+ */
+export function previousProjectKnowledgeHome(cwd = process.cwd()): string {
   return resolve(cwd, HASNA_KNOWLEDGE_APP_PATH);
 }
 

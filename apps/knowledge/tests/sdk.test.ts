@@ -12,6 +12,7 @@ import {
   type KnowledgeClient,
 } from '../src/index';
 import { CURRENT_SCHEMA_VERSION } from '../src/knowledge-db';
+import { projectKnowledgeHome } from '../src/workspace';
 
 function writeWindowsCmdShim(bin: string, name: string): void {
   writeFileSync(join(bin, `${name}.cmd`), [
@@ -272,7 +273,7 @@ describe('public knowledge sdk', () => {
     const client = createKnowledgeClient({ scope: 'project', cwd: dir });
 
     const paths = client.paths();
-    expect(normalizeDarwinPath(paths.home)).toBe(normalizeDarwinPath(join(dir, '.hasna', 'knowledge')));
+    expect(normalizeDarwinPath(paths.home)).toBe(normalizeDarwinPath(projectKnowledgeHome(dir)));
     expect(paths.exists).toBe(false);
     expect(paths.knowledge_db_exists).toBe(false);
     expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
@@ -307,7 +308,7 @@ describe('public knowledge sdk', () => {
     expect(EXAMPLE_KNOWLEDGE_CANONICAL.source_owner).toBe('open-files');
 
     const paths = client.paths();
-    expect(normalizeDarwinPath(paths.home)).toBe(normalizeDarwinPath(join(dir, '.hasna', 'knowledge')));
+    expect(normalizeDarwinPath(paths.home)).toBe(normalizeDarwinPath(projectKnowledgeHome(dir)));
     expect(paths.config.storage.type).toBe('local');
 
     const setup = client.setup({ canonicalExample: true });

@@ -8,6 +8,7 @@ import {
   createAppWikiScope,
   openProjectWiki,
 } from '../src/index';
+import { projectKnowledgeHome } from '../src/workspace';
 import { KNOWLEDGE_API_KEY_ENV_KEYS, KNOWLEDGE_API_URL_ENV_KEYS, RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS } from '../src/client-transport';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -49,12 +50,13 @@ describe('app wiki standard', () => {
       process.env.USERPROFILE = home;
 
       const wiki = openProjectWiki({ cwd: projectDir });
-      expect(normalizeDarwinPath(wiki.paths().home)).toBe(normalizeDarwinPath(join(projectDir, '.hasna', 'knowledge')));
-      expect(existsSync(join(projectDir, '.hasna', 'knowledge'))).toBe(false);
+      const canonicalProjectHome = projectKnowledgeHome(projectDir, home);
+      expect(normalizeDarwinPath(wiki.paths().home)).toBe(normalizeDarwinPath(canonicalProjectHome));
+      expect(existsSync(join(projectDir, '.hasna'))).toBe(false);
 
       const init = await wiki.init();
       expect(init.scope).toBe('project');
-      expect(normalizeDarwinPath(init.knowledge_db_path)).toBe(normalizeDarwinPath(join(projectDir, '.hasna', 'knowledge', 'knowledge.db')));
+      expect(normalizeDarwinPath(init.knowledge_db_path)).toBe(normalizeDarwinPath(join(canonicalProjectHome, 'knowledge.db')));
 
       const sourcePath = join(projectDir, 'source.md');
       writeFileSync(sourcePath, 'The scoped app wiki standard keeps project notes in the project catalog.');
@@ -70,10 +72,11 @@ describe('app wiki standard', () => {
       });
       expect(note.note.path).toBe('wiki/notes/scoped-app-wiki.md');
       expect(note.citations_written).toBe(1);
-      expect(existsSync(join(projectDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'notes', 'scoped-app-wiki.md'))).toBe(true);
-      expect(existsSync(join(projectDir, '.hasna', 'knowledge', 'db.json'))).toBe(false);
+      expect(existsSync(join(canonicalProjectHome, 'artifacts', 'wiki', 'notes', 'scoped-app-wiki.md'))).toBe(true);
+      expect(existsSync(join(canonicalProjectHome, 'db.json'))).toBe(false);
       expect(existsSync(join(projectDir, '.husna'))).toBe(false);
-      expect(existsSync(join(home, '.hasna', 'knowledge'))).toBe(false);
+      expect(existsSync(join(home, '.hasna', 'knowledge', 'db.json'))).toBe(false);
+      expect(existsSync(join(home, '.hasna', 'knowledge', 'projects'))).toBe(true);
 
       const notes = wiki.notes.list();
       expect(notes).toHaveLength(1);
@@ -111,6 +114,7 @@ describe('app wiki standard', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'ok-app-wiki-cli-'));
     const home = mkdtempSync(join(tmpdir(), 'ok-app-wiki-cli-home-'));
     const env = isolatedHomeEnv(home);
+    const canonicalProjectHome = projectKnowledgeHome(projectDir, home);
     const sourcePath = join(projectDir, 'cli-source.md');
     writeFileSync(sourcePath, 'CLI app wiki source refs are ingested into the scoped project store.');
     const sourceRef = pathToFileURL(sourcePath).href;
@@ -150,10 +154,10 @@ describe('app wiki standard', () => {
     expect(blocked.status).toBe(1);
     expect(blocked.stderr.toString('utf8')).toContain('Global app-wiki writes require');
 
-    expect(existsSync(join(projectDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'notes', 'cli-app-wiki.md'))).toBe(true);
-    expect(existsSync(join(projectDir, '.hasna', 'knowledge', 'db.json'))).toBe(false);
+    expect(existsSync(join(canonicalProjectHome, 'artifacts', 'wiki', 'notes', 'cli-app-wiki.md'))).toBe(true);
+    expect(existsSync(join(canonicalProjectHome, 'db.json'))).toBe(false);
     expect(existsSync(join(projectDir, '.husna'))).toBe(false);
-    expect(existsSync(join(home, '.hasna', 'knowledge'))).toBe(false);
-    expect(readFileSync(join(projectDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'notes', 'cli-app-wiki.md'), 'utf8')).toContain('Source refs:');
+    expect(existsSync(join(home, '.hasna', 'knowledge', 'db.json'))).toBe(false);
+    expect(readFileSync(join(canonicalProjectHome, 'artifacts', 'wiki', 'notes', 'cli-app-wiki.md'), 'utf8')).toContain('Source refs:');
   });
 });
