@@ -10,6 +10,7 @@ import {
   validateConfig,
 } from "../config";
 import { GatewayHttpError, redactSensitiveText } from "../errors";
+import { resolveDefaultConfigPath } from "../config-path";
 import { getBudgetStatuses } from "../budget";
 import { readUsageLedgerRecords, usageLedgerBackendMode } from "../storage";
 import type { GatewayBudgetStatus } from "../budget";
@@ -44,7 +45,6 @@ type LedgerTotals = {
   estimatedCostUsd: number;
 };
 
-const DEFAULT_CONFIG_PATH = "gateway.config.json";
 const SECRET_ENV_NAME_PATTERN = /(KEY|TOKEN|SECRET|PASSWORD|PASS|AUTH|CREDENTIAL)/i;
 const MCP_VALIDATION_ERROR_TYPE = "gateway_mcp_validation_error";
 const MCP_VALIDATION_ERROR_CODE = "invalid_tool_input";
@@ -69,7 +69,7 @@ const configPathSchema = z
   .string()
   .min(1)
   .optional()
-  .describe("Path to gateway.config.json. Defaults to the server --config value or gateway.config.json.");
+  .describe("Path to gateway.config.json. Defaults to the server --config value, the GATEWAY_CONFIG_PATH override, or the canonical ~/.hasna/gateway/gateway.config.json.");
 
 const chatMessageSchema = z
   .object({
@@ -590,11 +590,11 @@ export function parseMcpArgs(argv: string[]): { configPath: string; allowConfigP
   if (configIndex >= 0 && argv[configIndex + 1]) {
     return { configPath: argv[configIndex + 1]!, allowConfigPathOverrides };
   }
-  return { configPath: process.env.GATEWAY_CONFIG_PATH ?? DEFAULT_CONFIG_PATH, allowConfigPathOverrides };
+  return { configPath: process.env.GATEWAY_CONFIG_PATH ?? resolveDefaultConfigPath(), allowConfigPathOverrides };
 }
 
 export function buildServer(options: GatewayMcpServerOptions = {}): McpServer {
-  const defaultConfigPath = options.defaultConfigPath ?? DEFAULT_CONFIG_PATH;
+  const defaultConfigPath = options.defaultConfigPath ?? resolveDefaultConfigPath();
   const allowConfigPathOverrides = options.allowConfigPathOverrides ?? false;
   const server = new McpServer({
     name: "gateway",

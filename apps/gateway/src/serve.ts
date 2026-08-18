@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { loadGatewayConfig, validateRuntimeSecrets } from "./config";
+import { resolveDefaultConfigPath } from "./config-path";
 import { startGatewayServer } from "./server";
 import { gatewayVersion } from "./version";
 
@@ -20,7 +21,7 @@ Usage:
   gateway-serve --config gateway.config.json [--host 127.0.0.1] [--port 8787]
 `);
 } else {
-  const configPath = flagString("config", "gateway.config.json");
+  const configPath = flagString("config", resolveDefaultConfigPath());
   const config = await loadGatewayConfig(configPath);
   config.server.host = flagString("host", config.server.host);
   config.server.port = Number(flagString("port", String(config.server.port)));
