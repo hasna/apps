@@ -1,6 +1,7 @@
 import { join, dirname } from "path";
 import { existsSync } from "fs";
 import { fileURLToPath } from "url";
+import { getHomeDir } from "../../lib/home.js";
 
 /** A UI element from the accessibility tree */
 export interface AXElement {
@@ -98,7 +99,7 @@ function getAccessibilityHelperPath(): string {
   const candidates = [
     join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "helpers", "accessibility"),
     join(dirname(fileURLToPath(import.meta.url)), "..", "helpers", "accessibility"),
-    join(process.env.HOME ?? "~", ".hasna", "computer", "helpers", "accessibility"),
+    join(getHomeDir(), ".hasna", "computer", "helpers", "accessibility"),
   ];
 
   for (const candidate of candidates) {

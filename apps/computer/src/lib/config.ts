@@ -1,9 +1,17 @@
 import { join } from "path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { getHomeDir } from "./home.js";
 import type { Provider, SafetyConfig } from "../types/index.js";
 
-const CONFIG_DIR = join(process.env.HOME ?? "~", ".hasna", "computer");
-const CONFIG_PATH = join(CONFIG_DIR, "config.json");
+/** Canonical config directory: ~/.hasna/computer (resolved per call). */
+function getConfigDir(): string {
+  return join(getHomeDir(), ".hasna", "computer");
+}
+
+/** Canonical config path: ~/.hasna/computer/config.json (resolved per call). */
+function getConfigPathResolved(): string {
+  return join(getConfigDir(), "config.json");
+}
 
 /** Full configuration schema */
 export interface ComputerConfig {
@@ -48,8 +56,8 @@ export const DEFAULT_CONFIG: ComputerConfig = {
 /** Load config from disk, merged with defaults */
 export function loadConfig(): ComputerConfig {
   try {
-    if (existsSync(CONFIG_PATH)) {
-      const raw = readFileSync(CONFIG_PATH, "utf-8");
+    if (existsSync(getConfigPathResolved())) {
+      const raw = readFileSync(getConfigPathResolved(), "utf-8");
       const user = JSON.parse(raw) as Partial<ComputerConfig>;
       return mergeConfig(DEFAULT_CONFIG, user);
     }
@@ -61,8 +69,8 @@ export function loadConfig(): ComputerConfig {
 
 /** Save config to disk */
 export function saveConfig(config: ComputerConfig): void {
-  mkdirSync(CONFIG_DIR, { recursive: true });
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
+  mkdirSync(getConfigDir(), { recursive: true });
+  writeFileSync(getConfigPathResolved(), JSON.stringify(config, null, 2) + "\n");
 }
 
 /** Get a single config value by dot path (e.g. "safety.blockedApps") */
@@ -124,5 +132,5 @@ function mergeConfig(
 
 /** Get config file path */
 export function getConfigPath(): string {
-  return CONFIG_PATH;
+  return getConfigPathResolved();
 }

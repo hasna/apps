@@ -13,6 +13,7 @@ import { createMacDriver } from "../drivers/mac/index.js";
 import { createProvider } from "../providers/index.js";
 import { saveScreenshotToFile } from "../drivers/mac/screenshot.js";
 import { scaleScreenshot } from "../lib/scale.js";
+import { getDefaultScreenshotsDir } from "../lib/home.js";
 import { loadConfig } from "../lib/config.js";
 import { checkAction } from "./safety.js";
 import { screenshotsMatch } from "../lib/diff.js";
@@ -68,7 +69,7 @@ export async function runTask(options: RunOptions): Promise<Session> {
   await createSession(session);
 
   // Screenshots dir
-  const ssDir = screenshotsDir ?? `${process.env.HOME}/.hasna/computer/screenshots/${sessionId}`;
+  const ssDir = screenshotsDir ?? getDefaultScreenshotsDir(sessionId);
   if (saveScreenshots) {
     await mkdir(ssDir, { recursive: true });
   }

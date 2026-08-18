@@ -1,6 +1,7 @@
 import { join, dirname } from "path";
 import { existsSync } from "fs";
 import { fileURLToPath } from "url";
+import { getHomeDir } from "../../lib/home.js";
 import type { DriverAction, ActionResult, Screenshot } from "../../types/index.js";
 import { captureScreenshot } from "./screenshot.js";
 
@@ -215,7 +216,7 @@ function getScrollHelperPath(): string {
     // Installed: helpers/ relative to dist/
     join(dirname(fileURLToPath(import.meta.url)), "..", "helpers", "scroll"),
     // Global install
-    join(process.env.HOME ?? "~", ".hasna", "computer", "helpers", "scroll"),
+    join(getHomeDir(), ".hasna", "computer", "helpers", "scroll"),
   ];
 
   for (const candidate of candidates) {
