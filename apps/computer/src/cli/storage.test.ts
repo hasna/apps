@@ -28,7 +28,7 @@ describe("computer storage CLI", () => {
   });
 
   test("storage status reports local mode as JSON", () => {
-    const home = mkdtempSync(join(tmpdir(), "open-computer-storage-cli-"));
+    const home = mkdtempSync(join(tmpdir(), "computer-storage-cli-"));
     try {
       const result = runCli(["storage", "status", "--json"], {
         HOME: home,
