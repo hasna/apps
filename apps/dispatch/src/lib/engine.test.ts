@@ -491,7 +491,7 @@ describe("performDispatch", () => {
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.detail).toMatch(/without submitting/);
     expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("-l"))).toBe(true);
     expect(r.argvs().some((a) => a.includes("Enter"))).toBe(false);
@@ -510,7 +510,7 @@ describe("performDispatch", () => {
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.detection).toMatchObject({ agentKind: "codewith", canReceivePrompt: true });
     expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("-l"))).toBe(true);
   });
@@ -523,7 +523,7 @@ describe("performDispatch", () => {
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.detail).toMatch(/without submitting/);
     expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("-l"))).toBe(true);
     expect(r.argvs().some((a) => a.includes("Enter"))).toBe(false);
@@ -537,7 +537,7 @@ describe("performDispatch", () => {
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.detail).toMatch(/without submitting/);
     expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("-l"))).toBe(true);
     expect(r.argvs().some((a) => a.includes("Enter"))).toBe(false);
@@ -551,7 +551,7 @@ describe("performDispatch", () => {
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.detection).toMatchObject({ agentKind: "codewith", composerState: "idle", canReceivePrompt: true });
     expect(rec.detail).toMatch(/without submitting/);
     expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("-l"))).toBe(true);
@@ -566,7 +566,7 @@ describe("performDispatch", () => {
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.detail).toMatch(/without submitting/);
     expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("-l"))).toBe(true);
     expect(r.argvs().some((a) => a.includes("Enter"))).toBe(false);
@@ -580,7 +580,7 @@ describe("performDispatch", () => {
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.detail).toMatch(/without submitting/);
     expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("-l"))).toBe(true);
     expect(r.argvs().some((a) => a.includes("Enter"))).toBe(false);
@@ -594,7 +594,7 @@ describe("performDispatch", () => {
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.targetState).toBe("active");
     expect(rec.detection).toMatchObject({ agentKind: "codewith", canReceivePrompt: false, canQueuePrompt: true });
     expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("-l"))).toBe(true);
@@ -630,7 +630,7 @@ describe("performDispatch", () => {
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.targetState).toBe("active");
     expect(rec.confirm?.queued).toBe(true);
     expect(rec.detection).toMatchObject({ recommendedSubmitKey: "Tab" });
@@ -665,7 +665,7 @@ describe("performDispatch", () => {
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.targetState).toBe("active");
     expect(rec.confirm?.queued).toBe(true);
     expect(rec.detection).toMatchObject({ agentKind: "claude", canQueuePrompt: true, recommendedSubmitKey: "Enter" });
@@ -731,7 +731,7 @@ Queued follow-up inputs:
 
     expect(rec.status).toBe("failed");
     expect(rec.detail).toMatch(/auth profile|action needed/i);
-    expect(rec.deliveredAt).toBeUndefined();
+    expect(rec.succeededAt).toBeUndefined();
     expect(rec.confirm).toMatchObject({
       delivered: false,
       queued: true,
@@ -780,7 +780,7 @@ Queued follow-up inputs:
       { tmux: new Tmux(r), store, sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.captureBefore).toMatchObject({
       status: "captured",
       target: "codewith-04:1.1",
@@ -800,7 +800,7 @@ Queued follow-up inputs:
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.confirm?.workingDetected).toBe(true);
     expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("-l"))).toBe(true);
     expect(r.argvs().some((a) => a.includes("Enter"))).toBe(true);
@@ -827,7 +827,7 @@ Queued follow-up inputs:
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.detection).toMatchObject({ agentKind: "codex", composerState: "idle", canReceivePrompt: true });
     expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("-l"))).toBe(true);
   });
@@ -841,7 +841,7 @@ Queued follow-up inputs:
         { tmux: new Tmux(r), sleep: noSleep },
       );
 
-      expect(rec.status, command).toBe("delivered");
+      expect(rec.status, command).toBe("succeeded");
       expect(rec.detail, command).toMatch(/without submitting/);
       expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("-l")), command).toBe(true);
     }
@@ -855,7 +855,7 @@ Queued follow-up inputs:
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.detection).toMatchObject({ agentKind: "claude", composerState: "idle", canReceivePrompt: true });
     expect(rec.detail).toMatch(/without submitting/);
     expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("-l"))).toBe(true);
@@ -888,12 +888,12 @@ GET /health 200
       { target: "work:agent", prompt: "Refactor the parser and add tests" },
       { tmux: new Tmux(r), store, sleep: noSleep },
     );
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.confirm?.delivered).toBe(true);
     expect(rec.submitDelayMs).toBeGreaterThan(0);
-    expect(rec.deliveredAt).toBeDefined();
+    expect(rec.succeededAt).toBeDefined();
     // persisted
-    expect(store.getDispatch(rec.id)!.status).toBe("delivered");
+    expect(store.getDispatch(rec.id)!.status).toBe("succeeded");
     store.close();
   });
 
@@ -933,7 +933,7 @@ GET /health 200
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(sawParkedBeforeEnter).toBe(true);
     expect(r.argvs().filter((a) => a[1] === "send-keys" && a.includes("Enter"))).toHaveLength(1);
   });
@@ -996,7 +996,7 @@ GET /health 200
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(r.argvs().filter((a) => a[1] === "send-keys" && a.includes("Enter"))).toHaveLength(1);
   });
 
@@ -1009,7 +1009,7 @@ GET /health 200
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(r.argvs().filter((a) => a[1] === "send-keys" && a.includes("Enter"))).toHaveLength(1);
   });
 
@@ -1026,7 +1026,7 @@ GET /health 200
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(r.argvs().filter((a) => a[1] === "send-keys" && a.includes("Enter"))).toHaveLength(1);
   });
 
@@ -1124,7 +1124,7 @@ GET /health 200
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(r.argvs().filter((a) => a[1] === "send-keys" && a.includes("Enter"))).toHaveLength(1);
   });
 
@@ -1163,7 +1163,7 @@ GET /health 200
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(sawParkedBeforeEnter).toBe(true);
     expect(r.argvs().filter((a) => a[1] === "send-keys" && a.includes("Enter"))).toHaveLength(1);
   });
@@ -1264,7 +1264,7 @@ GET /health 200
       { target: "work:agent", prompt: "draft this", submit: false },
       { tmux: new Tmux(r), sleep: noSleep },
     );
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.detail).toMatch(/without submitting/);
     expect(r.argvs().some((a) => a.includes("Enter"))).toBe(false);
   });
@@ -1275,7 +1275,7 @@ GET /health 200
       { target: "work:agent", prompt: "go", confirm: false, captureBeforeLines: 5 },
       { tmux: new Tmux(r), sleep: noSleep },
     );
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.detail).toMatch(/confirmation disabled/);
     expect(rec.targetState).toBe("idle");
     expect(rec.captureBefore).toMatchObject({ status: "captured", requestedLines: 5 });
@@ -1322,7 +1322,7 @@ GET /health 200
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.confirm?.handledOutput).toBe(true);
     expect(rec.detail).toMatch(/disabled|rejection/i);
     expect(enterCount).toBe(1);

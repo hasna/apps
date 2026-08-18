@@ -55,7 +55,7 @@ d("confirmation regressions (real tmux)", () => {
     expect(send.status).toBe(0);
     const rec = JSON.parse(send.stdout);
     expect(rec.kind).toBe("exec");
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
 
     // The command actually executed in the pane.
     await Bun.sleep(300);
@@ -75,7 +75,7 @@ d("confirmation regressions (real tmux)", () => {
     const send = runCli(["send", "--to", SESSION, "--prompt", "apply the lease-loss fix now", "--queue", "--json"]);
     expect(send.status).toBe(0);
     const rec = JSON.parse(send.stdout);
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.confirm.delivered).toBe(true);
     expect(rec.confirm.queued).toBe(true);
 
@@ -110,7 +110,7 @@ d("confirmation regressions (real tmux)", () => {
     const rec = JSON.parse(send.stdout);
     expect(rec.status).toBe("failed");
     expect(rec.detail).toMatch(/auth profile|action needed/i);
-    expect(rec.deliveredAt).toBeUndefined();
+    expect(rec.succeededAt).toBeUndefined();
     expect(rec.confirm).toMatchObject({
       delivered: false,
       queued: true,
@@ -134,7 +134,7 @@ d("confirmation regressions (real tmux)", () => {
 
     const send = runCli(["exec", "--to", SESSION, "--command", "pwd", "--allow", policyFile, "--json"]);
     expect(send.status).toBe(0);
-    expect(JSON.parse(send.stdout).status).toBe("delivered");
+    expect(JSON.parse(send.stdout).status).toBe("succeeded");
 
     await Bun.sleep(300);
     // Mode exited and the command executed.

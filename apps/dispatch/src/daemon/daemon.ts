@@ -94,7 +94,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
             lastTickError: undefined,
           };
           persistState();
-          if (res.fired.length > 0) log(`fired ${res.fired.length} schedule(s)`);
+          if (res.succeeded.length > 0) log(`succeeded ${res.succeeded.length} schedule(s)`);
           if (res.failed.length > 0) log(`deferred ${res.failed.length} failed schedule(s) for retry`);
         } catch (err) {
           state = {

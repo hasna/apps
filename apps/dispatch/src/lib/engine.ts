@@ -71,14 +71,14 @@ export async function performDispatch(options: DispatchOptions, deps: DispatchDe
 
   // Create (or synthesize) the record.
   let record: DispatchRecord = store
-    ? store.createDispatch({ target: options.target, machine, prompt, status: "sending", dryRun })
+    ? store.createDispatch({ target: options.target, machine, prompt, status: "running", dryRun })
     : {
         id: genId(),
         kind: "prompt",
         target: options.target,
         machine,
         prompt,
-        status: "sending",
+        status: "running",
         dryRun,
         createdAt: nowIso(),
         updatedAt: nowIso(),
@@ -92,7 +92,7 @@ export async function performDispatch(options: DispatchOptions, deps: DispatchDe
         detail: record.detail,
         confirm: record.confirm,
         submitDelayMs: record.submitDelayMs,
-        deliveredAt: record.deliveredAt,
+        succeededAt: record.succeededAt,
         dryRun: record.dryRun,
         targetState: record.targetState,
         detection: record.detection,
@@ -238,10 +238,10 @@ export async function performDispatch(options: DispatchOptions, deps: DispatchDe
   // 5. Type-only mode: don't submit.
   if (!submitEnabled) {
     return finish({
-      status: "delivered",
+      status: "succeeded",
       detail: "typed into composer without submitting (submit disabled)",
       submitDelayMs: delayMs,
-      deliveredAt: nowIso(),
+      succeededAt: nowIso(),
       targetState,
       detection,
       captureBefore,
@@ -320,10 +320,10 @@ export async function performDispatch(options: DispatchOptions, deps: DispatchDe
   // 7. Confirm + record.
   if (!confirmEnabled) {
     return finish({
-      status: "delivered",
+      status: "succeeded",
       detail: "submitted (confirmation disabled)",
       submitDelayMs: delayMs,
-      deliveredAt: nowIso(),
+      succeededAt: nowIso(),
       targetState,
       detection,
       captureBefore,
@@ -341,11 +341,11 @@ export async function performDispatch(options: DispatchOptions, deps: DispatchDe
   });
 
   return finish({
-    status: confirm.delivered ? "delivered" : "failed",
+    status: confirm.delivered ? "succeeded" : "failed",
     detail: confirm.reason,
     confirm,
     submitDelayMs: delayMs,
-    deliveredAt: confirm.delivered ? nowIso() : undefined,
+    succeededAt: confirm.delivered ? nowIso() : undefined,
     targetState,
     detection,
     captureBefore,

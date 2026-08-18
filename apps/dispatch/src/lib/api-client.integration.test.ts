@@ -20,7 +20,7 @@ const record = {
   target: "work:agent",
   machine: "local",
   prompt: "deploy prod",
-  status: "delivered",
+  status: "succeeded",
   detail: "working detected",
   createdAt: "2026-07-29T00:00:00.000Z",
   updatedAt: "2026-07-29T00:00:00.000Z",
@@ -81,7 +81,7 @@ describe("hosted API route against a live loopback authority", () => {
 
     expect(run.stderr).toBe("");
     expect(run.status).toBe(0);
-    expect(JSON.parse(run.stdout)).toMatchObject({ id: "d1", status: "delivered", detail: "working detected" });
+    expect(JSON.parse(run.stdout)).toMatchObject({ id: "d1", status: "succeeded", detail: "working detected" });
   }, 30_000);
 
   test("a 200 the client cannot read exits non-zero instead of printing a fabricated success", async () => {
@@ -100,7 +100,7 @@ describe("hosted API route against a live loopback authority", () => {
   }, 30_000);
 
   test("a partially-filled record is rejected the same way as an empty body", async () => {
-    dispatchBody = { dispatch: { id: "d1", target: "work:agent", status: "delivered" } };
+    dispatchBody = { dispatch: { id: "d1", target: "work:agent", status: "succeeded" } };
     const run = await sendPrompt();
 
     expect(run.status).not.toBe(0);

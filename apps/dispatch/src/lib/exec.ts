@@ -32,7 +32,7 @@ export async function performExec(options: ExecOptions, deps: ExecDeps): Promise
         target: options.target,
         machine,
         prompt: redacted,
-        status: "sending",
+        status: "running",
         commandHash: initialHash,
         dryRun: options.dryRun === true,
         execPlan: auditPlan,
@@ -43,7 +43,7 @@ export async function performExec(options: ExecOptions, deps: ExecDeps): Promise
         target: options.target,
         machine,
         prompt: redacted,
-        status: "sending",
+        status: "running",
         commandHash: initialHash,
         dryRun: options.dryRun === true,
         execPlan: auditPlan,
@@ -57,7 +57,7 @@ export async function performExec(options: ExecOptions, deps: ExecDeps): Promise
       const persisted = store.updateDispatch(record.id, {
         status: record.status,
         detail: record.detail,
-        deliveredAt: record.deliveredAt,
+        succeededAt: record.succeededAt,
         commandHash: record.commandHash,
         filter: record.filter
           ? { ...record.filter, normalizedCommand: redactedCommand(record.filter.commandHash) }
@@ -127,13 +127,13 @@ export async function performExec(options: ExecOptions, deps: ExecDeps): Promise
   }
 
   return finish({
-    status: "delivered",
+    status: "succeeded",
     detail: "command submitted to shell",
     commandHash: filter.commandHash,
     filter,
     targetKind,
     dryRun: false,
     execPlan: auditPlan,
-    deliveredAt: nowIso(),
+    succeededAt: nowIso(),
   });
 }

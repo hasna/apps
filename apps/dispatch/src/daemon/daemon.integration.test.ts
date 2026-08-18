@@ -91,19 +91,19 @@ d("dispatch daemon (real tmux + fake agent)", () => {
       runCli(["schedule", "--to", SESSION, "--prompt", "scheduled hello to the agent", "--in", "1500ms", "--json"])
         .stdout,
     );
-    expect(sched.status).toBe("scheduled");
+    expect(sched.status).toBe("admitted");
     expect(sched.at).toBeDefined();
 
     // Wait past the fire time + a tick + full delivery (generous for load).
     await Bun.sleep(12000);
 
     const schedules = JSON.parse(runCli(["schedules", "--json"]).stdout);
-    expect(schedules.find((s: any) => s.id === sched.id).status).toBe("fired");
+    expect(schedules.find((s: any) => s.id === sched.id).status).toBe("succeeded");
 
     const dispatches = JSON.parse(runCli(["list", "--json"]).stdout);
     const fired = dispatches.find((r: any) => r.prompt.includes("scheduled hello"));
     expect(fired).toBeDefined();
-    expect(fired.status).toBe("delivered");
+    expect(fired.status).toBe("succeeded");
     expect(fired.confirm.delivered).toBe(true);
   }, 30000);
 
@@ -113,15 +113,15 @@ d("dispatch daemon (real tmux + fake agent)", () => {
       runCli(["loop", "--to", SESSION, "--prompt", "loop hello to the agent", "--every", "2s", "--name", "it-loop", "--json"])
         .stdout,
     );
-    expect(loop).toMatchObject({ status: "scheduled", kind: "loop", name: "it-loop", every: "2s" });
+    expect(loop).toMatchObject({ status: "admitted", kind: "loop", name: "it-loop", every: "2s" });
 
     await Bun.sleep(9000);
 
     const loops = JSON.parse(runCli(["loops", "--json"]).stdout);
     const after = loops.find((s: any) => s.id === loop.id);
     expect(after).toBeDefined();
-    expect(after.status).toBe("scheduled");
-    expect(after.lastDispatchId).toBeDefined();
+    expect(after.status).toBe("admitted");
+    expect(after.lastAttemptId).toBeDefined();
 
     const dispatches = JSON.parse(runCli(["list", "--json"]).stdout);
     expect(dispatches.some((r: any) => r.prompt.includes("loop hello"))).toBe(true);
@@ -141,7 +141,7 @@ d("dispatch daemon (real tmux + fake agent)", () => {
 
     // The schedule is still pending (not yet fired) and persisted on disk.
     let after = JSON.parse(runCli(["schedules", "--json"]).stdout).find((s: any) => s.id === sched.id);
-    expect(after.status).toBe("scheduled");
+    expect(after.status).toBe("admitted");
 
     // Restart a fresh daemon process; it must pick up the persisted schedule
     // (which fires ~3.5s after creation) and deliver it.
@@ -149,11 +149,11 @@ d("dispatch daemon (real tmux + fake agent)", () => {
     await Bun.sleep(14000);
 
     after = JSON.parse(runCli(["schedules", "--json"]).stdout).find((s: any) => s.id === sched.id);
-    expect(after.status).toBe("fired");
+    expect(after.status).toBe("succeeded");
     const fired = JSON.parse(runCli(["list", "--json"]).stdout).find((r: any) =>
       r.prompt.includes("survives restart marker"),
     );
     expect(fired).toBeDefined();
-    expect(fired.status).toBe("delivered");
+    expect(fired.status).toBe("succeeded");
   }, 35000);
 });

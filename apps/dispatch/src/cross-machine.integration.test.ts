@@ -106,7 +106,7 @@ d("cross-machine dispatch (real second host)", () => {
     expect(send.status).toBe(0);
     const rec = JSON.parse(send.stdout);
     expect(rec.machine).toBe(remote!.host);
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.confirm.delivered).toBe(true);
   }, 70000);
 });

@@ -470,7 +470,7 @@ export const TOOLS: ToolDef[] = [
     title: "List scheduled dispatches",
     description: "List scheduled dispatches (optionally filter by status).",
     inputSchema: {
-      status: z.enum(["scheduled", "paused", "fired", "cancelled", "failed"]).optional(),
+      status: z.enum(["admitted", "paused", "succeeded", "cancelled", "failed"]).optional(),
       kind: z.enum(["schedule", "loop"]).optional(),
       limit: z.number().optional().describe("max rows (default 20)"),
       verbose: z.boolean().optional().describe("return full schedules instead of compact summaries"),
@@ -490,7 +490,7 @@ export const TOOLS: ToolDef[] = [
     title: "List dispatch loops",
     description: "List recurring interval dispatch loops.",
     inputSchema: {
-      status: z.enum(["scheduled", "paused", "cancelled", "failed"]).optional(),
+      status: z.enum(["admitted", "paused", "cancelled", "failed"]).optional(),
       limit: z.number().optional().describe("max rows (default 20)"),
       verbose: z.boolean().optional().describe("return full loops instead of compact summaries"),
     },
@@ -737,7 +737,7 @@ export const TOOLS: ToolDef[] = [
       const findings: string[] = [];
       if (status.health === "dead") findings.push("daemon is not running");
       if (status.health === "stale") findings.push("daemon health is stale");
-      if (status.scheduled > 0 && status.health !== "alive") findings.push("scheduled items cannot fire until daemon is alive");
+      if (status.admitted > 0 && status.health !== "alive") findings.push("admitted items cannot fire until daemon is alive");
       if (status.recentFailures.length > 0) findings.push("recent schedule/loop failures recorded");
       return { ok: findings.length === 0, status, findings };
     },

@@ -3,7 +3,7 @@ import { tick } from "./scheduler.js";
 import { Store } from "./store.js";
 import type { DispatchOptions, DispatchRecord } from "../types.js";
 
-function fakeRecord(id: string, status: DispatchRecord["status"] = "delivered"): DispatchRecord {
+function fakeRecord(id: string, status: DispatchRecord["status"] = "succeeded"): DispatchRecord {
   return {
     id,
     target: "s:w",
@@ -37,13 +37,13 @@ describe("scheduler.tick", () => {
 
     const res = await tick({ store, dispatch });
     expect(calls).toHaveLength(1);
-    expect(res.fired).toHaveLength(1);
-    expect(store.getSchedule(sched.id)!.status).toBe("fired");
-    expect(store.getSchedule(sched.id)!.lastDispatchId).toBe("rec1");
+    expect(res.succeeded).toHaveLength(1);
+    expect(store.getSchedule(sched.id)!.status).toBe("succeeded");
+    expect(store.getSchedule(sched.id)!.lastAttemptId).toBe("rec1");
 
     // Subsequent ticks do not re-fire it.
     const res2 = await tick({ store, dispatch });
-    expect(res2.fired).toHaveLength(0);
+    expect(res2.succeeded).toHaveLength(0);
     expect(calls).toHaveLength(1);
     store.close();
   });
@@ -58,7 +58,7 @@ describe("scheduler.tick", () => {
     const { calls, dispatch } = counter();
     const res = await tick({ store, dispatch });
     expect(calls).toHaveLength(0);
-    expect(res.fired).toHaveLength(0);
+    expect(res.succeeded).toHaveLength(0);
     store.close();
   });
 
@@ -75,9 +75,9 @@ describe("scheduler.tick", () => {
     const res = await tick({ store, dispatch, now: () => fixedNow });
     expect(calls).toHaveLength(1);
     const after = store.getSchedule(sched.id)!;
-    expect(after.status).toBe("scheduled");
+    expect(after.status).toBe("admitted");
     expect(new Date(after.nextRun).getTime()).toBeGreaterThan(fixedNow.getTime());
-    expect(after.lastDispatchId).toBe("rec1");
+    expect(after.lastAttemptId).toBe("rec1");
     store.close();
   });
 
@@ -95,11 +95,11 @@ describe("scheduler.tick", () => {
 
     const res = await tick({ store, dispatch, now: () => fixedNow });
     expect(calls).toHaveLength(1);
-    expect(res.fired).toHaveLength(1);
+    expect(res.succeeded).toHaveLength(1);
     const after = store.getSchedule(sched.id)!;
-    expect(after.status).toBe("scheduled");
+    expect(after.status).toBe("admitted");
     expect(after.nextRun).toBe("2026-06-17T10:05:30.000Z");
-    expect(after.lastDispatchId).toBe("rec1");
+    expect(after.lastAttemptId).toBe("rec1");
     store.close();
   });
 
@@ -122,10 +122,10 @@ describe("scheduler.tick", () => {
       onError: (_s, e) => errors.push(e),
     });
     expect(errors).toHaveLength(1);
-    expect(res.fired).toHaveLength(0);
+    expect(res.succeeded).toHaveLength(0);
     expect(res.failed).toHaveLength(1);
     const after = store.getSchedule(sched.id)!;
-    expect(after.status).toBe("scheduled");
+    expect(after.status).toBe("admitted");
     expect(after.nextRun).toBe("2026-06-17T10:00:05.000Z");
     store.close();
   });
@@ -160,7 +160,7 @@ describe("scheduler.tick", () => {
       now: () => new Date(Date.now() + 10_000),
       maxRetryWindowMs: 0,
     });
-    expect(res2.fired).toHaveLength(0);
+    expect(res2.succeeded).toHaveLength(0);
     expect(res2.failed).toHaveLength(0);
     store.close();
   });
@@ -182,7 +182,7 @@ describe("scheduler.tick", () => {
     });
     expect(res.failed).toHaveLength(1);
     const after = store.getSchedule(sched.id)!;
-    expect(after.status).toBe("scheduled");
+    expect(after.status).toBe("admitted");
     expect(new Date(after.nextRun).getTime()).toBeGreaterThan(Date.parse("2026-06-17T10:00:30.000Z"));
     store.close();
   });
@@ -204,9 +204,9 @@ describe("scheduler.tick", () => {
     });
     expect(res.failed).toHaveLength(1);
     const after = store.getSchedule(sched.id)!;
-    expect(after.status).toBe("scheduled");
+    expect(after.status).toBe("admitted");
     expect(after.nextRun).toBe("2026-06-17T10:01:00.000Z");
-    expect(after.lastDispatchId).toBe("rec-loop-failed");
+    expect(after.lastAttemptId).toBe("rec-loop-failed");
     expect(after.lastFailureAt).toBeDefined();
     expect(after.lastFailureReason).toMatch(/ended with status skipped/);
     expect(after.failureCount).toBe(1);
@@ -226,11 +226,11 @@ describe("scheduler.tick", () => {
       now: () => new Date("2026-06-17T10:00:00.000Z"),
       retryDelayMs: 5_000,
     });
-    expect(res.fired).toHaveLength(0);
+    expect(res.succeeded).toHaveLength(0);
     expect(res.failed).toHaveLength(1);
     const after = store.getSchedule(sched.id)!;
-    expect(after.status).toBe("scheduled");
-    expect(after.lastDispatchId).toBe("rec-failed");
+    expect(after.status).toBe("admitted");
+    expect(after.lastAttemptId).toBe("rec-failed");
     expect(after.nextRun).toBe("2026-06-17T10:00:05.000Z");
     expect(after.lastFailureAt).toBeDefined();
     expect(after.lastFailureReason).toMatch(/ended with status failed/);
@@ -251,11 +251,11 @@ describe("scheduler.tick", () => {
       now: () => new Date("2026-06-17T10:00:00.000Z"),
       retryDelayMs: 5_000,
     });
-    expect(res.fired).toHaveLength(0);
+    expect(res.succeeded).toHaveLength(0);
     expect(res.failed).toHaveLength(1);
     const after = store.getSchedule(sched.id)!;
-    expect(after.status).toBe("scheduled");
-    expect(after.lastDispatchId).toBe("rec-skipped");
+    expect(after.status).toBe("admitted");
+    expect(after.lastAttemptId).toBe("rec-skipped");
     expect(after.nextRun).toBe("2026-06-17T10:00:05.000Z");
     store.close();
   });
@@ -276,11 +276,11 @@ describe("scheduler.tick", () => {
     });
     await tick({
       store,
-      dispatch: async () => fakeRecord("rec-recovered", "delivered"),
+      dispatch: async () => fakeRecord("rec-recovered", "succeeded"),
       now: () => new Date("2026-06-17T10:00:00.000Z"),
     });
     const after = store.getSchedule(sched.id)!;
-    expect(after.status).toBe("scheduled");
+    expect(after.status).toBe("admitted");
     expect(after.lastFailureAt).toBeUndefined();
     expect(after.lastFailureReason).toBeUndefined();
     expect(after.failureCount).toBe(1);
@@ -299,7 +299,7 @@ describe("scheduler.tick", () => {
     const { calls, dispatch } = counter();
     const res = await tick({ store, dispatch });
     expect(calls).toHaveLength(0);
-    expect(res.fired).toHaveLength(0);
+    expect(res.succeeded).toHaveLength(0);
     store.close();
   });
 
@@ -322,8 +322,8 @@ describe("scheduler.tick", () => {
       now: () => new Date("2026-06-17T10:00:00.000Z"),
     });
 
-    expect(res.fired).toHaveLength(0);
-    expect(store.getSchedule(sched.id)).toMatchObject({ status: "paused", lastDispatchId: undefined });
+    expect(res.succeeded).toHaveLength(0);
+    expect(store.getSchedule(sched.id)).toMatchObject({ status: "paused", lastAttemptId: undefined });
     store.close();
   });
 
@@ -343,8 +343,8 @@ describe("scheduler.tick", () => {
       now: () => new Date("2026-06-17T10:00:00.000Z"),
     });
 
-    expect(res.fired).toHaveLength(0);
-    expect(store.getSchedule(sched.id)).toMatchObject({ status: "cancelled", lastDispatchId: undefined });
+    expect(res.succeeded).toHaveLength(0);
+    expect(store.getSchedule(sched.id)).toMatchObject({ status: "cancelled", lastAttemptId: undefined });
     store.close();
   });
 
@@ -374,9 +374,9 @@ describe("scheduler.tick", () => {
     });
 
     expect(calls).toBe(2);
-    expect(res.fired).toHaveLength(1);
+    expect(res.succeeded).toHaveLength(1);
     expect(store.getSchedule(doomed.id)).toBeUndefined();
-    expect(store.getSchedule(survivor.id)).toMatchObject({ status: "fired", lastDispatchId: "rec-survivor" });
+    expect(store.getSchedule(survivor.id)).toMatchObject({ status: "succeeded", lastAttemptId: "rec-survivor" });
     store.close();
   });
 
@@ -388,7 +388,7 @@ describe("scheduler.tick", () => {
     const { calls, dispatch } = counter();
     const res = await tick({ store, dispatch });
     expect(calls).toHaveLength(3);
-    expect(res.fired).toHaveLength(3);
+    expect(res.succeeded).toHaveLength(3);
     store.close();
   });
 });

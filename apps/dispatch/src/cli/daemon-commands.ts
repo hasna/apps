@@ -60,7 +60,7 @@ export function registerDaemonCommands(program: Command, deps: DaemonCommandDeps
     deps.out(`  health: ${st.health}${st.heartbeatAgeMs !== undefined ? `  heartbeat_age_ms: ${st.heartbeatAgeMs}` : ""}`);
     if (st.lastTickAt) deps.out(`  last tick: ${st.lastTickAt}`);
     if (st.nextDue) deps.out(`  next due: ${st.nextDue.id} ${st.nextDue.kind ?? "schedule"} ${st.nextDue.nextRun} ${st.nextDue.machine ?? "local"}/${st.nextDue.target}`);
-    deps.out(`  scheduled: ${st.scheduled}  paused: ${st.paused}  fired: ${st.fired}  cancelled: ${st.cancelled}  failed: ${st.failed}`);
+    deps.out(`  admitted: ${st.admitted}  paused: ${st.paused}  succeeded: ${st.succeeded}  cancelled: ${st.cancelled}  failed: ${st.failed}`);
     if (st.recentFailures.length > 0) {
       deps.out("  recent failures:");
       for (const f of st.recentFailures) deps.out(`    ${f.id} ${f.lastFailureAt} ${f.lastFailureReason ?? "unknown failure"}`);
@@ -245,7 +245,7 @@ export function registerDaemonCommands(program: Command, deps: DaemonCommandDeps
         const findings: string[] = [];
         if (st.health === "dead") findings.push("daemon is not running; run `dispatch daemon ensure` or install the user service");
         if (st.health === "stale") findings.push("daemon health is stale; run `dispatch daemon restart`");
-        if (st.scheduled > 0 && st.health !== "alive") findings.push(`${st.scheduled} scheduled item(s) cannot fire until the daemon is alive`);
+        if (st.admitted > 0 && st.health !== "alive") findings.push(`${st.admitted} admitted item(s) cannot fire until the daemon is alive`);
         if (st.recentFailures.length > 0) findings.push(`${st.recentFailures.length} recent schedule/loop failure(s) recorded`);
         const result = { ok: findings.length === 0, status: st, findings };
         if (opts.json) {

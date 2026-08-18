@@ -62,7 +62,7 @@ const record = {
   target: "work:agent",
   machine: "local",
   prompt: "hello",
-  status: "delivered",
+  status: "succeeded",
   createdAt: "x",
   updatedAt: "x",
 } as const;
@@ -71,7 +71,7 @@ const schedule = {
   id: "s1",
   options: { target: "work:agent", prompt: "later" },
   nextRun: "2099-01-01T00:00:00.000Z",
-  status: "scheduled",
+  status: "admitted",
   createdAt: "x",
   updatedAt: "x",
 } as const;
@@ -80,9 +80,9 @@ const daemonStatusBody = {
   running: true,
   stale: false,
   health: "alive",
-  scheduled: 0,
+  admitted: 0,
   paused: 0,
-  fired: 0,
+  succeeded: 0,
   cancelled: 0,
   failed: 0,
   recentDispatches: 0,
@@ -169,9 +169,9 @@ describe("dispatch API route resolution", () => {
 describe("DispatchApiClient", () => {
   test("routes command families through authenticated /v1 endpoints", async () => {
     const { calls, fetchImpl } = apiFetch((path, method) => {
-      if (path.startsWith("/v1/dispatches/bulk")) return { body: { result: { status: "completed", source: "explicit", requested: 0, planned: 0, delivered: 0, skipped: 0, failed: 0, dryRun: true, maxConcurrency: 1, jitterMs: 0, perMachineLimit: 1, records: [] } } };
+      if (path.startsWith("/v1/dispatches/bulk")) return { body: { result: { status: "completed", source: "explicit", requested: 0, planned: 0, succeeded: 0, skipped: 0, failed: 0, dryRun: true, maxConcurrency: 1, jitterMs: 0, perMachineLimit: 1, records: [] } } };
       if (path.startsWith("/v1/dispatches")) {
-        if (method === "GET" && path === "/v1/dispatches?status=delivered&limit=3") return { body: { dispatches: [record] } };
+        if (method === "GET" && path === "/v1/dispatches?status=succeeded&limit=3") return { body: { dispatches: [record] } };
         return { body: { dispatch: record } };
       }
       if (path.startsWith("/v1/schedules/s1/") || (path === "/v1/schedules/s1" && method === "DELETE")) {
@@ -215,12 +215,12 @@ describe("DispatchApiClient", () => {
     await client.fleetSummary({ limit: 1 });
     await client.targets({ backend: "tmux", limit: 5, verbose: true });
     await client.status("d1");
-    await client.list({ status: "delivered", limit: 3 });
+    await client.list({ status: "succeeded", limit: 3 });
     await client.schedule({ options: { target: "work:agent", prompt: "later" }, in: "30m" });
     await client.loop({ options: { target: "work:agent", prompt: "poll" }, every: "5m" });
     await client.scheduleStatus("s1");
-    await client.listSchedules({ status: "scheduled", kind: "schedule", limit: 2 });
-    await client.listLoops({ status: "scheduled", limit: 2 });
+    await client.listSchedules({ status: "admitted", kind: "schedule", limit: 2 });
+    await client.listLoops({ status: "admitted", limit: 2 });
     await client.cancelSchedule("s1");
     await client.pauseSchedule("s1");
     await client.resumeSchedule("s1");
@@ -243,12 +243,12 @@ describe("DispatchApiClient", () => {
       "POST /v1/fleet/summary",
       "GET /v1/targets?backend=tmux&limit=5&verbose=true",
       "GET /v1/dispatches/d1",
-      "GET /v1/dispatches?status=delivered&limit=3",
+      "GET /v1/dispatches?status=succeeded&limit=3",
       "POST /v1/schedules",
       "POST /v1/loops",
       "GET /v1/schedules/s1",
-      "GET /v1/schedules?status=scheduled&kind=schedule&limit=2",
-      "GET /v1/loops?status=scheduled&limit=2",
+      "GET /v1/schedules?status=admitted&kind=schedule&limit=2",
+      "GET /v1/loops?status=admitted&limit=2",
       "POST /v1/schedules/s1/cancel",
       "POST /v1/schedules/s1/pause",
       "POST /v1/schedules/s1/resume",
@@ -394,7 +394,7 @@ describe("DispatchApiClient", () => {
       "<html>login</html>",
       // Right envelope, wrong record: no timestamps, so callers that read them
       // would render `undefined` as if the authority had reported one.
-      { dispatch: { id: "d1", target: "work:agent", machine: "local", prompt: "hello", status: "delivered" } },
+      { dispatch: { id: "d1", target: "work:agent", machine: "local", prompt: "hello", status: "succeeded" } },
       // Right fields, undeclared status value.
       { dispatch: { ...record, status: "queued" } },
     ];
@@ -497,7 +497,7 @@ describe("DispatchApiClient", () => {
     const client = new DispatchApiClient({ baseUrl: "https://dispatch.hasna.xyz/v1", apiKey: "secret", fetchImpl });
 
     const result = await client.send({ target: "work:agent", prompt: "hello" });
-    expect(result).toMatchObject({ id: "d1", status: "delivered", detail: "working detected" });
+    expect(result).toMatchObject({ id: "d1", status: "succeeded", detail: "working detected" });
     expect(result.confirm).toEqual({ delivered: true, reason: "composer cleared" });
   });
 

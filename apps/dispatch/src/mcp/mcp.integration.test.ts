@@ -127,7 +127,7 @@ d("MCP server (in-memory transport, real tmux)", () => {
       arguments: { target: SESSION, prompt: "mcp-driven dispatch to the agent", delayMs: 200 },
     });
     const compact = textOf(sendRes);
-    expect(compact).toMatchObject({ compact: true, record: { status: "delivered" } });
+    expect(compact).toMatchObject({ compact: true, record: { status: "succeeded" } });
     const id = compact.record.id;
 
     const statusRes = await client.callTool({ name: "dispatch_status", arguments: { id } });

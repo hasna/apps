@@ -2,13 +2,17 @@
  * Core types for @hasna/dispatch.
  */
 
-/** Lifecycle status of a dispatch. */
+/**
+ * Lifecycle status of a dispatch attempt, using the fleet daemon-worker
+ * taxonomy: an attempt is `admitted` (accepted), `running` (executing), then
+ * reaches a terminal state (`succeeded`, `failed`, `cancelled`, or
+ * `skipped`).
+ */
 export type DispatchStatus =
-  | "pending"
-  | "sending"
-  | "delivered"
+  | "admitted"
+  | "running"
+  | "succeeded"
   | "failed"
-  | "scheduled"
   | "cancelled"
   | "skipped";
 
@@ -209,7 +213,7 @@ export interface BulkDispatchResult {
   source: DispatchTargetSource;
   requested: number;
   planned: number;
-  delivered: number;
+  succeeded: number;
   skipped: number;
   failed: number;
   dryRun: boolean;
@@ -387,7 +391,7 @@ export interface AgentRecoveryDispatchSummary {
   status: DispatchStatus;
   detail?: string;
   targetState?: AgentActivityState;
-  deliveredAt?: string;
+  succeededAt?: string;
 }
 
 export interface AgentRecoverResult {
@@ -493,8 +497,12 @@ export interface MosaicPromptReceipt {
 /** User-facing kind of a persisted scheduled prompt. */
 export type ScheduleKind = "schedule" | "loop";
 
-/** Lifecycle status of a scheduled prompt or loop. */
-export type ScheduleStatus = "scheduled" | "paused" | "fired" | "cancelled" | "failed";
+/**
+ * Lifecycle status of a scheduled prompt or loop, using the fleet
+ * daemon-worker taxonomy: `admitted` (accepted into the queue), user-paused,
+ * then a terminal state (`succeeded`, `cancelled`, `failed`).
+ */
+export type ScheduleStatus = "admitted" | "paused" | "succeeded" | "cancelled" | "failed";
 
 /** A persisted dispatch record. */
 export interface DispatchRecord {
@@ -532,7 +540,7 @@ export interface DispatchRecord {
   /** Exact tmux input that would be or was sent for exec records. */
   execPlan?: ExecDeliveryPlan;
   createdAt: string;
-  deliveredAt?: string;
+  succeededAt?: string;
   updatedAt: string;
 }
 
@@ -555,14 +563,16 @@ export interface ScheduledDispatch {
   /** Next computed fire time (ISO 8601). */
   nextRun: string;
   /**
-   * `scheduled` — waiting to fire (or retrying). `paused` — stopped until
-   * resumed. `fired` — a one-shot completed. `cancelled` — cancelled by a user.
-   * `failed` — a one-shot gave up after exhausting its retry window.
+   * `admitted` — accepted into the queue, waiting to fire (or retrying).
+   * `paused` — stopped until resumed. `succeeded` — a one-shot completed.
+   * `cancelled` — cancelled by a user. `failed` — a one-shot gave up after
+   * exhausting its retry window.
    */
   status: ScheduleStatus;
-  /** Id of the last dispatch this schedule produced. */
-  lastDispatchId?: string;
-  lastFiredAt?: string;
+  /** Attempt identity: id of the last dispatch attempt this entry produced. */
+  lastAttemptId?: string;
+  /** Timestamp of the last dispatch attempt, success or failure. */
+  lastAttemptAt?: string;
   /** Last failed attempt timestamp, if any. Kept as audit metadata. */
   lastFailureAt?: string;
   /** Last failed attempt reason, if any. */

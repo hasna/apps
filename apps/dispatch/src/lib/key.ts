@@ -81,7 +81,7 @@ export async function performKeyDispatch(options: KeyOptions, deps: KeyDeps): Pr
         target: options.target,
         machine,
         prompt,
-        status: "sending",
+        status: "running",
       })
     : {
         id: genId(),
@@ -89,7 +89,7 @@ export async function performKeyDispatch(options: KeyOptions, deps: KeyDeps): Pr
         target: options.target,
         machine,
         prompt,
-        status: "sending",
+        status: "running",
         createdAt: nowIso(),
         updatedAt: nowIso(),
       };
@@ -100,7 +100,7 @@ export async function performKeyDispatch(options: KeyOptions, deps: KeyDeps): Pr
       record = store.updateDispatch(record.id, {
         status: record.status,
         detail: record.detail,
-        deliveredAt: record.deliveredAt,
+        succeededAt: record.succeededAt,
         targetState: record.targetState,
         detection: record.detection,
       });
@@ -160,10 +160,10 @@ export async function performKeyDispatch(options: KeyOptions, deps: KeyDeps): Pr
   }
 
   return finish({
-    status: "delivered",
+    status: "succeeded",
     detail: `sent key ${normalizedKey} to agent composer`,
     targetState: target.activity,
     detection: target.detection,
-    deliveredAt: nowIso(),
+    succeededAt: nowIso(),
   });
 }

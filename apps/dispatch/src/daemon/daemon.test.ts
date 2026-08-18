@@ -26,7 +26,7 @@ describe("runDaemon", () => {
     let sends = 0;
     (client as unknown as { send: (o: unknown) => Promise<unknown> }).send = async () => {
       sends++;
-      return store.createDispatch({ target: "s:w", prompt: "fired", status: "delivered" });
+      return store.createDispatch({ target: "s:w", prompt: "fired", status: "succeeded" });
     };
     store.createSchedule({
       options: { target: "s:w", prompt: "go" },
@@ -47,7 +47,7 @@ describe("runDaemon", () => {
     });
 
     expect(sends).toBe(1);
-    expect(store.listSchedules({ status: "fired" })).toHaveLength(1);
+    expect(store.listSchedules({ status: "succeeded" })).toHaveLength(1);
     expect(existsSync(pidPath)).toBe(false); // cleaned up on exit
     expect(readDaemonState(statePath)?.lastTickAt).toBeDefined();
     expect(readDaemonState(statePath)?.stoppedAt).toBeDefined();

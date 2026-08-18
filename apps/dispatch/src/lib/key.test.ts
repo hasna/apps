@@ -72,7 +72,7 @@ describe("performKeyDispatch", () => {
     const rec = await performKeyDispatch({ target: "work:agent", key: "Tab" }, { tmux: new Tmux(r), store });
 
     expect(rec.kind).toBe("key");
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.prompt).toBe("<key:Tab>");
     expect(store.getDispatch(rec.id)!.prompt).toBe("<key:Tab>");
     expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("Tab"))).toBe(true);
@@ -87,7 +87,7 @@ describe("performKeyDispatch", () => {
     );
     const rec = await performKeyDispatch({ target: "work:node", key: "Enter" }, { tmux: new Tmux(r) });
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("Enter"))).toBe(true);
   });
 
@@ -105,7 +105,7 @@ describe("performKeyDispatch", () => {
     const r = runner("node", activeCodewithCapture, codewithProcessTree);
     const rec = await performKeyDispatch({ target: "dispatch:1.1", key: "Tab" }, { tmux: new Tmux(r) });
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.detection).toMatchObject({ agentKind: "codewith", composerState: "active", canQueuePrompt: true });
     expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("Tab"))).toBe(true);
   });

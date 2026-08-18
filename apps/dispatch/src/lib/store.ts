@@ -43,7 +43,7 @@ interface DispatchRow {
   capture_before_json: string | null;
   receipt_json: string | null;
   created_at: string;
-  delivered_at: string | null;
+  succeeded_at: string | null;
   updated_at: string;
 }
 
@@ -58,8 +58,8 @@ interface ScheduleRow {
   interval_ms: number | null;
   next_run: string;
   status: string;
-  last_dispatch_id: string | null;
-  last_fired_at: string | null;
+  last_attempt_id: string | null;
+  last_attempt_at: string | null;
   last_failure_at: string | null;
   last_failure_reason: string | null;
   failure_count: number | null;
@@ -89,7 +89,7 @@ function rowToDispatch(r: DispatchRow): DispatchRecord {
     captureBefore: r.capture_before_json ? (JSON.parse(r.capture_before_json) as CaptureResult) : undefined,
     receipt: r.receipt_json ? (JSON.parse(r.receipt_json) as MosaicPromptReceipt) : undefined,
     createdAt: r.created_at,
-    deliveredAt: r.delivered_at ?? undefined,
+    succeededAt: r.succeeded_at ?? undefined,
     updatedAt: r.updated_at,
   };
 }
@@ -106,8 +106,8 @@ function rowToSchedule(r: ScheduleRow): ScheduledDispatch {
     intervalMs: r.interval_ms ?? undefined,
     nextRun: r.next_run,
     status: r.status as ScheduleStatus,
-    lastDispatchId: r.last_dispatch_id ?? undefined,
-    lastFiredAt: r.last_fired_at ?? undefined,
+    lastAttemptId: r.last_attempt_id ?? undefined,
+    lastAttemptAt: r.last_attempt_at ?? undefined,
     lastFailureAt: r.last_failure_at ?? undefined,
     lastFailureReason: r.last_failure_reason ?? undefined,
     failureCount: r.failure_count ?? undefined,
@@ -116,7 +116,7 @@ function rowToSchedule(r: ScheduleRow): ScheduledDispatch {
   };
 }
 
-const STALE_SENDING_DISPATCH_MS = 60 * 1000;
+const STALE_RUNNING_DISPATCH_MS = 60 * 1000;
 const SQLITE_BUSY_TIMEOUT_MS = 10000;
 const DEFAULT_SCHEDULE_LIMIT = 200;
 const DEFAULT_DUE_SCHEDULE_LIMIT = 1000;
@@ -183,7 +183,7 @@ export class Store {
         capture_before_json TEXT,
         receipt_json TEXT,
         created_at TEXT NOT NULL,
-        delivered_at TEXT,
+        succeeded_at TEXT,
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_dispatches_status ON dispatches(status);
@@ -200,8 +200,8 @@ export class Store {
         interval_ms INTEGER,
         next_run TEXT NOT NULL,
         status TEXT NOT NULL,
-        last_dispatch_id TEXT,
-        last_fired_at TEXT,
+        last_attempt_id TEXT,
+        last_attempt_at TEXT,
         last_failure_at TEXT,
         last_failure_reason TEXT,
         failure_count INTEGER,
@@ -211,6 +211,24 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_schedules_status ON schedules(status);
       CREATE INDEX IF NOT EXISTS idx_schedules_next ON schedules(next_run);
     `));
+    // Taxonomy migration (2026-08-18): rename persisted columns to the
+    // daemon-worker taxonomy (attempt identity, attempt timestamp, success
+    // timestamp). Renames are guarded and preserve all data.
+    this.renameDispatchColumn("delivered_at", "succeeded_at");
+    this.renameScheduleColumn("last_dispatch_id", "last_attempt_id");
+    this.renameScheduleColumn("last_fired_at", "last_attempt_at");
+    // Taxonomy migration: rewrite persisted status values to the taxonomy
+    // vocabulary (admitted / running / succeeded). Idempotent: legacy values
+    // no longer exist after the first run, so re-running changes nothing.
+    withSqliteBusyRetry(() =>
+      this.db.exec(`
+        UPDATE dispatches SET status='admitted' WHERE status IN ('pending','scheduled');
+        UPDATE dispatches SET status='running' WHERE status='sending';
+        UPDATE dispatches SET status='succeeded' WHERE status='delivered';
+        UPDATE schedules SET status='admitted' WHERE status='scheduled';
+        UPDATE schedules SET status='succeeded' WHERE status='fired';
+      `),
+    );
     this.ensureDispatchColumn("kind", "TEXT NOT NULL DEFAULT 'prompt'");
     this.ensureDispatchColumn("backend", "TEXT NOT NULL DEFAULT 'tmux'");
     this.ensureDispatchColumn("command_hash", "TEXT");
@@ -248,17 +266,33 @@ export class Store {
     withSqliteBusyRetry(() => this.db.exec(`ALTER TABLE schedules ADD COLUMN ${name} ${definition};`));
   }
 
+  private renameDispatchColumn(from: string, to: string): void {
+    const rows = withSqliteBusyRetry(() =>
+      this.db.query<{ name: string }, []>("PRAGMA table_info(dispatches)").all(),
+    );
+    if (!rows.some((row) => row.name === from) || rows.some((row) => row.name === to)) return;
+    withSqliteBusyRetry(() => this.db.exec(`ALTER TABLE dispatches RENAME COLUMN ${from} TO ${to};`));
+  }
+
+  private renameScheduleColumn(from: string, to: string): void {
+    const rows = withSqliteBusyRetry(() =>
+      this.db.query<{ name: string }, []>("PRAGMA table_info(schedules)").all(),
+    );
+    if (!rows.some((row) => row.name === from) || rows.some((row) => row.name === to)) return;
+    withSqliteBusyRetry(() => this.db.exec(`ALTER TABLE schedules RENAME COLUMN ${from} TO ${to};`));
+  }
+
   // ---- dispatches ----
 
-  failStaleSendingDispatches(maxAgeMs: number = STALE_SENDING_DISPATCH_MS): number {
+  failStaleRunningDispatches(maxAgeMs: number = STALE_RUNNING_DISPATCH_MS): number {
     const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
     const now = nowIso();
-    const detail = `dispatch left in sending state for more than ${Math.round(maxAgeMs / 1000)}s; marking stale`;
+    const detail = `dispatch left in running state for more than ${Math.round(maxAgeMs / 1000)}s; marking stale`;
     const result = withSqliteBusyRetry(() =>
       this.db.query(
         `UPDATE dispatches
          SET status='failed', detail=$detail, updated_at=$updated
-         WHERE status='sending' AND updated_at < $cutoff`,
+         WHERE status='running' AND updated_at < $cutoff`,
       )
       .run({ $detail: detail, $updated: now, $cutoff: cutoff }),
     );
@@ -292,7 +326,7 @@ export class Store {
       target: input.target,
       machine: input.machine ?? "local",
       prompt: input.prompt,
-      status: input.status ?? "pending",
+      status: input.status ?? "admitted",
       detail: input.detail,
       submitDelayMs: input.submitDelayMs,
       commandHash: input.commandHash,
@@ -309,7 +343,7 @@ export class Store {
     };
     withSqliteBusyRetry(() =>
       this.db.query(
-        `INSERT INTO dispatches (id, kind, backend, target, machine, prompt, status, detail, confirm_json, submit_delay_ms, command_hash, filter_json, target_kind, dry_run, exec_plan_json, target_state, detection_json, capture_before_json, receipt_json, created_at, delivered_at, updated_at)
+        `INSERT INTO dispatches (id, kind, backend, target, machine, prompt, status, detail, confirm_json, submit_delay_ms, command_hash, filter_json, target_kind, dry_run, exec_plan_json, target_state, detection_json, capture_before_json, receipt_json, created_at, succeeded_at, updated_at)
          VALUES ($id, $kind, $backend, $target, $machine, $prompt, $status, $detail, $confirm, $delay, $commandHash, $filter, $targetKind, $dryRun, $execPlan, $targetState, $detection, $captureBefore, $receipt, $created, $delivered, $updated)`,
       )
       .run({
@@ -341,7 +375,7 @@ export class Store {
   }
 
   getDispatch(id: string): DispatchRecord | undefined {
-    this.failStaleSendingDispatches();
+    this.failStaleRunningDispatches();
     const row = this.db.query<DispatchRow, [string]>("SELECT * FROM dispatches WHERE id = ?").get(id);
     return row ? rowToDispatch(row) : undefined;
   }
@@ -355,7 +389,7 @@ export class Store {
         | "detail"
         | "confirm"
         | "submitDelayMs"
-        | "deliveredAt"
+        | "succeededAt"
         | "commandHash"
         | "filter"
         | "targetKind"
@@ -377,7 +411,7 @@ export class Store {
          SET status=$status, detail=$detail, confirm_json=$confirm, submit_delay_ms=$delay,
              command_hash=$commandHash, filter_json=$filter, target_kind=$targetKind,
              dry_run=$dryRun, exec_plan_json=$execPlan, target_state=$targetState,
-             detection_json=$detection, capture_before_json=$captureBefore, receipt_json=$receipt, delivered_at=$delivered,
+             detection_json=$detection, capture_before_json=$captureBefore, receipt_json=$receipt, succeeded_at=$succeeded,
              updated_at=$updated
          WHERE id=$id`,
       )
@@ -396,7 +430,7 @@ export class Store {
         $detection: merged.detection ? JSON.stringify(merged.detection) : null,
         $captureBefore: merged.captureBefore ? JSON.stringify(merged.captureBefore) : null,
         $receipt: merged.receipt ? JSON.stringify(merged.receipt) : null,
-        $delivered: merged.deliveredAt ?? null,
+        $succeeded: merged.succeededAt ?? null,
         $updated: merged.updatedAt,
       }),
     );
@@ -404,7 +438,7 @@ export class Store {
   }
 
   listDispatches(opts: { status?: DispatchStatus; limit?: number } = {}): DispatchRecord[] {
-    this.failStaleSendingDispatches();
+    this.failStaleRunningDispatches();
     const limit = opts.limit ?? 100;
     const rows = opts.status
       ? this.db
@@ -441,14 +475,14 @@ export class Store {
       every: input.every,
       intervalMs: input.intervalMs,
       nextRun: input.nextRun,
-      status: "scheduled",
+      status: "admitted",
       createdAt: now,
       updatedAt: now,
     };
     withSqliteBusyRetry(() =>
       this.db.query(
-        `INSERT INTO schedules (id, options_json, kind, name, at, cron, every, interval_ms, next_run, status, last_dispatch_id, last_fired_at, last_failure_at, last_failure_reason, failure_count, created_at, updated_at)
-         VALUES ($id, $options, $kind, $name, $at, $cron, $every, $intervalMs, $next, $status, $lastDispatch, $lastFired, $lastFailureAt, $lastFailureReason, $failureCount, $created, $updated)`,
+        `INSERT INTO schedules (id, options_json, kind, name, at, cron, every, interval_ms, next_run, status, last_attempt_id, last_attempt_at, last_failure_at, last_failure_reason, failure_count, created_at, updated_at)
+         VALUES ($id, $options, $kind, $name, $at, $cron, $every, $intervalMs, $next, $status, $lastAttempt, $lastAttemptAt, $lastFailureAt, $lastFailureReason, $failureCount, $created, $updated)`,
       )
       .run({
         $id: sched.id,
@@ -461,8 +495,8 @@ export class Store {
         $intervalMs: sched.intervalMs ?? null,
         $next: sched.nextRun,
         $status: sched.status,
-        $lastDispatch: null,
-        $lastFired: null,
+        $lastAttempt: null,
+        $lastAttemptAt: null,
         $lastFailureAt: null,
         $lastFailureReason: null,
         $failureCount: 0,
@@ -483,7 +517,7 @@ export class Store {
     patch: Partial<
       Pick<
         ScheduledDispatch,
-        "nextRun" | "status" | "lastDispatchId" | "lastFiredAt" | "lastFailureAt" | "lastFailureReason" | "failureCount"
+        "nextRun" | "status" | "lastAttemptId" | "lastAttemptAt" | "lastFailureAt" | "lastFailureReason" | "failureCount"
       >
     >,
   ): ScheduledDispatch {
@@ -493,7 +527,7 @@ export class Store {
     withSqliteBusyRetry(() =>
       this.db.query(
         `UPDATE schedules
-         SET next_run=$next, status=$status, last_dispatch_id=$lastDispatch, last_fired_at=$lastFired,
+         SET next_run=$next, status=$status, last_attempt_id=$lastAttempt, last_attempt_at=$lastAttemptAt,
              last_failure_at=$lastFailureAt, last_failure_reason=$lastFailureReason, failure_count=$failureCount,
              updated_at=$updated
          WHERE id=$id`,
@@ -502,8 +536,8 @@ export class Store {
         $id: id,
         $next: merged.nextRun,
         $status: merged.status,
-        $lastDispatch: merged.lastDispatchId ?? null,
-        $lastFired: merged.lastFiredAt ?? null,
+        $lastAttempt: merged.lastAttemptId ?? null,
+        $lastAttemptAt: merged.lastAttemptAt ?? null,
         $lastFailureAt: merged.lastFailureAt ?? null,
         $lastFailureReason: merged.lastFailureReason ?? null,
         $failureCount: merged.failureCount ?? 0,
@@ -519,7 +553,7 @@ export class Store {
     patch: Partial<
       Pick<
         ScheduledDispatch,
-        "nextRun" | "status" | "lastDispatchId" | "lastFiredAt" | "lastFailureAt" | "lastFailureReason" | "failureCount"
+        "nextRun" | "status" | "lastAttemptId" | "lastAttemptAt" | "lastFailureAt" | "lastFailureReason" | "failureCount"
       >
     >,
   ): ScheduledDispatch | undefined {
@@ -572,7 +606,7 @@ export class Store {
   dueSchedules(nowMs: number, limit: number = DEFAULT_DUE_SCHEDULE_LIMIT): ScheduledDispatch[] {
     const rows = this.db
       .query<ScheduleRow, { $now: string; $limit: number }>(
-        "SELECT * FROM schedules WHERE status = 'scheduled' AND next_run <= $now ORDER BY next_run ASC LIMIT $limit",
+        "SELECT * FROM schedules WHERE status = 'admitted' AND next_run <= $now ORDER BY next_run ASC LIMIT $limit",
       )
       .all({ $now: new Date(nowMs).toISOString(), $limit: limit });
     return rows.map(rowToSchedule);
@@ -582,7 +616,7 @@ export class Store {
   nextScheduled(): ScheduledDispatch | undefined {
     const row = this.db
       .query<ScheduleRow, []>(
-        "SELECT * FROM schedules WHERE status = 'scheduled' ORDER BY next_run ASC LIMIT 1",
+        "SELECT * FROM schedules WHERE status = 'admitted' ORDER BY next_run ASC LIMIT 1",
       )
       .get();
     return row ? rowToSchedule(row) : undefined;

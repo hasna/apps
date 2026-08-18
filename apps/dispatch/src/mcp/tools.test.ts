@@ -77,7 +77,7 @@ const codexComposerCapture = `
 describe("MCP tool handlers", () => {
   test("status returns the record or a not-found marker", async () => {
     const d = deps();
-    const rec = d.store.createDispatch({ target: "s:w", prompt: "hi", status: "delivered" });
+    const rec = d.store.createDispatch({ target: "s:w", prompt: "hi", status: "succeeded" });
     expect(await tool("dispatch_status").handler(d, { id: rec.id })).toMatchObject({
       kind: "prompt",
       resultKind: "dispatch",
@@ -109,7 +109,7 @@ describe("MCP tool handlers", () => {
       in: "30m",
       name: "reminder",
     })) as { schedule: { id: string; status: string; name: string }; compact: true };
-    expect(sched.schedule.status).toBe("scheduled");
+    expect(sched.schedule.status).toBe("admitted");
     expect(sched.schedule.name).toBe("reminder");
     expect(await tool("dispatch_schedules").handler(d, {})).toMatchObject({ count: 1, compact: true });
     expect(await tool("dispatch_schedules").handler(d, { verbose: true })).toHaveLength(1);
@@ -336,7 +336,7 @@ describe("MCP tool handlers", () => {
     const d = deps();
     d.store.createSchedule({ options: { target: "s:w", prompt: "x" }, nextRun: "2099-01-01T00:00:00Z" });
     const st = (await tool("dispatch_daemon_status").handler(d, {})) as { scheduled: number };
-    expect(st.scheduled).toBe(1);
+    expect(st.admitted).toBe(1);
   });
 
   test("exec loads a reviewed policy file and delegates command dispatch options to the client", async () => {
@@ -436,7 +436,7 @@ describe("MCP tool handlers", () => {
         target: opts.target,
         machine: "local",
         prompt: opts.prompt,
-        status: "delivered",
+        status: "succeeded",
         createdAt: "x",
         updatedAt: "x",
       };
@@ -534,7 +534,7 @@ describe("MCP tool handlers", () => {
           target: `work:${i}`,
           machine: "local",
           prompt: `prompt ${i}`,
-          status: "delivered",
+          status: "succeeded",
           createdAt: "x",
           updatedAt: "x",
         })),
@@ -589,7 +589,7 @@ describe("MCP tool handlers", () => {
         target: opts.target,
         machine: "local",
         prompt: `<key:${opts.key}>`,
-        status: "delivered",
+        status: "succeeded",
         createdAt: "x",
         updatedAt: "x",
       };

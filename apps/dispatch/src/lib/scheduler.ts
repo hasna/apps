@@ -22,14 +22,16 @@ export interface SchedulerDeps {
 }
 
 export interface TickResult {
-  fired: ScheduledDispatch[];
+  /** Terminal receipts: entries that reached a terminal success state this tick. */
+  succeeded: ScheduledDispatch[];
+  /** Terminal receipts: entries that recorded a failure this tick. */
   failed: ScheduledDispatch[];
 }
 
 /**
  * Fire every due schedule once: run its dispatch, then advance it — a one-shot
- * `at` becomes `fired`; a `cron` reschedules to its next run and stays
- * `scheduled`. A failed one-shot is kept scheduled and moved to a retry time so
+ * `at` becomes `succeeded` (terminal); a `cron` reschedules to its next run and
+ * stays `admitted`. A failed one-shot is kept admitted and moved to a retry time so
  * it is not permanently consumed by a transient tmux/ssh failure and does not
  * spin in the current tick loop. All state is persisted, so the queue survives a
  * daemon restart.
@@ -40,17 +42,17 @@ export async function tick(deps: SchedulerDeps): Promise<TickResult> {
   const retryDelayMs = deps.retryDelayMs ?? 60_000;
   const maxRetryWindowMs = deps.maxRetryWindowMs ?? 60 * 60_000;
   const due = deps.store.dueSchedules(current.getTime());
-  const fired: ScheduledDispatch[] = [];
+  const succeeded: ScheduledDispatch[] = [];
   const failed: ScheduledDispatch[] = [];
 
   for (const sched of due) {
-    let lastDispatchId: string | undefined;
+    let lastAttemptId: string | undefined;
     let failedDispatch = false;
     let failureReason: string | undefined;
     try {
       const rec = await deps.dispatch(sched.options);
-      lastDispatchId = rec?.id;
-      if (rec?.status !== "delivered") {
+      lastAttemptId = rec?.id;
+      if (rec?.status !== "succeeded") {
         failedDispatch = true;
         failureReason = rec?.detail ?? `dispatch ${rec?.id ?? "unknown"} ended with status ${rec?.status ?? "unknown"}`;
         deps.onError?.(sched, new Error(failureReason));
@@ -63,7 +65,7 @@ export async function tick(deps: SchedulerDeps): Promise<TickResult> {
 
     const firedAt = nowIso();
     const currentSched = deps.store.getSchedule(sched.id);
-    if (!currentSched || currentSched.status !== "scheduled") {
+    if (!currentSched || currentSched.status !== "admitted") {
       // A user may pause/cancel/clear a schedule while its dispatch is in
       // flight. Do not resurrect it or abort the rest of the tick.
       continue;
@@ -80,10 +82,10 @@ export async function tick(deps: SchedulerDeps): Promise<TickResult> {
           new Date(sched.createdAt).getTime(),
         );
         if (current.getTime() - firstDue >= maxRetryWindowMs) {
-          const updated = deps.store.updateScheduleIfStatus(sched.id, "scheduled", {
+          const updated = deps.store.updateScheduleIfStatus(sched.id, "admitted", {
             status: "failed",
-            lastDispatchId,
-            lastFiredAt: firedAt,
+            lastAttemptId: lastAttemptId,
+            lastAttemptAt: firedAt,
             lastFailureAt: firedAt,
             lastFailureReason: failureReason,
             failureCount: (currentSched.failureCount ?? sched.failureCount ?? 0) + 1,
@@ -97,11 +99,11 @@ export async function tick(deps: SchedulerDeps): Promise<TickResult> {
         : sched.cron
           ? computeNextRun({ cron: sched.cron }, now())
           : new Date(current.getTime() + retryDelayMs).toISOString();
-      const updated = deps.store.updateScheduleIfStatus(sched.id, "scheduled", {
-        status: "scheduled",
+      const updated = deps.store.updateScheduleIfStatus(sched.id, "admitted", {
+        status: "admitted",
         nextRun,
-        lastDispatchId,
-        lastFiredAt: firedAt,
+        lastAttemptId: lastAttemptId,
+        lastAttemptAt: firedAt,
         lastFailureAt: firedAt,
         lastFailureReason: failureReason,
         failureCount: (currentSched.failureCount ?? sched.failureCount ?? 0) + 1,
@@ -116,26 +118,26 @@ export async function tick(deps: SchedulerDeps): Promise<TickResult> {
       const nextRun = sched.intervalMs
         ? computeNextRun({ intervalMs: sched.intervalMs }, now())
         : computeNextRun({ cron: sched.cron }, now());
-      const updated = deps.store.updateScheduleIfStatus(sched.id, "scheduled", {
-        status: "scheduled",
+      const updated = deps.store.updateScheduleIfStatus(sched.id, "admitted", {
+        status: "admitted",
         nextRun,
-        lastDispatchId,
-        lastFiredAt: firedAt,
+        lastAttemptId: lastAttemptId,
+        lastAttemptAt: firedAt,
         lastFailureAt: undefined,
         lastFailureReason: undefined,
       });
-      if (updated) fired.push(updated);
+      if (updated) succeeded.push(updated);
     } else {
-      const updated = deps.store.updateScheduleIfStatus(sched.id, "scheduled", {
-        status: "fired",
-        lastDispatchId,
-        lastFiredAt: firedAt,
+      const updated = deps.store.updateScheduleIfStatus(sched.id, "admitted", {
+        status: "succeeded",
+        lastAttemptId: lastAttemptId,
+        lastAttemptAt: firedAt,
         lastFailureAt: undefined,
         lastFailureReason: undefined,
       });
-      if (updated) fired.push(updated);
+      if (updated) succeeded.push(updated);
     }
   }
 
-  return { fired, failed };
+  return { succeeded, failed };
 }

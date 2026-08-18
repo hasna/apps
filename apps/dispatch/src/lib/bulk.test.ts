@@ -106,7 +106,7 @@ describe("performBulkDispatch", () => {
       source: "explicit",
       requested: 2,
       planned: 2,
-      delivered: 0,
+      succeeded: 0,
       skipped: 2,
       failed: 0,
       dryRun: true,
@@ -156,7 +156,7 @@ describe("performBulkDispatch", () => {
 
     expect(result.status).toBe("failed");
     expect(result.skipped).toBe(2);
-    expect(result.delivered).toBe(0);
+    expect(result.succeeded).toBe(0);
     expect(result.records.every((r) => r.targetState === "active")).toBe(true);
   });
 
@@ -175,9 +175,9 @@ describe("performBulkDispatch", () => {
       },
     );
 
-    expect(result.delivered).toBe(1);
+    expect(result.succeeded).toBe(1);
     expect(result.records[0]).toMatchObject({
-      status: "delivered",
+      status: "succeeded",
       targetState: "active",
       confirm: { queued: true },
       detection: { recommendedSubmitKey: "Tab" },
@@ -221,7 +221,7 @@ describe("performBulkDispatch", () => {
 
     expect(result.status).toBe("failed");
     expect(result.failed).toBe(1);
-    expect(result.delivered).toBe(1);
+    expect(result.succeeded).toBe(1);
     expect(result.records.find((r) => r.target === "bad:1.1")).toMatchObject({
       status: "failed",
       machine: "bad-machine",
@@ -249,9 +249,9 @@ describe("performBulkDispatch on the mosaic slice", () => {
 
     expect(result.status).toBe("completed");
     expect(result.requested).toBe(2);
-    expect(result.delivered).toBe(2);
+    expect(result.succeeded).toBe(2);
     expect(result.failed).toBe(0);
-    expect(result.records.every((rec) => rec.status === "delivered" && rec.backend === "mosaic")).toBe(true);
+    expect(result.records.every((rec) => rec.status === "succeeded" && rec.backend === "mosaic")).toBe(true);
     expect(result.records.map((rec) => rec.target).sort()).toEqual(["work:terminal_1", "work:terminal_2"]);
     expect(result.records.every((rec) => rec.confirm?.delivered === true && rec.receipt != null)).toBe(true);
 
@@ -279,7 +279,7 @@ describe("performBulkDispatch on the mosaic slice", () => {
 
     expect(result.status).toBe("failed");
     expect(result.skipped).toBe(2);
-    expect(result.delivered).toBe(0);
+    expect(result.succeeded).toBe(0);
     expect(result.records.every((rec) => rec.status === "skipped" && rec.backend === "mosaic")).toBe(true);
     expect(
       result.records.every((rec) =>
@@ -310,7 +310,7 @@ describe("performBulkDispatch on the mosaic slice", () => {
     );
 
     expect(result.status).toBe("completed");
-    expect(result.delivered).toBe(3);
+    expect(result.succeeded).toBe(3);
     expect(made).toHaveLength(2);
     expect(made).toContain("local");
     expect(made).toContain("spark02");

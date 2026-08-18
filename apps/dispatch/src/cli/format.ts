@@ -25,11 +25,11 @@ export function resolvePrompt(opts: { prompt?: string; file?: string }, stdin?: 
 }
 
 const STATUS_ICON: Record<string, string> = {
-  delivered: "✓",
+  succeeded: "✓",
   failed: "✗",
   pending: "·",
   sending: "→",
-  scheduled: "⧗",
+  admitted: "⧗",
   paused: "‖",
   cancelled: "⊘",
   skipped: "↷",
@@ -47,7 +47,7 @@ export interface CompactDispatchRecord {
   detailLength?: number;
   createdAt: string;
   updatedAt: string;
-  deliveredAt?: string;
+  succeededAt?: string;
   commandHash?: string;
   filterCode?: string;
   targetState?: string;
@@ -64,8 +64,8 @@ export interface CompactScheduledDispatch {
   nextRun: string;
   promptPreview: string;
   promptLength: number;
-  lastDispatchId?: string;
-  lastFiredAt?: string;
+  lastAttemptId?: string;
+  lastAttemptAt?: string;
   lastFailureAt?: string;
   lastFailureReasonPreview?: string;
   lastFailureReasonLength?: number;
@@ -115,7 +115,7 @@ export function summarizeRecord(rec: DispatchRecord, opts: { previewChars?: numb
     detailLength: rec.detail?.length,
     createdAt: rec.createdAt,
     updatedAt: rec.updatedAt,
-    deliveredAt: rec.deliveredAt,
+    succeededAt: rec.succeededAt,
     commandHash: rec.commandHash,
     filterCode: rec.filter?.code,
     targetState: rec.targetState,
@@ -134,8 +134,8 @@ export function summarizeSchedule(s: ScheduledDispatch, opts: { previewChars?: n
     nextRun: s.nextRun,
     promptPreview: truncateText(s.options.prompt, opts.previewChars ?? 80),
     promptLength: s.options.prompt.length,
-    lastDispatchId: s.lastDispatchId,
-    lastFiredAt: s.lastFiredAt,
+    lastAttemptId: s.lastAttemptId,
+    lastAttemptAt: s.lastAttemptAt,
     lastFailureAt: s.lastFailureAt,
     lastFailureReasonPreview: s.lastFailureReason ? truncateText(s.lastFailureReason, opts.previewChars ?? 80) : undefined,
     lastFailureReasonLength: s.lastFailureReason?.length,
@@ -174,7 +174,7 @@ export function formatRecordDetail(rec: DispatchRecord): string {
     `  created: ${rec.createdAt}`,
     `  updated: ${rec.updatedAt}`,
   ];
-  if (rec.deliveredAt) lines.push(`  delivered: ${rec.deliveredAt}`);
+  if (rec.succeededAt) lines.push(`  succeeded: ${rec.succeededAt}`);
   if (rec.detail) lines.push(`  detail: ${truncateText(rec.detail, 1_000)} (${rec.detail.length} chars; use --json for the full stored detail)`);
   if (rec.confirm) lines.push(`  confirm: delivered=${rec.confirm.delivered} reason=${rec.confirm.reason}`);
   if (rec.detection) {
@@ -235,7 +235,7 @@ export function formatRecover(result: AgentRecoverResult): string {
 
 export function formatBulk(result: BulkDispatchResult): string {
   const lines = [
-    `${result.status === "completed" ? "✓" : "✗"} bulk ${result.source} requested=${result.requested} planned=${result.planned} delivered=${result.delivered} skipped=${result.skipped} failed=${result.failed}${result.dryRun ? " dry-run" : ""}`,
+    `${result.status === "completed" ? "✓" : "✗"} bulk ${result.source} requested=${result.requested} planned=${result.planned} succeeded=${result.succeeded} skipped=${result.skipped} failed=${result.failed}${result.dryRun ? " dry-run" : ""}`,
   ];
   if (result.detail) lines.push(truncateText(result.detail, 1_000));
   const shown = result.records.slice(0, 20);
@@ -278,7 +278,7 @@ export function summarizeBulk(result: BulkDispatchResult): {
   source: string;
   requested: number;
   planned: number;
-  delivered: number;
+  succeeded: number;
   skipped: number;
   failed: number;
   dryRun: boolean;
@@ -296,7 +296,7 @@ export function summarizeBulk(result: BulkDispatchResult): {
     source: result.source,
     requested: result.requested,
     planned: result.planned,
-    delivered: result.delivered,
+    succeeded: result.succeeded,
     skipped: result.skipped,
     failed: result.failed,
     dryRun: result.dryRun,
@@ -335,8 +335,8 @@ export function formatScheduleDetail(s: ScheduledDispatch): string {
     `  updated: ${s.updatedAt}`,
   ];
   if (s.name) lines.push(`  name: ${s.name}`);
-  if (s.lastDispatchId) lines.push(`  lastDispatchId: ${s.lastDispatchId}`);
-  if (s.lastFiredAt) lines.push(`  lastFiredAt: ${s.lastFiredAt}`);
+  if (s.lastAttemptId) lines.push(`  lastAttemptId: ${s.lastAttemptId}`);
+  if (s.lastAttemptAt) lines.push(`  lastAttemptAt: ${s.lastAttemptAt}`);
   if (s.lastFailureAt) lines.push(`  lastFailureAt: ${s.lastFailureAt}`);
   if (s.lastFailureReason) lines.push(`  lastFailureReason: ${truncateText(s.lastFailureReason, 1_000)} (${s.lastFailureReason.length} chars; use --json for the full stored failure reason)`);
   if (s.failureCount) lines.push(`  failureCount: ${s.failureCount}`);

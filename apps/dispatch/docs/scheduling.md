@@ -16,19 +16,19 @@ The next match is strictly after the reference time.
 
 ## Lifecycle and retries
 
-States are `scheduled`, `paused`, `fired`, `failed`, and `cancelled`. `clear`
+States are `admitted`, `paused`, `succeeded`, `failed`, and `cancelled`. `clear`
 deletes a row rather than creating an audit state. Dispatch records from previous
 runs remain independent ledger entries.
 
 The scheduler claims due rows before delivery and the daemon processes them serially:
 
-- Successful one-shots become `fired`.
+- Successful one-shots become `succeeded` (terminal).
 - Failed one-shots retry every 60 seconds for up to one hour after their effective
   first-due time, then become `failed`.
 - Cron schedules compute the next matching time after each attempt.
 - Interval loops compute the next run after the attempt completes, so a loop does
   not overlap itself.
-- Recurring failures retain failure metadata and remain `scheduled` for the next cadence.
+- Recurring failures retain failure metadata and remain `admitted` for the next cadence.
 
 `pause` excludes work from due claims. `resume` recomputes future cron/interval
 timing from the resume time. Stored delivery safety, machine, backend, and goal

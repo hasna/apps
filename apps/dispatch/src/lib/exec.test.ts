@@ -48,7 +48,7 @@ describe("performExec", () => {
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     const argvs = r.argvs();
     expect(argvs.some((a) => a[1] === "load-buffer")).toBe(true);
     expect(argvs.some((a) => a[1] === "paste-buffer" && a.includes("-p"))).toBe(true);
@@ -68,7 +68,7 @@ describe("performExec", () => {
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("C-c"))).toBe(true);
   });
 

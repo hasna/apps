@@ -146,7 +146,7 @@ describe("daemonStatus", () => {
     const st = daemonStatus(store, pidPath, statePath);
     expect(st.running).toBe(true);
     expect(st.health).toBe("alive");
-    expect(st.scheduled).toBe(1);
+    expect(st.admitted).toBe(1);
     expect(st.paused).toBe(1);
     expect(st.recentDispatches).toBe(1);
     expect(st.nextDue?.target).toBe("s:w");
