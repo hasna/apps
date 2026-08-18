@@ -8,7 +8,7 @@ import process from "node:process";
 const ROUTE_ID = "release-smoke";
 const ROUTE_PATH = "/webhooks/release-smoke";
 const AUTOMATION_ID = "release.webhook-smoke";
-const RUNNER_ID = "open-loops:release-smoke";
+const RUNNER_ID = "loops:release-smoke";
 const SECRET_ENV_KEY = "HASNA_AUTOMATIONS_WEBHOOK_SECRET_RELEASE_SMOKE";
 const DEFAULT_PEERS = ["@hasna/actions@^0.1.0"];
 const RELEASE_0_1_1_PEERS = ["@hasna/actions@0.1.0"];
@@ -103,7 +103,7 @@ async function main(): Promise<void> {
       "--path",
       ROUTE_PATH,
       "--source",
-      "open-automations.release-smoke",
+      "automations.release-smoke",
       "--type",
       "webhook.delivery",
       "--data-path",
@@ -168,7 +168,7 @@ async function main(): Promise<void> {
 
       const deliveryBody = JSON.stringify({
         payload: {
-          repository: "open-automations",
+          repository: "automations",
           release: args.packageSpec,
           smoke: "delivery-smoke",
         },
@@ -219,7 +219,7 @@ async function main(): Promise<void> {
 
     const handoffBody = JSON.stringify({
       payload: {
-        repository: "open-automations",
+        repository: "automations",
         release: args.packageSpec,
         smoke: "delivery-handoff",
       },
@@ -237,7 +237,7 @@ async function main(): Promise<void> {
       "--header",
       "X-Hasna-Event-Id:delivery-handoff",
     ], { timeoutMs: args.timeoutMs });
-    assert(handoffEvent.source === "open-automations.release-smoke", "handoff event had unexpected source");
+    assert(handoffEvent.source === "automations.release-smoke", "handoff event had unexpected source");
     assert(handoffEvent.type === "webhook.delivery", "handoff event had unexpected type");
     assert(handoffEvent.dedupeKey === "delivery-handoff", "handoff event had unexpected dedupe key");
     assert(handoffEvent.metadata?.webhook?.routeId === ROUTE_ID, "handoff event missing webhook route metadata");
@@ -387,9 +387,9 @@ function releaseAutomationSpec(packageSpec: string): unknown {
     version: "1.0.0",
     triggers: [{
       kind: "webhook",
-      source: "open-automations.release-smoke",
+      source: "automations.release-smoke",
       type: "webhook.delivery",
-      filter: { repository: "open-automations" },
+      filter: { repository: "automations" },
     }],
     actions: [{
       id: "record-handoff-evidence",
@@ -547,7 +547,7 @@ Options:
 
 Examples:
   bun run smoke:webhook-release -- --package @hasna/automations@0.1.1
-  bun run smoke:webhook-release -- --package file:$PWD --no-default-peers --peer file:/path/to/open-actions
+  bun run smoke:webhook-release -- --package file:$PWD --no-default-peers --peer file:/path/to/actions
 
 Notes:
   The @hasna/automations@0.1.1 replay uses the known compatible peer set

@@ -58,7 +58,7 @@ describe("automations daemon server store", () => {
   test("run once awaits the selected async server store heartbeat and close", async () => {
     const calls: string[] = [];
     const output = spyOn(console, "log").mockImplementation(() => undefined);
-    const directory = mkdtempSync(join(tmpdir(), "open-automations-daemon-"));
+    const directory = mkdtempSync(join(tmpdir(), "automations-daemon-"));
     temporaryDirectories.push(directory);
     const store = {
       async heartbeatDaemon() {
