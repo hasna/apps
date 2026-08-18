@@ -3,7 +3,7 @@
 //
 // `emails send --dry-run` exists to PREDICT what a real send will do. It used to
 // print the self-hosted caps and "scheduling is not available" in BOTH modes,
-// with no mode branch — so in local mode the one command whose entire purpose is
+// with no mode branch — so for the local SQLite client the one command whose entire purpose is
 // prediction predicted the wrong limits and a failure that would not happen.
 // These constants are imported by the predictor (src/cli/commands/send.ts) AND by
 // the enforcer (src/server/self-hosted/service.ts).
@@ -23,7 +23,7 @@ export interface SendAttachmentLimits {
  * `mimeEncodedUpperBound`.
  *
  * The per-file cap MUST stay at or below the local path's own 25MiB ceiling
- * (`MAX_ATTACHMENT_SIZE_BYTES` in `send.local.ts`), or that layer would reject
+ * (`MAX_ATTACHMENT_SIZE_BYTES` in `send.sqlite.ts`), or that layer would reject
  * sends this route had just accepted.
  */
 export const SELF_HOSTED_SEND_ATTACHMENT_LIMITS: SendAttachmentLimits = {

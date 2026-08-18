@@ -72,7 +72,7 @@ describe("domain readiness service", () => {
     // `expect().toThrow()` cannot see a REJECTION, and an un-awaited promise never throws —
     // it would pass for a function that stopped guarding entirely.
     await expect(enableDomainInboundReadiness(domain.id))
-      .rejects.toThrow("Inbound self_hosted source is not configured");
+      .rejects.toThrow("Inbound self-hosted source is not configured");
 
     registerS3Source({
       bucket: "emails-inbound",

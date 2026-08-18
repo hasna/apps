@@ -74,7 +74,7 @@ export function isAwsSnsUrl(url: string): boolean {
  * Trusted envelope evidence that selects the destination scope.
  *
  * `addresses` are envelope addresses whose DOMAIN selects the scope. In local
- * mode there is a single store so this is informational; in self-hosted mode it
+ * mode there is a single store so this is informational; when the API client is configured it
  * resolves the tenant through the global physical domain map. It is never read
  * from a header or body field a caller could point at another tenant.
  */

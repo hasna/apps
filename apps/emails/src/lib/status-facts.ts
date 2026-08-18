@@ -171,7 +171,7 @@ function countByKey(rows: ResourceRow[], key: string): Record<string, number> {
 //
 // `StorageWiring` and `readStorageWiring` moved to `src/lib/storage-wiring.ts` when the
 // forwarding pipeline needed the same fact for the same reason. The rule for who may ask it,
-// and why it is not the deleted deployment axis under another name, is stated there once.
+// and why it is not the deleted hosted-API axis under another name, is stated there once.
 
 // WHO PERFORMS THE INGESTION, which is what the two ingestion blocks below turn on.
 // An installation that keeps its mail in its own database performs its own
@@ -735,7 +735,7 @@ function realtimeBlock(wiring: StorageWiring, gaps: StatusGaps): RealtimeStatusB
 
 function sourcesBlock(input: StatusFactsInput, source: string, gaps: StatusGaps): SourcesStatusBlock {
   // THE AGGREGATE ROW IS NOT A SOURCE. The mailbox view puts one at the head of its
-  // list (`kind: "all"` — src/cli/tui/data.local.ts, and it is the ONLY row the view
+  // list (`kind: "all"` — src/cli/tui/data.sqlite.ts, and it is the ONLY row the view
   // in src/lib/self-hosted-mail-data-source.ts returns, because that store is a
   // single shared one). The two deleted siblings disagreed about exactly this field
   // and BOTH were wrong in one direction:

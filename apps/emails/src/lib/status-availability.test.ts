@@ -21,7 +21,7 @@ import type { EmailSystemStatus } from "./status-types.js";
 
 describe("status availability primitives", () => {
   it("formats a reason as <code>:<detail> — <prose> and exposes the code", () => {
-    const availability = statusUnavailable("server_route_absent", "/v1/senders", "self_hosted_api", "why");
+    const availability = statusUnavailable("server_route_absent", "/v1/senders", "self-hosted_api", "why");
     expect(availability.available).toBe(false);
     expect(availability.reason).toBe("server_route_absent:/v1/senders — why");
     expect(statusReasonCode(availability.reason)).toBe("server_route_absent");
@@ -98,13 +98,13 @@ describe("status availability primitives", () => {
 });
 
 function nullPayload(): EmailSystemStatus {
-  const unreachable = statusUnavailable("source_unreachable", "GET /v1/providers -> HTTP 503", "self_hosted_api:/v1/providers");
-  const notModelled = statusUnavailable("not_modelled_over_v1", "domain_dns_evidence", "self_hosted_api:/v1/domains");
-  const absent = statusUnavailable("server_route_absent", "/v1/senders", "self_hosted_api:/v1/addresses");
-  const capped = statusAvailable("self_hosted_api:/v1/addresses", "client_enumeration", false);
+  const unreachable = statusUnavailable("source_unreachable", "GET /v1/providers -> HTTP 503", "self-hosted_api:/v1/providers");
+  const notModelled = statusUnavailable("not_modelled_over_v1", "domain_dns_evidence", "self-hosted_api:/v1/domains");
+  const absent = statusUnavailable("server_route_absent", "/v1/senders", "self-hosted_api:/v1/addresses");
+  const capped = statusAvailable("self-hosted_api:/v1/addresses", "client_enumeration", false);
   return {
     generated_at: "2026-07-01T00:00:00.000Z",
-    mode: { current: "self_hosted", label: "Server API", source: { kind: "config", name: "emails_mode", value: "self_hosted" }, warning: null },
+    backend: "api",
     degraded: true,
     limited: true,
     unavailable: ["addresses.usable_from", "domains.send_ready", "providers.total"],
@@ -117,10 +117,10 @@ function nullPayload(): EmailSystemStatus {
       "domains.send_ready": notModelled,
       "addresses.usable_from": absent,
     },
-    database: { availability: statusUnavailable("not_applicable", "local_database_absent_in_self_hosted", "self_hosted_api"), data_dir: null },
+    database: { availability: statusUnavailable("not_applicable", "local_database_absent_in_self-hosted", "self-hosted_api"), data_dir: null },
     providers: { availability: unreachable, total: null, active: null, by_type: null },
     domains: {
-      availability: statusAvailable("self_hosted_api:/v1/domains", "client_enumeration"),
+      availability: statusAvailable("self-hosted_api:/v1/domains", "client_enumeration"),
       total: 3, verified: 2, send_ready: null, receive_ready: null,
       usable: [], usable_limit: 25, usable_truncated: false,
     },
@@ -131,17 +131,17 @@ function nullPayload(): EmailSystemStatus {
     },
     inbox: {
       total: 0, unread: 0, latest_received_at: null,
-      inbound_buckets: { availability: statusUnavailable("not_applicable", "server_owned_ingestion", "self_hosted_api"), items: null, total: null },
-      realtime: { availability: statusUnavailable("not_modelled_over_v1", "realtime_queue_state", "self_hosted_api"), queue_configured: null, queue_url: null, last_poll_at: null, last_error: null },
+      inbound_buckets: { availability: statusUnavailable("not_applicable", "server_owned_ingestion", "self-hosted_api"), items: null, total: null },
+      realtime: { availability: statusUnavailable("not_modelled_over_v1", "realtime_queue_state", "self-hosted_api"), queue_configured: null, queue_url: null, last_poll_at: null, last_error: null },
     },
     mailboxes: { counts: { inbox: 0, unread: 0, sent: 0, archived: 0, spam: 0, trash: 0, starred: 0 }, folders: [] },
     sources: {
-      availability: statusAvailable("self_hosted_mail_view", "client_enumeration"),
+      availability: statusAvailable("self-hosted_mail_view", "client_enumeration"),
       total: 1, active: null, legacy: null, orphaned: null,
       items: [], limit: 50, truncated: false,
       configured: { availability: unreachable, total: null, by_status: null, latest_last_synced_at: null },
     },
-    provisioning: { availability: statusAvailable("self_hosted_api", "client_enumeration"), domains_pending: 0, domains_failed: 0, addresses_pending: 0, addresses_failed: 0 },
+    provisioning: { availability: statusAvailable("self-hosted_api", "client_enumeration"), domains_pending: 0, domains_failed: 0, addresses_pending: 0, addresses_failed: 0 },
     next_actions: [{ command: "emails provider list --json", reason: "providers could not be read." }],
     cli_equivalents: {},
   };

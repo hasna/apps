@@ -1,7 +1,7 @@
 // The five address-ownership MCP tools are NOT local-state tools: they read and
 // write through `src/db/owners.ts`, which routes to `/v1/owners`,
 // `/v1/addresses/<id>` (owner_id/administrator_id) and
-// `/v1/address-ownership-events` in self_hosted mode. These tests drive the REAL
+// `/v1/address-ownership-events` when the API client is configured. These tests drive the REAL
 // tool handlers against the out-of-process /v1 stub (src/test-support/v1-stub.ts)
 // to prove they work there rather than refusing.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
@@ -39,7 +39,7 @@ async function seedOwnedAddress() {
   return { address, human, agent };
 }
 
-describe("MCP address-ownership tools in self_hosted mode", () => {
+describe("MCP address-ownership tools when the API client is configured", () => {
   it("set_address_owner writes ownership through /v1", async () => {
     const { address, human, agent } = await seedOwnedAddress();
 
@@ -107,11 +107,11 @@ describe("MCP address-ownership tools in self_hosted mode", () => {
     expect(history[0]).toMatchObject({ reason: "retired" });
   });
 
-  it("reports a real not-found error rather than a mode refusal", async () => {
+  it("reports a real not-found error rather than a refusal", async () => {
     const result = await runDomainTool("get_address_owner", { address: "missing@example.com" });
 
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text ?? "").toContain("Address not found");
-    expect(result.content[0]?.text ?? "").not.toContain("self_hosted API-only mode");
+    expect(result.content[0]?.text ?? "").not.toContain("self-hosted API-only mode");
   });
 });

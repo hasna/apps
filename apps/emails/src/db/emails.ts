@@ -3,8 +3,8 @@
 //
 // WHAT THIS FILE USED TO BE. A 29-line facade that built a dispatch helper, read the
 // process-wide deployment word, and handed SEVEN exports to one of two sibling modules:
-// a 282-line SQLite arm (`emails.local.ts`) and a 188-line `curl`-bridge arm
-// (`emails.remote.ts`). Both are gone. Every READ below reaches the store seam
+// a 282-line SQLite arm (`emails.sqlite.ts`) and a 188-line `curl`-bridge arm
+// (`emails.api.ts`). Both are gone. Every READ below reaches the store seam
 // (`src/store/`) through `MessagesRepository`, the repository the seam guard already maps
 // this family onto (`src/store-seam.test.ts`). The injectable is a store, not a database
 // handle, and every export is ASYNCHRONOUS because every operation on the seam is.
@@ -15,7 +15,7 @@
 // ─── THE ONE THING A READER MUST KNOW: THE WRITE IS GONE FROM HERE ───────────────────
 //
 // `createEmail` no longer writes anything. It is a named refusal, and the local ledger
-// INSERT it used to run moved to `src/lib/sent-ledger.local.ts`, beside the
+// INSERT it used to run moved to `src/lib/sent-ledger.sqlite.ts`, beside the
 // `email_content` INSERT that is the other half of the same logical write. The reason is
 // not stylistic; it is four columns and a foreign key:
 //
@@ -46,7 +46,7 @@
 //      it is handed and echoes it back. This is the same shape as the defect
 //      `src/db/email-content.ts` records: a write that reported success and was discarded.
 //
-// So the honest split is the one `src/lib/sent-ledger.local.ts` predicted in its own header
+// So the honest split is the one `src/lib/sent-ledger.sqlite.ts` predicted in its own header
 // before this collapse existed: the two halves of one ledger write live together, in the
 // module that is only reachable on an installation whose store IS that database, and THIS
 // family's exported write — the published SDK surface, and the path an API-configured
@@ -150,7 +150,7 @@
 // unified projection does not select those columns even though the table beneath it has
 // them (src/store-sqlite/messages-sql.ts).
 //
-// The deleted HTTP arm filled them with `"self_hosted"`, `[]`, `null` and `{}` — four
+// The deleted HTTP arm filled them with `"self-hosted"`, `[]`, `null` and `{}` — four
 // comfortable values indistinguishable from four real ones. `Email` is widened instead, so
 // `null` means "this store does not publish it" and an empty array keeps meaning "there
 // were no bcc recipients". `reply_to` was ALREADY `string | null` and is the one field
@@ -593,7 +593,7 @@ function assertProviderFilterAvailable(providerId: string | undefined, what: str
  * dependents, an idempotency key both stores refuse, and a `/v1` route that only accepts
  * inbound — and names the widenings that would bring it back.
  *
- * WHAT STILL WRITES THE LEDGER. `src/lib/sent-ledger.local.ts`, on a local installation, in
+ * WHAT STILL WRITES THE LEDGER. `src/lib/sent-ledger.sqlite.ts`, on a local installation, in
  * the same module and on the same paths as the `email_content` INSERT that records the
  * body. On an API-configured installation the SERVICE records a sent message when its send
  * route reserves the send intent, which is the only place that has ever worked.
@@ -615,7 +615,7 @@ export async function createEmail(
       + "provider_id, bcc_addrs, reply_to or tags, both stores refuse an idempotency_key on "
       + "createMessage, and the SQLite store writes messages to inbound_emails rather than to the "
       + "emails table that email_content and events hold foreign keys into. A local installation "
-      + "records a sent message through createSentEmailLedger (src/lib/sent-ledger.local.ts); an "
+      + "records a sent message through createSentEmailLedger (src/lib/sent-ledger.sqlite.ts); an "
       + "installation reading through an Emails API records it in the service's own send route.",
   );
 }

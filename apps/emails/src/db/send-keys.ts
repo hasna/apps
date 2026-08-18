@@ -123,7 +123,7 @@
 //     their own sibling owners arm, so the answer followed whichever module was imported
 //     rather than the configured store. It is read through `EmailStore.owners` here, so the
 //     key and its owner come from ONE dataset. The remaining split this note used to record —
-//     `src/cli/commands/sendkey.ts` resolving an owner NAME through a deployment-word-routed
+//     `src/cli/commands/sendkey.ts` resolving an owner NAME through a selector-routed
 //     `src/db/owners.ts` while the keys came from the configured store — CLOSED when the
 //     owners family collapsed onto the same seam: both now resolve from storage
 //     configuration, so the name and the key cannot come from different datasets.

@@ -15,8 +15,7 @@ services:
     ports:
       - "127.0.0.1:${EMAILS_PORT:-8080}:8080"
     environment:
-      EMAILS_MODE: self_hosted
-      EMAILS_DATABASE_URL: "postgresql://${EMAILS_POSTGRES_RUNTIME_USER:-emails_runtime}:${EMAILS_POSTGRES_RUNTIME_PASSWORD:?set EMAILS_POSTGRES_RUNTIME_PASSWORD}@db:5432/${EMAILS_POSTGRES_DB:-emails}?sslmode=disable"
+      HASNA_EMAILS_DATABASE_URL: "postgresql://${EMAILS_POSTGRES_RUNTIME_USER:-emails_runtime}:${EMAILS_POSTGRES_RUNTIME_PASSWORD:?set EMAILS_POSTGRES_RUNTIME_PASSWORD}@db:5432/${EMAILS_POSTGRES_DB:-emails}?sslmode=disable"
       EMAILS_API_SIGNING_KEY: "${EMAILS_API_SIGNING_KEY:?set EMAILS_API_SIGNING_KEY (32+ characters)}"
       EMAILS_SEND_PROVIDER: "${EMAILS_SEND_PROVIDER:-ses}"
       # No default allowlist ships: set your own signup/login/invite domains.
@@ -41,8 +40,7 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      EMAILS_MODE: self_hosted
-      EMAILS_DATABASE_URL: "postgresql://${EMAILS_POSTGRES_MIGRATOR_USER:-emails_migrator}:${EMAILS_POSTGRES_MIGRATOR_PASSWORD:?set EMAILS_POSTGRES_MIGRATOR_PASSWORD}@db:5432/${EMAILS_POSTGRES_DB:-emails}?sslmode=disable"
+      HASNA_EMAILS_DATABASE_URL: "postgresql://${EMAILS_POSTGRES_MIGRATOR_USER:-emails_migrator}:${EMAILS_POSTGRES_MIGRATOR_PASSWORD:?set EMAILS_POSTGRES_MIGRATOR_PASSWORD}@db:5432/${EMAILS_POSTGRES_DB:-emails}?sslmode=disable"
     depends_on:
       db:
         condition: service_healthy

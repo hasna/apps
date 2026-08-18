@@ -65,9 +65,9 @@ sending `Authorization: Bearer <cred>`, both fed by one config resolver:
 - Async mail/inbox: `SelfHostedMailDataSource.request()` — `src/lib/self-hosted-mail-data-source.ts:322` (fetch).
 - Config: `resolveSelfHostedConfig()` — `src/db/self-hosted-store.ts:70` → `{baseUrl, apiKey}`.
 - Env (via `src/lib/client-env.ts`): vault pointer `EMAILS_CLIENT_ENV_SECRET` →
-  the deployment-mode selector, `EMAILS_SELF_HOSTED_URL`, `EMAILS_SELF_HOSTED_API_KEY`.
+  the selector selector, `HASNA_EMAILS_API_URL`, `HASNA_EMAILS_API_KEY`.
 
-The code runs on a **single DB DSN** (`EMAILS_DATABASE_URL`, `env.ts`) used by both
+The code runs on a **single DB DSN** (`HASNA_EMAILS_DATABASE_URL`, `env.ts`) used by both
 `migrate.ts` and `serve.ts`. A least-privilege app role is only *aspirational* (a comment
 at `service.ts:41`), not wired. The RLS backstop (§6 Layer 2) therefore **requires new
 infra** — a separate `NOBYPASSRLS` serving role/DSN — and until that lands, Layer 1 (the
@@ -187,7 +187,7 @@ Add to all 27 data tables: `tenant_id UUID NOT NULL REFERENCES tenants(id)` + `I
 (tenant_id)`. Tables:
 
 ```
-domains, addresses, messages, contacts, self_hosted_providers, templates,
+domains, addresses, messages, contacts, self-hosted_providers, templates,
 contact_groups, sequences, owners, send_keys, scheduled_emails, aliases,
 forwarding_rules, warming_schedules, email_triage, provisioning_events,
 mailbox_sources, events, email_agent_settings, email_agent_runs, email_digests,
@@ -473,7 +473,7 @@ before the tenant is known is therefore **excluded from tenant RLS**:
 
 **Role model — this is NEW infra, not existing (H1).** The first draft claimed the server
 "already assumes a two-role model." It does **not**: `migrate.ts` and `serve.ts` both use
-the single `EMAILS_DATABASE_URL` (`env.ts`); the only "role" reference is a comment
+the single `HASNA_EMAILS_DATABASE_URL` (`env.ts`); the only "role" reference is a comment
 (`service.ts:41`). If that single DSN is a superuser or has `BYPASSRLS` (common for a
 self-hosted operator's master DSN), `FORCE ROW LEVEL SECURITY` is **silently ignored** and
 Layer 2 provides zero isolation. Therefore RLS is **contingent on introducing**:
@@ -541,7 +541,7 @@ read one config object.
   becomes tenant-scoped (must be logged in as admin/owner).
 - **MCP/TUI**: no protocol change — they use the same config/chokepoints. Surface tenant +
   identity via a `whoami`/context call so the TUI header can show the active org.
-- **Back-compat**: an operator who keeps using only `EMAILS_SELF_HOSTED_API_KEY` continues
+- **Back-compat**: an operator who keeps using only `HASNA_EMAILS_API_KEY` continues
   to work unchanged — their key maps to the default tenant (§9 backfill). Sessions are
   additive.
 
@@ -697,7 +697,7 @@ ingest/webhook path resolves tenant before writing (§6 cross-cutting).
    (scoped store, `resolveRequestContext`, api_key_tenants lookup, auth endpoints). Boot
    runs 0012: identity tables created, all rows + all existing keys backfilled to the
    default tenant, transitional DEFAULT in place. The operator's existing
-   `EMAILS_SELF_HOSTED_API_KEY` keeps working (its `kid` now maps to default tenant); all
+   `HASNA_EMAILS_API_KEY` keeps working (its `kid` now maps to default tenant); all
    existing data is visible under the default tenant. Sessions become available; operator
    runs `emails auth bootstrap` to create their owner user.
 2. **Verify in prod**: existing key reads/writes work; all data under default tenant; new
@@ -773,7 +773,7 @@ Sole-owner files are noted to avoid merge conflicts across build agents.
 **Phase 4 — RLS seal (dep: Phase 1 verified in prod; H1/H2/H3).**
 - **WI-4a-0 Serving role + DSN (PREREQUISITE, H1).** Introduce a non-owner `NOBYPASSRLS`
   serving role + `EMAILS_APP_DATABASE_URL`; point `serve.ts` request handling at it
-  (keep `EMAILS_DATABASE_URL` for `migrate.ts`); add a boot assertion that the serving
+  (keep `HASNA_EMAILS_DATABASE_URL` for `migrate.ts`); add a boot assertion that the serving
   role is genuinely under RLS. Owner I. **RLS must not be enabled until this lands.**
 - **WI-4a Migration 0013 + system writers.** Append 0013 (drop transitional default,
   enable+FORCE RLS with the `NULLIF(...set_config...)` policy). Update ingest worker
@@ -875,9 +875,9 @@ by envelope-only routing through a global single-tenant domain map.
 
 ## 15. Implementation reconciliation (v3)
 
-The implementation now has exactly two deployment modes: local SQLite and
-operator-owned `self_hosted` PostgreSQL. It has no hosted SaaS control plane and
-no hybrid synchronization mode. Passing an explicit Bun `Database` handle to
+The implementation now has exactly two deployment configurations: local SQLite and
+operator-owned `self-hosted` PostgreSQL. It has no hosted SaaS control plane and
+no synchronization between the two backends. Passing an explicit Bun `Database` handle to
 the public library always selects that caller-owned SQLite database, even when
 the process is otherwise configured as a self-hosted client.
 

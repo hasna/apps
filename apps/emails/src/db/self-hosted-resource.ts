@@ -12,7 +12,7 @@
 // exist server-side, `selfHostedStoreFor(...).list()` gets an HTTP 404 and THROWS
 // (SelfHostedHttpError). It never silently degrades to the local store. Once the
 // matching `/v1/<resource>` endpoint is deployed, the same call returns selfHosted
-// data. Local mode (isSelfHostedMode() === false) is entirely unaffected.
+// data. The local SQLite backend is entirely unaffected.
 
 import { selfHostedStoreFor, type SelfHostedResourceStore } from "./self-hosted-store.js";
 import { safeOffset, safeOptionalLimit } from "./pagination.js";

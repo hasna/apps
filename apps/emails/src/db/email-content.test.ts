@@ -22,7 +22,7 @@
 //  4. THE MIGRATION PATH STILL READS. Content written by the deleted arm's statement — a
 //     legacy ledger row plus an `email_content` row — must still come back through the seam,
 //     because that is the shape every existing installation's mail is in.
-//  5. THAT TABLE STILL HAS A WRITER. The write moved to `src/lib/sent-ledger.local.ts`; a
+//  5. THAT TABLE STILL HAS A WRITER. The write moved to `src/lib/sent-ledger.sqlite.ts`; a
 //     collapse that dropped it would leave the table with a reader and no writer, and nothing
 //     else in this suite would notice.
 
@@ -40,8 +40,8 @@ import {
 import type { EmailStore } from "../store/email-store.js";
 import type { MessageRecord } from "../store/records.js";
 import type { Outcome, Refusal } from "../store/outcome.js";
-import { createProvider } from "./providers.local.js";
-import { createSentEmailLedger, storeSentEmailContent } from "../lib/sent-ledger.local.js";
+import { createProvider } from "./providers.sqlite.js";
+import { createSentEmailLedger, storeSentEmailContent } from "../lib/sent-ledger.sqlite.js";
 import {
   getEmailContent,
   storeEmailContent,

@@ -25,7 +25,7 @@ import { join } from "node:path";
 // shell may export this package's whole client configuration (endpoint, credential,
 // and the deployment variable this repo is deleting), and an enumerated list
 // that named each one would both go stale and re-introduce the very identifiers
-// the mode-axis ratchet counts.
+// the selector-removal guard counts.
 const SCRUBBED_ENV_PREFIXES = ["EMAILS_", "HASNA_EMAILS_", "MAILERY_", "HASNA_MAILERY_"] as const;
 const SCRUBBED_ENV_KEYS = [
   "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE",
@@ -158,15 +158,15 @@ describe("`emails email send` forwards to the real send command", () => {
 describe("both arms register the forwarding alias, not a re-declared surface", () => {
   // WEAK detectors, deliberately: the API-backed arm cannot be exercised
   // end-to-end from this suite without configuring the deployment variable the
-  // mode-axis ratchet counts at zero slack, so its `email send` is pinned
+  // selector-removal guard counts at zero slack, so its `email send` is pinned
   // STRUCTURALLY instead. What is asserted is the exact shape the old stub did
   // not have — a variadic passthrough argument and NO re-declared options —
   // which is also the shape a divergent re-implementation would break first.
   // The local arm's behaviour is already pinned above; these prove the two arms
   // share it.
   const armModules = [
-    { arm: "local", path: "./email-log.local.js" },
-    { arm: "api-backed", path: "./email-log.remote.js" },
+    { arm: "sqlite", path: "./email-log.sqlite.js" },
+    { arm: "api", path: "./email-log.api.js" },
   ] as const;
 
   for (const { arm, path } of armModules) {

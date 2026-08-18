@@ -8,8 +8,8 @@ import {
   listS3Sources,
   listLiveS3Sources,
 } from "./s3-sync.js";
-import { syncS3Inbox } from "./s3-sync.remote.js";
-import { s3SyncLocalTestBoundary } from "./s3-sync.local.js";
+import { syncS3Inbox } from "./s3-sync.api.js";
+import { s3SyncLocalTestBoundary } from "./s3-sync.sqlite.js";
 import {
   backfillS3SourceIdsFromRawUrls,
   closeDatabase,
@@ -172,7 +172,7 @@ describe("S3 source registry (client config)", () => {
   // pass. Two of those sites cannot be repaired with a local `await` at all — `listLiveS3Sources()`
   // is a DEFAULT PARAMETER of an exported synchronous function in
   // src/lib/domain-inbound-evidence.ts, and `listS3Sources()` is called inside the exported
-  // synchronous `listMailboxSources` in src/cli/tui/data.local.ts.
+  // synchronous `listMailboxSources` in src/cli/tui/data.sqlite.ts.
   it("keeps all four registry exports SYNCHRONOUS", () => {
     registerS3Source({ id: "s3-sync-shape", bucket: "shape-bucket", status: "live" });
     for (const value of [listS3Sources(), listLiveS3Sources(), retireS3Source("s3-sync-shape")]) {

@@ -19,7 +19,7 @@ import {
 } from "../db/provisioning.js";
 import { assessDomainReadiness, type DomainReadiness } from "./domain-readiness.js";
 import { domainInboundReadinessSignals } from "./domain-inbound-evidence.js";
-import { resolveEmailsMode, type EmailsModeResolution } from "./mode.js";
+import { isApiClientConfigured } from "../store-resolution.js";
 
 export type DomainReadinessProviderSummary = Pick<Provider, "id" | "name" | "type" | "region" | "active">;
 
@@ -42,8 +42,8 @@ export interface DomainDnsLifecycleStatus {
 export interface DomainLifecycleSummary {
   id: string;
   domain: string;
-  mode: EmailsModeResolution["mode"];
-  mode_label: EmailsModeResolution["label"];
+  /** Which client backend produced this summary: the local SQLite file or the `/v1` API. */
+  backend: "sqlite" | "api";
   source_of_truth: DomainSourceOfTruth;
   domain_type: DomainType;
   provider: DomainReadinessProviderSummary | null;
@@ -60,7 +60,7 @@ export interface DomainLifecycleSummary {
 }
 
 export interface BuildDomainLifecycleSummaryOptions {
-  mode?: EmailsModeResolution;
+  backend?: "sqlite" | "api";
   provider?: Provider | null;
   provisioning?: DomainProvisioning | null;
   ready_addresses?: number;
@@ -68,12 +68,12 @@ export interface BuildDomainLifecycleSummaryOptions {
 
 export interface ListDomainLifecycleSummaryOptions extends ListDomainOptions {
   provider_id?: string;
-  mode?: EmailsModeResolution;
+  backend?: "sqlite" | "api";
 }
 
 export interface ResolveDomainLifecycleOptions {
   provider_id?: string;
-  mode?: EmailsModeResolution;
+  backend?: "sqlite" | "api";
 }
 
 export interface DomainReadinessMutationInput {
@@ -156,36 +156,36 @@ function providerSummary(provider: Provider | null): DomainReadinessProviderSumm
   };
 }
 
-function resolveMode(mode?: EmailsModeResolution): EmailsModeResolution {
-  return mode ?? resolveEmailsMode();
+function resolveBackend(backend?: "sqlite" | "api"): "sqlite" | "api" {
+  return backend ?? (isApiClientConfigured() ? "api" : "sqlite");
 }
 
-export function defaultDomainSourceOfTruth(mode: EmailsModeResolution["mode"]): DomainSourceOfTruth {
-  if (mode === "self_hosted") return "postgres";
+export function defaultDomainSourceOfTruth(backend: "sqlite" | "api"): DomainSourceOfTruth {
+  if (backend === "api") return "postgres";
   return "local";
 }
 
 export function assessDomainLifecycleReadiness(
   domain: Domain,
-  mode: EmailsModeResolution,
+  backend: "sqlite" | "api",
   readyAddresses: number,
   provisioning: DomainProvisioning | null,
 ): DomainReadiness {
   return assessDomainReadiness(domain, provisioning, {
-    ...domainInboundReadinessSignals(domain, mode),
+    ...domainInboundReadinessSignals(domain, backend),
     ready_addresses: readyAddresses,
   });
 }
 
 function lifecycleSummaryFromParts(
   domain: Domain,
-  opts: Required<Pick<BuildDomainLifecycleSummaryOptions, "mode">> & {
+  opts: Required<Pick<BuildDomainLifecycleSummaryOptions, "backend">> & {
     provider: Provider | null;
     provisioning: DomainProvisioning | null;
     ready_addresses: number;
   },
 ): DomainLifecycleSummary {
-  const readiness = assessDomainLifecycleReadiness(domain, opts.mode, opts.ready_addresses, opts.provisioning);
+  const readiness = assessDomainLifecycleReadiness(domain, opts.backend, opts.ready_addresses, opts.provisioning);
   const missingRecords: string[] = [];
   const warnings: string[] = [];
   const missingRequirements: string[] = [];
@@ -208,13 +208,11 @@ function lifecycleSummaryFromParts(
   if (domain.dkim_status !== "verified" || domain.spf_status !== "verified") nextActions.push(`emails domains verify ${domain.domain}`);
   if (!readiness.receive_ready) nextActions.push(readiness.fix_commands.find((command) => command.includes("domain adopt")) ?? `emails domains enable-inbound ${domain.domain} --force`);
   if (domain.outbound_status !== "ready") nextActions.push(`emails domains enable-outbound ${domain.domain}`);
-  if (opts.mode.warning) warnings.push(opts.mode.warning);
 
   return {
     id: domain.id,
     domain: domain.domain,
-    mode: opts.mode.mode,
-    mode_label: opts.mode.label,
+    backend: opts.backend,
     source_of_truth: domain.source_of_truth,
     domain_type: domain.domain_type,
     provider: providerSummary(opts.provider),
@@ -249,7 +247,7 @@ export async function buildDomainLifecycleSummary(
   opts: BuildDomainLifecycleSummaryOptions = {},
 ): Promise<DomainLifecycleSummary> {
   return lifecycleSummaryFromParts(domain, {
-    mode: resolveMode(opts.mode),
+    backend: resolveBackend(opts.backend),
     provider: opts.provider === undefined ? getProvider(domain.provider_id) : opts.provider,
     provisioning: opts.provisioning === undefined ? await getDomainProvisioning(domain.id) : opts.provisioning,
     // `?? 0` on a MISSING key, never on a truncated read: `listReadyAddressCountsByDomains`
@@ -261,10 +259,10 @@ export async function buildDomainLifecycleSummary(
 
 export async function buildDomainLifecycleSummaries(
   domains: Domain[],
-  opts: Pick<BuildDomainLifecycleSummaryOptions, "mode"> = {},
+  opts: Pick<BuildDomainLifecycleSummaryOptions, "backend"> = {},
 ): Promise<DomainLifecycleSummary[]> {
   if (domains.length === 0) return [];
-  const mode = resolveMode(opts.mode);
+  const backend = resolveBackend(opts.backend);
   const domainIds = domains.map((domain) => domain.id);
   const provisioningById = await listDomainProvisioningByIds(domainIds);
   const readyAddressesById = await listReadyAddressCountsByDomains(domainIds);
@@ -276,7 +274,7 @@ export async function buildDomainLifecycleSummaries(
       providerById.set(domain.provider_id, getProvider(domain.provider_id));
     }
     return lifecycleSummaryFromParts(domain, {
-      mode,
+      backend,
       provider: providerById.get(domain.provider_id) ?? null,
       provisioning: provisioningById.get(domain.id) ?? null,
       ready_addresses: readyAddressesById.get(domain.id) ?? 0,
@@ -286,7 +284,7 @@ export async function buildDomainLifecycleSummaries(
 
 export function listDomainLifecycleSummaries(options: ListDomainLifecycleSummaryOptions = {}): Promise<DomainLifecycleSummary[]> {
   const domains = listDomains(options.provider_id, { limit: options.limit, offset: options.offset });
-  return buildDomainLifecycleSummaries(domains, { mode: options.mode });
+  return buildDomainLifecycleSummaries(domains, { backend: options.backend });
 }
 
 export function resolveDomainLifecycleRecord(
@@ -316,7 +314,7 @@ export function getDomainLifecycleSummary(
   options: ResolveDomainLifecycleOptions = {},
 ): Promise<DomainLifecycleSummary> {
   const domain = resolveDomainLifecycleRecord(domainOrId, { provider_id: options.provider_id });
-  return buildDomainLifecycleSummary(domain, { mode: options.mode });
+  return buildDomainLifecycleSummary(domain, { backend: options.backend });
 }
 
 function toReadinessUpdate(input: DomainReadinessMutationInput): DomainReadinessUpdate {
@@ -344,13 +342,13 @@ export async function updateDomainLifecycleReadiness(
   options: ResolveDomainLifecycleOptions = {},
 ): Promise<DomainReadinessMutationResult> {
   const domain = resolveDomainLifecycleRecord(domainOrId, { provider_id: options.provider_id });
-  const before = await buildDomainLifecycleSummary(domain, { mode: options.mode });
+  const before = await buildDomainLifecycleSummary(domain, { backend: options.backend });
   const update = toReadinessUpdate(input);
   const timestamp = now();
 
   if (input.inbound_status === "ready") {
     if (!input.force && !before.readiness.receive_ready && !before.readiness.inbound_evidence_ready) {
-      throw new Error(`Inbound self_hosted source is not configured for ${domain.domain}; register an SES/S3 source or pass force after manual/provider setup.`);
+      throw new Error(`Inbound self-hosted source is not configured for ${domain.domain}; register an SES/S3 source or pass force after manual/provider setup.`);
     }
     update.last_inbound_check_at ??= timestamp;
   }
@@ -396,7 +394,7 @@ export async function updateDomainLifecycleReadiness(
   return {
     before,
     updated,
-    after: await buildDomainLifecycleSummary(updated, { mode: options.mode }),
+    after: await buildDomainLifecycleSummary(updated, { backend: options.backend }),
   };
 }
 

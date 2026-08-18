@@ -19,7 +19,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startV1Stub, type V1Stub, type V1StubResources } from "../../test-support/v1-stub.js";
-import { registerDaemonCommands } from "./daemon.remote.js";
+import { registerDaemonCommands } from "./daemon.api.js";
 
 let stub: V1Stub;
 let home: string;

@@ -68,7 +68,7 @@ describe("self-hosted status CLI commands", () => {
   it("reports self-hosted status with inbox counts sourced from /v1", async () => {
     const result = await runStatusCommand(["status"]);
     expect(result.data).toMatchObject({
-      mode: { current: "self_hosted" },
+      backend: "api",
       database: { data_dir: null },
       inbox: {
         total: 3,
@@ -76,7 +76,7 @@ describe("self-hosted status CLI commands", () => {
         latest_received_at: LATEST,
       },
     });
-    expect(result.formatted).toContain("Mode:       self_hosted");
+    expect(result.formatted).toMatch(/Backend:\s+api/);
   });
 
   // G5: the operator-facing path end to end. `emails status --json` must carry
@@ -135,7 +135,7 @@ describe("self-hosted status CLI commands", () => {
     const result = await runStatusCommand(["agent", "context"]);
     expect(result.data).toMatchObject({
       status: {
-        mode: { current: "self_hosted" },
+        backend: "api",
         database: { data_dir: null },
         inbox: { total: 3, unread: 1 },
       },

@@ -15,19 +15,21 @@ async function toolError(error: unknown): Promise<ToolResult> {
   return { content: [{ type: "text", text: `Error: ${formatError(error)}` }], isError: true };
 }
 
-async function isSelfHostedRuntimeMode(): Promise<boolean> {
-  const { resolveEmailsMode } = await import("../../lib/mode.js");
-  return resolveEmailsMode().mode === "self_hosted";
+async function isApiClientRuntime(): Promise<boolean> {
+  const { isApiClientConfigured } = await import("../../store-resolution.js");
+  return isApiClientConfigured();
 }
 
 async function assertSelfHostedApiRouteReady(toolName: string): Promise<void> {
-  if (!(await isSelfHostedRuntimeMode())) return;
-  const { isSelfHostedMode } = await import("../../db/self-hosted-store.js");
-  if (!isSelfHostedMode()) {
-    throw new Error(
-      `MCP tool ${toolName} is API-backed in self_hosted mode and requires EMAILS_MODE=self_hosted with ` +
-        "EMAILS_SELF_HOSTED_URL and EMAILS_SELF_HOSTED_API_KEY. Set EMAILS_MODE=local only for an explicit local group store.",
-    );
+  if (!(await isApiClientRuntime())) return;
+  // The API-backed route requires the API client's strict configuration
+  // (HASNA_EMAILS_API_URL plus a credential); resolveSelfHostedConfig refuses
+  // with the config-help message when it is missing.
+  try {
+    const { resolveSelfHostedConfig } = await import("../../db/self-hosted-store.js");
+    resolveSelfHostedConfig();
+  } catch (error) {
+    throw new Error(`MCP tool ${toolName} is API-backed: ${(error as Error).message}`);
   }
 }
 

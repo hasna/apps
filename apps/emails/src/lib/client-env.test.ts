@@ -28,15 +28,13 @@ function restoreInheritedProcessEnv(): void {
 }
 
 const ENV_KEYS = [
-  "EMAILS_MODE",
-  "HASNA_EMAILS_MODE",
   EMAILS_CLIENT_ENV_SECRET_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   EMAILS_IDP_TOKEN_ENV,
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "DATABASE_URL",
-  "EMAILS_DATABASE_URL",
+  "HASNA_EMAILS_DATABASE_URL",
   "HASNA_EMAILS_DATABASE_URL",
   "EMAILS_API_SIGNING_KEY",
   "HASNA_MAILERY_API_SIGNING_KEY",
@@ -76,7 +74,7 @@ function installCapturingSecretsCommand(): string {
 ENV_PATH=${JSON.stringify(envPath)}
 env | sort > "$ENV_PATH"
 if [ "$1" = "get" ] && [ "$2" = "hasna/test/opensource/emails/prod/client-env" ]; then
-  printf '%s\\n' '{"EMAILS_MODE":"self_hosted","EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid","EMAILS_SELF_HOSTED_API_KEY":"loaded-client-key"}'
+  printf '%s\\n' '{"HASNA_EMAILS_API_URL":"https://emails.example.invalid","HASNA_EMAILS_API_KEY":"loaded-client-key"}'
   exit 0
 fi
 exit 2
@@ -219,9 +217,9 @@ describe("Emails client-env loader", () => {
   it("runs secrets get with a scrubbed environment", () => {
     const envPath = installCapturingSecretsCommand();
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/test/opensource/emails/prod/client-env";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "stale-self-hosted-key-must-not-pass";
+    process.env["HASNA_EMAILS_API_KEY"] = "stale-self-hosted-key-must-not-pass";
     process.env["DATABASE_URL"] = "postgres://database-url-must-not-pass";
-    process.env["EMAILS_DATABASE_URL"] = "postgres://emails-database-url-must-not-pass";
+    process.env["HASNA_EMAILS_DATABASE_URL"] = "postgres://emails-database-url-must-not-pass";
     process.env["HASNA_EMAILS_DATABASE_URL"] = "postgres://hasna-emails-database-url-must-not-pass";
     process.env["EMAILS_API_SIGNING_KEY"] = "signing-key-must-not-pass";
     process.env["HASNA_MAILERY_API_SIGNING_KEY"] = "legacy-signing-key-must-not-pass";
@@ -242,9 +240,8 @@ describe("Emails client-env loader", () => {
       loaded: true,
       ready: true,
     });
-    expect(process.env["EMAILS_MODE"]).toBe("self_hosted");
-    expect(process.env["EMAILS_SELF_HOSTED_URL"]).toBe("https://emails.example.invalid");
-    expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBe("loaded-client-key");
+    expect(process.env["HASNA_EMAILS_API_URL"]).toBe("https://emails.example.invalid");
+    expect(process.env["HASNA_EMAILS_API_KEY"]).toBe("loaded-client-key");
 
     const childEnvKeys = new Set(
       readFileSync(envPath, "utf8")
@@ -253,10 +250,10 @@ describe("Emails client-env loader", () => {
         .map((line) => line.split("=", 1)[0]),
     );
     for (const key of [
-      "EMAILS_SELF_HOSTED_API_KEY",
+      "HASNA_EMAILS_API_KEY",
       EMAILS_CLIENT_ENV_SECRET_ENV,
       "DATABASE_URL",
-      "EMAILS_DATABASE_URL",
+      "HASNA_EMAILS_DATABASE_URL",
       "HASNA_EMAILS_DATABASE_URL",
       "EMAILS_API_SIGNING_KEY",
       "HASNA_MAILERY_API_SIGNING_KEY",
@@ -276,8 +273,8 @@ describe("Emails client-env loader", () => {
 
   it("loads an optional EMAILS_SESSION_TOKEN from the vault entry when present", () => {
     installStaticSecretsCommand(
-      '{"EMAILS_MODE":"self_hosted","EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid",' +
-        '"EMAILS_SELF_HOSTED_API_KEY":"loaded-client-key","EMAILS_SESSION_TOKEN":"emss_from_vault"}',
+      '{"HASNA_EMAILS_API_URL":"https://emails.example.invalid",' +
+        '"HASNA_EMAILS_API_KEY":"loaded-client-key","EMAILS_SESSION_TOKEN":"emss_from_vault"}',
     );
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/test/opensource/emails/prod/client-env";
 
@@ -289,7 +286,7 @@ describe("Emails client-env loader", () => {
 
   it("accepts a session-token-only vault entry (no API key required)", () => {
     installStaticSecretsCommand(
-      '{"EMAILS_MODE":"self_hosted","EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid",' +
+      '{"HASNA_EMAILS_API_URL":"https://emails.example.invalid",' +
         '"EMAILS_SESSION_TOKEN":"emss_only"}',
     );
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/test/opensource/emails/prod/client-env";
@@ -298,7 +295,7 @@ describe("Emails client-env loader", () => {
 
     expect(loaded.ready).toBe(true);
     expect(process.env[EMAILS_SESSION_TOKEN_ENV]).toBe("emss_only");
-    expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBeUndefined();
+    expect(process.env["HASNA_EMAILS_API_KEY"]).toBeUndefined();
   });
 
   it("accepts an identity-token-only vault entry (no API key or session required)", () => {
@@ -308,9 +305,9 @@ describe("Emails client-env loader", () => {
     installStaticSecretsCommand(
       JSON.stringify({
         // Assembled, not spelled, so this addition contributes nothing to the axis
-        // ratchet this file sits inside.
-        [["EMAILS", "MODE"].join("_")]: "self_hosted",
-        EMAILS_SELF_HOSTED_URL: "https://emails.example.invalid",
+        // source-text guard this file sits inside.
+        [["EMAILS", "MODE"].join("_")]: "self-hosted",
+        HASNA_EMAILS_API_URL: "https://emails.example.invalid",
         [EMAILS_IDP_TOKEN_ENV]: "emid_identity_only",
       }),
     );
@@ -320,25 +317,25 @@ describe("Emails client-env loader", () => {
 
     expect(loaded.ready).toBe(true);
     expect(process.env[EMAILS_IDP_TOKEN_ENV]).toBe("emid_identity_only");
-    expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBeUndefined();
+    expect(process.env["HASNA_EMAILS_API_KEY"]).toBeUndefined();
     expect(process.env[EMAILS_SESSION_TOKEN_ENV]).toBeUndefined();
   });
 
   it("fails loud when the vault entry carries NO credential of any kind", () => {
     installStaticSecretsCommand(
-      '{"EMAILS_MODE":"self_hosted","EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid"}',
+      '{"HASNA_EMAILS_API_URL":"https://emails.example.invalid"}',
     );
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/test/opensource/emails/prod/client-env";
 
     // The refusal is typed and names every accepted credential setting — never an
     // empty success, and never a message missing the identity token.
-    expect(() => loadEmailsClientEnvSecret()).toThrow("EMAILS_SELF_HOSTED_API_KEY or EMAILS_SESSION_TOKEN");
+    expect(() => loadEmailsClientEnvSecret()).toThrow("HASNA_EMAILS_API_KEY or EMAILS_SESSION_TOKEN");
     expect(() => loadEmailsClientEnvSecret()).toThrow(EMAILS_IDP_TOKEN_ENV);
   });
 
   it("persists a session token into env and merges it into the vault entry", () => {
     const { storePath, argvLogPath } = installVaultBackedSecretsCommand(
-      '{"EMAILS_MODE":"self_hosted","EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid","EMAILS_SELF_HOSTED_API_KEY":"op-key"}',
+      '{"HASNA_EMAILS_API_URL":"https://emails.example.invalid","HASNA_EMAILS_API_KEY":"op-key"}',
     );
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/test/opensource/emails/prod/client-env";
 
@@ -349,8 +346,8 @@ describe("Emails client-env loader", () => {
     const stored = JSON.parse(readFileSync(storePath, "utf8")) as Record<string, string>;
     expect(stored[EMAILS_SESSION_TOKEN_ENV]).toBe("emss_new_session");
     // The pre-existing keys are preserved through the merge.
-    expect(stored["EMAILS_SELF_HOSTED_API_KEY"]).toBe("op-key");
-    expect(stored["EMAILS_SELF_HOSTED_URL"]).toBe("https://emails.example.invalid");
+    expect(stored["HASNA_EMAILS_API_KEY"]).toBe("op-key");
+    expect(stored["HASNA_EMAILS_API_URL"]).toBe("https://emails.example.invalid");
 
     // REGRESSION (secrets 0.2.9 incident, todos 10bf2fcd): the credential map must
     // ride to the CLI on stdin, never in argv — argv is readable in `ps` by every
@@ -365,7 +362,7 @@ describe("Emails client-env loader", () => {
     expect(process.env[EMAILS_SESSION_TOKEN_ENV]).toBeUndefined();
     const after = JSON.parse(readFileSync(storePath, "utf8")) as Record<string, string>;
     expect(after[EMAILS_SESSION_TOKEN_ENV]).toBeUndefined();
-    expect(after["EMAILS_SELF_HOSTED_API_KEY"]).toBe("op-key");
+    expect(after["HASNA_EMAILS_API_KEY"]).toBe("op-key");
   });
 
   it("loads through the secrets >=0.2.9 default-deny guard (get without --show exits 1)", () => {
@@ -378,11 +375,11 @@ describe("Emails client-env loader", () => {
     tempDirs.push(dir);
     const bin = join(dir, "secrets");
     // Assembled, not spelled, so this addition contributes nothing to the axis
-    // ratchet this file sits inside.
+    // source-text guard this file sits inside.
     const guardedEntry = JSON.stringify({
-      [["EMAILS", "MODE"].join("_")]: "self_hosted",
-      EMAILS_SELF_HOSTED_URL: "https://emails.example.invalid",
-      EMAILS_SELF_HOSTED_API_KEY: "guarded-client-key",
+      [["EMAILS", "MODE"].join("_")]: "self-hosted",
+      HASNA_EMAILS_API_URL: "https://emails.example.invalid",
+      HASNA_EMAILS_API_KEY: "guarded-client-key",
     });
     writeFileSync(bin, `#!/bin/sh
 if [ "$1" = "get" ]; then
@@ -402,7 +399,7 @@ exit 2
     const loaded = loadEmailsClientEnvSecret();
 
     expect(loaded.ready).toBe(true);
-    expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBe("guarded-client-key");
+    expect(process.env["HASNA_EMAILS_API_KEY"]).toBe("guarded-client-key");
   });
 
   it("falls back to the legacy argv `set` when the installed secrets predates --stdin", () => {
@@ -413,13 +410,13 @@ exit 2
     const dir = mkdtempSync(join(tmpdir(), "emails-client-env-legacy-"));
     tempDirs.push(dir);
     const storePath = join(dir, "store.json");
-    // Assembled key: keeps this fixture out of the axis-ratchet count.
+    // Assembled key: keeps this fixture out of the axis-source-text guard count.
     writeFileSync(
       storePath,
       JSON.stringify({
-        [["EMAILS", "MODE"].join("_")]: "self_hosted",
-        EMAILS_SELF_HOSTED_URL: "https://emails.example.invalid",
-        EMAILS_SELF_HOSTED_API_KEY: "op-key",
+        [["EMAILS", "MODE"].join("_")]: "self-hosted",
+        HASNA_EMAILS_API_URL: "https://emails.example.invalid",
+        HASNA_EMAILS_API_KEY: "op-key",
       }),
     );
     const bin = join(dir, "secrets");
@@ -448,7 +445,7 @@ exit 2
     expect(result.scope).toBe("vault");
     const stored = JSON.parse(readFileSync(storePath, "utf8")) as Record<string, string>;
     expect(stored[EMAILS_SESSION_TOKEN_ENV]).toBe("emss_legacy_session");
-    expect(stored["EMAILS_SELF_HOSTED_API_KEY"]).toBe("op-key");
+    expect(stored["HASNA_EMAILS_API_KEY"]).toBe("op-key");
   });
 
   it("never retries a genuine --stdin write failure with the value in argv", () => {
@@ -462,11 +459,11 @@ exit 2
     tempDirs.push(dir);
     const argvLogPath = join(dir, "argv.log");
     writeFileSync(argvLogPath, "");
-    // Assembled key: keeps this fixture out of the axis-ratchet count.
+    // Assembled key: keeps this fixture out of the axis-source-text guard count.
     const entry = JSON.stringify({
-      [["EMAILS", "MODE"].join("_")]: "self_hosted",
-      EMAILS_SELF_HOSTED_URL: "https://emails.example.invalid",
-      EMAILS_SELF_HOSTED_API_KEY: "op-key",
+      [["EMAILS", "MODE"].join("_")]: "self-hosted",
+      HASNA_EMAILS_API_URL: "https://emails.example.invalid",
+      HASNA_EMAILS_API_KEY: "op-key",
     });
     const bin = join(dir, "secrets");
     writeFileSync(bin, `#!/bin/sh
@@ -521,7 +518,7 @@ exit 2
     const loaded = loadEmailsClientEnvSecret();
 
     expect(loaded.ready).toBe(true);
-    expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBe("loaded-client-key");
+    expect(process.env["HASNA_EMAILS_API_KEY"]).toBe("loaded-client-key");
 
     const childEnvKeys = new Set(
       readFileSync(envPath, "utf8")

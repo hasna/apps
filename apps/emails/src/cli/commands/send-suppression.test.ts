@@ -3,18 +3,18 @@
 // The suppression check printed "Warning: Suppressed recipients: …" followed by
 // "Use --force to send anyway." and then FELL THROUGH — no `return`, no
 // filtering, no exit. So the recipient was mailed whether or not `--force` was
-// passed, and in local mode nothing further down the chain stops it. `--force`
+// passed, and for the local SQLite client nothing further down the chain stops it. `--force`
 // was inverted: the flag that was supposed to be required to send anyway made no
 // difference at all.
 //
 // Self-hosted is covered against the out-of-process /v1 stub; local is covered
-// against an in-memory SQLite DB with a sandbox provider, because local mode is
+// against an in-memory SQLite DB with a sandbox provider, because local SQLite client is
 // where there is no second gate.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { Command } from "commander";
 import { closeDatabase, getDatabase, resetDatabase } from "../../db/database.js";
 import { suppressContact } from "../../db/contacts.js";
-import { createProvider } from "../../db/providers.local.js";
+import { createProvider } from "../../db/providers.sqlite.js";
 import { listSandboxEmails } from "../../db/sandbox.js";
 import { resetMailDataSource } from "../../lib/mail-data-source.js";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
@@ -162,7 +162,6 @@ describe("emails send — suppressed recipients (local)", () => {
 
   beforeEach(async () => {
     captureInheritedProcessEnv();
-    process.env["EMAILS_MODE"] = "local";
     process.env["EMAILS_DB_PATH"] = ":memory:";
     resetDatabase();
     resetMailDataSource();
@@ -176,7 +175,6 @@ describe("emails send — suppressed recipients (local)", () => {
   afterEach(() => {
     closeDatabase();
     resetMailDataSource();
-    delete process.env["EMAILS_MODE"];
     delete process.env["EMAILS_DB_PATH"];
     restoreInheritedProcessEnv();
   });
@@ -189,7 +187,7 @@ describe("emails send — suppressed recipients (local)", () => {
 
     expect(result.exited).toBe(true);
     expect(result.errorOutput).toContain("Refusing to send to suppressed recipient(s): blocked@ext.com");
-    // Local mode has no second gate, so this assertion is the whole finding.
+    // The local SQLite client has no second gate, so this assertion is the whole finding.
     expect(await listSandboxEmails(providerId, 10)).toHaveLength(0);
   });
 
@@ -222,7 +220,6 @@ describe("suppression matches the recipient canonically, not by exact string", (
 
   beforeEach(() => {
     captureInheritedProcessEnv();
-    process.env["EMAILS_MODE"] = "local";
     process.env["EMAILS_DB_PATH"] = ":memory:";
     resetDatabase();
     resetMailDataSource();
@@ -232,7 +229,6 @@ describe("suppression matches the recipient canonically, not by exact string", (
   afterEach(() => {
     closeDatabase();
     resetMailDataSource();
-    delete process.env["EMAILS_MODE"];
     delete process.env["EMAILS_DB_PATH"];
     restoreInheritedProcessEnv();
   });
@@ -298,7 +294,6 @@ describe("reply, forward, and the MCP send tool refuse suppressed recipients too
 
   beforeEach(async () => {
     captureInheritedProcessEnv();
-    process.env["EMAILS_MODE"] = "local";
     process.env["EMAILS_DB_PATH"] = ":memory:";
     resetDatabase();
     resetMailDataSource();
@@ -312,13 +307,12 @@ describe("reply, forward, and the MCP send tool refuse suppressed recipients too
   afterEach(() => {
     closeDatabase();
     resetMailDataSource();
-    delete process.env["EMAILS_MODE"];
     delete process.env["EMAILS_DB_PATH"];
     restoreInheritedProcessEnv();
   });
 
   async function seedInbound(): Promise<string> {
-    const { storeInboundEmail } = await import("../../db/inbound.local.js");
+    const { storeInboundEmail } = await import("../../db/inbound.sqlite.js");
     const stored = storeInboundEmail({
       provider_id: null,
       message_id: "<parent@ext.com>",
@@ -425,7 +419,7 @@ describe("emails batch keeps its (already correct) skip-unless-force shape", () 
     // suites running against the defaulting word branch, and one API-configured case
     // in the sendkey suite then genuinely diverged across its two storage
     // provenances. The word key is named by construction: this file sits inside the
-    // deployment-axis ratchet's scanned corpus.
+    // deployment-hygiene guard's scanned corpus.
     const wordSetting = ["EMAILS", "MODE"].join("_");
     const priorWord = process.env[wordSetting];
     const priorDbPath = process.env["EMAILS_DB_PATH"];

@@ -95,16 +95,13 @@ beforeAll(async () => {
   chmodSync(wrapper, 0o700);
 
   // An emulated `secrets` CLI standing in for the operator vault. It returns the
-  // canonical client-env entry the pointer resolves to: the service origin, a
-  // credential, and — keyed through client-env's own required-key contract rather
-  // than a restated literal — the deployment word the word-routed CLI still reads.
-  // The word therefore appears only in this runtime vault payload, exactly as it
-  // does in production, and nowhere in tracked source.
-  const [modeKey, urlKey] = CLIENT_ENV_REQUIRED_KEYS;
+  // canonical client-env entry the pointer resolves to: the service origin and a
+  // credential, keyed through client-env's own required-key contract rather than
+  // restated literals.
+  const [urlKey] = CLIENT_ENV_REQUIRED_KEYS;
   const clientEnvEntry = JSON.stringify({
-    [modeKey]: "self_hosted",
     [urlKey]: stub.baseUrl,
-    EMAILS_SELF_HOSTED_API_KEY: stub.apiKey,
+    HASNA_EMAILS_API_KEY: stub.apiKey,
   });
   secretsDir = join(testRoot, "secrets-bin");
   mkdirSync(secretsDir);
@@ -175,8 +172,8 @@ describe("published self-hosted client smoke", () => {
     const env: Record<string, string> = {
       PATH: process.env.PATH ?? "",
       HOME: home,
-      EMAILS_SELF_HOSTED_URL: stub.baseUrl,
-      EMAILS_SELF_HOSTED_API_KEY: stub.apiKey,
+      HASNA_EMAILS_API_URL: stub.baseUrl,
+      HASNA_EMAILS_API_KEY: stub.apiKey,
       EMAILS_SMOKE_CLI: wrapper,
       EMAILS_DB_PATH: "",
     };

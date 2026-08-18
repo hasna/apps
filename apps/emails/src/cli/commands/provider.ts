@@ -10,7 +10,7 @@ import {
 } from "../../db/provider-secrets.js";
 import { getAdapter } from "../../providers/index.js";
 import { log } from "../../lib/logger.js";
-import { getEmailsMode } from "../../lib/mode.js";
+import { isApiClientConfigured } from "../../store-resolution.js";
 import type { Provider } from "../../types/index.js";
 import { confirmDestructiveAction, formatListHint, handleError, isCliVerboseOutput, parseCliListPage } from "../utils.js";
 
@@ -35,7 +35,7 @@ interface ProviderCredentialInput {
  * An in-memory provider built from EXACTLY what the operator typed.
  *
  * Validation must exercise the supplied credentials, not whatever the persisted
- * row happens to contain. In self_hosted mode the stored row carries no
+ * row happens to contain. In API-client configuration the stored row carries no
  * credentials at all, so validating it fell through to the CLI machine's
  * ambient AWS chain and reported "Provider credentials are invalid" for
  * credentials that were perfectly valid — the operator-facing half of the
@@ -75,13 +75,13 @@ async function validateProviderCandidate(
   if (opts.skipValidation) return { validated: false, note: "credential validation skipped (--skip-validation)" };
   if (candidate.type === "sandbox") return { validated: false };
   const hasCredentials = Boolean(candidate.api_key || candidate.access_key || candidate.secret_key);
-  if (!hasCredentials && getEmailsMode() === "self_hosted") {
+  if (!hasCredentials && isApiClientConfigured()) {
     // Nothing was supplied and the SERVER holds the real credentials. Probing
     // this machine's ambient AWS chain would tell the operator nothing about
     // whether the server can send, so do not pretend it did.
     return {
       validated: false,
-      note: "credentials were not validated: in self_hosted mode the server signs outbound mail with its own "
+      note: "credentials were not validated: when the API client is configured the server signs outbound mail with its own "
         + "environment credentials, which this client cannot reach",
     };
   }

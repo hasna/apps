@@ -301,7 +301,7 @@ describe("describeWarmingProgress", () => {
   });
 
   it("reports day 1 with a zero limit for an unusable start date", async () => {
-    // Reachable in self-hosted mode: the Postgres schema relaxed start_date to
+    // Reachable when the API client is configured: the Postgres schema relaxed start_date to
     // nullable and the /v1 client coerces null to "". NaN must not reach output,
     // and an unknown start must not read as "full volume allowed".
     for (const start_date of ["", "not-a-date"]) {

@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import pkg from "../../package.json" with { type: "json" };
-import { assertNoLegacyHostedEnvironment } from "../lib/mode.js";
 import { resolveServerBindOptions } from "./bind-options.js";
 import { resolveServerStorageBackend } from "./storage-backend.js";
 
@@ -17,11 +16,11 @@ Runs the Emails HTTP service (or a background worker).
 Commands:
   (default)          Run the HTTP service. Which one follows the internal store
                      this server is configured with, and nothing else:
-                       - PostgreSQL (EMAILS_DATABASE_URL +
+                       - PostgreSQL (HASNA_EMAILS_DATABASE_URL +
                          EMAILS_API_SIGNING_KEY): the operator-owned Postgres API
                          (GET /health, /ready, /version and the API-key
                          authenticated /v1 surface), binding 0.0.0.0.
-                       - SQLite (EMAILS_DATABASE_URL unset): the SQLite
+                       - SQLite (HASNA_EMAILS_DATABASE_URL unset): the SQLite
                          dashboard on 127.0.0.1.
   ingest-worker      Run the SES-inbound ingestion worker: long-poll the SQS
                      queue (EMAILS_INGEST_QUEUE_URL), fetch each archived raw
@@ -72,15 +71,11 @@ Options:
   process.exit(0);
 }
 
-// EVERY command fails closed on a removed hosted/legacy variable, ahead of dispatch.
-// This is deliberately eager while the storage resolution below is lazy: the legacy
-// variables configure a runtime that no longer exists, so honouring one for a worker
-// while refusing it for the service would be a silent difference between two entry
-// points of the same binary. The STORE, by contrast, is resolved only by the branches
-// that actually open one — the workers and one-shot commands validate their own
-// PostgreSQL, signing and AWS requirements after dispatch, and must be able to report a
-// bad flag without a database being configured at all.
-assertNoLegacyHostedEnvironment();
+// The STORE is resolved only by the branches that actually open one — the workers and
+// one-shot commands validate their own PostgreSQL, signing and AWS requirements after
+// dispatch, and must be able to report a bad flag without a database being configured
+// at all. Legacy selector variables are gone: nothing in this entrypoint reads one,
+// and a leftover value neither selects a store nor stops startup.
 
 function repeated(flag: string): string[] {
   const values: string[] = [];

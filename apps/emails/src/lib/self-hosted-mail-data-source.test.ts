@@ -5,7 +5,7 @@ import {
   resolveSelfHostedMailDataSource,
 } from "./self-hosted-mail-data-source.js";
 import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
-import { EMAILS_SELF_HOSTED_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "./client-env.js";
+import { HASNA_EMAILS_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "./client-env.js";
 import { resetMailDataSource, resolveMailDataSource } from "./mail-data-source.js";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,10 +40,8 @@ const LEGACY_ENV_KEYS = [
 ] as const;
 
 function clearModeEnv(): void {
-  delete process.env["EMAILS_MODE"];
-  delete process.env["HASNA_EMAILS_MODE"];
-  delete process.env["EMAILS_SELF_HOSTED_URL"];
-  delete process.env["EMAILS_SELF_HOSTED_API_KEY"];
+  delete process.env["HASNA_EMAILS_API_URL"];
+  delete process.env["HASNA_EMAILS_API_KEY"];
   for (const key of LEGACY_ENV_KEYS) delete process.env[key];
 }
 
@@ -1793,7 +1791,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
 
     const sources = await ds.listMailboxSources();
     expect(sources[0]).toMatchObject({
-      id: "self_hosted",
+      id: "self-hosted",
       total: 2,
       counts: { inbox: 1, archived: 1, sent: 1 },
     });
@@ -2020,7 +2018,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     const ds = new SelfHostedMailDataSource({ baseUrl: "https://emails.example/v1", apiKey: "k", fetchImpl: serve });
     await expect(ds.send({
       to: "x@example.com", from: "me@example.com", subject: "s", body: "b", providerId: "some-provider-id",
-    })).rejects.toThrow(/--provider is not supported in self_hosted mode/);
+    })).rejects.toThrow(/--provider is not supported when the API client is configured/);
     expect(called).toBe(0);
   });
 
@@ -2399,7 +2397,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
       apiKey: "k",
       credentials: [
         { setting: EMAILS_SESSION_TOKEN_ENV, value: "session-token-placeholder" },
-        { setting: EMAILS_SELF_HOSTED_API_KEY_ENV, value: "api-key-placeholder" },
+        { setting: HASNA_EMAILS_API_KEY_ENV, value: "api-key-placeholder" },
       ],
       fetchImpl,
     });
@@ -2428,7 +2426,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
       apiKey: "k",
       credentials: [
         { setting: EMAILS_SESSION_TOKEN_ENV, value: "session-token-placeholder" },
-        { setting: EMAILS_SELF_HOSTED_API_KEY_ENV, value: "api-key-placeholder" },
+        { setting: HASNA_EMAILS_API_KEY_ENV, value: "api-key-placeholder" },
       ],
       fetchImpl,
     });
@@ -2440,20 +2438,18 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
 });
 
 describe("resolveMailDataSource — self-hosted seam selection", () => {
-  it("selects self_hosted only from explicit mode, URL, and key", () => {
-    process.env["EMAILS_MODE"] = "self_hosted";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "k";
+  it("selects the API data source from URL and credential", () => {
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
+    process.env["HASNA_EMAILS_API_KEY"] = "k";
     resetSelfHostedConfigCache();
     resetMailDataSource();
     const ds = resolveMailDataSource();
     expect(ds.constructor.name).toBe("SelfHostedMailDataSource");
-    expect(ds.mode).toBe("self_hosted");
+    expect(ds.backend).toBe("api");
     expect(resolveSelfHostedMailDataSource()).toBeInstanceOf(SelfHostedMailDataSource);
   });
 
-  it("does not construct a self-hosted client while local mode is selected", () => {
-    process.env["EMAILS_MODE"] = "local";
+  it("does not construct the API data source without the API configuration", () => {
     resetSelfHostedConfigCache();
     resetMailDataSource();
     expect(resolveSelfHostedMailDataSource()).toBeNull();
@@ -2589,7 +2585,7 @@ describe("SelfHostedMailDataSource — source scoping", () => {
     expect((await ds.mailboxCounts({ source: { sourceId: source!.id } })).inbox).toBe(2);
   });
 
-  it("accepts local mode's `all` source id as the same whole-store scope", async () => {
+  it("accepts local SQLite client's `all` source id as the same whole-store scope", async () => {
     const { ds } = make([v1("2"), v1("5")]);
     expect((await ds.listMailbox("inbox", { source: { sourceId: "all" } })).map((m) => m.id)).toEqual(["5", "2"]);
   });
@@ -2677,7 +2673,7 @@ describe("SelfHostedMailDataSource — source scoping", () => {
 
   it("honors the --search and --limit it is handed on listMailboxSources", async () => {
     const { ds } = make([v1("2")]);
-    expect((await ds.listMailboxSources({ search: "self-hosted" })).map((s) => s.id)).toEqual(["self_hosted"]);
+    expect((await ds.listMailboxSources({ search: "self-hosted" })).map((s) => s.id)).toEqual(["self-hosted"]);
     expect(await ds.listMailboxSources({ search: "s3-bucket-that-does-not-exist" })).toEqual([]);
     expect(await ds.listMailboxSources({ limit: 0 })).toHaveLength(1);
   });

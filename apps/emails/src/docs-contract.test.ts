@@ -74,7 +74,7 @@ describe("agent documentation contract", () => {
 
     expect(auth).toContain("EMAILS_SESSION_TOKEN");
     expect(auth).toContain("EMAILS_IDP_TOKEN");
-    expect(auth).toContain("EMAILS_SELF_HOSTED_API_KEY");
+    expect(auth).toContain("HASNA_EMAILS_API_KEY");
     expect(auth).toContain("0021_idp_principal_tenants");
 
     expect(provisioning).toContain("the stateful provisioning workflow is not implemented");

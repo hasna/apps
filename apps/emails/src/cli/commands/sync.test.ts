@@ -5,22 +5,19 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { Command } from "commander";
 import { registerSyncCommands } from "./sync.js";
-import { registerSyncCommands as registerLocalSyncCommands } from "./sync.local.js";
-import { registerSyncCommands as registerRemoteSyncCommands } from "./sync.remote.js";
+import { registerSyncCommands as registerSqliteSyncCommands } from "./sync.sqlite.js";
+import { registerSyncCommands as registerApiSyncCommands } from "./sync.api.js";
 
 const MODE_ENV_KEYS = [
-  "EMAILS_MODE",
-  "HASNA_EMAILS_MODE",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
 ] as const;
 
 let originalModeEnv: Partial<Record<typeof MODE_ENV_KEYS[number], string>> = {};
 
 function enableSelfHostedMode() {
-  process.env["EMAILS_MODE"] = "self_hosted";
-  process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example.test";
-  process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-api-key";
+  process.env["HASNA_EMAILS_API_URL"] = "https://emails.example.test";
+  process.env["HASNA_EMAILS_API_KEY"] = "test-api-key";
 }
 
 async function runSyncCommandExpectingExit(args: string[]): Promise<string> {
@@ -93,13 +90,10 @@ describe("sync JSON output", () => {
   it("prints one parseable stats document when -j follows the command", async () => {
     const env = {
       ...process.env,
-      [MODE_ENV_KEYS[0]]: "local",
       EMAILS_DB_PATH: ":memory:",
       NO_COLOR: "1",
     };
-    delete env[MODE_ENV_KEYS[1]];
-    delete env[MODE_ENV_KEYS[2]];
-    delete env.EMAILS_SELF_HOSTED_API_KEY;
+    for (const key of MODE_ENV_KEYS) delete env[key];
 
     const child = Bun.spawn({
       cmd: [process.execPath, "run", "src/cli/index.tsx", "stats", "-j"],
@@ -144,8 +138,8 @@ describe("sync JSON output", () => {
 
 describe("sync JSON option registration", () => {
   for (const [mode, register] of [
-    ["local", registerLocalSyncCommands],
-    ["self_hosted", registerRemoteSyncCommands],
+    ["sqlite", registerSqliteSyncCommands],
+    ["api", registerApiSyncCommands],
   ] as const) {
     it(`registers the exact JSON option on every ${mode} command`, () => {
       const program = new Command();

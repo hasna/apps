@@ -1230,11 +1230,11 @@ const healthResponseSchema = {
   properties: {
     status: { type: "string", enum: ["ok"] },
     version: { type: "string" },
-    mode: { type: "string", enum: ["self_hosted"] },
+    backend: { type: "string", enum: ["sqlite", "postgresql"] },
     name: { type: "string", enum: ["emails"] },
     db: databaseProbeSchema,
   },
-  required: ["status", "version", "mode", "name", "db"],
+  required: ["status", "version", "backend", "name", "db"],
 } as const;
 
 function readyResponseSchema(status: "ready" | "not_ready", ok: true | false) {
@@ -1243,7 +1243,7 @@ function readyResponseSchema(status: "ready" | "not_ready", ok: true | false) {
     properties: {
       status: { type: "string", enum: [status] },
       version: { type: "string" },
-      mode: { type: "string", enum: ["self_hosted"] },
+      backend: { type: "string", enum: ["sqlite", "postgresql"] },
       db: {
         type: "object",
         properties: {
@@ -1258,7 +1258,7 @@ function readyResponseSchema(status: "ready" | "not_ready", ok: true | false) {
     required: [
       "status",
       "version",
-      "mode",
+      "backend",
       "db",
       "pendingMigrations",
       "migrationIssues",
@@ -1271,10 +1271,10 @@ const versionResponseSchema = {
   properties: {
     status: { type: "string", enum: ["ok"] },
     version: { type: "string" },
-    mode: { type: "string", enum: ["self_hosted"] },
+    backend: { type: "string", enum: ["sqlite", "postgresql"] },
     name: { type: "string", enum: ["emails"] },
   },
-  required: ["status", "version", "mode", "name"],
+  required: ["status", "version", "backend", "name"],
 } as const;
 
 const openApiDocumentResponseSchema = {

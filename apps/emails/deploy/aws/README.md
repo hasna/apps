@@ -27,7 +27,7 @@ bun src/server/index.ts
 bun src/server/index.ts ingest-worker
 bun src/cli/index.tsx db migrate
 
-EMAILS_DATABASE_URL=<Secrets Manager injection; its presence is what selects
+HASNA_EMAILS_DATABASE_URL=<Secrets Manager injection; its presence is what selects
                      the operator /v1 API over the local SQLite dashboard>
 EMAILS_API_SIGNING_KEY=<Secrets Manager injection>
 EMAILS_SEND_PROVIDER=ses

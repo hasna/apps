@@ -27,9 +27,9 @@
 // `gaps` — see src/lib/status-availability.ts for why `null` and not `0`/`[]`.
 
 import { resolveMailDataSource } from "./mail-data-source.js";
-import { getEmailsMode, resolveEmailsMode, type EmailsMode } from "./mode.js";
+import { isApiClientConfigured } from "../store-resolution.js";
 import { collectStatusFacts } from "./status-facts.js";
-import { isCommandAvailableInMode } from "./status-commands.js";
+import { isCommandAvailableForBackend } from "./status-commands.js";
 import {
   renderStatusCount,
   renderStatusUnavailable,
@@ -83,11 +83,11 @@ function isZero(value: number | null): boolean {
  */
 function buildNextActions(
   status: Omit<EmailSystemStatus, "next_actions">,
-  mode: EmailsMode,
+  backend: "sqlite" | "api",
 ): NextAction[] {
   const candidates: NextAction[] = [];
   const push = (command: string, reason: string): void => {
-    if (!isCommandAvailableInMode(command, mode)) return;
+    if (!isCommandAvailableForBackend(command, backend)) return;
     if (candidates.some((action) => action.command === command)) return;
     candidates.push({ command, reason });
   };
@@ -138,7 +138,7 @@ function buildNextActions(
 }
 
 async function buildSystemStatus(): Promise<EmailSystemStatus> {
-  const mode = resolveEmailsMode();
+  const backend: "sqlite" | "api" = isApiClientConfigured() ? "api" : "sqlite";
   const ds = resolveMailDataSource();
   const [counts, mailboxes, mailboxSources] = await Promise.all([
     ds.mailboxCounts(),
@@ -163,12 +163,7 @@ async function buildSystemStatus(): Promise<EmailSystemStatus> {
   // computed from the assembled payload, never initialised to an empty default.
   const blocks = {
     generated_at: new Date().toISOString(),
-    mode: {
-      current: mode.mode,
-      label: mode.label,
-      source: mode.source,
-      warning: mode.warning,
-    },
+    backend,
     database: facts.database,
     providers: facts.providers,
     domains: facts.domains,
@@ -236,14 +231,11 @@ async function buildSystemStatus(): Promise<EmailSystemStatus> {
     ...blocks,
     // A bound still degrades: the caller asked for a total and got a floor.
     //
-    // So does a mode note. When one is present the process is reading a DIFFERENT
-    // DATABASE than the operator asked for, so every count below is about the wrong
-    // system — a worse condition than any single unmeasured field, not a footnote to
-    // them. Without this the JSON payload reads `degraded: false, limited: false,
-    // total: 0, unread: 0`: immaculate, and wrong. The human renderers print the note,
-    // but agents read this object, and an agent sent to investigate a blocked message
-    // is exactly who concluded the mailbox was empty.
-    degraded: failures.length > 0 || incomplete.length > 0 || mode.warning !== null,
+    // (The mode-shadowing note that used to force `degraded: true` here is gone
+    // with the selector variable: a pointer-configured client loads its
+    // client environment unconditionally, so the wrong-database read it warned
+    // about cannot be produced by a shadowed selector any more.)
+    degraded: failures.length > 0 || incomplete.length > 0,
     limited: limitations.length > 0,
     unavailable,
     limitations,
@@ -252,7 +244,7 @@ async function buildSystemStatus(): Promise<EmailSystemStatus> {
     gaps: Object.fromEntries(Object.entries(gaps).sort(([a], [b]) => a.localeCompare(b))),
   };
 
-  return { ...partial, next_actions: buildNextActions(partial, mode.mode) };
+  return { ...partial, next_actions: buildNextActions(partial, backend) };
 }
 
 export async function getEmailSystemStatus(): Promise<EmailSystemStatus> {
@@ -261,7 +253,7 @@ export async function getEmailSystemStatus(): Promise<EmailSystemStatus> {
 
 /**
  * Runtime status for `emails status`, `emails agent context` and the MCP status
- * resources/tools. Mode-aware: local reads SQLite, self_hosted reads `/v1`.
+ * resources/tools. Mode-aware: local reads SQLite, self-hosted reads `/v1`.
  */
 export async function getEmailSystemStatusForRuntime(): Promise<EmailSystemStatus> {
   return buildSystemStatus();
@@ -289,8 +281,7 @@ function countsLine(
 export function formatEmailSystemStatus(status: EmailSystemStatus): string {
   const lines: string[] = [];
   lines.push("Email system status");
-  lines.push(`  Mode:       ${status.mode.current} (${status.mode.label})`);
-  if (status.mode.warning) lines.push(`  Mode note:  ${status.mode.warning}`);
+  lines.push(`  Backend:    ${status.backend}`);
 
   if (status.providers.availability.available) {
     const active = renderStatusCount(status.providers.active, status.providers.availability);
@@ -379,7 +370,7 @@ export function formatEmailSystemStatus(status: EmailSystemStatus): string {
 export function statusGapSignals(status: EmailSystemStatus): {
   degraded: boolean;
   limited: boolean;
-  mode_warning: string | null;
+  backend: "sqlite" | "api";
   unavailable: string[];
   failures: string[];
   limitations: string[];
@@ -390,13 +381,10 @@ export function statusGapSignals(status: EmailSystemStatus): {
     degraded: status.degraded,
     limited: status.limited,
     // The single most important thing a subset consumer can be told, and the one the
-    // subsets used to drop: WHICH SYSTEM these numbers describe. Every `--json` and
-    // MCP view projects a subset of the full status, and none of them carried `mode`,
-    // so a shadowed client-env pointer — the process reading an empty local database
-    // while the operator believes they are looking at the deployment — was invisible
-    // on every machine-readable surface. MCP has no human arm at all, so for an agent
-    // the note did not exist. Adding a signal here reaches every view.
-    mode_warning: status.mode.warning,
+    // subsets used to drop: WHICH SYSTEM these numbers describe. `backend` is carried
+    // on every `--json` and MCP view so a machine-readable surface always says which
+    // store the counts describe.
+    backend: status.backend,
     unavailable: status.unavailable,
     failures: status.failures,
     limitations: status.limitations,
@@ -432,7 +420,7 @@ export function formatStatusDataGaps(status: EmailSystemStatus): string[] {
     }
   }
   if (status.limitations.length > 0) {
-    lines.push(`Data gaps (${status.limitations.length}) — not answerable in ${status.mode.current} mode:`);
+    lines.push(`Data gaps (${status.limitations.length}) — not answerable for the ${status.backend} client:`);
     for (const path of status.limitations) {
       lines.push(`  ${path} — ${status.gaps[path]?.reason ?? pathAvailability(status, path)?.reason ?? "unavailable"}`);
     }
@@ -527,7 +515,7 @@ export function sampleAgentContext(
   return {
     status: {
       generated_at: status.generated_at,
-      mode: status.mode,
+      backend: status.backend,
       degraded: status.degraded,
       unavailable: status.unavailable,
       incomplete: status.incomplete,
@@ -582,8 +570,8 @@ function buildAgentContext(status: EmailSystemStatus): Record<string, unknown> {
   // src/cli/commands/address.ts serverOnly()s in both modes — a workflow whose
   // second step cannot be run is worse than no workflow.
   const runnable = (steps: string[]): string[] => {
-    const mode = getEmailsMode();
-    return steps.filter((command) => isCommandAvailableInMode(command, mode));
+    const backend = isApiClientConfigured() ? "api" : "sqlite";
+    return steps.filter((command) => isCommandAvailableForBackend(command, backend));
   };
   return {
     status,

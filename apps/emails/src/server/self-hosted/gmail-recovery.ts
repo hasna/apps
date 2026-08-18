@@ -611,8 +611,8 @@ export async function runGmailRecoveryReconcile(
   options: GmailRecoveryReconcileCommandOptions,
   emit: (line: string) => void = (line) => console.log(line),
 ): Promise<GmailRecoveryReconcileResult> {
-  if (!process.env["EMAILS_DATABASE_URL"]) {
-    throw new Error("gmail recovery reconcile requires EMAILS_DATABASE_URL");
+  if (!process.env["HASNA_EMAILS_DATABASE_URL"]) {
+    throw new Error("gmail recovery reconcile requires HASNA_EMAILS_DATABASE_URL");
   }
   const { client } = getSelfHostedPool();
   try {
@@ -650,8 +650,8 @@ export async function runGmailRecoveryReplay(
   options: GmailRecoveryReplayCommandOptions,
   emit: (line: string) => void = (line) => console.log(line),
 ): Promise<GmailRecoveryReplayReport> {
-  if (!process.env["EMAILS_DATABASE_URL"]) {
-    throw new Error("gmail recovery replay requires EMAILS_DATABASE_URL");
+  if (!process.env["HASNA_EMAILS_DATABASE_URL"]) {
+    throw new Error("gmail recovery replay requires HASNA_EMAILS_DATABASE_URL");
   }
   const config = resolveGmailRecoveryConfig(process.env);
   if (!config) {

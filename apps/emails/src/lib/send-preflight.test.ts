@@ -127,7 +127,7 @@ describe("attachment caps are evaluated, not merely printed", () => {
       .toContain("file_count");
   });
 
-  it("applies the LOCAL caps in local mode, not the server's", () => {
+  it("applies the LOCAL caps for the local SQLite client, not the server's", () => {
     // A file over the self-hosted per-file cap but inside the local one is
     // refused self-hosted and fine locally. Predicting the wrong mode's limits is
     // the same class of defect as not predicting at all.
@@ -149,7 +149,7 @@ describe("attachment caps are evaluated, not merely printed", () => {
 });
 
 describe("the preview states what it did NOT check", () => {
-  it("names the server-side state it cannot read, in self-hosted mode", () => {
+  it("names the server-side state it cannot read, when the API client is configured", () => {
     const note = describeUncheckedSendPolicy(true);
     for (const unchecked of ["send-key", "quota", "warming", "domain readiness", "provider acceptance"]) {
       expect(note.toLowerCase()).toContain(unchecked.toLowerCase());
@@ -158,7 +158,7 @@ describe("the preview states what it did NOT check", () => {
     expect(note).toContain("does not guarantee delivery");
   });
 
-  it("says local mode has no outbound policy gate at all", () => {
+  it("says local SQLite client has no outbound policy gate at all", () => {
     expect(describeUncheckedSendPolicy(false)).toContain("no outbound policy gate");
   });
 });

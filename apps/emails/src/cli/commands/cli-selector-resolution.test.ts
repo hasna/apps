@@ -18,7 +18,7 @@
 // A CLI that prints a handle must accept that handle back.
 //
 // Subprocess harness (temp HOME/SQLite, env scrubbed BY PREFIX — enumerating
-// this package's env keys here would add references the mode-axis ratchet
+// this package's env keys here would add references the selector-removal guard
 // counts).
 
 import { afterAll, describe, expect, it } from "bun:test";

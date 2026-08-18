@@ -93,7 +93,7 @@ export {
 //    back. A local installation still records a send through `createSentEmailLedger`.
 //  * THREE FIELDS ON `Email` ARE NULLABLE now — `provider_id`, `bcc_addresses` and `tags` —
 //    because no message projection on the seam publishes them, and `null` there means "this
-//    store does not record it" rather than the `"self_hosted"` / `[]` / `{}` the deleted HTTP
+//    store does not record it" rather than the `"self-hosted"` / `[]` / `{}` the deleted HTTP
 //    arm invented. A consumer that renders `bcc_addresses.length` or spreads `tags` breaks at
 //    compile time, which is the point. `listEmails` also REFUSES a `provider_id` filter for
 //    the same reason, rather than ignoring it and returning another provider's mail.
@@ -281,7 +281,7 @@ export type { SendKey, SendKeySummary } from "./db/send-keys.js";
 //    `listPendingForwarding: (limit, opts) => local.listPendingForwarding(limit, undefined, opts)`.
 //    That shim served every non-self-hosted caller that did not pass a handle, and the barrel's
 //    `as typeof remote` cast meant the PUBLISHED TYPE was the remote arm's signature, not the
-//    local arm's. Verifying this block against `forwarding.local.ts` instead of that barrel is
+//    local arm's. Verifying this block against `forwarding.sqlite.ts` instead of that barrel is
 //    how the break was missed the first time.
 //
 // All of it needs a MAJOR version at release. The version is deliberately not bumped in the

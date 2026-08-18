@@ -11,26 +11,17 @@ import { runDomainTool } from "./tools/domains-impl.js";
 const FIXTURE_BEARER = "mcp-domain-address-test-key";
 
 const ENV_KEYS = [
-  "EMAILS_MODE",
-  "HASNA_EMAILS_MODE",
   "EMAILS_DB_PATH",
   "HASNA_EMAILS_DB_PATH",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "EMAILS_CLIENT_ENV_SECRET",
-  "MAILERY_MODE",
-  "HASNA_MAILERY_MODE",
-  "MAILERY_STORAGE_MODE",
-  "HASNA_MAILERY_STORAGE_MODE",
-  "EMAILS_STORAGE_MODE",
-  "HASNA_EMAILS_STORAGE_MODE",
+  "EMAILS_SESSION_TOKEN",
+  "EMAILS_IDP_TOKEN",
   "MAILERY_API_URL",
   "MAILERY_API_KEY",
-  "MAILERY_CLOUD_API_URL",
-  "MAILERY_CLOUD_TOKEN",
   "HASNA_MAILERY_API_URL",
   "HASNA_MAILERY_API_KEY",
-  "HASNA_MAILERY_ENV_FILE",
 ] as const;
 
 let ORIGINAL_HOME: string | undefined;
@@ -182,9 +173,8 @@ beforeEach(async () => {
   resetEnv();
   tempHome = mkdtempSync(join(tmpdir(), "emails-mcp-domain-address-self-hosted-"));
   process.env["HOME"] = tempHome;
-  process.env["EMAILS_MODE"] = "self_hosted";
-  process.env["EMAILS_SELF_HOSTED_URL"] = await startApi();
-  process.env["EMAILS_SELF_HOSTED_API_KEY"] = FIXTURE_BEARER;
+  process.env["HASNA_EMAILS_API_URL"] = await startApi();
+  process.env["HASNA_EMAILS_API_KEY"] = FIXTURE_BEARER;
   resetSelfHostedConfigCache();
 });
 
@@ -199,65 +189,65 @@ afterEach(() => {
   tempHome = null;
 });
 
-describe("MCP domain/address self_hosted API-only guards", () => {
+describe("MCP domain/address self-hosted API-only guards", () => {
   it("routes domain and address listing tools through the API without creating local SQLite", async () => {
     const domainList = parseResult<{
       domains: Array<{ id: string; domain: string }>;
-      mode: string;
+      backend: string;
       source: string;
     }>(await runDomainTool("list_domains", { provider_id: "ses" }));
     const domains = parseResult<{
       domains: Array<{ id: string; domain: string }>;
-      mode: string;
+      backend: string;
       source: string;
     }>(await runDomainTool("list_usable_domains", { send: true }));
     const addresses = parseResult<{
       addresses: Array<{ id: string; email: string }>;
-      mode: string;
+      backend: string;
       source: string;
     }>(await runDomainTool("list_addresses", {}));
     const usableFrom = parseResult<{
       addresses: Array<{ id: string; email: string; readiness: { send_ready: boolean } }>;
-      mode: string;
+      backend: string;
       source: string;
     }>(await runDomainTool("list_usable_from_addresses", { send: true }));
     const verified = parseResult<{
       email: string;
       verified: boolean;
-      mode: string;
+      backend: string;
       source: string;
     }>(await runDomainTool("verify_address", { address_id: "addr-ready" }));
 
     expect(domainList).toMatchObject({
-      mode: "self_hosted",
-      source: "self_hosted_api",
+      backend: "api",
+      source: "self-hosted_api",
     });
     expect(domainList.domains.map((domain) => domain.domain)).toEqual(["example.com", "pending.example.com"]);
     expect(domains).toMatchObject({
-      mode: "self_hosted",
-      source: "self_hosted_api",
+      backend: "api",
+      source: "self-hosted_api",
       domains: [{ id: "domain-ready-1", domain: "example.com" }],
     });
     expect(addresses).toMatchObject({
-      mode: "self_hosted",
-      source: "self_hosted_api",
+      backend: "api",
+      source: "self-hosted_api",
     });
     expect(addresses.addresses.map((address) => address.email)).toEqual(["ops@example.com", "pending@example.com"]);
     expect(usableFrom).toMatchObject({
-      mode: "self_hosted",
-      source: "self_hosted_api",
+      backend: "api",
+      source: "self-hosted_api",
     });
     expect(usableFrom.addresses.map((address) => address.email)).toEqual(["ops@example.com", "pending@example.com"]);
     expect(usableFrom.addresses.every((address) => address.readiness.send_ready)).toBe(true);
     expect(verified).toMatchObject({
       email: "ops@example.com",
       verified: true,
-      mode: "self_hosted",
-      source: "self_hosted_api",
+      backend: "api",
+      source: "self-hosted_api",
     });
   });
 
-  it("answers the credential-free no-provider DNS path in self_hosted mode", async () => {
+  it("answers the credential-free no-provider DNS path in self-hosted mode", async () => {
     // Ported half of `get_dns_records`: with no provider resolved the tool is pure
     // local computation (the generic SPF/DMARC pair from src/lib/dns.ts) and needs
     // no credentials — exactly like its CLI twin `emails domain dns`, which already
@@ -268,10 +258,10 @@ describe("MCP domain/address self_hosted API-only guards", () => {
     const body = result.content[0]?.text ?? "";
     expect(body).toContain("v=spf1");
     expect(body).toContain("DMARC");
-    expect(body).not.toContain("self_hosted API-only mode");
+    expect(body).not.toContain("is disabled for the API client");
   });
 
-  it("refuses the provider-scoped DNS path in self_hosted mode with the recorded credential reason", async () => {
+  it("refuses the provider-scoped DNS path in self-hosted mode with the recorded credential reason", async () => {
     // Strong-reason record, not a port: a provider-backed lookup needs provider API
     // credentials. On the hosted path the /v1 providers resource carries no
     // credential columns (the server owns them) and the /v1 service exposes no
@@ -281,7 +271,7 @@ describe("MCP domain/address self_hosted API-only guards", () => {
     const result = await runDomainTool("get_dns_records", { domain: "example.com" });
     expect(result.isError).toBe(true);
     const body = result.content[0]?.text ?? "";
-    expect(body).toContain("self_hosted API-only mode");
+    expect(body).toContain("is disabled for the API client");
     expect(body).toContain("credentials");
     expect(body).toContain("emails domain dns");
   });
@@ -300,23 +290,23 @@ describe("MCP domain/address self_hosted API-only guards", () => {
     // operator's shell.
     const result = await runDomainTool("verify_domain", { domain: "example.com" });
     expect(result.isError).toBe(true);
-    expect(result.content[0]?.text ?? "").toContain("self_hosted API-only mode");
+    expect(result.content[0]?.text ?? "").toContain("is disabled for the API client");
   });
 
   it("no longer refuses the repository-backed domain/address tools — they reach the wire", async () => {
     // Each of these has a `/v1` route, a complete client arm, and a working CLI twin;
     // the guard was the only thing refusing.
     //
-    // A bare `not.toContain("self_hosted API-only mode")` would be near-vacuous here:
+    // A bare `not.toContain("is disabled for the API client")` would be near-vacuous here:
     // it stays green if a tool is replaced by `throw new Error("nope")`, and — worse —
     // if a guard is re-added using the OTHER refusal wording this codebase already
-    // ships ("is API-backed in self_hosted mode and requires ..."). So each tool must
+    // ships ("is API-backed in self-hosted mode and requires ..."). So each tool must
     // additionally prove it got as far as the HTTP transport: it either succeeds, or
     // fails with an error naming the wire (the `/v1` path or an HTTP status). This
     // fixture only serves GET /v1/domains and GET /v1/addresses, so most calls fail
     // there; src/mcp/self-hosted-unguarded-tools.test.ts drives them to completion
     // against a full stub.
-    const REFUSAL_WORDINGS = ["self_hosted API-only mode", "is API-backed in self_hosted mode", "not available in the self-hosted client"];
+    const REFUSAL_WORDINGS = ["is disabled for the API client", "is API-backed in self-hosted mode", "not available in the self-hosted client"];
     // The discriminating property is "reached the HTTP transport", NOT "succeeded".
     // Deliberately not asserting success for any of them: this suite shares a process
     // with others that mutate the self-hosted env, and under that pollution the
@@ -395,6 +385,6 @@ describe("MCP domain/address self_hosted API-only guards", () => {
     // Negative control for the loop: the one tool that KEEPS its guard must trip
     // the very check the loop applies, or the loop is asserting over nothing.
     const body = (await runDomainTool("verify_domain", { domain: "example.com" })).content[0]?.text ?? "";
-    expect(body).toContain("self_hosted API-only mode");
+    expect(body).toContain("is disabled for the API client");
   });
 });

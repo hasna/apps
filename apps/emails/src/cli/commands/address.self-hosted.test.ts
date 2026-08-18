@@ -1,7 +1,7 @@
-// Self-hosted (self_hosted) routing for the address CLI. With the client pointed
+// Self-hosted (self-hosted) routing for the address CLI. With the client pointed
 // at the operator's `/v1` API, `emails addresses` must READ from that HTTP API
 // (there is no local SQLite island anymore). This locks in the mission-alignment
-// fix where `addresses` used to show empty LOCAL state in self-hosted mode.
+// fix where `addresses` used to show empty LOCAL state when the API client is configured.
 //
 // The self-hosted store performs its HTTP call with a SYNCHRONOUS `curl`
 // (spawnSync), which blocks Bun's event loop — so the stand-in for the operator

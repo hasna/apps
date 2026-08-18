@@ -7,7 +7,7 @@ import {
   getAttachmentDecodedSize,
   MAX_ATTACHMENT_COUNT,
   MAX_ATTACHMENT_SIZE_BYTES,
-} from "./send.remote.js";
+} from "./send.api.js";
 import type { Provider, SendEmailOptions } from "../types/index.js";
 
 // In the self-hosted client, outbound sending goes through the authenticated /v1

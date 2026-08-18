@@ -6,7 +6,7 @@ import { createProvider } from "../db/providers.js";
 import { getAddressOwnershipDetail, listEnrichedAddresses, resolveAddressRef } from "./address-ownership.js";
 
 // Address ownership enrichment reads addresses/owners/providers via the /v1 API.
-// NOTE on the self-hosted model: the self-hosted address record does NOT persist
+// NOTE on the API-client configurationl: the self-hosted address record does NOT persist
 // provider_id (addresses have no server-side provider association), so
 // provider_name enrichment and provider-scoped listing are no longer meaningful
 // here — the previous local-SQLite assertions for those validated removed

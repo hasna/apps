@@ -1,5 +1,6 @@
-// Self-hosted HTTP storage bridge. It is selected only by an explicit
-// EMAILS_MODE=self_hosted setting plus an operator-supplied URL and credential.
+// Self-hosted HTTP storage bridge. It is selected by the client storage
+// contract alone — an API origin (HASNA_EMAILS_API_URL) plus a credential. The
+// selector variable that used to select it is gone and never read.
 //
 //   list   -> GET    /v1/<resource>            -> { <resource>: [...] }
 //   get    -> GET    /v1/<resource>/<id>       -> { <singular>: <entity> } | 404
@@ -18,15 +19,15 @@
 import { spawnSync } from "node:child_process";
 import {
   CLIENT_ENV_CREDENTIAL_SELECTION_KEYS,
+  EMAILS_API_URL_ENV,
   EMAILS_IDP_TOKEN_ENV,
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
+  HASNA_EMAILS_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   loadEmailsClientEnvSecret,
   resolveEmailsClientCredentialCandidates,
   type EmailsClientCredentialCandidate,
   type EmailsClientCredentialSetting,
 } from "../lib/client-env.js";
-import { getEmailsMode } from "../lib/mode.js";
 import {
   parseSelfHostedErrorJson,
   parseSelfHostedSuccessJson,
@@ -34,7 +35,6 @@ import {
   SelfHostedResponseSizeError,
   validateSelfHostedSdkSuccessResponse,
 } from "../lib/self-hosted-wire.js";
-import { redactStructuredDiagnosticValue } from "../lib/redaction.js";
 
 const APP = "emails";
 
@@ -70,7 +70,7 @@ function toV1BaseUrl(apiUrl: string): string {
   }
   const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "::1";
   if (url.protocol !== "https:" && !loopback) {
-    throw new Error("EMAILS_SELF_HOSTED_URL must use https except for a loopback development URL.");
+    throw new Error(`${EMAILS_API_URL_ENV} must use https except for a loopback development URL.`);
   }
   let path = url.pathname.replace(/\/+$/, "");
   if (path.endsWith("/v1")) path = path.slice(0, -"/v1".length);
@@ -85,35 +85,27 @@ let _cachedConfig: SelfHostedConfig | null = null;
 
 const CONFIG_HELP =
   "Configure the client via EMAILS_CLIENT_ENV_SECRET (an encrypted client env file), " +
-  "or set EMAILS_MODE=self_hosted with EMAILS_SELF_HOSTED_URL and EMAILS_SELF_HOSTED_API_KEY.";
+  `or set ${EMAILS_API_URL_ENV} with ${CLIENT_ENV_CREDENTIAL_SELECTION_KEYS.join(" or ")}.`;
 
 /**
- * Resolve strict self-hosted client configuration. This function is called only
- * after self_hosted has been selected; local mode never loads a client-env
- * secret and never needs an HTTP endpoint.
+ * Resolve strict self-hosted client configuration. The client storage contract
+ * selects the API client — this function is only called once that selection has
+ * been made, and it validates that the configured API origin and credential are
+ * complete. A configured client-env vault pointer is loaded first (idempotent
+ * per process) so the URL and credential it delivers are visible here.
  */
-export function resolveSelfHostedConfig(
-  env: NodeJS.ProcessEnv = process.env,
-  options: { selectedMode?: "self_hosted" } = {},
-): SelfHostedConfig {
-  let modeRaw = env["EMAILS_MODE"]?.trim() ?? env["HASNA_EMAILS_MODE"]?.trim() ?? options.selectedMode;
-  if (modeRaw === "local") {
-    throw new Error(`${APP}: self-hosted configuration was requested while EMAILS_MODE=local.`);
-  }
-  if (modeRaw === "self_hosted" || env["EMAILS_CLIENT_ENV_SECRET"]?.trim()) {
-    loadEmailsClientEnvSecret(env);
-    modeRaw = env["EMAILS_MODE"]?.trim() ?? env["HASNA_EMAILS_MODE"]?.trim() ?? options.selectedMode ?? modeRaw;
-  }
-  const apiUrl = env["EMAILS_SELF_HOSTED_URL"]?.trim();
+export function resolveSelfHostedConfig(env: NodeJS.ProcessEnv = process.env): SelfHostedConfig {
+  loadEmailsClientEnvSecret(env);
+  const apiUrl = env[EMAILS_API_URL_ENV]?.trim();
   const candidates = resolveEmailsClientCredentialCandidates(env);
   // Credential precedence: an explicit user session first, then the caller's
   // own idp identity token (ADR-0002 — an agent uses ITS identity even when
   // an operator API key is also present in the env), then the operator key.
   // The server maps whichever credential to its tenant; the client never sends one.
-  const signature = `${modeRaw ?? ""}|${apiUrl ?? ""}|${credentialSettingsSignature(candidates)}`;
+  const signature = `${apiUrl ?? ""}|${credentialSettingsSignature(candidates)}`;
   if (signature === _cachedSignature && _cachedConfig) return _cachedConfig;
 
-  const config = computeConfig(modeRaw, apiUrl, candidates);
+  const config = computeConfig(apiUrl, candidates);
   _cachedSignature = signature;
   _cachedConfig = config;
   return config;
@@ -123,31 +115,18 @@ function credentialSettingsSignature(candidates: readonly EmailsClientCredential
   const markers: Record<EmailsClientCredentialSetting, string> = {
     [EMAILS_SESSION_TOKEN_ENV]: "s",
     [EMAILS_IDP_TOKEN_ENV]: "f",
-    [EMAILS_SELF_HOSTED_API_KEY_ENV]: "k",
+    [HASNA_EMAILS_API_KEY_ENV]: "k",
   };
   return candidates.map((candidate) => markers[candidate.setting]).join("");
 }
 
-function assertSupportedMode(modeRaw: string | undefined): void {
-  if (modeRaw !== "self_hosted") {
-    const received = modeRaw
-      ? `received '${redactStructuredDiagnosticValue(modeRaw)}'`
-      : "no explicit mode was selected";
-    throw new Error(
-      `${APP}: self-hosted configuration requires EMAILS_MODE=self_hosted; ${received}. ${CONFIG_HELP}`,
-    );
-  }
-}
-
 function computeConfig(
-  modeRaw: string | undefined,
   apiUrl: string | undefined,
   candidates: readonly EmailsClientCredentialCandidate[],
 ): SelfHostedConfig {
-  assertSupportedMode(modeRaw);
   if (!apiUrl || candidates.length === 0) {
     const missing = [
-      !apiUrl ? "EMAILS_SELF_HOSTED_URL" : null,
+      !apiUrl ? EMAILS_API_URL_ENV : null,
       candidates.length === 0 ? CLIENT_ENV_CREDENTIAL_SELECTION_KEYS.join(", or ") : null,
     ].filter(Boolean).join(" and ");
     throw new Error(
@@ -176,12 +155,11 @@ function resolveSelfHostedBaseUrlLenient(env: NodeJS.ProcessEnv = process.env): 
   } catch (error) {
     loadError = error;
   }
-  assertSupportedMode(env["EMAILS_MODE"]?.trim() ?? env["HASNA_EMAILS_MODE"]?.trim());
-  const apiUrl = env["EMAILS_SELF_HOSTED_URL"]?.trim();
+  const apiUrl = env[EMAILS_API_URL_ENV]?.trim();
   if (!apiUrl) {
     if (loadError) throw loadError;
     throw new Error(
-      `${APP}: the self-hosted client is not configured (EMAILS_SELF_HOSTED_URL missing). ${CONFIG_HELP}`,
+      `${APP}: the self-hosted client is not configured (${EMAILS_API_URL_ENV} missing). ${CONFIG_HELP}`,
     );
   }
   return toV1BaseUrl(apiUrl);
@@ -191,14 +169,6 @@ function resolveSelfHostedBaseUrlLenient(env: NodeJS.ProcessEnv = process.env): 
 export function resetSelfHostedConfigCache(): void {
   _cachedSignature = null;
   _cachedConfig = null;
-}
-
-/**
- * Shared mode predicate for synchronous repositories. It resolves the same
- * canonical process mode as the CLI/MCP data-source seam.
- */
-export function isSelfHostedMode(): boolean {
-  return getEmailsMode() === "self_hosted";
 }
 
 interface CurlResult {
@@ -263,7 +233,7 @@ function curlProcessEnv(): NodeJS.ProcessEnv {
 function credentialsForConfig(config: SelfHostedConfig): readonly EmailsClientCredentialCandidate[] {
   return [
     {
-      setting: config.credentialSetting ?? EMAILS_SELF_HOSTED_API_KEY_ENV,
+      setting: config.credentialSetting ?? HASNA_EMAILS_API_KEY_ENV,
       value: config.credential,
     },
     ...(config.credentialFallbacks ?? []),

@@ -1009,7 +1009,7 @@ describe("ensureDefaultCatchAll / getGlobalCatchAll", () => {
   it("does NOT protect an already-unprotected global catch-all — an inherited defect, pinned deliberately", async () => {
     // BOTH DELETED ARMS BEHAVED THIS WAY, so there is no stronger arm to resolve toward, and
     // changing what a published write does to a column the caller did not name is a product
-    // decision rather than a mode-axis refactor. The harm is real and is why this is pinned
+    // decision rather than a selector-removal refactor. The harm is real and is why this is pinned
     // rather than merely preserved: after either call below reports the row as the protected
     // global catch-all, `removeAlias` will still delete it, and every unmatched recipient's
     // mail stops being caught. The fix is one field on the update patch.
@@ -1428,11 +1428,11 @@ describe("the collapsed module", () => {
     expect(existsSync(join(dbDir, "aliases.ts"))).toBe(true);
     expect(readFileSync(join(dbDir, "aliases.ts"), "utf8").length).toBeGreaterThan(4000);
 
-    expect(existsSync(join(dbDir, "aliases.local.ts"))).toBe(false);
-    expect(existsSync(join(dbDir, "aliases.remote.ts"))).toBe(false);
+    expect(existsSync(join(dbDir, "aliases.sqlite.ts"))).toBe(false);
+    expect(existsSync(join(dbDir, "aliases.api.ts"))).toBe(false);
   });
 
-  it("reads no deployment-mode variable and imports no routing helper", () => {
+  it("reads no selector variable and imports no routing helper", () => {
     const source = readFileSync(join(dbDir, "aliases.ts"), "utf8");
     // Comments in this module discuss the axis by role, so the check is on IMPORTS and CALLS
     // rather than on prose.
@@ -1456,7 +1456,7 @@ describe("the collapsed module", () => {
     const consumers = [
       ["cli", "commands", "alias.ts"],
       ["cli", "commands", "domain.ts"],
-      ["cli", "commands", "inbox.local.ts"],
+      ["cli", "commands", "inbox.sqlite.ts"],
       ["mcp", "tools", "domains-impl.ts"],
       ["lib", "delivery-doctor.ts"],
     ];
