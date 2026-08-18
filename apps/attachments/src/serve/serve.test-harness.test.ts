@@ -41,6 +41,22 @@ export class InMemoryAttachmentsStore {
     row.expiresAt = expiresAt ?? null;
   }
 
+  async markReady(input: {
+    id: string;
+    size: number;
+    contentType?: string;
+    link?: string | null;
+    expiresAt?: number | null;
+  }): Promise<void> {
+    const row = this.attachments.find((a) => a.id === input.id);
+    if (!row) return;
+    row.status = "ready";
+    row.size = input.size;
+    if (input.contentType !== undefined) row.contentType = input.contentType;
+    if (input.link !== undefined) row.link = input.link;
+    if (input.expiresAt !== undefined) row.expiresAt = input.expiresAt;
+  }
+
   async incrementDownloads(id: string): Promise<void> {
     const row = this.attachments.find((a) => a.id === id);
     if (row) row.downloads = (row.downloads ?? 0) + 1;

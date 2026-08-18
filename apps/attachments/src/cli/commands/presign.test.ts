@@ -49,6 +49,47 @@ mock.module("../../core/s3", () => ({
   },
 }));
 
+// Hosted (/v1) path: resolveStore() returns an ApiStore when the cloud env is
+// present, which must route presign through the API transport, not the
+// local-only gate. The mock mirrors the real resolver's env flip.
+const mockV1PresignUpload = mock(
+  async (_filename: string, _contentType: string | undefined, _expiryMs: number) => ({
+    id: "att_cloud1",
+    uploadUrl: "https://bucket.example.com/put?X-Amz-Signature=cloud",
+    contentType: "application/pdf",
+    filename: "report.pdf",
+  }),
+);
+const mockV1PresignComplete = mock(async (_id: string, _opts: object) => ({
+  attachment: {
+    id: "att_cloud1",
+    filename: "report.pdf",
+    s3Key: "attachments/2026-08-18/att_cloud1/report.pdf",
+    bucket: "cloud",
+    size: 4096,
+    contentType: "application/pdf",
+    link: "https://has.na/a/abc",
+    expiresAt: Date.now() + 3600000,
+    createdAt: Date.now(),
+    storageBackend: "s3",
+    status: "ready",
+  },
+  link: "https://has.na/a/abc",
+  size: 4096,
+}));
+
+mock.module("../../core/cloud-v1", () => ({
+  resolveAttachmentsV1: (env: NodeJS.ProcessEnv) => {
+    if (env.HASNA_ATTACHMENTS_API_URL && env.HASNA_ATTACHMENTS_API_KEY) {
+      return {
+        transport: "cloud-http",
+        store: { presignUpload: mockV1PresignUpload, presignComplete: mockV1PresignComplete },
+      };
+    }
+    return { transport: "local", store: null };
+  },
+}));
+
 // Use real config module pointed at a temp file
 let _presignTestConfigDir: string;
 beforeAll(() => {
@@ -320,6 +361,66 @@ describe("presign-upload command", () => {
     } finally {
       capture.restore();
       exitSpy.mockRestore();
+    }
+  });
+});
+// ─── hosted (/v1) backend ──────────────────────────────────────────────────
+
+function withCloudEnv<T>(fn: () => Promise<T>): Promise<T> {
+  const prevUrl = process.env.HASNA_ATTACHMENTS_API_URL;
+  const prevKey = process.env.HASNA_ATTACHMENTS_API_KEY;
+  process.env.HASNA_ATTACHMENTS_API_URL = "https://attachments.example.com";
+  process.env.HASNA_ATTACHMENTS_API_KEY = "k";
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      if (prevUrl === undefined) delete process.env.HASNA_ATTACHMENTS_API_URL;
+      else process.env.HASNA_ATTACHMENTS_API_URL = prevUrl;
+      if (prevKey === undefined) delete process.env.HASNA_ATTACHMENTS_API_KEY;
+      else process.env.HASNA_ATTACHMENTS_API_KEY = prevKey;
+    });
+}
+
+describe("presign commands on the hosted (/v1) backend", () => {
+  it("presign-upload works in self_hosted/cloud mode (no local-only gate)", async () => {
+    mockV1PresignUpload.mockClear();
+    const capture = captureOutput();
+    try {
+      await withCloudEnv(async () => {
+        const program = buildPresignCmd();
+        await program.parseAsync(["presign-upload", "report.pdf", "--expiry", "2h"], { from: "user" });
+      });
+      const out = capture.out.join("");
+      expect(out).toContain("Upload URL: https://bucket.example.com/put?X-Amz-Signature=cloud");
+      expect(out).toContain("ID: att_cloud1");
+      expect(mockV1PresignUpload).toHaveBeenCalledTimes(1);
+      const [filename, contentType, expiryMs] = mockV1PresignUpload.mock.calls[0] as [string, string, number];
+      expect(filename).toBe("report.pdf");
+      // Content-type detection happens inside the store (local mime lookup, or
+      // the /v1 server), not in the CLI — the command passes the raw option.
+      expect(contentType).toBeUndefined();
+      expect(expiryMs).toBe(7200000);
+    } finally {
+      capture.restore();
+    }
+  });
+
+  it("presign-complete works in self_hosted/cloud mode and prints the link", async () => {
+    mockV1PresignComplete.mockClear();
+    const capture = captureOutput();
+    try {
+      await withCloudEnv(async () => {
+        const program = buildPresignCmd();
+        await program.parseAsync(["presign-complete", "att_cloud1"], { from: "user" });
+      });
+      const out = capture.out.join("");
+      expect(out).toContain("Link:     https://has.na/a/abc");
+      expect(mockV1PresignComplete).toHaveBeenCalledTimes(1);
+      const [id, opts] = mockV1PresignComplete.mock.calls[0] as [string, { linkType: string }];
+      expect(id).toBe("att_cloud1");
+      expect(opts.linkType).toBe("presigned");
+    } finally {
+      capture.restore();
     }
   });
 });

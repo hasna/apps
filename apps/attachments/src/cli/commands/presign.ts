@@ -1,19 +1,11 @@
 import { Command } from "commander";
 import { getConfig, parseExpiryStrict } from "../../core/config";
-import { LocalStore, resolveStore } from "../../core/store";
+import { resolveStore } from "../../core/store";
 import { formatExpiry, exitError } from "../utils";
 
-/** Presigned direct-to-S3 upload is a local/S3 capability; self_hosted uses `upload`. */
-function requireLocalStore(): LocalStore {
-  const store = resolveStore();
-  if (!(store instanceof LocalStore)) {
-    store.close();
-    exitError(
-      "presign is only available in local mode (it needs on-box S3 credentials). In self_hosted/cloud mode use `attachments upload`, which streams via the /v1 API.",
-    );
-  }
-  return store;
-}
+// Presigned direct-to-S3 upload works on both backends: the store that holds
+// the S3 credentials mints the PUT URL (the client's own config in local mode,
+// the /v1 server in self_hosted/cloud mode), so the client needs none.
 
 export function presignUploadCommand(): Command {
   const cmd = new Command("presign-upload")
@@ -35,7 +27,7 @@ export function presignUploadCommand(): Command {
         process.exit(1);
       }
 
-      const store = requireLocalStore();
+      const store = resolveStore();
       try {
         const result = await store.presignUpload(filename, options.contentType as string | undefined, expiryMs);
         process.stdout.write(`Upload URL: ${result.uploadUrl} (expires in ${options.expiry})\n`);
@@ -91,7 +83,7 @@ export function presignCompleteCommand(): Command {
         process.exit(1);
       }
 
-      const store = requireLocalStore();
+      const store = resolveStore();
       try {
         const { attachment, link, size } = await store.presignComplete(id, {
           expiryMs,

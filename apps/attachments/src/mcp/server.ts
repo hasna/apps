@@ -12,7 +12,7 @@ import { computeReport } from "../cli/commands/report.js";
 import { runHealthCheck } from "../cli/commands/health-check.js";
 import { completeTaskWithFiles } from "../cli/commands/complete-task.js";
 import { linkAttachmentToTask } from "../cli/commands/link-task.js";
-import { resolveStore, LocalStore } from "../core/store.js";
+import { resolveStore } from "../core/store.js";
 import { getConfig, parseExpiryStrict, setConfig } from "../core/config.js";
 
 // ---------------------------------------------------------------------------
@@ -580,18 +580,6 @@ export function getToolsForProfile(
 // Tool handler helpers
 // ---------------------------------------------------------------------------
 
-/** Presigned direct-to-S3 upload needs on-box S3 creds; self_hosted uses upload_attachment. */
-function requireLocalStore(): LocalStore {
-  const store = resolveStore();
-  if (!(store instanceof LocalStore)) {
-    store.close();
-    throw new Error(
-      "presigned direct upload is only available in local mode (needs on-box S3 credentials). In self_hosted/cloud mode use the upload_attachment tool.",
-    );
-  }
-  return store;
-}
-
 async function handleUploadAttachment(args: {
   path?: string;
   url?: string;
@@ -764,7 +752,7 @@ async function handlePresignUpload(args: {
     throw new Error("Presigned upload expiry cannot be never");
   }
 
-  const store = requireLocalStore();
+  const store = resolveStore();
   try {
     const result = await store.presignUpload(args.filename, args.content_type, expiryMs);
     return {
@@ -792,7 +780,7 @@ async function handleCompletePresignedUpload(args: {
     : undefined;
   const linkType = args.link_type ?? config.defaults.linkType;
 
-  const store = requireLocalStore();
+  const store = resolveStore();
   try {
     const { attachment, link, size } = await store.presignComplete(args.id, {
       expiryMs,

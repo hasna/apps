@@ -224,6 +224,97 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
           },
         },
       },
+      "/v1/attachments/presign-upload": {
+        post: {
+          operationId: "presignAttachmentUpload",
+          summary: "Mint a presigned S3 PUT URL so a client can upload directly to S3 without holding credentials.",
+          security: [{ apiKey: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    filename: { type: "string" },
+                    content_type: { type: "string" },
+                    expiry: { type: "string" },
+                    size: { type: "integer" },
+                  },
+                  required: ["filename"],
+                },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string" },
+                      upload_url: { type: "string" },
+                      content_type: { type: "string" },
+                      filename: { type: "string" },
+                      expires_at: { type: "integer" },
+                      finalize_url: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "403": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "413": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/attachments/{id}/presign-upload/complete": {
+        post: {
+          operationId: "completePresignedAttachmentUpload",
+          summary: "Verify and finalize a presigned direct upload: check the object, generate the share link, mark ready.",
+          security: [{ apiKey: [] }],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: false,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    expiry: { type: "string" },
+                    password: { type: "string" },
+                    max_downloads: { type: "integer" },
+                    link_type: { type: "string", enum: ["presigned", "server"] },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      attachment: { $ref: "#/components/schemas/Attachment" },
+                      link: { type: "string" },
+                      size: { type: "integer" },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "403": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "413": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
       "/v1/slugs/{slug}": {
         get: {
           operationId: "getFriendlySlugAvailability",

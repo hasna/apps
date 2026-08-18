@@ -106,6 +106,27 @@ export interface AttachmentsV1Store {
   ): Promise<{ link: string | null; expires_at: number | null; slug?: string }>;
   download(id: string, output: string | undefined, options?: { password?: string }): Promise<V1DownloadResult>;
   saveFeedback(input: { message: string; email?: string | null; category?: string; version?: string | null }): Promise<void>;
+  presignUpload(
+    filename: string,
+    contentType: string | undefined,
+    expiryMs: number,
+  ): Promise<{ id: string; uploadUrl: string; contentType: string; filename: string; expiresAt: number }>;
+  presignComplete(
+    id: string,
+    options: { expiryMs: number | null; password?: string; maxDownloads?: number; linkType: "presigned" | "server" },
+  ): Promise<{ attachment: Attachment; link: string; size: number }>;
+}
+
+/**
+ * Round-trip a parsed expiry (ms) back to a parseable duration string so the
+ * /v1 server (which parses "30m"/"24h"/"7d"/"never") accepts it. Every value
+ * `parseExpiryStrict` can produce divides evenly into a whole-unit string.
+ */
+function expiryMsToString(expiryMs: number | null): string {
+  if (expiryMs === null) return "never";
+  if (expiryMs % 86400000 === 0) return `${expiryMs / 86400000}d`;
+  if (expiryMs % 3600000 === 0) return `${expiryMs / 3600000}h`;
+  return `${Math.ceil(expiryMs / 60000)}m`;
 }
 
 export type ResolveAttachmentsV1Result =
@@ -388,6 +409,44 @@ function makeStore(client: HasnaStorageClient, env: NodeJS.ProcessEnv): Attachme
         category: input.category ?? "general",
         version: input.version ?? null,
       });
+    },
+
+    async presignUpload(filename: string, contentType: string | undefined, expiryMs: number) {
+      if (expiryMs === null || expiryMs <= 0) {
+        throw new Error("Presigned upload expiry cannot be never");
+      }
+      const detected = mimeLookup(filename);
+      const resolvedType = contentType ?? (detected !== false ? detected : "application/octet-stream");
+      const result = await client.transport.post<{
+        id: string;
+        upload_url: string;
+        expires_at?: number;
+      }>("/attachments/presign-upload", {
+        filename,
+        content_type: resolvedType,
+        expiry: expiryMsToString(expiryMs),
+      });
+      return {
+        id: result.id,
+        uploadUrl: result.upload_url,
+        contentType: resolvedType,
+        filename,
+        expiresAt: result.expires_at ?? Date.now() + expiryMs,
+      };
+    },
+
+    async presignComplete(id, options) {
+      const result = await client.transport.post<{
+        attachment: ApiAttachment;
+        link: string;
+        size: number;
+      }>(`/attachments/${encodeURIComponent(id)}/presign-upload/complete`, {
+        expiry: expiryMsToString(options.expiryMs),
+        password: options.password,
+        max_downloads: options.maxDownloads,
+        link_type: options.linkType,
+      });
+      return { attachment: toAttachment(result.attachment), link: result.link, size: result.size };
     },
   };
   return store;
