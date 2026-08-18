@@ -47,13 +47,13 @@ const ANY_SEGMENT_EXCLUDES = new Set([
 const ROOT_EXCLUDES = new Set(["dist", "build", ".turbo"]);
 
 /**
- * Tool-owned sidecar files, excluded only at the skill root. The sync provenance markers
- * (pull.ts PULL_MARKER_FILE, registry-reconcile.ts SYNC_CURSOR_FILE) sit inside the
- * corpus skill directory and must never change the bundle digest or travel into a
- * published bundle when a pulled skill is re-pushed: a pulled skill's repack must equal
- * its remote digest.
+ * Tool-owned sidecar file, excluded only at the skill root. The sync provenance marker
+ * (pull.ts PULL_MARKER_FILE) sits inside the corpus skill directory and must never change
+ * the bundle digest or travel into a published bundle when a pulled skill is re-pushed:
+ * a pulled skill's repack must equal its remote digest. The sync cursor lives at the
+ * corpus root, never inside a skill directory, so it is deliberately not excluded here.
  */
-const TOOL_SIDECAR_FILENAMES = new Set([".hasna-skills.json", ".sync-cursor.json"]);
+const TOOL_SIDECAR_FILENAMES = new Set([".hasna-skills.json"]);
 
 /**
  * Filenames that routinely hold live credentials. A superset of RESERVED_SKILL_ENTRIES in

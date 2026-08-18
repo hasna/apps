@@ -50,9 +50,11 @@ export function registerRegistryReconcile(parent: Command) {
         });
         if (options.json) {
           console.log(JSON.stringify(result, null, 2));
+          if (result.summary.errors > 0) process.exitCode = 1;
           return;
         }
         printHuman(result);
+        if (result.summary.errors > 0) process.exitCode = 1;
       } catch (error) {
         if (options.json) {
           console.log(JSON.stringify({ error: (error as Error).message }, null, 2));
@@ -67,7 +69,11 @@ export function registerRegistryReconcile(parent: Command) {
 
 function printHuman(result: ReconcileRegistryResult): void {
   const { summary } = result;
-  const heading = result.dryRun ? "Dry run: what a sync would do" : "Sync complete";
+  const heading = result.dryRun
+    ? "Dry run: what a sync would do"
+    : summary.errors > 0
+      ? "Sync completed with errors"
+      : "Sync complete";
   console.log(chalk.bold(`${heading} (${result.direction === "all" ? "all" : result.direction}${result.dryRun ? ", dry-run" : ""})`));
   console.log(`  ${chalk.dim("corpus")}    ${result.corpusRoot}`);
   console.log(`  ${chalk.dim("conflict")}  ${result.conflictPolicy}`);
