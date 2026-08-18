@@ -137,9 +137,9 @@ Recommended internal modules:
 
 The companion `open-router` repository is intended for reusable prompt-aware routing, provider scoring, and evaluation harnesses. It is currently a companion placeholder, not a package dependency.
 
-The deterministic smart routing layer belongs in `open-gateway` for now because it depends directly on gateway config, data policy, credentials, route metadata, budgets, usage ledger records, and provider attempt accounting. Once `open-router` has reusable package code, the boundary should be:
+The deterministic smart routing layer belongs in `gateway` for now because it depends directly on gateway config, data policy, credentials, route metadata, budgets, usage ledger records, and provider attempt accounting. Once `open-router` has reusable package code, the boundary should be:
 
-- `open-gateway`: policy, credentials, budgets, provider attempts, ledger, and OpenAI-compatible HTTP surface.
+- `gateway`: policy, credentials, budgets, provider attempts, ledger, and OpenAI-compatible HTTP surface.
 - `open-router`: optional prompt-aware scoring/evals that receive already-policy-filtered candidates and return explainable ranking metadata.
 
 ## Existing Hasna Code To Reuse

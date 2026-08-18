@@ -315,7 +315,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           authorization: `Bearer ${input.apiKey}`,
           ...(input.provider.id === "openrouter"
             ? {
-                "http-referer": "https://github.com/hasna/open-gateway",
+                "http-referer": "https://github.com/hasna/apps",
                 "x-title": "Hasna Gateway",
               }
             : {}),

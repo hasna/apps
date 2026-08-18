@@ -26,7 +26,7 @@ export const providerPresets: Record<string, GatewayProviderConfig> = {
     baseUrl: "https://openrouter.ai/api/v1",
     apiKeyEnv: "OPENROUTER_API_KEY",
     headers: {
-      "http-referer": "https://github.com/hasna/open-gateway",
+      "http-referer": "https://github.com/hasna/apps",
       "x-title": "Hasna Gateway",
     },
     enabled: true,
