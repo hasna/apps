@@ -16,13 +16,13 @@ function app() {
 
 
 describe("cloud serve probes", () => {
-  test("/version returns status, version, mode", async () => {
+  test("/version returns status, version, backend", async () => {
     const res = await app().request("/version");
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       status: "ok",
       version: "9.9.9",
-      mode: "cloud",
+      backend: "postgresql",
     });
   });
 
@@ -31,7 +31,7 @@ describe("cloud serve probes", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.status).toBe("ok");
-    expect(body.mode).toBe("cloud");
+    expect(body.backend).toBe("postgresql");
     expect(body.db.ok).toBe(true);
   });
 
@@ -310,6 +310,7 @@ describe("cloud serve scan-run + maintenance surface (localonly-logs)", () => {
       client: f.client,
       version: "9.9.9",
       signingSecret: SIGNING_SECRET,
+      keyStatus: async (): Promise<"active"> => "active",
     });
     return { a, f };
   }

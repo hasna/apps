@@ -36,7 +36,6 @@ services:
         condition: service_healthy
     environment:
       PORT: "8080"
-      HASNA_LOGS_STORAGE_MODE: cloud
       HASNA_LOGS_DATABASE_URL: postgres://logs:logs@postgres:5432/logs
       HASNA_LOGS_API_SIGNING_KEY: local-dev-signing-secret-change-me
     ports:
