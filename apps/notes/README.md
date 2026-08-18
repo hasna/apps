@@ -102,10 +102,10 @@ escape raw HTML, drop unsafe links, and expose plain-text extraction for titles
 and search:
 
 ```bash
-node cli/notes.mjs markdown commands
-node cli/notes.mjs markdown render <note-id>
-node cli/notes.mjs markdown plain-text <note-id>
-node cli/notes.mjs markdown apply-command bold --text hello --selection-start 0 --selection-end 5
+bun cli/notes.mjs markdown commands
+bun cli/notes.mjs markdown render <note-id>
+bun cli/notes.mjs markdown plain-text <note-id>
+bun cli/notes.mjs markdown apply-command bold --text hello --selection-start 0 --selection-end 5
 ```
 
 ## Note creation events
@@ -194,7 +194,7 @@ open "dist/HasnaNotes.app"
 
 ```bash
 swift run -c release HasnaNotesSmoke   # round-trips a note through the markdown store
-node --test test/notes-functionality.test.mjs
+bun test test/notes-functionality.test.mjs
 ```
 
 ### CLI / MCP
@@ -204,20 +204,20 @@ notes list --limit 10
 notes-mcp
 
 # running straight from the repo
-node cli/notes.mjs list --limit 10
-node cli/notes.mjs labels assign <note-id> research
-node cli/notes.mjs move <note-id> <machine>
-node cli/notes.mjs archive <note-id>
-node cli/notes.mjs delete <note-id>          # moves to Trash
-node cli/notes.mjs purge <note-id>           # permanent delete
-node cli/notes.mjs settings set-trash-retention 30
-node cli/notes.mjs title <note-id> --apply
-node cli/notes.mjs markdown commands
-node cli/notes.mjs agent "summarize notes" --json
-node cli/notes.mjs agent "consolidate notes" --json       # preview
-node cli/notes.mjs agent "consolidate notes" --yes --json # write
-node cli/notes.mjs events status --json
-node mcp/notes-mcp.mjs
+bun cli/notes.mjs list --limit 10
+bun cli/notes.mjs labels assign <note-id> research
+bun cli/notes.mjs move <note-id> <machine>
+bun cli/notes.mjs archive <note-id>
+bun cli/notes.mjs delete <note-id>          # moves to Trash
+bun cli/notes.mjs purge <note-id>           # permanent delete
+bun cli/notes.mjs settings set-trash-retention 30
+bun cli/notes.mjs title <note-id> --apply
+bun cli/notes.mjs markdown commands
+bun cli/notes.mjs agent "summarize notes" --json
+bun cli/notes.mjs agent "consolidate notes" --json       # preview
+bun cli/notes.mjs agent "consolidate notes" --yes --json # write
+bun cli/notes.mjs events status --json
+bun mcp/notes-mcp.mjs
 ```
 
 Installable package:

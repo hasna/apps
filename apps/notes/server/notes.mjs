@@ -46,34 +46,34 @@ export function serializeNote(row) {
   };
 }
 
-function logEvent(db, { tenantId, noteId = null, actor, action, metadata = {} }) {
-  db.query('INSERT INTO note_events (id, tenant_id, note_id, actor_type, actor_id, action, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+async function logEvent(db, { tenantId, noteId = null, actor, action, metadata = {} }) {
+  await db.query('INSERT INTO note_events (id, tenant_id, note_id, actor_type, actor_id, action, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
     randomUUID(), tenantId, noteId, actor.type, actor.id, action, JSON.stringify(metadata), nowIso(),
   );
 }
 
-function getRow(db, tenantId, id) {
-  return db.query('SELECT * FROM notes WHERE tenant_id = ? AND id = ?').get(tenantId, id) ?? null;
+async function getRow(db, tenantId, id) {
+  return (await db.query('SELECT * FROM notes WHERE tenant_id = ? AND id = ?').get(tenantId, id)) ?? null;
 }
 
-function getRowByClientId(db, tenantId, clientId) {
-  return db.query('SELECT * FROM notes WHERE tenant_id = ? AND client_id = ?').get(tenantId, clientId) ?? null;
+async function getRowByClientId(db, tenantId, clientId) {
+  return (await db.query('SELECT * FROM notes WHERE tenant_id = ? AND client_id = ?').get(tenantId, clientId)) ?? null;
 }
 
-function insertRow(db, tenantId, input, { source }) {
+async function insertRow(db, tenantId, input, { source }) {
   const title = input.title?.trim() || 'Untitled';
   const bodyMarkdown = input.bodyMarkdown ?? '';
   const frontmatterJson = input.frontmatterJson ?? {};
   const now = nowIso();
   const id = randomUUID();
-  db.query(
+  await db.query(
     `INSERT INTO notes (id, tenant_id, client_id, slug, title, body_markdown, frontmatter_json, folder, labels,
        pinned, archived, revision, seq, content_hash, source, agent_provenance_json, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id, tenantId, input.clientId ?? null, input.slug ?? null, title, bodyMarkdown, JSON.stringify(frontmatterJson),
     input.folder ?? null, JSON.stringify(cleanLabels(input.labels)), input.pinned ? 1 : 0, input.archived ? 1 : 0,
-    nextSeq(db, tenantId),
+    await nextSeq(db, tenantId),
     input.contentHash ?? noteHash({ title, bodyMarkdown, frontmatterJson }),
     input.source ?? source, JSON.stringify(input.agentProvenanceJson ?? {}), now, now,
   );
@@ -85,12 +85,12 @@ function insertRow(db, tenantId, input, { source }) {
  * `folder` uses `=== undefined` so an explicit null clears it; revision +1;
  * seq restamped; updatedAt = now.
  */
-function updateRow(db, tenantId, current, input, { restore = false, keepContentHash = false } = {}) {
+async function updateRow(db, tenantId, current, input, { restore = false, keepContentHash = false } = {}) {
   const title = input.title?.trim() || current.title;
   const bodyMarkdown = input.bodyMarkdown ?? current.body_markdown;
   const frontmatterJson = input.frontmatterJson ?? JSON.parse(current.frontmatter_json);
   const contentHash = keepContentHash && input.contentHash !== undefined ? input.contentHash : noteHash({ title, bodyMarkdown, frontmatterJson });
-  db.query(
+  await db.query(
     `UPDATE notes SET slug = ?, title = ?, body_markdown = ?, frontmatter_json = ?, folder = ?, labels = ?,
        pinned = ?, archived = ?, source = ?, agent_provenance_json = ?, content_hash = ?,
        revision = revision + 1, seq = ?, updated_at = ?${restore ? ', deleted_at = NULL, purged_at = NULL' : ''}
@@ -103,22 +103,22 @@ function updateRow(db, tenantId, current, input, { restore = false, keepContentH
     (input.archived ?? Boolean(current.archived)) ? 1 : 0,
     input.source ?? current.source,
     JSON.stringify(input.agentProvenanceJson ?? JSON.parse(current.agent_provenance_json)),
-    contentHash, nextSeq(db, tenantId), nowIso(), tenantId, current.id,
+    contentHash, await nextSeq(db, tenantId), nowIso(), tenantId, current.id,
   );
   return getRow(db, tenantId, current.id);
 }
 
-function emitTransitionEvents(db, tenantId, before, after, actor) {
+async function emitTransitionEvents(db, tenantId, before, after, actor) {
   // S2 dialect superset (§7, gate doc GAP-2): the platform has no
   // restore/archive event kinds; S2 records them in its audit feed.
-  if (before.deleted_at && !after.deleted_at) logEvent(db, { tenantId, noteId: after.id, actor, action: 'note.restored' });
-  if (!before.archived && after.archived) logEvent(db, { tenantId, noteId: after.id, actor, action: 'note.archived' });
-  if (before.archived && !after.archived) logEvent(db, { tenantId, noteId: after.id, actor, action: 'note.unarchived' });
+  if (before.deleted_at && !after.deleted_at) await logEvent(db, { tenantId, noteId: after.id, actor, action: 'note.restored' });
+  if (!before.archived && after.archived) await logEvent(db, { tenantId, noteId: after.id, actor, action: 'note.archived' });
+  if (before.archived && !after.archived) await logEvent(db, { tenantId, noteId: after.id, actor, action: 'note.unarchived' });
 }
 
 // --- CRUD (dialect §4) -------------------------------------------------------
 
-export function listNotes(db, tenantId, { limit, includeDeleted, cursor }) {
+export async function listNotes(db, tenantId, { limit, includeDeleted, cursor }) {
   // Base dialect orders by updatedAt DESC with no pagination.
   // PLATFORM-GAP (GAP-6): a tenant with >200 notes cannot be enumerated on
   // the hosted platform. S2 superset: opaque `cursor` pages by seq DESC
@@ -132,7 +132,7 @@ export function listNotes(db, tenantId, { limit, includeDeleted, cursor }) {
     conditions.push('seq < ?');
     params.push(cursorSeq);
   }
-  const rows = db
+  const rows = await db
     .query(`SELECT * FROM notes WHERE ${conditions.join(' AND ')} ORDER BY seq DESC LIMIT ?`)
     .all(...params, limit + 1);
   const page = rows.slice(0, limit);
@@ -142,46 +142,46 @@ export function listNotes(db, tenantId, { limit, includeDeleted, cursor }) {
   };
 }
 
-export function getNote(db, tenantId, id) {
-  const row = getRow(db, tenantId, id);
+export async function getNote(db, tenantId, id) {
+  const row = await getRow(db, tenantId, id);
   // PLATFORM-GAP (GAP-2): the dialect 404s soft-deleted notes here, which is
   // what makes REST restore impossible.
   if (!row || row.deleted_at) throw new ApiError('not_found', 'note not found', 404);
   return serializeNote(row);
 }
 
-export function createNote(db, tenantId, input, actor) {
-  const row = insertRow(db, tenantId, { ...input, contentHash: undefined }, { source: 'hosted' });
-  logEvent(db, { tenantId, noteId: row.id, actor, action: 'note.created', metadata: { source: input.source ?? 'hosted' } });
+export async function createNote(db, tenantId, input, actor) {
+  const row = await insertRow(db, tenantId, { ...input, contentHash: undefined }, { source: 'hosted' });
+  await logEvent(db, { tenantId, noteId: row.id, actor, action: 'note.created', metadata: { source: input.source ?? 'hosted' } });
   return serializeNote(row);
 }
 
-export function updateNote(db, tenantId, id, input, actor) {
-  const current = getRow(db, tenantId, id);
+export async function updateNote(db, tenantId, id, input, actor) {
+  const current = await getRow(db, tenantId, id);
   if (!current || current.deleted_at) throw new ApiError('not_found', 'note not found', 404);
   // Dialect §4: PATCH has no optimistic-concurrency check — last write wins
   // in server arrival order. baseRevision guards exist only on /sync items.
-  const updated = updateRow(db, tenantId, current, input);
-  logEvent(db, { tenantId, noteId: id, actor, action: 'note.updated' });
-  emitTransitionEvents(db, tenantId, current, updated, actor);
+  const updated = await updateRow(db, tenantId, current, input);
+  await logEvent(db, { tenantId, noteId: id, actor, action: 'note.updated' });
+  await emitTransitionEvents(db, tenantId, current, updated, actor);
   return serializeNote(updated);
 }
 
-export function deleteNote(db, tenantId, id, actor) {
-  const current = getRow(db, tenantId, id);
+export async function deleteNote(db, tenantId, id, actor) {
+  const current = await getRow(db, tenantId, id);
   if (!current) throw new ApiError('not_found', 'note not found', 404);
   // PLATFORM-GAP (GAP-1): DELETE is soft-only; a deleted row still answers
   // the list feed until the client purges via the dialect superset.
-  db.query('UPDATE notes SET deleted_at = ?, revision = revision + 1, seq = ?, updated_at = ? WHERE tenant_id = ? AND id = ?').run(
-    nowIso(), nextSeq(db, tenantId), nowIso(), tenantId, id,
+  await db.query('UPDATE notes SET deleted_at = ?, revision = revision + 1, seq = ?, updated_at = ? WHERE tenant_id = ? AND id = ?').run(
+    nowIso(), await nextSeq(db, tenantId), nowIso(), tenantId, id,
   );
-  const row = getRow(db, tenantId, id);
-  logEvent(db, { tenantId, noteId: id, actor, action: 'note.deleted' });
+  const row = await getRow(db, tenantId, id);
+  await logEvent(db, { tenantId, noteId: id, actor, action: 'note.deleted' });
   return { deleted: true, id: row.id, revision: row.revision };
 }
 
-export function exportNotes(db, tenantId) {
-  const rows = db.query('SELECT * FROM notes WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC, seq DESC').all(tenantId);
+export async function exportNotes(db, tenantId) {
+  const rows = await db.query('SELECT * FROM notes WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC, seq DESC').all(tenantId);
   return { exportId: randomUUID(), notes: rows.map(serializeNote) };
 }
 

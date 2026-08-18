@@ -20,9 +20,10 @@ export function mapError(err) {
   if (err instanceof ApiError) return { code: err.code, message: err.message, status: err.status, details: err.details };
   // SQLite constraint violations map to the same generic 409 the platform
   // produces for Postgres 23505 — required so concurrent duplicate
-  // Idempotency-Keys surface as retryable 409 "conflict" (§5.4).
+  // Idempotency-Keys surface as retryable 409 "conflict" (§5.4). The
+  // PostgreSQL backend surfaces its own 23505 code; both map identically.
   const code = err?.code ?? '';
-  if (typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT')) {
+  if (typeof code === 'string' && (code.startsWith('SQLITE_CONSTRAINT') || code === '23505')) {
     return { code: 'conflict', message: 'resource already exists', status: 409 };
   }
   return { code: 'internal_error', message: 'internal server error', status: 500 };
