@@ -59,7 +59,6 @@
     "computers-serve": "./dist/bin/computers-serve.js",
     "computers-mcp": "./dist/bin/computers-mcp.js",
     "computers-worker": "./dist/bin/computers-worker.js",
-    "computers-resident": "./dist/bin/computers-resident.js",
     "computers-migrate": "./dist/bin/computers-migrate.js"
   },
   "files": [
@@ -84,7 +83,7 @@
     "verify:pack": "bun run scripts/verify-pack.ts",
     "verify:release": "bun run check && bun run test:postgres-migrations && bun run verify:pack && bun audit && bun pm untrusted",
     "canary:local-mac": "bun run src/bin/computers.ts local config canary",
-    "prepack": "bun run check"
+    "prepack": "bun run verify:pack"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

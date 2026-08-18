@@ -390,7 +390,6 @@
         "computers-serve": "./dist/bin/computers-serve.js",
         "computers-mcp": "./dist/bin/computers-mcp.js",
         "computers-worker": "./dist/bin/computers-worker.js",
-        "computers-resident": "./dist/bin/computers-resident.js",
         "computers-migrate": "./dist/bin/computers-migrate.js",
       },
       "devDependencies": {

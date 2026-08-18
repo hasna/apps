@@ -7,3 +7,5 @@ The resulting identity metadata binds certificate ID, tenant, Computer, provider
 Operation envelopes are idempotent and replay protected through operation ID, attempt ID, sequence, nonce, expiry, policy generation, and monotonic fence. The resident compares the envelope digest in constant time with the SHA-256 digest of the canonical stored operation payload and applies an explicit capability-to-operation-kind map before recording the nonce. Capabilities are limited to typed `exec`, `install`, `status`, and `cancel` payloads. No raw privileged shell command exists.
 
 `computers-resident` currently reports not ready because no privileged daemon or mTLS transport exists. It must not run as if those guarantees were present.
+
+No `computers-resident` bin is shipped in the npm package: the resident surface is a library export (`./src/resident.ts` protocol types and helpers) until a privileged daemon exists, and the future daemon bin ships as `computers-daemon` per the contract bin allowlist.

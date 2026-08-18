@@ -80,9 +80,6 @@ describe("CLI and binary envelopes", () => {
     const mcp = await run("src/bin/computers-mcp.ts");
     expect(mcp.code).toBe(1); expect(mcp.stdout).toBe("");
     expect(JSON.parse(mcp.stderr)).toEqual({ error: { code: "configuration_error", message: "MCP controller configuration is invalid" } });
-    const resident = await run("src/bin/computers-resident.ts");
-    expect(resident.code).toBe(1); expect(resident.stderr).toBe("");
-    expect(JSON.parse(resident.stdout)).toMatchObject({ ready: false, mtlsTransport: false, privilegedDaemon: false });
   });
 
   test("MCP stdio emits one JSON-RPC frame per response and no notification response", async () => {

@@ -1,7 +1,7 @@
 {
   "version": 2,
   "package": "@hasna/computers",
-  "binaries": ["computers", "computers-serve", "computers-mcp", "computers-worker", "computers-resident", "computers-migrate"],
+  "binaries": ["computers", "computers-serve", "computers-mcp", "computers-worker", "computers-migrate"],
   "exports": [".", "./sdk", "./contracts", "./providers", "./local", "./storage"],
   "mcpTools": ["computers_list", "computers_get", "computers_operations", "computers_exec_request", "computers_install_plan", "computers_provider_readiness"],
   "mcpAnnotations": {

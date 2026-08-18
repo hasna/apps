@@ -1,0 +1,53 @@
+# @hasna/computers — local development stack.
+#
+# Provides a throwaway PostgreSQL database for exercising the controller API,
+# plus the computers-serve HTTP API built from the Dockerfile.
+#
+#   # 1. bring up postgres and apply the schema
+#   docker compose up -d postgres
+#   then run the PostgreSQL migrations against
+#   postgres://computers@localhost:5432/computers
+#   (scripts/test-postgres-migrations.sh is the live gate)
+#   # 2. build + start the service
+#   docker compose up --build serve
+#
+# The postgres container is a local throwaway: trust auth, no password set
+# (POSTGRES_HOST_AUTH_METHOD=trust), reachable only on the loopback publish.
+# Never point this stack at real data.
+services:
+  postgres:
+    image: postgres:16
+    container_name: hasna-computers-postgres
+    environment:
+      POSTGRES_USER: computers
+      POSTGRES_DB: computers
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - computers-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U computers -d computers"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  serve:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hasna-computers-serve
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      COMPUTERS_PORT: "7788"
+      COMPUTERS_HOST: "0.0.0.0"
+      # Local-only throwaway controller credential (sha256 digest of
+      # "local-dev-controller-token"). Use a real credential in production.
+      COMPUTERS_AUTH: '[{"tokenHash":"6b2ab26d0d69512d7e4c7242b69104739775d680dfe1b5b84255ebdce5da61a3","context":{"tenantId":"tenant_local","principalId":"principal_local","scopes":["computers:admin"],"authMethod":"bearer"}}]'
+    ports:
+      - "7788:7788"
+
+volumes:
+  computers-pgdata:
