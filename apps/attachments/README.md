@@ -183,9 +183,9 @@ masked by `attachments config show`. SQLite metadata defaults to
 `~/.hasna/attachments/db.sqlite` and can be overridden with
 `HASNA_ATTACHMENTS_DB_PATH`.
 
-On first use, missing files from legacy `~/.open-attachments/` and
-`~/.attachments/` directories are copied into the canonical directory without
-overwriting existing files.
+On first use, missing files from the retired legacy `~/.open-attachments/`
+and `~/.attachments/` directories are copied into the canonical directory
+without overwriting existing files.
 
 ## Development
 

@@ -88,7 +88,7 @@ classifies whether attachments or another service answered.
 
 ## Data Migration
 
-On first use, missing files from legacy `~/.open-attachments` and
+On first use, missing files from the retired legacy `~/.open-attachments` and
 `~/.attachments` directories are copied into `~/.hasna/attachments` without
 overwriting canonical files. This is unrelated to cloud persistence. Postgres
 migrations run through `attachments-serve` or `attachments-serve migrate`.

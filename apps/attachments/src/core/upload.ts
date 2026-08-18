@@ -358,7 +358,7 @@ export async function uploadFromBuffer(
   opts: UploadOptions = {},
   deps: UploadDeps = {}
 ): Promise<Attachment> {
-  const tempDir = join(tmpdir(), "open-attachments-stdin");
+  const tempDir = join(tmpdir(), "attachments-stdin");
   mkdirSync(tempDir, { recursive: true });
   const tempPath = join(tempDir, filename);
 

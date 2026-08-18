@@ -24,7 +24,7 @@ bun run build:cli
 ## Project Structure
 
 ```
-open-attachments/
+attachments/
 ├── src/
 │   ├── cli/
 │   │   ├── index.ts          # CLI entry point
