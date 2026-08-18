@@ -24,6 +24,54 @@ const projectChannelBindRequest = {
     bind_existing: { type: "object", additionalProperties: true },
   },
 } as const;
+const projectChannelMessageOwnershipSnapshot = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "message_count",
+    "first_message_id",
+    "last_message_id",
+    "message_ids_digest",
+    "message_project_digest",
+    "digest",
+    "preserved_digest",
+  ],
+  properties: {
+    message_count: { type: "integer", minimum: 0 },
+    first_message_id: { anyOf: [{ type: "integer" }, { type: "null" }] },
+    last_message_id: { anyOf: [{ type: "integer" }, { type: "null" }] },
+    message_ids_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    message_project_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    preserved_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+  },
+} as const;
+const projectChannelAdoptRequest = {
+  type: "object",
+  additionalProperties: {},
+  required: ["operation_intent", "adopt_existing"],
+  properties: {
+    operation_intent: { type: "string", enum: ["adopt_existing"] },
+    adopt_existing: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "target_id",
+        "expected_project_id",
+        "expected_revision",
+        "expected_digest",
+        "expected_message_ownership",
+      ],
+      properties: {
+        target_id: { type: "string", pattern: "^chn_[0-9a-f]{32}$" },
+        expected_project_id: { type: "string", minLength: 1 },
+        expected_revision: { type: "string", minLength: 1 },
+        expected_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+        expected_message_ownership: projectChannelMessageOwnershipSnapshot,
+      },
+    },
+  },
+} as const;
 const errorObject = {
   type: "object",
   additionalProperties: true,
@@ -968,6 +1016,29 @@ export const openapiSpec = {
         },
       },
     },
+    "/v1/project-registration/channels/adopt-existing": {
+      post: {
+        operationId: "adoptExistingProjectChannel",
+        summary: "Conditionally adopt one exact pre-bound channel without changing its content",
+        description:
+          "Requires the stable channel id, exact current project ownership, channel revision/digest, and complete message ownership snapshot. " +
+          "The accepted immutable receipt records a no-op adoption and the inverse verifies the same state without clobbering it.",
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: projectChannelAdoptRequest } },
+        },
+        responses: {
+          "200": {
+            description: "deterministic duplicate or terminal nonacceptance receipt",
+            content: { "application/json": { schema: okObject } },
+          },
+          "201": {
+            description: "immutable accepted adopt-existing receipt",
+            content: { "application/json": { schema: okObject } },
+          },
+        },
+      },
+    },
     "/v1/project-registration/channels/receipts/terminal": {
       get: {
         operationId: "lookupProjectChannelRegistrationReceipt",
@@ -987,7 +1058,7 @@ export const openapiSpec = {
           { name: "idempotency_key", in: "query", required: true, schema: { type: "string" } },
           { name: "request_digest", in: "query", required: true, schema: { type: "string" } },
           { name: "precondition_digest", in: "query", required: true, schema: { type: "string" } },
-          { name: "precondition_kind", in: "query", schema: { type: "string", enum: ["absent", "bind_existing"] } },
+          { name: "precondition_kind", in: "query", schema: { type: "string", enum: ["absent", "bind_existing", "adopt_existing"] } },
           { name: "target_id", in: "query", schema: { type: "string" } },
           { name: "max_items", in: "query", required: true, schema: { type: "integer", const: 1 } },
           { name: "response_byte_limit", in: "query", required: true, schema: { type: "integer", minimum: 1 } },

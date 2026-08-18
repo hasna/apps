@@ -29,6 +29,11 @@ import {
   type TodosTaskManifestAuthority,
 } from "../task-manifest/index.js";
 import {
+  createPostgresTodosTaskSubtreeTransferAuthority,
+  postgresTodosTaskSubtreeTransferSchemaSql,
+  type TodosTaskSubtreeTransferAuthority,
+} from "../task-subtree-transfer/index.js";
+import {
   ensurePostgresScopedSlugUniqueIndexes,
   postgresTodosCommentCursorIndexSql,
   postgresTodosTaskShortIdIndexSql,
@@ -85,6 +90,7 @@ let cachedVerifier: ApiKeyVerifier | null = null;
 let cachedPrGroupLedger: PrGroupLedger | null = null;
 let cachedProjectRegistrationAuthority: TodosProjectRegistrationAuthority | null = null;
 let cachedTaskManifestAuthority: TodosTaskManifestAuthority | null = null;
+let cachedTaskSubtreeTransferAuthority: TodosTaskSubtreeTransferAuthority | null = null;
 let schemaEnsured: Promise<void> | null = null;
 
 function getCloudTenantId(): string {
@@ -141,6 +147,16 @@ export function getCloudTaskManifestAuthority(): TodosTaskManifestAuthority {
     tenantId: getCloudTenantId(),
   });
   return cachedTaskManifestAuthority;
+}
+
+/** Package-owned task-subtree-transfer authority backed by the shared Postgres pool. */
+export function getCloudTaskSubtreeTransferAuthority(): TodosTaskSubtreeTransferAuthority {
+  if (cachedTaskSubtreeTransferAuthority) return cachedTaskSubtreeTransferAuthority;
+  cachedTaskSubtreeTransferAuthority = createPostgresTodosTaskSubtreeTransferAuthority(getClient(), {
+    service: TODOS_APP_SLUG,
+    tenantId: getCloudTenantId(),
+  });
+  return cachedTaskSubtreeTransferAuthority;
 }
 
 /**
@@ -211,6 +227,9 @@ export async function ensureCloudSchema(): Promise<void> {
       await client.query(sql);
     }
     for (const sql of postgresTodosTaskManifestSchemaSql(getCloudTenantId())) {
+      await client.query(sql);
+    }
+    for (const sql of postgresTodosTaskSubtreeTransferSchemaSql()) {
       await client.query(sql);
     }
     await getApiKeyStore().ensureSchema();
@@ -309,5 +328,6 @@ export async function closeCloud(): Promise<void> {
   cachedPrGroupLedger = null;
   cachedProjectRegistrationAuthority = null;
   cachedTaskManifestAuthority = null;
+  cachedTaskSubtreeTransferAuthority = null;
   schemaEnsured = null;
 }

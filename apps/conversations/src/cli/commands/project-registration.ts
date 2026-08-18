@@ -258,6 +258,21 @@ export function registerProjectRegistrationCommands(program: Command): void {
     });
 
   registration
+    .command("adopt-existing")
+    .description("Conditionally adopt one exact pre-bound rich channel without mutating its metadata or messages")
+    .requiredOption("--request <path>", "Adopt-existing contract request JSON file")
+    .option("-j, --json", "Output as JSON")
+    .action(async (opts) => {
+      try {
+        printJson(await getStore().registerProjectChannel(
+          registrationRequest(opts.request, opts, "adopt_existing"),
+        ));
+      } finally {
+        closeDb();
+      }
+    });
+
+  registration
     .command("lookup-receipt")
     .description("Look up one exact terminal project channel registration receipt")
     .requiredOption("--request <path>", "Terminal receipt lookup request JSON file")

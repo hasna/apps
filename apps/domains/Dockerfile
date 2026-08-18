@@ -29,8 +29,7 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PORT=8080 \
     HOST=0.0.0.0 \
-    HASNA_APP_NAME=domains \
-    HASNA_APP_MODE=self_hosted
+    HASNA_APP_NAME=domains
 
 # Amazon RDS global CA bundle so sslmode=require (verify-full under current pg)
 # verifies the RDS server certificate. Referenced by PGSSLROOTCERT / the kit TLS.

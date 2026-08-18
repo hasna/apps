@@ -173,7 +173,7 @@ export async function createWorkflowDatabaseBundle(
   mkdirSync(stateDir, { recursive: true });
   if (!isCloudStore()) {
     // Local transport: seed the sandbox with a snapshot of the on-box dataset.
-    // Cloud/self_hosted: the dataset lives on the server — no snapshot file;
+    // Hosted route: the dataset lives on the server — no snapshot file;
     // runViaSandbox provisions the sandbox with API credentials instead.
     await writeDatabaseSnapshot(join(stateDir, "testers.db"));
   }
@@ -247,7 +247,7 @@ async function writeDatabaseSnapshot(targetPath: string): Promise<void> {
 }
 
 /**
- * Cloud/self_hosted sandbox provisioning: the dataset lives on the server, so
+ * Hosted-route sandbox provisioning: the dataset lives on the server, so
  * the sandbox is handed API credentials instead of a database snapshot file.
  * The URL is the non-secret normalized `<origin>/v1` base the client itself
  * resolved; the key is the SAME client-flip credential the client's own
@@ -394,7 +394,7 @@ function buildSandboxCommand(input: {
     input.setupCommand,
     buildAppStartCommand(input),
     buildSandboxBrowserInstallCommand(installBrowserArgs),
-    // Local transport: the run reads the seeded snapshot file. Cloud/self_hosted:
+    // Local transport: the run reads the seeded snapshot file. Hosted route:
     // no dbPath is set and the sandbox reaches the dataset through the API env
     // vars handed to it by runViaSandbox (resolveCloudSandboxEnv) — never via
     // a file baked into the command.

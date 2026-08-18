@@ -705,6 +705,70 @@ describe("project-first CLI surface", () => {
     }
   });
 
+  test("register-full accepts the exact pre-bound channel adoption shape before authority preflight", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-register-full-prebound-"));
+    const dbPath = join(root, "projects.db");
+    const targetPath = join(root, "fleet-resources");
+    const projectId = "wks_preboundchannel0001";
+    const zeroDigest = "0".repeat(64);
+    const payload = JSON.stringify({
+      operation_id: "op-cli-register-full-prebound",
+      project: {
+        id: projectId,
+        name: "Fleet Resources",
+        slug: "fleet-resources",
+        kind: "project",
+      },
+      target_path: targetPath,
+      goals_markdown: "# Goals\n\n- Reconcile safely.\n",
+      worklog_markdown: "# Worklog\n\n- Registration requested.\n",
+      reconcile_existing: {
+        conversations_channel: {
+          target_id: "chn_1012ddb87c8f033cb40fdead018cdfc8",
+          expected_project_id: projectId,
+          expected_revision: "rev_prebound_channel_001",
+          expected_digest: zeroDigest,
+          expected_message_ownership: {
+            message_count: 0,
+            first_message_id: null,
+            last_message_id: null,
+            message_ids_digest: zeroDigest,
+            message_project_digest: zeroDigest,
+            digest: zeroDigest,
+            preserved_digest: zeroDigest,
+          },
+        },
+      },
+      response_byte_limit: 512_000,
+      time_budget_ms: 10_000,
+    });
+    try {
+      const result = await runProjectsWithStdin(
+        ["register-full", "--json"],
+        payload,
+        { HASNA_PROJECTS_DB_PATH: dbPath },
+      );
+      expect(result.exitCode).toBe(1);
+      expect(text(result.stderr)).toBe("");
+      const body = JSON.parse(text(result.stdout)) as {
+        ok: boolean;
+        outcome: string;
+        reason_code?: string;
+        dependencies: Array<{ dependency_task_id: string }>;
+      };
+      expect(body.ok).toBe(false);
+      expect(body.outcome).toBe("no_go");
+      expect(body.reason_code).not.toBe("invalid_bounded_stdin_request");
+      expect(body.dependencies.map((item) => item.dependency_task_id).sort()).toEqual(
+        Object.values(PROJECT_REGISTRATION_DEPENDENCY_TASKS).sort(),
+      );
+      expect(existsSync(dbPath)).toBe(false);
+      expect(existsSync(targetPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("register-full refuses a caller-supplied tenant in historical authority identity", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-register-full-historical-tenant-"));
     const dbPath = join(root, "projects.db");

@@ -13,7 +13,10 @@ export const PROJECT_CHANNEL_REGISTRATION_ROUTE = "/v1/project-registration/chan
 export const PROJECT_CHANNEL_REGISTRATION_CREATOR = "project-registration";
 
 export type ProjectChannelRegistrationDirection = "forward" | "inverse";
-export type ProjectChannelRegistrationOperationIntent = "create" | "bind_existing";
+export type ProjectChannelRegistrationOperationIntent =
+  | "create"
+  | "bind_existing"
+  | "adopt_existing";
 export type ProjectChannelRegistrationAuthorityName =
   | "todos"
   | "mementos"
@@ -67,6 +70,7 @@ export interface ProjectChannelRegistrationCapability {
   supported_resources: ["channel"];
   conditional_create: true;
   conditional_bind_existing: true;
+  conditional_adopt_existing: true;
   immutable_receipts: true;
   exact_terminal_lookup: true;
   exact_readback: true;
@@ -83,6 +87,30 @@ export interface ProjectChannelRegistrationPriorState {
   message_project_digest: string;
   message_transition: ProjectChannelRegistrationMessageTransition;
 }
+
+export interface ProjectChannelRegistrationMessageOwnershipSnapshot {
+  readonly [key: string]: ProjectChannelRegistrationJson;
+  message_count: number;
+  first_message_id: number | null;
+  last_message_id: number | null;
+  message_ids_digest: string;
+  message_project_digest: string;
+  digest: string;
+  preserved_digest: string;
+}
+
+export interface ProjectChannelRegistrationAdoptionState {
+  adoption: true;
+  target_id: string;
+  project_id: string;
+  revision: string;
+  digest: string;
+  message_ownership: ProjectChannelRegistrationMessageOwnershipSnapshot;
+}
+
+export type ProjectChannelRegistrationPriorStateUnion =
+  | ProjectChannelRegistrationPriorState
+  | ProjectChannelRegistrationAdoptionState;
 
 export interface ProjectChannelRegistrationMessageTransition {
   source_project_id: string | null;
@@ -119,7 +147,7 @@ export interface ProjectChannelRegistrationReceipt {
   duplicate_of_receipt_id: string | null;
   accepted_receipt_id: string | null;
   created_by_operation: boolean;
-  prior_state: ProjectChannelRegistrationPriorState | null;
+  prior_state: ProjectChannelRegistrationPriorStateUnion | null;
   created_at: string;
 }
 
@@ -153,6 +181,13 @@ export interface ProjectChannelRegistrationRequest extends ProjectChannelRegistr
     expected_project_id: string | null;
     expected_revision: string;
     expected_digest: string;
+  };
+  adopt_existing?: {
+    target_id: string;
+    expected_project_id: string;
+    expected_revision: string;
+    expected_digest: string;
+    expected_message_ownership: ProjectChannelRegistrationMessageOwnershipSnapshot;
   };
   target: ProjectChannelRegistrationPathHandle;
   accepted_receipt?: ProjectChannelRegistrationReceipt;
@@ -255,7 +290,7 @@ export interface ProjectChannelRegistrationLookupRequest extends ProjectChannelR
   idempotency_key: string;
   request_digest: string;
   precondition_digest: string;
-  precondition_kind?: "absent" | "bind_existing";
+  precondition_kind?: "absent" | "bind_existing" | "adopt_existing";
   target_id?: string;
   max_items: 1;
 }
@@ -280,6 +315,7 @@ export interface ProjectChannelRegistrationBindingInverseVerification {
   project_id: string | null;
   revision: string;
   digest: string;
+  adopted?: true;
 }
 
 export type ProjectChannelRegistrationInverseVerification =
@@ -343,7 +379,7 @@ export function isProjectChannelCollectionChangedError(
 
 type ReceiptRow = Omit<ProjectChannelRegistrationReceipt, "created_by_operation" | "prior_state"> & {
   created_by_operation: number | boolean;
-  prior_state: string | ProjectChannelRegistrationPriorState | null;
+  prior_state: string | ProjectChannelRegistrationPriorStateUnion | null;
 };
 
 type ChannelRow = Record<string, unknown> & {
@@ -843,7 +879,7 @@ export function listProjectChannelMessagePage(
 
 function parseReceipt(row: ReceiptRow): ProjectChannelRegistrationReceipt {
   const priorState = typeof row.prior_state === "string"
-    ? parseJsonObject(row.prior_state) as unknown as ProjectChannelRegistrationPriorState | null
+    ? parseJsonObject(row.prior_state) as unknown as ProjectChannelRegistrationPriorStateUnion | null
     : row.prior_state;
   return {
     ...row,
@@ -875,6 +911,7 @@ export function buildProjectChannelRegistrationCapability(
     supported_resources: ["channel"],
     conditional_create: true,
     conditional_bind_existing: true,
+    conditional_adopt_existing: true,
     immutable_receipts: true,
     exact_terminal_lookup: true,
     exact_readback: true,
@@ -919,6 +956,7 @@ export function assertProjectChannelRegistrationOperationIntent(
     ProjectChannelRegistrationRequest,
     | "operation_intent"
     | "bind_existing"
+    | "adopt_existing"
     | "desired"
     | "precondition_digest"
     | "target_selector"
@@ -926,17 +964,19 @@ export function assertProjectChannelRegistrationOperationIntent(
   expected: ProjectChannelRegistrationOperationIntent,
 ): void {
   const desiredBind = request.desired.registration_mode === "bind_existing";
+  const desiredAdopt = request.desired.registration_mode === "adopt_existing";
   const bindShape = request.bind_existing !== undefined || desiredBind;
-  if (
-    expected === "create"
-    && request.operation_intent === undefined
-    && bindShape
-  ) {
+  const adoptShape = request.adopt_existing !== undefined || desiredAdopt;
+  if (expected === "create" && request.operation_intent === undefined && bindShape) {
     throw new Error("project channel registration create surface rejects bind-existing intent.");
+  }
+  if (expected === "create" && request.operation_intent === undefined && adoptShape) {
+    throw new Error("project channel registration create surface rejects adopt-existing intent.");
   }
   const legacyExpectedAbsentCreate = expected === "create"
     && request.operation_intent === undefined
     && !bindShape
+    && !adoptShape
     && request.precondition_digest === projectChannelRegistrationDigest({
       target_selector: request.target_selector,
       expected: "absent",
@@ -949,8 +989,14 @@ export function assertProjectChannelRegistrationOperationIntent(
   if (expected === "create" && bindShape) {
     throw new Error("project channel registration create surface rejects bind-existing intent.");
   }
+  if (expected === "create" && adoptShape) {
+    throw new Error("project channel registration create surface rejects adopt-existing intent.");
+  }
   if (expected === "bind_existing" && (!request.bind_existing || !desiredBind)) {
     throw new Error("project channel registration bind-existing surface requires bind-existing intent.");
+  }
+  if (expected === "adopt_existing" && (!request.adopt_existing || !desiredAdopt)) {
+    throw new Error("project channel registration adopt-existing surface requires adopt-existing intent.");
   }
 }
 
@@ -961,6 +1007,7 @@ export function validateProjectChannelRegistrationForward(
   channel: string;
   retired: boolean;
   binding: ProjectChannelRegistrationRequest["bind_existing"] | null;
+  adoption: ProjectChannelRegistrationRequest["adopt_existing"] | null;
 } {
   assertBounds(request);
   assertProjectChannelRegistrationIdentity(request, capability);
@@ -999,15 +1046,20 @@ export function validateProjectChannelRegistrationForward(
     request.operation_intent !== undefined
     && request.operation_intent !== "create"
     && request.operation_intent !== "bind_existing"
+    && request.operation_intent !== "adopt_existing"
   ) {
-    throw new Error("operation_intent must be create or bind_existing.");
+    throw new Error("operation_intent must be create, bind_existing, or adopt_existing.");
   }
   assertProjectChannelRegistrationOperationIntent(
     request,
     request.operation_intent ?? "create",
   );
-  if (!binding && request.desired.registration_mode === "bind_existing") {
+  const adoption = request.adopt_existing ?? null;
+  if (!binding && !adoption && request.desired.registration_mode === "bind_existing") {
     throw new Error("bind-existing registration requires bind_existing preconditions.");
+  }
+  if (!binding && !adoption && request.desired.registration_mode === "adopt_existing") {
+    throw new Error("adopt-existing registration requires adopt_existing preconditions.");
   }
   if (binding) {
     assertRequiredText("bind_existing.target_id", binding.target_id);
@@ -1033,6 +1085,30 @@ export function validateProjectChannelRegistrationForward(
       throw new Error("desired bind-existing identity does not match the request.");
     }
   }
+  if (adoption) {
+    assertRequiredText("adopt_existing.target_id", adoption.target_id);
+    assertRequiredText("adopt_existing.expected_project_id", adoption.expected_project_id);
+    assertRequiredText("adopt_existing.expected_revision", adoption.expected_revision);
+    assertRequiredText("adopt_existing.expected_digest", adoption.expected_digest);
+    if (!/^chn_[0-9a-f]{32}$/.test(adoption.target_id)) {
+      throw new Error("adopt_existing.target_id must be a stable chn_ id.");
+    }
+    if (adoption.expected_project_id !== request.project_id) {
+      throw new Error("adopt_existing.expected_project_id must equal project_id.");
+    }
+    assertMessageOwnershipSnapshot("adopt_existing.expected_message_ownership", adoption.expected_message_ownership);
+    if (
+      request.desired.registration_mode !== "adopt_existing"
+      || request.desired.target_id !== adoption.target_id
+      || request.desired.expected_project_id !== adoption.expected_project_id
+      || request.desired.expected_revision !== adoption.expected_revision
+      || request.desired.expected_digest !== adoption.expected_digest
+      || projectChannelRegistrationDigest(request.desired.expected_message_ownership)
+        !== projectChannelRegistrationDigest(adoption.expected_message_ownership)
+    ) {
+      throw new Error("desired adopt-existing identity does not match the request.");
+    }
+  }
   if (request.request_digest !== projectChannelRegistrationDigest(request.desired)) {
     throw new Error("request_digest does not match desired.");
   }
@@ -1045,16 +1121,28 @@ export function validateProjectChannelRegistrationForward(
         expected_digest: binding.expected_digest,
         desired_project_id: request.project_id,
       })
-    : projectChannelRegistrationDigest({
+    : adoption
+      ? projectChannelRegistrationDigest({
+          target_id: adoption.target_id,
+          target_selector: channel,
+          expected_project_id: adoption.expected_project_id,
+          expected_revision: adoption.expected_revision,
+          expected_digest: adoption.expected_digest,
+          expected_message_ownership: adoption.expected_message_ownership,
+          desired_project_id: request.project_id,
+        })
+      : projectChannelRegistrationDigest({
         target_selector: channel,
         expected: "absent",
-      });
+        });
   if (request.precondition_digest !== expectedPrecondition) {
     throw new Error(binding
       ? "precondition_digest does not describe the exact bind-existing transition."
-      : "precondition_digest does not describe expected-absent.");
+      : adoption
+        ? "precondition_digest does not describe the exact adopt-existing snapshot."
+        : "precondition_digest does not describe expected-absent.");
   }
-  return { channel, retired: retiredPrefix(channel), binding };
+  return { channel, retired: retiredPrefix(channel), binding, adoption };
 }
 
 function receiptId(input: {
@@ -1065,7 +1153,7 @@ function receiptId(input: {
   targetId: string | null;
   duplicateOf: string | null;
   acceptedReceiptId: string | null;
-  priorState: ProjectChannelRegistrationPriorState | null;
+  priorState: ProjectChannelRegistrationPriorStateUnion | null;
 }): string {
   const identity: { [key: string]: ProjectChannelRegistrationJson } = {
     authority: input.capability.authority,
@@ -1087,28 +1175,45 @@ function receiptId(input: {
     duplicate_of_receipt_id: input.duplicateOf,
     accepted_receipt_id: input.acceptedReceiptId,
   };
-  // Preserve the pre-bind receipt identity for ordinary create/inverse
-  // receipts. Only binding receipts add the new prior-state dimension.
+  // Preserve the receipt identity for ordinary create/inverse receipts and
+  // include the exact conditional state for reconciliation receipts.
   if (input.priorState !== null) {
-    identity.prior_state = {
-      target_id: input.priorState.target_id,
-      project_id: input.priorState.project_id,
-      bound_project_id: input.priorState.bound_project_id,
-      revision: input.priorState.revision,
-      digest: input.priorState.digest,
-      message_project_digest: input.priorState.message_project_digest,
-      message_transition: {
-        source_project_id: input.priorState.message_transition.source_project_id,
-        target_project_id: input.priorState.message_transition.target_project_id,
-        message_count: input.priorState.message_transition.message_count,
-        first_message_id: input.priorState.message_transition.first_message_id,
-        last_message_id: input.priorState.message_transition.last_message_id,
-        message_ids_digest: input.priorState.message_transition.message_ids_digest,
-        before_digest: input.priorState.message_transition.before_digest,
-        after_digest: input.priorState.message_transition.after_digest,
-        preserved_digest: input.priorState.message_transition.preserved_digest,
-      },
-    };
+    identity.prior_state = "adoption" in input.priorState
+      ? {
+          adoption: true,
+          target_id: input.priorState.target_id,
+          project_id: input.priorState.project_id,
+          revision: input.priorState.revision,
+          digest: input.priorState.digest,
+          message_ownership: {
+            message_count: input.priorState.message_ownership.message_count,
+            first_message_id: input.priorState.message_ownership.first_message_id,
+            last_message_id: input.priorState.message_ownership.last_message_id,
+            message_ids_digest: input.priorState.message_ownership.message_ids_digest,
+            message_project_digest: input.priorState.message_ownership.message_project_digest,
+            digest: input.priorState.message_ownership.digest,
+            preserved_digest: input.priorState.message_ownership.preserved_digest,
+          },
+        }
+      : {
+          target_id: input.priorState.target_id,
+          project_id: input.priorState.project_id,
+          bound_project_id: input.priorState.bound_project_id,
+          revision: input.priorState.revision,
+          digest: input.priorState.digest,
+          message_project_digest: input.priorState.message_project_digest,
+          message_transition: {
+            source_project_id: input.priorState.message_transition.source_project_id,
+            target_project_id: input.priorState.message_transition.target_project_id,
+            message_count: input.priorState.message_transition.message_count,
+            first_message_id: input.priorState.message_transition.first_message_id,
+            last_message_id: input.priorState.message_transition.last_message_id,
+            message_ids_digest: input.priorState.message_transition.message_ids_digest,
+            before_digest: input.priorState.message_transition.before_digest,
+            after_digest: input.priorState.message_transition.after_digest,
+            preserved_digest: input.priorState.message_transition.preserved_digest,
+          },
+        };
   }
   return `pcr_${projectChannelRegistrationDigest(identity).slice(0, 32)}`;
 }
@@ -1124,7 +1229,7 @@ export function buildProjectChannelRegistrationReceipt(input: {
   duplicateOf?: string | null;
   acceptedReceiptId?: string | null;
   createdByOperation?: boolean;
-  priorState?: ProjectChannelRegistrationPriorState | null;
+  priorState?: ProjectChannelRegistrationPriorStateUnion | null;
 }): ProjectChannelRegistrationReceipt {
   const reason = input.reason ?? null;
   const targetId = input.targetId ?? null;
@@ -1348,14 +1453,10 @@ function readMessageOwnershipRows(
   ).all(channel) as ProjectMessageLinkageRow[];
 }
 
-function messageOwnershipSnapshot(rows: ProjectMessageLinkageRow[]): {
-  message_count: number;
-  first_message_id: number | null;
-  last_message_id: number | null;
-  message_ids_digest: string;
-  digest: string;
-  preserved_digest: string;
-} {
+export function messageOwnershipSnapshot(
+  rows: ProjectMessageLinkageRow[],
+  messageProjectDigest?: string,
+): ProjectChannelRegistrationMessageOwnershipSnapshot {
   const ordered = rows.slice().sort((left, right) => Number(left.id) - Number(right.id));
   const hashes = projectMessageLinkageHashes(ordered);
   return {
@@ -1364,6 +1465,13 @@ function messageOwnershipSnapshot(rows: ProjectMessageLinkageRow[]): {
     last_message_id: ordered.length > 0 ? Number(ordered[ordered.length - 1].id) : null,
     message_ids_digest: projectChannelRegistrationDigest(
       ordered.map((row) => ({ id: Number(row.id), uuid: String(row.uuid) })),
+    ),
+    message_project_digest: messageProjectDigest ?? projectChannelRegistrationDigest(
+      ordered.map((row) => ({
+        id: Number(row.id),
+        uuid: String(row.uuid),
+        project_id: row.project_id ?? null,
+      })),
     ),
     digest: projectChannelRegistrationDigest(
       hashes.map((entry) => ({ id: entry.id, uuid: entry.uuid, hash: entry.hash })),
@@ -1376,6 +1484,55 @@ function messageOwnershipSnapshot(rows: ProjectMessageLinkageRow[]): {
       })),
     ),
   };
+}
+
+function assertMessageOwnershipSnapshot(
+  name: string,
+  value: unknown,
+): asserts value is ProjectChannelRegistrationMessageOwnershipSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${name} is required.`);
+  }
+  const snapshot = value as Record<string, unknown>;
+  const requiredKeys = [
+    "message_count",
+    "first_message_id",
+    "last_message_id",
+    "message_ids_digest",
+    "message_project_digest",
+    "digest",
+    "preserved_digest",
+  ] as const;
+  const actualKeys = Object.keys(snapshot).sort();
+  const expectedKeys = [...requiredKeys].sort();
+  if (projectChannelRegistrationDigest(actualKeys) !== projectChannelRegistrationDigest(expectedKeys)) {
+    throw new Error(`${name} must contain exactly the message ownership snapshot fields.`);
+  }
+  if (!Number.isInteger(snapshot.message_count) || Number(snapshot.message_count) < 0) {
+    throw new Error(`${name}.message_count must be a non-negative integer.`);
+  }
+  for (const key of ["first_message_id", "last_message_id"]) {
+    if (snapshot[key] !== null && !Number.isInteger(snapshot[key])) {
+      throw new Error(`${name}.${key} must be an integer or null.`);
+    }
+  }
+  for (const key of [
+    "message_ids_digest",
+    "message_project_digest",
+    "digest",
+    "preserved_digest",
+  ]) {
+    if (typeof snapshot[key] !== "string" || !/^[0-9a-f]{64}$/.test(snapshot[key])) {
+      throw new Error(`${name}.${key} must be a lowercase SHA-256 digest.`);
+    }
+  }
+}
+
+export function messageOwnershipSnapshotMatches(
+  actual: ProjectChannelRegistrationMessageOwnershipSnapshot,
+  expected: ProjectChannelRegistrationMessageOwnershipSnapshot,
+): boolean {
+  return projectChannelRegistrationDigest(actual) === projectChannelRegistrationDigest(expected);
 }
 
 export function buildProjectChannelRegistrationMessageTransition(
@@ -1481,6 +1638,89 @@ export function registerProjectChannel(
     }
 
     const preexisting = readChannelByName(db, validated.channel);
+    if (validated.adoption) {
+      if (!preexisting) {
+        const receipt = insertReceipt(db, buildProjectChannelRegistrationReceipt({
+          capability,
+          request,
+          outcome: "terminal_nonacceptance",
+          reason: "adopt_target_missing",
+        }));
+        assertTimeBudget(startedAt, request.time_budget_ms);
+        return receipt;
+      }
+      const current = projectChannelRegistrationChannelRecord(preexisting);
+      if (
+        preexisting.id !== validated.adoption.target_id
+        || preexisting.project_id !== validated.adoption.expected_project_id
+        || current.revision !== validated.adoption.expected_revision
+        || current.digest !== validated.adoption.expected_digest
+      ) {
+        const receipt = insertReceipt(db, buildProjectChannelRegistrationReceipt({
+          capability,
+          request,
+          outcome: "terminal_nonacceptance",
+          reason: "adopt_precondition_conflict",
+          targetId: preexisting.id,
+          resultRevision: current.revision,
+          resultDigest: current.digest,
+          createdByOperation: false,
+        }));
+        assertTimeBudget(startedAt, request.time_budget_ms);
+        return receipt;
+      }
+      const messageRows = readMessageOwnershipRows(db, preexisting.name);
+      if (messageRows.some((row) => (row.project_id ?? null) !== request.project_id)) {
+        const receipt = insertReceipt(db, buildProjectChannelRegistrationReceipt({
+          capability,
+          request,
+          outcome: "terminal_nonacceptance",
+          reason: "adopt_message_owner_conflict",
+          targetId: preexisting.id,
+          resultRevision: current.revision,
+          resultDigest: current.digest,
+          createdByOperation: false,
+        }));
+        assertTimeBudget(startedAt, request.time_budget_ms);
+        return receipt;
+      }
+      const snapshot = messageOwnershipSnapshot(messageRows, messageProjectDigest(db, preexisting.name));
+      if (!messageOwnershipSnapshotMatches(snapshot, validated.adoption.expected_message_ownership)) {
+        const receipt = insertReceipt(db, buildProjectChannelRegistrationReceipt({
+          capability,
+          request,
+          outcome: "terminal_nonacceptance",
+          reason: "adopt_message_precondition_conflict",
+          targetId: preexisting.id,
+          resultRevision: current.revision,
+          resultDigest: current.digest,
+          createdByOperation: false,
+        }));
+        assertTimeBudget(startedAt, request.time_budget_ms);
+        return receipt;
+      }
+      const priorState: ProjectChannelRegistrationAdoptionState = {
+        adoption: true,
+        target_id: preexisting.id,
+        project_id: request.project_id,
+        revision: current.revision,
+        digest: current.digest,
+        message_ownership: snapshot,
+      };
+      const receipt = buildProjectChannelRegistrationReceipt({
+        capability,
+        request,
+        outcome: "accepted",
+        reason: "adopted_preexisting",
+        targetId: preexisting.id,
+        resultRevision: current.revision,
+        resultDigest: current.digest,
+        createdByOperation: false,
+        priorState,
+      });
+      assertTimeBudget(startedAt, request.time_budget_ms);
+      return insertReceipt(db, receipt);
+    }
     if (validated.binding) {
       if (!preexisting) {
         const receipt = insertReceipt(db, buildProjectChannelRegistrationReceipt({
@@ -1767,13 +2007,14 @@ export function validateProjectChannelRegistrationLookup(
     request.precondition_kind !== undefined
     && request.precondition_kind !== "absent"
     && request.precondition_kind !== "bind_existing"
+    && request.precondition_kind !== "adopt_existing"
   ) {
-    throw new Error("precondition_kind must be absent or bind_existing.");
+    throw new Error("precondition_kind must be absent, bind_existing, or adopt_existing.");
   }
   if (request.direction === "forward") {
-    if (request.precondition_kind === "bind_existing") {
+    if (request.precondition_kind === "bind_existing" || request.precondition_kind === "adopt_existing") {
       if (request.target_id === undefined) {
-        throw new Error("bind-existing receipt lookup requires the exact target_id.");
+        throw new Error("reconciliation receipt lookup requires the exact target_id.");
       }
     } else if (request.precondition_digest !== projectChannelRegistrationDigest({
       target_selector: request.target_selector,
@@ -1847,6 +2088,17 @@ export function validateProjectChannelRegistrationInverse(
   }
   if (
     accepted.prior_state
+    && "adoption" in accepted.prior_state
+    && (
+      accepted.prior_state.target_id !== accepted.target_id
+      || accepted.prior_state.project_id !== request.project_id
+    )
+  ) {
+    throw new Error("inverse request does not match the accepted adopt-existing ownership.");
+  }
+  if (
+    accepted.prior_state
+    && !("adoption" in accepted.prior_state)
     && (
       accepted.prior_state.target_id !== accepted.target_id
       || accepted.prior_state.bound_project_id !== request.project_id
@@ -1855,7 +2107,7 @@ export function validateProjectChannelRegistrationInverse(
     throw new Error("inverse request does not match the accepted bind-existing ownership.");
   }
   const expectedIntent: ProjectChannelRegistrationOperationIntent = accepted.prior_state
-    ? "bind_existing"
+    ? ("adoption" in accepted.prior_state ? "adopt_existing" : "bind_existing")
     : "create";
   if (
     request.operation_intent !== undefined
@@ -2011,7 +2263,39 @@ export function compensateProjectChannelRegistration(
       assertTimeBudget(startedAt, request.time_budget_ms);
       return receipt;
     }
-    if (accepted.prior_state) {
+    if (accepted.prior_state && "adoption" in accepted.prior_state) {
+      const currentMessages = readMessageOwnershipRows(db, row.name);
+      const snapshot = messageOwnershipSnapshot(currentMessages, messageProjectDigest(db, row.name));
+      if (
+        row.project_id !== accepted.prior_state.project_id
+        || !messageOwnershipSnapshotMatches(snapshot, accepted.prior_state.message_ownership)
+      ) {
+        const receipt = terminalInverseReceipt(
+          db,
+          capability,
+          request,
+          "message_ownership_drifted",
+          accepted,
+          current,
+        );
+        assertTimeBudget(startedAt, request.time_budget_ms);
+        return receipt;
+      }
+      const receipt = buildProjectChannelRegistrationReceipt({
+        capability,
+        request,
+        outcome: "accepted",
+        targetId: accepted.target_id,
+        resultRevision: current.revision,
+        resultDigest: current.digest,
+        acceptedReceiptId: accepted.receipt_id,
+        createdByOperation: false,
+        priorState: accepted.prior_state,
+      });
+      assertTimeBudget(startedAt, request.time_budget_ms);
+      return insertReceipt(db, receipt);
+    }
+    if (accepted.prior_state && !("adoption" in accepted.prior_state)) {
       const prior = accepted.prior_state;
       const currentMessages = readMessageOwnershipRows(db, row.name);
       if (
@@ -2145,7 +2429,24 @@ export function verifyProjectChannelRegistrationInverse(
   if (!accepted) throw new Error("accepted project channel registration receipt is required.");
   validateProjectChannelRegistrationInverse(request, capability, accepted);
   const target = readChannelById(db, accepted.target_id!);
-  if (accepted.prior_state) {
+  if (accepted.prior_state && "adoption" in accepted.prior_state) {
+    if (!target) {
+      throw new Error("project channel registration inverse verification did not find the adopted target.");
+    }
+    const record = projectChannelRegistrationChannelRecord(target);
+    const snapshot = messageOwnershipSnapshot(
+      readMessageOwnershipRows(db, target.name),
+      messageProjectDigest(db, target.name),
+    );
+    if (
+      target.project_id !== accepted.prior_state.project_id
+      || record.revision !== accepted.prior_state.revision
+      || record.digest !== accepted.prior_state.digest
+      || !messageOwnershipSnapshotMatches(snapshot, accepted.prior_state.message_ownership)
+    ) {
+      throw new Error("project channel registration inverse verification found a drifted adopted target.");
+    }
+  } else if (accepted.prior_state) {
     if (!target) {
       throw new Error("project channel registration inverse verification did not find the restored target.");
     }
@@ -2182,6 +2483,7 @@ export function verifyProjectChannelRegistrationInverse(
         project_id: accepted.prior_state.project_id,
         revision: accepted.prior_state.revision,
         digest: accepted.prior_state.digest,
+        ...("adoption" in accepted.prior_state ? { adopted: true as const } : {}),
       }
     : {
         target_id: accepted.target_id!,

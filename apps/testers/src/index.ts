@@ -106,10 +106,11 @@ export {
 
 // ─── Storage — the single Store abstraction ──────────────────────────────────
 // The SDK's public data surface routes EXCLUSIVELY through the Store (local
-// SQLite or cloud /v1 HTTP + bearer key, resolved once from env). Raw `db/*`
+// SQLite or hosted /v1 HTTP + bearer key, resolved once from env). Raw `db/*`
 // SQLite functions and `getDatabase` are intentionally NOT part of the public
-// API — importing them would read/write on-box SQLite even in cloud mode (the
-// split-brain bug). Consumers use these async, Store-routed accessors instead.
+// API — importing them would read/write on-box SQLite even when the hosted API
+// is selected (the split-brain bug). Consumers use these async, Store-routed
+// accessors instead.
 export {
   getStore,
   resetStore,

@@ -189,6 +189,7 @@ const [
   { registerScaleHardeningCommands },
   { registerPrGroupCommands },
   { registerTaskManifestCommands },
+  { registerTaskSubtreeTransferCommands },
   { registerHelpCommands },
 ] = await Promise.all([
   import("./helpers.js"),
@@ -227,6 +228,7 @@ const [
   import("./commands/scale-hardening-commands.js"),
   import("./commands/pr-group-commands.js"),
   import("./commands/task-manifest-commands.js"),
+  import("./commands/task-subtree-transfer-commands.js"),
   import("./commands/help-commands.js"),
 ]);
 
@@ -262,6 +264,7 @@ registerStorageCommands(program);
 registerScaleHardeningCommands(program);
 registerPrGroupCommands(program);
 registerTaskManifestCommands(program);
+registerTaskSubtreeTransferCommands(program);
 await registerOptionalEventsCommands(program);
 registerHelpCommands(program, authority.route, remoteCommandCapabilities);
 

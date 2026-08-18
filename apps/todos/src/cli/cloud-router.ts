@@ -33,6 +33,11 @@ import type {
   TodosTaskManifestCompensationResult,
 } from "../task-manifest/index.js";
 import type {
+  TodosTaskSubtreeTransferCapability,
+  TodosTaskSubtreeTransferInspection,
+  TodosTaskSubtreeTransferResult,
+} from "../task-subtree-transfer/index.js";
+import type {
   TodosProjectRegistrationCapability,
   TodosProjectRegistrationInverseVerification,
   TodosProjectRegistrationLookupRequest,
@@ -671,6 +676,20 @@ function unwrapTaskManifestEnvelope<T>(
   return (raw as Record<typeof key, T>)[key];
 }
 
+function unwrapTaskSubtreeTransferEnvelope<T>(
+  raw: unknown,
+  key: "capability" | "inspection" | "result",
+  route: string,
+): T {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || !(key in raw)) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a non-authoritative task-subtree-transfer response envelope; ` +
+        "local SQLite fallback is disabled",
+    );
+  }
+  return (raw as Record<typeof key, T>)[key];
+}
+
 function unwrapProjectRegistrationEnvelope<T>(
   raw: unknown,
   key: "capability" | "receipt" | "record" | "verification" | "page" | "validation",
@@ -882,6 +901,70 @@ export async function cloudMarkTaskManifestOutboxDelivered(
         "local SQLite fallback is disabled",
     );
   }
+}
+
+export async function cloudTaskSubtreeTransferCapability(
+  client: HasnaStorageClient,
+): Promise<TodosTaskSubtreeTransferCapability> {
+  const route = "/v1/task-subtree-transfer/capability";
+  return unwrapTaskSubtreeTransferEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.get<unknown>("/task-subtree-transfer/capability")),
+    "capability",
+    route,
+  );
+}
+
+export async function cloudInspectTaskSubtreeTransfer(
+  client: HasnaStorageClient,
+  input: unknown,
+): Promise<TodosTaskSubtreeTransferInspection> {
+  const route = "/v1/task-subtree-transfer/inspect";
+  return unwrapTaskSubtreeTransferEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/task-subtree-transfer/inspect", input)),
+    "inspection",
+    route,
+  );
+}
+
+export async function cloudApplyTaskSubtreeTransfer(
+  client: HasnaStorageClient,
+  input: unknown,
+): Promise<TodosTaskSubtreeTransferResult> {
+  const route = "/v1/task-subtree-transfer/apply";
+  return unwrapTaskSubtreeTransferEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/task-subtree-transfer/apply", input)),
+    "result",
+    route,
+  );
+}
+
+export async function cloudReadExactTaskSubtreeTransfer(
+  client: HasnaStorageClient,
+  receiptId: string,
+): Promise<TodosTaskSubtreeTransferResult> {
+  const route = "/v1/task-subtree-transfer/read-exact";
+  return unwrapTaskSubtreeTransferEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/task-subtree-transfer/read-exact", { receipt_id: receiptId })),
+    "result",
+    route,
+  );
+}
+
+export async function cloudRollbackTaskSubtreeTransfer(
+  client: HasnaStorageClient,
+  input: unknown,
+): Promise<TodosTaskSubtreeTransferResult> {
+  const route = "/v1/task-subtree-transfer/rollback";
+  return unwrapTaskSubtreeTransferEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/task-subtree-transfer/rollback", input)),
+    "result",
+    route,
+  );
 }
 
 /** Unwrap the `{ task }` envelope the todos `/v1` API returns for single tasks. */

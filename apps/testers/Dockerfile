@@ -26,8 +26,7 @@ RUN bun run build:cli \
 FROM oven/bun:1-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
-    PORT=8080 \
-    HASNA_TESTERS_STORAGE_MODE=cloud
+    PORT=8080
 
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
