@@ -76,9 +76,6 @@ export function registerUpload(program: Command): void {
       if (options.internal && cloudMode) {
         exitError("--internal requires local client mode. Use --client-mode local or set client.mode to local.");
       }
-      if (cloudMode && options.encrypt) {
-        exitError("--encrypt is not supported in self_hosted/cloud mode. Use --client-mode local to encrypt at rest.");
-      }
       // D1(b): an on-box upload whose configured public host is really the remote
       // API would produce a link that can never resolve. core/upload rewrites the
       // base URL; tell the operator, because the link they get is NOT the public
