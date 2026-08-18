@@ -11,8 +11,8 @@ let fx: Fixture;
 afterEach(() => {
   fx?.cleanup();
   clearCredentials();
-  delete process.env["HASNA_TREASURY_STORAGE_MODE"];
   delete process.env["HASNA_TREASURY_DATABASE_URL"];
+  delete process.env["HASNA_TREASURY_DATABASE_URL_FILE"];
 });
 
 type Handler = (args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text: string }> }>;
@@ -41,7 +41,6 @@ describe("mcp-safety", () => {
 
   it("storage_status leaks no DSN/secret value", async () => {
     fx = await seedFixture();
-    process.env["HASNA_TREASURY_STORAGE_MODE"] = "cloud";
     process.env["HASNA_TREASURY_DATABASE_URL"] = "postgres://user:SUPERSECRETPW@db.example/treasury?sslmode=verify-full";
     const handlers = capture(principal(["treasury:read"], [fx.usId, fx.roId]), "full");
     const status = parse(await handlers.get("treasury_storage_status")!({}));
@@ -49,6 +48,7 @@ describe("mcp-safety", () => {
     expect(text).not.toContain("SUPERSECRETPW");
     expect(text).not.toContain("postgres://");
     expect(status.dsn_present).toBe(true);
+    expect(status.backend).toBe("postgresql");
     expect(status).toHaveProperty("remote_reachable");
     expect(status).not.toHaveProperty("dsn");
   });

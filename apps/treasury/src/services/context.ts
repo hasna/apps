@@ -25,7 +25,7 @@ export function contextFromPrincipal(db: QueryClient, principal: ApiPrincipal): 
 }
 
 /**
- * A local/dev owner context (used by the CLI in local loopback mode when no
+ * A local/dev owner context (used by the CLI on the loopback dev path when no
  * scoped credential is supplied). Full scopes + bypass. Scoped credentials
  * still exercise the real deny-by-default path on every transport.
  */

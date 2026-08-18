@@ -1,16 +1,16 @@
 import { APP_VERSION } from "../version.js";
-import { resolveStorageMode } from "../config.js";
+import { resolveServerBackend } from "../config.js";
 import { openDatabase } from "../db/database.js";
 
 // System endpoint payloads (BUILD-SPEC §6.2). health_shape conformance locks
-// the { status, version, mode } shape.
+// the { status, version, backend } shape.
 
-export function versionPayload(): { status: "ok"; version: string; mode: "local" | "cloud" } {
-  return { status: "ok", version: APP_VERSION, mode: resolveStorageMode() };
+export function versionPayload(): { status: "ok"; version: string; backend: "sqlite" | "postgresql" } {
+  return { status: "ok", version: APP_VERSION, backend: resolveServerBackend() };
 }
 
-export function healthPayload(): { status: "ok"; version: string; mode: "local" | "cloud" } {
-  return { status: "ok", version: APP_VERSION, mode: resolveStorageMode() };
+export function healthPayload(): { status: "ok"; version: string; backend: "sqlite" | "postgresql" } {
+  return { status: "ok", version: APP_VERSION, backend: resolveServerBackend() };
 }
 
 /**

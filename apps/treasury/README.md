@@ -19,16 +19,19 @@ sweep / intercompany-funding recommendations.
 | `treasury-mcp` | `dist/mcp/index.js` | MCP server — Streamable HTTP on `127.0.0.1:8890/mcp` (bearer auth), stdio fallback |
 | `treasury-serve` | `dist/server/index.js` | Hono HTTP service on `:3486` with `/health` `/ready` `/version` + `/v1` |
 
-## Storage (two runtime modes — PURE REMOTE)
+## Storage (server data backend, env-selected)
 
-- `local` — SQLite at `~/.hasna/treasury/treasury.db` is authoritative (default).
-- `cloud` — reads AND writes go directly to the app-owned Postgres via the
-  vendored storage-kit with `sslmode=verify-full`. No sync engine, no hybrid.
-  A missing DSN or a DSN-present-but-`local` misconfig is a hard fail-closed error.
+The server data backend is the only technical switch:
 
-Mode/DSN resolve from `HASNA_TREASURY_STORAGE_MODE` / `HASNA_TREASURY_DATABASE_URL`
-(presence only — the value is never read to choose a mode; it is scrubbed from
-the environment after connect).
+- **SQLite** at `~/.hasna/treasury/treasury.db` is authoritative by default.
+- **PostgreSQL** — set `HASNA_TREASURY_DATABASE_URL` (or a
+  `*_DATABASE_URL_FILE` mount, as docker-compose injects it) to select the
+  PostgreSQL backend via the vendored storage-kit with `sslmode=verify-full`.
+  A missing DSN is a hard fail-closed error — no silent fallback.
+
+The removed legacy storage-mode variables (`HASNA_TREASURY_STORAGE_MODE` etc.)
+are rejected at startup with migration guidance, never interpreted. The DSN is
+scrubbed from the environment after connect.
 
 ## Domain
 
@@ -53,8 +56,8 @@ source-of-truth.
   security stack. A bearer token maps to `{credential_id, scopes, entity_ids}`
   (timing-safe compare, expiry + revocation honored).
 - Deny-by-default: knowing an `entity_id` grants nothing without matching
-  scope + entity access. Auth is decoupled from storage mode — a non-loopback or
-  cloud bind with no credentials fails closed at startup.
+  scope + entity access. Auth is decoupled from the storage backend — a
+  non-loopback bind with no credentials fails closed at startup.
 - MCP domain tools thread the **caller** principal into per-op authorization
   exactly like `/v1` (never a SYSTEM bypass).
 - Append-only, hash-chained audit (`audit_log`) for money/lifecycle events;
@@ -74,11 +77,11 @@ treasury runway group --base USD --json
 treasury doctor --json
 ```
 
-## Self-host
+## Deploying with PostgreSQL
 
-`docker-compose.yml` ships serve + mcp + Postgres (mode `cloud`, DSN via a
-file-mounted secret). See the compose file for the `bunx --package` bin
-invocation and secret layout.
+`docker-compose.yml` ships serve + mcp + Postgres (DSN via a file-mounted
+secret, `sslmode=verify-full`). See the compose file for the `bunx --package`
+bin invocation and secret layout.
 
 ## License
 

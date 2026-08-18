@@ -1,9 +1,9 @@
 import { guard, type RunContext } from "./context.js";
 import { appendAudit } from "../db/audit.js";
 import { openDatabase, type QueryClient } from "../db/database.js";
-import { resolveDbPath, resolveStorageMode, databaseUrlPresent, type StorageMode } from "../config.js";
+import { resolveDbPath, resolveServerBackend, databaseUrlPresent } from "../config.js";
 
-// Domain tables that may be mirrored between local and cloud. The append-only
+// Domain tables that may be mirrored between the two stores. The append-only
 // audit_log is DELIBERATELY excluded — it can never be pushed/pulled/overwritten
 // (BUILD-SPEC §4.6/§4.7).
 export const SYNC_TABLES: Record<string, string[]> = {
@@ -16,7 +16,7 @@ export const SYNC_TABLES: Record<string, string[]> = {
 export const AUDIT_TABLES = ["audit_log"];
 
 export interface StorageStatus {
-  mode: "local" | "cloud";
+  backend: "sqlite" | "postgresql";
   dsn_present: boolean;
   sqlite_path: string;
   migrations_applied: number;
@@ -29,10 +29,10 @@ export interface StorageStatus {
  */
 export async function storageStatus(rc: RunContext): Promise<StorageStatus> {
   guard(rc, "treasury:read", "read");
-  const mode = resolveStorageMode();
+  const backend = resolveServerBackend();
   const migrations = await rc.db.get<{ c: number }>("SELECT COUNT(*) AS c FROM schema_migrations");
   let remoteReachable = false;
-  if (mode === "cloud") {
+  if (backend === "postgresql") {
     try {
       const probe = await rc.db.get<{ ok: number }>("SELECT 1 AS ok");
       remoteReachable = probe?.ok === 1;
@@ -41,7 +41,7 @@ export async function storageStatus(rc: RunContext): Promise<StorageStatus> {
     }
   }
   return {
-    mode,
+    backend,
     dsn_present: databaseUrlPresent(),
     sqlite_path: resolveDbPath(),
     migrations_applied: Number(migrations?.c ?? 0),
@@ -84,22 +84,23 @@ export interface SyncResult {
   audit_excluded: string[];
 }
 
-async function counterpart(sourceMode: StorageMode, opts: SyncOptions): Promise<QueryClient> {
+async function counterpart(source: QueryClient, opts: SyncOptions): Promise<QueryClient> {
   if (opts.target) return opts.target;
-  // Open the EXPLICIT opposite store so the transfer truly crosses local<->cloud
-  // rather than re-opening the SAME store and self-copying (which was a silent
-  // no-op in local mode). A local process therefore reaches the CLOUD counterpart,
-  // and openDatabase fails closed (throws) if that cloud DSN is not configured —
-  // never a silent same-store copy. push/pull/sync stay storage:admin-gated.
-  const targetMode: StorageMode = sourceMode === "local" ? "cloud" : "local";
-  return openDatabase({ fresh: true, mode: targetMode });
+  // Open the EXPLICIT opposite store so the transfer truly crosses
+  // sqlite<->postgresql rather than re-opening the SAME store and self-copying
+  // (which was a silent no-op). A sqlite-backed process therefore reaches the
+  // POSTGRESQL counterpart, and openDatabase fails closed (throws) if no DSN is
+  // configured — never a silent same-store copy. push/pull/sync stay
+  // storage:admin-gated.
+  const targetBackend: "sqlite" | "postgresql" = source.backend === "sqlite" ? "postgresql" : "sqlite";
+  return openDatabase({ fresh: true, backend: targetBackend });
 }
 
 /** Push local rows to the cloud store. Elevated scope + audit; audit tables excluded. */
 export async function storagePush(rc: RunContext, opts: SyncOptions = {}): Promise<SyncResult> {
   guard(rc, "storage:admin", "admin");
   const tables = assertSyncTables(opts.tables);
-  const target = await counterpart(rc.db.mode, opts);
+  const target = await counterpart(rc.db, opts);
   const counts: Record<string, number> = {};
   for (const t of tables) counts[t] = await copyTable(rc.db, target, t);
   await appendAudit(rc.db, { entity_id: null, actor_id: rc.auth.actor_id, action: "storage.push", detail: `tables=${tables.join(",")}` });
@@ -110,7 +111,7 @@ export async function storagePush(rc: RunContext, opts: SyncOptions = {}): Promi
 export async function storagePull(rc: RunContext, opts: SyncOptions = {}): Promise<SyncResult> {
   guard(rc, "storage:admin", "admin");
   const tables = assertSyncTables(opts.tables);
-  const source = await counterpart(rc.db.mode, opts);
+  const source = await counterpart(rc.db, opts);
   const counts: Record<string, number> = {};
   for (const t of tables) counts[t] = await copyTable(source, rc.db, t);
   await appendAudit(rc.db, { entity_id: null, actor_id: rc.auth.actor_id, action: "storage.pull", detail: `tables=${tables.join(",")}` });

@@ -1,7 +1,6 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { authenticateToken, bearerToken, isApiAuthConfigured, type ApiPrincipal } from "../server/auth.js";
-import { resolveStorageMode } from "../config.js";
 import { buildServer, localOwnerPrincipal } from "./index.js";
 
 export const DEFAULT_MCP_HTTP_PORT = 8890; // treasury pinned MCP HTTP port (§5.3)
@@ -71,11 +70,11 @@ export function resetMcpRateLimit(): void {
   mcpRateLimitMap.clear();
 }
 
-/** Auth disabled only when explicitly off AND loopback AND local mode (fail-closed). */
+/** Auth disabled only when explicitly off AND loopback (fail-closed). */
 export function mcpAuthDisabled(hostname: string): boolean {
   const off = (process.env["HASNA_TREASURY_MCP_AUTH"] || process.env["TREASURY_MCP_AUTH"] || "").toLowerCase() === "off";
   const loopback = hostname === "127.0.0.1" || hostname === "localhost";
-  return off && loopback && resolveStorageMode() === "local";
+  return off && loopback;
 }
 
 /**
@@ -112,19 +111,18 @@ export async function handleMcpHttpRequest(
 
 /**
  * Fail-closed startup assertion for the MCP HTTP transport, mirroring the serve
- * tier's assertServeSafety (BUILD-SPEC §5.1a). A non-loopback bind OR cloud mode
- * with no API credentials configured is almost certainly a misconfigured /
- * open-intent deploy. Refuse to start and surface the misconfig instead of
- * silently coming up "successfully" and 401'ing every caller at request time.
+ * tier's assertServeSafety (BUILD-SPEC §5.1a). A non-loopback bind with no API
+ * credentials configured is almost certainly a misconfigured / open-intent
+ * deploy. Refuse to start and surface the misconfig instead of silently coming
+ * up "successfully" and 401'ing every caller at request time.
  */
 export function assertMcpServeSafety(hostname: string): void {
   const loopback = hostname === "127.0.0.1" || hostname === "localhost";
-  const cloud = resolveStorageMode() === "cloud";
-  if ((!loopback || cloud) && !isApiAuthConfigured()) {
+  if (!loopback && !isApiAuthConfigured()) {
     throw new Error(
-      `Refusing to start treasury-mcp: bind=${hostname} mode=${cloud ? "cloud" : "local"} requires API credentials. ` +
+      `Refusing to start treasury-mcp: bind=${hostname} requires API credentials. ` +
         `Set HASNA_TREASURY_API_CREDENTIALS (or HASNA_TREASURY_API_KEY). ` +
-        `Unauthenticated MCP is only allowed on 127.0.0.1 in local mode.`,
+        `Unauthenticated MCP is only allowed on 127.0.0.1.`,
     );
   }
 }

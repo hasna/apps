@@ -71,12 +71,11 @@ describe("security fix: file-mounted DSN reaches the cloud pool (high)", () => {
     const file = join(dir, "database_url");
     // Only the *_FILE mount is set — exactly how docker-compose injects it.
     writeFileSync(file, "postgres://u:p@127.0.0.1:1/treasury?sslmode=verify-full", { mode: 0o400 });
-    process.env["HASNA_TREASURY_STORAGE_MODE"] = "cloud";
     process.env["HASNA_TREASURY_DATABASE_URL_FILE"] = file;
 
     let caught: unknown;
     try {
-      await openDatabase({ mode: "cloud", fresh: true });
+      await openDatabase({ backend: "postgresql", fresh: true });
     } catch (err) {
       caught = err;
     }
@@ -91,7 +90,7 @@ describe("security fix: file-mounted DSN reaches the cloud pool (high)", () => {
   });
 });
 
-describe("security fix: stdio transport is gated to local mode (low)", () => {
+describe("security fix: stdio transport is gated to the sqlite backend (low)", () => {
   let env: Record<string, string | undefined>;
   beforeEach(() => {
     env = snapshotEnv();
@@ -102,19 +101,16 @@ describe("security fix: stdio transport is gated to local mode (low)", () => {
   });
   afterEach(() => restoreEnv(env));
 
-  it("allows stdio (SYSTEM bypass) in local mode with auth off", () => {
-    process.env["HASNA_TREASURY_STORAGE_MODE"] = "local";
+  it("allows stdio (SYSTEM bypass) on the sqlite backend with auth off", () => {
     expect(() => assertStdioSafety()).not.toThrow();
   });
 
-  it("refuses stdio in cloud mode (would grant unauthenticated bypass to production Postgres)", () => {
-    process.env["HASNA_TREASURY_STORAGE_MODE"] = "cloud";
+  it("refuses stdio when a DATABASE_URL selects postgresql (would grant unauthenticated bypass to the configured database)", () => {
     process.env["HASNA_TREASURY_DATABASE_URL"] = "postgres://u:p@db/treasury?sslmode=verify-full";
-    expect(() => assertStdioSafety()).toThrow(/cloud mode/i);
+    expect(() => assertStdioSafety()).toThrow(/postgresql backend/i);
   });
 
   it("refuses stdio when API credentials are configured (stdio cannot authenticate a bearer)", () => {
-    process.env["HASNA_TREASURY_STORAGE_MODE"] = "local";
     process.env["HASNA_TREASURY_API_CREDENTIALS"] = JSON.stringify([{ id: "c", token: "t", roles: ["treasurer"] }]);
     expect(() => assertStdioSafety()).toThrow(/credentials/i);
   });
