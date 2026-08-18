@@ -368,7 +368,7 @@ describe("write/ingest MCP tools keep the local-transport guard in api mode", ()
         expect(result.isError).toBe(true);
         const text = callText(result);
         expect(text).toContain("runs on-box only");
-        expect(text).toContain("cloud (api) mode");
+        expect(text).toContain("hosted transport");
       } finally {
         await close();
       }
