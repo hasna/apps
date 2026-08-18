@@ -4,11 +4,36 @@ import { resolve } from "node:path";
 import { existsSync, statSync, copyFileSync, readdirSync } from "node:fs";
 import { getDatabase, getDbPath, resetDatabase } from "../../db/database.js";
 import { isApiMode } from "../../db/api-mode.js";
+import { bulkUpsertMemories } from "../../db/memories.js";
 import {
   outputJson,
   makeHandleError,
   type GlobalOpts,
 } from "../helpers.js";
+
+/**
+ * Read every row of a backup file's `memories` table.
+ *
+ * The backup file is a copy of the live SQLite database (`mementos backup`),
+ * so the `memories` table is the full row set. Rows are passed through
+ * unchanged: the bulk-restore path (local and hosted) validates enums,
+ * redacts secrets and preserves original ids and status.
+ */
+function readMemoriesFromBackup(source: string): {
+  rows: Array<Record<string, unknown>>;
+  count: number;
+} {
+  const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
+  const backupDb = new Database(source, { readonly: true });
+  try {
+    const rows = backupDb
+      .query("SELECT * FROM memories")
+      .all() as Array<Record<string, unknown>>;
+    return { rows, count: rows.length };
+  } finally {
+    backupDb.close();
+  }
+}
 
 export function registerRestoreCommand(program: Command): void {
   const handleError = makeHandleError(program);
@@ -21,19 +46,6 @@ export function registerRestoreCommand(program: Command): void {
     .action((filePath: string | undefined, opts) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
-        // `restore` copies a backup file over the LOCAL SQLite database. It has
-        // no meaning against the shared cloud store (which is authoritative and
-        // has no client-side db file), so refuse rather than fail-closed on
-        // getDatabase(). The cloud store is restored out-of-band on the server.
-        if (isApiMode()) {
-          const msg = "restore operates on the local SQLite database and is not available in API mode (the self-hosted cloud store is authoritative). Unset HASNA_MEMENTOS_API_URL / HASNA_MEMENTOS_API_KEY to restore a local db.";
-          if (globalOpts.json) {
-            outputJson({ error: msg });
-          } else {
-            console.error(chalk.red(msg));
-          }
-          process.exit(1);
-        }
         const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
         const backupsDir = resolve(home, ".hasna", "mementos", "backups");
 
@@ -70,10 +82,97 @@ export function registerRestoreCommand(program: Command): void {
           process.exit(1);
         }
 
-        const dbPath = getDbPath();
         const backupStat = statSync(source);
         const backupSizeMB = (backupStat.size / (1024 * 1024)).toFixed(1);
         const backupSizeStr = backupStat.size >= 1024 * 1024 ? `${backupSizeMB} MB` : `${(backupStat.size / 1024).toFixed(1)} KB`;
+
+        // Hosted path: the store is the cloud (no client-side db file), so a
+        // restore re-ships the backup's memories into it through the faithful
+        // idempotent bulk-restore primitive (original ids and status
+        // preserved; existing store rows are NEVER overwritten). Replacing the
+        // shared store wholesale from one machine's backup would destroy other
+        // machines' memories with no preserved original.
+        if (isApiMode()) {
+          const { rows, count } = readMemoriesFromBackup(source);
+
+          if (!opts.force) {
+            if (globalOpts.json) {
+              outputJson({
+                action: "restore",
+                source,
+                target: "cloud-api",
+                backup_size: backupStat.size,
+                backup_memories: count,
+                status: "dry_run",
+                message:
+                  "Restores the backup's memories into the hosted store; existing store rows are never overwritten. Use --force to confirm.",
+              });
+              return;
+            }
+            console.log(chalk.bold("Restore preview (hosted store):"));
+            console.log(`  Source:           ${chalk.cyan(source)} (${backupSizeStr})`);
+            console.log(`  Backup memories:  ${chalk.green(String(count))}`);
+            console.log(`  Target:           hosted store (cloud-api)`);
+            console.log(`  Semantics:        merges the backup's memories; existing rows are never overwritten`);
+            console.log();
+            console.log(chalk.yellow("Use --force to confirm restore"));
+            return;
+          }
+
+          const result = bulkUpsertMemories(rows);
+
+          // Fail closed: rows the store refused did not persist, so the
+          // command must not read as a completed restore. (A current server
+          // returns 400 for rejections and apiJson throws; this guard also
+          // covers a server contract that drifts toward 2xx-with-rejections.)
+          if (result.rejected > 0) {
+            const msg = `${result.rejected} of ${result.total} memories were rejected and did not persist. See errors.`;
+            if (globalOpts.json) {
+              outputJson({
+                action: "restore",
+                status: "failed",
+                source,
+                target: "cloud-api",
+                inserted: result.inserted,
+                skipped: result.skipped,
+                rejected: result.rejected,
+                total: result.total,
+                error: msg,
+              });
+            } else {
+              console.error(chalk.red(msg));
+            }
+            process.exit(1);
+          }
+
+          if (globalOpts.json) {
+            outputJson({
+              action: "restore",
+              source,
+              target: "cloud-api",
+              backup_size: backupStat.size,
+              backup_memories: count,
+              restored_memories: result.inserted,
+              inserted: result.inserted,
+              skipped: result.skipped,
+              rejected: result.rejected,
+              total: result.total,
+              status: "completed",
+            });
+            return;
+          }
+
+          console.log(`Restored from: ${chalk.green(source)}`);
+          console.log(`  Restored memories: ${chalk.green(String(result.inserted))} (inserted)`);
+          console.log(`  Skipped (already present): ${chalk.yellow(String(result.skipped))}`);
+          console.log(`  Rejected: ${chalk.yellow(String(result.rejected))}`);
+          return;
+        }
+
+        // Local path: `restore` copies a backup file over the LOCAL SQLite
+        // database. The cloud store has no client-side db file, which is why
+        // API mode takes the branch above instead of reaching this code.
+        const dbPath = getDbPath();
 
         // Get current DB memory count
         let currentCount = 0;
@@ -90,7 +189,7 @@ export function registerRestoreCommand(program: Command): void {
         // Get backup memory count by opening it temporarily
         let backupCount = 0;
         try {
-          const { Database } = require("bun:sqlite");
+          const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
           const backupDb = new Database(source, { readonly: true });
           const row = backupDb.query("SELECT COUNT(*) as count FROM memories").get() as { count: number } | null;
           backupCount = row?.count ?? 0;
