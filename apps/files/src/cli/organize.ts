@@ -26,8 +26,12 @@ import type {
 import { store } from "../store/index.js";
 
 /**
- * Organization reviews operate on locally-imported Google Drive metadata — an
- * on-box capability with no cloud data plane. In api mode this refuses instead
+ * Recorded strong reason for the local-transport guard (local-only-capability-
+ * removal workflow, 2026-08-18; reviewer-ruled — do not remove this gate by
+ * assumption). Organization reviews operate on locally-imported Google Drive
+ * metadata (`google_drive_imported_objects`), which the hosted server has no
+ * schema, routes, or producer for (see src/mcp/organization-tools.ts for the
+ * full evidence chain and its behavior lock). In api mode this refuses instead
  * of silently touching the local SQLite island (the split-brain guard).
  */
 function requireLocalOrganize(command: string): void {
