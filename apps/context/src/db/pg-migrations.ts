@@ -2,8 +2,11 @@
  * PostgreSQL migrations for context remote storage sync.
  *
  * Equivalent to the SQLite schema in database.ts, translated for PostgreSQL.
- * FTS5 virtual tables and SQLite triggers are omitted (not available in PostgreSQL).
- * Full-text search should use PostgreSQL tsvector/tsquery or pg_trgm instead.
+ * SQLite FTS5 virtual tables and triggers are not available in PostgreSQL;
+ * migration 15 below provides the equivalent full-text search on the hosted
+ * backend with generated tsvector columns + GIN indexes (auto-maintained by
+ * the sync upsert, no triggers needed) and PgAdapterAsync.searchChunks /
+ * searchLibraries query them.
  */
 
 export const PG_MIGRATIONS: string[] = [
@@ -349,4 +352,14 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_api_endpoints_document ON api_endpoints(document_id)`,
   `CREATE INDEX IF NOT EXISTS idx_api_endpoints_method_path ON api_endpoints(method, path)`,
   `CREATE INDEX IF NOT EXISTS idx_api_endpoints_operation ON api_endpoints(operation_id)`,
+
+  // Migration 15: full-text search on the hosted backend (SQLite FTS5
+  // equivalent). Generated tsvector columns are maintained automatically by
+  // the sync upsert (generated columns are excluded from INSERT/UPDATE column
+  // lists), so no triggers are needed. Matches the FTS5 columns indexed
+  // locally: chunks.content; libraries name/slug/description/npm_package.
+  `ALTER TABLE chunks ADD COLUMN IF NOT EXISTS content_tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED`,
+  `CREATE INDEX IF NOT EXISTS idx_chunks_content_tsv ON chunks USING GIN (content_tsv)`,
+  `ALTER TABLE libraries ADD COLUMN IF NOT EXISTS search_tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(name, '') || ' ' || coalesce(slug, '') || ' ' || coalesce(description, '') || ' ' || coalesce(npm_package, ''))) STORED`,
+  `CREATE INDEX IF NOT EXISTS idx_libraries_search_tsv ON libraries USING GIN (search_tsv)`,
 ];

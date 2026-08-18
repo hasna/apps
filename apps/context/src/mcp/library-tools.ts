@@ -7,7 +7,7 @@ import {
   listLibraries,
   createLibrary,
 } from "../db/libraries.js";
-import { searchChunks } from "../db/chunks.js";
+import { searchChunksOnBackend, searchLibrariesOnBackend } from "../db/backend-search.js";
 import { listApiEndpoints } from "../db/api-endpoints.js";
 import {
   refreshDocumentationSource,
@@ -60,7 +60,7 @@ Returns matching libraries with IDs, descriptions, and links.`,
     },
     async ({ libraryName, version }) => {
       try {
-        const results = searchLibraries(version ? `${libraryName} ${version}` : libraryName, 5);
+        const results = await searchLibrariesOnBackend(version ? `${libraryName} ${version}` : libraryName, 5);
 
         if (results.length === 0) {
           return {
@@ -255,8 +255,8 @@ Provide a specific topic or query to get the most relevant chunks.`,
           try {
             const queryVec = await embedText(query, embConfig);
             const semantic = semanticSearch(queryVec, library.id, maxChunks);
-            // Merge with FTS5 results for hybrid ranking
-            const fts = searchChunks(query, library.id, maxChunks);
+            // Merge with FTS results for hybrid ranking
+            const fts = await searchChunksOnBackend(query, library.id, maxChunks);
             const seen = new Set<string>();
             results = [];
             for (const r of [...semantic.slice(0, Math.ceil(maxChunks * 0.6)), ...fts]) {
@@ -266,10 +266,10 @@ Provide a specific topic or query to get the most relevant chunks.`,
               if (results.length >= maxChunks) break;
             }
           } catch {
-            results = searchChunks(query, library.id, maxChunks);
+            results = await searchChunksOnBackend(query, library.id, maxChunks);
           }
         } else {
-          results = searchChunks(query, library.id, maxChunks);
+          results = await searchChunksOnBackend(query, library.id, maxChunks);
         }
 
         if (results.length === 0) {

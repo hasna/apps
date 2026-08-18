@@ -1,0 +1,230 @@
+/**
+ * REAL Postgres regression coverage for full-text search on the hosted backend.
+ *
+ * ROOT CAUSE guarded here: SQLite FTS5 (libraries_fts, chunks_fts + triggers)
+ * is built only in the local schema (database.ts). The PostgreSQL schema
+ * (pg-migrations.ts) shipped NO full-text search at all, and PgAdapterAsync
+ * exposed no search surface — so a hosted deployment could not search
+ * libraries or chunks from the Postgres backend. The Postgres backend now
+ * carries generated tsvector columns + GIN indexes (migration 15, maintained
+ * automatically by the sync upsert) and PgAdapterAsync gains searchChunks /
+ * searchLibraries with FTS5-equivalent prefix semantics.
+ *
+ * The fixtures are inserted with the same SQL the sync produces (upsertPg),
+ * after runStorageMigrations — so this covers migration 15 + generated
+ * columns end to end. This file deliberately mutates NO shared state: bun's
+ * test runner executes every file in one process, so process.env and the
+ * SQLite singleton here must stay untouched.
+ *
+ * Guarded by CONTEXT_TEST_PG_URL so the default no-Postgres lane skips it:
+ *   CONTEXT_TEST_PG_URL=postgres://hasna@127.0.0.1:5432/context_fts_port_test \
+ *     bun test src/db/remote-fts.pg.test.ts
+ */
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { randomUUID } from "crypto";
+import { PgAdapterAsync, buildPrefixTsQuery } from "./remote-storage.js";
+import { runStorageMigrations } from "./storage-sync.js";
+
+const PG_URL = process.env["CONTEXT_TEST_PG_URL"];
+
+describe("buildPrefixTsQuery", () => {
+  test("ANDs prefix terms like the local FTS5 escapeFts", () => {
+    expect(buildPrefixTsQuery("useState hooks")).toBe("useState:* & hooks:*");
+    expect(buildPrefixTsQuery("React hook")).toBe("React:* & hook:*");
+  });
+
+  test("strips tsquery syntax characters", () => {
+    expect(buildPrefixTsQuery("foo:bar")).toBe("foobar:*");
+    expect(buildPrefixTsQuery('say "hi"')).toBe("say:* & hi:*");
+    expect(buildPrefixTsQuery("a & b")).toBe("a:* & b:*");
+  });
+
+  test("returns null for empty or whitespace-only queries", () => {
+    expect(buildPrefixTsQuery("")).toBeNull();
+    expect(buildPrefixTsQuery("   ")).toBeNull();
+  });
+});
+
+describe.skipIf(!PG_URL)("postgres full-text search parity", () => {
+  let remote: PgAdapterAsync;
+
+  beforeAll(async () => {
+    remote = new PgAdapterAsync(PG_URL!);
+    // Start from fresh tables for this run (disposable test database).
+    await remote.run("DROP TABLE IF EXISTS chunks CASCADE");
+    await remote.run("DROP TABLE IF EXISTS documents CASCADE");
+    await remote.run("DROP TABLE IF EXISTS libraries CASCADE");
+    await remote.run("DROP TABLE IF EXISTS _schema_version CASCADE");
+    await runStorageMigrations(remote);
+  });
+
+  beforeEach(async () => {
+    await remote.run("DELETE FROM chunks");
+    await remote.run("DELETE FROM documents");
+    await remote.run("DELETE FROM libraries");
+  });
+
+  afterAll(async () => {
+    await remote.close();
+  });
+
+  /** Insert a library with the same column set the sync upsert pushes. */
+  async function insertLibrary(input: {
+    name: string;
+    slug: string;
+    description?: string;
+    npm_package?: string;
+  }): Promise<string> {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    await remote.run(
+      `INSERT INTO libraries
+         (id, name, slug, description, npm_package, github_repo, docs_url, version,
+          chunk_count, document_count, last_crawled_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NULL, NULL, NULL, 0, 0, NULL, $6, $6)
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, slug = EXCLUDED.slug`,
+      id,
+      input.name,
+      input.slug,
+      input.description ?? null,
+      input.npm_package ?? null,
+      now,
+    );
+    return id;
+  }
+
+  /** Insert a document + chunk with the same column set the sync upsert pushes. */
+  async function insertChunk(input: {
+    libraryId: string;
+    url: string;
+    title: string;
+    content: string;
+  }): Promise<{ chunkId: string; documentId: string }> {
+    const documentId = randomUUID();
+    const chunkId = randomUUID();
+    const now = new Date().toISOString();
+    await remote.run(
+      `INSERT INTO documents
+         (id, library_id, url, title, content, parsed_at, created_at)
+       VALUES ($1, $2, $3, $4, NULL, NULL, $5)
+       ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title`,
+      documentId,
+      input.libraryId,
+      input.url,
+      input.title,
+      now,
+    );
+    await remote.run(
+      `INSERT INTO chunks
+         (id, library_id, document_id, content, position, token_count, created_at)
+       VALUES ($1, $2, $3, $4, 0, NULL, $5)
+       ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content`,
+      chunkId,
+      input.libraryId,
+      documentId,
+      input.content,
+      now,
+    );
+    return { chunkId, documentId };
+  }
+
+  test("chunk search returns ONLY matching chunks (not empty, not all)", async () => {
+    const libId = await insertLibrary({ name: "FtsLib", slug: "fts-lib" });
+    const match = await insertChunk({
+      libraryId: libId,
+      url: "https://example.com/guide/hooks",
+      title: "Guide",
+      content: "useState is a React hook for managing component state.",
+    });
+    await insertChunk({
+      libraryId: libId,
+      url: "https://example.com/guide/routing",
+      title: "Guide",
+      content: "Express routing middleware handles HTTP requests.",
+    });
+
+    const results = await remote.searchChunks("useState");
+    expect(results.length).toBe(1);
+    expect(results[0]!.chunk_id).toBe(match.chunkId);
+    expect(results[0]!.content).toContain("useState");
+    expect(results[0]!.url).toBe("https://example.com/guide/hooks");
+    expect(results[0]!.title).toBe("Guide");
+  });
+
+  test("library-scoped chunk search filters by library", async () => {
+    const libA = await insertLibrary({ name: "LibA", slug: "lib-a" });
+    const libB = await insertLibrary({ name: "LibB", slug: "lib-b" });
+    const chunkA = await insertChunk({
+      libraryId: libA,
+      url: "https://a.example.com/x",
+      title: "A",
+      content: "React hooks manage component state.",
+    });
+    await insertChunk({
+      libraryId: libB,
+      url: "https://b.example.com/x",
+      title: "B",
+      content: "React hooks manage component state.",
+    });
+
+    const scoped = await remote.searchChunks("hooks", libA);
+    expect(scoped.map((r) => r.chunk_id)).toEqual([chunkA.chunkId]);
+    const all = await remote.searchChunks("hooks");
+    expect(all.length).toBe(2);
+  });
+
+  test("prefix search matches partial tokens (FTS5 prefix parity)", async () => {
+    const libId = await insertLibrary({ name: "PrefixLib", slug: "prefix-lib" });
+    await insertChunk({
+      libraryId: libId,
+      url: "https://example.com/p",
+      title: "P",
+      content: "The function supercalifragilistic is extremely long.",
+    });
+
+    const results = await remote.searchChunks("supercali");
+    expect(results.length).toBe(1);
+    expect(results[0]!.content).toContain("supercalifragilistic");
+  });
+
+  test("empty and stopword-only queries return no results", async () => {
+    const libId = await insertLibrary({ name: "StopLib", slug: "stop-lib" });
+    await insertChunk({
+      libraryId: libId,
+      url: "https://example.com/s",
+      title: "S",
+      content: "useState is a React hook for managing component state.",
+    });
+
+    expect(await remote.searchChunks("")).toEqual([]);
+    expect(await remote.searchChunks("the")).toEqual([]);
+  });
+
+  test("library search finds libraries by name and description", async () => {
+    const lib = await insertLibrary({
+      name: "React Documentation",
+      slug: "react-documentation",
+      description: "Hooks and component API reference",
+    });
+
+    const byName = await remote.searchLibraries("documentation");
+    expect(byName.map((l) => l.id)).toContain(lib);
+    const byDescription = await remote.searchLibraries("component");
+    expect(byDescription.map((l) => l.id)).toContain(lib);
+  });
+
+  test("library search falls back to ILIKE when FTS misses (local fallback parity)", async () => {
+    const lib = await insertLibrary({ name: "The React Docs", slug: "the-react-docs" });
+
+    // Prove the FTS predicate itself misses a stopword-only query on Postgres...
+    const probe = await remote.all(
+      "SELECT (to_tsvector('english', ?) @@ to_tsquery('english', ?)) AS matched",
+      "The React Docs",
+      "the:*",
+    ) as Array<{ matched: boolean }>;
+    expect(probe[0]?.matched).toBe(false);
+    // ...and that searchLibraries still finds the library through the fallback.
+    const results = await remote.searchLibraries("the");
+    expect(results.map((l) => l.id)).toContain(lib);
+  });
+});
