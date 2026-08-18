@@ -55,6 +55,9 @@ export interface ConversationsIntegrationConfig {
 export interface MementosIntegrationConfig {
   enabled: boolean;
   base_url?: string;
+  bucket?: string;
+  keyTemplate?: string;
+  required?: boolean;
 }
 
 export interface EmailsIntegrationConfig {
