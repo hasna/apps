@@ -64,6 +64,7 @@ export class EconomyClient {
     const env = typeof process !== 'undefined' ? process.env : {}
     return new EconomyClient({
       baseUrl: env['ECONOMY_API_URL'] ?? env['ECONOMY_URL'] ?? 'http://localhost:3456',
+      // hasna-credential-seam-waiver: @hasna/economy-sdk is a browser-targeted package whose shipped bundle must not load @hasna/contracts/client (that seam imports node:net, which no browser runtime resolves), so the SDK reads ECONOMY_API_KEY from its own environment.
       apiKey: env['ECONOMY_API_KEY'],
     })
   }

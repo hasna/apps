@@ -15,16 +15,9 @@ describe("resolveEconomyCloudStorage", () => {
     expect(r.client).toBeNull();
   });
 
-  it("is inactive when mode is local even with API_URL + API_KEY", () => {
-    const r = resolveEconomyCloudStorage({
-      HASNA_ECONOMY_STORAGE_MODE: "local",
-      HASNA_ECONOMY_API_URL: "https://economy.hasna.xyz",
-      HASNA_ECONOMY_API_KEY: KEY,
-    });
-    expect(r.active).toBe(false);
-  });
 
-  it("infers self_hosted/cloud when API_URL + API_KEY are set without explicit mode", () => {
+
+  it("resolves the http transport when API_URL + API_KEY are set", () => {
     const r = resolveEconomyCloudStorage({
       HASNA_ECONOMY_API_URL: "https://economy.hasna.xyz",
       HASNA_ECONOMY_API_KEY: KEY,
@@ -34,23 +27,21 @@ describe("resolveEconomyCloudStorage", () => {
     expect(r.client!.baseUrl).toBe("https://economy.hasna.xyz/v1");
   });
 
-  it("throws when mode=self_hosted but the API key is missing (no silent local drift)", () => {
+  it("throws when API_URL is set without the API key (no silent local drift)", () => {
     expect(() =>
       resolveEconomyCloudStorage({
-        HASNA_ECONOMY_STORAGE_MODE: "self_hosted",
         HASNA_ECONOMY_API_URL: "https://economy.hasna.xyz",
       }),
     ).toThrow();
   });
 
-  // Regression: todos 4704ab9f. The guard above only ever fired when the mode was
-  // set EXPLICITLY. With the mode INFERRED (the shape the fleet env-flip actually
-  // writes: API_URL + API_KEY and no STORAGE_MODE), a half-applied flip left
-  // API_URL set and API_KEY absent -- and that resolved to `local` with
-  // misconfigured=false and no warning, indistinguishable from an unconfigured
-  // machine. The CLI then served the local SQLite store while the operator had
-  // pointed it at the cloud API: a different dataset, no error, plausible numbers.
-  it("throws when API_URL is set without API_KEY and no explicit mode (partial flip)", () => {
+  // Regression: todos 4704ab9f. The fleet env-flip shape is API_URL + API_KEY
+  // with no storage-mode variable (modes are retired). A half-applied flip that
+  // leaves API_URL set and API_KEY absent must not resolve to `local` silently:
+  // the CLI would serve the local SQLite store while the operator pointed it at
+  // the cloud API. The contracts seam reports the resolution as misconfigured
+  // and the resolver throws.
+  it("throws when API_URL is set without API_KEY (partial flip)", () => {
     expect(() =>
       resolveEconomyCloudStorage({
         HASNA_ECONOMY_API_URL: "https://economy.hasna.xyz",
@@ -67,19 +58,10 @@ describe("resolveEconomyCloudStorage", () => {
     expect(resolveEconomyCloudStorage({}).active).toBe(false);
   });
 
-  // An explicit local mode is an operator decision and outranks a stray API_URL
-  // left in the environment.
-  it("stays local when mode=local even with API_URL set and no key", () => {
-    const r = resolveEconomyCloudStorage({
-      HASNA_ECONOMY_STORAGE_MODE: "local",
-      HASNA_ECONOMY_API_URL: "https://economy.hasna.xyz",
-    });
-    expect(r.active).toBe(false);
-  });
 
-  it("is active and targets <origin>/v1 when mode=self_hosted + API_URL + API_KEY", () => {
+
+  it("is active and targets <origin>/v1 when API_URL + API_KEY are set", () => {
     const r = resolveEconomyCloudStorage({
-      HASNA_ECONOMY_STORAGE_MODE: "self_hosted",
       HASNA_ECONOMY_API_URL: "https://economy.hasna.xyz",
       HASNA_ECONOMY_API_KEY: KEY,
     });
@@ -107,7 +89,6 @@ describe("resolveEconomyCloudStorage", () => {
 
     const r = resolveEconomyCloudStorage(
       {
-        HASNA_ECONOMY_STORAGE_MODE: "self_hosted",
         HASNA_ECONOMY_API_URL: "https://economy.hasna.xyz",
         HASNA_ECONOMY_API_KEY: KEY,
       },
@@ -136,7 +117,6 @@ describe("resolveEconomyCloudStorage", () => {
 
     const r = resolveEconomyCloudStorage(
       {
-        HASNA_ECONOMY_STORAGE_MODE: "self_hosted",
         HASNA_ECONOMY_API_URL: "https://economy.hasna.xyz",
         HASNA_ECONOMY_API_KEY: KEY,
       },
@@ -168,7 +148,6 @@ describe("resolveEconomyCloudStorage", () => {
 
     const r = resolveEconomyCloudStorage(
       {
-        HASNA_ECONOMY_STORAGE_MODE: "self_hosted",
         HASNA_ECONOMY_API_URL: "https://economy.hasna.xyz",
         HASNA_ECONOMY_API_KEY: KEY,
       },
