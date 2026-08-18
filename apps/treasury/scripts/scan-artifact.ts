@@ -11,9 +11,16 @@
 //
 // The scanner is the `contracts` binary from the pinned dependency, not
 // `bunx`. An unpinned package runner resolves to whatever is newest at publish
-// time, and a resolution failure silently becomes a non-run.
+// time, and a resolution failure silently becomes a non-run. The binary is
+// located two ways: the package-manager-created `.bin` link when
+// `@hasna/contracts` resolves from the registry, and the monorepo workspace
+// member's built CLI (`apps/contracts/dist/cli/index.js`, built by its
+// `prepare` script during install) when the pinned version matches the local
+// workspace version and no `.bin` link is created. Fail closed if neither
+// exists — a scanner that did not run is the vacuous check this gate exists
+// to prevent.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
@@ -28,13 +35,30 @@ function run(command: string[], cwd: string): string {
 }
 
 const repoRoot = join(import.meta.dir, "..");
+
+/** Locate the pinned contracts scanner binary; fail closed when absent. */
+function resolveScanner(): string {
+  const candidates = [
+    join(repoRoot, "node_modules", ".bin", "contracts"),
+    // Monorepo workspace member: apps/<name>/scripts -> apps/contracts.
+    join(import.meta.dir, "..", "..", "contracts", "dist", "cli", "index.js"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error(
+    `contracts scanner binary not found. Looked in: ${candidates.join(", ")}. ` +
+      "Install the pinned @hasna/contracts dependency (or build the contracts workspace member) before packing.",
+  );
+}
+
 const workspace = mkdtempSync(join(tmpdir(), "treasury-artifact-scan-"));
 
 try {
   const packed = run(["bun", "pm", "pack", "--destination", workspace, "--ignore-scripts", "--quiet"], repoRoot);
   const archive = isAbsolute(packed) ? packed : join(workspace, packed);
 
-  const scanner = join(repoRoot, "node_modules", ".bin", "contracts");
+  const scanner = resolveScanner();
   const result = Bun.spawnSync([scanner, "artifact-scan", archive], {
     cwd: repoRoot,
     stdout: "inherit",
