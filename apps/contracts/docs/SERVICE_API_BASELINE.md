@@ -256,7 +256,7 @@ Duplicate roots and package identity collisions are flagged, not counted twice.
 
 | Wave | Repos | Focus |
 | --- | --- | --- |
-| Contract kit | `open-contracts`, `open-configs`, `deployment`, `releases`, `testers` | Schema, validators, smoke harnesses, scorecards. |
+| Contract kit | `contracts`, `configs`, `deployment`, `releases`, `testers` | Schema, validators, smoke harnesses, scorecards. |
 | Infra services | `backup`, `bridge`, `domains`, `gateway`, `hooks`, `machines`, `releases`, `secrets`, `servers`, `uptime`, `monitor`, `logs`, `repos`, `sandboxes`, `sessions`, `shield`, `security` | Serve bins, lifecycle, deployment contracts, auth-negative gates. |
 | Finance/comms/customer | `accounting`, `banking`, `economy`, `conversations`, `mailery`, `telephony`, `tickets`, `feedback`, `contacts`, `calendar`, `shortlinks` | `/v1`, OpenAPI, webhooks, provider safety, queues, auth. |
 | Data/AI/control | `attachments`, `files`, `knowledge`, `mementos`, `projects`, `search`, `todos`, `coders`, `codewith`, `connectors`, `dispatch`, `mcps`, `prompts`, `swarm`, `testers`, `browser`, `computer`, `terminal` | Parity, provenance, package smoke, operator status. |
