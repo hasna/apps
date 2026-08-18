@@ -4,6 +4,9 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { resetDatabase } from "../db/database.js";
+import { createLibrary as dbCreateLibrary } from "../db/libraries.js";
+import { upsertDocument as dbUpsertDocument } from "../db/documents.js";
+import { insertChunk as dbInsertChunk } from "../db/chunks.js";
 import { handleRequest, startServer } from "./index.js";
 
 let fixtureServer: Server | null = null;
@@ -36,6 +39,10 @@ const ISOLATED_ENV_NAMES = [
   "HASNA_CONTEXT_HTTP_TOKEN",
   "HASNA_CONTEXT_REQUIRE_HTTP_AUTH",
   "HASNA_CONTEXT_CORS_ORIGIN",
+  "HASNA_CONTEXT_DATABASE_URL",
+  "CONTEXT_DATABASE_URL",
+  "HASNA_CONTEXT_STORAGE_MODE",
+  "CONTEXT_STORAGE_MODE",
 ] as const;
 
 beforeEach(() => {
@@ -295,6 +302,61 @@ describe("HTTP semantic search API", () => {
     expect(searchBody.model).toBe("text-embedding-3-small");
     expect(searchBody.results).toHaveLength(1);
     expect(searchBody.results[0]?.content).toContain("HTTP source refresh documentation");
+  });
+});
+
+describe("HTTP search backend dispatch", () => {
+  // Each test seeds a DISTINCT library name: the test runner executes every
+  // file in one process, and an interleaved sibling test may leave the shared
+  // in-memory DB dirty, so a fixed slug would collide intermittently.
+  function seedChunk(name: string): void {
+    const lib = dbCreateLibrary({ name });
+    const doc = dbUpsertDocument({
+      library_id: lib.id,
+      url: "https://dispatch.example.com/x",
+      title: "Dispatch",
+    });
+    dbInsertChunk({
+      library_id: lib.id,
+      document_id: doc.id,
+      content: "useState is a React hook for managing component state.",
+      position: 0,
+    });
+  }
+
+  it("serves /api/search from the local FTS index when no Postgres backend is configured", async () => {
+    seedChunk("Dispatch Docs Local");
+
+    const res = await handleRequest(new Request("http://context.test/api/search?q=usestate"));
+    expect(res.status).toBe(200);
+    const body = await res.json() as { mode: string; results: unknown[] };
+    expect(body.mode).toBe("fts");
+    expect(body.results).toHaveLength(1);
+  });
+
+  it("serves /api/search from the hosted backend when a Postgres URL is configured", async () => {
+    seedChunk("Dispatch Docs Remote Search");
+    // Unreachable on purpose: port 1 refuses instantly. The remote search path
+    // is attempted and returns no results — the local FTS index must NOT be
+    // consulted, because the local-only gate this port removes would otherwise
+    // serve stale local data from a hosted deployment.
+    process.env["HASNA_CONTEXT_DATABASE_URL"] = "postgres://127.0.0.1:1/context-unreachable";
+
+    const res = await handleRequest(new Request("http://context.test/api/search?q=usestate"));
+    expect(res.status).toBe(200);
+    const body = await res.json() as { mode: string; results: unknown[] };
+    expect(body.mode).toBe("fts");
+    expect(body.results).toEqual([]);
+  });
+
+  it("serves /api/libraries?q= from the hosted backend when a Postgres URL is configured", async () => {
+    seedChunk("Dispatch Docs Remote Lib");
+    process.env["HASNA_CONTEXT_DATABASE_URL"] = "postgres://127.0.0.1:1/context-unreachable";
+
+    const res = await handleRequest(new Request("http://context.test/api/libraries?q=dispatch"));
+    expect(res.status).toBe(200);
+    const body = await res.json() as { libraries: unknown[] };
+    expect(body.libraries).toEqual([]);
   });
 });
 

@@ -5,11 +5,10 @@ import { getDatabase, getDbPath } from "../db/database.js";
 import {
   createLibrary,
   listLibraries,
-  searchLibraries,
   getLibraryBySlug,
   deleteLibrary,
 } from "../db/libraries.js";
-import { searchChunks } from "../db/chunks.js";
+import { searchChunksOnBackend, searchLibrariesOnBackend } from "../db/backend-search.js";
 import { handleMcpRequest, healthPayload } from "../mcp/http.js";
 import { buildServer } from "../mcp/index.js";
 import { listApiEndpoints } from "../db/api-endpoints.js";
@@ -184,7 +183,9 @@ export async function handleRequest(req: Request): Promise<Response> {
     // GET /api/libraries
     if (method === "GET" && path === "/api/libraries") {
       const q = url.searchParams.get("q");
-      const libraries = q ? searchLibraries(q) : listLibraries();
+      const libraries = q
+        ? await searchLibrariesOnBackend(q)
+        : listLibraries();
       return json({ libraries });
     }
 
@@ -395,7 +396,7 @@ export async function handleRequest(req: Request): Promise<Response> {
         return json({ results, query: q, mode: "semantic", model: config.model });
       }
 
-      const results = searchChunks(q, libraryId, limit);
+      const results = await searchChunksOnBackend(q, libraryId, limit);
       return json({ results, query: q, mode: "fts" });
     }
 
