@@ -12,6 +12,10 @@ import { KNOWLEDGE_API_URL_ENV } from './client-transport.js';
  * belongs to the on-box transport.
  * The HTTP server (src/serve) never calls this — it reads PostgreSQL
  * directly — so this guard applies to CLI/MCP/SDK clients only.
+ * Recorded boundary decision (local-only-capability review, 2026-08-18):
+ * docs/architecture/catalog-transport-boundary.md — the hosted half of the
+ * catalog is a wrapper build with no server-side implementation at ea43dd336;
+ * do not remove this guard without that build landing.
  */
 export function assertSqliteClientTransport(operation = 'catalog'): void {
   if (usesKnowledgeHttpTransport()) {
