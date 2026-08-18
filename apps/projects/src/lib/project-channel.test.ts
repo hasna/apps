@@ -54,7 +54,7 @@ describe("project channel derivation", () => {
   // not in this package: every one of these would previously have been
   // rewritten by a prefix table owned by the CLI.
   const cases: Array<{ slug: string; kind: WorkspaceKind; channel: string }> = [
-    { slug: "open-projects", kind: "open-source", channel: "open-projects" },
+    { slug: "projects", kind: "open-source", channel: "projects" },
     { slug: "conversations", kind: "open-source", channel: "conversations" },
     { slug: "platform-alumia", kind: "platform", channel: "platform-alumia" },
     { slug: "alumia", kind: "platform", channel: "alumia" },
@@ -91,7 +91,7 @@ describe("project channel derivation", () => {
 
   test("derivation never IMPOSES an `internal-` prefix, for any kind", () => {
     for (const kind of WORKSPACE_KINDS) {
-      for (const slug of ["iproj-agent-ceo", "fleet-comms", "handbook", "misc", "open-projects"]) {
+      for (const slug of ["iproj-agent-ceo", "fleet-comms", "handbook", "misc", "projects"]) {
         const derived = deriveProjectChannel({ slug, kind });
         expect(derived.channel.startsWith("internal-")).toBe(false);
         expect(derived.channel).toBe(slug);
@@ -118,7 +118,7 @@ describe("project channel derivation", () => {
 
   test("linked integration wins over derivation and is normalized", () => {
     const derived = deriveProjectChannel({
-      slug: "open-projects",
+      slug: "projects",
       kind: "open-source",
       integrations: { conversations_channel: "  Custom_Channel " },
     });
@@ -335,7 +335,7 @@ describe("project channel resolution", () => {
     const derivedProject = createWorkspace({ name: "Fleet Comms", slug: "fleet-comms", kind: "project" }, db);
     const linkedProject = createWorkspace({
       name: "Projects",
-      slug: "open-projects",
+      slug: "projects",
       kind: "open-source",
       integrations: { conversations_channel: "projects" },
     }, db);
@@ -407,14 +407,14 @@ describe("ensureProjectChannel", () => {
 
   test("treats an already-existing channel as success", () => {
     const db = makeDb();
-    const project = createWorkspace({ name: "Projects", slug: "open-projects", kind: "open-source" }, db);
-    const { calls, runner } = recordingRunner(() => ({ ok: false, stdout: "", stderr: "Channel #open-projects already exists." }));
+    const project = createWorkspace({ name: "Projects", slug: "projects", kind: "open-source" }, db);
+    const { calls, runner } = recordingRunner(() => ({ ok: false, stdout: "", stderr: "Channel #projects already exists." }));
 
     const result = ensureProjectChannel(project, { db, runner });
 
     expect(result.status).toBe("exists");
     expect(result.created).toBe(false);
-    expect(result.channel).toBe("open-projects");
+    expect(result.channel).toBe("projects");
     expect(calls).toHaveLength(1);
     db.close();
   });

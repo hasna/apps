@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 
 /**
- * open-projects MCP transport/port boilerplate.
+ * projects MCP transport/port boilerplate.
  * Keep this local and dependency-free so the published CLI can build without
  * an unpublished workspace-only MCP harness package.
  */

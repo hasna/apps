@@ -1,6 +1,6 @@
 # Project Render UI Contract
 
-Open Projects currently ships CLI, MCP, SDK, storage, and JSON Render surfaces.
+Hasna Projects currently ships CLI, MCP, SDK, storage, and JSON Render surfaces.
 It does not yet ship a browser frontend. The first UI-ready backend contract is
 the per-project canvas store plus JSON Render `Canvas` component emitted by:
 

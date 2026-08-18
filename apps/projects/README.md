@@ -206,7 +206,7 @@ and `projects recipes list` can emit validated JSON Render specs with
 render specs are available from `--render-spec` and matching `projects_render_*`
 MCP tools. Claude starts are annotated with `--name` when safe.
 Codewith, Cursor, and OpenCode rename support is reported as manual or
-unsupported unless a stable programmatic rename path is available; Open Projects
+unsupported unless a stable programmatic rename path is available; Hasna Projects
 does not force text into unknown panes. Use `projects start --rename-report` or
 `projects sessions <project> --unrenamed` to inspect rename status. Detailed
 execution still belongs in `todos`; long-form specs and decisions still belong

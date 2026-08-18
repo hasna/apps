@@ -2534,7 +2534,7 @@ export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptio
   const observedBudgetStatuses: ProjectBudgetStatus[] = [];
   const provider = createOpenRouter({
     apiKey,
-    appName: "open-projects",
+    appName: "projects",
     appUrl: "https://github.com/hasna/projects",
   });
 

@@ -261,7 +261,7 @@ export function prepareCodingSessionRename(
         status: "manual",
         method: null,
         command_changed: false,
-        message: "The configured Claude command does not start with `claude`, so Open Projects did not rewrite it.",
+        message: "The configured Claude command does not start with `claude`, so Hasna Projects did not rewrite it.",
         manual_instruction: `Start Claude with --name ${shellQuote(desiredName)} when this wrapper supports it.`,
       }],
     };
@@ -276,7 +276,7 @@ export function prepareCodingSessionRename(
         status: "manual",
         method: null,
         command_changed: false,
-        message: "No stable Codewith CLI rename option was detected, so Open Projects will not inject text into the pane.",
+        message: "No stable Codewith CLI rename option was detected, so Hasna Projects will not inject text into the pane.",
         manual_instruction: `Rename the Codewith session to ${desiredName} from the host UI or supported slash command when available.`,
       }],
     };
@@ -303,7 +303,7 @@ export function skippedExactWindowsRenameReport(project: Workspace, agentTool: P
     status: "skipped",
     method: null,
     command_changed: false,
-    message: "Exact tmux windows were requested, so Open Projects did not manage a primary coding-agent command.",
+    message: "Exact tmux windows were requested, so Hasna Projects did not manage a primary coding-agent command.",
   }];
 }
 
