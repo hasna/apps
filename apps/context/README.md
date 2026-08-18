@@ -54,7 +54,7 @@ for list/status/history-style tools; pass `limit`, `verbose`, or `json=true`
 when an agent needs more rows, fuller text, or raw records.
 
 Docs are stored in SQLite for catalog/search and as structured Markdown artifacts
-under `~/.hasna/apps/knowledge/docs/<library>/`. Each library folder also gets a
+under `~/.hasna/context/docs/<library>/`. Each library folder also gets a
 `manifest.json` that maps saved Markdown files back to SQLite document metadata,
 source refresh metadata, and any indexed API endpoints.
 Use `--doc-version <version>` with `context build` / `context ask`, or a library
@@ -307,9 +307,10 @@ Programmatic storage helpers are available from `@hasna/context/storage`.
 
 ## Data Directory
 
-Data is stored in `~/.hasna/apps/knowledge/`. Existing `~/.hasna/context/` or
-`~/.context/` data is copied forward on first database open. Override with
-`CONTEXT_DATA_DIR` or `HASNA_CONTEXT_DATA_DIR`.
+Data is stored in `~/.hasna/context/`. Data left at the previous default
+(`~/.hasna/apps/knowledge/`) or the oldest legacy store (`~/.context/`) is
+copied forward once on first database open (context-owned files only, verified,
+never deleted). Override with `CONTEXT_DATA_DIR` or `HASNA_CONTEXT_DATA_DIR`.
 
 ## License
 
