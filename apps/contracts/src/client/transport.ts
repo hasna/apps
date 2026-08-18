@@ -24,17 +24,23 @@ import {
 // The credential chain is part of this module's public surface: callers wire
 // `--api-key` / `--profile` through it, and consumers migrating off a direct
 // `process.env` read need its types.
-import { appConfigDiskValue, credentialDiskSources } from "./credentials.js";
+import { appConfigDiskValue, credentialDiskSources, readClientConfigFile, type ConfigFileRead, type ResolvedClientConfigFile } from "./credentials.js";
 
 export {
   appConfigDiskValue,
   CredentialResolutionError,
   credentialDiskSources,
   explicitCredential,
+  readClientConfigFile,
   resolveCredential,
-  __resetCredentialDeprecationNotices,
 } from "./credentials.js";
-export type { AppConfigDiskHit, CredentialChainOptions, CredentialTier, ResolvedCredential } from "./credentials.js";
+export type {
+  AppConfigDiskHit,
+  CredentialChainOptions,
+  CredentialTier,
+  ConfigFileRead,
+  ResolvedCredential,
+} from "./credentials.js";
 export { clientTransportEnvKeys, credentialOverrideEnvKey, CREDENTIAL_PROFILE_ENV_KEY } from "./env-keys.js";
 export type { ClientTransportEnvKeys } from "./env-keys.js";
 
@@ -376,6 +382,199 @@ export interface ResolveClientTransportOptions {
 }
 
 /**
+ * A value that was DECLARED but cannot be used: empty, whitespace-only, or a
+ * quoted-whitespace artifact (`'"   "'`). A declaration that names a key and
+ * denies it a value is a deliberate selection; treating it as absent silently
+ * selects a different authority or credential tier.
+ */
+function isBlankConfigValue(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  const quote = trimmed[0];
+  if ((quote === '"' || quote === "'") && trimmed.endsWith(quote)) {
+    return trimmed.slice(1, -1).trim().length === 0;
+  }
+  return false;
+}
+
+/**
+ * The coherent authority behind one client resolution: the endpoint and the
+ * credential it will be sent to, derived from ONE disk read.
+ *
+ * Why one read: a long-lived client that resolves the URL from disk at
+ * construction and the key from disk per request can observe an atomic
+ * URL+key replacement as a torn pair — the rotated key sent to the retired
+ * authority. Deriving both from a single parse of a single read makes the
+ * pair atomic, and the request-time re-resolution (see
+ * {@link createClientTransport}) fails closed when the authority moved.
+ *
+ * Fail-closed policy, all loud, none silent:
+ *  - a DEFINED-but-blank API URL (env or disk) is misconfigured, never
+ *    "absent";
+ *  - a disk URL declaration with an unterminated quote is misconfigured;
+ *  - canonical and short aliases inside the SAME file with different values
+ *    are a conflict;
+ *  - a disk URL that differs from an env URL is a mixed-authority conflict
+ *    (the env endpoint would receive a credential written for the disk
+ *    endpoint);
+ *  - canonical and short KEY aliases with different values are a conflict.
+ * Keys and paths are named; values are never rendered.
+ */
+export function resolveCoherentClientAuthority(
+  name: string,
+  env: Env = process.env,
+  options: ResolveClientTransportOptions = {},
+): {
+  baseUrl: string | null;
+  apiUrlSource: string | null;
+  credential: ResolvedCredential | null;
+  misconfigured: boolean;
+  warning: string | null;
+} {
+  assertNoLegacyClientMode(name, env);
+  const keys = clientTransportEnvKeys(name);
+  const warnings: string[] = [];
+  const misconfigured = (warning: string) => ({ baseUrl: null, apiUrlSource: null, credential: null, misconfigured: true, warning });
+
+  // ---- 1. Env URL keys: defined-but-blank is a deliberate unusable
+  // selection; env is authoritative when it names a usable URL.
+  const envUrlEntries = keys.apiUrlKeys
+    .filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined)
+    .map((key) => ({ key, value: String(env[key]) }));
+  const envBlank = envUrlEntries.find((entry) => isBlankConfigValue(entry.value));
+  if (envBlank) {
+    return misconfigured(
+      `${envBlank.key} is set but blank. It is a deliberate selection that cannot be honoured: ` +
+        `unset it to use the local store, or give it a real server URL.`,
+    );
+  }
+  const envUrlHit = envUrlEntries.find((entry) => !isBlankConfigValue(entry.value)) ?? null;
+
+  // ---- 2. Disk config, read ONCE (secure read; unsafe file throws).
+  const disk = readClientConfigFile(name, env);
+
+  // ---- 3. URL conflicts — same-file aliases, and env-vs-disk authority.
+  if (disk) {
+    const urlConflict = aliasConflictKeys(disk, keys.apiUrlKeys);
+    if (urlConflict) {
+      return misconfigured(
+        `${urlConflict.join(" and ")} in ${disk.path} hold different values. ` +
+          `The aliases are ambiguous; keep exactly one of them.`,
+      );
+    }
+    for (const key of keys.apiUrlKeys) {
+      if (disk.unusable.has(key)) {
+        return misconfigured(
+          `${key} in ${disk.path} is set but blank or malformed. ` +
+            `It is a deliberate declaration that cannot be honoured: fix the line or delete it.`,
+        );
+      }
+    }
+    if (envUrlHit) {
+      const diskUrl = firstUsableDiskValue(disk, keys.apiUrlKeys);
+      if (diskUrl !== null && diskUrl !== envUrlHit.value.trim()) {
+        return misconfigured(
+          `${envUrlHit.key} selects one API server while ${disk.path} selects a different one. ` +
+            `A credential written for one authority must never be sent to the other: ` +
+            `align them or keep only one.`,
+        );
+      }
+    }
+  }
+
+  // ---- 4. URL selection. `key` is the source for every downstream field:
+  // an env key name, or the absolute path of the file that decided.
+  const urlHit = envUrlHit
+    ? { key: envUrlHit.key, value: envUrlHit.value.trim() }
+    : disk
+      ? firstUsableDiskHit(disk, keys.apiUrlKeys)
+      : null;
+  const apiUrlSource = urlHit ? urlHit.key : null;
+
+  // ---- 5. No URL anywhere: local SQLite, and no credential is resolved (a
+  // client authenticating to nothing must not read or emit credential state).
+  if (!urlHit) {
+    return { baseUrl: null, apiUrlSource: null, credential: null, misconfigured: false, warning: warnings.length > 0 ? warnings.join(" ") : null };
+  }
+
+  // ---- 6. Credential aliases on disk, then the credential itself. A
+  // deliberate tier that cannot be honoured throws rather than
+  // authenticating as a different principal.
+  if (disk) {
+    const keyConflict = aliasConflictKeys(disk, keys.apiKeyKeys);
+    if (keyConflict) {
+      return misconfigured(
+        `${keyConflict.join(" and ")} in ${disk.path} hold different values. ` +
+          `The aliases are ambiguous; keep exactly one of them.`,
+      );
+    }
+    for (const key of keys.apiKeyKeys) {
+      if (disk.unusable.has(key)) {
+        return misconfigured(
+          `${key} in ${disk.path} is set but blank or malformed. ` +
+            `It is a deliberate declaration that cannot be honoured: fix the line or delete it.`,
+        );
+      }
+    }
+  }
+  const credential: ResolvedCredential | null = resolveCredential(name, env, options.credentials);
+  if (!credential) {
+    const diskHint = credentialDiskSourcesForMessage(name, env);
+    warnings.push(
+      `${apiUrlSource} selects the HTTP server for '${name}', but no API key could be resolved; ` +
+        `refusing to route and leaving the local sqlite store selected. ` +
+        `Looked for a credential file at ${diskHint}, then for ${keys.apiKeyKeys[0]} in the environment.`,
+    );
+    return { baseUrl: null, apiUrlSource, credential: null, misconfigured: true, warning: warnings.join(" ") };
+  }
+  if (credential.warning) warnings.push(credential.warning);
+
+  // ---- 7. Normalize the base URL.
+  let baseUrl: string;
+  try {
+    baseUrl = toV1BaseUrl(urlHit.value);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    warnings.push(`Invalid API URL from ${apiUrlSource}: ${message}. Using local store.`);
+    return { baseUrl: null, apiUrlSource, credential, misconfigured: true, warning: warnings.join(" ") };
+  }
+  return { baseUrl, apiUrlSource, credential, misconfigured: false, warning: warnings.length > 0 ? warnings.join(" ") : null };
+}
+
+/** Both aliases present in one file with different values: the key pair. */
+function aliasConflictKeys(disk: ResolvedClientConfigFile, keys: readonly string[]): string[] | null {
+  const usable = keys.filter((key) => !disk.unusable.has(key)).map((key) => ({ key, value: disk.values.get(key)?.trim() ?? "" }));
+  const present = usable.filter((entry) => entry.value.length > 0);
+  if (present.length > 1 && new Set(present.map((entry) => entry.value)).size > 1) {
+    return present.map((entry) => entry.key);
+  }
+  return null;
+}
+
+/** The first usable value for the keys in order, or null. */
+function firstUsableDiskValue(disk: ResolvedClientConfigFile, keys: readonly string[]): string | null {
+  for (const key of keys) {
+    if (disk.unusable.has(key)) continue;
+    const value = disk.values.get(key)?.trim();
+    if (value) return value;
+  }
+  return null;
+}
+
+/** The first usable hit for the keys in order, keyed by the file path. */
+function firstUsableDiskHit(
+  disk: ResolvedClientConfigFile,
+  keys: readonly string[],
+): { key: string; value: string } | null {
+  for (const key of keys) {
+    if (disk.unusable.has(key)) continue;
+    const value = disk.values.get(key)?.trim();
+    if (value) return { key: disk.path, value };
+  }
+  return null;
+}
+
+/**
  * Resolve how a client should reach an app's data given the environment.
  *
  * An explicit API URL requests HTTP. It is read from the environment first and,
@@ -390,98 +589,44 @@ export interface ResolveClientTransportOptions {
  * shell inherits no fleet environment, and the honest answer for one is the
  * config its operator actually wrote down — not a silent local-store read at
  * `misconfigured: false`.
+ *
+ * A defined-but-blank URL declaration, a malformed disk declaration, and any
+ * conflicting URL/key alias pair are all reported as `misconfigured: true` —
+ * loud, never a silent local read.
  */
 export function resolveClientTransport(
   name: string,
   env: Env = process.env,
   options: ResolveClientTransportOptions = {},
 ): ClientTransportResolution {
-  assertNoLegacyClientMode(name, env);
-  const keys = clientTransportEnvKeys(name);
-  const envUrlHit = firstEnv(env, keys.apiUrlKeys, { preserveRaw: true });
-  // Only consulted when the environment is silent, so the env keeps precedence
-  // and a client with an explicit URL never pays a stat for a file it ignores.
-  const diskUrlHit = envUrlHit ? null : appConfigDiskValue(name, env, keys.apiUrlKeys);
-  // `key` carries the SOURCE for every downstream field: an env key name, or the
-  // absolute path of the file that decided. `apiKeySource` already reports its
-  // tier this way, so an operator reads both the same way.
-  const urlHit = envUrlHit ?? (diskUrlHit ? { key: diskUrlHit.path, value: diskUrlHit.value } : null);
-  const keyHit = firstEnv(env, keys.apiKeyKeys);
-  const warnings: string[] = [];
+  const coherent = resolveCoherentClientAuthority(name, env, options);
+  const keyHit = firstEnv(env, clientTransportEnvKeys(name).apiKeyKeys);
+  const credential = coherent.credential;
 
-  // No URL in the environment or on disk means local SQLite. Do not resolve the
-  // credential chain here: a client authenticating to nothing must not read or
-  // emit credential state.
-  if (!urlHit) {
+  if (coherent.misconfigured || !coherent.baseUrl) {
     return {
       transport: "sqlite",
-      transportSource: "default",
+      transportSource: coherent.apiUrlSource ?? "default",
       baseUrl: null,
-      apiUrlSource: null,
-      apiKeyPresent: Boolean(keyHit),
-      apiKeySource: keyHit ? keyHit.key : null,
-      apiKeyTier: null,
-      misconfigured: false,
-      warning: null,
-    };
-  }
-
-  // An API URL explicitly selects HTTP. Resolve the credential at call time.
-  // A deliberate tier that cannot be honoured still throws rather than
-  // authenticating as a different principal.
-  const credential: ResolvedCredential | null = resolveCredential(name, env, options.credentials);
-
-  if (!credential) {
-    const diskHint = credentialDiskSourcesForMessage(name, env);
-    warnings.push(
-      `${urlHit.key} selects the HTTP server for '${name}', but no API key could be resolved; ` +
-        `refusing to route and leaving the local sqlite store selected. ` +
-        `Looked for a credential file at ${diskHint}, then for ${keys.apiKeyKeys[0]} in the environment.`,
-    );
-    return {
-      transport: "sqlite",
-      transportSource: urlHit.key,
-      baseUrl: null,
-      apiUrlSource: urlHit.key,
-      apiKeyPresent: false,
-      apiKeySource: null,
-      apiKeyTier: null,
-      misconfigured: true,
-      warning: warnings.join(" "),
-    };
-  }
-  if (credential.warning) warnings.push(credential.warning);
-
-  const apiUrlSource = urlHit.key;
-  let baseUrl: string;
-  try {
-    baseUrl = toV1BaseUrl(urlHit.value);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    warnings.push(`Invalid API URL from ${apiUrlSource}: ${message}. Using local store.`);
-    return {
-      transport: "sqlite",
-      transportSource: urlHit.key,
-      baseUrl: null,
-      apiUrlSource: urlHit.key,
-      apiKeyPresent: true,
-      apiKeySource: credential.source,
-      apiKeyTier: credential.tier,
-      misconfigured: true,
-      warning: warnings.join(" "),
+      apiUrlSource: coherent.apiUrlSource,
+      apiKeyPresent: credential !== null || Boolean(keyHit),
+      apiKeySource: credential?.source ?? (keyHit ? keyHit.key : null),
+      apiKeyTier: credential?.tier ?? null,
+      misconfigured: coherent.misconfigured,
+      warning: coherent.warning,
     };
   }
 
   return {
     transport: "http",
-    transportSource: urlHit.key,
-    baseUrl,
-    apiUrlSource,
+    transportSource: coherent.apiUrlSource!,
+    baseUrl: coherent.baseUrl,
+    apiUrlSource: coherent.apiUrlSource,
     apiKeyPresent: true,
-    apiKeySource: credential.source,
-    apiKeyTier: credential.tier,
+    apiKeySource: credential!.source,
+    apiKeyTier: credential!.tier,
     misconfigured: false,
-    warning: warnings.length > 0 ? warnings.join(" ") : null,
+    warning: coherent.warning,
   };
 }
 
@@ -667,6 +812,14 @@ export interface HasnaHttpTransportOptions {
    * deliberate, explicit credential.
    */
   apiKey: string | CredentialProvider;
+  /**
+   * Per-request COHERENT authority resolution: endpoint AND credential from
+   * one read. When present, each request resolves through this instead of
+   * `baseUrl` + `apiKey`, so an atomic URL+key replacement can never be
+   * observed as a torn pair — the fresh resolution is authoritative and
+   * {@link createClientTransport} fails closed when the endpoint moved.
+   */
+  resolveAuthority?: () => { baseUrl: string; credential: ResolvedCredential };
   /** Override fetch (tests). Defaults to global fetch. */
   fetchImpl?: FetchLike;
   /** Extra headers merged into every request. */
@@ -843,18 +996,23 @@ export function createHasnaHttpTransport(options: HasnaHttpTransportOptions): Ha
   async function request<T>(method: string, path: string, body?: unknown, opts: HasnaRequestOptions = {}): Promise<T> {
     const upper = method.toUpperCase();
     const rel = appendQuery(path.startsWith("/") ? path : `/${path}`, opts.query);
-    const url = `${base}${rel}`;
     const retry = resolveRetry(opts.retry);
     const methodRetryable = IDEMPOTENT_METHODS.has(upper) || Boolean(opts.idempotencyKey);
     const maxAttempts = retry && methodRetryable ? retry.retries + 1 : 1;
 
-    // ONE request, ONE identity. The credential is resolved fresh here — so a
-    // rotation is picked up by the next request without rebuilding the client —
-    // but it is resolved exactly once for the whole retry loop. Re-resolving per
-    // attempt would let a rotation land mid-request and send two attempts of the
-    // same logical call under two different principals, which is precisely the
-    // audit-log confusion that makes retry-on-401 the wrong pattern here.
-    const credential = currentCredential(options.name, options.apiKey);
+    // ONE request, ONE identity — and one coherent authority. With
+    // `resolveAuthority` the endpoint and the credential come from the same
+    // fresh resolution (one disk read), so a rotated pair is never observed as
+    // the new key against the old origin; the resolver itself fails closed when
+    // the endpoint moved. Without it, the credential is resolved fresh exactly
+    // once for the whole retry loop — a rotation is picked up by the next
+    // request without rebuilding the client, but never mid-request (two
+    // attempts of the same logical call under two principals is precisely the
+    // audit-log confusion that makes retry-on-401 the wrong pattern here).
+    const authority = options.resolveAuthority ? options.resolveAuthority() : null;
+    const effectiveBase = authority ? toV1BaseUrl(authority.baseUrl) : base;
+    const credential = authority ? authority.credential : currentCredential(options.name, options.apiKey);
+    const url = `${effectiveBase}${rel}`;
 
     let last: { retryable: boolean; error: Error } | null = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -906,28 +1064,42 @@ export function createClientTransport(
   if (resolution.transport === "sqlite" || !resolution.baseUrl) {
     return { transport: "sqlite", client: null, resolution };
   }
-  // The credential is NOT read here. It is resolved per request through the
-  // same chain `resolveClientTransport` used, so this path cannot drift from
-  // that one — an earlier version of this function re-read the key straight out
-  // of `env`, which was a second, divergent resolution on the code path most
-  // callers actually take.
-  const credentialProvider: CredentialProvider = () => {
-    const resolved = resolveCredential(name, env, credentialOptions);
-    if (!resolved) {
+  // The credential is NOT read here, and neither is the endpoint frozen as
+  // independent state. Each request resolves the COHERENT authority — endpoint
+  // AND credential from one disk read — through the same resolution logic
+  // `resolveClientTransport` uses, so this path cannot drift from that one.
+  // An earlier version of this function froze the URL at construction while
+  // re-reading the key per request: an atomic URL+key replacement then sent
+  // the replacement credential to the retired authority — a cross-authority
+  // disclosure. The per-request resolution closes it from both sides: a
+  // torn pair is impossible (one read), and an authority that MOVED is refused
+  // outright (the construction endpoint is the contract; a change demands a
+  // rebuilt client). Same-authority key-only rotation keeps healing.
+  const constructionAuthority = resolution.baseUrl;
+  const coherentAuthority = (): { baseUrl: string; credential: ResolvedCredential } => {
+    const fresh = resolveCoherentClientAuthority(name, env, { ...(credentialOptions ? { credentials: credentialOptions } : {}) });
+    if (fresh.misconfigured || !fresh.baseUrl || !fresh.credential) {
       throw new Error(
-        `Client for '${name}' resolved to the http transport but no API key is available any more. ` +
-          `Looked at ${credentialDiskSourcesForMessage(name, env)}, then the environment. ` +
-          `A credential file that was removed after this client was built is the usual cause.`,
+        `Client for '${name}' is no longer usable: ${fresh.warning ?? "the server configuration became unusable."} ` +
+          `A configuration change after this client was built is the usual cause.`,
       );
     }
-    return resolved;
+    if (fresh.baseUrl !== constructionAuthority) {
+      throw new Error(
+        `The API authority for '${name}' changed since this client was created (now ${fresh.apiUrlSource}). ` +
+          `This client refuses to send a credential to a different authority than the one it was built for. ` +
+          `Rebuild the client after rotating the server configuration.`,
+      );
+    }
+    return { baseUrl: fresh.baseUrl, credential: fresh.credential };
   };
   return {
     transport: "http",
     client: createHasnaHttpTransport({
       name,
       baseUrl: resolution.baseUrl,
-      apiKey: credentialProvider,
+      apiKey: (() => coherentAuthority().credential) as CredentialProvider,
+      resolveAuthority: coherentAuthority,
       ...(overrides?.fetchImpl ? { fetchImpl: overrides.fetchImpl } : {}),
       ...(overrides?.headers ? { headers: overrides.headers } : {}),
       ...(overrides?.timeoutMs ? { timeoutMs: overrides.timeoutMs } : {}),

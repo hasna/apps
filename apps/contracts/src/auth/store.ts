@@ -5,8 +5,8 @@
 // interface so it works with the vendored storage kit's `TypedQueryClient`, a
 // raw `pg.Pool` wrapper, or a lightweight test shim — no direct `pg` import.
 //
-// PURE REMOTE (Amendment A1): every call hits the cloud Postgres directly. There
-// is no cache and no local mirror; a revocation check reads the row each time.
+// Every call hits the server's PostgreSQL directly. There is no cache and no
+// local mirror; a revocation check reads the row each time.
 
 import { ownAgentClaim, type ApiKeyClaims, type MintedApiKey } from "./keys.js";
 import { normalizeTenantId, ownTenantId } from "./tenant.js";

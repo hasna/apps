@@ -11,6 +11,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  CredentialFileUnsafeError,
   CredentialResolutionError,
   __resetCredentialDeprecationNotices,
   appConfigDiskValue,
@@ -20,7 +21,7 @@ import {
 import { credentialOverrideEnvKey } from "./env-keys.js";
 
 const STALE_ENV_KEY = "hasna_accounts_STALE-revoked-key";
-const FRESH_DISK_KEY = "hasna_accounts_FRESH-on-disk-key";
+const FRESH_DISK_KEY = "hasna_accounts_FRESH-on-diskA";
 
 const homes: string[] = [];
 
@@ -35,7 +36,7 @@ function writeCloudEnv(home: string, app: string, body: string): string {
   const dir = join(home, ".hasna", "cloud");
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${app}.env`);
-  writeFileSync(path, body);
+  writeFileSync(path, body, { mode: 0o600 });
   return path;
 }
 
@@ -44,7 +45,7 @@ function writeConfigEnv(home: string, app: string, body: string): string {
   const dir = join(home, ".config", "hasna");
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${app}-cloud.env`);
-  writeFileSync(path, body);
+  writeFileSync(path, body, { mode: 0o600 });
   return path;
 }
 
@@ -73,15 +74,15 @@ describe("the measured failure: a stale shell must not outrank the disk", () => 
 
   test("the disk is re-read on every call, so a rotation heals without a new process", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=key-before-rotation\n");
+    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=rotA\n");
     const env = { HOME: home, HASNA_ACCOUNTS_API_KEY: STALE_ENV_KEY };
 
-    expect(resolveCredential("accounts", env)!.apiKey).toBe("key-before-rotation");
+    expect(resolveCredential("accounts", env)!.apiKey).toBe("rotA");
 
     // The rotation lands on disk. The process env is untouched and still stale.
-    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=key-after-rotation\n");
+    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=rotB\n");
 
-    expect(resolveCredential("accounts", env)!.apiKey).toBe("key-after-rotation");
+    expect(resolveCredential("accounts", env)!.apiKey).toBe("rotB");
   });
 });
 
@@ -139,11 +140,11 @@ describe("tier 2 — a deliberate override never falls through to another identi
     writeCloudEnv(home, "accounts", `HASNA_ACCOUNTS_API_KEY=${FRESH_DISK_KEY}\n`);
     const dir = join(home, ".hasna", "cloud");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "accounts.staging.env"), "HASNA_ACCOUNTS_API_KEY=staging-key\n");
+    writeFileSync(join(dir, "accounts.staging.env"), "HASNA_ACCOUNTS_API_KEY=stgA\n", { mode: 0o600 });
 
     const resolved = resolveCredential("accounts", { HOME: home, HASNA_PROFILE: "staging" });
 
-    expect(resolved!.apiKey).toBe("staging-key");
+    expect(resolved!.apiKey).toBe("stgA");
     expect(resolved!.tier).toBe("profile");
     expect(resolved!.deliberate).toBe(true);
   });
@@ -170,7 +171,7 @@ describe("tier 2 — a deliberate override never falls through to another identi
     const home = makeHome();
     const dir = join(home, ".hasna", "cloud");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "accounts.staging.env"), "HASNA_ACCOUNTS_API_KEY=staging-key\n");
+    writeFileSync(join(dir, "accounts.staging.env"), "HASNA_ACCOUNTS_API_KEY=stgA\n", { mode: 0o600 });
 
     const resolved = resolveCredential("accounts", {
       HOME: home,
@@ -186,40 +187,40 @@ describe("tier 2 — a deliberate override never falls through to another identi
 describe("tier 3 — disk", () => {
   test("the primary cloud file outranks the secondary config file", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=primary-key\n");
-    writeConfigEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=secondary-key\n");
+    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=vA\n");
+    writeConfigEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=vB\n");
 
     const resolved = resolveCredential("accounts", { HOME: home });
 
-    expect(resolved!.apiKey).toBe("primary-key");
+    expect(resolved!.apiKey).toBe("vA");
     expect(resolved!.tier).toBe("disk");
   });
 
   test("two disk layers holding DIFFERENT keys produce a split-brain warning with no key material", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=primary-key\n");
-    writeConfigEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=secondary-key\n");
+    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=vA\n");
+    writeConfigEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=vB\n");
 
     const resolved = resolveCredential("accounts", { HOME: home });
 
     expect(resolved!.warning).toContain("disagree");
-    expect(resolved!.warning).not.toContain("primary-key");
-    expect(resolved!.warning).not.toContain("secondary-key");
+    expect(resolved!.warning).not.toContain("vA");
+    expect(resolved!.warning).not.toContain("vB");
   });
 
   test("two disk layers holding the SAME key produce no warning", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=same-key\n");
-    writeConfigEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=same-key\n");
+    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=k2\n");
+    writeConfigEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=k2\n");
 
     expect(resolveCredential("accounts", { HOME: home })!.warning).toBeNull();
   });
 
   test("the `export KEY=\"value\"` file shape is parsed", () => {
     const home = makeHome();
-    writeCloudEnv(home, "knowledge", 'export HASNA_KNOWLEDGE_API_KEY="quoted-exported-key"\n');
+    writeCloudEnv(home, "knowledge", 'export HASNA_KNOWLEDGE_API_KEY="exportQ"\n');
 
-    expect(resolveCredential("knowledge", { HOME: home })!.apiKey).toBe("quoted-exported-key");
+    expect(resolveCredential("knowledge", { HOME: home })!.apiKey).toBe("exportQ");
   });
 
   test("comments, blank lines, and trailing whitespace are ignored", () => {
@@ -227,29 +228,29 @@ describe("tier 3 — disk", () => {
     writeCloudEnv(
       home,
       "accounts",
-      "# a comment\n\n  HASNA_ACCOUNTS_API_KEY=spaced-key  \n# HASNA_ACCOUNTS_API_KEY=commented-out\n",
+      "# a comment\n\n  HASNA_ACCOUNTS_API_KEY=spacedA  \n# HASNA_ACCOUNTS_API_KEY=cmtA\n",
     );
 
-    expect(resolveCredential("accounts", { HOME: home })!.apiKey).toBe("spaced-key");
+    expect(resolveCredential("accounts", { HOME: home })!.apiKey).toBe("spacedA");
   });
 
   test("rotated-out sibling files are never read", () => {
     const home = makeHome();
     const dir = join(home, ".hasna", "cloud");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "accounts.env.bak-20260101"), "HASNA_ACCOUNTS_API_KEY=backup-key\n");
-    writeFileSync(join(dir, "accounts.env.pre-flip-1"), "HASNA_ACCOUNTS_API_KEY=preflip-key\n");
+    writeFileSync(join(dir, "accounts.env.bak-20260101"), "HASNA_ACCOUNTS_API_KEY=bk1\n", { mode: 0o600 });
+    writeFileSync(join(dir, "accounts.env.pre-flip-1"), "HASNA_ACCOUNTS_API_KEY=preA\n", { mode: 0o600 });
 
     expect(resolveCredential("accounts", { HOME: home })).toBeNull();
   });
 
   test("the unprefixed <APP>_API_KEY alias is honoured, but only after the canonical name", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", "ACCOUNTS_API_KEY=alias-key\n");
-    expect(resolveCredential("accounts", { HOME: home })!.apiKey).toBe("alias-key");
+    writeCloudEnv(home, "accounts", "ACCOUNTS_API_KEY=a1\n");
+    expect(resolveCredential("accounts", { HOME: home })!.apiKey).toBe("a1");
 
-    writeCloudEnv(home, "accounts", "ACCOUNTS_API_KEY=alias-key\nHASNA_ACCOUNTS_API_KEY=canonical-key\n");
-    expect(resolveCredential("accounts", { HOME: home })!.apiKey).toBe("canonical-key");
+    writeCloudEnv(home, "accounts", "ACCOUNTS_API_KEY=a1\n" + "HASNA_ACCOUNTS_API_KEY=c1\n");
+    expect(resolveCredential("accounts", { HOME: home })!.apiKey).toBe("c1");
   });
 
   test("a malformed file yields no credential and leaks no file content into the result", () => {
@@ -259,18 +260,16 @@ describe("tier 3 — disk", () => {
     expect(resolveCredential("accounts", { HOME: home })).toBeNull();
   });
 
-  test("an unreadable disk path is not fatal — resolution continues to the legacy tier", () => {
+  test("an unreadable disk path is refused loudly, never resolved around", () => {
     const home = makeHome();
-    // `~/.hasna/cloud/accounts.env` is a DIRECTORY, so reading it throws EISDIR.
+    // `~/.hasna/cloud/accounts.env` is a DIRECTORY, so opening it fails with
+    // EISDIR. A path that EXISTS but cannot be verified must not silently
+    // hand the resolution to a lower tier.
     mkdirSync(join(home, ".hasna", "cloud", "accounts.env"), { recursive: true });
 
-    const resolved = resolveCredential(
-      "accounts",
-      { HOME: home, HASNA_ACCOUNTS_API_KEY: STALE_ENV_KEY },
-      { onDeprecation: () => {} },
-    );
-
-    expect(resolved!.tier).toBe("legacy-env");
+    expect(() =>
+      resolveCredential("accounts", { HOME: home, HASNA_ACCOUNTS_API_KEY: STALE_ENV_KEY }),
+    ).toThrow(CredentialFileUnsafeError);
   });
 });
 
@@ -331,7 +330,7 @@ describe("tier 4 — the legacy process env is a fallback, not a default", () =>
 describe("precedence holds across all four tiers", () => {
   test("removing each tier in turn falls to exactly the next one", () => {
     const home = makeHome();
-    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=disk-key\n");
+    writeCloudEnv(home, "accounts", "HASNA_ACCOUNTS_API_KEY=diskA\n");
     const base = {
       HOME: home,
       HASNA_ACCOUNTS_API_KEY: "legacy-key",

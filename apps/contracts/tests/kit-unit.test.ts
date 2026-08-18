@@ -39,6 +39,36 @@ describe("kit server backend resolution", () => {
     expect(aliasEnv.databaseUrlSource).toBe("TODOS_DATABASE_URL");
   });
 
+  test("a defined blank DATABASE_URL fails closed instead of selecting sqlite", () => {
+    const cases: Array<[string, Record<string, string>]> = [
+      ["canonical empty", { HASNA_DEMO_DATABASE_URL: "" }],
+      ["canonical whitespace", { HASNA_DEMO_DATABASE_URL: "   " }],
+      ["canonical quoted whitespace", { HASNA_DEMO_DATABASE_URL: '"   "' }],
+      ["short alias empty", { DEMO_DATABASE_URL: "" }],
+    ];
+    for (const [label, env] of cases) {
+      expect(() => resolveServerDataBackend("demo", env), label).toThrow(/blank/i);
+    }
+  });
+
+  test("conflicting canonical and short DATABASE_URL aliases are rejected, not silently first", () => {
+    expect(() =>
+      resolveServerDataBackend("demo", {
+        HASNA_DEMO_DATABASE_URL: "postgres://a.example/demo",
+        DEMO_DATABASE_URL: "postgres://b.example/demo",
+      }),
+    ).toThrow(/ambiguous/i);
+  });
+
+  test("identical values in both aliases stay accepted", () => {
+    expect(
+      resolveServerDataBackend("demo", {
+        HASNA_DEMO_DATABASE_URL: "postgres://one.example/demo",
+        DEMO_DATABASE_URL: "postgres://one.example/demo",
+      }),
+    ).toMatchObject({ backend: "postgresql" });
+  });
+
   test("legacy mode variables fail with migration guidance", () => {
     for (const value of ["cloud", "", "   "]) {
       expect(() =>

@@ -9,12 +9,138 @@
 //     guard),
 //   - `dryRun` reports the plan without mutating anything.
 //
-// PURE REMOTE (Amendment A1): migrations run against the cloud Postgres. There
-// is no local schema and no sync of ledger rows between machines.
+// Migrations run against the server's PostgreSQL: there is no local schema
+// and no sync of ledger rows between machines.
 
 import { createHash } from "node:crypto";
 import type { TypedQueryClient } from "./query.js";
 import { ownProp, ownString } from "./own.js";
+
+/**
+ * A transaction-control statement, matched on the FIRST token of a statement
+ * after comments and quoted bodies are stripped (see
+ * {@link stripSqlBodies}). Each of these changes the transaction the migration
+ * runs in, and any of them can close the ledger's outer transaction, commit
+ * DDL outside it, and then leave the ledger empty when the later ledger write
+ * fails. The ledger refuses them statically, before any SQL runs.
+ */
+const TRANSACTION_CONTROL_STATEMENT =
+  /^(?:BEGIN|START\s+TRANSACTION|COMMIT(?:\s+PREPARED)?|END(?:\s+TRANSACTION)?|ROLLBACK(?:\s+TO\s+\S+)?(?:\s+PREPARED)?|ABORT|SAVEPOINT\s+\S+|RELEASE(?:\s+SAVEPOINT)?\s+\S+|PREPARE\s+TRANSACTION|SET\s+TRANSACTION)\b/i;
+
+/**
+ * Replace quoted bodies, comments, and quoted strings with spaces so that the
+ * remaining text is statement structure only.
+ *
+ * A migration may legitimately contain `BEGIN`/`END` inside a plpgsql function
+ * body (`$$ ... $$`) or a quoted string; those are body tokens, not statements,
+ * and must not trip the guard. Everything left after stripping is the
+ * statement skeleton, where a leading transaction-control word IS a statement.
+ */
+function stripSqlBodies(sql: string): string {
+  let out = "";
+  let i = 0;
+  const n = sql.length;
+  while (i < n) {
+    const ch = sql[i]!;
+    const next = sql[i + 1];
+    if (ch === "-" && next === "-") {
+      while (i < n && sql[i] !== "\n") {
+        out += " ";
+        i++;
+      }
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      while (i < n - 1 && !(sql[i] === "*" && sql[i + 1] === "/")) {
+        out += " ";
+        i++;
+      }
+      if (i < n - 1) {
+        out += "  ";
+        i += 2;
+      }
+      continue;
+    }
+    if (ch === "$") {
+      // dollar-quoted body: $$ ... $$ or $tag$ ... $tag$
+      const match = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i));
+      if (match) {
+        const tag = match[0];
+        out += " ".repeat(tag.length);
+        i += tag.length;
+        const end = sql.indexOf(tag, i);
+        if (end === -1) {
+          out += " ".repeat(n - i);
+          i = n;
+        } else {
+          out += " ".repeat(end - i + tag.length);
+          i = end + tag.length;
+        }
+        continue;
+      }
+    }
+    if (ch === "'") {
+      out += " ";
+      i++;
+      while (i < n) {
+        if (sql[i] === "'") {
+          if (sql[i + 1] === "'") {
+            out += "  ";
+            i += 2;
+            continue;
+          }
+          out += " ";
+          i++;
+          break;
+        }
+        out += " ";
+        i++;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      out += " ";
+      i++;
+      while (i < n) {
+        if (sql[i] === '"') {
+          if (sql[i + 1] === '"') {
+            out += "  ";
+            i += 2;
+            continue;
+          }
+          out += " ";
+          i++;
+          break;
+        }
+        out += " ";
+        i++;
+      }
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+/**
+ * Statically refuse a migration whose SQL issues transaction-control
+ * statements. The diagnostic names the migration id ONLY — the SQL text is
+ * never rendered (it can carry literals an operator would not want echoed).
+ */
+function assertNoTransactionControl(migration: Migration): void {
+  const skeleton = stripSqlBodies(migration.sql);
+  for (const statement of skeleton.split(";")) {
+    if (TRANSACTION_CONTROL_STATEMENT.test(statement.trim())) {
+      throw new Error(
+        `Migration '${migration.id}' contains a transaction-control statement, which cannot run ` +
+          `inside the migration ledger: it could commit DDL outside the ledger transaction and leave ` +
+          `the ledger empty when the later ledger write fails. Rewrite it as plain DDL; the ledger ` +
+          `applies and records each migration atomically.`,
+      );
+    }
+  }
+}
 
 /** Default ledger table name. Override per app if a legacy name exists. */
 export const DEFAULT_MIGRATION_LEDGER_TABLE = "schema_migrations";
@@ -138,6 +264,10 @@ export class MigrationLedger {
     // OWN-property read: a prototype-supplied `dryRun` would turn every
     // `migrate()` call into a no-op that still reports a plan.
     const dryRun = ownProp<unknown>(opts, "dryRun") === true;
+    // Static guard BEFORE any SQL — even before the ledger table exists — so a
+    // migration that could escape the ledger transaction is refused with
+    // nothing executed, in dry-run and in apply alike.
+    for (const migration of this.migrations) assertNoTransactionControl(migration);
     await this.ensureLedger();
     const applied = await this.readApplied();
     const plan = this.buildPlan(applied);
