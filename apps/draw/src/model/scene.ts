@@ -65,7 +65,7 @@ export function addStroke(
   if (options.strokeColor !== undefined) element.strokeColor = options.strokeColor;
   if (options.strokeWidth !== undefined) element.strokeWidth = options.strokeWidth;
   if (options.opacity !== undefined) element.opacity = options.opacity;
-  if (options.pressures !== undefined) element.pressures = options.pressures;
+  if (options.pressures !== undefined) element.pressures = [...options.pressures];
   return { ...scene, elements: [...scene.elements, element] };
 }
 

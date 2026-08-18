@@ -39,6 +39,18 @@ describe("renewals service (deadline tracking)", () => {
     expect(listRenewalsService(ctx, { asset_id: assetId, status: "completed" }).length).toBe(1);
   });
 
+  it("includes overdue renewals and the exact horizon boundary", () => {
+    const { ctx, assetId } = seedFixture();
+    createRenewal(ctx, { asset_id: assetId, due_date: "2026-07-01" });
+    createRenewal(ctx, { asset_id: assetId, due_date: "2026-10-04" });
+    createRenewal(ctx, { asset_id: assetId, due_date: "2026-10-05" });
+
+    const upcoming = upcomingRenewals(ctx, { within_days: 90, as_of: "2026-07-06" });
+    expect(upcoming.map((renewal) => renewal.due_date)).toEqual(["2026-07-01", "2026-10-04"]);
+    expect(upcoming[0]!.days_until_due).toBe(-5);
+    expect(upcoming[1]!.days_until_due).toBe(90);
+  });
+
   it("rejects a negative fee", () => {
     const { ctx, assetId } = seedFixture();
     expect(() => createRenewal(ctx, { asset_id: assetId, due_date: "2027-01-01", fee_amount: -1 })).toThrow();

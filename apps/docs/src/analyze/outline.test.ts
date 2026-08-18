@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { countWords, getOutline, nodeText, slugify, toText } from "./outline.js";
-import { bold, heading, paragraph, text } from "../model/schema.js";
+import { bold, hardBreak, heading, horizontalRule, paragraph, text } from "../model/schema.js";
 import type { DocJSON } from "../types/index.js";
 
 const doc: DocJSON = {
@@ -22,12 +22,25 @@ describe("nodeText / toText", () => {
     expect(toText(doc)).toContain("Getting Started");
     expect(toText(doc)).toContain("More bold text here.");
   });
+
+  test("keeps hard breaks while omitting horizontal rules", () => {
+    const withBreak: DocJSON = {
+      type: "doc",
+      content: [paragraph([text("first"), hardBreak(), text("second")]), horizontalRule(), paragraph([text("third")])],
+    };
+    expect(toText(withBreak)).toBe("first\nsecond\n\nthird");
+  });
 });
 
 describe("slugify", () => {
   test("makes URL-safe slugs", () => {
     expect(slugify("Hello, World!")).toBe("hello-world");
     expect(slugify("  Multiple   Spaces ")).toBe("multiple-spaces");
+  });
+
+  test("supports Unicode headings and empty slug input", () => {
+    expect(slugify("  Învățare — étape 2  ")).toBe("învățare-étape-2");
+    expect(slugify("!!!")).toBe("");
   });
 });
 
@@ -61,5 +74,43 @@ describe("countWords", () => {
     const stats = countWords(empty);
     expect(stats.words).toBe(0);
     expect(stats.readingTimeMinutes).toBe(0);
+  });
+
+  test("counts Unicode characters without counting whitespace", () => {
+    const unicode: DocJSON = { type: "doc", content: [paragraph([text("café 你好")])] };
+    expect(countWords(unicode)).toMatchObject({ words: 2, characters: 7, charactersNoSpaces: 6 });
+  });
+
+  test("counts sentence punctuation and applies the 200-word reading boundary", () => {
+    const exactBoundary: DocJSON = {
+      type: "doc",
+      content: [paragraph([text(Array.from({ length: 200 }, (_, i) => `word${i}`).join(" "))])],
+    };
+    const overBoundary: DocJSON = {
+      type: "doc",
+      content: [paragraph([text(`${Array.from({ length: 200 }, () => "word").join(" ")} extra`)])],
+    };
+    const sentences = countWords({
+      type: "doc",
+      content: [paragraph([text("One. Two! Three?")])],
+    });
+
+    expect(sentences.sentences).toBe(3);
+    expect(countWords(exactBoundary).readingTimeMinutes).toBe(1);
+    expect(countWords(overBoundary).readingTimeMinutes).toBe(2);
+  });
+
+  test("handles documents without a content array", () => {
+    expect(toText({ type: "doc" })).toBe("");
+    expect(countWords({ type: "doc" })).toMatchObject({
+      words: 0,
+      characters: 0,
+      charactersNoSpaces: 0,
+      paragraphs: 0,
+      headings: 0,
+      sentences: 0,
+      readingTimeMinutes: 0,
+    });
+    expect(getOutline({ type: "doc" })).toEqual([]);
   });
 });

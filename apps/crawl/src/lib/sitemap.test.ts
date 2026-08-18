@@ -23,6 +23,10 @@ afterEach(() => {
 });
 
 describe("fetchSitemap", () => {
+  it("returns no entries for an invalid sitemap URL", async () => {
+    await expect(fetchSitemap("http://[invalid-host")).resolves.toEqual([]);
+  });
+
   it("decodes XML entities in sitemap URL entries", async () => {
     const baseUrl = serveSitemap(() => new Response(`
 <urlset>
