@@ -1092,12 +1092,17 @@ knowledge search <query> --semantic [--model openai:text-embedding-3-small] [--s
 knowledge search <query> --context [--semantic] [--scope project] [--verbose] [--json]
 ```
 Run hybrid search over active JSON-store notes, `chunks_fts`, generated wiki
-chunks, wiki/index catalog rows, and optional vector results. The default path
-is local-only keyword and catalog search. `--semantic` embeds the query and
-merges vector results from `vector_index_entries`, preserving source refs,
-artifact URIs, citations, revision/hash metadata, and provenance in each
-structured result. JSON notes are keyword-only results with `kind:
-legacy_item` and `knowledge://item/<id>` source refs.
+chunks, wiki/index catalog rows, and optional vector results. Keyword search
+over the shared item corpus routes through the server API when HTTP transport
+is active (`HASNA_KNOWLEDGE_API_URL` set). The on-box catalog — `chunks_fts`,
+wiki/catalog rows, and vector results — is served by the local sqlite catalog
+pipeline, which is not available in the HTTP client (the refusal is explicit,
+see `docs/architecture/catalog-transport-boundary.md` for the recorded reason
+and boundary). `--semantic` embeds the query and merges vector results from
+`vector_index_entries`, preserving source refs, artifact URIs, citations,
+revision/hash metadata, and provenance in each structured result. JSON notes
+are keyword-only results with `kind: legacy_item` and
+`knowledge://item/<id>` source refs.
 
 Default terminal search output shows compact result rows with source refs and
 text previews. Use `--context` for an agent-ready citation pack, `--verbose` for
