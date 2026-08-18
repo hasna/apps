@@ -39,12 +39,26 @@ describe("kit server backend resolution", () => {
     expect(aliasEnv.databaseUrlSource).toBe("TODOS_DATABASE_URL");
   });
 
-  test("legacy mode variables fail with migration guidance", () => {
-    for (const value of ["cloud", "", "   "]) {
-      expect(() =>
-        resolveServerDataBackend("todos", { HASNA_TODOS_STORAGE_MODE: value }),
-      ).toThrow(/removed.*HASNA_TODOS_DATABASE_URL/i);
+  test("legacy mode variables are inert: never select a backend, never throw", () => {
+    // No-compat mandate: the mode concept is removed, so a surviving mode
+    // variable must have NO effect — it does not throw (that would be a
+    // transitional guard) and it never selects a backend.
+    for (const value of ["cloud", "local", "", "   "]) {
+      expect(resolveServerDataBackend("todos", { HASNA_TODOS_STORAGE_MODE: value })).toEqual({
+        backend: "sqlite",
+        source: "default",
+        databaseUrlPresent: false,
+        databaseUrlSource: null,
+      });
     }
+    // And the env contract still wins when both are present: a mode variable
+    // cannot override a DATABASE_URL selection.
+    expect(
+      resolveServerDataBackend("todos", {
+        HASNA_TODOS_STORAGE_MODE: "local",
+        TODOS_DATABASE_URL: "postgres://fixture.invalid/todos",
+      }).backend,
+    ).toBe("postgresql");
   });
 
   test("resolveDatabaseUrl honors alias but never logs value", () => {
