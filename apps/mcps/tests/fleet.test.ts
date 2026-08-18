@@ -47,7 +47,7 @@ const PACKAGE_METADATA: Record<string, unknown> = {
           mcps: "bin/index.js",
           "mcps-mcp": "bin/mcp.js",
         },
-        repository: { url: "https://github.com/hasna/open-mcps" },
+        repository: { url: "https://github.com/hasna/mcps" },
       },
     },
   },

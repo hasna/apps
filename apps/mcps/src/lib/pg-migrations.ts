@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for a future open-mcps remote storage boundary.
+ * PostgreSQL migrations for a future mcps remote storage boundary.
  *
  * Equivalent to the SQLite schema in db.ts, translated for PostgreSQL.
  */

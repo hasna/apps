@@ -110,9 +110,9 @@ describe("package repository metadata", () => {
     expect(pkg.bugs.url).toBe(`${GITHUB_REPO_URL}/issues`);
   });
 
-  it("never uses the local open-* folder name as a GitHub slug", () => {
-    // Convention: folder open-mcps / npm @hasna/mcps / GitHub hasna/mcps.
-    // github.com/hasna/open-mcps does not exist, so any such link is a dead link.
+  it("never uses the retired open-* name as a GitHub slug", () => {
+    // Convention: app folder apps/mcps / npm @hasna/mcps / GitHub hasna/apps (monorepo).
+    // github.com/hasna/open-mcps does not exist (retired open- prefix), so any such link is a dead link.
     expect(JSON.stringify(pkg)).not.toContain("github.com/hasna/open-");
   });
 });
