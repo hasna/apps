@@ -1,8 +1,8 @@
-# Open Changelog
+# Hasna Changelog
 
 Reusable changelog collection, generation, and publishing for Hasna-coded apps.
 
-Open Changelog stores entries locally as JSONL, exposes the same model through an SDK, HTTP API, CLI, and MCP tools, and generates Keep a Changelog style Markdown. Publishing to a target `CHANGELOG.md` is dry-run by default and writes only when explicitly requested.
+Hasna Changelog stores entries locally as JSONL, exposes the same model through an SDK, HTTP API, CLI, and MCP tools, and generates Keep a Changelog style Markdown. Publishing to a target `CHANGELOG.md` is dry-run by default and writes only when explicitly requested.
 
 ## Install
 
@@ -31,11 +31,11 @@ changelog list --app changelog
 changelog show <entry-id>
 changelog update <entry-id> --kind fixed --message "Tighten publish safety"
 changelog release --version 0.1.0
-changelog generate --app changelog --version 0.1.0 --kind added --title "Open Changelog Notes"
+changelog generate --app changelog --version 0.1.0 --kind added --title "Hasna Changelog Notes"
 changelog export --app changelog --format jsonl
 
 changelog publish --app changelog --dry-run --diff
-changelog publish --app changelog --write --target CHANGELOG.md --title "Open Changelog Notes"
+changelog publish --app changelog --write --target CHANGELOG.md --title "Hasna Changelog Notes"
 ```
 
 `publish` prints a Markdown preview by default. It writes only with `--write`.

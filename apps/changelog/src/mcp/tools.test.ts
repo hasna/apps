@@ -12,7 +12,7 @@ function textFromResult(result: Awaited<ReturnType<ReturnType<typeof buildChange
 
 describe("changelog MCP tools", () => {
   test("registers tool definitions and covers add/list/get/generate/publish", async () => {
-    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "open-changelog-mcp-")) });
+    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "changelog-mcp-")) });
     const tools = buildChangelogMcpTools(store);
     expect(tools.map((tool) => tool.name)).toEqual([
       "add_changelog_entry",

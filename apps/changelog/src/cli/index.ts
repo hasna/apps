@@ -60,7 +60,7 @@ function localStore(): LocalChangelogStore {
 
 /**
  * Normalize a user-supplied `--app` value the same way entries are normalized
- * on write (`@hasna/todos` -> `open-todos`) so filters match stored appIds.
+ * on write (`@hasna/todos` -> `todos`) so filters match stored appIds.
  * Values that cannot be normalized fall back to the raw string, keeping
  * exact-match behavior for legacy stored ids.
  */
@@ -119,12 +119,12 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   const program = new Command();
   program
     .name("changelog")
-    .description("Collect, generate, and publish Open Changelog entries")
+    .description("Collect, generate, and publish Hasna Changelog entries")
     .version(VERSION, "-V, --cli-version", "output the CLI version number");
 
   program
     .command("init")
-    .description("Create the local Open Changelog data directory")
+    .description("Create the local Hasna Changelog data directory")
     .action(() => {
       const filePath = resolveChangelogFilePath();
       mkdirSync(dirname(filePath), { recursive: true });
@@ -148,7 +148,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--task <task...>", "Task id/ref; can be repeated")
     .option("--metadata <json>", "JSON object metadata")
     .option("--allow-duplicate", "Allow an entry with the same app/version/kind/title/tasks/commits")
-    .option("--api-url <url>", "Remote Open Changelog API URL")
+    .option("--api-url <url>", "Remote Hasna Changelog API URL")
     .action(async (title: string, options: Record<string, string | string[] | boolean | undefined>) => {
       const input: ChangelogEntryInput = {
         appId: await requiredAppId(options.app as string | undefined),
@@ -181,7 +181,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--kind <kind>", "Filter by kind/category")
     .option("--tag <tag>", "Filter by tag")
     .option("--limit <n>", "Limit results", "50")
-    .option("--api-url <url>", "Remote Open Changelog API URL")
+    .option("--api-url <url>", "Remote Hasna Changelog API URL")
     .action(async (options: { app?: string; version?: string; kind?: string; tag?: string; limit?: string; apiUrl?: string }) => {
       const filter = commonFilter(options);
       const client = maybeClient(options);
@@ -192,7 +192,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .command("show")
     .description("Show one changelog entry")
     .argument("<id>", "Changelog entry id")
-    .option("--api-url <url>", "Remote Open Changelog API URL")
+    .option("--api-url <url>", "Remote Hasna Changelog API URL")
     .action(async (id: string, options: { apiUrl?: string }) => {
       const client = maybeClient(options);
       const item = client ? await client.get(id) : await localStore().getEntry(id);
@@ -221,7 +221,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--commit <commit...>", "Replace commit refs; can be repeated")
     .option("--task <task...>", "Replace task refs; can be repeated")
     .option("--metadata <json>", "Replace JSON object metadata")
-    .option("--api-url <url>", "Remote Open Changelog API URL")
+    .option("--api-url <url>", "Remote Hasna Changelog API URL")
     .action(async (id: string, options: Record<string, string | string[] | undefined>) => {
       const client = maybeClient({ apiUrl: options.apiUrl as string | undefined });
       const update = updateFromOptions(options);
@@ -243,7 +243,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--tag <tag>", "Filter by tag")
     .option("--limit <n>", "Limit entries", "500")
     .option("--title <title>", "Markdown title")
-    .option("--api-url <url>", "Remote Open Changelog API URL")
+    .option("--api-url <url>", "Remote Hasna Changelog API URL")
     .action(async (options: { app?: string; version?: string; kind?: string; tag?: string; limit?: string; title?: string; apiUrl?: string }) => {
       const client = maybeClient(options);
       const filter = commonFilter({ ...options, app: await inferredAppId(options.app) });
@@ -265,7 +265,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--app <appId>", "Application id or slug; inferred from package.json when omitted")
     .option("--from-version <version>", "Source version bucket", "Unreleased")
     .option("--date <date>", "Release date as YYYY-MM-DD")
-    .option("--api-url <url>", "Remote Open Changelog API URL")
+    .option("--api-url <url>", "Remote Hasna Changelog API URL")
     .action(async (options: { app?: string; version: string; fromVersion?: string; date?: string; apiUrl?: string }) => {
       const input = {
         appId: await requiredAppId(options.app),
@@ -289,14 +289,14 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--target <path>", "Target changelog file", "CHANGELOG.md")
     .option("--dry-run", "Preview without writing (the default unless --write is passed; not supported with --release)")
     .option("--write", "Write the target file")
-    .option("--release", "Release-publish for open-releases: promote pending entries to --version, write the changelog, and print a changelogRef")
+    .option("--release", "Release-publish for releases: promote pending entries to --version, write the changelog, and print a changelogRef")
     .option("--from-version <version>", "Source bucket promoted by --release", "Unreleased")
     .option("--date <date>", "Release date as YYYY-MM-DD used by --release")
     .option("--base-url <url>", "Published changelog site base URL used for the changelogRef uri")
     .option("--diff", "Print a line diff during dry-run or include it in JSON")
     .option("--no-backup", "Do not write a backup before overwriting an existing file")
     .option("--json", "Print JSON result instead of Markdown preview")
-    .option("--api-url <url>", "Remote Open Changelog API URL")
+    .option("--api-url <url>", "Remote Hasna Changelog API URL")
     .action(async (options: { app?: string; version?: string; kind?: string; tag?: string; limit?: string; title?: string; target: string; dryRun?: boolean; write?: boolean; release?: boolean; fromVersion?: string; date?: string; baseUrl?: string; diff?: boolean; backup?: boolean; json?: boolean; apiUrl?: string }) => {
       if (options.release) {
         if (!options.version) throw new Error("--release requires --version");
@@ -370,7 +370,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   program
     .command("stats")
     .description("Show changelog stats")
-    .option("--api-url <url>", "Remote Open Changelog API URL")
+    .option("--api-url <url>", "Remote Hasna Changelog API URL")
     .action(async (options: { apiUrl?: string }) => {
       const client = maybeClient(options);
       printJson(client ? await client.stats() : await localStore().stats());
@@ -385,7 +385,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--tag <tag>", "Filter by tag")
     .option("--limit <n>", "Limit results", "500")
     .option("--format <format>", "json or jsonl", "jsonl")
-    .option("--api-url <url>", "Remote Open Changelog API URL")
+    .option("--api-url <url>", "Remote Hasna Changelog API URL")
     .action(async (options: { app?: string; version?: string; kind?: string; tag?: string; limit?: string; format: string; apiUrl?: string }) => {
       const filter = commonFilter(options);
       const client = maybeClient(options);

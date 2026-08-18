@@ -13,10 +13,9 @@ interface PackageJson {
 }
 
 /**
- * Infer the hasna.app.v1 appId from an npm package name. `@hasna/*` packages
- * map to the `open-<name>` repo-folder convention so the inferred appId is
- * the join key used by the distribution contracts (`@hasna/todos` ->
- * `open-todos`).
+ * Infer the hasna.app.v1 appId from an npm package name. `@hasna/*` package
+ * names normalize to the bare app slug (`@hasna/todos` -> `todos`), which is
+ * the join key used by the distribution contracts.
  */
 function appIdFromPackageName(name: string | undefined): string | undefined {
   if (!name) return undefined;

@@ -35,7 +35,7 @@ async function seededStore(dir: string): Promise<LocalChangelogStore> {
 
 describe("generateChangelogSite", () => {
   test("generates per-app pages, RSS, JSON feeds, and an index", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "open-changelog-web-"));
+    const dir = await mkdtemp(join(tmpdir(), "changelog-web-"));
     const store = await seededStore(dir);
     const outDir = join(dir, "site");
 
@@ -88,7 +88,7 @@ describe("generateChangelogSite", () => {
   });
 
   test("restricts output to one app when appId is set", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "open-changelog-web-single-"));
+    const dir = await mkdtemp(join(tmpdir(), "changelog-web-single-"));
     const store = await seededStore(dir);
     const outDir = join(dir, "site");
     const result = await generateChangelogSite({ outDir, store, appId: "open-uptime" });
@@ -103,7 +103,7 @@ describe("generateChangelogSite", () => {
   });
 
   test("escapes hostile version strings in the version heading", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "open-changelog-web-xss-"));
+    const dir = await mkdtemp(join(tmpdir(), "changelog-web-xss-"));
     const outDir = join(dir, "site");
     // Bypass input validation via the entries option to simulate hostile or
     // legacy stored data reaching the generator.
@@ -133,7 +133,7 @@ describe("generateChangelogSite", () => {
   });
 
   test("omits feed link fields when no baseUrl is configured", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "open-changelog-web-nolink-"));
+    const dir = await mkdtemp(join(tmpdir(), "changelog-web-nolink-"));
     const store = await seededStore(dir);
     const outDir = join(dir, "site");
     await generateChangelogSite({ outDir, store });

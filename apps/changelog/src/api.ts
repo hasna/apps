@@ -112,7 +112,7 @@ export function createChangelogHandler(options: ChangelogApiOptions = {}): (requ
 
     try {
       if (request.method === "GET" && pathname === "/health") {
-        return withCors(jsonResponse({ ok: true, service: "open-changelog", version: VERSION }), corsOrigin);
+        return withCors(jsonResponse({ ok: true, service: "changelog", version: VERSION }), corsOrigin);
       }
 
       if (request.method === "POST" && pathname === "/v1/entries") {

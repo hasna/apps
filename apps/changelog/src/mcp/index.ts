@@ -15,7 +15,7 @@ export async function startMcpServer(): Promise<void> {
 function printHelp(): void {
   console.log(`Usage: changelog-mcp [options]
 
-Open Changelog MCP server over stdio.
+Hasna Changelog MCP server over stdio.
 
 Tools:
   add_changelog_entry
