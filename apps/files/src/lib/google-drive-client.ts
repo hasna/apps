@@ -1,6 +1,15 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import { Readable } from "stream";
 import { runConnectorOperation } from "@hasna/connectors";
 import type { GoogleDriveExportFormats, GoogleDriveProfileStatus } from "../types/index.js";
@@ -337,7 +346,7 @@ function loadCredentials(profile: string): OAuthCredentials {
   const envClientId = process.env.GOOGLE_CLIENT_ID;
   const envClientSecret = process.env.GOOGLE_CLIENT_SECRET;
   if (envClientId && envClientSecret) return { clientId: envClientId, clientSecret: envClientSecret };
-  for (const baseDir of configDirs()) {
+  for (const baseDir of googleDriveConnectorDirs()) {
     const credentials = {
       ...readJson<OAuthCredentials>(join(baseDir, "credentials.json")),
       ...readJson<OAuthCredentials>(join(baseDir, "profiles", profile, "config.json")),
@@ -348,7 +357,7 @@ function loadCredentials(profile: string): OAuthCredentials {
 }
 
 function loadTokens(profile: string): LoadedTokens | null {
-  for (const baseDir of configDirs()) {
+  for (const baseDir of googleDriveConnectorDirs()) {
     const fromProfile = readJson<OAuth2Tokens>(join(baseDir, "profiles", profile, "tokens.json"));
     if (fromProfile) return { tokens: fromProfile, baseDir };
     const flat = readJson<{ tokens?: OAuth2Tokens } & OAuth2Tokens>(join(baseDir, "profiles", `${profile}.json`));
@@ -359,7 +368,7 @@ function loadTokens(profile: string): LoadedTokens | null {
 }
 
 function saveTokens(profile: string, tokens: OAuth2Tokens, preferredBaseDir?: string): void {
-  const dirs = configDirs();
+  const dirs = googleDriveConnectorDirs();
   const baseDir = preferredBaseDir ?? dirs.find((dir) => existsSync(dir)) ?? dirs[0];
   if (!baseDir) throw new Error("Google Drive connector configuration directory is unavailable");
   const profileDir = join(baseDir, "profiles", profile);
@@ -367,11 +376,149 @@ function saveTokens(profile: string, tokens: OAuth2Tokens, preferredBaseDir?: st
   writeFileSync(join(profileDir, "tokens.json"), JSON.stringify(tokens, null, 2), { mode: 0o600 });
 }
 
-function configDirs(): string[] {
-  const explicit = process.env.HASNA_GOOGLE_DRIVE_CONNECTOR_DIR ?? process.env.GOOGLE_DRIVE_CONNECTOR_DIR;
+export interface GoogleDriveTokenStoreMigrationResult {
+  migrated: boolean;
+  dryRun: boolean;
+  filesCopied: string[];
+  filesAlreadyPresent: string[];
+  conflicts: string[];
+  receiptPath: string | null;
+}
+
+const NO_MIGRATION: Omit<GoogleDriveTokenStoreMigrationResult, "dryRun"> = {
+  migrated: false,
+  filesCopied: [],
+  filesAlreadyPresent: [],
+  conflicts: [],
+  receiptPath: null,
+};
+
+function sha256File(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function listFilesRecursive(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    return entry.isDirectory() ? listFilesRecursive(path) : [path];
+  });
+}
+
+/**
+ * One-time migration of the legacy Google Drive connector token store
+ * (~/.hasna/connectors/{googledrive,connect-googledrive}) into the canonical
+ * app data root (~/.hasna/files/connectors/).
+ *
+ * Copies every file, chmod 0600 (OAuth credentials), verifies each copy
+ * byte-for-byte, and records a receipt
+ * (~/.hasna/files/connectors/.googledrive-migrated.receipt.json). The source
+ * is never deleted; an existing canonical file that differs is a recorded
+ * conflict and is never overwritten; the migration is idempotent (receipt
+ * skips it, per-file verification resumes a partial copy) and supports
+ * dry-run (reports exactly what would be copied, writes nothing).
+ *
+ * Never runs when an explicit connector dir override is set — an operator
+ * override is authoritative and no default path is migrated from.
+ */
+export function migrateGoogleDriveTokenStore(
+  env: NodeJS.ProcessEnv = process.env,
+  dryRun = false,
+): GoogleDriveTokenStoreMigrationResult {
+  const explicit = env.HASNA_GOOGLE_DRIVE_CONNECTOR_DIR ?? env.GOOGLE_DRIVE_CONNECTOR_DIR;
+  const connectorsDir = env.HASNA_CONNECTORS_DIR;
+  if (explicit || connectorsDir) return { ...NO_MIGRATION, dryRun };
+
+  const home = env.HOME || env.USERPROFILE || homedir();
+  const legacyBase = join(home, ".hasna", "connectors");
+  const newBase = join(home, ".hasna", "files", "connectors");
+  if (!existsSync(legacyBase)) return { ...NO_MIGRATION, dryRun };
+
+  const receiptPath = join(newBase, ".googledrive-migrated.receipt.json");
+  if (existsSync(receiptPath)) return { ...NO_MIGRATION, dryRun, receiptPath };
+
+  const result: GoogleDriveTokenStoreMigrationResult = {
+    migrated: !dryRun,
+    dryRun,
+    filesCopied: [],
+    filesAlreadyPresent: [],
+    conflicts: [],
+    receiptPath: dryRun ? receiptPath : null,
+  };
+
+  for (const sub of ["googledrive", "connect-googledrive"]) {
+    const source = join(legacyBase, sub);
+    if (!existsSync(source)) continue;
+    const dest = join(newBase, sub);
+    for (const file of listFilesRecursive(source)) {
+      const rel = file.slice(source.length + 1);
+      const to = join(dest, rel);
+      if (existsSync(to)) {
+        if (sha256File(to) === sha256File(file)) result.filesAlreadyPresent.push(rel);
+        else result.conflicts.push(rel);
+      } else if (dryRun) {
+        result.filesCopied.push(rel);
+      } else {
+        mkdirSync(dirname(to), { recursive: true });
+        copyFileSync(file, to);
+        chmodSync(to, 0o600);
+        if (sha256File(to) === sha256File(file)) result.filesCopied.push(rel);
+        else result.conflicts.push(rel);
+      }
+    }
+  }
+
+  if (!dryRun && result.filesCopied.length + result.filesAlreadyPresent.length + result.conflicts.length > 0) {
+    mkdirSync(newBase, { recursive: true });
+    writeFileSync(
+      receiptPath,
+      `${JSON.stringify(
+        {
+          migratedAt: new Date().toISOString(),
+          from: legacyBase,
+          to: newBase,
+          filesCopied: result.filesCopied,
+          filesAlreadyPresent: result.filesAlreadyPresent,
+          conflicts: result.conflicts,
+        },
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
+    result.receiptPath = receiptPath;
+  }
+
+  return result;
+}
+
+/**
+ * The canonical default connector-token store: ~/.hasna/files/connectors/.
+ * Env overrides (HASNA_GOOGLE_DRIVE_CONNECTOR_DIR / GOOGLE_DRIVE_CONNECTOR_DIR
+ * / HASNA_CONNECTORS_DIR) are honored unchanged and win over the default; a
+ * first-run migration moves legacy default data into the canonical root.
+ * Legacy default dirs stay appended as read-only fallbacks.
+ */
+export function googleDriveConnectorDirs(env: NodeJS.ProcessEnv = process.env): string[] {
+  const explicit = env.HASNA_GOOGLE_DRIVE_CONNECTOR_DIR ?? env.GOOGLE_DRIVE_CONNECTOR_DIR;
   if (explicit) return [explicit];
-  const baseDir = process.env.HASNA_CONNECTORS_DIR ?? join(homedir(), ".hasna", "connectors");
-  return [join(baseDir, "googledrive"), join(baseDir, "connect-googledrive")];
+
+  const connectorsDir = env.HASNA_CONNECTORS_DIR;
+  if (connectorsDir) {
+    return [join(connectorsDir, "googledrive"), join(connectorsDir, "connect-googledrive")];
+  }
+
+  migrateGoogleDriveTokenStore(env);
+
+  const home = env.HOME || env.USERPROFILE || homedir();
+  const newBase = join(home, ".hasna", "files", "connectors");
+  const legacyBase = join(home, ".hasna", "connectors");
+  return [
+    join(newBase, "googledrive"),
+    join(newBase, "connect-googledrive"),
+    join(legacyBase, "googledrive"),
+    join(legacyBase, "connect-googledrive"),
+  ];
 }
 
 function readJson<T>(path: string): T | null {
