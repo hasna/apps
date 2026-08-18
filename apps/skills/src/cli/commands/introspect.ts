@@ -13,7 +13,7 @@ import { getSkillDocs, getSkillRequirements } from "../../lib/skillinfo.js";
 import { getInstallMeta, getInstalledSkills, getSkillPath } from "../../lib/installer.js";
 import { validateSkillDirectory } from "../../lib/skill-validation.js";
 import { findPortableSkill, normalizePortableSkillName, validatePortableSkillDirectory } from "../../lib/portable-skills.js";
-import { SYNC_AGENTS, SYNC_MARKER_FILE, agentGlobalSkillsDir } from "../../lib/agent-sync.js";
+import { SYNC_AGENTS, SYNC_MARKER_FILE, agentGlobalSkillsDir, isPointerSkillMd } from "../../lib/agent-sync.js";
 import { resolveCorpusRoot } from "../../lib/home-migration.js";
 import { hashSkillMarkdownFile } from "../../lib/skill-hash.js";
 import {
@@ -244,6 +244,9 @@ function handleDiff(name: string, options: { json: boolean }) {
     present: existsSync(canonicalSkillMd),
     path: canonicalDir,
     ...(existsSync(canonicalSkillMd) ? { hash: hashSkillMarkdownFile(canonicalSkillMd) } : {}),
+    // A stub canonical is an executable skill whose managed form is a pointer
+    // (bug 60f2ab27): content homes under it are adopted content, not sync output.
+    ...(existsSync(canonicalSkillMd) ? { stub: isPointerSkillMd(readFileSync(canonicalSkillMd, "utf-8")) } : {}),
   };
 
   // Pin comparison remains, as a subset of the home-vs-canonical comparison:
@@ -267,6 +270,14 @@ function handleDiff(name: string, options: { json: boolean }) {
     const managed = existsSync(join(dir, SYNC_MARKER_FILE));
     const skillMdPath = join(dir, "SKILL.md");
     const hash = present && existsSync(skillMdPath) ? hashSkillMarkdownFile(skillMdPath) : undefined;
+    let stub: boolean | undefined;
+    if (present && existsSync(skillMdPath)) {
+      try {
+        stub = isPointerSkillMd(readFileSync(skillMdPath, "utf-8"));
+      } catch {
+        stub = undefined;
+      }
+    }
     const diverged = present && canonical.present && managed && hash !== canonical.hash;
     homes.push({
       agent,
@@ -274,6 +285,7 @@ function handleDiff(name: string, options: { json: boolean }) {
       present,
       managed,
       ...(hash ? { hash } : {}),
+      ...(stub !== undefined ? { stub } : {}),
       ...(diverged !== undefined ? { diverged } : {}),
     });
   }
@@ -306,7 +318,8 @@ function handleDiff(name: string, options: { json: boolean }) {
       } else if (!home.managed) {
         console.log(`${chalk.dim("•")} ${home.agent}: ${chalk.yellow("unmarked (adoption candidate)")}`);
       } else if (home.diverged) {
-        console.log(`${chalk.red("✗")} ${home.agent}: ${chalk.red("diverged")} ${chalk.dim(home.hash?.slice(0, 12))} ≠ ${chalk.dim(canonical.hash?.slice(0, 12))}`);
+        const stubNote = home.stub === true ? " (home is a pointer stub; canonical holds content)" : canonical.stub === true ? " (home holds content; canonical renders a pointer stub — sync refuses to replace it)" : "";
+        console.log(`${chalk.red("✗")} ${home.agent}: ${chalk.red("diverged")} ${chalk.dim(home.hash?.slice(0, 12))} ≠ ${chalk.dim(canonical.hash?.slice(0, 12))}${stubNote}`);
       } else {
         console.log(`${chalk.green("✓")} ${home.agent}: ${chalk.green("matches canonical")}`);
       }

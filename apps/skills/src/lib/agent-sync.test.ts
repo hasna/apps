@@ -15,6 +15,7 @@ import { join } from "node:path";
 import {
   adaptSkillMdForAgent,
   agentGlobalSkillsDir,
+  isPointerSkillMd,
   pointerSkillMd,
   resolveSyncAgents,
   resolveSyncCorpus,
@@ -301,6 +302,38 @@ describe("syncSkillsToAgents", () => {
     }
   });
 
+  test("sync refuses to replace a content-bearing managed home with an executable pointer stub", () => {
+    // Regression for O15-00102 (task 60f2ab27): a corpus skill WITHOUT kind frontmatter
+    // (kind defaults to executable) synced over an adopted full-content managed home,
+    // replacing it with a 15-line pointer stub at rc=0 with no warning.
+    const corpus = tempDir("sync-corpus-");
+    const home = tempDir("sync-home-");
+    try {
+      const fullMd = "---\nname: oss-pr-zero-drain\ndescription: Drain the PR queues\n---\n\n# OSS PR-Zero Drain\n\nFull content that must survive.\n";
+      // No kind in frontmatter, no skill.json kind: kind defaults to executable.
+      seedCorpusSkill(corpus, "oss-pr-zero-drain", fullMd, {
+        "skill.json": JSON.stringify({ standard: "hasna.skill.v1", name: "oss-pr-zero-drain" }),
+      });
+      const homeDir = join(home, ".claude", "skills", "oss-pr-zero-drain");
+      mkdirSync(homeDir, { recursive: true });
+      // The managed home holds the FULL content (adopted state, marker present).
+      writeFileSync(join(homeDir, "SKILL.md"), fullMd);
+      writeFileSync(join(homeDir, SYNC_MARKER_FILE), JSON.stringify({ managedBy: "@hasna/skills", skill: "oss-pr-zero-drain", source: "adopted", syncedAt: "2026-08-15T00:00:00.000Z" }));
+
+      const { actions } = syncSkillsToAgents({ rootDir: corpus, homeDir: home, agents: ["claude"] });
+
+      expect(actions).toHaveLength(1);
+      expect(actions[0].action).toBe("skip");
+      expect(actions[0].reason).toContain("pointer stub");
+      // The full content is untouched; the marker survives.
+      expect(readFileSync(join(homeDir, "SKILL.md"), "utf-8")).toBe(fullMd);
+      expect(existsSync(join(homeDir, SYNC_MARKER_FILE))).toBe(true);
+    } finally {
+      rmSync(corpus, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("a named workflow skill syncs its complete bundled directory", () => {
     const corpus = tempDir("sync-corpus-");
     const home = tempDir("sync-home-");
@@ -381,6 +414,28 @@ describe("syncSkillsToAgents", () => {
   });
 });
 
+describe("isPointerSkillMd", () => {
+  test("recognises a sync pointer stub", () => {
+    expect(isPointerSkillMd(pointerSkillMd("my-skill", "Does a thing"))).toBe(true);
+  });
+
+  test("recognises an agent-adapted pointer stub (user_invocable inserted)", () => {
+    const adapted = adaptSkillMdForAgent(pointerSkillMd("my-skill", "Does a thing"), "claude");
+    expect(adapted).toContain("user_invocable: true");
+    expect(isPointerSkillMd(adapted)).toBe(true);
+  });
+
+  test("rejects a full-content skill document", () => {
+    const full = "---\nname: my-skill\ndescription: Real content\nkind: instruction\n---\n\n# My Skill\n\nReal body.\n";
+    expect(isPointerSkillMd(full)).toBe(false);
+  });
+
+  test("rejects content that merely mentions the catalog sentence without the pointer shape", () => {
+    const prose = "---\nname: my-skill\ndescription: Prose\n---\n\nThis is an executable skill from the @hasna/skills catalog. But this is real body text, not a pointer.\n";
+    expect(isPointerSkillMd(prose)).toBe(false);
+  });
+});
+
 describe("writeManagedAgentSkill", () => {
   test("pointerSkillMd carries name, description, and run guidance", () => {
     const md = pointerSkillMd("my-skill", "Does a thing");
@@ -438,6 +493,79 @@ describe("writeManagedSkillDir", () => {
       expect(readFileSync(join(target, "scripts", "current"), "utf-8")).toBe("current v2");
       expect(existsSync(join(target, "scripts", "obsolete"))).toBe(false);
       expect(existsSync(join(target, SYNC_MARKER_FILE))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses to replace a content-bearing managed home with a pointer stub", () => {
+    const root = tempDir("sync-managed-dir-");
+    try {
+      const target = join(root, "target");
+      const fullContent = "---\nname: s\ndescription: Full skill\n---\n\n# Full skill\n\nReal content.\n";
+      // Seed the managed home with FULL content (adopted state, marker present).
+      const first = writeManagedSkillDir(target, fullContent, { skill: "s", source: "adopted" });
+      expect(first.action).toBe("create");
+
+      const stub = pointerSkillMd("s", "Full skill");
+      const second = writeManagedSkillDir(target, stub, { skill: "s", source: "corpus" });
+
+      expect(second.action).toBe("skip");
+      expect(second.reason).toContain("pointer stub");
+      // The full content and marker are untouched (fullContent already ends with a newline).
+      expect(readFileSync(join(target, "SKILL.md"), "utf-8")).toBe(fullContent);
+      expect(existsSync(join(target, SYNC_MARKER_FILE))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("stub-over-content refusal is overridable with --force", () => {
+    const root = tempDir("sync-managed-dir-");
+    try {
+      const target = join(root, "target");
+      const fullContent = "---\nname: s\ndescription: Full skill\n---\n\n# Full skill\n\nReal content.\n";
+      writeManagedSkillDir(target, fullContent, { skill: "s", source: "adopted" });
+
+      const stub = pointerSkillMd("s", "Full skill");
+      const forced = writeManagedSkillDir(target, stub, { skill: "s", source: "corpus", force: true });
+
+      expect(forced.action).toBe("update");
+      // pointerSkillMd output already ends with a newline; the writer stores it verbatim.
+      expect(readFileSync(join(target, "SKILL.md"), "utf-8")).toBe(stub);
+      expect(existsSync(join(target, SYNC_MARKER_FILE))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("stub over an existing stub home is a normal update, not a refusal", () => {
+    const root = tempDir("sync-managed-dir-");
+    try {
+      const target = join(root, "target");
+      const stub = pointerSkillMd("s", "Full skill");
+      writeManagedSkillDir(target, stub, { skill: "s", source: "corpus" });
+
+      const reSync = writeManagedSkillDir(target, pointerSkillMd("s", "Full skill"), { skill: "s", source: "corpus" });
+
+      expect(reSync.action).toBe("update");
+      expect(readFileSync(join(target, "SKILL.md"), "utf-8")).toBe(stub);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("full content over full content is a normal update, never a refusal", () => {
+    const root = tempDir("sync-managed-dir-");
+    try {
+      const target = join(root, "target");
+      const fullContent = "---\nname: s\ndescription: Full skill\n---\n\n# Full skill\n\nReal content.\n";
+      writeManagedSkillDir(target, fullContent, { skill: "s", source: "corpus" });
+
+      const second = writeManagedSkillDir(target, fullContent + "v2\n", { skill: "s", source: "corpus" });
+
+      expect(second.action).toBe("update");
+      expect(readFileSync(join(target, "SKILL.md"), "utf-8")).toBe(fullContent + "v2\n");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { SYNC_MARKER_FILE, SYNC_MARKER_MANAGED_BY } from "./agent-sync.js";
+import { SYNC_MARKER_FILE, SYNC_MARKER_MANAGED_BY, isPointerSkillMd, pointerSkillMd } from "./agent-sync.js";
 import { INSTALLED_SKILLS_DIRNAME } from "./config.js";
 import { censusHomeDrift } from "./home-census.js";
 
@@ -75,6 +75,59 @@ describe("censusHomeDrift", () => {
     expect(census.entries).toHaveLength(1);
     expect(census.entries[0]).toMatchObject({ agent: "claude", skill: "alpha", kind: "diverged" });
     expect(census.entries[0].homeHash).not.toBe(census.entries[0].canonicalHash);
+  });
+
+  test("diverged labels a home stub whose canonical corpus holds content", () => {
+    const home = tempHome();
+    const corpus = corpusDir(home);
+    writeSkillMd(join(corpus, "alpha"), SKILL_CONTENT("alpha"));
+    writeSkillMd(join(home, ".claude", "skills", "alpha"), pointerSkillMd("alpha", "alpha skill"));
+    mark(join(home, ".claude", "skills", "alpha"));
+
+    const census = censusHomeDrift({ homeDir: home });
+
+    expect(census.clean).toBe(false);
+    expect(census.entries).toHaveLength(1);
+    expect(census.entries[0]).toMatchObject({ agent: "claude", skill: "alpha", kind: "diverged" });
+    expect(census.entries[0].homeStub).toBe(true);
+    expect(census.entries[0].canonicalStub).toBe(false);
+  });
+
+  test("diverged labels a content home whose canonical corpus renders a stub", () => {
+    const home = tempHome();
+    const corpus = corpusDir(home);
+    // An executable corpus entry: the canonical managed form is a pointer stub.
+    writeSkillMd(join(corpus, "alpha"), pointerSkillMd("alpha", "alpha skill"));
+    // The managed home still holds full adopted content.
+    writeSkillMd(join(home, ".claude", "skills", "alpha"), SKILL_CONTENT("alpha"));
+    mark(join(home, ".claude", "skills", "alpha"));
+
+    const census = censusHomeDrift({ homeDir: home });
+
+    expect(census.clean).toBe(false);
+    expect(census.entries).toHaveLength(1);
+    expect(census.entries[0]).toMatchObject({ agent: "claude", skill: "alpha", kind: "diverged" });
+    expect(census.entries[0].homeStub).toBe(false);
+    expect(census.entries[0].canonicalStub).toBe(true);
+  });
+
+  test("a matching stub home under a stub canonical is clean, not drift", () => {
+    const home = tempHome();
+    const corpus = corpusDir(home);
+    const stub = pointerSkillMd("alpha", "alpha skill");
+    writeSkillMd(join(corpus, "alpha"), stub);
+    writeSkillMd(join(home, ".claude", "skills", "alpha"), stub);
+    mark(join(home, ".claude", "skills", "alpha"));
+
+    const census = censusHomeDrift({ homeDir: home });
+
+    expect(census.clean).toBe(true);
+    expect(census.entries).toEqual([]);
+  });
+
+  test("isPointerSkillMd is exported for the census", () => {
+    expect(isPointerSkillMd(pointerSkillMd("x", "y"))).toBe(true);
+    expect(isPointerSkillMd(SKILL_CONTENT("x"))).toBe(false);
   });
 
   test("stray-in-home when a marked dir has no canonical entry", () => {

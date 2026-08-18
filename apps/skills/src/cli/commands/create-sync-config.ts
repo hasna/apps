@@ -327,7 +327,10 @@ function printCensusHuman(census: DriftCensus): void {
       : entry.kind === "stray-in-home"
         ? chalk.yellow("stray-in-home")
         : chalk.yellow("diverged");
-    console.log(`  ${kind}  ${chalk.bold(entry.skill)} → ${entry.agent}  ${chalk.dim(entry.path)}`);
+    let note = "";
+    if (entry.homeStub === true) note = " (home is a pointer stub; canonical holds content)";
+    else if (entry.canonicalStub === true) note = " (home holds content; canonical renders a pointer stub — sync refuses to replace it)";
+    console.log(`  ${kind}  ${chalk.bold(entry.skill)} → ${entry.agent}  ${chalk.dim(entry.path)}${note}`);
   }
   console.log(chalk.dim(`\n${census.managed} managed, ${census.unmarked} unmarked (adoption candidates). Exit code is non-zero while drift exists.`));
 }
