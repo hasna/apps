@@ -69,7 +69,11 @@
     ],
     "envPrefix": "HASNA_KNOWLEDGE_",
     "aliasEnvPrefix": "KNOWLEDGE_",
-    "sqlitePath": "~/.hasna/knowledge/knowledge.db"
+    "sqlitePath": "~/.hasna/knowledge/knowledge.db",
+    "pgTestGate": {
+      "envVar": "HASNA_KNOWLEDGE_TEST_DATABASE_URL",
+      "command": "HASNA_KNOWLEDGE_DATABASE_URL=$HASNA_KNOWLEDGE_TEST_DATABASE_URL bun run test:pg"
+    }
   },
   "metadata": {
     "service": {
@@ -88,6 +92,11 @@
     "client": {
       "apiUrlEnv": "HASNA_KNOWLEDGE_API_URL",
       "apiKeyEnv": "HASNA_KNOWLEDGE_API_KEY"
+    },
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
     }
   }
 }
