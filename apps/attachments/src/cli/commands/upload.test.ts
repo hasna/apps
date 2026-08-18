@@ -2,6 +2,8 @@ import { describe, it, expect, mock, beforeEach, spyOn, afterAll } from "bun:tes
 import { Command } from "commander";
 import * as configModule from "../../core/config";
 import * as childProcess from "child_process";
+import { tmpdir } from "os";
+import { unlinkSync, writeFileSync } from "fs";
 
 // ---------------------------------------------------------------------------
 // Mock core/upload and core/config before importing the command
@@ -529,6 +531,55 @@ describe("upload command", () => {
       expect(mockUploadFromUrl).not.toHaveBeenCalled();
     } finally {
       capture.restore();
+    }
+  });
+  it("cloud mode accepts --encrypt --password and passes it to the store (was local-only)", async () => {
+    // The refusal gate lives in the CLI action; the hosted transport is
+    // selected by the same env the suite strips for hermeticity, so this
+    // test re-arms URL+KEY (and clears the local override) for its own scope,
+    // stubs the /v1 upload call, and restores everything afterwards.
+    const capture = captureOutput();
+    // exitError() calls process.exit(1) directly; spy so a live refusal fails
+    // this test with a reported error instead of killing the test runner.
+    const exitSpy = spyOn(process, "exit").mockImplementation((_code?: number) => {
+      throw new Error("process.exit called");
+    });
+    const realFetch = globalThis.fetch;
+    const uploadFetch = mock(async (_input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.encrypt).toBe(true);
+      expect(body.password).toBe("pw");
+      return new Response(
+        JSON.stringify({ id: "att_cloud", filename: "photo.png", size: 10, link: "https://attachments.hasna.xyz/a/tok" }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      );
+    });
+    globalThis.fetch = uploadFetch as never;
+    const savedUrl = process.env.HASNA_ATTACHMENTS_API_URL;
+    const savedKey = process.env.HASNA_ATTACHMENTS_API_KEY;
+    const savedMode = process.env.HASNA_ATTACHMENTS_STORAGE_MODE;
+    process.env.HASNA_ATTACHMENTS_API_URL = "https://attachments.hasna.xyz";
+    process.env.HASNA_ATTACHMENTS_API_KEY = "hasna_" + "attachments_testkey_" + "0000";
+    delete process.env.HASNA_ATTACHMENTS_STORAGE_MODE;
+    const tmp = `${tmpdir()}/localonly-encrypt-${process.pid}.png`;
+    writeFileSync(tmp, "fake-png-bytes");
+    try {
+      const program = buildProgram();
+      await program.parseAsync(
+        ["upload", tmp, "--encrypt", "--password", "pw", "--format", "json"],
+        { from: "user" },
+      );
+      expect(uploadFetch).toHaveBeenCalledTimes(1);
+      expect(capture.err.join("")).not.toContain("not supported");
+      expect(JSON.parse(capture.out.join("")).id).toBe("att_cloud");
+    } finally {
+      capture.restore();
+      exitSpy.mockRestore();
+      unlinkSync(tmp);
+      globalThis.fetch = realFetch;
+      if (savedUrl === undefined) delete process.env.HASNA_ATTACHMENTS_API_URL; else process.env.HASNA_ATTACHMENTS_API_URL = savedUrl;
+      if (savedKey === undefined) delete process.env.HASNA_ATTACHMENTS_API_KEY; else process.env.HASNA_ATTACHMENTS_API_KEY = savedKey;
+      if (savedMode === undefined) delete process.env.HASNA_ATTACHMENTS_STORAGE_MODE; else process.env.HASNA_ATTACHMENTS_STORAGE_MODE = savedMode;
     }
   });
 });

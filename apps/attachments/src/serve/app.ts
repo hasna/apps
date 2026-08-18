@@ -10,6 +10,7 @@
 import { Hono, type Context } from "hono";
 import { nanoid } from "nanoid";
 import { Readable } from "stream";
+import { createCipheriv, randomBytes, scryptSync } from "crypto";
 import { lookup as mimeLookup } from "mime-types";
 import { verifyApiKey, type ApiKeyVerifier } from "@hasna/contracts/auth";
 import type { PoolQueryClient } from "../generated/storage-kit/query.js";
@@ -66,6 +67,7 @@ function toApiAttachment(a: Attachment) {
     tag: a.tag,
     expires_at: a.expiresAt,
     created_at: a.createdAt,
+    encrypted: !!a.encryptionAlgorithm,
   };
 }
 
@@ -167,6 +169,31 @@ async function uploadBufferToStore(
   } else {
     await store.uploadBuffer(key, body, contentType);
   }
+}
+
+/**
+ * Encrypt a buffer at rest with the same scheme the local backend uses
+ * (core/upload.ts buildEncryptionTransform): a per-upload random salt/iv and an
+ * aes-256-gcm key derived from the caller-supplied password via scrypt. The
+ * salt/iv/tag travel in the metadata row so the download path can re-derive
+ * the key from the same password and verify the auth tag. Key material is the
+ * password itself, never a master key: no key bytes are stored or logged.
+ */
+function encryptBuffer(
+  password: string,
+  buffer: Buffer,
+): { buffer: Buffer; algorithm: string; salt: string; iv: string; tag: string } {
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const key = scryptSync(password, salt, 32);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  return {
+    buffer: Buffer.concat([cipher.update(buffer), cipher.final()]),
+    algorithm: "aes-256-gcm",
+    salt: salt.toString("hex"),
+    iv: iv.toString("hex"),
+    tag: cipher.getAuthTag().toString("hex"),
+  };
 }
 
 export function createServeApp(deps: ServeAppDeps): Hono {
@@ -287,6 +314,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
       password?: string;
       maxDownloads?: number;
       linkType?: "presigned" | "server";
+      encrypt?: boolean;
     } = {};
 
     const parseLinkType = (value: string | undefined): "presigned" | "server" | undefined =>
@@ -309,6 +337,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
         password: parsed.fields["password"] ?? c.req.header("x-attachments-password") ?? undefined,
         maxDownloads: parseCount(parsed.fields["max_downloads"] ?? c.req.query("max_downloads") ?? undefined),
         linkType: parseLinkType(parsed.fields["link_type"] ?? c.req.query("link_type") ?? undefined),
+        encrypt: parsed.fields["encrypt"] === "true" || parsed.fields["encrypt"] === "1",
       };
     } else if (contentType.includes("application/json")) {
       const body = (await c.req.json().catch(() => null)) as
@@ -320,6 +349,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
             password?: string;
             max_downloads?: number;
             link_type?: "presigned" | "server";
+            encrypt?: boolean;
           }
         | null;
       if (!body?.filename || typeof body.content_base64 !== "string") {
@@ -333,6 +363,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
         password: body.password,
         maxDownloads: body.max_downloads,
         linkType: body.link_type,
+        encrypt: body.encrypt === true,
       };
     } else {
       // Raw streaming upload: bytes in the request body.
@@ -350,6 +381,10 @@ export function createServeApp(deps: ServeAppDeps): Hono {
           c.req.query("link_type") === "presigned" || c.req.query("link_type") === "server"
             ? (c.req.query("link_type") as "presigned" | "server")
             : undefined,
+        encrypt:
+          c.req.query("encrypt") === "true" ||
+          c.req.query("encrypt") === "1" ||
+          c.req.header("x-attachments-encrypt") === "true",
       };
     }
 
@@ -368,15 +403,27 @@ export function createServeApp(deps: ServeAppDeps): Hono {
     const { milliseconds: expiryMs } = parseExpiryOr400(opts.expiry ?? config.defaults.expiry);
     const expiresAt = expiryMs !== null ? Date.now() + expiryMs : null;
 
+    if (opts.encrypt && !opts.password) {
+      return c.json(
+        { error: "--encrypt requires a password so the file can be decrypted later" },
+        400,
+      );
+    }
+    // Same at-rest scheme as the local backend: encrypt BEFORE the bytes reach
+    // the object store; the salt/iv/tag ride in the metadata row so the
+    // download path re-derives the key from the same password.
+    const encryption = opts.encrypt && opts.password ? encryptBuffer(opts.password, buffer) : null;
+
     const linkType = resolveDeliverableLinkType({
       requested: opts.linkType ?? getLinkType(config),
       backend,
       expiryMs,
       password: opts.password,
+      encrypt: opts.encrypt,
       maxDownloads: opts.maxDownloads,
     });
 
-    await uploadBufferToStore(config, objectKey, buffer, resolvedType);
+    await uploadBufferToStore(config, objectKey, encryption ? encryption.buffer : buffer, resolvedType);
 
     let link: string | null = null;
     if (linkType === "presigned") {
@@ -396,10 +443,10 @@ export function createServeApp(deps: ServeAppDeps): Hono {
       createdAt: Date.now(),
       storageBackend: backend,
       status: "ready",
-      encryptionAlgorithm: null,
-      encryptionSalt: null,
-      encryptionIv: null,
-      encryptionTag: null,
+      encryptionAlgorithm: encryption?.algorithm ?? null,
+      encryptionSalt: encryption?.salt ?? null,
+      encryptionIv: encryption?.iv ?? null,
+      encryptionTag: encryption?.tag ?? null,
       downloads: 0,
     };
     await store.insert(attachment);
@@ -451,10 +498,23 @@ export function createServeApp(deps: ServeAppDeps): Hono {
     const attachment = await store.findById(c.req.param("id"));
     if (!attachment) return c.json({ error: "Not found" }, 404);
     if (isExpired(attachment)) return c.json({ error: "Attachment has expired" }, 410);
-    const result = await openAttachmentStream(attachment, {
-      config,
-      rangeHeader: c.req.header("range"),
-    });
+    // Encrypted attachments decrypt on the server with the caller-supplied
+    // password (same contract as the local backend); a missing password is a
+    // caller mistake and answers 400, never a bare 500.
+    const password = c.req.header("x-attachments-password");
+    if (attachment.encryptionAlgorithm && !password) {
+      return c.json({ error: "Attachment is encrypted and requires a password" }, 400);
+    }
+    let result;
+    try {
+      result = await openAttachmentStream(attachment, {
+        config,
+        rangeHeader: c.req.header("range"),
+        password,
+      });
+    } catch (err: unknown) {
+      return badRequestOrRethrow(c, err);
+    }
     c.header("Content-Disposition", contentDispositionAttachment(attachment.filename));
     c.header("Content-Type", result.contentType ?? attachment.contentType);
     if (result.contentLength !== undefined) c.header("Content-Length", String(result.contentLength));

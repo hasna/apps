@@ -92,6 +92,25 @@ describe("resolveAttachmentsV1", () => {
     expect(calls[0]!.headers["idempotency-key"]).toBeDefined();
   });
 
+  test("uploadBuffer carries encrypt + password to /v1 (was local-only)", async () => {
+    const { calls, fetchImpl } = mockFetch((c) => {
+      expect(c.method).toBe("POST");
+      const body = JSON.parse(c.body!);
+      expect(body.encrypt).toBe(true);
+      expect(body.password).toBe("Parola-Test-1");
+      return { status: 201, body: { id: "att_enc", filename: "secret.txt", size: 5, link: null } };
+    });
+    const r = resolveAttachmentsV1(cloudEnv, { fetchImpl });
+    if (r.transport !== "cloud-http") throw new Error("expected cloud");
+    const att = await r.store.uploadBuffer("secret.txt", new TextEncoder().encode("hello"), {
+      encrypt: true,
+      password: "Parola-Test-1",
+      linkType: "server",
+    });
+    expect(att.id).toBe("att_enc");
+    expect(calls[0]!.headers["idempotency-key"]).toBeDefined();
+  });
+
   test("delete DELETEs /v1/attachments/:id and tolerates 404", async () => {
     const { calls, fetchImpl } = mockFetch(() => ({ status: 404, body: { error: "Not found" } }));
     const r = resolveAttachmentsV1(cloudEnv, { fetchImpl });

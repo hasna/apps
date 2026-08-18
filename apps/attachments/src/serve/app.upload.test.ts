@@ -33,6 +33,11 @@ class MockS3Client {
     }
     return `https://bucket.s3.amazonaws.com/${key}?X-Amz-Expires=${expiresIn}`;
   }
+  async download(key: string) {
+    const hit = uploads.find((u) => u.key === key);
+    if (!hit) throw new Error(`no stored object for ${key}`);
+    return Buffer.from(hit.body);
+  }
   async delete(_key: string) {}
 }
 
@@ -226,5 +231,115 @@ describe("D1(c) — multipart/form-data upload", () => {
     expect(body.filename).toBe("plain.txt");
     expect(body.content_type).toBe("text/plain");
     expect(createHash("sha256").update(uploads[0]!.body).digest("hex")).toBe(SHA);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Encryption at rest on the hosted /v1 path. The local backend has encrypted
+// stored bytes with a password-derived aes-256-gcm key since before the
+// two-backend split (core/upload.ts); the hosted server used to reject
+// `encrypt` outright (core/store.ts assertApiSupported), hardcode the
+// encryption metadata to null, and stream raw ciphertext back on download
+// (serve/app.ts). These tests lock the ported behavior: the hosted path
+// encrypts before storage, carries the metadata, and decrypts on download.
+// ---------------------------------------------------------------------------
+describe("encryption at rest (--encrypt) on the hosted /v1 path", () => {
+  let app: ReturnType<typeof makeApp>;
+  beforeEach(() => {
+    uploads.length = 0;
+    presignCalls.length = 0;
+    app = makeApp();
+  });
+
+  const CONTENT = "%PDF-1.4 fake pdf body\nline two\n";
+
+  function form(extra: Record<string, string> = {}, filename = "raport.pdf", type = "application/pdf") {
+    const fd = new FormData();
+    fd.append("file", new File([CONTENT], filename, { type }));
+    for (const [k, v] of Object.entries(extra)) fd.append(k, v);
+    return fd;
+  }
+
+  test("JSON upload with encrypt + password stores ciphertext and carries metadata", async () => {
+    const { status, body } = await jsonUpload(app, { encrypt: true, password: "Parola-Test-1" });
+    expect(status).toBe(201);
+    expect(body.encrypted).toBe(true);
+    // Server link, never a presigned URL over ciphertext.
+    expect(String(body.link).startsWith(`${PUBLIC_BASE}/a/`)).toBe(true);
+    expect(presignCalls).toEqual([]);
+    // The object store receives ciphertext, never the plaintext.
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]!.body.toString()).not.toContain("hello");
+    expect(createHash("sha256").update(uploads[0]!.body).digest("hex")).not.toBe(
+      createHash("sha256").update(Buffer.from("hello")).digest("hex"),
+    );
+    // Metadata carries the decrypt inputs; size stays the plaintext size.
+    const row = store.attachments[0]!;
+    expect(row.encryptionAlgorithm).toBe("aes-256-gcm");
+    expect(row.encryptionSalt).toMatch(/^[0-9a-f]{32}$/);
+    expect(row.encryptionIv).toMatch(/^[0-9a-f]{24}$/);
+    expect(row.encryptionTag).toMatch(/^[0-9a-f]{32}$/);
+    expect(row.size).toBe(5);
+  });
+
+  test("encrypt without a password is a 400 with the reason", async () => {
+    const { status, body } = await jsonUpload(app, { encrypt: true });
+    expect(status).toBe(400);
+    expect(String(body.error)).toContain("--encrypt requires a password");
+  });
+
+  test("multipart upload honours the encrypt form field", async () => {
+    const res = await app.request("/v1/attachments", {
+      method: "POST",
+      headers: { "x-api-key": key() },
+      body: form({ encrypt: "true", password: "Parola-Test-1" }),
+    });
+    expect(res.status).toBe(201);
+    expect(uploads[0]!.body.toString()).not.toContain("%PDF-1.4");
+    expect(store.attachments[0]!.encryptionAlgorithm).toBe("aes-256-gcm");
+  });
+
+  test("raw streaming upload honours the encrypt query + password header", async () => {
+    const res = await app.request("/v1/attachments?filename=note.txt&encrypt=true", {
+      method: "POST",
+      headers: {
+        "x-api-key": key(),
+        "content-type": "application/octet-stream",
+        "x-attachments-password": "Parola-Test-1",
+      },
+      body: "hello",
+    });
+    expect(res.status).toBe(201);
+    expect(uploads[0]!.body.toString()).not.toContain("hello");
+    expect(store.attachments[0]!.encryptionAlgorithm).toBe("aes-256-gcm");
+  });
+
+  test("download of an encrypted attachment without a password is a 400", async () => {
+    const { body } = await jsonUpload(app, { encrypt: true, password: "Parola-Test-1" });
+    const res = await app.request(`/v1/attachments/${body.id}/download`, {
+      headers: { "x-api-key": key() },
+    });
+    expect(res.status).toBe(400);
+    expect(String((await res.json() as Record<string, unknown>).error)).toContain(
+      "requires a password",
+    );
+  });
+
+  test("download with the password returns the original plaintext", async () => {
+    const { body } = await jsonUpload(app, { encrypt: true, password: "Parola-Test-1" });
+    const res = await app.request(`/v1/attachments/${body.id}/download`, {
+      headers: { "x-api-key": key(), "x-attachments-password": "Parola-Test-1" },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("hello");
+  });
+
+  test("download of a non-encrypted attachment is untouched", async () => {
+    const { body } = await jsonUpload(app, {});
+    const res = await app.request(`/v1/attachments/${body.id}/download`, {
+      headers: { "x-api-key": key() },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("hello");
   });
 });

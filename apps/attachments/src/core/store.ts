@@ -127,11 +127,6 @@ export interface Store {
 /** Options that ApiStore (self_hosted / cloud) cannot honor client-side. */
 function assertApiSupported(options: UploadOptions | undefined): void {
   if (!options) return;
-  if (options.encrypt) {
-    throw new Error(
-      "--encrypt is not supported in self_hosted/cloud mode (it encrypts bytes on the client before an on-box store). Run against local mode to encrypt at rest.",
-    );
-  }
   if (options.requireEmail || (options.allowedEmails && options.allowedEmails.length > 0)) {
     throw new Error(
       "email-gated links (--require-email / --allowed-email) are only available in local mode.",
@@ -150,6 +145,7 @@ function toV1UploadOptions(options: UploadOptions = {}): V1UploadOptions {
     password: options.password,
     maxDownloads: options.maxDownloads,
     linkType: options.linkType,
+    encrypt: options.encrypt,
   };
 }
 

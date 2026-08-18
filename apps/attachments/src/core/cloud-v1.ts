@@ -57,6 +57,7 @@ type ApiAttachment = {
   tag?: string | null;
   expires_at?: number | null;
   created_at?: number;
+  encrypted?: boolean;
 };
 
 export interface V1UploadOptions {
@@ -65,6 +66,7 @@ export interface V1UploadOptions {
   password?: string;
   maxDownloads?: number;
   linkType?: "presigned" | "server";
+  encrypt?: boolean;
   filename?: string;
 }
 
@@ -282,6 +284,7 @@ function makeStore(client: HasnaStorageClient, env: NodeJS.ProcessEnv): Attachme
     ...(options.password ? { password: options.password } : {}),
     ...(options.maxDownloads ? { max_downloads: options.maxDownloads } : {}),
     ...(options.linkType ? { link_type: options.linkType } : {}),
+    ...(options.encrypt ? { encrypt: true } : {}),
   });
 
   const store: AttachmentsV1Store = {
