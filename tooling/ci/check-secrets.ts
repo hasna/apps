@@ -11,6 +11,9 @@
  *   bun tooling/ci/check-secrets.ts --base <ref>   # added lines vs base (CI)
  *   bun tooling/ci/check-secrets.ts --self-test    # prove it can fire AND stay silent
  *
+ * Exit codes (vault-scanner contract): 0 clean · 1 finding · 2 could not
+ * scan. A git failure is a 2 — never a clean 0 over an empty scan.
+ *
  * The `[-]`/`[_]` bracket form is deliberate: it matches real tokens
  * identically but cannot match its own pattern text, so committing this file
  * never trips the scan on itself.
@@ -33,7 +36,11 @@ const PATTERNS: Array<{ name: string; re: RegExp }> = [
   { name: "aws-access-key", re: /AKIA[A-Z0-9]/ },
 ];
 
-const EXCLUDE_PATHS = [".changeset/config.json"];
+// Exit codes mirror the vault scanner contract (`secrets scan staged`):
+//   0 clean · 1 finding · 2 could not scan. A git failure is a 2, never a
+//   clean 0 — a scanner that reports "0 findings, 0 added lines" because its
+//   git diff died is the vacuous-pass class this repo's publish guard was
+//   fixed to refuse (same lineage, measured 2026-08-13 on the pack path).
 
 function scanText(text: string): Array<{ line: number; pattern: string; sample: string }> {
   const hits: Array<{ line: number; pattern: string; sample: string }> = [];
@@ -56,15 +63,32 @@ function redact(line: string, re: RegExp): string {
   return `${before}[REDACTED]`;
 }
 
-function diffAddedLines(base: string | null): { text: string; label: string } {
+function diffAddedLines(base: string | null, cwd?: string): { text: string; label: string } {
   const cmd = base
     ? `git diff --no-ext-diff --unified=0 ${base} HEAD`
     : `git diff --cached --no-ext-diff --unified=0`;
   let out = "";
   try {
-    out = execSync(cmd, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-  } catch {
-    out = "";
+    out = execSync(cmd, {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      ...(cwd ? { cwd } : {}),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (e: any) {
+    // FAIL CLOSED. An unresolvable base ref, a broken git, or a missing
+    // repository must never degrade to "no diff text" — that would print a
+    // clean "0 findings, 0 added lines checked" while having scanned
+    // nothing. The legitimately-empty diff (rc=0, empty output) does not
+    // take this path.
+    const stderrTail = String(e?.stderr ?? "")
+      .trim()
+      .split("\n")
+      .slice(-3)
+      .join("\n");
+    throw new Error(
+      `git diff failed (${cmd})${stderrTail ? `:\n  ${stderrTail}` : ""}`,
+    );
   }
   const added: string[] = [];
   let currentFile = "(unknown)";
@@ -79,7 +103,15 @@ function diffAddedLines(base: string | null): { text: string; label: string } {
 }
 
 function runScan(base: string | null): number {
-  const { text, label } = diffAddedLines(base);
+  let diff: { text: string; label: string };
+  try {
+    diff = diffAddedLines(base);
+  } catch (e: any) {
+    console.error(`SECRETS SCAN COULD NOT RUN (${base ? `base=${base}` : "staged"}) — refusing a vacuous pass:`);
+    console.error(`  ${e.message}`);
+    return 2;
+  }
+  const { text, label } = diff;
   const perLine = text.split("\n");
   const hits: Array<{ file: string; lineNo: number; pattern: string }> = [];
   perLine.forEach((ln, idx) => {
@@ -131,6 +163,37 @@ function selfTest(): number {
   check(`fires on seeded violations (${badHits.length}/${badLines.length} caught)`, badHits.length === badLines.length);
   const cleanHits = scanText(cleanLines.join("\n"));
   check(`stays silent on clean lines (0 hits)`, cleanHits.length === 0);
+
+  // Diff-runner arms (fail-closed discipline, measured 2026-08-17): a git
+  // failure must THROW (exit 2 in run mode), never yield an empty scan; a
+  // valid base against a real commit must return the added line.
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "hasna-apps-secrets-"));
+  const git = (args: string) =>
+    execSync(`git -c user.email=self@test -c user.name=self-test ${args}`, {
+      cwd: repo,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  try {
+    git("init -q");
+    fs.writeFileSync(path.join(repo, "a.txt"), "one\n");
+    git("add a.txt");
+    git("commit -qm init");
+    fs.writeFileSync(path.join(repo, "a.txt"), "one\ntwo\n");
+    git("add a.txt");
+    git('commit -qm second');
+    const good = diffAddedLines("HEAD^", repo);
+    check("valid base returns the added line (instrument works)", good.text.includes("a.txt: two"));
+    let threw = false;
+    try {
+      diffAddedLines("no-such-ref-anywhere", repo);
+    } catch {
+      threw = true;
+    }
+    check("unresolvable base ref throws (never a vacuous empty scan)", threw);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
 
   if (failed) {
     console.error("self-test FAILED — the scan is broken; fix it before trusting any clean result");
