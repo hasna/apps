@@ -61,7 +61,14 @@
  * manifest-missing exception entries DELETED — both members gained
  * hasna.contract.json in the contracts-align wave 2 merges, so the
  * recorded exceptions that passed were stale-entry failures under the
- * two-sided contract.
+ * two-sided contract. They are recorded in NO_VALIDATOR_PIN pending a
+ * validator pin. The datasets CONTRACTS_EXCEPTIONS entry DELETED — the
+ * member's manifest now wires artifactScan (contracts task 226bfc01
+ * completed). Its kit/pin mismatch (kit 0.11.1, pinned 0.10.6) is
+ * RECORDED in KIT_VERSION_EXCEPTIONS: the code imports parseContract,
+ * which contracts 0.11.1 does not export, so the pin stays 0.10.6 until
+ * the API migration lands (measured: pin bump to ^0.11.1 breaks the
+ * datasets prepare build).
  * The exception registry is DATA, not prose: every entry
  * is keyed to a measured violation class and carries the reason and the
  * tracked remediation task. When a violation is fixed, DELETE its exception
@@ -346,11 +353,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos reconcile task 'Reconcile @hasna/controls contracts conformance: manifest_valid' (auto-filed by the standard suite; resolves when the contracts lane publishes the two-backend validator and controls re-pins)",
   },
   {
-    member: "datasets",
-    cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Manifest imported via delta (hasna/contracts 0.10.6 pin) from org repo; org repo has no artifact-scan script.",
-    task: "todos 226bfc01-093a-469a-bc94-57491c08fe1b (contracts task — datasets)",
-  },
-  {
     member: "docs",
     cause: "kitVersion 0.1.0 predates repo-conformance; no @hasna/contracts dep pinned; validated at latest, manifest is pre-backend-schema era.",
     task: "todos 6818348f (contracts task — docs)",
@@ -497,6 +499,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
 export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string; pinned: string }> = [
   { member: "accounts", kitVersion: "0.10.6", pinned: "0.5.2" },
   { member: "calendar", kitVersion: "0.8.4", pinned: "0.4.2" },
+  { member: "datasets", kitVersion: "0.11.1", pinned: "0.10.6" },
   { member: "domains", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "files", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "gateway", kitVersion: "0.11.1", pinned: "0.2.2" },
@@ -513,7 +516,9 @@ export const NO_VALIDATOR_PIN: string[] = [
   "catalog",
   "changelog",
   "computers",
+  "context",
   "contracts",
+  "crawl",
   "docs",
   "draw",
   "guardrails",
