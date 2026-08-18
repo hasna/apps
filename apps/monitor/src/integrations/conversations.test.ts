@@ -17,6 +17,7 @@ import type { ConversationsIntegrationConfig } from "./index.js";
 import {
   createConversationsClient,
   postMessageToSpace,
+  resetEffectLedgerForTests,
   sendConversationMessage,
 } from "./conversations.js";
 
@@ -166,8 +167,11 @@ const CONFIG: ConversationsIntegrationConfig = {
 afterEach(() => {
   delete process.env.HASNA_MONITOR_CONVERSATIONS_API_KEY;
   delete process.env.HASNA_MONITOR_CONVERSATIONS_API_URL;
+  delete process.env.HASNA_MONITOR_CONVERSATIONS_FROM;
   delete process.env.HASNA_CONVERSATIONS_API_KEY;
   delete process.env.HASNA_CONVERSATIONS_API_URL;
+  // The effect ledger is module state shared across tests; each test starts clean.
+  resetEffectLedgerForTests();
 });
 
 describe("sendConversationMessage", () => {
@@ -199,7 +203,7 @@ describe("sendConversationMessage", () => {
     }
   });
 
-  it("derives a stable effect key per channel+content, and a distinct one for different content", async () => {
+  it("resolves a repeated identical effect from the ledger WITHOUT a second POST, and posts distinct content", async () => {
     const server = makeFakeServer();
     const client = makeClient(server);
 
@@ -207,14 +211,28 @@ describe("sendConversationMessage", () => {
     const second = await sendConversationMessage("same message", { channelId: "ops", client });
     const other = await sendConversationMessage("different message", { channelId: "ops", client });
 
+    // The effect key is stable per (channel, from, content): the second
+    // identical send resolves against the ledger — no second POST, no second
+    // message. Distinct content is a distinct effect and POSTs.
+    expect(server.postCount).toBe(2);
+    expect(first.status).toBe("delivered");
+    if (first.status === "delivered") {
+      expect(first.messageUuid).toMatch(CANONICAL_UUID);
+    }
+    expect(second.status).toBe("reconciled");
+    if (second.status === "reconciled") {
+      expect(second.attempts).toBe(0); // resolved from the ledger, nothing sent
+      expect(second.messageId).toBe(first.status === "delivered" ? first.messageId : 0);
+      expect(second.messageUuid).toBe(first.status === "delivered" ? first.messageUuid : "");
+    }
+    expect(other.status).toBe("delivered");
+
+    // The single wire uuid for "same message" is the derived effect key, and
+    // "different message" carries a distinct one.
     const u1 = server.postedBodies[0]?.["uuid"];
     const u2 = server.postedBodies[1]?.["uuid"];
-    const u3 = server.postedBodies[2]?.["uuid"];
-    expect(u1).toBe(u2);
-    expect(u2).not.toBe(u3);
-    expect(first.status).toBe("delivered");
-    expect(second.status).toBe("delivered");
-    expect(other.status).toBe("delivered");
+    expect(u1).toMatch(CANONICAL_UUID);
+    expect(u1).not.toBe(u2);
   });
 
   it("records a caller-supplied effect key verbatim", async () => {
@@ -229,6 +247,88 @@ describe("sendConversationMessage", () => {
     if (result.status === "delivered") {
       expect(result.messageUuid).toBe(effectKey);
     }
+  });
+
+  it("always sends a resolved sender: option, then env, then the default", async () => {
+    const server = makeFakeServer();
+    const client = makeClient(server);
+    await sendConversationMessage("msg", { channelId: "ops", client });
+    expect(server.postedBodies[0]?.["from"]).toBe("monitor");
+
+    process.env.HASNA_MONITOR_CONVERSATIONS_FROM = "env-monitor";
+    const server2 = makeFakeServer();
+    await sendConversationMessage("msg", { channelId: "ops", client: makeClient(server2) });
+    expect(server2.postedBodies[0]?.["from"]).toBe("env-monitor");
+
+    const server3 = makeFakeServer();
+    await sendConversationMessage("msg", {
+      channelId: "ops",
+      from: "explicit-sender",
+      client: makeClient(server3),
+    });
+    expect(server3.postedBodies[0]?.["from"]).toBe("explicit-sender");
+  });
+
+  it("hosted shape: server mints its own uuid and has no by-uuid route — repeated identical sends still create ONE message", async () => {
+    // The hosted service drops caller UUIDs, mints its own, and answers every
+    // by-uuid probe with a generic 404 (apps/conversations CHANGELOG 0.5.25).
+    // The effect ledger must prevent the second POST regardless.
+    const server = makeFakeServer();
+    let postCount = 0;
+    const fetchImpl: typeof fetch = (async (input, init) => {
+      const url = input instanceof URL ? input : new URL(String(input));
+      if (init?.method === "POST" && url.pathname === "/v1/messages") {
+        postCount += 1;
+        server.postCount += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        server.postedBodies.push(body);
+        return new Response(
+          // The server IGNORES the caller uuid and mints its own.
+          JSON.stringify({
+            message: { id: postCount, uuid: `server-minted-${postCount}`, channel: "ops" },
+          }),
+          { status: 201, headers: { "content-type": "application/json" } }
+        );
+      }
+      const byUuid = url.pathname.match(/^\/v1\/messages\/by-uuid\/([^/]+)$/);
+      if (init?.method === "GET" && byUuid) {
+        // Hosted shape: the route does not exist; generic 404.
+        return new Response(JSON.stringify({ error: "Not found" }), { status: 404 });
+      }
+      return new Response(JSON.stringify({ error: "Not found" }), { status: 404 });
+    }) as typeof fetch;
+    const client = new ConversationsClient({ baseUrl: "http://monitor.test", fetch: fetchImpl });
+
+    const first = await sendConversationMessage("alert: disk full", { channelId: "ops", client });
+    const second = await sendConversationMessage("alert: disk full", { channelId: "ops", client });
+
+    expect(postCount).toBe(1); // the ledger prevented a duplicate hosted write
+    expect(first.status).toBe("delivered");
+    if (first.status === "delivered") {
+      expect(first.messageUuid).toBe("server-minted-1");
+    }
+    expect(second.status).toBe("reconciled");
+    if (second.status === "reconciled") {
+      expect(second.messageId).toBe(first.status === "delivered" ? first.messageId : 0);
+      expect(second.reconciled).toBe(true);
+      expect(second.attempts).toBe(0);
+    }
+  });
+
+  it("evicts the oldest effect from the bounded ledger, allowing a later re-send of the same effect", async () => {
+    const server = makeFakeServer();
+    const client = makeClient(server);
+    const first = await sendConversationMessage("evicted-message", { channelId: "ops", client });
+    expect(first.status).toBe("delivered");
+    // Fill the ledger past its cap with distinct effects, evicting the first.
+    for (let i = 0; i < 256; i += 1) {
+      const result = await sendConversationMessage(`fill-${i}`, { channelId: "ops", client });
+      expect(result.status).toBe("delivered");
+    }
+    const again = await sendConversationMessage("evicted-message", { channelId: "ops", client });
+    // The first entry was evicted: this identical send POSTs again.
+    expect(again.status).toBe("delivered");
+    expect(server.postCount).toBe(258);
   });
 
   it("reconciles an unknown outcome by effect key before retrying: found message is recorded, no resend", async () => {
@@ -406,28 +506,28 @@ describe("sendConversationMessage", () => {
 
   it("resolves the client from the package-contract env when the app namespace is absent", async () => {
     process.env.HASNA_CONVERSATIONS_API_URL = "http://contract.test";
-    process.env.HASNA_CONVERSATIONS_API_KEY = "contract-key-value";
+    process.env.HASNA_CONVERSATIONS_API_KEY = "fx-a";
     const server = makeFakeServer();
     const client = createConversationsClient({ fetch: fakeFetch(server) });
 
     await client.getHealth();
 
     expect(server.lastRequestUrl).toContain("http://contract.test");
-    expect(server.lastApiKeyHeader).toBe("contract-key-value");
+    expect(server.lastApiKeyHeader).toBe("fx-a");
   });
 
   it("prefers the app namespace (HASNA_MONITOR_*) over the package contract env", async () => {
     process.env.HASNA_MONITOR_CONVERSATIONS_API_URL = "http://monitor.test";
-    process.env.HASNA_MONITOR_CONVERSATIONS_API_KEY = "monitor-key-value";
+    process.env.HASNA_MONITOR_CONVERSATIONS_API_KEY = "fx-m";
     process.env.HASNA_CONVERSATIONS_API_URL = "http://contract.test";
-    process.env.HASNA_CONVERSATIONS_API_KEY = "contract-key-value";
+    process.env.HASNA_CONVERSATIONS_API_KEY = "fx-a";
     const server = makeFakeServer();
     const client = createConversationsClient({ fetch: fakeFetch(server) });
 
     await client.getHealth();
 
     expect(server.lastRequestUrl).toContain("http://monitor.test");
-    expect(server.lastApiKeyHeader).toBe("monitor-key-value");
+    expect(server.lastApiKeyHeader).toBe("fx-m");
   });
 
   it("sends the configured API key header when provided and never surfaces its value in the result", async () => {
@@ -474,7 +574,7 @@ describe("legacy postMessageToSpace", () => {
     expect(server.getCount).toBe(1);
   });
 
-  it("passes the config api_key through to the request and never surfaces its value", async () => {
+  it("passes the config api_key and from through to the request and never surfaces the key value", async () => {
     const server = makeFakeServer();
     server.postBehavior = { kind: "ok", id: 55 };
     const originalFetch = globalThis.fetch;
@@ -482,12 +582,17 @@ describe("legacy postMessageToSpace", () => {
     // transport is injected through the global fetch the SDK falls back to.
     globalThis.fetch = fakeFetch(server) as typeof fetch;
     try {
-      await postMessageToSpace("legacy message", { ...CONFIG, api_key: "config-key-value" });
+      await postMessageToSpace("legacy message", {
+        ...CONFIG,
+        api_key: "config-key-value",
+        from: "config-sender",
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }
     expect(server.postCount).toBe(1);
     expect(server.lastApiKeyHeader).toBe("config-key-value");
+    expect(server.postedBodies[0]?.["from"]).toBe("config-sender");
     expect(JSON.stringify(server.postedBodies)).not.toContain("config-key-value");
   });
 });

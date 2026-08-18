@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
@@ -12,7 +12,7 @@ import { spawnSync } from "child_process";
 // The config module supports MONITOR_CONFIG_DIR so tests can exercise the
 // real load/save path without touching a developer's ~/.hasna/monitor state.
 
-import { loadConfig, saveConfig } from "./config";
+import { loadConfig, redactIntegrationsConfig, saveConfig } from "./config";
 import type { MonitorConfig } from "./config";
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -416,6 +416,49 @@ describe("saveConfig() + loadConfig() round-trip", () => {
     saveConfig(config);
     const reloaded = loadConfig();
     expect(reloaded.thresholds).toEqual(config.thresholds);
+  });
+
+  it("persists the conversations api_key for runtime use but writes the config file owner-only", () => {
+    const config = loadConfig();
+    config.integrations = {
+      conversations: {
+        enabled: true,
+        space_id: "ops",
+        api_key: "persisted-key-value",
+        from: "monitor",
+      },
+    };
+    saveConfig(config);
+
+    // The stored file keeps the real value (the runtime needs it)...
+    const raw = JSON.parse(readFileSync(join(configDir, "config.json"), "utf-8")) as MonitorConfig;
+    expect(raw.integrations?.conversations?.api_key).toBe("persisted-key-value");
+    // ...but the file is owner-only, never world/group readable.
+    const stat = statSync(join(configDir, "config.json"));
+    expect(stat.mode & 0o077).toBe(0);
+  });
+});
+
+describe("redactIntegrationsConfig()", () => {
+  it("replaces api_key values with a marker and leaves other fields intact", () => {
+    const integrations = {
+      todos: { enabled: true, project_id: "proj" },
+      conversations: { enabled: true, space_id: "ops", api_key: "real-key-value", from: "monitor" },
+      emails: { enabled: true, to: "ops@hasna.com" },
+    };
+    const redacted = redactIntegrationsConfig(integrations);
+    expect(redacted.conversations?.api_key).toBe("***");
+    expect(JSON.stringify(redacted)).not.toContain("real-key-value");
+    expect(redacted.conversations?.space_id).toBe("ops");
+    expect(redacted.conversations?.from).toBe("monitor");
+    expect(redacted.todos?.project_id).toBe("proj");
+    // The input object is not mutated.
+    expect(integrations.conversations?.api_key).toBe("real-key-value");
+  });
+
+  it("is a no-op on integrations without credential fields", () => {
+    const integrations = { todos: { enabled: true, project_id: "proj" } };
+    expect(redactIntegrationsConfig(integrations)).toEqual(integrations);
   });
 });
 
