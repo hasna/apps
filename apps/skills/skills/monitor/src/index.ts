@@ -6,7 +6,7 @@ function printHelp(): void {
   console.log(`monitor - Instruction-set skill
 
 DESCRIPTION:
-  Guides an agent through common open-monitor MCP workflows:
+  Guides an agent through common monitor MCP workflows:
     - machine health and doctor checks
     - process inspection and safe termination
     - cron job inspection and execution

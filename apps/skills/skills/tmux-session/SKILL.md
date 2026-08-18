@@ -24,7 +24,7 @@ Use this skill when you need to add a window and session to an existing group, o
 Examples:
 
 ```text
-workspace/hasna/opensource/opensourcedev/open-todos
+workspace/repos/hasna/apps/apps/todos
 workspace/hasna/opensource/opensourcedev/open-conversations
 workspace/hasnaxyz/agent/agentdev/agent-claude
 workspace/hasnaxyz/service/servicedev/service-chat
@@ -71,12 +71,12 @@ SOURCE="opensourcemaintain"
 BASE="$HOME/workspace/hasna/opensource/opensourcedev"
 
 WINDOWS=(
-  "open-todos:$BASE/open-todos"
+  "todos:$BASE/todos"
   "open-conversations:$BASE/open-conversations"
   "open-mementos:$BASE/open-mementos"
 )
 
-tmux new-session -d -s "$SOURCE" -n "open-todos" -c "$BASE/open-todos"
+tmux new-session -d -s "$SOURCE" -n "todos" -c "$BASE/todos"
 
 for entry in "${WINDOWS[@]:1}"; do
   tmux new-window -t "$SOURCE" -n "$(echo "$entry" | cut -d: -f1)" -c "$(echo "$entry" | cut -d: -f2)"

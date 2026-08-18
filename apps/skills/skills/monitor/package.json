@@ -1,7 +1,7 @@
 {
   "name": "monitor",
   "version": "0.1.0",
-  "description": "Instruction-set skill for operating the open-monitor MCP",
+  "description": "Instruction-set skill for operating the monitor MCP",
   "type": "module",
   "main": "src/index.ts",
   "bin": {

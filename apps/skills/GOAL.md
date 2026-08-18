@@ -26,7 +26,7 @@ stop until it is implemented, tested, working, and published.
 ## How
 - Explore the **current skills repo** (CLI, MCP, SDK, package) and the existing **SKILL.md
   conventions** in this workspace before changing anything. Model structure/conventions on sibling
-  `~/workspace/hasna/opensource/open-*` repos (e.g. open-todos) — keep **CLI ↔ MCP parity**.
+  `~/workspace/repos/hasna/apps/apps/*` repos (e.g. todos) — keep **CLI ↔ MCP parity**.
 - **TDD**: tests first, full suite green, nothing skipped. Secrets scan before every commit/push;
   conventional commits, no Co-Authored-By.
 - **Publish** `@hasna/skills` (public, patch version bump) when done; `bun install -g @hasna/skills`
