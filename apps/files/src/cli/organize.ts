@@ -27,12 +27,13 @@ import { store } from "../store/index.js";
 
 /**
  * Organization reviews operate on locally-imported Google Drive metadata — an
- * on-box capability with no cloud data plane. In api mode this refuses instead
- * of silently touching the local SQLite island (the split-brain guard).
+ * on-box capability with no hosted data plane. On the hosted transport this
+ * refuses instead of silently touching the local SQLite island (the split-brain
+ * guard).
  */
 function requireLocalOrganize(command: string): void {
   if (store().transport !== "local") {
-    console.error(chalk.red(`${command} runs on-box only and is unavailable in cloud (api) mode; organization reviews operate on locally-imported Google Drive metadata.`));
+    console.error(chalk.red(`${command} runs on-box only and is unavailable on the hosted transport; organization reviews operate on locally-imported Google Drive metadata.`));
     process.exit(1);
   }
 }

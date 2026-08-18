@@ -172,7 +172,6 @@ function localEnv(root: string): Record<string, string> {
   const env = { ...process.env } as Record<string, string>;
   delete env.HASNA_FILES_API_URL;
   delete env.HASNA_FILES_API_KEY;
-  delete env.HASNA_FILES_STORAGE_MODE;
   env.HASNA_FILES_DATA_DIR = root;
   env.HASNA_FILES_DB_PATH = join(root, "files.db");
   return env;

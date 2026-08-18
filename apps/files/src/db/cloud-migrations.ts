@@ -1,13 +1,13 @@
 /**
- * Ordered cloud (Postgres) migrations for the open-files self-hosted service.
+ * Ordered Postgres migrations for the files service.
  *
  * Combines the canonical data-plane schema (PG_MIGRATIONS) with the shared
  * @hasna/contracts api_keys migrations, wrapped in the vendored storage kit's
  * `defineMigration` so they run through the drift/downgrade-guarded
  * `MigrationLedger`.
  *
- * PURE REMOTE (Amendment A1): the service reads AND writes these tables in
- * cloud Postgres directly. There is no sync engine in the service.
+ * The service reads AND writes these tables in Postgres directly. There is no
+ * sync engine in the service.
  */
 import { apiKeyMigrations } from "@hasna/contracts/auth";
 import { defineMigration, type Migration } from "../generated/storage-kit/index.js";

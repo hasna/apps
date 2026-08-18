@@ -9,7 +9,6 @@ test("files-migrate help exits before resolving cloud database configuration", a
     cwd: repoRoot,
     env: {
       ...process.env,
-      HASNA_FILES_STORAGE_MODE: "local",
       HASNA_FILES_DATABASE_URL: "",
     },
     stdout: "pipe",

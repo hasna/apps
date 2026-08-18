@@ -196,12 +196,13 @@ function logActivity(input: LogActivityInput): void {
  * Guard for tools that perform physical, machine-local work (indexing a local
  * folder or S3 bucket, syncing Google Drive, moving/copying bytes on local
  * disk, watching the filesystem). These only make sense against the on-box
- * {@link LocalStore}; in api mode the cloud service owns ingestion, so the thin
- * client refuses rather than silently operating on the wrong machine.
+ * {@link LocalStore}; on the hosted transport the files service owns ingestion,
+ * so the thin client refuses rather than silently operating on the wrong
+ * machine.
  */
 function requireLocalTransport(tool: string) {
   if (store().transport !== "local") {
-    return mcpError(`${tool} runs on-box only and is unavailable in cloud (api) mode; the self-hosted service owns ingestion.`);
+    return mcpError(`${tool} runs on-box only and is unavailable on the hosted transport; the files service owns ingestion.`);
   }
   return null;
 }

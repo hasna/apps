@@ -32,15 +32,15 @@ function err(error: unknown) {
 /**
  * Organization is a review workflow over Google-Drive-imported metadata — an
  * on-box ingestion capability like the `sync_google_drive` tools it depends on.
- * It has no cloud data plane (the imported Drive rows only exist locally), so in
- * api mode the tool refuses rather than silently reading/writing the local
- * SQLite island. This routes the mode decision through the Store seam and is the
- * split-brain guard the refactor requires.
+ * It has no hosted data plane (the imported Drive rows only exist locally), so
+ * on the hosted transport the tool refuses rather than silently reading/writing
+ * the local SQLite island. This routes the transport decision through the Store
+ * seam and is the split-brain guard the refactor requires.
  */
 function localOnly(tool: string): { content: Array<{ type: "text"; text: string }>; isError: true } | null {
   if (store().transport !== "local") {
     return {
-      content: [{ type: "text", text: `${tool} runs on-box only and is unavailable in cloud (api) mode; organization reviews operate on locally-imported Google Drive metadata.` }],
+      content: [{ type: "text", text: `${tool} runs on-box only and is unavailable on the hosted transport; organization reviews operate on locally-imported Google Drive metadata.` }],
       isError: true,
     };
   }

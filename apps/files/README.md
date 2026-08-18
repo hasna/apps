@@ -278,15 +278,17 @@ boundary and object layout.
 
 ## Storage
 
-There are two client transports and no SQLite/PostgreSQL sync engine:
+The client has exactly two transports, selected by the environment, and no
+SQLite/PostgreSQL sync engine:
 
-- Local mode is the default. Reads and writes use SQLite at
+- Local: the default. Reads and writes use SQLite at
   `~/.hasna/files/files.db`.
-- API mode routes supported data-plane reads and writes to `<API_URL>/v1`.
-  It does not read or update the local SQLite index.
+- Hosted HTTP API: routing supported data-plane reads and writes to
+  `<API_URL>/v1`. It does not read or update the local SQLite index.
 
-API URL and key are sufficient to select API mode. Setting
-`HASNA_FILES_STORAGE_MODE=local` explicitly keeps the client local.
+Setting `HASNA_FILES_API_URL` **and** `HASNA_FILES_API_KEY` together selects the
+hosted API. A URL without a key (or vice versa) is a misconfiguration and fails
+closed — the client never silently switches datasets.
 
 ```bash
 export HASNA_FILES_API_URL=https://files.example.test
@@ -294,12 +296,12 @@ export HASNA_FILES_API_KEY=<scoped-api-key>
 files list --json
 ```
 
-The service is different from the client: cloud `files-serve` uses PostgreSQL
-directly and must be configured with `HASNA_FILES_STORAGE_MODE=cloud`,
-`HASNA_FILES_DATABASE_URL`, and `HASNA_FILES_API_SIGNING_KEY`. Run
-`files-migrate --check`, then `files-migrate`, before starting the service.
-`files-migrate` is the only shipped PostgreSQL migration command; there is no
-`files storage` command group.
+The service is different from the client: `files-serve` uses PostgreSQL when
+`HASNA_FILES_DATABASE_URL` is set, and must also be configured with
+`HASNA_FILES_API_SIGNING_KEY`. Run `files-migrate --check`, then
+`files-migrate`, before starting the service. `files-migrate` is the only
+shipped PostgreSQL migration command; there is no `files storage` command
+group.
 
 Do not store static S3 access keys in `files sources`. S3 source config accepts
 named profiles, endpoints, and path-style settings only. Use platform secret

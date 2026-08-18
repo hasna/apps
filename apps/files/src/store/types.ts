@@ -8,12 +8,11 @@
  *   - {@link LocalStore} — on-box SQLite at ~/.hasna/files/files.db (first-class).
  *   - {@link ApiStore}   — HTTPS `https://files.md/v1` + bearer key.
  *
- * `self_hosted` and `cloud` BOTH use the ApiStore (identical client code; only
- * the URL/key differ — that distinction is server-side tenancy, not a client
- * concern). Callers never branch on transport for data access and never touch
- * SQLite or a raw HTTP client directly: that inline branching was the
- * split-brain bug this seam eliminates. A raw database DSN is NEVER used by the
- * client.
+ * Any client bound to the hosted transport uses the ApiStore (the URL/key are
+ * the only difference — server-side tenancy, not a client concern). Callers
+ * never branch on transport for data access and never touch SQLite or a raw
+ * HTTP client directly: that inline branching was the split-brain bug this
+ * seam eliminates. A raw database DSN is NEVER used by the client.
  *
  * On-box *ingestion* capabilities (filesystem/S3/Google Drive indexing,
  * extraction, local file watching, evidence upload) are physical, machine-local

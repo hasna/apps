@@ -4,7 +4,7 @@
   "class": "service",
   "contractVersion": "v1",
   "kitVersion": "0.4.2",
-  "description": "Agent-first file management — index local folders and S3 buckets, sync Google Drive, tag, search, organize, and serve an evidence vault. CLI + MCP + HTTP API (files-serve) + generated SDK. Cloud mode (HASNA_FILES_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly with API-key auth via @hasna/contracts; file bytes stay in S3.",
+  "description": "Agent-first file management — index local folders and S3 buckets, sync Google Drive, tag, search, organize, and serve an evidence vault. CLI + MCP + HTTP API (files-serve) + generated SDK. The client uses the hosted HTTP API when HASNA_FILES_API_URL + HASNA_FILES_API_KEY are set, else local SQLite; files-serve uses PostgreSQL when HASNA_FILES_DATABASE_URL is set, with API-key auth via @hasna/contracts; file bytes stay in S3.",
   "bins": [
     "files",
     "files-mcp",

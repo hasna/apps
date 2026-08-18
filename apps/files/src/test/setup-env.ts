@@ -1,14 +1,10 @@
-const CLIENT_MODE_ENV_KEYS = [
+const CLIENT_HOSTED_ENV_KEYS = [
   "HASNA_FILES_API_URL",
   "HASNA_FILES_API_KEY",
-  "HASNA_FILES_STORAGE_MODE",
-  "HASNA_FILES_MODE",
   "FILES_API_URL",
   "FILES_API_KEY",
-  "FILES_STORAGE_MODE",
-  "FILES_MODE",
 ] as const;
 
-for (const key of CLIENT_MODE_ENV_KEYS) {
+for (const key of CLIENT_HOSTED_ENV_KEYS) {
   delete process.env[key];
 }

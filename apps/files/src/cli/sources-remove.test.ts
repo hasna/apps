@@ -10,13 +10,9 @@ const remoteSelectorKeys = [
   "HASNA_FILES_API_URL",
   "HASNA_FILES_API_KEY",
   "HASNA_FILES_DATABASE_URL",
-  "HASNA_FILES_STORAGE_MODE",
-  "HASNA_FILES_MODE",
   "FILES_API_URL",
   "FILES_API_KEY",
   "FILES_DATABASE_URL",
-  "FILES_STORAGE_MODE",
-  "FILES_MODE",
 ] as const;
 let testDir: string | undefined;
 
@@ -62,7 +58,7 @@ describe("source removal CLI", () => {
     expect(stderr(result)).toContain("No source found matching");
   });
 
-  test("subprocesses inherit no Files API, key, database, or mode selectors", () => {
+  test("subprocesses inherit no Files API, key, or database selectors", () => {
     const env = cliEnv();
 
     for (const key of remoteSelectorKeys) expect(env[key]).toBeUndefined();

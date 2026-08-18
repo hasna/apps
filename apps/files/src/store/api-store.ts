@@ -1,10 +1,9 @@
 /**
- * Cloud HTTP transport for {@link FilesStore}. Routes every data-plane call to
- * the self-hosted service at `https://files.md/v1` through the
- * @hasna/contracts storage client (bearer key in the transport only — never a
- * database DSN, never logged). Used identically for `self_hosted` and `cloud`
- * tiers; the only difference is the URL/key, which is a server-side tenancy
- * concern, not a client one.
+ * Hosted HTTP transport for {@link FilesStore}. Routes every data-plane call to
+ * the files service at `<API_URL>/v1` through the @hasna/contracts storage
+ * client (bearer key in the transport only — never a database DSN, never
+ * logged). The URL/key are the only difference between deployments — a
+ * server-side tenancy concern, not a client one.
  *
  * The CRUD verbs (list/get/create/update/delete) cover top-level resources; the
  * transport escape hatch handles the sub-resource + action routes the CRUD
@@ -441,8 +440,8 @@ export class ApiStore implements FilesStore {
   }
 
   // ── evidence ───────────────────────────────────────────────────────────────
-  // Storage (S3 bucket/creds) is owned by the self-hosted service; the `storage`
-  // overrides are intentionally NOT forwarded — a thin api client can never
+  // Storage (S3 bucket/creds) is owned by the files service; the `storage`
+  // overrides are intentionally NOT forwarded — a thin hosted client can never
   // redirect the shared vault. Bytes go to the server-signed URL directly.
   async createEvidenceUploadIntent(input: CreateEvidenceUploadInput, _storage?: EvidenceStorageOptions, output?: EvidenceCredentialOutputOptions): Promise<EvidenceUploadResult> {
     return this.http.post<EvidenceUploadResult>("/evidence/upload-intents", {

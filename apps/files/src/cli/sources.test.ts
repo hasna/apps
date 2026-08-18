@@ -408,10 +408,6 @@ function cliEnv(): NodeJS.ProcessEnv {
   testDir = mkdtempSync(join(tmpdir(), "open-files-cli-"));
   const env = { ...process.env };
   for (const key of [
-    "HASNA_FILES_STORAGE_MODE",
-    "HASNA_FILES_MODE",
-    "FILES_STORAGE_MODE",
-    "FILES_MODE",
     "HASNA_FILES_API_URL",
     "FILES_API_URL",
     "HASNA_FILES_API_KEY",
