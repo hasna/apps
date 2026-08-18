@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   SEMVER,
   REPOSITORY_ROOT,
   changedPackageVersions,
+  consumedChangesetPackages,
   discoverMembers,
   homeBunfigPath,
   readLatestChangelogVersion,
@@ -14,6 +17,48 @@ import {
   parseBunfigExcludes,
   rewriteWorkspaceRange,
 } from "./helpers";
+
+function syntheticGit(command: string[], cwd: string): string {
+  const result = Bun.spawnSync({ cmd: command, cwd, stdout: "pipe", stderr: "pipe" });
+  if (result.exitCode !== 0) throw new Error(`synthetic git failed: ${command.join(" ")}\n${new TextDecoder().decode(result.stderr)}`);
+  return new TextDecoder().decode(result.stdout);
+}
+
+// A changeset-consuming release diff (the `changeset version` output: package.json
+// version bumps + CHANGELOG.md headings + the applied .changeset/*.md files DELETED)
+// legitimately ships version bumps with no PENDING changeset — the changeset that
+// accompanied the bump was consumed to produce it. Measured on hasna/apps#277
+// (@hasna/prompts 0.3.33, 2026-08-17) and hasna/apps#154 (hooks 0.6.4): the test below
+// ("a package.json version change is accompanied by a changeset") failed by
+// construction on those release PRs. The two tests in this group pin the exemption
+// detector against synthetic git repos: a release-shaped diff MUST be recognized
+// (positive arm) and a plain unbacked bump MUST stay recognized as such (negative arm).
+function releaseShapeRepo(): { dir: string; consumed: () => Map<string, string> } {
+  const dir = mkdtempSync(join(tmpdir(), "versioning-release-shape-"));
+  const git = (command: string[]) => syntheticGit(command, dir);
+  git(["git", "init", "-q"]);
+  git(["git", "config", "user.email", "test@example.com"]);
+  git(["git", "config", "user.name", "versioning-test"]);
+  // Machine git hooks (e.g. a global lefthook) add seconds per commit and make the
+  // fixture non-hermetic; the synthetic repo needs no hooks.
+  git(["git", "config", "core.hooksPath", "/dev/null"]);
+  mkdirSync(join(dir, "apps", "pkg"), { recursive: true });
+  mkdirSync(join(dir, ".changeset"), { recursive: true });
+  writeFileSync(join(dir, "apps", "pkg", "package.json"), `${JSON.stringify({ name: "@hasna/pkg", version: "0.2.0" }, null, 2)}\n`);
+  writeFileSync(join(dir, ".changeset", "release-1.md"), '---\n"@hasna/pkg": patch\n---\n\nRelease body\n');
+  git(["git", "add", "-A"]);
+  git(["git", "commit", "-qm", "base"]);
+  git(["git", "branch", "base"]);
+  return { dir, consumed: () => consumedChangesetPackages(dir, "base") };
+}
+
+function commitReleaseShape(dir: string, consume: boolean): void {
+  const git = (command: string[]) => syntheticGit(command, dir);
+  writeFileSync(join(dir, "apps", "pkg", "package.json"), `${JSON.stringify({ name: "@hasna/pkg", version: "0.2.1" }, null, 2)}\n`);
+  if (consume) rmSync(join(dir, ".changeset", "release-1.md"));
+  git(["git", "add", "-A"]);
+  git(["git", "commit", "-qm", "release"]);
+}
 
 const members = discoverMembers();
 const membersByName = new Map(members.map((member) => [member.name, member]));
@@ -111,11 +156,67 @@ describe("hasna/apps versioning integrity", () => {
       return;
     }
     const changedPackages = new Set(readPendingChangesets().flatMap((changeset) => [...changeset.packages.keys()]));
+    // EXEMPTION — changeset-consuming release PRs (measured hasna/apps#277 for
+    // @hasna/prompts 0.3.33, hooks #154 precedent). The release lane bumps
+    // package.json BECAUSE a changeset was consumed, so no new changeset accompanies
+    // the bump by construction. `consumedChangesetPackages` reads the .changeset/*.md
+    // files DELETED in this same diff (base...HEAD) from the base ref and treats the
+    // packages they named as accompanied: the changeset that backed the bump is in the
+    // diff, consumed rather than pending. A plain unbacked bump deletes nothing under
+    // .changeset/ and stays red (negative arm pinned below).
+    const releaseBacked = consumedChangesetPackages();
     const unbacked = [...changed.keys()].filter((directoryName) => {
       const member = members.find((candidate) => candidate.directory === join(REPOSITORY_ROOT, "apps", directoryName));
-      return member !== undefined && !changedPackages.has(member.name);
+      return member !== undefined && !changedPackages.has(member.name) && !releaseBacked.has(member.name);
     });
     expect(unbacked).toEqual([]);
+  });
+
+  test("a release-shaped diff (bump + consumed changeset) is recognized as backed", () => {
+    const { dir, consumed } = releaseShapeRepo();
+    try {
+      commitReleaseShape(dir, true);
+      const backed = consumed();
+      expect(backed.get("@hasna/pkg")).toBe("release-1.md");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a plain unbacked bump deletes nothing under .changeset/ and is not exempted", () => {
+    const { dir, consumed } = releaseShapeRepo();
+    try {
+      commitReleaseShape(dir, false);
+      expect(consumed().size).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a release-shaped diff stays recognized when the base moved past the release", () => {
+    // The base ref (e.g. origin/main) can advance past a release BEFORE the exemption
+    // lane re-runs against it: the release's .changeset deletions then sit on BOTH
+    // sides of the three-dot diff, so the consumed files are no longer readable from
+    // the base ref itself. The detector must read them from the merge-base, which
+    // still holds them. Measured live 2026-08-18: hasna/apps#277's head (prompts
+    // 0.3.33) against an origin/main that had already absorbed the release (the
+    // squash-merge equivalent: the base side carries the same bump + consumption in
+    // its own commit, neither side an ancestor of the other).
+    const { dir, consumed } = releaseShapeRepo();
+    try {
+      commitReleaseShape(dir, true);
+      const git = (command: string[]) => syntheticGit(command, dir);
+      git(["git", "checkout", "-q", "base"]);
+      writeFileSync(join(dir, "apps", "pkg", "package.json"), `${JSON.stringify({ name: "@hasna/pkg", version: "0.2.1" }, null, 2)}\n`);
+      rmSync(join(dir, ".changeset", "release-1.md"));
+      git(["git", "add", "-A"]);
+      git(["git", "commit", "-qm", "base absorbs release"]);
+      git(["git", "checkout", "-q", "master"]);
+      const backed = consumed();
+      expect(backed.get("@hasna/pkg")).toBe("release-1.md");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("workspace references are member-bound and have a deterministic npm rewrite", () => {
