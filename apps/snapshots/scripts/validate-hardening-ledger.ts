@@ -293,9 +293,27 @@ function validateSchema(
   }
 }
 
+let reachableRepositoryCommits: Set<string> | undefined;
+
+function repositoryCommitExists(commitSha: string): boolean {
+  if (!reachableRepositoryCommits) {
+    const result = Bun.spawnSync({
+      cmd: ["git", "-C", repositoryRoot, "rev-list", "--all"],
+      env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+      stdout: "pipe",
+      stderr: "ignore"
+    });
+    reachableRepositoryCommits = result.exitCode === 0
+      ? new Set(new TextDecoder().decode(result.stdout).trim().split("\n").filter(Boolean))
+      : new Set();
+  }
+  return reachableRepositoryCommits.has(commitSha);
+}
+
 function gitObjectExists(specification: string): boolean {
   const result = Bun.spawnSync({
     cmd: ["git", "-C", repositoryRoot, "cat-file", "-e", specification],
+    env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
     stdout: "ignore",
     stderr: "ignore"
   });
@@ -303,7 +321,7 @@ function gitObjectExists(specification: string): boolean {
 }
 
 function validateCommit(commitSha: string, label: string, errors: string[]): boolean {
-  if (!gitObjectExists(commitSha + "^{commit}")) {
+  if (!repositoryCommitExists(commitSha)) {
     errors.push(label + " must resolve to a commit in this repository");
     return false;
   }

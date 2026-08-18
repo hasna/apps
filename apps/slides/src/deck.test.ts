@@ -111,6 +111,30 @@ describe("slide CRUD", () => {
     expect(deck.moveSlide("missing", 0)).toBe(false);
   });
 
+  test("clamps insert and move indices at both boundaries", () => {
+    const deck = createDeck();
+    const first = deck.addSlide({ body: "first" });
+    const last = deck.addSlide({ body: "last" }, -100);
+
+    expect(deck.slides.map((slide) => slide.id)).toEqual([last.id, first.id]);
+    expect(deck.moveSlide(last.id, 100)).toBe(true);
+    expect(deck.slides.map((slide) => slide.id)).toEqual([first.id, last.id]);
+    expect(deck.moveSlide(last.id, -100)).toBe(true);
+    expect(deck.slides.map((slide) => slide.id)).toEqual([last.id, first.id]);
+  });
+
+  test("merges metadata and keeps clone metadata independent", () => {
+    const deck = createDeck();
+    deck.setMeta({ owner: "tests", nested: { enabled: true } });
+    deck.setMeta({ revision: 2 });
+
+    const clone = deck.clone();
+    (clone.data.meta!.nested as { enabled: boolean }).enabled = false;
+
+    expect(deck.data.meta).toEqual({ owner: "tests", nested: { enabled: true }, revision: 2 });
+    expect(clone.data.meta).toEqual({ owner: "tests", nested: { enabled: false }, revision: 2 });
+  });
+
   test("mutations advance updatedAt", async () => {
     const deck = createDeck();
     const before = deck.data.updatedAt;

@@ -32,4 +32,37 @@ describe("metadata args", () => {
       usage: "signatures-mcp",
     })).toBeUndefined();
   });
+
+  test("supports short aliases for version and help", () => {
+    expect(getMetadataResponse(["-V"], {
+      command: "signatures-mcp",
+      description: "Start MCP server",
+      usage: "signatures-mcp",
+    })).toBe(getPackageVersion());
+
+    expect(getMetadataResponse(["-h"], {
+      command: "signatures-mcp",
+      description: "Start MCP server",
+      usage: "signatures-mcp",
+    })).toContain("Usage: signatures-mcp");
+  });
+
+  test("version takes precedence when help is also present", () => {
+    expect(getMetadataResponse(["--help", "--version"], {
+      command: "signatures-mcp",
+      description: "Start MCP server",
+      usage: "signatures-mcp",
+    })).toBe(getPackageVersion());
+  });
+
+  test("renders optional custom options after the built-in options", () => {
+    const help = getMetadataResponse(["--help"], {
+      command: "signatures-mcp",
+      description: "Start MCP server",
+      usage: "signatures-mcp",
+      options: ["  --http         Use HTTP transport"],
+    });
+
+    expect(help?.indexOf("-h, --help")).toBeLessThan(help?.indexOf("--http") ?? -1);
+  });
 });

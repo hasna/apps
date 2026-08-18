@@ -33,6 +33,13 @@ describe("column labels", () => {
       expect(columnLabelToIndex(columnIndexToLabel(i))).toBe(i);
     }
   });
+
+  test("rejects empty, non-alphabetic, and negative labels/indexes", () => {
+    expect(() => columnLabelToIndex("")).toThrow("Invalid column label");
+    expect(() => columnLabelToIndex("A1")).toThrow("Invalid column label");
+    expect(() => columnIndexToLabel(-1)).toThrow("Invalid column index");
+    expect(() => columnIndexToLabel(1.5)).toThrow("Invalid column index");
+  });
 });
 
 describe("A1 references", () => {
@@ -58,6 +65,11 @@ describe("A1 references", () => {
     expect(() => parseA1("1A")).toThrow();
     expect(() => parseA1("")).toThrow();
   });
+
+  test("trims surrounding whitespace and preserves large coordinates", () => {
+    expect(parseA1("  $XFD$1048576  ")).toEqual({ row: 1048575, col: 16383 });
+    expect(toA1({ row: 1048575, col: 16383 })).toBe("XFD1048576");
+  });
 });
 
 describe("ranges", () => {
@@ -80,5 +92,12 @@ describe("ranges", () => {
     expect(coords).toHaveLength(4);
     expect(coords[0]).toEqual({ row: 0, col: 0 });
     expect(coords[3]).toEqual({ row: 1, col: 1 });
+  });
+
+  test("parseRange trims each endpoint and expands reversed ranges", () => {
+    const range = parseRange("  C4 : A2 ");
+    expect(toRangeRef(range)).toBe("A2:C4");
+    expect(expandRange(range)).toHaveLength(9);
+    expect(expandRange(range).at(-1)).toEqual({ row: 3, col: 2 });
   });
 });
