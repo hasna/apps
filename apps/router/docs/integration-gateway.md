@@ -1,13 +1,13 @@
-# open-gateway Integration
+# gateway Integration
 
-`router` is intended to be called before `open-gateway` executes a request.
+`router` is intended to be called before `gateway` executes a request.
 It recommends and explains an ordered candidate list. It does not send requests
 to providers and does not own provider credentials, budgets, retries, streaming,
 or usage ledgers.
 
 ## Local Library Contract
 
-`open-gateway` can adapt its existing `GatewayRouteCandidate[]` into
+`gateway` can adapt its existing `GatewayRouteCandidate[]` into
 `RouterCandidate[]` without reshaping most fields:
 
 ```ts
@@ -47,7 +47,7 @@ const orderedGatewayCandidates = selectedIds
 const routeMetadata = toOpenGatewayRouteDecision(decision);
 ```
 
-`open-gateway` should still enforce:
+`gateway` should still enforce:
 
 - credential presence
 - provider request construction
@@ -59,7 +59,7 @@ const routeMetadata = toOpenGatewayRouteDecision(decision);
 
 ## Policy Alignment
 
-The router mirrors the important `open-gateway` policy shape:
+The router mirrors the important `gateway` policy shape:
 
 - `allowTraining`
 - `allowLogging`
@@ -102,11 +102,11 @@ Content-Type: application/json
 The response is a `RouterDecision` with redacted `selected` and
 `orderedCandidates`, plus `scores`, `skipped`, `analysis`, `policy`,
 `gatewayHints`, and `safetyNotes`. The full provider descriptors remain in
-`open-gateway` and should be joined by selected model id before execution.
+`gateway` and should be joined by selected model id before execution.
 
-## Open Gateway Changes That May Be Useful Later
+## Gateway Changes That May Be Useful Later
 
-No `open-gateway` files were changed for this package. A future integration PR
+No `gateway` files were changed for this package. A future integration PR
 could add:
 
 - an optional `@hasna/router` dependency

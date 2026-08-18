@@ -7,7 +7,7 @@ export const gatewayDescriptors: Record<string, RouterGatewayCompatibility> = {
     kind: "direct",
     openAiCompatible: true,
     requestOptionsShape: "openai-compatible",
-    notes: ["Direct provider or local open-gateway candidate; no upstream gateway routing options are added."],
+    notes: ["Direct provider or local gateway candidate; no upstream gateway routing options are added."],
   },
   openrouter: {
     kind: "openrouter",

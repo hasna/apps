@@ -119,5 +119,5 @@ Descriptors and sanitized gateway-hint helpers are included for:
 - Kong AI Gateway
 - Helicone AI Gateway
 
-See [gateway integration](docs/integration-open-gateway.md) and
+See [gateway integration](docs/integration-gateway.md) and
 [provider references](docs/provider-references.md).

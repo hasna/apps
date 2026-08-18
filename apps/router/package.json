@@ -1,7 +1,7 @@
 {
   "name": "@hasna/router",
   "version": "0.1.0",
-  "description": "Deterministic smart model router companion for open-gateway",
+  "description": "Deterministic smart model router companion for gateway",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -39,7 +39,7 @@
     "llm",
     "router",
     "model-routing",
-    "open-gateway",
+    "gateway",
     "openrouter",
     "vercel-ai-gateway",
     "litellm",

@@ -4,7 +4,7 @@
   "class": "library",
   "contractVersion": "v1",
   "kitVersion": "0.10.6",
-  "description": "Deterministic smart model router companion for open-gateway.",
+  "description": "Deterministic smart model router companion for gateway.",
   "hosting": [
     "user-hosted"
   ],
