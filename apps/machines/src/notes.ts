@@ -22,6 +22,14 @@ export type NoteMachineContextSource = "notes" | "agent" | "sync" | "import" | "
 /** Legacy stored values accepted on read until records are migrated. */
 export const LEGACY_NOTE_CONTEXT_SOURCES = ["notes", "machines"] as const;
 export type LegacyNoteContextSource = (typeof LEGACY_NOTE_CONTEXT_SOURCES)[number];
+/** Retired open-* alias values accepted on read until records are migrated (open- prefix retired, PR #320). */
+export type LegacyNoteMachineContextSourceAlias = "open-notes" | "open-machines";
+/** Actor source accepted at read boundaries: canonical values plus retired open-* aliases. */
+export type NoteMachineContextSourceInput = NoteMachineContextSource | LegacyNoteMachineContextSourceAlias;
+const LEGACY_NOTE_CONTEXT_SOURCE_ALIASES: Record<LegacyNoteMachineContextSourceAlias, NoteMachineContextSource> = {
+  "open-notes": "notes",
+  "open-machines": "machines",
+};
 export type MachineTrashPolicySource = "manifest_metadata" | "default";
 
 export interface NoteMachineReference {
@@ -49,12 +57,15 @@ export interface NoteActorContext {
   display_name: string;
 }
 
+/** Actor input at a read boundary; source accepts retired open-* aliases, normalized to canonical on read. */
+export type NoteActorContextInput = Partial<Omit<NoteActorContext, "source">> & { source?: NoteMachineContextSourceInput };
+
 export interface NoteMachineContextOptions {
   originMachineId?: string | null;
   sourceMachineId?: string | null;
   targetMachineId?: string | null;
   syncTargetMachineIds?: string[];
-  actor?: Partial<NoteActorContext>;
+  actor?: NoteActorContextInput;
   topology?: MachineTopology;
   now?: Date;
   includeTailscale?: boolean;
@@ -231,19 +242,20 @@ export function machineReferenceForNote(
   };
 }
 
-function normalizeActorType(actor: Partial<NoteActorContext> | undefined): NoteActorType {
+function normalizeActorType(actor: NoteActorContextInput | undefined): NoteActorType {
   if (actor?.actor_type && NOTE_ACTOR_TYPES.has(actor.actor_type)) return actor.actor_type;
   if (actor?.actor_type) return "unknown";
   return actor?.agent_id || actor?.agent_name ? "agent" : "unknown";
 }
 
-function normalizeContextSource(source: NoteMachineContextSource | undefined, actorType: NoteActorType): NoteMachineContextSource {
-  if (source && NOTE_CONTEXT_SOURCES.has(source)) return source;
+function normalizeContextSource(source: NoteMachineContextSourceInput | undefined, actorType: NoteActorType): NoteMachineContextSource {
+  const canonical = source === "open-notes" || source === "open-machines" ? LEGACY_NOTE_CONTEXT_SOURCE_ALIASES[source] : source;
+  if (canonical && NOTE_CONTEXT_SOURCES.has(canonical)) return canonical;
   if (source) return "unknown";
   return actorType === "agent" ? "agent" : "unknown";
 }
 
-function normalizeActor(actor: Partial<NoteActorContext> | undefined): NoteActorContext {
+function normalizeActor(actor: NoteActorContextInput | undefined): NoteActorContext {
   const actorType = normalizeActorType(actor);
   const source = normalizeContextSource(actor?.source, actorType);
   const actorId = actor?.actor_id?.trim() || actor?.agent_id?.trim() || null;
