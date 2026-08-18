@@ -36,11 +36,11 @@ Same foundation as the `open-*` ecosystem:
 |-------|--------|-----------|
 | Runtime | **Bun** | Fast startup, native SQLite, TypeScript-first |
 | Language | **TypeScript** (strict) | Consistent with ecosystem |
-| Database | **SQLite** (bun:sqlite, WAL) | Zero-dependency, portable, proven in open-todos |
-| CLI | **Commander.js + React/Ink** | Interactive TUI, matches open-todos pattern |
-| Web UI | **Vite + React 19 + TailwindCSS 4 + Radix UI** | Matches open-todos dashboard |
+| Database | **SQLite** (bun:sqlite, WAL) | Zero-dependency, portable, proven in todos |
+| CLI | **Commander.js + React/Ink** | Interactive TUI, matches todos pattern |
+| Web UI | **Vite + React 19 + TailwindCSS 4 + Radix UI** | Matches todos dashboard |
 | API | **Hono** (HTTP, port 19428) | Lightweight, TypeScript-native |
-| MCP | **@modelcontextprotocol/sdk** | stdio transport, same as open-todos |
+| MCP | **@modelcontextprotocol/sdk** | stdio transport, same as todos |
 | Validation | **Zod** | Schema validation for all inputs |
 | Search | **SQLite FTS5** | Full-text search, no extra service |
 | Auth | **API Key + Bearer token** | Simple, agent-friendly |
