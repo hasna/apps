@@ -7,6 +7,7 @@ import { createHooksAdapter, type RunHookFn } from "./hooks.js";
 import { FileEffectStore } from "./effects.js";
 import { digestOf, effectKey } from "./effects.js";
 import type { EffectOutcome, EffectRequest } from "./adapter.js";
+import type { EffectStore } from "./effects.js";
 
 const REQ: EffectRequest = {
   slug: "deploy-check",
@@ -111,10 +112,12 @@ describe("hooks adapter outcome classification", () => {
     });
     const adapter = createHooksAdapter({ store, runner });
 
-    const outcome = await adapter.invoke(REQ, { hookId: "nope" }, {});
+    // the effect identity must name the hook actually configured and executed
+    const req = { ...REQ, target: "nope" };
+    const outcome = await adapter.invoke(req, { hookId: "nope" }, {});
     expect(outcome.state).toBe("failed");
     expect(outcome.lastErrorClass).toBe("not_found");
-    expect((await store.get(effectKey(REQ)))!.lastErrorClass).toBe("not_found");
+    expect((await store.get(effectKey(req)))!.lastErrorClass).toBe("not_found");
   });
 
   it("classifies a trust-check rejection as failed with invalid_input", async () => {
@@ -167,6 +170,56 @@ describe("hooks adapter outcome classification", () => {
     // action caller — a non-required failure never throws out of the adapter
     expect(outcome.state).toBe("failed");
     expect(await store.get(effectKey(REQ))).not.toBeNull();
+  });
+
+  it("classifies a receipt persistence failure as unknown — the hook may have landed without a receipt", async () => {
+    const failingStore: EffectStore = {
+      record: async () => {
+        throw new Error("EACCES: permission denied, open '/var/monitor-effects/abc.json.tmp'");
+      },
+      get: async () => null,
+    };
+    const { runner } = fakeRunner(async () => ({ output: {}, stderr: "", exitCode: 0 }));
+    const adapter = createHooksAdapter({ store: failingStore, runner });
+
+    const outcome = await adapter.invoke(REQ, { hookId: "gitguard" }, {});
+    // a storage failure must not reject with a raw error: the hook has already
+    // run, so the outcome is ambiguous and the caller must reconcile, not retry
+    expect(outcome.state).toBe("unknown");
+    expect(outcome.lastErrorClass).toBe("unknown");
+    expect(outcome.errorDetail).toContain("EACCES");
+    expect(outcome.errorDetail!.length).toBeLessThanOrEqual(512);
+  });
+});
+
+describe("hooks adapter effect identity validation", () => {
+  it("refuses an effect whose target does not match the configured hookId — no execution, no receipt", async () => {
+    const store = tempStore();
+    const { runner, calls } = fakeRunner(async () => ({ output: {}, stderr: "", exitCode: 0 }));
+    const adapter = createHooksAdapter({ store, runner });
+
+    const mismatched = { ...REQ, target: "claimed-hook" };
+    const outcome = await adapter.invoke(mismatched, { hookId: "actual-hook" }, {});
+
+    expect(outcome.state).toBe("failed");
+    expect(outcome.lastErrorClass).toBe("invalid_input");
+    // the claimed hook must never be executed under a different identity
+    expect(calls.length).toBe(0);
+    expect(await store.get(effectKey(mismatched))).toBeNull();
+  });
+
+  it("refuses an effect whose operation is not invoke", async () => {
+    const store = tempStore();
+    const { runner, calls } = fakeRunner(async () => ({ output: {}, stderr: "", exitCode: 0 }));
+    const adapter = createHooksAdapter({ store, runner });
+
+    const mismatched = { ...REQ, operation: "emit" };
+    const outcome = await adapter.invoke(mismatched, { hookId: "gitguard" }, {});
+
+    expect(outcome.state).toBe("failed");
+    expect(outcome.lastErrorClass).toBe("invalid_input");
+    expect(calls.length).toBe(0);
+    expect(await store.get(effectKey(mismatched))).toBeNull();
   });
 });
 
