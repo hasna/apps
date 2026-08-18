@@ -11,11 +11,18 @@ fail-closed against servers that predate the routes.
 | Method | Route | Client method | Response contract |
 |---|---|---|---|
 | GET | `/api/v1/pins` | `listPins()` | `RemotePin[]` |
-| PUT | `/api/v1/pins/:slug` | `pin(slug)` | `RemotePin` (idempotent — pinning again refreshes) |
-| DELETE | `/api/v1/pins/:slug` | `unpin(slug)` | empty success (200/204) |
+| PUT | `/api/v1/pins/:slug` | `pin(slug, metadata?)` | `RemotePin` (upsert; body `{ metadata }`; pinning again refreshes) |
+| DELETE | `/api/v1/pins/:slug` | `unpin(slug)` | `true` when a pin existed and was deleted; `false` on `404 { code: "PIN_NOT_FOUND" }` |
 | GET | `/api/v1/tags` | `listTags()` | `string[]` (tag names) |
 | GET | `/api/v1/tags/:tag/skills` | `skillsByTag(tag)` | `RemoteSkillSummary[]` |
 | GET | `/api/v1/skills/updated?since=<iso>&cursor=<opaque>&limit=<n>` | `listUpdatedSince(since, {cursor, limit})` | `{ skills: RemoteSkillSummary[], nextCursor: string \| null }` |
+
+The pins wire shape follows the hosted-pins contract defined by the server
+lane: `RemotePin` is `{ slug, pinnedAt, metadata }` — `pinnedAt`/`metadata`
+are server-reported and may be absent, and a present-but-wrong-typed field is
+a contract error, never silently dropped. `metadata` is stored as a JSON
+object; a non-object value is refused (`400 INVALID_METADATA` on the server,
+contract error on the client).
 
 The updated-since page is deliberately a **distinct path** (`/api/v1/skills/updated`),
 not a query flag on `/api/v1/skills`. A server without incremental sync must
@@ -39,8 +46,15 @@ A server that predates these routes answers 404 (unmatched path) or 405
   sync caller.
 - any other non-ok status → **`RemoteRequestError`** (carries the status).
 - a malformed success payload (wrong container shape, missing `slug`,
-  non-string `nextCursor`) → a plain contract `Error`. Fail-closed on both
-  sides of the wire.
+  non-string `nextCursor`, non-string tag elements, wrong-typed optional
+  fields) → a plain contract `Error`. Fail-closed on both sides of the wire.
+
+The one deliberate exception is a domain 404 the server itself answers: the
+hosted-pins DELETE returns `404 { error: "pin not found", code: "PIN_NOT_FOUND" }`
+when no pin exists. `unpin()` matches that code and resolves `false` — the
+absence of a pin is a domain answer, not version skew. Any other 404 body —
+including the dispatcher's `{ code: "NOT_FOUND" }` on a route the server
+lacks — still throws `RemoteRouteUnsupportedError`.
 
 Existing pre-T10 methods are unchanged: `getSkill`/`getSkillMd` still return
 `null` on a missing skill, `getBundle` still returns `null` on 404 — those are

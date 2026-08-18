@@ -56,7 +56,7 @@ describe("RemoteSkillsClient pin/tag/updated-since methods", () => {
   test("listPins calls GET /api/v1/pins and maps the pin list", async () => {
     mockServer(async () =>
       jsonResponse([
-        { slug: "pdf-generate", version: "1.2.0", pinnedAt: "2026-08-01T00:00:00.000Z", extra: "ignored" },
+        { slug: "pdf-generate", pinnedAt: "2026-08-01T00:00:00.000Z", metadata: { team: "docs" }, extra: "ignored" },
         { slug: "read-image" },
       ]),
     );
@@ -67,23 +67,36 @@ describe("RemoteSkillsClient pin/tag/updated-since methods", () => {
     expect(calls[0].url).toBe("https://skills.example.test/api/v1/pins");
     expect(calls[0].init?.method ?? "GET").toBe("GET");
     expect(pins).toEqual([
-      { slug: "pdf-generate", version: "1.2.0", pinnedAt: "2026-08-01T00:00:00.000Z" },
-      { slug: "read-image", version: undefined, pinnedAt: undefined },
+      { slug: "pdf-generate", pinnedAt: "2026-08-01T00:00:00.000Z", metadata: { team: "docs" } },
+      { slug: "read-image", pinnedAt: undefined, metadata: undefined },
     ]);
   });
 
-  test("pin calls PUT /api/v1/pins/:slug and returns the pin", async () => {
+  test("pin calls PUT /api/v1/pins/:slug with the metadata body and returns the pin", async () => {
     mockServer(async () =>
-      jsonResponse({ slug: "pdf-generate", version: "1.2.0", pinnedAt: "2026-08-01T00:00:00.000Z" }),
+      jsonResponse({
+        slug: "pdf-generate",
+        pinnedAt: "2026-08-01T00:00:00.000Z",
+        metadata: { team: "docs", owner: "driver" },
+      }),
     );
 
-    const pinned = await client().pin("pdf-generate");
+    const pinned = await client().pin("pdf-generate", { team: "docs", owner: "driver" });
 
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe("https://skills.example.test/api/v1/pins/pdf-generate");
     expect(calls[0].init?.method).toBe("PUT");
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ metadata: { team: "docs", owner: "driver" } });
     expect(pinned.slug).toBe("pdf-generate");
-    expect(pinned.version).toBe("1.2.0");
+    expect(pinned.metadata).toEqual({ team: "docs", owner: "driver" });
+  });
+
+  test("pin without metadata sends an empty body per the hosted-pins contract", async () => {
+    mockServer(async () => jsonResponse({ slug: "pdf-generate" }));
+
+    await client().pin("pdf-generate");
+
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({});
   });
 
   test("pin encodes the slug into the path", async () => {
@@ -94,14 +107,31 @@ describe("RemoteSkillsClient pin/tag/updated-since methods", () => {
     expect(calls[0].url).toBe("https://skills.example.test/api/v1/pins/weird%2Fslug");
   });
 
-  test("unpin calls DELETE /api/v1/pins/:slug and resolves on an empty success", async () => {
-    mockServer(async () => new Response(null, { status: 204 }));
+  test("unpin calls DELETE /api/v1/pins/:slug and resolves true when a pin existed", async () => {
+    mockServer(async () => jsonResponse({ deleted: true, slug: "pdf-generate" }));
 
-    await expect(client().unpin("pdf-generate")).resolves.toBeUndefined();
+    await expect(client().unpin("pdf-generate")).resolves.toBe(true);
 
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe("https://skills.example.test/api/v1/pins/pdf-generate");
     expect(calls[0].init?.method).toBe("DELETE");
+  });
+
+  test("unpin resolves false on the hosted-pins PIN_NOT_FOUND 404 (domain answer, not version skew)", async () => {
+    mockServer(async () => jsonResponse({ error: "pin not found", code: "PIN_NOT_FOUND" }, 404));
+
+    await expect(client().unpin("pdf-generate")).resolves.toBe(false);
+  });
+
+  test("unpin surfaces RemoteRouteUnsupportedError on a 404 carrying any other code", async () => {
+    mockServer(async () => jsonResponse({ error: "not found", code: "NOT_FOUND" }, 404));
+
+    const error = await client().unpin("pdf-generate").then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(error).toBeInstanceOf(RemoteRouteUnsupportedError);
   });
 
   test("listTags calls GET /api/v1/tags and returns tag names", async () => {
@@ -287,6 +317,30 @@ describe("payload contract — malformed success payloads fail closed", () => {
     mockServer(async () => jsonResponse({ tags: ["audio"] }));
 
     await expect(client().listTags()).rejects.toThrow(/did not match the expected contract/);
+  });
+
+  test("listTags rejects malformed elements instead of filtering them", async () => {
+    mockServer(async () => jsonResponse(["audio", 42, ""]));
+
+    await expect(client().listTags()).rejects.toThrow(/every element must be a non-empty tag name/);
+  });
+
+  test("pin rejects a wrong-typed pinnedAt instead of dropping it", async () => {
+    mockServer(async () => jsonResponse({ slug: "pdf-generate", pinnedAt: 42 }));
+
+    await expect(client().pin("pdf-generate")).rejects.toThrow(/pinnedAt must be a string/);
+  });
+
+  test("pin rejects a non-object metadata field", async () => {
+    mockServer(async () => jsonResponse({ slug: "pdf-generate", metadata: "team" }));
+
+    await expect(client().pin("pdf-generate")).rejects.toThrow(/metadata must be a JSON object/);
+  });
+
+  test("skillsByTag rejects a wrong-typed updatedAt instead of dropping it", async () => {
+    mockServer(async () => jsonResponse([{ slug: "transcribe", updatedAt: 42 }]));
+
+    await expect(client().skillsByTag("audio")).rejects.toThrow(/updatedAt must be a string/);
   });
 
   test("listPins rejects a non-array payload", async () => {

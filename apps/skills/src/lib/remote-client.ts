@@ -34,11 +34,15 @@ export class RemoteRequestError extends Error {
   }
 }
 
-/** A remote pin on a skill. `version`/`pinnedAt` are server-reported and may be absent. */
+/**
+ * A remote pin on a skill, matching the hosted-pins wire shape
+ * (`{ slug, pinnedAt, metadata }`). `pinnedAt`/`metadata` are server-reported
+ * and may be absent.
+ */
 export interface RemotePin {
   slug: string;
-  version?: string;
   pinnedAt?: string;
+  metadata?: Record<string, unknown>;
 }
 
 /** The minimal per-skill row the pin/tag/updated-since routes serve. */
@@ -86,13 +90,32 @@ export class RemoteSkillsClient {
    * never as an empty listing, which would read as "no pins / no changes" and
    * silently desynchronize the caller. Every other non-ok response becomes a
    * `RemoteRequestError` carrying the status.
+   *
+   * `domainNotFoundCodes` is the one deliberate exception: a route the server
+   * DOES have can 404 for a domain reason (the hosted-pins DELETE answers
+   * `{ code: "PIN_NOT_FOUND" }` when no pin exists). A 404 whose JSON body
+   * carries one of those codes is returned to the caller (status intact) so it
+   * can apply domain semantics instead of misreporting version skew. Every
+   * other 404 — including the dispatcher's `{ code: "NOT_FOUND" }` on a route
+   * the server lacks — still throws `RemoteRouteUnsupportedError`.
    */
-  private async requestNewRoute(path: string, options?: RequestInit): Promise<Response> {
+  private async requestNewRoute(
+    path: string,
+    options?: RequestInit,
+    opts: { domainNotFoundCodes?: string[] } = {},
+  ): Promise<Response> {
     const response = await this.request(path, options);
     // Route identity for the error excludes the query string — the query is
     // caller data (cursor/since), not the route that is missing.
     const routePath = path.split("?")[0];
     if (response.status === 404 || response.status === 405) {
+      if (
+        response.status === 404 &&
+        opts.domainNotFoundCodes?.length &&
+        (await responseBodyCarriesCode(response, opts.domainNotFoundCodes))
+      ) {
+        return response;
+      }
       throw new RemoteRouteUnsupportedError(routePath, response.status, this.apiUrl);
     }
     if (!response.ok) {
@@ -205,17 +228,31 @@ export class RemoteSkillsClient {
     return normalizePinList(await response.json());
   }
 
-  /** Pin a skill on the instance (idempotent — pinning again refreshes it). */
-  async pin(slug: string): Promise<RemotePin> {
+  /**
+   * Pin a skill on the instance (upsert — pinning again refreshes it). The
+   * wire contract matches the hosted-pins routes: a PUT with an optional
+   * `{ metadata }` body, answered with the stored pin (`slug`, `pinnedAt`,
+   * `metadata`).
+   */
+  async pin(slug: string, metadata?: Record<string, unknown>): Promise<RemotePin> {
     const path = `/api/v1/pins/${encodeURIComponent(slug)}`;
-    const response = await this.requestNewRoute(path, { method: "PUT" });
+    const response = await this.requestNewRoute(path, {
+      method: "PUT",
+      body: JSON.stringify({ ...(metadata ? { metadata } : {}) }),
+    });
     return normalizePin(await response.json());
   }
 
-  /** Unpin a skill on the instance. */
-  async unpin(slug: string): Promise<void> {
+  /**
+   * Unpin a skill on the instance. Resolves true when a pin existed and was
+   * deleted; false when the instance has no pin for this slug (its 404
+   * carries `code: "PIN_NOT_FOUND"` — a domain answer, not version skew). A
+   * bare 404 (route not deployed) still throws `RemoteRouteUnsupportedError`.
+   */
+  async unpin(slug: string): Promise<boolean> {
     const path = `/api/v1/pins/${encodeURIComponent(slug)}`;
-    await this.requestNewRoute(path, { method: "DELETE" });
+    const response = await this.requestNewRoute(path, { method: "DELETE" }, { domainNotFoundCodes: ["PIN_NOT_FOUND"] });
+    return response.status !== 404;
   }
 
   /** List the tag names the instance serves. */
@@ -225,7 +262,14 @@ export class RemoteSkillsClient {
     if (!Array.isArray(payload)) {
       throw new Error("Remote tags payload did not match the expected contract (expected an array of tag names)");
     }
-    return payload.filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0);
+    // Fail-closed: a malformed element is rejected, never silently dropped —
+    // a filtered tag list would quietly disagree with the instance.
+    for (const tag of payload) {
+      if (typeof tag !== "string" || tag.trim().length === 0) {
+        throw new Error("Remote tags payload did not match the expected contract (every element must be a non-empty tag name)");
+      }
+    }
+    return payload as string[];
   }
 
   /** List the skills carrying a tag on the instance. */
@@ -249,6 +293,15 @@ export class RemoteSkillsClient {
   }
 }
 
+/** Present-but-wrong-typed optional fields fail the contract instead of being dropped. */
+function requireOptionalString(record: Record<string, unknown>, field: string): string | undefined {
+  if (record[field] === undefined) return undefined;
+  if (typeof record[field] !== "string") {
+    throw new Error(`Remote payload did not match the expected contract (${field} must be a string when present)`);
+  }
+  return record[field] as string;
+}
+
 function normalizePin(entry: unknown): RemotePin {
   if (!entry || typeof entry !== "object") {
     throw new Error("Remote pin payload did not match the expected contract (expected an object)");
@@ -258,10 +311,18 @@ function normalizePin(entry: unknown): RemotePin {
   if (!slug) {
     throw new Error("Remote pin payload did not match the expected contract (missing slug)");
   }
+  let metadata: Record<string, unknown> | undefined;
+  if (record.metadata !== undefined) {
+    if (!record.metadata || typeof record.metadata !== "object" || Array.isArray(record.metadata)) {
+      throw new Error("Remote pin payload did not match the expected contract (metadata must be a JSON object when present)");
+    }
+    metadata = record.metadata as Record<string, unknown>;
+  }
+  const pinnedAt = requireOptionalString(record, "pinnedAt");
   return {
     slug,
-    ...(typeof record.version === "string" ? { version: record.version } : {}),
-    ...(typeof record.pinnedAt === "string" ? { pinnedAt: record.pinnedAt } : {}),
+    ...(pinnedAt !== undefined ? { pinnedAt } : {}),
+    ...(metadata ? { metadata } : {}),
   };
 }
 
@@ -283,9 +344,9 @@ function normalizeSkillSummary(entry: unknown): RemoteSkillSummary {
   }
   return {
     slug,
-    ...(typeof record.name === "string" ? { name: record.name } : {}),
-    ...(typeof record.version === "string" ? { version: record.version } : {}),
-    ...(typeof record.updatedAt === "string" ? { updatedAt: record.updatedAt } : {}),
+    ...(requireOptionalString(record, "name") !== undefined ? { name: requireOptionalString(record, "name") } : {}),
+    ...(requireOptionalString(record, "version") !== undefined ? { version: requireOptionalString(record, "version") } : {}),
+    ...(requireOptionalString(record, "updatedAt") !== undefined ? { updatedAt: requireOptionalString(record, "updatedAt") } : {}),
   };
 }
 
@@ -294,6 +355,19 @@ function normalizeSkillSummaryList(payload: unknown): RemoteSkillSummary[] {
     throw new Error("Remote skills payload did not match the expected contract (expected an array of skills)");
   }
   return payload.map(normalizeSkillSummary);
+}
+
+/** True when a 404's JSON body carries one of the given `code` values. */
+async function responseBodyCarriesCode(response: Response, codes: string[]): Promise<boolean> {
+  try {
+    const payload: unknown = await response.clone().json();
+    if (!payload || typeof payload !== "object") return false;
+    const code = (payload as Record<string, unknown>).code;
+    return typeof code === "string" && codes.includes(code);
+  } catch {
+    // A bare 404 (route missing, no domain body) does not parse as JSON.
+    return false;
+  }
 }
 
 function normalizeUpdatedSincePage(payload: unknown): UpdatedSincePage {
