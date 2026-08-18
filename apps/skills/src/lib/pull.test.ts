@@ -762,6 +762,31 @@ describe("pullSkills — verified bundle path", () => {
     }
   });
 
+  test("a bundle-less pull installs SKILL.md byte-for-byte and proves its revision", async () => {
+    const root = tempRoot();
+    // Deliberately NO trailing newline: the corpus writer must not normalize the bytes,
+    // because the revision proof covers the exact fetched document (the server stores
+    // and hashes it verbatim). Appending a newline would record a revision that does
+    // not identify the installed bytes.
+    const md = "---\nname: no-newline-skill\ndescription: no trailing newline\nkind: instruction\n---\n# v1";
+    const meta = revisionMetaFor("no-newline-skill", md);
+    try {
+      const { results } = await pullSkills({
+        names: ["no-newline-skill"],
+        rootDir: root,
+        client: fakeClient({ "no-newline-skill": { md, meta } }),
+      });
+      expect(results[0].success).toBe(true);
+      expect(results[0].revisionId).toBe(String(meta.revisionId));
+      const installed = readFileSync(join(root, "no-newline-skill", "SKILL.md"), "utf-8");
+      expect(installed).toBe(md);
+      const marker = JSON.parse(readFileSync(join(root, "no-newline-skill", ".hasna-skills.json"), "utf-8"));
+      expect(marker.revisionId).toBe(String(meta.revisionId));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a purged published slug on a bundle-less instance is reported, not reinstalled", async () => {
     const root = tempRoot();
     const source = makeBundleSkill("purged-md-only", BUNDLED_MD);

@@ -460,8 +460,12 @@ export function writeCorpusSkill(
   const created = !existsSync(skillPath);
   mkdirSync(skillPath, { recursive: true });
 
-  const skillMd = input.skillMd.endsWith("\n") ? input.skillMd : `${input.skillMd}\n`;
-  writeFileSync(join(skillPath, "SKILL.md"), skillMd);
+  // Verbatim, never normalized: the fetched document is a published artifact and the
+  // hosted registry's revision is computed over its exact bytes (the row stores it
+  // byte-for-byte). Appending a trailing newline would install bytes the recorded
+  // revision does not identify — a pull must be able to prove which revision it
+  // installed, which requires the installed bytes to BE the hashed bytes.
+  writeFileSync(join(skillPath, "SKILL.md"), input.skillMd);
 
   const frontmatter = parseSkillFrontmatter(input.skillMd) ?? undefined;
   // Carry the instance's kind when it reports one; else the SKILL.md frontmatter; else
