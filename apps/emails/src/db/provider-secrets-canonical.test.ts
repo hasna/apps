@@ -1,7 +1,7 @@
 /**
  * Canonical provider-secrets keyring root regression tests for @hasna/emails.
  *
- * Fleet law: app data lives at ~/.hasna/<app>/. The provider-credential
+ * Convention: app data lives at ~/.hasna/<app>/. The provider-credential
  * keyring (the encrypted root-key file) used to default to
  * ${XDG_CONFIG_HOME}/open-emails-secrets/... or ~/.hasna/secrets/... — both
  * outside the app's data root. The default is now
@@ -20,6 +20,7 @@ import { join } from "node:path";
 import {
   defaultProviderSecretsKeyringPath,
   legacyProviderSecretsKeyringPaths,
+  migrateProviderSecretsKeyring,
   resolveProviderSecretsKeyringPath,
 } from "./provider-secrets.js";
 
@@ -184,6 +185,26 @@ describe("one-time keyring migration", () => {
       const resolved = resolveProviderSecretsKeyringPath(fake.env, true);
       expect(resolved).toBe(canonical);
       expect(readFileSync(canonical).equals(canonicalRaw)).toBe(true);
+    } finally {
+      cleanup(fake);
+    }
+  });
+
+  test("dry-run reports the legacy source and writes nothing", () => {
+    const fake = fakeEnvWithXdg();
+    try {
+      const { raw } = makeKeyring();
+      const legacy = legacyProviderSecretsKeyringPaths(fake.env)[0]!;
+      writeKeyring(legacy, raw);
+
+      const report = migrateProviderSecretsKeyring(fake.env, true);
+
+      expect(report.dryRun).toBe(true);
+      expect(report.from).toBe(legacy);
+      expect(existsSync(defaultProviderSecretsKeyringPath(fake.env))).toBe(false);
+      expect(
+        existsSync(join(fake.home, ".hasna", "emails", ".provider-keyring-migrated.receipt.json")),
+      ).toBe(false);
     } finally {
       cleanup(fake);
     }

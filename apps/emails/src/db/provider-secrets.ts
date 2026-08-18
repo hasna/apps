@@ -172,22 +172,34 @@ export function legacyProviderSecretsKeyringPaths(env: NodeJS.ProcessEnv = proce
   return paths;
 }
 
+export interface KeyringMigrationReport {
+  dryRun: boolean;
+  from: string | null;
+  to: string;
+}
+
 /**
  * One-time migration of a legacy keyring file into the canonical root.
  * Copies (never deletes) the encrypted keyring, enforces mode 0600 on the
  * copy, verifies it byte-for-byte and that it parses as a valid keyring, and
  * records a receipt next to the canonical file. Never overwrites an existing
  * canonical keyring. Idempotent: the receipt or an existing canonical file
- * skips the copy.
+ * skips the copy. dryRun reports the legacy source it would migrate from and
+ * writes nothing.
  */
-export function migrateProviderSecretsKeyring(env: NodeJS.ProcessEnv): void {
+export function migrateProviderSecretsKeyring(
+  env: NodeJS.ProcessEnv,
+  dryRun = false,
+): KeyringMigrationReport {
   const canonical = defaultProviderSecretsKeyringPath(env);
-  if (existsSync(canonical)) return;
+  const empty = (from: string | null): KeyringMigrationReport => ({ dryRun, from, to: canonical });
+  if (existsSync(canonical)) return empty(null);
   const receiptPath = join(dirname(canonical), ".provider-keyring-migrated.receipt.json");
-  if (existsSync(receiptPath)) return;
+  if (existsSync(receiptPath)) return empty(null);
 
   for (const legacy of legacyProviderSecretsKeyringPaths(env)) {
     if (!existsSync(legacy)) continue;
+    if (dryRun) return empty(legacy);
     ensurePrivateDirectory(dirname(canonical));
     copyFileSync(legacy, canonical);
     chmodSync(canonical, 0o600);
@@ -214,8 +226,9 @@ export function migrateProviderSecretsKeyring(env: NodeJS.ProcessEnv): void {
       )}\n`,
       { mode: 0o600 },
     );
-    return;
+    return { dryRun: false, from: legacy, to: canonical };
   }
+  return empty(null);
 }
 
 /**
