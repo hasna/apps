@@ -67,10 +67,11 @@
   --glass-sb-ring:inset 0 0 0 0.5px rgba(255,255,255,.22);
   --glass-canvas-bg:color-mix(in srgb,var(--bg) 62%,transparent); /* menus/popovers/pills over the canvas */
   --glass-canvas-ring:inset 0 0 0 0.5px rgba(255,255,255,.18);
-  /* Rule 20 — glass that floats over the VIVID PURPLE gradient (the machines dropdown
-     menu) needs a stronger tint than canvas glass: at 62% the refracted gradient sank
-     secondary text below 4.5:1 and sidebar rows ghosted through the blur. 86% keeps
-     the material read while guaranteeing legibility ("add a tint or fall back"). */
+  /* Rule 20 — glass that floats over the VIVID PURPLE gradient (menus/popovers
+     over the sidebar) needs a stronger tint than canvas glass: at 62% the refracted
+     gradient sank secondary text below 4.5:1 and sidebar rows ghosted through the
+     blur. 86% keeps the material read while guaranteeing legibility ("add a tint or
+     fall back"). */
   --glass-menu-bg:color-mix(in srgb,var(--bg) 86%,transparent);
   /* Recording red — the ONE red for live-capture surfaces (record circle, pill dot,
      stop control). Distinct from --danger (destructive actions); flips for dark. */
@@ -206,8 +207,8 @@ body.native .window{
    and the native .content-header height below change TOGETHER. */
 :root{--native-inset:0px;--traffic-w:78px;--traffic-h:40px;}
 body.native{--native-inset:38px;}
-/* The sidebar top hosts the machines dropdown — keep it clear of the 78x40 logical px
-   traffic-light keep-out (docs/design-rules-macos26.md §3.4). */
+/* The sidebar top sits under the 78x40 logical px traffic-light keep-out
+   (docs/design-rules-macos26.md §3.4) — keep it clear of the native chrome. */
 body.native .sidebar-top{padding-top:calc(10px + var(--native-inset));}
 body.native .set-top{padding-top:calc(4px + var(--native-inset));}
 /* The content header alone owns the native top inset (the traffic-light band). Do NOT
@@ -223,8 +224,8 @@ body.native .set-top{padding-top:calc(4px + var(--native-inset));}
 /* ====================== SIDEBAR (app shell) ====================== */
 /* README identity: the narrow infinity-purple Liquid-Glass sidebar (spec §3.2).
    The gradient is the BACKGROUND layer; glass lives only on the chrome floating
-   above it (machines dropdown, selected rows). The gradient IS the edge — no
-   border-right; the white canvas provides the seam. */
+   above it (selected rows, popovers). The gradient IS the edge — no border-right;
+   the white canvas provides the seam. */
 .sidebar{
   width:248px;min-width:248px;height:100%;
   background:linear-gradient(180deg,var(--sb-grad-0),var(--sb-grad-1),var(--sb-grad-2));
@@ -234,8 +235,8 @@ body.native .set-top{padding-top:calc(4px + var(--native-inset));}
 }
 .sidebar-top{padding:4px 2px 8px;position:relative;z-index:5;}
 /* Scroll edge effect for the sidebar nav (Rule 6 / spec §3.7): when nav rows scroll
-   beneath the machines-dropdown chrome they fade out under a soft gradient lip instead
-   of hard-clipping mid-glyph. app.js toggles .nav-scrolled on .sidebar from the
+   beneath the sidebar-top chrome they fade out under a soft gradient lip instead of
+   hard-clipping mid-glyph. app.js toggles .nav-scrolled on .sidebar from the
    .sidebar-nav scrollTop (same pattern as .content.scrolled). The fade color is the
    top gradient stop — at the nav's boundary (~10% down) the gradient has barely left
    --sb-grad-0, so the seam is imperceptible. */
