@@ -201,7 +201,11 @@ function buildMemoryContent(machineId: string, report: DoctorReport): string {
 function adapterClient(config: MementosIntegrationConfig, client?: MementosClient): MementosClient {
   if (client) return client;
   if (config.base_url) {
-    return new MementosClient({ baseUrl: config.base_url });
+    // The /v1 routes enforce API-key auth and the SDK emits auth headers only
+    // when an apiKey is supplied. Resolve the key from the SDK's own env
+    // surface (MEMENTOS_API_KEY) via fromEnv, overriding only the base URL with
+    // the configured one, so a configured endpoint stays authenticated.
+    return MementosClient.fromEnv({ baseUrl: config.base_url });
   }
   return MementosClient.fromEnv();
 }
@@ -211,8 +215,13 @@ function adapterClient(config: MementosIntegrationConfig, client?: MementosClien
  * signature; implemented over `MementosAdapter` (MementosClient.saveMemory).
  * The memory key is stable per machine (`health:{target}` by default), so
  * repeated snapshots for the same machine upsert one memory row instead of
- * duplicating. Throws on any failed outcome; the dispatcher keeps failures
- * non-fatal by catching.
+ * duplicating.
+ *
+ * A failure affects the caller ONLY when the integration is `required: true`
+ * AND the failure is confirmed (4xx): that case throws so the dispatcher can
+ * propagate it into the run outcome. Non-blocking failures (non-required, or
+ * unknown outcomes such as 5xx/network where the write may have landed) are
+ * logged and resolve, keeping the integration non-fatal by default.
  */
 export async function saveHealthMemory(
   machineId: string,
@@ -242,7 +251,16 @@ export async function saveHealthMemory(
   );
 
   if (!outcome.ok) {
-    throw new Error(`mementos saveHealthMemory failed: ${outcome.error}`);
+    if (outcome.runBlocking) {
+      // required:true + confirmed failure — this affects the run outcome.
+      throw new Error(
+        `mementos saveHealthMemory failed (required integration): ${outcome.error}`,
+      );
+    }
+    console.error(
+      `[monitor:integrations:mementos] non-blocking save failure for ${machineId}: ${outcome.error} (failureClass=${outcome.failureClass})`,
+    );
+    return;
   }
   console.error(
     `[monitor:integrations:mementos] saved health memory for ${machineId} (status: ${report.overallStatus})`,
