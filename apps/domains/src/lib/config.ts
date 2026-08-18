@@ -2,7 +2,8 @@
  * Persistent config stored in the domains config directory.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -46,18 +47,69 @@ export function applyPurchaseProfile(): string | undefined {
   return profile;
 }
 
-function configPath(): string {
-  if (process.env["DOMAINS_CONFIG_PATH"]) return process.env["DOMAINS_CONFIG_PATH"];
-  const dir = process.env["DOMAINS_CONFIG_DIR"];
-  if (dir) return join(dir, "config.json");
-  const legacyDir = join(homedir(), ".hasna", "domains");
-  if (existsSync(legacyDir)) return join(legacyDir, "config.json");
-  const xdgConfig = process.env["XDG_CONFIG_HOME"] || join(homedir(), ".config");
-  return join(xdgConfig, "open-domains", "config.json");
+function canonicalHome(env: NodeJS.ProcessEnv): string {
+  return env["HOME"] || env["USERPROFILE"] || homedir();
 }
 
-export function loadConfig(): DomainsConfig {
-  const path = configPath();
+/**
+ * One-time migration from the previous XDG config default
+ * ($XDG_CONFIG_HOME/open-domains/config.json) into the canonical
+ * ~/.hasna/domains/config.json. Copies, verifies by size and sha256, records a
+ * receipt, never deletes the source, never overwrites existing canonical data,
+ * and is idempotent (receipt + canonical file both skip it).
+ */
+export function migrateLegacyConfig(env: NodeJS.ProcessEnv = process.env): void {
+  const home = canonicalHome(env);
+  const canonicalDir = join(home, ".hasna", "domains");
+  const newPath = join(canonicalDir, "config.json");
+  if (existsSync(newPath)) return;
+  if (existsSync(join(canonicalDir, ".migrated-from-xdg-config.receipt.json"))) return;
+
+  const xdgConfig = env["XDG_CONFIG_HOME"]?.trim() || join(home, ".config");
+  const oldPath = join(xdgConfig, "open-domains", "config.json");
+  if (!existsSync(oldPath)) return;
+
+  mkdirSync(canonicalDir, { recursive: true });
+  copyFileSync(oldPath, newPath);
+  const oldBytes = readFileSync(oldPath);
+  const newBytes = readFileSync(newPath);
+  if (!oldBytes.equals(newBytes)) {
+    throw new Error(
+      `Refusing migration: copied ${newPath} does not byte-match ${oldPath}; the canonical config was not populated.`,
+    );
+  }
+  writeFileSync(
+    join(canonicalDir, ".migrated-from-xdg-config.receipt.json"),
+    `${JSON.stringify(
+      {
+        migratedAt: new Date().toISOString(),
+        from: oldPath,
+        to: newPath,
+        bytes: newBytes.byteLength,
+        sha256: createHash("sha256").update(newBytes).digest("hex"),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+/**
+ * The default config location: ~/.hasna/domains/config.json. Env overrides
+ * (DOMAINS_CONFIG_PATH / DOMAINS_CONFIG_DIR) are honored unchanged and win
+ * over the default.
+ */
+export function getConfigPath(env: NodeJS.ProcessEnv = process.env): string {
+  if (env["DOMAINS_CONFIG_PATH"]) return env["DOMAINS_CONFIG_PATH"];
+  const dir = env["DOMAINS_CONFIG_DIR"];
+  if (dir) return join(dir, "config.json");
+
+  migrateLegacyConfig(env);
+  return join(canonicalHome(env), ".hasna", "domains", "config.json");
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): DomainsConfig {
+  const path = getConfigPath(env);
   if (!existsSync(path)) return {};
   try {
     return JSON.parse(readFileSync(path, "utf-8")) as DomainsConfig;
@@ -66,15 +118,15 @@ export function loadConfig(): DomainsConfig {
   }
 }
 
-export function saveConfig(config: DomainsConfig): void {
-  const path = configPath();
+export function saveConfig(config: DomainsConfig, env: NodeJS.ProcessEnv = process.env): void {
+  const path = getConfigPath(env);
   const dir = dirname(path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   writeFileSync(path, JSON.stringify(config, null, 2), "utf-8");
 }
 
-export function setConfigKey(keyPath: string, value: string): DomainsConfig {
-  const config = loadConfig();
+export function setConfigKey(keyPath: string, value: string, env: NodeJS.ProcessEnv = process.env): DomainsConfig {
+  const config = loadConfig(env);
   const parts = keyPath.split(".");
 
   if (parts.length === 1) {
@@ -86,7 +138,7 @@ export function setConfigKey(keyPath: string, value: string): DomainsConfig {
     throw new Error(`Unknown config key: ${keyPath}`);
   }
 
-  saveConfig(config);
+  saveConfig(config, env);
   return config;
 }
 
