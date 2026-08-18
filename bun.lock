@@ -1977,10 +1977,13 @@
       "bin": {
         "tenants": "dist/cli.js",
         "tenants-serve": "dist/server/index.js",
+        "tenants-mcp": "dist/mcp/index.js",
       },
       "dependencies": {
         "@hasna/contracts": "0.4.2",
+        "@modelcontextprotocol/sdk": "^1.26.0",
         "pg": "^8.16.3",
+        "zod": "^3.25.76",
       },
       "devDependencies": {
         "@types/bun": "^1.2.4",
