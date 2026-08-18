@@ -392,7 +392,7 @@ export async function listMachines(client: TypedQueryClient = getCloudClient()):
   // The `machines` table is only maintained by the local ingest/recompute path and
   // is never populated when sessions arrive via the /v1 API (upsertSession only
   // writes sessions.machine). Deriving from sessions keeps the counts truthful in
-  // self_hosted mode; the machines table is LEFT JOINed purely for optional
+  // hosted mode; the machines table is LEFT JOINed purely for optional
   // hostname/platform/first-last-seen metadata when a machine has registered.
   const rows = await client.many<Machine & Record<string, unknown>>(
     `SELECT
@@ -785,8 +785,8 @@ export interface RelocateResult {
  * Rewrite session paths in the shared RDS after a project directory move
  * (old -> new). Mirrors the local relocate: updates `sessions.project_path`,
  * `sessions.source_path`, and the path-encoded `ingestion_state.file_path`.
- * This is the cloud (self_hosted) half of the Store's `relocatePaths`, so a
- * relocate against a machine in self_hosted mode mutates the ONE shared
+ * This is the Postgres half of the Store's `relocatePaths`, so a relocate
+ * against a machine on the postgresql backend mutates the ONE shared
  * registry instead of a non-authoritative on-box index.
  */
 export async function relocatePaths(

@@ -7,13 +7,13 @@ import { getDataSource, resetDataSource } from "../src/server/data-source.js";
 
 describe("server data source", () => {
   let tempDir: string;
-  let originalStorageMode: string | undefined;
+  let originalDatabaseUrl: string | undefined;
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "sessions-data-source-"));
-    originalStorageMode = process.env.HASNA_SESSIONS_STORAGE_MODE;
+    originalDatabaseUrl = process.env.HASNA_SESSIONS_DATABASE_URL;
     process.env.SESSIONS_DB_PATH = join(tempDir, "sessions.db");
-    delete process.env.HASNA_SESSIONS_STORAGE_MODE;
+    delete process.env.HASNA_SESSIONS_DATABASE_URL;
     resetDatabase();
     resetDataSource();
     getDatabase();
@@ -23,24 +23,24 @@ describe("server data source", () => {
     closeDatabase();
     resetDataSource();
     delete process.env.SESSIONS_DB_PATH;
-    if (originalStorageMode === undefined) {
-      delete process.env.HASNA_SESSIONS_STORAGE_MODE;
+    if (originalDatabaseUrl === undefined) {
+      delete process.env.HASNA_SESSIONS_DATABASE_URL;
     } else {
-      process.env.HASNA_SESSIONS_STORAGE_MODE = originalStorageMode;
+      process.env.HASNA_SESSIONS_DATABASE_URL = originalDatabaseUrl;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("selects and caches the configured mode until reset", () => {
-    const local = getDataSource();
-    expect(local.mode).toBe("local");
-    expect(getDataSource()).toBe(local);
+  it("selects and caches the configured backend until reset", () => {
+    const sqlite = getDataSource();
+    expect(sqlite.backend).toBe("sqlite");
+    expect(getDataSource()).toBe(sqlite);
 
-    process.env.HASNA_SESSIONS_STORAGE_MODE = "cloud";
-    expect(getDataSource()).toBe(local);
+    process.env["HASNA_SESSIONS_DATABASE_URL"] = "postgres://localhost/sessions";
+    expect(getDataSource()).toBe(sqlite);
 
     resetDataSource();
-    expect(getDataSource().mode).toBe("cloud");
+    expect(getDataSource().backend).toBe("postgresql");
   });
 
   it("performs local CRUD and reports missing removals", async () => {

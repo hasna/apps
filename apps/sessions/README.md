@@ -31,8 +31,8 @@ sessions ingest                # all providers
 sessions ingest --source codex # one provider
 sessions ingest --source codewith
 sessions ingest --force        # re-index everything
-sessions sync --json           # ingest locally; pushes content when self_hosted API env is set
-sessions sync --dry-run --json # plan a self_hosted /v1 content push
+sessions sync --json           # ingest locally; pushes content when hosted API env is set
+sessions sync --dry-run --json # plan a hosted /v1 content push
 
 # Full-text search across every session
 sessions search "kubernetes deploy"
@@ -72,7 +72,7 @@ sessions bulk stop --open-only --status idle,dead --dry-run
 sessions watch-ingest
 sessions watch-ingest --status
 
-# Keep local changes ready for self_hosted sync (bounded polling; Ctrl-C to stop)
+# Keep local changes ready for hosted sync (bounded polling; Ctrl-C to stop)
 sessions daemon --dry-run --interval 60
 sessions sync --watch --interval 60 --max-iterations 3
 
@@ -99,7 +99,8 @@ sessions resume <id-or-prefix>
 ```
 
 `sessions list`, `rename`, and `resume` use the active store: the local SQLite
-index by default or the authenticated self-hosted `/v1` API when configured.
+index by default, or the authenticated hosted `/v1` API when
+`HASNA_SESSIONS_API_URL` + `HASNA_SESSIONS_API_KEY` are configured.
 Only Claude sessions currently produce an executable resume command. Use
 `sessions list-indexed` (alias `indexed-list`) when you need source and machine
 filters in addition to project filtering.
@@ -184,36 +185,36 @@ HTTP is the default transport. Use `sessions-mcp --stdio` or `MCP_STDIO=1` for
 stdio clients; `--http` and `MCP_HTTP=1` remain available as explicit HTTP
 selectors.
 
-## Local and self-hosted registry mode
+## Local index and hosted registry
 
 By default sessions use the local SQLite index at `~/.hasna/sessions/`.
-`sessions sync` ingests local sessions and recomputes machine metadata. In local
-mode the on-box index is authoritative, so there is nothing to push or pull.
+`sessions sync` ingests local sessions and recomputes machine metadata. With the
+sqlite store the on-box index is authoritative, so there is nothing to push or
+pull.
 
 To share one registry across machines, point the CLI or MCP server at a
-self-hosted `sessions-serve` instance with `HASNA_SESSIONS_API_URL` and
-`HASNA_SESSIONS_API_KEY`. In that mode `sessions sync` pushes locally indexed
-session metadata and content to the authenticated `/v1` API. Clients do not
-open a Postgres DSN, and the former client-side storage subcommand family has
-been removed.
+hosted `sessions-serve` instance by setting `HASNA_SESSIONS_API_URL` and
+`HASNA_SESSIONS_API_KEY`. With the hosted store selected, `sessions sync`
+pushes locally indexed session metadata and content to the authenticated `/v1`
+API. Clients do not open a Postgres DSN, and the former client-side storage
+subcommand family has been removed.
 
 `sessions recall` is local-only because its combined FTS, semantic, tool-call,
-and graph ranking uses the on-box index. In hosted/self-hosted mode, use
+and graph ranking uses the on-box index. Through the hosted store, use
 `sessions list`, `sessions show <id>`, and `sessions search <query>` against the
-active hosted store instead. Run `sessions recall` on a machine in local mode
-when the richer recall result is required; the CLI and public storage SDK fail
-before making a hosted recall request. No `/v1/recall` endpoint is provided;
-generated HTTP SDK consumers can use `listSessions`, `getSession` with
-`listSessionMessages`, and `searchSessions`.
+active hosted store instead. Run `sessions recall` on a machine using the
+sqlite store when the richer recall result is required; the CLI and public
+storage SDK fail before making a hosted recall request. No `/v1/recall`
+endpoint is provided; generated HTTP SDK consumers can use `listSessions`,
+`getSession` with `listSessionMessages`, and `searchSessions`.
 
-## Self-Hosted API Sync
+## Hosted API Sync
 
 Use API sync when this machine should push local indexed sessions, messages, and
-tool calls to the Hasna self-hosted Sessions service over `/v1` instead of
-writing directly to a database. Configure:
+tool calls to the hosted Sessions service over `/v1` instead of writing
+directly to a database. Configure:
 
 ```bash
-export HASNA_SESSIONS_MODE=self_hosted
 export HASNA_SESSIONS_API_URL=https://sessions.your-deployment.example
 export HASNA_SESSIONS_API_KEY=...
 ```
@@ -284,7 +285,7 @@ sessions backfill \
   --json
 ```
 
-Live apply is fail-closed: it requires a self-hosted API store, an explicit
+Live apply is fail-closed: it requires the hosted HTTP API store, an explicit
 selection boundary (`--source` plus `--pilot`, a range, or a `--known-id`; or
 the conspicuous `--all-sources` acknowledgement), a capacity ceiling, a
 successful backup hook, durable checkpointing, and the literal confirmation
@@ -313,10 +314,9 @@ sessions backfill \
 ```
 
 Run the service-side Postgres schema with `sessions-serve migrate` using the
-owner DSN. The current server-side storage mode value is
-`HASNA_SESSIONS_STORAGE_MODE=cloud`, but this README uses "self-hosted" for the
-deployment mode: the service runs in Hasna-owned infrastructure or your own
-server, and clients talk to its `/v1` API.
+owner DSN. The server's data backend is selected by `HASNA_SESSIONS_DATABASE_URL`:
+set it to run the service against PostgreSQL, or leave it unset for SQLite.
+Clients talk to the service's `/v1` API regardless of backend.
 
 ## Adapter notes
 
@@ -330,7 +330,8 @@ a durable local export or API; avoid scraping transient cloud/cache formats.
 `sessions-serve` exposes unauthenticated health/documentation endpoints and a
 versioned, API-key-authenticated `/v1` API:
 
-- `GET /health`, `GET /ready`, `GET /version` → `{ status, version, mode }`
+- `GET /health`, `GET /ready`, `GET /version` → `{ status, version }`; `GET /`
+  and `GET /info` → `{ ok, name, version, description, backend, endpoints }`
 - `GET /openapi.json` → OpenAPI 3 document (the SDK is generated from it)
 - `/v1/sessions` (list/create), `/v1/sessions/import` (content upsert),
   `/v1/sessions/:id` (get/delete), `/v1/sessions/:id/messages`,
@@ -350,13 +351,12 @@ Auth uses `@hasna/contracts` API keys (header `x-api-key` or
 issue keys with `bunx @hasna/contracts issue-key --app sessions --scopes
 'sessions:read,sessions:write'`.
 
-In self-hosted server mode (`HASNA_SESSIONS_STORAGE_MODE=cloud` +
-`HASNA_SESSIONS_DATABASE_URL`) the service reads/writes Postgres directly: no
-client-side DSN sync engine and no service-side cache. Apply the schema with
-`sessions-serve migrate` (run with the owner DSN). See `docker-compose.yml` for
-a self-hosted stack (serve + Postgres) and `Dockerfile` for the ARM64 image.
-Self-hosted mode raises Bun's request body limit to 512 MiB for large
-`/v1/sessions/import` payloads; override with
+With `HASNA_SESSIONS_DATABASE_URL` set, the service reads/writes Postgres
+directly: no client-side DSN sync engine and no service-side cache. Apply the
+schema with `sessions-serve migrate` (run with the owner DSN). See
+`docker-compose.yml` for a hosted stack (serve + Postgres) and `Dockerfile`
+for the ARM64 image. The postgresql backend raises Bun's request body limit to
+512 MiB for large `/v1/sessions/import` payloads; override with
 `HASNA_SESSIONS_MAX_REQUEST_BODY_SIZE` using bytes or units such as `768MiB`.
 
 The generated, dependency-free SDK is published at `@hasna/sessions/sdk`:

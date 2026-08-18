@@ -3,7 +3,6 @@ import { closeDatabase, resetDatabase } from "./database.js";
 import { resolveSessionStore } from "./session-store.js";
 
 const CLOUD_ENV = {
-  HASNA_SESSIONS_MODE: "self_hosted",
   HASNA_SESSIONS_API_URL: "https://sessions.your-deployment.example",
   HASNA_SESSIONS_API_KEY: "hasna_sessions_test_key",
 } as const;
@@ -37,17 +36,25 @@ function cloudStore(handler: (call: Call) => { status?: number; json?: unknown }
   return { store, calls };
 }
 
-describe("resolveSessionStore flip", () => {
-  test("local when env unset", () => {
-    expect(resolveSessionStore({}).mode).toBe("local");
+describe("resolveSessionStore transport selection", () => {
+  test("sqlite when env unset", () => {
+    expect(resolveSessionStore({}).transport).toBe("sqlite");
   });
 
-  test("cloud when self_hosted + URL + key set", () => {
-    expect(resolveSessionStore(CLOUD_ENV).mode).toBe("cloud");
+  test("http when API URL + key set", () => {
+    expect(resolveSessionStore(CLOUD_ENV).transport).toBe("http");
   });
 
-  test("throws (no silent local drift) when cloud requested but misconfigured", () => {
-    expect(() => resolveSessionStore({ HASNA_SESSIONS_MODE: "self_hosted" })).toThrow();
+  test("throws (no silent local drift) when the API URL lacks a key", () => {
+    expect(() =>
+      resolveSessionStore({ HASNA_SESSIONS_API_URL: "https://sessions.your-deployment.example" }),
+    ).toThrow(/no API key could be resolved/);
+  });
+
+  test("throws when a removed storage-mode variable is set", () => {
+    expect(() =>
+      resolveSessionStore({ HASNA_SESSIONS_STORAGE_MODE: "cloud" }),
+    ).toThrow(/was removed/);
   });
 });
 

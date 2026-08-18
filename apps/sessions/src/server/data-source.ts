@@ -1,9 +1,9 @@
-// Mode-aware data source for sessions-serve.
+// Server data source for sessions-serve.
 //
-// cloud mode (Amendment A1, PURE REMOTE) reads/writes the shared RDS via the
-// vendored kit. local mode serves the SQLite index so the same /v1 surface works
-// for self-hosters and tests without a Postgres. Both return identical wire
-// shapes so the generated SDK/OpenAPI is one contract.
+// The server has one technical switch: a configured HASNA_SESSIONS_DATABASE_URL
+// selects PostgreSQL (PURE REMOTE — reads/writes go directly to Postgres via
+// the vendored kit); otherwise SQLite serves the same /v1 surface. Both return
+// identical wire shapes so the generated SDK/OpenAPI is one contract.
 
 import type {
   Machine,
@@ -15,7 +15,7 @@ import type {
 } from "../types/index.js";
 import type { SearchHit, ToolCallHit } from "../lib/search.js";
 import type { Entity, EntityType, RelatedSession, SessionGraph } from "../lib/graph.js";
-import { isCloudMode } from "../db/cloud/client.js";
+import { serverDataBackend } from "../db/cloud/client.js";
 import * as cloud from "../db/cloud/store.js";
 import { contentShrinkError } from "../lib/content-import-safety.js";
 
@@ -41,7 +41,8 @@ export interface Stats {
 }
 
 export interface DataSource {
-  readonly mode: "local" | "cloud";
+  /** The active server data backend, selected by the env. */
+  readonly backend: "sqlite" | "postgresql";
   list(opts: ListOptions): Promise<Session[]>;
   recent(limit: number): Promise<Session[]>;
   get(idOrPrefix: string, opts?: SessionLookupOptions): Promise<Session | null>;
@@ -63,7 +64,7 @@ export interface DataSource {
 }
 
 const cloudSource: DataSource = {
-  mode: "cloud",
+  backend: "postgresql",
   list: (opts) => cloud.listSessions(opts),
   recent: (limit) => cloud.getRecentSessions(limit),
   get: (idOrPrefix, opts) => cloud.getSessionByPrefix(idOrPrefix, opts),
@@ -88,7 +89,7 @@ const cloudSource: DataSource = {
 
 function localSource(): DataSource {
   return {
-    mode: "local",
+    backend: "sqlite",
     async list(opts) {
       const { listSessions } = await import("../db/sessions.js");
       return listSessions(opts);
@@ -227,10 +228,10 @@ function localSource(): DataSource {
 
 let _source: DataSource | null = null;
 
-/** Resolve the active data source for the current storage mode (memoized). */
+/** Resolve the active data source for the current server data backend (memoized). */
 export function getDataSource(): DataSource {
   if (_source) return _source;
-  _source = isCloudMode() ? cloudSource : localSource();
+  _source = serverDataBackend() === "postgresql" ? cloudSource : localSource();
   return _source;
 }
 

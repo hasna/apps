@@ -10,40 +10,45 @@ const PROJECTS_DIR = join(TEST_DIR, "projects");
 // A fixed "today" so the --today history filter is deterministic.
 const TODAY = new Date().toISOString().slice(0, 10);
 
+const SESSIONS_CLIENT_ENV_KEYS = [
+  "HASNA_SESSIONS_API_URL",
+  "HASNA_SESSIONS_API_KEY",
+  "SESSIONS_API_URL",
+  "SESSIONS_API_KEY",
+] as const;
+
+/** Spawn env with the ambient hosted-client pair scrubbed, plus overrides. */
+function cliTestEnv(extra: Record<string, string> = {}): Record<string, string> {
+  const env = { ...process.env } as Record<string, string>;
+  for (const key of SESSIONS_CLIENT_ENV_KEYS) delete env[key];
+  return { ...env, ...extra };
+}
+
 function runCli(args: string[]) {
   return Bun.spawnSync({
     cmd: ["bun", "run", "src/cli/index.tsx", ...args],
     cwd: repoRoot,
-    env: {
-      ...process.env,
+    env: cliTestEnv({
       HOME: HOME_DIR,
       CLAUDE_PATH: TEST_DIR,
-      // Force local-store mode: never touch a real cloud endpoint from a test.
-      HASNA_SESSIONS_API_URL: "",
-      HASNA_SESSIONS_API_KEY: "",
-      HASNA_SESSIONS_MODE: "",
-    },
+    }),
     stdout: "pipe",
     stderr: "pipe",
   });
 }
 
 async function runCloudCli(args: string[], apiUrl: string) {
+  mkdirSync(join(HOME_DIR, ".hasna", "cloud"), { recursive: true });
+  writeFileSync(
+    join(HOME_DIR, ".hasna", "cloud", "sessions.env"),
+    `HASNA_SESSIONS_API_URL=${apiUrl}\nHASNA_SESSIONS_API_KEY=test-key\n`,
+  );
   const child = Bun.spawn({
     cmd: ["bun", "run", "src/cli/index.tsx", ...args],
     cwd: repoRoot,
-    env: {
-      ...process.env,
+    env: cliTestEnv({
       HOME: HOME_DIR,
-      HASNA_SESSIONS_API_URL: apiUrl,
-      HASNA_SESSIONS_API_KEY: "test-key",
-      HASNA_SESSIONS_MODE: "",
-      HASNA_SESSIONS_STORAGE_MODE: "",
-      SESSIONS_API_URL: "",
-      SESSIONS_API_KEY: "",
-      SESSIONS_MODE: "",
-      SESSIONS_STORAGE_MODE: "",
-    },
+    }),
     stdout: "pipe",
     stderr: "pipe",
   });

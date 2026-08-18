@@ -1,22 +1,21 @@
-// Client-side session store resolver (local vs self_hosted cloud).
+// Client-side session store resolver (sqlite local index vs hosted HTTP API).
 //
 // This is the ONE seam the CLI uses for session-record reads/writes. When the
-// client-flip resolves to `cloud-http` — HASNA_SESSIONS_MODE=self_hosted (or
-// cloud) AND HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set — every
-// read and write is routed to the app's cloud `/v1` HTTP API
-// (the configured HASNA_SESSIONS_API_URL, e.g. https://sessions.your-deployment.example/v1)
+// environment carries both HASNA_SESSIONS_API_URL and HASNA_SESSIONS_API_KEY,
+// every read and write is routed to the app's hosted `/v1` HTTP API
+// (the configured HASNA_SESSIONS_API_URL, e.g. https://sessions.example.com/v1)
 // with the bearer key, using the
 // @hasna/contracts HTTP storage client's transport. NO SQLite, NO DSN, NO raw
-// RDS from a client.
+// RDS from a client. A misconfigured pair (URL without key, or an invalid URL)
+// throws — the client never silently falls back to the local index.
 //
-// Otherwise (env unset) the local SQLite index (~/.hasna/sessions/sessions.db)
-// is used exactly as before — `unset => local`.
+// Otherwise the local SQLite index (~/.hasna/sessions/sessions.db) is used
+// exactly as before — `unset => sqlite`.
 //
 // SAFETY: the API key lives only inside the transport; it is never logged.
 
 import { resolveStorageClient } from "@hasna/contracts/client/storage";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
-import { normalizeStorageMode } from "@hasna/contracts/mode";
 import type {
   Machine,
   Message,
@@ -69,7 +68,8 @@ export interface StoreStats {
 }
 
 export interface SessionStore {
-  readonly mode: "local" | "cloud";
+  /** Which client backend this store talks to: local SQLite or the hosted HTTP API. */
+  readonly transport: "sqlite" | "http";
   list(opts: ListOptions): Promise<Session[]>;
   recent(limit: number): Promise<Session[]>;
   get(idOrPrefix: string, opts?: SessionLookupOptions): Promise<Session | null>;
@@ -79,16 +79,17 @@ export interface SessionStore {
   remove(id: string): Promise<boolean>;
   /**
    * Set a session's title (the "rename" operation), resolving by full id or a
-   * unique id/source_id prefix. Local mode updates the on-box SQLite index;
-   * self_hosted mode PATCHes `/v1/sessions/{id}` so the shared cloud registry is
-   * what actually changes. Returns the updated session, or null if not found.
+   * unique id/source_id prefix. The sqlite store updates the on-box SQLite
+   * index; the http store PATCHes `/v1/sessions/{id}` so the shared hosted
+   * registry is what actually changes. Returns the updated session, or null
+   * if not found.
    */
   rename(idOrPrefix: string, title: string, opts?: SessionLookupOptions): Promise<Session | null>;
   /**
    * Rewrite session paths after a project directory move (old -> new): updates
-   * project_path / source_path in the active index. Local mode touches the
-   * on-box SQLite index; self_hosted mode hits `/v1/relocate` so the shared
-   * cloud registry is what actually changes (never a split-brain no-op).
+   * project_path / source_path in the active index. The sqlite store touches
+   * the on-box SQLite index; the http store hits `/v1/relocate` so the shared
+   * hosted registry is what actually changes (never a split-brain no-op).
    */
   relocatePaths(oldPath: string, newPath: string): Promise<{ rowsUpdated: number }>;
   search(query: string, opts: ListOptions): Promise<SearchHitDto[]>;
@@ -120,9 +121,9 @@ export interface SessionStore {
   mergeFromDb(path: string): Promise<MergeResult>;
   /**
    * Index local transcript files into the on-box session index. This is an
-   * inherently LOCAL maintenance operation: even on a flipped (self_hosted)
-   * machine, `sync` ingests into the on-box index first and then pushes the
-   * metadata to the shared cloud `/v1` registry. The cloud transport has no
+   * inherently local maintenance operation: even with the hosted http store
+   * selected, `sync` ingests into the on-box index first and then pushes the
+   * metadata to the shared hosted `/v1` registry. The http transport has no
    * local index, so it throws rather than pretending to ingest.
    */
   ingest(opts?: IngestStoreOptions): Promise<IngestResult[]>;
@@ -132,105 +133,14 @@ export interface SessionStore {
 
 const APP = "sessions";
 
-// -- Explicit mode selection -------------------------------------------------
+// -- Client transport selection ----------------------------------------------
 //
-// This client PINS the storage mode before calling the contracts resolver. It
-// must never depend on that resolver inferring a cloud transition from the mere
-// presence of an API URL (or of a credential the resolver can find on disk).
-//
-// Owner ruling 2026-07-29: a local->network transition must be explicitly
-// signalled, never inferred from a credential file appearing on disk. The
-// contracts client still infers today, and hasna/contracts#51 removes it. When
-// that lands, a consumer that passes `process.env` straight through gets the
-// LOCAL SQLite store for a fully-configured cloud client -- silently, at exit 0,
-// which is the exact silent-degrade this fleet has spent the day chasing.
-//
-// Measured 2026-07-30: of the five repos importing the contracts client at
-// runtime, `domains`, `logs` and `todos` already pin; `files` and `sessions` did
-// not, and were the two that #51 would strand. This is the `sessions` pin, and it
-// deliberately mirrors `withImpliedSelfHostedMode` in @hasna/logs so the fleet
-// converges on one shape rather than five.
-//
-// Pinning is also what makes this client immune to WHICH inference is live
-// upstream -- env pair, URL alone, or disk credential. The mode is ours to state.
-
-const MODE_KEYS = [
-  "HASNA_SESSIONS_STORAGE_MODE",
-  "HASNA_SESSIONS_MODE",
-  "SESSIONS_STORAGE_MODE",
-  "SESSIONS_MODE",
-] as const;
-const API_URL_KEYS = ["HASNA_SESSIONS_API_URL", "SESSIONS_API_URL"] as const;
-const API_KEY_KEYS = ["HASNA_SESSIONS_API_KEY", "SESSIONS_API_KEY"] as const;
-
-/** True when any of `keys` carries a non-blank value. The value is never read out. */
-function anySet(source: Env, keys: readonly string[]): boolean {
-  return keys.some((k) => (source[k]?.trim() ?? "") !== "");
-}
-
-/**
- * The value that means "use the server" in the INSTALLED @hasna/contracts.
- *
- * Derived, never hardcoded, and that is load-bearing rather than tidy. The
- * storage-mode enum has already changed once: contracts <=0.8.5 accepts `cloud`
- * plus the deprecated aliases `self_hosted`/`remote`/`hybrid`, while contracts
- * after the inference removal accepts ONLY `sqlite`/`postgres` and THROWS on
- * everything else. The two valid sets are DISJOINT, so any literal pinned here
- * is a bet on which side of that change a machine is on, and the bet loses on
- * one side or the other.
- *
- * Measured 2026-07-30 against contracts 0.5.2: `postgres` throws, `self_hosted`
- * normalizes. Against contracts main (0.8.6): `postgres` normalizes,
- * `self_hosted` throws. Probing newest-first therefore yields the right token on
- * both generations, and on the next one provided it keeps a server token here.
- *
- * The probe runs through the library's own `normalizeStorageMode`, so the answer
- * comes from the installed code rather than from our belief about it.
- */
-export const SERVER_MODE_CANDIDATES = ["postgres", "self_hosted", "cloud"] as const;
-
-/** Accepts a mode token or throws. Injectable so both enum generations are testable. */
-export type ModeNormalizer = (value: string) => unknown;
-
-let cachedServerMode: string | null = null;
-
-export function serverStorageMode(normalize: ModeNormalizer = normalizeStorageMode): string {
-  const useCache = normalize === (normalizeStorageMode as ModeNormalizer);
-  if (useCache && cachedServerMode !== null) return cachedServerMode;
-  for (const candidate of SERVER_MODE_CANDIDATES) {
-    try {
-      normalize(candidate);
-      if (useCache) cachedServerMode = candidate;
-      return candidate;
-    } catch {
-      // Not a token this generation of @hasna/contracts understands.
-    }
-  }
-  // Every candidate was rejected: the enum changed again and this list is stale.
-  // Fail loudly rather than guess -- guessing is the defect class this pin exists
-  // to remove, and a wrong mode silently reads the wrong dataset.
-  throw new Error(
-    `No known server storage mode is accepted by the installed @hasna/contracts ` +
-      `(tried ${SERVER_MODE_CANDIDATES.join(", ")}). The storage-mode enum has changed; ` +
-      `add the new server token to SERVER_MODE_CANDIDATES in src/db/session-store.ts.`,
-  );
-}
-
-/**
- * Return an env whose storage mode is explicit.
- *
- * An already-set mode -- through any of the four documented variables -- is left
- * exactly as it is, so an operator pinning `local` is never overridden. Only the
- * complete API url + key pair implies `self_hosted`; half a pair implies nothing,
- * because half a pair is not a statement of intent.
- */
-export function sessionsCloudEnv(source: Env = process.env): Env {
-  if (anySet(source, MODE_KEYS)) return source;
-  if (anySet(source, API_URL_KEYS) && anySet(source, API_KEY_KEYS)) {
-    return { ...source, HASNA_SESSIONS_STORAGE_MODE: serverStorageMode() };
-  }
-  return source;
-}
+// The client selects its backend by the environment, through the
+// @hasna/contracts resolver: `HASNA_SESSIONS_API_URL` + `HASNA_SESSIONS_API_KEY`
+// select the hosted HTTP API; otherwise the local SQLite index. The resolver
+// throws on a misconfigured pair (URL without key, invalid URL) and rejects
+// the removed storage-mode variables — the client never silently reads the
+// wrong dataset.
 
 function isNotFound(error: unknown): boolean {
   return (
@@ -241,7 +151,7 @@ function isNotFound(error: unknown): boolean {
   );
 }
 
-/** Cloud (self_hosted) store: every op hits `/v1` over HTTPS with the bearer key. */
+/** Hosted store: every op hits `/v1` over HTTPS with the bearer key. */
 function cloudStore(client: HasnaStorageClient): SessionStore {
   const t = client.transport;
   const listQuery = (opts: ListOptions): Record<string, string | number> => {
@@ -258,7 +168,7 @@ function cloudStore(client: HasnaStorageClient): SessionStore {
     return q;
   };
   return {
-    mode: "cloud",
+    transport: "http",
     async list(opts) {
       const res = await t.get<{ sessions: Session[] }>("/sessions", { query: listQuery(opts) });
       return res.sessions ?? [];
@@ -415,30 +325,30 @@ function cloudStore(client: HasnaStorageClient): SessionStore {
 }
 
 /**
- * Loud, explicit failure for operations that are not (yet) served by the cloud
- * `/v1` API. NEVER silently fall back to the local SQLite index in cloud mode —
- * that is exactly the split-brain we are eliminating.
+ * Loud, explicit failure for operations that are not (yet) served by the hosted
+ * `/v1` API. NEVER silently fall back to the local SQLite index — that is
+ * exactly the split-brain we are eliminating.
  */
 function notAvailableInCloud(op: string): never {
   throw new Error(
-    `'${op}' is not available in self_hosted mode: it depends on the local session index ` +
-      `(embeddings / full recall / local DB merge), which the cloud /v1 API does not serve. ` +
-      `Run it on a machine in local mode (unset HASNA_SESSIONS_API_URL/API_KEY).`,
+    `'${op}' is not available through the hosted HTTP API: it depends on the local session index ` +
+      `(embeddings / full recall / local DB merge), which the hosted /v1 API does not serve. ` +
+      `Run it on a machine using the sqlite store (no HASNA_SESSIONS_API_URL/API_KEY).`,
   );
 }
 
 function recallNotAvailableInCloud(): never {
   throw new Error(
-    `'recall' is local-only and is not available in hosted/self-hosted mode. ` +
+    `'recall' is local-only and is not available through the hosted HTTP API. ` +
       `Use 'sessions list', 'sessions show <id>', or 'sessions search <query>' against the hosted store, ` +
-      `or run recall on a machine in local mode.`,
+      `or run recall on a machine using the sqlite store.`,
   );
 }
 
-/** Local store: SQLite index, loaded lazily so cloud-only runs never open the DB. */
+/** Local store: SQLite index, loaded lazily so http-only runs never open the DB. */
 function localStore(): SessionStore {
   return {
-    mode: "local",
+    transport: "sqlite",
     async list(opts) {
       const { listSessions } = await import("./sessions.js");
       return listSessions(opts);
@@ -596,28 +506,29 @@ function localStore(): SessionStore {
 }
 
 /**
- * Resolve the active session store. Cloud-http when self_hosted + API_URL +
- * API_KEY are set (throws if cloud requested but misconfigured — no silent local
- * drift); local SQLite otherwise.
+ * Resolve the active session store. The hosted HTTP API is selected by the
+ * `HASNA_SESSIONS_API_URL` + `HASNA_SESSIONS_API_KEY` pair (the contracts
+ * resolver throws on a misconfigured pair and on removed storage-mode
+ * variables — no silent local drift); local SQLite otherwise.
  */
 export function resolveSessionStore(
   env: Env = process.env,
   overrides?: Parameters<typeof resolveStorageClient>[2],
 ): SessionStore {
-  const resolved = resolveStorageClient(APP, sessionsCloudEnv(env), overrides);
-  if (resolved.transport === "cloud-http") return cloudStore(resolved.client);
+  const resolved = resolveStorageClient(APP, env, overrides);
+  if (resolved.transport === "http") return cloudStore(resolved.client);
   return localStore();
 }
 
 /**
- * The LocalStore transport, resolved unconditionally (independent of env).
+ * The sqlite store transport, resolved unconditionally (independent of env).
  *
  * Used only by the inherently-local index path: `ingest`/`reindex`/`ingest-watch`
  * populate the on-box index, and `sync` reads the on-box index to push it to the
- * shared cloud `/v1` registry even when the resolved store is `cloud`. This is
- * NOT a per-command local read fallback — the split-brain bug where reads
- * silently drifted to the local SQLite island stays deleted; those paths go
- * through `resolveSessionStore()`.
+ * shared hosted `/v1` registry even when the resolved store is the http
+ * transport. This is NOT a per-command local read fallback — the split-brain bug
+ * where reads silently drifted to the local SQLite island stays deleted; those
+ * paths go through `resolveSessionStore()`.
  */
 export function getLocalStore(): SessionStore {
   return localStore();

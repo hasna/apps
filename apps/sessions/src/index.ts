@@ -133,9 +133,10 @@ export type {
 // NOTE: the raw SQLite escape hatch (SqliteAdapter / getDatabase / closeDatabase /
 // resetDatabase / initSchema) is intentionally NOT re-exported from the package
 // main. Direct SQLite access outside the Store seam is exactly the split-brain
-// this refactor eliminates: a consumer importing it in self_hosted/cloud mode
-// would read the local island instead of the shared cloud registry. The on-box
-// SQLite index is reachable only behind the Store (LocalStore transport, below).
+// this refactor eliminates: a consumer importing it while the hosted http store
+// is selected would read the local island instead of the shared hosted registry.
+// The on-box SQLite index is reachable only behind the Store (LocalStore
+// transport, below).
 
 // --- Client storage abstraction (the ONE seam: LocalStore | ApiStore) ---
 export {
@@ -147,12 +148,12 @@ export {
   type StoreStats,
 } from "./db/session-store.js";
 
-// NOTE: the Postgres (RDS) data plane + HTTP serve surface (getCloudClient /
-// isCloudMode / cloudStore / createSessionsServer / migrations / OpenAPI) reads
-// DATABASE_URL and opens a `pg` pool. It is server-only and lives behind the
-// `@hasna/sessions/server` subpath — it is intentionally NOT re-exported here so
-// the client-importable package main never reaches a DSN data plane. Clients use
-// `@hasna/sessions/storage` (the Store).
+// NOTE: the Postgres data plane + HTTP serve surface (serverDataBackend /
+// getCloudClient / cloudStore / createSessionsServer / migrations / OpenAPI)
+// reads DATABASE_URL and opens a `pg` pool. It is server-only and lives behind
+// the `@hasna/sessions/server` subpath — it is intentionally NOT re-exported
+// here so the client-importable package main never reaches a DSN data plane.
+// Clients use `@hasna/sessions/storage` (the Store).
 
 // --- Generated SDK ---
 export {

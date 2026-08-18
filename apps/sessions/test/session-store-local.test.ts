@@ -19,8 +19,8 @@ afterEach(() => {
 describe("local session store complete surface", () => {
   it("executes record, search, graph, maintenance, and local-only operations", async () => {
     const store = getLocalStore();
-    expect(store.mode).toBe("local");
-    expect(resolveSessionStore({}).mode).toBe("local");
+    expect(store.transport).toBe("sqlite");
+    expect(resolveSessionStore({}).transport).toBe("sqlite");
 
     expect(await store.semanticSearch("nothing", {})).toEqual([]);
     expect(await store.embed({ limit: 0 })).toEqual({ messagesProcessed: 0, chunksEmbedded: 0 });

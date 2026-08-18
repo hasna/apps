@@ -2,12 +2,11 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { APP_NAME, closeCloudClient, getCloudClient, isCloudMode } from "../src/db/cloud/client.js";
+import { APP_NAME, closeCloudClient, getCloudClient, serverDataBackend } from "../src/db/cloud/client.js";
 import { checkCloudReady, runCloudMigrations } from "../src/db/cloud/migrate.js";
 import { loadMigrations, resolveMigrationsDir } from "../src/db/cloud/migrations.js";
 
 const originalEnv = {
-  mode: process.env.HASNA_SESSIONS_STORAGE_MODE,
   url: process.env.HASNA_SESSIONS_DATABASE_URL,
   migrations: process.env.SESSIONS_MIGRATIONS_DIR,
 };
@@ -15,8 +14,6 @@ const roots: string[] = [];
 
 afterEach(async () => {
   await closeCloudClient();
-  if (originalEnv.mode === undefined) delete process.env.HASNA_SESSIONS_STORAGE_MODE;
-  else process.env.HASNA_SESSIONS_STORAGE_MODE = originalEnv.mode;
   if (originalEnv.url === undefined) delete process.env.HASNA_SESSIONS_DATABASE_URL;
   else process.env.HASNA_SESSIONS_DATABASE_URL = originalEnv.url;
   if (originalEnv.migrations === undefined) delete process.env.SESSIONS_MIGRATIONS_DIR;
@@ -25,12 +22,11 @@ afterEach(async () => {
 });
 
 describe("cloud client lifecycle", () => {
-  it("detects mode and lazily caches and closes the configured pool", async () => {
+  it("selects the data backend by HASNA_SESSIONS_DATABASE_URL and lazily caches and closes the configured pool", async () => {
     expect(APP_NAME).toBe("sessions");
-    expect(isCloudMode({})).toBe(false);
-    expect(isCloudMode({ HASNA_SESSIONS_STORAGE_MODE: "self_hosted" })).toBe(true);
+    expect(serverDataBackend({})).toBe("sqlite");
+    expect(serverDataBackend({ HASNA_SESSIONS_DATABASE_URL: "postgres://localhost/sessions" })).toBe("postgresql");
 
-    process.env.HASNA_SESSIONS_STORAGE_MODE = "cloud";
     process.env["HASNA_SESSIONS_DATABASE_URL"] = "postgres://localhost/sessions";
     const first = getCloudClient();
     expect(getCloudClient()).toBe(first);
@@ -41,10 +37,13 @@ describe("cloud client lifecycle", () => {
     expect(second).not.toBe(first);
   });
 
-  it("fails closed when cloud client configuration is absent", () => {
-    delete process.env.HASNA_SESSIONS_STORAGE_MODE;
+  it("fails closed when no database URL selects the postgresql backend", () => {
     delete process.env.HASNA_SESSIONS_DATABASE_URL;
-    expect(() => getCloudClient()).toThrow("requires sessions storage mode 'cloud'");
+    expect(() => getCloudClient()).toThrow("postgresql storage for sessions needs a database URL");
+  });
+
+  it("rejects the removed storage-mode variables", () => {
+    expect(() => serverDataBackend({ HASNA_SESSIONS_STORAGE_MODE: "cloud" })).toThrow(/was removed/);
   });
 });
 

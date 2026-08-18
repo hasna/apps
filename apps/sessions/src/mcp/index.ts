@@ -30,14 +30,14 @@ function buildResumeCommand(session: Session): string[] {
   throw new Error(`resume is not supported for source '${session.source}' (only claude)`);
 }
 
-// Session-record store seam (SAME resolver the CLI uses). When the client-flip
-// resolves to cloud-http — HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY set
-// (self_hosted) — the core session-record read tools (recent/list/get/machines/
-// stats/search) route to the configured self-hosted `/v1` API with the bearer key so
-// every machine's MCP sees the ONE shared cloud session registry. Env unset =>
-// local SQLite index exactly as before (no regression). Analytical/local-only
-// tools (ingest, embed, semantic/graph/recall, tool-call search, adapters) have
-// no /v1 surface and always operate on the local transcript index.
+// Session-record store seam (SAME resolver the CLI uses). When the environment
+// carries HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY, the core
+// session-record read tools (recent/list/get/machines/stats/search) route to
+// the configured hosted `/v1` API with the bearer key so every machine's MCP
+// sees the ONE shared hosted session registry. Env unset => local SQLite index
+// exactly as before (no regression). Analytical/local-only tools (ingest,
+// embed, semantic/graph/recall, tool-call search, adapters) have no /v1
+// surface and always operate on the local transcript index.
 function sessionStore() {
   return resolveSessionStore();
 }
@@ -340,18 +340,18 @@ server.tool(
   async (a: { id: string; source?: string; message_limit?: number }) => {
     try {
       const store = sessionStore();
-      // Everything routes through the Store (LocalStore | ApiStore). In
-      // self_hosted mode, message/tool transcripts come from authenticated /v1
-      // content endpoints populated by `sessions sync`.
+      // Everything routes through the Store (LocalStore | ApiStore). Through
+      // the hosted http transport, message/tool transcripts come from
+      // authenticated /v1 content endpoints populated by `sessions sync`.
       const session = await store.get(a.id, { source: a.source });
       if (!session) return fail(`Session not found (or ambiguous prefix): ${a.id}`);
       let messages = await store.messages(session.id);
       if (a.message_limit) messages = messages.slice(0, a.message_limit);
       const tool_calls = await store.toolCalls(session.id);
       const note =
-        store.mode === "local"
+        store.transport === "sqlite"
           ? undefined
-          : "self_hosted registry: message/tool transcripts are available after a producing machine runs sessions sync";
+          : "hosted registry: message/tool transcripts are available after a producing machine runs sessions sync";
       return ok(note ? { session, messages, tool_calls, note } : { session, messages, tool_calls });
     } catch (e) {
       return fail(e);
@@ -459,14 +459,14 @@ server.tool(
 
 // ─── Session listing / resume / rename tools (Store-backed) ───────────────────
 // Every tool below routes through the SAME resolveSessionStore() seam as the
-// core query tools: local SQLite index by default, or the shared self_hosted
-// /v1 cloud registry when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are
-// set. There is no separate on-box friendly-name registry any more (that was the
-// split-brain: a second session view that ignored the shared cloud).
+// core query tools: local SQLite index by default, or the shared hosted /v1
+// registry when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set. There
+// is no separate on-box friendly-name registry any more (that was the
+// split-brain: a second session view that ignored the shared hosted registry).
 
 server.tool(
   "sessions_list",
-  "List sessions from the active store (local index, or the shared self_hosted /v1 registry).",
+  "List sessions from the active store (local index, or the shared hosted /v1 registry).",
   { project: z.string().optional(), limit: z.number().int().positive().optional() },
   async (args: { project?: string; limit?: number }) => {
     try {
@@ -560,7 +560,7 @@ server.tool(
 
 server.tool(
   "sessions_rename",
-  "Set a session's title in the active store (local index, or the shared self_hosted /v1 registry).",
+  "Set a session's title in the active store (local index, or the shared hosted /v1 registry).",
   {
     identifier: z.string(),
     source: z.string().optional().describe("Resolve identifier as a provider-native source id within this source"),

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase, getDatabase, resetDatabase } from "../src/db/database.js";
@@ -199,21 +199,20 @@ describe("recallSessions", () => {
 });
 
 describe("@hasna/sessions/storage recall contract", () => {
-  it("preserves recall in local mode", async () => {
+  it("preserves recall on the sqlite store", async () => {
     const { stripe } = seedRecallFixtures();
-    const store = resolveSessionStore({ HASNA_SESSIONS_MODE: "local" });
+    const store = resolveSessionStore({});
 
     const response = await store.recall("stripe webhook", { limit: 1 });
 
-    expect(store.mode).toBe("local");
+    expect(store.transport).toBe("sqlite");
     expect(response.results[0].session_id).toBe(stripe.id);
   });
 
-  it("reports recall as local-only in hosted mode without making a request", async () => {
+  it("reports recall as local-only through the hosted store without making a request", async () => {
     let requestCount = 0;
     const store = resolveSessionStore(
       {
-        HASNA_SESSIONS_STORAGE_MODE: "cloud",
         HASNA_SESSIONS_API_URL: "https://sessions.example.test",
         HASNA_SESSIONS_API_KEY: "test-key",
       },
@@ -225,9 +224,9 @@ describe("@hasna/sessions/storage recall contract", () => {
       },
     );
 
-    expect(store.mode).toBe("cloud");
+    expect(store.transport).toBe("http");
     await expect(store.recall("stripe webhook", { limit: 1 })).rejects.toThrow(
-      "'recall' is local-only and is not available in hosted/self-hosted mode",
+      "'recall' is local-only and is not available through the hosted HTTP API",
     );
     expect(requestCount).toBe(0);
   });
@@ -255,20 +254,28 @@ describe("sessions recall CLI", () => {
   });
 
   it("prints the recall response as JSON", () => {
+    const homeDir = join(dir, "home");
+    mkdirSync(homeDir, { recursive: true });
+    const env = { ...process.env } as Record<string, string>;
+    for (const key of [
+      "HASNA_SESSIONS_API_URL",
+      "HASNA_SESSIONS_API_KEY",
+      "SESSIONS_API_URL",
+      "SESSIONS_API_KEY",
+    ]) {
+      delete env[key];
+    }
     const result = Bun.spawnSync({
       cmd: ["bun", "run", "src/cli/index.tsx", "recall", "stripe webhook", "--json"],
       cwd: repoRoot,
       env: {
-        ...process.env,
+        ...env,
+        HOME: homeDir,
         SESSIONS_DB_PATH: dbPath,
         HASNA_SESSIONS_API_URL: "",
         HASNA_SESSIONS_API_KEY: "",
-        HASNA_SESSIONS_MODE: "local",
-        HASNA_SESSIONS_STORAGE_MODE: "local",
         SESSIONS_API_URL: "",
         SESSIONS_API_KEY: "",
-        SESSIONS_MODE: "local",
-        SESSIONS_STORAGE_MODE: "local",
         OPENAI_API_KEY: "",
       },
       stdout: "pipe",
@@ -283,20 +290,28 @@ describe("sessions recall CLI", () => {
     expect(payload.results[0].touched_file_paths).toContain("src/routes/stripe-webhook.ts");
   });
 
-  it("reports recall as local-only in self_hosted mode with supported alternatives", () => {
+  it("reports recall as local-only through the hosted store with supported alternatives", () => {
+    const homeDir = join(dir, "hosted-home");
+    mkdirSync(join(homeDir, ".hasna", "cloud"), { recursive: true });
+    writeFileSync(
+      join(homeDir, ".hasna", "cloud", "sessions.env"),
+      "HASNA_SESSIONS_API_URL=https://sessions.example.test\nHASNA_SESSIONS_API_KEY=test-key\n",
+    );
+    const env = { ...process.env } as Record<string, string>;
+    for (const key of [
+      "HASNA_SESSIONS_API_URL",
+      "HASNA_SESSIONS_API_KEY",
+      "SESSIONS_API_URL",
+      "SESSIONS_API_KEY",
+    ]) {
+      delete env[key];
+    }
     const result = Bun.spawnSync({
       cmd: ["bun", "run", "src/cli/index.tsx", "recall", "stripe webhook"],
       cwd: repoRoot,
       env: {
-        ...process.env,
-        HASNA_SESSIONS_STORAGE_MODE: "self_hosted",
-        HASNA_SESSIONS_MODE: "self_hosted",
-        HASNA_SESSIONS_API_URL: "https://sessions.example.test",
-        HASNA_SESSIONS_API_KEY: "test-key",
-        SESSIONS_STORAGE_MODE: "self_hosted",
-        SESSIONS_MODE: "self_hosted",
-        SESSIONS_API_URL: "https://sessions.example.test",
-        SESSIONS_API_KEY: "test-key",
+        ...env,
+        HOME: homeDir,
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -306,7 +321,7 @@ describe("sessions recall CLI", () => {
     expect(result.exitCode).toBe(1);
     expect(Buffer.from(result.stdout).toString("utf-8")).toBe("");
     expect(stderr).toContain(
-      "'recall' is local-only and is not available in hosted/self-hosted mode",
+      "'recall' is local-only and is not available through the hosted HTTP API",
     );
     expect(stderr).toContain("'sessions list'");
     expect(stderr).toContain("'sessions show <id>'");

@@ -1,7 +1,7 @@
 # Configuration reference
 
 Sessions has three distinct configuration surfaces: local indexing, the
-self-hosted HTTP client, and the `sessions-serve` data plane. Do not put a
+hosted HTTP client, and the `sessions-serve` data plane. Do not put a
 Postgres DSN in a client process; clients use the authenticated `/v1` API.
 
 ## Local index
@@ -33,24 +33,25 @@ If `~/.hasna/sessions/sessions.db` does not exist but the legacy
 `CODEWITH_THREAD_ID`. These values identify source context; they are not storage
 credentials.
 
-## Self-hosted client
+## Hosted client
 
 Configure the `sessions` CLI, MCP active-store tools, or
 `@hasna/sessions/storage` with:
 
 ```bash
-export HASNA_SESSIONS_MODE=self_hosted
 export HASNA_SESSIONS_API_URL=https://sessions.example.com
 export HASNA_SESSIONS_API_KEY=...
 ```
 
-`HASNA_SESSIONS_MODE=cloud` is accepted as the same client mode.
-`SESSIONS_MODE`, `SESSIONS_API_URL`, and `SESSIONS_API_KEY` are compatibility
-aliases used by the shared storage client. Mode plus URL plus key are required;
-partial self-hosted configuration fails closed.
+The complete URL + key pair selects the hosted HTTP store; otherwise the local
+SQLite index is used. URL plus key are required — partial hosted configuration
+fails closed. `SESSIONS_API_URL` and `SESSIONS_API_KEY` are the short aliases
+used by the shared storage client.
 
 | Variable | Behavior |
 | --- | --- |
+| `HASNA_SESSIONS_API_URL` | Hosted `/v1` API base URL; together with the API key selects the hosted store. |
+| `HASNA_SESSIONS_API_KEY` | Bearer key for the hosted `/v1` API. |
 | `HASNA_SESSIONS_PRODUCTION_HOSTS` | Comma- or space-separated host suffixes treated as production-like by backfill safety checks. |
 | `HASNA_SESSIONS_PRODUCTION=1` | Force the backfill production gate regardless of URL. |
 
@@ -71,10 +72,10 @@ address.
 
 ## Service data plane
 
-`sessions-serve` defaults to local mode. A self-hosted service uses Postgres:
+`sessions-serve` uses SQLite unless `HASNA_SESSIONS_DATABASE_URL` selects the
+PostgreSQL backend:
 
 ```bash
-export HASNA_SESSIONS_STORAGE_MODE=cloud
 export HASNA_SESSIONS_DATABASE_URL=postgres://...
 export HASNA_SESSIONS_API_SIGNING_KEY=...
 sessions-serve migrate
@@ -83,12 +84,11 @@ sessions-serve
 
 | Variable | Behavior |
 | --- | --- |
-| `HASNA_SESSIONS_STORAGE_MODE` | `local` or `cloud`; default `local`. `SESSIONS_STORAGE_MODE` is an alias. Deprecated `remote`, `hybrid`, and `self_hosted` values normalize to `cloud`. |
-| `HASNA_SESSIONS_DATABASE_URL` | Canonical Postgres DSN in cloud mode. `SESSIONS_DATABASE_URL` is the supported alias. |
+| `HASNA_SESSIONS_DATABASE_URL` | Postgres DSN; its presence selects the postgresql backend. `SESSIONS_DATABASE_URL` is the supported alias. |
 | `HASNA_SESSIONS_API_SIGNING_KEY` | Preferred HMAC signing key for `/v1` API-key authentication. `HASNA_API_SIGNING_KEY` is the shared fallback. |
 | `PORT` | HTTP port. Default: `3456`. |
 | `HOST` | Bind hostname. Default: `127.0.0.1`. |
-| `HASNA_SESSIONS_MAX_REQUEST_BODY_SIZE` | Request-body limit in bytes or units such as `768MiB`. Cloud mode defaults to `512MiB`. |
+| `HASNA_SESSIONS_MAX_REQUEST_BODY_SIZE` | Request-body limit in bytes or units such as `768MiB`. The postgresql backend defaults to `512MiB`. |
 | `SESSIONS_SERVE_ENABLE_MCP=1` | Also mount MCP at `/mcp` in the service process. |
 | `SESSIONS_MIGRATIONS_DIR` | Override the directory containing SQL migrations. |
 | `PGSSLROOTCERT` | CA bundle used by verified Postgres TLS modes. |

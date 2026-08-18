@@ -1,10 +1,11 @@
 // API-key auth wiring for sessions-serve, built on @hasna/contracts/auth.
 //
-// Stateless HMAC-verifiable keys (prefix `hasna_sessions_`). In cloud mode the
-// revocation check reads the shared RDS `api_keys` table via the vendored kit;
-// in local mode revocation is skipped (a cryptographically valid, unexpired key
-// is accepted). Fail-closed: when no signing secret is configured, /v1 is
-// refused (503) rather than silently opened.
+// Stateless HMAC-verifiable keys (prefix `hasna_sessions_`). With the
+// postgresql backend the revocation check reads the `api_keys` table via the
+// vendored kit; with the sqlite backend revocation is skipped (a
+// cryptographically valid, unexpired key is accepted). Fail-closed: when no
+// signing secret is configured, /v1 is refused (503) rather than silently
+// opened.
 
 import {
   verifyApiKey,
@@ -12,7 +13,7 @@ import {
   type ApiKeyVerifier,
   type AuthAuditEvent,
 } from "@hasna/contracts/auth";
-import { getCloudClient, isCloudMode } from "../db/cloud/client.js";
+import { getCloudClient, serverDataBackend } from "../db/cloud/client.js";
 
 const APP = "sessions";
 
@@ -24,9 +25,9 @@ export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): stri
 let _verifier: ApiKeyVerifier | null | undefined;
 let _store: ApiKeyStore | null = null;
 
-/** The api-keys store (cloud only), for revocation checks + schema bootstrap. */
+/** The api-keys store (postgresql backend only), for revocation checks + schema bootstrap. */
 export function getApiKeyStore(): ApiKeyStore | null {
-  if (!isCloudMode()) return null;
+  if (serverDataBackend() !== "postgresql") return null;
   if (_store) return _store;
   _store = new ApiKeyStore(getCloudClient());
   return _store;
@@ -47,7 +48,11 @@ export function getVerifier(auditLog?: (e: AuthAuditEvent) => void): ApiKeyVerif
   _verifier = verifyApiKey({
     app: APP,
     signingSecret,
-    ...(store ? { isRevoked: store.isRevoked } : {}),
+    // With the postgresql backend the store's keyStatus both refuses revoked
+    // keys and refuses keys with no record. On the sqlite backend there is no
+    // revocation table, so any cryptographically valid, unexpired key is
+    // accepted — declared explicitly rather than left implicit.
+    ...(store ? { keyStatus: store.keyStatus } : { allowUnregisteredKeys: true }),
     ...(auditLog ? { audit: auditLog } : {}),
   });
   return _verifier;

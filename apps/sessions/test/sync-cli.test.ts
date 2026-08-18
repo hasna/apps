@@ -6,12 +6,25 @@ import { join } from "node:path";
 const repoRoot = join(import.meta.dir, "..");
 let root: string;
 
+const SESSIONS_CLIENT_ENV_KEYS = [
+  "HASNA_SESSIONS_API_URL",
+  "HASNA_SESSIONS_API_KEY",
+  "SESSIONS_API_URL",
+  "SESSIONS_API_KEY",
+] as const;
+
+/** Spawn env with the ambient hosted-client pair scrubbed, plus overrides. */
+function cliTestEnv(extra: Record<string, string> = {}): Record<string, string> {
+  const env = { ...process.env } as Record<string, string>;
+  for (const key of SESSIONS_CLIENT_ENV_KEYS) delete env[key];
+  return { ...env, ...extra };
+}
+
 function runCli(args: string[]) {
   return Bun.spawnSync({
     cmd: ["bun", "run", "src/cli/index.tsx", ...args],
     cwd: repoRoot,
-    env: {
-      ...process.env,
+    env: cliTestEnv({
       HOME: root,
       CLAUDE_PATH: join(root, "claude"),
       CODEX_PATH: join(root, "codex"),
@@ -20,10 +33,7 @@ function runCli(args: string[]) {
       SESSIONS_DB_PATH: join(root, "sessions.db"),
       HASNA_SESSIONS_DB_PATH: join(root, "sessions.db"),
       HASNA_SESSIONS_DIR: join(root, "sessions-home"),
-      HASNA_SESSIONS_MODE: "local",
-      HASNA_SESSIONS_API_URL: "",
-      HASNA_SESSIONS_API_KEY: "",
-    },
+    }),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -128,7 +138,7 @@ describe("sessions content sync CLI", () => {
     expect(Buffer.from(result.stderr).toString("utf-8")).toBe("");
 
     const payload = JSON.parse(Buffer.from(result.stdout).toString("utf-8"));
-    expect(payload.target).toBe("self_hosted_api");
+    expect(payload.target).toBe("hosted_api");
     expect(payload.dryRun).toBe(true);
     expect(payload.scanned).toBe(0);
     expect(payload.backup.guidance).toContain("require a successful --backup-command");

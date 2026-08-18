@@ -258,7 +258,7 @@ function fakeStore(options: { failOn?: string; existing?: SessionContentImport[]
     imported.set(`${input.session.source}:${input.session.source_id}`, sessionFromImport(input));
   }
   const store = {
-    mode: "cloud" as const,
+    transport: "http" as const,
     imports: [] as string[],
     async importContent(input: SessionContentImport) {
       const key = `${input.session.source}:${input.session.source_id}`;
@@ -303,7 +303,7 @@ function fakeStore(options: { failOn?: string; existing?: SessionContentImport[]
 function localFakeStore(): SessionStore & { imports: string[] } {
   return {
     ...fakeStore(),
-    mode: "local" as const,
+    transport: "sqlite" as const,
   };
 }
 
@@ -938,17 +938,17 @@ describe("session backfill", () => {
       pilot: 1,
       maxTotalBytes: 1024 * 1024,
       checkpointPath: join(root, "checkpoint.json"),
-      env: { HASNA_SESSIONS_STORAGE_MODE: "local", HASNA_SESSIONS_API_URL: "https://staging.example.test" },
+      env: { HASNA_SESSIONS_API_URL: "https://staging.example.test" },
     });
 
     expect(result.gates.backup.ran).toBe(false);
     expect(result.applied.attempted).toBe(0);
     expect(store.imports).toEqual([]);
     expect(existsSync(marker)).toBe(false);
-    expect(result.errors).toContain("apply requires self_hosted/cloud API mode; local mode is inventory-only");
+    expect(result.errors).toContain("apply requires the hosted HTTP API store; the sqlite local store is inventory-only");
   });
 
-  it("treats injected cloud stores without API provenance as production-like", async () => {
+  it("treats injected hosted stores without API provenance as production-like", async () => {
     const file = join(root, "injected-cloud.jsonl");
     const parser = new FakeParser(new Map([[file, parsedSession("injected-cloud", file, [message("m1", "hello")])]]));
     const store = fakeStore();
@@ -972,7 +972,7 @@ describe("session backfill", () => {
     expect(result.applied.attempted).toBe(0);
     expect(store.imports).toEqual([]);
     expect(result.errors).toContain(
-      "production-like injected cloud store requires --allow-production and separate out-of-band user approval",
+      "production-like injected hosted store requires --allow-production and separate out-of-band user approval",
     );
   });
 
@@ -993,7 +993,6 @@ describe("session backfill", () => {
       maxTotalBytes: 1024 * 1024,
       checkpointPath: join(root, "checkpoint.json"),
       env: {
-        SESSIONS_MODE: "self_hosted",
         SESSIONS_API_URL: "https://sessions.internal-test.example",
         SESSIONS_API_KEY: "placeholder",
         HASNA_SESSIONS_PRODUCTION_HOSTS: "internal-test.example",
@@ -1039,7 +1038,7 @@ describe("session backfill", () => {
     expect(Object.keys(saved.completed).sort()).toEqual(["codex:a", "codex:b", "codex:c"]);
   });
 
-  it("does not run backup in local mode before resolving the default store", async () => {
+  it("does not run backup on the sqlite store before resolving the default store", async () => {
     const file = join(root, "default-local-mode.jsonl");
     const marker = join(root, "default-backup-ran");
     const parser = new FakeParser(new Map([[file, parsedSession("default-local-mode", file, [message("m1", "hello")])]]));
@@ -1054,13 +1053,13 @@ describe("session backfill", () => {
       pilot: 1,
       maxTotalBytes: 1024 * 1024,
       checkpointPath: join(root, "checkpoint.json"),
-      env: { HASNA_SESSIONS_MODE: "local", HASNA_SESSIONS_STORAGE_MODE: "local" },
+      env: {},
     });
 
     expect(result.gates.backup.ran).toBe(false);
     expect(result.applied.attempted).toBe(0);
     expect(existsSync(marker)).toBe(false);
-    expect(result.errors).toContain("apply requires self_hosted/cloud API mode; local mode is inventory-only");
+    expect(result.errors).toContain("apply requires the hosted HTTP API store; the sqlite local store is inventory-only");
   });
 
   it("emits machine-readable CLI inventory JSON without API credentials", () => {
