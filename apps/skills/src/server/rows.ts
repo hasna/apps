@@ -16,6 +16,7 @@ import { ownBytes, type OwnedBytes } from "../lib/skill-bundle.js";
 import type {
   BlobStorageKind,
   ServerArtifact,
+  ServerPin,
   ServerRunLog,
   ServerRunRecord,
   ServerRunStatus,
@@ -119,6 +120,16 @@ export function rowToSkill(row: Record<string, unknown>): ServerSkillRecord {
     ...(typeof row.published_by_user_id === "string" ? { publishedByUserId: row.published_by_user_id } : {}),
     createdAt: dateString(row.created_at),
     updatedAt: dateString(row.updated_at),
+  };
+}
+
+export function rowToPin(row: Record<string, unknown>): ServerPin {
+  return {
+    orgId: String(row.org_id),
+    principal: String(row.principal),
+    slug: String(row.slug),
+    pinnedAt: dateString(row.pinned_at),
+    metadata: parseJsonObject(row.metadata_json),
   };
 }
 

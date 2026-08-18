@@ -153,6 +153,22 @@ export interface ServerSkillRecord {
  * split ServerArtifact makes between `bodyText` and `storageKey`, except that a bundle is
  * a gzipped tar and so cannot be a string at any layer.
  */
+/**
+ * A skill the principal pinned on the hosted instance.
+ *
+ * The cloud-side twin of the local `.skills/project.json` pin: metadata-only,
+ * never content. `principal` is the api_keys.id of the API key that pinned
+ * (ApiPrincipal.apiKeyId) - a pin is a fact about a specific principal's
+ * selection, and two API keys in one org each have their own pin set.
+ */
+export interface ServerPin {
+  orgId: string;
+  principal: string;
+  slug: string;
+  pinnedAt: string;
+  metadata: Record<string, unknown>;
+}
+
 export interface ServerSkillBundle {
   orgId: string;
   sha256: string;
@@ -292,4 +308,18 @@ export interface SkillsProductStore {
   /** False when the org has no skill by that slug. Also drops a bundle nothing else references. */
   deleteSkill(principal: ApiPrincipal, slug: string): Promise<boolean>;
   getSkillBundle(principal: ApiPrincipal, sha256: string): Promise<ServerSkillBundle | null>;
+
+  /*
+   * Pins.
+   *
+   * Required rather than optional, for the same reason publishSkill is: a store
+   * that silently cannot persist a pin would hand PUT /api/v1/pins/:slug a 2xx
+   * and lose the selection - the client would believe the cloud remembers what
+   * it pinned when it does not. Every read takes a principal and is scoped to
+   * (org, principal), so one tenant's pin set is never another's.
+   */
+  pinSkill(principal: ApiPrincipal, slug: string, metadata?: Record<string, unknown>): Promise<ServerPin>;
+  /** False when this principal has no pin by that slug. */
+  unpinSkill(principal: ApiPrincipal, slug: string): Promise<boolean>;
+  listPins(principal: ApiPrincipal): Promise<ServerPin[]>;
 }

@@ -18,7 +18,7 @@ import { mergeSkillRegistryLists } from "../lib/registry-merge.js";
 import type { ArtifactStorage } from "./artifact-storage.js";
 import type { SkillsServerConfig } from "./config.js";
 import { getServerSkill, getServerSkillMd, listServerSkills } from "./registry.js";
-import type { ApiPrincipal, PublishSkillInput, ServerSkillRecord, SkillsProductStore } from "./types.js";
+import type { ApiPrincipal, PublishSkillInput, ServerPin, ServerSkillRecord, SkillsProductStore } from "./types.js";
 
 /**
  * Slug grammar, matching normalizePortableSkillName() in src/lib/portable-skills.ts.
@@ -40,6 +40,28 @@ const MAX_SKILL_MD_BYTES = 512_000;
 const MAX_MANIFEST_BYTES = MAX_SKILL_MD_BYTES + 64_000;
 /** Multipart parts this endpoint understands. Anything else is refused unread-past. */
 const ALLOWED_PUBLISH_PARTS = new Set(["manifest", "bundle"]);
+
+/** Wire shape of a pin: the client-facing facts, without the storage columns. */
+export function pinPayload(pin: ServerPin): Record<string, unknown> {
+  return { slug: pin.slug, pinnedAt: pin.pinnedAt, metadata: pin.metadata };
+}
+
+/**
+ * The metadata field of a pin body.
+ *
+ * Absent means an empty object (matching the schema default), present-and-not-an-
+ * object is refused rather than coerced: a client that sends `metadata: "team"`
+ * sent a bug, and storing it as `{}` would make the round-trip silently lose
+ * what the caller wrote. The route calls this on the parsed JSON body before
+ * touching the store, so a malformed body is a 400 and never a row.
+ */
+export function pinMetadataField(body: Record<string, unknown>): Record<string, unknown> {
+  if (body.metadata === undefined) return {};
+  if (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata)) {
+    throw new SkillRequestError(400, "INVALID_METADATA", "`metadata` must be a JSON object");
+  }
+  return body.metadata as Record<string, unknown>;
+}
 
 export class SkillRequestError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {

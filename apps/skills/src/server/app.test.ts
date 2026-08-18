@@ -101,6 +101,63 @@ for (const backend of backends) {
         const denied = await fetch(`${ctx.baseUrl}/api/v1/skills`);
         expect(denied.status).toBe(401);
         expect(await denied.json()).toMatchObject({ code: "AUTH_REQUIRED" });
+
+        // The pins surface sits behind the same gate: an unauthenticated list,
+        // pin, and unpin all get 401 before any handler runs.
+        const deniedPins = await fetch(`${ctx.baseUrl}/api/v1/pins`);
+        expect(deniedPins.status).toBe(401);
+        expect(await deniedPins.json()).toMatchObject({ code: "AUTH_REQUIRED" });
+        for (const init of [
+          { method: "PUT", body: JSON.stringify({}) },
+          { method: "DELETE" },
+        ]) {
+          const deniedPin = await fetch(`${ctx.baseUrl}/api/v1/pins/deploy-notes`, {
+            ...init,
+            headers: { "Content-Type": "application/json" },
+          });
+          expect(deniedPin.status).toBe(401);
+          expect(await deniedPin.json()).toMatchObject({ code: "AUTH_REQUIRED" });
+        }
+      } finally {
+        await ctx.stop();
+      }
+    });
+
+    test("pins round-trip through the API and are scoped per org and principal", async () => {
+      const ctx = await testServer(backend);
+      try {
+        const orgA = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
+        const orgB = new RemoteSkillsClient("sk_test_org_b", ctx.baseUrl);
+
+        // A pin set survives: write, list, read back through the client.
+        const pinned = await orgA.pin("deploy-notes", { reason: "team default" });
+        expect(pinned).toMatchObject({ slug: "deploy-notes", metadata: { reason: "team default" } });
+        expect(pinned.pinnedAt).toBeTruthy();
+        expect((await orgA.listPins()).map((pin: { slug: string }) => pin.slug)).toEqual(["deploy-notes"]);
+
+        // Another org pins the same slug; each org sees exactly its own pin.
+        await orgB.pin("deploy-notes");
+        expect((await orgA.listPins()).map((pin: { slug: string }) => pin.slug)).toEqual(["deploy-notes"]);
+        expect((await orgB.listPins()).map((pin: { slug: string }) => pin.slug)).toEqual(["deploy-notes"]);
+        expect((await orgA.listPins())[0]).toMatchObject({ metadata: { reason: "team default" } });
+
+        // Repinning upserts to one row and refreshes the payload.
+        await orgA.pin("deploy-notes", { reason: "revised" });
+        expect((await orgA.listPins()).map((pin: { slug: string }) => pin.slug)).toEqual(["deploy-notes"]);
+        expect((await orgA.listPins())[0]).toMatchObject({ metadata: { reason: "revised" } });
+
+        // Unpin removes only the caller's pin.
+        expect(await orgA.unpin("deploy-notes")).toBe(true);
+        expect((await orgA.listPins())).toEqual([]);
+        expect(await orgB.unpin("deploy-notes")).toBe(true);
+
+        // A bad slug is refused before touching the store.
+        const invalid = await fetch(`${ctx.baseUrl}/api/v1/pins/..%2Fescape`, {
+          method: "PUT",
+          headers: { authorization: "Bearer sk_test_org_a", "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        expect([400, 404]).toContain(invalid.status);
       } finally {
         await ctx.stop();
       }

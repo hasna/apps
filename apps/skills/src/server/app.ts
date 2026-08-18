@@ -7,10 +7,13 @@ import { resolveDatabaseTarget } from "./database-url.js";
 import { executeRun } from "./handlers.js";
 import {
   SkillRequestError,
+  assertPublishableSlug,
   getMergedSkill,
   getMergedSkillMd,
   listMergedSkills,
   parsePublishRequest,
+  pinMetadataField,
+  pinPayload,
   readPublishedBundle,
   storePublishedSkill,
   deletePublishedSkill,
@@ -219,6 +222,31 @@ async function handleApiV1(
       return removed
         ? json({ deleted: true, slug: id })
         : json({ error: "published skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
+    }
+  }
+
+  if (resource === "pins") {
+    if (request.method === "GET" && !id) {
+      return json((await store.listPins(principal)).map(pinPayload));
+    }
+
+    if (request.method === "PUT" && id && !subresource) {
+      // The slug grammar is the published-skill one, re-asserted here: a pin
+      // names the same space of slugs, and the route never builds a path or a
+      // storage key from it, but an unanchored slug could still smuggle
+      // separators into a future consumer. Reject before touching the store.
+      assertPublishableSlug(id);
+      const body = await readJson(request, config.requestBodyLimitBytes);
+      const pin = await store.pinSkill(principal, id, pinMetadataField(body));
+      return json(pinPayload(pin));
+    }
+
+    if (request.method === "DELETE" && id && !subresource) {
+      assertPublishableSlug(id);
+      const removed = await store.unpinSkill(principal, id);
+      return removed
+        ? json({ deleted: true, slug: id })
+        : json({ error: "pin not found", code: "PIN_NOT_FOUND" }, { status: 404 });
     }
   }
 
