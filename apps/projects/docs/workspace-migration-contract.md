@@ -59,7 +59,7 @@ explicit paths remain compatibility/import locations, not canonical identity.
 
 Built-in legacy path inference recognizes these current conventions:
 
-- `hasna-open-dev`: `/home/hasna/workspace/hasna/opensource/opensourcedev`, template `open-{slug}`
+- `~/workspace/repos`: `/home/hasna/workspace/repos`, template `{slug}` (the retired `hasna-open-dev` / `opensourcedev` layout is gone)
 - `hasna-open`: `/home/hasna/workspace/hasna/opensource`, template `{slug}`
 - `hasnaxyz-projects`: `/home/hasna/workspace/hasnaxyz/project`, template `project-{slug}`
 - `hasnaxyz-internal`: `/home/hasna/workspace/hasnaxyz/internalapp`, template `iapp-{slug}`
