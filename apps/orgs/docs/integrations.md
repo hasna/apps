@@ -1,12 +1,12 @@
 # Integration Notes
 
-`open-orgs` is a graph and context layer. It stores refs, ownership edges,
+`orgs` is a graph and context layer. It stores refs, ownership edges,
 delegation edges, resolver evidence, and privacy-safe snapshots. It does not
 own source records that belong to sibling packages.
 
 ## Ownership Matrix
 
-| Domain | Source of Truth | open-orgs Responsibility |
+| Domain | Source of Truth | orgs Responsibility |
 | --- | --- | --- |
 | Human, agent, service, and organization identity records | `open-identities` | Store `identityRef` pointers and use public IDs in snapshots. Do not copy documents, contact points, traits, voice, image, or private metadata. |
 | Project/workspace records, locations, and project-agent assignments | `open-projects` | Store `projectRef` pointers and graph ownership/stewardship edges. Do not duplicate workspace state or filesystem locations. |
@@ -22,7 +22,7 @@ own source records that belong to sibling packages.
 
 Delegation is intentionally two-stage:
 
-1. `open-orgs` answers who is allowed or recommended for a scoped delegation.
+1. `orgs` answers who is allowed or recommended for a scoped delegation.
 2. `open-dispatch` verifies live machine and tmux target safety before typing
    anything.
 

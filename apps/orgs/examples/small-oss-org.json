@@ -103,13 +103,13 @@
   "projects": [
     {
       "id": "proj_open_orgs",
-      "slug": "open-orgs",
-      "name": "open-orgs",
+      "slug": "orgs",
+      "name": "orgs",
       "orgId": "org_open_tools",
       "projectRef": {
         "system": "open-projects",
         "kind": "workspace",
-        "id": "open-orgs"
+        "id": "orgs"
       },
       "ownerMemberIds": ["mem_review_agent"],
       "ownerTeamIds": ["team_core"],
@@ -137,7 +137,7 @@
       "capabilityIds": [],
       "dispatchTarget": {
         "machine": "linux-dev",
-        "target": "open-orgs:agent.1",
+        "target": "orgs:agent.1",
         "source": "manual",
         "state": "idle",
         "lastSeenAt": "2026-01-01T00:00:00.000Z"

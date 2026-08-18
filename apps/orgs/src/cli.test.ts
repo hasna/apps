@@ -9,7 +9,7 @@ let dir = "";
 let storePath = "";
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "open-orgs-cli-"));
+  dir = await mkdtemp(join(tmpdir(), "orgs-cli-"));
   storePath = join(dir, "orgs.json");
 });
 

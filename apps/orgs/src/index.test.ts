@@ -14,14 +14,14 @@ import {
 let dir = "";
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "open-orgs-"));
+  dir = await mkdtemp(join(tmpdir(), "orgs-"));
 });
 
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-describe("open-orgs graph", () => {
+describe("orgs graph", () => {
   test("creates org graph records and exports a privacy-safe agent snapshot", async () => {
     const store = new JsonOrgStore({ filePath: join(dir, "orgs.json"), auditPath: join(dir, "audit.jsonl") });
     const org = await store.createOrg({ name: "Open Tools", identityRef: { system: "open-identities", kind: "organization", id: "open-tools", metadata: { secret: "hidden" } } });
@@ -52,8 +52,8 @@ describe("open-orgs graph", () => {
     });
     await store.createProject({
       orgId: org.id,
-      name: "open-orgs",
-      projectRef: { system: "open-projects", kind: "workspace", id: "open-orgs" },
+      name: "orgs",
+      projectRef: { system: "projects", kind: "workspace", id: "orgs" },
       ownerMemberIds: [lead.id],
       capabilityIds: [capability.id],
     });
@@ -73,7 +73,7 @@ describe("open-orgs graph", () => {
       displayName: "Worker Agent",
       authority: "execute",
     });
-    expect(snapshot.relatedProjects[0].name).toBe("open-orgs");
+    expect(snapshot.relatedProjects[0].name).toBe("orgs");
   });
 
   test("rejects active reporting cycles", async () => {
