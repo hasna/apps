@@ -7,6 +7,22 @@ This project is pre-1.0. Following semver's pre-1.0 convention, a **minor** bump
 
 ## 0.3.2 — unreleased
 
+### macOS bar-only variant (`8a265e51d`)
+
+The macOS app is now a bar-only successor: a `bar` build variant that ships
+only the menu-bar app, a windowless launch mode, a runtime variant check that
+rejects the wrong launch mode, and Developer ID signing wired into the build
+script. The legacy full-bundle app is replaced by this variant.
+
+### Config-driven API base URL (`ea43dd336`)
+
+The vendored HTTP client's default API base URL no longer derives a hostname
+from the app name (bug 21a3b267: an internal-infra URL pattern shipped in the
+0.3.1 tarball). `defaultApiBaseUrl` now returns the documented local
+self-hosted endpoint (`http://localhost:8874`, the `recordings-serve` default
+port), and the configured `HASNA_<APP>_API_URL` always wins. The
+internal-infra string can no longer reach a published tarball.
+
 ## 0.3.0 — unreleased
 
 **This release is breaking.** It is numbered `0.3.0` rather than `0.2.15`
