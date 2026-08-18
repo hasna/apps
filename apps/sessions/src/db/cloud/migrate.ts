@@ -1,4 +1,4 @@
-// Migration runner for the open-sessions cloud schema.
+// Migration runner for the sessions cloud schema.
 //
 // Applies pending `migrations/*.sql` against the shared RDS using the vendored
 // kit's MigrationLedger (per-migration sha256 drift/downgrade guards). Intended

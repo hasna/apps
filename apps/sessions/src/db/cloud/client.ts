@@ -1,4 +1,4 @@
-// Cloud Postgres client for open-sessions (PURE REMOTE, Amendment A1).
+// Cloud Postgres client for sessions (PURE REMOTE, Amendment A1).
 //
 // Opens a single pooled connection to the shared RDS via the vendored storage
 // kit. cloud mode reads AND writes go directly to Postgres — there is no sync

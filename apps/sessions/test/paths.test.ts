@@ -116,7 +116,7 @@ describe("resolveProjectPath", () => {
   });
 
   it("uses cwd from transcript lines instead of lossy hyphen decoding", () => {
-    root = mkdtempSync(join(tmpdir(), "open-sessions-path-resolve-"));
+    root = mkdtempSync(join(tmpdir(), "sessions-path-resolve-"));
     const encodedDir = "-Users-dev-Workspace-hyphenated-project";
     const projectDir = join(root, encodedDir);
     mkdirSync(projectDir, { recursive: true });
@@ -137,7 +137,7 @@ describe("resolveProjectPath", () => {
   });
 
   it("checks later transcript files when the first file has no cwd", () => {
-    root = mkdtempSync(join(tmpdir(), "open-sessions-path-resolve-"));
+    root = mkdtempSync(join(tmpdir(), "sessions-path-resolve-"));
     const encodedDir = "-Users-dev-Workspace-client-dashboard";
     const projectDir = join(root, encodedDir);
     mkdirSync(projectDir, { recursive: true });
@@ -170,7 +170,7 @@ describe("getSessionsDbPath", () => {
 
   it("creates parent directories for explicit database paths", () => {
     previous = process.env.SESSIONS_DB_PATH;
-    root = mkdtempSync(join(tmpdir(), "open-sessions-db-path-"));
+    root = mkdtempSync(join(tmpdir(), "sessions-db-path-"));
     const dbPath = join(root, "missing", "nested", "sessions.db");
     process.env.SESSIONS_DB_PATH = dbPath;
 

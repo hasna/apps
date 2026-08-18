@@ -1,4 +1,4 @@
-// Cloud (Postgres) data access for open-sessions serve. PURE REMOTE (A1):
+// Cloud (Postgres) data access for sessions serve. PURE REMOTE (A1):
 // every function reads/writes the shared RDS directly through the vendored kit.
 //
 // Cloud holds sessions, messages, and tool calls in Postgres. Local SQLite is

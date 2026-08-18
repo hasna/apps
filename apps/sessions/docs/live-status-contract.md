@@ -15,17 +15,17 @@ Required stable fields:
 
 ```json
 {
-  "target": "open-router:1.1",
-  "session": "open-router",
+  "target": "router:1.1",
+  "session": "router",
   "windowIndex": "1",
   "paneIndex": "1",
   "paneId": "%101",
   "command": "node",
-  "cwd": "/home/hasna/Workspace/hasna/opensource/open-router",
-  "projectPath": "/home/hasna/workspace/hasna/opensource/open-router",
-  "projectSlug": "open-router",
+  "cwd": "/home/hasna/workspace/repos/hasna/apps/apps/router",
+  "projectPath": "/home/hasna/workspace/hasna/opensource/router",
+  "projectSlug": "router",
   "machine": "spark02",
-  "title": "open-router",
+  "title": "router",
   "status": "active",
   "statusReason": "working indicator in pane text",
   "paneDead": false,
@@ -96,10 +96,10 @@ Do not execute text from these fields.
   },
   "entries": [
     {
-      "target": "open-router:1.1",
+      "target": "router:1.1",
       "machine": "spark02",
-      "projectSlug": "open-router",
-      "projectPath": "/home/hasna/workspace/hasna/opensource/open-router",
+      "projectSlug": "router",
+      "projectPath": "/home/hasna/workspace/hasna/opensource/router",
       "isOpenSession": true,
       "status": "idle",
       "action": "status",
@@ -109,7 +109,7 @@ Do not execute text from these fields.
       "queue": "none",
       "argv": null,
       "commandPreview": null,
-      "lastVisibleLine": "hasna@spark02:~/workspace/hasna/opensource/open-router$"
+      "lastVisibleLine": "hasna@spark02:~/workspace/repos/hasna/apps/apps/router$"
     }
   ]
 }
