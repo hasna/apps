@@ -46,7 +46,7 @@ confidence in the release contents.
 
 ```bash
 orgs init
-orgs orgs add --name "Open Maintainers"
+orgs orgs add --name "Maintainers"
 orgs teams add --org maintainers --name "Core"
 orgs agents add --org maintainers --name "Review Agent" --identity agent:review-agent
 orgs capabilities add --org maintainers --namespace repo --key review

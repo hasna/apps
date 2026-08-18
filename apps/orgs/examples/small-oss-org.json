@@ -4,7 +4,7 @@
     {
       "id": "org_open_tools",
       "slug": "tools",
-      "name": "Open Tools",
+      "name": "Tools",
       "description": "A small OSS maintainer org.",
       "identityRef": {
         "system": "identities",
