@@ -38,7 +38,7 @@ export function buildDeploymentPlan(config: AttachmentsConfig = getConfig()) {
         {
           match: attachmentRoutePattern,
           target: attachmentsOrigin ?? "<attachments-origin>",
-          purpose: "Serve open-attachments public pages and downloads",
+          purpose: "Serve attachments public pages and downloads",
           precedence: "higher than the generic shortlinks route",
         },
         {

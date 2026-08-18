@@ -218,7 +218,7 @@ describe("uploadFromBuffer", () => {
 
   it("cleans up the temp file after upload", async () => {
     const buffer = Buffer.from("temp data");
-    const expectedTempPath = join(tmpdir(), "open-attachments-stdin", "cleanup-test.txt");
+    const expectedTempPath = join(tmpdir(), "attachments-stdin", "cleanup-test.txt");
 
     await uploadFromBuffer(buffer, "cleanup-test.txt", {}, deps);
 
@@ -231,7 +231,7 @@ describe("uploadFromBuffer", () => {
     });
 
     const buffer = Buffer.from("will fail");
-    const expectedTempPath = join(tmpdir(), "open-attachments-stdin", "fail-test.txt");
+    const expectedTempPath = join(tmpdir(), "attachments-stdin", "fail-test.txt");
 
     await expect(uploadFromBuffer(buffer, "fail-test.txt", {}, deps)).rejects.toThrow("S3 failure");
 

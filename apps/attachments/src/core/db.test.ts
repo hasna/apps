@@ -21,7 +21,7 @@ beforeAll(async () => {
 });
 
 function makeTempPath(): string {
-  return join(tmpdir(), `open-attachments-test-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`);
+  return join(tmpdir(), `attachments-test-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`);
 }
 
 function makeAttachment(overrides: Partial<Attachment> = {}): Attachment {
