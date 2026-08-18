@@ -1301,7 +1301,7 @@
     },
     "apps/monitor": {
       "name": "@hasna/monitor",
-      "version": "0.1.26",
+      "version": "0.1.27",
       "bin": {
         "monitor": "./bins/monitor.js",
         "monitor-mcp": "./bins/monitor-mcp.js",
