@@ -13,7 +13,7 @@
  * the pinned kit actually exposes.
  */
 
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 
 export const REPO_ROOT = join(import.meta.dir, "..");
@@ -37,7 +37,7 @@ const MANIFEST_KEYS = [
 ] as const;
 
 const MANIFEST_CLASSES = ["library", "cli-with-store", "service", "saas"] as const;
-const STORAGE_MODES = ["sqlite", "postgres"] as const;
+const STORAGE_BACKENDS = ["sqlite", "postgresql"] as const;
 
 /** Bin suffixes the contract allowlists for an app named `<name>`. */
 const ALLOWED_BIN_SUFFIXES = [
@@ -53,7 +53,11 @@ const ALLOWED_BIN_SUFFIXES = [
 ] as const;
 
 export type Manifest = Record<string, unknown>;
-export type PackageJson = { bin?: Record<string, string>; scripts?: Record<string, string> };
+export type PackageJson = {
+  bin?: Record<string, string>;
+  scripts?: Record<string, string>;
+  exports?: Record<string, unknown>;
+};
 
 export function readManifest(path = MANIFEST_PATH): Manifest {
   return JSON.parse(readFileSync(path, "utf8")) as Manifest;
@@ -97,8 +101,10 @@ export function manifestShapeIssues(manifest: Manifest): string[] {
   }
 
   const storage = manifest["storage"] as Record<string, unknown> | undefined;
-  if (storage && !STORAGE_MODES.includes(storage["mode"] as (typeof STORAGE_MODES)[number])) {
-    issues.push(`storage.mode must be one of ${STORAGE_MODES.join(", ")}, got ${JSON.stringify(storage["mode"])}`);
+  if (storage && !STORAGE_BACKENDS.includes(storage["backend"] as (typeof STORAGE_BACKENDS)[number])) {
+    issues.push(
+      `storage.backend must be one of ${STORAGE_BACKENDS.join(", ")}, got ${JSON.stringify(storage["backend"])}`,
+    );
   }
 
   const unknown = Object.keys(manifest).filter(
@@ -141,6 +147,125 @@ export function undocumentedBinIssues(manifest: Manifest, pkg: PackageJson): str
       (bin) =>
         `package.json ships bin "${bin}" that the manifest neither declares nor records under metadata.contractAlignment.pendingBinRenames`,
     );
+}
+
+/**
+ * Problems with the contract storage shape (0.11.1 schema): the retired legacy
+ * `mode` key, a missing or invalid `backend`, or a sqlite backend without the
+ * canonical sqlitePath. `contracts repo-conformance` is the authority; this is
+ * the offline tripwire so `bun test` catches a stale shape without the kit.
+ */
+export function storageBackendIssues(manifest: Manifest): string[] {
+  const issues: string[] = [];
+  const storage = manifest["storage"] as Record<string, unknown> | undefined;
+  if (!storage) {
+    issues.push("storage is required for a cli-with-store manifest");
+    return issues;
+  }
+  if ("mode" in storage) {
+    issues.push("storage.mode is the retired legacy shape; the 0.11.1 schema declares storage.backend");
+  }
+  const backend = storage["backend"];
+  if (typeof backend !== "string" || !STORAGE_BACKENDS.includes(backend as (typeof STORAGE_BACKENDS)[number])) {
+    issues.push(`storage.backend must be one of ${STORAGE_BACKENDS.join(", ")}, got ${JSON.stringify(backend)}`);
+  }
+  if (backend === "sqlite") {
+    const sqlitePath = storage["sqlitePath"];
+    if (typeof sqlitePath !== "string" || !sqlitePath.endsWith(".db")) {
+      issues.push("storage.sqlitePath is required and must end in .db for a sqlite backend");
+    }
+  }
+  const engines = storage["engines"];
+  if (engines !== undefined && !Array.isArray(engines)) {
+    issues.push("storage.engines must be an array");
+  }
+  return issues;
+}
+
+/**
+ * The daemon surface is real end to end: `<name>-daemon` is declared in the
+ * manifest bin list, carried by a supported CLI-kind service surface, present
+ * in package.json bin, and backed by an entry file that resolves. A bin that
+ * only exists in the manifest is a contract that cannot run.
+ */
+export function daemonSurfaceIssues(manifest: Manifest, pkg: PackageJson): string[] {
+  const name = manifest["name"];
+  if (typeof name !== "string") return [];
+  const daemonBin = `${name}-daemon`;
+  const issues: string[] = [];
+
+  const declaredBins = Array.isArray(manifest["bins"]) ? (manifest["bins"] as string[]) : [];
+  if (!declaredBins.includes(daemonBin)) {
+    issues.push(`manifest bins do not declare ${daemonBin}`);
+  }
+
+  const surfaces = Array.isArray(manifest["serviceSurfaces"])
+    ? (manifest["serviceSurfaces"] as Record<string, unknown>[])
+    : [];
+  const hasSurface = surfaces.some(
+    (surface) => surface["bin"] === daemonBin && surface["kind"] === "cli" && surface["status"] === "supported",
+  );
+  if (!hasSurface) {
+    issues.push(`no supported cli service surface declares bin ${daemonBin}`);
+  }
+
+  const bins = pkg.bin ?? {};
+  if (!(daemonBin in bins)) {
+    issues.push(`package.json bin does not ship ${daemonBin}`);
+  } else {
+    const target = bins[daemonBin];
+    if (typeof target === "string" && !existsSync(join(REPO_ROOT, target))) {
+      issues.push(`package.json bin ${daemonBin} targets ${target}, which does not exist`);
+    }
+  }
+  return issues;
+}
+
+/**
+ * The SDK surface is real end to end: a supported sdk service surface declares
+ * exportSubpath "./sdk", package.json exports carries that subpath, and the
+ * export target file resolves. An SDK the package cannot import is not a
+ * surface.
+ */
+export function sdkSurfaceIssues(manifest: Manifest, pkg: PackageJson): string[] {
+  const issues: string[] = [];
+  const surfaces = Array.isArray(manifest["serviceSurfaces"])
+    ? (manifest["serviceSurfaces"] as Record<string, unknown>[])
+    : [];
+  const sdk = surfaces.find((surface) => surface["kind"] === "sdk");
+  if (!sdk) {
+    issues.push("no sdk service surface is declared");
+    return issues;
+  }
+  if (sdk["status"] !== "supported") {
+    issues.push(`sdk surface must be supported, got ${JSON.stringify(sdk["status"])}`);
+  }
+  const subpath = sdk["exportSubpath"];
+  if (typeof subpath !== "string" || subpath !== "./sdk") {
+    issues.push(`sdk surface must declare exportSubpath "./sdk", got ${JSON.stringify(subpath)}`);
+  }
+
+  const targets: string[] = [];
+  const exportsField = pkg.exports;
+  if (exportsField && typeof exportsField === "object") {
+    const entry = exportsField["./sdk"];
+    if (typeof entry === "string") {
+      targets.push(entry);
+    } else if (entry && typeof entry === "object") {
+      for (const value of Object.values(entry)) {
+        if (typeof value === "string") targets.push(value);
+      }
+    }
+  }
+  if (targets.length === 0) {
+    issues.push('package.json exports does not carry "./sdk"');
+  }
+  for (const target of targets) {
+    if (!existsSync(join(REPO_ROOT, target))) {
+      issues.push(`package.json exports "./sdk" targets ${target}, which does not exist`);
+    }
+  }
+  return issues;
 }
 
 /** Every script name reachable from `entry`, following `bun run`/`npm run` and pre/post hooks. */
@@ -259,8 +384,11 @@ if (import.meta.main) {
 
   const issues = [
     ...manifestShapeIssues(manifest),
+    ...storageBackendIssues(manifest),
     ...binAllowlistIssues(manifest),
     ...undocumentedBinIssues(manifest, pkg),
+    ...daemonSurfaceIssues(manifest, pkg),
+    ...sdkSurfaceIssues(manifest, pkg),
     ...artifactGateIssues(manifest, pkg),
     ...contractsPinIssues(manifest, pkg),
     ...(online ? unknownSubcommandIssues(manifest, pkg) : []),
@@ -270,5 +398,7 @@ if (import.meta.main) {
     for (const issue of issues) console.error(`fail contract-gate: ${issue}`);
     process.exit(1);
   }
-  console.log(`pass contract-gate: manifest shape, bin allowlist, artifact gate, and kit pin${online ? ", kit subcommands" : ""}`);
+  console.log(
+    `pass contract-gate: manifest shape, storage.backend, bin allowlist, daemon bin, SDK export, artifact gate, and kit pin${online ? ", kit subcommands" : ""}`,
+  );
 }

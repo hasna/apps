@@ -3,11 +3,12 @@
   "name": "monitor",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.8.5",
+  "kitVersion": "0.11.1",
   "description": "System monitoring tool for multiple computers — local, SSH, EC2.",
   "bins": [
     "monitor",
-    "monitor-mcp"
+    "monitor-mcp",
+    "monitor-daemon"
   ],
   "hosting": [
     "user-hosted"
@@ -28,22 +29,29 @@
       "authMode": "local-only"
     },
     {
+      "name": "daemon",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "monitor-daemon",
+      "authMode": "local-only"
+    },
+    {
+      "name": "sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "exportSubpath": "./sdk",
+      "authMode": "local-only"
+    },
+    {
       "name": "http-api",
       "kind": "api",
       "status": "deferred",
       "authMode": "api-key",
       "deferReason": "monitor-server serves a local REST/SSE surface today, but it declares neither GET /ready nor GET /version and ships no generated SDK, so it is not yet a contract-supported API surface."
-    },
-    {
-      "name": "typescript-sdk",
-      "kind": "sdk",
-      "status": "deferred",
-      "authMode": "api-key",
-      "deferReason": "No client SDK is generated while the HTTP API surface is deferred; consumers import ./src/index.ts directly."
     }
   ],
   "storage": {
-    "mode": "sqlite",
+    "backend": "sqlite",
     "engines": [
       "sqlite"
     ],
@@ -60,8 +68,8 @@
     "conformance": {
       "waivedStorageEngines": [
         {
-          "engine": "postgres",
-          "reason": "src/db/postgres-adapter.ts exists but cannot serve traffic: its runSync helper busy-waits with Bun.sleepSync, which blocks the event loop the pending query needs, so every call times out after 30s. Declaring postgres as a supported engine would be false until that adapter is rewritten async-first.",
+          "engine": "postgresql",
+          "reason": "src/db/postgres-adapter.ts exists but cannot serve traffic: its runSync helper busy-waits with Bun.sleepSync, which blocks the event loop the pending query needs, so every call times out after 30s. Declaring postgresql as a supported engine would be false until that adapter is rewritten async-first.",
           "reviewedBy": "platform-storage",
           "expiresAt": "2027-01-01T00:00:00.000Z"
         }

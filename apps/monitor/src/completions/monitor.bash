@@ -17,7 +17,7 @@ _monitor() {
   local cur prev words cword
   _init_completion || return
 
-  local subcommands="status health machines add doctor ps mcp-health mcp-status mcp-restart exec kill alerts apps compare-apps service temperature ports loop-check tailscale containers report cron search migrate retention integrations serve mcp sync completions help"
+  local subcommands="config edit validate backup restore status compare health machines add doctor ps mcp-health mcp-status mcp-restart exec kill alerts apps compare-apps service temperature ports loop-check tailscale containers report cron search migrate retention integrations serve mcp sync completions help"
 
   case "$prev" in
     monitor)

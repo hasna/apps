@@ -4,30 +4,11 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { getCollectorForMachine, listKnownMachineIds } from "../collectors/index.js";
-import { ProcessManager, processInfoToRow } from "../process-manager/index.js";
-import { loadConfig, saveConfig } from "../config.js";
+import { createMonitorService, type MonitorService } from "../sdk/index.js";
+import { loadConfig } from "../config.js";
 import type { IntegrationsConfig } from "../config.js";
+import { compareInstalledApps, type InstalledAppsResult } from "../apps.js";
 import { runIntegrations } from "../integrations/index.js";
-import {
-  listMachines,
-  getMachine,
-  insertMachine,
-  deleteMachine,
-  listAlerts,
-  insertCronJob,
-  listCronJobs,
-  getCronJob,
-  updateCronJob,
-  getProcesses,
-  upsertAgent,
-  updateAgentHeartbeat,
-  updateAgentFocus,
-  listAgents,
-  insertFeedback,
-} from "../db/queries.js";
-import { search } from "../db/search.js";
-import { CronEngine } from "../cron/index.js";
 import type { KillSignal } from "../process-manager/index.js";
 import {
   AppsInputSchema,
@@ -47,20 +28,7 @@ import {
   AgentHeartbeatInputSchema,
   AgentSetFocusInputSchema,
 } from "../validation.js";
-import {
-  collectMachineDiagnostics,
-  collectRuntimeHealthAcrossMachines,
-  mergeStoredAndLiveAlerts,
-} from "../runtime-health.js";
-import { executeTmuxCommand } from "../tmux.js";
 import { MONITOR_VERSION } from "../version.js";
-import { compareInstalledApps, listInstalledApps, listInstalledAppsAcrossMachines } from "../apps.js";
-import { listManagedServices, manageService } from "../services.js";
-import { getContainerLogs, listContainers, listContainersAcrossMachines } from "../containers.js";
-import { getMcpProcessStatus, getMcpProcessStatusAcrossMachines, restartMcpServer } from "../mcp-processes.js";
-import { scanListeningPorts, scanListeningPortsAcrossMachines } from "../ports.js";
-import { getTailscaleStatus, getTailscaleStatusAcrossMachines } from "../tailscale.js";
-import { getTemperatureStatus, getTemperatureStatusAcrossMachines } from "../temperature.js";
 import {
   sanitizeMachineRows,
   sanitizeProcessRow,
@@ -76,16 +44,7 @@ import {
   truncateText,
 } from "../output.js";
 
-// ── Shared instances ──────────────────────────────────────────────────────────
-
-const pm = new ProcessManager();
-const cronEngine = new CronEngine();
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-async function collectAndAnalyse(machineId = "local") {
-  return await collectMachineDiagnostics(machineId);
-}
 
 function textContent(text: string) {
   return { content: [{ type: "text" as const, text }] };
@@ -125,7 +84,7 @@ function getLimitArgs(
   };
 }
 
-function compactRuntimeHealth(runtimeHealth: Awaited<ReturnType<typeof collectMachineDiagnostics>>["runtimeHealth"], args: Record<string, unknown>) {
+function compactRuntimeHealth(runtimeHealth: import("../sdk/index.js").MachineDiagnostics["runtimeHealth"], args: Record<string, unknown>) {
   const serversPage = pageItems(runtimeHealth.mcp.servers, getLimitArgs(args));
   const panesPage = pageItems(runtimeHealth.tmux.deadPanes, getLimitArgs(args));
 
@@ -155,7 +114,7 @@ function compactRuntimeHealth(runtimeHealth: Awaited<ReturnType<typeof collectMa
 
 function compactDoctorReport(
   machineId: string,
-  diagnostics: Awaited<ReturnType<typeof collectMachineDiagnostics>>,
+  diagnostics: import("../sdk/index.js").MachineDiagnostics,
   args: Record<string, unknown>
 ) {
   const actionsPage = pageItems(diagnostics.doctorReport.recommendedActions, {
@@ -195,28 +154,12 @@ function compactDoctorReport(
   };
 }
 
-type InstalledAppsResult = Awaited<ReturnType<typeof listInstalledApps>>;
-type ServiceListResult = Awaited<ReturnType<typeof listManagedServices>>;
-type PortsResult = Awaited<ReturnType<typeof scanListeningPorts>>;
-type TailscaleResult = Awaited<ReturnType<typeof getTailscaleStatus>>;
-type TemperatureResult = Awaited<ReturnType<typeof getTemperatureStatus>>;
-type ContainersResult = Awaited<ReturnType<typeof listContainers>>;
-type McpStatusResult = Awaited<ReturnType<typeof getMcpProcessStatus>>;
-type MachineListItem = {
-  id: string;
-  name: string;
-  type: string;
-  host: string | null;
-  port: number | null;
-  ssh_key_path: string | null;
-  aws_region: string | null;
-  aws_instance_id: string | null;
-  tags: string;
-  created_at: number;
-  last_seen: number | null;
-  status: string;
-};
-
+type ServiceListResult = import("../services.js").ServiceListResult;
+type PortsResult = import("../ports.js").ListeningPortsResult;
+type TailscaleResult = import("../tailscale.js").TailscaleStatusResult;
+type TemperatureResult = import("../temperature.js").TemperatureResult;
+type ContainersResult = import("../containers.js").ContainersResult;
+type McpStatusResult = import("../mcp-processes.js").McpProcessStatusResult;
 function compactInstalledAppsResult(result: InstalledAppsResult, args: Record<string, unknown>) {
   const page = pageItems(result.apps, getLimitArgs(args));
   return {
@@ -374,15 +317,27 @@ function compactMcpStatusResult(result: McpStatusResult, args: Record<string, un
 
 // ── Server setup ─────────────────────────────────────────────────────────────
 
-export function buildServer(): Server {
-const server = new Server(
-  { name: "monitor", version: MONITOR_VERSION },
-  { capabilities: { tools: {} } }
-);
+export interface BuildServerOptions {
+  /** MonitorService the tools delegate to. Defaults to a fresh instance. */
+  service?: MonitorService;
+}
 
-// ── Tool definitions ──────────────────────────────────────────────────────────
+/**
+ * Build the MCP server. The MCP is an interface layer: every tool delegates
+ * to the MonitorService facade (src/sdk/index.ts); no tool carries a second
+ * implementation of a monitor operation. Presentation (validation, compact
+ * shaping, paging, sanitization, error wrapping) lives here.
+ */
+export function buildServer(options: BuildServerOptions = {}): Server {
+  const service = options.service ?? createMonitorService();
+  const server = new Server(
+    { name: "monitor", version: MONITOR_VERSION },
+    { capabilities: { tools: {} } }
+  );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  // ── Tool definitions ────────────────────────────────────────────────────────
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "monitor_snapshot",
@@ -1079,7 +1034,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // ── monitor_snapshot ──────────────────────────────────────────────────
       case "monitor_snapshot": {
         const machineId = (a["machine_id"] as string | undefined) ?? "local";
-        const diagnostics = await collectAndAnalyse(machineId);
+        const diagnostics = await service.snapshot(machineId);
         if (a["verbose"] === true) {
           const { snapshot, doctorReport, runtimeHealth } = diagnostics;
           return jsonContent({ snapshot: sanitizeSystemSnapshot(snapshot), doctorReport, runtimeHealth });
@@ -1093,7 +1048,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // ── monitor_health ────────────────────────────────────────────────────
       case "monitor_health": {
         const machineId = (a["machine_id"] as string | undefined) ?? "local";
-        const diagnostics = await collectAndAnalyse(machineId);
+        const diagnostics = await service.health(machineId);
         if (a["verbose"] === true) {
           return jsonContent({ ...diagnostics.doctorReport, runtimeHealth: diagnostics.runtimeHealth });
         }
@@ -1104,8 +1059,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "monitor_mcp_health": {
         const allMachines = (a["all_machines"] as boolean | undefined) ?? false;
         if (allMachines) {
-          const machineIds = listKnownMachineIds();
-          const results = await collectRuntimeHealthAcrossMachines(machineIds);
+          const results = await service.mcpHealth(undefined, true);
           if (a["verbose"] === true) {
             return jsonContent(results.map((result) => ({
               machine_id: result.machineId,
@@ -1124,7 +1078,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const machineId = (a["machine_id"] as string | undefined) ?? "local";
-        const { runtimeHealth } = await collectAndAnalyse(machineId);
+        const { runtimeHealth } = await service.mcpHealth(machineId, false);
         return jsonContent({
           machine_id: machineId,
           runtime_health: a["verbose"] === true
@@ -1147,9 +1101,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorContent(String(e));
         }
 
-        const results = input.all
-          ? await getMcpProcessStatusAcrossMachines()
-          : [await getMcpProcessStatus(input.machine_id)];
+        const results = await service.mcpStatus(input.machine_id, input.all);
         return jsonContent(a["verbose"] === true
           ? results
           : results.map((result) => compactMcpStatusResult(result, a)));
@@ -1168,7 +1120,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorContent(String(e));
         }
 
-        const result = await restartMcpServer(input.name, input.machine_id);
+        const result = await service.mcpRestart(input.name, input.machine_id);
         return jsonContent(result);
       }
 
@@ -1177,34 +1129,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const machineId = (a["machine_id"] as string | undefined) ?? "local";
         const filter = (a["filter"] as string | undefined) ?? "all";
 
-        const collector = getCollectorForMachine(machineId);
-        const result = await collector.collect();
-        if (!result.ok) return errorContent(result.error);
-
-        const allRows = result.snapshot.processes.map((p) =>
-          processInfoToRow(p, machineId)
-        );
-        const report = pm.analyse(allRows);
-
-        let filtered = allRows;
-        switch (filter) {
-          case "zombies":
-            filtered = report.zombies;
-            break;
-          case "orphans":
-            filtered = report.orphans;
-            break;
-          case "high_mem":
-            filtered = report.highMem;
-            break;
-        }
-
-        // Sort by CPU desc
-        filtered = [...filtered].sort(
-          (a, b) => (b.cpu_percent ?? 0) - (a.cpu_percent ?? 0)
+        const { allRows, report, processes } = await service.processes(
+          machineId,
+          filter as "all" | "zombies" | "orphans" | "high_mem"
         );
 
-        const sanitizedProcesses = filtered.map(sanitizeProcessRow);
+        const sanitizedProcesses = processes.map(sanitizeProcessRow);
         if (a["verbose"] === true) {
           return jsonContent({
             machine_id: machineId,
@@ -1256,9 +1186,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorContent(String(e));
         }
 
-        const results = input.all || input.compare
-          ? await listInstalledAppsAcrossMachines()
-          : [await listInstalledApps(input.machine_id)];
+        const results = await service.apps(input.machine_id, input.all, input.compare);
 
         if (a["verbose"] === true) {
           return jsonContent(
@@ -1310,11 +1238,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         if (input.action === "list") {
-          const result = await listManagedServices(input.machine_id);
+          const result = await service.services(input.machine_id, "list");
           return jsonContent(a["verbose"] === true ? result : compactServiceResult(result, a));
         }
 
-        return jsonContent(await manageService(input.action ?? "restart", input.name!, input.machine_id));
+        return jsonContent(await service.services(input.machine_id, input.action ?? "restart", input.name));
       }
 
       // ── monitor_exec ──────────────────────────────────────────────────────
@@ -1334,8 +1262,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorContent(String(e));
         }
 
-        const collector = getCollectorForMachine(execInput.machine_id ?? "local");
-        const result = await executeTmuxCommand(collector, {
+        const result = await service.exec(execInput.machine_id ?? "local", {
           target: execInput.target ?? "",
           all: execInput.all,
           command: execInput.command,
@@ -1363,9 +1290,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorContent(String(e));
         }
 
-        const results = input.all
-          ? await scanListeningPortsAcrossMachines()
-          : [await scanListeningPorts(input.machine_id)];
+        const results = await service.ports(input.machine_id, input.all);
 
         const filtered = results.map((result) => ({
           ...result,
@@ -1392,9 +1317,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorContent(String(e));
         }
 
-        const results = input.all
-          ? await getTailscaleStatusAcrossMachines()
-          : [await getTailscaleStatus(input.machine_id)];
+        const results = await service.tailscale(input.machine_id, input.all);
 
         return jsonContent(a["verbose"] === true
           ? results
@@ -1414,9 +1337,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorContent(String(e));
         }
 
-        const results = input.all
-          ? await getTemperatureStatusAcrossMachines()
-          : [await getTemperatureStatus(input.machine_id)];
+        const results = await service.temperature(input.machine_id, input.all);
 
         return jsonContent(a["verbose"] === true
           ? results
@@ -1427,9 +1348,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "monitor_containers": {
         const machineId = (a["machine_id"] as string | undefined) ?? "local";
         const all = (a["all"] as boolean | undefined) ?? false;
-        const results = all
-          ? await listContainersAcrossMachines()
-          : [await listContainers(machineId)];
+        const results = await service.containers(machineId, all);
         return jsonContent(a["verbose"] === true
           ? results
           : results.map((result) => compactContainersResult(result, a)));
@@ -1449,7 +1368,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorContent(String(e));
         }
 
-        const result = await getContainerLogs(input.container, input.machine_id, input.tail);
+        const result = await service.containerLogs(input.machine_id, input.container, input.tail);
         if (a["verbose"] === true) {
           return jsonContent(result);
         }
@@ -1501,33 +1420,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           );
         }
 
-        const action = await pm.kill(killInput.pid, killInput.signal as KillSignal, machineId);
+        const action = await service.kill(machineId, killInput.pid, killInput.signal as KillSignal);
         return jsonContent(action);
       }
 
       // ── monitor_machines ──────────────────────────────────────────────────
       case "monitor_machines": {
-        let machines: MachineListItem[];
-        try {
-          machines = listMachines();
-        } catch {
-          // DB may not be initialized — fall back to config
-          const config = loadConfig();
-          machines = config.machines.map((m) => ({
-            id: m.id,
-            name: m.label,
-            type: m.type,
-            host: m.ssh?.host ?? null,
-            port: m.ssh?.port ?? null,
-            ssh_key_path: m.ssh?.privateKeyPath ?? null,
-            aws_region: m.ec2?.region ?? null,
-            aws_instance_id: m.ec2?.instanceId ?? null,
-            tags: "{}",
-            created_at: 0,
-            last_seen: null,
-            status: "unknown",
-          }));
-        }
+        const machines = service.machinesList();
         if (a["verbose"] === true) {
           return jsonContent(sanitizeMachineRows(machines));
         }
@@ -1553,10 +1452,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const type = (a["type"] as "local" | "ssh" | "ec2") ?? "local";
         if (!machName) return errorContent("name is required");
 
-        const id = machName.toLowerCase().replace(/\s+/g, "-");
-
-        insertMachine({
-          id,
+        const id = await service.machineAdd({
           name: machName,
           type,
           host: (a["host"] as string | undefined) ?? null,
@@ -1564,9 +1460,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ssh_key_path: (a["ssh_key_path"] as string | undefined) ?? null,
           aws_region: (a["aws_region"] as string | undefined) ?? null,
           aws_instance_id: (a["aws_instance_id"] as string | undefined) ?? null,
-          tags: "{}",
-          last_seen: null,
-          status: "unknown",
         });
 
         return jsonContent({ ok: true, machine_id: id, message: `Machine '${machName}' added with ID '${id}'` });
@@ -1577,15 +1470,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const machineId = a["machine_id"] as string | undefined;
         const unresolvedOnly = (a["unresolved_only"] as boolean | undefined) ?? true;
 
-        let alerts;
-        if (machineId) {
-          const { doctorReport } = await collectAndAnalyse(machineId);
-          alerts = unresolvedOnly
-            ? mergeStoredAndLiveAlerts(machineId, doctorReport)
-            : listAlerts(machineId, unresolvedOnly);
-        } else {
-          alerts = listAlerts(undefined, unresolvedOnly);
-        }
+        const alerts = await service.alerts(machineId, unresolvedOnly);
 
         if (a["verbose"] === true) {
           return jsonContent(alerts);
@@ -1615,12 +1500,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         switch (action) {
           case "list": {
             const machineId = a["machine_id"] as string | undefined;
-            let jobs: import("../db/schema.js").CronJobRow[] = [];
-            try {
-              jobs = listCronJobs(machineId);
-            } catch {
-              jobs = [];
-            }
+            const jobs = service.cron("list", { machine_id: machineId }) as import("../db/schema.js").CronJobRow[];
             if (a["verbose"] === true) {
               return jsonContent(jobs);
             }
@@ -1663,32 +1543,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               if (e instanceof ValidationError) return errorContent(e.message);
               return errorContent(String(e));
             }
-            const id = insertCronJob({
+            const id = service.cron("add", {
               machine_id: cronInput.machine_id ?? null,
               name: cronInput.name,
               schedule: cronInput.schedule,
               command: cronInput.command,
-              action_type: cronInput.action_type ?? "shell",
+              action_type: (cronInput.action_type ?? "shell") as import("../db/schema.js").CronJobRow["action_type"],
               action_config: cronInput.action_config ?? "{}",
               enabled: cronInput.enabled ?? 1,
-              last_run_at: null,
-              last_run_status: null,
-            });
+            }) as number;
             return jsonContent({ ok: true, job_id: id, message: `Cron job '${cronInput.name}' created with ID ${id}` });
           }
 
           case "toggle": {
             const jobId = a["job_id"] as number;
             if (!jobId) return errorContent("job_id is required for toggle action");
-            let job;
+            let newEnabled: number;
             try {
-              job = getCronJob(jobId);
+              newEnabled = service.cron("toggle", { job_id: jobId }) as number;
             } catch {
               return errorContent(`Cron job ${jobId} not found`);
             }
-            if (!job) return errorContent(`Cron job ${jobId} not found`);
-            const newEnabled = job.enabled ? 0 : 1;
-            updateCronJob(jobId, { enabled: newEnabled });
             return jsonContent({ ok: true, job_id: jobId, enabled: newEnabled === 1 });
           }
 
@@ -1700,7 +1575,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // ── monitor_doctor ────────────────────────────────────────────────────
       case "monitor_doctor": {
         const machineId = (a["machine_id"] as string | undefined) ?? "local";
-        const diagnostics = await collectAndAnalyse(machineId);
+        const diagnostics = await service.doctor(machineId);
         const { snapshot, doctorReport, processReport, runtimeHealth } = diagnostics;
 
         // Build AI-agent-friendly recommendations
@@ -1811,7 +1686,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const tables = tablesRaw && tablesRaw.length > 0 ? tablesRaw : undefined;
 
         try {
-          const results = sanitizeSearchResults(search(query, tables));
+          const results = sanitizeSearchResults(service.search(query, tables));
           if (a["verbose"] === true) {
             return jsonContent({ query, count: results.length, results });
           }
@@ -1850,7 +1725,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const metaStr = input.metadata ? JSON.stringify(input.metadata) : "{}";
         try {
-          upsertAgent({ id: input.id, name: input.name, metadata: metaStr });
+          service.registerAgent({ id: input.id, name: input.name, metadata: metaStr });
         } catch {
           // agents table may not exist yet if migration 003 hasn't run
           return errorContent("agents table not available — run migrations first");
@@ -1869,7 +1744,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         try {
-          updateAgentHeartbeat(input.id);
+          service.agentHeartbeat(input.id);
         } catch {
           return errorContent("agents table not available — run migrations first");
         }
@@ -1890,7 +1765,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         try {
-          updateAgentFocus(input.id, input.focus);
+          service.agentSetFocus(input.id, input.focus);
         } catch {
           return errorContent("agents table not available — run migrations first");
         }
@@ -1901,7 +1776,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "monitor_list_agents": {
         let agents;
         try {
-          agents = listAgents();
+          agents = service.listAgents();
         } catch {
           return jsonContent([]);
         }
@@ -1939,8 +1814,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const action = (a["action"] as string | undefined) ?? "get";
 
         if (action === "get") {
-          const config = loadConfig();
-          return jsonContent({ integrations: config.integrations ?? {} });
+          return jsonContent({ integrations: service.integrations("get") });
         }
 
         if (action === "set") {
@@ -1949,10 +1823,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             return errorContent("integrations object is required for action='set'");
           }
 
-          const config = loadConfig();
-          config.integrations = integrationsRaw as IntegrationsConfig;
-          saveConfig(config);
-          return jsonContent({ ok: true, integrations: config.integrations });
+          return jsonContent({
+            ok: true,
+            integrations: service.integrations("set", integrationsRaw as IntegrationsConfig),
+          });
         }
 
         return errorContent(`Unknown action: ${action}. Use 'get' or 'set'.`);
@@ -1979,7 +1853,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         let id: number;
         try {
-          id = insertFeedback({ source, rating: Math.round(rating), message, metadata });
+          id = service.sendFeedback({ source, rating: Math.round(rating), message, metadata });
         } catch {
           return errorContent("feedback table not available — run migrations first");
         }
@@ -1991,7 +1865,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return errorContent(`Unknown tool: ${name}`);
     }
   } catch (err) {
-    return errorContent(String(err));
+    return errorContent(err instanceof Error ? err.message : String(err));
   }
 });
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -174,6 +174,58 @@ describe("monitor kill --name", () => {
     ).toBe(true);
     await waitForChildExit(child);
     expect(isAlive(child.pid!)).toBe(false);
+  });
+
+  it("never selects the CLI's own process when the machine is local via the DB store", () => {
+    const marker = `monitor-kill-db-local-${process.pid}-${Date.now()}`;
+    const child = startMarkedProcess(marker);
+    const scratch = mkdtempSync(join(tmpdir(), "monitor-kill-db-local-"));
+    tempDirs.push(scratch);
+    const configDir = join(scratch, "config");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "config.json"), JSON.stringify({
+      machines: [],
+      dbPath: join(scratch, "monitor.db"),
+    }));
+    const env = { MONITOR_CONFIG_DIR: configDir };
+
+    // Register a local-type machine through the DB store (the supported
+    // `monitor add <name> --type local` path, which stores machines in the
+    // database rather than the config file).
+    const added = spawnSync(
+      process.execPath,
+      [monitorBin, "add", "db-local", "--type", "local"],
+      {
+        cwd: join(import.meta.dir, "../.."),
+        encoding: "utf8",
+        env: { ...process.env, NO_COLOR: "1", ...env },
+        timeout: 20_000,
+      }
+    );
+    expect(added.status).toBe(0);
+    expect(added.stdout).toContain("'db-local'");
+
+    const result = runMonitorKill(
+      ["--name", "monitor", "--machine", "db-local", "--dry-run", "--json"],
+      undefined,
+      env
+    );
+
+    expect(result.status).toBe(0);
+    const output = JSON.parse(result.stdout) as {
+      machine_id: string;
+      matches: Array<{ pid: number; name: string; cmd: string }>;
+    };
+    expect(output.machine_id).toBe("db-local");
+    // Positive control: the local process table was actually read through the
+    // DB-resolved machine.
+    expect(
+      output.matches.some((match) => match.pid === child.pid && match.cmd.includes(marker))
+    ).toBe(true);
+    // Self-protection: the running CLI process must never be selectable through
+    // a DB-local machine (config-only classification would miss it and allow
+    // `monitor kill` to terminate its own process).
+    expect(output.matches.some((match) => match.pid === result.pid)).toBe(false);
   });
 
   it("reports an unknown machine as a JSON error", () => {

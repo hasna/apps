@@ -22,11 +22,14 @@ import {
   binAllowlistIssues,
   contractsInvocations,
   contractsPinIssues,
+  daemonSurfaceIssues,
   manifestShapeIssues,
   reachableScripts,
   readManifest,
   readPackageJson,
   REPO_ROOT,
+  sdkSurfaceIssues,
+  storageBackendIssues,
   undocumentedBinIssues,
 } from "../scripts/contract-gate";
 
@@ -99,7 +102,11 @@ describe("reachableScripts", () => {
 const CONFORMANCE_REPORT = [
   "fail hasna.service_contract.v1 monitor (cli-with-store) .",
   "  pass manifest_valid: hasna.contract.json valid for monitor (cli-with-store)",
+  "  pass bins_allowlisted: bins allowlisted: monitor, monitor-mcp, monitor-daemon",
   "  fail bins_match_package: in package.json but undeclared: monitor-server, monitor-web",
+  "  pass surface_matrix: API, SDK, MCP, and CLI are declared or explicitly waived",
+  "  pass surface_bindings: declared surface bins and SDK exports match package.json",
+  "  pass storage_capabilities: sqlite declared; postgresql explicitly waived",
   "  skip health_shape: no serve bin declared",
   "",
 ].join("\n");
@@ -113,9 +120,29 @@ describe("parseConformanceReport", () => {
         detail: "hasna.contract.json valid for monitor (cli-with-store)",
       },
       {
+        status: "pass",
+        check: "bins_allowlisted",
+        detail: "bins allowlisted: monitor, monitor-mcp, monitor-daemon",
+      },
+      {
         status: "fail",
         check: "bins_match_package",
         detail: "in package.json but undeclared: monitor-server, monitor-web",
+      },
+      {
+        status: "pass",
+        check: "surface_matrix",
+        detail: "API, SDK, MCP, and CLI are declared or explicitly waived",
+      },
+      {
+        status: "pass",
+        check: "surface_bindings",
+        detail: "declared surface bins and SDK exports match package.json",
+      },
+      {
+        status: "pass",
+        check: "storage_capabilities",
+        detail: "sqlite declared; postgresql explicitly waived",
       },
       { status: "skip", check: "health_shape", detail: "no serve bin declared" },
     ]);
@@ -183,6 +210,71 @@ describe("ci workflow", () => {
       expect(gateStep).toBeGreaterThan(0);
       expect(gateStep).toBeLessThan(testStep);
     }
+  });
+});
+
+// ── MON-V2-14 contract conformance: kit pin, storage shape, daemon bin, ./sdk ──
+
+describe("MON-V2-14 contracts conformance", () => {
+  it("pins one selected published Contracts kit version (0.11.1) in manifest and scripts", () => {
+    expect(manifest["kitVersion"]).toBe("0.11.1");
+    for (const invocation of contractsInvocations(pkg)) {
+      expect(invocation.version).toBe("0.11.1");
+    }
+  });
+
+  it("declares the current storage shape: backend, engines, envPrefix, sqlitePath", () => {
+    const storage = manifest["storage"] as Record<string, unknown>;
+    expect(storage["backend"]).toBe("sqlite");
+    expect(storage["mode"]).toBeUndefined();
+    expect(storage["engines"]).toEqual(["sqlite"]);
+    expect(storage["envPrefix"]).toBe("HASNA_MONITOR_");
+    expect(storage["sqlitePath"]).toBe("~/.hasna/monitor/monitor.db");
+  });
+
+  it("waives the waivable postgresql engine, never the retired postgres value", () => {
+    const metadata = manifest["metadata"] as Record<string, unknown>;
+    const conformance = metadata["conformance"] as Record<string, unknown>;
+    const waivers = conformance["waivedStorageEngines"] as { engine: string }[];
+    expect(waivers.map((waiver) => waiver.engine)).toEqual(["postgresql"]);
+  });
+
+  it("declares the daemon bin end to end: manifest bin, supported surface, package bin, real entry", () => {
+    expect((manifest["bins"] as string[]).includes("monitor-daemon")).toBe(true);
+    const surfaces = manifest["serviceSurfaces"] as {
+      bin?: string;
+      kind: string;
+      status: string;
+    }[];
+    expect(
+      surfaces.some(
+        (surface) => surface.bin === "monitor-daemon" && surface.kind === "cli" && surface.status === "supported",
+      ),
+    ).toBe(true);
+    expect(Object.keys(pkg.bin ?? {})).toContain("monitor-daemon");
+    expect(daemonSurfaceIssues(manifest, pkg)).toEqual([]);
+  });
+
+  it("supports the SDK through a real ./sdk export", () => {
+    const surfaces = manifest["serviceSurfaces"] as {
+      kind: string;
+      status: string;
+      exportSubpath?: string;
+    }[];
+    const sdk = surfaces.find((surface) => surface.kind === "sdk");
+    expect(sdk?.status).toBe("supported");
+    expect(sdk?.exportSubpath).toBe("./sdk");
+    expect(sdkSurfaceIssues(manifest, pkg)).toEqual([]);
+  });
+
+  it("keeps the conformance baseline to exactly the two pending owner-blocked bin renames", () => {
+    expect(baselineFailures(manifest)).toEqual([
+      { check: "bins_match_package", detail: "in package.json but undeclared: monitor-server, monitor-web" },
+    ]);
+  });
+
+  it("accepts the new storage shape in the offline gate", () => {
+    expect(storageBackendIssues(manifest)).toEqual([]);
   });
 });
 

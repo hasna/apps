@@ -151,3 +151,38 @@ not enabled. Allowed preflight methods are `GET`, `POST`, `PUT`, `DELETE`, and
 
 See [Security](security.md) for process safety and redaction details, and the
 [CLI reference](cli.md) for command-line equivalents.
+
+## SDK (MonitorService facade)
+
+The `@hasna/monitor` SDK exposes the same operations as the CLI and the MCP
+through a single facade: `MonitorService` (`src/sdk/index.ts`, re-exported from
+the package root).
+
+```ts
+import { createMonitorService } from "@hasna/monitor";
+
+const monitor = createMonitorService();
+const machines = monitor.machinesList();
+const diagnostics = await monitor.doctor("local");
+const alerts = await monitor.alerts(undefined, true);
+```
+
+Every `MonitorService` method delegates to the shared implementation modules;
+it never re-implements an operation. The MCP server (`monitor-mcp`) and the CLI
+(`src/cli/index.ts`) are both interface layers over the same facade: each CLI
+shared-core command dispatches through the `MonitorService` method that
+`CLI_TO_METHOD` declares for it, and renders the returned data. Neither
+interface carries a second implementation of a monitor operation.
+
+### Parity contract
+
+- `SDK_METHODS` — the shared operation set (one entry per MCP tool).
+- `MCP_TOOL_MAP` — bijection between MCP tool names and `MonitorService`
+  methods.
+- `CLI_TO_METHOD` — CLI shared-core commands and the SDK method each one runs.
+
+Parity tests (`src/sdk/parity.test.ts`, `src/mcp/parity.test.ts`) enforce the
+bijection, method existence, advertised-tool identity, that every MCP tool
+dispatch reaches exactly its `MonitorService` method, that every CLI shared-core
+command is registered on the CLI program, and that tool responses are produced
+from the service result (canary delegation).

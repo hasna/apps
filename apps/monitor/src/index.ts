@@ -280,3 +280,23 @@ export type {
 
 export { loadConfig, saveConfig, migrateConfig, initConfig } from "./config.js";
 export type { MonitorConfig, MachineConfig } from "./config.js";
+
+// ── SDK facade (MON-V2-15) ────────────────────────────────────────────────────
+
+export {
+  MonitorService,
+  createMonitorService,
+  SDK_METHODS,
+  MCP_TOOL_MAP,
+  CLI_TO_METHOD,
+} from "./sdk/index.js";
+export type {
+  MonitorMethod,
+  MachineAddInput,
+  MachineListItem,
+  CronAddInput,
+  FeedbackInput,
+  AgentInput,
+  ExecInput,
+  ProcessQueryResult,
+} from "./sdk/index.js";
