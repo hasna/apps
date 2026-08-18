@@ -36,7 +36,7 @@
     "build:cli": "bun run clean && bun build src/cli/index.ts --outdir dist/cli --target bun",
     "prepare": "bun run build:js",
     "typecheck": "bunx tsc --noEmit",
-    "test": "bun test --preload ./test-setup.ts",
+    "test": "bash scripts/test.sh",
     "test:coverage": "bash scripts/test.sh --coverage",
     "verify:release": "bun run typecheck && bun run test && bun run build && bun run scan:artifact",
     "prepack": "bun run verify:release",

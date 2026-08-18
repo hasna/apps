@@ -154,7 +154,7 @@ async function main(): Promise<void> {
     config,
     version,
     signingSecret,
-    isRevoked: keyStore.isRevoked,
+    keyStatus: keyStore.keyStatus,
     audit: (e) => console.log("[api_auth]", JSON.stringify(e)),
   });
 
