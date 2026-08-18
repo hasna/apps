@@ -135,7 +135,7 @@ export function getCloudVerifier(): ApiKeyVerifier {
   cachedVerifier = verifyApiKey({
     app: CALENDAR_APP_SLUG,
     signingSecret,
-    isRevoked: getApiKeyStore().isRevoked,
+    keyStatus: getApiKeyStore().keyStatus,
   });
   return cachedVerifier;
 }
