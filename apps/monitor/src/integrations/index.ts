@@ -31,6 +31,12 @@ export interface MementosIntegrationConfig {
   enabled: boolean;
   /** Base URL of the mementos HTTP API. Default: http://localhost:3002 */
   base_url?: string;
+  /** Memory bucket (MON-V2-08); default "monitor". */
+  bucket?: string;
+  /** Memory key template; default "health:{target}". */
+  keyTemplate?: string;
+  /** required:true makes a confirmed mementos failure affect the run outcome. */
+  required?: boolean;
 }
 
 export interface EmailsIntegrationConfig {
