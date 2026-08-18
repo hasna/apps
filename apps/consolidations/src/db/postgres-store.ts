@@ -7,7 +7,9 @@ import {
 } from "./audit.js";
 import { cloudMigrations } from "./migration-plan.js";
 import type { DataTable, InsertRow, ListFilter, Row, Store } from "./store.js";
-import { createServerPoolFromEnv } from "../generated/storage-kit/pool.js";
+import { resolveDataBackend, resolveDatabaseUrl } from "../config.js";
+import { createPgPool } from "../generated/storage-kit/pool.js";
+import { createQueryClient } from "../generated/storage-kit/query.js";
 import { MigrationLedger } from "../generated/storage-kit/migrations.js";
 import type { PoolQueryClient } from "../generated/storage-kit/query.js";
 
@@ -42,7 +44,22 @@ export class PostgresStore implements Store {
 
   /** Connect via the kit, run migrations, and return a live store. Fail-closed. */
   static async connect(): Promise<PostgresStore> {
-    const { client } = createServerPoolFromEnv("consolidations");
+    // Backend guard + legacy storage-mode rejection come from the app config
+    // resolution. The DSN is resolved through the app config so the
+    // *_DATABASE_URL_FILE mount variant is honored — the kit's env-only
+    // resolver does not read the FILE variant.
+    if (resolveDataBackend() !== "postgresql") {
+      throw new Error(
+        "postgresql storage for consolidations needs a database URL. Set HASNA_CONSOLIDATIONS_DATABASE_URL (or *_DATABASE_URL_FILE).",
+      );
+    }
+    const dsn = resolveDatabaseUrl();
+    if (!dsn) {
+      throw new Error(
+        "postgresql storage for consolidations needs a database URL. Set HASNA_CONSOLIDATIONS_DATABASE_URL (or *_DATABASE_URL_FILE).",
+      );
+    }
+    const client = createQueryClient(createPgPool({ connectionString: dsn }));
     const ledger = new MigrationLedger(client, cloudMigrations());
     await ledger.migrate();
     return new PostgresStore(client);
