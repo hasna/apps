@@ -44,7 +44,11 @@ Good OSS commands:
   (`src/lib/remote-registry.ts`); an unconfigured or auth-missing install keeps
   the local corpus (fail closed). `--remote` makes the merge mandatory and
   errors without a configured origin.
-- `registry sync`, `pull` — the instance-local registry surface
+- `push`, `pull` — send and fetch corpus skills to/from the configured Skills
+  instance (`src/cli/commands/publish.ts`, `src/lib/pull.ts`); they require a
+  configured origin
+- `registry sync` — generates a deterministic registry sync artifact from the
+  local corpus (instance-local)
 
 The CLI ships no billing or credits command namespaces: `no-billing-surface.test.ts`
 pins the CLI `--help` surface, the MCP contract, and the server route table to zero
