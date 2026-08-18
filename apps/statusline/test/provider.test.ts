@@ -5,7 +5,7 @@ import fixture from "./fixtures/claude-input.json";
 describe("parseClaudeInput", () => {
   const ctx = parseClaudeInput(fixture);
 
-  test("cwd", () => expect(ctx.cwd).toBe("/Users/hasna/Workspace/hasna/opensource/open-statusline"));
+  test("cwd", () => expect(ctx.cwd).toBe("/Users/hasna/Workspace/hasna/opensource/statusline"));
   test("model id", () => expect(ctx.model?.id).toBe("claude-fable-5[1m]"));
   test("model display name", () => expect(ctx.model?.displayName).toBe("Fable"));
   test("cost", () => expect(ctx.cost?.totalCostUsd).toBe(1234.5));

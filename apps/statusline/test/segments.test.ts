@@ -243,7 +243,7 @@ describe("session segments", () => {
     expect(await getSegment("lines-changed")!.render(ctx())).toBe("+142/-18");
   });
   test("current-dir", async () => {
-    expect(await getSegment("current-dir")!.render(ctx())).toBe("open-statusline");
+    expect(await getSegment("current-dir")!.render(ctx())).toBe("statusline");
   });
   test("claude-version", async () => {
     expect(await getSegment("agent-version")!.render(ctx())).toBe("v2.1.39");
