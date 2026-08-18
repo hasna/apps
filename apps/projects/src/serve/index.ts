@@ -38,6 +38,33 @@ export function getPackageVersion(): string {
   }
 }
 
+/**
+ * Classify early-exit arguments before any environment-bound work (database
+ * URL, signing secret) runs. --help and --version must answer with no
+ * configured database URL (binds-before-args class, O15-00084).
+ */
+export function handleEarlyArgs(argv: string[]): "help" | "version" | "start" {
+  if (argv.includes("--help")) return "help";
+  if (argv.includes("--version")) return "version";
+  return "start";
+}
+
+export function printHelp(): void {
+  console.log(`usage: projects-serve [migrate] [--port <n>]
+
+projects-serve — self-hosted HTTP API for @hasna/projects.
+
+commands:
+  migrate [--dry-run]   apply pending migrations, then exit
+  (no command)          start the HTTP server
+
+options:
+  --help                show this help and exit
+  --version             print the package version and exit
+  --port <n>            listen port (default: 8080, or $PORT)
+`);
+}
+
 /** Resolve the cloud Postgres connection string from the fleet-standard envs. */
 export function resolveDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   const url =
@@ -107,6 +134,15 @@ export function createProjectsPgStore(
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const version = getPackageVersion();
+  const early = handleEarlyArgs(argv);
+  if (early === "help") {
+    printHelp();
+    return;
+  }
+  if (early === "version") {
+    console.log(version);
+    return;
+  }
   const connectionString = resolveDatabaseUrl();
   const pool = createPgPool({ connectionString, applicationName: `${APP}-serve`, max: 5 });
   const client = createQueryClient(pool);
