@@ -6,19 +6,15 @@
 //
 //   • LocalStore — on-box SQLite (see ./client-store.ts). Delegates to the
 //     synchronous sqlite engine in ./store.js.
-//   • ApiStore   — the self_hosted/cloud HTTP API at `<API_URL>/v1` with a
-//     bearer key (see ./cloud-store.ts, exported as `ApiStore`). Delegates to the
+//   • ApiStore   — the hosted HTTP API at `<API_URL>/v1` with a bearer key
+//     (see ./cloud-store.ts, exported as `ApiStore`). Delegates to the
 //     published @hasna/contracts storage client.
 //
-// `resolveStore()` (./client-store.ts) picks the transport from the client-flip
-// env (HASNA_SHORTLINKS_API_URL + HASNA_SHORTLINKS_API_KEY /
-// HASNA_SHORTLINKS_STORAGE_MODE). Callers NEVER branch on mode themselves and
-// NEVER touch sqlite or fetch directly — that split-brain path is the bug this
-// abstraction eliminates.
-//
-// `self_hosted` and `cloud` are the SAME client code (ApiStore); only the URL
-// and key differ, and that distinction is server-side tenancy. `local` is
-// first-class and fully functional.
+// `resolveStore()` (./client-store.ts) picks the transport from the client env:
+// `HASNA_SHORTLINKS_API_URL` + `HASNA_SHORTLINKS_API_KEY` select the hosted API,
+// otherwise the on-box SQLite store is used. Callers NEVER branch on the
+// transport themselves and NEVER touch sqlite or fetch directly — that
+// split-brain path is the bug this abstraction eliminates.
 //
 // SAFETY: the API key lives only inside the ApiStore transport; it is never
 // logged, returned, or embedded in any value produced through this interface.
@@ -32,6 +28,9 @@ import type {
   Link,
   LinkStats,
 } from "./types.js";
+
+/** Plain env shape consumed by the store resolver (own-property reads only). */
+export type Env = Record<string, string | undefined>;
 
 export interface ListLinksOptions {
   domain?: string;
@@ -47,11 +46,11 @@ export interface TotalStats {
 
 /**
  * The single storage surface shared by LocalStore and ApiStore. All methods are
- * async so one call site works against either transport with no mode branching.
+ * async so one call site works against either transport.
  */
 export interface Store {
   /** Which transport backs this store (for banners/diagnostics only). */
-  readonly kind: "local" | "cloud-http";
+  readonly kind: "local" | "http";
 
   // ── Domains ────────────────────────────────────────────────────────────────
   addDomain(input: AddDomainInput): Promise<Domain>;

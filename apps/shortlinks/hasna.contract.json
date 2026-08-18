@@ -3,15 +3,19 @@
   "name": "shortlinks",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.4.2",
-  "description": "Open-source shortlink manager for custom domains, click tracking, and Cloudflare/Postgres runtime support, with a CLI, MCP server, REST API (shortlinks-serve), and a generated SDK. Cloud service is PURE REMOTE (Amendment A1): reads/writes RDS Postgres directly.",
+  "kitVersion": "0.11.1",
+  "description": "Open-source shortlink manager for custom domains, click tracking, and Cloudflare/Postgres runtime support, with a CLI, MCP server, REST API (shortlinks-serve), and a generated SDK. The server data backend (sqlite | postgresql) is selected by the DATABASE_URL environment contract; clients use on-box SQLite or the hosted /v1 API.",
   "bins": [
     "shortlinks",
     "shortlinks-mcp",
     "shortlinks-serve"
   ],
   "storage": {
-    "mode": "cloud",
+    "backend": "postgresql",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
     "envPrefix": "HASNA_SHORTLINKS_",
     "aliasEnvPrefix": "SHORTLINKS_",
     "databaseUrlSecretRef": "hasna/oss/shortlinks/database-url",

@@ -38,8 +38,9 @@ function makeApp() {
     client,
     store,
     version: "test",
-    mode: "cloud",
+    backend: "postgresql",
     signingSecret: "unit-test-signing-secret",
+    keyStatus: async () => "active",
   });
 }
 
@@ -50,7 +51,7 @@ describe("shortlinks serve app", () => {
     const body = (await res.json()) as any;
     expect(body.status).toBe("ok");
     expect(body.version).toBe("test");
-    expect(body.mode).toBe("cloud");
+    expect(body.backend).toBe("postgresql");
   });
 
   test("GET /version returns service metadata", async () => {

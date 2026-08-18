@@ -1739,7 +1739,7 @@
         "pg": "^8.13.3",
       },
       "devDependencies": {
-        "@hasna/contracts": "^0.5.2",
+        "@hasna/contracts": "^0.11.1",
         "@types/bun": "^1.2.4",
         "@types/pg": "^8.11.11",
         "typescript": "^5.7.3",
@@ -1992,7 +1992,7 @@
     },
     "apps/terminal": {
       "name": "@hasna/terminal",
-      "version": "4.3.18",
+      "version": "4.3.19",
       "bin": {
         "t": "dist/cli.js",
         "terminal": "dist/cli.js",
@@ -2112,7 +2112,7 @@
     },
     "apps/treasury": {
       "name": "@hasna/treasury",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "bin": {
         "treasury": "dist/cli/index.js",
         "treasury-mcp": "dist/mcp/index.js",
@@ -5064,8 +5064,6 @@
     "@hasna/shield/react": ["react@19.2.8", "", {}, "sha512-PWaYA1L/q9u2u7xYQi+Y3L3Yfnie7XyLeaJICV1MGD6LprsBxcAqGjYyr0eY3p+QdsA+x/Irkt4Qif8D63+Sbw=="],
 
     "@hasna/shield/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
-
-    "@hasna/shortlinks/@hasna/contracts": ["@hasna/contracts@0.5.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-R7NBm91oMOWQVnfIyh7QTEPuWbVycGaObzKFJd1je5RNjXsLuPASqCfr9heJ7nuugn9xxFBCCRQCxHg9/VeJrg=="],
 
     "@hasna/shortlinks/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 

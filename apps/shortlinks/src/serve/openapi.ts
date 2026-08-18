@@ -71,10 +71,10 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     properties: {
       status: { type: "string" },
       version: { type: "string" },
-      mode: { type: "string" },
+      backend: { type: "string" },
       ...extra,
     },
-    required: ["status", "version", "mode"],
+    required: ["status", "version", "backend"],
   });
 
   return {
@@ -83,7 +83,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       title: "ShortlinksApi",
       version,
       description:
-        "Shortlink manager — custom domains, click tracking, and shortlink CRUD with API-key auth. PURE REMOTE (Amendment A1): reads/writes RDS Postgres directly.",
+        "Shortlink manager — custom domains, click tracking, and shortlink CRUD with API-key auth. The server data backend (sqlite | postgresql) is selected by the DATABASE_URL environment contract.",
     },
     servers: [{ url: "/" }],
     components: {
@@ -172,7 +172,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       "/version": {
         get: {
           operationId: "getVersion",
-          summary: "Service version and mode.",
+          summary: "Service version and data backend.",
           responses: {
             "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/VersionInfo" } } } },
           },

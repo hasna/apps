@@ -13,17 +13,11 @@ function runCli(args: string[], options: { env?: Record<string, string>; json?: 
     env: {
       ...process.env,
       SHORTLINKS_HOME: tempHome,
-      HASNA_SHORTLINKS_STORE: "",
       HASNA_SHORTLINKS_DATABASE_URL: "",
-      HASNA_SHORTLINKS_DATABASE_SSL: "",
-      SHORTLINKS_STORE: "",
       SHORTLINKS_DATABASE_URL: "",
-      SHORTLINKS_DATABASE_SSL: "",
-      // Force the on-box LocalStore: neutralize any ambient cloud client-flip
-      // (MODE/STORAGE_MODE + API_URL + API_KEY) so tests never touch the real
-      // shortlinks cloud API on a self_hosted-configured machine.
-      HASNA_SHORTLINKS_MODE: "",
-      HASNA_SHORTLINKS_STORAGE_MODE: "",
+      // Force the on-box LocalStore: neutralize any ambient hosted-API client
+      // env (API_URL + API_KEY) so tests never touch the real shortlinks API
+      // from a machine that has it configured.
       HASNA_SHORTLINKS_API_URL: "",
       HASNA_SHORTLINKS_API_KEY: "",
       HASNA_EVENTS_HOME: join(tempHome, "events"),

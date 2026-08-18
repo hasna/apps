@@ -14,10 +14,13 @@ if ! id shortlinks >/dev/null 2>&1; then
 fi
 
 install -d -o shortlinks -g shortlinks "${SHORTLINKS_HOME}/.hasna/shortlinks"
+# The server data backend is selected by HASNA_SHORTLINKS_DATABASE_URL (exported
+# by shortlinks-env-exec below); unset selects the on-box SQLite store. The
+# sanctioned PostgreSQL service entrypoint is `shortlinks-serve` (see
+# Dockerfile) — this unit runs the client-side redirect server, which resolves
+# its store from the client env contract (on-box SQLite or the hosted /v1 API).
 cat > /etc/shortlinks.env <<ENV
 SHORTLINKS_DATABASE_SECRET_ID=${SHORTLINKS_DATABASE_SECRET_ID}
-HASNA_SHORTLINKS_STORE=postgres
-HASNA_SHORTLINKS_DATABASE_SSL=true
 ENV
 chown root:shortlinks /etc/shortlinks.env
 chmod 640 /etc/shortlinks.env
@@ -32,8 +35,6 @@ set -euo pipefail
 export AWS_REGION="${AWS_REGION:-us-east-1}"
 export HOME="/var/lib/shortlinks"
 export PATH="/var/lib/shortlinks/.bun/bin:/usr/local/bin:/usr/bin:/bin"
-export HASNA_SHORTLINKS_STORE="postgres"
-export HASNA_SHORTLINKS_DATABASE_SSL="${HASNA_SHORTLINKS_DATABASE_SSL:-true}"
 
 secret_json="$(aws secretsmanager get-secret-value \
   --region "${AWS_REGION}" \
@@ -91,8 +92,7 @@ WorkingDirectory=/var/lib/shortlinks
 Environment=HOME=/var/lib/shortlinks
 Environment=PATH=/var/lib/shortlinks/.bun/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=/etc/shortlinks.env
-ExecStartPre=/usr/local/bin/shortlinks-env-exec shortlinks postgres migrate
-ExecStart=/usr/local/bin/shortlinks-env-exec shortlinks --store postgres serve --host 127.0.0.1 --port 8787 --default-host has.na
+ExecStart=/usr/local/bin/shortlinks-env-exec shortlinks serve --host 127.0.0.1 --port 8787 --default-host has.na
 Restart=always
 RestartSec=5
 

@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 # ---------------------------------------------------------------------------
 # @hasna/shortlinks — ARM64 (Fargate) container for shortlinks-serve.
-# PURE REMOTE (Amendment A1): the service talks to RDS Postgres directly.
+# The service talks to PostgreSQL directly: a HASNA_SHORTLINKS_DATABASE_URL
+# (provided by the ECS task) selects the postgresql server data backend.
 # ---------------------------------------------------------------------------
 FROM oven/bun:1 AS build
 WORKDIR /app
@@ -29,7 +30,6 @@ WORKDIR /app
 # RDS chain instead of failing with "self signed certificate in certificate chain".
 ENV NODE_ENV=production \
     PORT=8080 \
-    HASNA_SHORTLINKS_STORAGE_MODE=cloud \
     NODE_EXTRA_CA_CERTS=/etc/ssl/rds/global-bundle.pem \
     PGSSLROOTCERT=/etc/ssl/rds/global-bundle.pem
 

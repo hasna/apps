@@ -24,11 +24,11 @@ export interface DeleteResponse { "deleted": boolean; "slug"?: string }
 
 export interface DomainDeleteResponse { "deleted": boolean; "hostname"?: string }
 
-export interface HealthStatus { "status": string; "version": string; "mode": string; "db_latency_ms"?: number }
+export interface HealthStatus { "status": string; "version": string; "backend": string; "db_latency_ms"?: number }
 
-export interface ReadyStatus { "status": string; "version": string; "mode": string; "pending_migrations"?: Array<string> }
+export interface ReadyStatus { "status": string; "version": string; "backend": string; "pending_migrations"?: Array<string> }
 
-export interface VersionInfo { "status": string; "version": string; "mode": string; "name"?: string }
+export interface VersionInfo { "status": string; "version": string; "backend": string; "name"?: string }
 
 export interface ErrorResponse { "error": string; "reason"?: string }
 
@@ -68,7 +68,14 @@ export class ShortlinksApiClient {
     const url = new URL(this.baseUrl + path);
     if (opts.query) {
       for (const [key, value] of Object.entries(opts.query)) {
-        if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+        if (value === undefined || value === null) continue;
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item !== undefined && item !== null) url.searchParams.append(key, String(item));
+          }
+        } else {
+          url.searchParams.set(key, String(value));
+        }
       }
     }
     const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };
@@ -213,7 +220,7 @@ export class ShortlinksApiClient {
       });
     }
 
-    /** Service version and mode. */
+    /** Service version and data backend. */
     async getVersion(init?: RequestInit): Promise<VersionInfo> {
       return this.request("GET", `/version`, {
         body: undefined,

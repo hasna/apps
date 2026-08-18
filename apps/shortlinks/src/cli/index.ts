@@ -56,10 +56,10 @@ function handleError(error: unknown): never {
 }
 
 /**
- * Run `fn` with the resolved client {@link Store}. The store is the cloud
- * ApiStore when the client flip is on (HASNA_SHORTLINKS_API_URL + _API_KEY /
- * _STORAGE_MODE), otherwise the on-box LocalStore. There is no DSN/postgres
- * client path: a client never touches the raw RDS.
+ * Run `fn` with the resolved client {@link Store}. The store is the hosted-API
+ * ApiStore when HASNA_SHORTLINKS_API_URL + HASNA_SHORTLINKS_API_KEY are set,
+ * otherwise the on-box LocalStore. There is no DSN/postgres client path: a
+ * client never touches the raw RDS.
  */
 async function withRuntimeStore<T>(fn: (store: Store) => T | Promise<T>): Promise<T> {
   const store = resolveStore(process.env, { dbPath: program.opts().db });
@@ -516,9 +516,9 @@ function registerCompactEventsCommands(program: Command): void {
 
 program
   .name("shortlinks")
-  .description("Shortlink manager with custom domains, click tracking, and Cloudflare helpers — local SQLite or self-hosted cloud /v1 API storage")
+  .description("Shortlink manager with custom domains, click tracking, and Cloudflare helpers — local SQLite or hosted /v1 API storage")
   .version(getPackageVersion())
-  .option("--db <path>", "SQLite database path (local mode only)")
+  .option("--db <path>", "SQLite database path (local backend only)")
   .option("-j, --json", "Output JSON for agents and scripts");
 
 program
@@ -1119,7 +1119,7 @@ program
       const data = await withRuntimeStore(async (store) => ({
         service: "shortlinks",
         ok: true,
-        // Which transport the client flip resolved to: "local" or "cloud-http".
+        // Which transport the client resolver selected: "local" or "http".
         store: store.kind,
         data_dir: getDataDir(),
         config_path: getConfigPath(),
@@ -1132,10 +1132,9 @@ program
           secrets: commandExists("secrets"),
         },
         environment: {
-          // API mode is bearer-key only — never a DB DSN on the client.
+          // Hosted-API client is bearer-key only — never a DB DSN on the client.
           api_url_present: Boolean(process.env.HASNA_SHORTLINKS_API_URL),
           api_key_present: Boolean(process.env.HASNA_SHORTLINKS_API_KEY),
-          storage_mode: process.env.HASNA_SHORTLINKS_STORAGE_MODE || process.env.HASNA_SHORTLINKS_MODE || null,
           cloudflare_api_token_present: Boolean(process.env.CLOUDFLARE_API_TOKEN),
           cloudflare_api_key_present: Boolean(process.env.CLOUDFLARE_API_KEY),
           cloudflare_email_present: Boolean(process.env.CLOUDFLARE_EMAIL),

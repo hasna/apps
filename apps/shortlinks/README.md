@@ -2,7 +2,7 @@
 
 Shortlink management for custom domains — CLI, MCP server, REST API, and a generated SDK.
 
-`shortlinks` creates Bitly-style short URLs, supports multiple domains, records click analytics, can run a tiny redirect server, and includes helper commands for Cloudflare DNS/Workers and `@hasna/domains`. It defaults to local SQLite and can serve from an app-owned PostgreSQL database when `HASNA_SHORTLINKS_STORE=postgres` and `HASNA_SHORTLINKS_DATABASE_URL` are configured.
+`shortlinks` creates Bitly-style short URLs, supports multiple domains, records click analytics, can run a tiny redirect server, and includes helper commands for Cloudflare DNS/Workers and `@hasna/domains`. It defaults to local SQLite and serves from an app-owned PostgreSQL database when `HASNA_SHORTLINKS_DATABASE_URL` is configured.
 
 ## Surfaces
 
@@ -15,19 +15,18 @@ Four surfaces share one core library:
 | REST API | `shortlinks-serve` | HTTP service: `GET /health`, `/ready`, `/version`, `/openapi.json`, and a versioned `/v1` CRUD API guarded by API-key auth. |
 | SDK | `@hasna/shortlinks-sdk` (+ `@hasna/shortlinks/sdk`) | Typed fetch client generated from the serve OpenAPI (`bun run sdk:generate`). |
 
-### Cloud service (PURE REMOTE, Amendment A1)
+### Hosted service
 
-`shortlinks-serve` reads/writes the shared cloud Postgres directly via the vendored `@hasna/contracts` storage kit — no sync engine or cache in the service. API-key auth comes from `@hasna/contracts/auth`; mint keys with `contracts issue-key --app shortlinks --scopes 'shortlinks:read,shortlinks:write'`.
+`shortlinks-serve` reads/writes PostgreSQL directly via the vendored `@hasna/contracts` storage kit — no sync engine or cache in the service. A configured `HASNA_SHORTLINKS_DATABASE_URL` selects the postgresql server data backend; the pool factory fails closed without it. API-key auth comes from `@hasna/contracts/auth`; mint keys with `contracts issue-key --app shortlinks --scopes 'shortlinks:read,shortlinks:write'`.
 
 ```bash
-HASNA_SHORTLINKS_STORAGE_MODE=cloud \
 HASNA_SHORTLINKS_DATABASE_URL=$DATABASE_URL \
 HASNA_SHORTLINKS_API_SIGNING_KEY=... \
 shortlinks-serve            # migrate (idempotent) then serve on :8080
 shortlinks-serve migrate    # one-shot migration task
 ```
 
-Client self_hosted mode uses `SHORTLINKS_API_URL` + `SHORTLINKS_API_KEY` (never a DSN).
+Clients use `SHORTLINKS_API_URL` + `SHORTLINKS_API_KEY` (never a DSN).
 
 [![npm](https://img.shields.io/npm/v/@hasna/shortlinks)](https://www.npmjs.com/package/@hasna/shortlinks)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -190,28 +189,26 @@ shortlinks domain buy new-short-domain.ai --dry-run
 
 This package does not install or call any removed `connect-*` packages.
 
-## Storage modes
+## Storage selection
 
 The client resolves ONE `Store` from the environment — there is no DSN on any client:
 
-- **local** (default): on-box SQLite. Every command, MCP tool, and SDK call reads
-  and writes the local database.
-- **self_hosted / cloud**: set `HASNA_SHORTLINKS_API_URL` + `HASNA_SHORTLINKS_API_KEY`
-  (and optionally `HASNA_SHORTLINKS_STORAGE_MODE`) to route every call to the cloud
-  `/v1` HTTP API with a bearer key. `self_hosted` and `cloud` are identical client
-  code; only the URL/key differ.
+- **on-box SQLite** (default): every command, MCP tool, and SDK call reads and
+  writes the local database.
+- **hosted `/v1` HTTP API**: set `HASNA_SHORTLINKS_API_URL` + `HASNA_SHORTLINKS_API_KEY`
+  to route every call to the hosted `/v1` API with a bearer key. Setting only one
+  of the two is a configuration error and fails loudly — never silent local drift.
 
 ```bash
-# Route the client to the self-hosted cloud API (bearer key, never a DSN):
+# Route the client to the hosted API (bearer key, never a DSN):
 export HASNA_SHORTLINKS_API_URL=https://shortlinks.hasna.xyz
 export HASNA_SHORTLINKS_API_KEY=hsk_...
-export HASNA_SHORTLINKS_STORAGE_MODE=self_hosted
 shortlinks doctor
 ```
 
-The cloud server (`shortlinks-serve`, run on ECS Fargate) is the only component
-that holds a Postgres connection, and it opens its pool server-side through the
-sanctioned storage kit — the raw RDS DSN is never distributed to clients.
+The server (`shortlinks-serve`) is the only component that holds a Postgres
+connection, and it opens its pool server-side through the sanctioned storage
+kit — the raw RDS DSN is never distributed to clients.
 
 ## Development
 
