@@ -942,12 +942,32 @@ const MIGRATIONS: Migration[] = [
           current_main_sha    TEXT,
           UNIQUE(gh_owner, gh_repo, number)
         );
-        CREATE INDEX idx_pr_monitor_state_owner ON pr_monitor_state(gh_owner, gh_repo);
-        CREATE INDEX idx_pr_monitor_state_class ON pr_monitor_state(last_classification);
+        CREATE INDEX IF NOT EXISTS idx_pr_monitor_state_owner ON pr_monitor_state(gh_owner, gh_repo);
+        CREATE INDEX IF NOT EXISTS idx_pr_monitor_state_class ON pr_monitor_state(last_classification);
       `);
     },
     verifyAfterMarker(db) {
-      if (db.query("PRAGMA foreign_key_check").all().length > 0) {
+      // This migration adds NO foreign keys: pr_monitor_state declares none
+      // and the pull_requests columns are plain payload columns. A whole-DB
+      // PRAGMA foreign_key_check therefore measures pre-existing drift, not
+      // this migration — the live registry holds 1560 orphan rows (branches
+      // 1230, tags 156, commits 129, remotes 3, worktree_leases 42)
+      // referencing repos rows deleted without cascade cleanup, so a whole-DB
+      // check can never pass there and bricks every repos verb with no in-CLI
+      // recovery. Verify only what this migration created, like the v9/v10
+      // pattern verifies its own tables: the table exists with the declared
+      // columns, and any foreign key constraint this table itself defines is
+      // clean. (The scoped form reports violations of the named table's own
+      // constraints only; the pre-existing orphans stay observable and are a
+      // separately tracked repair lane.)
+      const columns = columnNames(db, "pr_monitor_state");
+      const missing = PR_MONITOR_STATE_COLUMNS.filter((column) => !columns.has(column));
+      if (missing.length > 0) {
+        throw new Error(
+          `pr monitor migration failed shape verification; missing columns: ${missing.join(", ")}`,
+        );
+      }
+      if (db.query("PRAGMA foreign_key_check(pr_monitor_state)").all().length > 0) {
         throw new Error("pr monitor migration failed foreign-key verification");
       }
     },
@@ -982,6 +1002,36 @@ const WORKTREE_LEASE_COLUMNS = [
   "verified_at",
   "released_at",
   "last_error",
+] as const;
+
+/**
+ * Every column migration v15 declares for pr_monitor_state. Compared against
+ * the live table after the migration runs, so a divergent pre-existing table
+ * accepted by `CREATE TABLE IF NOT EXISTS` fails loudly at migration time —
+ * where the operator can see it — rather than at the first INSERT by the
+ * pr-monitor verb. This is the scoped shape verification for v15, and it can
+ * never fail on the pre-existing orphan drift the whole-DB foreign-key check
+ * used to reject.
+ */
+const PR_MONITOR_STATE_COLUMNS = [
+  "pr_key",
+  "gh_owner",
+  "gh_repo",
+  "number",
+  "first_seen_at",
+  "last_seen_at",
+  "last_observed_state",
+  "last_head_sha",
+  "last_updated_at",
+  "last_seen_comment_id",
+  "last_seen_comment_at",
+  "last_classification",
+  "last_classification_at",
+  "last_emitted_fingerprint",
+  "verdict_json",
+  "ci_failing_json",
+  "base_ref_oid",
+  "current_main_sha",
 ] as const;
 
 function tableExists(db: Database, name: string): boolean {

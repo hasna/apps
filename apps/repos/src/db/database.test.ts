@@ -301,6 +301,131 @@ describe("database", () => {
     }
   });
 
+  it("applies v15 on a drifted registry whose unrelated tables carry pre-existing FK violations", () => {
+    // Reproduces the 0.1.49 brick (todos 01c45b0c): the real registry maxes at
+    // v14 and holds 1560 pre-existing orphan rows (branches 1230, tags 156,
+    // commits 129, remotes 3, worktree_leases 42) referencing deleted repos
+    // rows. v15's verifyAfterMarker ran PRAGMA foreign_key_check over the
+    // WHOLE database, which can never pass there, so v15 never completed and
+    // every repos verb exited 1 with no in-CLI recovery.
+    closeDb();
+    const dir = mkdtempSync(join(tmpdir(), "repos-drifted-v15-"));
+    const path = join(dir, "repos.db");
+    const monitorColumns = [
+      "pr_key", "gh_owner", "gh_repo", "number", "first_seen_at", "last_seen_at",
+      "last_observed_state", "last_head_sha", "last_updated_at",
+      "last_seen_comment_id", "last_seen_comment_at", "last_classification",
+      "last_classification_at", "last_emitted_fingerprint", "verdict_json",
+      "ci_failing_json", "base_ref_oid", "current_main_sha",
+    ];
+    try {
+      // 1. Bring a fresh registry through every migration as the clean
+      //    baseline the fixture is rewound from.
+      const seed = getDb(path);
+      expect((seed.query("SELECT version FROM migrations ORDER BY version").all() as { version: number }[])
+        .map((row) => row.version)).toEqual([1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+      closeDb();
+
+      // 2. Rewind to the measured pre-v15 state (marker absent, v15 DDL
+      //    dropped), then inject drift into unrelated tables exactly as the
+      //    live registry carries it: orphan rows left behind when repos rows
+      //    were deleted without cascade cleanup.
+      const raw = new Database(path);
+      raw.exec("PRAGMA foreign_keys = ON");
+      raw.exec("DELETE FROM migrations WHERE version = 15");
+      raw.exec("DROP TABLE pr_monitor_state");
+      raw.exec("PRAGMA foreign_keys = OFF");
+      raw.exec(`
+        INSERT INTO repos (id, path, name) VALUES (999999, '/drifted/ghost', 'ghost');
+        INSERT INTO branches (repo_id, name) VALUES
+          (999999, 'origin/orphan-1'), (999999, 'origin/orphan-2'), (999999, 'origin/orphan-3');
+        INSERT INTO tags (repo_id, name, sha) VALUES
+          (999999, 'v0.0.0', 'abc'), (999999, 'v0.0.1', 'def');
+        INSERT INTO commits (repo_id, sha, author_name, author_email, date, message)
+          VALUES (999999, 'deadbeef', 'ghost', 'ghost@example.test', '2026-08-18', 'orphan commit');
+        INSERT INTO remotes (repo_id, name, url) VALUES (999999, 'origin', 'git.example.test/ghost.git');
+        INSERT INTO worktree_leases (
+          lease_id, repo_id, repo_path, repo_catalog_id, machine_id, worktree_path,
+          branch, base_ref, base_sha, task_id, run_id, mode, owner_metadata,
+          cleanup_policy, status, created_at, updated_at, claimed_at
+        ) VALUES (
+          'drift-lease', '999999', '/drifted/ghost', 999999, 'station-test', '/tmp/ghost-wt',
+          'main', 'origin/main', 'abc123', 'task-ghost', 'run-ghost', 'task', '{}',
+          'delete', 'active', '2026-08-18 00:00:00', '2026-08-18 00:00:00', '2026-08-18 00:00:00'
+        );
+        DELETE FROM repos WHERE id = 999999;
+      `);
+      raw.exec("PRAGMA foreign_keys = ON");
+      const violations = raw.query("PRAGMA foreign_key_check").all() as Array<{ table: string }>;
+      expect(violations.length).toBe(8);
+      const byTable: Record<string, number> = {};
+      for (const row of violations) byTable[row.table] = (byTable[row.table] ?? 0) + 1;
+      expect(byTable).toEqual({ branches: 3, tags: 2, commits: 1, remotes: 1, worktree_leases: 1 });
+      raw.close();
+
+      // 3. The drifted registry must migrate: the v15 marker lands, the
+      //    monitor table is usable, and SDK verbs work. Pre-fix this throws
+      //    "pr monitor migration failed foreign-key verification".
+      const migrated = getDb(path);
+      expect(migrated.query("SELECT version FROM migrations WHERE version = 15").get()).toEqual({ version: 15 });
+      const columns = new Set(
+        (migrated.query("PRAGMA table_info(pr_monitor_state)").all() as Array<{ name: string }>).map((c) => c.name),
+      );
+      for (const column of monitorColumns) expect(columns.has(column)).toBe(true);
+      // The migration tolerates the drift; it does not repair it. The orphans
+      // are a separately tracked repair lane, and they must remain observable.
+      expect(migrated.query("PRAGMA foreign_key_check").all().length).toBe(8);
+      migrated.query(`INSERT INTO pr_monitor_state (
+        pr_key, gh_owner, gh_repo, number, last_seen_at, last_observed_state
+      ) VALUES ('https://github.com/hasna/apps/pull/1', 'hasna', 'apps', 1, '2026-08-18 00:00:00', 'OPEN')`).run();
+      expect(migrated.query("SELECT number FROM pr_monitor_state WHERE pr_key = ?")
+        .get("https://github.com/hasna/apps/pull/1")).toEqual({ number: 1 });
+      expect(listRepos({ query: "ghost" })).toEqual([]);
+
+      // 4. Idempotent on the drifted registry: a second run is a no-op, and a
+      //    re-run with the marker deleted again while the v15 DDL stays in
+      //    place — the state the incident report describes — also succeeds.
+      closeDb();
+      const second = getDb(path);
+      expect(second.query("SELECT version FROM migrations WHERE version = 15").get()).toEqual({ version: 15 });
+      closeDb();
+      const rawAgain = new Database(path);
+      rawAgain.exec("DELETE FROM migrations WHERE version = 15");
+      rawAgain.close();
+      const third = getDb(path);
+      expect(third.query("SELECT version FROM migrations WHERE version = 15").get()).toEqual({ version: 15 });
+    } finally {
+      closeDb();
+      rmSync(dir, { recursive: true, force: true });
+      process.env["HASNA_REPOS_DB_PATH"] = ":memory:";
+      getDb(":memory:");
+    }
+  });
+
+  it("applies v15 on a clean registry and re-runs idempotently", () => {
+    closeDb();
+    const dir = mkdtempSync(join(tmpdir(), "repos-clean-v15-"));
+    const path = join(dir, "repos.db");
+    try {
+      const first = getDb(path);
+      expect((first.query("SELECT version FROM migrations ORDER BY version").all() as { version: number }[])
+        .map((row) => row.version)).toEqual([1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+      expect(first.query("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(first.query("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_pr_monitor_state_owner'").get())
+        .not.toBeNull();
+      expect(first.query("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_pr_monitor_state_class'").get())
+        .not.toBeNull();
+      closeDb();
+      const second = getDb(path);
+      expect(second.query("SELECT version FROM migrations WHERE version = 15").get()).toEqual({ version: 15 });
+    } finally {
+      closeDb();
+      rmSync(dir, { recursive: true, force: true });
+      process.env["HASNA_REPOS_DB_PATH"] = ":memory:";
+      getDb(":memory:");
+    }
+  });
+
   it("upgrades the live migration-5 worktree schema without skipping relocation audit", () => {
     closeDb();
     const dir = mkdtempSync(join(tmpdir(), "repos-live-v5-upgrade-"));
