@@ -505,12 +505,17 @@ export class SqliteSkillsStore implements SkillsProductStore {
       // Read the outgoing digest before overwriting it, so the bundle it pointed at can
       // be collected if this republish leaves it referenced by nothing.
       const previous = this.get(
-        "SELECT revision_id, revision_number, bundle_sha256, bundle_byte_size, tombstoned_at FROM skills_registry WHERE org_id = ? AND slug = ?",
+        "SELECT revision_id, revision_number, bundle_sha256, bundle_byte_size, skill_md, tombstoned_at FROM skills_registry WHERE org_id = ? AND slug = ?",
         [orgId, input.slug],
       );
       const previousSha = typeof previous?.bundle_sha256 === "string" ? previous.bundle_sha256 : null;
       const previousRevisionId = typeof previous?.revision_id === "string" && previous.revision_id ? previous.revision_id : null;
       const tombstoned = previous?.tombstoned_at != null;
+      // The document travels with the row the way the bundle does: a publish that omits
+      // skillMd is a metadata update, not an instruction to discard the published
+      // document. The effective document enters BOTH the stored row and the revision
+      // hash, so the recorded revision keeps identifying the stored bytes.
+      const carriedSkillMd = typeof input.skillMd === "string" ? input.skillMd : (typeof previous?.skill_md === "string" ? previous.skill_md : null);
       // A live existing row requires If-Match naming its current revision. The pre-read
       // is only for the carried-forward bundle and the revision number: the ACTUAL guard
       // is the WHERE clause on the upsert below, evaluated against the row as it stands
@@ -534,7 +539,7 @@ export class SqliteSkillsStore implements SkillsProductStore {
         source: input.source,
         kind: input.kind,
         ...(input.version ? { version: input.version } : {}),
-        ...(input.skillMd ? { skillMd: input.skillMd } : {}),
+        ...(carriedSkillMd ? { skillMd: carriedSkillMd } : {}),
         ...(carriedSha ? { bundleSha256: carriedSha } : {}),
         ...(carriedSize === null || carriedSize === undefined ? {} : { bundleByteSize: carriedSize }),
       });
@@ -606,7 +611,7 @@ export class SqliteSkillsStore implements SkillsProductStore {
           input.source,
           input.kind,
           input.version ?? null,
-          input.skillMd ?? null,
+          carriedSkillMd,
           input.bundle?.sha256 ?? null,
           input.bundle?.byteSize ?? null,
           input.principal.userId,

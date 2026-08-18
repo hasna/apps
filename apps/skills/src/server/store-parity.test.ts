@@ -535,5 +535,36 @@ for (const backend of backends) {
         await fixture.close();
       }
     });
+
+    test("a metadata-only re-publish keeps the published SKILL.md and the revision covers it", async () => {
+      const fixture = await seeded(backend);
+      try {
+        const bytes = bundleBytes("kept");
+        const md = "---\nname: kept-doc\ndescription: has a document\nkind: instruction\n---\n# v1\n";
+        await fixture.store.publishSkill({ ...publishInput(fixture.principal, "kept-doc", "alpha", bytes), skillMd: md });
+        const v1 = await fixture.store.getSkill(fixture.principal, "kept-doc");
+        expect(v1!.skillMd).toBe(md);
+
+        // Metadata-only re-publish: no skillMd, no bundle. The stored document must
+        // survive (mirroring the bundle COALESCE — a metadata update is not an
+        // instruction to discard the published document), and the new revision must
+        // identify the STORED document so a client recomputing from the served
+        // metadata gets the same id.
+        const v2 = await fixture.store.publishSkill({
+          ...publishInput(fixture.principal, "kept-doc", "beta"),
+          skillMd: undefined,
+          expectedRevisionId: v1!.revisionId,
+        });
+        expect(v2.skillMd).toBe(md);
+
+        const after = await fixture.store.getSkill(fixture.principal, "kept-doc");
+        expect(after!.skillMd).toBe(md);
+        expect(after!.bundleSha256).toBe(digestOf(bytes));
+        expect(revisionIdOfRecord(after!)).toBe(after!.revisionId);
+        expect(after!.revisionId).toBe(v2.revisionId);
+      } finally {
+        await fixture.close();
+      }
+    });
   });
 }

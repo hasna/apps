@@ -312,10 +312,14 @@ function provenRevision(meta: CorpusSkillMeta, slug: string, bundle: { sha256?: 
   const declared = meta.revisionId;
   if (!declared) return "";
   const source = meta.publishedSource;
-  const skillMd = meta.skillMd;
-  if (typeof source !== "string" || source.length === 0 || typeof skillMd !== "string" || skillMd.length === 0) {
+  // Only publishedSource is always required: the metadata payload always carries it.
+  // skillMd is OPTIONAL in the canonical hash (absent hashes as null) — a bundle-only
+  // publish (valid: skill-validation warns, never blocks) hashes over the null form
+  // and serves no document, so its revision is proven over the verified bundle bytes
+  // with skillMd absent. Requiring skillMd here refused every valid bundle-only skill.
+  if (typeof source !== "string" || source.length === 0) {
     throw new PullSkillError(
-      `Revision proof failed for '${slug}': the instance declared revision '${declared.slice(0, 12)}…' but did not serve the content fields needed to recompute it (publishedSource / skillMd). Nothing was installed.`,
+      `Revision proof failed for '${slug}': the instance declared revision '${declared.slice(0, 12)}…' but did not serve the content fields needed to recompute it (publishedSource). Nothing was installed.`,
     );
   }
   const recomputed = revisionIdOf({
@@ -327,9 +331,9 @@ function provenRevision(meta: CorpusSkillMeta, slug: string, bundle: { sha256?: 
     source,
     kind: meta.kind ?? "instruction",
     ...(meta.version ? { version: meta.version } : {}),
-    skillMd,
-    bundleSha256: bundle.sha256,
-    bundleByteSize: bundle.byteSize,
+    ...(typeof meta.skillMd === "string" && meta.skillMd.length > 0 ? { skillMd: meta.skillMd } : {}),
+    ...(bundle.sha256 ? { bundleSha256: bundle.sha256 } : {}),
+    ...(bundle.byteSize !== undefined && bundle.byteSize !== null ? { bundleByteSize: bundle.byteSize } : {}),
   });
   if (recomputed !== declared) {
     throw new PullSkillError(

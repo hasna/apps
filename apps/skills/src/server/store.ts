@@ -27,7 +27,7 @@ import { SqliteSkillsStore, type SqliteStoreOptions } from "./sqlite-store.js";
  * (with the carried-forward bundle, so a metadata-only re-publish hashes the same
  * content the row will hold).
  */
-function recordFieldsOf(input: PublishSkillInput, carriedBundle: { bundleSha256?: string; bundleByteSize?: number }): RevisionContent {
+function recordFieldsOf(input: PublishSkillInput, carriedBundle: { bundleSha256?: string; bundleByteSize?: number }, carriedSkillMd?: string): RevisionContent {
   return {
     slug: input.slug,
     displayName: input.displayName,
@@ -37,7 +37,7 @@ function recordFieldsOf(input: PublishSkillInput, carriedBundle: { bundleSha256?
     source: input.source,
     kind: input.kind,
     ...(input.version ? { version: input.version } : {}),
-    ...(input.skillMd ? { skillMd: input.skillMd } : {}),
+    ...(carriedSkillMd ? { skillMd: carriedSkillMd } : {}),
     bundleSha256: input.bundle?.sha256 ?? carriedBundle.bundleSha256,
     bundleByteSize: input.bundle?.byteSize ?? carriedBundle.bundleByteSize,
   };
@@ -285,6 +285,11 @@ export class MemorySkillsStore implements SkillsProductStore {
     const carriedBundle = !input.bundle && previous?.bundleSha256
       ? { bundleSha256: previous.bundleSha256, ...(previous.bundleByteSize === undefined ? {} : { bundleByteSize: previous.bundleByteSize }) }
       : {};
+    // The document travels with the row the way the bundle does: a publish that omits
+    // skillMd is a metadata update, not an instruction to discard the published
+    // document. The effective document enters BOTH the record and the revision hash,
+    // so the recorded revision keeps identifying the stored bytes.
+    const carriedSkillMd = typeof input.skillMd === "string" ? input.skillMd : previous?.skillMd;
     const record: ServerSkillRecord = {
       orgId: input.principal.orgId,
       slug: input.slug,
@@ -295,7 +300,7 @@ export class MemorySkillsStore implements SkillsProductStore {
       source: input.source,
       kind: input.kind,
       ...(input.version ? { version: input.version } : {}),
-      ...(input.skillMd ? { skillMd: input.skillMd } : {}),
+      ...(carriedSkillMd ? { skillMd: carriedSkillMd } : {}),
       // Absent bundle means "unchanged", so the previous digest is carried forward -
       // the same COALESCE the SQL backends do.
       ...(input.bundle
@@ -304,7 +309,7 @@ export class MemorySkillsStore implements SkillsProductStore {
       publishedByUserId: input.principal.userId,
       createdAt: previous?.createdAt ?? now,
       updatedAt: now,
-      revisionId: revisionIdOfRecord(recordFieldsOf(input, carriedBundle)),
+      revisionId: revisionIdOfRecord(recordFieldsOf(input, carriedBundle, carriedSkillMd)),
       revisionNumber: (previous?.revisionNumber ?? 0) + 1,
     };
     this.skills.set(key, record);
@@ -787,13 +792,18 @@ export class PostgresSkillsStore implements SkillsProductStore {
     const orgId = input.principal.orgId;
     return await this.sql.begin(async (tx) => {
       const previousRows = await tx`
-        SELECT revision_id, revision_number, bundle_sha256, bundle_byte_size, tombstoned_at
+        SELECT revision_id, revision_number, bundle_sha256, bundle_byte_size, skill_md, tombstoned_at
         FROM skills_registry WHERE org_id = ${orgId} AND slug = ${input.slug} LIMIT 1
       `;
       const previous = previousRows[0] as Record<string, unknown> | undefined;
       const previousSha = typeof previous?.bundle_sha256 === "string" ? String(previous.bundle_sha256) : null;
       const previousRevisionId = typeof previous?.revision_id === "string" && previous.revision_id ? String(previous.revision_id) : null;
       const tombstoned = previous?.tombstoned_at != null;
+      // The document travels with the row the way the bundle does: a publish that omits
+      // skillMd is a metadata update, not an instruction to discard the published
+      // document. The effective document enters BOTH the stored row and the revision
+      // hash, so the recorded revision keeps identifying the stored bytes.
+      const carriedSkillMd = typeof input.skillMd === "string" ? input.skillMd : (typeof previous?.skill_md === "string" ? String(previous.skill_md) : null);
       // A live existing row requires If-Match naming its current revision. The pre-read
       // is only for the carried-forward bundle and the revision number: the ACTUAL guard
       // is the WHERE clause on the upsert below, which is evaluated against the row as it
@@ -817,7 +827,7 @@ export class PostgresSkillsStore implements SkillsProductStore {
         source: input.source,
         kind: input.kind,
         ...(input.version ? { version: input.version } : {}),
-        ...(input.skillMd ? { skillMd: input.skillMd } : {}),
+        ...(carriedSkillMd ? { skillMd: carriedSkillMd } : {}),
         ...(carriedSha ? { bundleSha256: carriedSha } : {}),
         ...(carriedSize === null || carriedSize === undefined ? {} : { bundleByteSize: carriedSize }),
       });
@@ -841,7 +851,7 @@ export class PostgresSkillsStore implements SkillsProductStore {
         INSERT INTO skills_registry (org_id, slug, display_name, description, category, tags_json, source, kind, version, skill_md,
                                      bundle_sha256, bundle_byte_size, published_by_user_id, revision_id, revision_number, updated_at)
         VALUES (${orgId}, ${input.slug}, ${input.displayName}, ${input.description}, ${input.category}, ${JSON.stringify(input.tags)}::jsonb,
-                ${input.source}, ${input.kind}, ${input.version ?? null}, ${input.skillMd ?? null},
+                ${input.source}, ${input.kind}, ${input.version ?? null}, ${carriedSkillMd},
                 ${input.bundle?.sha256 ?? null}, ${input.bundle?.byteSize ?? null}, ${input.principal.userId}, ${revisionId}, 1, now())
         ON CONFLICT (org_id, slug) DO UPDATE SET
           display_name = EXCLUDED.display_name,

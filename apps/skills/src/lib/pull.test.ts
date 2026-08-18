@@ -737,6 +737,63 @@ describe("pullSkills — verified bundle path", () => {
     }
   });
 
+  test("a bundle-only published skill (no SKILL.md) pulls and proves its revision", async () => {
+    // Publishing permits a bundle without a SKILL.md (skill-validation warns, never
+    // blocks), the publisher omits skillMd when absent, and the server hashes the row
+    // over the canonical null form. The bundle path must recompute the revision over
+    // the served metadata plus the verified bundle bytes — skillMd absent included —
+    // instead of refusing the declared revision.
+    const root = tempRoot();
+    const source = makeBundleSkill("bundle-only", BUNDLED_MD);
+    const meta = {
+      displayName: "Display bundle-only",
+      description: "Description of bundle-only",
+      category: "Development Tools",
+      tags: ["ops"],
+      source: "remote",
+      publishedSource: "custom",
+      kind: "instruction",
+      bundleSha256: source.packed.sha256,
+      bundleByteSize: source.packed.bytes.byteLength,
+      revisionId: revisionIdOf({
+        slug: "bundle-only",
+        displayName: "Display bundle-only",
+        description: "Description of bundle-only",
+        category: "Development Tools",
+        tags: ["ops"],
+        source: "custom",
+        kind: "instruction",
+        // skillMd absent hashes as the canonical null form — exactly what the server
+        // records for a bundle-only publish.
+        bundleSha256: source.packed.sha256,
+        bundleByteSize: source.packed.bytes.byteLength,
+      }),
+    };
+    try {
+      const { results } = await pullSkills({
+        names: ["bundle-only"],
+        rootDir: root,
+        client: fakeClient({
+          "bundle-only": {
+            md: null,
+            meta,
+            bundle: source.packed.bytes,
+            bundleHeaders: { [BUNDLE_DIGEST_HEADER]: source.packed.sha256, [BUNDLE_REVISION_ID_HEADER]: String(meta.revisionId) },
+          },
+        }),
+      });
+      expect(results[0].success).toBe(true);
+      expect(results[0].revisionId).toBe(String(meta.revisionId));
+      const installed = readFileSync(join(root, "bundle-only", "SKILL.md"), "utf-8");
+      expect(installed).toBe(BUNDLED_MD);
+      const marker = JSON.parse(readFileSync(join(root, "bundle-only", ".hasna-skills.json"), "utf-8"));
+      expect(marker.revisionId).toBe(String(meta.revisionId));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      source.cleanup();
+    }
+  });
+
   test("a bundle-less pull proves the revision against the SKILL.md it actually installs", async () => {
     const root = tempRoot();
     const oldMd = "---\nname: md-only-skill\ndescription: first\nkind: instruction\n---\n# v1\n";

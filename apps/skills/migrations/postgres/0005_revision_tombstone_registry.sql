@@ -5,7 +5,7 @@
 -- three properties of the same row:
 --
 --   1. IMMUTABLE REVISION IDENTITY. revision_id is a sha-256 over the row's published
---      content (computed in TypeScript, src/server/revision.ts) and revision_number is a
+--      content (computed in TypeScript, src/lib/revision.ts) and revision_number is a
 --      monotonic per-slug write counter. Together they let a client prove WHICH revision
 --      it installed and let the server refuse a stale overwrite.
 --
@@ -28,7 +28,7 @@
 -- an empty revision id would make If-Match vacuous for legacy rows (every stale client
 -- would "match" the same empty string and two concurrent writers could both land).
 --
--- Hand-written parallel of migrations/sqlite/0004_revision_tombstone_registry.sql; the
+-- Hand-written parallel of migrations/sqlite/0005_revision_tombstone_registry.sql; the
 -- dialect differences are the same documented set as 0001-0003 (timestamptz -> text).
 
 ALTER TABLE skills_registry ADD COLUMN revision_id text NOT NULL DEFAULT '';

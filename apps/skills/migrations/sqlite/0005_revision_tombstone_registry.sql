@@ -1,6 +1,6 @@
--- SQLite dialect of 0004_revision_tombstone_registry.
+-- SQLite dialect of 0005_revision_tombstone_registry.
 --
--- Hand-written parallel of migrations/postgres/0004_revision_tombstone_registry.sql. Read
+-- Hand-written parallel of migrations/postgres/0005_revision_tombstone_registry.sql. Read
 -- that file for why the registry gains revision_id/revision_number (immutable revision
 -- identity), the optimistic-concurrency guard, and the tombstone contract; the rationale
 -- is not repeated here, only the dialect differences are.
@@ -9,7 +9,7 @@
 --   * timestamptz -> text holding a UTC ISO-8601 instant.
 --
 -- SQLite requires a non-null literal DEFAULT for a NOT NULL ADD COLUMN; the '' default is
--- the legacy-row marker the store's backfill (src/server/revision.ts) replaces with a
+-- the legacy-row marker the store's backfill (src/lib/revision.ts) replaces with a
 -- content sha on first open, exactly as on Postgres.
 
 ALTER TABLE skills_registry ADD COLUMN revision_id text NOT NULL DEFAULT '';
