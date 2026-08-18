@@ -3,9 +3,9 @@
  * Also available from the compatibility subpath @hasna/secrets/sdk.
  *
  * The method surface mirrors the serve OpenAPI document (src/server/openapi.ts)
- * and routes through the one shared Hasna HTTP transport (no raw fetch). It speaks
- * the Hasna self_hosted convention: `SECRETS_API_URL` + `SECRETS_API_KEY` (the
- * client never sees a DSN).
+ * and routes through the one shared Hasna HTTP transport (no raw fetch). It
+ * speaks the hosted-client env contract: `SECRETS_API_URL` + `SECRETS_API_KEY`
+ * (the client never sees a DSN).
  */
 
 export * from "./sdk/client.js";
@@ -13,7 +13,7 @@ import { SecretsClient, type SecretsClientOptions } from "./sdk/client.js";
 
 /**
  * Build a client from the environment. Requires `SECRETS_API_URL` and
- * `SECRETS_API_KEY` (self_hosted mode — a DSN is never used here).
+ * `SECRETS_API_KEY` (the hosted client — a DSN is never used here).
  */
 export function createSecretsClientFromEnv(
   env: NodeJS.ProcessEnv = process.env,

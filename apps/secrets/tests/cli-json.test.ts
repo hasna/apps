@@ -16,13 +16,12 @@ afterEach(() => {
   rmSync(testDir, { recursive: true, force: true });
 });
 
-// Force the local encrypted-SQLite vault: strip any cloud/self_hosted routing
-// env inherited from the host so these CLI runs are hermetic and deterministic.
+// Force the local encrypted-SQLite vault: strip any hosted routing env inherited
+// from the host so these CLI runs are hermetic and deterministic.
 function env(): Record<string, string> {
   const base = { ...process.env } as Record<string, string>;
   delete base.HASNA_SECRETS_API_URL;
   delete base.HASNA_SECRETS_API_KEY;
-  delete base.HASNA_SECRETS_STORAGE_MODE;
   return {
     ...base,
     OPEN_SECRETS_DB: join(testDir, "vault.db"),

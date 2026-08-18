@@ -5,17 +5,17 @@
 // implementations:
 //
 //   • LocalStore — the on-box encrypted SQLite vault (~/.hasna/secrets/vault.db).
-//   • ApiStore   — the self_hosted/cloud HTTP API at `<API_URL>/v1` with a bearer
-//     key. Delegates to the vendored @hasna/contracts storage client.
+//   • ApiStore   — the hosted HTTP API at `<API_URL>/v1` with a bearer key.
+//     Delegates to the vendored @hasna/contracts storage client.
 //
-// `getStore()` (./index.ts) resolves which transport to use from the client-flip
-// env (HASNA_SECRETS_API_URL + HASNA_SECRETS_API_KEY / HASNA_SECRETS_STORAGE_MODE).
-// Callers NEVER branch on mode themselves and NEVER touch sqlite or fetch
-// directly — that was the split-brain bug this module eliminates.
+// `getStore()` (./index.ts) resolves which transport to use from the client env
+// contract (HASNA_SECRETS_API_URL + HASNA_SECRETS_API_KEY selects the hosted
+// client; neither set selects the local store). Callers NEVER branch on the
+// transport themselves and NEVER touch sqlite or fetch directly — that was the
+// split-brain bug this module eliminates.
 //
-// `self_hosted` and `cloud` are the SAME client code (ApiStore); only the URL and
-// key differ, and that distinction is server-side tenancy. `local` is
-// first-class and fully functional.
+// The hosted client is one implementation regardless of who runs the server;
+// tenancy is server-side. `local` is first-class and fully functional.
 //
 // SAFETY: the API key never leaves the transport; it is never logged, returned,
 // or embedded in any value produced by an implementation.
@@ -75,7 +75,7 @@ export class MetadataValidationError extends Error {
 
 export interface Store {
   /** Which transport backs this store. */
-  readonly mode: "local" | "api";
+  readonly kind: "local" | "api";
 
   // ── secrets ────────────────────────────────────────────────────────────
   setSecret(key: string, value: string, type?: SecretType, label?: string, expiresAt?: string, opts?: SetSecretOptions): Promise<SetSecretResult>;

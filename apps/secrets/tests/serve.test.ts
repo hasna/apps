@@ -57,7 +57,13 @@ function fakeStore() {
 }
 
 function handler(store = fakeStore()) {
-  const verifier = verifyApiKey({ app: "secrets", signingSecret: SIGNING });
+  const verifier = verifyApiKey({
+    app: "secrets",
+    signingSecret: SIGNING,
+    // Only kids the test registered as tenants authenticate (the fakeClient's
+    // tenant lookup is keyed on the same map).
+    keyStatus: (kid: string) => (persistedTenantByKid.has(kid) ? "active" : "unknown"),
+  });
   return createHandler({ client: fakeClient(), store, verifier });
 }
 
@@ -78,7 +84,7 @@ describe("secrets serve", () => {
       const res = await h(new Request(`http://x${path}`));
       const body = await res.json();
       expect(body.version).toBeDefined();
-      expect(body.mode).toBe("cloud");
+      expect(body.mode).toBeUndefined();
     }
   });
 
@@ -141,7 +147,7 @@ describe("secrets serve", () => {
     expect(res.status).toBe(404);
   });
 
-  test("a valid minted key without a persisted tenant assignment is denied before writes", async () => {
+  test("a valid minted key without a persisted registration is denied before writes", async () => {
     const store = fakeStore();
     const key = keyWith(["secrets:write"], false);
 
@@ -153,8 +159,13 @@ describe("secrets serve", () => {
       }),
     );
 
-    expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: "API key has no tenant assignment" });
+    // The key-status hook (keyStatus) refuses a kid this service has no record
+    // of before the request reaches a handler or a write.
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({
+      error: "API key is not registered with this service.",
+      reason: "unknown_key",
+    });
     expect(store.tenantWrites).toHaveLength(0);
   });
 

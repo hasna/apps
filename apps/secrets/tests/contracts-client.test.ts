@@ -1,18 +1,15 @@
 import { describe, expect, it } from "bun:test";
 import {
-  DEPRECATED_STORAGE_MODE_ALIASES,
+  clientTransportEnvKeys,
   envToken,
-  normalizeStorageMode,
-} from "../src/store/contracts-client/mode.js";
-import {
-  HasnaHttpError,
-  defaultCloudBaseUrl,
+  resolveClientTransport,
   type HasnaHttpTransport,
 } from "../src/store/contracts-client/transport.js";
 import {
   createHasnaStorageClient,
   resolveStorageClient,
 } from "../src/store/contracts-client/storage.js";
+import { HasnaHttpError } from "../src/store/contracts-client/transport.js";
 
 interface Call {
   method: string;
@@ -42,16 +39,55 @@ function fakeTransport(handler: (call: Call) => unknown | Promise<unknown>): { t
   };
 }
 
-describe("vendored client mode helpers", () => {
-  it("normalizes every supported value and rejects unknown values", () => {
+describe("vendored client env contract", () => {
+  it("exposes the env-key spec and env token helper", () => {
     expect(envToken("my-app")).toBe("MY_APP");
-    expect(normalizeStorageMode("local")).toEqual({ mode: "local", deprecatedAlias: null });
-    expect(normalizeStorageMode(" CLOUD ")).toEqual({ mode: "cloud", deprecatedAlias: null });
-    for (const alias of DEPRECATED_STORAGE_MODE_ALIASES) {
-      expect(normalizeStorageMode(alias.replace("_", "-"))).toEqual({ mode: "cloud", deprecatedAlias: alias });
-    }
-    expect(() => normalizeStorageMode("invalid")).toThrow("Unknown storage mode");
-    expect(defaultCloudBaseUrl("demo")).toBe("https://demo.hasna.xyz");
+    expect(clientTransportEnvKeys("my-app")).toEqual({
+      apiUrlKeys: ["HASNA_MY_APP_API_URL", "MY_APP_API_URL"],
+      apiKeyKeys: ["HASNA_MY_APP_API_KEY", "MY_APP_API_KEY"],
+    });
+  });
+
+  it("resolves local when no hosted env is set", () => {
+    const resolution = resolveClientTransport("demo", {});
+    expect(resolution).toMatchObject({ transport: "local", misconfigured: false, baseUrl: null });
+  });
+
+  it("resolves hosted-http when API_URL + API_KEY are both set", () => {
+    const resolution = resolveClientTransport("demo", {
+      HASNA_DEMO_API_URL: "http://localhost:9999",
+      HASNA_DEMO_API_KEY: "fixture-key",
+    });
+    expect(resolution).toMatchObject({
+      transport: "hosted-http",
+      baseUrl: "http://localhost:9999/v1",
+      apiKeyPresent: true,
+      misconfigured: false,
+    });
+  });
+
+  it("fails closed on API_URL without API_KEY", () => {
+    const resolution = resolveClientTransport("demo", { HASNA_DEMO_API_URL: "https://demo.example" });
+    expect(resolution.transport).toBe("local");
+    expect(resolution.misconfigured).toBe(true);
+    expect(resolution.warning).toContain("API key");
+  });
+
+  it("fails closed on API_KEY without API_URL", () => {
+    const resolution = resolveClientTransport("demo", { HASNA_DEMO_API_KEY: "fixture-key" });
+    expect(resolution.transport).toBe("local");
+    expect(resolution.misconfigured).toBe(true);
+    expect(resolution.warning).toContain("API URL");
+  });
+
+  it("fails closed on an invalid API URL", () => {
+    const resolution = resolveClientTransport("demo", {
+      HASNA_DEMO_API_URL: "not a url",
+      HASNA_DEMO_API_KEY: "fixture-key",
+    });
+    expect(resolution.transport).toBe("local");
+    expect(resolution.misconfigured).toBe(true);
+    expect(resolution.warning).toContain("Invalid API URL");
   });
 
   it("preserves HTTP error metadata", () => {
@@ -153,16 +189,21 @@ describe("generic Hasna storage client", () => {
     await expect(client.delete("things", "broken")).rejects.toBeInstanceOf(HasnaHttpError);
   });
 
-  it("resolves local and cloud storage clients", async () => {
+  it("resolves local and hosted storage clients", async () => {
     expect(resolveStorageClient("demo", {})).toEqual({ transport: "local", client: null });
     const resolved = resolveStorageClient("demo", {
       HASNA_DEMO_API_URL: "http://localhost:9999",
       HASNA_DEMO_API_KEY: "fixture-key",
     });
-    expect(resolved.transport).toBe("cloud-http");
-    if (resolved.transport === "cloud-http") {
+    expect(resolved.transport).toBe("hosted-http");
+    if (resolved.transport === "hosted-http") {
       expect(resolved.client.name).toBe("demo");
       expect(resolved.client.baseUrl).toBe("http://localhost:9999/v1");
     }
+  });
+
+  it("throws on a partial hosted config (fail-closed)", () => {
+    expect(() => resolveStorageClient("demo", { HASNA_DEMO_API_URL: "https://demo.example" })).toThrow(/API key/);
+    expect(() => resolveStorageClient("demo", { HASNA_DEMO_API_KEY: "fixture-key" })).toThrow(/API URL/);
   });
 });

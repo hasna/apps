@@ -1,13 +1,13 @@
-// ApiStore — the self_hosted/cloud transport.
+// ApiStore — the hosted HTTP transport.
 //
-// Every read and write routes to the app's cloud HTTP API at `<API_URL>/v1` with
-// the bearer key, via the vendored @hasna/contracts storage client. `self_hosted`
-// and `cloud` are identical here; only the URL/key differ (server-side tenancy).
+// Every read and write routes to the app's hosted HTTP API at `<API_URL>/v1`
+// with the bearer key, via the vendored @hasna/contracts storage client.
+// Tenancy is server-side; one implementation serves every deployment.
 //
 // SAFETY: values are sent as plaintext over TLS to the API, which encrypts them
-// server-side with the cloud master key — the local master key is never used in
-// api mode. The API key lives only inside the transport and is never logged,
-// returned, or embedded in any value produced here.
+// server-side with the server's master key — the local master key is never used
+// with the hosted store. The API key lives only inside the transport and is
+// never logged, returned, or embedded in any value produced here.
 
 import type { HasnaStorageClient } from "./contracts-client/index.js";
 import { assertValidSecretPath } from "../hasna-xyz-paths.js";
@@ -91,7 +91,7 @@ export class SecretDecryptionError extends Error {
 }
 
 export class ApiStore implements Store {
-  readonly mode = "api" as const;
+  readonly kind = "api" as const;
   private readonly client: HasnaStorageClient;
   private readonly transport: Transport;
 
@@ -374,10 +374,10 @@ export class ApiStore implements Store {
     } catch {
       /* keep the raw base if it is not a parseable URL */
     }
-    return { mode: "api", location };
+    return { kind: "api", location };
   }
 
   async encryptVault(): Promise<EncryptVaultResult> {
-    throw new Error("encrypt-vault is a local-vault operation; in api mode the server owns encryption at rest.");
+    throw new Error("encrypt-vault is a local-vault operation; with the hosted store the server owns encryption at rest.");
   }
 }

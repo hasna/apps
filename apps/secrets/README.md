@@ -91,23 +91,23 @@ secrets audit example/anthropic/test/api_key
 `agent` is the **issued-to subject of the credential that made the call**, not
 the process, session, host, or person behind it.
 
-In cloud mode the server derives it once per request from the verified API-key
-claims, and never from request input:
+On the hosted server it derives it once per request from the verified
+API-key claims, and never from request input:
 
 ```ts
 const actor = decision.principal.agent ?? decision.principal.kid;
 ```
 
 That subject is fixed at issuance — `issue-key --agent <name>`, see
-[Cloud service](#cloud-service-self_hosted) — and is covered by the token
+[Hosted service](#hosted-service) — and is covered by the token
 signature, so a caller can neither assert nor override it. No endpoint accepts an
 agent *identity* parameter: `/v1/secrets/get` takes `key` and nothing else, and
 an unknown `agent` query parameter or header is ignored rather than rejected.
 (`POST /v1/users` does take a `type` of `human` or `agent`; that is a user record
-kind, not the identity of the caller.) In local mode the same column is instead
-filled from `AGENT_ID ?? USER ?? hostname()`, which *is* self-asserted. The two
-modes populate one column from two sources with different trust properties; read
-the mode before reading the value.
+kind, not the identity of the caller.) With the local store the same column is
+instead filled from `AGENT_ID ?? USER ?? hostname()`, which *is* self-asserted.
+The two backends populate one column from two sources with different trust
+properties; read which backend the row came from before reading the value.
 
 The consequence that matters when interpreting a row: **every caller sharing one
 key collapses to one `agent` value.** A deployment in which many callers share a
@@ -118,9 +118,9 @@ narrow the access to a machine either, so it must not be described as
 machine-attributed; that claims a narrowing the record does not contain.
 
 Distinct per-caller attribution therefore comes from distinct credentials, each
-issued with its own `--agent`. In cloud mode it is not reachable by any
-client-side change, because the client does not supply this value at all; in
-local mode the value is whatever the calling process asserts, which is a
+issued with its own `--agent`. On the hosted server it is not reachable by any
+client-side change, because the client does not supply this value at all; with
+the local store the value is whatever the calling process asserts, which is a
 different property and not a substitute for it.
 
 Inspect metadata-only secret reference health:
@@ -269,9 +269,10 @@ values copied from request context.
 
 The `agent` field below describes the intended contract for these grant-aware
 events. On the existing `get` / `set` / `delete` rows it is not a per-caller
-identity but the identity resolved for the caller by the active mode — the
-credential's issued-to subject in cloud mode, the process environment in local
-mode — and it carries exactly the attribution that source carries; see
+identity but the identity resolved for the caller by the active backend — the
+credential's issued-to subject on the hosted server, the process environment
+with the local store — and it carries exactly the attribution that source
+carries; see
 [What the `agent` column attributes](#what-the-agent-column-attributes).
 A resolver implementing these events inherits that limit: it cannot narrow an
 access below the granularity of the identity available to it.
@@ -737,7 +738,7 @@ The vault database lives at `~/.hasna/secrets/vault.db`. Key material lives in
 A test process cannot reach a real vault. This is enforced by the code, not by
 convention, because convention already failed: the suite wrote fixtures into a
 hosted production vault on four separate runs, because a machine's shell
-environment exports `HASNA_SECRETS_STORAGE_MODE` / `_API_URL` / `_API_KEY` and
+environment exports `HASNA_SECRETS_API_URL` / `HASNA_SECRETS_API_KEY` and
 `getStore()` reads them.
 
 ```bash
@@ -781,7 +782,7 @@ Notes:
 - A test that genuinely needs to exercise the hosted transport should inject a
   fake `fetchImpl`, not point a real one at a remote host.
 
-## Cloud service (`self_hosted`)
+## Hosted service
 
 Beyond the local vault, `@hasna/secrets` ships a deployable HTTP service and a
 typed SDK. Four surfaces cover the same core:
@@ -789,23 +790,23 @@ typed SDK. Four surfaces cover the same core:
 - **`secrets`** — the CLI.
 - **`secrets-mcp`** — the MCP server (stdio by default, `--http` for Streamable HTTP).
 - **`secrets-serve`** — the HTTP API. Unauthenticated probes `GET /health`,
-  `/ready`, `/version` (`{status, version, mode}`) and `GET /openapi.json`; a
+  `/ready`, `/version` (`{status, version}`) and `GET /openapi.json`; a
   versioned `/v1` surface (secrets + vault-item CRUD, search, audit, users)
   behind **strict API-key auth** (`@hasna/contracts`). Scopes: `secrets:read`,
   `secrets:write`.
 - **`@hasna/secrets`** — the typed, dependency-free SDK package root generated
   from the serve OpenAPI. The compatibility subpath `@hasna/secrets/sdk`
-  exports the same API. Client `self_hosted` mode uses `SECRETS_API_URL` +
-  `SECRETS_API_KEY` (never a DSN).
+  exports the same API. The hosted client uses `SECRETS_API_URL` +
+  `SECRETS_API_KEY` (never a DSN); the server selects its backend from
+  `HASNA_SECRETS_DATABASE_URL` (set -> PostgreSQL, else SQLite).
 
-Storage is **PURE REMOTE (Amendment A1)** in cloud mode: `secrets-serve` reads
-and writes the shared Postgres directly (no cache, no local mirror). Secret and
-vault-item values are **encrypted at rest** (AES-256-GCM) with a master key
-injected via `HASNA_SECRETS_MASTER_KEY` — the service fails closed without it.
+`secrets-serve` reads and writes its database directly (no cache, no local
+mirror). Secret and vault-item values are **encrypted at rest** (AES-256-GCM)
+with a master key injected via `HASNA_SECRETS_MASTER_KEY` — the service fails
+closed without it.
 
 ```bash
-# migrate the cloud database (one-shot), then serve
-export HASNA_SECRETS_STORAGE_MODE=cloud
+# migrate the database (one-shot), then serve
 export HASNA_SECRETS_DATABASE_URL=postgres://...          # or DATABASE_URL
 export HASNA_SECRETS_API_SIGNING_KEY=$(openssl rand -hex 32)
 export HASNA_SECRETS_MASTER_KEY=$(openssl rand -base64 32)

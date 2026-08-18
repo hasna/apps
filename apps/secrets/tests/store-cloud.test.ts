@@ -29,31 +29,36 @@ function fakeClient(routes: Record<string, unknown>): { client: HasnaStorageClie
   return { client, calls };
 }
 
-describe("secrets Store resolver (env flip)", () => {
-  it("stays local with no cloud env", () => {
+describe("secrets Store resolver (env contract)", () => {
+  it("stays local with no hosted env", () => {
     const store = getStore({} as NodeJS.ProcessEnv);
     expect(store).toBeInstanceOf(LocalStore);
-    expect(store.mode).toBe("local");
+    expect(store.kind).toBe("local");
   });
 
-  it("routes to api with mode=self_hosted + API_URL + API_KEY", () => {
+  it("routes to api when API_URL + API_KEY are both set", () => {
     const env = {
-      HASNA_SECRETS_STORAGE_MODE: "self_hosted",
       HASNA_SECRETS_API_URL: "https://secrets.hasna.xyz",
       HASNA_SECRETS_API_KEY: "hasna_secrets_test_key",
     } as unknown as NodeJS.ProcessEnv;
     const store = getStore(env);
     expect(store).toBeInstanceOf(ApiStore);
-    expect(store.mode).toBe("api");
+    expect(store.kind).toBe("api");
     expect(store.describe().location).toBe("https://secrets.hasna.xyz");
   });
 
-  it("infers api from API_URL + API_KEY alone (fleet env-flip)", () => {
+  it("fails closed on a partial hosted config (URL without key)", () => {
     const env = {
       HASNA_SECRETS_API_URL: "https://secrets.hasna.xyz",
+    } as unknown as NodeJS.ProcessEnv;
+    expect(() => getStore(env)).toThrow(/API key/);
+  });
+
+  it("fails closed on a partial hosted config (key without URL)", () => {
+    const env = {
       HASNA_SECRETS_API_KEY: "k",
     } as unknown as NodeJS.ProcessEnv;
-    expect(getStore(env).mode).toBe("api");
+    expect(() => getStore(env)).toThrow(/API URL/);
   });
 });
 
@@ -141,12 +146,12 @@ describe("ApiStore route mapping", () => {
     expect(calls.some((c) => c[0] === "POST" && c[1] === "/feedback")).toBe(true);
   });
 
-  it("encryptVault throws in api mode (server owns encryption)", async () => {
+  it("encryptVault throws with the hosted store (server owns encryption)", async () => {
     const store = new ApiStore(fakeClient({}).client);
-    await expect(store.encryptVault()).rejects.toThrow(/api mode/);
+    await expect(store.encryptVault()).rejects.toThrow(/hosted store/);
   });
 
-  it("pruneExpired is a no-op in api mode", async () => {
+  it("pruneExpired is a no-op with the hosted store", async () => {
     expect(await new ApiStore(fakeClient({}).client).pruneExpired()).toBe(0);
   });
 

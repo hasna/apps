@@ -161,8 +161,8 @@ export interface StoreCounts {
 }
 
 export interface StoreDescriptor {
-  /** `local` uses the on-box sqlite vault; `api` routes to the cloud HTTP API. */
-  mode: "local" | "api";
+  /** `local` uses the on-box sqlite vault; `api` routes to the hosted HTTP API. */
+  kind: "local" | "api";
   /** Human-safe location: the vault file path (local) or the API origin (api). Never a key. */
   location: string;
 }
