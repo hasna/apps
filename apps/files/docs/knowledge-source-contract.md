@@ -1,4 +1,4 @@
-# Open Knowledge Source Contract
+# Hasna Knowledge Source Contract
 
 `@hasna/files` is the source-of-truth file layer for `@hasna/knowledge`.
 Knowledge may cite, chunk, summarize, embed, and index files, but it should not

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Open Files Corpus Reader"
-  short_description: "Read and classify open-files corpora across MIME types."
-  default_prompt: "Use this skill to audit MIME coverage and plan safe extraction/classification for an open-files corpus."

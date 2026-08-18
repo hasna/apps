@@ -1,0 +1,4 @@
+interface:
+  display_name: "Files Corpus Reader"
+  short_description: "Read and classify files corpora across MIME types."
+  default_prompt: "Use this skill to audit MIME coverage and plan safe extraction/classification for a files corpus."
