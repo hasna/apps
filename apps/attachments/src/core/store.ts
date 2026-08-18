@@ -5,14 +5,14 @@
 //   - LocalStore  — on-box: SQLite metadata (AttachmentsDB) + S3/local object
 //                   bytes. Fully first-class, works with zero cloud config.
 //   - ApiStore    — HTTP `<API_URL>/v1` + bearer key, via @hasna/contracts. Used
-//                   for BOTH `self_hosted` (our AWS) and `cloud` (SaaS); the two
-//                   differ only by URL/key, which is a server-side tenancy detail,
+//                   for the hosted API; the URL/key pair is server-side tenancy,
 //                   not client code.
 //
-// The mode is resolved purely from env by `resolveStore` (delegating to the
-// contracts client-flip): presence of HASNA_ATTACHMENTS_API_URL +
-// HASNA_ATTACHMENTS_API_KEY (and/or HASNA_ATTACHMENTS_STORAGE_MODE) => ApiStore;
-// otherwise LocalStore. This is the ONLY place that decision is made, so every
+// The backend is selected purely from env by `resolveStore`: presence of BOTH
+// HASNA_ATTACHMENTS_API_URL and HASNA_ATTACHMENTS_API_KEY => ApiStore;
+// otherwise LocalStore. Setting exactly one of the two vars fails closed (a
+// throw), so a client never silently reads the wrong dataset. This is the ONLY
+// place that decision is made, so every
 // command/tool/method routes through the same interface and no caller ever
 // touches sqlite (`bun:sqlite`) or a raw `fetch` directly. That is the
 // split-brain bug this module exists to eliminate.
@@ -117,28 +117,28 @@ export interface Store {
 
   download(idOrUrl: string, output?: string, options?: { password?: string }): Promise<DownloadResult>;
 
-  /** Persist a feedback note about the service (on-box in local mode, `<API_URL>/v1/feedback` in api mode). */
+  /** Persist a feedback note about the service (on-box with the local backend, `<API_URL>/v1/feedback` with the hosted API). */
   saveFeedback(input: FeedbackInput): Promise<void>;
 
   /** Release any held resources (DB handles). Always safe to call. */
   close(): void;
 }
 
-/** Options that ApiStore (self_hosted / cloud) cannot honor client-side. */
+/** Options the hosted ApiStore cannot honor client-side. */
 function assertApiSupported(options: UploadOptions | undefined): void {
   if (!options) return;
   if (options.encrypt) {
     throw new Error(
-      "--encrypt is not supported in self_hosted/cloud mode (it encrypts bytes on the client before an on-box store). Run against local mode to encrypt at rest.",
+      "--encrypt is not supported with the hosted API backend (it encrypts bytes on the client before an on-box store). Use the local backend to encrypt at rest.",
     );
   }
   if (options.requireEmail || (options.allowedEmails && options.allowedEmails.length > 0)) {
     throw new Error(
-      "email-gated links (--require-email / --allowed-email) are only available in local mode.",
+      "email-gated links (--require-email / --allowed-email) are only available with the local backend.",
     );
   }
   if (options.baseUrl) {
-    throw new Error("--internal / custom base URL links are only available in local mode.");
+    throw new Error("--internal / custom base URL links are only available with the local backend.");
   }
 }
 
@@ -438,7 +438,7 @@ export class ApiStore implements Store {
   }
 
   async deleteExpired(): Promise<number> {
-    // The self_hosted/cloud server enforces expiry server-side; there is no bulk
+    // The hosted server enforces expiry server-side; there is no bulk
     // purge route, so remove the expired records the API still reports.
     const all = await this.v1.list({ includeExpired: true });
     const now = Date.now();
@@ -472,23 +472,16 @@ export class ApiStore implements Store {
   }
 }
 
-export interface ResolveStoreOptions {
-  /** Force the on-box LocalStore even when cloud env is present (e.g. `--local`). */
-  forceLocal?: boolean;
-}
-
 /**
- * The one call every command/tool/method makes to get its store. Resolves the
- * client-flip env for `attachments`; returns an {@link ApiStore} when
- * self_hosted/cloud is configured, otherwise a {@link LocalStore}. Throws (via the
- * contracts resolver) if cloud was requested but misconfigured, so a client never
- * silently reads the wrong dataset.
+ * The one call every command/tool/method makes to get its store. Returns an
+ * {@link ApiStore} when both `HASNA_ATTACHMENTS_API_URL` and
+ * `HASNA_ATTACHMENTS_API_KEY` are set, otherwise a {@link LocalStore}. Throws if
+ * exactly one of the two vars is set, so a client never silently reads the wrong
+ * dataset.
  */
-export function resolveStore(env: NodeJS.ProcessEnv = process.env, options: ResolveStoreOptions = {}): Store {
-  if (!options.forceLocal) {
-    const resolved = resolveAttachmentsV1(env);
-    if (resolved.transport === "cloud-http") return new ApiStore(resolved.store);
-  }
+export function resolveStore(env: NodeJS.ProcessEnv = process.env): Store {
+  const resolved = resolveAttachmentsV1(env);
+  if (resolved.transport === "cloud-http") return new ApiStore(resolved.store);
   return new LocalStore();
 }
 

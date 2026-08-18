@@ -80,7 +80,6 @@ export interface AttachmentsConfig {
     linkType: "presigned" | "server";
   };
   client: {
-    mode: "local" | "cloud";
     apiBaseUrl: string;
     apiToken: string;
     apiTokenEnv: string;

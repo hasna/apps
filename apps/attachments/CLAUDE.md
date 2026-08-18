@@ -38,7 +38,7 @@ Set `ATTACHMENTS_PROFILE` before starting the server.
 
 - Local CLI/API: SQLite plus local or private S3 object storage.
 - Hosted `attachments-serve`: direct Postgres plus S3-compatible storage.
-- No local/cloud sync or cache mode.
+- No sync engine.
 - Default link preference: presigned; protected, constrained, local, long-lived,
   and non-expiring links automatically use server-hosted routes.
 - Local API: `/api`; hosted API: `/v1` with `/openapi.json`.

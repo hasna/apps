@@ -59,7 +59,7 @@ const testConfig = {
   storage: { backend: "s3" as const, localDir: "~/.hasna/attachments/test-objects", maxSizeBytes: 10 * 1024 * 1024 * 1024 },
   server: { port: 3459, host: "localhost", baseUrl: "http://localhost:3459", publicPath: "/a" },
   defaults: { expiry: "7d", linkType: "presigned" as const },
-  client: { mode: "local" as const, apiBaseUrl: "", apiToken: "", apiTokenEnv: "ATTACHMENTS_API_TOKEN", preferInternal: false },
+  client: { preferInternal: false },
   domains: [],
   deployment: {},
 };
@@ -73,7 +73,6 @@ mock.module("../../core/upload", () => ({
 
 // spyOn validateStorageConfig to avoid mock.module cache pollution
 const mockGetConfig = spyOn(configModule, "getConfig").mockImplementation(() => testConfig);
-const mockIsCloudClientMode = spyOn(configModule, "isCloudClientMode").mockImplementation(() => false);
 const mockValidateStorageConfig = spyOn(configModule, "validateStorageConfig").mockImplementation(() => {});
 
 // spyOn execSync for clipboard tests
@@ -136,8 +135,6 @@ describe("upload command", () => {
   beforeEach(() => {
     mockGetConfig.mockReset();
     mockGetConfig.mockImplementation(() => testConfig);
-    mockIsCloudClientMode.mockReset();
-    mockIsCloudClientMode.mockImplementation(() => false);
     mockUploadFile.mockReset();
     mockUploadFile.mockImplementation(async () => ({
       id: "att_testid1234",

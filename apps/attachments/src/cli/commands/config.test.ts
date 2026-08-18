@@ -190,10 +190,6 @@ describe("config set — partial updates", () => {
       server: { port: 4567, host: "localhost", baseUrl: "https://attachments.example.com", publicPath: "/a" },
       defaults: { expiry: "1h", linkType: "server" },
       client: {
-        mode: "local",
-        apiBaseUrl: "",
-        apiToken: "",
-        apiTokenEnv: "ATTACHMENTS_API_TOKEN",
         preferInternal: false,
       },
       domains: [],

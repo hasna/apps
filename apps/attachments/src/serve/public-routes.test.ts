@@ -41,7 +41,6 @@ function makeApp() {
     store: store as unknown as PgAttachmentsStore,
     config: makeConfig(),
     version: "test",
-    mode: "cloud",
     signingSecret: SIGNING,
   });
 }

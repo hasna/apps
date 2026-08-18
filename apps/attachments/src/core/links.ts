@@ -136,9 +136,9 @@ export interface LocalShareBaseUrl {
 /**
  * Resolve the base URL for a share link stored in the ON-BOX database.
  *
- * D1(b): `attachments upload --client-mode local` wrote metadata into the local
- * SQLite database but built the link from `getPublicBaseUrl(config)`, which on a
- * developer machine points at the remote service (`HASNA_ATTACHMENTS_API_URL`).
+ * D1(b): an on-box upload wrote metadata into the local SQLite database but
+ * built the link from `getPublicBaseUrl(config)`, which on a developer machine
+ * points at the hosted service (`HASNA_ATTACHMENTS_API_URL`).
  * The command reported success and handed back a link that can never resolve —
  * the remote service has no such token.
  *

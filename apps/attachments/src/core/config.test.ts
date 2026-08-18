@@ -192,10 +192,6 @@ describe("setConfig", () => {
       server: { port: 4000, host: "localhost", baseUrl: "https://attachments.example.com", publicPath: "/a" },
       defaults: { expiry: "30d", linkType: "server" },
       client: {
-        mode: "local",
-        apiBaseUrl: "",
-        apiToken: "",
-        apiTokenEnv: "ATTACHMENTS_API_TOKEN",
         preferInternal: false,
       },
       domains: [],

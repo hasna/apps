@@ -1,5 +1,5 @@
 # =============================================================================
-# hasna self-hosted deploy pipeline  —  drop this file in .github/workflows/deploy.yml
+# hasna user-hosted deploy pipeline  —  drop this file in .github/workflows/deploy.yml
 #
 # The ONLY per-repo edit is the `APP` env var below. Everything else is derived
 # from AWS at run time via the /hasna/deploy/<APP> SSM manifest published by the

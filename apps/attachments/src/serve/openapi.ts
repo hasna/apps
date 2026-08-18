@@ -41,28 +41,25 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
           properties: {
             status: { type: "string" },
             version: { type: "string" },
-            mode: { type: "string" },
           },
-          required: ["status", "version", "mode"],
+          required: ["status", "version"],
         },
         ReadyStatus: {
           type: "object",
           properties: {
             status: { type: "string" },
             version: { type: "string" },
-            mode: { type: "string" },
             pending_migrations: { type: "array", items: { type: "string" } },
           },
-          required: ["status", "version", "mode"],
+          required: ["status", "version"],
         },
         VersionInfo: {
           type: "object",
           properties: {
             status: { type: "string" },
             version: { type: "string" },
-            mode: { type: "string" },
           },
-          required: ["status", "version", "mode"],
+          required: ["status", "version"],
         },
         CreateAttachmentRequest: {
           type: "object",
@@ -147,7 +144,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       "/version": {
         get: {
           operationId: "getVersion",
-          summary: "Service version and mode.",
+          summary: "Service version.",
           responses: {
             "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/VersionInfo" } } } },
           },
