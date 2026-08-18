@@ -4,6 +4,27 @@ All notable changes to `@hasna/projects` are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.132]
+
+### Changed
+
+- Cloud mode now requires an explicit API URL: with `HASNA_PROJECTS_STORAGE_MODE=cloud`
+  and an API key but no `HASNA_PROJECTS_API_URL` (or the legacy URL env keys), the
+  client reports a misconfiguration warning naming the missing variable instead of
+  guessing a hardcoded default host. This removes the hardcoded host from the
+  published artifact per the monorepo publish-guard rule; the host must be configured
+  explicitly.
+
+### Patch
+
+- First release from the hasna/apps monorepo. The package was imported from
+  hasna/projects with history preserved (import capsule 86a604070, import merge
+  ff0c8e055); apart from the cloud-mode URL change above there are no functional
+  changes since 0.1.131 — the rest of the delta is the import itself plus the
+  monorepo workspace wiring (tsconfig bun-types→bun, ajv declared as a
+  devDependency, changelog headings reconciled to 0.1.131). This patch establishes
+  version ownership under the monorepo.
+
 ## [Unreleased]
 
 ### Added
@@ -561,14 +582,14 @@ fails against that build.
 ### Security
 
 - **Scrub internal infra identifiers from the shipped `README.md`.** The
-  Storage Sync section named the internal production RDS cluster
-  (`hasna-xyz-infra-apps-prod-postgres`) and the Secrets Manager runtime-secret
-  path in prose and an `export` example. `README.md` ships in the published npm
-  tarball (`files`), so these leaked to every installer. Replaced with generic,
-  operator-supplied guidance ("your PostgreSQL connection string"); the package
-  ships no default database, cluster, or secret-manager identifier. Also dropped
-  the stale `projects storage status/push/pull` command examples from that block
-  (those subcommands were removed in the 0.1.90 `ProjectStore` reconciliation).
+  Storage Sync section named the internal production RDS cluster and the
+  Secrets Manager runtime-secret path in prose and an `export` example.
+  `README.md` ships in the published npm tarball (`files`), so these leaked to
+  every installer. Replaced with generic, operator-supplied guidance ("your
+  PostgreSQL connection string"); the package ships no default database,
+  cluster, or secret-manager identifier. Also dropped the stale
+  `projects storage status/push/pull` command examples from that block (those
+  subcommands were removed in the 0.1.90 `ProjectStore` reconciliation).
   The runtime-code leak (the removed `getCanonicalProjectsRdsConfig()` constants
   echoed by the old `storage status` CLI/MCP surface) was already eliminated in
   0.1.90; this is the last remaining occurrence, in documentation only.
