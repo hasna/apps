@@ -206,7 +206,7 @@ calendarCommand("add <title>")
   .option("--busy <type>", "Busy type: busy, free, out_of_office")
   .option("--timezone <tz>", "Timezone")
   .option("--rrule <rule>", "Recurrence rule (RRULE)")
-  .option("--source-task <id>", "Link to open-todos task ID")
+  .option("--source-task <id>", "Link to todos task ID")
   .option("--agent <agentId>", "Creator agent ID")
   .action(async (title, opts) => {
     const store = getStore();

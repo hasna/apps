@@ -129,7 +129,7 @@ export function buildServer(): McpServer {
       busy_type: z.enum(["busy", "free", "out_of_office"]).optional(),
       visibility: z.enum(["default", "private", "confidential"]).optional(),
       recurrence_rule: z.string().optional().describe("RRULE string, e.g. FREQ=WEEKLY;BYDAY=MO"),
-      source_task_id: z.string().optional().describe("Link to open-todos task"),
+      source_task_id: z.string().optional().describe("Link to todos task"),
       created_by: z.string().optional().describe("Agent ID of creator"),
     },
     async (input) => {
