@@ -478,10 +478,10 @@ describe("serve", () => {
 
       const input: AssignMachineProjectInput = {
         machineId: "demo-node-01",
-        projectId: "open-machines",
-        path: "/home/operator/workspace/hasna/opensource/open-machines",
+        projectId: "machines",
+        path: "/home/operator/workspace/hasna/opensource/machines",
         workspaceId: "ws_open_machines",
-        repoName: "open-machines",
+        repoName: "machines",
         workspaceRoot: null,
         openFilesRoot: "/home/operator/workspace/hasna/opensource/open-files",
         label: "demo-node-01",
@@ -557,7 +557,7 @@ describe("serve", () => {
       expect(assigned.status).toBe(200);
       expect((await assigned.json()).assignments[0]).toMatchObject({
         machine_id: "demo-node-01",
-        project_id: "open-machines",
+        project_id: "machines",
         projects_location_input: {
           project: "ws_open_machines",
           metadata: {
@@ -567,12 +567,12 @@ describe("serve", () => {
         },
       });
 
-      const filtered = await fetch(`${base}/api/projects/assignments?project=open-machines`).then((response) => response.json());
-      expect(filtered.filters).toEqual({ machine_id: null, project_id: "open-machines" });
+      const filtered = await fetch(`${base}/api/projects/assignments?project=machines`).then((response) => response.json());
+      expect(filtered.filters).toEqual({ machine_id: null, project_id: "machines" });
       expect(filtered.assignments).toHaveLength(1);
 
       const removeInput = { machineId: input.machineId, projectId: input.projectId };
-      const removed = await fetch(`${base}/api/projects/assignments?machine=demo-node-01&project=open-machines`, {
+      const removed = await fetch(`${base}/api/projects/assignments?machine=demo-node-01&project=machines`, {
         method: "DELETE",
         headers: { authorization: `Bearer ${projectAssignmentRemoveApproval(removeInput)}` },
       });

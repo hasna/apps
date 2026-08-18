@@ -41,7 +41,7 @@ export interface MachineDetailsTimestamps {
 }
 
 export interface MachineDetailsSource {
-  authority: "open-machines";
+  authority: "machines";
   metadata_source: "manifest_metadata" | "heartbeat" | "topology" | "registry" | "fallback";
   manifest_declared: boolean;
   heartbeat_present: boolean;
@@ -303,7 +303,7 @@ function timestampsForRegistry(record: MachineRecord, syncRun: SyncRunSummary | 
 function sourceForMachine(topology: MachineTopology, machine: MachineTopologyEntry | null): MachineDetailsSource {
   if (!machine) {
     return {
-      authority: "open-machines",
+      authority: "machines",
       metadata_source: "fallback",
       manifest_declared: false,
       heartbeat_present: false,
@@ -313,7 +313,7 @@ function sourceForMachine(topology: MachineTopology, machine: MachineTopologyEnt
   }
   const heartbeatPresent = machine.heartbeat_status !== "unknown" || Boolean(machine.last_heartbeat_at);
   return {
-    authority: "open-machines",
+    authority: "machines",
     metadata_source: machine.manifest_declared ? "manifest_metadata" : heartbeatPresent ? "heartbeat" : "topology",
     manifest_declared: machine.manifest_declared,
     heartbeat_present: heartbeatPresent,
@@ -324,7 +324,7 @@ function sourceForMachine(topology: MachineTopology, machine: MachineTopologyEnt
 
 function sourceForRegistry(topology: MachineTopology, record: MachineRecord): MachineDetailsSource {
   return {
-    authority: "open-machines",
+    authority: "machines",
     metadata_source: "registry",
     manifest_declared: false,
     heartbeat_present: false,

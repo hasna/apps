@@ -114,14 +114,14 @@ describe("machine topology SDK", () => {
 
       const workspace = resolveMachineWorkspace({
         machineId: "demo-node-01",
-        projectId: "open-knowledge",
-        repoName: "open-knowledge",
+        projectId: "knowledge",
+        repoName: "knowledge",
         topology,
         now: new Date("2026-06-09T00:00:00.000Z"),
       });
       expect(workspace.ok).toBe(true);
       expect(workspace.machine_id).toBe("demo-node-01");
-      expect(workspace.paths.project_root.path).toBe("/home/operator/workspace/hasna/opensource/open-knowledge");
+      expect(workspace.paths.project_root.path).toBe("/home/operator/workspace/hasna/opensource/knowledge");
       expect(workspace.paths.project_root.source).toBe("inferred");
       expect(workspace.paths.open_files_root.path).toBe("/home/operator/workspace/hasna/opensource/open-files");
       expect(workspace.machine.trust_status).toBe("unknown");
@@ -230,14 +230,14 @@ describe("machine topology SDK", () => {
         tags: ["trusted"],
         metadata: {
           workspace_paths: {
-            "open-knowledge": {
-              path: "/mnt/projects/open-knowledge",
+            "knowledge": {
+              path: "/mnt/projects/knowledge",
             },
           },
           open_files_roots: {
-            "open-knowledge": "/mnt/files/open-files",
+            "knowledge": "/mnt/files/open-files",
           },
-          primary_projects: ["open-knowledge"],
+          primary_projects: ["knowledge"],
           auth_status: "authenticated",
           api_token: "should-not-appear",
           githubAppPrivateKey: "synthetic-private-key-material",
@@ -254,19 +254,19 @@ describe("machine topology SDK", () => {
       expect(JSON.stringify(topology)).not.toContain("screen-sharing");
       const resolved = resolveMachineWorkspace({
         machineId: "demo-node-01",
-        projectId: "open-knowledge",
-        repoName: "open-knowledge",
+        projectId: "knowledge",
+        repoName: "knowledge",
         topology,
         now: new Date("2026-06-09T00:00:00.000Z"),
       });
 
       expect(resolved.ok).toBe(true);
-      expect(resolved.project.project_id).toBe("open-knowledge");
+      expect(resolved.project.project_id).toBe("knowledge");
       expect(resolved.machine.primary).toBe(true);
       expect(resolved.machine.trust_status).toBe("trusted");
       expect(resolved.machine.auth_status).toBe("authenticated");
       expect(resolved.paths.project_root).toEqual({
-        path: "/mnt/projects/open-knowledge",
+        path: "/mnt/projects/knowledge",
         source: "manifest_metadata",
       });
       expect(resolved.paths.open_files_root).toEqual({

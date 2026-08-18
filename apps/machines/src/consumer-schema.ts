@@ -93,7 +93,7 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
         verified_at: { type: ["string", "null"], format: "date-time" },
         expires_at: { type: ["string", "null"], format: "date-time" },
         ttl_ms: { type: ["number", "null"] },
-        source_authority: { enum: ["open-machines", "manifest", "manifest_metadata", "live_topology", "argument", "inferred", "fallback", "unresolved", "mixed", "unknown"] },
+        source_authority: { enum: ["machines", "open-machines", "manifest", "manifest_metadata", "live_topology", "argument", "inferred", "fallback", "unresolved", "mixed", "unknown"] }, // machines and open-machines accepted on read (open-machines is the legacy stored value)
         confidence: { enum: ["exact", "high", "medium", "low", "none"] },
         cacheable: { type: "boolean" },
         stale: { type: "boolean" },
@@ -577,7 +577,7 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
           type: "object",
           required: ["authority", "metadata_source", "manifest_declared", "heartbeat_present", "topology_entry", "local"],
           properties: {
-            authority: { const: "open-machines" },
+            authority: { const: "machines" },
             metadata_source: { enum: ["manifest_metadata", "heartbeat", "topology", "registry", "fallback"] },
             manifest_declared: { type: "boolean" },
             heartbeat_present: { type: "boolean" },
@@ -621,7 +621,7 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
         actor_name: { type: ["string", "null"] },
         agent_id: { type: ["string", "null"] },
         agent_name: { type: ["string", "null"] },
-        source: { enum: ["open-notes", "agent", "sync", "import", "open-machines", "unknown"] },
+        source: { enum: ["notes", "open-notes", "agent", "sync", "import", "machines", "open-machines", "unknown"] }, // legacy open-* values (open-notes, open-machines) accepted on read
         display_name: { type: "string" },
       },
     },
@@ -1295,7 +1295,7 @@ export function validateMachinesConsumerEnvelope(
       if (!hasNullableString(actor, "actor_name")) errors.push("actor.actor_name");
       if (!hasNullableString(actor, "agent_id")) errors.push("actor.agent_id");
       if (!hasNullableString(actor, "agent_name")) errors.push("actor.agent_name");
-      if (!["open-notes", "agent", "sync", "import", "open-machines", "unknown"].includes(String(actor.source))) errors.push("actor.source");
+      if (!["notes", "open-notes", "agent", "sync", "import", "machines", "open-machines", "unknown"].includes(String(actor.source))) errors.push("actor.source");
       if (!hasString(actor, "display_name")) errors.push("actor.display_name");
     }
     if (!hasArray(value, "warnings")) errors.push("warnings");
@@ -1575,7 +1575,7 @@ export function validateMachinesConsumerEnvelope(
     } else {
       const source = value.source as Record<string, unknown>;
       requireFields(source, ["authority", "metadata_source", "manifest_declared", "heartbeat_present", "topology_entry", "local"], errors);
-      if (source.authority !== "open-machines") errors.push("source.authority");
+      if (source.authority !== "machines" && source.authority !== "open-machines") errors.push("source.authority");
       if (!["manifest_metadata", "heartbeat", "topology", "registry", "fallback"].includes(String(source.metadata_source))) errors.push("source.metadata_source");
       if (typeof source.manifest_declared !== "boolean") errors.push("source.manifest_declared");
       if (typeof source.heartbeat_present !== "boolean") errors.push("source.heartbeat_present");

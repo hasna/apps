@@ -33,7 +33,7 @@ function setupTemp(name: string): string {
 }
 
 describe("machine project assignments", () => {
-  test("lists assignment metadata in an open-projects import-ready shape", () => {
+  test("lists assignment metadata in an projects import-ready shape", () => {
     const dir = setupTemp("machines-project-assignments-");
     try {
       manifestAdd({
@@ -44,10 +44,10 @@ describe("machine project assignments", () => {
         tags: ["trusted"],
         metadata: {
           project_assignments: {
-            "open-machines": {
-              path: "/home/operator/workspace/hasna/opensource/open-machines",
+            "machines": {
+              path: "/home/operator/workspace/hasna/opensource/machines",
               workspace_id: "ws_open_machines",
-              repo_name: "open-machines",
+              repo_name: "machines",
               label: "demo-node-01",
               kind: "machine-local",
               is_primary: true,
@@ -66,12 +66,12 @@ describe("machine project assignments", () => {
       expect(result.filters).toEqual({ machine_id: null, project_id: null });
       expect(result.assignments).toHaveLength(1);
       expect(result.assignments[0]).toMatchObject({
-        id: "machine:demo-node-01:project:open-machines",
-        project_type: "open-projects",
-        project_id: "open-machines",
+        id: "machine:demo-node-01:project:machines",
+        project_type: "projects",
+        project_id: "machines",
         workspace_id: "ws_open_machines",
         machine_id: "demo-node-01",
-        path: "/home/operator/workspace/hasna/opensource/open-machines",
+        path: "/home/operator/workspace/hasna/opensource/machines",
         is_primary: true,
         machine: {
           trust_status: "trusted",
@@ -80,26 +80,26 @@ describe("machine project assignments", () => {
         projects_location_input: {
           project: "ws_open_machines",
           machine_id: "demo-node-01",
-          path: "/home/operator/workspace/hasna/opensource/open-machines",
+          path: "/home/operator/workspace/hasna/opensource/machines",
           label: "demo-node-01",
           kind: "machine-local",
           primary: true,
           metadata: {
-            source: "open-machines",
+            source: "machines",
             machine_id: "demo-node-01",
-            assignment_id: "machine:demo-node-01:project:open-machines",
+            assignment_id: "machine:demo-node-01:project:machines",
             owner: "platform",
           },
         },
       });
       expect(result.projects[0]).toMatchObject({
-        project_id: "open-machines",
+        project_id: "machines",
         workspace_id: "ws_open_machines",
         primary_machine_id: "demo-node-01",
       });
       expect(result.machines[0]).toMatchObject({
         machine_id: "demo-node-01",
-        project_ids: ["open-machines"],
+        project_ids: ["machines"],
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -125,8 +125,8 @@ describe("machine project assignments", () => {
 
       const assigned = assignMachineProject({
         machineId: "demo-node-01",
-        projectId: "open-machines",
-        path: "/srv/projects/open-machines",
+        projectId: "machines",
+        path: "/srv/projects/machines",
         openFilesRoot: "/srv/projects/open-files",
         label: "demo-node-01",
         kind: "machine-local",
@@ -139,12 +139,12 @@ describe("machine project assignments", () => {
 
       const resolved = resolveMachineWorkspace({
         machineId: "demo-node-01",
-        projectId: "open-machines",
-        repoName: "open-machines",
+        projectId: "machines",
+        repoName: "machines",
         includeTailscale: false,
       });
       expect(resolved.paths.project_root).toEqual({
-        path: "/srv/projects/open-machines",
+        path: "/srv/projects/machines",
         source: "manifest_metadata",
       });
       expect(resolved.paths.open_files_root).toEqual({
@@ -154,7 +154,7 @@ describe("machine project assignments", () => {
 
       const removed = removeMachineProjectAssignment({
         machineId: "demo-node-01",
-        projectId: "open-machines",
+        projectId: "machines",
       });
       expect(removed.assignments).toEqual([]);
       const afterRemove = readManifest().machines.find((machine) => machine.id === "demo-node-01");
@@ -177,8 +177,8 @@ describe("machine project assignments", () => {
 
       const assigned = assignMachineProject({
         machineId: "apple03",
-        projectId: "open-machines",
-        path: "/srv/projects/open-machines",
+        projectId: "machines",
+        path: "/srv/projects/machines",
         label: "station03",
         kind: "machine-local",
       });
@@ -186,7 +186,7 @@ describe("machine project assignments", () => {
       expect(assigned.assignments[0]?.machine_id).toBe("station03");
       expect(listMachineProjectAssignments({ machineId: "apple03" }).assignments[0]?.machine_id).toBe("station03");
 
-      removeMachineProjectAssignment({ machineId: "apple03", projectId: "open-machines" });
+      removeMachineProjectAssignment({ machineId: "apple03", projectId: "machines" });
       expect(listMachineProjectAssignments({ machineId: "station03" }).assignments).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -202,8 +202,8 @@ describe("machine project assignments", () => {
         workspacePath: "/workspace",
         metadata: {
           project_assignments: [{
-            project_id: "open-machines",
-            path: "/workspace/open-machines",
+            project_id: "machines",
+            path: "/workspace/machines",
             label: "array-form",
             kind: "machine-local",
           }],
@@ -213,7 +213,7 @@ describe("machine project assignments", () => {
       expect(listMachineProjectAssignments().assignments).toHaveLength(1);
       const removed = removeMachineProjectAssignment({
         machineId: "demo-node-01",
-        projectId: "open-machines",
+        projectId: "machines",
       });
       expect(removed.assignments).toEqual([]);
       expect(listMachineProjectAssignments().assignments).toEqual([]);
@@ -231,23 +231,23 @@ describe("machine project assignments", () => {
         workspacePath: "/workspace",
         metadata: {
           project_assignments: {
-            "open-machines": {
-              path: "/workspace/open-machines",
+            "machines": {
+              path: "/workspace/machines",
               is_primary: true,
               metadata: { owner: "platform" },
             },
           },
-          primary_projects: ["open-machines"],
+          primary_projects: ["machines"],
         },
       });
 
       const updated = assignMachineProject({
         machineId: "demo-node-01",
-        projectId: "open-machines",
-        path: "/workspace/open-machines-v2",
+        projectId: "machines",
+        path: "/workspace/machines-v2",
       });
       expect(updated.assignments[0]).toMatchObject({
-        path: "/workspace/open-machines-v2",
+        path: "/workspace/machines-v2",
         is_primary: true,
         metadata: { owner: "platform" },
         projects_location_input: {
@@ -258,8 +258,8 @@ describe("machine project assignments", () => {
 
       const demoted = assignMachineProject({
         machineId: "demo-node-01",
-        projectId: "open-machines",
-        path: "/workspace/open-machines-v2",
+        projectId: "machines",
+        path: "/workspace/machines-v2",
         primary: false,
         metadata: { owner: "security" },
       });

@@ -32,7 +32,7 @@ export const BROWSERPLAN_CLI_COMMAND = "browserplan";
  */
 export const BROWSERPLAN_APP_ID = "open-chrome";
 /** Route owner id for this package, i.e. `defaultAppIdForPackage(MACHINES_PACKAGE_NAME)`. */
-export const BROWSERPLAN_ROUTE_OWNER = "open-machines";
+export const BROWSERPLAN_ROUTE_OWNER = "machines";
 export const BROWSERPLAN_SECRETS_OWNER = "open-identities/open-attachments/open-mailery";
 /**
  * Command prefix every accepted `app_install_update` template must start with. Kept as a

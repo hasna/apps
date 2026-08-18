@@ -44,6 +44,7 @@
         },
         "source_authority": {
           "enum": [
+            "machines",
             "open-machines",
             "manifest",
             "manifest_metadata",
@@ -1204,7 +1205,7 @@
               "const": "open-chrome"
             },
             "route_owner": {
-              "const": "open-machines"
+              "const": "machines"
             },
             "default_timeout_ms": {
               "type": "number"
@@ -1795,7 +1796,7 @@
           ],
           "properties": {
             "authority": {
-              "const": "open-machines"
+              "const": "machines"
             },
             "metadata_source": {
               "enum": [
@@ -1944,10 +1945,12 @@
         },
         "source": {
           "enum": [
+            "notes",
             "open-notes",
             "agent",
             "sync",
             "import",
+            "machines",
             "open-machines",
             "unknown"
           ]

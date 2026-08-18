@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-machines remote storage.
+ * PostgreSQL migrations for machines remote storage.
  *
  * Equivalent of the SQLite runtime schema in db.ts, translated for PostgreSQL.
  */

@@ -82,7 +82,7 @@ describe("published SDK mutation boundary", () => {
   test("heartbeat collection exposes public SDK approval helpers", () => {
     const { dir } = withTempEnv("machines-sdk-heartbeat-collect-");
     try {
-      process.env.HASNA_MACHINES_MUTATION_TOKEN = "sdk-secret";
+      process.env.HASNA_MACHINES_MUTATION_TOKEN = "sdk-mutation-test-token-not-a-credential";
       const options = { machines: ["unknown"] };
 
       expect("HEARTBEAT_COLLECT_MUTATION_OPERATION" in machines).toBe(true);
@@ -154,7 +154,7 @@ describe("published SDK mutation boundary", () => {
   test("SDK scoped token authorizes only the bound manifest mutation", () => {
     const { dir, manifestPath } = withTempEnv("machines-sdk-token-");
     try {
-      process.env.HASNA_MACHINES_MUTATION_TOKEN = "sdk-secret";
+      process.env.HASNA_MACHINES_MUTATION_TOKEN = "sdk-mutation-test-token-not-a-credential";
       const now = Date.now();
       const machine = { id: "sdk-token-node", platform: "linux" as const, workspacePath: "/workspace" };
       const token = machines.createMutationApprovalToken({
@@ -195,8 +195,8 @@ describe("published SDK mutation boundary", () => {
 
       const input = {
         machineId: "sdk-project-node",
-        projectId: "open-machines",
-        path: "/workspace/open-machines",
+        projectId: "machines",
+        path: "/workspace/machines",
         label: "sdk-project-node",
         kind: "machine-local",
         primary: true,
@@ -207,19 +207,19 @@ describe("published SDK mutation boundary", () => {
       const assigned = machines.assignMachineProject(input, trustedSdkMutation());
       expect(assigned.assignments[0]).toMatchObject({
         machine_id: "sdk-project-node",
-        project_id: "open-machines",
-        path: "/workspace/open-machines",
+        project_id: "machines",
+        path: "/workspace/machines",
       });
 
       expect(() => machines.removeMachineProjectAssignment({
         machineId: "sdk-project-node",
-        projectId: "open-machines",
+        projectId: "machines",
       })).toThrow("sdk.machines_projects_unassign requires");
       expect(machines.listMachineProjectAssignments().assignments).toHaveLength(1);
 
       machines.removeMachineProjectAssignment({
         machineId: "sdk-project-node",
-        projectId: "open-machines",
+        projectId: "machines",
       }, trustedSdkMutation());
       expect(machines.listMachineProjectAssignments().assignments).toEqual([]);
     } finally {
@@ -260,7 +260,7 @@ describe("published SDK mutation boundary", () => {
   test("SDK approval ignores caller-supplied time for expired tokens", () => {
     const { dir, manifestPath } = withTempEnv("machines-sdk-expired-token-");
     try {
-      process.env.HASNA_MACHINES_MUTATION_TOKEN = "sdk-secret";
+      process.env.HASNA_MACHINES_MUTATION_TOKEN = "sdk-mutation-test-token-not-a-credential";
       const issuedAt = Date.now() - 10 * 60 * 1000;
       const machine = { id: "sdk-expired-node", platform: "linux" as const, workspacePath: "/workspace" };
       const token = machines.createMutationApprovalToken({

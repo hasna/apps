@@ -2139,7 +2139,7 @@ notesCommand
   .option("--actor-name <name>", "Actor display name")
   .option("--agent-id <id>", "Agent identifier for agent-created notes")
   .option("--agent-name <name>", "Agent display name for agent-created notes")
-  .option("--source <source>", "open-notes | agent | sync | import | open-machines | unknown")
+  .option("--source <source>", "notes | agent | sync | import | machines | unknown")
   .option("--tailscale", "Probe tailscale while building machine display context", false)
   .option("-j, --json", "Print JSON output", false)
   .action((options: {
@@ -2537,7 +2537,7 @@ projectsAssignmentsCommand
   .requiredOption("--machine <id>", "Machine identifier")
   .requiredOption("--project <id>", "Project or workspace identifier")
   .requiredOption("--path <path>", "Absolute project path on the machine")
-  .option("--workspace-id <id>", "open-projects workspace id")
+  .option("--workspace-id <id>", "projects workspace id")
   .option("--repo <name>", "Repository name; defaults to project id")
   .option("--workspace-root <path>", "Machine workspace root")
   .option("--open-files-root <path>", "open-files root on the machine")

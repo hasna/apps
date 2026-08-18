@@ -137,7 +137,7 @@ function fallbackAdapterCheck(domain: DoctorOptionalAdapterDomain): DoctorCheck 
     `No ${domain} adapter configured; skipped optional private integration check.`,
     {
       optional: true,
-      source: "open-machines",
+      source: "machines",
       data: { configured: false, fallback: true },
     },
   );
@@ -387,7 +387,7 @@ export function runDoctor(machineId?: string, options: DoctorOptions = {}): Doct
         },
         remediation: details["github_app_ref"] === "configured"
           ? undefined
-          : ["Set HASNA_GITHUB_APP_ID plus HASNA_GITHUB_APP_PRIVATE_KEY_REF or provide an equivalent open-secrets adapter."],
+          : ["Set HASNA_GITHUB_APP_ID plus HASNA_GITHUB_APP_PRIVATE_KEY_REF or provide an equivalent secrets adapter."],
       },
     ),
     ...optionalAdapterChecks,

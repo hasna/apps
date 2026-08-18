@@ -56,7 +56,7 @@ model as other manifest writes.
 Public packages should keep private fleet state behind an opaque source/ref
 boundary. `HASNA_MACHINES_PRIVATE_MANIFEST_REF` (or
 `MACHINES_PRIVATE_MANIFEST_REF`) may point at a private backend, but
-open-machines only reports the redacted ref and falls back to the local
+machines only reports the redacted ref and falls back to the local
 `machines.json` unless a caller supplies a manifest adapter. The adapter
 contract is backend-agnostic and lives in the package root exports; it does not
 pull in secrets managers, storage SDKs, or org-specific fleet internals.
@@ -102,7 +102,7 @@ but it does not enroll devices, install profiles, or publish team identifiers.
 backward-compatible fields: a fleet-wide `packages` list applied to every
 machine (per-machine `packages` override by name), and a `freeze` list for the
 supply-chain freeze gate. Package specs accept optional `version` (the pin),
-`appId` (the `hasna.app.v1` join key, defaulting to the `open-<name>`
+`appId` (the `hasna.app.v1` join key, defaulting to the `<name>`
 convention for `@hasna/*` packages), `bin` (verification CLI, defaulting to
 the unscoped package name), `verify` (set `false` for library-only packages
 without a CLI: rollouts succeed on install exit code alone, though a declared
@@ -219,8 +219,8 @@ const browserPlanFleet = getBrowserPlanFleet();
 const route = resolveMachineRoute("linux-dev-01");
 const workspace = resolveMachineWorkspace({
   machineId: "linux-dev-01",
-  projectId: "open-knowledge",
-  repoName: "open-knowledge",
+  projectId: "knowledge",
+  repoName: "knowledge",
 });
 const snapshot = createMachineResolverSnapshot({ route, workspace });
 console.log(validateMachinesConsumerEnvelope("resolver_snapshot", snapshot).ok);
@@ -250,7 +250,7 @@ Private route targets and shell commands remain redacted unless
 
 ```bash
 machines loop-preflight --machine control,worker --cmd 'bun test' --no-tailscale
-machines machine-health --project open-machines --repo open-machines
+machines machine-health --project machines --repo machines
 machines routing --machine worker
 machines command-matrix --machine worker --cmd 'bun run build'
 machines dispatch-smoke --json
@@ -275,7 +275,7 @@ authentication remains routable but is blocked for command execution. Probe
 results expose only a bounded status and exit code; route targets, commands,
 and SSH stderr remain redacted on public output.
 
-`machines dispatch-smoke` is a no-mutation diagnostic for open-dispatch
+`machines dispatch-smoke` is a no-mutation diagnostic for dispatch
 self-healing. It checks the default affected fleet (`local`, `spark01`,
 `spark02` through a direct SSH alias when applicable, and `apple03`) while
 ignoring `apple01` unless explicitly requested. The JSON envelope includes
@@ -399,7 +399,7 @@ MCP tools expose the same contract as `machines_friendly_name_get`,
 
 ### Hasna Notes ownership and provenance contract
 
-Open-machines does not own note storage. It does expose machine identity,
+Machines does not own note storage. It does expose machine identity,
 display-name, sync-target, actor provenance, and per-machine trash metadata that
 Hasna Notes can attach to its own note records.
 
@@ -462,7 +462,7 @@ curl 'http://127.0.0.1:7676/api/notes/trash-policies?limit=10&offset=0'
 ```
 
 MCP exposes `machines_notes_context` and `machines_notes_trash_policies` with
-the same field names. These fields are the coordination contract for open-notes:
+the same field names. These fields are the coordination contract for notes:
 store stable ids in note records, show `display_name`, and use pagination
 metadata for any machine-backed lists.
 
@@ -477,7 +477,7 @@ The `machine_details` envelope is a friendly, consumer-safe view. It includes:
 - `machine_id` and `slug`: stable machine id for storage and links.
 - `friendly_name` / `friendlyName`: present only when a user label is set.
 - `display_name` / `displayName`: always present; uses friendly name first, then `machine_id`.
-- `known`: whether open-machines found the machine in topology.
+- `known`: whether machines found the machine in topology.
 - `status`: `state`, neutral `label`, `online`, and optional seen timestamps.
 - `platform`, `machine_type`, `role`, `roles`, `machine_capabilities`, and `tags` when known.
 - `updated_at`, `last_seen_at`, and `timestamps.recent_sync_at` / `recent_sync_status` when known.
@@ -496,7 +496,7 @@ and sensitive metadata keys are not part of the default details view.
 
 ### BrowserPlan fleet contract
 
-Open-chrome owns BrowserPlan. Open-machines exposes the stable machine/fleet
+Open-chrome owns BrowserPlan. Machines exposes the stable machine/fleet
 contract that BrowserPlan can consume to select targets and route BrowserPlan-
 owned remote commands:
 
@@ -536,7 +536,7 @@ are never returned as BrowserPlan machines; if requested, they appear in
 
 For UI labels, render each machine's `display_name`; it already falls back from
 friendly name to stable id. `status.label` uses `Online`, `Offline`, or neutral
-`Unknown`. Optional metadata is omitted or nullable when open-machines does not
+`Unknown`. Optional metadata is omitted or nullable when machines does not
 know it.
 
 `operation_hooks` are contracts, not command execution. BrowserPlan/open-chrome
@@ -552,7 +552,7 @@ and rejects everything else — including anything chained after a valid install
 Note that `daemon_status`, `tab_inventory` and `supervisor_status` advertise
 commands the published `0.1.0` artifact does not dispatch; they report ready but
 print usage and exit 0.
-Open-machines owns route resolution and exposes the safe runner pattern:
+Machines owns route resolution and exposes the safe runner pattern:
 `runMachineCommand()` in the SDK, `machines ssh --machine <id> --cmd
 <browserplan-owned command> --json` in the CLI, and MCP `machines_ssh_resolve`.
 Private route details are still omitted unless a trusted local operator surface
@@ -630,7 +630,7 @@ machines defaults to
 
 For GitHub automation, prefer GitHub App installation tokens over personal user
 tokens. Public manifests and docs should store only opaque secret references
-for the app id/private key material; private adapters or `open-secrets` should
+for the app id/private key material; private adapters or `secrets` should
 resolve those references at runtime.
 `screen-credentials` verifies the resolved user and secret key for a machine or
 the full fleet without printing secret values.
@@ -643,8 +643,8 @@ import { resolveMachineWorkspace } from "@hasna/machines/consumer";
 
 const workspace = resolveMachineWorkspace({
   machineId: "linux-dev-01",
-  projectId: "open-knowledge",
-  repoName: "open-knowledge",
+  projectId: "knowledge",
+  repoName: "knowledge",
 });
 
 console.log(workspace.paths.project_root.path);
@@ -657,8 +657,8 @@ diagnostics. It uses explicit manifest metadata first and deterministic
 workspace inference second; consumers can still pass manual overrides.
 
 ```bash
-machines workspace resolve --machine linux-dev-01 --project open-knowledge --repo open-knowledge --json
-machines workspace doctor --machine linux-dev-01 --project open-knowledge --repo open-knowledge --json
+machines workspace resolve --machine linux-dev-01 --project knowledge --repo knowledge --json
+machines workspace doctor --machine linux-dev-01 --project knowledge --repo knowledge --json
 ```
 
 `workspace resolve` and `workspace doctor` include JSON-friendly
@@ -666,15 +666,15 @@ machines workspace doctor --machine linux-dev-01 --project open-knowledge --repo
 unresolved roots, inferred roots, local stale paths, untrusted machines, and
 unknown auth. Repair hints include the dry-run command plus the matching
 `--apply` command so downstream apps can surface the next step without
-depending on open-machines internals.
+depending on machines internals.
 
 If a resolver result reports inferred or unresolved project/open-files roots,
 repair the manifest metadata explicitly. The command previews changes by
 default and only writes when `--apply` is passed:
 
 ```bash
-machines workspace repair --machine linux-dev-01 --project open-knowledge --repo open-knowledge --json
-machines workspace repair --machine linux-dev-01 --project open-knowledge --repo open-knowledge --apply --json
+machines workspace repair --machine linux-dev-01 --project knowledge --repo knowledge --json
+machines workspace repair --machine linux-dev-01 --project knowledge --repo knowledge --apply --json
 ```
 
 ## Compatibility SDK
@@ -690,8 +690,8 @@ const report = checkMachineCompatibility({
   commands: [{ command: "bun" }],
   packages: [{ name: "@example/knowledge", command: "knowledge", expectedVersion: "0.2.29" }],
   workspaces: [{
-    label: "open-knowledge",
-    path: "/srv/workspaces/open-knowledge",
+    label: "knowledge",
+    path: "/srv/workspaces/knowledge",
     expectedPackageName: "@example/knowledge",
     expectedVersion: "0.2.29",
   }],
@@ -709,7 +709,7 @@ CLI and MCP expose the same shape:
 machines compatibility --machine linux-dev-01 \
   --command bun \
   --package @example/knowledge:knowledge:0.2.29 \
-  --workspace open-knowledge=/srv/workspaces/open-knowledge:@example/knowledge:0.2.29 \
+  --workspace knowledge=/srv/workspaces/knowledge:@example/knowledge:0.2.29 \
   --json
 ```
 

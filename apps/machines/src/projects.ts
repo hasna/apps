@@ -17,12 +17,12 @@ export type MachineProjectAssignmentSource =
 
 export interface MachineProjectAssignment {
   id: string;
-  project_type: "open-projects";
+  project_type: "projects";
   project_id: string;
   workspace_id: string | null;
   repo_name: string | null;
   project: {
-    project_type: "open-projects";
+    project_type: "projects";
     project_id: string;
     workspace_id: string | null;
     repo_name: string | null;
@@ -81,7 +81,7 @@ export interface MachineProjectAssignment {
 }
 
 export interface MachineProjectAssignmentProjectSummary {
-  project_type: "open-projects";
+  project_type: "projects";
   project_id: string;
   workspace_id: string | null;
   repo_name: string | null;
@@ -252,7 +252,7 @@ function createAssignment(input: {
         : "unknown";
   const id = assignmentId(input.machine.id, projectId);
   const projectsMetadata = {
-    source: "open-machines",
+    source: "machines",
     machine_id: input.machine.id,
     assignment_id: id,
     path_source: "manifest_metadata",
@@ -262,12 +262,12 @@ function createAssignment(input: {
   };
   return {
     id,
-    project_type: "open-projects",
+    project_type: "projects",
     project_id: projectId,
     workspace_id: workspaceId,
     repo_name: repoName,
     project: {
-      project_type: "open-projects",
+      project_type: "projects",
       project_id: projectId,
       workspace_id: workspaceId,
       repo_name: repoName,
@@ -414,7 +414,7 @@ function projectSummaries(assignments: MachineProjectAssignment[]): MachineProje
   return [...groups.values()].map((entries) => {
     const first = entries[0]!;
     return {
-      project_type: "open-projects" as const,
+      project_type: "projects" as const,
       project_id: first.project_id,
       workspace_id: first.workspace_id,
       repo_name: first.repo_name,

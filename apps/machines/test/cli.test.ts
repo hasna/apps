@@ -1109,10 +1109,10 @@ describe("cli command handling", () => {
 
       const input = {
         machineId: "demo-node-01",
-        projectId: "open-machines",
-        path: "/home/operator/workspace/hasna/opensource/open-machines",
+        projectId: "machines",
+        path: "/home/operator/workspace/hasna/opensource/machines",
         workspaceId: null,
-        repoName: "open-machines",
+        repoName: "machines",
         workspaceRoot: null,
         openFilesRoot: null,
         label: "demo-node-01",
@@ -1176,16 +1176,16 @@ describe("cli command handling", () => {
       expect(assigned.status).toBe(0);
       expect(JSON.parse(assigned.stdout).assignments[0]).toMatchObject({
         machine_id: "demo-node-01",
-        project_id: "open-machines",
+        project_id: "machines",
         projects_location_input: {
-          project: "open-machines",
+          project: "machines",
           machine_id: "demo-node-01",
-          path: "/home/operator/workspace/hasna/opensource/open-machines",
+          path: "/home/operator/workspace/hasna/opensource/machines",
           metadata: { machine_id: "demo-node-01" },
         },
       });
 
-      const listed = runCli(["projects", "assignments", "list", "--project", "open-machines", "--json"], baseEnv);
+      const listed = runCli(["projects", "assignments", "list", "--project", "machines", "--json"], baseEnv);
       expect(listed.status).toBe(0);
       expect(JSON.parse(listed.stdout).assignments).toHaveLength(1);
 
