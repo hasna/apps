@@ -64,7 +64,7 @@ export function buildFanoutTasks(release: Release): FanoutTask[] {
       ...base,
       fingerprint: `release-fanout:changelog:${spec}`,
       title: `Publish changelog for ${spec}`,
-      description: `${context}\n\nCollect the changes shipped in this version and publish the changelog entry (open-changelog), then attach the changelogRef to the release record.`,
+      description: `${context}\n\nCollect the changes shipped in this version and publish the changelog entry (changelog), then attach the changelogRef to the release record.`,
       tags: [...base.tags, "release-fanout:changelog"],
     },
     {
@@ -97,7 +97,7 @@ function appendToOutbox(tasks: FanoutTask[], path: string, reason: string): Fano
   mkdirSync(dirname(path), { recursive: true });
   const now = new Date().toISOString();
   const lines = tasks
-    .map((task) => JSON.stringify({ schema: "open-releases.fanout-task.v1", queuedAt: now, reason, task }))
+    .map((task) => JSON.stringify({ schema: "releases.fanout-task.v1", queuedAt: now, reason, task }))
     .join("\n");
   appendFileSync(path, `${lines}\n`, "utf8");
   return tasks.map((task) => ({ task, via: "outbox" as const, ok: true }));

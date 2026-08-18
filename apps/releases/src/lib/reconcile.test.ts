@@ -11,7 +11,7 @@ function seededLedger(): ReleaseLedger {
     schema: "hasna.release.v1",
     id: "rel-seed-1",
     createdAt: "2026-07-06T10:00:00.000Z",
-    appId: "open-todos",
+    appId: "todos",
     package: "@hasna/todos",
     version: "1.4.2",
     gitSha: "0f4c2d1",
@@ -61,7 +61,7 @@ describe("reconcileReleases", () => {
     expect(backfilled.version).toBe("1.5.0");
     expect(backfilled.publishPath).toBe("backfilled");
     expect(backfilled.gitSha).toBe("aa11bb22cc");
-    expect(backfilled.appId).toBe("open-todos");
+    expect(backfilled.appId).toBe("todos");
     expect(backfilled.metadata?.["flagged"]).toBe("publish-bypassed-ledger");
     // The backfilled row is itself a contract-valid document (upstream evidence kind).
     expect(backfilled.evidenceRefs[0]?.kind).toBe("other");
@@ -75,7 +75,7 @@ describe("reconcileReleases", () => {
       schema: "hasna.release.v1",
       id: "rel-seed-2",
       createdAt: "2026-07-07T10:00:00.000Z",
-      appId: "open-todos",
+      appId: "todos",
       package: "@hasna/todos",
       version: "1.5.0",
       gitSha: "aa11bb2",
@@ -148,7 +148,7 @@ describe("reconcileReleases", () => {
     });
     expect(report.entries).toHaveLength(1);
     expect(report.entries[0]).toMatchObject({ package: "@hasna/events", status: "backfilled", flagged: true });
-    expect(ledger.latestFor("@hasna/events")?.appId).toBe("open-events");
+    expect(ledger.latestFor("@hasna/events")?.appId).toBe("events");
     ledger.close();
   });
 });

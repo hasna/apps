@@ -19,11 +19,11 @@ export function parsePackageSpec(spec: string): PackageSpec {
   return { package: spec.slice(0, at), version: spec.slice(at + 1) };
 }
 
-/** Derive the default app id slug from an npm package name: `@hasna/todos` → `open-todos`. */
+/** Derive the default app id slug from an npm package name: `@hasna/todos` → `todos`. */
 export function deriveAppId(npmName: string): string {
   const bare = npmName.includes("/") ? npmName.split("/").pop()! : npmName;
   const slug = bare.replace(/[^a-z0-9-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").toLowerCase();
-  return slug.startsWith("open-") ? slug : `open-${slug}`;
+  return slug;
 }
 
 export interface RecordReleaseInput {

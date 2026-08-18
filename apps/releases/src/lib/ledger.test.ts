@@ -12,7 +12,7 @@ function release(overrides: Partial<Release> = {}): Release {
     schema: "hasna.release.v1",
     id: `rel-${Math.random().toString(36).slice(2)}`,
     createdAt: "2026-07-06T10:00:00.000Z",
-    appId: "open-todos",
+    appId: "todos",
     package: "@hasna/todos",
     version: "1.4.2",
     gitSha: "0f4c2d1",

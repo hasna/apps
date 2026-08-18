@@ -5,7 +5,7 @@ const validRelease = {
   schema: "hasna.release.v1",
   id: "rel-1",
   createdAt: "2026-07-06T10:00:00.000Z",
-  appId: "open-todos",
+  appId: "todos",
   package: "@hasna/todos",
   version: "1.4.2",
   gitSha: "0f4c2d1",

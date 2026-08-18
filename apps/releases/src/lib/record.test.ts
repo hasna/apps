@@ -28,9 +28,9 @@ describe("parsePackageSpec", () => {
 
 describe("deriveAppId", () => {
   test("derives open-<name> slugs", () => {
-    expect(deriveAppId("@hasna/todos")).toBe("open-todos");
+    expect(deriveAppId("@hasna/todos")).toBe("todos");
     expect(deriveAppId("@hasna/open-todos")).toBe("open-todos");
-    expect(deriveAppId("releases")).toBe("open-releases");
+    expect(deriveAppId("releases")).toBe("releases");
   });
 });
 
@@ -49,17 +49,17 @@ describe("recordRelease", () => {
 
     // ledger record is a valid hasna.release.v1 document
     expect(result.release.schema).toBe("hasna.release.v1");
-    expect(result.release.appId).toBe("open-todos");
+    expect(result.release.appId).toBe("todos");
     expect(result.release.evidenceRefs.length).toBeGreaterThan(0);
 
     const ledger = new ReleaseLedger(ledgerDbPath(dataDir));
     expect(ledger.has("@hasna/todos", "1.4.2")).toBe(true);
     ledger.close();
 
-    // typed event went through the open-events envelope into the local store
+    // typed event went through the events envelope into the local store
     expect(result.event.type).toBe("release.published");
     expect(result.event.source).toBe("releases");
-    expect(result.event.data.appId).toBe("open-todos");
+    expect(result.event.data.appId).toBe("todos");
     expect(result.event.schemaVersion).toBeDefined();
     const eventsDir = join(dataDir, "events");
     const files = (readdirSync(eventsDir, { recursive: true }) as string[]).map(String);
