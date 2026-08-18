@@ -1204,6 +1204,7 @@
         "monitor-daemon": "./bins/monitor-daemon.js",
         "monitor-server": "./bins/monitor-server.js",
         "monitor-web": "./bins/monitor-web.js",
+        "monitor-daemon": "./bins/monitor-daemon.ts",
       },
       "dependencies": {
         "@aws-sdk/client-cloudwatch": "^3.600.0",
