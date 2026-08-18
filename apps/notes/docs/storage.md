@@ -15,8 +15,11 @@ A notes client (CLI, MCP server, macOS app) has exactly two connections:
 
 Selection lives in ONE resolver: `client/transport.mjs`
 (`resolveNotesClientTransport`). An API URL without its key **fails closed** —
-there is no anonymous fallback and no default localhost server. Client code
-never reads `HASNA_NOTES_DATABASE_URL` and never opens PostgreSQL.
+there is no anonymous fallback and no default localhost server. Client
+note-reading and note-writing paths never read `HASNA_NOTES_DATABASE_URL` and
+never open PostgreSQL. The one exception is the `notes storage migrate
+--dry-run` planning verb, which reads the DSN and opens a short-lived PG pool
+to compute the migration plan (fail-closed: no DSN, no plan).
 
 Retired selectors (`PERSONALNOTES_MODE`, `HASNA_NOTES_STORAGE_MODE`,
 `HASNA_NOTES_MODE`, `NOTES_STORAGE_MODE`, `NOTES_MODE`) fail loud even when
