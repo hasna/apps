@@ -20,7 +20,7 @@ import type { MonitorConfig } from "./config";
 let configDir: string;
 
 beforeEach(() => {
-  configDir = mkdtempSync(join(tmpdir(), "open-monitor-config-"));
+  configDir = mkdtempSync(join(tmpdir(), "monitor-config-"));
   process.env["MONITOR_CONFIG_DIR"] = configDir;
 });
 
@@ -102,8 +102,8 @@ describe("loadConfig()", () => {
   });
 
   it("does not migrate legacy user config when MONITOR_CONFIG_DIR is set", () => {
-    const homeDir = mkdtempSync(join(tmpdir(), "open-monitor-home-"));
-    const isolatedConfigDir = mkdtempSync(join(tmpdir(), "open-monitor-config-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "monitor-home-"));
+    const isolatedConfigDir = mkdtempSync(join(tmpdir(), "monitor-config-"));
     const legacyDir = join(homeDir, ".monitor");
     mkdirSync(legacyDir, { recursive: true });
     writeFileSync(
@@ -155,8 +155,8 @@ describe("loadConfig()", () => {
   });
 
   it("uses MONITOR_CONFIG_DIR for default SQLite storage", () => {
-    const homeDir = mkdtempSync(join(tmpdir(), "open-monitor-home-"));
-    const isolatedConfigDir = mkdtempSync(join(tmpdir(), "open-monitor-config-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "monitor-home-"));
+    const isolatedConfigDir = mkdtempSync(join(tmpdir(), "monitor-config-"));
 
     try {
       const result = runIsolatedBunScript(
@@ -398,7 +398,7 @@ describe("monitor config commands", () => {
   });
 
   it("migrates legacy config before editing on first run", () => {
-    const homeDir = mkdtempSync(join(tmpdir(), "open-monitor-home-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "monitor-home-"));
     const legacyDir = join(homeDir, ".monitor");
     mkdirSync(legacyDir, { recursive: true });
     const legacyConfig = {
@@ -490,7 +490,7 @@ describe("monitor config commands", () => {
   });
 
   it("migrates legacy config before backing up on first run", () => {
-    const homeDir = mkdtempSync(join(tmpdir(), "open-monitor-home-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "monitor-home-"));
     const legacyDir = join(homeDir, ".monitor");
     mkdirSync(legacyDir, { recursive: true });
     const legacyConfig = {

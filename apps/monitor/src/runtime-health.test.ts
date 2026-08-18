@@ -166,8 +166,8 @@ describe("inspectRuntimeHealth", () => {
       "tmux list-panes -a -F '#S\t#I\t#P\t#{pane_dead}\t#{pane_current_command}\t#{pane_dead_status}\t#{pane_start_command}'":
         makeCommandResult({
           stdout: [
-            "open-monitor\t1\t0\t0\tbun\t\tbun run dev",
-            "open-monitor\t1\t1\t1\tbash\t1\tbun test",
+            "monitor\t1\t0\t0\tbun\t\tbun run dev",
+            "monitor\t1\t1\t1\tbash\t1\tbun test",
           ].join("\n"),
         }),
     });
@@ -177,7 +177,7 @@ describe("inspectRuntimeHealth", () => {
     expect(report.mcp.connectedCount).toBe(1);
     expect(report.mcp.failedCount).toBe(1);
     expect(report.tmux.deadCount).toBe(1);
-    expect(report.tmux.deadPanes[0]?.ref).toBe("open-monitor:1.1");
+    expect(report.tmux.deadPanes[0]?.ref).toBe("monitor:1.1");
     expect(report.checks.find((check) => check.name === "mcp:summary")?.status).toBe("warn");
     expect(report.checks.find((check) => check.name === "tmux:summary")?.status).toBe("warn");
     expect(report.recommendedActions.some((action) => action.includes("hooks"))).toBe(true);

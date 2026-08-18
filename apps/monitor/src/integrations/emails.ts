@@ -1,7 +1,7 @@
 /**
- * open-emails integration — sends email alerts for critical severity only.
+ * emails integration — sends email alerts for critical severity only.
  *
- * Uses the open-emails HTTP API (POST /api/emails/send).
+ * Uses the emails HTTP API (POST /api/emails/send).
  * Only sends for severity === "critical".
  */
 
@@ -44,12 +44,12 @@ async function sendEmailMessage(message: EmailMessage, config: EmailsIntegration
 
   if (!res.ok) {
     const responseText = await res.text().catch(() => "(no body)");
-    throw new Error(`open-emails API returned ${res.status}: ${responseText}`);
+    throw new Error(`emails API returned ${res.status}: ${responseText}`);
   }
 }
 
 /**
- * Send a critical alert email via open-emails.
+ * Send a critical alert email via emails.
  * Silently skips if severity is not "critical".
  */
 export async function sendAlertEmail(

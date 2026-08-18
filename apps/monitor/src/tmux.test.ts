@@ -35,33 +35,33 @@ function makeCollector(results: Record<string, CommandResult>, calls: string[] =
 describe("executeTmuxCommand", () => {
   it("dispatches to a single target with Enter by default", async () => {
     const sendCommand =
-      "tmux send-keys -t 'open-monitor:1.0' -l 'bun test' && tmux send-keys -t 'open-monitor:1.0' Enter";
+      "tmux send-keys -t 'monitor:1.0' -l 'bun test' && tmux send-keys -t 'monitor:1.0' Enter";
     const calls: string[] = [];
     const collector = makeCollector({
       [sendCommand]: makeCommandResult(),
     }, calls);
 
     const result = await executeTmuxCommand(collector, {
-      target: "open-monitor:1.0",
+      target: "monitor:1.0",
       command: "bun test",
     });
 
     expect(result.ok).toBe(true);
     expect(result.mode).toBe("single");
     expect(result.targets).toHaveLength(1);
-    expect(result.targets[0]?.target).toBe("open-monitor:1.0");
+    expect(result.targets[0]?.target).toBe("monitor:1.0");
     expect(calls).toEqual([sendCommand]);
   });
 
   it("broadcasts to every discovered pane when all=true", async () => {
     const listOutput = [
-      "open-monitor\t1\t0\t0\tbun\t\tbun run dev",
-      "open-monitor\t1\t1\t0\tbash\t\tbun test",
+      "monitor\t1\t0\t0\tbun\t\tbun run dev",
+      "monitor\t1\t1\t0\tbash\t\tbun test",
     ].join("\n");
     const pane0 =
-      "tmux send-keys -t 'open-monitor:1.0' -l 'clear' && tmux send-keys -t 'open-monitor:1.0' Enter";
+      "tmux send-keys -t 'monitor:1.0' -l 'clear' && tmux send-keys -t 'monitor:1.0' Enter";
     const pane1 =
-      "tmux send-keys -t 'open-monitor:1.1' -l 'clear' && tmux send-keys -t 'open-monitor:1.1' Enter";
+      "tmux send-keys -t 'monitor:1.1' -l 'clear' && tmux send-keys -t 'monitor:1.1' Enter";
 
     const calls: string[] = [];
     const collector = makeCollector({
@@ -79,8 +79,8 @@ describe("executeTmuxCommand", () => {
     expect(result.mode).toBe("all");
     expect(result.target_count).toBe(2);
     expect(result.targets.map((target) => target.target)).toEqual([
-      "open-monitor:1.0",
-      "open-monitor:1.1",
+      "monitor:1.0",
+      "monitor:1.1",
     ]);
     expect(calls).toEqual([TMUX_LIST_PANES_COMMAND, pane0, pane1]);
   });

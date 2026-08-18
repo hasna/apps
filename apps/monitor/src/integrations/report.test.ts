@@ -76,7 +76,7 @@ describe("runReportIntegrations", () => {
       {
         conversations: {
           enabled: true,
-          space_id: "open-monitor",
+          space_id: "monitor",
           base_url: baseUrl,
         },
         emails: {
@@ -88,7 +88,7 @@ describe("runReportIntegrations", () => {
     );
 
     expect(delivered).toEqual(["conversations", "emails"]);
-    expect(requests.some((entry) => entry.path === "/api/spaces/open-monitor/messages")).toBe(true);
+    expect(requests.some((entry) => entry.path === "/api/spaces/monitor/messages")).toBe(true);
     expect(requests.some((entry) => entry.path === "/api/emails/send")).toBe(true);
   });
 });

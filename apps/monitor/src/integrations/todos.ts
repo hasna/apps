@@ -1,7 +1,7 @@
 /**
- * open-todos integration — creates a task when an alert fires.
+ * todos integration — creates a task when an alert fires.
  *
- * Uses the open-todos HTTP API (POST /api/tasks).
+ * Uses the todos HTTP API (POST /api/tasks).
  * Only creates a task if no open task already exists for the same
  * machine + check_name combination.
  */
@@ -27,7 +27,7 @@ function taskTitle(alert: AlertRow): string {
 }
 
 /**
- * Create a task in open-todos for the given alert.
+ * Create a task in todos for the given alert.
  * Skips creation if an open task for the same machine+check already exists.
  */
 export async function createTaskForAlert(
@@ -104,7 +104,7 @@ export async function createTaskForAlert(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "(no body)");
-    throw new Error(`open-todos API returned ${res.status}: ${text}`);
+    throw new Error(`todos API returned ${res.status}: ${text}`);
   }
 
   console.error(

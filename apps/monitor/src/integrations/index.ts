@@ -13,23 +13,23 @@ import type { FleetHealthReport } from "../report.js";
 
 export interface TodosIntegrationConfig {
   enabled: boolean;
-  /** open-todos project ID to create tasks in */
+  /** todos project ID to create tasks in */
   project_id: string;
-  /** Base URL of the open-todos HTTP API. Default: http://localhost:3000 */
+  /** Base URL of the todos HTTP API. Default: http://localhost:3000 */
   base_url?: string;
 }
 
 export interface ConversationsIntegrationConfig {
   enabled: boolean;
-  /** open-conversations space name/ID to post alerts to */
+  /** conversations space name/ID to post alerts to */
   space_id: string;
-  /** Base URL of the open-conversations HTTP API. Default: http://localhost:3001 */
+  /** Base URL of the conversations HTTP API. Default: http://localhost:3001 */
   base_url?: string;
 }
 
 export interface MementosIntegrationConfig {
   enabled: boolean;
-  /** Base URL of the open-mementos HTTP API. Default: http://localhost:3002 */
+  /** Base URL of the mementos HTTP API. Default: http://localhost:3002 */
   base_url?: string;
 }
 
@@ -37,7 +37,7 @@ export interface EmailsIntegrationConfig {
   enabled: boolean;
   /** Recipient email address for critical alert emails */
   to: string;
-  /** Base URL of the open-emails HTTP API. Default: http://localhost:3003 */
+  /** Base URL of the emails HTTP API. Default: http://localhost:3003 */
   base_url?: string;
   /** From address (optional) */
   from?: string;
