@@ -106,7 +106,6 @@ and link regeneration.
 storage directly; there is no local/cloud sync engine or cache mode.
 
 ```bash
-export HASNA_ATTACHMENTS_STORAGE_MODE=cloud
 export HASNA_ATTACHMENTS_DATABASE_URL=postgres://...
 export HASNA_ATTACHMENTS_API_SIGNING_KEY=replace-me
 export ATTACHMENTS_S3_BUCKET=my-bucket

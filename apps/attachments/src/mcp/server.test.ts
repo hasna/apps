@@ -1607,7 +1607,7 @@ describe("MCP Server — presigned upload on the hosted (/v1) backend", () => {
       });
   }
 
-  it("presign_upload works in self_hosted/cloud mode (no local-only gate)", async () => {
+  it("presign_upload works on the hosted route (no local-only gate)", async () => {
     mockV1PresignUpload.mockClear();
     await withCloudEnv(async () => {
       const server = createServer();
@@ -1630,7 +1630,7 @@ describe("MCP Server — presigned upload on the hosted (/v1) backend", () => {
     });
   });
 
-  it("complete_presigned_upload works in self_hosted/cloud mode and returns the link", async () => {
+  it("complete_presigned_upload works on the hosted route and returns the link", async () => {
     mockV1PresignComplete.mockClear();
     await withCloudEnv(async () => {
       const server = createServer();

@@ -382,7 +382,7 @@ function withCloudEnv<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 describe("presign commands on the hosted (/v1) backend", () => {
-  it("presign-upload works in self_hosted/cloud mode (no local-only gate)", async () => {
+  it("presign-upload works on the hosted route (no local-only gate)", async () => {
     mockV1PresignUpload.mockClear();
     const capture = captureOutput();
     try {
@@ -405,7 +405,7 @@ describe("presign commands on the hosted (/v1) backend", () => {
     }
   });
 
-  it("presign-complete works in self_hosted/cloud mode and prints the link", async () => {
+  it("presign-complete works on the hosted route and prints the link", async () => {
     mockV1PresignComplete.mockClear();
     const capture = captureOutput();
     try {
