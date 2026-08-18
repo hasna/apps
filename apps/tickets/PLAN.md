@@ -30,7 +30,7 @@ The system exposes four independent surfaces sharing a single SQLite database:
 
 ## 2. Tech Stack
 
-Same foundation as the `open-*` ecosystem:
+Same foundation as the Hasna ecosystem:
 
 | Layer | Choice | Rationale |
 |-------|--------|-----------|
@@ -638,7 +638,7 @@ Migrations tracked in `_migrations` table (same pattern as todos).
 ## 10. Key Design Decisions
 
 ### SQLite vs PostgreSQL
-**Decision: SQLite** — consistent with the `open-*` ecosystem, zero-dependency deploy, sufficient for self-hosted use cases. The architecture is designed to support a PostgreSQL adapter in the future (swap `db/database.ts`).
+**Decision: SQLite** — consistent with the Hasna ecosystem, zero-dependency deploy, sufficient for self-hosted use cases. The architecture is designed to support a PostgreSQL adapter in the future (swap `db/database.ts`).
 
 ### Multi-tenancy
 **Decision: Single database, workspace/project scoped** — all queries include `workspace_id` or `project_id` filter. Simple for self-hosted, extensible if needed.
@@ -1071,7 +1071,7 @@ src/
 | **npm** | @hasna/todos | @hasna/tickets |
 | **Bin** | todos, todos-mcp, todos-serve | tickets, tickets-mcp, tickets-serve |
 
-Both systems can integrate: completing a dev ticket in `open-todos` can automatically close the
+Both systems can integrate: completing a dev ticket in `todos` can automatically close the
 corresponding user-facing ticket in `tickets` via the SDK or webhook.
 
 ---
