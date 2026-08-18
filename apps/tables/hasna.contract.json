@@ -4,9 +4,13 @@
   "class": "library",
   "contractVersion": "v1",
   "kitVersion": "0.11.1",
-  "description": "Headless Airtable-like data tables SDK — bases, typed fields (text/number/select/date/checkbox/link/formula/lookup), records, views (filter/sort/group), formula + lookup engine, and CSV/JSON import-export. Primary surfaces: the headless SDK (\".\") and a Glide-Data-Grid React component (\"./react\"). Ships a `tables` CLI over local JSON base files under ~/.hasna/tables. Pure library plus CLI: no server, no SQL store.",
-  "bins": ["tables"],
-  "hosting": ["user-hosted"],
+  "description": "Headless Airtable-like data tables SDK \u2014 bases, typed fields (text/number/select/date/checkbox/link/formula/lookup), records, views (filter/sort/group), formula + lookup engine, and CSV/JSON import-export. Primary surfaces: the headless SDK (\".\") and a Glide-Data-Grid React component (\"./react\"). Ships a `tables` CLI over local JSON base files under ~/.hasna/tables. Pure library plus CLI: no server, no SQL store.",
+  "bins": [
+    "tables"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
   "serviceSurfaces": [
     {
       "name": "tables-sdk",
@@ -35,6 +39,11 @@
           "reason": "Headless data-tables library; MCP execution belongs to consuming applications."
         }
       ]
+    },
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
     }
   }
 }
