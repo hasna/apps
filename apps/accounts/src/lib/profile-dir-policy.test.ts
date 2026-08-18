@@ -193,8 +193,8 @@ describe("agent worktrees, scratchpads and caches are refused (F1)", () => {
   // ACCOUNTS_HOME override feeding profilesDir() — so an agent pointing
   // ACCOUNTS_HOME at its own worktree reproduces the original leak one level in.
   const refused = [
-    "/home/hasna/.hasna/repos/worktrees/open-accounts/e68bc8c7-registry-cleanup",
-    "/home/hasna/.hasna/repos/worktrees/open-accounts/x/profiles/claude/acct",
+    "/home/hasna/.hasna/repos/worktrees/apps/e68bc8c7-registry-cleanup",
+    "/home/hasna/.hasna/repos/worktrees/apps/x/profiles/claude/acct",
     "/home/hasna/.hasna/projects/workspaces/wks_abc/scratchpad/accounts-home/profiles/claude/a",
     "/home/hasna/.hasna/projects/workspaces/wks_abc/h2/prof-claude",
     "/home/hasna/.cache/accounts-tests/worker-a/case-1/profiles/claude/acct",
