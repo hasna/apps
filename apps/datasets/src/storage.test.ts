@@ -39,7 +39,7 @@ afterEach(() => {
   testDir = undefined;
 });
 
-describe("open-datasets storage", () => {
+describe("datasets storage", () => {
   test("registers sources, ingests rows, and returns bounded previews", () => {
     const source = createSource({
       name: "Swiss paperwork CSV",
