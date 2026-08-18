@@ -51,7 +51,7 @@ describe("server data backend", () => {
     });
   });
 
-  test("every legacy mode variable fails with database URL guidance", () => {
+  test("every legacy mode variable is inert; DATABASE_URL is the only selector", () => {
     for (const key of [
       "HASNA_TODOS_STORAGE_MODE",
       "HASNA_TODOS_MODE",
@@ -59,10 +59,15 @@ describe("server data backend", () => {
       "TODOS_MODE",
     ]) {
       for (const value of ["cloud", "", "   "]) {
+        expect(resolveServerDataBackend("todos", { [key]: value }).backend, `${key} must be inert`).toBe(
+          "sqlite",
+        );
         expect(
-          () => resolveServerDataBackend("todos", { [key]: value }),
-          `${key}=${JSON.stringify(value)} must throw`,
-        ).toThrow(/removed.*HASNA_TODOS_DATABASE_URL/i);
+          resolveServerDataBackend("todos", {
+            [key]: value,
+            HASNA_TODOS_DATABASE_URL: "postgres://user@host/db",
+          }).backend,
+        ).toBe("postgresql");
       }
     }
   });

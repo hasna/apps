@@ -25,7 +25,6 @@ function identity() {
 
 function taskCreateInvocation() {
   return {
-    mode: "local" as const,
     authorityId: "tenant-a",
     contractDigest: TODOS_CONTRACT_DIGEST,
     manifestDigest: TODOS_OPERATION_MANIFEST_DIGEST,
@@ -64,7 +63,7 @@ function recalculateBundle(bundle: TodosTransferBundle): TodosTransferBundle {
 }
 
 describe("Todos operation invocation", () => {
-  test("binds mode, authority, exact digests, manifest operation, identity, and request", () => {
+  test("binds authority, exact digests, manifest operation, identity, and request", () => {
     const invocation = taskCreateInvocation();
     expect(TodosOperationInvocationSchema.safeParse(invocation).success).toBe(true);
     const validated = validateTodosOperationInvocation(invocation);
@@ -77,7 +76,6 @@ describe("Todos operation invocation", () => {
 
   test("rejects missing invocation bindings", () => {
     for (const field of [
-      "mode",
       "authorityId",
       "contractDigest",
       "manifestDigest",
@@ -91,7 +89,7 @@ describe("Todos operation invocation", () => {
     }
   });
 
-  test("rejects mismatched authority, mode, digests, operation, identity, and request", () => {
+  test("rejects mismatched authority, digests, operation, identity, and request", () => {
     const base = taskCreateInvocation();
     const invalid = [
       { ...base, authorityId: "tenant-b" },
@@ -104,23 +102,6 @@ describe("Todos operation invocation", () => {
     for (const invocation of invalid) {
       expect(TodosOperationInvocationSchema.safeParse(invocation).success).toBe(false);
     }
-
-    const localOnlyWithCloudMode = {
-      ...base,
-      mode: "cloud",
-      operationId: "todos.server.start",
-      identity: {
-        ...base.identity,
-        audience: "tenant_admin",
-        roles: ["tenant_admin"],
-      },
-      request: {
-        interface: "loopback",
-        port: 4317,
-        expectedState: "stopped",
-      },
-    };
-    expect(TodosOperationInvocationSchema.safeParse(localOnlyWithCloudMode).success).toBe(false);
   });
 
   test("derives required idempotency from the manifest and identity context", () => {

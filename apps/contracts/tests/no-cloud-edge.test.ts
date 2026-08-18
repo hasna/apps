@@ -567,7 +567,7 @@ describe("no-cloud gate: the mandated guard test", () => {
 
 describe("no-cloud gate: symbols are scoped to their import", () => {
   // The internal files package's real shape: defined locally, routed at the
-  // self-hosted service.
+  // server-side service.
   const localDefinition =
     'import type { Command } from "commander";\n' +
     "export function registerCloudTools(register: unknown): void { void register; }\n" +

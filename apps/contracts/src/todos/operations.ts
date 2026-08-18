@@ -2,7 +2,6 @@ import * as z from "zod/v4";
 import {
   TODOS_MANIFEST_VERSION,
   TodosAudienceSchema,
-  TodosModeSchema,
   sha256TodosValue,
 } from "./common";
 import {
@@ -68,7 +67,6 @@ export const TodosOperationSchema = z.strictObject({
   resource: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/),
   action: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/),
   classification: z.enum(["shared_customer", "local_topology_only"]),
-  supportedModes: z.array(TodosModeSchema).min(1),
   audience: TodosAudienceSchema,
   capabilityId: TodosCapabilityIdSchema,
   availability: z.enum(["core", "gated"]),
@@ -155,13 +153,6 @@ export const TodosOperationManifestSchema = z.strictObject({
       }
       seen.add(surfaceValue);
     }
-    if (new Set(operation.supportedModes).size !== operation.supportedModes.length) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Supported modes must be unique",
-        path: ["operations", index, "supportedModes"],
-      });
-    }
     if (new Set(operation.requiredScopes).size !== operation.requiredScopes.length) {
       ctx.addIssue({
         code: "custom",
@@ -170,17 +161,6 @@ export const TodosOperationManifestSchema = z.strictObject({
       });
     }
     if (operation.classification === "shared_customer") {
-      if (
-        operation.supportedModes.length !== 2
-        || operation.supportedModes[0] !== "local"
-        || operation.supportedModes[1] !== "cloud"
-      ) {
-        ctx.addIssue({
-          code: "custom",
-          message: "Shared customer operations must support local and cloud",
-          path: ["operations", index, "supportedModes"],
-        });
-      }
       if (!operation.surfaces.http || !operation.surfaces.http.path.startsWith("/v1/")) {
         ctx.addIssue({
           code: "custom",
@@ -206,16 +186,6 @@ export const TodosOperationManifestSchema = z.strictObject({
         }
       }
     } else {
-      if (
-        operation.supportedModes.length !== 1
-        || operation.supportedModes[0] !== "local"
-      ) {
-        ctx.addIssue({
-          code: "custom",
-          message: "Local topology operations support local mode only",
-          path: ["operations", index, "supportedModes"],
-        });
-      }
       if (operation.surfaces.http !== null) {
         ctx.addIssue({
           code: "custom",
@@ -428,7 +398,6 @@ function shared(input: OperationInput): TodosOperation {
     resource: input.resource,
     action: input.action,
     classification: "shared_customer",
-    supportedModes: ["local", "cloud"],
     audience,
     capabilityId: input.capabilityId,
     availability: input.availability ?? "core",
@@ -465,7 +434,6 @@ function localTopology(input: Omit<OperationInput, "httpMethod" | "httpPath">): 
     resource: input.resource,
     action: input.action,
     classification: "local_topology_only",
-    supportedModes: ["local"],
     audience,
     capabilityId: input.capabilityId,
     availability: input.availability ?? "core",

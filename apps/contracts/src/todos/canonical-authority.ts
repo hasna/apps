@@ -61,7 +61,6 @@ export const TodosCanonicalAuthorityHandshakeSchema =
   TodosAuthorityHandshakeSchema.superRefine(canonicalAuthorityIssues);
 
 export interface CreateTodosAuthorityHandshakeInput {
-  mode: "local" | "cloud";
   authority: TodosAuthorityDescriptor;
   issuedAt: string;
 }
@@ -70,7 +69,6 @@ export function createTodosAuthorityHandshake(
   input: CreateTodosAuthorityHandshakeInput,
 ): TodosAuthorityHandshake {
   return TodosCanonicalAuthorityHandshakeSchema.parse({
-    mode: input.mode,
     authority: input.authority,
     contractVersion: TODOS_CONTRACT_VERSION,
     contractDigest: TODOS_CONTRACT_DIGEST,

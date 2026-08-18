@@ -8,7 +8,7 @@
 // SAFETY: this module never returns, logs, or embeds an API-key value. Callers
 // receive only presence flags and source names.
 
-import { envToken, type Env } from "../env-token.js";
+import { type Env } from "../env-token.js";
 import { isIP } from "node:net";
 import { clientTransportEnvKeys } from "./env-keys.js";
 import {
@@ -178,30 +178,6 @@ function firstEnv(
     if (value) return { key, value: options.preserveRaw ? raw! : value };
   }
   return null;
-}
-
-function firstDefinedEnvKey(env: Env, keys: readonly string[]): string | null {
-  for (const key of keys) {
-    if (Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined) return key;
-  }
-  return null;
-}
-
-function assertNoLegacyClientMode(name: string, env: Env): void {
-  const token = envToken(name);
-  const legacyKey = firstDefinedEnvKey(env, [
-    `HASNA_${token}_STORAGE_MODE`,
-    `HASNA_${token}_MODE`,
-    `${token}_STORAGE_MODE`,
-    `${token}_MODE`,
-  ]);
-  if (!legacyKey) return;
-  const apiUrlKey = clientTransportEnvKeys(name).apiUrlKeys[0];
-  throw new Error(
-    `${legacyKey} was removed. Delete the mode variable; ` +
-      `set ${apiUrlKey} with an API credential to select HTTP, ` +
-      `or leave it unset for local SQLite.`,
-  );
 }
 
 function rawAuthority(value: string): string {
@@ -396,7 +372,6 @@ export function resolveClientTransport(
   env: Env = process.env,
   options: ResolveClientTransportOptions = {},
 ): ClientTransportResolution {
-  assertNoLegacyClientMode(name, env);
   const keys = clientTransportEnvKeys(name);
   const envUrlHit = firstEnv(env, keys.apiUrlKeys, { preserveRaw: true });
   // Only consulted when the environment is silent, so the env keeps precedence

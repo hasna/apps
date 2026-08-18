@@ -6,7 +6,6 @@ import {
   TodosContentRefSchema,
   TodosEntityIdSchema,
   TodosIdempotencyKeySchema,
-  TodosModeSchema,
   TodosOwnerIdSchema,
   TodosOwnerQualifiedRefSchema,
   type TodosOwnerQualifiedRef,
@@ -292,7 +291,6 @@ export const TodosTransferBundleSchema = z.strictObject({
   createdAt: TodosTimestampSchema,
   source: z.strictObject({
     authorityId: TodosOwnerIdSchema,
-    mode: TodosModeSchema,
   }),
   contractVersion: z.literal(TODOS_CONTRACT_VERSION),
   contractDigest: TodosSha256DigestSchema,
@@ -337,7 +335,6 @@ export interface TodosTransferBundleWithDigestsInput {
   createdAt: string;
   source: {
     authorityId: string;
-    mode: "local" | "cloud";
   };
   contractDigest: string;
   manifestDigest: string;

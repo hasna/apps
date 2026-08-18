@@ -1,6 +1,6 @@
 {
   "contractVersion": "1.0.0",
-  "invariantRegistryDigest": "12da98adc6f79a8f0118760df2b8641e4905eba6b12205ad8a580c7aa108f646",
+  "invariantRegistryDigest": "1e8a1bdd3acc19e59b46653f626347986a50e26c778e94c63bf0e140e5a57332",
   "invariants": {
     "invariants": [
       {
@@ -46,8 +46,8 @@
       },
       {
         "category": "authority",
-        "description": "Local authorities have no endpoint and cloud authorities require one HTTPS endpoint.",
-        "id": "todos.authority.mode_binding",
+        "description": "A network authority endpoint must be HTTPS; a null endpoint is the on-box installation.",
+        "id": "todos.authority.endpoint_https_rule",
         "jsonSchemaExpressible": false,
         "runtimeValidatorIds": [
           "authority.config_semantics",
@@ -244,8 +244,8 @@
       },
       {
         "category": "invocation",
-        "description": "The operation, mode, scopes, idempotency, and typed request all match the manifest.",
-        "id": "todos.invocation.operation_mode_scope_request",
+        "description": "The operation, scopes, idempotency, and typed request all match the manifest.",
+        "id": "todos.invocation.operation_scope_request",
         "jsonSchemaExpressible": false,
         "runtimeValidatorIds": [
           "invocation.operation_binding",
@@ -589,7 +589,7 @@
   "manifestVersion": "1",
   "runtimeValidationRequired": true,
   "schema": "hasna.todos.schema_bundle.v1",
-  "schemaDigest": "b65d185367e004fd24ad42ff1da041a440c6ee9675b17ed44712948b438c21c4",
+  "schemaDigest": "b76e7fcfc885e994f6b7b26251c6ed89adaa71a1baf3e9f495b893bd823da6e7",
   "schemas": {
     "hasna.todos.activity.v1": {
       "$defs": {
@@ -1026,18 +1026,10 @@
               "minLength": 2,
               "pattern": "^[a-z][a-z0-9.-]*$",
               "type": "string"
-            },
-            "kind": {
-              "enum": [
-                "local_installation",
-                "cloud_tenant"
-              ],
-              "type": "string"
             }
           },
           "required": [
             "id",
-            "kind",
             "endpoint"
           ],
           "type": "object"
@@ -1065,17 +1057,9 @@
         "manifestVersion": {
           "const": "1",
           "type": "string"
-        },
-        "mode": {
-          "enum": [
-            "local",
-            "cloud"
-          ],
-          "type": "string"
         }
       },
       "required": [
-        "mode",
         "authority",
         "contractVersion",
         "contractDigest",
@@ -1086,7 +1070,7 @@
       "type": "object",
       "x-hasna-invariants": [
         "todos.authority.capability_uniqueness",
-        "todos.authority.mode_binding"
+        "todos.authority.endpoint_https_rule"
       ]
     },
     "hasna.todos.authority_handshake.v1": {
@@ -1119,18 +1103,10 @@
               "minLength": 2,
               "pattern": "^[a-z][a-z0-9.-]*$",
               "type": "string"
-            },
-            "kind": {
-              "enum": [
-                "local_installation",
-                "cloud_tenant"
-              ],
-              "type": "string"
             }
           },
           "required": [
             "id",
-            "kind",
             "endpoint"
           ],
           "type": "object"
@@ -1163,17 +1139,9 @@
         "manifestVersion": {
           "const": "1",
           "type": "string"
-        },
-        "mode": {
-          "enum": [
-            "local",
-            "cloud"
-          ],
-          "type": "string"
         }
       },
       "required": [
-        "mode",
         "authority",
         "contractVersion",
         "contractDigest",
@@ -1186,7 +1154,7 @@
       "x-hasna-invariants": [
         "todos.authority.canonical_binding",
         "todos.authority.capability_uniqueness",
-        "todos.authority.mode_binding"
+        "todos.authority.endpoint_https_rule"
       ]
     },
     "hasna.todos.capability.v1": {
@@ -1218,17 +1186,6 @@
           "pattern": "^[a-z][a-z0-9-]*$",
           "type": "string"
         },
-        "modes": {
-          "items": {
-            "enum": [
-              "local",
-              "cloud"
-            ],
-            "type": "string"
-          },
-          "minItems": 1,
-          "type": "array"
-        },
         "operationIds": {
           "items": {
             "pattern": "^todos\\.[a-z0-9_]+(?:\\.[a-z0-9_]+)+$",
@@ -1242,7 +1199,6 @@
         "id",
         "availability",
         "operationIds",
-        "modes",
         "audiences"
       ],
       "type": "object"
@@ -1280,17 +1236,6 @@
                 "pattern": "^[a-z][a-z0-9-]*$",
                 "type": "string"
               },
-              "modes": {
-                "items": {
-                  "enum": [
-                    "local",
-                    "cloud"
-                  ],
-                  "type": "string"
-                },
-                "minItems": 1,
-                "type": "array"
-              },
               "operationIds": {
                 "items": {
                   "pattern": "^todos\\.[a-z0-9_]+(?:\\.[a-z0-9_]+)+$",
@@ -1304,7 +1249,6 @@
               "id",
               "availability",
               "operationIds",
-              "modes",
               "audiences"
             ],
             "type": "object"
@@ -1904,7 +1848,6 @@
         "code": {
           "enum": [
             "TODOS_INVALID_INPUT",
-            "TODOS_INVALID_MODE",
             "TODOS_AUTHENTICATION_FAILED",
             "TODOS_SCOPE_REQUIRED",
             "TODOS_TENANT_MISMATCH",
@@ -2898,13 +2841,6 @@
         "manifestDigest": {
           "$ref": "#/$defs/__schema1"
         },
-        "mode": {
-          "enum": [
-            "local",
-            "cloud"
-          ],
-          "type": "string"
-        },
         "operationId": {
           "pattern": "^todos\\.[a-z0-9_]+(?:\\.[a-z0-9_]+)+$",
           "type": "string"
@@ -2912,7 +2848,6 @@
         "request": {}
       },
       "required": [
-        "mode",
         "authorityId",
         "contractDigest",
         "manifestDigest",
@@ -2924,7 +2859,7 @@
       "x-hasna-invariants": [
         "todos.invocation.authority_identity_binding",
         "todos.invocation.canonical_digests",
-        "todos.invocation.operation_mode_scope_request"
+        "todos.invocation.operation_scope_request"
       ]
     },
     "hasna.todos.operation_manifest.v1": {
@@ -3103,17 +3038,6 @@
                 "minLength": 1,
                 "type": "string"
               },
-              "supportedModes": {
-                "items": {
-                  "enum": [
-                    "local",
-                    "cloud"
-                  ],
-                  "type": "string"
-                },
-                "minItems": 1,
-                "type": "array"
-              },
               "surfaces": {
                 "additionalProperties": false,
                 "properties": {
@@ -3269,7 +3193,6 @@
               "resource",
               "action",
               "classification",
-              "supportedModes",
               "audience",
               "capabilityId",
               "availability",
@@ -11151,18 +11074,10 @@
               "properties": {
                 "authorityId": {
                   "$ref": "#/$defs/__schema2"
-                },
-                "mode": {
-                  "enum": [
-                    "local",
-                    "cloud"
-                  ],
-                  "type": "string"
                 }
               },
               "required": [
-                "authorityId",
-                "mode"
+                "authorityId"
               ],
               "type": "object"
             },
@@ -14473,18 +14388,10 @@
               "properties": {
                 "authorityId": {
                   "$ref": "#/$defs/__schema2"
-                },
-                "mode": {
-                  "enum": [
-                    "local",
-                    "cloud"
-                  ],
-                  "type": "string"
                 }
               },
               "required": [
-                "authorityId",
-                "mode"
+                "authorityId"
               ],
               "type": "object"
             },
@@ -17691,18 +17598,10 @@
               "properties": {
                 "authorityId": {
                   "$ref": "#/$defs/__schema2"
-                },
-                "mode": {
-                  "enum": [
-                    "local",
-                    "cloud"
-                  ],
-                  "type": "string"
                 }
               },
               "required": [
-                "authorityId",
-                "mode"
+                "authorityId"
               ],
               "type": "object"
             },
@@ -18410,7 +18309,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -18686,7 +18584,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -18990,7 +18887,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -19305,7 +19201,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -19648,7 +19543,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -19833,7 +19727,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -19991,18 +19884,10 @@
                       "minLength": 2,
                       "pattern": "^[a-z][a-z0-9.-]*$",
                       "type": "string"
-                    },
-                    "kind": {
-                      "enum": [
-                        "local_installation",
-                        "cloud_tenant"
-                      ],
-                      "type": "string"
                     }
                   },
                   "required": [
                     "id",
-                    "kind",
                     "endpoint"
                   ],
                   "type": "object"
@@ -20035,17 +19920,9 @@
                 "manifestVersion": {
                   "const": "1",
                   "type": "string"
-                },
-                "mode": {
-                  "enum": [
-                    "local",
-                    "cloud"
-                  ],
-                  "type": "string"
                 }
               },
               "required": [
-                "mode",
                 "authority",
                 "contractVersion",
                 "contractDigest",
@@ -20080,7 +19957,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -20289,7 +20165,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -20448,17 +20323,6 @@
                   "pattern": "^[a-z][a-z0-9-]*$",
                   "type": "string"
                 },
-                "modes": {
-                  "items": {
-                    "enum": [
-                      "local",
-                      "cloud"
-                    ],
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
                 "operationIds": {
                   "items": {
                     "pattern": "^todos\\.[a-z0-9_]+(?:\\.[a-z0-9_]+)+$",
@@ -20472,7 +20336,6 @@
                 "id",
                 "availability",
                 "operationIds",
-                "modes",
                 "audiences"
               ],
               "type": "object"
@@ -20501,7 +20364,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -20669,17 +20531,6 @@
                         "pattern": "^[a-z][a-z0-9-]*$",
                         "type": "string"
                       },
-                      "modes": {
-                        "items": {
-                          "enum": [
-                            "local",
-                            "cloud"
-                          ],
-                          "type": "string"
-                        },
-                        "minItems": 1,
-                        "type": "array"
-                      },
                       "operationIds": {
                         "items": {
                           "pattern": "^todos\\.[a-z0-9_]+(?:\\.[a-z0-9_]+)+$",
@@ -20693,7 +20544,6 @@
                       "id",
                       "availability",
                       "operationIds",
-                      "modes",
                       "audiences"
                     ],
                     "type": "object"
@@ -20744,7 +20594,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -21004,7 +20853,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -21292,7 +21140,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -21465,7 +21312,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -21686,7 +21532,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -21938,7 +21783,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -22157,7 +22001,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -22404,7 +22247,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -22595,7 +22437,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -22869,7 +22710,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -23174,7 +23014,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -23454,7 +23293,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -23762,7 +23600,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -24154,7 +23991,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -24577,7 +24413,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -24777,7 +24612,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -25059,7 +24893,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -25372,7 +25205,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -25643,7 +25475,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -25942,7 +25773,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -26478,7 +26308,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -27042,7 +26871,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -27263,7 +27091,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -27537,7 +27364,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -27800,7 +27626,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -28094,7 +27919,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -28385,7 +28209,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -28704,7 +28527,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -28942,7 +28764,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -29208,7 +29029,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -29474,7 +29294,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -29768,7 +29587,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -30392,7 +30210,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -30697,7 +30514,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -31064,7 +30880,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -31459,7 +31274,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -31658,7 +31472,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -31807,13 +31620,6 @@
                   "const": "1",
                   "type": "string"
                 },
-                "mode": {
-                  "enum": [
-                    "local",
-                    "cloud"
-                  ],
-                  "type": "string"
-                },
                 "observedAt": {
                   "format": "date-time",
                   "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-]\\d{2}:\\d{2})))$",
@@ -31830,7 +31636,6 @@
               },
               "required": [
                 "status",
-                "mode",
                 "authorityId",
                 "contractVersion",
                 "manifestVersion",
@@ -31862,7 +31667,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -32113,7 +31917,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -32506,7 +32309,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -33676,7 +33478,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -33939,7 +33740,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -34233,7 +34033,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -34483,7 +34282,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -34761,7 +34559,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -35188,7 +34985,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -35454,7 +35250,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -35748,7 +35543,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -35987,7 +35781,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -39276,18 +39069,10 @@
                   "properties": {
                     "authorityId": {
                       "$ref": "#/$defs/__schema2"
-                    },
-                    "mode": {
-                      "enum": [
-                        "local",
-                        "cloud"
-                      ],
-                      "type": "string"
                     }
                   },
                   "required": [
-                    "authorityId",
-                    "mode"
+                    "authorityId"
                   ],
                   "type": "object"
                 },
@@ -39339,7 +39124,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -39674,7 +39458,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -40026,7 +39809,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -40437,7 +40219,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -40864,7 +40645,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -41306,7 +41086,6 @@
                 "code": {
                   "enum": [
                     "TODOS_INVALID_INPUT",
-                    "TODOS_INVALID_MODE",
                     "TODOS_AUTHENTICATION_FAILED",
                     "TODOS_SCOPE_REQUIRED",
                     "TODOS_TENANT_MISMATCH",
@@ -42358,13 +42137,6 @@
           "const": "1",
           "type": "string"
         },
-        "mode": {
-          "enum": [
-            "local",
-            "cloud"
-          ],
-          "type": "string"
-        },
         "observedAt": {
           "format": "date-time",
           "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-]\\d{2}:\\d{2})))$",
@@ -42381,7 +42153,6 @@
       },
       "required": [
         "status",
-        "mode",
         "authorityId",
         "contractVersion",
         "manifestVersion",
@@ -47725,18 +47496,10 @@
           "properties": {
             "authorityId": {
               "$ref": "#/$defs/__schema2"
-            },
-            "mode": {
-              "enum": [
-                "local",
-                "cloud"
-              ],
-              "type": "string"
             }
           },
           "required": [
-            "authorityId",
-            "mode"
+            "authorityId"
           ],
           "type": "object"
         },

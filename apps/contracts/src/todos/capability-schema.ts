@@ -2,7 +2,6 @@ import * as z from "zod/v4";
 import {
   TODOS_MANIFEST_VERSION,
   TodosAudienceSchema,
-  TodosModeSchema,
 } from "./common";
 
 export const TODOS_CAPABILITY_SCHEMA_IDS = {
@@ -14,7 +13,6 @@ export const TodosCapabilitySchema = z.strictObject({
   id: z.string().min(1).max(128).regex(/^[a-z][a-z0-9-]*$/),
   availability: z.enum(["core", "gated"]),
   operationIds: z.array(z.string().regex(/^todos\.[a-z0-9_]+(?:\.[a-z0-9_]+)+$/)).min(1),
-  modes: z.array(TodosModeSchema).min(1),
   audiences: z.array(TodosAudienceSchema).min(1),
 });
 export type TodosCapability = z.infer<typeof TodosCapabilitySchema>;

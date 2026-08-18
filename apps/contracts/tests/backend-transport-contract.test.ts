@@ -44,12 +44,18 @@ describe("server data-backend contract", () => {
     });
   });
 
-  test("legacy storage-mode configuration fails with a migration path", () => {
+  test("legacy storage-mode configuration is inert; DATABASE_URL is the only selector", () => {
     const resolveServerDataBackend = requiredFunction("resolveServerDataBackend");
     for (const value of ["cloud", "", "   "]) {
-      expect(() =>
-        resolveServerDataBackend("demo", { HASNA_DEMO_STORAGE_MODE: value }),
-      ).toThrow(/HASNA_DEMO_STORAGE_MODE.*removed.*HASNA_DEMO_DATABASE_URL/i);
+      expect(resolveServerDataBackend("demo", { HASNA_DEMO_STORAGE_MODE: value }).backend).toBe(
+        "sqlite",
+      );
+      expect(
+        resolveServerDataBackend("demo", {
+          HASNA_DEMO_STORAGE_MODE: value,
+          HASNA_DEMO_DATABASE_URL: "postgres://fixture.invalid/demo",
+        }).backend,
+      ).toBe("postgresql");
     }
   });
 
@@ -104,16 +110,16 @@ describe("client transport contract", () => {
     expect(JSON.stringify(http)).not.toContain("fixture-client-key");
   });
 
-  test("a legacy mode variable is a migration error, not a routing signal", () => {
+  test("a legacy mode variable is inert; URL and credential still select HTTP", () => {
     const resolveClientTransport = requiredFunction("resolveClientTransport");
     for (const value of ["postgres", "", "   "]) {
-      expect(() =>
-        resolveClientTransport("demo", {
-          HASNA_DEMO_STORAGE_MODE: value,
-          HASNA_DEMO_API_URL: "https://demo.example.com",
-          HASNA_DEMO_API_KEY: "fixture-client-key",
-        }),
-      ).toThrow(/HASNA_DEMO_STORAGE_MODE.*removed.*HASNA_DEMO_API_URL/i);
+      const r = resolveClientTransport("demo", {
+        HASNA_DEMO_STORAGE_MODE: value,
+        HASNA_DEMO_API_URL: "https://demo.example.com",
+        HASNA_DEMO_API_KEY: "fixture-client-key",
+      });
+      expect(r.transport).toBe("http");
+      expect(r.baseUrl).toBe("https://demo.example.com/v1");
     }
   });
 

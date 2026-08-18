@@ -108,7 +108,7 @@ const root = join(import.meta.dir, "..");
  * this list. An entry at registrable-domain granularity permits every name under
  * it, so ONE entry for a hyperscaler's domain silently permits every account-,
  * region- and instance-bearing hostname that provider generates on our behalf —
- * which is the exact shape of a self-hosted deployment's own endpoints, and in
+ * which is the exact shape of a deployment's own endpoints, and in
  * one common form embeds the account identifier itself. An adversarial pass
  * measured three such literals scoring zero findings under the registrable form.
  * Matching the whole host costs nothing here: the entries below ARE, one for one,

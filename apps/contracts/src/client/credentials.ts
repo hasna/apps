@@ -313,9 +313,9 @@ const CREDENTIAL_SHAPED_KEY =
  * over the file's line order.
  *
  * Values found here are NOT policed for legacy-ness. A live fleet file may still
- * carry a retired key such as `HASNA_<APP>_STORAGE_MODE`; this reader simply
- * never asks for it. Throwing on a file's contents would take down every client
- * on the fleet for a stale line nobody reads.
+ * carry keys this reader never asks for; it simply ignores them. Throwing on a
+ * file's contents would take down every client on the fleet for a stale line
+ * nobody reads.
  */
 export function appConfigDiskValue(
   name: string,

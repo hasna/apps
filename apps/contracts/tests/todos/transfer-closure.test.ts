@@ -336,7 +336,7 @@ function completeBundle(): TodosTransferBundle {
   return createTodosTransferBundle({
     bundleId: "complete-bundle",
     createdAt: timestamp,
-    source: { authorityId: owner, mode: "local" },
+    source: { authorityId: owner },
     records: completeRecords(),
   });
 }
@@ -448,7 +448,7 @@ describe("Todos complete portable closure", () => {
     const missingFirst = createTodosTransferBundle({
       bundleId: "projection-v2-without-v1",
       createdAt: timestamp,
-      source: { authorityId: owner, mode: "local" },
+      source: { authorityId: owner },
       records: missingFirstRecords,
     });
     expect(
@@ -464,7 +464,7 @@ describe("Todos complete portable closure", () => {
     const missingMiddle = createTodosTransferBundle({
       bundleId: "projection-v3-without-v2",
       createdAt: timestamp,
-      source: { authorityId: owner, mode: "local" },
+      source: { authorityId: owner },
       records: missingMiddleRecords,
     });
     expect(
@@ -481,7 +481,7 @@ describe("Todos complete portable closure", () => {
     const mismatchedBundle = createTodosTransferBundle({
       bundleId: "projection-predecessor-mismatch",
       createdAt: timestamp,
-      source: { authorityId: owner, mode: "local" },
+      source: { authorityId: owner },
       records: mismatchedRecords,
     });
     expect(
@@ -507,7 +507,7 @@ describe("Todos complete portable closure", () => {
     const identityMismatchBundle = createTodosTransferBundle({
       bundleId: "projection-predecessor-identity-mismatch",
       createdAt: timestamp,
-      source: { authorityId: owner, mode: "local" },
+      source: { authorityId: owner },
       records: identityMismatchRecords,
     });
     expect(validateTodosTransferBundle(identityMismatchBundle).valid).toBe(false);
@@ -517,7 +517,7 @@ describe("Todos complete portable closure", () => {
     const completeHistory = createTodosTransferBundle({
       bundleId: "projection-complete-history",
       createdAt: timestamp,
-      source: { authorityId: owner, mode: "local" },
+      source: { authorityId: owner },
       records: completeHistoryRecords,
     });
     expect(validateTodosTransferBundle(completeHistory).valid).toBe(true);

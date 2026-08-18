@@ -11,7 +11,6 @@ import {
   TodosAuthorityHandshakeSchema,
   TodosCanonicalAuthorityHandshakeSchema,
   TodosIdentityContextSchema,
-  TodosModeSchema,
   createTodosError,
   validateCanonicalTodosAuthorityHandshake,
   validateTodosIdentityContext,
@@ -23,55 +22,58 @@ function fixture(path: string): unknown {
   return JSON.parse(readFileSync(join(generatedRoot, "fixtures", path), "utf8"));
 }
 
-describe("Todos mode and authority", () => {
-  test("accepts exactly local and cloud", () => {
-    expect(TodosModeSchema.parse("local")).toBe("local");
-    expect(TodosModeSchema.parse("cloud")).toBe("cloud");
-
-    for (const value of [
-      undefined,
-      null,
-      "",
-      {},
-      "remote",
-      "self_hosted",
-      "self-hosted",
-      "hybrid",
-    ]) {
-      expect(TodosModeSchema.safeParse(value).success).toBe(false);
-    }
-  });
-
-  test("requires explicit mode and exactly one authority", () => {
+describe("Todos authority without a mode axis", () => {
+  test("a null-endpoint authority and an HTTPS authority both validate", () => {
     const local = fixture("authority.local.valid.json");
     const cloud = fixture("authority.cloud.valid.json");
     expect(TodosCanonicalAuthorityHandshakeSchema.safeParse(local).success).toBe(true);
     expect(TodosCanonicalAuthorityHandshakeSchema.safeParse(cloud).success).toBe(true);
     expect(local).not.toHaveProperty("local_fallback");
     expect(cloud).not.toHaveProperty("local_fallback");
+    expect(local).not.toHaveProperty("mode");
+    expect(cloud).not.toHaveProperty("mode");
+    expect((local as { authority: { kind?: string } }).authority).not.toHaveProperty("kind");
+    expect((cloud as { authority: { kind?: string } }).authority).not.toHaveProperty("kind");
+  });
 
-    const withoutMode = structuredClone(local) as Record<string, unknown>;
-    delete withoutMode.mode;
-    expect(TodosAuthorityConfigSchema.safeParse(withoutMode).success).toBe(false);
+  test("the mode and placement vocabulary is rejected, not ignored", () => {
+    const local = fixture("authority.local.valid.json") as Record<string, unknown>;
+    expect(TodosAuthorityConfigSchema.safeParse({ ...local, mode: "local" }).success).toBe(false);
+    expect(TodosAuthorityConfigSchema.safeParse({ ...local, mode: "cloud" }).success).toBe(false);
+    expect(
+      TodosAuthorityConfigSchema.safeParse({
+        ...local,
+        authority: { id: "tenant-a-local", kind: "local_installation", endpoint: null },
+      }).success,
+    ).toBe(false);
+    expect(
+      TodosAuthorityConfigSchema.safeParse({
+        ...local,
+        authority: { id: "tenant-a-cloud", kind: "cloud_tenant", endpoint: "https://todos.example.invalid/v1" },
+      }).success,
+    ).toBe(false);
+  });
 
-    const inferredFromEndpoint = structuredClone(cloud) as Record<string, unknown>;
-    delete inferredFromEndpoint.mode;
-    expect(TodosAuthorityConfigSchema.safeParse(inferredFromEndpoint).success).toBe(false);
-
+  test("requires exactly one authority and an HTTPS endpoint when one is present", () => {
+    const local = fixture("authority.local.valid.json") as Record<string, unknown>;
     const multiple = {
-      ...(local as Record<string, unknown>),
-      authorities: [
-        (local as { authority: unknown }).authority,
-        (cloud as { authority: unknown }).authority,
-      ],
+      ...local,
+      authorities: [local.authority, local.authority],
     };
     expect(TodosAuthorityConfigSchema.safeParse(multiple).success).toBe(false);
 
+    expect(
+      TodosAuthorityConfigSchema.safeParse({
+        ...local,
+        authority: { id: "tenant-a-cloud", endpoint: "http://todos.example.invalid/v1" },
+      }).success,
+    ).toBe(false);
+
     const mismatchedHandshake = {
       ...(local as Record<string, unknown>),
-      authority: (cloud as { authority: unknown }).authority,
+      authority: (fixture("authority.cloud.valid.json") as { authority: unknown }).authority,
     };
-    expect(TodosAuthorityHandshakeSchema.safeParse(mismatchedHandshake).success).toBe(false);
+    expect(TodosAuthorityHandshakeSchema.safeParse(mismatchedHandshake).success).toBe(true);
   });
 
   test("fails closed on wrong digests and missing, extra, reordered, or invented capabilities", () => {

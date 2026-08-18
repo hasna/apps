@@ -703,7 +703,6 @@
   ],
   "adapterExtensions": [
     {
-      "mode": "local",
       "schema": "hasna.task_to_pr_adapter_extension.v1",
       "ref": {
         "role": "adapter_extension",
@@ -715,7 +714,6 @@
       "digest": "6666666666666666666666666666666666666666666666666666666666666666"
     },
     {
-      "mode": "cloud",
       "schema": "hasna.task_to_pr_adapter_extension.v1",
       "ref": {
         "role": "adapter_extension",

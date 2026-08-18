@@ -68,13 +68,6 @@ export const TodosOperationInvocationSchema =
     });
     return;
   }
-  if (!operation.supportedModes.includes(value.mode)) {
-    ctx.addIssue({
-      code: "custom",
-      message: "Invocation mode is not supported by this operation",
-      path: ["mode"],
-    });
-  }
 
   const identityResult = validateTodosIdentityContext(value.identity, {
     organizationId: value.authorityId,
@@ -209,8 +202,13 @@ export function validateTodosOperationInvocation(
   };
 }
 
+// The bundle registers the structural envelope for this id. The refined
+// TodosOperationInvocationSchema adds runtime refinements only (declared via
+// the invariant registry), and its wrapper instance renders with a different
+// `$defs` allocation under z.toJSONSchema — registering it would diverge the
+// runtime schema bundle from the version-neutral schema foundation.
 export const TODOS_INVOCATION_SCHEMAS = Object.freeze({
-  [TODOS_OPERATION_INVOCATION_SCHEMA_ID]: TodosOperationInvocationSchema,
+  [TODOS_OPERATION_INVOCATION_SCHEMA_ID]: TodosOperationInvocationEnvelopeSchema,
 });
 
 export {
