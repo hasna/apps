@@ -158,7 +158,7 @@ program
       host: options.host,
       port: options.port ? Number.parseInt(options.port, 10) : undefined,
     });
-    console.log(`Open Catalog API listening on http://${server.hostname}:${server.port}`);
+    console.log(`Hasna Catalog API listening on http://${server.hostname}:${server.port}`);
   });
 
 if (import.meta.main) {

@@ -413,7 +413,8 @@ export const ORG_ASSET_CLASSES: OrgAssetClass[] = [
  * is not an inventory of anything.
  */
 export const ALLOWED_ORG_IDENTIFIERS: ReadonlyMap<string, string> = new Map([
-  ["open-catalog", "this package's own repo checkout folder; self-reference is unavoidable and discloses nothing new"],
+  ["open-catalog", "this package's own repo checkout folder under the retired open- name; self-reference is unavoidable and discloses nothing new"],
+  ["catalog", "this package's own repo checkout folder (current name); self-reference is unavoidable and discloses nothing new"],
   ["open-source", "the English compound, not a checkout folder — it appears in prose in every OSS repository"],
   ["open-sourced", "as above"],
   ["open-sourcing", "as above"],

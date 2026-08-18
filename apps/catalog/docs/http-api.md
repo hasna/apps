@@ -5,7 +5,7 @@ SQLite store as the CLI.
 
 ```bash
 catalog serve
-# Open Catalog API listening on http://127.0.0.1:8797
+# Hasna Catalog API listening on http://127.0.0.1:8797
 ```
 
 All successful and error responses are formatted JSON with
