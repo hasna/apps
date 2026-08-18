@@ -176,6 +176,7 @@ export interface ProjectRegistrationAuthorityReceipt {
   duplicate_of_receipt_id: string | null;
   accepted_receipt_id: string | null;
   created_by_operation: boolean;
+  prior_state?: JsonObject | null;
   created_at: string;
 }
 
@@ -203,6 +204,8 @@ export interface ProjectRegistrationAuthorityRequest extends ProjectRegistration
   project_slug: string;
   project_name: string;
   desired: JsonObject;
+  operation_intent?: "create" | "bind_existing" | "adopt_existing";
+  adopt_existing?: JsonObject;
   target: ProjectRegistrationPathHandle;
   accepted_receipt?: ProjectRegistrationAuthorityReceipt;
 }
@@ -403,6 +406,14 @@ export interface ProjectRegistrationExistingConversationsChannelReconciliation {
   target_id: string;
 }
 
+export interface ProjectRegistrationPreboundConversationsChannelReconciliation {
+  target_id: string;
+  expected_project_id: string;
+  expected_revision: string;
+  expected_digest: string;
+  expected_message_ownership: JsonObject;
+}
+
 export interface ProjectRegistrationExistingAuthorityReconciliation {
   source_operation_id: string;
   source_authority_identity?: ProjectRegistrationHistoricalAuthorityIdentity;
@@ -415,14 +426,16 @@ export interface ProjectRegistrationExistingMementosProjectReconciliation
 }
 
 export interface FullProjectRegistrationReconciliationInput {
-  conversations_channel?: ProjectRegistrationExistingConversationsChannelReconciliation;
+  conversations_channel?: ProjectRegistrationExistingConversationsChannelReconciliation
+    | ProjectRegistrationPreboundConversationsChannelReconciliation;
   todos_project?: ProjectRegistrationExistingAuthorityReconciliation;
   todos_task_list?: ProjectRegistrationExistingAuthorityReconciliation;
   mementos_project?: ProjectRegistrationExistingMementosProjectReconciliation;
 }
 
 interface ValidatedFullProjectRegistrationReconciliationInput {
-  conversations_channel?: ProjectRegistrationExistingConversationsChannelReconciliation;
+  conversations_channel?: ProjectRegistrationExistingConversationsChannelReconciliation
+    | ProjectRegistrationPreboundConversationsChannelReconciliation;
   todos_project?: ProjectRegistrationExistingAuthorityReconciliation;
   todos_task_list?: ProjectRegistrationExistingAuthorityReconciliation;
   mementos_project?: ProjectRegistrationExistingAuthorityReconciliation & {
@@ -587,6 +600,14 @@ interface AcceptedProjectPathRepair {
 }
 
 type ExistingAuthorityAdoption =
+  | {
+      evidence: "prebound_channel";
+      target_id: string;
+      expected_project_id: string;
+      expected_revision: string;
+      expected_digest: string;
+      expected_message_ownership: JsonObject;
+    }
   | {
       evidence: "project_integration";
       integration_key: keyof WorkspaceIntegrations;
@@ -1049,6 +1070,74 @@ function validateReconcileExisting(
       throw new Error(`project registration reconcile_existing.${key} must be an object`);
     }
     const entry = entryRaw as Record<string, unknown>;
+    const preboundKeys = [
+      "target_id",
+      "expected_project_id",
+      "expected_revision",
+      "expected_digest",
+      "expected_message_ownership",
+    ].sort();
+    if (
+      key === "conversations_channel"
+      && canonicalJson(Object.keys(entry).sort()) === canonicalJson(preboundKeys)
+    ) {
+      if (
+        typeof entry.target_id !== "string"
+        || !/^chn_[0-9a-f]{32}$/.test(entry.target_id)
+        || typeof entry.expected_project_id !== "string"
+        || entry.expected_project_id !== input.project.id
+        || typeof entry.expected_revision !== "string"
+        || !entry.expected_revision.trim()
+        || typeof entry.expected_digest !== "string"
+        || !/^[0-9a-f]{64}$/.test(entry.expected_digest)
+        || !entry.expected_message_ownership
+        || typeof entry.expected_message_ownership !== "object"
+        || Array.isArray(entry.expected_message_ownership)
+      ) {
+        throw new Error(
+          "project registration reconcile_existing.conversations_channel pre-bound adoption requires exact channel/project revision/digest and message ownership snapshot",
+        );
+      }
+      const ownership = entry.expected_message_ownership as Record<string, unknown>;
+      const ownershipKeys = [
+        "message_count",
+        "first_message_id",
+        "last_message_id",
+        "message_ids_digest",
+        "message_project_digest",
+        "digest",
+        "preserved_digest",
+      ];
+      if (canonicalJson(Object.keys(ownership).sort()) !== canonicalJson(ownershipKeys.slice().sort())) {
+        throw new Error(
+          "project registration reconcile_existing.conversations_channel expected_message_ownership must contain exactly the required fields",
+        );
+      }
+      if (
+        !Number.isInteger(ownership.message_count)
+        || Number(ownership.message_count) < 0
+        || (ownership.first_message_id !== null && !Number.isInteger(ownership.first_message_id))
+        || (ownership.last_message_id !== null && !Number.isInteger(ownership.last_message_id))
+        || [
+          ownership.message_ids_digest,
+          ownership.message_project_digest,
+          ownership.digest,
+          ownership.preserved_digest,
+        ].some((digest) => typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest))
+      ) {
+        throw new Error(
+          "project registration reconcile_existing.conversations_channel expected_message_ownership contains invalid values",
+        );
+      }
+      value.conversations_channel = {
+        target_id: entry.target_id,
+        expected_project_id: entry.expected_project_id,
+        expected_revision: entry.expected_revision,
+        expected_digest: entry.expected_digest,
+        expected_message_ownership: ownership as JsonObject,
+      };
+      continue;
+    }
     const expectedKeys = key === "mementos_project"
       ? ["source_operation_id", "source_target", "target_id"]
       : ["source_operation_id", "target_id"];
@@ -1119,7 +1208,7 @@ function validateReconcileExisting(
       };
     }
   }
-  if (sourceOperationIds.size !== 1) {
+  if (sourceOperationIds.size > 1) {
     throw new Error(
       "project registration reconcile_existing entries must share one source_operation_id",
     );
@@ -1635,11 +1724,44 @@ function validateAuthorityReceiptResult(
     if (!receipt.target_id || !receipt.result_revision || !receipt.result_digest) {
       throw new ProjectRegistrationStepError(request.step_id, "authority_receipt_missing_result");
     }
-    if (receipt.outcome === "accepted" && !receipt.created_by_operation) {
+    if (
+      receipt.outcome === "accepted"
+      && !receipt.created_by_operation
+      && request.operation_intent !== "adopt_existing"
+    ) {
       throw new ProjectRegistrationStepError(request.step_id, "authority_refused_attempt_ownership");
     }
     if (receipt.outcome === "duplicate_of_accepted" && !receipt.duplicate_of_receipt_id) {
       throw new ProjectRegistrationStepError(request.step_id, "authority_duplicate_missing_link");
+    }
+    if (request.operation_intent === "adopt_existing") {
+      const adoption = request.adopt_existing;
+      const prior = receipt.prior_state;
+      const priorOwnership = prior && typeof prior === "object"
+        ? prior.message_ownership
+        : undefined;
+      if (
+        !adoption
+        || receipt.created_by_operation
+        || receipt.target_id !== adoption.target_id
+        || receipt.result_revision !== adoption.expected_revision
+        || receipt.result_digest !== adoption.expected_digest
+        || !prior
+        || prior.adoption !== true
+        || prior.target_id !== adoption.target_id
+        || prior.project_id !== adoption.expected_project_id
+        || prior.revision !== adoption.expected_revision
+        || prior.digest !== adoption.expected_digest
+        || !priorOwnership
+        || typeof priorOwnership !== "object"
+        || Array.isArray(priorOwnership)
+        || canonicalJson(priorOwnership) !== canonicalJson(adoption.expected_message_ownership)
+      ) {
+        throw new ProjectRegistrationStepError(
+          request.step_id,
+          "authority_adoption_receipt_mismatch",
+        );
+      }
     }
   } else {
     if (receipt.outcome === "terminal_nonacceptance") return;
@@ -2441,7 +2563,19 @@ function appendAdoptedAuthorityReceipt(input: {
   path_repair?: AcceptedProjectPathRepair;
   db: Database;
 }): ProjectRegistrationReceipt {
-  const adoptionPreconditions: JsonObject[] = input.adoption.evidence === "project_integration"
+  const adoptionPreconditions: JsonObject[] = input.adoption.evidence === "prebound_channel"
+    ? [{
+        predicate: "prebound_channel_adoption",
+        target_id: input.adoption.target_id,
+        expected_project_id: input.adoption.expected_project_id,
+        expected_revision: input.adoption.expected_revision,
+        expected_digest: input.adoption.expected_digest,
+        expected_message_ownership: input.adoption.expected_message_ownership,
+        authority_receipt_id: input.authority_receipt.receipt_id,
+        exact_readback: true,
+        no_clobber: true,
+      }]
+    : input.adoption.evidence === "project_integration"
     ? [{
         predicate: "explicit_project_integration",
         integration_key: input.adoption.integration_key,
@@ -2579,10 +2713,33 @@ async function executeExternalStep(input: {
   adopt_existing?: ExistingAuthorityAdoption;
 }): Promise<AcceptedExternalStep> {
   const requestDigest = sha256(canonicalJson(input.desired));
-  const preconditionDigest = sha256(canonicalJson({
-    target_selector: input.target_selector,
-    expected: "absent",
-  }));
+  const prebound = input.adopt_existing?.evidence === "prebound_channel"
+    ? input.adopt_existing
+    : null;
+  const operationIntent = prebound ? "adopt_existing" as const : undefined;
+  const adoptExistingPayload = prebound
+    ? {
+        target_id: prebound.target_id,
+        expected_project_id: prebound.expected_project_id,
+        expected_revision: prebound.expected_revision,
+        expected_digest: prebound.expected_digest,
+        expected_message_ownership: prebound.expected_message_ownership,
+      }
+    : undefined;
+  const preconditionDigest = sha256(canonicalJson(prebound
+    ? {
+        target_id: prebound.target_id,
+        target_selector: input.target_selector,
+        expected_project_id: prebound.expected_project_id,
+        expected_revision: prebound.expected_revision,
+        expected_digest: prebound.expected_digest,
+        expected_message_ownership: prebound.expected_message_ownership,
+        desired_project_id: input.project.id,
+      }
+    : {
+        target_selector: input.target_selector,
+        expected: "absent",
+      }));
   const idempotencyKey = deriveProjectRegistrationIdempotencyKey({
     operation_id: input.operation_id,
     step_id: input.step_id,
@@ -2609,6 +2766,10 @@ async function executeExternalStep(input: {
     project_slug: input.project.slug,
     project_name: input.project.name,
     desired: input.desired,
+    ...(operationIntent && adoptExistingPayload ? {
+      operation_intent: operationIntent,
+      adopt_existing: adoptExistingPayload,
+    } : {}),
     target: input.target,
     ...input.bounds,
   };
@@ -2763,6 +2924,53 @@ async function executeExternalStep(input: {
       input.step_id,
       receipt.reason ?? "authority_nonacceptance",
     );
+  }
+  if (prebound) {
+    if (
+      receipt.target_id !== prebound.target_id
+      || receipt.result_revision !== prebound.expected_revision
+      || receipt.result_digest !== prebound.expected_digest
+    ) {
+      throw new ProjectRegistrationStepError(input.step_id, "authority_adoption_receipt_mismatch");
+    }
+    const record = await input.adapter.readExact({
+      resource_kind: input.resource_kind,
+      target_id: receipt.target_id!,
+      target: input.target,
+      ...input.bounds,
+    });
+    if (
+      record.target_id !== receipt.target_id
+      || record.revision !== receipt.result_revision
+      || record.digest !== receipt.result_digest
+    ) {
+      throw new ProjectRegistrationStepError(input.step_id, "authority_exact_readback_mismatch");
+    }
+    const accepted: AcceptedExternalStep = {
+      adapter: input.adapter,
+      capability: input.capability,
+      receipt,
+      record,
+      request,
+      local_receipt: null,
+    };
+    input.accepted_steps.push(accepted);
+    accepted.local_receipt = appendAdoptedAuthorityReceipt({
+      adapter: input.adapter,
+      request,
+      authority_receipt: receipt,
+      record,
+      adoption: prebound,
+      db: input.db,
+    });
+    appendAuthorityReadbackReceipt({
+      adapter: input.adapter,
+      request,
+      authority_receipt: receipt,
+      record,
+      db: input.db,
+    });
+    return accepted;
   }
   const accepted: AcceptedExternalStep = {
     adapter: input.adapter,
@@ -4637,6 +4845,9 @@ export async function registerFullProject(
     const channel = deriveProjectChannel(project).channel;
     const existingChannel = retrofitProject?.integrations.conversations_channel;
     const channelReconciliation = validated.reconcile_existing?.conversations_channel;
+    const preboundChannel = channelReconciliation && "expected_project_id" in channelReconciliation
+      ? channelReconciliation
+      : null;
     const conversations = await executeExternalStep({
       adapter: authorities.conversations,
       capability: capabilities.conversations,
@@ -4649,13 +4860,30 @@ export async function registerFullProject(
         project_id: project.id,
         project_slug: project.slug,
         project_kind: project.kind,
+        ...(preboundChannel ? {
+          registration_mode: "adopt_existing",
+          target_id: preboundChannel.target_id,
+          expected_project_id: preboundChannel.expected_project_id,
+          expected_revision: preboundChannel.expected_revision,
+          expected_digest: preboundChannel.expected_digest,
+          expected_message_ownership: preboundChannel.expected_message_ownership,
+        } : {}),
       },
       project,
       target: input.target,
       bounds,
       db,
       accepted_steps: externalAccepted,
-      adopt_existing: channelReconciliation
+      adopt_existing: preboundChannel
+        ? {
+            evidence: "prebound_channel",
+            target_id: preboundChannel.target_id,
+            expected_project_id: preboundChannel.expected_project_id,
+            expected_revision: preboundChannel.expected_revision,
+            expected_digest: preboundChannel.expected_digest,
+            expected_message_ownership: preboundChannel.expected_message_ownership,
+          }
+        : channelReconciliation && "source_operation_id" in channelReconciliation
         ? {
             evidence: "prior_registration_receipt",
             source_operation_id: channelReconciliation.source_operation_id,

@@ -251,6 +251,10 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
     receipt: ProjectRegistrationAuthorityReceipt,
     request: ProjectRegistrationAuthorityLookupRequest,
   ) => ProjectRegistrationAuthorityReceipt) | null = null;
+  adoptionReceiptTransform: ((
+    receipt: ProjectRegistrationAuthorityReceipt,
+    request: ProjectRegistrationAuthorityRequest,
+  ) => ProjectRegistrationAuthorityReceipt) | null = null;
   route: string;
   packageVersion = "test-1.0.0";
   authorityId: string;
@@ -333,6 +337,29 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
         : fakeAuthorityTargetId(this.authority, request.resource_kind, request.desired));
     const existingRecord = this.records.get(targetId);
     const preexistingReason = this.preexistingTerminalReasons.get(targetId);
+    if (request.operation_intent === "adopt_existing" && existingRecord) {
+      const adoption = request.adopt_existing;
+      if (!adoption) throw new Error("adoption fixture requires exact preconditions");
+      const adopted = this.makeReceipt(request, {
+        outcome: "accepted",
+        target_id: targetId,
+        result_revision: existingRecord.revision,
+        result_digest: existingRecord.digest,
+        reason: "adopted_preexisting",
+        created_by_operation: false,
+        prior_state: {
+          adoption: true,
+          target_id: targetId,
+          project_id: adoption.expected_project_id,
+          revision: existingRecord.revision,
+          digest: existingRecord.digest,
+          message_ownership: adoption.expected_message_ownership,
+        },
+      });
+      const transformed = this.adoptionReceiptTransform?.(adopted, request) ?? adopted;
+      this.receiptByKey.set(request.idempotency_key, transformed);
+      return transformed;
+    }
     if (existingRecord && preexistingReason) {
       const rejected = this.makeReceipt(request, {
         outcome: "terminal_nonacceptance",
@@ -896,6 +923,7 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
       created_by_operation: boolean;
       accepted_receipt_id?: string | null;
       duplicate_of_receipt_id?: string | null;
+      prior_state?: ProjectRegistrationAuthorityReceipt["prior_state"];
     },
   ): ProjectRegistrationAuthorityReceipt {
     return {
@@ -925,6 +953,7 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
       duplicate_of_receipt_id: result.duplicate_of_receipt_id ?? null,
       accepted_receipt_id: result.accepted_receipt_id ?? null,
       created_by_operation: result.created_by_operation,
+      ...(result.prior_state !== undefined ? { prior_state: result.prior_state } : {}),
       created_at: "2026-08-07T00:00:00.000Z",
     };
   }
@@ -3291,6 +3320,118 @@ describe("full project registration transaction", () => {
         reason_code: "registration_reconciliation_receipt_unverified",
       });
       expect(fakes.conversations.records.has(channelId)).toBe(true);
+      expect(fakes.conversations.compensated).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("adopts an exact pre-bound rich channel without a historical registration receipt", async () => {
+    const db = makeDb();
+    const target = tempTarget("prebound-channel-adoption");
+    const fakes = fakeAuthorities();
+    const projectId = "wks_preboundchannel0001";
+    const channelId = "chn_1012ddb87c8f033cb40fdead018cdfc8";
+    const revision = "rev_prebound_channel_001";
+    const digest = sha256(`${channelId}:${revision}:rich-channel`);
+    fakes.conversations.channelTargetIdFactory = () => channelId;
+    fakes.conversations.records.set(channelId, {
+      target_id: channelId,
+      revision,
+      digest,
+    });
+    fakes.conversations.preexistingTerminalReasons.set(channelId, "preexisting_conflict");
+    const request = {
+      ...input("op-prebound-channel-adoption", target.target, { id: projectId }),
+      reconcile_existing: {
+        conversations_channel: {
+          target_id: channelId,
+          expected_project_id: projectId,
+          expected_revision: revision,
+          expected_digest: digest,
+          expected_message_ownership: {
+            message_count: 0,
+            first_message_id: null,
+            last_message_id: null,
+            message_ids_digest: sha256(canonicalJson([])),
+            message_project_digest: sha256(canonicalJson([])),
+            digest: sha256(canonicalJson([])),
+            preserved_digest: sha256(canonicalJson([])),
+          },
+        },
+      },
+    } as unknown as FullProjectRegistrationInput;
+    try {
+      const result = await registerFullProject(request, { db, authorities: fakes.authorities });
+
+      expect(result).toMatchObject({ ok: true, outcome: "accepted" });
+      expect(result.receipts.find((receipt) => receipt.step_id === "conversations_channel")).toMatchObject({
+        outcome: "accepted",
+        reason: "adopted_preexisting",
+        target_id: channelId,
+        rollback: [],
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("fails closed when the pre-bound adoption receipt does not prove the exact snapshot", async () => {
+    const db = makeDb();
+    const target = tempTarget("prebound-channel-receipt-drift");
+    const fakes = fakeAuthorities();
+    const projectId = "wks_preboundchannel0002";
+    const channelId = "chn_2012ddb87c8f033cb40fdead018cdfc8";
+    const revision = "rev_prebound_channel_002";
+    const digest = sha256(`${channelId}:${revision}:rich-channel`);
+    const ownership = {
+      message_count: 0,
+      first_message_id: null,
+      last_message_id: null,
+      message_ids_digest: sha256(canonicalJson([])),
+      message_project_digest: sha256(canonicalJson([])),
+      digest: sha256(canonicalJson([])),
+      preserved_digest: sha256(canonicalJson([])),
+    };
+    fakes.conversations.channelTargetIdFactory = () => channelId;
+    fakes.conversations.records.set(channelId, {
+      target_id: channelId,
+      revision,
+      digest,
+    });
+    fakes.conversations.adoptionReceiptTransform = (receipt) => ({
+      ...receipt,
+      prior_state: {
+        ...(receipt.prior_state ?? {}),
+        digest: sha256("drifted-adoption-receipt"),
+      },
+    });
+    const request = {
+      ...input("op-prebound-channel-receipt-drift", target.target, { id: projectId }),
+      reconcile_existing: {
+        conversations_channel: {
+          target_id: channelId,
+          expected_project_id: projectId,
+          expected_revision: revision,
+          expected_digest: digest,
+          expected_message_ownership: ownership,
+        },
+      },
+    } as unknown as FullProjectRegistrationInput;
+    try {
+      const result = await registerFullProject(request, { db, authorities: fakes.authorities });
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "split_state",
+        failed_step: "conversations_channel",
+        reason_code: "authority_terminal_outcome_unresolved",
+      });
+      expect(fakes.conversations.records.get(channelId)).toEqual({
+        target_id: channelId,
+        revision,
+        digest,
+      });
       expect(fakes.conversations.compensated).toEqual([]);
     } finally {
       db.close();

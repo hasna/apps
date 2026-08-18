@@ -9,6 +9,7 @@ import {
   createProjectChannelRegistrationAuthority,
   listProjectChannelMessagePage,
   listProjectChannelRegistrationPage,
+  messageOwnershipSnapshot,
   projectChannelRegistrationChannelRecord,
   projectChannelRegistrationDigest,
   registerProjectChannel,
@@ -94,7 +95,9 @@ function inverseRequest(
     target_id: forward.target_id,
   };
   return {
-    operation_intent: forward.prior_state ? "bind_existing" : "create",
+    operation_intent: forward.prior_state
+      ? ("adoption" in forward.prior_state ? "adopt_existing" : "bind_existing")
+      : "create",
     operation_id: forward.operation_id,
     step_id: forward.step_id,
     resource_kind: "channel",
@@ -828,7 +831,8 @@ describe("project channel registration authority", () => {
         },
       },
     });
-    const transition = accepted.prior_state!.message_transition;
+    if (!accepted.prior_state || "adoption" in accepted.prior_state) throw new Error("expected bind prior state");
+    const transition = accepted.prior_state.message_transition;
     expect(transition.first_message_id).toBeNumber();
     expect(transition.last_message_id).toBeNumber();
     expect(transition.message_ids_digest).toBeString();
@@ -1001,6 +1005,285 @@ describe("project channel registration authority", () => {
       revision: beforeRecord.revision,
       digest: beforeRecord.digest,
     });
+  });
+
+  test("adopts an exact pre-bound rich channel without mutating metadata or messages", async () => {
+    createLocalProject();
+    const channel = createChannel("adopted-rich", "human", {
+      project_id: PROJECT_ID,
+      description: "Existing description",
+      topic: "Existing topic",
+      metadata: { source: "legacy", retained: true },
+      tags: ["adopted", "rich"],
+    });
+    getDb().prepare(
+      "INSERT INTO channel_members (channel, agent) VALUES (?, ?)",
+    ).run(channel.name, "second-member");
+    sendMessage({
+      from: "human",
+      to: channel.name,
+      channel: channel.name,
+      project_id: PROJECT_ID,
+      content: "existing history",
+    });
+    const db = getDb();
+    const beforeChannel = db.prepare("SELECT * FROM channels WHERE id = ?").get(channel.id);
+    const beforeMembers = db.prepare(
+      "SELECT agent, joined_at FROM channel_members WHERE channel = ? ORDER BY agent",
+    ).all(channel.name);
+    const beforeMessages = db.prepare(
+      "SELECT * FROM messages WHERE channel = ? ORDER BY id",
+    ).all(channel.name);
+    const rows = db.prepare(
+      `SELECT ${[
+        "id", "uuid", "session_id", "from_agent", "to_agent", "channel", "project_id",
+        "content", "priority", "working_dir", "repository", "branch", "metadata",
+        "edited_at", "pinned_at", "blocking", "attachments", "reply_to", "created_at", "read_at",
+      ].join(", ")} FROM messages WHERE channel = ? ORDER BY id ASC`,
+    ).all(channel.name) as Array<Record<string, unknown>>;
+    const record = projectChannelRegistrationChannelRecord(beforeChannel as never);
+    const ownership = messageOwnershipSnapshot(rows as never);
+    const desired = {
+      channel: channel.name,
+      project_id: PROJECT_ID,
+      project_slug: channel.name,
+      project_kind: "work",
+      registration_mode: "adopt_existing",
+      target_id: channel.id,
+      expected_project_id: PROJECT_ID,
+      expected_revision: record.revision,
+      expected_digest: record.digest,
+      expected_message_ownership: ownership,
+    };
+    const request = await forwardRequest({
+      operation_intent: "adopt_existing",
+      operation_id: "operation-adopt-existing",
+      idempotency_key: "operation-adopt-existing:conversations-channel:forward",
+      project_slug: channel.name,
+      target_selector: channel.name,
+      desired,
+      request_digest: projectChannelRegistrationDigest(desired),
+      precondition_digest: projectChannelRegistrationDigest({
+        target_id: channel.id,
+        target_selector: channel.name,
+        expected_project_id: PROJECT_ID,
+        expected_revision: record.revision,
+        expected_digest: record.digest,
+        expected_message_ownership: ownership,
+        desired_project_id: PROJECT_ID,
+      }),
+      adopt_existing: {
+        target_id: channel.id,
+        expected_project_id: PROJECT_ID,
+        expected_revision: record.revision,
+        expected_digest: record.digest,
+        expected_message_ownership: ownership,
+      },
+    } as Partial<ProjectChannelRegistrationRequest>);
+
+    expect(() => registerProjectChannel({
+      ...request,
+      operation_intent: "create",
+    })).toThrow("create surface rejects adopt-existing intent");
+
+    const accepted = await registerProjectChannel(request);
+    expect(accepted).toMatchObject({
+      outcome: "accepted",
+      reason: "adopted_preexisting",
+      target_id: channel.id,
+      created_by_operation: false,
+      prior_state: {
+        adoption: true,
+        target_id: channel.id,
+        project_id: PROJECT_ID,
+        revision: record.revision,
+        digest: record.digest,
+        message_ownership: ownership,
+      },
+    });
+    expect(db.prepare("SELECT * FROM channels WHERE id = ?").get(channel.id)).toEqual(beforeChannel);
+    expect(db.prepare(
+      "SELECT agent, joined_at FROM channel_members WHERE channel = ? ORDER BY agent",
+    ).all(channel.name)).toEqual(beforeMembers);
+    expect(db.prepare("SELECT * FROM messages WHERE channel = ? ORDER BY id").all(channel.name)).toEqual(beforeMessages);
+
+    const duplicate = await registerProjectChannel(request);
+    expect(duplicate).toMatchObject({
+      outcome: "duplicate_of_accepted",
+      duplicate_of_receipt_id: accepted.receipt_id,
+      prior_state: accepted.prior_state,
+    });
+
+    const inverse = inverseRequest(accepted, {
+      operation_id: "operation-adopt-existing",
+      idempotency_key: "operation-adopt-existing:conversations-channel:inverse",
+      target_selector: channel.id,
+      project_slug: channel.name,
+    });
+    const restored = await createProjectChannelRegistrationAuthority().compensate(inverse);
+    expect(restored).toMatchObject({
+      outcome: "accepted",
+      direction: "inverse",
+      target_id: channel.id,
+      accepted_receipt_id: accepted.receipt_id,
+      prior_state: accepted.prior_state,
+    });
+    expect(db.prepare("SELECT * FROM channels WHERE id = ?").get(channel.id)).toEqual(beforeChannel);
+    expect(db.prepare("SELECT * FROM messages WHERE channel = ? ORDER BY id").all(channel.name)).toEqual(beforeMessages);
+    expect(await createProjectChannelRegistrationAuthority().verifyInverse(inverse)).toEqual({
+      target_id: channel.id,
+      accepted_receipt_id: accepted.receipt_id,
+      absent: false,
+      restored: true,
+      adopted: true,
+      project_id: PROJECT_ID,
+      revision: record.revision,
+      digest: record.digest,
+    });
+  });
+
+  test("fails closed on pre-bound channel identity, owner, revision, and message snapshot drift", async () => {
+    const foreignProjectId = "wks_foreign_project_00000001";
+    createLocalProject();
+    createLocalProject(foreignProjectId);
+    const channel = createChannel("adoption-cas", "human", {
+      project_id: PROJECT_ID,
+      description: "CAS protected",
+      metadata: { preserved: true },
+      tags: ["cas"],
+    });
+    sendMessage({
+      from: "human",
+      to: channel.name,
+      channel: channel.name,
+      project_id: PROJECT_ID,
+      content: "CAS protected history",
+    });
+    const db = getDb();
+    const readChannel = () => db.prepare("SELECT * FROM channels WHERE id = ?").get(channel.id);
+    const readMessages = () => db.prepare("SELECT * FROM messages WHERE channel = ? ORDER BY id")
+      .all(channel.name);
+    const readOwnership = () => messageOwnershipSnapshot(db.prepare(
+      `SELECT ${[
+        "id", "uuid", "session_id", "from_agent", "to_agent", "channel", "project_id",
+        "content", "priority", "working_dir", "repository", "branch", "metadata",
+        "edited_at", "pinned_at", "blocking", "attachments", "reply_to", "created_at", "read_at",
+      ].join(", ")} FROM messages WHERE channel = ? ORDER BY id ASC`,
+    ).all(channel.name) as never);
+    const request = async (
+      operationId: string,
+      targetId: string,
+      record: ReturnType<typeof projectChannelRegistrationChannelRecord>,
+      ownership: ReturnType<typeof messageOwnershipSnapshot>,
+    ) => {
+      const desired = {
+        channel: channel.name,
+        project_id: PROJECT_ID,
+        project_slug: channel.name,
+        project_kind: "work",
+        registration_mode: "adopt_existing",
+        target_id: targetId,
+        expected_project_id: PROJECT_ID,
+        expected_revision: record.revision,
+        expected_digest: record.digest,
+        expected_message_ownership: ownership,
+      };
+      return forwardRequest({
+        operation_intent: "adopt_existing",
+        operation_id: operationId,
+        idempotency_key: `${operationId}:conversations-channel:forward`,
+        project_slug: channel.name,
+        target_selector: channel.name,
+        desired,
+        request_digest: projectChannelRegistrationDigest(desired),
+        precondition_digest: projectChannelRegistrationDigest({
+          target_id: targetId,
+          target_selector: channel.name,
+          expected_project_id: PROJECT_ID,
+          expected_revision: record.revision,
+          expected_digest: record.digest,
+          expected_message_ownership: ownership,
+          desired_project_id: PROJECT_ID,
+        }),
+        adopt_existing: {
+          target_id: targetId,
+          expected_project_id: PROJECT_ID,
+          expected_revision: record.revision,
+          expected_digest: record.digest,
+          expected_message_ownership: ownership,
+        },
+      } as Partial<ProjectChannelRegistrationRequest>);
+    };
+    const expectNoWrite = async (
+      candidate: ProjectChannelRegistrationRequest,
+      reason: string,
+    ) => {
+      const channelBefore = readChannel();
+      const messagesBefore = readMessages();
+      expect(await registerProjectChannel(candidate)).toMatchObject({
+        outcome: "terminal_nonacceptance",
+        reason,
+        created_by_operation: false,
+      });
+      expect(readChannel()).toEqual(channelBefore);
+      expect(readMessages()).toEqual(messagesBefore);
+    };
+
+    const initialRecord = projectChannelRegistrationChannelRecord(readChannel() as never);
+    const initialOwnership = readOwnership();
+    await expectNoWrite(
+      await request(
+        "operation-adopt-target-mismatch",
+        "chn_ffffffffffffffffffffffffffffffff",
+        initialRecord,
+        initialOwnership,
+      ),
+      "adopt_precondition_conflict",
+    );
+
+    db.prepare("UPDATE channels SET project_id = ? WHERE id = ?").run(foreignProjectId, channel.id);
+    const foreignOwnerRecord = projectChannelRegistrationChannelRecord(readChannel() as never);
+    await expectNoWrite(
+      await request("operation-adopt-owner-mismatch", channel.id, foreignOwnerRecord, readOwnership()),
+      "adopt_precondition_conflict",
+    );
+    db.prepare("UPDATE channels SET project_id = ? WHERE id = ?").run(PROJECT_ID, channel.id);
+
+    const beforeChannelDrift = projectChannelRegistrationChannelRecord(readChannel() as never);
+    const beforeChannelDriftOwnership = readOwnership();
+    const staleChannelRequest = await request(
+      "operation-adopt-channel-drift",
+      channel.id,
+      beforeChannelDrift,
+      beforeChannelDriftOwnership,
+    );
+    db.prepare("UPDATE channels SET description = ? WHERE id = ?").run("drifted", channel.id);
+    await expectNoWrite(staleChannelRequest, "adopt_precondition_conflict");
+    db.prepare("UPDATE channels SET description = ? WHERE id = ?").run("CAS protected", channel.id);
+
+    db.prepare("UPDATE messages SET project_id = ? WHERE channel = ?")
+      .run(foreignProjectId, channel.name);
+    await expectNoWrite(
+      await request(
+        "operation-adopt-message-owner-conflict",
+        channel.id,
+        projectChannelRegistrationChannelRecord(readChannel() as never),
+        readOwnership(),
+      ),
+      "adopt_message_owner_conflict",
+    );
+    db.prepare("UPDATE messages SET project_id = ? WHERE channel = ?").run(PROJECT_ID, channel.name);
+
+    const beforeMessageDrift = projectChannelRegistrationChannelRecord(readChannel() as never);
+    const beforeMessageDriftOwnership = readOwnership();
+    const staleMessageRequest = await request(
+      "operation-adopt-message-drift",
+      channel.id,
+      beforeMessageDrift,
+      beforeMessageDriftOwnership,
+    );
+    db.prepare("UPDATE messages SET content = ? WHERE channel = ?").run("drifted history", channel.name);
+    await expectNoWrite(staleMessageRequest, "adopt_message_precondition_conflict");
   });
 
   test("refuses conflicting legacy message owners and inverse drift without partial ownership changes", async () => {

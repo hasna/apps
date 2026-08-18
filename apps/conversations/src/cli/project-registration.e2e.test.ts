@@ -14,6 +14,7 @@ const INVERSE_FORWARD_FILE = join(TEST_DIR, "registration-inverse-forward.json")
 const INVERSE_FILE = join(TEST_DIR, "registration-inverse.json");
 const BIND_FILE = join(TEST_DIR, "registration-bind-existing.json");
 const BIND_NO_INTENT_FILE = join(TEST_DIR, "registration-bind-existing-no-intent.json");
+const ADOPT_NO_INTENT_FILE = join(TEST_DIR, "registration-adopt-existing-no-intent.json");
 const BIND_INVERSE_FILE = join(TEST_DIR, "registration-bind-existing-inverse.json");
 const PROJECT_ID = "wks_ys8tzpsZJMNtx0ORZtLsA";
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
@@ -526,6 +527,28 @@ describe("project-registration CLI producer contract", () => {
     expect(createWithBindShapeWithoutIntent.exitCode).toBe(1);
     expect(createWithBindShapeWithoutIntent.stderr).toContain(
       "create surface rejects bind-existing intent",
+    );
+    writeFileSync(ADOPT_NO_INTENT_FILE, JSON.stringify({
+      ...bindWithoutIntent,
+      desired: {
+        ...bindDesired,
+        registration_mode: "adopt_existing",
+      },
+      bind_existing: undefined,
+      adopt_existing: {
+        target_id: existing.id,
+      },
+    }));
+    const createWithAdoptShapeWithoutIntent = runCli([
+      "project-registration",
+      "create",
+      "--request",
+      ADOPT_NO_INTENT_FILE,
+      "--json",
+    ]);
+    expect(createWithAdoptShapeWithoutIntent.exitCode).toBe(1);
+    expect(createWithAdoptShapeWithoutIntent.stderr).toContain(
+      "create surface rejects adopt-existing intent",
     );
     const bindWithoutIntentResult = runCli([
       "project-registration",
