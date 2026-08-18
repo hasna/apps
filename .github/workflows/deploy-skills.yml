@@ -1,9 +1,20 @@
-name: deploy
+name: deploy-skills
+
+# Ported from apps/skills/.github/workflows/deploy.yml (todos 9b1828c9):
+# GitHub Actions only discovers workflows at the repo ROOT .github/workflows/,
+# so the member-nested copy was a silent dead lane. This root-level workflow is
+# the discoverable home of the skills deploy lane. The push trigger is scoped
+# with paths: [apps/skills/**] — a push to any OTHER member of this monorepo
+# must not fire the skills deploy. The bare `v*` tag trigger from the
+# standalone repo is deliberately NOT carried over: path filters are not
+# evaluated for tag pushes, so a v* tag on the monorepo would deploy skills
+# from whatever commit the tag points at. Release deploys happen on path-scoped
+# pushes to main, or by workflow_dispatch.
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    paths: ["apps/skills/**"]
   workflow_dispatch: {}
 
 concurrency:
@@ -24,6 +35,13 @@ jobs:
     runs-on: ubuntu-24.04-arm
     environment: production
     timeout-minutes: 45
+
+    defaults:
+      run:
+        # The monorepo checkout lands at the repo root; this job's Dockerfile,
+        # package.json, bun.lock and .dockerignore all live under apps/skills.
+        # The docker build context below is `.` and MUST resolve to apps/skills.
+        working-directory: apps/skills
 
     steps:
       - name: Checkout

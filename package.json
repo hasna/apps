@@ -18,11 +18,12 @@
     "build": "turbo run build",
     "test": "turbo run test",
     "lint": "turbo run lint",
-    "check": "bun run check:names && bun run check:secrets && bun run check:manifests && bun run check:publish-guard",
+    "check": "bun run check:names && bun run check:secrets && bun run check:manifests && bun run check:publish-guard && bun run check:deploy-lanes",
     "check:names": "bun tooling/ci/check-names.ts",
     "check:secrets": "bun tooling/ci/check-secrets.ts",
     "check:manifests": "bun tooling/ci/check-manifests.ts",
     "check:publish-guard": "bun tooling/ci/check-publish-guard.ts",
+    "check:deploy-lanes": "bun tooling/ci/check-deploy-lanes.ts",
     "test:standard": "bun test tooling/ci/tests/standard",
     "test:versioning": "bun test test/versioning",
     "test:suites": "bun run test:versioning && bun run test:standard"

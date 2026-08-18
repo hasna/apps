@@ -76,6 +76,19 @@ jobs:
       - name: Contract-manifest gate (placeholder)
         run: bun tooling/ci/check-manifests.ts
 
+      # Deploy-lane gate: member deploy workflows must live at the DISCOVERABLE
+      # repo root (GitHub Actions only reads .github/workflows/ at the root),
+      # must be push-scoped to apps/<member>/** (a monorepo push to another
+      # member must not fire another member's deploy), and ported lanes must
+      # keep their root workflow present. Self-test runs first and separately:
+      # a gate whose patterns cannot fire reports a clean tree, and a clean
+      # tree is what success looks like. (todos 9b1828c9)
+      - name: Deploy-lane gate self-test
+        run: bun tooling/ci/check-deploy-lanes.ts --self-test
+
+      - name: Deploy-lane gate (discoverable root, path-scoped, single-sourced)
+        run: bun tooling/ci/check-deploy-lanes.ts
+
   # ---------------------------------------------------------------------------------
   # test-suites: the versioning + standard-adherence suites, wired as a HARD gate.
   #   test:versioning — hermetic versioning-integrity suite (test/versioning): package
