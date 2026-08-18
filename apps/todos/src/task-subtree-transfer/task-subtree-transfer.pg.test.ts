@@ -83,10 +83,13 @@ function applyRequest(
   };
 }
 
-function rollbackRequest(applied: TodosTaskSubtreeTransferResult) {
+function rollbackRequest(
+  applied: TodosTaskSubtreeTransferResult,
+  operationId = applied.receipt.operation_id,
+) {
   const base = {
     receipt_id: applied.receipt.receipt_id,
-    operation_id: applied.receipt.operation_id,
+    operation_id: operationId,
     step_id: "rollback",
     idempotency_key: "",
     precondition_digest: "",
@@ -141,6 +144,22 @@ describe.skipIf(!PG_URL)("task-subtree-transfer PostgreSQL authority", () => {
       [SERVICE, taskId],
     );
     return row.rows[0]!.payload;
+  }
+
+  async function planPayload(planId: string): Promise<Record<string, unknown>> {
+    const row = await client!.query<{ payload: Record<string, unknown> }>(
+      `SELECT payload FROM todos_sync_records
+       WHERE service = $1 AND object_type = 'plans' AND object_id = $2`,
+      [SERVICE, planId],
+    );
+    return row.rows[0]!.payload;
+  }
+
+  async function receiptCount(): Promise<string> {
+    const row = await client!.query<{ count: string }>(
+      "SELECT count(*) AS count FROM todos_task_subtree_transfer_receipts",
+    );
+    return row.rows[0]!.count;
   }
 
   beforeAll(async () => {
@@ -321,6 +340,26 @@ describe.skipIf(!PG_URL)("task-subtree-transfer PostgreSQL authority", () => {
     await expect(client!.query(
       "UPDATE todos_task_subtree_transfer_receipts SET result_digest = 'changed'",
     )).rejects.toThrow(/immutable/);
+
+    const beforeWrongOperationRollback = {
+      root: await taskPayload(ROOT_TASK_ID),
+      child: await taskPayload(CHILD_TASK_ID),
+      retained: await taskPayload(RETAINED_TASK_ID),
+      containedPlan: await planPayload(CONTAINED_PLAN_ID),
+      receipts: await receiptCount(),
+    };
+    await expect(authority.rollback(
+      rollbackRequest(applied, `wrong-operation-${UNIQUE}`),
+    )).rejects.toMatchObject({
+      code: "TODOS_TASK_SUBTREE_TRANSFER_ROLLBACK_CONFLICT",
+    });
+    expect({
+      root: await taskPayload(ROOT_TASK_ID),
+      child: await taskPayload(CHILD_TASK_ID),
+      retained: await taskPayload(RETAINED_TASK_ID),
+      containedPlan: await planPayload(CONTAINED_PLAN_ID),
+      receipts: await receiptCount(),
+    }).toEqual(beforeWrongOperationRollback);
 
     const rolledBack = await authority.rollback(rollbackRequest(applied));
     const duplicateRollback = await authority.rollback(rollbackRequest(applied));

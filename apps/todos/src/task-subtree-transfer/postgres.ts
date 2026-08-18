@@ -341,6 +341,12 @@ export class PostgresTodosTaskSubtreeTransferBackend implements TodosTaskSubtree
       );
       if (!applyRow.rows[0]) throw new TodosTaskSubtreeTransferError("TODOS_TASK_SUBTREE_TRANSFER_RECEIPT_NOT_FOUND", `Apply receipt not found: ${input.receipt_id}`);
       const applied = (typeof applyRow.rows[0].result_json === "string" ? JSON.parse(String(applyRow.rows[0].result_json)) : applyRow.rows[0].result_json) as TodosTaskSubtreeTransferResult;
+      if (applied.receipt.operation_id !== input.operation_id) {
+        throw new TodosTaskSubtreeTransferError(
+          "TODOS_TASK_SUBTREE_TRANSFER_ROLLBACK_CONFLICT",
+          "Rollback operation does not match the apply receipt",
+        );
+      }
       const expectedPrecondition = canonicalDigest({ route: TODOS_TASK_SUBTREE_TRANSFER_ROUTE, direction: "rollback", operation_id: input.operation_id, step_id: input.step_id, apply_receipt_id: input.receipt_id, apply_result_digest: applied.receipt.result_digest });
       if (input.precondition_digest !== expectedPrecondition) throw new TodosTaskSubtreeTransferError("TODOS_TASK_SUBTREE_TRANSFER_DIGEST_MISMATCH", "Rollback precondition digest does not match the exact apply receipt", { expected_precondition_digest: expectedPrecondition });
       const now = options.now?.() ?? new Date().toISOString();
@@ -408,7 +414,7 @@ export class PostgresTodosTaskSubtreeTransferBackend implements TodosTaskSubtree
         plans: applied.receipt.prior_image.plans.map((plan) => ({ ...plan, updated_at: now })),
       };
       const resultDigest = canonicalDigest({ route: TODOS_TASK_SUBTREE_TRANSFER_ROUTE, direction: "rollback", apply_receipt_id: input.receipt_id, prior_image: applied.receipt.post_image, post_image: restored });
-      const receipt: TodosTaskSubtreeTransferReceipt = { ...applied.receipt, receipt_id: deterministicUuid(TODOS_TASK_SUBTREE_TRANSFER_ROUTE, "rollback", input.operation_id, input.step_id, input.idempotency_key, input.receipt_id), kind: "rollback", step_id: input.step_id, idempotency_key: input.idempotency_key, request_digest: requestDigest, precondition_digest: input.precondition_digest, result_digest: resultDigest, apply_receipt_id: input.receipt_id, prior_image: applied.receipt.post_image, post_image: restored, created_at: now };
+      const receipt: TodosTaskSubtreeTransferReceipt = { ...applied.receipt, receipt_id: deterministicUuid(TODOS_TASK_SUBTREE_TRANSFER_ROUTE, "rollback", input.operation_id, input.step_id, input.idempotency_key, input.receipt_id), kind: "rollback", operation_id: input.operation_id, step_id: input.step_id, idempotency_key: input.idempotency_key, request_digest: requestDigest, precondition_digest: input.precondition_digest, result_digest: resultDigest, apply_receipt_id: input.receipt_id, prior_image: applied.receipt.post_image, post_image: restored, created_at: now };
       const result: TodosTaskSubtreeTransferResult = { duplicate: false, receipt, moved_task_ids: applied.moved_task_ids, moved_plan_ids: applied.moved_plan_ids, complete: true };
       await tx.query(
         `INSERT INTO todos_task_subtree_transfer_receipts (
