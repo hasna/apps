@@ -4,6 +4,7 @@ import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
 import { runTask } from "../agent/loop.js";
 import { listSessions, getSession, getActionLogs, deleteSession, getStats, searchSessions, getDataDir } from "../db/index.js";
+import { getHomeDir } from "../lib/home.js";
 import { captureScreenshot, saveScreenshotToFile } from "../drivers/mac/screenshot.js";
 import { loadConfig, getConfigValue, setConfigValue, getConfigPath } from "../lib/config.js";
 import { calculateCost, formatCost, stepCost } from "../lib/pricing.js";
@@ -599,7 +600,7 @@ program
     const candidates = [
       join(__dirname, "..", "..", "helpers", "record"),
       join(__dirname, "..", "helpers", "record"),
-      join(process.env.HOME ?? "~", ".hasna", "computer", "helpers", "record"),
+      join(getHomeDir(), ".hasna", "computer", "helpers", "record"),
     ];
     const helperPath = candidates.find((c) => existsSync(c));
     if (!helperPath) {

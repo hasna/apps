@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { cpSync, existsSync, mkdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { getHomeDir } from "../lib/home.js";
 import type { Session, ActionLog, DriverAction, SessionStatus } from "../types/index.js";
 
 const SERVICE_NAME = "computer";
@@ -21,7 +21,7 @@ export function getDataDir(service = SERVICE_NAME): string {
     mkdirSync(process.env["COMPUTER_DATA_DIR"], { recursive: true });
     return process.env["COMPUTER_DATA_DIR"];
   }
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+  const home = getHomeDir();
   const dir = join(home, ".hasna", service);
   migrateLegacyDataDir(home, service, dir);
   mkdirSync(dir, { recursive: true });
