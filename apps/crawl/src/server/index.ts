@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { readFileSync } from "fs";
+import { join } from "path";
 import { listCrawls, getCrawl, createCrawl } from "../db/crawls.js";
 import { listPages, getPage, searchPages } from "../db/pages.js";
 import { getConfig } from "../lib/config.js";
@@ -176,6 +178,26 @@ export async function handleCrawlRequest(req: Request, port = DEFAULT_PORT): Pro
       return new Response(JSON.stringify(mcpHealthJson()), {
         headers: { "Content-Type": "application/json" },
       });
+    }
+
+    if (rawPath === "/ready" && method === "GET") {
+      // Contract readiness probe (hasna.service_contract.v1): the server
+      // exposes a single probe; /ready mirrors /health.
+      return new Response(JSON.stringify(mcpHealthJson()), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (rawPath === "/version" && method === "GET") {
+      // Contract version probe (hasna.service_contract.v1).
+      return json({ name: "crawl", version: VERSION });
+    }
+
+    if (rawPath === "/openapi.json" && method === "GET") {
+      // OpenAPI 3 document describing the /v1 REST API (hasna.service_contract.v1
+      // sdk generatedFrom target). The relative path is the same from src/ and dist/.
+      const doc = JSON.parse(readFileSync(join(import.meta.dir, "../..", "openapi.json"), "utf8"));
+      return json(doc);
     }
 
     if (rawPath === "/mcp") {
@@ -511,7 +533,7 @@ export async function handleCrawlRequest(req: Request, port = DEFAULT_PORT): Pro
 
 export function startCrawlServer(options: { port?: number; hostname?: string } = {}) {
   const port = options.port ?? DEFAULT_PORT;
-  const hostname = options.hostname ?? "127.0.0.1";
+  const hostname = options.hostname ?? process.env.HOST ?? "127.0.0.1";
   const server = Bun.serve({
     port,
     hostname,

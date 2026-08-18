@@ -85,4 +85,71 @@ describe("serve command", () => {
     expect(body.name).toBe("crawl");
     expect(body.port).toBe(port);
   });
+
+  it("serves the contract probe endpoints /ready and /version", async () => {
+    const port = randomPort();
+    const dbPath = `/tmp/test-crawl-serve-${Date.now()}-${Math.random().toString(36).slice(2)}.db`;
+    dbPaths.push(dbPath);
+
+    const env = { ...process.env };
+    delete env["PORT"];
+    env["CRAWL_DB_PATH"] = dbPath;
+    env["HASNA_CRAWL_DB_PATH"] = dbPath;
+
+    const proc = Bun.spawn(
+      [process.execPath, "run", "src/cli/index.ts", "serve", "-p", String(port)],
+      {
+        cwd: repoRoot,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    processes.push(proc);
+
+    await waitForJson(port, proc);
+
+    const ready = await fetch(`http://127.0.0.1:${port}/ready`);
+    expect(ready.status).toBe(200);
+    expect(await ready.json()).toMatchObject({ status: "ok" });
+
+    const version = await fetch(`http://127.0.0.1:${port}/version`);
+    expect(version.status).toBe(200);
+    const versionBody = (await version.json()) as { name?: string; version?: string };
+    expect(versionBody.name).toBe("crawl");
+    expect(typeof versionBody.version).toBe("string");
+  });
+
+  it("serves the OpenAPI document at /openapi.json", async () => {
+    const port = randomPort();
+    const dbPath = `/tmp/test-crawl-serve-${Date.now()}-${Math.random().toString(36).slice(2)}.db`;
+    dbPaths.push(dbPath);
+
+    const env = { ...process.env };
+    delete env["PORT"];
+    env["CRAWL_DB_PATH"] = dbPath;
+    env["HASNA_CRAWL_DB_PATH"] = dbPath;
+
+    const proc = Bun.spawn(
+      [process.execPath, "run", "src/cli/index.ts", "serve", "-p", String(port)],
+      {
+        cwd: repoRoot,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    processes.push(proc);
+
+    await waitForJson(port, proc);
+
+    const response = await fetch(`http://127.0.0.1:${port}/openapi.json`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/json");
+
+    const doc = (await response.json()) as { openapi?: string; paths?: Record<string, unknown> };
+    expect(doc.openapi).toBe("3.0.3");
+    expect(doc.paths?.["/v1/crawls"]).toBeDefined();
+    expect(doc.paths?.["/v1/search"]).toBeDefined();
+  });
 });

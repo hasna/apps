@@ -22,6 +22,7 @@
   },
   "files": [
     "dist",
+    "openapi.json",
     "LICENSE",
     "README.md"
   ],
@@ -32,6 +33,8 @@
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
+    "artifact-scan": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/crawl-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan crawl-artifact-scan.tgz; rc=$?; rm -f \"$PWD/crawl-artifact-scan.tgz\"; exit $rc",
+    "prepack": "bun run artifact-scan",
     "prepublishOnly": "bun run build"
   },
   "keywords": [
