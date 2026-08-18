@@ -37,6 +37,7 @@ interface ShippedConversationsClient {
   getChannel(name: string): Promise<Record<string, unknown> | null>;
   getProjectChannelRegistrationCapability(): Promise<Record<string, unknown>>;
   registerProjectChannel(body: Record<string, unknown>): Promise<Record<string, unknown>>;
+  adoptExistingProjectChannel?(body: Record<string, unknown>): Promise<Record<string, unknown>>;
   readProjectChannelRegistrationExact(
     id: string,
     query: Record<string, unknown>,
@@ -191,6 +192,15 @@ class ConversationsSdkAuthority implements ProjectRegistrationAuthorityAdapter {
   }
 
   async create(request: ProjectRegistrationAuthorityRequest): Promise<ProjectRegistrationAuthorityReceipt> {
+    if (request.operation_intent === "adopt_existing") {
+      if (!this.client.adoptExistingProjectChannel) {
+        throw new Error("Conversations SDK does not expose adoptExistingProjectChannel");
+      }
+      return selectedResponse(
+        this.authority,
+        await this.client.adoptExistingProjectChannel(withTargetDigest(request)),
+      );
+    }
     return selectedResponse(
       this.authority,
       await this.client.registerProjectChannel(withTargetDigest(request)),

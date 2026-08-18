@@ -406,6 +406,39 @@ function parseFullRegistrationReconciliation(
       throw new Error(`register-full reconcile_existing.${key} must be an object`);
     }
     const entry = entryValue as Record<string, unknown>;
+    const preboundKeys = [
+      "target_id",
+      "expected_project_id",
+      "expected_revision",
+      "expected_digest",
+      "expected_message_ownership",
+    ].sort();
+    if (
+      key === "conversations_channel"
+      && JSON.stringify(Object.keys(entry).sort()) === JSON.stringify(preboundKeys)
+    ) {
+      if (
+        typeof entry.target_id !== "string"
+        || typeof entry.expected_project_id !== "string"
+        || typeof entry.expected_revision !== "string"
+        || typeof entry.expected_digest !== "string"
+        || !entry.expected_message_ownership
+        || typeof entry.expected_message_ownership !== "object"
+        || Array.isArray(entry.expected_message_ownership)
+      ) {
+        throw new Error(
+          "register-full reconcile_existing.conversations_channel pre-bound adoption is incomplete",
+        );
+      }
+      parsed.conversations_channel = {
+        target_id: entry.target_id,
+        expected_project_id: entry.expected_project_id,
+        expected_revision: entry.expected_revision,
+        expected_digest: entry.expected_digest,
+        expected_message_ownership: entry.expected_message_ownership as Record<string, unknown>,
+      };
+      continue;
+    }
     const expectedKeys = key === "mementos_project"
       ? ["source_operation_id", "source_target_path", "target_id"]
       : ["source_operation_id", "target_id"];
