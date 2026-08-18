@@ -215,6 +215,12 @@ If the URL is an origin such as `https://your-server.example`, the CLI requests
 Authenticated registry listing and premium server-side execution use
 `SKILLS_API_KEY` or the credential saved by `skills auth login --api-key`.
 
+The typed `RemoteSkillsClient` also exposes pin, tag, and cursor-based
+incremental-sync methods (`listPins`/`pin`/`unpin`, `listTags`/`skillsByTag`,
+`listUpdatedSince`). A server that predates those routes fails closed with an
+explicit unsupported-route error — never a silent empty listing. Route table
+and version-skew contract: `docs/architecture/remote-client-pins-tags-sync.md`.
+
 For the reusable upstream contract, see
 `docs/architecture/reusable-skills-engine.md`.
 
