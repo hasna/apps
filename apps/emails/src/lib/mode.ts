@@ -6,7 +6,13 @@ import { redactStructuredDiagnosticValue } from "./redaction.js";
 export { EMAILS_CLIENT_ENV_SECRET_ENV } from "./client-env.js";
 
 export type EmailsMode = "local" | "self_hosted";
-export type EmailsModeLabel = "Local" | "Self-hosted";
+// User-visible labels for the mode. The mode VALUE remains the machine enum
+// `self_hosted` (JSON contract, env contract); its human label must NOT use
+// the retired placement-axis vocabulary ("self-hosted" as a mode name is
+// banned by the owner's deployment-terms doctrine — it survives only as plain
+// English for a server someone runs). This mode means "the client talks to a
+// server's HTTP API", so the label is the connection, not the placement.
+export type EmailsModeLabel = "Local" | "Server API";
 
 // Canonical mode selectors. The package's public env prefix is EMAILS_; the
 // MAILERY_ prefix belongs to the abandoned 0.6.x line and to the separate cloud
@@ -116,7 +122,7 @@ export function assertNoLegacyHostedEnvironment(
 }
 
 export function labelForEmailsMode(mode: EmailsMode): EmailsModeLabel {
-  return mode === "local" ? "Local" : "Self-hosted";
+  return mode === "local" ? "Local" : "Server API";
 }
 
 export function normalizeEmailsMode(value: string): EmailsMode {
