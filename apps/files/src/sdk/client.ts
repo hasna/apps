@@ -9,7 +9,9 @@ export interface CreateSource { "type"?: "local" | "s3" | "google_drive"; "name"
 
 export interface UpdateSource { "name"?: string; "enabled"?: boolean; "path"?: string; "bucket"?: string; "prefix"?: string; "region"?: string; "config"?: Record<string, unknown> }
 
-export interface File { "id": string; "source_id": string; "machine_id": string; "path": string; "name": string; "ext": string; "size": number; "mime": string; "hash"?: string | null; "status": "active" | "deleted" | "moved"; "indexed_at"?: string; "created_at"?: string; "tags": Array<string> }
+export interface File { "id": string; "source_id": string; "machine_id": string; "path": string; "name": string; "ext": string; "size": number; "mime": string; "hash"?: string | null; "status": "active" | "deleted" | "moved"; "indexed_at"?: string; "created_at"?: string; "tags": Array<string>; "rank"?: number; "search_match_sources"?: Array<"metadata" | "content">; "search_document_kinds"?: Array<string>; "search_document_count"?: number }
+
+export interface SearchDocument { "id": string; "file_id": string; "revision_id"?: string | null; "source_ref": string; "kind": string; "extractor": string; "content_hash": string; "searchable_text": string; "metadata": Record<string, unknown>; "status": "ready" | "partial" | "unsupported" | "error" | "stale"; "private": boolean; "created_at": string; "updated_at": string }
 
 export interface Tag { "id": string; "name": string; "color": string; "created_at"?: string }
 
@@ -223,8 +225,8 @@ export class FilesClient {
       });
     }
 
-    /** List / search files */
-    async listFiles(query?: { "source_id"?: string; "tag"?: string; "ext"?: string; "q"?: string; "status"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<Array<File>> {
+    /** List / search files (ranked full-text search over metadata + derived content) */
+    async listFiles(query?: { "source_id"?: string; "machine_id"?: string; "project_id"?: string; "collection_id"?: string; "tag"?: string; "ext"?: string; "status"?: string; "q"?: string; "search_scope"?: "all" | "metadata" | "content"; "after"?: string; "before"?: string; "min_size"?: number; "max_size"?: number; "sort"?: "name" | "size" | "date"; "sort_dir"?: "asc" | "desc"; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<Array<File>> {
       return this.request("GET", `/files`, {
         body: undefined,
         query,
@@ -244,6 +246,15 @@ export class FilesClient {
     /** Retrieve authorized derived text extraction */
     async extractFileText(id: string, body?: { "max_bytes"?: number; "max_segment_chars"?: number; "redact_patterns"?: Array<string> }, init?: RequestInit): Promise<ExtractedText> {
       return this.request("POST", `/files/${encodeURIComponent(String(id))}/extract-text`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Upsert a derived content search document for a file */
+    async upsertSearchDocument(id: string, body: { "source_ref": string; "kind": string; "extractor"?: string; "content_hash"?: string; "searchable_text": string; "metadata"?: Record<string, unknown>; "status"?: string; "private"?: boolean; "replace_existing"?: boolean; "revision_id"?: string }, init?: RequestInit): Promise<SearchDocument> {
+      return this.request("POST", `/files/${encodeURIComponent(String(id))}/search-documents`, {
         body,
         query: undefined,
         init,
@@ -307,6 +318,24 @@ export class FilesClient {
     /** Remove a file from a project */
     async removeFromProject(id: string, fileId: string, init?: RequestInit): Promise<Ok> {
       return this.request("DELETE", `/projects/${encodeURIComponent(String(id))}/files/${encodeURIComponent(String(fileId))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List derived search documents without indexed text */
+    async listSearchDocuments(query?: { "file_id"?: string; "kind"?: string; "status"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<Array<SearchDocument>> {
+      return this.request("GET", `/search-documents`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Remove a derived search document and its index entry */
+    async deleteSearchDocument(id: string, init?: RequestInit): Promise<Ok> {
+      return this.request("DELETE", `/search-documents/${encodeURIComponent(String(id))}`, {
         body: undefined,
         query: undefined,
         init,

@@ -31,7 +31,9 @@ import type {
   FileAccessEvent,
   FileAsset,
   FileLink,
+  FileSearchDocument,
   FileWithTags,
+  ListFileSearchDocumentsOptions,
   ListFilesOptions,
   Machine,
   Project,
@@ -41,6 +43,7 @@ import type {
   SourceConfig,
   SourceType,
   Tag,
+  UpsertFileSearchDocumentInput,
 } from "../types/index.js";
 import type {
   CreateEvidenceUploadInput,
@@ -258,4 +261,13 @@ export interface FilesStore {
   getEvidenceAsset(id: string): Promise<FileAsset | null>;
   listEvidenceLinks(assetId: string): Promise<FileLink[]>;
   listEvidenceAccessEvents(assetId: string, limit?: number): Promise<FileAccessEvent[]>;
+
+  // ── derived search documents (content FTS population) ──────────────────────
+  /** Upsert one derived content document; the search index is served on both
+   *  transports (on-box FTS5, hosted tsvector). */
+  upsertSearchDocument(input: UpsertFileSearchDocumentInput): Promise<FileSearchDocument>;
+  /** List derived search documents without printing indexed text. */
+  listSearchDocuments(opts?: ListFileSearchDocumentsOptions): Promise<FileSearchDocument[]>;
+  /** Remove a derived search document and its index entry. */
+  deleteSearchDocument(id: string): Promise<boolean>;
 }

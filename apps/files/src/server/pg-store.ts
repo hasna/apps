@@ -6,6 +6,7 @@
  * running service. A missing/invalid DATABASE_URL is a hard, explicit error
  * (never a silent no-op).
  */
+import { createHash } from "node:crypto";
 import { nanoid } from "nanoid";
 import { createCloudPoolFromEnv } from "../generated/storage-kit/index.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
@@ -25,11 +26,15 @@ import type {
   FileAssetStatus,
   FileLink,
   FileScanStatus,
+  FileSearchDocument,
+  FileSearchDocumentKind,
+  FileSearchDocumentStatus,
   FileStorageProvider,
   FileUploadIntent,
   FileWithTags,
   Machine,
   Project,
+  SearchMatchSource,
   Source,
   SourceType,
   Tag,
@@ -311,10 +316,21 @@ export interface ListFilesQuery {
   source_id?: string;
   machine_id?: string;
   project_id?: string;
+  collection_id?: string;
   tag?: string;
   ext?: string;
   status?: string;
   q?: string;
+  /** "all" (default) merges metadata + content matches; "metadata" or "content" restricts. */
+  search_scope?: "all" | "metadata" | "content";
+  /** ISO date string; filters on modified_at or indexed_at — same rule as the local store. */
+  after?: string;
+  before?: string;
+  /** bytes */
+  min_size?: number;
+  max_size?: number;
+  sort?: "name" | "size" | "date";
+  sort_dir?: "asc" | "desc";
   limit?: number;
   offset?: number;
 }
@@ -324,18 +340,50 @@ function normalizeExtensionFilter(ext: string): string {
   return lower.startsWith(".") ? lower : `.${lower}`;
 }
 
+/** The metadata surface the local store's `files_fts` covers (name/path/mime/canonical/description). */
+const METADATA_VECTOR =
+  "to_tsvector('simple', coalesce(f.name,'') || ' ' || coalesce(f.path,'') || ' ' || coalesce(f.mime,'') || ' ' || coalesce(f.canonical_name,'') || ' ' || coalesce(f.description,''))";
+
+function searchSortColumn(sort: ListFilesQuery["sort"]): string {
+  if (sort === "name") return "f.name";
+  if (sort === "size") return "f.size";
+  return "f.indexed_at";
+}
+
 export async function listFiles(client: TypedQueryClient, opts: ListFilesQuery): Promise<FileWithTags[]> {
   const where: string[] = [];
   const params: unknown[] = [];
   const add = (clause: string, value: unknown) => { params.push(value); where.push(clause.replace("$?", `$${params.length}`)); };
+
+  const scope = opts.search_scope ?? "all";
+  let ranked = false;
+  if (opts.q) {
+    // The tsquery text is the FIRST placeholder: both the content CTE and the
+    // metadata vector reference it before the WHERE clause is assembled.
+    const queryText = opts.q.trim();
+    if (queryText) {
+      params.push(queryText); // $1 -> plainto_tsquery
+      params.push(`%${opts.q}%`); // $2 -> ILIKE pattern
+      const ilikeRef = `$${params.length}`;
+      if (scope === "content") {
+        where.push("cm.file_id IS NOT NULL");
+      } else if (scope === "metadata") {
+        where.push(`(f.name ILIKE ${ilikeRef} OR f.path ILIKE ${ilikeRef} OR ${METADATA_VECTOR} @@ qv.query)`);
+      } else {
+        where.push(`(f.name ILIKE ${ilikeRef} OR f.path ILIKE ${ilikeRef} OR ${METADATA_VECTOR} @@ qv.query OR cm.file_id IS NOT NULL)`);
+      }
+      ranked = true;
+    }
+  }
+
   add("f.status = $?", opts.status ?? "active");
   if (opts.source_id) add("f.source_id = $?", opts.source_id);
   if (opts.machine_id) add("f.machine_id = $?", opts.machine_id);
   if (opts.ext) add("f.ext = $?", normalizeExtensionFilter(opts.ext));
-  if (opts.q) {
-    params.push(`%${opts.q}%`);
-    where.push(`(f.name ILIKE $${params.length} OR f.path ILIKE $${params.length})`);
-  }
+  if (opts.after) add("COALESCE(f.modified_at, f.indexed_at) >= $?", opts.after);
+  if (opts.before) add("COALESCE(f.modified_at, f.indexed_at) <= $?", opts.before);
+  if (opts.min_size !== undefined) add("f.size >= $?", opts.min_size);
+  if (opts.max_size !== undefined) add("f.size <= $?", opts.max_size);
   const joins: string[] = [];
   if (opts.tag) {
     params.push(opts.tag);
@@ -348,14 +396,237 @@ export async function listFiles(client: TypedQueryClient, opts: ListFilesQuery):
     params.push(opts.project_id);
     joins.push(`JOIN project_files pf ON pf.file_id = f.id AND pf.project_id = $${params.length}`);
   }
+  if (opts.collection_id) {
+    params.push(opts.collection_id);
+    joins.push(`JOIN collection_files cf ON cf.file_id = f.id AND cf.collection_id = $${params.length}`);
+  }
+
   const limit = pageLimit(opts.limit, 50, MAX_PAGE_SIZE);
   const offset = pageOffset(opts.offset);
+  // The tag/project/collection joins filter on ONE id each, so they can never
+  // duplicate a file row; DISTINCT is only required for the tag join shape the
+  // route has always used.
   const selected = opts.tag ? "DISTINCT f.*" : "f.*";
-  const sql = `SELECT ${selected} FROM files f ${joins.join(" ")} WHERE ${where.join(" AND ")} ORDER BY f.indexed_at DESC, f.id DESC LIMIT ${limit} OFFSET ${offset}`;
+  let sql: string;
+  if (ranked) {
+    // The tsquery text is the first bound parameter ($1); the ILIKE pattern is $2.
+    // Each scope touches only its own surface: metadata scope never opens the
+    // content table, content scope never reports a metadata hit.
+    const withContent = scope !== "metadata";
+    const withMetadata = scope !== "content";
+    const tsqueryRef = "$1";
+    const contentCte = withContent
+      ? `WITH content_matches AS (
+  SELECT d.file_id,
+         MIN(ts_rank(d.search_vector, qv.query)) AS rank,
+         array_agg(DISTINCT d.kind) AS kinds,
+         COUNT(DISTINCT d.id) AS doc_count
+  FROM file_search_documents d
+  CROSS JOIN (SELECT plainto_tsquery('simple', ${tsqueryRef}) AS query) qv
+  WHERE d.status IN ('ready','partial') AND d.search_vector @@ qv.query
+  GROUP BY d.file_id
+)
+`
+      : "";
+    const contentJoin = withContent ? "LEFT JOIN content_matches cm ON cm.file_id = f.id\n" : "";
+    const metadataColumns = withMetadata
+      ? `CASE WHEN (f.name ILIKE $2 OR f.path ILIKE $2 OR ${METADATA_VECTOR} @@ qv.query) THEN 1 ELSE 0 END AS _metadata_hit,
+  ts_rank(${METADATA_VECTOR}, qv.query) AS _metadata_rank`
+      : `0 AS _metadata_hit,
+  0 AS _metadata_rank`;
+    const rankExpr = withContent && withMetadata
+      ? `COALESCE(cm.rank, ts_rank(${METADATA_VECTOR}, qv.query), 0)`
+      : withContent
+        ? `COALESCE(cm.rank, 0)`
+        : `COALESCE(ts_rank(${METADATA_VECTOR}, qv.query), 0)`;
+    const searchOrder = `ORDER BY _rank DESC, f.indexed_at DESC, f.id DESC`;
+    sql = `${contentCte}SELECT ${selected},
+  ${rankExpr} AS _rank,
+  cm.rank AS _content_rank,
+  cm.kinds AS _content_kinds,
+  cm.doc_count AS _content_doc_count,
+  ${metadataColumns}
+FROM files f
+CROSS JOIN (SELECT plainto_tsquery('simple', ${tsqueryRef}) AS query) qv
+${contentJoin}${joins.join(" ")}
+WHERE ${where.join(" AND ")}
+${searchOrder} LIMIT ${limit} OFFSET ${offset}`;
+  } else {
+    const sortCol = searchSortColumn(opts.sort);
+    const sortDir = opts.sort_dir === "asc" ? "ASC" : "DESC";
+    sql = `SELECT ${selected} FROM files f ${joins.join(" ")} WHERE ${where.join(" AND ")} ORDER BY ${sortCol} ${sortDir}, f.id DESC LIMIT ${limit} OFFSET ${offset}`;
+  }
   const rows = await client.many<Record<string, unknown>>(sql, params);
-  const out: FileWithTags[] = [];
-  for (const r of rows) out.push(toFile(r, await fileTags(client, String(r.id))));
+  const out: RankedFileRow[] = [];
+  for (const r of rows) {
+    const file = toFile(r, await fileTags(client, String(r.id)));
+    out.push(ranked ? toRankedFile(r, file) : file);
+  }
   return out;
+}
+
+/** Derived search-document row shape returned to the HTTP layer for ranked search. */
+export type RankedFileRow = FileWithTags & {
+  rank?: number;
+  search_match_sources?: SearchMatchSource[];
+  search_document_kinds?: FileSearchDocumentKind[];
+  search_document_count?: number;
+};
+
+/** Decorate a file row with the server-computed search fields (metadata + content merge). */
+function toRankedFile(r: Record<string, unknown>, file: FileWithTags): RankedFileRow {
+  const sources: SearchMatchSource[] = [];
+  const contentRank = r._content_rank == null ? null : Number(r._content_rank);
+  const metadataHit = Number(r._metadata_hit ?? 0) === 1;
+  if (contentRank !== null) sources.push("content");
+  if (metadataHit) sources.push("metadata");
+  const kinds = Array.isArray(r._content_kinds) ? r._content_kinds as FileSearchDocumentKind[] : undefined;
+  const docCount = r._content_doc_count == null ? undefined : Number(r._content_doc_count);
+  const row: RankedFileRow = { ...file, rank: Number(r._rank ?? 0) };
+  if (sources.length) row.search_match_sources = sources;
+  if (kinds?.length) row.search_document_kinds = kinds;
+  if (docCount !== undefined) row.search_document_count = docCount;
+  return row;
+}
+
+/**
+ * Server-side derived-content search documents (the hosted mirror of the
+ * on-box `file_search_documents` writer). The table and its generated tsvector
+ * + GIN index are migration 29; this is the first writer for them.
+ */
+export interface UpsertSearchDocumentQuery {
+  file_id: string;
+  revision_id?: string | null;
+  source_ref: string;
+  kind: FileSearchDocumentKind;
+  extractor?: string;
+  content_hash?: string;
+  searchable_text: string;
+  metadata?: Record<string, unknown>;
+  status?: FileSearchDocumentStatus;
+  private?: boolean;
+  replace_existing?: boolean;
+}
+
+export async function upsertSearchDocument(client: TypedQueryClient, input: UpsertSearchDocumentQuery): Promise<FileSearchDocument> {
+  const existing = await client.get<Record<string, unknown>>("SELECT id FROM files WHERE id = $1", [input.file_id]);
+  if (!existing) throw new Error(`File not found: ${input.file_id}`);
+
+  const kind = input.kind;
+  const sourceRef = input.source_ref.trim();
+  const hashRaw = input.content_hash?.trim();
+  const contentHash = hashRaw && /^[a-f0-9]{64}$/i.test(hashRaw.startsWith("sha256:") ? hashRaw.slice(7) : hashRaw)
+    ? `sha256:${hashRaw.startsWith("sha256:") ? hashRaw.slice(7) : hashRaw}`.toLowerCase()
+    : hashRaw || `sha256:${createHash("sha256").update(input.searchable_text).digest("hex")}`;
+  const status = input.status ?? "ready";
+  const extractor = (input.extractor ?? "unknown").trim() || "unknown";
+  const now = new Date().toISOString();
+
+  if (input.replace_existing !== false) {
+    await client.execute(
+      `UPDATE file_search_documents
+       SET status = 'stale', updated_at = $1
+       WHERE file_id = $2 AND kind = $3 AND source_ref = $4 AND content_hash != $5 AND status != 'stale'`,
+      [now, input.file_id, kind, sourceRef, contentHash],
+    );
+  }
+
+  await client.execute(
+    `INSERT INTO file_search_documents (
+      id, file_id, revision_id, source_ref, kind, extractor, content_hash,
+      searchable_text, metadata, status, private, created_at, updated_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+    ON CONFLICT (file_id, kind, source_ref, content_hash) DO UPDATE SET
+      revision_id = EXCLUDED.revision_id,
+      extractor = EXCLUDED.extractor,
+      searchable_text = EXCLUDED.searchable_text,
+      metadata = EXCLUDED.metadata,
+      status = EXCLUDED.status,
+      private = EXCLUDED.private,
+      updated_at = EXCLUDED.updated_at`,
+    [
+      `fsd_${nanoid(14)}`,
+      input.file_id,
+      input.revision_id ?? null,
+      sourceRef,
+      kind,
+      extractor,
+      contentHash,
+      input.searchable_text,
+      JSON.stringify(input.metadata ?? {}),
+      status,
+      input.private === false ? false : true,
+      now,
+      now,
+    ],
+  );
+  const row = await client.get<Record<string, unknown>>(
+    `SELECT * FROM file_search_documents WHERE file_id = $1 AND kind = $2 AND source_ref = $3 AND content_hash = $4`,
+    [input.file_id, kind, sourceRef, contentHash],
+  );
+  return toSearchDocument(row!);
+}
+
+export interface ListSearchDocumentsQuery {
+  file_id?: string;
+  kind?: FileSearchDocumentKind;
+  status?: FileSearchDocumentStatus;
+  limit?: number;
+  offset?: number;
+}
+
+export async function listSearchDocuments(client: TypedQueryClient, opts: ListSearchDocumentsQuery = {}): Promise<FileSearchDocument[]> {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (opts.file_id) { params.push(opts.file_id); conditions.push(`file_id = $${params.length}`); }
+  if (opts.kind) { params.push(opts.kind); conditions.push(`kind = $${params.length}`); }
+  if (opts.status) { params.push(opts.status); conditions.push(`status = $${params.length}`); }
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const limit = pageLimit(opts.limit, 50, MAX_PAGE_SIZE);
+  const offset = pageOffset(opts.offset);
+  const rows = await client.many<Record<string, unknown>>(
+    `SELECT * FROM file_search_documents ${where} ORDER BY updated_at DESC LIMIT ${limit} OFFSET ${offset}`,
+    params,
+  );
+  return rows.map(toSearchDocument);
+}
+
+export async function deleteSearchDocument(client: TypedQueryClient, id: string): Promise<boolean> {
+  const res = await client.query("DELETE FROM file_search_documents WHERE id = $1", [id]);
+  return (res?.rowCount ?? 0) > 0;
+}
+
+export async function deleteSearchDocumentsForFile(client: TypedQueryClient, fileId: string): Promise<number> {
+  const res = await client.query("DELETE FROM file_search_documents WHERE file_id = $1", [fileId]);
+  return res?.rowCount ?? 0;
+}
+
+function toSearchDocument(row: Record<string, unknown>): FileSearchDocument {
+  return {
+    id: String(row.id),
+    file_id: String(row.file_id),
+    revision_id: row.revision_id == null ? undefined : String(row.revision_id),
+    source_ref: String(row.source_ref),
+    kind: String(row.kind) as FileSearchDocumentKind,
+    extractor: String(row.extractor),
+    content_hash: String(row.content_hash),
+    searchable_text: String(row.searchable_text),
+    metadata: parseJsonObject(row.metadata),
+    status: String(row.status) as FileSearchDocumentStatus,
+    private: Boolean(row.private),
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+  };
+}
+
+function parseJsonObject(raw: unknown): Record<string, unknown> {
+  if (typeof raw !== "string") return (raw ?? {}) as Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
 }
 
 export async function getFile(client: TypedQueryClient, id: string): Promise<FileWithTags | null> {

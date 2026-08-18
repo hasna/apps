@@ -7,7 +7,9 @@
 import type {
   Collection,
   DuplicateGroup,
+  FileSearchDocument,
   FileWithTags,
+  ListFileSearchDocumentsOptions,
   ListFilesOptions,
   Machine,
   Project,
@@ -15,6 +17,7 @@ import type {
   SearchResult,
   Source,
   Tag,
+  UpsertFileSearchDocumentInput,
 } from "../types/index.js";
 import { createSource, deleteSource, getSource, listSources, updateSource } from "../db/sources.js";
 import {
@@ -35,6 +38,11 @@ import {
   softDeleteFile,
 } from "../db/files.js";
 import { searchFiles } from "../db/search.js";
+import {
+  deleteFileSearchDocument,
+  listFileSearchDocuments,
+  upsertFileSearchDocument,
+} from "../db/file-search-documents.js";
 import { deleteTag, listTags, tagFile, untagFile } from "../db/tags.js";
 import { getCurrentMachine, listMachines } from "../db/machines.js";
 import {
@@ -149,6 +157,15 @@ export class LocalStore implements FilesStore {
   }
   async searchFiles(query: string, opts: Omit<ListFilesOptions, "query"> = {}): Promise<SearchResult[]> {
     return searchFiles(query, opts);
+  }
+  async upsertSearchDocument(input: UpsertFileSearchDocumentInput): Promise<FileSearchDocument> {
+    return upsertFileSearchDocument(input);
+  }
+  async listSearchDocuments(opts: ListFileSearchDocumentsOptions = {}): Promise<FileSearchDocument[]> {
+    return listFileSearchDocuments(opts);
+  }
+  async deleteSearchDocument(id: string): Promise<boolean> {
+    return deleteFileSearchDocument(id);
   }
   async recentFiles(agentId?: string, limit = 20): Promise<RecentFile[]> {
     return recentFiles(agentId, limit);

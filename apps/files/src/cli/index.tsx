@@ -7,11 +7,8 @@ import { createSource, listSources, getSource, updateSource } from "../db/source
 import { getFile } from "../db/files.js";
 import { getLatestFileVersion } from "../db/file-versions.js";
 import {
-  deleteFileSearchDocument,
   getFileSearchIndexStats,
-  listFileSearchDocuments,
   refreshAllFileSearchDocumentFts,
-  upsertFileSearchDocument,
 } from "../db/file-search-documents.js";
 import { listPeers, addPeer, removePeer } from "../db/peers.js";
 import { getConfigPath, loadConfig, setConfigValue } from "../lib/config.js";
@@ -892,7 +889,7 @@ searchIndex
   .option("--public", "Mark the derived document as non-private")
   .option("--no-replace-existing", "Do not mark older same-kind/source-ref documents stale")
   .option("--json", "Output as JSON")
-  .action((fileId: string, opts: {
+  .action(async (fileId: string, opts: {
     textFile: string;
     kind: string;
     extractor: string;
@@ -907,10 +904,14 @@ searchIndex
     replaceExisting?: boolean;
     json?: boolean;
   }) => {
-    requireLocalTransport("files search-index add");
+    // The derived-content index is a BOTH-backend capability: the local store
+    // writes FTS5 rows, the hosted store writes /v1 search documents.
     try {
-      const id = requireId(fileId, "files");
-      if (!getFile(id)) throw new Error(`File not found: ${id}`);
+      const files = store();
+      // Partial ids resolve on the local store only; hosted ids pass through.
+      const id = files.transport === "local" ? requireId(fileId, "files") : fileId;
+      const file = await files.getFile(id);
+      if (!file) throw new Error(`File not found: ${id}`);
       const textPath = resolve(opts.textFile);
       if (!existsSync(textPath)) throw new Error(`Text artifact not found: ${opts.textFile}`);
 
@@ -920,7 +921,9 @@ searchIndex
       const rawText = readFileSync(textPath, "utf8");
       const searchableText = rawText.slice(0, maxChars);
       const truncated = rawText.length > searchableText.length;
-      const revisionId = opts.revision ?? getLatestFileVersion(id)?.id;
+      // Revision resolution is a local-store refinement; hosted clients pass
+      // --revision explicitly (the server owns revision metadata).
+      const revisionId = opts.revision ?? (files.transport === "local" ? getLatestFileVersion(id)?.id : undefined);
       const sourceRef = opts.sourceRef
         ?? (revisionId ? buildOpenFilesFileRevisionRef(id, revisionId) : buildOpenFilesFileRef(id));
       const metadata = {
@@ -932,7 +935,7 @@ searchIndex
         } : {}),
       };
 
-      const document = upsertFileSearchDocument({
+      const document = await files.upsertSearchDocument({
         file_id: id,
         revision_id: revisionId,
         source_ref: sourceRef,
@@ -960,22 +963,22 @@ searchIndex
   .option("-l, --limit <n>", "Max documents", "50")
   .option("--offset <n>", "Offset", "0")
   .option("--json", "Output as JSON")
-  .action((fileId: string | undefined, opts: {
+  .action(async (fileId: string | undefined, opts: {
     kind?: string;
     status?: string;
     limit: string;
     offset: string;
     json?: boolean;
   }) => {
-    requireLocalTransport("files search-index list");
     try {
-      const docs = listFileSearchDocuments({
-        file_id: fileId ? requireId(fileId, "files") : undefined,
+      const files = store();
+      const docs = (await files.listSearchDocuments({
+        file_id: fileId ? (files.transport === "local" ? requireId(fileId, "files") : fileId) : undefined,
         kind: opts.kind ? parseFileSearchDocumentKind(opts.kind) : undefined,
         status: opts.status ? parseFileSearchDocumentStatus(opts.status) : undefined,
         limit: parseIntFlag(opts.limit, "limit", { min: 1 }),
         offset: parseIntFlag(opts.offset, "offset", { min: 0 }),
-      }).map(formatSearchDocumentForOutput);
+      })).map(formatSearchDocumentForOutput);
       if (opts.json) { console.log(JSON.stringify(docs, null, 2)); return; }
       if (!docs.length) { console.log(chalk.dim("No search documents found.")); return; }
       for (const doc of docs) {
@@ -989,10 +992,9 @@ searchIndex
   .command("remove <document-id>")
   .description("Remove a derived search document and its FTS entry")
   .option("--json", "Output as JSON")
-  .action((documentId: string, opts: { json?: boolean }) => {
-    requireLocalTransport("files search-index remove");
+  .action(async (documentId: string, opts: { json?: boolean }) => {
     try {
-      const removed = deleteFileSearchDocument(documentId);
+      const removed = await store().deleteSearchDocument(documentId);
       if (opts.json) { console.log(JSON.stringify({ removed }, null, 2)); return; }
       console.log(removed ? chalk.green("removed") : chalk.dim("not found"));
     } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }

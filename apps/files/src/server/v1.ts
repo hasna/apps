@@ -183,18 +183,71 @@ export function createV1Handler(options: V1HandlerOptions = {}): V1Handler {
         // ── /v1/files ──────────────────────────────────────────────────
         if (seg[0] === "files") {
           if (seg.length === 1 && method === "GET") {
+            const sortRaw = q("sort");
+            const sort = sortRaw === "name" || sortRaw === "size" || sortRaw === "date" ? sortRaw : undefined;
+            const sortDirRaw = q("sort_dir");
+            const sortDir = sortDirRaw === "asc" || sortDirRaw === "desc" ? sortDirRaw : undefined;
+            const scopeRaw = q("search_scope");
+            const searchScope = scopeRaw === "content" || scopeRaw === "metadata" ? scopeRaw : "all";
+            const minSizeRaw = url.searchParams.get("min_size");
+            const maxSizeRaw = url.searchParams.get("max_size");
             return json(await store.listFiles(client, {
               source_id: q("source_id"),
               machine_id: q("machine_id"),
               project_id: q("project_id"),
+              collection_id: q("collection_id"),
               tag: q("tag"),
               ext: q("ext"),
               status: q("status"),
               q: q("q"),
+              search_scope: searchScope,
+              after: q("after"),
+              before: q("before"),
+              min_size: minSizeRaw === null || minSizeRaw === "" ? undefined : Number(minSizeRaw),
+              max_size: maxSizeRaw === null || maxSizeRaw === "" ? undefined : Number(maxSizeRaw),
+              sort,
+              sort_dir: sortDir,
               limit: Number(url.searchParams.get("limit") ?? 50),
               offset: Number(url.searchParams.get("offset") ?? 0),
             }));
           }
+          // Derived-content search documents (hosted mirror of the local
+          // `file_search_documents` writer; keywords take precedence over {id}).
+          if (seg.length === 3 && seg[2] === "search-documents" && method === "POST") {
+            const b = await body();
+            if (!b || typeof b !== "object" || typeof (b as Record<string, unknown>).kind !== "string" || typeof (b as Record<string, unknown>).source_ref !== "string") {
+              return err("kind and source_ref are required");
+            }
+            const input = b as Record<string, unknown>;
+            if (typeof input.searchable_text !== "string" || input.searchable_text.length === 0) {
+              return err("searchable_text is required", 400);
+            }
+            const status = typeof input.status === "string" ? input.status : "ready";
+            if (!["ready", "partial", "unsupported", "error", "stale"].includes(status)) {
+              return err("invalid status", 400);
+            }
+            try {
+              const doc = await store.upsertSearchDocument(client, {
+                file_id: seg[1]!,
+                revision_id: typeof input.revision_id === "string" ? input.revision_id : undefined,
+                source_ref: input.source_ref as string,
+                kind: input.kind as never,
+                extractor: typeof input.extractor === "string" ? input.extractor : undefined,
+                content_hash: typeof input.content_hash === "string" ? input.content_hash : undefined,
+                searchable_text: input.searchable_text as string,
+                metadata: input.metadata && typeof input.metadata === "object" ? input.metadata as Record<string, unknown> : undefined,
+                status: status as never,
+                private: typeof input.private === "boolean" ? input.private : undefined,
+                replace_existing: typeof input.replace_existing === "boolean" ? input.replace_existing : undefined,
+              });
+              return json(doc, 201);
+            } catch (error) {
+              if (error instanceof Error && /File not found/.test(error.message)) return err("File not found", 404);
+              throw error;
+            }
+          }
+          // (GET list + DELETE for search documents are id-only, top-level —
+          // see the /v1/search-documents block after this route group.)
           // Collection-level reads/actions (keywords take precedence over {id}).
           if (seg.length === 2 && method === "GET" && seg[1] === "recent") {
             return json(await store.recentFiles(client, q("agent_id"), Number(url.searchParams.get("limit") ?? 20)));
@@ -296,6 +349,22 @@ export function createV1Handler(options: V1HandlerOptions = {}): V1Handler {
           }
           if (seg.length === 3 && seg[2] === "history" && method === "GET") {
             return json(await store.getFileHistory(client, seg[1]!, activityQuery(url)));
+          }
+        }
+
+        // ── /v1/search-documents ─────────────────────────────────────────
+        if (seg[0] === "search-documents") {
+          if (seg.length === 1 && method === "GET") {
+            return json(await store.listSearchDocuments(client, {
+              file_id: q("file_id"),
+              kind: q("kind") as never,
+              status: q("status") as never,
+              limit: Number(url.searchParams.get("limit") ?? 50),
+              offset: Number(url.searchParams.get("offset") ?? 0),
+            }));
+          }
+          if (seg.length === 2 && method === "DELETE") {
+            return (await store.deleteSearchDocument(client, seg[1]!)) ? json({ ok: true }) : err("Search document not found", 404);
           }
         }
 
