@@ -40,6 +40,12 @@ export interface SkillsServerConfig {
    * body is buffered, and the JSON cap is untouched.
    */
   skillBundleLimitBytes: number;
+  /**
+   * How long a deleted skill answers 410 with a tombstone marker before it is purged
+   * (todos d061fcda). Within the window a client's pull can reconcile (remove its local
+   * copy); after it, the row and its bundle are gone and the slug is an ordinary 404.
+   */
+  tombstoneWindowMs: number;
   publicBaseUrl: string;
   nodeEnv: string;
   /**
@@ -83,6 +89,9 @@ export function resolveServerConfig(env: Record<string, string | undefined> = pr
     bundleSigningKey: env.HASNA_SKILLS_API_SIGNING_KEY || env.HASNA_SKILLS_SIGNING_KEY || undefined,
     requestBodyLimitBytes: parsePositiveInt(env.HASNA_SKILLS_REQUEST_BODY_LIMIT_BYTES, 1_000_000),
     skillBundleLimitBytes: parsePositiveInt(env.HASNA_SKILLS_BUNDLE_LIMIT_BYTES, 25_000_000),
+    // 7 days: long enough for a pulling client's next run to reconcile a deletion,
+    // short enough that a forgotten slug is eventually gone rather than kept forever.
+    tombstoneWindowMs: parsePositiveInt(env.HASNA_SKILLS_TOMBSTONE_WINDOW_MS, 7 * 24 * 60 * 60 * 1000),
     // No vendor default: an operator's server advertises either the origin they
     // configured or its own bound address. It never names someone else's host.
     publicBaseUrl: (env.SKILLS_PUBLIC_BASE_URL || localOrigin(host, port)).replace(/\/+$/, ""),

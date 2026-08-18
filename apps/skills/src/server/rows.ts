@@ -120,6 +120,13 @@ export function rowToSkill(row: Record<string, unknown>): ServerSkillRecord {
     ...(typeof row.published_by_user_id === "string" ? { publishedByUserId: row.published_by_user_id } : {}),
     createdAt: dateString(row.created_at),
     updatedAt: dateString(row.updated_at),
+    // Revision/tombstone columns (migration 0004). revision_id is NOT NULL with a ''
+    // legacy marker that the store backfills; revision_number defaults to 0 for rows
+    // that predate the migration.
+    revisionId: String(row.revision_id ?? ""),
+    revisionNumber: Number(row.revision_number ?? 0),
+    ...(row.tombstoned_at ? { tombstonedAt: dateString(row.tombstoned_at) } : {}),
+    ...(row.tombstone_purge_after ? { tombstonePurgeAfter: dateString(row.tombstone_purge_after) } : {}),
   };
 }
 

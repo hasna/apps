@@ -3,10 +3,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { pullSkills, PullSkillError, type SkillPullClient, BUNDLE_DIGEST_HEADER, BUNDLE_SIGNATURE_HEADER, installBundleAtomically, verifyBundleResponseBytes } from "./pull.js";
+import { pullSkills, PullSkillError, type SkillPullClient, BUNDLE_DIGEST_HEADER, BUNDLE_SIGNATURE_HEADER, BUNDLE_REVISION_ID_HEADER, BUNDLE_REVISION_NUMBER_HEADER, installBundleAtomically, verifyBundleResponseBytes, PULL_MARKER_FILE } from "./pull.js";
 import { getPortableSkillsRoot } from "./portable-skills.js";
 import { clearRegistryCache, loadRegistryProfile } from "./registry.js";
 import { MissingApiUrlError } from "./api-url.js";
+import { revisionIdOf } from "./revision.js";
 import { packSkillBundle, sha256Hex, unpackSkillBundle } from "./skill-bundle.js";
 import { signBundleBytes } from "./skill-bundles.js";
 
@@ -20,7 +21,18 @@ useDefaultTestTimeout();
  * network or an origin. The real HTTP path is exercised end-to-end in pull.e2e.test.ts.
  */
 function fakeClient(
-  skills: Record<string, { md: string | null; meta?: Record<string, unknown>; bundle?: Uint8Array; bundleHeaders?: Record<string, string> }>,
+  skills: Record<
+    string,
+    {
+      md: string | null;
+      meta?: Record<string, unknown>;
+      bundle?: Uint8Array;
+      bundleHeaders?: Record<string, string>;
+      tombstoned?: boolean;
+      /** When set, getBundle answers this status instead of serving a bundle (e.g. 404 after purge). */
+      bundleStatus?: number;
+    }
+  >,
   listing?: unknown[],
 ): SkillPullClient {
   return {
@@ -34,10 +46,59 @@ function fakeClient(
       return skills[slug]?.md ?? null;
     },
     async getBundle(slug: string) {
-      const bundle = skills[slug]?.bundle;
-      if (!bundle) return null;
-      return new Response(bundle.buffer as ArrayBuffer, { headers: skills[slug]?.bundleHeaders ?? {} });
+      const entry = skills[slug];
+      if (!entry) return null;
+      // A tombstoned slug answers 410, exactly like the hosted registry (todos d061fcda).
+      if (entry.tombstoned) return new Response(null, { status: 410 });
+      // A purged slug answers 404: the published row is gone (todos d061fcda).
+      if (entry.bundleStatus) return new Response(null, { status: entry.bundleStatus });
+      if (!entry.bundle) return null;
+      return new Response(entry.bundle.buffer as ArrayBuffer, { headers: entry.bundleHeaders ?? {} });
     },
+  };
+}
+
+/**
+ * The metadata payload a revisioned instance serves for a published skill, with the
+ * revision id computed over the SAME canonical content the pull recomputes from. The
+ * proof "the recorded revision identifies the installed content" must be real — never
+ * an arbitrary 64-hex id.
+ */
+function revisionMetaFor(
+  slug: string,
+  md: string,
+  opts: { source?: string; version?: string; bundleSha256?: string; bundleByteSize?: number; kind?: "executable" | "instruction" } = {},
+): Record<string, unknown> {
+  const kind = opts.kind ?? "instruction";
+  const source = opts.source ?? "custom";
+  const displayName = `Display ${slug}`;
+  const description = `Description of ${slug}`;
+  const category = "Development Tools";
+  const tags = ["ops"];
+  const revisionId = revisionIdOf({
+    slug,
+    displayName,
+    description,
+    category,
+    tags,
+    source,
+    kind,
+    ...(opts.version ? { version: opts.version } : {}),
+    skillMd: md,
+    ...(opts.bundleSha256 ? { bundleSha256: opts.bundleSha256 } : {}),
+    ...(opts.bundleByteSize !== undefined ? { bundleByteSize: opts.bundleByteSize } : {}),
+  });
+  return {
+    displayName,
+    description,
+    category,
+    tags,
+    source: "remote",
+    publishedSource: source,
+    kind,
+    ...(opts.version ? { version: opts.version } : {}),
+    skillMd: md,
+    revisionId,
   };
 }
 
@@ -411,6 +472,421 @@ describe("pullSkills — verified bundle path", () => {
       source.cleanup();
     }
   });
+
+  test("records the installed revision id in the result and the marker", async () => {
+    const root = tempRoot();
+    const source = makeBundleSkill("revisioned-skill", BUNDLED_MD);
+    const meta = revisionMetaFor("revisioned-skill", BUNDLED_MD, {
+      kind: "executable",
+      version: "1.2.3",
+      bundleSha256: source.packed.sha256,
+      bundleByteSize: source.packed.bytes.byteLength,
+    });
+    const revisionId = String(meta.revisionId);
+    try {
+      const { results } = await pullSkills({
+        names: ["revisioned-skill"],
+        rootDir: root,
+        client: fakeClient({
+          "revisioned-skill": {
+            md: BUNDLED_MD,
+            meta,
+            bundle: source.packed.bytes,
+            bundleHeaders: {
+              [BUNDLE_DIGEST_HEADER]: source.packed.sha256,
+              [BUNDLE_REVISION_ID_HEADER]: revisionId,
+              [BUNDLE_REVISION_NUMBER_HEADER]: "3",
+            },
+          },
+        }),
+      });
+      expect(results[0].success).toBe(true);
+      expect(results[0].revisionId).toBe(revisionId);
+
+      const marker = JSON.parse(readFileSync(join(root, "revisioned-skill", ".hasna-skills.json"), "utf-8"));
+      expect(marker.revisionId).toBe(revisionId);
+      expect(marker.contentHash).toBe(source.packed.sha256);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      source.cleanup();
+    }
+  });
+
+  test("a declared revision that does not identify the served content fails closed", async () => {
+    const root = tempRoot();
+    const source = makeBundleSkill("unprovable-skill", BUNDLED_MD);
+    try {
+      // The instance declares a revision that is NOT the content-addressed sha of what it
+      // serves: the pull must refuse to install and refuse to record, never accept it.
+      const { results } = await pullSkills({
+        names: ["unprovable-skill"],
+        rootDir: root,
+        client: fakeClient({
+          "unprovable-skill": {
+            md: BUNDLED_MD,
+            meta: revisionMetaFor("unprovable-skill", BUNDLED_MD, {
+              kind: "executable",
+              bundleSha256: source.packed.sha256,
+              bundleByteSize: source.packed.bytes.byteLength,
+            }),
+            bundle: source.packed.bytes,
+            bundleHeaders: {
+              [BUNDLE_DIGEST_HEADER]: source.packed.sha256,
+              [BUNDLE_REVISION_ID_HEADER]: "ab".repeat(32),
+              [BUNDLE_REVISION_NUMBER_HEADER]: "1",
+            },
+          },
+        }),
+      });
+      expect(results[0].success).toBe(false);
+      expect(results[0].error).toContain("Revision proof failed");
+      // Nothing was installed: no corpus entry, no marker with an unprovable id.
+      expect(existsSync(join(root, "unprovable-skill"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      source.cleanup();
+    }
+  });
+
+  test("pull after a remote change detects the newer revision", async () => {
+    const root = tempRoot();
+    const v1 = makeBundleSkill("evolving-skill", "---\nname: evolving-skill\ndescription: v1\nkind: instruction\n---\n# v1\n");
+    const v2 = makeBundleSkill("evolving-skill", "---\nname: evolving-skill\ndescription: v2\nkind: instruction\n---\n# v2\n");
+    const md1 = "---\nname: evolving-skill\ndescription: v1\nkind: instruction\n---\n# v1\n";
+    const md2 = "---\nname: evolving-skill\ndescription: v2\nkind: instruction\n---\n# v2\n";
+    try {
+      const clientFor = (md: string, packed: { bytes: Uint8Array; sha256: string }, number: number) => {
+        const meta = revisionMetaFor("evolving-skill", md, { bundleSha256: packed.sha256, bundleByteSize: packed.bytes.byteLength });
+        return fakeClient({
+          "evolving-skill": {
+            md,
+            meta,
+            bundle: packed.bytes,
+            bundleHeaders: {
+              [BUNDLE_DIGEST_HEADER]: packed.sha256,
+              [BUNDLE_REVISION_ID_HEADER]: String(meta.revisionId),
+              [BUNDLE_REVISION_NUMBER_HEADER]: String(number),
+            },
+          },
+        });
+      };
+
+      const first = await pullSkills({ names: ["evolving-skill"], rootDir: root, client: clientFor(md1, v1.packed, 1) });
+      expect(first.results[0].success).toBe(true);
+      expect(first.results[0].revisionId).toBe(String(revisionMetaFor("evolving-skill", md1, { bundleSha256: v1.packed.sha256, bundleByteSize: v1.packed.bytes.byteLength }).revisionId));
+      const markerAfterFirst = JSON.parse(readFileSync(join(root, "evolving-skill", ".hasna-skills.json"), "utf-8"));
+      expect(markerAfterFirst.revisionId).toBe(String(revisionMetaFor("evolving-skill", md1, { bundleSha256: v1.packed.sha256, bundleByteSize: v1.packed.bytes.byteLength }).revisionId));
+      expect(markerAfterFirst.contentHash).toBe(v1.packed.sha256);
+
+      // The remote moved to a newer revision; a re-pull detects and records it.
+      const second = await pullSkills({ names: ["evolving-skill"], rootDir: root, client: clientFor(md2, v2.packed, 2) });
+      expect(second.results[0].success).toBe(true);
+      expect(second.results[0].revisionId).toBe(String(revisionMetaFor("evolving-skill", md2, { bundleSha256: v2.packed.sha256, bundleByteSize: v2.packed.bytes.byteLength }).revisionId));
+      expect(second.results[0].contentHash).toBe(v2.packed.sha256);
+      const markerAfterSecond = JSON.parse(readFileSync(join(root, "evolving-skill", ".hasna-skills.json"), "utf-8"));
+      expect(markerAfterSecond.revisionId).toBe(String(revisionMetaFor("evolving-skill", md2, { bundleSha256: v2.packed.sha256, bundleByteSize: v2.packed.bytes.byteLength }).revisionId));
+      expect(markerAfterSecond.contentHash).toBe(v2.packed.sha256);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      v1.cleanup();
+      v2.cleanup();
+    }
+  });
+
+  test("a tombstoned skill is removed from the corpus by pull, then reported missing after expiry", async () => {
+    const root = tempRoot();
+    const source = makeBundleSkill("doomed-skill", BUNDLED_MD);
+    const meta = revisionMetaFor("doomed-skill", BUNDLED_MD, { bundleSha256: source.packed.sha256, bundleByteSize: source.packed.bytes.byteLength });
+    const revisionId = String(meta.revisionId);
+    try {
+      // First: install it.
+      const installed = await pullSkills({
+        names: ["doomed-skill"],
+        rootDir: root,
+        client: fakeClient({
+          "doomed-skill": {
+            md: BUNDLED_MD,
+            meta,
+            bundle: source.packed.bytes,
+            bundleHeaders: { [BUNDLE_DIGEST_HEADER]: source.packed.sha256, [BUNDLE_REVISION_ID_HEADER]: revisionId },
+          },
+        }),
+      });
+      expect(installed.results[0].success).toBe(true);
+      expect(existsSync(join(root, "doomed-skill", "SKILL.md"))).toBe(true);
+
+      // The instance tombstones the slug: pull sees the 410 and reconciles by removing
+      // the local copy — the tombstone contract, visible at the client boundary.
+      const tombstoned = await pullSkills({
+        names: ["doomed-skill"],
+        rootDir: root,
+        client: fakeClient({ "doomed-skill": { md: null, tombstoned: true } }),
+      });
+      expect(tombstoned.results[0].success).toBe(true);
+      expect(tombstoned.results[0].tombstoned).toBe(true);
+      expect(tombstoned.results[0].removed).toBe(true);
+      expect(existsSync(join(root, "doomed-skill"))).toBe(false);
+
+      // After the tombstone window expires the slug is purged: pull reports not-found.
+      const expired = await pullSkills({
+        names: ["doomed-skill"],
+        rootDir: root,
+        client: fakeClient({}),
+      });
+      expect(expired.results[0].success).toBe(false);
+      expect(expired.results[0].error).toContain("not found");
+      // A second tombstone pull with no local copy is still a clean reconcile.
+      const alreadyGone = await pullSkills({
+        names: ["doomed-skill"],
+        rootDir: root,
+        client: fakeClient({ "doomed-skill": { md: null, tombstoned: true } }),
+      });
+      expect(alreadyGone.results[0].success).toBe(true);
+      expect(alreadyGone.results[0].removed).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      source.cleanup();
+    }
+  });
+
+  test("a 410 tombstone never deletes an unmanaged or user-created local skill", async () => {
+    const root = tempRoot();
+    const source = makeBundleSkill("doomed-skill", BUNDLED_MD);
+    const meta = revisionMetaFor("doomed-skill", BUNDLED_MD, { bundleSha256: source.packed.sha256, bundleByteSize: source.packed.bytes.byteLength });
+    try {
+      // Install a pull-managed copy first, then remove its marker to model a skill the
+      // user created or took over locally (no `.hasna-skills.json`).
+      await pullSkills({
+        names: ["doomed-skill"],
+        rootDir: root,
+        client: fakeClient({
+          "doomed-skill": {
+            md: BUNDLED_MD,
+            meta,
+            bundle: source.packed.bytes,
+            bundleHeaders: { [BUNDLE_DIGEST_HEADER]: source.packed.sha256, [BUNDLE_REVISION_ID_HEADER]: String(meta.revisionId) },
+          },
+        }),
+      });
+      rmSync(join(root, "doomed-skill", PULL_MARKER_FILE));
+      const localBytes = readFileSync(join(root, "doomed-skill", "SKILL.md"), "utf-8");
+
+      // The remote 410 arrives: the unmanaged directory must survive.
+      const result = await pullSkills({
+        names: ["doomed-skill"],
+        rootDir: root,
+        client: fakeClient({ "doomed-skill": { md: null, tombstoned: true } }),
+      });
+      expect(result.results[0].success).toBe(true);
+      expect(result.results[0].tombstoned).toBe(true);
+      expect(result.results[0].removed).toBe(false);
+      expect(result.results[0].leftInPlace).toBe(true);
+      expect(existsSync(join(root, "doomed-skill", "SKILL.md"))).toBe(true);
+      expect(readFileSync(join(root, "doomed-skill", "SKILL.md"), "utf-8")).toBe(localBytes);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      source.cleanup();
+    }
+  });
+
+  test("a purged published slug is reported, never swapped for the bundled skill", async () => {
+    const root = tempRoot();
+    const source = makeBundleSkill("purged-skill", BUNDLED_MD);
+    const meta = revisionMetaFor("purged-skill", BUNDLED_MD, { bundleSha256: source.packed.sha256, bundleByteSize: source.packed.bytes.byteLength });
+    try {
+      // First: the slug is published and pulled (a revision-marked local install).
+      await pullSkills({
+        names: ["purged-skill"],
+        rootDir: root,
+        client: fakeClient({
+          "purged-skill": {
+            md: BUNDLED_MD,
+            meta,
+            bundle: source.packed.bytes,
+            bundleHeaders: { [BUNDLE_DIGEST_HEADER]: source.packed.sha256, [BUNDLE_REVISION_ID_HEADER]: String(meta.revisionId) },
+          },
+        }),
+      });
+      const installedBytes = readFileSync(join(root, "purged-skill", "SKILL.md"), "utf-8");
+
+      // The tombstone window passes and the published row is purged; the bundled skill
+      // with the same slug is what the metadata endpoint now serves, and the bundle
+      // endpoint answers 404. The pull must report the published slug as purged/absent,
+      // NOT reinstall the different bundled skill over the local copy.
+      const bundledMd = "---\nname: purged-skill\ndescription: THE BUNDLED skill, a different thing\nkind: instruction\n---\n# Bundled\n";
+      const purged = await pullSkills({
+        names: ["purged-skill"],
+        rootDir: root,
+        client: fakeClient({
+          "purged-skill": {
+            md: bundledMd,
+            meta: { displayName: "Bundled purged-skill", description: "THE BUNDLED skill, a different thing", category: "Development Tools", tags: [], kind: "instruction", source: "remote" },
+            bundleStatus: 404,
+          },
+        }),
+      });
+      expect(purged.results[0].success).toBe(true);
+      expect(purged.results[0].purged).toBe(true);
+      expect(purged.results[0].removed).toBeFalsy();
+      // The local published install is untouched and the bundled content was NOT installed.
+      expect(existsSync(join(root, "purged-skill", "SKILL.md"))).toBe(true);
+      expect(readFileSync(join(root, "purged-skill", "SKILL.md"), "utf-8")).toBe(installedBytes);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      source.cleanup();
+    }
+  });
+
+  test("a bundle-only published skill (no SKILL.md) pulls and proves its revision", async () => {
+    // Publishing permits a bundle without a SKILL.md (skill-validation warns, never
+    // blocks), the publisher omits skillMd when absent, and the server hashes the row
+    // over the canonical null form. The bundle path must recompute the revision over
+    // the served metadata plus the verified bundle bytes — skillMd absent included —
+    // instead of refusing the declared revision.
+    const root = tempRoot();
+    const source = makeBundleSkill("bundle-only", BUNDLED_MD);
+    const meta = {
+      displayName: "Display bundle-only",
+      description: "Description of bundle-only",
+      category: "Development Tools",
+      tags: ["ops"],
+      source: "remote",
+      publishedSource: "custom",
+      kind: "instruction",
+      bundleSha256: source.packed.sha256,
+      bundleByteSize: source.packed.bytes.byteLength,
+      revisionId: revisionIdOf({
+        slug: "bundle-only",
+        displayName: "Display bundle-only",
+        description: "Description of bundle-only",
+        category: "Development Tools",
+        tags: ["ops"],
+        source: "custom",
+        kind: "instruction",
+        // skillMd absent hashes as the canonical null form — exactly what the server
+        // records for a bundle-only publish.
+        bundleSha256: source.packed.sha256,
+        bundleByteSize: source.packed.bytes.byteLength,
+      }),
+    };
+    try {
+      const { results } = await pullSkills({
+        names: ["bundle-only"],
+        rootDir: root,
+        client: fakeClient({
+          "bundle-only": {
+            md: null,
+            meta,
+            bundle: source.packed.bytes,
+            bundleHeaders: { [BUNDLE_DIGEST_HEADER]: source.packed.sha256, [BUNDLE_REVISION_ID_HEADER]: String(meta.revisionId) },
+          },
+        }),
+      });
+      expect(results[0].success).toBe(true);
+      expect(results[0].revisionId).toBe(String(meta.revisionId));
+      const installed = readFileSync(join(root, "bundle-only", "SKILL.md"), "utf-8");
+      expect(installed).toBe(BUNDLED_MD);
+      const marker = JSON.parse(readFileSync(join(root, "bundle-only", ".hasna-skills.json"), "utf-8"));
+      expect(marker.revisionId).toBe(String(meta.revisionId));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      source.cleanup();
+    }
+  });
+
+  test("a bundle-less pull proves the revision against the SKILL.md it actually installs", async () => {
+    const root = tempRoot();
+    const oldMd = "---\nname: md-only-skill\ndescription: first\nkind: instruction\n---\n# v1\n";
+    const newMd = "---\nname: md-only-skill\ndescription: second\nkind: instruction\n---\n# v2\n";
+    // The metadata response carries revision r1 for oldMd, but by the time the pull
+    // fetches the SKILL.md the row has changed (newMd): the separately fetched bytes are
+    // what will be installed, and the declared revision does not identify them. The pull
+    // must fail closed rather than record r1 against newMd.
+    const meta = revisionMetaFor("md-only-skill", oldMd);
+    try {
+      const { results } = await pullSkills({
+        names: ["md-only-skill"],
+        rootDir: root,
+        client: fakeClient({
+          "md-only-skill": { md: newMd, meta },
+        }),
+      });
+      expect(results[0].success).toBe(false);
+      expect(results[0].error).toContain("Revision proof failed");
+      expect(existsSync(join(root, "md-only-skill"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a bundle-less pull installs SKILL.md byte-for-byte and proves its revision", async () => {
+    const root = tempRoot();
+    // Deliberately NO trailing newline: the corpus writer must not normalize the bytes,
+    // because the revision proof covers the exact fetched document (the server stores
+    // and hashes it verbatim). Appending a newline would record a revision that does
+    // not identify the installed bytes.
+    const md = "---\nname: no-newline-skill\ndescription: no trailing newline\nkind: instruction\n---\n# v1";
+    const meta = revisionMetaFor("no-newline-skill", md);
+    try {
+      const { results } = await pullSkills({
+        names: ["no-newline-skill"],
+        rootDir: root,
+        client: fakeClient({ "no-newline-skill": { md, meta } }),
+      });
+      expect(results[0].success).toBe(true);
+      expect(results[0].revisionId).toBe(String(meta.revisionId));
+      const installed = readFileSync(join(root, "no-newline-skill", "SKILL.md"), "utf-8");
+      expect(installed).toBe(md);
+      const marker = JSON.parse(readFileSync(join(root, "no-newline-skill", ".hasna-skills.json"), "utf-8"));
+      expect(marker.revisionId).toBe(String(meta.revisionId));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a purged published slug on a bundle-less instance is reported, not reinstalled", async () => {
+    const root = tempRoot();
+    const source = makeBundleSkill("purged-md-only", BUNDLED_MD);
+    const meta = revisionMetaFor("purged-md-only", BUNDLED_MD, { bundleSha256: source.packed.sha256, bundleByteSize: source.packed.bytes.byteLength });
+    try {
+      // Install the published revision first.
+      await pullSkills({
+        names: ["purged-md-only"],
+        rootDir: root,
+        client: fakeClient({
+          "purged-md-only": {
+            md: BUNDLED_MD,
+            meta,
+            bundle: source.packed.bytes,
+            bundleHeaders: { [BUNDLE_DIGEST_HEADER]: source.packed.sha256, [BUNDLE_REVISION_ID_HEADER]: String(meta.revisionId) },
+          },
+        }),
+      });
+      const installedBytes = readFileSync(join(root, "purged-md-only", "SKILL.md"), "utf-8");
+
+      // After purge the instance serves only the bundled SKILL.md with no revision id and
+      // no bundle at all. The pull reports the published slug as purged rather than
+      // installing the bundled skill over the local copy.
+      const bundledMd = "---\nname: purged-md-only\ndescription: bundled replacement\nkind: instruction\n---\n# Bundled\n";
+      const purged = await pullSkills({
+        names: ["purged-md-only"],
+        rootDir: root,
+        client: fakeClient({
+          "purged-md-only": {
+            md: bundledMd,
+            meta: { displayName: "Bundled purged-md-only", description: "bundled replacement", category: "Development Tools", tags: [], kind: "instruction", source: "remote" },
+          },
+        }),
+      });
+      expect(purged.results[0].success).toBe(true);
+      expect(purged.results[0].purged).toBe(true);
+      expect(existsSync(join(root, "purged-md-only", "SKILL.md"))).toBe(true);
+      expect(readFileSync(join(root, "purged-md-only", "SKILL.md"), "utf-8")).toBe(installedBytes);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      source.cleanup();
+    }
+  });
 });
 
 describe("verifyBundleResponseBytes", () => {
@@ -434,6 +910,34 @@ describe("verifyBundleResponseBytes", () => {
       headers: { [BUNDLE_SIGNATURE_HEADER]: "not-a-signature" },
     });
     expect(() => verifyBundleResponseBytes(bytes.buffer.slice(0), response, { signingKey: "key" })).toThrow(PullSkillError);
+  });
+
+  test("records the revision id and number from the headers", () => {
+    const revisionId = "ef".repeat(32);
+    const response = new Response(bytes, {
+      headers: {
+        [BUNDLE_DIGEST_HEADER]: sha256Hex(bytes),
+        [BUNDLE_REVISION_ID_HEADER]: revisionId,
+        [BUNDLE_REVISION_NUMBER_HEADER]: "7",
+      },
+    });
+    const verified = verifyBundleResponseBytes(bytes.buffer.slice(0), response);
+    expect(verified.revisionId).toBe(revisionId);
+    expect(verified.revisionNumber).toBe(7);
+  });
+
+  test("rejects a malformed revision id header", () => {
+    const response = new Response(bytes, {
+      headers: { [BUNDLE_DIGEST_HEADER]: sha256Hex(bytes), [BUNDLE_REVISION_ID_HEADER]: "not-a-revision-id" },
+    });
+    expect(() => verifyBundleResponseBytes(bytes.buffer.slice(0), response)).toThrow(PullSkillError);
+  });
+
+  test("rejects a malformed revision number header", () => {
+    const response = new Response(bytes, {
+      headers: { [BUNDLE_DIGEST_HEADER]: sha256Hex(bytes), [BUNDLE_REVISION_ID_HEADER]: "ef".repeat(32), [BUNDLE_REVISION_NUMBER_HEADER]: "-1" },
+    });
+    expect(() => verifyBundleResponseBytes(bytes.buffer.slice(0), response)).toThrow(PullSkillError);
   });
 });
 

@@ -407,6 +407,24 @@ export interface CorpusSkillMeta {
   tags?: string[];
   version?: string;
   kind?: SkillKind;
+  /**
+   * The hosted registry's revision id for this skill (todos d061fcda), when the
+   * instance reported one. Carried onto the metadata-only pull path so the pull marker
+   * records which revision was installed there too.
+   */
+  revisionId?: string;
+  /**
+   * The row's SKILL.md, served in the published metadata so a client can recompute the
+   * content-addressed revision id and PROVE the declared revision identifies the content
+   * it received (todos d061fcda).
+   */
+  skillMd?: string;
+  /**
+   * The row's stored source (the payload's own `source` is always the client view
+   * "remote"). The canonical revision hash is computed over the stored value, so the
+   * client needs it to recompute the id.
+   */
+  publishedSource?: string;
 }
 
 export interface WriteCorpusSkillInput {
@@ -442,8 +460,12 @@ export function writeCorpusSkill(
   const created = !existsSync(skillPath);
   mkdirSync(skillPath, { recursive: true });
 
-  const skillMd = input.skillMd.endsWith("\n") ? input.skillMd : `${input.skillMd}\n`;
-  writeFileSync(join(skillPath, "SKILL.md"), skillMd);
+  // Verbatim, never normalized: the fetched document is a published artifact and the
+  // hosted registry's revision is computed over its exact bytes (the row stores it
+  // byte-for-byte). Appending a trailing newline would install bytes the recorded
+  // revision does not identify — a pull must be able to prove which revision it
+  // installed, which requires the installed bytes to BE the hashed bytes.
+  writeFileSync(join(skillPath, "SKILL.md"), input.skillMd);
 
   const frontmatter = parseSkillFrontmatter(input.skillMd) ?? undefined;
   // Carry the instance's kind when it reports one; else the SKILL.md frontmatter; else
