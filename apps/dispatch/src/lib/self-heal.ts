@@ -394,15 +394,15 @@ function recommendedAction(category: DispatchSelfHealCategory): string {
 function repairRoute(category: DispatchSelfHealCategory): string {
   switch (category) {
     case "machine":
-      return "open-machines owns durable machine reachability abstractions; open-dispatch owns delivery failures after a route is resolved";
+      return "@hasna/machines owns durable machine reachability abstractions; @hasna/dispatch owns delivery failures after a route is resolved";
     case "routing":
-      return "open-dispatch owns dispatch route execution; open-todos/open-configs/open-machines own missing source, config, or machine abstractions";
+      return "@hasna/dispatch owns dispatch route execution; @hasna/todos/@hasna/configs/@hasna/machines own missing source, config, or machine abstractions";
     case "stale_package":
     case "dispatch_bug":
     case "target":
     case "auth":
     case "unknown":
-      return "open-dispatch owns this diagnosis unless evidence proves the missing abstraction belongs in another open-* package";
+      return "@hasna/dispatch owns this diagnosis unless evidence proves the missing abstraction belongs in another @hasna/* package";
   }
 }
 
@@ -445,7 +445,7 @@ function nextActions(category: DispatchSelfHealCategory): string[] {
       ];
     case "dispatch_bug":
       return [
-        "create or update the open-dispatch bug task with redacted evidence",
+        "create or update the @hasna/dispatch bug task with redacted evidence",
         "add a regression test before publishing and updating affected machines",
         ...common,
       ];

@@ -1,4 +1,4 @@
-# AGENTS.md — working in `open-dispatch`
+# AGENTS.md — working in `apps/dispatch` (`hasna/apps` monorepo)
 
 `@hasna/dispatch` dispatches prompts to coding agents in tmux windows reliably:
 CLI + MCP + SDK + a live daemon. This file orients an agent (or human) contributing here.

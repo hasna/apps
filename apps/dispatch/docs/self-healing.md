@@ -46,12 +46,12 @@ The diagnosis classifies the failure into one of these buckets:
 
 | Bucket | Typical signal | Owning repair path |
 |---|---|---|
-| `target` | target missing, unsafe shell pane, active composer, prompt never parked | fix target discovery/state in `open-dispatch` or wait for a safe target |
+| `target` | target missing, unsafe shell pane, active composer, prompt never parked | fix target discovery/state in `@hasna/dispatch` or wait for a safe target |
 | `auth` | 401/403, auth profile switch, account limit, logged out, credential problem | repair the target agent account/profile state before retrying |
-| `machine` | SSH/Tailscale failure, host unreachable, machine not found, remote timeout | check `spark01`/`spark02`/`apple03`; durable reachability abstractions belong in `open-machines` |
+| `machine` | SSH/Tailscale failure, host unreachable, machine not found, remote timeout | check `spark01`/`spark02`/`apple03`; durable reachability abstractions belong in `@hasna/machines` |
 | `stale_package` | unknown option/command, missing dist file, version mismatch, broken install | patch-publish `@hasna/dispatch`, update affected machines, then restart daemons |
-| `routing` | sessions-query/source mapping failure, no live sessions, route mismatch | fix route execution in `open-dispatch`; source/config gaps belong in `open-todos`, `open-configs`, or `open-machines` |
-| `dispatch_bug` | unhandled exception, stack trace, sqlite/internal invariant | fix `open-dispatch` with a regression test before publish/update |
+| `routing` | sessions-query/source mapping failure, no live sessions, route mismatch | fix route execution in `@hasna/dispatch`; source/config gaps belong in `@hasna/todos`, `@hasna/configs`, or `@hasna/machines` |
+| `dispatch_bug` | unhandled exception, stack trace, sqlite/internal invariant | fix `@hasna/dispatch` with a regression test before publish/update |
 
 `unknown` means the sample was too thin. Capture one more bounded redacted status
 sample and classify manually before changing state.
@@ -72,12 +72,12 @@ sample and classify manually before changing state.
 
 Use the diagnosis bucket to choose the owning package:
 
-- `open-dispatch`: delivery behavior, target safety, confirmation, daemon queue,
+- `@hasna/dispatch`: delivery behavior, target safety, confirmation, daemon queue,
   route execution, CLI/MCP/SDK surfaces, and self-heal diagnosis.
-- `open-machines`: durable machine inventory, reachability, SSH/Tailscale route
+- `@hasna/machines`: durable machine inventory, reachability, SSH/Tailscale route
   resolution, and fleet-level machine checks.
-- `open-configs`: durable config/profile distribution gaps.
-- `open-todos`: task identity, task-triggered routing, dedupe, and lifecycle
+- `@hasna/configs`: durable config/profile distribution gaps.
+- `@hasna/todos`: task identity, task-triggered routing, dedupe, and lifecycle
   workflow gaps.
 
 If the repair needs an abstraction that does not exist yet, create or update a
@@ -89,7 +89,7 @@ behavior during the incident; they must not become the permanent route.
 For `stale_package` or `dispatch_bug`:
 
 1. Reproduce with a bounded fixture or dry-run path.
-2. Make the smallest package change in `open-dispatch`.
+2. Make the smallest package change in `@hasna/dispatch`.
 3. Add or update tests that fail without the fix.
 4. Run focused tests, typecheck, and build when feasible.
 5. Commit and push a task branch.

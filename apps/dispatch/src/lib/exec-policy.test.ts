@@ -224,7 +224,7 @@ describe("exec command policy", () => {
         paneCommand: "node",
         visible,
         processTree: codewithProcessTree,
-        cwd: "/home/hasna/Workspace/hasna/opensource/open-dispatch",
+        cwd: "/home/hasna/workspace/repos/hasna/apps/dispatch",
       }),
     ).toMatchObject({
       targetKind: "agent",
@@ -289,7 +289,7 @@ Goal active Objective: Add reliable session orchestration to dispatch
         paneCommand: "node",
         visible: activeCapture,
         processTree: codewithProcessTree,
-        cwd: "/home/hasna/Workspace/hasna/opensource/open-dispatch",
+        cwd: "/home/hasna/workspace/repos/hasna/apps/dispatch",
       }),
     ).toMatchObject({
       targetKind: "agent",
@@ -374,7 +374,7 @@ Goal active Objective: Copied from a real Codewith pane
     })).toBe(false);
   });
 
-  test("detects the open-dispatch self-pane active Codewith wrapper shape", () => {
+  test("detects the dispatch self-pane active Codewith wrapper shape", () => {
     const visible = `
 • Working (38s • esc to interrupt)
 
@@ -393,7 +393,7 @@ Goal active Objective: Copied from a real Codewith pane
         paneCommand: "node",
         visible,
         processTree,
-        cwd: "/home/hasna/Workspace/hasna/opensource/open-dispatch",
+        cwd: "/home/hasna/workspace/repos/hasna/apps/dispatch",
       }),
     ).toMatchObject({
       targetKind: "agent",
@@ -830,7 +830,7 @@ ${"\n".repeat(32)}`;
       command: "cd /tmp/wrong && git reset --hard",
       policy: {
         allowPrefixes: ["git reset --hard"],
-        allowGitResetHardPaths: ["/home/hasna/workspace/hasna/opensource/open-dispatch"],
+        allowGitResetHardPaths: ["/home/hasna/workspace/repos/hasna/apps/dispatch"],
       },
     });
     expect(blocked.allowed).toBe(false);
@@ -839,10 +839,10 @@ ${"\n".repeat(32)}`;
     const allowed = evaluateExecPolicy({
       target: "work:shell",
       targetKind: "shell",
-      command: "cd /home/hasna/workspace/hasna/opensource/open-dispatch && git reset --hard",
+      command: "cd /home/hasna/workspace/repos/hasna/apps/dispatch && git reset --hard",
       policy: {
         allowPrefixes: ["git reset --hard"],
-        allowGitResetHardPaths: ["/home/hasna/workspace/hasna/opensource/open-dispatch"],
+        allowGitResetHardPaths: ["/home/hasna/workspace/repos/hasna/apps/dispatch"],
       },
     });
     expect(allowed.allowed).toBe(true);
@@ -853,10 +853,10 @@ ${"\n".repeat(32)}`;
     const result = evaluateExecPolicy({
       target: "work:shell",
       targetKind: "shell",
-      command: "cd /home/hasna/workspace/hasna/opensource/open-dispatch/../wrong && git reset --hard",
+      command: "cd /home/hasna/workspace/repos/hasna/apps/dispatch/../wrong && git reset --hard",
       policy: {
         allowPrefixes: ["git reset --hard"],
-        allowGitResetHardPaths: ["/home/hasna/workspace/hasna/opensource/open-dispatch"],
+        allowGitResetHardPaths: ["/home/hasna/workspace/repos/hasna/apps/dispatch"],
       },
     });
     expect(result.allowed).toBe(false);

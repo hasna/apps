@@ -547,7 +547,7 @@ describe("performDispatch", () => {
     const r = composerRunner("node", idleFooterOnlyCodewithCapture, "✶ Working… (esc to interrupt)", codewithProcessTree);
 
     const rec = await performDispatch(
-      { target: "open-dispatch:1.1", prompt: "Handle the next operator prompt", submit: false },
+      { target: "dispatch:1.1", prompt: "Handle the next operator prompt", submit: false },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
@@ -590,7 +590,7 @@ describe("performDispatch", () => {
     const r = composerRunner("node", activeCodewithCapture, "✶ Working… (esc to interrupt)", codewithProcessTree);
 
     const rec = await performDispatch(
-      { target: "open-dispatch:1.1", prompt: "Steer this at the next safe boundary", submitDelayMs: 0 },
+      { target: "dispatch:1.1", prompt: "Steer this at the next safe boundary", submitDelayMs: 0 },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
@@ -606,7 +606,7 @@ describe("performDispatch", () => {
     const r = composerRunner("node", activeCodewithCapture, "✶ Working… (esc to interrupt)", codewithProcessTree);
 
     const rec = await performDispatch(
-      { target: "open-dispatch:1.1", prompt: "Do not send Enter to a busy pane", ifIdle: true },
+      { target: "dispatch:1.1", prompt: "Do not send Enter to a busy pane", ifIdle: true },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 

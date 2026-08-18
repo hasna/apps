@@ -460,7 +460,7 @@ Messages to be submitted after next tool call:
     const prompt =
       "Adversarial review only; do not modify files. Include an adversarial self-review before concluding and report blocking findings first.";
     const before = `
-> You are in /home/hasna/workspace/hasna/opensource/open-dispatch
+> You are in /home/hasna/workspace/repos/hasna/apps/dispatch
 
   Do you trust the contents of this directory? Working with untrusted contents
   comes with higher risk of prompt injection.
