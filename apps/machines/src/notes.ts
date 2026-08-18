@@ -18,7 +18,7 @@ export const MACHINE_TRASH_POLICIES_KIND = "machine_trash_policies";
 
 export type NoteMachineRole = "origin" | "source" | "target" | "sync_target" | "trash_owner";
 export type NoteActorType = "human" | "agent" | "system" | "unknown";
-export type NoteMachineContextSource = "notes" | "agent" | "sync" | "import" | "machines" | "unknown";
+export type NoteMachineContextSource = "notes" | "agent" | "sync" | "import" | "machines" | "unknown" | "open-notes" | "open-machines";
 /** Legacy stored values accepted on read until records are migrated. */
 export const LEGACY_NOTE_CONTEXT_SOURCES = ["notes", "machines"] as const;
 export type LegacyNoteContextSource = (typeof LEGACY_NOTE_CONTEXT_SOURCES)[number];
