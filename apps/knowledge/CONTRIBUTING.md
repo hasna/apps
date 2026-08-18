@@ -1,4 +1,4 @@
-# Contributing to open-knowledge
+# Contributing to knowledge
 
 Thank you for your interest in contributing!
 

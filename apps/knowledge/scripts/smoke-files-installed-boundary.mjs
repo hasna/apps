@@ -39,7 +39,7 @@ function parseArgs(argv) {
         'Usage: bun scripts/smoke-files-installed-boundary.mjs [--json] [--dry-run] [--keep-temp]',
         '       [--files-bin files] [--knowledge-bin knowledge] [--evidence-json <path>] [--evidence-md <path>]',
         '',
-        'Runs the installed open-files to open-knowledge source-boundary smoke:',
+        'Runs the installed files to knowledge source-boundary smoke:',
         '  1. create an isolated open-files data dir and source containing a raw sentinel',
         '  2. use the installed files binary to index, export manifest, doctor, resolve, and extract redacted text',
         '  3. ingest only source refs and redacted extracted text into an isolated knowledge workspace',

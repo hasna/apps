@@ -234,7 +234,7 @@ describe('installed files boundary smoke script', () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe('');
     expect(result.stdout).toContain('smoke-files-installed-boundary.mjs');
-    expect(result.stdout).toContain('installed open-files to open-knowledge source-boundary smoke');
+    expect(result.stdout).toContain('installed files to knowledge source-boundary smoke');
     expect(result.stdout).toContain('scan both knowledge SQLite stores and artifacts');
   });
 
