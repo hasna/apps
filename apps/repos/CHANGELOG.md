@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.49
+
+Adds the `repos pr-monitor` PR-state monitor verb and its SDK/MCP surfaces (PR
+#448).
+
+- New `repos pr-monitor` CLI verb: 8-class PR state monitoring (NEW,
+  CI_FAILING, REVIEW_NEEDED, NO_GO_OPEN, READY_TO_MERGE, BASE_MOVED,
+  STALE_WORKTREE, NEW_COMMENT) with the v1 JSON envelope, baseline mode,
+  `--sync`/`--no-sync`, and fingerprint-deduped event emission.
+- Migration v15: `pr_monitor_state` watch table plus `pull_requests.base_ref_oid`
+  capture; the watch state is local-only by design.
+- Verdict parser for `[REVIEW] GO|NO_GO — repo#n @ sha` comments, classification
+  engine with precedence and a merge-tree freshness leg, and a `pr_monitor` MCP
+  tool with SDK export.
+
 ## 0.1.48
 
 ## 0.1.47
