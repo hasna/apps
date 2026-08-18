@@ -7,6 +7,7 @@ import {
 } from "../../lib/registry-sync.js";
 import type { SkillRegistryProfile } from "../../lib/registry.js";
 import { pullSkills, PullSkillError, type PulledSkillResult } from "../../lib/pull.js";
+import { getPortableSkillsRoot } from "../../lib/portable-skills.js";
 
 export function registerRegistry(parent: Command) {
   const registry = parent
@@ -76,10 +77,11 @@ async function handleRegistrySync(options: {
 
 /**
  * `skills pull` — fetch skills from the configured instance into this machine's corpus
- * (~/.hasna/skills/installed/<name>/). Registered here beside `registry sync` because both
- * are the "instance <-> local registry" surface. Once a skill is in the corpus,
- * loadRegistry() shows it to `skills list --all` and the MCP `list_skills` with no further
- * step.
+ * (the canonical root resolved by getPortableSkillsRoot(): <app folder>/installed/<name>/
+ * before the owner-layout migration, <app folder>/skills/<name>/ after it). Registered
+ * here beside `registry sync` because both are the "instance <-> local registry" surface.
+ * Once a skill is in the corpus, loadRegistry() shows it to `skills list --all` and the
+ * MCP `list_skills` with no further step.
  */
 export function registerPull(parent: Command) {
   parent
@@ -95,7 +97,7 @@ export function registerPull(parent: Command) {
         if (options.json) {
           console.log(JSON.stringify({ results }, null, 2));
         } else {
-          printPullHuman(results);
+          printPullHuman(results, getPortableSkillsRoot());
         }
         if (results.some((result) => !result.success)) process.exitCode = 1;
       } catch (error) {
@@ -113,7 +115,7 @@ export function registerPull(parent: Command) {
     });
 }
 
-function printPullHuman(results: PulledSkillResult[]): void {
+function printPullHuman(results: PulledSkillResult[], corpusRoot: string): void {
   if (!results.length) {
     console.log(chalk.dim("No skills to pull."));
     return;
@@ -127,5 +129,5 @@ function printPullHuman(results: PulledSkillResult[]): void {
     }
   }
   const ok = results.filter((result) => result.success).length;
-  console.log(chalk.dim(`\n${ok}/${results.length} pulled into ~/.hasna/skills/installed`));
+  console.log(chalk.dim(`\n${ok}/${results.length} pulled into ${corpusRoot}`));
 }

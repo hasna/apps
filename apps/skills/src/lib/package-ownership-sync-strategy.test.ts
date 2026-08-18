@@ -25,8 +25,12 @@ describe("package ownership and sync strategy", () => {
       "Agent CLI",
       "MCP server",
       "Bundled skill corpus",
-      "| Server API | Private service wrapper |",
-      "| Server workers | Private service wrapper |",
+      // The server and worker ship in the OSS package (`skills-server`,
+      // `skills-worker`); the web app and infrastructure stay private wrappers.
+      "| Server API | Open upstream |",
+      "`skills-server`",
+      "| Server workers | Open upstream |",
+      "`skills-worker`",
       "| Web app | Private service wrapper |",
       "| Infrastructure | Private service wrapper |",
     ]) {

@@ -9,7 +9,12 @@ useDefaultTestTimeout();
 describe("open-core hosted service pattern", () => {
   const content = readFileSync(join(process.cwd(), "docs/architecture/open-core-saas-pattern.md"), "utf8");
 
-  test("keeps hosted server implementation outside OSS packages", () => {
+  test("ships the user-hosted server inside the OSS package", () => {
+    // The shipped reality: `skills-server`/`skills-worker`/`skills-migrate` ship in
+    // the OSS package (bin entries, src/server, migrations/) — the pattern doc must
+    // say so, not reserve the server for a private wrapper.
+    expect(content).toContain("skills-server");
+    expect(content).toContain("ships in the OSS package");
     expect(content).toContain("server-aware");
     expect(content).toContain("local");
     expect(content).toContain("billing status");

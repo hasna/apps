@@ -65,7 +65,7 @@ export class PushSkillError extends Error {
 export function registerPublish(parent: Command) {
   parent
     .command("push")
-    .argument("<name>", "Name of a skill in the local corpus (~/.hasna/skills/installed or the migrated ~/.hasna/skills/skills)")
+    .argument("<name>", "Name of a skill in the local corpus (the canonical root: <app folder>/installed, or <app folder>/skills after the owner-layout migration)")
     .option("--version <version>", "Override the version recorded on the instance")
     .option("--dry-run", "Pack and validate without uploading", false)
     .option("--json", "Output result as JSON", false)

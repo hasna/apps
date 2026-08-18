@@ -12,9 +12,15 @@ describe("database boundary audit", () => {
     "utf8",
   );
 
-  test("documents that no hosted product schema exists in OSS", () => {
-    expect(content).toContain("There is no hosted product database schema");
+  test("documents the self-hosted server schema that ships in the package", () => {
+    // The package ships the full user-hosted server (src/server, `skills-server`,
+    // `skills-migrate`) with a 13-table schema in migrations/ — the audit must say
+    // so instead of claiming no hosted schema exists.
     expect(content).toContain("@hasna/skills");
+    expect(content).toContain("13");
+    expect(content).toContain("organizations");
+    expect(content).toContain("skills_registry");
+    expect(content).toContain("skills_runs");
     expect(content).toContain("skill implementation details");
     expect(content).toContain("hosted\nservice schema");
   });

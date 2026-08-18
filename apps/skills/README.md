@@ -110,7 +110,7 @@ requirements explicitly document local provider use.
 | `skills import <file>` | | Pin skills from a JSON export |
 | `skills config set <key> <value>` | | Set default agent, scope, output format, or API origin |
 | `skills config unset <key>` | | Remove a configuration value (`skills config unset apiUrl` returns to running on this machine) |
-| `skills new <name>` | `scaffold` | Scaffold a portable skill under `~/.hasna/skills/installed/<name>` |
+| `skills new <name>` | `scaffold` | Scaffold a portable skill into the canonical corpus root |
 | `skills port <path>` | `add` | Import an existing skill folder into the portable standard |
 | `skills create <name>` | | Scaffold a new custom skill directory |
 | `skills sync --to claude` | | Disabled by design; use `skills mcp --register <agent|all>` |
@@ -190,7 +190,8 @@ Stable command shapes:
 ## Remote Registry
 
 The npm package ships no bundled skill corpus. Discovery reads the local corpus
-cache (`~/.hasna/skills/installed`, filled by `skills pull`) and, when an API
+cache (the canonical corpus root — `<app folder>/installed`, or `<app folder>/skills`
+after the owner-layout migration — filled by `skills pull`) and, when an API
 base URL is set, the server's registry. This is not a mode you select: pointing
 browse/search commands at a server's registry is one fact, an API base URL being
 set. To set it:
@@ -219,14 +220,16 @@ The typed `RemoteSkillsClient` also exposes pin, tag, and cursor-based
 incremental-sync methods (`listPins`/`pin`/`unpin`, `listTags`/`skillsByTag`,
 `listUpdatedSince`). A server that predates those routes fails closed with an
 explicit unsupported-route error — never a silent empty listing. Route table
-and version-skew contract: `docs/architecture/remote-client-pins-tags-sync.md`.
+and version-skew contract: `docs/architecture/remote-client-pins-tags-sync.md`;
+every served route is listed in the [API route table](#api-routes) below.
 
 For the reusable upstream contract, see
 `docs/architecture/reusable-skills-engine.md`.
 
 ## Portable Skills
 
-Portable skills live under `~/.hasna/skills/installed/<name>/` and follow the
+Portable skills live under the canonical corpus root (`<app folder>/installed/<name>/`,
+or `<app folder>/skills/<name>/` after the owner-layout migration) and follow the
 standard documented in `docs/skill-standard.md`.
 
 ```bash
@@ -329,7 +332,7 @@ new empty file under the working directory.
 
 The data directory follows `$HASNA_SKILLS_DIR`, so the database moves with the rest
 of the app's state. The database file sits at the app root, beside `config.json` —
-not inside `installed/`, which holds only the installed skill corpus.
+not inside the corpus folder, which holds only the installed skill corpus.
 
 One sharp edge: `HASNA_SKILLS_DATABASE_URL` is shared with the optional repo-native
 storage sync under [Storage Boundary](#storage-boundary), and that sync speaks
@@ -373,6 +376,54 @@ database in its own ephemeral layer, and two replicas each get their *own* datab
 rather than sharing one. Multi-replica and container deployments want Postgres; both
 `skills-server` and `skills-worker` print the database they opened on startup, so a
 split-brain SQLite setup shows up as two different paths in the logs.
+
+<a id="api-routes"></a>
+
+### API routes
+
+Every route the shipped server serves (`skills-server`, `src/server/app.ts`),
+guarded by a doc test (`src/lib/readme-route-table.test.ts`) so a route dropped
+from this table fails CI:
+
+| Route | Purpose | Status |
+|---|---|---|
+| `GET /health` | Liveness | served |
+| `GET /ready` | Readiness | served |
+| `GET /api/auth/whoami` | Authenticated identity | served |
+| `GET /api/v1/skills` | List bundled + published skills (merged) | served |
+| `POST /api/v1/skills` | Publish a skill (`skills push`) | served |
+| `GET /api/v1/skills/:slug` | Single skill metadata | served |
+| `PUT /api/v1/skills/:slug` | Update published metadata | served |
+| `PATCH /api/v1/skills/:slug` | Update published metadata | served |
+| `DELETE /api/v1/skills/:slug` | Delete a published skill | served |
+| `GET /api/v1/skills/:slug/skill.md` | Skill documentation | served |
+| `GET /api/v1/skills/:slug/bundle` | Bundle bytes (`X-Skill-Bundle-Sha256`; `X-Skill-Bundle-Signature` when a signing key is configured) | served |
+| `GET /api/v1/runs` | List runs | served |
+| `POST /api/v1/runs/:slug` | Create a remote run | served |
+| `GET /api/v1/runs/:runId` | Run status (`skills runs status`) | served |
+| `GET /api/v1/runs/:runId/logs` | Run logs | served |
+| `GET /api/v1/runs/:runId/artifacts` | List run artifacts | served |
+| `GET /api/v1/runs/:runId/artifacts/:artifactId` | Download an artifact (`skills exports download`) | served |
+| `POST /api/v1/runs/:runId/cancel` | Cancel a run | served |
+| `GET /api/v1/pins` | List remote pins | client-contract (not yet served; fails closed) |
+| `PUT /api/v1/pins/:slug` | Pin a skill remotely | client-contract (not yet served; fails closed) |
+| `DELETE /api/v1/pins/:slug` | Unpin a skill remotely | client-contract (not yet served; fails closed) |
+| `GET /api/v1/tags` | List remote tags | client-contract (not yet served; fails closed) |
+| `GET /api/v1/tags/:tag/skills` | Skills by remote tag | client-contract (not yet served; fails closed) |
+| `GET /api/v1/skills/updated` | Incremental-sync page (`since`, `cursor`, `limit`) | client-contract (not yet served; fails closed) |
+
+The pins/tags/updated-since routes are implemented on the typed client
+(`RemoteSkillsClient`) with a fail-closed version-skew guard — a server that
+predates them answers an explicit unsupported-route error, never a silent empty
+listing (contract: `docs/architecture/remote-client-pins-tags-sync.md`).
+
+The two-way local↔registry reconciliation verb is **not shipped** — it is tracked
+as task T9 of the skills local+cloud unification plan (8022d27f) and will reuse
+the routes above.
+
+The server-in-OSS is a deliberate, reviewed open-core boundary: the OSS package is
+the complete user-hosted product (CLI, MCP, server, worker, migrations); the hosted
+SaaS layer (web app, billing) stays outside. Ruling: `docs/adr/0001-open-core-boundary.md`.
 
 <a id="storage-boundary"></a>
 
@@ -448,7 +499,8 @@ checked.
 ## Project Runtime State
 
 Skills are discovered from the configured server registry or the local corpus
-cache (`~/.hasna/skills/installed`, filled by `skills pull`; a checkout can be
+cache (the canonical corpus root — `<app folder>/installed`, or `<app folder>/skills`
+after the owner-layout migration — filled by `skills pull`; a checkout can be
 named explicitly with `skills sync --source <path>` or `$SKILLS_SOURCE`). The
 npm package ships no bundled corpus. Project folders and agent-native skill
 folders are never used as skill libraries.
@@ -490,10 +542,11 @@ bun run typecheck          # TypeScript type checking
 Premium server-executed skills should add public contracts, pricing, docs, and tests
 without adding provider secrets to the OSS package.
 
-Portable skill directories are auto-discovered from
-`~/.hasna/skills/installed/<name>/`. Skills found in either older location -
+Portable skill directories are auto-discovered from the canonical corpus root
+(`<app folder>/installed/<name>/`, or `<app folder>/skills/<name>/` after the
+owner-layout migration). Skills found in either older location -
 `~/.hasna/skills/<name>/` or `~/.hasna/skills/custom/<name>/` - are copied into
-`installed/` on first use; the originals are left in place.
+the corpus on first use; the originals are left in place.
 Project `.skills/` is reserved for runtime state and outputs.
 
 ## Data Directory
@@ -505,7 +558,8 @@ Hasna app (`mementos` has `agents/`, `accounts` has `profiles/`, `knowledge` has
 
 ```
 ~/.hasna/skills/                    app folder
-~/.hasna/skills/installed/<name>/   the corpus, one folder per skill
+~/.hasna/skills/installed/<name>/   the corpus by default, one folder per skill
+~/.hasna/skills/skills/<name>/      the corpus after the owner-layout migration
 ~/.hasna/skills/config.json         app data
 ~/.hasna/skills/skills.db
 ~/.hasna/skills/auth.json
@@ -518,24 +572,29 @@ Project runtime data stays in `.skills/runs`, `.skills/exports`, `.skills/tmp`,
 and optional `.skills/project.json`.
 
 Set `HASNA_SKILLS_DIR` to relocate the **app folder**. Everything moves together
-— the corpus is always `<app folder>/installed` — so there is one variable and one
-coherent relocation. The legacy `~/.skills` migration is skipped for an
-overridden folder. `skills config path` reports the config file actually in use.
+— the corpus is always a named subfolder of it (`<app folder>/installed` by
+default, `<app folder>/skills` once the owner-layout migration has run) — so
+there is one variable and one coherent relocation. The legacy `~/.skills`
+migration is skipped for an overridden folder. `skills config path` reports the
+config file actually in use.
 
 | Path | Location | Moves with `HASNA_SKILLS_DIR` |
 |---|---|---|
-| Installed skills | `<app folder>/installed/<name>/` | yes |
+| Skill corpus | `<app folder>/installed/<name>/` (or `<app folder>/skills/<name>/` after the owner-layout migration) | yes |
 | Global config | `<app folder>/config.json` | yes |
 | Feedback database | `<app folder>/skills.db` | yes |
 | Auth | `<app folder>/auth.json` | yes |
 
 There is no separate local-skills-folder override, and none is needed: one
-variable relocates the whole app folder, so the corpus is always
-`<app folder>/installed`. With the default app folder that is exactly the
-migrated corpus location — the former `~/.skills` and `custom/` trees are folded
-into `<app folder>/installed` on first resolution (see "Migrating from the older
-layout"). Extension corpora are a separate concern and keep their own
-`extensionsDir` config key.
+variable relocates the whole app folder, so the corpus is always a named
+subfolder of it — `<app folder>/installed` by default, and `<app folder>/skills`
+once `skills storage migrate` has run the owner-layout migration (recorded by
+`.layout-migration.json` in the corpus folder; a `skills/` directory someone
+created by hand is not the corpus). With the default app folder the
+pre-migration corpus is exactly the migrated legacy location — the former
+`~/.skills` and `custom/` trees are folded into `<app folder>/installed` on
+first resolution (see "Migrating from the older layout"). Extension corpora are
+a separate concern and keep their own `extensionsDir` config key.
 
 ### Migrating from the older layout
 

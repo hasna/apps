@@ -8,6 +8,12 @@ preserving one canonical owner for the open skill engine.
 Use `hasna/skills` as the canonical upstream package and let private service wrappers
 consume it through released package APIs plus generated registry sync.
 
+The open package is the complete user-hosted product: the server and worker ship in
+the OSS package (`skills-server`, `skills-worker`, `skills-migrate`, `src/server/`,
+`migrations/`) — the deliberate open-core boundary ruling
+(`../adr/0001-open-core-boundary.md`). Private service wrappers, when built, run that
+server behind their own web and billing layer; they never duplicate the engine.
+
 Do not use permanent forks, submodules, subtree imports, copied source trees, or
 monorepo package ownership transfers as the product integration model. Those
 approaches create duplicate engines that drift.
@@ -20,9 +26,9 @@ approaches create duplicate engines that drift.
 | Agent CLI | Open upstream | `@hasna/skills`, command `skills` | Local for free/user-key skills; server-executed skills submit to an explicitly configured Skills API. |
 | MCP server | Open upstream | `@hasna/skills`, command `skills-mcp` | Agent protocol wrapper over shared engine APIs. |
 | Bundled skill corpus | Open upstream | `hasna/skills/skills/*` | Source corpus for free and explicitly local execution; server-executed entries expose contracts, not protected source. |
-| Server API | Private service wrapper | Same open repo or separate service repo | Auth, account state, billing, approvals, registry sync, and runs. |
-| Server workers | Private service wrapper | Same open repo or separate service repo | Queues, sandbox execution, exports, logs, retries, and connector bindings. |
-| Web app | Private service wrapper | Same open repo or separate service repo | Web UI consuming the same API contracts as CLI and MCP. |
+| Server API | Open upstream | `@hasna/skills`, command `skills-server` | Org-scoped auth, published-skill registry, bundle storage, and runs (`src/server/`, `migrations/`). A hosted SaaS wrapper, if built, runs this server behind its own web and billing layer. |
+| Server workers | Open upstream | `@hasna/skills`, command `skills-worker` | Run queue execution (`src/server/worker.ts`); exports, logs, and retries. |
+| Web app | Private service wrapper | Separate service repo | Web UI consuming the same API contracts as CLI and MCP. |
 | Infrastructure | Private service wrapper | Hasna AWS infrastructure repo | Deployment, secret stores, observability, and rollback automation. |
 
 ## Consumption Model

@@ -1,17 +1,31 @@
 # Database Boundary Audit
 
-This audit documents the public package database boundary.
+This audit documents the public package database boundary for `@hasna/skills`.
 
 ## Result
 
-There is no hosted product database schema in this repo.
+The package ships the full user-hosted server: the `skills-server`, `skills-worker`,
+and `skills-migrate` binaries, the implementation in `src/server/`, and the product
+schema as SQL migrations in `migrations/` (one set for SQLite, one for Postgres).
+The schema is the 13-table product schema below, org-scoped through the
+`organizations`/`organization_members` tables and the principal-scoped store reads:
 
-The current repo is the `@hasna/skills` package shape: CLI, MCP, local server
-helpers, skill corpus, and reusable engine modules. Searches for hosted schema
-ownership must not treat skill implementation details as product state.
+| Table | Role |
+| --- | --- |
+| `organizations`, `organization_members`, `users` | Org-scoped tenancy and membership |
+| `api_keys` | Authenticated principals |
+| `skills_registry`, `skills_bundles` | Published-skill registry with content-addressed bundles |
+| `skills_runs`, `skills_run_logs`, `skills_artifacts` | Run lifecycle, logs, and artifacts |
+| `skills_approvals`, `skills_audit_events` | Approval and audit trail |
+| `skills_lifecycle_receipts`, `skills_credit_reservations` | Run-output governance and credit accounting |
 
-Database-related files that do exist are inside individual skills or examples,
-such as:
+This is a deliberate reviewed decision, not an accident: the server-in-OSS is the
+intended unified surface (see `../adr/0001-open-core-boundary.md`). Searches for
+hosted schema ownership must not treat skill implementation details as product
+state.
+
+Database-related files that also exist inside individual skills or examples, such
+as:
 
 - `skills/scaffold-project` templates.
 - `skills/manageskill` local skill database helpers.
@@ -39,9 +53,10 @@ The open package may store local user state in files:
 These local files are not account state and should not become a hosted database
 model.
 
-## Hosted Wrapper State
+## Hosted SaaS Wrapper State
 
-Hosted wrappers, if built, own their own schema for:
+The org-scoped user-hosted schema above is in the OSS package. What stays outside
+it is the hosted SaaS layer, which, if built, owns its own schema for:
 
 - Tenancy.
 - Identity.
@@ -55,7 +70,7 @@ Hosted wrappers, if built, own their own schema for:
 - Connectors.
 - Audit.
 
-Hosted wrappers should preserve tenant or organization ids, idempotency keys,
+A hosted SaaS wrapper should preserve tenant or organization ids, idempotency keys,
 correlation ids, upstream package version, canonical skill slug, requested
 skill slug, and source type such as upstream, private-hosted, uploaded, or
 generated.
