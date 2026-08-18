@@ -45,7 +45,7 @@ export function registerStorage(parent: Command) {
         ? planSkillsS3SnapshotUpload(snapshot, { prefix: config.s3Prefix })
         : [];
       const plan = {
-        package: "open-skills",
+        package: "skills",
         noNetwork: true,
         databaseConfigured: Boolean(config.databaseUrl),
         s3Configured: Boolean(config.s3Bucket),

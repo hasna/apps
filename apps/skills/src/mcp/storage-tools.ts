@@ -38,7 +38,7 @@ export function registerStorageTools(server: McpServer): void {
       : [];
 
     return mcpJson({
-      package: "open-skills",
+      package: "skills",
       noNetwork: true,
       databaseConfigured: Boolean(config.databaseUrl),
       s3Configured: Boolean(config.s3Bucket),

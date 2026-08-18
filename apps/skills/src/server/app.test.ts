@@ -93,7 +93,7 @@ for (const backend of backends) {
         const health = await fetch(`${ctx.baseUrl}/health`);
         expect(health.status).toBe(200);
         const healthBody = await health.json();
-        expect(healthBody).toMatchObject({ ok: true, service: "open-skills" });
+        expect(healthBody).toMatchObject({ ok: true, service: "skills" });
         // The server does not describe who is running it. One product, one
         // deployment story; /health reports liveness, not a deployment variant.
         expect(healthBody).not.toHaveProperty("mode");

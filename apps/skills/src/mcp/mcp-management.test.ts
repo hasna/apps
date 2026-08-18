@@ -348,7 +348,7 @@ describe("MCP Server management and resources", () => {
       expect(statusResponse).not.toBeNull();
       const status = JSON.parse(statusResponse.result.content[0].text);
       expect(status).toMatchObject({
-        package: "open-skills",
+        package: "skills",
         tables: ["skills_sync_records", "skills_sync_cursors"],
         remote: {
           databaseConfigured: false,
@@ -368,7 +368,7 @@ describe("MCP Server management and resources", () => {
       expect(planResponse).not.toBeNull();
       const plan = JSON.parse(planResponse.result.content[0].text);
       expect(plan).toMatchObject({
-        package: "open-skills",
+        package: "skills",
         noNetwork: true,
         databaseConfigured: false,
         s3Configured: false,

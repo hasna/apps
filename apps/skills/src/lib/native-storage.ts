@@ -149,7 +149,7 @@ export function getStorageDatabaseUrl(
 }
 
 export interface SkillsNativeStorageStatus {
-  package: "open-skills";
+  package: "skills";
   tables: readonly SkillsStorageTable[];
   env: {
     databaseUrl: string;
@@ -181,7 +181,7 @@ export function getSkillsNativeStorageStatus(
   const s3BucketEnv = readStorageEnv(env, "s3Bucket");
   const targetDir = options.targetDir ?? process.cwd();
   return {
-    package: "open-skills",
+    package: "skills",
     tables: [...SKILLS_STORAGE_TABLES],
     env: {
       databaseUrl: SKILLS_NATIVE_STORAGE_ENV.databaseUrl,
@@ -425,7 +425,7 @@ export function createSkillsSnapshotSyncRecord(
     kind: "local-snapshot",
     id: options.id ?? "project-state",
     updatedAt: snapshot.exportedAt,
-    source: options.source ?? "open-skills",
+    source: options.source ?? "skills",
     payload: snapshot as unknown as Record<string, unknown>,
   };
 }
