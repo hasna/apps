@@ -2,10 +2,26 @@
 set -euo pipefail
 umask 077
 
-if [ "$#" -ne 2 ]; then
-  echo "Usage: $0 <Recordings.app> <explicit absolute Bun executable path>" >&2
-  exit 2
+SMOKE_VARIANT="full"
+if [ "$#" -ge 3 ]; then
+  case "$3" in
+    --variant)
+      SMOKE_VARIANT="${4:-full}"
+      ;;
+    *)
+      echo "Usage: $0 <Recordings.app> <explicit absolute Bun executable path> [--variant full|bar]" >&2
+      exit 2
+      ;;
+  esac
+  case "$SMOKE_VARIANT" in
+    full|bar) ;;
+    *)
+      echo "SMOKE_VARIANT must be full or bar; got: $SMOKE_VARIANT" >&2
+      exit 2
+      ;;
+  esac
 fi
+readonly SMOKE_VARIANT
 
 HOST_UNAME_EXECUTABLE="/usr/bin/uname"
 SYSTEM_DIRNAME_EXECUTABLE="/usr/bin/dirname"
@@ -345,6 +361,12 @@ run_smoke() {
   if [ "$mode" = "permission-helper" ]; then
     arguments=(--request-permissions "${arguments[@]}")
   fi
+  if [ "$SMOKE_VARIANT" = "bar" ]; then
+    # Bar builds are bar-only by construction (compile-time RECORDINGS_BAR_ONLY); the
+    # explicit argument is a belt-and-suspenders self-describing launch record so the
+    # launch is attributable to the variant even without the build define.
+    arguments=(--bar-only "${arguments[@]}")
+  fi
 
   SMOKE_PID=""
   SMOKE_PID_START_IDENTITY=""
@@ -428,6 +450,7 @@ run_smoke() {
     PATH="$SANITIZED_PATH" \
     TMPDIR="$WORK_DIR" \
     SMOKE_MODE="$mode" \
+    SMOKE_VARIANT="$SMOKE_VARIANT" \
     SMOKE_FOCUS_EVIDENCE="$SMOKE_FOCUS_EVIDENCE" \
     EXPECTED_HELPER="$APP_PATH/Contents/Helpers/recordings" \
     "$BUN_EXECUTABLE" -e '
@@ -454,19 +477,38 @@ run_smoke() {
       if (JSON.stringify(result.renderedStatusLabels) !== JSON.stringify(expected)) {
         fail(`unexpected status labels ${JSON.stringify(result.renderedStatusLabels)}`);
       }
-      if (result.windowCreationCount !== 1 || result.windowActivationCount !== 2) {
-        fail("retained-window activation path was not exercised twice");
-      }
-      if (result.retainedWindowReused !== true) fail("main window was not retained");
-      if (result.applicationActivationPolicy !== 0) fail("main window did not set regular activation policy");
-      if (!result.mainWindowIsVisible || !result.mainWindowCanBecomeKey) {
-        fail("retained main window was not visible and capable of becoming key");
-      }
-      if (!result.applicationIsActive || !result.mainWindowIsKey) {
-        if (process.env.SMOKE_FOCUS_EVIDENCE !== "ssh-unavailable") {
-          fail("Open Recordings did not make the retained window active and key");
+      if (process.env.SMOKE_VARIANT === "bar") {
+        // The bar variant launches windowless by construction: no workspace window is
+        // ever created, activated, or reused, the app stays an accessory (LSUIElement),
+        // and no window is exposed. This is the runtime half of the P1 #2 regression —
+        // the full-build smoke below must keep creating the window.
+        if (result.windowCreationCount !== 0 || result.windowActivationCount !== 0) {
+          fail("bar-only launch created or activated a workspace window");
         }
-        focusEvidenceStatus = "ssh-unavailable";
+        if (result.retainedWindowReused !== false) {
+          fail("bar-only launch reused a workspace window");
+        }
+        if (result.mainWindowIsVisible || result.mainWindowCanBecomeKey || result.mainWindowIsKey) {
+          fail("bar-only launch exposed a main window");
+        }
+        if (result.applicationActivationPolicy !== 1) {
+          fail("bar-only launch did not stay an accessory activation policy");
+        }
+      } else {
+        if (result.windowCreationCount !== 1 || result.windowActivationCount !== 2) {
+          fail("retained-window activation path was not exercised twice");
+        }
+        if (result.retainedWindowReused !== true) fail("main window was not retained");
+        if (result.applicationActivationPolicy !== 0) fail("main window did not set regular activation policy");
+        if (!result.mainWindowIsVisible || !result.mainWindowCanBecomeKey) {
+          fail("retained main window was not visible and capable of becoming key");
+        }
+        if (!result.applicationIsActive || !result.mainWindowIsKey) {
+          if (process.env.SMOKE_FOCUS_EVIDENCE !== "ssh-unavailable") {
+            fail("Open Recordings did not make the retained window active and key");
+          }
+          focusEvidenceStatus = "ssh-unavailable";
+        }
       }
     } else if (mode === "resolver") {
       if (result.menuBarSurfaceCount !== 0 || result.globalHandlersInstalled !== false) {
@@ -570,4 +612,8 @@ run_smoke() {
 run_smoke normal
 run_smoke permission-helper
 run_smoke resolver
-echo "Recordings.app runtime smoke passed: menu bar, retained window, helper isolation, and packaged resolver."
+if [ "$SMOKE_VARIANT" = "bar" ]; then
+  echo "Recordings.app runtime smoke passed (bar variant): menu bar, windowless launch, helper isolation, and packaged resolver."
+else
+  echo "Recordings.app runtime smoke passed: menu bar, retained window, helper isolation, and packaged resolver."
+fi

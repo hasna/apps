@@ -168,6 +168,9 @@ Artifact and version:
 
 Target selection:
   --expected-hostname <name>           Require this live short hostname before mutating
+  --variant <full|bar>                 Artifact variant the operator intends to install;
+                                       the manifest variant is verified against this at
+                                       install time (default: full)
   --artifact-policy <release|local-only>
                                        Trust policy to evaluate the artifact under
   --approved-target <name>             Approved target for a local-only artifact
@@ -214,6 +217,7 @@ EXPECTED_NEW_IDENTITY_SHA256=""
 EXPECTED_HOSTNAME=""
 EXPECTED_HOSTNAME_SET=0
 ARTIFACT_POLICY="release"
+INSTALL_VARIANT="full"
 APPROVED_TARGET="fleet"
 APPROVED_TARGET_IDENTITY_KIND=""
 APPROVED_TARGET_IDENTITY_SHA256="none"
@@ -252,6 +256,16 @@ while [ "$#" -gt 0 ]; do
     --expected-hostname)
       EXPECTED_HOSTNAME="${2:-}"
       EXPECTED_HOSTNAME_SET=1
+      shift 2
+      ;;
+    --variant)
+      case "${2:-}" in
+        full|bar) INSTALL_VARIANT="${2}" ;;
+        *)
+          echo "Install variant must be full or bar." >&2
+          exit 2
+          ;;
+      esac
       shift 2
       ;;
     --artifact-policy)
@@ -532,7 +546,8 @@ fi
 "$BUN_EXECUTABLE" "$ARTIFACT_TOOL" native-fs-guard-check
 DATA_DIR="${HOME}/.hasna/recordings"
 DATA_PARENT="$("$DIRNAME_EXECUTABLE" "$DATA_DIR")"
-APP_DEST="${HOME}/Applications/Recordings.app"
+MANIFEST_BUNDLE_NAME="Recordings.app"
+APP_DEST="${HOME}/Applications/${MANIFEST_BUNDLE_NAME}"
 APP_PARENT="$("$DIRNAME_EXECUTABLE" "$APP_DEST")"
 ROLLBACK_DIR="${DATA_DIR}/rollbacks"
 JOURNAL_PATH="${APP_PARENT}/.Recordings-install-transaction.json"
@@ -1323,6 +1338,7 @@ MANIFEST_SNAPSHOT="${WORK_DIR}/$("$BASENAME_EXECUTABLE" "$MANIFEST_PATH")"
   --source-sha "$EXPECTED_SOURCE_SHA" \
   --version "$EXPECTED_VERSION" \
   --artifact-policy "$ARTIFACT_POLICY" \
+  --variant "$INSTALL_VARIANT" \
   --approved-target "$APPROVED_TARGET" \
   --approved-target-identity-kind "$APPROVED_TARGET_IDENTITY_KIND" \
   --approved-target-identity-sha256 "$APPROVED_TARGET_IDENTITY_SHA256"
@@ -1330,6 +1346,22 @@ MANIFEST_BUILDER_IDENTITY_KIND="$("$BUN_EXECUTABLE" "$ARTIFACT_TOOL" manifest-ge
   --manifest "$MANIFEST_SNAPSHOT" \
   --manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
   --field builder_identity_kind)"
+AUTHENTICATED_BUNDLE_NAME="$("$BUN_EXECUTABLE" "$ARTIFACT_TOOL" manifest-get \
+  --manifest "$MANIFEST_SNAPSHOT" \
+  --manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
+  --field bundle_name)"
+case "$AUTHENTICATED_BUNDLE_NAME" in
+  *.app) ;;
+  *)
+    echo "Authenticated artifact manifest carries an invalid bundle name: ${AUTHENTICATED_BUNDLE_NAME}." >&2
+    exit 1
+    ;;
+esac
+if [ "$AUTHENTICATED_BUNDLE_NAME" != "$MANIFEST_BUNDLE_NAME" ]; then
+  MANIFEST_BUNDLE_NAME="$AUTHENTICATED_BUNDLE_NAME"
+  APP_DEST="${HOME}/Applications/${MANIFEST_BUNDLE_NAME}"
+  APP_PARENT="$("$DIRNAME_EXECUTABLE" "$APP_DEST")"
+fi
 
 CURRENT_MACOS="$("$SW_VERS_EXECUTABLE" -productVersion)"
 MINIMUM_MACOS="$("$BUN_EXECUTABLE" "$ARTIFACT_TOOL" manifest-get \
@@ -1361,7 +1393,7 @@ verify_secure_parent "$APP_PARENT"
 verify_existing_state_root
 
 STAGING_DIR="$("$MKTEMP_EXECUTABLE" -d "${APP_PARENT}/.Recordings-install.XXXXXX")"
-STAGED_APP="${STAGING_DIR}/Recordings.app"
+STAGED_APP="${STAGING_DIR}/${MANIFEST_BUNDLE_NAME}"
 "$BUN_EXECUTABLE" "$ARTIFACT_TOOL" verify-archive \
   --archive "$ARTIFACT_SNAPSHOT" \
   --manifest "$MANIFEST_SNAPSHOT" \
@@ -1370,6 +1402,7 @@ STAGED_APP="${STAGING_DIR}/Recordings.app"
   --source-sha "$EXPECTED_SOURCE_SHA" \
   --version "$EXPECTED_VERSION" \
   --artifact-policy "$ARTIFACT_POLICY" \
+  --variant "$INSTALL_VARIANT" \
   --approved-target "$APPROVED_TARGET" \
   --approved-target-identity-kind "$APPROVED_TARGET_IDENTITY_KIND" \
   --approved-target-identity-sha256 "$APPROVED_TARGET_IDENTITY_SHA256"
@@ -1647,10 +1680,11 @@ write_journal() {
   --source-sha "$EXPECTED_SOURCE_SHA" \
   --version "$EXPECTED_VERSION" \
   --artifact-policy "$ARTIFACT_POLICY" \
+  --variant "$INSTALL_VARIANT" \
   --approved-target "$APPROVED_TARGET" \
   --approved-target-identity-kind "$APPROVED_TARGET_IDENTITY_KIND" \
   --approved-target-identity-sha256 "$APPROVED_TARGET_IDENTITY_SHA256"
-CANDIDATE_APP="$UNPACK_DIR/Recordings.app"
+CANDIDATE_APP="$UNPACK_DIR/${MANIFEST_BUNDLE_NAME}"
 
 "$BUN_EXECUTABLE" "$ARTIFACT_TOOL" verify-app \
   --app "$CANDIDATE_APP" \
@@ -1658,6 +1692,7 @@ CANDIDATE_APP="$UNPACK_DIR/Recordings.app"
   --manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
   --team-id "$EXPECTED_TEAM_ID" \
   --artifact-policy "$ARTIFACT_POLICY" \
+  --variant "$INSTALL_VARIANT" \
   --approved-target "$APPROVED_TARGET" \
   --approved-target-identity-kind "$APPROVED_TARGET_IDENTITY_KIND" \
   --approved-target-identity-sha256 "$APPROVED_TARGET_IDENTITY_SHA256"
@@ -1671,10 +1706,12 @@ fi
 DISCOVERED_APPS=()
 add_unique_app "$APP_DEST"
 add_unique_app "${DATA_DIR}/Recordings.app"
-for candidate in "${HOME}"/Applications/Recordings.app.*; do
+add_unique_app "${DATA_DIR}/HasnaRecordings.app"
+for candidate in "${HOME}"/Applications/Recordings.app.* "${HOME}"/Applications/HasnaRecordings.app.*; do
   add_unique_app "$candidate"
 done
 add_unique_app "/Applications/Recordings.app"
+add_unique_app "/Applications/HasnaRecordings.app"
 if [ -x "$MDFIND_EXECUTABLE" ]; then
   while IFS= read -r candidate; do
     [ -n "$candidate" ] || continue
@@ -1685,7 +1722,7 @@ fi
 MANAGEABLE_APPS=()
 for existing_app in ${DISCOVERED_APPS[@]+"${DISCOVERED_APPS[@]}"}; do
   case "$existing_app" in
-    "$APP_DEST"|"${DATA_DIR}/Recordings.app"|"${HOME}/Applications/Recordings.app."*)
+    "$APP_DEST"|"${DATA_DIR}/Recordings.app"|"${DATA_DIR}/HasnaRecordings.app"|"${HOME}/Applications/Recordings.app."*|"${HOME}/Applications/HasnaRecordings.app."*)
       echo "Duplicate disposition: archive transactionally, remove after activation: ${existing_app}"
       MANAGEABLE_APPS+=("$existing_app")
       ;;
@@ -1847,6 +1884,7 @@ done
   --manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
   --team-id "$EXPECTED_TEAM_ID" \
   --artifact-policy "$ARTIFACT_POLICY" \
+  --variant "$INSTALL_VARIANT" \
   --approved-target "$APPROVED_TARGET" \
   --approved-target-identity-kind "$APPROVED_TARGET_IDENTITY_KIND" \
   --approved-target-identity-sha256 "$APPROVED_TARGET_IDENTITY_SHA256"
@@ -2012,6 +2050,7 @@ write_journal candidate-installed
   --manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
   --team-id "$EXPECTED_TEAM_ID" \
   --artifact-policy "$ARTIFACT_POLICY" \
+  --variant "$INSTALL_VARIANT" \
   --approved-target "$APPROVED_TARGET" \
   --approved-target-identity-kind "$APPROVED_TARGET_IDENTITY_KIND" \
   --approved-target-identity-sha256 "$APPROVED_TARGET_IDENTITY_SHA256"
@@ -2027,11 +2066,12 @@ fi
   --manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
   --team-id "$EXPECTED_TEAM_ID" \
   --artifact-policy "$ARTIFACT_POLICY" \
+  --variant "$INSTALL_VARIANT" \
   --approved-target "$APPROVED_TARGET" \
   --approved-target-identity-kind "$APPROVED_TARGET_IDENTITY_KIND" \
   --approved-target-identity-sha256 "$APPROVED_TARGET_IDENTITY_SHA256"
 SMOKE_TOOL_PATH="/usr/bin:/bin:/usr/sbin:/sbin:$("$DIRNAME_EXECUTABLE" "$BUN_EXECUTABLE")"
-PATH="$SMOKE_TOOL_PATH" "$RUNTIME_SMOKE" "$APP_DEST" "$BUN_EXECUTABLE"
+PATH="$SMOKE_TOOL_PATH" "$RUNTIME_SMOKE" "$APP_DEST" "$BUN_EXECUTABLE" --variant "$INSTALL_VARIANT"
 write_journal activated
 
 write_journal committed
@@ -2043,7 +2083,14 @@ STOPPED_RUNNING_APP=0
 if [ "$LAUNCH_APP" -eq 1 ] || [ "$was_running" -eq 1 ]; then
   EXPECTED_EXECUTABLE="$APP_DEST/Contents/MacOS/Recordings"
   RUNNING_EXECUTABLES+=("$EXPECTED_EXECUTABLE")
-  "$OPEN_EXECUTABLE" -n "$APP_DEST"
+  if [ "$INSTALL_VARIANT" = "bar" ]; then
+    # Bar installs relaunch with an explicit --bar-only so the launch record is
+    # self-describing; the compile-time RECORDINGS_BAR_ONLY default makes the bar
+    # windowless even without the argument.
+    "$OPEN_EXECUTABLE" -n "$APP_DEST" --args --bar-only
+  else
+    "$OPEN_EXECUTABLE" -n "$APP_DEST"
+  fi
   attempts=$((LAUNCH_TIMEOUT_SECONDS * 10))
   launched_pid=""
   launched_start_identity=""

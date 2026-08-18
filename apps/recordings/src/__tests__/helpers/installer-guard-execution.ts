@@ -417,6 +417,9 @@ export function runInstallerToIdentityGuard(
       "  *\" manifest-get \"*\"--field builder_identity_kind\"*) printf 'none\\n' ;;",
       "  *\" manifest-get \"*\"--field minimum_macos\"*) printf '26.0\\n' ;;",
       "  *\" manifest-get \"*\"--field architectures\"*) printf 'arm64\\n' ;;",
+      // The authenticated bundle name drives the install target (fleet naming rule: the
+      // bar variant installs as HasnaRecordings.app); the fixture is a full build.
+      "  *\" manifest-get \"*\"--field bundle_name\"*) printf 'Recordings.app\\n' ;;",
       "  *\" tree-digest \"*) printf '%s\\n' \"$RECORDINGS_FIXTURE_TREE_DIGEST\" ;;",
       '  *" extract-verified-archive "*)',
       '    staging_target=""',
