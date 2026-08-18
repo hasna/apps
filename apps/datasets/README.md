@@ -1,4 +1,4 @@
-# Open Datasets
+# Hasna Datasets
 
 `@hasna/datasets` is the local dataset registry for Hasna project dashboards.
 It stores bounded dataset metadata, versions, records, projections, JSON Render

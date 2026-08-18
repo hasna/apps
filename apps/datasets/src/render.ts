@@ -61,7 +61,7 @@ export function buildDatasetCanvasSpec(input: DatasetCanvasInput): DatasetJsonRe
         nodes,
         edges,
         data: {
-          source: "open-datasets",
+          source: "datasets",
           privacy: {
             previews_bounded: true,
             raw_records_embedded: false,
