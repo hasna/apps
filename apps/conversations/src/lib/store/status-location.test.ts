@@ -10,7 +10,6 @@ import { storeStatusLocation } from "./status-location.js";
 
 const URL_VAR = "HASNA_CONVERSATIONS_API_URL";
 const KEY_VAR = "HASNA_CONVERSATIONS_API_KEY";
-const MODE_VAR = "HASNA_CONVERSATIONS_STORAGE_MODE";
 const DB_VAR = "HASNA_CONVERSATIONS_DB_PATH";
 
 /** Not a credential: a syntactically plausible but deliberately invalid stub. */
@@ -21,21 +20,14 @@ const RAW =
 const MARKERS = ["SYNTHUSER", "SYNTHPASS", "SYNTHPATH", "SYNTHQUERY", "SYNTHFRAGMENT"];
 
 describe("storeStatusLocation", () => {
-  test("status payloads expose connection location without deployment-mode keys or values", () => {
+  test("status payloads expose exactly the connection-location field, never both", () => {
     const local = storeStatusLocation({ [DB_VAR]: "/tmp/conversations-status-contract.db" });
     const hosted = storeStatusLocation({ [URL_VAR]: RAW, [KEY_VAR]: FAKE_KEY });
 
-    for (const location of [local, hosted]) {
-      expect(Object.keys(location)).not.toContain("mode");
-      expect(Object.keys(location)).not.toContain("deploymentMode");
-      expect(Object.keys(location)).not.toContain("deploymentModes");
-      expect(JSON.stringify(location)).not.toMatch(/"(?:self_hosted|remote|hybrid)"/);
-    }
-
-    expect("db_path" in local).toBe(true);
-    expect("api_url" in local).toBe(false);
-    expect("api_url" in hosted).toBe(true);
-    expect("db_path" in hosted).toBe(false);
+    // The exact key sets ARE the contract: one connection field, never both,
+    // and no other selector fields can ride along in the payload.
+    expect(Object.keys(local).sort()).toEqual(["db_path"]);
+    expect(Object.keys(hosted).sort()).toEqual(["api_url"]);
   });
 
   // This is the exact value that reached three output surfaces before the fix:
@@ -87,19 +79,7 @@ describe("storeStatusLocation", () => {
     expect(MARKERS.filter((m) => JSON.stringify(local).includes(m))).toEqual([]);
   });
 
-  // A retired storage-mode variable is an error, never a selector — the status
-  // fragment shares the resolver's fail-loud ratchet, so a stale mode variable
-  // names itself instead of inventing a "default host" answer.
-  test("a retired storage-mode variable refuses by name, even for the status fragment", () => {
-    expect(() => storeStatusLocation({ [MODE_VAR]: "cloud", [KEY_VAR]: FAKE_KEY })).toThrow(
-      new RegExp(MODE_VAR),
-    );
-    expect(() => storeStatusLocation({ [MODE_VAR]: "local", [URL_VAR]: RAW, [KEY_VAR]: FAKE_KEY })).toThrow(
-      new RegExp(MODE_VAR),
-    );
-  });
-
-  // A key with NO url and NO mode is refused rather than downgraded, and the
+  // A key with NO url is refused rather than downgraded, and the
   // refusal is a message an operator reads. Asserted here because this is the
   // one status-adjacent path that emits text about the configuration: it must
   // name env-var KEYS and never a value.

@@ -47,9 +47,9 @@ describe("the key list", () => {
     expect(STORE_SELECTING_KEYS).toContain(LOW);
   });
 
-  test("is eleven distinct names, derived rather than hardcoded", () => {
+  test("is seven distinct names, derived rather than hardcoded", () => {
     expect(new Set(STORE_SELECTING_KEYS).size).toBe(STORE_SELECTING_KEYS.length);
-    expect(STORE_SELECTING_KEYS.length).toBe(11);
+    expect(STORE_SELECTING_KEYS.length).toBe(7);
   });
 });
 

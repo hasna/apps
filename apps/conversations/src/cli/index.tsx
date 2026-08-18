@@ -76,15 +76,16 @@ registerBrainsCommand(program);
 // ---- default: TUI ----
 // The interactive TUI reads/writes the on-box SQLite domain helpers directly
 // (real-time polling). That is the local Store's own backing, so it is correct
-// when the client is local. In API mode it would silently show/mutate the LOCAL
-// db instead of the cloud API — the split-brain bug this architecture forbids. So
-// in API mode we refuse and route the operator to the Store-backed subcommands
-// instead of quietly serving stale local data.
+// when the client is local. With the hosted API selected it would silently
+// show/mutate the LOCAL db instead of the cloud API — the split-brain bug this
+// architecture forbids. So when the API pair is set we refuse and route the
+// operator to the Store-backed subcommands instead of quietly serving stale
+// local data.
 program
   .action(() => {
     if (isCloudStore()) {
       printErrorLine(chalk.red("The interactive TUI is local-mode only."));
-      printErrorLine(chalk.dim("This client is in api mode (HASNA_CONVERSATIONS_API_URL/_API_KEY set)."));
+      printErrorLine(chalk.dim("This client is configured for the hosted API (HASNA_CONVERSATIONS_API_URL/_API_KEY set)."));
       printErrorLine(chalk.dim("Use the routed subcommands (send, read, sessions, channels, etc.) which talk to the cloud API."));
       process.exit(1);
     }

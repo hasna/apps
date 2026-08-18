@@ -42,13 +42,9 @@ async function probe(mode: string, arg: string, env: Record<string, string>) {
       HOME: sandboxHome,
       HASNA_CONVERSATIONS_API_URL: undefined,
       HASNA_CONVERSATIONS_API_KEY: undefined,
-      HASNA_CONVERSATIONS_STORAGE_MODE: undefined,
-      HASNA_CONVERSATIONS_MODE: undefined,
       HASNA_CONVERSATIONS_DB_PATH: undefined,
       CONVERSATIONS_API_URL: undefined,
       CONVERSATIONS_API_KEY: undefined,
-      CONVERSATIONS_STORAGE_MODE: undefined,
-      CONVERSATIONS_MODE: undefined,
       CONVERSATIONS_DB_PATH: undefined,
       ...env,
     },
@@ -154,18 +150,6 @@ describe("store divergence — a half-configured cloud client refuses instead of
     expect(exitCode).not.toBe(0);
     expect(result.refused).toBe(true);
     expect(result.message).toContain("HASNA_CONVERSATIONS_API_URL");
-    expect(result.channels).toBeUndefined();
-  });
-
-  test("a pinned storage mode without an API key refuses, naming the retired variable", async () => {
-    const { exitCode, result } = await probe("count", "", {
-      HASNA_CONVERSATIONS_STORAGE_MODE: "cloud",
-      HASNA_CONVERSATIONS_API_URL: cloudUrl,
-    });
-
-    expect(exitCode).not.toBe(0);
-    expect(result.refused).toBe(true);
-    expect(result.message).toContain("HASNA_CONVERSATIONS_STORAGE_MODE");
     expect(result.channels).toBeUndefined();
   });
 

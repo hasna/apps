@@ -68,7 +68,6 @@ const FAKE_KEY = ["hasna", "conversations", "FAKE", "NOT", "A", "REAL", "KEY"].j
  */
 const STORE_SELECTING_KEYS: readonly string[] = [
   ...DB_PATH_KEYS,
-  ...ENV_KEYS.modeKeys,
   ...ENV_KEYS.apiUrlKeys,
   ...ENV_KEYS.apiKeyKeys,
   ALLOW_CLOUD_IN_TESTS_ENV_KEY,

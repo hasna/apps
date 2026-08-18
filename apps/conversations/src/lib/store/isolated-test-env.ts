@@ -67,17 +67,16 @@ import { ALLOW_CLOUD_IN_TESTS_ENV_KEY, DB_PATH_KEYS, ENV_KEYS } from "./index.js
 
 /**
  * EVERY variable that can select a store, derived from the transport contract
- * rather than hardcoded — eleven names as of this commit.
+ * rather than hardcoded — seven names as of this commit.
  *
  * Clearing the whole set matters more than setting one member. A suite that sets
  * only `CONVERSATIONS_DB_PATH` is overridden by an ambient `HASNA_`-prefixed path;
  * a suite that sets a db path but leaves an ambient API url and key in place is
  * relying on `getDbPath` winning a race it is not guaranteed to be asked about,
- * since other resolvers in `store/index.ts` read the mode and url keys directly.
+ * since other resolvers in `store/index.ts` read the url and key keys directly.
  */
 export const STORE_SELECTING_KEYS: readonly string[] = [
   ...DB_PATH_KEYS,
-  ...ENV_KEYS.modeKeys,
   ...ENV_KEYS.apiUrlKeys,
   ...ENV_KEYS.apiKeyKeys,
   ALLOW_CLOUD_IN_TESTS_ENV_KEY,

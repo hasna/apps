@@ -12,10 +12,10 @@
 // re-vendored; a guard placed there would be silently reverted by the next
 // re-vendor. That reasoning is already recorded in `./index.ts` for this
 // module's sibling guard, and it applies here unchanged. The upstream resolver
-// has no concept of a test context at all — it keys on the API-URL keys, the
-// API-key keys, and the mode, and has no notion of a local store path — so it
-// cannot see this conflict by construction. That gap is tracked upstream
-// separately; this file is what protects the app in the meantime.
+// has no concept of a test context at all — it keys on the API-URL keys and
+// the API-key keys, and has no notion of a local store path — so it cannot see
+// this conflict by construction. That gap is tracked upstream separately; this
+// file is what protects the app in the meantime.
 //
 // WHAT THIS DELIBERATELY DOES NOT DO. It is dormant outside a test runner. An
 // operator running the CLI by hand against production is the intended production

@@ -26,8 +26,8 @@
 // Shared domain types (type-only; no runtime surface).
 export * from "./types.js";
 
-// The Store abstraction: getStore(), ConversationsStore, LocalStore, the mode
-// resolvers (isCloudStore/cloudApiUrl/…) and normalizeChannelName.
+// The Store abstraction: getStore(), ConversationsStore, LocalStore, the
+// transport resolvers (isCloudStore/cloudApiUrl/…) and normalizeChannelName.
 export * from "./lib/store/index.js";
 
 // Contract-valid project dashboard panel, aggregated through the active Store.

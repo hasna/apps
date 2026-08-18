@@ -19,8 +19,6 @@ function runStatus() {
       key.startsWith("HASNA_CONVERSATIONS_")
       || key === "CONVERSATIONS_API_URL"
       || key === "CONVERSATIONS_API_KEY"
-      || key === "CONVERSATIONS_MODE"
-      || key === "CONVERSATIONS_STORAGE_MODE"
     ) {
       delete env[key];
     }
@@ -48,15 +46,21 @@ describe("status JSON contract", () => {
     try { unlinkSync(`${TEST_DB}-shm`); } catch {}
   });
 
-  test("reports the answering connection without deployment-mode keys or values", () => {
+  test("reports the answering connection as exactly the two-backend location fields", () => {
     const result = runStatus();
     expect(result.exitCode, result.stderr).toBe(0);
 
     const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-    expect(Object.keys(payload)).not.toContain("mode");
-    expect(Object.keys(payload)).not.toContain("deploymentMode");
-    expect(Object.keys(payload)).not.toContain("deploymentModes");
-    expect(JSON.stringify(payload)).not.toMatch(/"(?:self_hosted|remote|hybrid)"/);
+    // Exact key set: one connection-location field plus the five stats. No
+    // other selector field may ride along in the payload.
+    expect(Object.keys(payload).sort()).toEqual([
+      "db_path",
+      "total_channels",
+      "total_messages",
+      "total_projects",
+      "total_sessions",
+      "unread_messages",
+    ]);
     expect(payload.db_path).toBe(TEST_DB);
     expect(payload.api_url).toBeUndefined();
   });

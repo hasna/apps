@@ -217,7 +217,7 @@ function resolveDashboardDist(): string | null {
  * Turn a store CONFIGURATION refusal into a 503 the dashboard can render.
  *
  * `getStore()` already refuses to guess when the environment is half-configured —
- * an API URL with no key, a pinned cloud mode with no key (see
+ * an API URL with no key (see
  * `assertUnambiguousStoreEnv`) — because the on-box SQLite store holds a DIFFERENT
  * dataset and answering from it is a wrong answer, not a fallback. Without this
  * boundary that refusal surfaces as an unhandled rejection and a bare 500 with no

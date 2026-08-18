@@ -249,8 +249,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             // Name the variable that ACTUALLY selected local. Claiming a fixed
             // one is the same defect class this commit's sibling fixed: an
             // operator who chose local through HASNA_CONVERSATIONS_DB_PATH was
-            // told it came from a storage-mode variable they never set, and
-            // would go looking for it.
+            // told it came from a variable they never set, and would go looking
+            // for it.
             NSLog("HasnaConversations: configured store=local (explicitly requested via %@)", selectedBy)
             configuredStore = "local"
             started = backend.start(storeEnv: env)

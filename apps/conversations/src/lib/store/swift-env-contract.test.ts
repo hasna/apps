@@ -31,12 +31,11 @@ describe("swift store-env contract", () => {
     // contract that no longer covers what the resolver reads.
     const rendered = renderSwiftStoreEnvContract();
     const honoured = [
-      ...ENV_KEYS.modeKeys,
       ...ENV_KEYS.apiUrlKeys,
       ...ENV_KEYS.apiKeyKeys,
       ...DB_PATH_KEYS,
     ];
-    expect(honoured.length).toBe(10);
+    expect(honoured.length).toBe(6);
     for (const key of honoured) {
       expect(rendered).toContain(`"${key}"`);
     }
@@ -47,6 +46,6 @@ describe("swift store-env contract", () => {
     // or because the file was read as "", proves nothing about drift.
     const onDisk = readFileSync(join(repoRoot, SWIFT_CONTRACT_PATH), "utf8");
     expect(onDisk.length).toBeGreaterThan(500);
-    expect(onDisk).not.toBe(renderSwiftStoreEnvContract().replace("legacyModeKeys", "legacyModeKeysX"));
+    expect(onDisk).not.toBe(renderSwiftStoreEnvContract().replace("apiUrlKeys", "apiUrlKeysX"));
   });
 });

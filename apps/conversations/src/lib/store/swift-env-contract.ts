@@ -17,12 +17,10 @@
 //
 // Regenerate with: bun run scripts/render-swift-store-env-contract.ts --write
 //
-// DEPLOYMENT MODES NO LONGER EXIST (owner directive 2026-07-29; knowledge
-// k_ms5wv466_u0jidq): the client selects the HTTP API by the API url + key pair,
-// and any retired storage-mode variable is a fail-loud error. The Swift contract
-// therefore carries the retired mode keys ONLY so the shell can strip them from
-// the child environment and refuse on them in the fleet config file — it never
-// emits a mode token, because there is none to emit.
+// The client selects the HTTP API by the API url + key pair (owner directive
+// 2026-07-29; knowledge k_ms5wv466_u0jidq). The Swift contract carries the env
+// keys the shell strips from the child environment and re-emits under canonical
+// names — nothing else is emitted.
 
 import { APP, DB_PATH_KEYS, ENV_KEYS } from "./index.js";
 
@@ -53,13 +51,6 @@ import Foundation
 /// honours them in. Mirrors \`clientTransportEnvKeys("${APP}")\` and
 /// \`DB_PATH_KEYS\` from src/lib/store/index.ts.
 public enum StoreEnvContract {
-    /// Retired storage-mode keys, in precedence order. Any of them being SET is
-    /// an error naming the variable; they exist here only so the shell can strip
-    /// them from the child environment and refuse on them in the fleet config.
-    public static let legacyModeKeys: [String] = [
-${swiftStringArray(ENV_KEYS.modeKeys, "        ")}
-    ]
-
     /// API base-URL keys, highest precedence first.
     public static let apiUrlKeys: [String] = [
 ${swiftStringArray(ENV_KEYS.apiUrlKeys, "        ")}
@@ -79,10 +70,9 @@ ${swiftStringArray([...DB_PATH_KEYS], "        ")}
     /// Every key that can steer the child server's store choice. The child env is
     /// built by removing all of these and re-emitting only the resolved
     /// selection, so no inherited variable can redirect the store behind the
-    /// shell's back. The retired mode keys are included because a mode variable
-    /// that survived into the child would trip the resolver's fail-loud ratchet.
+    /// shell's back.
     public static let storeSelectingKeys: [String] =
-        legacyModeKeys + apiUrlKeys + apiKeyKeys + dbPathKeys
+        apiUrlKeys + apiKeyKeys + dbPathKeys
 }
 `;
 }

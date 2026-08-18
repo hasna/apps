@@ -62,13 +62,9 @@ const rows = (n: number, prefix: string) =>
 const CLEARED: Record<string, undefined> = {
   HASNA_CONVERSATIONS_API_URL: undefined,
   HASNA_CONVERSATIONS_API_KEY: undefined,
-  HASNA_CONVERSATIONS_STORAGE_MODE: undefined,
-  HASNA_CONVERSATIONS_MODE: undefined,
   HASNA_CONVERSATIONS_DB_PATH: undefined,
   CONVERSATIONS_API_URL: undefined,
   CONVERSATIONS_API_KEY: undefined,
-  CONVERSATIONS_STORAGE_MODE: undefined,
-  CONVERSATIONS_MODE: undefined,
   CONVERSATIONS_DB_PATH: undefined,
   // A login shim that re-injects the cleared variables would make three
   // "different" conditions byte-identical and every negative result vacuous.
@@ -176,18 +172,6 @@ beforeAll(async () => {
 afterAll(() => {
   cloud?.stop(true);
   if (sandboxHome) rmSync(sandboxHome, { recursive: true, force: true });
-});
-
-test("a retired storage-mode variable makes the status location refuse, not answer", () => {
-  // Deployment modes no longer exist: the status fragment shares the resolver's
-  // fail-loud ratchet, so a stale storage-mode variable is an error naming the
-  // variable, never a "default-host" answer from an invented server token.
-  expect(() =>
-    storeStatusLocation({
-      HASNA_CONVERSATIONS_STORAGE_MODE: "cloud",
-      HASNA_CONVERSATIONS_API_KEY: FAKE_KEY,
-    }),
-  ).toThrow(/HASNA_CONVERSATIONS_STORAGE_MODE/);
 });
 
 // Which stub-cloud count each endpoint class must return when the store is hosted.

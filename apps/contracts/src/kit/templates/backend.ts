@@ -2,8 +2,8 @@
 //
 // A server has exactly one technical switch: `sqlite | postgresql`.
 // A configured DATABASE_URL selects PostgreSQL; otherwise SQLite is
-// authoritative. Old storage-mode variables are rejected with migration
-// guidance and are never interpreted.
+// authoritative. The environment contract alone selects the backend (owner
+// directive 2026-07-29).
 
 import { ownString } from "./own.js";
 
@@ -28,17 +28,7 @@ export function serverDataBackendEnvKeys(name: string): ServerDataBackendEnvKeys
   };
 }
 
-function legacyModeKeys(name: string): string[] {
-  const token = envToken(name);
-  return [
-    `HASNA_${token}_STORAGE_MODE`,
-    `HASNA_${token}_MODE`,
-    `${token}_STORAGE_MODE`,
-    `${token}_MODE`,
-  ];
-}
-
-// Both loops read the env as OWN properties. `env` is caller-supplied and
+// The resolver reads the env as OWN properties. `env` is caller-supplied and
 // `process.env` is itself prototype-pollutable, so an unguarded `env[key]` let a
 // polluted `HASNA_<APP>_DATABASE_URL` flip the backend to postgresql and hand
 // back a connection string the operator never configured.
@@ -48,24 +38,6 @@ function firstEnv(env: Env, keys: readonly string[]): { key: string; value: stri
     if (value) return { key, value };
   }
   return null;
-}
-
-function firstDefinedEnvKey(env: Env, keys: readonly string[]): string | null {
-  for (const key of keys) {
-    if (Object.hasOwn(env, key) && env[key] !== undefined) return key;
-  }
-  return null;
-}
-
-export function assertNoLegacyStorageMode(name: string, env: Env = process.env): void {
-  const legacyKey = firstDefinedEnvKey(env, legacyModeKeys(name));
-  if (!legacyKey) return;
-  const canonicalDatabaseUrl = serverDataBackendEnvKeys(name).databaseUrlKeys[0];
-  throw new Error(
-    `${legacyKey} was removed. Delete the storage-mode variable; ` +
-      `set ${canonicalDatabaseUrl} to select the postgresql server backend, ` +
-      `or leave it unset for sqlite.`,
-  );
 }
 
 export interface ServerDataBackendResolution {
@@ -79,7 +51,6 @@ export function resolveServerDataBackend(
   name: string,
   env: Env = process.env,
 ): ServerDataBackendResolution {
-  assertNoLegacyStorageMode(name, env);
   const databaseUrl = firstEnv(env, serverDataBackendEnvKeys(name).databaseUrlKeys);
   if (!databaseUrl) {
     return {
@@ -99,7 +70,6 @@ export function resolveServerDataBackend(
 
 /** Resolve the database URL without logging it. Returns `null` when unset. */
 export function resolveDatabaseUrl(name: string, env: Env = process.env): string | null {
-  assertNoLegacyStorageMode(name, env);
   const hit = firstEnv(env, serverDataBackendEnvKeys(name).databaseUrlKeys);
   return hit?.value ?? null;
 }

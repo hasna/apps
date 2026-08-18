@@ -19,9 +19,8 @@
 // embedded here — the file is the source of truth, and it is the same file the
 // `conversations` CLI reads.
 //
-// DEPLOYMENT MODES NO LONGER EXIST (owner directive 2026-07-29; knowledge
-// k_ms5wv466_u0jidq). The client selects the HTTP API by the API url + key pair;
-// any retired storage-mode variable is a fail-loud error naming the variable.
+// The client selects the HTTP API by the API url + key pair (owner directive
+// 2026-07-29; knowledge k_ms5wv466_u0jidq).
 //
 // TWO PROPERTIES THIS FILE OWES:
 //
@@ -29,8 +28,7 @@
 //
 //  2. THE ANNOUNCEMENT MATCHES THE OUTCOME. An earlier version read three env
 //     vars while the resolver it guarded honoured more, several of which select
-//     the local store — `HASNA_CONVERSATIONS_MODE`, `CONVERSATIONS_STORAGE_MODE`,
-//     `CONVERSATIONS_MODE`, `HASNA_CONVERSATIONS_DB_PATH`, `CONVERSATIONS_DB_PATH`
+//     the local store — `HASNA_CONVERSATIONS_DB_PATH`, `CONVERSATIONS_DB_PATH`
 //     — and it forwarded the whole inherited environment to the child. With any
 //     one of those set, the shell logged `store=hosted` and the child resolved
 //     LOCAL. A guard that classifies an environment differently from the resolver
@@ -166,16 +164,6 @@ private func firstSet(_ env: [String: String], _ keys: [String]) -> (key: String
     return nil
 }
 
-/// The first RETIRED storage-mode key that is SET in the source, even to a blank
-/// value. Deployment modes no longer exist, so a stale mode variable is an error
-/// naming the variable — never a selector, never silently ignored.
-private func firstLegacyModeKey(_ env: [String: String]) -> String? {
-    for key in StoreEnvContract.legacyModeKeys where env[key] != nil {
-        return key
-    }
-    return nil
-}
-
 /// Reduce a URL to the parts that say WHICH SERVER is being contacted, so it is
 /// safe to log: scheme, host, port. Nothing else survives.
 ///
@@ -244,18 +232,9 @@ private func unusableURLReason(_ hit: (key: String, value: String)) -> String? {
 /// Apply the resolver's precedence to ONE source.
 ///
 /// Mirrors `assertUnambiguousStoreEnv` + `conversationsCloudEnv` in
-/// src/lib/store/index.ts, in the same order: the retired mode-key ratchet;
-/// then an explicit local DB path; then the url + key pair.
+/// src/lib/store/index.ts, in the same order: an explicit local DB path; then
+/// the url + key pair.
 func storeSelection(from env: [String: String], source: String) -> StoreSelection {
-    // 0. The fail-loud ratchet. A retired storage-mode variable is an error,
-    //    never a selector, and it is not rescued by a DB path or a valid pair.
-    if let modeKey = firstLegacyModeKey(env) {
-        return .refuse(reason: "\(modeKey) in \(source) was removed. Deployment modes no "
-            + "longer exist: delete the storage-mode variable. The client uses the on-box "
-            + "SQLite store, or the HTTP API selected by "
-            + "\(StoreEnvContract.apiUrlKeys[0]) + \(StoreEnvContract.apiKeyKeys[0]).")
-    }
-
     // 1. An explicit local SQLite path is the narrowest, most specific signal.
     if let dbHit = firstSet(env, StoreEnvContract.dbPathKeys) {
         return .local(dbPath: dbHit.value, selectedBy: dbHit.key)
@@ -337,9 +316,8 @@ public func resolveStore(
         var env = withoutStoreSelectingKeys(environment)
         env[StoreEnvContract.apiKeyKeys[0]] = apiKey
         env[StoreEnvContract.apiUrlKeys[0]] = url
-        // No mode token is ever emitted: with url + key present,
-        // src/lib/store/index.ts resolves the API transport on its own, and a
-        // retired mode key in the child would trip its fail-loud ratchet.
+        // With url + key present, src/lib/store/index.ts resolves the API
+        // transport on its own; nothing else is emitted.
         return .cloud(env: env, url: loggableURL(url))
 
     case .local(let dbPath, let selectedBy):

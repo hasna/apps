@@ -42,7 +42,7 @@ export const openapiSpec = {
   info: {
     title: "ConversationsClient",
     version: pkgVersion,
-    description: "Self-hosted conversations API (pure-remote, API-key authenticated).",
+    description: "Conversations HTTP API (API-key authenticated).",
   },
   servers: [{ url: "/" }],
   components: {

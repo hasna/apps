@@ -163,6 +163,15 @@ export class ConversationsClient {
       });
     }
 
+    /** Flag — and only with apply:true, remove — registrations created once and never seen again whose last heartbeat is older than the retention window. */
+    async reapStaleSingleTouch(body: { "apply"?: boolean; "older_than_seconds"?: number }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/agents/reap-stale`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Read a bounded, cursored page of notifications for the authenticated principal */
     async readChannelNotifications(query?: { "agent"?: string; "channel"?: string; "since"?: string; "unread_only"?: boolean; "mark_read"?: boolean; "limit"?: number; "cursor"?: number; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number }, init?: RequestInit): Promise<ChannelNotificationPage> {
       return this.request("GET", `/v1/channel-notifications/inbox`, {

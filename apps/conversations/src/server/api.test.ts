@@ -993,33 +993,33 @@ describe("conversations-serve", () => {
     }
   });
 
-  test("GET /health is unauthenticated and omits retired deployment mode", async () => {
+  test("GET /health is unauthenticated and returns exactly the documented fields", async () => {
     const r = await fetch(`${base}/health`);
     expect(r.status).toBe(200);
     const b = await r.json();
+    expect(Object.keys(b).sort()).toEqual(["app", "status", "version"]);
     expect(b.status).toBe("ok");
-    expect("mode" in b).toBe(false);
     expect(typeof b.version).toBe("string");
   });
 
-  test("GET /ready pings the store and omits retired deployment mode", async () => {
+  test("GET /ready pings the store and returns exactly the documented fields", async () => {
     const b = await (await fetch(`${base}/ready`)).json();
+    expect(Object.keys(b).sort()).toEqual(["app", "status", "version"]);
     expect(b.status).toBe("ok");
-    expect("mode" in b).toBe(false);
   });
 
-  test("GET /version returns version metadata without retired deployment mode", async () => {
+  test("GET /version returns version metadata as exactly the documented fields", async () => {
     const b = await (await fetch(`${base}/version`)).json();
-    expect("mode" in b).toBe(false);
+    expect(Object.keys(b).sort()).toEqual(["app", "build_sha", "status", "version"]);
     expect(b.version).toBeTruthy();
     expect(b.build_sha).toBeNull();
   });
 
-  test("OpenAPI version contract omits retired deployment mode", async () => {
+  test("OpenAPI version contract names exactly the documented fields", async () => {
     const spec = await (await fetch(`${base}/v1/openapi.json`)).json() as any;
     const schema = spec.paths["/version"].get.responses["200"].content["application/json"].schema;
-    expect(schema.required).not.toContain("mode");
-    expect(schema.properties.mode).toBeUndefined();
+    expect(schema.required).toEqual(["status", "version", "app", "build_sha"]);
+    expect(Object.keys(schema.properties).sort()).toEqual(["app", "build_sha", "status", "version"]);
     expect(schema.properties.build_sha.oneOf).toEqual([
       { type: "string", pattern: "^[0-9a-f]{40}$" },
       { type: "null" },
