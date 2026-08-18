@@ -73,6 +73,12 @@ import { compareCommentKeyset, isStrictlyOlder } from "../lib/comment-cursor.js"
 import { getDatabase } from "../db/database.js";
 import { scanSqliteIntegrity } from "../db/integrity.js";
 import {
+  addDependency,
+  getTaskDependencies,
+  getTaskDependents,
+  removeDependency,
+} from "../db/task-graph.js";
+import {
   applyPlanProjectLinkSqlite,
   getPlanProjectLinkReceipt,
   getPlanProjectLinkReceiptByIdempotencyKey,
@@ -333,6 +339,36 @@ export function createLocalSqliteTodosStorageAdapter(
       getTasksChangedSince: (since, filters) => getTasksChangedSince(since, filters, database()),
       exportSnapshot: () => exportSqliteTodosStorageSnapshot(database()),
       importSnapshot: (snapshot) => importSqliteTodosStorageSnapshot(snapshot, database()),
+    },
+    // Dependency edges. Mirrors the Postgres adapter surface (add/remove/list/
+    // listAll) so a sqlite-backed /v1 server serves /v1/dependencies instead of
+    // 501 — the CLI `blocked`/`ready`/`sprint`/`recap` analytics on the hosted
+    // route derive their dependency map from that one round trip
+    // (local-only capability removal, 2026-08-18).
+    dependencies: {
+      add: (taskId, dependsOn) => {
+        addDependency(taskId, dependsOn, database());
+        return { task_id: taskId, depends_on: dependsOn };
+      },
+      remove: (taskId, dependsOn) => removeDependency(taskId, dependsOn, database()),
+      list: (taskId) => {
+        const incoming = getTaskDependents(taskId, database()).map((edge) => ({
+          task_id: edge.task_id,
+          depends_on: edge.depends_on,
+        }));
+        return {
+          dependencies: getTaskDependencies(taskId, database()).map((edge) => ({
+            task_id: edge.task_id,
+            depends_on: edge.depends_on,
+          })),
+          blocks: incoming,
+          blocked_by: incoming,
+        };
+      },
+      listAll: () => database().query("SELECT * FROM task_dependencies").all() as Array<{
+        task_id: string;
+        depends_on: string;
+      }>,
     },
     integrity: {
       report: () => scanSqliteIntegrity(database()),

@@ -652,13 +652,12 @@ export function registerQueryCommands(program: Command) {
     .action(async (opts) => {
       const globalOpts = program.opts();
       const json = opts.json || globalOpts.json;
-      const db = getDatabase();
       const filters: Record<string, string> = {};
       if (opts.project) filters.project_id = opts.project;
       const cloud = getTodosCloudClient();
       const tasks = cloud
         ? await cloudStaleTasks(cloud, parseInt(opts.minutes, 10), Object.keys(filters).length ? (filters as never) : {})
-        : getStaleTasks(parseInt(opts.minutes, 10), Object.keys(filters).length ? filters : undefined, db);
+        : getStaleTasks(parseInt(opts.minutes, 10), Object.keys(filters).length ? filters : undefined, getDatabase());
       if (json) { console.log(JSON.stringify(tasks, null, 2)); return; }
       if (tasks.length === 0) { console.log(chalk.dim("No stale tasks.")); return; }
       console.log(chalk.bold(`Stale tasks (${tasks.length}):`));
@@ -880,7 +879,6 @@ export function registerQueryCommands(program: Command) {
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
       const days = parseInt(opts.days, 10);
       const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
       const projectId = opts.project || autoProject(globalOpts);
@@ -893,7 +891,7 @@ export function registerQueryCommands(program: Command) {
       const { getTasksChangedSince } = await import("../../db/tasks.js");
       const changed = (cloud
         ? await cloudChangedSince(cloud, since, filter as never)
-        : getTasksChangedSince(since, Object.keys(filter).length ? filter : undefined, db)) as any[];
+        : getTasksChangedSince(since, Object.keys(filter).length ? filter : undefined, getDatabase())) as any[];
       const completed = changed.filter((t: any) => t.status === "completed");
       const inProgress = changed.filter((t: any) => t.status === "in_progress");
       const failed = changed.filter((t: any) => t.status === "failed");
@@ -1319,7 +1317,6 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
       const days = parseInt(opts.days, 10);
       const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
       const projectId = opts.project || autoProject(globalOpts);
@@ -1331,13 +1328,13 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       const { getTasksChangedSince, getTaskStats } = await import("../../db/tasks.js");
       const changed: any[] = cloud
         ? await cloudChangedSince(cloud, since, filter as never)
-        : getTasksChangedSince(since, Object.keys(filter).length ? filter : undefined, db);
+        : getTasksChangedSince(since, Object.keys(filter).length ? filter : undefined, getDatabase());
       const completed = changed.filter((t: any) => t.status === "completed");
       const failed = changed.filter((t: any) => t.status === "failed");
       const all = cloud ? await cloudListTasks(cloud, filter as never) : listTasks(filter as any);
       const stats = (cloud
         ? await cloudTaskStats(cloud, filter as never)
-        : getTaskStats(Object.keys(filter).length ? filter : undefined, db)) as any;
+        : getTaskStats(Object.keys(filter).length ? filter : undefined, getDatabase())) as any;
 
       // By-day activity (count tasks updated per day)
       const byDay: Record<string, number> = {};
@@ -1461,16 +1458,15 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("-j, --json", "Output as JSON")
     .action(async (agent: string, opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
       const projectId = globalOpts.project ? (autoProject(globalOpts) || undefined) : undefined;
       const cloud = getTodosCloudClient();
       const filter: any = { assigned_to: agent };
       if (projectId) filter.project_id = projectId;
-      const tasks: any[] = cloud ? await cloudListTasks(cloud, filter) : listTasks(filter, db);
+      const tasks: any[] = cloud ? await cloudListTasks(cloud, filter) : listTasks(filter, getDatabase());
       // Also check agent_id for tasks created by this agent
       const filterByAgent: any = { agent_id: agent };
       if (projectId) filterByAgent.project_id = projectId;
-      const agentTasks: any[] = cloud ? await cloudListTasks(cloud, filterByAgent) : listTasks(filterByAgent, db);
+      const agentTasks: any[] = cloud ? await cloudListTasks(cloud, filterByAgent) : listTasks(filterByAgent, getDatabase());
       // Merge, dedupe by id
       const seen = new Set(tasks.map((t: any) => t.id));
       for (const t of agentTasks) {
@@ -1512,12 +1508,11 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("--project <id>", "Filter to project")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
       const cloud = getTodosCloudClient();
       const projectId = autoProject(globalOpts) || opts.project || undefined;
       const filter: any = { status: "pending" as const };
       if (projectId) filter.project_id = projectId;
-      const allPending: any[] = cloud ? await cloudListTasks(cloud, filter) : listTasks(filter, db);
+      const allPending: any[] = cloud ? await cloudListTasks(cloud, filter) : listTasks(filter, getDatabase());
       const blockedTasks: { task: any; blockers: any[] }[] = [];
       if (cloud) {
         const map = await cloudBlockingDepsMap(cloud, allPending);
@@ -1528,7 +1523,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       } else {
         const { getBlockingDeps } = await import("../../db/tasks.js");
         for (const t of allPending) {
-          const blockers = getBlockingDeps(t.id, db);
+          const blockers = getBlockingDeps(t.id, getDatabase());
           if (blockers.length > 0) blockedTasks.push({ task: t, blockers });
         }
       }
@@ -1616,7 +1611,6 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
       const cloud = getTodosCloudClient();
       const { getTasksChangedSince } = await import("../../db/tasks.js");
       const now = new Date();
@@ -1625,7 +1619,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       start.setHours(0, 0, 0, 0);
       const tasks: any[] = cloud
         ? await cloudChangedSince(cloud, start.toISOString())
-        : getTasksChangedSince(start.toISOString(), undefined, db);
+        : getTasksChangedSince(start.toISOString(), undefined, getDatabase());
 
       // Group by day
       const days: Record<string, { completed: any[]; started: any[]; other: any[] }> = {};
@@ -1674,11 +1668,10 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
       const cloud = getTodosCloudClient();
       const { getRecentActivity } = await import("../../db/audit.js");
       const numDays = parseInt(opts.days, 10);
-      const entries: any[] = cloud ? await cloudRecentActivity(cloud, 5000) : getRecentActivity(5000, db);
+      const entries: any[] = cloud ? await cloudRecentActivity(cloud, 5000) : getRecentActivity(5000, getDatabase());
       const now = new Date();
       const dayStats: { date: string; completed: number; created: number; failed: number }[] = [];
       for (let i = numDays - 1; i >= 0; i--) {
@@ -1722,12 +1715,11 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
       const cloud = getTodosCloudClient();
       const { getRecentActivity } = await import("../../db/audit.js");
       const entries: any[] = cloud
         ? await cloudRecentActivity(cloud, parseInt(opts.limit, 10))
-        : getRecentActivity(parseInt(opts.limit, 10), db);
+        : getRecentActivity(parseInt(opts.limit, 10), getDatabase());
       if (opts.json || globalOpts.json) {
         console.log(JSON.stringify(entries));
         return;
@@ -1902,13 +1894,12 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
         }
         return;
       }
-      const db = getDatabase();
       const cloud = getTodosCloudClient();
       const { isLockExpired } = await import("../../db/database.js");
       const projectId = autoProject(globalOpts) || opts.project || undefined;
       const filter: any = { status: "pending" };
       if (projectId) filter.project_id = projectId;
-      const pending: any[] = cloud ? await cloudListTasks(cloud, filter) : listTasks(filter, db);
+      const pending: any[] = cloud ? await cloudListTasks(cloud, filter) : listTasks(filter, getDatabase());
       let ready: any[];
       if (cloud) {
         const map = await cloudBlockingDepsMap(cloud, pending);
@@ -1922,7 +1913,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           // Not locked (or lock expired)
           if (t.locked_by && !isLockExpired(t.locked_at)) return false;
           // No unmet dependencies
-          return getBlockingDeps(t.id, db).length === 0;
+          return getBlockingDeps(t.id, getDatabase()).length === 0;
         });
       }
       const limited = ready.slice(0, parseInt(opts.limit, 10));
@@ -1932,7 +1923,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           return;
         }
         const { getTaskRouteState } = await import("../../lib/task-routing.js");
-        console.log(JSON.stringify(limited.map((task) => ({ ...task, route_state: getTaskRouteState(task, db, { verifyProjectRoot: true }) }))));
+        console.log(JSON.stringify(limited.map((task) => ({ ...task, route_state: getTaskRouteState(task, getDatabase(), { verifyProjectRoot: true }) }))));
         return;
       }
       if (limited.length === 0) {
@@ -1955,7 +1946,6 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("--project <id>", "Filter to project")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
       const cloud = getTodosCloudClient();
       const projectId = autoProject(globalOpts) || opts.project || undefined;
       const baseFilter: any = {};
@@ -1963,10 +1953,10 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
 
       const inProgress: any[] = cloud
         ? await cloudListTasks(cloud, { ...baseFilter, status: "in_progress" })
-        : listTasks({ ...baseFilter, status: "in_progress" }, db);
+        : listTasks({ ...baseFilter, status: "in_progress" }, getDatabase());
       const pending: any[] = cloud
         ? await cloudListTasks(cloud, { ...baseFilter, status: "pending" })
-        : listTasks({ ...baseFilter, status: "pending" }, db);
+        : listTasks({ ...baseFilter, status: "pending" }, getDatabase());
       const nowStr = new Date().toISOString();
 
       // Find blocked tasks
@@ -1980,7 +1970,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       } else {
         const { getBlockingDeps } = await import("../../db/tasks.js");
         for (const t of pending) {
-          const blockers = getBlockingDeps(t.id, db);
+          const blockers = getBlockingDeps(t.id, getDatabase());
           if (blockers.length > 0) blocked.push({ task: t, blockers });
         }
       }
@@ -2235,12 +2225,11 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("--project <id>", "Filter to project")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
       const cloud = getTodosCloudClient();
       const { countTasks } = await import("../../db/tasks.js");
       const countFn = cloud
         ? (f: any) => cloudCountTasks(cloud, f)
-        : (f: any) => Promise.resolve(countTasks(f, db));
+        : (f: any) => Promise.resolve(countTasks(f, getDatabase()));
       const projectId = autoProject(globalOpts) || opts.project || undefined;
       const base = projectId ? { project_id: projectId } : {};
       const priorities = ["critical", "high", "medium", "low", "none"] as const;

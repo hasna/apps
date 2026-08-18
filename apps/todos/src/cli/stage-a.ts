@@ -144,11 +144,11 @@ const REMOTE_COMMANDS = new Set([
   // on the /v1 route is refused outright — the state `dispatch` is in today.
   // Shipping the replacement for abandoned dispatch in that state would make it
   // dead on exactly the fleet it was built for. Covered by delegate-routing.test.ts.
-  "active", "add", "agent", "agents", "ai", "approve", "assign", "bulk", "claim", "comment", "count", "delegate", "delete", "deps", "fail",
+  "active", "add", "agent", "agents", "ai", "approve", "assign", "blocked", "bulk", "burndown", "claim", "comment", "count", "delegate", "delete", "deps", "fail",
   "doctor", "done", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
-  "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-registration", "project-rename", "project-resources", "projects", "recap",
-  "record-verification", "release", "remove", "show", "standup", "start", "status", "tag", "task", "task-lists",
-  "stale-lock-handoff", "task-manifest", "task-subtree-transfer", "template-export", "template-import", "template-preview", "templates", "timeline", "tl", "unlock", "unassign", "untag", "update",
+  "link-ref", "list", "lists", "lock", "log", "log-progress", "mine", "move", "next", "overdue", "plans", "priorities", "project-registration", "project-rename", "project-resources", "projects", "ready", "recap",
+  "record-verification", "release", "remove", "report", "show", "sla", "sprint", "standup", "stale", "start", "status", "summary", "tag", "task", "task-lists",
+  "stale-lock-handoff", "task-manifest", "task-subtree-transfer", "template-export", "template-import", "template-preview", "templates", "timeline", "tl", "today", "unlock", "unassign", "untag", "update", "week", "yesterday",
 ]);
 const REMOTE_COMMAND_CAPABILITIES =
   new Map<string, TodosRemoteCommandCapability>([
@@ -446,6 +446,15 @@ function disqualifyingArgument(invocation: ParsedInvocation): Disqualification |
     // the authority's OpenAPI contract (task 90c0b178).
     case "list":
       return firstPresentOption(args, ["--recurring"]);
+    // `ready` without a source-scan option is serviced remotely: it lists
+    // pending tasks and filters by lock-expiry + dependency edges against the
+    // shared /v1 dataset (cloudListTasks + cloudBlockingDepsMap). The
+    // source-scan form is a workstation migration tool by nature: it walks
+    // local SQLite stores on the machine (`discoverTaskRouteSources`), which
+    // the hosted route has no business doing. Ported with the gate kept on
+    // that one form only (2026-08-18, local-only capability removal).
+    case "ready":
+      return firstPresentOption(args, ["--source-root", "--source-store", "--include", "--exclude"]);
     case "claim":
       if (invocation.globalOptions.has("--project")) return dropIt("--project");
       return firstPresentOption(args, ["--project", "--stale-minutes", "--steal-stale"]);
