@@ -3,9 +3,9 @@ import { Command, InvalidOptionArgumentError } from "commander";
 import chalk from "chalk";
 import { createInterface } from "node:readline/promises";
 import { spawnSync } from "node:child_process";
-import { getCollectorForMachine, listKnownMachineIds, LocalCollector } from "../collectors/index.js";
+import { listKnownMachineIds } from "../collectors/index.js";
 import type { SystemSnapshot } from "../collectors/index.js";
-import { ProcessManager, processInfoToRow } from "../process-manager/index.js";
+import { ProcessManager } from "../process-manager/index.js";
 import {
   backupConfig,
   getConfigPath,
@@ -18,30 +18,15 @@ import {
 } from "../config.js";
 import type { IntegrationsConfig } from "../config.js";
 import {
-  listMachines,
-  insertMachine,
-  deleteMachine,
-  listAlerts,
   listCronJobs,
   insertCronJob,
   getCronJob,
   updateCronJob,
 } from "../db/queries.js";
 import type { AlertRow } from "../db/schema.js";
-import { search } from "../db/search.js";
-import { CronEngine, runJobAction } from "../cron/index.js";
+import { CronEngine } from "../cron/index.js";
 import { runReportIntegrations } from "../integrations/index.js";
-import {
-  getContainerLogs,
-  listContainers,
-  listContainersAcrossMachines,
-} from "../containers.js";
-import { compareInstalledApps, listInstalledApps, listInstalledAppsAcrossMachines } from "../apps.js";
-import { listManagedServices, manageService } from "../services.js";
-import { scanListeningPorts, scanListeningPortsAcrossMachines } from "../ports.js";
-import { getTailscaleStatus, getTailscaleStatusAcrossMachines } from "../tailscale.js";
-import { getTemperatureStatus, getTemperatureStatusAcrossMachines } from "../temperature.js";
-import { getMcpProcessStatus, getMcpProcessStatusAcrossMachines, restartMcpServer } from "../mcp-processes.js";
+import { compareInstalledApps } from "../apps.js";
 import {
   getListeningPortsLoopCheck,
   getProcessHygieneLoopCheck,
@@ -58,15 +43,9 @@ import {
   getReportSchedule,
   type ReportPeriod,
 } from "../report.js";
-import {
-  collectMachineDiagnostics,
-  collectRuntimeHealthAcrossMachines,
-  mergeStoredAndLiveAlerts,
-} from "../runtime-health.js";
-import { executeTmuxCommand } from "../tmux.js";
 import { MONITOR_VERSION } from "../version.js";
-import { getMonitorStatus } from "../status.js";
 import { buildProcessTree, filterProcessRows } from "../process-view.js";
+import { createMonitorService, type MonitorService, type ProcessQueryResult } from "../sdk/index.js";
 import {
   DEFAULT_LIST_LIMIT,
   DEFAULT_SEARCH_LIMIT,
@@ -96,6 +75,11 @@ type MachineComparisonRow = {
   diskMount: string | null;
   error: string | null;
 };
+
+// Shared MonitorService facade (MON-V2-15): every shared-core command below
+// dispatches through the SDK operation set declared in CLI_TO_METHOD. The CLI
+// renders and pages the results; it never re-implements a monitor operation.
+const service: MonitorService = createMonitorService();
 
 // ── Unicode progress bar ───────────────────────────────────────────────────────
 
@@ -346,30 +330,20 @@ function printPageHint<T>(
 
 async function collectMachineComparison(machineId: string): Promise<MachineComparisonRow> {
   try {
-    const result = await getCollectorForMachine(machineId).collect();
-    if (!result.ok) {
-      return {
-        machineId,
-        hostname: null,
-        cpuPercent: null,
-        memPercent: null,
-        diskPercent: null,
-        diskMount: null,
-        error: result.error,
-      };
-    }
+    const diagnostics = await service.snapshot(machineId);
+    const snapshot = diagnostics.snapshot;
 
-    const disk = result.snapshot.disks.reduce<(typeof result.snapshot.disks)[number] | null>(
+    const disk = snapshot.disks.reduce<(typeof snapshot.disks)[number] | null>(
       (highest, candidate) =>
         !highest || candidate.usagePercent > highest.usagePercent ? candidate : highest,
       null
     );
 
     return {
-      machineId: result.snapshot.machineId,
-      hostname: result.snapshot.hostname,
-      cpuPercent: result.snapshot.cpu.usagePercent,
-      memPercent: result.snapshot.mem.usagePercent,
+      machineId: snapshot.machineId,
+      hostname: snapshot.hostname,
+      cpuPercent: snapshot.cpu.usagePercent,
+      memPercent: snapshot.mem.usagePercent,
       diskPercent: disk?.usagePercent ?? null,
       diskMount: disk?.mount ?? null,
       error: null,
@@ -395,8 +369,8 @@ async function renderInstalledApps(
   const shouldCompare = Boolean(opts.compare || forceCompare);
   const shouldScanAll = Boolean(opts.all || shouldCompare);
   const results = shouldScanAll
-    ? await listInstalledAppsAcrossMachines()
-    : [await listInstalledApps(resolveMachineId(machineArg))];
+    ? await service.apps(undefined, true, shouldCompare)
+    : await service.apps(resolveMachineId(machineArg), false, false);
 
   if (opts.json) {
     console.log(
@@ -594,15 +568,16 @@ program
   .option("--compact", "Output a single-line CPU, memory, and disk summary")
   .action(async (machineArg: string | undefined, opts) => {
     const machineId = resolveMachineId(machineArg);
-    const collector = getCollectorForMachine(machineId);
-    const result = await collector.collect();
-
-    if (!result.ok) {
-      console.error(chalk.red(`Error collecting snapshot: ${result.error}`));
+    let snap: SystemSnapshot;
+    try {
+      const diagnostics = await service.snapshot(machineId);
+      snap = diagnostics.snapshot;
+    } catch (error) {
+      console.error(
+        chalk.red(`Error collecting snapshot: ${error instanceof Error ? error.message : String(error)}`)
+      );
       process.exit(1);
     }
-
-    const snap = result.snapshot;
 
     if (opts.json) {
       console.log(JSON.stringify(snap, null, 2));
@@ -715,7 +690,7 @@ program
   .option("-j, --json", "Output metadata-only JSON")
   .option("--probe-services", "Probe managed services and include status counts", false)
   .action(async (opts: { json?: boolean; probeServices?: boolean }) => {
-    const status = await getMonitorStatus({ probeServices: opts.probeServices === true });
+    const status = await service.monitorStatus({ probeServices: opts.probeServices === true });
     process.exitCode = HEALTH_EXIT_CODES[status.health.status];
 
     if (opts.json) {
@@ -744,20 +719,7 @@ program
   .option("-v, --verbose", "Include host/detail columns")
   .option("-j, --json", "Output raw JSON")
   .action((opts) => {
-    let machines: MachineListItem[];
-    try {
-      machines = listMachines();
-    } catch {
-      const config = loadConfig();
-      machines = config.machines.map((m) => ({
-        id: m.id,
-        name: m.label,
-        type: m.type,
-        status: "unknown" as const,
-        last_seen: null as number | null,
-        host: m.ssh?.host ?? null,
-      }));
-    }
+    const machines = service.machinesList();
 
     if (opts.json) {
       console.log(JSON.stringify(machines, null, 2));
@@ -792,10 +754,8 @@ program
   .option("--aws-region <region>", "AWS region (for ec2)")
   .option("--aws-instance-id <id>", "EC2 instance ID")
   .action((name: string, opts) => {
-    const id = name.toLowerCase().replace(/\s+/g, "-");
     try {
-      insertMachine({
-        id,
+      const id = service.machineAdd({
         name,
         type: opts.type as "local" | "ssh" | "ec2",
         host: opts.host ?? null,
@@ -803,9 +763,6 @@ program
         ssh_key_path: opts.key ?? null,
         aws_region: opts.awsRegion ?? null,
         aws_instance_id: opts.awsInstanceId ?? null,
-        tags: "{}",
-        last_seen: null,
-        status: "unknown",
       });
       console.log(chalk.green(`  Machine '${name}' added with ID '${id}'`));
     } catch (err) {
@@ -830,7 +787,7 @@ program
   .action(async (machineArg: string | undefined, opts) => {
     const machineId = resolveMachineId(machineArg);
     const configuredThresholds = loadConfig().thresholds;
-    const diagnostics = await collectMachineDiagnostics(machineId, {
+    const diagnostics = await service.doctor(machineId, {
       cpuWarn: opts.cpuThreshold ?? configuredThresholds?.cpuPercent,
       memWarn: opts.memThreshold ?? configuredThresholds?.memPercent,
       diskWarn: opts.diskThreshold ?? configuredThresholds?.diskPercent,
@@ -940,34 +897,20 @@ program
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     const machineId = resolveMachineId(machineArg);
-    const collector = getCollectorForMachine(machineId);
-    const pm = new ProcessManager();
-    const result = await collector.collect();
-
-    if (!result.ok) {
-      console.error(chalk.red(`Error: ${result.error}`));
+    let collected: ProcessQueryResult;
+    try {
+      collected = await service.processes(
+        machineId,
+        opts.filter as "all" | "zombies" | "orphans" | "high_mem"
+      );
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
 
-    const allRows = result.snapshot.processes.map((p) =>
-      processInfoToRow(p, machineId)
-    );
-    const report = pm.analyse(allRows);
+    const { allRows, report, processes } = collected;
 
-    let rows = allRows;
-    switch (opts.filter) {
-      case "zombies":
-        rows = report.zombies;
-        break;
-      case "orphans":
-        rows = report.orphans;
-        break;
-      case "high_mem":
-        rows = report.highMem;
-        break;
-    }
-
-    rows = filterProcessRows(rows, { user: opts.user, name: opts.name });
+    let rows = filterProcessRows(processes, { user: opts.user, name: opts.name });
 
     const sortBy = opts.sort as "cpu" | "mem";
     rows = [...rows].sort((a, b) =>
@@ -1038,8 +981,20 @@ program
   .option("-v, --verbose", "Show full MCP raw statuses and pane commands")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
-    const machineIds = opts.all ? listKnownMachineIds() : [resolveMachineId(machineArg)];
-    const results = await collectRuntimeHealthAcrossMachines(machineIds);
+    const results: Array<{
+      machineId: string;
+      diagnostics?: import("../runtime-health.js").MachineDiagnostics;
+      error?: string;
+    }> = opts.all
+      ? await service.mcpHealth(undefined, true)
+      : await (async () => {
+          const machineId = resolveMachineId(machineArg);
+          try {
+            return [{ machineId, diagnostics: await service.mcpHealth(machineId, false) }];
+          } catch (error) {
+            return [{ machineId, error: String(error) }];
+          }
+        })();
 
     if (opts.json) {
       console.log(JSON.stringify(results.map((result) => ({
@@ -1119,8 +1074,8 @@ program
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     const results = opts.all
-      ? await getMcpProcessStatusAcrossMachines()
-      : [await getMcpProcessStatus(resolveMachineId(machineArg))];
+      ? await service.mcpStatus(undefined, true)
+      : await service.mcpStatus(resolveMachineId(machineArg), false);
 
     if (opts.json) {
       console.log(JSON.stringify(results, null, 2));
@@ -1166,7 +1121,7 @@ program
   .option("-m, --machine <id>", "Machine ID", "local")
   .option("-j, --json", "Output raw JSON")
   .action(async (name: string, opts) => {
-    const result = await restartMcpServer(name, resolveMachineId(opts.machine));
+    const result = await service.mcpRestart(name, resolveMachineId(opts.machine));
 
     if (opts.json) {
       console.log(JSON.stringify(result, null, 2));
@@ -1220,9 +1175,8 @@ program
     }
 
     const machineId = resolveMachineId(opts.machine);
-    const collector = getCollectorForMachine(machineId);
-    const result = await executeTmuxCommand(collector, {
-      target,
+    const result = await service.exec(machineId, {
+      target: target ?? "",
       all: opts.all ?? false,
       command,
       enter: opts.enter ?? true,
@@ -1296,6 +1250,16 @@ program
       );
     }
 
+    // Local-type machines (including "local" itself) kill through the local
+    // process table; this mirrors the classification MonitorService.kill
+    // applies internally.
+    const isLocalMachine =
+      machineId === "local" ||
+      loadConfig().machines.some(
+        (machine) => machine.id === machineId && machine.type === "local"
+      );
+    const killMachineId = isLocalMachine ? "local" : machineId;
+
     const selectors = [
       pidStr !== undefined,
       opts.name !== undefined,
@@ -1308,29 +1272,22 @@ program
 
     if (opts.pids !== undefined || opts.filter !== undefined) {
       let pids: number[];
-      let collector: ReturnType<typeof getCollectorForMachine>;
       try {
-        collector = getCollectorForMachine(machineId);
+        if (opts.pids !== undefined) {
+          pids = opts.pids;
+        } else {
+          const { report } = await service.processes(machineId, "all");
+          const selected = opts.filter === "zombies"
+            ? report.zombies
+            : opts.filter === "orphans"
+              ? report.orphans
+              : report.highMem;
+          pids = selected.map((row) => row.pid);
+        }
       } catch (error) {
         return fail(
-          `Error selecting machine: ${error instanceof Error ? error.message : String(error)}`
+          `Error collecting snapshot: ${error instanceof Error ? error.message : String(error)}`
         );
-      }
-
-      if (opts.pids !== undefined) {
-        pids = opts.pids;
-      } else {
-        const result = await collector.collect();
-        if (!result.ok) return fail(`Error collecting snapshot: ${result.error}`);
-
-        const rows = result.snapshot.processes.map((process) => processInfoToRow(process, machineId));
-        const report = new ProcessManager().analyse(rows);
-        const selected = opts.filter === "zombies"
-          ? report.zombies
-          : opts.filter === "orphans"
-            ? report.orphans
-            : report.highMem;
-        pids = selected.map((row) => row.pid);
       }
 
       if (pids.length === 0) {
@@ -1342,10 +1299,7 @@ program
         return;
       }
 
-      const killMachineId = collector instanceof LocalCollector ? "local" : machineId;
-      const remoteCollector = collector instanceof LocalCollector ? undefined : collector;
-      const pm = new ProcessManager();
-      const remainingKillSlots = pm.remainingKillSlots(killMachineId);
+      const remainingKillSlots = new ProcessManager().remainingKillSlots(killMachineId);
 
       if (!opts.dryRun && pids.length > remainingKillSlots) {
         const message =
@@ -1384,7 +1338,7 @@ program
             reason: `dry-run: would send ${signal} on ${machineId}`,
           });
         } else {
-          actions.push(await pm.kill(pid, signal, killMachineId, remoteCollector));
+          actions.push(await service.kill(machineId, pid, signal));
         }
       }
 
@@ -1419,24 +1373,21 @@ program
         fail(`Invalid name pattern: ${error instanceof Error ? error.message : String(error)}`);
       }
 
-      let collector: ReturnType<typeof getCollectorForMachine>;
+      let matches: Array<{ pid: number; name: string; cmd: string | null }>;
       try {
-        collector = getCollectorForMachine(machineId);
+        const { allRows } = await service.processes(machineId, "all");
+        matches = allRows
+          .filter((proc) =>
+            (!isLocalMachine || proc.pid !== process.pid) &&
+            (matcher.test(proc.name) || (proc.cmd !== null && matcher.test(proc.cmd)))
+          )
+          .sort((a, b) => a.pid - b.pid)
+          .map(({ pid, name, cmd }) => ({ pid, name, cmd }));
       } catch (error) {
         return fail(
-          `Error selecting machine: ${error instanceof Error ? error.message : String(error)}`
+          `Error collecting snapshot: ${error instanceof Error ? error.message : String(error)}`
         );
       }
-      const result = await collector.collect();
-      if (!result.ok) return fail(`Error collecting snapshot: ${result.error}`);
-
-      const matches = result.snapshot.processes
-        .filter((proc) =>
-          (!(collector instanceof LocalCollector) || proc.pid !== process.pid) &&
-          (matcher.test(proc.name) || matcher.test(proc.cmd))
-        )
-        .sort((a, b) => a.pid - b.pid)
-        .map(({ pid, name, cmd }) => ({ pid, name, cmd }));
 
       const output = (extra: Record<string, unknown> = {}) => {
         console.log(JSON.stringify({
@@ -1493,10 +1444,7 @@ program
         }
       }
 
-      const pm = new ProcessManager();
-      const killMachineId = collector instanceof LocalCollector ? "local" : machineId;
-      const remoteCollector = collector instanceof LocalCollector ? undefined : collector;
-      const remainingKillSlots = pm.remainingKillSlots(killMachineId);
+      const remainingKillSlots = new ProcessManager().remainingKillSlots(killMachineId);
 
       if (matches.length > remainingKillSlots) {
         const message =
@@ -1512,8 +1460,8 @@ program
 
       const actions: Array<ProcessAction & { cmd: string }> = [];
       for (const match of matches) {
-        const action = await pm.kill(match.pid, signal, killMachineId, remoteCollector);
-        actions.push({ ...action, name: match.name, cmd: match.cmd });
+        const action = await service.kill(machineId, match.pid, signal);
+        actions.push({ ...action, name: match.name, cmd: match.cmd ?? "" });
       }
 
       if (opts.json) {
@@ -1549,8 +1497,7 @@ program
       return;
     }
 
-    const pm = new ProcessManager();
-    const action = await pm.kill(pid, signal, machineId);
+    const action = await service.kill(machineId, pid, signal);
 
     if (opts.json) {
       console.log(JSON.stringify(action, null, 2));
@@ -1581,20 +1528,13 @@ program
 
     let alerts: AlertRow[];
     try {
-      alerts = listAlerts(machineId, unresolvedOnly);
-    } catch {
-      alerts = [];
-    }
-
-    if (machineId) {
-      const diagnostics = await collectMachineDiagnostics(machineId).catch((error) => {
-        console.error(chalk.red(`Error: ${error}`));
+      alerts = await service.alerts(machineId, unresolvedOnly);
+    } catch (error) {
+      if (machineId) {
+        console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
         process.exit(1);
-      });
-      if (!diagnostics) return;
-      alerts = unresolvedOnly
-        ? mergeStoredAndLiveAlerts(machineId, diagnostics.doctorReport)
-        : alerts;
+      }
+      alerts = [];
     }
 
     if (opts.json) {
@@ -1662,7 +1602,7 @@ program
     }
 
     if (action === "list") {
-      const result = await listManagedServices(machineId);
+      const result = await service.services(machineId, "list");
       if (opts.json) {
         console.log(JSON.stringify(result, null, 2));
         return;
@@ -1700,7 +1640,7 @@ program
       process.exit(1);
     }
 
-    const result = await manageService(action as "start" | "stop" | "restart", name!, machineId);
+    const result = await service.services(machineId, action as "start" | "stop" | "restart", name!);
     if (opts.json) {
       console.log(JSON.stringify(result, null, 2));
       if (!result.ok) process.exit(1);
@@ -1736,8 +1676,8 @@ program
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     const results = opts.all
-      ? await getTemperatureStatusAcrossMachines()
-      : [await getTemperatureStatus(resolveMachineId(machineArg))];
+      ? await service.temperature(undefined, true)
+      : await service.temperature(resolveMachineId(machineArg), false);
 
     if (opts.json) {
       console.log(JSON.stringify(results, null, 2));
@@ -1820,8 +1760,8 @@ program
     }
 
     const results = opts.all
-      ? await scanListeningPortsAcrossMachines()
-      : [await scanListeningPorts(resolveMachineId(machineArg))];
+      ? await service.ports(undefined, true)
+      : await service.ports(resolveMachineId(machineArg), false);
 
     const filtered = results.map((result) => ({
       ...result,
@@ -1967,8 +1907,8 @@ program
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     const results = opts.all
-      ? await getTailscaleStatusAcrossMachines()
-      : [await getTailscaleStatus(resolveMachineId(machineArg))];
+      ? await service.tailscale(undefined, true)
+      : await service.tailscale(resolveMachineId(machineArg), false);
 
     if (opts.json) {
       console.log(JSON.stringify(results, null, 2));
@@ -2055,7 +1995,7 @@ program
     }
 
     if (opts.logs) {
-      const result = await getContainerLogs(opts.logs, resolveMachineId(machineArg), tail);
+      const result = await service.containerLogs(resolveMachineId(machineArg), opts.logs, tail);
       if (opts.json) {
         console.log(JSON.stringify(result, null, 2));
         return;
@@ -2088,8 +2028,8 @@ program
     }
 
     const results = opts.all
-      ? await listContainersAcrossMachines()
-      : [await listContainers(resolveMachineId(machineArg))];
+      ? await service.containers(undefined, true)
+      : await service.containers(resolveMachineId(machineArg), false);
 
     if (opts.json) {
       console.log(JSON.stringify(results, null, 2));
@@ -2224,12 +2164,7 @@ cronCmd
   .option("-j, --json", "Output raw JSON")
   .action((opts) => {
     const machineId = opts.machine ? resolveMachineId(opts.machine) : undefined;
-    let jobs: import("../db/schema.js").CronJobRow[] = [];
-    try {
-      jobs = listCronJobs(machineId);
-    } catch {
-      jobs = [];
-    }
+    const jobs = service.cron("list", { machine_id: machineId }) as import("../db/schema.js").CronJobRow[];
 
     if (opts.json) {
       console.log(JSON.stringify(jobs, null, 2));
@@ -2262,7 +2197,7 @@ cronCmd
   .option("--action-config <json>", "JSON action config")
   .action((name: string, schedule: string, command: string, opts) => {
     try {
-      const id = insertCronJob({
+      const id = service.cron("add", {
         machine_id: opts.machine ? resolveMachineId(opts.machine) : null,
         name,
         schedule,
@@ -2270,9 +2205,7 @@ cronCmd
         action_type: opts.actionType,
         action_config: opts.actionConfig ?? "{}",
         enabled: 1,
-        last_run_at: null,
-        last_run_status: null,
-      });
+      }) as number;
       console.log(chalk.green(`  Cron job '${name}' created (ID: ${id})`));
     } catch (err) {
       console.error(chalk.red(`  Error: ${err}`));
@@ -2340,9 +2273,9 @@ program
       ? (opts.tables as string).split(",").map((t: string) => t.trim()).filter(Boolean)
       : undefined;
 
-    let results: ReturnType<typeof search> = [];
+    let results: ReturnType<MonitorService["search"]>;
     try {
-      results = search(query, tables);
+      results = service.search(query, tables);
     } catch (err) {
       console.error(chalk.red(`  Search error: ${err}`));
       process.exit(1);
@@ -2425,8 +2358,7 @@ integrationsCmd
   .description("List current integration settings")
   .option("-j, --json", "Output raw JSON")
   .action((opts) => {
-    const config = loadConfig();
-    const integrations = config.integrations ?? {};
+    const integrations = service.integrations("get");
 
     if (opts.json) {
       console.log(JSON.stringify(integrations, null, 2));

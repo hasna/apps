@@ -20,6 +20,7 @@ import {
 } from "./index.js";
 import { MONITOR_VERSION } from "../version.js";
 import { closeDb, getDb } from "../db/client.js";
+import { program } from "../cli/index.js";
 
 describe("SDK parity surface", () => {
   it("exposes every parity method on MonitorService.prototype", () => {
@@ -54,6 +55,16 @@ describe("SDK parity surface", () => {
   it("keeps CLI command names unique in the mapping table", () => {
     const commands = Object.keys(CLI_TO_METHOD);
     expect(new Set(commands).size).toBe(commands.length);
+  });
+
+  it("registers every CLI_TO_METHOD command on the CLI program", () => {
+    const cliCommands = new Set(program.commands.map((command) => command.name()));
+    for (const command of Object.keys(CLI_TO_METHOD)) {
+      expect(
+        cliCommands,
+        `CLI command '${command}' is declared in CLI_TO_METHOD but not registered on the CLI program`
+      ).toContain(command);
+    }
   });
 
   it("exposes the package version through the service", () => {

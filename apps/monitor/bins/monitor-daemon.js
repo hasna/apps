@@ -15,7 +15,20 @@ const USAGE = `Usage: monitor-daemon [--version|--help]
 Execution daemon for monitor slug runs. The scheduler/worker implementation
 lands with MON-V2-04; this entry currently answers --version and --help only.`;
 
-const arg = process.argv[2];
+// The exact supported invocation is a single flag: `--version`/`-v` or
+// `--help`/`-h`. Anything else — including trailing arguments after a valid
+// flag, and zero arguments — is refused rather than silently accepted.
+const args = process.argv.slice(2);
+
+if (args.length !== 1) {
+  console.error(
+    `monitor-daemon: expected exactly one argument (--version | --help), got ${args.length}: ${JSON.stringify(args)}`
+  );
+  console.error(USAGE);
+  process.exit(1);
+}
+
+const arg = args[0];
 
 if (arg === "--version" || arg === "-v") {
   console.log(MONITOR_VERSION);
@@ -27,6 +40,6 @@ if (arg === "--help" || arg === "-h") {
   process.exit(0);
 }
 
-console.error(`monitor-daemon: unknown argument ${JSON.stringify(arg ?? "(none)")}`);
+console.error(`monitor-daemon: unknown argument ${JSON.stringify(arg)}`);
 console.error(USAGE);
 process.exit(1);

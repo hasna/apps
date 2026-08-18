@@ -168,9 +168,11 @@ const alerts = await monitor.alerts(undefined, true);
 ```
 
 Every `MonitorService` method delegates to the shared implementation modules;
-it never re-implements an operation. The MCP server (`monitor-mcp`) is an
-interface layer over the same facade, and the CLI shared-core commands map onto
-the same operation set.
+it never re-implements an operation. The MCP server (`monitor-mcp`) and the CLI
+(`src/cli/index.ts`) are both interface layers over the same facade: each CLI
+shared-core command dispatches through the `MonitorService` method that
+`CLI_TO_METHOD` declares for it, and renders the returned data. Neither
+interface carries a second implementation of a monitor operation.
 
 ### Parity contract
 
@@ -180,5 +182,7 @@ the same operation set.
 - `CLI_TO_METHOD` — CLI shared-core commands and the SDK method each one runs.
 
 Parity tests (`src/sdk/parity.test.ts`, `src/mcp/parity.test.ts`) enforce the
-bijection, method existence, advertised-tool identity, and that every MCP tool
-dispatch reaches its `MonitorService` method.
+bijection, method existence, advertised-tool identity, that every MCP tool
+dispatch reaches exactly its `MonitorService` method, that every CLI shared-core
+command is registered on the CLI program, and that tool responses are produced
+from the service result (canary delegation).

@@ -18,7 +18,10 @@
 export * from "../index.js";
 
 import { ProcessManager, processInfoToRow, type KillSignal, type ProcessReport } from "../process-manager/index.js";
-import { getCollectorForMachine, listKnownMachineIds } from "../collectors/index.js";
+import { getCollectorForMachine, listKnownMachineIds, LocalCollector } from "../collectors/index.js";
+import type { DoctorThresholds } from "../doctor/index.js";
+import { getMonitorStatus } from "../status.js";
+import type { MonitorStatusContract } from "../status.js";
 import {
   collectMachineDiagnostics,
   collectRuntimeHealthAcrossMachines,
@@ -144,9 +147,20 @@ export const MCP_TOOL_MAP = {
   monitor_send_feedback: "sendFeedback",
 } as const satisfies Record<string, MonitorMethod>;
 
-/** CLI shared-core commands and the SDK operation each one runs. */
+/**
+ * CLI shared-core commands and the SDK method each one runs.
+ *
+ * Every command named here dispatches through `MonitorService` in
+ * `src/cli/index.ts` (see `src/sdk/parity.test.ts`), so the CLI shares the
+ * same operation set as the MCP. `health` is the metadata-only monitor app
+ * view (`monitorStatus`), which is the operation the CLI `health` command
+ * runs; the SDK `health` method is the machine-diagnostics operation used by
+ * the MCP `monitor_health` tool.
+ */
 export const CLI_TO_METHOD = {
-  health: "health",
+  health: "monitorStatus",
+  status: "snapshot",
+  compare: "snapshot",
   machines: "machinesList",
   add: "machineAdd",
   doctor: "doctor",
@@ -167,7 +181,7 @@ export const CLI_TO_METHOD = {
   cron: "cron",
   search: "search",
   integrations: "integrations",
-} as const satisfies Record<string, MonitorMethod>;
+} as const satisfies Record<string, keyof MonitorService>;
 
 export type MachineDiagnostics = Awaited<ReturnType<typeof collectMachineDiagnostics>>;
 export type MachineHealthResult = Awaited<ReturnType<typeof collectRuntimeHealthAcrossMachines>>[number];
@@ -388,9 +402,19 @@ export class MonitorService {
     return getContainerLogs(container, machineId ?? "local", tail);
   }
 
-  /** Terminate a process by PID on a machine. */
+  /**
+   * Terminate a process by PID on a machine.
+   *
+   * The collector is resolved here (never by the interface layers), so the
+   * operation behaves identically for the CLI and the MCP: local-type
+   * machines kill through the local process table, remote machines through
+   * their configured collector.
+   */
   async kill(machineId: string | undefined, pid: number, signal: KillSignal) {
-    return this.pm.kill(pid, signal, machineId ?? "local");
+    const id = machineId ?? "local";
+    const collector = getCollectorForMachine(id);
+    const local = collector instanceof LocalCollector;
+    return this.pm.kill(pid, signal, local ? "local" : id, local ? undefined : collector);
   }
 
   /** List registered/configured machines, falling back to the config file. */
@@ -456,9 +480,14 @@ export class MonitorService {
     return listAlerts(undefined, unresolvedOnly);
   }
 
-  /** Run live diagnostics on a machine. */
-  async doctor(machineId = "local") {
-    return collectMachineDiagnostics(machineId);
+  /** Run live diagnostics on a machine, optionally with explicit thresholds. */
+  async doctor(machineId = "local", doctorThresholds: Partial<DoctorThresholds> = {}) {
+    return collectMachineDiagnostics(machineId, doctorThresholds);
+  }
+
+  /** Metadata-only monitor app health counts (the CLI `health` view). */
+  async monitorStatus(options: { probeServices?: boolean } = {}): Promise<MonitorStatusContract> {
+    return getMonitorStatus(options);
   }
 
   /** Cron operations: list, add, toggle. */
