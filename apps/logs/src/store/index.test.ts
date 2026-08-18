@@ -101,18 +101,14 @@ describe("resolveStore", () => {
     }
   });
 
-  test("a legacy storage-mode variable is rejected by the client, never interpreted", () => {
+  test("a legacy storage-mode variable is inert: the API pair alone selects the transport", () => {
     const restore = scrub();
     try {
       // HASNA_LOGS_STORAGE_MODE was removed from the contracts client contract;
-      // the client throws with migration guidance instead of treating it as a
-      // mode switch.
-      expect(() =>
-        resolveStore({ ...API_ENV, HASNA_LOGS_STORAGE_MODE: "cloud" }),
-      ).toThrow();
-      expect(() =>
-        usesHttpTransport({ HASNA_LOGS_STORAGE_MODE: "self_hosted" }),
-      ).toThrow();
+      // the client never reads it — the API pair alone selects the transport.
+      expect(() => resolveStore({ ...API_ENV, HASNA_LOGS_STORAGE_MODE: "cloud" })).not.toThrow();
+      expect(usesHttpTransport({ HASNA_LOGS_STORAGE_MODE: "self_hosted" })).toBe(false);
+      expect(usesHttpTransport(API_ENV)).toBe(true);
     } finally {
       restore();
     }
