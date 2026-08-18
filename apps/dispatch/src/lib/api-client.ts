@@ -46,22 +46,27 @@ export type DispatchClientRoute = "local" | "api-http";
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 /**
- * Outcome of an API-mode routing attempt. `routed` records whether the remote
+ * Outcome of a hosted-API routing attempt. `routed` records whether the remote
  * authority answered the call; it is never derived from the payload value, so a
- * falsy or empty remote response can never be mistaken for "local mode".
+ * falsy or empty remote response can never be mistaken for a local answer.
  */
 export type DispatchApiRouteResult<T> = { routed: true; value: T } | { routed: false };
 
-const API_MODES = new Set(["api", "self_hosted", "remote", "cloud", "hybrid"]);
-const VALID_MODES = new Set(["local", ...API_MODES]);
 const RETRY_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const IDEMPOTENT = new Set(["GET", "HEAD", "PUT", "DELETE", "OPTIONS"]);
+
+/**
+ * Retired storage-mode variables. Deployment modes no longer exist (owner
+ * directive 2026-07-29): the client selects the hosted HTTP API from the
+ * HASNA_DISPATCH_API_URL + HASNA_DISPATCH_API_KEY pair, and the on-box SQLite
+ * store from their absence. A stale storage-mode variable is an error, never a
+ * selector — the fail-loud ratchet in {@link getDispatchApiConfigStatus}.
+ */
+const RETIRED_STORAGE_MODE_KEYS = ["HASNA_DISPATCH_STORAGE_MODE", "DISPATCH_STORAGE_MODE"] as const;
 
 export interface DispatchApiConfigStatus {
   selected: boolean;
   ok: boolean;
-  mode: string;
-  source: "HASNA_DISPATCH_STORAGE_MODE" | "DISPATCH_STORAGE_MODE" | "auto:api-url+api-key" | "default";
   apiUrlConfigured: boolean;
   apiKeyConfigured: boolean;
   v1BaseUrl: string | null;
@@ -174,11 +179,6 @@ function firstEnv<K extends string>(env: Env, keys: readonly K[]): { key: K; val
     if (value) return { key, value };
   }
   return null;
-}
-
-function cleanMode(value: string | undefined): string | null {
-  const normalized = value?.trim().toLowerCase().replace(/-/g, "_");
-  return normalized || null;
 }
 
 function normalizeApiAuthorityUrl(value: string): string {
@@ -381,75 +381,92 @@ function checkResponse(contract: ResponseContract, raw: unknown, fail: (issues: 
   return value;
 }
 
+/**
+ * Resolve the client transport for the Dispatch CLI/SDK from the environment.
+ *
+ * There are no deployment modes (owner directive 2026-07-29). The two-backend
+ * contract is: both HASNA_DISPATCH_API_URL and HASNA_DISPATCH_API_KEY set
+ * select the hosted `/v1` HTTP authority (fail-closed — an incomplete pair is
+ * an error naming the missing variable, never a fall-back to the on-box
+ * store); neither set selects the on-box SQLite store.
+ *
+ * A retired storage-mode variable throws first, via the fail-loud ratchet —
+ * a stale `HASNA_DISPATCH_STORAGE_MODE`/`DISPATCH_STORAGE_MODE` is an error,
+ * never a selector, so an old install cannot silently keep or change backend
+ * selection.
+ */
 export function getDispatchApiConfigStatus(env: Env = process.env as Env): DispatchApiConfigStatus {
-  // Resolve precedence first, then validate only the variable that actually
-  // wins. Validating the loser too would let a stale `DISPATCH_STORAGE_MODE`
-  // left over from an older install veto an explicitly set
-  // `HASNA_DISPATCH_STORAGE_MODE` and hard-fail every command, including the
-  // default local mode that never reads either value.
-  const modeHit = firstEnv(env, ["HASNA_DISPATCH_STORAGE_MODE", "DISPATCH_STORAGE_MODE"]);
-  const selectedMode = cleanMode(modeHit?.value);
+  // 0. The fail-loud ratchet. Runs before anything else: a stale mode variable
+  //    does not get rescued by a complete API pair.
+  for (const key of RETIRED_STORAGE_MODE_KEYS) {
+    if (Object.hasOwn(env, key) && env[key] !== undefined) {
+      throw new Error(
+        `${key} was removed. Deployment modes no longer exist: delete the storage-mode variable. ` +
+          `The client uses the on-box SQLite store, or the hosted HTTP API selected by ` +
+          `HASNA_DISPATCH_API_URL + HASNA_DISPATCH_API_KEY. On the server, set ` +
+          `HASNA_DISPATCH_DATABASE_URL to select the postgresql backend, or leave it unset for sqlite.`,
+      );
+    }
+  }
+
   const urlHit = firstEnv(env, ["HASNA_DISPATCH_API_URL", "DISPATCH_API_URL"]);
   const keyHit = firstEnv(env, ["HASNA_DISPATCH_API_KEY", "DISPATCH_API_KEY"]);
 
-  if (modeHit && selectedMode && !VALID_MODES.has(selectedMode)) {
-    return {
-      selected: true,
-      ok: false,
-      mode: selectedMode,
-      source: modeHit.key,
-      apiUrlConfigured: Boolean(urlHit),
-      apiKeyConfigured: Boolean(keyHit),
-      v1BaseUrl: null,
-      issues: [
-        `REMOTE_STORAGE_MODE_INVALID: ${modeHit.key}=${selectedMode} must be local, api, remote, self_hosted, cloud, or hybrid; local fallback is disabled`,
-      ],
-      localFallback: false,
-    };
-  }
-
-  let mode = selectedMode ?? "local";
-  let source: DispatchApiConfigStatus["source"] = modeHit ? modeHit.key : "default";
-  if (!selectedMode && urlHit && keyHit) {
-    mode = "api";
-    source = "auto:api-url+api-key";
-  }
-
-  if (mode === "local") {
+  // 1. Neither set: the documented single-operator default is the on-box store.
+  if (!urlHit && !keyHit) {
     return {
       selected: false,
       ok: true,
-      mode,
-      source,
-      apiUrlConfigured: Boolean(urlHit),
-      apiKeyConfigured: Boolean(keyHit),
+      apiUrlConfigured: false,
+      apiKeyConfigured: false,
       v1BaseUrl: null,
       issues: [],
       localFallback: false,
     };
   }
 
+  // 2. Half a hosted configuration is an error, never a fall-back to local —
+  //    the on-box store holds a different dataset.
+  if (urlHit && !keyHit) {
+    return {
+      selected: true,
+      ok: false,
+      apiUrlConfigured: true,
+      apiKeyConfigured: false,
+      v1BaseUrl: null,
+      issues: [
+        "REMOTE_API_KEY_MISSING: the hosted Dispatch API requires HASNA_DISPATCH_API_KEY; local fallback is disabled",
+      ],
+      localFallback: false,
+    };
+  }
+  if (keyHit && !urlHit) {
+    return {
+      selected: true,
+      ok: false,
+      apiUrlConfigured: false,
+      apiKeyConfigured: true,
+      v1BaseUrl: null,
+      issues: [
+        "REMOTE_API_URL_MISSING: the hosted Dispatch API requires HASNA_DISPATCH_API_URL; local fallback is disabled",
+      ],
+      localFallback: false,
+    };
+  }
+
+  // 3. The API pair: hosted authority, validated fail-closed.
   const issues: string[] = [];
   let v1BaseUrl: string | null = null;
-  if (!urlHit) {
-    issues.push("REMOTE_API_URL_MISSING: remote Dispatch API mode requires HASNA_DISPATCH_API_URL; local fallback is disabled");
-  } else {
-    try {
-      v1BaseUrl = normalizeApiAuthorityUrl(urlHit.value);
-    } catch (error) {
-      issues.push(error instanceof Error ? error.message : String(error));
-    }
-  }
-  if (!keyHit) {
-    issues.push("REMOTE_API_KEY_MISSING: remote Dispatch API mode requires HASNA_DISPATCH_API_KEY; local fallback is disabled");
+  try {
+    v1BaseUrl = normalizeApiAuthorityUrl(urlHit!.value);
+  } catch (error) {
+    issues.push(error instanceof Error ? error.message : String(error));
   }
   return {
     selected: true,
     ok: issues.length === 0,
-    mode,
-    source,
-    apiUrlConfigured: Boolean(urlHit),
-    apiKeyConfigured: Boolean(keyHit),
+    apiUrlConfigured: true,
+    apiKeyConfigured: true,
     v1BaseUrl,
     issues,
     localFallback: false,
@@ -750,8 +767,8 @@ function safeJson(text: string): unknown {
 export function getDispatchApiClient(env: Env = process.env as Env, fetchImpl?: FetchLike): DispatchApiClient | null {
   const status = getDispatchApiConfigStatus(env);
   if (!status.selected) return null;
-  if (!status.ok) throw new Error(status.issues[0] ?? "Dispatch API mode is misconfigured; local fallback is disabled");
+  if (!status.ok) throw new Error(status.issues[0] ?? "Dispatch API transport is misconfigured; local fallback is disabled");
   const key = firstEnv(env, ["HASNA_DISPATCH_API_KEY", "DISPATCH_API_KEY"])?.value;
-  if (!key) throw new Error("Dispatch API mode resolved without an API key; local fallback is disabled");
+  if (!key) throw new Error("Dispatch API transport resolved without an API key; local fallback is disabled");
   return new DispatchApiClient({ baseUrl: status.v1BaseUrl!, apiKey: key, ...(fetchImpl ? { fetchImpl } : {}) });
 }

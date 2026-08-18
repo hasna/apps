@@ -579,21 +579,24 @@ the historical raw records should pass `verbose: true`.
 `dispatch_exec` accepts `policyFile` for the same reviewed JSON policy used by
 CLI `--allow`; it does not accept inline allowlists from the caller.
 
-## Local and API mode
+## Local and hosted API
 
-By default, `dispatch` runs in local mode: live commands use local or
+By default, `dispatch` runs against the on-box store: live commands use local or
 `--machine`-resolved terminal runners, and recorded dispatches/schedules live in
 on-box SQLite under `DISPATCH_DATA_DIR`.
 
-Set the dispatch storage mode to `api`, `self_hosted`, `remote`, `cloud`, or
-`hybrid` to route the CLI/MCP client through the authenticated `/v1` HTTP
-authority instead. API mode is fail-closed: it requires both
-`HASNA_DISPATCH_API_URL` and `HASNA_DISPATCH_API_KEY`, normalizes the authority to
-`/v1`, does not accept URL userinfo/query/fragment data, and never falls back to
-local SQLite after an API mode misconfiguration. Once API mode is selected, the
-route is fixed for the whole command: an empty or `null` answer from the
-authority is reported as a remote failure (`REMOTE_API_EMPTY_RESPONSE`), never
-quietly answered from the local box.
+Set both `HASNA_DISPATCH_API_URL` and `HASNA_DISPATCH_API_KEY` to route the
+CLI/MCP client through the authenticated `/v1` HTTP authority instead. There are
+no deployment modes (owner directive 2026-07-29); the hosted route is selected
+by the API pair alone and is fail-closed: an incomplete pair — URL without a
+key, or key without a URL — errors naming the missing variable, the authority
+URL is normalized to `/v1` and rejects userinfo/query/fragment data, and the
+client never falls back to local SQLite after a hosted misconfiguration. A
+retired `HASNA_DISPATCH_STORAGE_MODE`/`DISPATCH_STORAGE_MODE` variable is an
+error, never a selector. Once the hosted route is selected, the route is fixed
+for the whole command: an empty or `null` answer from the authority is reported
+as a remote failure (`REMOTE_API_EMPTY_RESPONSE`), never quietly answered from
+the local box.
 
 Every 2xx body is checked against the endpoint's documented response contract
 before it reaches a caller. A payload that does not match — `{}`, `[]`,
@@ -611,8 +614,7 @@ are retried. Write retries stay off until the authority's idempotency contract i
 specified and covered by tests.
 
 ```bash
-HASNA_DISPATCH_STORAGE_MODE=api
-HASNA_DISPATCH_API_URL=https://dispatch.example.internal
+HASNA_DISPATCH_API_URL=https://dispatch.example.com
 HASNA_DISPATCH_API_KEY=...
 
 dispatch list --json
@@ -620,9 +622,6 @@ dispatch schedule --to work:agent --prompt "later" --in 30m --json
 dispatch targets --json
 dispatch daemon status --json
 ```
-
-An explicit `HASNA_DISPATCH_STORAGE_MODE=local` keeps local mode even if API
-URL/key variables are present.
 
 ## How auto-submit works (the key feature)
 
@@ -667,9 +666,8 @@ URL/key variables are present.
 | `DISPATCH_AI_MODEL` / `DISPATCH_AI_BASE_URL` / `DISPATCH_AI_API_KEY` | Provider-independent AI model, endpoint, and credential overrides |
 | `GROQ_API_KEY` / `CEREBRAS_API_KEY` / `OPENAI_API_KEY` | Provider credentials used when `DISPATCH_AI_API_KEY` is unset |
 | `GROQ_MODEL` / `CEREBRAS_MODEL` / `OPENAI_MODEL` | Provider-specific model overrides |
-| `HASNA_DISPATCH_STORAGE_MODE` / `DISPATCH_STORAGE_MODE` | `local` or API-backed mode (`api`, `self_hosted`, `remote`, `cloud`, `hybrid`) |
-| `HASNA_DISPATCH_API_URL` / `DISPATCH_API_URL` | API authority root or `/v1` URL for API mode |
-| `HASNA_DISPATCH_API_KEY` / `DISPATCH_API_KEY` | Bearer/API key for API mode; value is never printed |
+| `HASNA_DISPATCH_API_URL` / `DISPATCH_API_URL` | API authority root or `/v1` URL; selects the hosted route together with the key |
+| `HASNA_DISPATCH_API_KEY` / `DISPATCH_API_KEY` | Bearer/API key for the hosted route; value is never printed |
 
 ## Development
 

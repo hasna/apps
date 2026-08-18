@@ -127,7 +127,7 @@ export function buildProgram(deps: CliDeps = {}): Command {
   }
 
   /**
-   * Run `fn` against the remote authority when the client route is API mode.
+   * Run `fn` against the remote authority when the client route is the hosted API.
    * `routed` reflects the route decision only, never the truthiness of the remote
    * payload, so an empty or falsy remote answer can never silently fall back to
    * the local box.

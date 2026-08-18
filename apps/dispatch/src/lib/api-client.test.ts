@@ -97,91 +97,72 @@ const startBody = { started: true, alreadyRunning: false } as const;
 const stopBody = { stopped: true, forced: false, wasRunning: true } as const;
 
 describe("dispatch API route resolution", () => {
-  test("explicit api/self-hosted mode resolves to /v1 with auth required", () => {
+  test("API url + key pair selects the hosted /v1 authority with auth required", () => {
     const status = getDispatchApiConfigStatus({
-      HASNA_DISPATCH_STORAGE_MODE: "self_hosted",
       HASNA_DISPATCH_API_URL: "https://dispatch.hasna.xyz",
       HASNA_DISPATCH_API_KEY: "test-key",
     });
     expect(status).toMatchObject({
       selected: true,
       ok: true,
-      mode: "self_hosted",
       v1BaseUrl: "https://dispatch.hasna.xyz/v1",
       localFallback: false,
+      issues: [],
     });
+    expect(getDispatchApiClient({
+      HASNA_DISPATCH_API_URL: "https://dispatch.hasna.xyz",
+      HASNA_DISPATCH_API_KEY: "test-key",
+    })).toBeInstanceOf(DispatchApiClient);
   });
 
-  test("url plus key can select api mode for fleet flips, while explicit local wins", () => {
+  test("url plus key selects the hosted authority; neither set selects the on-box store", () => {
     expect(
       getDispatchApiConfigStatus({
         HASNA_DISPATCH_API_URL: "https://dispatch.hasna.xyz/v1",
         HASNA_DISPATCH_API_KEY: "test-key",
       }),
-    ).toMatchObject({ selected: true, source: "auto:api-url+api-key", v1BaseUrl: "https://dispatch.hasna.xyz/v1" });
+    ).toMatchObject({ selected: true, v1BaseUrl: "https://dispatch.hasna.xyz/v1" });
 
-    expect(
-      getDispatchApiConfigStatus({
-        HASNA_DISPATCH_STORAGE_MODE: "local",
-        HASNA_DISPATCH_API_URL: "https://dispatch.hasna.xyz",
-        HASNA_DISPATCH_API_KEY: "test-key",
-      }),
-    ).toMatchObject({ selected: false, mode: "local" });
+    expect(getDispatchApiConfigStatus({})).toMatchObject({ selected: false, ok: true, issues: [] });
+    expect(getDispatchApiClient({})).toBeNull();
   });
 
-  test("api mode without a key fails closed instead of falling back to local SQLite", () => {
-    expect(() => getDispatchApiClient({ HASNA_DISPATCH_STORAGE_MODE: "api", HASNA_DISPATCH_API_URL: "https://dispatch.hasna.xyz" })).toThrow(
+  test("an incomplete API pair fails closed instead of falling back to local SQLite", () => {
+    expect(() => getDispatchApiClient({ HASNA_DISPATCH_API_URL: "https://dispatch.hasna.xyz" })).toThrow(
       /REMOTE_API_KEY_MISSING/,
     );
-    expect(() => getDispatchApiClient({ HASNA_DISPATCH_STORAGE_MODE: "api", HASNA_DISPATCH_API_KEY: "test-key" })).toThrow(
+    expect(() => getDispatchApiClient({ HASNA_DISPATCH_API_KEY: "test-key" })).toThrow(
       /REMOTE_API_URL_MISSING/,
     );
   });
 
-  test("a stale DISPATCH_STORAGE_MODE alias never vetoes the canonical mode that outranks it", () => {
-    // Only the variable that wins precedence is consulted, so an unread alias
-    // must not be able to brick the run — least of all the default local path.
-    expect(
-      getDispatchApiConfigStatus({ HASNA_DISPATCH_STORAGE_MODE: "local", DISPATCH_STORAGE_MODE: "sqlite" }),
-    ).toMatchObject({ selected: false, ok: true, mode: "local", source: "HASNA_DISPATCH_STORAGE_MODE", issues: [] });
-    expect(getDispatchApiClient({ HASNA_DISPATCH_STORAGE_MODE: "local", DISPATCH_STORAGE_MODE: "sqlite" })).toBeNull();
+  test("a retired storage-mode variable throws, even beside a valid API pair", () => {
+    // The fail-loud ratchet: deployment modes no longer exist (owner directive
+    // 2026-07-29), so a stale storage-mode variable is an error, never a
+    // selector — it must not silently change or veto the transport decision.
+    expect(() => getDispatchApiConfigStatus({ HASNA_DISPATCH_STORAGE_MODE: "local" })).toThrow(
+      /HASNA_DISPATCH_STORAGE_MODE/,
+    );
+    expect(() => getDispatchApiConfigStatus({ DISPATCH_STORAGE_MODE: "cloud" })).toThrow(/DISPATCH_STORAGE_MODE/);
 
     const apiEnv = {
       HASNA_DISPATCH_STORAGE_MODE: "api",
-      DISPATCH_STORAGE_MODE: "sqlite",
       HASNA_DISPATCH_API_URL: "https://dispatch.hasna.xyz",
       HASNA_DISPATCH_API_KEY: "test-key",
     };
-    expect(getDispatchApiConfigStatus(apiEnv)).toMatchObject({
-      selected: true,
-      ok: true,
-      mode: "api",
-      source: "HASNA_DISPATCH_STORAGE_MODE",
-      v1BaseUrl: "https://dispatch.hasna.xyz/v1",
-      issues: [],
-    });
-    expect(getDispatchApiClient(apiEnv)).toBeInstanceOf(DispatchApiClient);
+    expect(() => getDispatchApiConfigStatus(apiEnv)).toThrow(/HASNA_DISPATCH_STORAGE_MODE/);
+    expect(() => getDispatchApiClient(apiEnv)).toThrow(/HASNA_DISPATCH_STORAGE_MODE/);
   });
 
-  test("an unusable storage mode still fails closed when that variable is the one in effect", () => {
-    // Negative control for the precedence rule above: ignoring the loser must not
-    // become ignoring the winner. The alias is authoritative when the canonical
-    // name is unset, and the canonical name is authoritative when both are set.
-    expect(getDispatchApiConfigStatus({ DISPATCH_STORAGE_MODE: "sqlite" })).toMatchObject({
-      selected: true,
-      ok: false,
-      mode: "sqlite",
-      source: "DISPATCH_STORAGE_MODE",
-      localFallback: false,
-    });
-    expect(getDispatchApiConfigStatus({ HASNA_DISPATCH_STORAGE_MODE: "sqlite", DISPATCH_STORAGE_MODE: "local" })).toMatchObject({
-      selected: true,
-      ok: false,
-      mode: "sqlite",
-      source: "HASNA_DISPATCH_STORAGE_MODE",
-      localFallback: false,
-    });
-    expect(() => getDispatchApiClient({ HASNA_DISPATCH_STORAGE_MODE: "sqlite" })).toThrow(/REMOTE_STORAGE_MODE_INVALID/);
+  test("an unset storage-mode variable is ignored, not rejected", () => {
+    // A key present with an undefined value is not a stale configuration.
+    expect(
+      getDispatchApiConfigStatus({
+        HASNA_DISPATCH_STORAGE_MODE: undefined,
+        HASNA_DISPATCH_API_URL: "https://dispatch.hasna.xyz",
+        HASNA_DISPATCH_API_KEY: "test-key",
+      }),
+    ).toMatchObject({ selected: true, ok: true, v1BaseUrl: "https://dispatch.hasna.xyz/v1" });
   });
 });
 
