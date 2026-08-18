@@ -413,6 +413,18 @@ export interface CorpusSkillMeta {
    * records which revision was installed there too.
    */
   revisionId?: string;
+  /**
+   * The row's SKILL.md, served in the published metadata so a client can recompute the
+   * content-addressed revision id and PROVE the declared revision identifies the content
+   * it received (todos d061fcda).
+   */
+  skillMd?: string;
+  /**
+   * The row's stored source (the payload's own `source` is always the client view
+   * "remote"). The canonical revision hash is computed over the stored value, so the
+   * client needs it to recompute the id.
+   */
+  publishedSource?: string;
 }
 
 export interface WriteCorpusSkillInput {
