@@ -1492,6 +1492,10 @@ export async function handleSelfHostedRequest(
           auth.ctx.principalType === "apikey" ||
           (auth.ctx.principalType === "idp" && hasAllScopes(auth.ctx.scopes, ["emails:write"])) ||
           auth.ctx.role === "owner" || auth.ctx.role === "admin",
+        // Explicit per-send suppression override. The policy gate honors it
+        // only together with tenant-wide authority above; a bare body field is
+        // never authority on its own.
+        allow_suppressed_recipients: body.allow_suppressed_recipients === true,
       });
       if (!policy.allowed) {
         const blocked = await auth.store.markSendBlocked(reserved.record.id, policy.code).catch(() => null);

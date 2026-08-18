@@ -112,6 +112,39 @@ describe("central outbound policy", () => {
     });
   });
 
+  test("an explicit suppression override is honored only with tenant-wide send authority", async () => {
+    // Without the flag the server refuses a suppressed recipient unconditionally.
+    expect((await policyStore({ suppressed: "blocked@example.net" }).evaluateOutboundPolicy({
+      from: "sender@example.com",
+      recipients: ["blocked@example.net"],
+      allowTenantWideSend: true,
+    }))).toMatchObject({ code: "recipient_suppressed", status: 409 });
+
+    // A sender-scoped send key cannot request the override: the set of
+    // principals who may mail a suppressed recipient equals the set who may
+    // unsuppress it, and a send key cannot write the contacts ledger.
+    const scoped = policyStore({ suppressed: "blocked@example.net" });
+    scoped.verifySendKey = async () => ({
+      id: "key", owner_id: "owner-1", prefix: "esk_scoped", label: null,
+      last_used_at: null, revoked_at: null, created_at: "now", updated_at: "now",
+    });
+    expect((await scoped.evaluateOutboundPolicy({
+      from: "sender@example.com",
+      recipients: ["blocked@example.net"],
+      sendKeyToken: "esk_scoped",
+      allow_suppressed_recipients: true,
+    }))).toMatchObject({ code: "suppression_override_forbidden", status: 403 });
+
+    // A tenant-wide principal (API key, owner/admin session, IdP emails:write)
+    // may override: the same authority that can unsuppress the contact.
+    expect((await policyStore({ suppressed: "blocked@example.net" }).evaluateOutboundPolicy({
+      from: "sender@example.com",
+      recipients: ["blocked@example.net"],
+      allowTenantWideSend: true,
+      allow_suppressed_recipients: true,
+    }))).toEqual({ allowed: true });
+  });
+
   test("a supplied send key must be valid and scoped to the sender owner", async () => {
     expect((await policyStore().evaluateOutboundPolicy({
       from: "sender@example.com", recipients: [], allowTenantWideSend: false,

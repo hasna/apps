@@ -117,15 +117,19 @@ describe("emails send — suppressed recipients (self-hosted)", () => {
     }
   });
 
-  it("tells the operator that --force cannot override the server, and sends nothing", async () => {
+  it("honours --force against the server: the override is transmitted and the send proceeds", async () => {
+    // The stub mirrors the server: a suppressed recipient is refused with
+    // 409 recipient_suppressed UNLESS the request carries the explicit
+    // override. The send succeeding therefore proves the CLI transmitted
+    // allow_suppressed_recipients rather than merely skipping its own check.
     const result = await runSend([
       "send", "--from", "agent@acme.com", "--to", "blocked@ext.com", "--subject", "Hi", "--body", "x", "--force",
     ]);
 
-    expect(result.exited).toBe(true);
-    expect(result.errorOutput).toContain("--force cannot override suppression in self-hosted mode");
-    expect(result.errorOutput).toContain("409 recipient_suppressed");
-    expect(await stub.list("messages")).toHaveLength(0);
+    expect(result.exited).toBe(false);
+    expect(result.consoleOutput).toContain("--force: sending to the suppressed recipient(s) anyway.");
+    expect(result.consoleOutput).toContain("Email sent to blocked@ext.com");
+    expect(await stub.list("messages")).toHaveLength(1);
   });
 
   it("reports but does not refuse during a dry run", async () => {
@@ -135,7 +139,7 @@ describe("emails send — suppressed recipients (self-hosted)", () => {
 
     expect(result.exited).toBe(false);
     expect(result.consoleOutput).toContain("Suppressed recipients: blocked@ext.com");
-    expect(result.consoleOutput).toContain("A real send would be refused");
+    expect(result.consoleOutput).toContain("A real send would be refused; --force overrides on both backends");
     expect(result.consoleOutput).toContain("[NOT SENT]");
     expect(await stub.list("messages")).toHaveLength(0);
   });
