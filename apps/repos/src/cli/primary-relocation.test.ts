@@ -136,7 +136,7 @@ describe("registry relocate-primary CLI", () => {
     const result = runCli([]);
     expect(result.exitCode).toBe(0);
     const output = JSON.parse(result.stdout.toString());
-    expect(output.schema).toBe("open-repos.primary-relocation.v2");
+    expect(output.schema).toBe("repos.primary-relocation.v2");
     expect(output.applied).toBe(false);
     expect(output.receipt).toBeNull();
     expect(output.target_repo_id).toBe(1508);

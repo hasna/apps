@@ -76,7 +76,7 @@ export interface RemoteIdentityCleanupCounts {
 }
 
 export interface RemoteIdentityCleanupSummary {
-  schema: "open-repos.remote-identity-cleanup.v1";
+  schema: "repos.remote-identity-cleanup.v1";
   version: 1;
   applied: boolean;
   replayed: boolean;
@@ -305,7 +305,7 @@ async function ensureRemoteSyncSchema(remote: ReposRemoteSyncClient): Promise<vo
   await remote.query(`CREATE INDEX IF NOT EXISTS idx_repos_sync_records_updated_at ON ${SYNC_RECORD_TABLE}(updated_at)`);
 }
 
-const REMOTE_IDENTITY_CLEANUP_SCHEMA = "open-repos.remote-identity-cleanup.v1" as const;
+const REMOTE_IDENTITY_CLEANUP_SCHEMA = "repos.remote-identity-cleanup.v1" as const;
 
 type RemoteCleanupChange =
   | {
@@ -519,7 +519,7 @@ export async function cleanupRemoteIdentities(
   try {
     if (ownsRemote) await remote.connect?.();
     await remote.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [
-      "open-repos.remote-identity-cleanup.schema.v1",
+      "repos.remote-identity-cleanup.schema.v1",
     ]);
     schemaLockHeld = true;
     await remote.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
@@ -836,7 +836,7 @@ export async function cleanupRemoteIdentities(
     if (schemaLockHeld) {
       try {
         await remote.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [
-          "open-repos.remote-identity-cleanup.schema.v1",
+          "repos.remote-identity-cleanup.schema.v1",
         ]);
       } catch {
         // Never replace a closed cleanup result with raw driver output.

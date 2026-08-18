@@ -26,7 +26,7 @@ function createTrackedRepo(name: string): string {
 
 beforeEach(() => {
   closeDb();
-  testDir = join(tmpdir(), `open-repos-utils-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  testDir = join(tmpdir(), `repos-utils-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
   process.env["HASNA_REPOS_DB_PATH"] = ":memory:";
   getDb(":memory:");

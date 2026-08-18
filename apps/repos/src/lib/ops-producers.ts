@@ -64,7 +64,7 @@ export interface RepoPrQueueItem {
 }
 
 export interface RepoPrQueueResult {
-  schema: "open-repos.pr-queue.v1";
+  schema: "repos.pr-queue.v1";
   generated_at: string;
   synced?: {
     /** Local checkouts behind the remotes that were considered. */
@@ -192,7 +192,7 @@ export function buildPrQueue(options: PrQueueOptions = {}): RepoPrQueueResult {
   const rows = listPrRows({ org: options.org, repo: options.repo, state, limit });
   const items = rows.map(prRowToQueueItem);
   return {
-    schema: "open-repos.pr-queue.v1",
+    schema: "repos.pr-queue.v1",
     generated_at: new Date().toISOString(),
     ...(synced ? { synced } : {}),
     filters: {
@@ -222,7 +222,7 @@ export interface CliSmokeOptions {
 }
 
 export interface CliSmokeResult {
-  schema: "open-repos.global-cli-smoke.v1";
+  schema: "repos.global-cli-smoke.v1";
   generated_at: string;
   limits: {
     timeout_ms: number;
@@ -297,7 +297,7 @@ export function runGlobalCliSmoke(options: CliSmokeOptions = {}): CliSmokeResult
   });
 
   return {
-    schema: "open-repos.global-cli-smoke.v1",
+    schema: "repos.global-cli-smoke.v1",
     generated_at: new Date().toISOString(),
     limits: { timeout_ms: timeoutMs },
     summary: {
@@ -321,7 +321,7 @@ export interface PackageHygieneOptions {
 }
 
 export interface PackageHygieneResult {
-  schema: "open-repos.package-hygiene.v1";
+  schema: "repos.package-hygiene.v1";
   generated_at: string;
   scopes: string[];
   summary: {
@@ -358,7 +358,7 @@ export interface ReleaseCandidateOptions {
 }
 
 export interface ReleaseCandidateResult {
-  schema: "open-repos.release-candidates.v1";
+  schema: "repos.release-candidates.v1";
   generated_at: string;
   repo: {
     input: string;
@@ -444,7 +444,7 @@ export interface DocsRulesDriftOptions {
 }
 
 export interface DocsRulesDriftResult {
-  schema: "open-repos.docs-rules-drift.v1";
+  schema: "repos.docs-rules-drift.v1";
   generated_at: string;
   repo: {
     input: string;
@@ -479,7 +479,7 @@ export interface DependencyRefreshOptions {
 }
 
 export interface DependencyRefreshResult {
-  schema: "open-repos.dependency-refresh.v1";
+  schema: "repos.dependency-refresh.v1";
   generated_at: string;
   repo: {
     input: string;
@@ -513,7 +513,7 @@ export interface WorkspaceWorktreeHygieneOptions {
 }
 
 export interface WorkspaceWorktreeHygieneResult {
-  schema: "open-repos.workspace-worktree-hygiene.v1";
+  schema: "repos.workspace-worktree-hygiene.v1";
   generated_at: string;
   roots: string[];
   worktree_root: string | null;
@@ -550,7 +550,7 @@ export interface TaskRouteHealthOptions {
 }
 
 export interface TaskRouteHealthResult {
-  schema: "open-repos.task-route-health.v1";
+  schema: "repos.task-route-health.v1";
   generated_at: string;
   router_loop: string;
   project: string | null;
@@ -573,7 +573,7 @@ export interface ProtectedReleaseOptions extends ReleaseCandidateOptions {
 }
 
 export interface ProtectedReleaseResult {
-  schema: "open-repos.protected-release.v1";
+  schema: "repos.protected-release.v1";
   generated_at: string;
   release: ReleaseCandidateResult;
   summary: {
@@ -602,7 +602,7 @@ export function inspectPackageHygiene(options: PackageHygieneOptions = {}): Pack
   const taskSeeds = duplicates.map((row) => packageDuplicateTaskSeed(row));
 
   return {
-    schema: "open-repos.package-hygiene.v1",
+    schema: "repos.package-hygiene.v1",
     generated_at: new Date().toISOString(),
     scopes,
     summary: {
@@ -859,7 +859,7 @@ export function buildReleaseCandidates(options: ReleaseCandidateOptions): Releas
           ? "candidate"
           : "noop";
   return {
-    schema: "open-repos.release-candidates.v1",
+    schema: "repos.release-candidates.v1",
     generated_at: new Date().toISOString(),
     repo: {
       input: options.repo,
@@ -993,7 +993,7 @@ export function buildDocsRulesDrift(options: DocsRulesDriftOptions): DocsRulesDr
     : [];
 
   return {
-    schema: "open-repos.docs-rules-drift.v1",
+    schema: "repos.docs-rules-drift.v1",
     generated_at: new Date().toISOString(),
     repo: { input: options.repo, path: repoPath, github_repo: githubRepo, branch },
     config: { docs_paths: docsPaths, source_paths: sourcePaths },
@@ -1060,7 +1060,7 @@ export function buildDependencyRefresh(options: DependencyRefreshOptions): Depen
   const issues = checks.filter((check) => check.status === "issue");
   const taskSeeds = issues.length > 0 ? [dependencyRefreshTaskSeed({ repoPath, githubRepo, packageName, maxLockAgeDays, issues })] : [];
   return {
-    schema: "open-repos.dependency-refresh.v1",
+    schema: "repos.dependency-refresh.v1",
     generated_at: new Date().toISOString(),
     repo: { input: options.repo, path: repoPath, github_repo: githubRepo, package_name: packageName },
     limits: { max_lock_age_days: maxLockAgeDays },
@@ -1115,7 +1115,7 @@ export function buildWorkspaceWorktreeHygiene(options: WorkspaceWorktreeHygieneO
   }
 
   return {
-    schema: "open-repos.workspace-worktree-hygiene.v1",
+    schema: "repos.workspace-worktree-hygiene.v1",
     generated_at: new Date().toISOString(),
     roots,
     worktree_root: worktreeRoot,
@@ -1161,7 +1161,7 @@ export function buildTaskRouteHealth(options: TaskRouteHealthOptions): TaskRoute
 
   const taskSeeds = issues.length > 0 ? [taskRouteHealthTaskSeed({ routerLoop: options.routerLoop, project: options.project, issues })] : [];
   return {
-    schema: "open-repos.task-route-health.v1",
+    schema: "repos.task-route-health.v1",
     generated_at: new Date().toISOString(),
     router_loop: options.routerLoop,
     project: options.project ?? null,
@@ -1190,7 +1190,7 @@ export function buildProtectedRelease(options: ProtectedReleaseOptions): Protect
     ? [protectedReleaseTaskSeed(release, options.approvalLabel)]
     : [];
   return {
-    schema: "open-repos.protected-release.v1",
+    schema: "repos.protected-release.v1",
     generated_at: new Date().toISOString(),
     release,
     summary: {
@@ -1238,8 +1238,9 @@ function prRowToQueueItem(row: PrRow): RepoPrQueueItem {
       id: row.repo_id,
       // `name`, `org` and `path` describe the LOCAL checkout and keep their
       // v1 meaning: `name` is the directory on disk, which is routinely
-      // different from the GitHub repository name (github.com/hasna/emails is
-      // checked out as open-emails). Redefining it to the GitHub name would
+      // different from the GitHub repository name (github.com/hasna/emails
+      // used to be checked out under the retired `open-`-prefixed name).
+      // Redefining it to the GitHub name would
       // leave `name` and `path` describing different things and break any
       // consumer that uses `name` to locate a checkout. The GitHub identity is
       // carried by `full_name`, and `github_repo` below exposes it on its own.
@@ -1274,12 +1275,12 @@ function prRowToQueueItem(row: PrRow): RepoPrQueueItem {
         `GitHub author is ${row.author}`,
         `Base: ${row.base_branch ?? "unknown"}`,
         `Head: ${row.head_branch ?? "unknown"}`,
-        // State/Author lines are the delivery channel for the open-loops
+        // State/Author lines are the delivery channel for the loops
         // (@hasna/loops >=0.4.10) freshness gate + bot-login fast path on the
         // seeded TODOS TASK: the todos CLI has no metadata flag, so
         // upsertTaskSeeds cannot persist task_seed.metadata. The gate's text
         // extractors parse these lines; formats are contract-pinned to
-        // open-loops src/lib/route/pr-review.ts and enforced by the
+        // loops src/lib/route/pr-review.ts and enforced by the
         // "gate-parseable" contract test in ops-producers.test.ts:
         // - `State: <open|merged|closed>` — prStateFromEvidence permits `\s*`
         //   before the separator, so the plain-colon form parses.
@@ -1303,13 +1304,13 @@ function prRowToQueueItem(row: PrRow): RepoPrQueueItem {
         pr_number: row.number,
         pr_url: prUrl,
         github_author: row.author,
-        // pr_author + pr_state feed the open-loops (@hasna/loops >=0.4.10) PR
+        // pr_author + pr_state feed the loops (@hasna/loops >=0.4.10) PR
         // freshness gate + bot-login normalization fast path, letting it skip a
         // per-task live `gh pr view` fallback. Values are already fetched into
         // the row (see pr block above); previously they were dropped here.
         pr_author: row.author,
         pr_state: row.state,
-        source: "open-repos.pr-queue.v1",
+        source: "repos.pr-queue.v1",
       },
     },
   };
@@ -1813,7 +1814,7 @@ function releaseBlockerTaskSeed(opts: {
     priority: "high",
     tags: ["auto:route", "area:repoops", "task-lifecycle", "release-blocker", `repo:${repoSlug(opts.githubRepo)}`],
     metadata: {
-      source: "open-repos.release-candidates.v1",
+      source: "repos.release-candidates.v1",
       repo_path: opts.repoPath,
       repo_full_name: opts.githubRepo,
       package_name: opts.packageName,
@@ -1874,7 +1875,7 @@ function releaseCandidateTaskSeed(opts: {
     priority: "high",
     tags: ["auto:route", "area:repoops", "task-lifecycle", "release-candidate", `repo:${repoSlug(opts.githubRepo)}`],
     metadata: {
-      source: "open-repos.release-candidates.v1",
+      source: "repos.release-candidates.v1",
       repo_path: opts.repoPath,
       repo_full_name: opts.githubRepo,
       package_name: opts.packageName,
@@ -1935,7 +1936,7 @@ function docsRulesDriftTaskSeed(opts: {
     priority: "medium",
     tags: ["auto:route", "area:repoops", "task-lifecycle", "docs-rules-drift", `repo:${repoSlug(opts.githubRepo)}`],
     metadata: {
-      source: "open-repos.docs-rules-drift.v1",
+      source: "repos.docs-rules-drift.v1",
       repo_path: opts.repoPath,
       repo_full_name: opts.githubRepo,
       branch: opts.branch,
@@ -1982,7 +1983,7 @@ function dependencyRefreshTaskSeed(opts: {
     priority: "medium",
     tags: ["auto:route", "area:repoops", "task-lifecycle", "dependency-refresh", `repo:${repoSlug(opts.githubRepo)}`],
     metadata: {
-      source: "open-repos.dependency-refresh.v1",
+      source: "repos.dependency-refresh.v1",
       repo_path: opts.repoPath,
       repo_full_name: opts.githubRepo,
       package_name: opts.packageName,
@@ -2034,7 +2035,7 @@ function worktreeHygieneTaskSeed(opts: {
     priority: opts.dirty ? "high" : "medium",
     tags: ["auto:route", "area:repoops", "task-lifecycle", "worktree-hygiene", `repo:${repoName}`],
     metadata: {
-      source: "open-repos.workspace-worktree-hygiene.v1",
+      source: "repos.workspace-worktree-hygiene.v1",
       repo_path: opts.repo_path,
       worktree_path: opts.path,
       branch: opts.branch,
@@ -2074,7 +2075,7 @@ function taskRouteHealthTaskSeed(opts: {
     priority: opts.issues.some((issue) => issue.severity === "high") ? "high" : "medium",
     tags: ["auto:route", "area:repoops", "task-route-health"],
     metadata: {
-      source: "open-repos.task-route-health.v1",
+      source: "repos.task-route-health.v1",
       router_loop: opts.routerLoop,
       project: opts.project,
       issue_ids: opts.issues.map((issue) => issue.id),
@@ -2116,7 +2117,7 @@ function protectedReleaseTaskSeed(release: ReleaseCandidateResult, approvalLabel
     priority: "critical",
     tags: ["auto:route", "area:repoops", "task-lifecycle", "protected-release", `repo:${repoSlug(release.repo.github_repo)}`],
     metadata: {
-      source: "open-repos.protected-release.v1",
+      source: "repos.protected-release.v1",
       repo_path: release.repo.path,
       repo_full_name: release.repo.github_repo,
       package_name: release.repo.package_name,
@@ -2243,7 +2244,7 @@ function cliSmokeTaskSeed(row: CliSmokeResult["commands"][number]): TaskSeed {
       command: row.command,
       args: row.args,
       status: row.status,
-      source: "open-repos.global-cli-smoke.v1",
+      source: "repos.global-cli-smoke.v1",
     },
   };
 }
@@ -2285,7 +2286,7 @@ function packageDuplicateTaskSeed(row: PackageHygieneResult["npm_global_duplicat
     metadata: {
       package_name: row.name,
       npm_version: row.version,
-      source: "open-repos.package-hygiene.v1",
+      source: "repos.package-hygiene.v1",
     },
   };
 }
@@ -2307,7 +2308,7 @@ export interface ReleasePipelineParityItem {
 }
 
 export interface ReleasePipelineParityQueueResult {
-  schema: "open-repos.release-pipeline-parity.v1";
+  schema: "repos.release-pipeline-parity.v1";
   generated_at: string;
   options: {
     include_registry: boolean;
@@ -2340,7 +2341,7 @@ function releaseParityTaskSeed(path: string, item: Omit<ReleasePipelineParityIte
     metadata: {
       repo_path: path,
       issue_codes: item.issue_codes,
-      source: "open-repos.release-pipeline-parity.v1",
+      source: "repos.release-pipeline-parity.v1",
     },
   };
 }
@@ -2375,7 +2376,7 @@ export function buildReleasePipelineParity(options: ReleasePipelineParityQueueOp
     .filter((seed): seed is TaskSeed => Boolean(seed));
 
   return {
-    schema: "open-repos.release-pipeline-parity.v1",
+    schema: "repos.release-pipeline-parity.v1",
     generated_at: new Date().toISOString(),
     options: { include_registry: includeRegistry },
     summary: {

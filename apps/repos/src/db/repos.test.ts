@@ -386,11 +386,11 @@ describe("repos", () => {
   });
 
   it("should search repos via FTS5", () => {
-    upsertRepo({ path: "/tmp/open-todos", name: "open-todos", description: "task management for agents" });
-    upsertRepo({ path: "/tmp/open-git", name: "open-git", description: "git intelligence platform" });
+    upsertRepo({ path: "/tmp/todos", name: "todos", description: "task management for agents" });
+    upsertRepo({ path: "/tmp/git", name: "git", description: "git intelligence platform" });
     const results = searchRepos("task management");
     expect(results.length).toBe(1);
-    expect(results[0]!.name).toBe("open-todos");
+    expect(results[0]!.name).toBe("todos");
   });
 
   it("treats punctuation in repo search queries as literal text", () => {

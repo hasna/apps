@@ -185,7 +185,7 @@ describe("loop task helpers", () => {
   });
 
   test("writes loop report JSON with private file permissions", () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-repos-loop-report-"));
+    const dir = mkdtempSync(join(tmpdir(), "repos-loop-report-"));
     tempDirs.push(dir);
 
     const path = writeLoopReport({ ok: true }, { reportDir: dir, prefix: "smoke" });
@@ -196,7 +196,7 @@ describe("loop task helpers", () => {
   });
 
   test("can annotate loop report JSON with its own report path", () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-repos-loop-report-"));
+    const dir = mkdtempSync(join(tmpdir(), "repos-loop-report-"));
     tempDirs.push(dir);
 
     const path = writeLoopReport({ ok: true, loop: {} }, { reportDir: dir, prefix: "smoke", annotatePath: true });

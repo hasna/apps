@@ -57,7 +57,7 @@ const cloudRepoName = ["open", "cloud"].join("-");
 describe("no-cloud inventory", () => {
   it("counts package, lock, source, docs, and config cloud references", () => {
     withTempWorkspace((root) => {
-      const repo = join(root, "open-repos");
+      const repo = join(root, "repos");
       gitRepo(repo);
       mkdirSync(join(repo, "src"), { recursive: true });
       mkdirSync(join(repo, "infra"), { recursive: true });
@@ -70,7 +70,7 @@ describe("no-cloud inventory", () => {
       writeFileSync(join(repo, "infra", "config.json"), JSON.stringify({ env: cloudEnv }) + "\n");
 
       const report = getNoCloudInventory({ root, limit: 10 });
-      const finding = report.repos.find((entry) => entry.path === "open-repos");
+      const finding = report.repos.find((entry) => entry.path === "repos");
 
       expect(report.summary.repos).toBe(1);
       expect(report.summary.needs_remediation).toBe(1);
@@ -117,8 +117,8 @@ describe("no-cloud inventory", () => {
 
   it("marks duplicate remote checkouts as non-routeable with a canonical path", () => {
     withTempWorkspace((root) => {
-      const canonical = join(root, "open-repos");
-      const duplicate = join(root, "open-repos-compact-cli");
+      const canonical = join(root, "repos");
+      const duplicate = join(root, "repos-compact-cli");
       gitRepo(canonical);
       gitRepo(duplicate);
       for (const repo of [canonical, duplicate]) {
@@ -128,15 +128,15 @@ describe("no-cloud inventory", () => {
       }
 
       const report = getNoCloudInventory({ root, limit: 10 });
-      const canonicalFinding = report.repos.find((entry) => entry.path === "open-repos");
-      const duplicateFinding = report.repos.find((entry) => entry.path === "open-repos-compact-cli");
+      const canonicalFinding = report.repos.find((entry) => entry.path === "repos");
+      const duplicateFinding = report.repos.find((entry) => entry.path === "repos-compact-cli");
 
       expect(canonicalFinding).toMatchObject({
         repo_key: "hasna/repos",
         routing: "canonical",
         routeable: true,
         route_blocked_reason: null,
-        canonical_path: "open-repos",
+        canonical_path: "repos",
         duplicate_of: null,
       });
       expect(duplicateFinding).toMatchObject({
@@ -144,8 +144,8 @@ describe("no-cloud inventory", () => {
         routing: "duplicate",
         routeable: false,
         route_blocked_reason: "duplicate-checkout",
-        canonical_path: "open-repos",
-        duplicate_of: "open-repos",
+        canonical_path: "repos",
+        duplicate_of: "repos",
       });
       expect(report.summary.duplicate_repos).toBe(1);
     });
@@ -203,16 +203,16 @@ describe("no-cloud inventory", () => {
 
   it("blocks auxiliary canonical candidates instead of routing the least-bad checkout", () => {
     withTempWorkspace((root) => {
-      const repo = join(root, "opensourcedev", "open-repos");
+      const repo = join(root, "opensourcedev", "repos");
       gitRepo(repo);
       writeFileSync(join(repo, "README.md"), `${cloudPackage}\n`);
       commitAll(repo, "add cloud evidence");
       setTrackedGitHubRemote(repo, "https://github.com/hasna/repos.git");
 
       const report = getNoCloudInventory({ root, limit: 10 });
-      const finding = report.repos.find((entry) => entry.path === "opensourcedev/open-repos");
+      const finding = report.repos.find((entry) => entry.path === "opensourcedev/repos");
       const reportFromOpenSourceDev = getNoCloudInventory({ root: join(root, "opensourcedev"), limit: 10 });
-      const findingFromOpenSourceDev = reportFromOpenSourceDev.repos.find((entry) => entry.path === "open-repos");
+      const findingFromOpenSourceDev = reportFromOpenSourceDev.repos.find((entry) => entry.path === "repos");
 
       expect(finding).toMatchObject({
         repo_key: "hasna/repos",
@@ -231,7 +231,7 @@ describe("no-cloud inventory", () => {
 
   it("blocks canonical candidates that are behind their known upstream", () => {
     withTempWorkspace((root) => {
-      const repo = join(root, "open-repos");
+      const repo = join(root, "repos");
       gitRepo(repo);
       writeFileSync(join(repo, "README.md"), `${cloudPackage}\n`);
       commitAll(repo, "add cloud evidence");
@@ -243,7 +243,7 @@ describe("no-cloud inventory", () => {
       execFileSync("git", ["reset", "--hard", "HEAD~1"], { cwd: repo, stdio: "pipe" });
 
       const report = getNoCloudInventory({ root, limit: 10 });
-      const finding = report.repos.find((entry) => entry.path === "open-repos");
+      const finding = report.repos.find((entry) => entry.path === "repos");
 
       expect(finding).toMatchObject({
         repo_key: "hasna/repos",
@@ -258,7 +258,7 @@ describe("no-cloud inventory", () => {
 
   it("requires canonical candidates to track origin main, not another upstream", () => {
     withTempWorkspace((root) => {
-      const repo = join(root, "open-repos");
+      const repo = join(root, "repos");
       gitRepo(repo);
       writeFileSync(join(repo, "README.md"), `${cloudPackage}\n`);
       commitAll(repo, "add cloud evidence");
@@ -269,7 +269,7 @@ describe("no-cloud inventory", () => {
       execFileSync("git", ["branch", "--set-upstream-to=fork/main", "main"], { cwd: repo, stdio: "pipe" });
 
       const report = getNoCloudInventory({ root, limit: 10 });
-      const finding = report.repos.find((entry) => entry.path === "open-repos");
+      const finding = report.repos.find((entry) => entry.path === "repos");
 
       expect(finding).toMatchObject({
         repo_key: "hasna/repos",
@@ -302,13 +302,13 @@ describe("no-cloud inventory", () => {
 
   it("blocks dirty canonical checkouts from remediation routing", () => {
     withTempWorkspace((root) => {
-      const repo = join(root, "open-repos");
+      const repo = join(root, "repos");
       gitRepo(repo);
       setTrackedGitHubRemote(repo, "https://github.com/hasna/repos.git");
       writeFileSync(join(repo, "README.md"), `${cloudPackage}\n`);
 
       const report = getNoCloudInventory({ root, limit: 10 });
-      const finding = report.repos.find((entry) => entry.path === "open-repos");
+      const finding = report.repos.find((entry) => entry.path === "repos");
 
       expect(finding).toMatchObject({
         repo_key: "hasna/repos",
@@ -443,9 +443,9 @@ describe("no-cloud inventory", () => {
     });
   });
 
-  it("treats repo names that already start with open as expected top-level checkouts", () => {
+  it("keeps canonical scoring for repos whose GitHub names genuinely start with open", () => {
     withTempWorkspace((root) => {
-      const expected = join(root, "hasna", "opensource", "open-chrome");
+      const expected = join(root, "hasnaxyz", "open-chrome");
       const duplicate = join(root, "hasnaxyz", "project", "open-chrome");
       gitRepo(expected);
       writeFileSync(join(expected, "README.md"), `${cloudPackage}\n`);
@@ -458,7 +458,7 @@ describe("no-cloud inventory", () => {
       setTrackedGitHubRemote(duplicate, "https://github.com/hasnaxyz/open-chrome.git");
 
       const report = getNoCloudInventory({ root, limit: 10, maxDepth: 4 });
-      const expectedFinding = report.repos.find((entry) => entry.path === "hasna/opensource/open-chrome");
+      const expectedFinding = report.repos.find((entry) => entry.path === "hasnaxyz/open-chrome");
       const duplicateFinding = report.repos.find((entry) => entry.path === "hasnaxyz/project/open-chrome");
 
       expect(expectedFinding).toMatchObject({
@@ -466,15 +466,15 @@ describe("no-cloud inventory", () => {
         routing: "canonical",
         routeable: false,
         route_blocked_reason: "dirty-worktree",
-        canonical_path: "hasna/opensource/open-chrome",
+        canonical_path: "hasnaxyz/open-chrome",
       });
       expect(duplicateFinding).toMatchObject({
         repo_key: "hasnaxyz/open-chrome",
         routing: "duplicate",
         routeable: false,
         route_blocked_reason: "duplicate-checkout",
-        canonical_path: "hasna/opensource/open-chrome",
-        duplicate_of: "hasna/opensource/open-chrome",
+        canonical_path: "hasnaxyz/open-chrome",
+        duplicate_of: "hasnaxyz/open-chrome",
       });
     });
   });
@@ -582,7 +582,7 @@ describe("registry inventory sources", () => {
 
   it("de-duplicates a name declared by two checkouts and by the registry", () => {
     withTempWorkspace((root) => {
-      const a = manifest(root, "open-repos", reposPkg);
+      const a = manifest(root, "repos", reposPkg);
       const b = manifest(root, "repos-worktree", reposPkg);
       const inventory = resolveNpmPackageChecks([a, b], {
         enumerate: () => ({ status: "ok", names: [reposPkg], detail: null }),
@@ -625,7 +625,8 @@ describe("registry inventory sources", () => {
     // to it. Measured on 2026-07-28: `npm search` returned 160 scoped names, the
     // scope roster returned 170, and search \\ roster was empty — the roster is a
     // strict superset, and two of the ten it adds (@hasna/cli@0.1.0 -> ^0.1.5,
-    // @hasna/open-projects@0.1.1 -> ^0.1.28) declare @hasna/cloud right now.
+    // @hasna/open-projects@0.1.1 -> ^0.1.28, the latter measured under its retired
+    // `open-`-prefixed name) declare @hasna/cloud right now.
     const inventory = resolveNpmPackageChecks([], {
       enumerate: () => unionScopeEnumerations([
         { source: "search", result: { status: "ok", names: [reposPkg], detail: null } },

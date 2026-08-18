@@ -725,7 +725,7 @@ registry
       const message = error instanceof Error ? error.message : "unknown relocation error";
       if (json) {
         const details = error instanceof PrimaryRelocationError ? error.details : undefined;
-        printJson({ schema: "open-repos.primary-relocation.v2", ok: false, error: { code, message, details } });
+        printJson({ schema: "repos.primary-relocation.v2", ok: false, error: { code, message, details } });
       } else {
         console.error(chalk.red(`${code}: ${message}`));
       }
@@ -823,7 +823,7 @@ registry
       const message = error instanceof Error ? error.message : "unknown branch adjudication error";
       if (json) {
         const details = error instanceof BranchAdjudicationError ? error.details : undefined;
-        printJson({ schema: "open-repos.branch-adjudication.v1", ok: false, error: { code, message, details } });
+        printJson({ schema: "repos.branch-adjudication.v1", ok: false, error: { code, message, details } });
       } else {
         console.error(chalk.red(`${code}: ${message}`));
       }
@@ -930,7 +930,7 @@ registry
       const message = error instanceof Error ? error.message : "unknown registry prune error";
       if (json) {
         const details = error instanceof RegistryPruneError ? error.details : undefined;
-        printJson({ schema: "open-repos.registry-prune.v1", ok: false, error: { code, message, details } });
+        printJson({ schema: "repos.registry-prune.v1", ok: false, error: { code, message, details } });
       } else {
         console.error(chalk.red(`${code}: ${message}`));
       }
@@ -2468,9 +2468,10 @@ program
 // ── CD / Open ──
 /**
  * `cd`/`open` resolve fuzzily by default, which is convenient interactively and
- * unsafe for automation — `repos cd todos` will happily return `open-todos`
- * while `platform-todos` also exists. `--exact` and `--remote` opt into a
- * deterministic lookup that fails rather than guessing.
+ * unsafe for automation — `repos cd todos` will happily return whichever
+ * checkout is indexed under that local directory name (e.g. the retired
+ * `open-`-prefixed form) while `platform-todos` also exists. `--exact` and
+ * `--remote` opt into a deterministic lookup that fails rather than guessing.
  */
 /**
  * Unlike `repo`/`show`/`inspect`, this refuses outright and prints nothing on
@@ -2512,7 +2513,7 @@ function resolveRepoPath(name: string | undefined, opts: any): string {
 
 program
   .command("cd [name]")
-  .description("Print repo path (use: cd $(repos cd open-todos))")
+  .description("Print repo path (use: cd $(repos cd todos))")
   .option(REMOTE_OPTION, REMOTE_OPTION_HELP)
   .option("--exact", "Match the local name or path exactly; never fuzzy-match")
   .action((name, opts) => {

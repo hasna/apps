@@ -142,9 +142,10 @@ export function listAllRepos(
  *
  * The by-name branch used to match the `name` column with no regard for
  * whether the matching row was a derived checkout. A canonical checkout of
- * `github.com/hasna/loops` is indexed as `open-loops`, while a shallow,
- * single-commit `_factory_src/loops` scratch clone of the SAME remote is
- * indexed under the bare name `loops`. Those are two DIFFERENT `name` values,
+ * `github.com/hasna/loops` used to be indexed under the retired
+ * `open-`-prefixed directory name, while a shallow, single-commit
+ * `_factory_src/loops` scratch clone of the SAME remote is indexed under the
+ * bare name `loops`. Those are two DIFFERENT `name` values,
  * so `getRepo("loops")` had exactly one exact match — the scratch clone — and
  * returned it: deterministic, unambiguous, and wrong. This is not the
  * tie-break `AmbiguousRepoNameError` exists for; it is a single match that
@@ -175,8 +176,8 @@ export function listAllRepos(
  * basename even when the checkout was copied from another repository.
  *
  * Other layouts deliberately remain unopinionated. In particular, OSS
- * checkouts such as `hasna/opensource/open-emails` legitimately use a local
- * directory name that differs from the GitHub repository name.
+ * checkouts legitimately use a local directory name that differs from the
+ * GitHub repository name (the retired `opensource/` layout did exactly that).
  */
 export function getManagedRepoIdentityMismatch(repo: Repo): RepoIdentityMismatch | null {
   const segments = repo.path.replace(/\\/g, "/").split("/").filter(Boolean);
@@ -281,7 +282,7 @@ export function repoLookupPathState(path: string): "present" | "missing" | "unde
  * - a path still on disk — or merely unprobeable (`EACCES`, `ENAMETOOLONG`) —
  *   under any row means a checkout of that remote exists under a different
  *   name, and the existing refuse-and-suggest flow points at a usable path
- *   (the `open-loops` class, todos c357a1f3) — keep it;
+ *   (the pre-migration `open-`-prefixed index class, todos c357a1f3) — keep it;
  * - every row gone means the canonical identity is otherwise unreachable and a
  *   suggestion would point at nothing — bind the name to the row so the caller
  *   receives the health verdict instead of a dead-end suggestion.
@@ -365,10 +366,11 @@ export class AmbiguousRemoteError extends Error {
  * name a repository.
  *
  * `name` is the local directory name, which routinely differs from the GitHub
- * repository name (`github.com/hasna/emails` is checked out as `open-emails`),
- * and the fuzzy `cd`-style lookup happily resolves `todos` to whichever of
- * `open-todos`, `platform-todos` or `hasnastudio/platform-todos` it reaches
- * first. Automation needs a lookup that either matches exactly or fails.
+ * repository name (the retired `open-`-prefixed checkouts are the canonical
+ * example), and the fuzzy `cd`-style lookup happily resolves `todos` to
+ * whichever indexed checkout it reaches first — e.g. `platform-todos` or
+ * `hasnastudio/platform-todos`. Automation needs a lookup that either matches
+ * exactly or fails.
  *
  * Accepts `github.com/org/name`, `org/name`, or any supported remote URL form.
  * Returns null when nothing matches — including when every indexed checkout of

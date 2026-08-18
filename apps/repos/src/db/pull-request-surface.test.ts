@@ -55,7 +55,7 @@ describe("cross-checkout de-duplication", () => {
     // primary clone plus two worktrees. Each becomes its own repos row and each
     // stores its own copy of PR #415.
     const paths = [
-      "/home/user/workspace/open-codewith",
+      "/home/user/workspace/codewith",
       "/home/user/.hasna/repos/worktrees/codewith/a",
       "/home/user/.hasna/repos/worktrees/codewith/b",
     ];
@@ -75,9 +75,9 @@ describe("cross-checkout de-duplication", () => {
     // Worktrees are indexed after the clone they came from, so without an
     // explicit rank term the final `id DESC` tiebreak always selects one —
     // pointing callers at another task's working directory.
-    const primary = upsertRepo({ path: "/home/u/workspace/open-codewith", name: "open-codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
+    const primary = upsertRepo({ path: "/home/u/workspace/codewith", name: "codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
     const wtA = upsertRepo({ path: "/home/u/.hasna/repos/worktrees/codewith/task-a", name: "task-a", org: "hasna", remote_url: "github.com/hasna/codewith" });
-    const wtB = upsertRepo({ path: "/home/u/.hasna/repos/worktrees/station01/open-codewith/task-b", name: "task-b", org: "hasna", remote_url: "github.com/hasna/codewith" });
+    const wtB = upsertRepo({ path: "/home/u/.hasna/repos/worktrees/station01/codewith/task-b", name: "task-b", org: "hasna", remote_url: "github.com/hasna/codewith" });
     const shm = upsertRepo({ path: "/dev/shm/build-20260710/repos/codewith", name: "codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
     // Identical timestamps, exactly as one fan-out sync writes them.
     for (const id of [primary.id, wtA.id, wtB.id, shm.id]) {
@@ -86,7 +86,7 @@ describe("cross-checkout de-duplication", () => {
 
     const rows = listPullRequestsWithRepo({ state: "open" });
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.repo_path).toBe("/home/u/workspace/open-codewith");
+    expect(rows[0]!.repo_path).toBe("/home/u/workspace/codewith");
     expect(isDerivedCheckoutPath(rows[0]!.repo_path!)).toBe(false);
   });
 
@@ -96,7 +96,7 @@ describe("cross-checkout de-duplication", () => {
     expect(isDerivedCheckoutPath("/home/u/WorkTrees/codewith/a")).toBe(true);
     expect(isDerivedCheckoutPath("/home/u/worktrees/codewith/a")).toBe(true);
     expect(isDerivedCheckoutPath("/DEV/SHM/build/codewith")).toBe(true);
-    expect(isDerivedCheckoutPath("/home/u/workspace/open-codewith")).toBe(false);
+    expect(isDerivedCheckoutPath("/home/u/workspace/codewith")).toBe(false);
     // Not a path segment, so not derived.
     expect(isDerivedCheckoutPath("/home/u/workspace/my-worktrees-notes")).toBe(false);
     // _factory_src (todos c357a1f3): a shallow factory scratch clone, not a
@@ -107,13 +107,13 @@ describe("cross-checkout de-duplication", () => {
     // applies to "my-worktrees-notes" above.
     expect(isDerivedCheckoutPath("/home/u/workspace/_factory_srcish/loops")).toBe(false);
 
-    const primary = upsertRepo({ path: "/home/u/workspace/open-codewith", name: "open-codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
+    const primary = upsertRepo({ path: "/home/u/workspace/codewith", name: "codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
     const cased = upsertRepo({ path: "/home/u/WorkTrees/codewith/a", name: "a", org: "hasna", remote_url: "github.com/hasna/codewith" });
     for (const id of [cased.id, primary.id]) {
       bulkInsertPullRequests([pr({ repo_id: id, number: 90, updated_at: "2026-07-26T01:00:00Z" })]);
     }
     // The SQL term must agree, or the case-variant worktree wins the tiebreak.
-    expect(listPullRequestsWithRepo({ state: "open" })[0]!.repo_path).toBe("/home/u/workspace/open-codewith");
+    expect(listPullRequestsWithRepo({ state: "open" })[0]!.repo_path).toBe("/home/u/workspace/codewith");
   });
 
   it("ranks a _factory_src scratch clone behind the real checkout, and its underscore does not become a LIKE wildcard", () => {
@@ -122,12 +122,12 @@ describe("cross-checkout de-duplication", () => {
     // two definitions must not drift apart. A naive (unescaped) LIKE would
     // also match a path with ANY character standing in for the underscore
     // (e.g. ".factoryAsrc"), which the second assertion below rules out.
-    const primary = upsertRepo({ path: "/home/u/workspace/open-loops", name: "open-loops", org: "hasna", remote_url: "github.com/hasna/loops" });
+    const primary = upsertRepo({ path: "/home/u/workspace/loops", name: "loops", org: "hasna", remote_url: "github.com/hasna/loops" });
     const mirror = upsertRepo({ path: "/home/u/workspace/_factory_src/loops", name: "loops", org: "hasna", remote_url: "github.com/hasna/loops" });
     for (const id of [mirror.id, primary.id]) {
       bulkInsertPullRequests([pr({ repo_id: id, number: 91, updated_at: "2026-07-26T01:00:00Z" })]);
     }
-    expect(listPullRequestsWithRepo({ state: "open" })[0]!.repo_path).toBe("/home/u/workspace/open-loops");
+    expect(listPullRequestsWithRepo({ state: "open" })[0]!.repo_path).toBe("/home/u/workspace/loops");
 
     // A path that only LOOKS like the marker if `_` were a wildcard must not
     // be classified as derived.
@@ -174,7 +174,7 @@ describe("cross-checkout de-duplication", () => {
   it("does not let the primary preference override fresher data", () => {
     // Path preference ranks below freshness: a stale primary must not beat a
     // worktree that actually saw the merge.
-    const primary = upsertRepo({ path: "/home/u/workspace/open-codewith", name: "open-codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
+    const primary = upsertRepo({ path: "/home/u/workspace/codewith", name: "codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
     const wt = upsertRepo({ path: "/home/u/.hasna/repos/worktrees/codewith/fresh", name: "fresh", org: "hasna", remote_url: "github.com/hasna/codewith" });
     bulkInsertPullRequests([
       pr({ repo_id: primary.id, number: 8, state: "open", updated_at: "2026-07-01T00:00:00Z" }),
@@ -300,7 +300,7 @@ describe("--org filtering", () => {
   });
 
   it("exposes org and repo names on every row", () => {
-    const repo = upsertRepo({ path: "/w/codewith", name: "open-codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
+    const repo = upsertRepo({ path: "/w/codewith-local", name: "codewith-local", org: "hasna", remote_url: "github.com/hasna/codewith" });
     bulkInsertPullRequests([pr({ repo_id: repo.id, number: 415 })]);
 
     const row = listPullRequests({ state: "open" })[0]!;
@@ -310,11 +310,11 @@ describe("--org filtering", () => {
   });
 
   it("filters by GitHub repository name independently of the local directory name", () => {
-    const repo = upsertRepo({ path: "/w/open-emails", name: "open-emails", org: "hasna", remote_url: "github.com/hasna/emails" });
+    const repo = upsertRepo({ path: "/w/emails-local", name: "emails-local", org: "hasna", remote_url: "github.com/hasna/emails" });
     bulkInsertPullRequests([pr({ repo_id: repo.id, number: 3, url: "https://github.com/hasna/emails/pull/3" })]);
 
     expect(listPullRequests({ repo_name: "emails", state: "open" })).toHaveLength(1);
-    expect(listPullRequests({ repo_name: "open-emails", state: "open" })).toHaveLength(0);
+    expect(listPullRequests({ repo_name: "emails-local", state: "open" })).toHaveLength(0);
   });
 });
 
@@ -394,26 +394,26 @@ describe("terminal state reconciliation", () => {
 
 describe("deterministic repo targeting", () => {
   it("resolves a repo by its exact GitHub remote, not its local directory name", () => {
-    upsertRepo({ path: "/w/open-emails", name: "open-emails", org: "hasna", remote_url: "github.com/hasna/emails" });
+    upsertRepo({ path: "/w/emails", name: "emails", org: "hasna", remote_url: "github.com/hasna/emails" });
 
-    expect(getRepoByRemote("github.com/hasna/emails")!.path).toBe("/w/open-emails");
-    expect(getRepoByRemote("hasna/emails")!.path).toBe("/w/open-emails");
-    expect(getRepoByRemote("https://github.com/hasna/emails.git")!.path).toBe("/w/open-emails");
+    expect(getRepoByRemote("github.com/hasna/emails")!.path).toBe("/w/emails");
+    expect(getRepoByRemote("hasna/emails")!.path).toBe("/w/emails");
+    expect(getRepoByRemote("https://github.com/hasna/emails.git")!.path).toBe("/w/emails");
   });
 
   it("returns null rather than guessing when no remote matches", () => {
-    upsertRepo({ path: "/w/open-todos", name: "open-todos", org: "hasna", remote_url: "github.com/hasna/todos" });
-    // The fuzzy `cd` lookup would happily return open-todos for this.
+    upsertRepo({ path: "/w/todos", name: "todos", org: "hasna", remote_url: "github.com/hasna/todos" });
+    // The fuzzy `cd` lookup would happily return the local checkout for this.
     expect(getRepoByRemote("github.com/hasnastudio/platform-todos")).toBeNull();
     expect(getRepoByRemote("nonsense")).toBeNull();
   });
 
   it("prefers the real checkout over worktree copies of the same remote", () => {
     upsertRepo({ path: "/home/u/.hasna/repos/worktrees/codewith/a", name: "a", org: "hasna", remote_url: "github.com/hasna/codewith" });
-    upsertRepo({ path: "/home/u/workspace/open-codewith", name: "open-codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
+    upsertRepo({ path: "/home/u/workspace/codewith", name: "codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
     upsertRepo({ path: "/dev/shm/build/codewith", name: "codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
 
-    expect(getRepoByRemote("github.com/hasna/codewith")!.path).toBe("/home/u/workspace/open-codewith");
+    expect(getRepoByRemote("github.com/hasna/codewith")!.path).toBe("/home/u/workspace/codewith");
     expect(listReposByRemote("github.com/hasna/codewith")).toHaveLength(3);
   });
 
@@ -470,11 +470,11 @@ describe("a foreign clone is never the answer for a remote (todos c0ac7e9b)", ()
   });
 
   it("still resolves a healthy canonical checkout past both a worktree and a mirror", () => {
-    upsertRepo({ path: "/w/open-loops", name: "open-loops", org: "hasna", remote_url: "github.com/hasna/loops" });
+    upsertRepo({ path: "/w/loops", name: "loops", org: "hasna", remote_url: "github.com/hasna/loops" });
     upsertRepo({ path: "/home/u/.hasna/repos/worktrees/loops/pr1", name: "pr1", org: "hasna", remote_url: "github.com/hasna/loops" });
     upsertRepo({ path: "/w/_factory_src/loops", name: "loops", org: "hasna", remote_url: "github.com/hasna/loops" });
 
-    expect(getRepoByRemote("hasna/loops", { isUsableCheckout: () => true })!.path).toBe("/w/open-loops");
+    expect(getRepoByRemote("hasna/loops", { isUsableCheckout: () => true })!.path).toBe("/w/loops");
     // Nothing is hidden: every checkout is still enumerable by remote.
     expect(listReposByRemote("hasna/loops")).toHaveLength(3);
   });
@@ -501,7 +501,7 @@ describe("a foreign clone is never the answer for a remote (todos c0ac7e9b)", ()
     // A worktree is derived but NOT foreign — that gap is the whole fix.
     expect(isForeignCheckoutPath("/home/u/.hasna/repos/worktrees/codewith/a")).toBe(false);
     expect(isDerivedCheckoutPath("/home/u/.hasna/repos/worktrees/codewith/a")).toBe(true);
-    expect(isForeignCheckoutPath("/home/u/workspace/open-codewith")).toBe(false);
+    expect(isForeignCheckoutPath("/home/u/workspace/codewith")).toBe(false);
     expect(isForeignCheckoutPath("/home/u/workspace/_factory_srcish/loops")).toBe(false);
   });
 });

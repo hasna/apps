@@ -4,7 +4,7 @@
  * The registry had no prune, forget, remove or delete verb at all. `repos scan`
  * exits 0 without retiring anything, and `repos registry` exposed only
  * `relocate-primary` and `adjudicate-branches`. So 291 rows on this machine
- * pointing at absent paths — including `open-browserplan`, whose stale
+ * pointing at absent paths — including a stale pre-migration row whose
  * `github.com/hasna/browserplan` remote still *works* because GitHub redirects it
  * to `hasnastudio/platform-browserplan`, so any tool resolving that row operates
  * on the live repo believing it is the old one — had no supported way to be
@@ -69,8 +69,8 @@ import { isAbsolute, resolve } from "node:path";
 import type { Database } from "bun:sqlite";
 import { getDb, getDbPath } from "./database.js";
 
-export const REGISTRY_PRUNE_SCHEMA = "open-repos.registry-prune.v1" as const;
-export const REGISTRY_PRUNE_RECEIPT_SCHEMA = "open-repos.registry-prune-receipt.v1" as const;
+export const REGISTRY_PRUNE_SCHEMA = "repos.registry-prune.v1" as const;
+export const REGISTRY_PRUNE_RECEIPT_SCHEMA = "repos.registry-prune-receipt.v1" as const;
 const OPERATION = "registry_prune" as const;
 
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
