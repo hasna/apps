@@ -325,11 +325,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos f6869bad-0aa9-466a-824b-b4a76a0b9b7b (contracts task — accounts)",
   },
   {
-    member: "automations",
-    cause: "Pinned @hasna/contracts 0.8.1 predates the manifest shape (storage.backend, no deploymentModes); manifest validates clean at 0.9.0. Pinned kit is stale.",
-    task: "todos 99f670fe-246a-48be-80dc-46457d4fc013 (contracts task — automations)",
-  },
-  {
     member: "calendar",
     cause: "manifest_valid at pinned 0.4.2 (mode-era schema vs mixed-era manifest): storage.mode Invalid enum value. Expected 'local' | 'cloud', received 'sqlite'; storage Unrecognized key(s) in object: 'engines', 'pgTestGate'; <root> Unrecognized key(s) in object: 'hosting', 'serviceSurfaces'. The earlier mode_enum_compliance env-var cause no longer fires.",
     task: "todos a967c9bd (contracts task — calendar)",
