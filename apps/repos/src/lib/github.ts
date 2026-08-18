@@ -58,6 +58,17 @@ function isUnsupportedFieldError(message: string): boolean {
  */
 const MERGE_INFO_PREVIEW = "Accept: application/vnd.github.merge-info-preview+json";
 
+/**
+ * One status-check context inside a `statusCheckRollup`, captured at sync time
+ * so the monitor's CI_FAILING class can name the failing check without a
+ * per-PR call (pr-monitor design §1.5/§2.4).
+ */
+export interface GraphqlCheckContext {
+  name: string;
+  status: string;
+  conclusion: string | null;
+}
+
 export interface GraphqlPr {
   number: number;
   title: string;
@@ -75,10 +86,12 @@ export interface GraphqlPr {
   deletions: number;
   changedFiles: number;
   headRefOid: string | null;
+  /** Tip commit of the base ref — the BASE_MOVED freshness input. */
+  baseRefOid: string | null;
   mergeable: string | null;
   mergeStateStatus?: string | null;
   reviewDecision: string | null;
-  commits?: { nodes: Array<{ commit: { statusCheckRollup: { state: string } | null } }> };
+  commits?: { nodes: Array<{ commit: { statusCheckRollup: { state: string; contexts?: { nodes: Array<GraphqlCheckContext> } | null } | null } }> };
 }
 
 function pullRequestFields(withMergeState: boolean): string {
@@ -86,8 +99,8 @@ function pullRequestFields(withMergeState: boolean): string {
     number title state isDraft author { login }
     createdAt updatedAt mergedAt closedAt url
     baseRefName headRefName additions deletions changedFiles
-    headRefOid mergeable reviewDecision${withMergeState ? "\n    mergeStateStatus" : ""}
-    commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }`;
+    headRefOid baseRefOid mergeable reviewDecision${withMergeState ? "\n    mergeStateStatus" : ""}
+    commits(last: 1) { nodes { commit { statusCheckRollup { state contexts { nodes { name status conclusion } } } } } }`;
 }
 
 function graphql(query: string, variables: Record<string, string>, withMergeState: boolean): any {
@@ -293,6 +306,19 @@ export function fetchPullRequestStates(
   return result;
 }
 
+/**
+ * Serialize the status-check contexts at the head sha into the registry
+ * `[{name, conclusion}]` shape the monitor stores per PR. The rollup is
+ * already scoped to the head commit by the query (`commits(last: 1)`), so no
+ * further per-PR call is owed; the classification layer filters the list down
+ * to the failing checks (§2.4 CI_FAILING).
+ */
+function serializeCheckContexts(pr: GraphqlPr): string | null {
+  const contexts = pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes;
+  if (!contexts || contexts.length === 0) return null;
+  return JSON.stringify(contexts.map(({ name, conclusion }) => ({ name, conclusion })));
+}
+
 function toPullRequestInput(repoId: number, pr: GraphqlPr): PullRequestInput {
   return {
     repo_id: repoId,
@@ -311,9 +337,11 @@ function toPullRequestInput(repoId: number, pr: GraphqlPr): PullRequestInput {
     deletions: pr.deletions || 0,
     changed_files: pr.changedFiles || 0,
     head_sha: pr.headRefOid || null,
+    base_ref_oid: pr.baseRefOid || null,
     mergeable: pr.mergeable || null,
     merge_state_status: pr.mergeStateStatus ?? null,
     ci_state: pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? null,
+    ci_contexts_json: serializeCheckContexts(pr),
     is_draft: Boolean(pr.isDraft),
     review_decision: pr.reviewDecision || null,
   };

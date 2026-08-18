@@ -901,7 +901,7 @@ const MIGRATIONS: Migration[] = [
     // keeps the row's GitHub identity addressable regardless of url casing.
     version: 15,
     run(db) {
-      // The column and its index are guarded exactly like v12's gate columns:
+      // The columns and index are guarded exactly like v12's gate columns:
       // the registry reaches this version by different routes, including
       // fixtures whose earlier markers were recorded without pull_requests
       // ever being created. A table that does not exist cannot be altered, and
@@ -909,6 +909,13 @@ const MIGRATIONS: Migration[] = [
       if (tableExists(db, "pull_requests")) {
         if (!columnNames(db, "pull_requests").has("base_ref_oid")) {
           db.exec("ALTER TABLE pull_requests ADD COLUMN base_ref_oid TEXT");
+        }
+        // The status-check contexts at head, captured by the sync query
+        // (design §1.5/§2.4 CI_FAILING: "captured at sync time, no extra
+        // call"). Same guarded shape as the base-ref column above; no index —
+        // it is a payload column, never a filter key.
+        if (!columnNames(db, "pull_requests").has("ci_contexts_json")) {
+          db.exec("ALTER TABLE pull_requests ADD COLUMN ci_contexts_json TEXT");
         }
         db.exec("CREATE INDEX IF NOT EXISTS idx_prs_base_ref_oid ON pull_requests(base_ref_oid)");
       }

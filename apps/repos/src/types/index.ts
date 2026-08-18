@@ -76,12 +76,16 @@ export interface PullRequest {
   changed_files: number;
   /** Tip commit of the head ref, for `gh pr merge --match-head-commit`. */
   head_sha: string | null;
+  /** Tip commit of the base ref at last sync — the BASE_MOVED freshness input. */
+  base_ref_oid: string | null;
   /** GitHub `mergeable`: MERGEABLE | CONFLICTING | UNKNOWN. */
   mergeable: string | null;
   /** GitHub `mergeStateStatus`: CLEAN | BLOCKED | DIRTY | UNSTABLE | BEHIND | DRAFT | HAS_HOOKS | UNKNOWN. */
   merge_state_status: string | null;
   /** Rolled-up status check state: SUCCESS | FAILURE | PENDING | ERROR | EXPECTED. */
   ci_state: string | null;
+  /** Status-check contexts at the head sha at last sync, JSON `[{name, conclusion}]`. */
+  ci_contexts_json: string | null;
   is_draft: boolean;
   /** GitHub `reviewDecision`: APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED. */
   review_decision: string | null;
