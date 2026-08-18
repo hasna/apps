@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 function isInMemoryDb(path: string): boolean {
@@ -40,11 +41,11 @@ function getDbPath(): string {
     return process.env["CALENDAR_DB_PATH"];
   }
 
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
+  const home = process.env["HOME"] || homedir();
   const cwd = process.cwd();
-  const nearest = findNearestCalendarDb(cwd, home);
-  if (nearest) return nearest;
 
+  // Explicit env override: project-scoped data is a deliberate opt-in and
+  // stays. The DEFAULT is canonical — ~/.hasna/calendar — never cwd-relative.
   if (process.env["CALENDAR_DB_SCOPE"] === "project") {
     const gitRoot = findGitRoot(cwd);
     if (gitRoot) {
@@ -53,26 +54,92 @@ function getDbPath(): string {
   }
 
   const newPath = join(home, ".hasna", "calendar", "calendar.db");
-  const legacyPath = join(home, ".calendar", "calendar.db");
-
-  if (!existsSync(newPath) && existsSync(legacyPath)) {
-    migrateLegacyHomeDb(legacyPath, newPath);
-  }
+  migrateLegacyData(cwd, home, newPath);
 
   return newPath;
+}
+
+// ── One-time legacy-data migration ───────────────────────────────────────────
+
+export interface LegacyDataScan {
+  /** The legacy non-canonical database that would be migrated, if any. */
+  readonly source: string | null;
+  /** The canonical target: ~/.hasna/calendar/calendar.db. */
+  readonly target: string;
+  readonly wouldMigrate: boolean;
+  readonly reason: string;
+}
+
+/**
+ * Reports whether legacy non-canonical calendar data exists and would be
+ * migrated. Read-only — never writes. The dry-run surface for the one-time
+ * migration.
+ */
+export function scanLegacyData(cwd = process.cwd(), home = process.env["HOME"] || homedir()): LegacyDataScan {
+  const newPath = join(home, ".hasna", "calendar", "calendar.db");
+  if (existsSync(newPath)) {
+    return { source: null, target: newPath, wouldMigrate: false, reason: "canonical database already exists" };
+  }
+  const nearest = findNearestCalendarDb(cwd, home);
+  if (nearest) {
+    return { source: nearest, target: newPath, wouldMigrate: true, reason: "legacy nearest-ancestor .calendar database found" };
+  }
+  const legacyPath = join(home, ".calendar", "calendar.db");
+  if (existsSync(legacyPath)) {
+    return { source: legacyPath, target: newPath, wouldMigrate: true, reason: "legacy home .calendar database found" };
+  }
+  return { source: null, target: newPath, wouldMigrate: false, reason: "no legacy data found" };
+}
+
+/**
+ * One-time safe migration of legacy non-canonical calendar data into the
+ * canonical root (~/.hasna/calendar). Runs only while the canonical database
+ * does not exist, so it is idempotent and resumable: once the target exists it
+ * never runs again, and it never overwrites existing canonical data. The
+ * source is COPIED (VACUUM INTO), never deleted, and a receipt records the
+ * migration. The nearest-ancestor .calendar database (the old default) takes
+ * precedence over the legacy home .calendar database, matching the old
+ * selection order.
+ */
+export function migrateLegacyData(cwd: string, home: string, newPath: string): void {
+  if (existsSync(newPath)) return;
+
+  const nearest = findNearestCalendarDb(cwd, home);
+  if (nearest) {
+    copyDatabase(nearest, newPath);
+    writeMigrationReceipt(nearest, newPath);
+    return;
+  }
+
+  const legacyPath = join(home, ".calendar", "calendar.db");
+  if (existsSync(legacyPath)) {
+    copyDatabase(legacyPath, newPath);
+    writeMigrationReceipt(legacyPath, newPath);
+  }
+}
+
+interface MigrationReceipt {
+  readonly source: string;
+  readonly target: string;
+  readonly migratedAt: string;
+}
+
+function writeMigrationReceipt(source: string, target: string): void {
+  const receipt: MigrationReceipt = { source, target, migratedAt: new Date().toISOString() };
+  writeFileSync(join(dirname(target), "migration-receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`);
 }
 
 function quoteSqlString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-function migrateLegacyHomeDb(legacyPath: string, newPath: string): void {
-  mkdirSync(dirname(newPath), { recursive: true });
-  const legacyDb = new Database(legacyPath, { readonly: true });
+function copyDatabase(sourcePath: string, targetPath: string): void {
+  mkdirSync(dirname(targetPath), { recursive: true });
+  const sourceDb = new Database(sourcePath, { readonly: true });
   try {
-    legacyDb.run(`VACUUM INTO ${quoteSqlString(newPath)}`);
+    sourceDb.run(`VACUUM INTO ${quoteSqlString(targetPath)}`);
   } finally {
-    legacyDb.close();
+    sourceDb.close();
   }
 }
 
