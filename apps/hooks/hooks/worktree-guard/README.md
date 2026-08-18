@@ -61,7 +61,7 @@ from a guardrail by a cooperating agent, not a way to reach a shared checkout.
 
 ## Install for Codewith
 
-Prefer renderer-managed configuration through open-configs. @hasna/hooks can emit the TOML fragment:
+Prefer renderer-managed configuration through configs. @hasna/hooks can emit the TOML fragment:
 
 ```bash
 hooks install worktree-guard --target codewith

@@ -297,7 +297,7 @@ describe("Codewith-native hooks", () => {
       permission_mode: "default",
       workspace_roots: [workspace],
       tool_name: "Bash",
-      tool_input: { command: `rm -rf ${join(scopeRoot, "open-hooks", "dist")}` },
+      tool_input: { command: `rm -rf ${join(scopeRoot, "hooks", "dist")}` },
       tool_use_id: "tool-nested-clean",
       transcript_path: null,
       turn_id: "turn-nested-clean",
@@ -313,7 +313,7 @@ describe("Codewith-native hooks", () => {
 
   test("pre-bash blocks rsync delete against protected roots but allows managed worktree child cleanup", async () => {
     const worktreeRoot = join(tmp, ".hasna", "repos", "worktrees");
-    const managed = join(worktreeRoot, "station01", "open-hooks-a55c105a", "wt_2ab04216a30ef5ece642792e");
+    const managed = join(worktreeRoot, "station01", "hooks-a55c105a", "wt_2ab04216a30ef5ece642792e");
     initGitRepo(managed);
 
     const blocked = await runHook("pre-bash", {
@@ -352,7 +352,7 @@ describe("Codewith-native hooks", () => {
 
   test("pre-bash blocks destructive find against protected roots but allows managed worktree child cleanup", async () => {
     const worktreeRoot = join(tmp, ".hasna", "repos", "worktrees");
-    const managed = join(worktreeRoot, "station01", "open-hooks-a55c105a", "wt_2ab04216a30ef5ece642792e");
+    const managed = join(worktreeRoot, "station01", "hooks-a55c105a", "wt_2ab04216a30ef5ece642792e");
     initGitRepo(managed);
 
     const deleteBlocked = await runHook("pre-bash", {
@@ -447,7 +447,7 @@ describe("Codewith-native hooks", () => {
   test("pre-bash allows child cleanup inside managed worktree repos under ~/.hasna", async () => {
     const worktreesRoot = join(tmp, ".hasna", "repos", "worktrees");
     const managedRepos = [
-      join(worktreesRoot, "station01", "open-hooks-a55c105a", "wt_2ab04216a30ef5ece642792e"),
+      join(worktreesRoot, "station01", "hooks-a55c105a", "wt_2ab04216a30ef5ece642792e"),
       join(worktreesRoot, "447614a0-1639-44e1-87a4-f396f8502a96", "guardrail-publish-20260713", "hooks"),
       join(worktreesRoot, "447614a0-1639-44e1-87a4-f396f8502a96", "hooks-bb544906", "wt_20260713T1015"),
     ];
@@ -890,7 +890,7 @@ describe("Codewith-native hooks", () => {
   test("worktree-guard allows writes inside a canonical <repo-name>/<worktree-name> worktree", async () => {
     const worktreesRoot = join(tmp, ".hasna", "repos", "worktrees");
     const shared = join(tmp, "shared-checkout");
-    const managed = join(worktreesRoot, "open-hooks", "OPE61-00004-worktree-guard");
+    const managed = join(worktreesRoot, "hooks", "OPE61-00004-worktree-guard");
     const target = join(managed, "src", "guard.ts");
     initGitRepo(shared);
     addGitWorktree(shared, managed);
@@ -950,7 +950,7 @@ describe("Codewith-native hooks", () => {
   test("worktree-guard still fails closed for standalone repos at a canonical-shaped path", async () => {
     const worktreesRoot = join(tmp, ".hasna", "repos", "worktrees");
     const shared = join(tmp, "shared-checkout");
-    const standalone = join(worktreesRoot, "open-hooks", "OPE61-00004-worktree-guard");
+    const standalone = join(worktreesRoot, "hooks", "OPE61-00004-worktree-guard");
     const target = join(standalone, "src", "guard.ts");
     initGitRepo(shared);
     initGitRepo(standalone);
@@ -1498,7 +1498,7 @@ describe("Codewith-native hooks", () => {
 
   test("worktree-guard blocks git -C commit targeting a shared checkout even from a managed cwd", async () => {
     const repo = join(tmp, "shared-repo");
-    const managed = join(tmp, "worktrees", "station01", "open-hooks-a55c105a", "wt_2ab04216a30ef5ece642792e", "repo");
+    const managed = join(tmp, "worktrees", "station01", "hooks-a55c105a", "wt_2ab04216a30ef5ece642792e", "repo");
     mkdirSync(managed, { recursive: true });
     initGitRepo(repo);
 
@@ -1549,7 +1549,7 @@ describe("Codewith-native hooks", () => {
 
   test("worktree-guard allows git commit inside a canonical <repo-name>/<worktree-name> worktree", async () => {
     const worktreesRoot = join(tmp, "worktrees");
-    const managed = join(worktreesRoot, "open-hooks", "OPE61-00004-worktree-guard");
+    const managed = join(worktreesRoot, "hooks", "OPE61-00004-worktree-guard");
     initGitRepo(managed);
 
     const result = await runHook("worktree-guard", {
@@ -1572,7 +1572,7 @@ describe("Codewith-native hooks", () => {
 
   test("worktree-guard allows git commit from a subdirectory of a canonical worktree", async () => {
     const worktreesRoot = join(tmp, "worktrees");
-    const managed = join(worktreesRoot, "open-hooks", "OPE61-00004-worktree-guard");
+    const managed = join(worktreesRoot, "hooks", "OPE61-00004-worktree-guard");
     initGitRepo(managed);
     const nested = join(managed, "hooks", "worktree-guard");
     mkdirSync(nested, { recursive: true });
@@ -1600,22 +1600,22 @@ describe("Codewith-native hooks", () => {
     const cases: Array<{ name: string; cwd: string; reason: string }> = [
       {
         name: "flat single-segment worktree",
-        cwd: join(worktreesRoot, "open-hooks-flat"),
+        cwd: join(worktreesRoot, "hooks-flat"),
         reason: "flat under the worktrees root",
       },
       {
         name: "station-id segment in front of <repo>/<worktree>",
-        cwd: join(worktreesRoot, "station01", "open-hooks", "OPE61-00004-worktree-guard"),
+        cwd: join(worktreesRoot, "station01", "hooks", "OPE61-00004-worktree-guard"),
         reason: "station-id/machine segment or extra nesting",
       },
       {
         name: "canonical-shaped path that is not a worktree root",
-        cwd: join(worktreesRoot, "open-hooks", "never-created-by-git"),
+        cwd: join(worktreesRoot, "hooks", "never-created-by-git"),
         reason: "is not a git worktree root (no .git)",
       },
       {
         name: "subdirectory of a flat worktree, which has the canonical shape",
-        cwd: join(worktreesRoot, "open-hooks-flat", "src"),
+        cwd: join(worktreesRoot, "hooks-flat", "src"),
         reason: "is not a git worktree root (no .git)",
       },
     ];
@@ -1646,16 +1646,16 @@ describe("Codewith-native hooks", () => {
     const worktreesRoot = join(tmp, "worktrees");
     const repo = join(tmp, "checkout");
     initGitRepo(repo);
-    Bun.spawnSync(["git", "remote", "add", "origin", "https://github.com/hasna/hooks.git"], { cwd: repo });
+    Bun.spawnSync(["git", "remote", "add", "origin", "https://github.com/hasna/plugins.git"], { cwd: repo });
 
     // The repos CLI is the source of truth for the canonical name: this repo's remote
-    // basename is `hooks`, but its canonical name is `open-hooks`.
+    // basename is `plugins`, but its canonical name is `hooks`.
     const bin = join(tmp, "stub-bin");
     mkdirSync(bin, { recursive: true });
     writeFileSync(join(bin, "repos"), [
       "#!/bin/sh",
-      'echo "$@" | grep -q -- "--remote github.com/hasna/hooks" || exit 1',
-      'printf \'{"name":"open-hooks","default_branch":"trunk","path":"/home/hasna/workspace/open-hooks"}\'',
+      'echo "$@" | grep -q -- "--remote github.com/hasna/plugins" || exit 1',
+      'printf \'{"name":"hooks","default_branch":"trunk","path":"/home/hasna/workspace/hooks"}\'',
     ].join("\n"));
     chmodSync(join(bin, "repos"), 0o755);
 
@@ -1674,9 +1674,9 @@ describe("Codewith-native hooks", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.json.decision).toBe("block");
-    expect(result.json.reason).toContain(join(worktreesRoot, "open-hooks", "OPE61-00004"));
+    expect(result.json.reason).toContain(join(worktreesRoot, "hooks", "OPE61-00004"));
     expect(result.json.reason).toContain("origin/trunk");
-    expect(result.json.reason).not.toContain(join(worktreesRoot, "hooks", "OPE61-00004"));
+    expect(result.json.reason).not.toContain(join(worktreesRoot, "plugins", "OPE61-00004"));
   });
 
   test("worktree-guard ignores a repos CLI row that is itself a worktree directory", async () => {
@@ -1719,7 +1719,7 @@ describe("Codewith-native hooks", () => {
     const worktreesRoot = join(tmp, "worktrees");
     const repo = join(tmp, "checkout");
     initGitRepo(repo);
-    Bun.spawnSync(["git", "remote", "add", "origin", "https://github.com/hasna/hooks.git"], { cwd: repo });
+    Bun.spawnSync(["git", "remote", "add", "origin", "https://github.com/hasna/plugins.git"], { cwd: repo });
 
     const bin = join(tmp, "stub-bin-hang");
     mkdirSync(bin, { recursive: true });
@@ -1754,7 +1754,7 @@ describe("Codewith-native hooks", () => {
   test("worktree-guard warns but does not block git commit in the deprecated lease layout", async () => {
     const worktreesRoot = join(tmp, "worktrees");
     const shared = join(tmp, "shared-checkout");
-    const lease = join(worktreesRoot, "station01", "open-hooks-a55c105a", "wt_2ab04216a30ef5ece642792e");
+    const lease = join(worktreesRoot, "station01", "hooks-a55c105a", "wt_2ab04216a30ef5ece642792e");
     initGitRepo(shared);
     addGitWorktree(shared, lease);
 

@@ -11,7 +11,7 @@ hooks install knowledge-context --target codewith
 ```
 
 By default this prints a Codewith TOML fragment and does not mutate managed
-Codewith config. Apply that fragment through `open-configs` or the managed
+Codewith config. Apply that fragment through `configs` or the managed
 config renderer. For explicit local testing only:
 
 ```bash

@@ -335,7 +335,7 @@ function installForTarget(
           target,
           fragment,
           applied: false,
-          note: "Codewith install is fragment-only by default; open-configs should own applying this TOML.",
+          note: "Codewith install is fragment-only by default; configs should own applying this TOML.",
         };
       }
 
@@ -364,7 +364,7 @@ function installForTarget(
         fragment,
         applied: true,
         configPath: path,
-        note: "Direct Codewith config write was explicitly requested; prefer open-configs for managed machines.",
+        note: "Direct Codewith config write was explicitly requested; prefer configs for managed machines.",
       };
     } catch (error) {
       return {
@@ -561,7 +561,7 @@ export function removeHook(name: string, scope: Scope = "global", target: Target
   }
 
   if (target === "codewith") {
-    // Codewith config is TOML and usually managed by open-configs. Avoid
+    // Codewith config is TOML and usually managed by configs. Avoid
     // attempting lossy TOML edits here; emit fragments for install instead.
     return false;
   }

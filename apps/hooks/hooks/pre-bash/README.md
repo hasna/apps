@@ -81,7 +81,7 @@ remote relative path cannot be resolved against the local working directory.
 
 ## Install for Codewith
 
-Prefer renderer-managed configuration through open-configs. @hasna/hooks can emit the TOML fragment:
+Prefer renderer-managed configuration through configs. @hasna/hooks can emit the TOML fragment:
 
 ```bash
 hooks install pre-bash --target codewith
