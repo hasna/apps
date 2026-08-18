@@ -22,7 +22,7 @@ register drifts from reality.
 | `self_host_artifact` | The repo ships no `Dockerfile` or compose file. The artifact is deliberately deferred with the service surface it would deploy. |
 | `storage_capabilities` | `storage.engines` and `storage.pgTestGate` are undeclared because `src/db/database.ts` is SQLite-only. A live-PostgreSQL gate cannot be declared without a PostgreSQL engine behind it. |
 
-Tracked as todos task `1c1c18f0-072e-4331-a1e8-e8f897427485` in project `open-prompts`.
+Tracked as todos task `1c1c18f0-072e-4331-a1e8-e8f897427485` in project `prompts`.
 
 ## Why no waiver closes them
 

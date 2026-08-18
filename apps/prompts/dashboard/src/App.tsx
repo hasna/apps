@@ -143,7 +143,7 @@ function Sidebar({ view, setView, collections, selectedCollection, setSelectedCo
     <aside className="sidebar">
       <div className="sidebar-logo">
         <BookOpen size={20} />
-        <span>open-prompts</span>
+        <span>prompts</span>
         <button className="theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>
           {theme === "dark" ? "☀" : "🌙"}
         </button>

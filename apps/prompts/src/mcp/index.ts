@@ -48,7 +48,7 @@ function cfgPath(agent: string, global_: boolean): string | null {
 }
 
 export function buildServer(): McpServer {
-const server = new McpServer({ name: "open-prompts", version: PACKAGE_VERSION })
+const server = new McpServer({ name: "prompts", version: PACKAGE_VERSION })
 
 function ok(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] }

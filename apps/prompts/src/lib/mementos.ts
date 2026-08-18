@@ -1,5 +1,5 @@
 /**
- * Optional open-mementos integration.
+ * Optional mementos integration.
  * Saves a memory when a prompt is used/rendered, if PROMPTS_SAVE_MEMENTOS=1
  * and @hasna/mementos is installed. Gracefully no-ops if not available.
  */
