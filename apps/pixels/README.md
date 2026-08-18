@@ -1,6 +1,6 @@
-# Open Pixels
+# Hasna Pixels
 
-Open Pixels is a small, reusable TypeScript toolkit for running analytics and advertising pixels behind explicit policy and consent gates. It ships as `@hasna/pixels` with a browser SDK, a server-side evaluation API, the `pixels` CLI, and the `pixels-mcp` MCP server.
+Hasna Pixels is a small, reusable TypeScript toolkit for running analytics and advertising pixels behind explicit policy and consent gates. It ships as `@hasna/pixels` with a browser SDK, a server-side evaluation API, the `pixels` CLI, and the `pixels-mcp` MCP server.
 
 It is deliberately fail-closed:
 
@@ -13,7 +13,7 @@ It is deliberately fail-closed:
 - only built-in providers with fixed script origins can dispatch;
 - the HTTP event route cannot dispatch unless both an authorizer and dispatcher are configured.
 
-The initial built-ins are Google Analytics, Google Ads, Meta Pixel, TikTok Pixel, and LinkedIn Insight Tag. Open Pixels does not buy traffic, manage ad campaigns, or bypass a consent manager.
+The initial built-ins are Google Analytics, Google Ads, Meta Pixel, TikTok Pixel, and LinkedIn Insight Tag. Hasna Pixels does not buy traffic, manage ad campaigns, or bypass a consent manager.
 
 ## Install
 
@@ -151,7 +151,7 @@ startPixelsMcpHttpServer({
 
 ## Privacy boundary
 
-Open Pixels is a technical enforcement layer, not legal advice or a complete consent-management platform. Its PII checks are bounded heuristics for common direct identifiers, not exhaustive classification or compliance proof. Applications remain responsible for their notices, retention, data processing agreements, geographic requirements, and correct classification of each provider. Never put secrets or direct personal information in browser-visible provider configuration or event properties.
+Hasna Pixels is a technical enforcement layer, not legal advice or a complete consent-management platform. Its PII checks are bounded heuristics for common direct identifiers, not exhaustive classification or compliance proof. Applications remain responsible for their notices, retention, data processing agreements, geographic requirements, and correct classification of each provider. Never put secrets or direct personal information in browser-visible provider configuration or event properties.
 
 The recursive guard rejects common direct-name keys, phone/contact ancestry (including nested values and numeric arrays), embedded email/IP/phone values, and formatted phone values. Human-name and phone/contact classification uses bounded semantic tokenization across camel, snake, kebab, compact, arbitrary case, plural, reordered, and neutrally modified forms, including common `cell`, `cellular`, `cellphone`, `mobile`, `phone`, `tel`, and `telephone` fields and compound containers in nested objects and arrays. Classification-only Unicode normalization and a pinned UTS #39-derived profile make composed, decomposed, compatibility, and mixed-ASCII visual-lookalike spellings decision-equivalent without changing emitted property keys or blanket-transliterating non-Latin metadata. Original code-point mappings are applied before compatibility normalization; deterministic normalization aliases are matched at every token offset, including inside long compact keys, so NFC/NFD/NFKC/NFKD cannot erase the official target. Event-wide key, code-point, and confusable-work budgets fail closed before wildcard or alias semantic matching can monopolize the runtime. Explicit `personal` plus name/surname fields are treated as human-name context, while named non-person structures such as personal project names and cellular network/product fields remain allowed. Telecom modifiers paired with an explicit non-person entity descriptor (`org`/organization, app/application, code, project, team, network, provider, carrier, standard, protocol, band, technology, plan, product, service, campaign, category, file, domain, or host) are treated as entity metadata, including one bounded neutral modifier and ordinary name/label metadata. Explicit person, contact, personal, value, number, email, IP, postal, street, zip, or address semantics still fail closed and take precedence over that entity exception. Compact scanning requires either an exact semantic boundary or a complete multi-token risk phrase; a lone substring inside an unrelated word such as `saxophone`, `zipper`, or `mobilegame` is not treated as a PII field. An official normalization alias used inside a complete sensitive word is also treated as an explicit obfuscation boundary, even when bounded unknown prefixes or suffixes surround it. Ambiguous name fields fail closed when their key or ancestry denotes a display, customer, contact, user, profile, member, person, recipient, author, visitor, or holder; explicit non-person patterns for app, code, event, product, company, organization (including `org`), campaign, category, file, host, domain, project, and team names remain allowed. It deliberately permits explicit amount, count, counter, identifier, index, rank, total, price, and quantity leaves even beneath contact ancestry, while avoiding lexical suffix collisions such as ordinary words that happen to end in `id` or `count`. Non-PII contact text remains allowed; callers must not use safe fields to disguise personal information.
 

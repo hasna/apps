@@ -26,7 +26,7 @@ export function buildPixelsMcpServer(): McpServer {
     "pixel-providers",
     "pixels://providers",
     {
-      title: "Open Pixels providers",
+      title: "Hasna Pixels providers",
       description: "Built-in allowlisted providers, purposes, and fixed script origins.",
       mimeType: "application/json",
     },
