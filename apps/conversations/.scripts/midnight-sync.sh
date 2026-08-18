@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_DIR="/home/hasna/workspace/hasna/opensource/opensourcedev/open-conversations"
+REPO_DIR="/home/hasna/workspace/repos/hasna/apps/conversations"
 LOG_FILE="$REPO_DIR/.scripts/midnight-sync.log"
 
 cd "$REPO_DIR"

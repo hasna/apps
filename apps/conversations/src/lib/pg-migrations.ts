@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-conversations remote storage sync.
+ * PostgreSQL migrations for conversations remote storage sync.
  *
  * Equivalent of the SQLite schema in db.ts, translated for PostgreSQL.
  * Each element is a standalone SQL string that must be executed in order.
