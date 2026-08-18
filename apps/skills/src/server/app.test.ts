@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { RemoteSkillsClient } from "../lib/remote-client.js";
 import { packSkillBundle } from "../lib/skill-bundle.js";
+import { verifyBundleSignature } from "../lib/skill-bundles.js";
 import { createSkillsFetchHandler } from "./app.js";
 import { resolveStoreBackends, storeBackendNotices, type StoreBackendFixture } from "./store-fixtures.js";
 import { runWorkerOnce } from "./worker.js";
@@ -66,11 +67,11 @@ function manifestFor(slug: string, marker: string, skillMd: string, sha256: stri
   };
 }
 
-async function testServer(backend: StoreBackendFixture) {
+async function testServer(backend: StoreBackendFixture, configOverrides: Record<string, unknown> = {}) {
   const fixture = await backend.create(SEED);
   const fetch = await createSkillsFetchHandler({
     store: fixture.store,
-    config: { inlineWorker: false, allowEphemeralStore: fixture.allowEphemeralStore },
+    config: { inlineWorker: false, allowEphemeralStore: fixture.allowEphemeralStore, ...configOverrides },
   });
   const server = Bun.serve({ port: 0, fetch });
   return {
@@ -198,6 +199,45 @@ for (const backend of backends) {
         expect(download.headers.get("x-skill-bundle-sha256")).toBe(bundle.sha256);
         const bytes = new Uint8Array(await download.arrayBuffer());
         expect(Array.from(bytes)).toEqual(Array.from(bundle.bytes));
+      } finally {
+        await ctx.stop();
+      }
+    });
+
+    test("serves X-Skill-Bundle-Signature over the exact served bytes when a signing key is configured", async () => {
+      const ctx = await testServer(backend, { bundleSigningKey: "test-signing-key-0123456789" });
+      try {
+        const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
+        const bundle = fixtureBundle("signed");
+
+        const published = await client.publishSkill(manifestFor("signed-runbook", "signed", bundle.skillMd, bundle.sha256), bundle.bytes);
+        expect(published.status).toBe(201);
+
+        const download = await client.downloadSkillBundle("signed-runbook");
+        expect(download.status).toBe(200);
+        const signature = download.headers.get("x-skill-bundle-signature");
+        expect(signature).toBeTruthy();
+        const bytes = new Uint8Array(await download.arrayBuffer());
+        expect(Array.from(bytes)).toEqual(Array.from(bundle.bytes));
+        expect(verifyBundleSignature(bytes, signature!, "test-signing-key-0123456789")).toBe(true);
+      } finally {
+        await ctx.stop();
+      }
+    });
+
+    test("does not emit X-Skill-Bundle-Signature when no signing key is configured", async () => {
+      const ctx = await testServer(backend);
+      try {
+        const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
+        const bundle = fixtureBundle("unsigned");
+
+        const published = await client.publishSkill(manifestFor("unsigned-runbook", "unsigned", bundle.skillMd, bundle.sha256), bundle.bytes);
+        expect(published.status).toBe(201);
+
+        const download = await client.downloadSkillBundle("unsigned-runbook");
+        expect(download.status).toBe(200);
+        expect(download.headers.get("x-skill-bundle-signature")).toBeNull();
+        expect(download.headers.get("x-skill-bundle-sha256")).toBe(bundle.sha256);
       } finally {
         await ctx.stop();
       }
