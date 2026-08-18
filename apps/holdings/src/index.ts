@@ -11,10 +11,10 @@ export {
   APP_NAME,
   ENV_TOKEN,
   DATABASE_URL_SECRET_REF,
-  resolveStorageMode,
+  resolveServerBackend,
   resolveDbPath,
   databaseUrlPresent,
-  type StorageMode,
+  type ServerDataBackend,
 } from "./config.js";
 export { ensureHoldingsAppHome, getHoldingsAppHome } from "./core/app-home.js";
 export { buildOpenApiDocument, openApiDocument, openApiDocumentJson } from "./api/index.js";

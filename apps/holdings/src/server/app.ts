@@ -3,7 +3,7 @@ import { getConnInfo } from "hono/bun";
 import type { Context } from "hono";
 import type { AppEnv } from "./hono-env.js";
 import type { Database } from "bun:sqlite";
-import { resolveStorageMode, type StorageMode } from "../config.js";
+import { resolveServerBackend, type ServerDataBackend } from "../config.js";
 import { authenticateBearer, bearerToken, isApiAuthConfigured } from "./auth.js";
 import { healthPayload, readyResult, versionPayload } from "./health.js";
 import { LOCAL_DEV_PRINCIPAL } from "./principal.js";
@@ -17,16 +17,16 @@ import { registerDocumentsRoutes } from "./routes/documents.js";
 export interface AppDeps {
   db: Database;
   bindHost?: string;
-  mode?: StorageMode;
+  backend?: ServerDataBackend;
 }
 
 function isLoopback(host: string): boolean {
   return host === "127.0.0.1" || host === "localhost" || host === "::1";
 }
 
-/** Whether the server must require auth (§6.3): any non-loopback bind or cloud mode. */
-export function authRequiredFor(bindHost: string, mode: StorageMode): boolean {
-  return !isLoopback(bindHost) || mode === "cloud";
+/** Whether the server must require auth (§6.3): any non-loopback bind or the postgresql backend. */
+export function authRequiredFor(bindHost: string, backend: ServerDataBackend): boolean {
+  return !isLoopback(bindHost) || backend === "postgresql";
 }
 
 function corsOrigins(): string[] {
@@ -82,8 +82,8 @@ export function rateLimitKey(c: Context<AppEnv>): string {
 export function createApp(deps: AppDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const bindHost = deps.bindHost ?? "127.0.0.1";
-  const mode = deps.mode ?? resolveStorageMode();
-  const authRequired = authRequiredFor(bindHost, mode);
+  const backend = deps.backend ?? resolveServerBackend();
+  const authRequired = authRequiredFor(bindHost, backend);
   const allowedOrigins = corsOrigins();
 
   // Deny-by-default CORS (§6.3a): only reflect explicitly allowlisted origins;
@@ -111,8 +111,8 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   });
 
   // System endpoints (§6.2).
-  app.get("/health", (c) => c.json(healthPayload(mode)));
-  app.get("/version", (c) => c.json(versionPayload(mode)));
+  app.get("/health", (c) => c.json(healthPayload(backend)));
+  app.get("/version", (c) => c.json(versionPayload(backend)));
   app.get("/ready", (c) => {
     const { ready, payload } = readyResult(deps.db);
     return c.json(payload, ready ? 200 : 503);

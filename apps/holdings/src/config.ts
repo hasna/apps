@@ -7,8 +7,8 @@ import { join } from "node:path";
  *
  * The server storage backend is `sqlite | postgresql` only (owner directive
  * 2026-07-29): SQLite at ~/.hasna/holdings/holdings.db when no DATABASE_URL is
- * configured; Postgres (the app-owned cloud store) when one is. The retired
- * HASNA_HOLDINGS_STORAGE_MODE variable is no longer read.
+ * configured; Postgres (the app-owned cloud store) when one is.
+ * Legacy storage env variables are no longer read.
  *
  * The npm package is `@hasna/holdings` and the manifest identity is `holdings`;
  * every name-derived storage token uses the bare token `holdings`: env prefix
@@ -19,7 +19,7 @@ export const APP_NAME = "holdings";
 export const ENV_TOKEN = "HOLDINGS";
 export const DATABASE_URL_SECRET_REF = "hasna/oss/holdings/database-url";
 
-export type StorageMode = "local" | "cloud";
+export type ServerDataBackend = "sqlite" | "postgresql";
 
 const DB_URL_KEYS = [`HASNA_${ENV_TOKEN}_DATABASE_URL`, `${ENV_TOKEN}_DATABASE_URL`] as const;
 const DB_URL_FILE_KEYS = [`HASNA_${ENV_TOKEN}_DATABASE_URL_FILE`] as const;
@@ -40,9 +40,9 @@ export function databaseUrlPresent(env: Env = process.env): boolean {
   return firstEnv(env, DB_URL_KEYS) !== undefined || firstEnv(env, DB_URL_FILE_KEYS) !== undefined;
 }
 
-/** Resolve the storage backend from the environment: Postgres when a DATABASE_URL is present, otherwise SQLite. */
-export function resolveStorageMode(env: Env = process.env): StorageMode {
-  return databaseUrlPresent(env) ? "cloud" : "local";
+/** Resolve the server data backend from the environment: PostgreSQL when a DATABASE_URL is present, otherwise SQLite. */
+export function resolveServerBackend(env: Env = process.env): ServerDataBackend {
+  return databaseUrlPresent(env) ? "postgresql" : "sqlite";
 }
 
 /** Canonical local SQLite path: ~/.hasna/holdings/holdings.db */
@@ -58,7 +58,7 @@ export function resolveDbPath(env: Env = process.env): string {
 /**
  * Resolve the cloud DSN via a short-lived fetch (§2.4), preferring a 0400 file
  * mount over a broadcast env var. The Secrets Manager path is a placeholder for
- * the runtime task-role fetch (not wired in local mode). Returns undefined if no
+ * the runtime task-role fetch (not wired on the sqlite backend). Returns undefined if no
  * source is available.
  */
 export function resolveDatabaseUrl(env: Env = process.env): string | undefined {

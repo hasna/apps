@@ -1,5 +1,5 @@
 import { resolveTlsConfig, sslModeFromConnectionString } from "../generated/storage-kit/tls.js";
-import { createCloudPoolFromEnv, createPgPool } from "../generated/storage-kit/pool.js";
+import { createServerPoolFromEnv, createPgPool } from "../generated/storage-kit/pool.js";
 
 // Cloud (Postgres) path — wired through the vendored storage-kit only (no runtime
 // import of @hasna/contracts, §4.2). PURE REMOTE: reads AND writes hit cloud
@@ -32,7 +32,7 @@ export function assertVerifyFull(dsn: string, env: Record<string, string | undef
 export function connectCloud(env: Record<string, string | undefined> = process.env) {
   const dsn = env["HASNA_HOLDINGS_DATABASE_URL"] ?? env["HOLDINGS_DATABASE_URL"];
   if (dsn) assertVerifyFull(dsn, env);
-  return createCloudPoolFromEnv("holdings", { applicationName: "holdings", env });
+  return createServerPoolFromEnv("holdings", { applicationName: "holdings", env });
 }
 
 /**

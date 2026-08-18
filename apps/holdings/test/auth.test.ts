@@ -38,10 +38,10 @@ describe("bearer auth + entity scoping", () => {
     expect(authenticateBearer("")).toBeNull();
   });
 
-  it("requires auth on any non-loopback bind or cloud mode (fail-closed policy)", () => {
-    expect(authRequiredFor("127.0.0.1", "local")).toBe(false);
-    expect(authRequiredFor("0.0.0.0", "local")).toBe(true);
-    expect(authRequiredFor("127.0.0.1", "cloud")).toBe(true);
+  it("requires auth on any non-loopback bind or the postgresql backend (fail-closed policy)", () => {
+    expect(authRequiredFor("127.0.0.1", "sqlite")).toBe(false);
+    expect(authRequiredFor("0.0.0.0", "sqlite")).toBe(true);
+    expect(authRequiredFor("127.0.0.1", "postgresql")).toBe(true);
   });
 
   it("denies unauthenticated /v1 when credentials are configured", async () => {

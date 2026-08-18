@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Database } from "bun:sqlite";
-import { databaseUrlPresent, resolveDbPath, resolveStorageMode } from "../../config.js";
+import { databaseUrlPresent, resolveDbPath, resolveServerBackend } from "../../config.js";
 import { appendAudit } from "../../db/audit.js";
 import { AUDIT_TABLES, SYNC_TABLES } from "../../db/schema.js";
 import type { ApiPrincipal } from "../../server/auth.js";
@@ -37,11 +37,11 @@ function migrationsApplied(db: Database): number {
 /**
  * Honest tri-state remote reachability (never a hardcoded boolean, §4.6):
  *   - `null`  → local build: there is no remote to reach (not applicable).
- *   - `true`/`false` → cloud mode: result of a cheap, timeout-bounded probe.
+ *   - `true`/`false` → postgresql backend: result of a cheap, timeout-bounded probe.
  * This ensures a live cloud Postgres is never misreported as unreachable.
  */
 async function remoteReachable(): Promise<boolean | null> {
-  if (resolveStorageMode() !== "cloud") return null;
+  if (resolveServerBackend() !== "postgresql") return null;
   if (!databaseUrlPresent()) return false;
   const { probeCloudReachable } = await import("../../db/cloud.js");
   return probeCloudReachable();
@@ -51,11 +51,11 @@ export function registerStorageTools(server: McpServer, deps: StorageToolDeps): 
   // Redacted status — MUST NOT emit a DSN or the full storage config (§4.6).
   server.tool(
     "holdings_storage_status",
-    "Redacted storage status (mode, dsn presence, sqlite path, migrations, reachability).",
+    "Redacted storage status (backend, dsn presence, sqlite path, migrations, reachability).",
     {},
     async () => {
       return mcpText({
-        mode: resolveStorageMode(),
+        backend: resolveServerBackend(),
         dsn_present: databaseUrlPresent(),
         sqlite_path: resolveDbPath(),
         migrations_applied: migrationsApplied(deps.db),
