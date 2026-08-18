@@ -55,7 +55,7 @@ rev: 3                  # per-note monotonic revision; bumped on every local mut
 createdAt: 2026-06-22T09:00:00Z
 updatedAt: 2026-06-22T09:00:00Z
 author: hasna
-agent: notes-app  # legacy `hasna-notes-app` / `open-notes-app` still parse
+agent: notes-app  # current value; legacy `hasna-notes-app` / `open-notes-app` still parse for back-compat
 machine: studio-mac       # informational attribution: which machine owns the note.
                           # Stable identity: $HASNA_NOTES_MACHINE -> `machine` in
                           # ~/.config/hasna-notes/config.json -> short hostname.
@@ -79,7 +79,7 @@ and never decide version order.
 
 Notes written by older versions still parse without migration (v2 auto-detects
 on read): `tags`, `contentType`, missing `folder`/`contentFormat`/`rev` keys,
-`agent: open-notes-app`, and the retired v1 machine-provenance keys
+the legacy `agent: open-notes-app` value, and the retired v1 machine-provenance keys
 (`sourceMachine`, `originMachine`, `previousMachine`, `targetMachineFriendlyName`,
 `openedFrom`, `sourceContext`, `trashMachine`, `movedAt`) are all tolerated —
 legacy source/origin friendly names map onto `machineFriendlyName` when they
