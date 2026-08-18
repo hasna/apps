@@ -3496,7 +3496,6 @@ storageCommand.command("status").description("Show storage sync status").option(
   const { getStorageStatus } = await import("../storage.js");
   const status = getStorageStatus();
   printJsonOrText(status, renderKeyValueTable([
-    ["mode", status.mode],
     ["configured", status.configured ? "yes" : "no"],
     ["active env", status.activeEnv || "none"],
     ["tables", status.tables.join(", ")],

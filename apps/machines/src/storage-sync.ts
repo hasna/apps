@@ -16,13 +16,12 @@ type StorageTable = (typeof STORAGE_TABLES)[number];
 type Row = Record<string, unknown>;
 
 /**
- * Storage mode: `local` (on-box SQLite) or `cloud` (hosted HTTP API). There is
- * no third value, and no variable selects it anymore (owner directive
- * 2026-07-29): any set storage-mode variable throws via
- * `assertNoLegacyStorageMode`.
+ * Server storage switch (owner directive 2026-07-29): `sqlite | postgresql`,
+ * selected by HASNA_MACHINES_DATABASE_URL presence — never by a storage-mode
+ * variable (a set one throws via `assertNoLegacyStorageMode`). The client
+ * switch is local store | hosted HTTP API, selected by
+ * HASNA_MACHINES_API_URL + HASNA_MACHINES_API_KEY.
  */
-export type StorageMode = "local" | "cloud";
-
 export interface StorageEnv {
   name: string;
 }
@@ -42,14 +41,10 @@ export interface SyncMeta {
 
 export const MACHINES_STORAGE_ENV = "HASNA_MACHINES_DATABASE_URL";
 export const MACHINES_STORAGE_FALLBACK_ENV = "MACHINES_DATABASE_URL";
-export const MACHINES_STORAGE_MODE_ENV = "HASNA_MACHINES_STORAGE_MODE";
-export const MACHINES_STORAGE_MODE_FALLBACK_ENV = "MACHINES_STORAGE_MODE";
 export const STORAGE_DATABASE_ENV = [MACHINES_STORAGE_ENV, MACHINES_STORAGE_FALLBACK_ENV] as const;
-export const STORAGE_MODE_ENV = [MACHINES_STORAGE_MODE_ENV, MACHINES_STORAGE_MODE_FALLBACK_ENV] as const;
 
 export interface StorageStatus {
   configured: boolean;
-  mode: StorageMode;
   env: typeof STORAGE_DATABASE_ENV;
   activeEnv: string | null;
   service: "machines";
@@ -83,15 +78,6 @@ export function getStorageDatabaseEnv(): StorageEnv | null {
 export function getStorageDatabaseUrl(): string | null {
   const env = getStorageDatabaseEnv();
   return env ? readEnv(env.name) ?? null : null;
-}
-
-export function getStorageMode(): StorageMode {
-  // A set storage-mode variable is an error, never a mode selector: silently
-  // accepting it would keep the split-brain drift the mode vocabulary caused.
-  assertNoLegacyStorageMode();
-  // A DSN in the environment is a pointer, not a mode: presence never selects
-  // a backend (that inference was the deployment-mode axis). Default is local.
-  return "local";
 }
 
 export async function getStoragePg(): Promise<PgAdapterAsync> {
@@ -151,10 +137,12 @@ export function getSyncMetaAll(): SyncMeta[] {
 }
 
 export function getStorageStatus(): StorageStatus {
+  // A set storage-mode variable is an error, never a selector: silently
+  // accepting it would keep the split-brain drift the mode vocabulary caused.
+  assertNoLegacyStorageMode();
   const activeEnv = getStorageDatabaseEnv();
   return {
     configured: Boolean(activeEnv),
-    mode: getStorageMode(),
     env: STORAGE_DATABASE_ENV,
     activeEnv: activeEnv?.name ?? null,
     service: "machines",

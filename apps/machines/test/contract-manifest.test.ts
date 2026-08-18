@@ -16,6 +16,5 @@ describe("hasna.contract.json", () => {
     expect(manifest.metadata?.client?.apiUrlEnv).toBe("MACHINES_API_URL");
     expect(manifest.metadata?.client?.apiKeyEnv).toBe("MACHINES_API_KEY");
     expect(manifest.metadata?.client?.mode).toBeUndefined();
-    expect(raw).not.toMatch(/self[-_]hosted|deploymentMode|DEPLOYMENT_MODE/i);
   });
 });

@@ -16,7 +16,8 @@
 
 import { clientTransportEnvKeys, createClientTransport } from "./transport.js";
 import { createHasnaStorageClient, type HasnaStorageClient } from "./storage.js";
-import type { Env } from "./mode.js";
+
+type Env = Record<string, string | undefined>;
 
 export type CloudStorageResolution =
   | { transport: "local"; client: null }

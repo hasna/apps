@@ -6,12 +6,9 @@ import { closeDb } from "../src/db.js";
 import {
   MACHINES_STORAGE_ENV,
   MACHINES_STORAGE_FALLBACK_ENV,
-  MACHINES_STORAGE_MODE_ENV,
-  MACHINES_STORAGE_MODE_FALLBACK_ENV,
   STORAGE_TABLES,
   getStorageDatabaseEnv,
   getStorageDatabaseUrl,
-  getStorageMode,
   getStorageStatus,
   parseStorageTables,
   resolveTables,
@@ -26,11 +23,14 @@ import {
 const ENV_KEYS = [
   MACHINES_STORAGE_ENV,
   MACHINES_STORAGE_FALLBACK_ENV,
-  MACHINES_STORAGE_MODE_ENV,
-  MACHINES_STORAGE_MODE_FALLBACK_ENV,
   MACHINES_DATABASE_ALLOW_INSECURE_TLS_ENV,
   MACHINES_DATABASE_SSL_REJECT_UNAUTHORIZED_ENV,
   "HASNA_MACHINES_DB_PATH",
+  // Legacy storage-mode variables are cleaned here too: bun test shares one
+  // process.env across files, so a leftover value leaks into every other
+  // file's `...process.env` fixture and flips their assertions.
+  "HASNA_MACHINES_STORAGE_MODE",
+  "MACHINES_STORAGE_MODE",
 ] as const;
 
 afterEach(() => {
@@ -39,41 +39,36 @@ afterEach(() => {
 });
 
 describe("machines storage config", () => {
-  test("resolves canonical database env and fallback env; storage mode is never env-selected", () => {
+  test("resolves canonical database env and fallback env; backend is selected by DATABASE_URL presence", () => {
     for (const key of ENV_KEYS) delete process.env[key];
     expect(getStorageDatabaseEnv()).toBeNull();
     expect(getStorageDatabaseUrl()).toBeNull();
-    expect(getStorageMode()).toBe("local");
 
-    // A DSN in the environment is a pointer, not a mode: it never flips the
-    // resolved mode by presence (that inference was the deployment-mode axis).
     process.env[MACHINES_STORAGE_FALLBACK_ENV] = "postgres://fallback/machines";
     expect(getStorageDatabaseEnv()?.name).toBe(MACHINES_STORAGE_FALLBACK_ENV);
     expect(getStorageDatabaseUrl()).toBe("postgres://fallback/machines");
-    expect(getStorageMode()).toBe("local");
 
     process.env[MACHINES_STORAGE_ENV] = "postgres://primary/machines";
     expect(getStorageDatabaseEnv()?.name).toBe(MACHINES_STORAGE_ENV);
     expect(getStorageDatabaseUrl()).toBe("postgres://primary/machines");
 
-    // A set storage-mode variable is an error, never a mode selector —
-    // whatever its value (deployment modes were removed, owner directive
-    // 2026-07-29).
-    process.env[MACHINES_STORAGE_MODE_ENV] = "cloud";
-    expect(() => getStorageMode()).toThrow(MACHINES_STORAGE_MODE_ENV);
+    // A set storage-mode variable is an error, never a selector — whatever
+    // its value (deployment modes were removed, owner directive 2026-07-29).
+    process.env.HASNA_MACHINES_STORAGE_MODE = "cloud";
+    expect(() => getStorageStatus()).toThrow("HASNA_MACHINES_STORAGE_MODE");
   });
 
   test("any storage-mode variable value throws, naming the variable", () => {
     // Deployment modes were removed (owner directive 2026-07-29). A silent
     // fallback here flips which store a process reads — always fail loudly,
-    // whatever the value (the retired deployment words, junk, or local/cloud).
-    for (const value of ["remote", "hybrid", "self_hosted", "invalid", "cloud", "local"]) {
-      process.env[MACHINES_STORAGE_MODE_ENV] = value;
-      expect(() => getStorageMode()).toThrow(MACHINES_STORAGE_MODE_ENV);
+    // whatever the value.
+    for (const value of ["invalid", "junk", "cloud", "local"]) {
+      process.env.HASNA_MACHINES_STORAGE_MODE = value;
+      expect(() => getStorageStatus()).toThrow("HASNA_MACHINES_STORAGE_MODE");
     }
-    delete process.env[MACHINES_STORAGE_MODE_ENV];
-    process.env[MACHINES_STORAGE_MODE_FALLBACK_ENV] = "hybrid";
-    expect(() => getStorageMode()).toThrow(MACHINES_STORAGE_MODE_FALLBACK_ENV);
+    delete process.env.HASNA_MACHINES_STORAGE_MODE;
+    process.env.MACHINES_STORAGE_MODE = "junk";
+    expect(() => getStorageStatus()).toThrow("MACHINES_STORAGE_MODE");
   });
 
   test("exposes and validates storage tables", () => {
@@ -153,7 +148,6 @@ describe("machines storage config", () => {
       const status = getStorageStatus();
       expect(status).toMatchObject({
         configured: false,
-        mode: "local",
         service: "machines",
         activeEnv: null,
         sync: [],

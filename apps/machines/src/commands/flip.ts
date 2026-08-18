@@ -7,7 +7,7 @@
  *   1. writing a per-app fleet env file on each target machine,
  *   2. wiring that env file into the app's service manager (systemd / launchd),
  *   3. restarting the service,
- *   4. verifying `<app> storage status --json` reports the expected mode,
+ *   4. verifying `<app> storage status --json` reports the expected client backend,
  *   5. supporting one-command revert (unset the two vars -> local original).
  *
  * ARCHITECTURE (LOCKED): the only sanctioned cloud path for a CLIENT machine is
@@ -41,22 +41,14 @@ import { buildSecretsExecShell } from "../child-env.js";
 
 export type FlipMode = "api" | "local";
 
-/** Retired deployment-mode words: rejected loudly, never remapped. */
-const RETIRED_FLIP_MODE_WORDS = new Set(["self_hosted", "self-hosted", "remote", "hybrid"]);
-
-/** Normalize user-facing mode aliases to the canonical FlipMode. */
+/** Normalize the user-facing flip state to the canonical FlipMode. */
 export function normalizeFlipMode(value?: string): FlipMode {
   const v = (value ?? "api").trim().toLowerCase();
-  if (v === "local" || v === "revert" || v === "off") return "local";
-  if (RETIRED_FLIP_MODE_WORDS.has(v)) {
-    // Deployment modes were removed (owner directive 2026-07-29). Remapping
-    // the old word would keep it alive in every operator's muscle memory.
-    throw new Error(
-      `"${value}" is a retired deployment-mode word. Use --mode api (route the client to the hosted API) or --mode local (revert to the on-box store).`,
-    );
-  }
-  // cloud/api/on all mean the sanctioned hosted-API client mode.
-  return "api";
+  if (v === "api") return "api";
+  if (v === "local") return "local";
+  throw new Error(
+    `Unknown flip mode: "${value}". Supported: api (route the client to the hosted API) or local (revert to the on-box store).`,
+  );
 }
 
 /** Per-app fleet-flip profile. Add a new app by adding an entry here. */
@@ -409,45 +401,36 @@ function buildServiceWiring(spec: FlipAppSpec, mode: FlipMode): string {
 
 export interface StorageStatusVerification {
   ok: boolean;
-  observedMode: string | null;
   apiEnabled: boolean | null;
   reason?: string;
 }
 
 /**
  * Parse `<app> storage status --json` output (possibly wrapped in the
- * FLIP_STATUS_BEGIN/END markers) and check it matches the expected mode.
- * Accepts either `api_enabled` or the legacy `remote_enabled` boolean.
+ * FLIP_STATUS_BEGIN/END markers) and check the app reports the expected
+ * client backend.
  *
- * Read-side compat: the fleet updates in waves, so a not-yet-updated app may
- * still REPORT a retired mode word (e.g. `self_hosted`) in its status JSON.
- * Any non-local reported mode counts as api-backed; this code never emits the
- * retired words itself.
+ * Verification keys solely on the `api_enabled` boolean in the status JSON.
+ * The hosted-API client is selected by the HASNA_<APP>_API_URL + API_KEY env
+ * contract, and a status that does not report `api_enabled: true` is no
+ * evidence the client is api-routed — fail closed.
  */
 export function verifyStorageMode(rawOutput: string, expected: FlipMode): StorageStatusVerification {
   const json = extractStatusJson(rawOutput);
   if (!json) {
-    return { ok: false, observedMode: null, apiEnabled: null, reason: "no parseable storage status JSON" };
+    return { ok: false, apiEnabled: null, reason: "no parseable storage status JSON" };
   }
-  const observedMode = typeof json.mode === "string" ? json.mode : null;
-  const apiEnabled =
-    typeof json.api_enabled === "boolean"
-      ? json.api_enabled
-      : typeof json.remote_enabled === "boolean"
-        ? json.remote_enabled
-        : null;
+  const apiEnabled = typeof json.api_enabled === "boolean" ? json.api_enabled : null;
   if (expected === "api") {
-    const ok = observedMode !== null && observedMode !== "local" && apiEnabled !== false;
-    return { ok, observedMode, apiEnabled, reason: ok ? undefined : "expected an api-backed mode & api_enabled!=false" };
+    const ok = apiEnabled === true;
+    return { ok, apiEnabled, reason: ok ? undefined : "expected api_enabled=true in storage status" };
   }
-  const ok = observedMode === "local" && apiEnabled !== true;
-  return { ok, observedMode, apiEnabled, reason: ok ? undefined : "expected mode=local" };
+  const ok = apiEnabled !== true;
+  return { ok, apiEnabled, reason: ok ? undefined : "expected api_enabled!=true for a local client" };
 }
 
 interface StorageStatusJson {
-  mode?: unknown;
   api_enabled?: unknown;
-  remote_enabled?: unknown;
   [key: string]: unknown;
 }
 
@@ -568,7 +551,7 @@ export function runFlip(options: RunFlipOptions): RunFlipReport {
             machineId: target.id,
             wave: wave.name,
             applied: false,
-            verification: { ok: false, observedMode: null, apiEnabled: null, reason: freeze.reason },
+            verification: { ok: false, apiEnabled: null, reason: freeze.reason },
             exitCode: -1,
             error: freeze.reason,
           });
@@ -583,7 +566,7 @@ export function runFlip(options: RunFlipOptions): RunFlipReport {
           machineId: target.id,
           wave: wave.name,
           applied: false,
-          verification: { ok: false, observedMode: null, apiEnabled: null, reason: "dry-run" },
+          verification: { ok: false, apiEnabled: null, reason: "dry-run" },
           exitCode: 0,
         });
         continue;

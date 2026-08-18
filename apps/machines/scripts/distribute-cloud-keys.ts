@@ -28,7 +28,7 @@
  *      the env var it falls back to a neutral, non-resolving placeholder),
  *      (the resolver auto-appends `/v1`; presence of URL+KEY => transport
  *      "cloud-http". NO DSN. NO STORAGE_MODE=remote. NO AWS creds. NO subnet
- *      router. This matches the LOCKED self-hosted architecture.)
+ *      router. This matches the LOCKED hosted-API architecture.)
  *   3. pushes that env file over tailscale ssh to `$HOME/.hasna/fleet-env/<app>.env`
  *      on each REACHABLE target — the exact location the flipped MCP service
  *      sources via its systemd/launchd drop-in (`EnvironmentFile=`). The bearer
@@ -125,7 +125,7 @@ const DEFAULT_TARGETS = [
 const KNOWN_DOWN = new Set(["apple01", "apple07"]);
 
 /**
- * Fleet API domain suffix used to build each app's self-hosted URL. This repo
+ * Fleet API domain suffix used to build each app's hosted-API URL. This repo
  * never bakes in a real internal hostname: set `HASNA_FLEET_API_DOMAIN` to the
  * operator's own private root domain (REQUIRED for a real distribution run).
  * Absent that env var this falls back to a neutral, non-resolving placeholder.
