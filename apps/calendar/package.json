@@ -38,7 +38,8 @@
     "dev:serve": "bun run src/server/index.ts",
     "prepublishOnly": "bun run build",
     "postinstall": "mkdir -p $HOME/.hasna/calendar $HOME/.hasna/calendar/templates 2>/dev/null || true",
-    "prepack": "bun run build"
+    "prepack": "bun run build",
+    "scan:artifact": "bun scripts/scan-artifact.ts"
   },
   "keywords": [
     "calendar",

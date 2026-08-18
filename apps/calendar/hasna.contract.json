@@ -76,6 +76,11 @@
     }
   },
   "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    },
     "service": {
       "port": 19428,
       "healthPath": "/health",
