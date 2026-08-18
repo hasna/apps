@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug in open-terminal
+about: Report a bug in terminal
 labels: bug
 ---
 
@@ -16,5 +16,5 @@ What actually happened
 **Environment:**
 - OS:
 - Node/Bun version:
-- open-terminal version: (`terminal --version`)
+- terminal version: (`terminal --version`)
 - Provider: Cerebras / Anthropic

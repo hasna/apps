@@ -1,6 +1,6 @@
-# Contributing to open-terminal
+# Contributing to terminal
 
-Thanks for your interest in contributing! open-terminal is an open-source smart terminal wrapper that saves AI agents 73-90% of tokens on terminal output.
+Thanks for your interest in contributing! terminal is an open-source smart terminal wrapper that saves AI agents 73-90% of tokens on terminal output.
 
 ## Development Setup
 

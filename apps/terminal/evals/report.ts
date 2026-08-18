@@ -108,7 +108,7 @@ function main() {
   lines.push("- **gpt-oss-20b (Groq)**: Many empty responses — model sometimes returns nothing with stop:[\\n].");
   lines.push("- **Exact match** = normalized string equality. **Fuzzy match** = same binary + args + flags (order-independent).");
   lines.push("- All tests used difficulty=0 (easy) pairs. Medium and hard pairs would show larger gaps.");
-  lines.push("- Cost assumes ~350 tokens/call. Actual cost depends on system prompt size (open-terminal sends ~1200 tokens).");
+  lines.push("- Cost assumes ~350 tokens/call. Actual cost depends on system prompt size (terminal sends ~1200 tokens).");
 
   // Recommendation
   lines.push("");

@@ -39,7 +39,7 @@ describe("smartDisplay", () => {
     const lines = [
       "./open-testers/node_modules/zod/.github/logo.png",
       "./open-attachments/node_modules/zod/.github/logo.png",
-      "./open-terminal/node_modules/zod/.github/logo.png",
+      "./terminal/node_modules/zod/.github/logo.png",
       "./open-emails/node_modules/zod/.github/logo.png",
       "./src/app.ts",
       "./tests/app.test.ts",
@@ -71,7 +71,7 @@ describe("smartDisplay", () => {
       "./open-testers/node_modules/zod-to-json-schema/.github/CR_logotype-full-color.png",
       "./open-attachments/node_modules/zod-to-json-schema/.github/CR_logotype-full-color.png",
       "./open-attachments/dashboard/src/assets/hero.png",
-      "./open-terminal/node_modules/zod-to-json-schema/.github/CR_logotype-full-color.png",
+      "./terminal/node_modules/zod-to-json-schema/.github/CR_logotype-full-color.png",
       "./open-emails/node_modules/zod-to-json-schema/.github/CR_logotype-full-color.png",
       "./open-todos/node_modules/zod-to-json-schema/.github/CR_logotype-full-color.png",
       "./open-todos/.playwright-mcp/page-2026-03-09T05-43-19-525Z.png",

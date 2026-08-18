@@ -210,7 +210,7 @@ export function formatDiscoverReport(report: DiscoverReport): string {
   lines.push(`📊 Terminal Discover — Token Savings Analysis`);
   lines.push(`   Scanned ${report.totalSessions} sessions, ${report.totalCommands} commands with >50 token output\n`);
 
-  lines.push(`💰 Estimated savings with open-terminal:`);
+  lines.push(`💰 Estimated savings with terminal:`);
   lines.push(`   Output tokens: ${report.totalOutputTokens.toLocaleString()}`);
   lines.push(`   Compressible:  ${report.estimatedSavings.toLocaleString()} tokens (70% avg)`);
   lines.push(`   Repeated ~5x before compaction = ${(report.estimatedSavings * 5).toLocaleString()} billable tokens`);

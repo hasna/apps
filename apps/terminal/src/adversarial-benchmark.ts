@@ -174,7 +174,7 @@ function realCliGatePassed(evidence: RealCliGateEvidence | undefined): boolean {
     && evidence.installedBinaryUsed
     && evidence.qualityFailures === 0
     && evidence.floorFailures === 0
-    && evidence.reposCovered.includes("open-terminal")
+    && evidence.reposCovered.includes("terminal")
     && evidence.reposCovered.includes("iapp-logos")
     && evidence.workflowCount > 0);
 }
@@ -254,7 +254,7 @@ function scenarioRows(report: BenchmarkReport): ScenarioResult[] {
 export function formatAdversarialReport(report: BenchmarkReport): string {
   const rows = scenarioRows(report);
   const lines = [
-    "open-terminal adversarial token benchmark",
+    "terminal adversarial token benchmark",
     `Variant: ${report.variant}`,
     "",
     "Why the previous benchmark was invalid:",

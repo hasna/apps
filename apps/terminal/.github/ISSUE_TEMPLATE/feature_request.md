@@ -1,6 +1,6 @@
 ---
 name: Feature Request
-about: Suggest a feature for open-terminal
+about: Suggest a feature for terminal
 labels: enhancement
 ---
 
