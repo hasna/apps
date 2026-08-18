@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markChannelRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies, compactMessage, listUnreadCounts, parseMentions, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, markUnread, markUnreadByIds, recordReadReceipt, recordReadReceiptsBatch, getReadReceipts, getMessageReadStatus, MAX_MESSAGE_BYTES } from "./messages";
-import { createChannel, joinChannel } from "./channels";
+import { createChannel, joinChannel, renameChannel } from "./channels";
 import { readChannelNotifications, subscribeToChannelNotifications } from "./channel-notifications";
 import { closeDb, getDb } from "./db";
 import { DEFAULT_READ_LIMIT } from "./message-window";
@@ -1501,5 +1501,149 @@ describe("recordReadReceipt / getReadReceipts / getMessageReadStatus", () => {
     expect(status.unread_by).toContain("Admin");
     expect(status.unread_by).toContain("Carol");
     expect(status.unread_by).not.toContain("Bob");
+  });
+});
+
+describe("work-status lifecycle stream write-time schema guard", () => {
+  const WS_EVENT = (state: string, overrides: Record<string, string> = {}): string => {
+    const fields = {
+      event_id: "8f3c7b1e-4d5a-4f2e-9a6b-2c4d5e6f7a8b",
+      task_id: "3f8f212c-9b2d-4c3e-8f4a-5b6c7d8e9f01",
+      scope: "todos:691ea5e4",
+      agent: "agent-chief-engineering",
+      session: "0f0c2a9e-1b2d-4c3e-8f4a-5b6c7d8e9f01",
+      at: "2026-08-17T12:00:00.000Z",
+      claim: "clm_123",
+      evidence: "-",
+      ...overrides,
+    };
+    // The schema line leads with the bare state token, never a `state=` field.
+    return [state, ...Object.entries(fields).map(([key, value]) => `${key}=${value}`)].join(" ");
+  };
+
+  beforeEach(() => {
+    createChannel("work-status", "fixture");
+  });
+
+  test("accepts a well-formed lifecycle event", () => {
+    const msg = sendMessage({ from: "a", to: "work-status", content: WS_EVENT("START"), channel: "work-status" });
+    expect(msg.channel).toBe("work-status");
+    expect(msg.content).toStartWith("START event_id=");
+  });
+
+  test("rejects a JSON document used as the event line", () => {
+    const json = `{"event":"DONE","task_id":"3f8f212c-9b2d-4c3e-8f4a-5b6c7d8e9f01","at":"2026-08-17T12:00:00.000Z"}`;
+    expect(() => sendMessage({ from: "a", to: "work-status", content: json, channel: "work-status" }))
+      .toThrow(/Work-status lifecycle schema violation/);
+    expect(readMessages()).toHaveLength(0);
+  });
+
+  test("accepts prose that merely starts with a lifecycle token", () => {
+    const msg = sendMessage({ from: "a", to: "work-status", content: "DONE — deployment complete", channel: "work-status" });
+    expect(msg.channel).toBe("work-status");
+    expect(msg.content).toBe("DONE — deployment complete");
+    expect(readMessages()).toHaveLength(1);
+  });
+
+  test("rejects an invalid state token", () => {
+    expect(() => sendMessage({ from: "a", to: "work-status", content: WS_EVENT("CONTINUE"), channel: "work-status" }))
+      .toThrow(/invalid state "CONTINUE"/);
+  });
+
+  test("rejects an empty event_id", () => {
+    expect(() => sendMessage({ from: "a", to: "work-status", content: WS_EVENT("START", { event_id: "" }), channel: "work-status" }))
+      .toThrow(/invalid value/);
+  });
+
+  test("rejects a missing claim= field", () => {
+    const line = WS_EVENT("DONE").split(" ").filter((token) => !token.startsWith("claim=")).join(" ");
+    expect(() => sendMessage({ from: "a", to: "work-status", content: line, channel: "work-status" }))
+      .toThrow(/missing required field claim/);
+  });
+
+  test("rejects an extra outcome= field", () => {
+    expect(() => sendMessage({ from: "a", to: "work-status", content: `${WS_EVENT("DONE")} outcome=success`, channel: "work-status" }))
+      .toThrow(/unexpected field outcome/);
+  });
+
+  test("rejects a duplicate same-state transition within the dedupe window", () => {
+    // The dedupe window is anchored on write time, so the previous event's
+    // claimed at must sit within five minutes of the current write.
+    sendMessage({ from: "a", to: "work-status", content: WS_EVENT("START", { at: new Date(Date.now() - 60_000).toISOString() }), channel: "work-status" });
+    expect(() => sendMessage({
+      from: "a",
+      to: "work-status",
+      content: WS_EVENT("START", { event_id: "f6e009ee-1a2b-3c4d-5e6f-7a8b9c0d1e2f", at: new Date(Date.now() - 30_000).toISOString() }),
+      channel: "work-status",
+    })).toThrow(/duplicate START event for task 3f8f212c-9b2d-4c3e-8f4a-5b6c7d8e9f01/);
+    expect(readMessages()).toHaveLength(1);
+  });
+
+  test("accepts a distinct state transition for the same task", () => {
+    sendMessage({ from: "a", to: "work-status", content: WS_EVENT("START"), channel: "work-status" });
+    const resumed = sendMessage({ from: "a", to: "work-status", content: WS_EVENT("RESUMED"), channel: "work-status" });
+    expect(resumed.content).toStartWith("RESUMED event_id=");
+    expect(readMessages()).toHaveLength(2);
+  });
+
+  test("accepts the same state again after the dedupe window", () => {
+    // The dedupe window is anchored on the STORED write time (created_at),
+    // never on the claimed at=: age the stored row beyond the window, then a
+    // new same-state emission is a genuinely new transition.
+    sendMessage({ from: "a", to: "work-status", content: WS_EVENT("BLOCKED"), channel: "work-status" });
+    getDb().prepare(
+      "UPDATE messages SET created_at = ? WHERE channel = 'work-status'",
+    ).run(new Date(Date.now() - 10 * 60_000).toISOString());
+    const later = sendMessage({
+      from: "a",
+      to: "work-status",
+      content: WS_EVENT("BLOCKED", { event_id: "f6e009ee-1a2b-3c4d-5e6f-7a8b9c0d1e2f" }),
+      channel: "work-status",
+    });
+    expect(later.content).toStartWith("BLOCKED event_id=");
+  });
+
+  test("does not gate non-work-status channels", () => {
+    const msg = sendMessage({ from: "a", to: "general", content: WS_EVENT("CONTINUE"), channel: "general" });
+    expect(msg.channel).toBe("general");
+  });
+
+  test("refuses to rename any channel to or from work-status", () => {
+    createChannel("deploys", "fixture");
+    expect(() => renameChannel("deploys", "work-status")).toThrow(
+      /work-status is the reserved lifecycle stream/,
+    );
+    expect(() => renameChannel("work-status", "deploys")).toThrow(
+      /work-status is the reserved lifecycle stream/,
+    );
+  });
+
+  test("refuses to edit a message in the append-only work-status stream", () => {
+    // P1 regression (successor of hasna/apps#252): editMessage could rewrite
+    // an event line in place, corrupting the lifecycle stream's history and
+    // its dedupe anchor.
+    const msg = sendMessage({ from: "a", to: "work-status", content: WS_EVENT("START"), channel: "work-status" });
+    expect(() => editMessage(msg.id, "a", WS_EVENT("START", { event_id: "f6e009ee-1a2b-3c4d-5e6f-7a8b9c0d1e2f" })))
+      .toThrow(/work-status.*append-only/i);
+    // The original row is untouched.
+    expect(readMessages()).toHaveLength(1);
+    expect(getMessageById(msg.id)?.content).toStartWith("START event_id=");
+  });
+
+  test("refuses to delete a message in the append-only work-status stream", () => {
+    // P1 regression (successor of hasna/apps#252): deleteMessage could remove
+    // an event row, erasing the transition history consumers derive from.
+    const msg = sendMessage({ from: "a", to: "work-status", content: WS_EVENT("START"), channel: "work-status" });
+    expect(() => deleteMessage(msg.id, "a")).toThrow(/work-status.*append-only/i);
+    expect(readMessages()).toHaveLength(1);
+  });
+
+  test("edit and delete still work for messages in other channels", () => {
+    createChannel("editable", "fixture");
+    const msg = sendMessage({ from: "a", to: "editable", content: "hello", channel: "editable" });
+    const edited = editMessage(msg.id, "a", "hello edited");
+    expect(edited).not.toBeNull();
+    expect(edited!.content).toBe("hello edited");
+    expect(deleteMessage(msg.id, "a")).toBe(true);
   });
 });

@@ -24,6 +24,13 @@ import { version as pkgVersion } from "../../package.json";
 import { openapiSpec } from "./openapi.js";
 import { decayedStatus, SINGLE_TOUCH_TOLERANCE_SECONDS, SINGLE_TOUCH_REAP_WINDOW_SECONDS } from "../lib/presence.js";
 import { normalizeChannelName, unknownChannelMessage } from "../lib/channel-names.js";
+import {
+  assertWorkStatusNotAppendOnly,
+  enforceWorkStatusEventWriteAsync,
+  parseStoredWriteTime,
+  WORK_STATUS_CHANNEL,
+  workStatusTaskLikePattern,
+} from "../lib/work-status-schema.js";
 import { newChannelId } from "../lib/channel-id.js";
 import { extractTopics } from "../lib/topic-extract.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "../lib/content-safety.js";
@@ -692,6 +699,17 @@ async function renameChannelServer(
 ): Promise<{ ok: true; name: string } | { ok: false; error: string; status: number }> {
   const from = normalizeChannelName(oldName);
   const to = normalizeChannelName(newName);
+  // The work-status channel is the fleet lifecycle stream: its identity is
+  // reserved and stable. Renaming TO it would bulk-move arbitrary messages
+  // into the stream without the write-time gate, and renaming it AWAY would
+  // silently orphan every consumer that reads the stream by its name.
+  if (from === WORK_STATUS_CHANNEL || to === WORK_STATUS_CHANNEL) {
+    return {
+      ok: false as const,
+      error: `Channel #work-status is the reserved lifecycle stream and cannot be renamed.`,
+      status: 400,
+    };
+  }
   return client.transaction(async (tx) => {
     await tx.get(
       "SELECT pg_advisory_xact_lock($1::bigint) AS channel_identity_locked",
@@ -2050,8 +2068,15 @@ async function handleV1(
     const row = await client.transaction(async (tx) => {
       let projectId = requestedProjectId;
       if (channelName) {
+        // The work-status lifecycle stream serializes its writers on the
+        // channel row with an exclusive lock: the schema gate reads prior
+        // events and then inserts, and a plain FOR SHARE read would let two
+        // concurrent writers both pass the dedupe check. The lock is taken
+        // before the history read so a blocked writer re-reads after the
+        // first transaction commits.
+        const lockKind = channelName === WORK_STATUS_CHANNEL ? "FOR UPDATE" : "FOR SHARE";
         const channelRow = await tx.get<{ name: string; project_id: string | null }>(
-          "SELECT name, project_id FROM channels WHERE name = $1 FOR SHARE",
+          `SELECT name, project_id FROM channels WHERE name = $1 ${lockKind}`,
           [channelName],
         );
         if (!channelRow) {
@@ -2066,6 +2091,33 @@ async function handleV1(
           }
           projectId = channelRow.project_id;
         }
+      }
+      // Work-status lifecycle stream: write-time schema enforcement, shared
+      // with the SQLite path (src/lib/messages.ts). One event per real
+      // transition, exact first-line shape; malformed lines and same-state
+      // duplicates are rejected inside the write transaction (fleet mandate
+      // global-work-status-lifecycle). A guard present on only one backend is
+      // absent exactly where it matters.
+      if (channelName === WORK_STATUS_CHANNEL) {
+        await enforceWorkStatusEventWriteAsync(channelName, content, async (taskId) => {
+          // Task-scoped lookup: the previous event for THIS task, newest
+          // first. No row cap: the marker-matched population is inherently
+          // tiny (only rows whose text contains this task's exact uuid
+          // marker), and a cap is what lets body-text mentions of the marker
+          // evict the real previous event. The stored created_at is the
+          // write-time anchor — never the writer-supplied at= field. Postgres
+          // returns created_at (timestamptz) as a Date object; the schema
+          // module parses both forms so the window check fires on the real
+          // backend.
+          const rows = await tx.many<{ content: unknown; created_at: unknown }>(
+            `SELECT content, created_at FROM messages WHERE channel = $1 AND content LIKE $2 ORDER BY id DESC`,
+            [channelName, workStatusTaskLikePattern(taskId)],
+          );
+          return rows.map((row) => ({
+            content: String(row.content),
+            writtenAtMs: parseStoredWriteTime(row.created_at),
+          }));
+        });
       }
       const inserted = await tx.get<Record<string, unknown>>(
         `INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
@@ -2233,6 +2285,7 @@ async function handleV1(
       channel: string | null;
       sessionId: string;
     }> = [];
+    const workStatusItems: Array<{ index: number; channel: string; content: string; uuid: string }> = [];
     const projectIdx = cols.indexOf("project_id");
     for (let i = 0; i < items.length; i++) {
       const raw = items[i];
@@ -2250,13 +2303,17 @@ async function handleV1(
       let priority = str(m.priority)?.toLowerCase() ?? "normal";
       if (!VALID_PRIORITIES.includes(priority)) priority = "normal";
       const sessionId = str(m.session_id) ?? `api:${from}`;
-      const channel = str(m.channel);
+      // Channel names normalize like every other write path; the raw body
+      // value is never stored, so the work-status gate cannot be dodged with
+      // a differently-cased spelling of the stream name.
+      const rawChannel = str(m.channel);
+      assertNoSensitiveOptionalText(rawChannel, "Message channel");
+      const channel = rawChannel ? normalizeChannelName(rawChannel) : undefined;
       const projectId = str(m.project_id);
       const replyTo = typeof m.reply_to === "number" ? m.reply_to : null;
       assertNoSensitiveContent(content, "Message content");
       assertNoSensitiveContent(from, "Message sender");
       assertNoSensitiveContent(to, "Message recipient");
-      assertNoSensitiveOptionalText(channel, "Message channel");
       assertNoSensitiveOptionalText(projectId, "Message project");
       assertNoSensitiveContent(sessionId, "Message session");
       const values: unknown[] = [
@@ -2277,7 +2334,11 @@ async function handleV1(
         m.blocking === true || m.blocking === 1,
         str(m.attachments) ?? null,
         replyTo,
-        str(m.created_at) ?? null,
+        // The work-status stream's dedupe window is anchored on the STORED
+        // write time; a caller-supplied created_at would let a writer backdate
+        // the anchor and slip an immediate duplicate past the window. The
+        // stream's rows are always server-timestamped (COALESCE -> NOW()).
+        channel === WORK_STATUS_CHANNEL ? null : (str(m.created_at) ?? null),
         str(m.read_at) ?? null,
       ];
       const base = params.length;
@@ -2302,6 +2363,9 @@ async function handleV1(
           sessionId,
         });
       }
+      if (channel === WORK_STATUS_CHANNEL) {
+        workStatusItems.push({ index: i, channel, content, uuid });
+      }
     }
 
     const result = await client.transaction(async (tx) => {
@@ -2313,8 +2377,12 @@ async function handleV1(
       const channelProjects = new Map<string, string | null>();
       const channels = [...new Set(channelProjectParams.map((entry) => entry.channel))].sort();
       for (const channel of channels) {
+        // The work-status stream serializes writers on the channel row with an
+        // exclusive lock so concurrent bulk and single writes cannot both pass
+        // the dedupe gate; every other channel keeps the SHARE lock.
+        const lockKind = channel === WORK_STATUS_CHANNEL ? "FOR UPDATE" : "FOR SHARE";
         const channelRow = await tx.get<{ name: string; project_id: string | null }>(
-          "SELECT name, project_id FROM channels WHERE name = $1 FOR SHARE",
+          `SELECT name, project_id FROM channels WHERE name = $1 ${lockKind}`,
           [channel],
         );
         if (channelRow) channelProjects.set(channel, channelRow.project_id ?? null);
@@ -2360,6 +2428,59 @@ async function handleV1(
           if (parent.session_id !== reference.sessionId) {
             throw new Error(`messages[${reference.itemIndex}].reply_to does not match parent session.`);
           }
+        }
+      }
+
+      // Work-status lifecycle stream: every item of this batch that targets
+      // the stream goes through the same write-time schema gate as the single
+      // message path, including the duplicate check against already-stored
+      // events and against events accepted earlier in this same batch.
+      if (workStatusItems.length > 0) {
+        // Idempotent replays keep the bulk endpoint's ON CONFLICT (uuid) DO
+        // NOTHING contract: a work-status row whose uuid already exists is a
+        // no-op replay of a row that already passed the gate, so it is
+        // skipped here — gating it would reject a recent same-state replay as
+        // a duplicate instead of skipping it.
+        const workStatusUuids = workStatusItems.map((item) => item.uuid);
+        const existingWorkStatus = new Set(
+          (await tx.many<{ uuid: string }>(
+            `SELECT uuid FROM messages WHERE uuid = ANY($1::text[])`,
+            [workStatusUuids],
+          )).map((row) => row.uuid),
+        );
+        // Single-gate same-batch uuids: a uuid repeated inside ONE request is
+        // a no-op ON CONFLICT skip, never a second gate pass. The stored-row
+        // set alone cannot see batch-internal repeats, and gating the second
+        // identical row would fail the whole batch as a same-state duplicate
+        // instead of skipping it.
+        const batchGatedUuids = new Set<string>();
+        const batchAcceptedByChannel = new Map<string, Array<{ content: string; writtenAtMs: number }>>();
+        const now = Date.now();
+        for (const item of workStatusItems) {
+          if (existingWorkStatus.has(item.uuid)) continue;
+          if (batchGatedUuids.has(item.uuid)) continue;
+          batchGatedUuids.add(item.uuid);
+          await enforceWorkStatusEventWriteAsync(WORK_STATUS_CHANNEL, item.content, async (taskId) => {
+            const stored = await tx.many<{ content: unknown; created_at: unknown }>(
+              `SELECT content, created_at FROM messages WHERE channel = $1 AND content LIKE $2 ORDER BY id DESC`,
+              [item.channel, workStatusTaskLikePattern(taskId)],
+            );
+            const batchPrevious = batchAcceptedByChannel.get(item.channel) ?? [];
+            // Batch-accepted entries are NEWER than any stored row (this
+            // request writes them), so they scan first, newest batch item
+            // first, and a batch duplicate is caught against the most recent
+            // event rather than an older stored one.
+            return [
+              ...batchPrevious.slice().reverse(),
+              ...stored.map((row) => ({
+                content: String(row.content),
+                writtenAtMs: parseStoredWriteTime(row.created_at),
+              })),
+            ];
+          });
+          const accepted = batchAcceptedByChannel.get(item.channel) ?? [];
+          accepted.push({ content: item.content, writtenAtMs: now });
+          batchAcceptedByChannel.set(item.channel, accepted);
         }
       }
 
@@ -2530,6 +2651,11 @@ async function handleV1(
       const from = str(body.from) ?? agent ?? undefined;
       const content = typeof body.content === "string" ? body.content : undefined;
       if (!from || content === undefined) return json({ error: "from and content are required" }, 400);
+      const existing = await client.get(`SELECT id, channel FROM messages WHERE id = $1 AND from_agent = $2`, [id, from]);
+      if (!existing) return json({ error: "Message not found or not yours" }, 404);
+      // The work-status stream is append-only: rewriting an event line in
+      // place would corrupt the lifecycle history and its dedupe anchor.
+      assertWorkStatusNotAppendOnly(existing.channel);
       const row = await client.get(
         `UPDATE messages SET content = $1, edited_at = NOW()::text
          WHERE id = $2 AND from_agent = $3 RETURNING *`,
@@ -2541,6 +2667,11 @@ async function handleV1(
     if (method === "DELETE") {
       const from = str(url.searchParams.get("from")) ?? agent ?? undefined;
       if (!from) return json({ error: "'from' is required to delete a message" }, 400);
+      const existing = await client.get(`SELECT id, channel FROM messages WHERE id = $1 AND from_agent = $2`, [id, from]);
+      if (!existing) return json({ error: "Message not found or not yours" }, 404);
+      // The work-status stream is append-only: removing an event row would
+      // erase the transition history consumers derive from.
+      assertWorkStatusNotAppendOnly(existing.channel);
       const row = await client.get(`DELETE FROM messages WHERE id = $1 AND from_agent = $2 RETURNING id`, [id, from]);
       if (!row) return json({ error: "Message not found or not yours" }, 404);
       return json({ id, deleted: true });
