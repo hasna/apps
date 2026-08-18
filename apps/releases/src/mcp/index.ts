@@ -16,7 +16,7 @@ export async function startMcpServer(): Promise<void> {
 function printHelp(): void {
   console.log(`Usage: releases-mcp [options]
 
-Open Releases MCP server over stdio.
+Hasna Releases MCP server over stdio.
 
 Tools:
   releases_record

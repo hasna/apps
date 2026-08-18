@@ -9,7 +9,7 @@ const release: Release = {
   schema: "hasna.release.v1",
   id: "rel-fanout-1",
   createdAt: "2026-07-06T10:00:00.000Z",
-  appId: "open-todos",
+  appId: "todos",
   package: "@hasna/todos",
   version: "1.4.2",
   gitSha: "0f4c2d1",
@@ -30,7 +30,7 @@ describe("buildFanoutTasks", () => {
     ]);
     for (const task of tasks) {
       expect(task.description).toContain("@hasna/todos@1.4.2");
-      expect(task.tags).toContain("app:open-todos");
+      expect(task.tags).toContain("app:todos");
     }
   });
 });
@@ -69,7 +69,7 @@ describe("dispatchFanoutTasks", () => {
     const outbox = readFileSync(join(dataDir, "outbox.jsonl"), "utf8").trim().split("\n");
     expect(outbox).toHaveLength(4);
     const first = JSON.parse(outbox[0]!);
-    expect(first.schema).toBe("open-releases.fanout-task.v1");
+    expect(first.schema).toBe("releases.fanout-task.v1");
     expect(first.reason).toBe("todos CLI not found");
     expect(first.task.fingerprint).toBe("release-fanout:changelog:@hasna/todos@1.4.2");
   });

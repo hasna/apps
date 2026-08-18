@@ -23,7 +23,7 @@ export interface ReconcileEntry {
 }
 
 export interface ReconcileReport {
-  schema: "open-releases.reconcile.v1";
+  schema: "releases.reconcile.v1";
   generated_at: string;
   summary: {
     packages: number;
@@ -189,7 +189,7 @@ export function reconcileReleases(options: ReconcileOptions = {}): ReconcileRepo
   }
 
   return {
-    schema: "open-releases.reconcile.v1",
+    schema: "releases.reconcile.v1",
     generated_at: new Date().toISOString(),
     summary: {
       packages: entries.length,

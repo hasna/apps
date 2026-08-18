@@ -47,7 +47,7 @@ export const Sha256DigestSchema = z.string().regex(/^[a-fA-F0-9]{64}$/);
 /** Mirrors upstream `TagsSchema`. */
 export const TagsSchema = z.array(z.string().min(1)).default([]);
 
-/** App id slug, e.g. `open-todos`. Mirrors `AppIdSchema`. */
+/** App id slug, e.g. `todos`. Mirrors `AppIdSchema`. */
 export const AppIdSchema = z
   .string()
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "must be a lowercase kebab-case slug");
