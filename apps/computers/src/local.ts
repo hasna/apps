@@ -300,7 +300,7 @@ function fail(code: string, message: string, resource?: ProviderOutcome["resourc
   return resource === undefined ? { kind: "definite_failure", code, message } : { kind: "definite_failure", code, message, resource };
 }
 function unknown(request: ProviderOperationRequest, message: string, manifest?: LocalManifest): ProviderOutcome {
-  const outcome: Extract<ProviderOutcome, { kind: "unknown" }> = { kind: "unknown", providerOperationId: request.attempt.providerIdempotencyKey, message };
+  const outcome: Extract<ProviderOutcome, { kind: "ambiguous" }> = { kind: "ambiguous", providerOperationId: request.attempt.providerIdempotencyKey, message };
   if (manifest !== undefined) outcome.resource = resource(manifest);
   return outcome;
 }
@@ -908,7 +908,7 @@ abstract class LocalProviderBase implements ProviderPort {
       request.execution.assertCurrent();
       return outcome;
     } catch (error) {
-      if (error instanceof ComputersError && error.code === "conflict") return unknown(request, "Local provider execution ownership was lost during mutation");
+      if (error instanceof ComputersError && error.code === "conflict") return unknown(request, "Local provider lease was lost during mutation");
       throw error;
     } finally { lock.release(); }
   }
@@ -1259,9 +1259,9 @@ export class AdoptedMachineProvider extends LocalProviderBase {
       || !Number.isSafeInteger(request.attempt.fence) || request.attempt.fence < 0
       || (lenientFence ? request.attempt.fence > request.operation.fence
         : request.attempt.fence !== request.operation.fence)
-      || !Number.isSafeInteger(request.attempt.executionOwnerGeneration) || request.attempt.executionOwnerGeneration < 1
+      || !Number.isSafeInteger(request.attempt.leaseGeneration) || request.attempt.leaseGeneration < 1
       || !Number.isSafeInteger(request.execution.ownerGeneration) || request.execution.ownerGeneration < 1
-      || request.execution.ownerGeneration !== request.attempt.executionOwnerGeneration) {
+      || request.execution.ownerGeneration !== request.attempt.leaseGeneration) {
       return fail("adoption_mismatch", "Adopted-machine operation execution binding does not match");
     }
     if (request.operation.kind === "create" && !this.requestAdoptionMatches(request, config)) {

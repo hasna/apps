@@ -75,7 +75,7 @@ Commands:
   provider readiness
   local config validate|probe|canary
 
-Requests return a truthful pending operation. A worker records provider_not_configured as a definite failed outcome when no adapter is configured; no desired state is claimed early.
+Requests return a truthful admitted operation. A worker records provider_not_configured as a definite failed outcome when no adapter is configured; no desired state is claimed early.
 `;
 
 export async function runCli(args = Bun.argv.slice(2)): Promise<number> {

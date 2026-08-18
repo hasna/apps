@@ -41,7 +41,7 @@ import { validateProviderConfinement } from "../validation";
 
 type Row = Record<string, SQLQueryBindings>;
 
-const SQLITE_SCHEMA_VERSION = 3;
+const SQLITE_SCHEMA_VERSION = 4;
 const SQLITE_BUSY_TIMEOUT_MS = 250;
 const SQLITE_RUNTIME_BUSY_TIMEOUT_MS = 5_000;
 const SQLITE_INITIALIZATION_TIMEOUT_MS = 15_000;
@@ -277,9 +277,9 @@ export interface StoragePort {
   createProfile(profile: ComputerProfile, audit: AuditRecord): MutationResult<ComputerProfile>;
   getProfile(tenantId: string, id: string): ComputerProfile | undefined;
   listProfiles(tenantId: string): ComputerProfile[];
-  recordProviderUnknown(attempt: ProviderAttempt, outcome: Extract<ProviderOutcome, { kind: "unknown" }>): void;
+  recordProviderAmbiguous(attempt: ProviderAttempt, outcome: Extract<ProviderOutcome, { kind: "ambiguous" }>): void;
   recordProviderMalformed(attempt: ProviderAttempt, outcome: ProviderMalformedOutcome): void;
-  completeProviderOperation(operation: Operation, attempt: ProviderAttempt, outcome: Exclude<ProviderOutcome, { kind: "unknown" }>): Operation;
+  completeProviderOperation(operation: Operation, attempt: ProviderAttempt, outcome: Exclude<ProviderOutcome, { kind: "ambiguous" }>): Operation;
   advanceOperationFence(tenantId: string, operationId: string, expectedFence: number): number;
   assertOperationPolicyCurrent(tenantId: string, operationId: string): void;
   failOperationPolicyFence(tenantId: string, operationId: string): Operation;
@@ -347,7 +347,7 @@ function operationFromRow(row: Row): Operation {
   };
   if (row.prior_computer_status !== null && row.prior_computer_status !== undefined) operation.priorComputerStatus = String(row.prior_computer_status) as ComputerStatus;
   if (row.desired_computer_status !== null && row.desired_computer_status !== undefined) operation.desiredComputerStatus = String(row.desired_computer_status) as ComputerStatus;
-  if (row.result_json !== null && row.result_json !== undefined) operation.result = parseJson(row.result_json);
+  if (row.receipt_json !== null && row.receipt_json !== undefined) operation.receipt = parseJson(row.receipt_json);
   if (row.error_code !== null && row.error_code !== undefined) operation.errorCode = String(row.error_code);
   return operation;
 }
@@ -374,12 +374,12 @@ function attemptFromRow(row: Row): ProviderAttempt {
   const attempt: ProviderAttempt = {
     id: String(row.id), tenantId: String(row.tenant_id), operationId: String(row.operation_id), attemptNumber: Number(row.attempt_number),
     providerIdempotencyKey: String(row.provider_idempotency_key), status: String(row.status) as ProviderAttempt["status"],
-    fence: Number(row.fence), executionOwnerGeneration: Number(row.execution_owner_generation ?? 0), startedAt: String(row.started_at),
+    fence: Number(row.fence), leaseGeneration: Number(row.lease_generation ?? 0), startedAt: String(row.started_at),
   };
   if (row.provider_operation_id !== null && row.provider_operation_id !== undefined) attempt.providerOperationId = String(row.provider_operation_id);
   if (row.resource_json !== null && row.resource_json !== undefined) attempt.resource = JSON.parse(String(row.resource_json)) as NonNullable<ProviderAttempt["resource"]>;
-  if (row.execution_owner_token !== null && row.execution_owner_token !== undefined) attempt.executionOwnerToken = String(row.execution_owner_token);
-  if (row.execution_owner_expires_at !== null && row.execution_owner_expires_at !== undefined) attempt.executionOwnerExpiresAt = String(row.execution_owner_expires_at);
+  if (row.lease_token !== null && row.lease_token !== undefined) attempt.leaseToken = String(row.lease_token);
+  if (row.lease_expires_at !== null && row.lease_expires_at !== undefined) attempt.leaseExpiresAt = String(row.lease_expires_at);
   if (row.completed_at !== null && row.completed_at !== undefined) attempt.completedAt = String(row.completed_at);
   return attempt;
 }
@@ -491,7 +491,7 @@ export class SQLiteStorage implements StoragePort {
     }
     this.#withContentionRetry(() => this.database.exec("PRAGMA synchronous = FULL"), deadline);
 
-    const migrationNames = ["0001_initial.sql", "0002_provider_assurance.sql", "0003_provider_binding_provenance.sql"];
+    const migrationNames = ["0001_initial.sql", "0002_provider_assurance.sql", "0003_provider_binding_provenance.sql", "0004_taxonomy_vocabulary.sql"];
     const migrations = migrationNames.map((name, index) => {
       const version = index + 1;
       const sourceUrl = new URL(`../../migrations/sqlite/${name}`, import.meta.url);
@@ -754,7 +754,7 @@ export class SQLiteStorage implements StoragePort {
       }
       const activeLifecycle = () => this.database.query(`SELECT 1 FROM operations WHERE tenant_id = ? AND computer_id = ?
         AND kind IN ('create','start','stop','quarantine','delete','restore')
-        AND status IN ('pending','accepted','running','unknown') LIMIT 1`)
+        AND status IN ('admitted','leased','running','ambiguous') LIMIT 1`)
         .get(operation.tenantId, operation.computerId) as Row | null;
       if (activeLifecycle() !== null) throw new ComputersError("conflict", "Computer already has an active lifecycle operation", 409);
       const current = this.database.query("SELECT status FROM computers WHERE tenant_id = ? AND id = ?")
@@ -792,7 +792,7 @@ export class SQLiteStorage implements StoragePort {
 
   updateOperation(tenantId: string, id: string, status: OperationStatus, result?: Record<string, unknown>, errorCode?: string): Operation {
     const updatedAt = nowIso();
-    const outcome = this.database.query("UPDATE operations SET status = ?, result_json = ?, error_code = ?, updated_at = ? WHERE tenant_id = ? AND id = ?")
+    const outcome = this.database.query("UPDATE operations SET status = ?, receipt_json = ?, error_code = ?, updated_at = ? WHERE tenant_id = ? AND id = ?")
       .run(status, result === undefined ? null : stableJson(result), errorCode ?? null, updatedAt, tenantId, id);
     if (outcome.changes !== 1) throw new ComputersError("not_found", "Operation not found", 404);
     const operation = this.getOperation(tenantId, id);
@@ -817,7 +817,7 @@ export class SQLiteStorage implements StoragePort {
       }
       const existing = this.database.query("SELECT * FROM operation_attempts WHERE tenant_id = ? AND operation_id = ? ORDER BY attempt_number DESC LIMIT 1")
         .get(operation.tenantId, operation.id) as Row | null;
-      const active = ["pending", "accepted", "running", "unknown"].includes(String(stored.status));
+      const active = ["admitted", "leased", "running", "ambiguous"].includes(String(stored.status));
       const policyFenced = Number(stored.policy_generation) !== Number(stored.computer_generation);
       const storedFence = Number(stored.operation_fence);
       if (!active) {
@@ -831,8 +831,8 @@ export class SQLiteStorage implements StoragePort {
         throw new ComputersError("stale_fence", "Stale operation fence", 409);
       }
       const now = nowIso();
-      const executionOwnerToken = makeId("own");
-      const executionOwnerExpiresAt = new Date(Date.parse(now) + PROVIDER_ATTEMPT_LEASE_MS).toISOString();
+      const leaseToken = makeId("own");
+      const leaseExpiresAt = new Date(Date.parse(now) + PROVIDER_ATTEMPT_LEASE_MS).toISOString();
       if (existing !== null) {
         const attempt = attemptFromRow(existing);
         const validFencedReconciliation = policyFenced && attempt.fence < storedFence
@@ -841,32 +841,32 @@ export class SQLiteStorage implements StoragePort {
           throw new ComputersError("stale_fence", "Stale provider attempt fence", 409);
         }
         if (["succeeded", "failed"].includes(attempt.status)
-          || (attempt.executionOwnerToken !== undefined && attempt.executionOwnerExpiresAt !== undefined
-            && Date.parse(attempt.executionOwnerExpiresAt) > Date.parse(now))) return { attempt, mode: "busy" as const };
-        const executionOwnerGeneration = attempt.executionOwnerGeneration + 1;
-        const claimed = this.database.query(`UPDATE operation_attempts SET execution_owner_token = ?, execution_owner_generation = ?, execution_owner_expires_at = ?
-          WHERE tenant_id = ? AND id = ? AND status IN ('running','unknown')
-          AND (execution_owner_token IS NULL OR execution_owner_expires_at IS NULL OR execution_owner_expires_at <= ?)`)
-          .run(executionOwnerToken, executionOwnerGeneration, executionOwnerExpiresAt, operation.tenantId, attempt.id, now);
+          || (attempt.leaseToken !== undefined && attempt.leaseExpiresAt !== undefined
+            && Date.parse(attempt.leaseExpiresAt) > Date.parse(now))) return { attempt, mode: "busy" as const };
+        const leaseGeneration = attempt.leaseGeneration + 1;
+        const claimed = this.database.query(`UPDATE operation_attempts SET lease_token = ?, lease_generation = ?, lease_expires_at = ?
+          WHERE tenant_id = ? AND id = ? AND status IN ('running','ambiguous')
+          AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?)`)
+          .run(leaseToken, leaseGeneration, leaseExpiresAt, operation.tenantId, attempt.id, now);
         if (claimed.changes !== 1) {
           const current = this.database.query("SELECT * FROM operation_attempts WHERE tenant_id = ? AND id = ?").get(operation.tenantId, attempt.id) as Row | null;
           if (current === null) throw new ComputersError("storage_error", "Provider attempt disappeared during claim", 500);
           return { attempt: attemptFromRow(current), mode: "busy" as const, ...(policyFenced ? { policyFenced: true } : {}) };
         }
-        return { attempt: { ...attempt, executionOwnerToken, executionOwnerGeneration, executionOwnerExpiresAt }, mode: "reconcile" as const,
+        return { attempt: { ...attempt, leaseToken, leaseGeneration, leaseExpiresAt }, mode: "reconcile" as const,
           ...(policyFenced ? { policyFenced: true } : {}) };
       }
       const attempt: ProviderAttempt = {
         id: makeId("pat"), tenantId: operation.tenantId, operationId: operation.id, attemptNumber: 1,
         providerIdempotencyKey: `provider:${operation.id}`, status: "running", fence: operation.fence,
-        executionOwnerToken, executionOwnerGeneration: 1, executionOwnerExpiresAt, startedAt: now,
+        leaseToken, leaseGeneration: 1, leaseExpiresAt, startedAt: now,
       };
       this.database.query(`INSERT INTO operation_attempts
-        (id, tenant_id, operation_id, attempt_number, provider_idempotency_key, status, fence, execution_owner_token, execution_owner_generation, execution_owner_expires_at, started_at)
+        (id, tenant_id, operation_id, attempt_number, provider_idempotency_key, status, fence, lease_token, lease_generation, lease_expires_at, started_at)
         VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)`).run(attempt.id, attempt.tenantId, attempt.operationId, attempt.attemptNumber,
-        attempt.providerIdempotencyKey, attempt.fence, executionOwnerToken, attempt.executionOwnerGeneration, executionOwnerExpiresAt, attempt.startedAt);
+        attempt.providerIdempotencyKey, attempt.fence, leaseToken, attempt.leaseGeneration, leaseExpiresAt, attempt.startedAt);
       const started = this.database.query(`UPDATE operations SET status = 'running', updated_at = ?
-        WHERE tenant_id = ? AND id = ? AND status IN ('pending','accepted') AND fence = ? AND policy_generation = ?
+        WHERE tenant_id = ? AND id = ? AND status IN ('admitted','leased') AND fence = ? AND policy_generation = ?
         AND policy_generation = (SELECT policy_generation FROM computers WHERE tenant_id = ? AND id = operations.computer_id)`)
         .run(now, operation.tenantId, operation.id, operation.fence, operation.policyGeneration, operation.tenantId);
       if (started.changes !== 1) throw new ComputersError("policy_generation_mismatch", "Policy generation changed before operation execution", 409);
@@ -876,25 +876,25 @@ export class SQLiteStorage implements StoragePort {
   }
 
   renewProviderAttemptOwnership(attempt: ProviderAttempt): void {
-    if (attempt.executionOwnerToken === undefined) throw new ComputersError("conflict", "Provider attempt has no execution owner", 409);
+    if (attempt.leaseToken === undefined) throw new ComputersError("conflict", "Provider attempt has no lease", 409);
     const expiresAt = new Date(Date.now() + PROVIDER_ATTEMPT_LEASE_MS).toISOString();
-    const renewed = this.database.query(`UPDATE operation_attempts SET execution_owner_expires_at = ?
-      WHERE tenant_id = ? AND id = ? AND operation_id = ? AND fence = ? AND status IN ('running','unknown')
-      AND execution_owner_token = ? AND execution_owner_generation = ? AND execution_owner_expires_at > ?`)
-      .run(expiresAt, attempt.tenantId, attempt.id, attempt.operationId, attempt.fence, attempt.executionOwnerToken, attempt.executionOwnerGeneration, nowIso());
-    if (renewed.changes !== 1) throw new ComputersError("conflict", "Provider attempt execution ownership was lost", 409);
-    attempt.executionOwnerExpiresAt = expiresAt;
+    const renewed = this.database.query(`UPDATE operation_attempts SET lease_expires_at = ?
+      WHERE tenant_id = ? AND id = ? AND operation_id = ? AND fence = ? AND status IN ('running','ambiguous')
+      AND lease_token = ? AND lease_generation = ? AND lease_expires_at > ?`)
+      .run(expiresAt, attempt.tenantId, attempt.id, attempt.operationId, attempt.fence, attempt.leaseToken, attempt.leaseGeneration, nowIso());
+    if (renewed.changes !== 1) throw new ComputersError("conflict", "Provider attempt lease was lost", 409);
+    attempt.leaseExpiresAt = expiresAt;
   }
 
   assertProviderAttemptOwnership(attempt: ProviderAttempt): void {
-    if (attempt.executionOwnerToken === undefined || attempt.executionOwnerExpiresAt === undefined || attempt.executionOwnerGeneration < 1) {
-      throw new ComputersError("conflict", "Provider attempt has no execution owner", 409);
+    if (attempt.leaseToken === undefined || attempt.leaseExpiresAt === undefined || attempt.leaseGeneration < 1) {
+      throw new ComputersError("conflict", "Provider attempt has no lease", 409);
     }
     const row = this.database.query(`SELECT 1 AS current FROM operation_attempts
-      WHERE tenant_id = ? AND id = ? AND operation_id = ? AND fence = ? AND status IN ('running','unknown')
-      AND execution_owner_token = ? AND execution_owner_generation = ? AND execution_owner_expires_at > ?`)
-      .get(attempt.tenantId, attempt.id, attempt.operationId, attempt.fence, attempt.executionOwnerToken, attempt.executionOwnerGeneration, nowIso()) as Row | null;
-    if (row === null) throw new ComputersError("conflict", "Provider attempt execution ownership was lost", 409);
+      WHERE tenant_id = ? AND id = ? AND operation_id = ? AND fence = ? AND status IN ('running','ambiguous')
+      AND lease_token = ? AND lease_generation = ? AND lease_expires_at > ?`)
+      .get(attempt.tenantId, attempt.id, attempt.operationId, attempt.fence, attempt.leaseToken, attempt.leaseGeneration, nowIso()) as Row | null;
+    if (row === null) throw new ComputersError("conflict", "Provider attempt lease was lost", 409);
   }
 
   recordProviderOwnershipLost(attempt: ProviderAttempt, resource?: ProviderOutcome["resource"]): void {
@@ -906,9 +906,9 @@ export class SQLiteStorage implements StoragePort {
         JOIN computers c ON c.tenant_id = o.tenant_id AND c.id = o.computer_id
         WHERE a.tenant_id = ? AND a.id = ? AND a.operation_id = ? AND a.fence = ?`)
         .get(attempt.tenantId, attempt.id, attempt.operationId, attempt.fence) as Row | null;
-      if (current === null || !["running", "unknown"].includes(String(current.attempt_status))
-        || !["running", "unknown"].includes(String(current.operation_status))) return;
-      this.database.query("UPDATE operations SET status = 'unknown', error_code = 'provider_outcome_unknown', updated_at = ? WHERE tenant_id = ? AND id = ? AND status IN ('running','unknown')")
+      if (current === null || !["running", "ambiguous"].includes(String(current.attempt_status))
+        || !["running", "ambiguous"].includes(String(current.operation_status))) return;
+      this.database.query("UPDATE operations SET status = 'ambiguous', error_code = 'provider_outcome_ambiguous', updated_at = ? WHERE tenant_id = ? AND id = ? AND status IN ('running','ambiguous')")
         .run(now, attempt.tenantId, attempt.operationId);
       this.#revokeResidentAuthorityInTransaction(attempt.tenantId, String(current.computer_id), now);
       this.database.query("UPDATE computers SET status = 'quarantined', updated_at = ? WHERE tenant_id = ? AND id = ? AND status NOT IN ('deleted','deleting')")
@@ -977,9 +977,9 @@ export class SQLiteStorage implements StoragePort {
       ORDER BY p.name, p.id`).all(tenantId) as Row[]).map(profileFromRow);
   }
 
-  recordProviderUnknown(attempt: ProviderAttempt, outcome: Extract<ProviderOutcome, { kind: "unknown" }>): void {
+  recordProviderAmbiguous(attempt: ProviderAttempt, outcome: Extract<ProviderOutcome, { kind: "ambiguous" }>): void {
     const inspection = inspectProviderOutcome(outcome);
-    if (inspection.kind === "valid" && inspection.outcome.kind === "unknown") {
+    if (inspection.kind === "valid" && inspection.outcome.kind === "ambiguous") {
       this.#recordProviderIndeterminate(attempt, inspection.outcome, false);
       return;
     }
@@ -1001,23 +1001,23 @@ export class SQLiteStorage implements StoragePort {
     }, true);
   }
 
-  #recordProviderIndeterminate(attempt: ProviderAttempt, outcome: Extract<ProviderOutcome, { kind: "unknown" }> | ProviderMalformedOutcome,
+  #recordProviderIndeterminate(attempt: ProviderAttempt, outcome: Extract<ProviderOutcome, { kind: "ambiguous" }> | ProviderMalformedOutcome,
     preserveComputerState: boolean): void {
     const transaction = this.database.transaction(() => {
       const now = nowIso();
       const current = this.database.query(`SELECT a.status AS attempt_status, a.operation_id, a.fence AS attempt_fence,
-        a.execution_owner_token, a.execution_owner_generation, a.execution_owner_expires_at, o.computer_id, o.kind, o.status AS operation_status, c.provider
+        a.lease_token, a.lease_generation, a.lease_expires_at, o.computer_id, o.kind, o.status AS operation_status, c.provider
         FROM operation_attempts a JOIN operations o ON o.tenant_id = a.tenant_id AND o.id = a.operation_id
         JOIN computers c ON c.tenant_id = o.tenant_id AND c.id = o.computer_id
         WHERE a.tenant_id = ? AND a.id = ?`).get(attempt.tenantId, attempt.id) as Row | null;
       if (current === null || current.operation_id !== attempt.operationId || Number(current.attempt_fence) !== attempt.fence
-        || attempt.executionOwnerToken === undefined || current.execution_owner_token !== attempt.executionOwnerToken
-        || Number(current.execution_owner_generation) !== attempt.executionOwnerGeneration || Date.parse(String(current.execution_owner_expires_at)) <= Date.parse(now)
-        || !["running", "unknown"].includes(String(current.attempt_status))) throw new ComputersError("conflict", "Provider attempt is not reconcilable", 409);
+        || attempt.leaseToken === undefined || current.lease_token !== attempt.leaseToken
+        || Number(current.lease_generation) !== attempt.leaseGeneration || Date.parse(String(current.lease_expires_at)) <= Date.parse(now)
+        || !["running", "ambiguous"].includes(String(current.attempt_status))) throw new ComputersError("conflict", "Provider attempt is not reconcilable", 409);
       const firstUnknown = current.attempt_status === "running";
-      this.database.query("UPDATE operation_attempts SET status = 'unknown', provider_operation_id = ?, resource_json = ?, execution_owner_token = NULL, execution_owner_expires_at = NULL WHERE tenant_id = ? AND id = ? AND status IN ('running','unknown') AND execution_owner_token = ? AND execution_owner_generation = ?")
-        .run(outcome.providerOperationId, outcome.resource === undefined ? null : stableJson(outcome.resource), attempt.tenantId, attempt.id, attempt.executionOwnerToken, attempt.executionOwnerGeneration);
-      this.database.query("UPDATE operations SET status = 'unknown', error_code = 'provider_outcome_unknown', updated_at = ? WHERE tenant_id = ? AND id = ? AND status IN ('running','unknown')")
+      this.database.query("UPDATE operation_attempts SET status = 'ambiguous', provider_operation_id = ?, resource_json = ?, lease_token = NULL, lease_expires_at = NULL WHERE tenant_id = ? AND id = ? AND status IN ('running','ambiguous') AND lease_token = ? AND lease_generation = ?")
+        .run(outcome.providerOperationId, outcome.resource === undefined ? null : stableJson(outcome.resource), attempt.tenantId, attempt.id, attempt.leaseToken, attempt.leaseGeneration);
+      this.database.query("UPDATE operations SET status = 'ambiguous', error_code = 'provider_outcome_ambiguous', updated_at = ? WHERE tenant_id = ? AND id = ? AND status IN ('running','ambiguous')")
         .run(now, attempt.tenantId, attempt.operationId);
       const bindingResource = outcome.resource ?? this.getProviderBinding(attempt.tenantId, String(current.computer_id))?.resource;
       if (bindingResource !== undefined) this.#upsertProviderBindingInTransaction({
@@ -1033,7 +1033,7 @@ export class SQLiteStorage implements StoragePort {
         }
       }
       if (firstUnknown) this.#appendAuditInTransaction(attempt.tenantId, {
-        actorPrincipalId: "principal_worker", action: `computer.${String(current.kind)}.unknown`,
+        actorPrincipalId: "principal_worker", action: `computer.${String(current.kind)}.ambiguous`,
         data: {
           operationId: attempt.operationId, attemptId: attempt.id, providerOperationId: outcome.providerOperationId,
           ...(preserveComputerState ? { provenance: "malformed_provider_outcome" } : {}),
@@ -1043,7 +1043,7 @@ export class SQLiteStorage implements StoragePort {
     transaction.immediate();
   }
 
-  completeProviderOperation(operationInput: Operation, attempt: ProviderAttempt, outcomeInput: Exclude<ProviderOutcome, { kind: "unknown" }>): Operation {
+  completeProviderOperation(operationInput: Operation, attempt: ProviderAttempt, outcomeInput: Exclude<ProviderOutcome, { kind: "ambiguous" }>): Operation {
     if (operationInput.tenantId !== attempt.tenantId || operationInput.id !== attempt.operationId) {
       throw new ComputersError("conflict", "Provider attempt does not match operation", 409);
     }
@@ -1057,8 +1057,8 @@ export class SQLiteStorage implements StoragePort {
       if (updated === undefined) throw new ComputersError("storage_error", "Storage consistency error", 500);
       return updated;
     }
-    if (inspection.outcome.kind === "unknown") {
-      this.recordProviderUnknown(attempt, inspection.outcome);
+    if (inspection.outcome.kind === "ambiguous") {
+      this.recordProviderAmbiguous(attempt, inspection.outcome);
       const updated = this.getOperation(attempt.tenantId, attempt.operationId);
       if (updated === undefined) throw new ComputersError("storage_error", "Storage consistency error", 500);
       return updated;
@@ -1073,13 +1073,13 @@ export class SQLiteStorage implements StoragePort {
       if (operation === undefined) throw new ComputersError("storage_error", "Storage consistency error", 500);
       const current = this.database.query(`SELECT a.status AS attempt_status, a.operation_id, a.fence AS attempt_fence,
         o.status AS operation_status, o.fence AS operation_fence, o.policy_generation AS operation_generation,
-        c.policy_generation AS computer_generation, c.provider, a.execution_owner_token, a.execution_owner_generation, a.execution_owner_expires_at
+        c.policy_generation AS computer_generation, c.provider, a.lease_token, a.lease_generation, a.lease_expires_at
         FROM operation_attempts a JOIN operations o ON o.tenant_id = a.tenant_id AND o.id = a.operation_id
         JOIN computers c ON c.tenant_id = o.tenant_id AND c.id = o.computer_id
         WHERE a.tenant_id = ? AND a.id = ?`).get(attempt.tenantId, attempt.id) as Row | null;
       if (current === null || current.operation_id !== operation.id || Number(current.attempt_fence) !== attempt.fence
-        || attempt.executionOwnerToken === undefined || current.execution_owner_token !== attempt.executionOwnerToken
-        || Number(current.execution_owner_generation) !== attempt.executionOwnerGeneration || Date.parse(String(current.execution_owner_expires_at)) <= Date.parse(now)) {
+        || attempt.leaseToken === undefined || current.lease_token !== attempt.leaseToken
+        || Number(current.lease_generation) !== attempt.leaseGeneration || Date.parse(String(current.lease_expires_at)) <= Date.parse(now)) {
         throw new ComputersError("conflict", "Provider attempt does not match operation", 409);
       }
       if (["succeeded", "failed"].includes(String(current.attempt_status))) {
@@ -1089,9 +1089,9 @@ export class SQLiteStorage implements StoragePort {
       }
       if (Number(current.operation_generation) !== Number(current.computer_generation) || Number(current.operation_fence) !== attempt.fence) {
         if (!success) {
-          this.database.query("UPDATE operation_attempts SET status = 'failed', resource_json = ?, execution_owner_expires_at = NULL, completed_at = ? WHERE tenant_id = ? AND id = ? AND status IN ('running','unknown') AND execution_owner_token = ? AND execution_owner_generation = ?")
-            .run(outcome.resource === undefined ? null : stableJson(outcome.resource), now, attempt.tenantId, attempt.id, attempt.executionOwnerToken, attempt.executionOwnerGeneration);
-          this.database.query("UPDATE operations SET status = 'failed', error_code = 'policy_generation_mismatch', updated_at = ? WHERE tenant_id = ? AND id = ? AND status IN ('running','unknown')")
+          this.database.query("UPDATE operation_attempts SET status = 'failed', resource_json = ?, lease_expires_at = NULL, completed_at = ? WHERE tenant_id = ? AND id = ? AND status IN ('running','ambiguous') AND lease_token = ? AND lease_generation = ?")
+            .run(outcome.resource === undefined ? null : stableJson(outcome.resource), now, attempt.tenantId, attempt.id, attempt.leaseToken, attempt.leaseGeneration);
+          this.database.query("UPDATE operations SET status = 'failed', error_code = 'policy_generation_mismatch', updated_at = ? WHERE tenant_id = ? AND id = ? AND status IN ('running','ambiguous')")
             .run(now, operation.tenantId, operation.id);
           this.#appendAuditInTransaction(operation.tenantId, {
             actorPrincipalId: "principal_worker", action: `computer.${operation.kind}.failed`,
@@ -1121,15 +1121,15 @@ export class SQLiteStorage implements StoragePort {
       if (success && lifecycleResolution.kind === "invalid") {
         const firstUnknown = current.attempt_status === "running";
         const attemptUpdate = this.database.query(`UPDATE operation_attempts
-          SET status = 'unknown', resource_json = ?, execution_owner_token = NULL, execution_owner_expires_at = NULL
-          WHERE tenant_id = ? AND id = ? AND status IN ('running','unknown')
-          AND execution_owner_token = ? AND execution_owner_generation = ?`)
+          SET status = 'ambiguous', resource_json = ?, lease_token = NULL, lease_expires_at = NULL
+          WHERE tenant_id = ? AND id = ? AND status IN ('running','ambiguous')
+          AND lease_token = ? AND lease_generation = ?`)
           .run(outcome.resource === undefined ? null : stableJson(outcome.resource), attempt.tenantId, attempt.id,
-            attempt.executionOwnerToken, attempt.executionOwnerGeneration);
+            attempt.leaseToken, attempt.leaseGeneration);
         if (attemptUpdate.changes !== 1) throw new ComputersError("conflict", "Provider attempt was completed concurrently", 409);
         const operationUpdate = this.database.query(`UPDATE operations
-          SET status = 'unknown', result_json = NULL, error_code = 'provider_outcome_unknown', updated_at = ?
-          WHERE tenant_id = ? AND id = ? AND status IN ('running','unknown') AND fence = ? AND policy_generation = ?`)
+          SET status = 'ambiguous', receipt_json = NULL, error_code = 'provider_outcome_ambiguous', updated_at = ?
+          WHERE tenant_id = ? AND id = ? AND status IN ('running','ambiguous') AND fence = ? AND policy_generation = ?`)
           .run(now, operation.tenantId, operation.id, attempt.fence, operation.policyGeneration);
         if (operationUpdate.changes !== 1) throw new ComputersError("conflict", "Operation was completed concurrently", 409);
         const bindingResource = outcome.resource ?? this.getProviderBinding(operation.tenantId, operation.computerId)?.resource;
@@ -1140,7 +1140,7 @@ export class SQLiteStorage implements StoragePort {
         this.#revokeIndeterminateAuthorityIfNeededInTransaction(operation.tenantId, operation.computerId,
           operation.kind, String(current.provider), now);
         if (firstUnknown) this.#appendAuditInTransaction(operation.tenantId, {
-          actorPrincipalId: "principal_worker", action: `computer.${operation.kind}.unknown`,
+          actorPrincipalId: "principal_worker", action: `computer.${operation.kind}.ambiguous`,
           data: { operationId: operation.id, attemptId: attempt.id, outcome: "success", reason: "invalid_observed_lifecycle" },
           computerId: operation.computerId,
         });
@@ -1149,10 +1149,10 @@ export class SQLiteStorage implements StoragePort {
         return updated;
       }
       const terminalComputerStatus = lifecycleResolution.kind === "observed" ? lifecycleResolution.status : undefined;
-      const attemptUpdate = this.database.query("UPDATE operation_attempts SET status = ?, resource_json = ?, execution_owner_expires_at = NULL, completed_at = ? WHERE tenant_id = ? AND id = ? AND status IN ('running','unknown') AND execution_owner_token = ? AND execution_owner_generation = ?")
-        .run(success ? "succeeded" : "failed", outcome.resource === undefined ? null : stableJson(outcome.resource), now, attempt.tenantId, attempt.id, attempt.executionOwnerToken, attempt.executionOwnerGeneration);
+      const attemptUpdate = this.database.query("UPDATE operation_attempts SET status = ?, resource_json = ?, lease_expires_at = NULL, completed_at = ? WHERE tenant_id = ? AND id = ? AND status IN ('running','ambiguous') AND lease_token = ? AND lease_generation = ?")
+        .run(success ? "succeeded" : "failed", outcome.resource === undefined ? null : stableJson(outcome.resource), now, attempt.tenantId, attempt.id, attempt.leaseToken, attempt.leaseGeneration);
       if (attemptUpdate.changes !== 1) throw new ComputersError("conflict", "Provider attempt was completed concurrently", 409);
-      const operationUpdate = this.database.query("UPDATE operations SET status = ?, result_json = ?, error_code = ?, updated_at = ? WHERE tenant_id = ? AND id = ? AND status IN ('running','unknown') AND fence = ? AND policy_generation = ?")
+      const operationUpdate = this.database.query("UPDATE operations SET status = ?, receipt_json = ?, error_code = ?, updated_at = ? WHERE tenant_id = ? AND id = ? AND status IN ('running','ambiguous') AND fence = ? AND policy_generation = ?")
         .run(success ? "succeeded" : "failed", result === undefined ? null : stableJson(result), errorCode, now, operation.tenantId, operation.id, attempt.fence, operation.policyGeneration);
       if (operationUpdate.changes !== 1) throw new ComputersError("conflict", "Operation was completed concurrently", 409);
       if (success && terminalComputerStatus !== undefined) {
@@ -1267,16 +1267,16 @@ export class SQLiteStorage implements StoragePort {
       if (Number(row.operation_generation) === Number(row.computer_generation)) {
         throw new ComputersError("conflict", "Operation policy generation is current", 409);
       }
-      if (!["pending", "accepted", "running", "unknown"].includes(String(row.status))) {
+      if (!["admitted", "leased", "running", "ambiguous"].includes(String(row.status))) {
         throw new ComputersError("conflict", "Operation cannot be failed by a policy fence", 409);
       }
       const now = nowIso();
       const update = this.database.query(`UPDATE operations SET status = 'failed', error_code = 'policy_generation_mismatch',
-        result_json = NULL, updated_at = ? WHERE tenant_id = ? AND id = ? AND status IN ('pending','accepted','running','unknown')`)
+        receipt_json = NULL, updated_at = ? WHERE tenant_id = ? AND id = ? AND status IN ('admitted','leased','running','ambiguous')`)
         .run(now, tenantId, operationId);
       if (update.changes !== 1) throw new ComputersError("conflict", "Operation was fenced concurrently", 409);
       this.database.query(`UPDATE operation_attempts SET status = 'failed', completed_at = ?
-        WHERE tenant_id = ? AND operation_id = ? AND status IN ('running','unknown')`).run(now, tenantId, operationId);
+        WHERE tenant_id = ? AND operation_id = ? AND status IN ('running','ambiguous')`).run(now, tenantId, operationId);
       this.#appendAuditInTransaction(tenantId, {
         actorPrincipalId: "principal_worker", action: `computer.${String(row.kind)}.failed`,
         data: { operationId, outcome: "policy_generation_mismatch", fenced: true }, computerId: String(row.computer_id),
@@ -1484,7 +1484,7 @@ export class SQLiteStorage implements StoragePort {
         WHERE i.certificate_id = ? AND i.tenant_id = ? AND i.computer_id = ?`)
         .get(envelope.operationId, envelope.attemptId, envelope.certificateId, envelope.tenantId, envelope.computerId) as Row | null;
       if (row === null || row.revoked_at !== null || Date.parse(String(row.identity_expires_at)) <= Date.parse(now)
-        || row.computer_status !== "running" || !["running", "unknown"].includes(String(row.attempt_status))) {
+        || row.computer_status !== "running" || !["running", "ambiguous"].includes(String(row.attempt_status))) {
         throw new ComputersError("authentication_required", "Resident authentication failed", 401);
       }
       if (row.provider !== row.binding_provider || row.instance_id !== row.binding_instance_id || row.boot_id !== row.binding_boot_id
@@ -1512,7 +1512,7 @@ export class SQLiteStorage implements StoragePort {
         throw error;
       }
       this.#appendAuditInTransaction(envelope.tenantId, {
-        actorPrincipalId: envelope.certificateId, action: "resident.operation_accepted",
+        actorPrincipalId: envelope.certificateId, action: "resident.operation_leased",
         data: { operationId: envelope.operationId, attemptId: envelope.attemptId, sequence: envelope.sequence, capability: envelope.capability }, computerId: envelope.computerId,
       });
     });
@@ -1543,7 +1543,7 @@ export class SQLiteStorage implements StoragePort {
         .run(revision.generation, revision.createdAt, revision.tenantId, revision.computerId, currentGeneration);
       if (advanced.changes !== 1) throw new ComputersError("conflict", "Install policy was updated concurrently", 409);
       {
-        this.database.query("UPDATE operations SET fence = fence + 1, updated_at = ? WHERE tenant_id = ? AND computer_id = ? AND policy_generation < ? AND status IN ('pending','accepted','running','unknown')")
+        this.database.query("UPDATE operations SET fence = fence + 1, updated_at = ? WHERE tenant_id = ? AND computer_id = ? AND policy_generation < ? AND status IN ('admitted','leased','running','ambiguous')")
           .run(revision.createdAt, revision.tenantId, revision.computerId, revision.generation);
         this.database.query("UPDATE computer_create_grants SET active = 0, updated_at = ? WHERE tenant_id = ? AND parent_computer_id = ? AND generation < ? AND active = 1")
           .run(revision.createdAt, revision.tenantId, revision.computerId, revision.generation);
@@ -1845,13 +1845,13 @@ export class SQLiteStorage implements StoragePort {
       provider_idempotency_key TEXT NOT NULL,
       provider_operation_id TEXT,
       resource_json TEXT CHECK (resource_json IS NULL OR (json_valid(resource_json) AND json_type(resource_json) = 'object')),
-      status TEXT NOT NULL CHECK (status IN ('running', 'unknown', 'succeeded', 'failed')),
+      status TEXT NOT NULL CHECK (status IN ('running', 'ambiguous', 'succeeded', 'failed')),
       fence INTEGER NOT NULL CHECK (fence >= 0),
       started_at TEXT NOT NULL,
       completed_at TEXT,
-      execution_owner_token TEXT,
-      execution_owner_generation INTEGER NOT NULL DEFAULT 0 CHECK (execution_owner_generation >= 0),
-      execution_owner_expires_at TEXT,
+      lease_token TEXT,
+      lease_generation INTEGER NOT NULL DEFAULT 0 CHECK (lease_generation >= 0),
+      lease_expires_at TEXT,
       UNIQUE (tenant_id, operation_id, attempt_number),
       UNIQUE (tenant_id, provider_idempotency_key),
       FOREIGN KEY (tenant_id, operation_id) REFERENCES operations (tenant_id, id)
@@ -1912,9 +1912,9 @@ export class SQLiteStorage implements StoragePort {
       && objectSql("table", "provider_assurance") === expectedProviderAssurance
       && objectSql("table", "provider_bindings") === expectedProviderBindings
       && hasColumnDefinitions("operation_attempts", {
-        execution_owner_token: { type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 0 },
-        execution_owner_generation: { type: "INTEGER", notNull: 1, defaultValue: "0", primaryKey: 0 },
-        execution_owner_expires_at: { type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 0 },
+        lease_token: { type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 0 },
+        lease_generation: { type: "INTEGER", notNull: 1, defaultValue: "0", primaryKey: 0 },
+        lease_expires_at: { type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 0 },
       })
       && hasColumnDefinitions("resident_enrollments", {
         revoked_at: { type: "TEXT", notNull: 0, defaultValue: null, primaryKey: 0 },
@@ -1944,7 +1944,7 @@ export class SQLiteStorage implements StoragePort {
       (provider = 'aws_ec2' AND confinement_class IN ('unverified_vm', 'strict_vm'))
     ) LIMIT 1`).get();
     const assurance = this.database.query("SELECT 1 AS present FROM provider_assurance WHERE provider = 'local_vm' AND confinement_class <> 'unverified_vm' LIMIT 1").get();
-    const attempt = this.database.query("SELECT 1 AS present FROM operation_attempts WHERE execution_owner_generation < 0 LIMIT 1").get();
+    const attempt = this.database.query("SELECT 1 AS present FROM operation_attempts WHERE lease_generation < 0 LIMIT 1").get();
     return computer === null && assurance === null && attempt === null && this.#providerBindingsHaveValidProvenance();
   }
 
@@ -1983,7 +1983,7 @@ export class SQLiteStorage implements StoragePort {
         VALUES (?, ?, ?, 'create', 'running', 1, ?, '{}', 0, ?, ?)`)
         .run(`opn_valid_${suffix}`, tenantId, `cmp_valid_${suffix}`, `schema-probe-${suffix}`, now, now);
       this.database.query(`INSERT INTO operation_attempts
-        (id, tenant_id, operation_id, attempt_number, provider_idempotency_key, status, fence, execution_owner_generation, started_at)
+        (id, tenant_id, operation_id, attempt_number, provider_idempotency_key, status, fence, lease_generation, started_at)
         VALUES (?, ?, ?, 1, ?, 'running', 0, 0, ?)`)
         .run(`pat_valid_${suffix}`, tenantId, `opn_valid_${suffix}`, `provider:valid-${suffix}`, now);
       this.database.query(`INSERT INTO computers
@@ -1995,12 +1995,12 @@ export class SQLiteStorage implements StoragePort {
         VALUES (?, ?, ?, 'create', 'succeeded', 1, ?, '{}', 0, ?, ?)`)
         .run(`opn_other_${suffix}`, tenantId, `cmp_other_${suffix}`, `schema-other-${suffix}`, now, now);
       this.database.query(`INSERT INTO operation_attempts
-        (id, tenant_id, operation_id, attempt_number, provider_idempotency_key, status, fence, execution_owner_generation, started_at, completed_at)
+        (id, tenant_id, operation_id, attempt_number, provider_idempotency_key, status, fence, lease_generation, started_at, completed_at)
         VALUES (?, ?, ?, 1, ?, 'succeeded', 0, 0, ?, ?)`)
         .run(`pat_other_${suffix}`, tenantId, `opn_other_${suffix}`, `provider:other-${suffix}`, now, now);
-      const executionOwnerGenerationRejected = rejectsWith(() => {
+      const leaseGenerationRejected = rejectsWith(() => {
         this.database.query(`INSERT INTO operation_attempts
-          (id, tenant_id, operation_id, attempt_number, provider_idempotency_key, status, fence, execution_owner_generation, started_at)
+          (id, tenant_id, operation_id, attempt_number, provider_idempotency_key, status, fence, lease_generation, started_at)
           VALUES (?, ?, ?, 1, ?, 'running', 0, -1, ?)`)
           .run(`pat_invalid_generation_${suffix}`, tenantId, `opn_valid_${suffix}`, `provider:schema-probe-${suffix}`, now);
       });
@@ -2040,7 +2040,7 @@ export class SQLiteStorage implements StoragePort {
           VALUES (?, ?, 'local_machine', ?, ?, ?, 'active', 0, ?)`)
           .run(tenantId, `cmp_valid_${suffix}`, `resource_attempt_${suffix}`, `opn_valid_${suffix}`, `pat_other_${suffix}`, now);
       });
-      return executionOwnerGenerationRejected && localMachineRejected && computerRejected && assuranceRejected
+      return leaseGenerationRejected && localMachineRejected && computerRejected && assuranceRejected
         && bindingProviderRejected && bindingComputerRejected && bindingAttemptRejected;
     } catch (error) {
       if (isSQLiteContention(error)) throw error;

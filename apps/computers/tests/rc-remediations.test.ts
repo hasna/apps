@@ -193,7 +193,7 @@ describe("release-candidate host re-assignment and binding provenance (findings 
         storageGiB, uptimeSeconds: 600, budgetMicros: 1000,
       });
       const operationFor = (computerId: string, storageGiB: number, idempotencyKey: string): Operation => ({
-        id: makeId("opn"), tenantId: admin.tenantId, computerId, kind: "create", status: "pending", policyGeneration: 1,
+        id: makeId("opn"), tenantId: admin.tenantId, computerId, kind: "create", status: "admitted", policyGeneration: 1,
         idempotencyKey, request: requestFor(storageGiB), fence: 0, createdAt: now, updatedAt: now,
         priorComputerStatus: "provisioning", desiredComputerStatus: "stopped",
       });

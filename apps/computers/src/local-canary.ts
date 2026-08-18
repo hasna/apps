@@ -11,14 +11,14 @@ const CANARY_CONTEXT: AuthorizationContext = { tenantId: "tenant_local_canary", 
 
 function requireSucceeded(storage: SQLiteStorage, operation: Operation, phase: string): Operation {
   const current = storage.getOperation(operation.tenantId, operation.id);
-  if (current?.status !== "succeeded") throw new ComputersError("provider_outcome_unknown", `Canary ${phase} operation did not succeed durably`, 503);
+  if (current?.status !== "succeeded") throw new ComputersError("provider_outcome_ambiguous", `Canary ${phase} operation did not succeed durably`, 503);
   return current;
 }
 
 function durableCleanupOperation(storage: SQLiteStorage, computer: Computer, kind: "quarantine" | "delete", suffix: string): Operation {
   const now = new Date().toISOString();
   const operation: Operation = {
-    id: makeId("opn"), tenantId: computer.tenantId, computerId: computer.id, kind, status: "pending",
+    id: makeId("opn"), tenantId: computer.tenantId, computerId: computer.id, kind, status: "admitted",
     policyGeneration: computer.policyGeneration, idempotencyKey: `canary-cleanup-${kind}-${suffix}`,
     request: { reason: "canary_failure" }, fence: 0, priorComputerStatus: computer.status,
     desiredComputerStatus: kind === "delete" ? "deleted" : "quarantined", createdAt: now, updatedAt: now,
@@ -34,13 +34,13 @@ export async function cleanupLocalCanary(storage: SQLiteStorage, service: Comput
   let current = storage.getComputer(computer.tenantId, computer.id) ?? computer;
   const active = storage.listOperations(current.tenantId, current.id).find((operation) =>
     ["create", "start", "stop", "quarantine", "delete", "restore"].includes(operation.kind)
-      && ["pending", "accepted", "running", "unknown"].includes(operation.status));
+      && ["admitted", "leased", "running", "ambiguous"].includes(operation.status));
   if (active !== undefined) {
     let reconciled = storage.getOperation(active.tenantId, active.id);
-    for (let pass = 0; pass < 3 && reconciled !== undefined && ["pending", "accepted", "running", "unknown"].includes(reconciled.status); pass += 1) {
+    for (let pass = 0; pass < 3 && reconciled !== undefined && ["admitted", "leased", "running", "ambiguous"].includes(reconciled.status); pass += 1) {
       await worker.runTenant(current.tenantId); reconciled = storage.getOperation(active.tenantId, active.id);
     }
-    if (reconciled === undefined || ["pending", "accepted", "running", "unknown"].includes(reconciled.status)) return { deleted: false };
+    if (reconciled === undefined || ["admitted", "leased", "running", "ambiguous"].includes(reconciled.status)) return { deleted: false };
     current = storage.getComputer(current.tenantId, current.id) ?? current;
   }
   if (current.status !== "deleted") {
@@ -89,29 +89,29 @@ export async function runLocalMacCanary(configFile: string, databaseFile: string
     const create = storage.listOperations(CANARY_CONTEXT.tenantId, computer.id)[0];
     if (create === undefined) throw new ComputersError("storage_error", "Canary create operation is missing", 500);
     await worker.runTenant(CANARY_CONTEXT.tenantId); requireSucceeded(storage, create, "create");
-    if (storage.getComputer(CANARY_CONTEXT.tenantId, computer.id)?.status !== "stopped") throw new ComputersError("provider_outcome_unknown", "Canary VM creation did not reach stopped", 503);
+    if (storage.getComputer(CANARY_CONTEXT.tenantId, computer.id)?.status !== "stopped") throw new ComputersError("provider_outcome_ambiguous", "Canary VM creation did not reach stopped", 503);
     storage.acquireHomeLease(CANARY_CONTEXT.tenantId, computer.id, computer.ownerPrincipalId, "principal_local_canary_controller", 900, 0);
     const start = service.requestLifecycle(CANARY_CONTEXT, computer.id, "start", `canary-start-${suffix}`); await worker.runTenant(CANARY_CONTEXT.tenantId); requireSucceeded(storage, start, "start");
     const assurance = storage.getProviderAssurance(CANARY_CONTEXT.tenantId, computer.id);
     if (storage.getComputer(CANARY_CONTEXT.tenantId, computer.id)?.status !== "running" || assurance?.confinementClass !== "unverified_vm"
-      || storage.getResidentBinding(CANARY_CONTEXT.tenantId, computer.id) !== undefined) throw new ComputersError("provider_outcome_unknown", "Canary did not preserve fail-closed unverified VM authority", 503);
+      || storage.getResidentBinding(CANARY_CONTEXT.tenantId, computer.id) !== undefined) throw new ComputersError("provider_outcome_ambiguous", "Canary did not preserve fail-closed unverified VM authority", 503);
     const stop = service.requestLifecycle(CANARY_CONTEXT, computer.id, "stop", `canary-stop-${suffix}`); await worker.runTenant(CANARY_CONTEXT.tenantId); requireSucceeded(storage, stop, "stop");
-    if (storage.getComputer(CANARY_CONTEXT.tenantId, computer.id)?.status !== "stopped") throw new ComputersError("provider_outcome_unknown", "Canary stop was not durably observed", 503);
+    if (storage.getComputer(CANARY_CONTEXT.tenantId, computer.id)?.status !== "stopped") throw new ComputersError("provider_outcome_ambiguous", "Canary stop was not durably observed", 503);
     const deletion = service.requestLifecycle(CANARY_CONTEXT, computer.id, "delete", `canary-delete-${suffix}`); await worker.runTenant(CANARY_CONTEXT.tenantId);
     const deleted = requireSucceeded(storage, deletion, "delete");
-    if (deleted.result?.instanceAbsent !== true || deleted.result.retainedHomeConfirmed !== true
+    if (deleted.receipt?.instanceAbsent !== true || deleted.receipt.retainedHomeConfirmed !== true
       || storage.getComputer(CANARY_CONTEXT.tenantId, computer.id)?.status !== "deleted"
       || storage.getProviderBinding(CANARY_CONTEXT.tenantId, computer.id)?.state !== "released") {
-      throw new ComputersError("provider_outcome_unknown", "Canary deletion, instance absence, or retained disk was not durably proven", 503);
+      throw new ComputersError("provider_outcome_ambiguous", "Canary deletion, instance absence, or retained disk was not durably proven", 503);
     }
     const home = storage.listComputerVolumes(CANARY_CONTEXT.tenantId, computer.id).find((volume) => volume.kind === "home");
-    if (home?.state !== "detached" || home.providerRef === undefined) throw new ComputersError("provider_outcome_unknown", "Canary retained disk was not recorded", 503);
+    if (home?.state !== "detached" || home.providerRef === undefined) throw new ComputersError("provider_outcome_ambiguous", "Canary retained disk was not recorded", 503);
     return { passed: true, computerId: computer.id, assurance: "unverified_vm", retainedHome: home.providerRef,
       limitations: ["Stock Lima remains unverified; the raw retained disk is not claimed formatted, mounted, or usable as durable home."] };
   } catch (error) {
     if (computer === undefined) throw error;
     const cleanup = await cleanupLocalCanary(storage, service, worker, computer, suffix);
-    if (!cleanup.deleted) throw new ComputersError("provider_outcome_unknown", `Canary cleanup is not durably proven for ${computer.id}`, 503);
+    if (!cleanup.deleted) throw new ComputersError("provider_outcome_ambiguous", `Canary cleanup is not durably proven for ${computer.id}`, 503);
     const cause = error instanceof ComputersError ? error.message : "Canary lifecycle failed";
     throw new ComputersError("provider_not_configured", `${cause}; audited cleanup deleted the VM and retained raw disk ${cleanup.retainedHome ?? "unknown"}`, 503);
   } finally { storage.close(); }

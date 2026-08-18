@@ -373,6 +373,52 @@ replay_authority_counts="$(psql -X -qAt -d "$database" -v ON_ERROR_STOP=1 -c "SE
   (SELECT count(*) FROM provider_bindings WHERE tenant_id='tenant_pg_post' AND computer_id='cmp_pg_post')::text;")"
 [[ "$replay_authority_counts" == "1:1:1:1:1:1:1:1:1:1:1" ]]
 
+# PostgreSQL 0004 taxonomy vocabulary: seed legacy-status rows, apply the migration,
+# and prove the statuses were re-mapped and the lease/receipt columns were renamed.
+migrator_psql -X -q -d "$database" -v ON_ERROR_STOP=1 <<'SQL'
+INSERT INTO computers (tenant_id,id,slug,provider,confinement_class,status,owner_principal_id,policy_generation,data_exfiltration_protection,created_at,updated_at)
+VALUES ('tenant_pg_taxonomy','cmp_pg_taxonomy','pg-taxonomy','local_machine','dedicated_machine','stopped','principal_pg_taxonomy',1,false,now(),now());
+INSERT INTO operations (tenant_id,id,computer_id,kind,status,policy_generation,idempotency_key,request_json,fence,created_at,updated_at)
+VALUES ('tenant_pg_taxonomy','opn_pg_taxonomy','cmp_pg_taxonomy','start','pending',1,'pg-taxonomy-legacy','{}',0,now(),now());
+INSERT INTO operation_attempts (id,tenant_id,operation_id,attempt_number,provider_idempotency_key,status,fence,started_at)
+VALUES ('pat_pg_taxonomy','tenant_pg_taxonomy','opn_pg_taxonomy',1,'provider:opn_pg_taxonomy','unknown',0,now());
+SQL
+migrator_psql -X -q -d "$database" -v ON_ERROR_STOP=1 -f migrations/postgres/0004_taxonomy_vocabulary.sql
+migrator_psql -X -q -d "$database" -v ON_ERROR_STOP=1 <<'SQL'
+DO $$
+BEGIN
+  IF (SELECT max(version) FROM schema_migrations) <> 4 THEN RAISE EXCEPTION 'schema version is not 4'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM operations WHERE tenant_id='tenant_pg_taxonomy' AND id='opn_pg_taxonomy' AND status='admitted') THEN
+    RAISE EXCEPTION 'legacy pending operation status was not re-mapped to admitted';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM operation_attempts WHERE tenant_id='tenant_pg_taxonomy' AND operation_id='opn_pg_taxonomy' AND id='pat_pg_taxonomy' AND status='ambiguous') THEN
+    RAISE EXCEPTION 'legacy unknown attempt status was not re-mapped to ambiguous';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='operations' AND column_name='receipt_json')
+    OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='operations' AND column_name='result_json') THEN
+    RAISE EXCEPTION 'operations receipt column was not renamed to receipt_json';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='operation_attempts' AND column_name='lease_token')
+    OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='operation_attempts' AND column_name='lease_generation')
+    OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='operation_attempts' AND column_name='lease_expires_at')
+    OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='operation_attempts' AND column_name='execution_owner_token') THEN
+    RAISE EXCEPTION 'attempt lease columns were not renamed to lease_token/lease_generation/lease_expires_at';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='operations_status_check' AND pg_get_constraintdef(oid) LIKE '%admitted%' AND pg_get_constraintdef(oid) LIKE '%ambiguous%' AND pg_get_constraintdef(oid) NOT LIKE '%pending%')
+    OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='operation_attempts_status_check' AND pg_get_constraintdef(oid) LIKE '%ambiguous%') THEN
+    RAISE EXCEPTION 'status CHECK constraints do not carry taxonomy vocabulary';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname='operations_one_active_lifecycle' AND indexdef LIKE '%admitted%') THEN
+    RAISE EXCEPTION 'operations_one_active_lifecycle index does not carry taxonomy statuses';
+  END IF;
+  BEGIN
+    INSERT INTO operations (tenant_id,id,computer_id,kind,status,policy_generation,idempotency_key,request_json,fence,created_at,updated_at)
+    VALUES ('tenant_pg_taxonomy','opn_pg_taxonomy_reject','cmp_pg_taxonomy','start','pending',1,'pg-taxonomy-reject','{}',0,now(),now());
+    RAISE EXCEPTION 'legacy status value was accepted after taxonomy migration';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+END $$;
+SQL
+
 migrator_psql -X -q -d "$database" -v ON_ERROR_STOP=1 -c "GRANT USAGE ON SCHEMA public TO $application_role; GRANT SELECT,INSERT,UPDATE,DELETE ON computers,provider_assurance TO $application_role; GRANT EXECUTE ON FUNCTION computers_current_tenant() TO $application_role;"
 
 without_tenant="$(psql -X -qAt -d "$database" -v ON_ERROR_STOP=1 -c "SET ROLE $application_role; SELECT (SELECT count(*) FROM computers)::text || ':' || (SELECT count(*) FROM provider_assurance)::text;")"

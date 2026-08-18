@@ -41,7 +41,7 @@ function operation(value: Computer, kind: Operation["kind"] = "create"): Operati
       profile: { id: profileId, generation: 1, digest: sha256(document), document }, adoption: { adoptionId: "adoption_one" } },
     priorComputerStatus: kind === "create" ? "provisioning" : "stopped", desiredComputerStatus: desired[kind as keyof typeof desired], fence: 0, createdAt: now, updatedAt: now };
 }
-function attempt(op: Operation): ProviderAttempt { return { id: `pat_${op.kind}_local`, tenantId: op.tenantId, operationId: op.id, attemptNumber: 1, providerIdempotencyKey: `provider:${op.id}`, status: "running", fence: 0, executionOwnerGeneration: 1, startedAt: op.createdAt }; }
+function attempt(op: Operation): ProviderAttempt { return { id: `pat_${op.kind}_local`, tenantId: op.tenantId, operationId: op.id, attemptNumber: 1, providerIdempotencyKey: `provider:${op.id}`, status: "running", fence: 0, leaseGeneration: 1, startedAt: op.createdAt }; }
 function execution(): { ownerGeneration: number; signal: AbortSignal; assertCurrent(): void } {
   return { ownerGeneration: 1, signal: new AbortController().signal, assertCurrent() { /* current test owner */ } };
 }
@@ -101,7 +101,7 @@ class CanaryCleanupProvider implements ProviderPort {
   async quarantine(): Promise<ProviderOutcome> { if (this.quarantineOutcome instanceof Error) throw this.quarantineOutcome; return this.quarantineOutcome; }
   async delete(): Promise<ProviderOutcome> { this.deleteCalls += 1; return this.success("deleted", { instanceAbsent: true, retainedHomeConfirmed: true }); }
   async restore(): Promise<ProviderOutcome> { return this.success("running"); }
-  async reconcile(): Promise<ProviderOutcome> { this.reconcileCalls += 1; return { kind: "unknown", providerOperationId: "canary-reconcile", message: "still indeterminate" }; }
+  async reconcile(): Promise<ProviderOutcome> { this.reconcileCalls += 1; return { kind: "ambiguous", providerOperationId: "canary-reconcile", message: "still indeterminate" }; }
   success(lifecycle: "stopped" | "running" | "quarantined" | "deleted", extra: Record<string, unknown> = {}): ProviderOutcome {
     return { kind: "success", resource: { resourceId: "resource:canary", instanceId: "instance:canary" }, result: {
       lifecycle, assurance: canaryAssurance, residentBindingVerified: false, volumes: { root: "root:canary", home: "home:canary" },
@@ -452,13 +452,13 @@ describe("local provider assurance and recovery", () => {
     inspector.inspection = resolved({ status: "Stopped", additionalDisks: [{ name: expectedDisk, format: false }] });
     const runner = new FakeRunner(); const provider = vmConfig(state, inspector, runner).provider; const op = operation(machine);
     expect(await provider.create({ computer: machine, operation: op, attempt: attempt(op), execution: execution() }))
-      .toMatchObject({ kind: "unknown", message: "Existing deterministic Lima VM lacks a matching controller ownership marker" });
+      .toMatchObject({ kind: "ambiguous", message: "Existing deterministic Lima VM lacks a matching controller ownership marker" });
     const stop = operation(machine, "stop");
     expect(await provider.stop({ computer: machine, operation: stop, attempt: attempt(stop), execution: execution() }))
-      .toMatchObject({ kind: "unknown", message: "Local VM lifecycle mutation requires a durable controller ownership manifest" });
+      .toMatchObject({ kind: "ambiguous", message: "Local VM lifecycle mutation requires a durable controller ownership manifest" });
     const deletion = operation(machine, "delete");
     expect(await provider.delete({ computer: machine, operation: deletion, attempt: attempt(deletion), execution: execution() }))
-      .toMatchObject({ kind: "unknown", message: "Local VM deletion requires a durable controller ownership manifest" });
+      .toMatchObject({ kind: "ambiguous", message: "Local VM deletion requires a durable controller ownership manifest" });
     expect(runner.calls).toHaveLength(0);
   });
 
@@ -504,7 +504,7 @@ describe("local provider assurance and recovery", () => {
       const inspector = new FakeInspector(); inspector.disk = true; inspector.diskOverride = diskOverride;
       inspector.inspection = resolved({ additionalDisks: [{ name: expectedDisk, format: false }] });
       const provider = vmConfig(root(), inspector, new FakeRunner()).provider; const op = operation(machine);
-      expect(await provider.create({ computer: machine, operation: op, attempt: attempt(op), execution: execution() })).toMatchObject({ kind: "unknown" });
+      expect(await provider.create({ computer: machine, operation: op, attempt: attempt(op), execution: execution() })).toMatchObject({ kind: "ambiguous" });
     }
   });
 
@@ -521,7 +521,7 @@ describe("local provider assurance and recovery", () => {
       resolved({ status: "Running", additionalDisks: [{ name: expectedDisk, format: false }] }),
     ]; inspector.disks = [true, true];
     const stopOp = operation(machine, "stop");
-    expect(await provider.stop({ computer: machine, operation: stopOp, attempt: attempt(stopOp), execution: execution() })).toMatchObject({ kind: "unknown" });
+    expect(await provider.stop({ computer: machine, operation: stopOp, attempt: attempt(stopOp), execution: execution() })).toMatchObject({ kind: "ambiguous" });
 
     runner.results.push(commandResult("", "start failed", 1), commandResult());
     inspector.inspections = [resolved({ status: "Running", additionalDisks: [{ name: expectedDisk, format: false }] }),
@@ -529,7 +529,7 @@ describe("local provider assurance and recovery", () => {
       resolved({ status: "Running", additionalDisks: [{ name: expectedDisk, format: false }] })];
     inspector.disks = [true, true, true];
     const startOp = operation(machine, "start");
-    expect(await provider.start({ computer: machine, operation: startOp, attempt: attempt(startOp), execution: execution(), homeLease: {} as never })).toMatchObject({ kind: "unknown" });
+    expect(await provider.start({ computer: machine, operation: startOp, attempt: attempt(startOp), execution: execution(), homeLease: {} as never })).toMatchObject({ kind: "ambiguous" });
 
     runner.results.push(commandResult()); inspector.inspections = [
       resolved({ status: "Running", additionalDisks: [{ name: expectedDisk, format: false }] }),
@@ -623,7 +623,7 @@ describe("local provider assurance and recovery", () => {
         if (kind === "stop") storage.updateComputerStatus(admin.tenantId, machine.id, "running");
         const lifecycle = service.requestLifecycle(admin, machine.id, kind, `reclaimed-lima-${kind}-lifecycle`);
         const abandoned = storage.claimProviderAttempt(lifecycle); expect(abandoned.mode).toBe("perform");
-        storage.database.query("UPDATE operation_attempts SET execution_owner_expires_at = ? WHERE tenant_id = ? AND id = ?")
+        storage.database.query("UPDATE operation_attempts SET lease_expires_at = ? WHERE tenant_id = ? AND id = ?")
           .run("1970-01-01T00:00:00.000Z", admin.tenantId, abandoned.attempt.id);
 
         runner.calls.length = 0; runner.requests.length = 0; runner.results.length = 0; inspector.disk = true;
@@ -675,12 +675,12 @@ describe("local provider assurance and recovery", () => {
     const oldMutation = provider.create({ computer: machine, operation: op, attempt: attempt(op), execution: oldExecution });
     await entered;
     const reclaimed = await provider.reconcile({ computer: machine, operation: op,
-      attempt: { ...attempt(op), executionOwnerGeneration: 2 }, execution: execution() });
-    expect(reclaimed).toMatchObject({ kind: "unknown", message: "Local resource mutation is already supervised by another owner" });
+      attempt: { ...attempt(op), leaseGeneration: 2 }, execution: execution() });
+    expect(reclaimed).toMatchObject({ kind: "ambiguous", message: "Local resource mutation is already supervised by another owner" });
     expect(runner.calls).toHaveLength(1);
     oldCurrent = false;
     finishResolve(commandResult());
-    expect(await oldMutation).toMatchObject({ kind: "unknown", message: "Local provider execution ownership was lost during mutation" });
+    expect(await oldMutation).toMatchObject({ kind: "ambiguous", message: "Local provider lease was lost during mutation" });
     expect(runner.calls).toHaveLength(1);
   });
 
@@ -693,17 +693,17 @@ describe("local provider assurance and recovery", () => {
     const base = { version: 1, commandId: `cmd_${"a".repeat(32)}`, resourceKey, argvDigest: `sha256:${"b".repeat(64)}`, createdAt: now, updatedAt: now };
     writeFileSync(journal, `${JSON.stringify({ ...base, phase: "prepared" })}\n`, { mode: 0o600 });
     expect(await provider.create({ computer: machine, operation: op, attempt: attempt(op), execution: execution() }))
-      .toMatchObject({ kind: "unknown", message: "Local command supervision was only partially published; manual recovery is required" });
+      .toMatchObject({ kind: "ambiguous", message: "Local command supervision was only partially published; manual recovery is required" });
     expect(runner.calls).toHaveLength(0); rmSync(journal);
 
     const child = Bun.spawn(["/usr/bin/sleep", "5"], { detached: true, stdout: "ignore", stderr: "ignore" });
     writeFileSync(journal, `${JSON.stringify({ ...base, phase: "published", pid: child.pid, pgid: child.pid })}\n`, { mode: 0o600 });
     expect(await provider.create({ computer: machine, operation: op, attempt: attempt(op), execution: execution() }))
-      .toMatchObject({ kind: "unknown", message: "A detached local mutator is still running; provider state is unknown" });
+      .toMatchObject({ kind: "ambiguous", message: "A detached local mutator is still running; provider state is unknown" });
     expect(runner.calls).toHaveLength(0);
     process.kill(-child.pid, "SIGKILL"); await child.exited;
     expect(await provider.create({ computer: machine, operation: op, attempt: attempt(op), execution: execution() }))
-      .toMatchObject({ kind: "unknown", message: "A stale local mutator was fenced; reconciliation is required before another mutation" });
+      .toMatchObject({ kind: "ambiguous", message: "A stale local mutator was fenced; reconciliation is required before another mutation" });
     expect(existsSync(journal)).toBe(false);
     expect((await provider.reconcile({ computer: machine, operation: op, attempt: attempt(op), execution: execution() })).kind).toBe("definite_failure");
     expect(runner.calls).toHaveLength(0);
@@ -732,14 +732,14 @@ describe("local provider assurance and recovery", () => {
       const inspector = new FakeInspector(); inspector.inspection = resolved({ exists: false }); const runner = new FakeRunner();
       const provider = vmConfig(state, inspector, runner).provider; const op = operation(machine);
       expect(await provider.create({ computer: machine, operation: op, attempt: attempt(op), execution: execution() }))
-        .toMatchObject({ kind: "unknown", message: "A detached local mutator is still running; provider state is unknown" });
+        .toMatchObject({ kind: "ambiguous", message: "A detached local mutator is still running; provider state is unknown" });
       expect(runner.calls).toHaveLength(0);
       process.kill(-pgid, "SIGKILL");
       for (let index = 0; index < 200; index += 1) {
         try { process.kill(-pgid, 0); await Bun.sleep(5); } catch { break; }
       }
       expect(await provider.create({ computer: machine, operation: op, attempt: attempt(op), execution: execution() }))
-        .toMatchObject({ kind: "unknown", message: "A stale local mutator was fenced; reconciliation is required before another mutation" });
+        .toMatchObject({ kind: "ambiguous", message: "A stale local mutator was fenced; reconciliation is required before another mutation" });
       expect(existsSync(journal)).toBe(false);
     } finally {
       try { process.kill(parent.pid, "SIGKILL"); } catch { /* exited */ }
@@ -943,7 +943,7 @@ describe("local provider assurance and recovery", () => {
       { name: "attempt fence", mutate: (request) => { request.attempt.fence += 1; } },
       { name: "operation policy generation", mutate: (request) => { request.operation.policyGeneration += 1; } },
       { name: "operation fence", mutate: (request) => { request.operation.fence = -1; request.attempt.fence = -1; } },
-      { name: "attempt execution generation", mutate: (request) => { request.attempt.executionOwnerGeneration = 0; request.execution.ownerGeneration = 0; } },
+      { name: "attempt execution generation", mutate: (request) => { request.attempt.leaseGeneration = 0; request.execution.ownerGeneration = 0; } },
       { name: "execution generation", mutate: (request) => { request.execution.ownerGeneration += 1; } },
       { name: "explicit provider", mutate: (request) => { request.operation.request.provider = "local_vm"; } },
     ];
@@ -1068,10 +1068,10 @@ describe("local provider assurance and recovery", () => {
       expect(storage.getResidentBinding(admin.tenantId, adopted.id)?.bootId).toBe("boot_one");
       observed = { ...observed, ownership: "shared" as const };
       expect((await provider.reconcile({ computer: adopted, operation: operation(adopted), attempt: attempt(operation(adopted)), execution: execution() })))
-        .toMatchObject({ kind: "unknown", message: "Authoritative adoption rejection left the established claim held for reconciliation" });
+        .toMatchObject({ kind: "ambiguous", message: "Authoritative adoption rejection left the established claim held for reconciliation" });
       const second = { ...computer("local_machine", "cmp_claim_blocked"), ownerPrincipalId: adopted.ownerPrincipalId };
       const secondOperation = operation(second);
-      expect((await provider.create({ computer: second, operation: secondOperation, attempt: attempt(secondOperation), execution: execution() })).kind).toBe("unknown");
+      expect((await provider.create({ computer: second, operation: secondOperation, attempt: attempt(secondOperation), execution: execution() })).kind).toBe("ambiguous");
     } finally { storage.close(); }
   });
 
@@ -1136,7 +1136,7 @@ describe("local provider assurance and recovery", () => {
       },
     } });
     expect(await newProvider.create({ computer: machine, operation: drifted, attempt: attempt(drifted), execution: execution() }))
-      .toMatchObject({ kind: "unknown", message: "Local resource mutation is already supervised by another owner" });
+      .toMatchObject({ kind: "ambiguous", message: "Local resource mutation is already supervised by another owner" });
     expect(newObservations).toBe(0); releaseResolve(); expect((await inFlight).kind).toBe("success");
   });
 
@@ -1169,7 +1169,7 @@ describe("local provider assurance and recovery", () => {
     const otherComputer = { ...machine, id: "cmp_adopt_identity_other", slug: "adopt-identity-other" }; const computerOp = operation(otherComputer);
     computerOp.request.adoption = { adoptionId: base.adoptionId };
     cases.push({ name: "Computer", config: base, machine: otherComputer, op: computerOp,
-      expected: { kind: "unknown", message: "This physical host is already claimed by another Computer" } });
+      expected: { kind: "ambiguous", message: "This physical host is already claimed by another Computer" } });
     const otherOwner = { ...machine, ownerPrincipalId: "principal_identity_other" }; const ownerOp = operation(otherOwner);
     ownerOp.request.adoption = { adoptionId: base.adoptionId };
     cases.push({ name: "owner", config: { ...base, allowedOwnerPrincipalId: otherOwner.ownerPrincipalId }, machine: otherOwner, op: ownerOp,
@@ -1240,7 +1240,7 @@ describe("local provider assurance and recovery", () => {
     const releasedManifestPath = join(state, "computers", firstMachine.tenantId, firstMachine.id, "manifest.json");
     const releasedManifest = readFileSync(releasedManifestPath, "utf8"); rmSync(releasedManifestPath);
     expect(await reopened.create({ computer: secondMachine, operation: secondOp, attempt: attempt(secondOp), execution: execution() }))
-      .toMatchObject({ kind: "unknown", message: "Released adopted-machine claim requires its exact durable manifest before re-adoption" });
+      .toMatchObject({ kind: "ambiguous", message: "Released adopted-machine claim requires its exact durable manifest before re-adoption" });
     writeFileSync(releasedManifestPath, releasedManifest, { mode: 0o600 });
     let driftedObservations = 0; const drifted = new AdoptedMachineProvider({ stateRoot: state, adoption: { ...base, hostId: "host_reopen_drift", controller: {
       observe: async () => { driftedObservations += 1; return { hostId: "host_reopen_drift", bootId: "boot_drift", state: "running", ownership: "dedicated",
@@ -1356,13 +1356,13 @@ describe("local provider assurance and recovery", () => {
       observations.length = 0;
       const stop = service.requestLifecycle(admin, machine.id, "stop", "worker-reclaimed-stop-lifecycle");
       const abandoned = storage.claimProviderAttempt(stop); expect(abandoned.mode).toBe("perform");
-      storage.database.query("UPDATE operation_attempts SET execution_owner_expires_at = ? WHERE tenant_id = ? AND id = ?")
+      storage.database.query("UPDATE operation_attempts SET lease_expires_at = ? WHERE tenant_id = ? AND id = ?")
         .run("1970-01-01T00:00:00.000Z", admin.tenantId, abandoned.attempt.id);
       observedState = "quarantined";
 
       await worker.runTenant(admin.tenantId);
       expect(observations).toEqual(["quarantined"]); expect(transitions).toEqual([]);
-      expect(storage.getOperation(admin.tenantId, stop.id)).toMatchObject({ status: "succeeded", result: { lifecycle: "quarantined" } });
+      expect(storage.getOperation(admin.tenantId, stop.id)).toMatchObject({ status: "succeeded", receipt: { lifecycle: "quarantined" } });
       expect(storage.getComputer(admin.tenantId, machine.id)?.status).toBe("quarantined");
       await worker.runTenant(admin.tenantId);
       expect(observations).toEqual(["quarantined"]); expect(transitions).toEqual([]);
@@ -1423,14 +1423,14 @@ describe("local provider assurance and recovery", () => {
 
       const quarantine = service.requestLifecycle(admin, machine.id, "quarantine", "worker-reclaimed-quarantine");
       const abandonedQuarantine = storage.claimProviderAttempt(quarantine); expect(abandonedQuarantine.mode).toBe("perform");
-      storage.database.query("UPDATE operation_attempts SET execution_owner_expires_at = ? WHERE tenant_id = ? AND id = ?")
+      storage.database.query("UPDATE operation_attempts SET lease_expires_at = ? WHERE tenant_id = ? AND id = ?")
         .run("1970-01-01T00:00:00.000Z", admin.tenantId, abandonedQuarantine.attempt.id);
       await worker.runTenant(admin.tenantId);
       expect(storage.getOperation(admin.tenantId, quarantine.id)?.status).toBe("succeeded"); expect(transitions).toEqual(["quarantined"]);
 
       const deletion = service.requestLifecycle(admin, machine.id, "delete", "worker-reclaimed-delete");
       const abandonedDelete = storage.claimProviderAttempt(deletion); expect(abandonedDelete.mode).toBe("perform");
-      storage.database.query("UPDATE operation_attempts SET execution_owner_expires_at = ? WHERE tenant_id = ? AND id = ?")
+      storage.database.query("UPDATE operation_attempts SET lease_expires_at = ? WHERE tenant_id = ? AND id = ?")
         .run("1970-01-01T00:00:00.000Z", admin.tenantId, abandonedDelete.attempt.id);
       await worker.runTenant(admin.tenantId);
       expect(storage.getOperation(admin.tenantId, deletion.id)?.status).toBe("succeeded"); expect(releases).toHaveLength(1);
@@ -1446,8 +1446,8 @@ describe("local provider assurance and recovery", () => {
     const tampered = structuredClone(op); (tampered.request.profile as { document: { cpus: number }; digest: string }).document.cpus = 99;
     (tampered.request.profile as { document: object; digest: string }).digest = sha256((tampered.request.profile as { document: object }).document);
     expect(await provider.create({ computer: machine, operation: tampered, attempt: attempt(tampered), execution: execution() })).toMatchObject({ kind: "definite_failure", code: "profile_mismatch" });
-    expect((await provider.create({ computer: machine, operation: op, attempt: attempt(op), execution: execution() })).kind).toBe("unknown");
-    expect((await provider.start({ computer: machine, operation: { ...op, kind: "start" }, attempt: attempt(op), execution: execution(), homeLease: {} as never })).kind).toBe("unknown");
+    expect((await provider.create({ computer: machine, operation: op, attempt: attempt(op), execution: execution() })).kind).toBe("ambiguous");
+    expect((await provider.start({ computer: machine, operation: { ...op, kind: "start" }, attempt: attempt(op), execution: execution(), homeLease: {} as never })).kind).toBe("ambiguous");
   });
 
   test("CAS-releases a definitely rejected adoption claim so it cannot leak", async () => {
@@ -1485,7 +1485,7 @@ describe("local provider assurance and recovery", () => {
     expect((await provider.create({ computer: first, operation: create, attempt: attempt(create), execution: execution() })).kind).toBe("success");
     observedState = "stopped";
     const deleting = operation(first, "delete");
-    expect((await provider.delete({ computer: first, operation: deleting, attempt: attempt(deleting), execution: execution() })).kind).toBe("unknown");
+    expect((await provider.delete({ computer: first, operation: deleting, attempt: attempt(deleting), execution: execution() })).kind).toBe("ambiguous");
     expect((await provider.reconcile({ computer: first, operation: deleting, attempt: attempt(deleting), execution: execution() }))).toMatchObject({ kind: "success" });
     expect(releases).toBe(2);
     observedState = "running";
@@ -1494,7 +1494,7 @@ describe("local provider assurance and recovery", () => {
     expect((await provider.create({ computer: second, operation: secondCreate, attempt: attempt(secondCreate), execution: execution() })).kind).toBe("success");
     expect(releaseClaims.map((claim) => claim.claimGeneration)).toEqual([1, 1]);
     expect(releaseClaims[0]?.claimFence).toBe(releaseClaims[1]?.claimFence ?? "");
-    expect(await provider.delete({ computer: first, operation: deleting, attempt: attempt(deleting), execution: execution() })).toMatchObject({ kind: "unknown", message: "Adopted-machine claim was superseded" });
+    expect(await provider.delete({ computer: first, operation: deleting, attempt: attempt(deleting), execution: execution() })).toMatchObject({ kind: "ambiguous", message: "Adopted-machine claim was superseded" });
     expect(releases).toBe(2);
   });
 
@@ -1517,15 +1517,15 @@ describe("local provider assurance and recovery", () => {
     expect(runner.calls[1]?.[6]).toBe("1"); expect(runner.calls[1]?.[7]).toMatch(/^fence_[a-f0-9]{32}$/);
     const stop = operation(machine, "stop");
     runner.results.push(commandResult(`${JSON.stringify(observation)}\n`), commandResult("", "transition rejected", 1));
-    expect((await provider.stop({ computer: machine, operation: stop, attempt: attempt(stop), execution: execution() })).kind).toBe("unknown");
+    expect((await provider.stop({ computer: machine, operation: stop, attempt: attempt(stop), execution: execution() })).kind).toBe("ambiguous");
     runner.results.push(commandResult(`${JSON.stringify(observation)}\n`), commandResult('{"transitioned":true,"extra":true}\n'));
-    expect((await provider.stop({ computer: machine, operation: stop, attempt: attempt(stop), execution: execution() })).kind).toBe("unknown");
+    expect((await provider.stop({ computer: machine, operation: stop, attempt: attempt(stop), execution: execution() })).kind).toBe("ambiguous");
     runner.results.push(commandResult(`${JSON.stringify(observation)}\n`), commandResult('{"transitioned":true}\n'), commandResult(`${JSON.stringify({ ...observation, state: "stopped" })}\n`));
     expect((await provider.stop({ computer: machine, operation: stop, attempt: attempt(stop), execution: execution() })).kind).toBe("success");
     const deletion = operation(machine, "delete"); runner.results.push(commandResult(`${JSON.stringify({ ...observation, state: "stopped" })}\n`), commandResult("", "release rejected", 1));
-    expect((await provider.delete({ computer: machine, operation: deletion, attempt: attempt(deletion), execution: execution() })).kind).toBe("unknown");
+    expect((await provider.delete({ computer: machine, operation: deletion, attempt: attempt(deletion), execution: execution() })).kind).toBe("ambiguous");
     runner.results.push(commandResult(`${JSON.stringify({ ...observation, state: "stopped" })}\n`), commandResult('{"released":true,"extra":true}\n'));
-    expect((await provider.delete({ computer: machine, operation: deletion, attempt: attempt(deletion), execution: execution() })).kind).toBe("unknown");
+    expect((await provider.delete({ computer: machine, operation: deletion, attempt: attempt(deletion), execution: execution() })).kind).toBe("ambiguous");
   });
 
   test("canary cleanup reaches audited deletion and retained-home confirmation", async () => {
@@ -1550,8 +1550,8 @@ describe("local provider assurance and recovery", () => {
     const provider = {
       kind: "local_vm" as const,
       async readiness(): Promise<ProviderReadiness> { return { provider: "local_vm", configured: true, ready: true, confinementClass: "unverified_vm", controls: {}, limitations: [] }; },
-      async create(request: { operation: Operation }): Promise<ProviderOutcome> { seen.push(request.operation); return { kind: "unknown", providerOperationId: "profile-current", message: "reconcile" }; },
-      async reconcile(request: { operation: Operation }): Promise<ProviderOutcome> { seen.push(request.operation); return { kind: "unknown", providerOperationId: "profile-current", message: "reconcile" }; },
+      async create(request: { operation: Operation }): Promise<ProviderOutcome> { seen.push(request.operation); return { kind: "ambiguous", providerOperationId: "profile-current", message: "reconcile" }; },
+      async reconcile(request: { operation: Operation }): Promise<ProviderOutcome> { seen.push(request.operation); return { kind: "ambiguous", providerOperationId: "profile-current", message: "reconcile" }; },
       async start(): Promise<ProviderOutcome> { throw new Error("unused"); }, async stop(): Promise<ProviderOutcome> { throw new Error("unused"); },
       async quarantine(): Promise<ProviderOutcome> { throw new Error("unused"); }, async delete(): Promise<ProviderOutcome> { throw new Error("unused"); },
       async restore(): Promise<ProviderOutcome> { throw new Error("unused"); },
@@ -1575,9 +1575,9 @@ describe("local provider assurance and recovery", () => {
 
   test("canary cleanup fails closed for explicit unknown, definite failure, and provider crash", async () => {
     const cases: Array<{ name: string; outcome: ProviderOutcome | Error; status: Operation["status"] }> = [
-      { name: "unknown", outcome: { kind: "unknown", providerOperationId: "canary-quarantine", message: "indeterminate" }, status: "unknown" },
+      { name: "ambiguous", outcome: { kind: "ambiguous", providerOperationId: "canary-quarantine", message: "indeterminate" }, status: "ambiguous" },
       { name: "failure", outcome: { kind: "definite_failure", code: "quarantine_failed", message: "not quarantined" }, status: "failed" },
-      { name: "crash", outcome: new Error("provider crashed"), status: "unknown" },
+      { name: "crash", outcome: new Error("provider crashed"), status: "ambiguous" },
     ];
     for (const item of cases) {
       const provider = new CanaryCleanupProvider(item.outcome); const { storage, service, worker, computer } = await preparedCanary(provider);
@@ -1587,10 +1587,10 @@ describe("local provider assurance and recovery", () => {
         expect(cleanup?.status).toBe(item.status); expect(provider.deleteCalls).toBe(0);
         expect((storage.database.query("SELECT COUNT(*) AS count FROM audit_events WHERE tenant_id = ? AND computer_id = ? AND action = 'computer.quarantine.requested'")
           .get(canaryAdmin.tenantId, computer.id) as { count: number }).count).toBe(1);
-        if (item.name === "unknown") {
+        if (item.name === "ambiguous") {
           expect(await cleanupLocalCanary(storage, service, worker, computer, `${item.name}-retry`)).toEqual({ deleted: false });
           expect(provider.reconcileCalls).toBe(3);
-          expect(storage.listOperations(canaryAdmin.tenantId, computer.id).filter((operation) => ["pending", "accepted", "running", "unknown"].includes(operation.status))).toHaveLength(1);
+          expect(storage.listOperations(canaryAdmin.tenantId, computer.id).filter((operation) => ["admitted", "leased", "running", "ambiguous"].includes(operation.status))).toHaveLength(1);
         }
       } finally { storage.close(); }
     }
@@ -1601,7 +1601,7 @@ describe("local provider assurance and recovery", () => {
       const provider = new CanaryCleanupProvider({ kind: "success", resource: { resourceId: "resource:canary" }, result: {} });
       let storage: SQLiteStorage; let service: ComputersService; let worker: OperationWorker; let machine: Computer;
       if (phase === "create") {
-        provider.create = async () => ({ kind: "unknown", providerOperationId: "canary-create-unknown", message: "indeterminate" });
+        provider.create = async () => ({ kind: "ambiguous", providerOperationId: "canary-create-unknown", message: "indeterminate" });
         storage = new SQLiteStorage(":memory:"); const ports = { local_machine: provider as never, local_vm: provider, aws_ec2: provider as never };
         service = new ComputersService(storage, { providers: ports, ticketSigningKeyProvider: new StaticInstallTicketSigningKeyProvider(randomBytes(32)) });
         service.createProfile(canaryAdmin, { id: "profile_canary", name: "Canary Lima", document: { provider: "local_vm", cpus: 2, memoryGiB: 4,
@@ -1613,17 +1613,17 @@ describe("local provider assurance and recovery", () => {
         ({ storage, service, worker, computer: machine } = await preparedCanary(provider));
         if (phase === "start") {
           storage.acquireHomeLease(canaryAdmin.tenantId, machine.id, machine.ownerPrincipalId, "canary-controller", 60, 0);
-          provider.start = async () => ({ kind: "unknown", providerOperationId: "canary-start-unknown", message: "indeterminate" });
+          provider.start = async () => ({ kind: "ambiguous", providerOperationId: "canary-start-unknown", message: "indeterminate" });
         } else if (phase === "stop") {
           storage.updateComputerStatus(canaryAdmin.tenantId, machine.id, "running");
-          provider.stop = async () => ({ kind: "unknown", providerOperationId: "canary-stop-unknown", message: "indeterminate" });
-        } else provider.delete = async () => ({ kind: "unknown", providerOperationId: "canary-delete-unknown", message: "indeterminate" });
+          provider.stop = async () => ({ kind: "ambiguous", providerOperationId: "canary-stop-unknown", message: "indeterminate" });
+        } else provider.delete = async () => ({ kind: "ambiguous", providerOperationId: "canary-delete-unknown", message: "indeterminate" });
         service.requestLifecycle(canaryAdmin, machine.id, phase, `canary-${phase}-unknown`); await worker.runTenant(canaryAdmin.tenantId);
       }
       try {
         expect(await cleanupLocalCanary(storage, service, worker, machine, `active-${phase}`)).toEqual({ deleted: false });
         expect(provider.reconcileCalls).toBe(3);
-        expect(storage.listOperations(canaryAdmin.tenantId, machine.id).filter((item) => ["pending", "accepted", "running", "unknown"].includes(item.status))).toHaveLength(1);
+        expect(storage.listOperations(canaryAdmin.tenantId, machine.id).filter((item) => ["admitted", "leased", "running", "ambiguous"].includes(item.status))).toHaveLength(1);
       } finally { storage.close(); }
     }
   });
@@ -1661,12 +1661,12 @@ describe("local provider assurance and recovery", () => {
     manifest.resolvedProfileDigest = `sha256:${"f".repeat(64)}`; writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
     inspector.inspection = resolved({ status: "Stopped", additionalDisks: [{ name: expectedDisk, format: false }] }); inspector.disk = true;
     expect(await provider.create({ computer: machine, operation: createOp, attempt: attempt(createOp), execution: execution() }))
-      .toMatchObject({ kind: "unknown", message: "Local VM profile binding has drifted while an external resource still exists" });
+      .toMatchObject({ kind: "ambiguous", message: "Local VM profile binding has drifted while an external resource still exists" });
     const invalidBinding = structuredClone(createOp); (invalidBinding.request.profile as { digest: string }).digest = `sha256:${"0".repeat(64)}`;
     expect(await provider.create({ computer: machine, operation: invalidBinding, attempt: attempt(invalidBinding), execution: execution() }))
-      .toMatchObject({ kind: "unknown", message: "Local VM profile binding has drifted while an external resource may still exist" });
+      .toMatchObject({ kind: "ambiguous", message: "Local VM profile binding has drifted while an external resource may still exist" });
     expect(await provider.reconcile({ computer: machine, operation: createOp, attempt: attempt(createOp), execution: execution() }))
-      .toMatchObject({ kind: "unknown", message: "Local VM profile binding has drifted while an external resource may still exist" });
+      .toMatchObject({ kind: "ambiguous", message: "Local VM profile binding has drifted while an external resource may still exist" });
     inspector.inspection = resolved({ exists: false }); inspector.disk = false; const deletion = operation(machine, "delete");
     expect(await provider.reconcile({ computer: machine, operation: deletion, attempt: attempt(deletion), execution: execution() })).toMatchObject({ kind: "definite_failure", code: "profile_mismatch" });
     expect(runner.calls).toHaveLength(2);
@@ -1774,11 +1774,11 @@ describe("local provider assurance and recovery", () => {
       const external = await localProvider.create({ computer: child, operation: create, attempt: attemptRecord, execution: execution() });
       if (external.kind !== "success") throw new Error(`Ghost fixture did not create the external VM: ${JSON.stringify(external)}`);
       expect(external.kind).toBe("success");
-      storage.recordProviderUnknown(attemptRecord, {
-        kind: "unknown", providerOperationId: attemptRecord.providerIdempotencyKey, resource: external.resource,
+      storage.recordProviderAmbiguous(attemptRecord, {
+        kind: "ambiguous", providerOperationId: attemptRecord.providerIdempotencyKey, resource: external.resource,
         message: "Controller crashed after external create",
       });
-      storage.database.query("UPDATE operation_attempts SET execution_owner_expires_at = ? WHERE tenant_id = ? AND id = ?")
+      storage.database.query("UPDATE operation_attempts SET lease_expires_at = ? WHERE tenant_id = ? AND id = ?")
         .run("1970-01-01T00:00:00.000Z", attemptRecord.tenantId, attemptRecord.id);
       storage.database.query(`INSERT INTO profile_revisions
         (id, profile_id, tenant_id, generation, digest, document_json, created_at) VALUES (?, ?, ?, 2, ?, ?, ?)`)
@@ -1786,7 +1786,7 @@ describe("local provider assurance and recovery", () => {
       inspector.inspection = resolved({ status: "Stopped", additionalDisks: [{ name: expectedDisk, format: false }] }); inspector.disk = true;
       basePorts.local_vm = localProvider;
       expect(await new OperationWorker(storage, basePorts).runTenant(adminContext.tenantId)).toBe(1);
-      expect(storage.getOperation(adminContext.tenantId, create.id)).toMatchObject({ status: "unknown" });
+      expect(storage.getOperation(adminContext.tenantId, create.id)).toMatchObject({ status: "ambiguous" });
       expect(storage.getProviderBinding(adminContext.tenantId, child.id)).toMatchObject({ state: "unknown", resource: { resourceId: external.resource.resourceId } });
       expect(() => service.createComputer(delegated, {
         ...fields, slug: "ghost-second", ownerPrincipalId: "principal_ghost_second", idempotencyKey: "ghost-second-create",
@@ -1801,7 +1801,7 @@ describe("local provider assurance and recovery", () => {
     inspector.onInspect = (value) => { if (value.portForwardCount === 1 && existsSync(phasePath)) rmSync(phasePath); };
     const runner = new FakeRunner(); runner.results.push(commandResult(), commandResult()); const provider = vmConfig(state, inspector, runner).provider; const op = operation(machine);
     expect(await provider.create({ computer: machine, operation: op, attempt: attempt(op), execution: execution() }))
-      .toMatchObject({ kind: "unknown", message: "Unsafe Lima cleanup requires an exact durable ownership marker" });
+      .toMatchObject({ kind: "ambiguous", message: "Unsafe Lima cleanup requires an exact durable ownership marker" });
     expect(runner.calls).toHaveLength(2);
   });
 
@@ -1824,7 +1824,7 @@ describe("local provider assurance and recovery", () => {
     const runner = new FakeRunner(); const machine = computer(); const expectedDisk = `home_${createHashFor(machine, "home")}`;
     runner.results.push({ exitCode: 0, stdout: "", stderr: "", timedOut: false, outputExceeded: false }, { exitCode: 0, stdout: "", stderr: "", timedOut: false, outputExceeded: false }, { exitCode: 1, stdout: "", stderr: "", timedOut: true, outputExceeded: false });
     const { provider } = vmConfig(state, inspector, runner); inspector.inspections = [resolved({ exists: false }), resolved({ portForwardCount: 1, additionalDisks: [{ name: expectedDisk, format: false }] })];
-    const op = operation(machine); expect((await provider.create({ computer: machine, operation: op, attempt: attempt(op), execution: execution() })).kind).toBe("unknown");
+    const op = operation(machine); expect((await provider.create({ computer: machine, operation: op, attempt: attempt(op), execution: execution() })).kind).toBe("ambiguous");
   });
 
   test("bounded runner enforces output and timeout without a shell", async () => {
@@ -1849,7 +1849,7 @@ describe("local provider assurance and recovery", () => {
     db.query("INSERT INTO profile_revisions (id, profile_id, tenant_id, generation, digest, document_json, created_at) VALUES (?, ?, ?, 1, ?, ?, ?)")
       .run("prv_before", "profile_shared", "tenant_before", sha256(document), JSON.stringify(document), new Date().toISOString()); db.close();
     const upgraded = new SQLiteStorage(databasePath); try {
-      expect(upgraded.database.query("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 3 });
+      expect(upgraded.database.query("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 4 });
       expect(upgraded.database.query("SELECT name FROM sqlite_master WHERE name = 'provider_assurance'").get()).toEqual({ name: "provider_assurance" });
       const otherAdmin = { ...admin, tenantId: "tenant_after" };
       const service = new ComputersService(upgraded, { ticketSigningKeyProvider: new StaticInstallTicketSigningKeyProvider(randomBytes(32)) });

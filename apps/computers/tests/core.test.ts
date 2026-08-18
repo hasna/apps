@@ -32,7 +32,7 @@ describe("Computers core", () => {
     expect(storage.ready()).toBe(true);
     expect((storage.database.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys).toBe(1);
     expect((storage.database.query("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode).toBe("memory");
-    expect(storage.database.query("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 3 });
+    expect(storage.database.query("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 4 });
   });
 
   test("uses honest confinement classes and deterministic create idempotency", () => {

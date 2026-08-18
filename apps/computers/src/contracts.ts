@@ -27,7 +27,7 @@ export type OperationKind =
   | "install"
   | "snapshot"
   | "restore";
-export type OperationStatus = "pending" | "accepted" | "running" | "unknown" | "succeeded" | "failed" | "cancelled";
+export type OperationStatus = "admitted" | "leased" | "running" | "ambiguous" | "succeeded" | "failed" | "cancelled";
 export type Scope = (typeof ALL_SCOPES)[number];
 
 export interface Computer {
@@ -164,7 +164,7 @@ export interface Operation {
   request: Record<string, unknown>;
   priorComputerStatus?: ComputerStatus;
   desiredComputerStatus?: ComputerStatus;
-  result?: Record<string, unknown>;
+  receipt?: Record<string, unknown>;
   errorCode?: string;
   fence: number;
   createdAt: string;
@@ -180,7 +180,7 @@ export interface ProviderResourceIdentity {
 export type ProviderOutcome =
   | { kind: "success"; resource: ProviderResourceIdentity; result: Record<string, unknown> }
   | { kind: "definite_failure"; code: string; message: string; resource?: ProviderResourceIdentity }
-  | { kind: "unknown"; providerOperationId: string; message: string; resource?: ProviderResourceIdentity };
+  | { kind: "ambiguous"; providerOperationId: string; message: string; resource?: ProviderResourceIdentity };
 
 export interface ProviderAssuranceEvidence {
   confinementClass: ConfinementClass;
@@ -213,11 +213,11 @@ export interface ProviderAttempt {
   providerIdempotencyKey: string;
   providerOperationId?: string;
   resource?: ProviderResourceIdentity;
-  status: "running" | "unknown" | "succeeded" | "failed";
+  status: "running" | "ambiguous" | "succeeded" | "failed";
   fence: number;
-  executionOwnerToken?: string;
-  executionOwnerGeneration: number;
-  executionOwnerExpiresAt?: string;
+  leaseToken?: string;
+  leaseGeneration: number;
+  leaseExpiresAt?: string;
   startedAt: string;
   completedAt?: string;
 }
@@ -406,7 +406,7 @@ export type ErrorCode =
   | "invalid_request"
   | "request_too_large"
   | "provider_not_configured"
-  | "provider_outcome_unknown"
+  | "provider_outcome_ambiguous"
   | "unsupported_operation"
   | "sandbox_disabled"
   | "replay_detected"
