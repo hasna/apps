@@ -4,17 +4,16 @@
  * THE storage boundary for every client caller (CLI, MCP, SDK, runner). There is
  * exactly ONE {@link Store} interface with two transports behind it:
  *
- *   - {@link LocalStore}  — on-box SQLite (delegates to `db/*`). First-class.
- *   - {@link ApiStore}    — the app's cloud `/v1` HTTP API + bearer key.
+ *   - {@link LocalStore}  — on-box SQLite (delegates to `db/*`).
+ *   - {@link ApiStore}    — the app's hosted `/v1` HTTP API + bearer key.
  *
  * The transport is resolved ONCE, from the environment, by {@link getStore}
- * (cached). `self_hosted` and `cloud` both resolve to {@link ApiStore} (identical
- * client code — only the URL/key differ; tenancy is a server concern). Everything
- * else resolves to {@link LocalStore}. There is NO per-call `if (isCloud())`
- * branch, NO DSN on the client, and NO raw `fetch`/`bun:sqlite` in command code:
- * callers only ever touch `getStore()`.
+ * (cached): when `HASNA_TESTERS_API_URL` and `HASNA_TESTERS_API_KEY` are both
+ * present the store is {@link ApiStore}; otherwise {@link LocalStore}. There is
+ * NO per-call `if (isCloud())` branch, NO DSN on the client, and NO raw
+ * `fetch`/`bun:sqlite` in command code: callers only ever touch `getStore()`.
  *
- * If cloud is requested but misconfigured, {@link getStore} throws (via the
+ * If the hosted API is partially configured, {@link getStore} throws (via the
  * resolver) so a caller can never silently read/write the wrong dataset.
  */
 import { resolveStorageClient, resolveClientTransport, type HasnaStorageClient } from "../generated/storage-client/index.js";
@@ -224,13 +223,13 @@ export interface Store {
    *
    * LOCAL transport only — recorded strong reason (local-only-capability
    * removal, 2026-08-18, port lane): the ApiStore rejects this because a
-   * cloud/self_hosted dataset lives on the server and cannot be dumped to a
+   * hosted dataset lives on the server and cannot be dumped to a
    * client-side file — there is no server dump endpoint, and building one would
    * require a full Postgres→SQLite dataset export (schema translation, blob
    * handling, 100k-row pagination). The end-to-end capability this feeds —
    * sandbox-target workflow execution against the dataset — works identically
-   * on the hosted path: `createWorkflowDatabaseBundle` skips the file dump in
-   * cloud mode and `runViaSandbox` provisions the sandbox with API credentials
+   * on the hosted path: `createWorkflowDatabaseBundle` skips the file dump on the
+   * hosted route and `runViaSandbox` provisions the sandbox with API credentials
    * (HASNA_TESTERS_API_URL/HASNA_TESTERS_API_KEY) instead. `snapshotToFile` is
    * therefore the LOCAL mechanism of a capability that is ported at the
    * provisioning layer, not a capability missing from the hosted path.
@@ -885,7 +884,7 @@ export class ApiStore implements Store {
 
   async snapshotToFile(_path: string): Promise<never> {
     throw new Error(
-      "snapshotToFile is unavailable in cloud/self_hosted mode: a remote dataset cannot be dumped to a local SQLite file. Sandbox execution against the cloud store must provision the sandbox with API credentials (HASNA_TESTERS_API_URL/HASNA_TESTERS_API_KEY) rather than a database snapshot.",
+      "snapshotToFile is unavailable in the hosted API store: a remote dataset cannot be dumped to a local SQLite file. Sandbox execution against the hosted store must provision the sandbox with API credentials (HASNA_TESTERS_API_URL/HASNA_TESTERS_API_KEY) rather than a database snapshot.",
     );
   }
 }
@@ -918,17 +917,15 @@ export function isCloudStore(): boolean {
  * Non-secret description of where this process's Store actually reads/writes, so
  * status commands (`status`, `get_status`) can report the TRUTH instead of a
  * hard-coded local sqlite path. Never returns the API key value — only presence
- * and the env-key name it came from. In cloud mode there is no local db, so
- * `dbPath` is null. This makes routing auditable: an operator can trust it to
- * confirm a flip landed on the cloud API.
+ * and the env-key name it came from. On the hosted transport there is no local
+ * db, so `dbPath` is null. This makes routing auditable: an operator can trust
+ * it to confirm the hosted API was selected.
  */
 export function storageStatus(): {
-  mode: "local" | "cloud";
   transport: "local" | "cloud-http";
   baseUrl: string | null;
   apiKeyPresent: boolean;
   apiKeySource: string | null;
-  modeSource: string;
   dbPath: string | null;
 } {
   const r = resolveClientTransport(TESTERS_APP, process.env);
@@ -937,12 +934,10 @@ export function storageStatus(): {
       ? null
       : process.env["HASNA_TESTERS_DB_PATH"] || process.env["TESTERS_DB_PATH"] || null;
   return {
-    mode: r.mode,
     transport: r.transport,
     baseUrl: r.baseUrl,
     apiKeyPresent: r.apiKeyPresent,
     apiKeySource: r.apiKeySource,
-    modeSource: r.modeSource,
     dbPath,
   };
 }

@@ -1,65 +1,47 @@
 // Client-side transport resolver for the Hasna Service Contract v1.
 //
-// THIS IS THE B2 CORE FIX. Historically, setting a client to cloud/self_hosted
-// mode was a NO-OP: the CLI/MCP still read the local SQLite/db.json store even
-// though `HASNA_<APP>_STORAGE_MODE=cloud` and a DATABASE_URL were set. A DSN on
-// the client does NOT switch the dataset a CLI reads.
+// The client selects its backend from the environment ONLY. Given an app name
+// and the environment it decides whether reads AND writes should be routed to
+// the app's hosted HTTP API (`<API_URL>/v1`) with the API key, or fall through
+// to the local store.
 //
-// This module makes the client actually talk to the cloud. Given an app name and
-// the environment it decides whether reads AND writes should be routed to the
-// app's cloud HTTP API (`<API_URL>/v1`, default `https://<app>.hasna.xyz/v1`)
-// with the API key, or fall through to the local store.
+// THE CLIENT CONTRACT (env vars). For app `<NAME>` = envToken(name):
 //
-// THE CLIENT-FLIP CONTRACT (env vars). For app `<NAME>` = envToken(name):
-//
-//   Mode   (any one, first match wins; aliases self_hosted/remote/hybrid -> cloud):
-//     HASNA_<NAME>_STORAGE_MODE = cloud | self_hosted | local | ...
-//     HASNA_<NAME>_MODE         = cloud | self_hosted | local | ...   (alias)
-//     <NAME>_STORAGE_MODE                                             (alias)
-//     <NAME>_MODE                                                     (alias)
-//   API base URL (optional; `/v1` is appended automatically):
-//     HASNA_<NAME>_API_URL = https://<app>.hasna.xyz
+//   API base URL (`/v1` is appended automatically):
+//     HASNA_<NAME>_API_URL
 //     <NAME>_API_URL                                                  (alias)
 //   API key (bearer / x-api-key):
-//     HASNA_<NAME>_API_KEY = hasna_<app>_...
+//     HASNA_<NAME>_API_KEY
 //     <NAME>_API_KEY                                                  (alias)
 //
-// DECISION: transport is `cloud-http` IFF the resolved mode is `cloud` AND an API
-// key is present. The base URL defaults to `https://<app>.hasna.xyz` when a key is
-// present but no URL is set. If mode is `cloud` but the API key is MISSING, we do
-// NOT silently serve wrong local data — we return `local` with a loud `warning`
-// and `misconfigured: true` so the caller can hard-fail instead of drifting.
+// DECISION: transport is `cloud-http` IFF `HASNA_<NAME>_API_URL` AND
+// `HASNA_<NAME>_API_KEY` are both present. Either one alone is a
+// misconfiguration: we do NOT silently serve local data for a partially
+// configured hosted setup — we return `local` with `misconfigured: true` so the
+// caller can hard-fail instead of drifting. With neither set, the local store
+// is selected.
 //
 // SAFETY: this module never returns, logs, or embeds the API key value. Callers
 // receive only presence flags and env-key names.
 
-import { normalizeStorageMode, envToken, type Env } from "./mode.js";
-import type { StorageMode } from "./mode.js";
+export type Env = Record<string, string | undefined>;
 
-/** Default cloud host template. `<app>` is the app slug. */
-export function defaultCloudBaseUrl(name: string): string {
-  return `https://${name}.hasna.xyz`;
+/** Upper-snake env token for an app name, e.g. `telephony` -> `TELEPHONY`. */
+export function envToken(name: string): string {
+  return name.toUpperCase().replace(/-/g, "_");
 }
 
 export interface ClientTransportEnvKeys {
-  /** Mode keys, in precedence order. */
-  modeKeys: string[];
   /** API base-URL keys, in precedence order. */
   apiUrlKeys: string[];
   /** API-key keys, in precedence order. */
   apiKeyKeys: string[];
 }
 
-/** Resolve the canonical client-flip env-key spec for an app. */
+/** Resolve the client env-key spec for an app. */
 export function clientTransportEnvKeys(name: string): ClientTransportEnvKeys {
   const token = envToken(name);
   return {
-    modeKeys: [
-      `HASNA_${token}_STORAGE_MODE`,
-      `HASNA_${token}_MODE`,
-      `${token}_STORAGE_MODE`,
-      `${token}_MODE`,
-    ],
     apiUrlKeys: [`HASNA_${token}_API_URL`, `${token}_API_URL`],
     apiKeyKeys: [`HASNA_${token}_API_KEY`, `${token}_API_KEY`],
   };
@@ -92,24 +74,18 @@ export type ClientTransportKind = "local" | "cloud-http";
 export interface ClientTransportResolution {
   /** Where the client should read/write from. */
   transport: ClientTransportKind;
-  /** Resolved storage mode (`local` | `cloud`). */
-  mode: StorageMode;
-  /** Deprecated mode alias that was normalized (e.g. `self_hosted`), if any. */
-  deprecatedAlias: string | null;
-  /** Env key the mode was read from, or `"default"`. */
-  modeSource: string;
-  /** `<origin>/v1` base for the cloud API when transport is cloud-http, else null. */
+  /** `<origin>/v1` base for the hosted API when transport is cloud-http, else null. */
   baseUrl: string | null;
-  /** Env key the API URL came from, `"default"` (host template), or null. */
+  /** Env key the API URL came from, or null. */
   apiUrlSource: string | null;
   /** Whether an API key is present (value never exposed). */
   apiKeyPresent: boolean;
   /** Env key the API key came from, or null. */
   apiKeySource: string | null;
   /**
-   * True when the operator asked for cloud but the config is incomplete (no API
-   * key), so we fell back to local. Callers SHOULD treat this as an error rather
-   * than silently reading local data.
+   * True when a hosted API endpoint or key is configured but the pair is
+   * incomplete, so we fell back to local. Callers SHOULD treat this as an
+   * error rather than silently reading local data.
    */
   misconfigured: boolean;
   /** Human-readable warning, or null. Never contains secret values. */
@@ -119,91 +95,57 @@ export interface ClientTransportResolution {
 /**
  * Resolve how a client should reach an app's data given the environment.
  *
- * Precedence for the mode: the first present of `HASNA_<NAME>_STORAGE_MODE`,
- * `HASNA_<NAME>_MODE`, `<NAME>_STORAGE_MODE`, `<NAME>_MODE`, else `local`.
+ * Hosted API IFF both `HASNA_<NAME>_API_URL` and `HASNA_<NAME>_API_KEY` are
+ * present (either alone is a misconfiguration and fails closed); otherwise the
+ * local store is selected.
  */
 export function resolveClientTransport(name: string, env: Env = process.env): ClientTransportResolution {
   const keys = clientTransportEnvKeys(name);
-  const modeHit = firstEnv(env, keys.modeKeys);
   const urlHit = firstEnv(env, keys.apiUrlKeys);
   const keyHit = firstEnv(env, keys.apiKeyKeys);
-
-  let mode: StorageMode = "local";
-  let deprecatedAlias: string | null = null;
-  let modeSource = "default";
   const warnings: string[] = [];
 
-  if (modeHit) {
-    const normalized = normalizeStorageMode(modeHit.value);
-    mode = normalized.mode;
-    deprecatedAlias = normalized.deprecatedAlias;
-    modeSource = modeHit.key;
-    if (deprecatedAlias) {
-      warnings.push(
-        `Deprecated mode '${deprecatedAlias}' from ${modeHit.key} is treated as 'cloud'. Prefer ${keys.modeKeys[0]}=cloud.`,
-      );
-    }
-  } else if (urlHit && keyHit) {
-    // No explicit *_STORAGE_MODE, but a cloud endpoint + API key are both
-    // configured — exactly what the fleet flip writes (HASNA_<APP>_API_URL +
-    // HASNA_<APP>_API_KEY, no mode var). Treat that as an implicit request to
-    // route to the cloud `/v1` API. An explicit `*_STORAGE_MODE=local` is still
-    // honored above and overrides this, so `unset -> local` and an explicit
-    // opt-out both keep the on-box store.
-    mode = "cloud";
-    modeSource = `${urlHit.key}+${keyHit.key}`;
-  }
-
-  // Local mode: never route to the network, regardless of URL/key presence.
-  if (mode === "local") {
+  // Neither URL nor key: local store.
+  if (!urlHit && !keyHit) {
     return {
       transport: "local",
-      mode,
-      deprecatedAlias,
-      modeSource,
-      baseUrl: null,
-      apiUrlSource: null,
-      apiKeyPresent: Boolean(keyHit),
-      apiKeySource: keyHit ? keyHit.key : null,
-      misconfigured: false,
-      warning: warnings.length > 0 ? warnings.join(" ") : null,
-    };
-  }
-
-  // Cloud mode but no API key: fall back to local, but flag it loudly.
-  if (!keyHit) {
-    warnings.push(
-      `${modeSource}=cloud but no API key is set (${keys.apiKeyKeys[0]}). Refusing to route to cloud; using local store. Set ${keys.apiKeyKeys[0]} to enable the cloud client.`,
-    );
-    return {
-      transport: "local",
-      mode,
-      deprecatedAlias,
-      modeSource,
       baseUrl: null,
       apiUrlSource: null,
       apiKeyPresent: false,
       apiKeySource: null,
+      misconfigured: false,
+      warning: null,
+    };
+  }
+
+  // One half of the hosted pair only: refuse to serve local data silently.
+  if (!urlHit || !keyHit) {
+    const missing = urlHit ? keys.apiKeyKeys[0] : keys.apiUrlKeys[0];
+    warnings.push(
+      `Hosted API requested but ${missing} is not set. Refusing to route; using local store. Set ${missing} to complete the hosted API configuration.`,
+    );
+    return {
+      transport: "local",
+      baseUrl: null,
+      apiUrlSource: urlHit ? urlHit.key : null,
+      apiKeyPresent: Boolean(keyHit),
+      apiKeySource: keyHit ? keyHit.key : null,
       misconfigured: true,
       warning: warnings.join(" "),
     };
   }
 
-  const rawUrl = urlHit?.value ?? defaultCloudBaseUrl(name);
-  const apiUrlSource = urlHit ? urlHit.key : "default";
+  const rawUrl = urlHit.value;
   let baseUrl: string;
   try {
     baseUrl = toV1BaseUrl(rawUrl);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    warnings.push(`Invalid API URL from ${apiUrlSource}: ${message}. Using local store.`);
+    warnings.push(`Invalid API URL from ${urlHit.key}: ${message}. Using local store.`);
     return {
       transport: "local",
-      mode,
-      deprecatedAlias,
-      modeSource,
       baseUrl: null,
-      apiUrlSource: null,
+      apiUrlSource: urlHit.key,
       apiKeyPresent: true,
       apiKeySource: keyHit.key,
       misconfigured: true,
@@ -213,11 +155,8 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
 
   return {
     transport: "cloud-http",
-    mode,
-    deprecatedAlias,
-    modeSource,
     baseUrl,
-    apiUrlSource,
+    apiUrlSource: urlHit.key,
     apiKeyPresent: true,
     apiKeySource: keyHit.key,
     misconfigured: false,
@@ -458,9 +397,9 @@ export function createHasnaHttpTransport(options: HasnaHttpTransportOptions): Ha
 /**
  * Convenience: resolve transport from env and, when cloud-http, build the HTTP
  * client in one call. Returns `{ transport: 'local', resolution }` for local, or
- * `{ transport: 'cloud-http', client, resolution }` for cloud. Throws if the
- * config is `misconfigured` (cloud requested but unusable) so callers can't drift
- * onto local data by accident.
+ * `{ transport: 'cloud-http', client, resolution }` for the hosted API. Throws
+ * if the config is `misconfigured` (hosted API partially configured but
+ * unusable) so callers can't drift onto local data by accident.
  */
 export function createClientTransport(
   name: string,
@@ -471,7 +410,7 @@ export function createClientTransport(
   | { transport: "cloud-http"; client: HasnaHttpTransport; resolution: ClientTransportResolution } {
   const resolution = resolveClientTransport(name, env);
   if (resolution.misconfigured) {
-    throw new Error(resolution.warning ?? `Client for '${name}' is misconfigured for cloud mode.`);
+    throw new Error(resolution.warning ?? `Client for '${name}' is misconfigured for the hosted API.`);
   }
   if (resolution.transport === "local" || !resolution.baseUrl) {
     return { transport: "local", client: null, resolution };

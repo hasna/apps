@@ -1,7 +1,6 @@
 // Keep this regression suite hermetic: force the testers Store to the on-box
-// SQLite transport so it never routes to the cloud `/v1` API (a cloud-wired
+// SQLite transport so it never routes to the hosted `/v1` API (a hosted-wired
 // station or CI would otherwise make these tests hit the network and hang).
-process.env.HASNA_TESTERS_STORAGE_MODE = "local";
 delete process.env.HASNA_TESTERS_API_URL;
 delete process.env.HASNA_TESTERS_API_KEY;
 process.env.TESTERS_DB_PATH = ":memory:";
@@ -209,7 +208,7 @@ describe("repo executor", () => {
         "5000",
         "--json",
       ],
-      env: { ...process.env, HASNA_TESTERS_STORAGE_MODE: "local", TESTERS_DB_PATH: ":memory:", HASNA_TESTERS_DIR: testersDir },
+      env: { ...process.env, TESTERS_DB_PATH: ":memory:", HASNA_TESTERS_DIR: testersDir },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -246,7 +245,7 @@ describe("repo executor", () => {
         "5000",
         "--json",
       ],
-      env: { ...process.env, HASNA_TESTERS_STORAGE_MODE: "local", TESTERS_DB_PATH: ":memory:", HASNA_TESTERS_DIR: testersDir },
+      env: { ...process.env, TESTERS_DB_PATH: ":memory:", HASNA_TESTERS_DIR: testersDir },
       stdout: "pipe",
       stderr: "pipe",
     });

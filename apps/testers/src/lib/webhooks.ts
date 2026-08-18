@@ -2,8 +2,8 @@ import { createWebhook, getWebhook, listWebhooks, deleteWebhook } from "../store
 import type { Run, ApiCheck, ApiCheckResult } from "../types/index.js";
 
 // ─── CRUD (routed through the Store — never touches SQLite directly) ─────────
-// The webhook domain lives in the Store (db/webhooks.ts locally, /v1/webhooks in
-// cloud mode) so it can never be written to the wrong dataset.
+// The webhook domain lives in the Store (db/webhooks.ts locally, /v1/webhooks on
+// the hosted transport) so it can never be written to the wrong dataset.
 export { createWebhook, getWebhook, listWebhooks, deleteWebhook };
 export type { Webhook } from "../db/webhooks.js";
 

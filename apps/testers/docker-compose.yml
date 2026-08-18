@@ -1,7 +1,8 @@
 # =============================================================================
-# testers — local docker compose for the cloud (Postgres) service.
-# Runs Postgres + testers-serve in cloud mode, applies migrations, then serves.
-# For production the image is deployed to ECS via the hasna-app Terraform module.
+# testers — local docker compose for the Postgres-backed service.
+# Runs Postgres + testers-serve (DATABASE_URL selects Postgres), applies
+# migrations, then serves. For production the image is deployed to ECS via the
+# hasna-app Terraform module.
 # =============================================================================
 services:
   db:
@@ -22,7 +23,6 @@ services:
     build: .
     command: ["testers", "db", "migrate"]
     environment:
-      HASNA_TESTERS_STORAGE_MODE: cloud
       HASNA_TESTERS_DATABASE_URL: postgresql://testers:testers@db:5432/testers
     depends_on:
       db:
@@ -33,7 +33,6 @@ services:
     command: ["testers-serve"]
     environment:
       PORT: "8080"
-      HASNA_TESTERS_STORAGE_MODE: cloud
       HASNA_TESTERS_DATABASE_URL: postgresql://testers:testers@db:5432/testers
       HASNA_TESTERS_API_SIGNING_KEY: ${HASNA_TESTERS_API_SIGNING_KEY:-dev-signing-secret-change-me}
     ports:
