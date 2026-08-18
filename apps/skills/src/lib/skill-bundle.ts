@@ -47,6 +47,15 @@ const ANY_SEGMENT_EXCLUDES = new Set([
 const ROOT_EXCLUDES = new Set(["dist", "build", ".turbo"]);
 
 /**
+ * Tool-owned sidecar files, excluded only at the skill root. The sync provenance markers
+ * (pull.ts PULL_MARKER_FILE, registry-reconcile.ts SYNC_CURSOR_FILE) sit inside the
+ * corpus skill directory and must never change the bundle digest or travel into a
+ * published bundle when a pulled skill is re-pushed: a pulled skill's repack must equal
+ * its remote digest.
+ */
+const TOOL_SIDECAR_FILENAMES = new Set([".hasna-skills.json", ".sync-cursor.json"]);
+
+/**
  * Filenames that routinely hold live credentials. A superset of RESERVED_SKILL_ENTRIES in
  * skill-validation.ts, which is where a skill author first hears about them.
  */
@@ -203,6 +212,7 @@ function walk(root: string, current: string, out: SkillBundleEntry[]): void {
     const isRootLevel = !rel.includes("/");
     if (ANY_SEGMENT_EXCLUDES.has(entry.name.toLowerCase())) continue;
     if (isRootLevel && ROOT_EXCLUDES.has(entry.name.toLowerCase())) continue;
+    if (isRootLevel && TOOL_SIDECAR_FILENAMES.has(entry.name.toLowerCase())) continue;
     if (entry.name.startsWith("._")) continue;
     // Symlinks are skipped rather than followed or recorded. A recorded link can point
     // outside the extraction root, and following one can pull in an entire home
