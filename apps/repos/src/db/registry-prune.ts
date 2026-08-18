@@ -4,7 +4,7 @@
  * The registry had no prune, forget, remove or delete verb at all. `repos scan`
  * exits 0 without retiring anything, and `repos registry` exposed only
  * `relocate-primary` and `adjudicate-branches`. So 291 rows on this machine
- * pointing at absent paths — including `open-browserplan`, whose stale
+ * pointing at absent paths — including a stale pre-migration row whose
  * `github.com/hasna/browserplan` remote still *works* because GitHub redirects it
  * to `hasnastudio/platform-browserplan`, so any tool resolving that row operates
  * on the live repo believing it is the old one — had no supported way to be
