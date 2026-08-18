@@ -445,28 +445,33 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "sheets",
-    cause: "manifest_valid: unrecognized 'exports' key at root; library-repo storage shape drift.",
+    cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Manifest migrated to kit 0.11.1 (backend schema; library class, no store); the artifact-scan release gate remains.",
     task: "todos d766ac9c (contracts task — sheets)",
   },
   {
     member: "signatures",
-    cause: "manifest_valid: storage.engines must declare both sqlite and postgres unless a metadata.conformance.waivedStorageEngines waiver exists; postgres missing.",
+    cause: "surface_matrix/service_api_topology: the api surface is declared deferred because signatures-serve does not serve GET /ready, GET /version, a /v1 base path, or an OpenAPI document, and the sdk surface is deferred with it (no generatedFrom); self_host_artifact: no Dockerfile/compose.yml. Manifest migrated to kit 0.11.1; storage engines now declare sqlite+postgresql with pgTestGate per the service-capable cli-with-store rule (the previously missing postgres engine).",
     task: "todos 7001d8d7 (contracts task — signatures)",
   },
   {
     member: "slides",
-    cause: "kitVersion 0.1.0 predates repo-conformance; no @hasna/contracts dep pinned; validated at latest, manifest is pre-backend-schema era.",
+    cause: "surface_matrix: no cli surface — the member ships no public `slides` CLI bin (tracked CLI_EXCEPTIONS task 62ec9dbc); published_artifact_gate: metadata.release.artifactScan.script is required for a published package. Manifest migrated to kit 0.11.1 (backend schema; library class, no store).",
     task: "todos ccc2e931 (contracts task — slides)",
   },
   {
     member: "tables",
-    cause: "kitVersion 0.1.0 predates repo-conformance; no @hasna/contracts dep pinned; validated at latest, manifest is pre-backend-schema era.",
+    cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Manifest migrated to kit 0.11.1 (backend schema; library class, JSON-file CLI store, no server); the artifact-scan release gate remains.",
     task: "todos daaa2841 (contracts task — tables)",
   },
   {
     member: "shield",
-    cause: "surface_matrix/service_api_topology: no supported API surface declared; surface_bindings: serviceSurfaces[2].exportSubpath targets missing ./sdk/dist files and generatedFrom is required. Imported by #74 after the original census; validated at 0.8.5 (no pinned dep, kitVersion resolution). (The earlier self_host_artifact cause no longer fires at main.)",
+    cause: "surface_matrix/service_api_topology: the api surface is declared deferred because shield-serve does not yet serve the contract topology (GET /health, GET /ready, GET /version) or publish an OpenAPI document, and the hand-written ./sdk client is deferred with it (no generatedFrom); self_host_artifact: no Dockerfile/compose.yml. Manifest migrated to kit 0.11.1 (storage backend sqlite, engines sqlite+postgresql with pgTestGate per the service-capable cli-with-store rule).",
     task: "todos 2aceeb94-7077-4479-b61a-0a7b33b856f7 (contracts task — shield)",
+  },
+  {
+    member: "testers",
+    cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack; credential_seam_compliance: src/generated/storage-client/storage.ts vendored copy of the @hasna/contracts client seam. Manifest migrated to kit 0.11.1 (storage backend sqlite + engines sqlite/postgresql, supported api/sdk/mcp/cli surfaces).",
+    task: "todos auto-filed reconcile (manifest lane — testers)",
   },
   {
     member: "tenants",
@@ -475,13 +480,18 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "todos",
-    cause: "manifest_valid: pre-backend-schema-era manifest (kitVersion 0.8.4) validated at pinned 0.5.2 — storage.mode Invalid enum value. Expected 'local' | 'cloud', received 'sqlite'; storage Unrecognized key(s) in object: 'engines', 'pgTestGate'; serviceSurfaces.*.deploymentModes Required; serviceSurfaces.* Unrecognized key(s) in object: 'kind'/'exportSubpath'/'generatedFrom'; <root> Unrecognized key(s) in object: 'hosting'. Imported by #105 after the original census.",
+    cause: "validates clean at kit 0.11.1 (backend-era manifest, storage backend sqlite + engines sqlite/postgresql); the pinned @hasna/contracts 0.5.2 predates the backend-era schema, so the census validator rejects the migrated manifest. The runtime kit bump to 0.11.1 changes the client credential seam (env-var API-key deprecation warning on stderr) and is owned by the todos code lane; todos remains pinned at 0.5.2 until that lands.",
     task: "todos 0ad82b16-5a7c-43c3-95b9-db2dc64f7ffa (contracts task — todos)",
   },
   {
     member: "ui",
     cause: "surface_matrix: manifest (imported with the org delta c594c9a from hasna/ui) declares only the cli surface — api/sdk/mcp missing without waivers; published_artifact_gate: metadata.release.artifactScan.script is required for a published package. Validated at kitVersion 0.10.6 (no pinned dep).",
     task: "todos 3f3cc597-74d5-4eeb-ae17-c56cd8069a3a (contracts task — ui)",
+  },
+  {
+    member: "workforce",
+    cause: "surface_matrix: the sdk surface is deferred (the API publishes no served /openapi.json and the repo has no ./sdk export — SDK lane c7ce8b75), so no generatedFrom can be claimed; published_artifact_gate: metadata.release.artifactScan.script is required for a published package. Manifest migrated to kit 0.11.1 with the vendored storage-kit regenerated by the pinned kit (mode.ts removed by the generator); storage backend sqlite + engines sqlite/postgresql, supported api (health/ready/version + /v1), mcp and cli surfaces.",
+    task: "todos auto-filed reconcile (manifest lane — workforce)",
   },
 ];
 
@@ -496,7 +506,7 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "instructions", kitVersion: "0.10.6", pinned: "0.4.2" },
   { member: "logs", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "tenants", kitVersion: "0.10.6", pinned: "0.4.2" },
-  { member: "todos", kitVersion: "0.8.4", pinned: "0.5.2" },
+  { member: "todos", kitVersion: "0.11.1", pinned: "0.5.2" },
 ];
 
 /** Members with a manifest but NO pinned @hasna/contracts dependency —
