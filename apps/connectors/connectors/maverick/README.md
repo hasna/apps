@@ -1,6 +1,6 @@
 # connect-maverick
 
-Maverick API connector - part of [open-connectors](https://github.com/hasna/open-connectors).
+Maverick API connector - part of [connectors](https://github.com/hasna/apps).
 
 ## Installation
 

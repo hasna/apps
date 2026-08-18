@@ -1,6 +1,6 @@
 # connect-mav
 
-MAV API connector - part of [open-connectors](https://github.com/hasna/open-connectors).
+MAV API connector - part of [connectors](https://github.com/hasna/apps).
 
 ## Installation
 

@@ -1,6 +1,6 @@
 # connect-mattermost
 
-Mattermost team messaging platform connector - part of [open-connectors](https://github.com/hasna/open-connectors).
+Mattermost team messaging platform connector - part of [connectors](https://github.com/hasna/apps).
 
 ## Installation
 

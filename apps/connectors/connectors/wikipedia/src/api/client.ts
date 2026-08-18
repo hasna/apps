@@ -8,7 +8,7 @@ export class WikipediaClient {
 
   constructor(config: WikipediaConfig = {}) {
     this.lang = config.language || 'en';
-    this.userAgent = config.userAgent || 'open-connectors/1.0 (https://github.com/hasna/open-connectors)';
+    this.userAgent = config.userAgent || 'hasna-connectors/1.0 (https://github.com/hasna/apps)';
     this.baseUrl = config.baseUrl || `https://${this.lang}.wikipedia.org`;
   }
 

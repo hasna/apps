@@ -16,8 +16,8 @@ A TypeScript scaffold for building API connector CLIs with multi-profile support
 
 ```bash
 # Clone for your connector
-git clone https://github.com/hasna/open-connectors.git connect-yourapi
-cd connect-yourapi
+git clone https://github.com/hasna/apps.git
+cd apps/connectors/connectors/connect-yourapi
 
 # Update package.json name
 # Change "@hasna/scaffold-connector" to "@hasna/connect-yourapi"

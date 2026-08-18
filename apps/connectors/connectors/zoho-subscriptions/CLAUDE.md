@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Zoho Subscriptions (Billing) API connector for open-connectors.
+Zoho Subscriptions (Billing) API connector for the connectors monorepo.
 
 ## Build & Run
 
