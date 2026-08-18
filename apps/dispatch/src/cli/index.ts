@@ -558,7 +558,7 @@ export function buildProgram(deps: CliDeps = {}): Command {
     .description("Classify a dispatch failure from bounded, redacted context and recommend the next safe action")
     .option("-t, --to <target>", "original dispatch target")
     .option("-m, --machine <id>", "original machine id")
-    .option("--route <text>", "short route/source description, for example sessions-query:open-router")
+    .option("--route <text>", "short route/source description, for example sessions-query:router")
     .option("--error <text>", "failure text to classify")
     .option("--error-file <path>", "read failure text from a file")
     .option("--status-file <path>", "read bounded status JSON/text from a file")

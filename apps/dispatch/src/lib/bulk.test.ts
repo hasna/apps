@@ -91,7 +91,7 @@ describe("performBulkDispatch", () => {
     const result = await performBulkDispatch(
       {
         source: "sessions-query",
-        targets: [{ target: "open-sessions:2.1", machine: "spark02", source: "sessions-query", state: "active" }],
+        targets: [{ target: "sessions:2.1", machine: "spark02", source: "sessions-query", state: "active" }],
         prompt: "Do not hit busy sessions",
         queue: false,
       },
@@ -105,7 +105,7 @@ describe("performBulkDispatch", () => {
     expect(result.skipped).toBe(1);
     expect(result.detail).toMatch(/skipped/);
     expect(result.records[0]).toMatchObject({
-      target: "open-sessions:2.1",
+      target: "sessions:2.1",
       status: "skipped",
       targetState: "active",
     });
@@ -114,7 +114,7 @@ describe("performBulkDispatch", () => {
   test("explicit bulk sends also default to idle-only delivery", async () => {
     const result = await performBulkDispatch(
       {
-        targets: [{ target: "open-a:1.1" }, { target: "open-b:1.1" }],
+        targets: [{ target: "a:1.1" }, { target: "b:1.1" }],
         prompt: "Do not touch active panes by default",
       },
       {
@@ -133,7 +133,7 @@ describe("performBulkDispatch", () => {
     const result = await performBulkDispatch(
       {
         source: "sessions-query",
-        targets: [{ target: "open-sessions:2.1", source: "sessions-query", state: "active" }],
+        targets: [{ target: "sessions:2.1", source: "sessions-query", state: "active" }],
         prompt: "Queue this",
         queue: true,
         submitDelayMs: 0,

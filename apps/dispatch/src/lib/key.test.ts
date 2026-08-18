@@ -8,7 +8,7 @@ const codewithComposerCapture = `
 ╭─────────────────────────────────────────────────────────╮
 │ ⎔  Hasna Codewith (v0.1.42)                             │
 │ model:       gpt-5.5 xhigh   fast   /model to change    │
-│ directory:   ~/workspace/hasna/opensource/open-dispatch │
+│ directory:   ~/workspace/repos/hasna/apps/dispatch │
 │ permissions: YOLO mode                                  │
 ╰─────────────────────────────────────────────────────────╯
 › Fix native chat
@@ -93,7 +93,7 @@ describe("performKeyDispatch", () => {
 
   test("refuses Enter key on active agents by default", async () => {
     const r = runner("node", activeCodewithCapture, codewithProcessTree);
-    const rec = await performKeyDispatch({ target: "open-dispatch:1.1", key: "Enter" }, { tmux: new Tmux(r) });
+    const rec = await performKeyDispatch({ target: "dispatch:1.1", key: "Enter" }, { tmux: new Tmux(r) });
 
     expect(rec.status).toBe("skipped");
     expect(rec.detection).toMatchObject({ agentKind: "codewith", composerState: "active", canQueuePrompt: true });
@@ -103,7 +103,7 @@ describe("performKeyDispatch", () => {
 
   test("allows Tab key on active Codewith agents with proven queue support", async () => {
     const r = runner("node", activeCodewithCapture, codewithProcessTree);
-    const rec = await performKeyDispatch({ target: "open-dispatch:1.1", key: "Tab" }, { tmux: new Tmux(r) });
+    const rec = await performKeyDispatch({ target: "dispatch:1.1", key: "Tab" }, { tmux: new Tmux(r) });
 
     expect(rec.status).toBe("delivered");
     expect(rec.detection).toMatchObject({ agentKind: "codewith", composerState: "active", canQueuePrompt: true });

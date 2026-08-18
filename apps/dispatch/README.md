@@ -128,7 +128,7 @@ dispatch send --to dispatch:1.1 --prompt "Follow up safely" --submit-key Tab
 dispatch send --goal --to browser:1.1 --prompt "Fix native chat..."
 
 # Bulk-send to explicit targets with safety guards and pre-capture
-dispatch send --to open-a:1.1,open-b:1.1 --prompt "Run smoke tests" \
+dispatch send --to a:1.1,b:1.1 --prompt "Run smoke tests" \
   --if-idle --dry-run --capture-before 120 --max-concurrency 2 --jitter 500
 
 # Resolve targets from an sessions registry when available

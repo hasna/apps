@@ -1,24 +1,24 @@
-# GOAL — Build & ship `open-dispatch` (`@hasna/dispatch`)
+# GOAL — Build & ship `@hasna/dispatch` (app `apps/dispatch` in the `hasna/apps` monorepo)
 
-You are the autonomous builder for **open-dispatch**, an open-source tool that lets agents (and
+You are the autonomous builder for **`@hasna/dispatch`**, an open-source tool that lets agents (and
 humans) **dispatch prompts/messages to coding agents running in tmux windows** — locally and across
-machines — reliably. Repo: GitHub **hasna/dispatch** (public OSS), npm **`@hasna/dispatch`**, folder
-`~/workspace/hasna/opensource/open-dispatch`. **Drive this to DONE — do not stop until it is live
+machines — reliably. Repo: GitHub **hasna/apps** (monorepo, app folder `apps/dispatch`), npm
+**`@hasna/dispatch`**. **Drive this to DONE — do not stop until it is live
 (published + working), with every "Done when" box verified.**
 
 ## Why this exists
 We constantly drive coding agents (Claude Code, Codex/codewith, etc.) running in tmux windows by
 `tmux send-keys`. Doing it by hand is unreliable: the Enter often doesn't submit (text sits in the
 composer), long prompts get mangled, there's no delivery confirmation, and it doesn't work across
-machines. `open-dispatch` makes this a first-class, reliable tool.
+machines. `@hasna/dispatch` makes this a first-class, reliable tool.
 
 ## Orient first
-- Study sibling repos for structure/conventions (Bun+TS, CLI + MCP + daemon/server + SDK, tests,
-  docs, packaging): **`~/workspace/hasna/opensource/open-todos`** (CLI+MCP+SDK+dashboard layout,
-  AGENTS.md/CLAUDE.md, scripts, publishing) and others under `~/workspace/hasna/opensource/open-*`.
-- Integrate cross-machine via the **open-machines SDK (`@hasna/machines`)** at
-  `~/workspace/hasna/opensource/open-machines` — read its README/SDK to learn how to enumerate/reach
-  machines (LAN/Tailscale/MagicDNS) so a dispatch can target a tmux window on another host.
+- Study sibling apps for structure/conventions (Bun+TS, CLI + MCP + daemon/server + SDK, tests,
+  docs, packaging): **`@hasna/todos`** (CLI+MCP+SDK+dashboard layout,
+  AGENTS.md/CLAUDE.md, scripts, publishing) and other `@hasna/*` apps in the monorepo.
+- Integrate cross-machine via the **`@hasna/machines` SDK** — read its README/SDK to learn how to
+  enumerate/reach machines (LAN/Tailscale/MagicDNS) so a dispatch can target a tmux window on another
+  host.
 - Follow `~/.claude/rules/` (TDD, secrets scan before every commit/push, conventional commits, NO
   Co-Authored-By, patch-version bumps, Bun over npm, **use the `projects` CLI for repo create/publish**).
 
@@ -37,18 +37,18 @@ machines. `open-dispatch` makes this a first-class, reliable tool.
    delivered/not-delivered status (with a reason). Expose `dispatch status <id>`.
 5. **Cross-machine.** Using `@hasna/machines`, dispatch to a tmux window on **another machine**
    (`dispatch send --machine spark01 --to <session:window> ...`) over SSH/Tailscale; sync machine
-   inventory via the open-machines SDK. Works for the 5 machines (spark01/02, apple01/03/06).
+   inventory via the @hasna/machines SDK. Works for the 5 machines (spark01/02, apple01/03/06).
 6. **Scheduled dispatches.** `dispatch schedule --at <time>|--cron <expr> --to ... --prompt ...` —
    queue a dispatch to fire later; list/cancel scheduled dispatches.
 7. **Live daemon.** A background daemon that owns the dispatch queue, scheduled dispatches,
    cross-machine routing, and delivery tracking (`dispatch daemon start|stop|status`). Persist state
    (so scheduled dispatches survive restarts).
-8. **Surfaces (mirror open-todos):** a first-class **CLI**, an **MCP server** (every verb as a tool so
+8. **Surfaces (mirror `@hasna/todos`):** a first-class **CLI**, an **MCP server** (every verb as a tool so
    agents dispatch via MCP), an **SDK** (`@hasna/dispatch` programmatic API), and the daemon.
 
 ## Engineering
 - **Bun + TypeScript.** TDD throughout — tests first, full suite green, nothing skipped.
-- Model package layout, scripts, MCP/CLI parity, and publishing on `open-todos`.
+- Model package layout, scripts, MCP/CLI parity, and publishing on `@hasna/todos`.
 - Secrets: never hardcode; scan staged files before every commit/push.
 
 ## Publish & go live
@@ -56,7 +56,7 @@ machines. `open-dispatch` makes this a first-class, reliable tool.
   `projects workspaces publish`, or `import-github`) → **hasna/dispatch (public)**. Register in todos.
 - Publish **`@hasna/dispatch`** to npm (public access, patch version). `bun install -g @hasna/dispatch`
   and verify the CLI works.
-- Use `/skill-goal-execute` (`/gosl`): create a todos plan under the open-dispatch project and execute
+- Use `/skill-goal-execute` (`/gosl`): create a todos plan under the dispatch project and execute
   tasks one by one, verifying each. Keep todos + the conversations space updated.
 
 ## Done when (all verified, not assumed)

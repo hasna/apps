@@ -27,7 +27,7 @@ describe("performExec", () => {
     const r = shellRunner();
     const store = new Store(":memory:");
     const rec = await performExec(
-      { target: "open-mailery:01", command: "mailery status", dryRun: true },
+      { target: "mailery:01", command: "mailery status", dryRun: true },
       { tmux: new Tmux(r), store, sleep: noSleep },
     );
 
@@ -44,7 +44,7 @@ describe("performExec", () => {
   test("pastes via tmux buffer and presses Enter without C-c by default", async () => {
     const r = shellRunner();
     const rec = await performExec(
-      { target: "open-mailery:01", command: "mailery status", policy: { allowTargets: ["open-mailery:*"] } },
+      { target: "mailery:01", command: "mailery status", policy: { allowTargets: ["mailery:*"] } },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
@@ -60,10 +60,10 @@ describe("performExec", () => {
     const r = shellRunner();
     const rec = await performExec(
       {
-        target: "open-mailery:01",
+        target: "mailery:01",
         command: "mailery status",
         forceInterrupt: true,
-        policy: { allowTargets: ["open-mailery:*"] },
+        policy: { allowTargets: ["mailery:*"] },
       },
       { tmux: new Tmux(r), sleep: noSleep },
     );
@@ -88,7 +88,7 @@ describe("performExec", () => {
   test("skips non-dry-run exec without explicit target opt-in", async () => {
     const r = shellRunner();
     const rec = await performExec(
-      { target: "open-mailery:01", command: "mailery status" },
+      { target: "mailery:01", command: "mailery status" },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 

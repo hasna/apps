@@ -7,7 +7,7 @@ const codewithComposerCapture = `
 ╭─────────────────────────────────────────────────────────╮
 │ ⎔  Hasna Codewith (v0.1.42)                             │
 │ model:       gpt-5.5 xhigh   fast   /model to change    │
-│ directory:   ~/workspace/hasna/opensource/open-dispatch │
+│ directory:   ~/workspace/repos/hasna/apps/dispatch │
 │ permissions: YOLO mode                                  │
 ╰─────────────────────────────────────────────────────────╯
 › Fix native chat

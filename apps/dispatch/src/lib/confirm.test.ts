@@ -207,7 +207,7 @@ describe("evaluateDelivery", () => {
 
   test("raw shell: echoed long command with no immediate output => delivered", () => {
     const prompt =
-      "cd /home/hasna/workspace/hasna/opensource/open-codewith-qa/codex-rs && just test-fast -p codex-state managed_worktree";
+      "cd /home/hasna/workspace/hasna/opensource/codewith-qa/codex-rs && just test-fast -p codex-state managed_worktree";
     const echoed = `hasna@spark01:~/workspace$ ${prompt}`;
     const res = evaluateDelivery({
       before: "hasna@spark01:~/workspace$ ",
@@ -222,7 +222,7 @@ describe("evaluateDelivery", () => {
 
   test("agent composer: unchanged prompt is still not delivered", () => {
     const prompt =
-      "cd /home/hasna/workspace/hasna/opensource/open-codewith-qa/codex-rs && just test-fast -p codex-state managed_worktree";
+      "cd /home/hasna/workspace/hasna/opensource/codewith-qa/codex-rs && just test-fast -p codex-state managed_worktree";
     const parked = `> ${prompt}`;
     const res = evaluateDelivery({
       before: "> ",
@@ -460,7 +460,7 @@ Messages to be submitted after next tool call:
     const prompt =
       "Adversarial review only; do not modify files. Include an adversarial self-review before concluding and report blocking findings first.";
     const before = `
-> You are in /home/hasna/workspace/hasna/opensource/open-dispatch
+> You are in /home/hasna/workspace/repos/hasna/apps/dispatch
 
   Do you trust the contents of this directory? Working with untrusted contents
   comes with higher risk of prompt injection.

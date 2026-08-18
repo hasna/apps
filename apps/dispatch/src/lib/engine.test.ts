@@ -11,7 +11,7 @@ const codewithComposerCapture = `
 │ ⎔  Hasna Codewith (v0.1.42)                             │
 │                                                         │
 │ model:       gpt-5.5 xhigh   fast   /model to change    │
-│ directory:   ~/workspace/hasna/opensource/open-codewith │
+│ directory:   ~/workspace/hasna/opensource/codewith │
 │ permissions: YOLO mode                                  │
 ╰─────────────────────────────────────────────────────────╯
 
@@ -487,7 +487,7 @@ describe("performDispatch", () => {
     const r = composerRunner("node", codewithComposerCapture, "✶ Working… (esc to interrupt)", codewithProcessTree);
 
     const rec = await performDispatch(
-      { target: "open-codewith-04:1.1", prompt: "Fix the dispatch bug", submit: false },
+      { target: "codewith-04:1.1", prompt: "Fix the dispatch bug", submit: false },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
@@ -506,7 +506,7 @@ describe("performDispatch", () => {
     const r = composerRunner("node", codewithComposerCapture, "✶ Working… (esc to interrupt)", processTree);
 
     const rec = await performDispatch(
-      { target: "open-codewith-04:1.1", prompt: "Fix the dispatch bug", submit: false },
+      { target: "codewith-04:1.1", prompt: "Fix the dispatch bug", submit: false },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
@@ -519,7 +519,7 @@ describe("performDispatch", () => {
     const r = composerRunner("node", completedGoalCodewithCapture, "✶ Working… (esc to interrupt)", codewithProcessTree);
 
     const rec = await performDispatch(
-      { target: "open-codewith-04:1.1", prompt: "Follow up on the completed goal", submit: false },
+      { target: "codewith-04:1.1", prompt: "Follow up on the completed goal", submit: false },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
@@ -533,7 +533,7 @@ describe("performDispatch", () => {
     const r = composerRunner("node", completedGoalNoBranchCodewithCapture, "✶ Working… (esc to interrupt)", codewithProcessTree);
 
     const rec = await performDispatch(
-      { target: "open-codewith-04:1.1", prompt: "Follow up on the branchless completed goal", submit: false },
+      { target: "codewith-04:1.1", prompt: "Follow up on the branchless completed goal", submit: false },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
@@ -547,7 +547,7 @@ describe("performDispatch", () => {
     const r = composerRunner("node", idleFooterOnlyCodewithCapture, "✶ Working… (esc to interrupt)", codewithProcessTree);
 
     const rec = await performDispatch(
-      { target: "open-dispatch:1.1", prompt: "Handle the next operator prompt", submit: false },
+      { target: "dispatch:1.1", prompt: "Handle the next operator prompt", submit: false },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
@@ -562,7 +562,7 @@ describe("performDispatch", () => {
     const r = composerRunner("bun", completedGoalCodewithCapture, "✶ Working… (esc to interrupt)", codewithProcessTree);
 
     const rec = await performDispatch(
-      { target: "open-codewith-04:1.1", prompt: "Follow up on the completed goal", submit: false },
+      { target: "codewith-04:1.1", prompt: "Follow up on the completed goal", submit: false },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
@@ -576,7 +576,7 @@ describe("performDispatch", () => {
     const r = composerRunner("node", wrappedCompletedGoalCodewithCapture, "✶ Working… (esc to interrupt)", codewithProcessTree);
 
     const rec = await performDispatch(
-      { target: "open-codewith-glm:1.1", prompt: "Follow up on the completed goal", submit: false },
+      { target: "codewith-glm:1.1", prompt: "Follow up on the completed goal", submit: false },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
@@ -590,7 +590,7 @@ describe("performDispatch", () => {
     const r = composerRunner("node", activeCodewithCapture, "✶ Working… (esc to interrupt)", codewithProcessTree);
 
     const rec = await performDispatch(
-      { target: "open-dispatch:1.1", prompt: "Steer this at the next safe boundary", submitDelayMs: 0 },
+      { target: "dispatch:1.1", prompt: "Steer this at the next safe boundary", submitDelayMs: 0 },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
@@ -606,7 +606,7 @@ describe("performDispatch", () => {
     const r = composerRunner("node", activeCodewithCapture, "✶ Working… (esc to interrupt)", codewithProcessTree);
 
     const rec = await performDispatch(
-      { target: "open-dispatch:1.1", prompt: "Do not send Enter to a busy pane", ifIdle: true },
+      { target: "dispatch:1.1", prompt: "Do not send Enter to a busy pane", ifIdle: true },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
@@ -626,7 +626,7 @@ describe("performDispatch", () => {
     );
 
     const rec = await performDispatch(
-      { target: "open-sessions:2.1", prompt: "Queue this safely", ifIdle: true, queue: true, submitDelayMs: 0 },
+      { target: "sessions:2.1", prompt: "Queue this safely", ifIdle: true, queue: true, submitDelayMs: 0 },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
@@ -704,7 +704,7 @@ describe("performDispatch", () => {
     const r = composerRunner("node", activeCodewithCapture, "✶ Working… (esc to interrupt)", codewithProcessTree);
 
     const rec = await performDispatch(
-      { target: "open-sessions:2.1", prompt: "Queue this", queue: true, submitKey: "Enter", submitDelayMs: 0 },
+      { target: "sessions:2.1", prompt: "Queue this", queue: true, submitKey: "Enter", submitDelayMs: 0 },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
@@ -725,7 +725,7 @@ Queued follow-up inputs:
     );
 
     const rec = await performDispatch(
-      { target: "open-guardrails:1.1", prompt: "Continue after profile switch", queue: true, submitDelayMs: 0 },
+      { target: "guardrails:1.1", prompt: "Continue after profile switch", queue: true, submitDelayMs: 0 },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
@@ -746,7 +746,7 @@ Queued follow-up inputs:
     const r = composerRunner("node", activeCodewithCapture, "✶ Working… (esc to interrupt)", codewithProcessTree);
 
     const rec = await performDispatch(
-      { target: "open-sessions:2.1", prompt: "Would send only", queue: true, dryRun: true },
+      { target: "sessions:2.1", prompt: "Would send only", queue: true, dryRun: true },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
@@ -776,14 +776,14 @@ Queued follow-up inputs:
     const store = new Store(":memory:");
 
     const rec = await performDispatch(
-      { target: "open-codewith-04:1.1", prompt: "Follow up", submit: false, captureBeforeLines: 20 },
+      { target: "codewith-04:1.1", prompt: "Follow up", submit: false, captureBeforeLines: 20 },
       { tmux: new Tmux(r), store, sleep: noSleep },
     );
 
     expect(rec.status).toBe("delivered");
     expect(rec.captureBefore).toMatchObject({
       status: "captured",
-      target: "open-codewith-04:1.1",
+      target: "codewith-04:1.1",
       requestedLines: 20,
       lines: 20,
       redacted: true,
