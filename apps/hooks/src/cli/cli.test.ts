@@ -249,7 +249,7 @@ describe("CLI", () => {
       expect(data.installed).toContain("session-start");
       expect(data.applied).toBe(false);
       expect(data.fragments[0].fragment).toContain("[[hooks.SessionStart]]");
-      expect(data.fragments[0].note).toContain("open-configs");
+      expect(data.fragments[0].note).toContain("configs");
     });
 
     test("--apply-codewith requires --codewith-config", async () => {

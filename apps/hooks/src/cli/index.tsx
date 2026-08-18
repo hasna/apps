@@ -433,7 +433,7 @@ program
   .option("-t, --target <target>", "Agent target: claude, gemini, codewith, all (default: claude)", "claude")
   .option("--profile <id>", "Agent profile ID to scope hooks to")
   .option("--dry-run", "Preview what would be installed without writing to settings", false)
-  .option("--apply-codewith", "Explicitly append Codewith TOML to a config file (prefer open-configs for managed configs)", false)
+  .option("--apply-codewith", "Explicitly append Codewith TOML to a config file (prefer configs for managed configs)", false)
   .option("--codewith-config <path>", "Explicit Codewith config path required with --apply-codewith")
   .option("-j, --json", "Output as JSON", false)
   .description("Install one or more hooks (registry names, local paths, git URLs, manifest URLs, or <name>@<version> pinned installs)")
@@ -661,7 +661,7 @@ program
 
     const successCount = results.filter((r) => r.success).length;
     const settingsFile = target === "codewith"
-      ? (options.applyCodewith ? options.codewithConfig : "TOML fragment only (open-configs should apply)")
+      ? (options.applyCodewith ? options.codewithConfig : "TOML fragment only (configs should apply)")
       : scope === "project" ? ".claude/settings.json" : "~/.claude/settings.json";
     console.log(chalk.bold(`\nInstalling hooks (${scope}, ${target})...\n`));
     for (const result of results) {
@@ -1308,7 +1308,7 @@ program
       installation: {
         global: "hooks install gitguard",
         project: "hooks install gitguard --project",
-        codewith: "hooks install session-start --target codewith  # emits TOML for open-configs to apply",
+        codewith: "hooks install session-start --target codewith  # emits TOML for configs to apply",
         category: "hooks install --category \"Git Safety\"",
         all: "hooks install --all",
       },

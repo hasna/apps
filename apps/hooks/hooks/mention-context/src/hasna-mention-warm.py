@@ -340,7 +340,7 @@ def candidate_names(org, word):
 def warm_slow(org, word, tmpdir, projects_cache):
     """Resolve the todos project for a repo and collect its last 3 BUG rows.
 
-    Duplicate project rows are the norm, not the exception: `open-todos` exists
+    Duplicate project rows are the norm, not the exception: `todos` exists
     FOUR times, with 3 / 101 / 58 / 150 task counters on three different
     machine_ids, and the BUG rows are spread across all four (2+7+14+34 = 57).
     Picking by name alone would silently return a 3-task fossil. So the primary

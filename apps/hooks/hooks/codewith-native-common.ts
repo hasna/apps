@@ -3028,7 +3028,7 @@ export interface CanonicalRepoIdentity {
  * lookup; never fuzzy `repos cd` or 'did you mean' output for targeting)".
  *
  * This matters because the repos-CLI name is frequently NOT the git remote
- * basename — on this fleet 46 of 50 indexed repos differ (`open-hooks` is
+ * basename — on this fleet 46 of 50 indexed repos differ (the retired `open-hooks` row is
  * `github.com/hasna/hooks`, `open-mailery` is `.../emails`). Deriving the
  * canonical path segment from the remote would send every agent to the wrong
  * directory, so the remote is only ever used as the exact lookup key.

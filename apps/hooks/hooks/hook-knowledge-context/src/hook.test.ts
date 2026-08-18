@@ -208,7 +208,7 @@ describe("hook-knowledge-context", () => {
       "review staged diff",
       "rerun tests",
     ]) {
-      expect(promptSignalScore(prompt, "/home/hasna/workspace/hasna/opensource/open-hooks")).toBeGreaterThanOrEqual(3);
+      expect(promptSignalScore(prompt, "/home/hasna/workspace/hasna/opensource/hooks")).toBeGreaterThanOrEqual(3);
     }
   });
 

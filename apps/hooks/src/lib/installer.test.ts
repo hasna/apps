@@ -690,7 +690,7 @@ describe("installer", () => {
       expect(result.fragment).toContain("[[hooks.SessionStart]]");
       expect(result.fragment).toContain("[[hooks.UserPromptSubmit]]");
       expect(result.fragment).toContain("[[hooks.SubagentStart]]");
-      expect(result.note).toContain("open-configs");
+      expect(result.note).toContain("configs");
     });
 
     test("installHook codewith write refuses missing explicit config path", () => {
@@ -796,7 +796,7 @@ describe("installer", () => {
       expect(result.applied).toBe(false);
       expect(result.fragment).toContain("[[hooks.PreToolUse]]");
       expect(result.fragment).toContain('matcher = "^Bash$"');
-      expect(result.note).toContain("open-configs");
+      expect(result.note).toContain("configs");
     });
 
     test("installHook codewith write refuses missing explicit config path", () => {

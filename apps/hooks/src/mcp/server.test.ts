@@ -103,7 +103,7 @@ function seedLogDb(rowCount: number, options: { withErrors?: boolean } = {}): ()
       "continue",
       options.withErrors ? `failure ${i} ${longText}` : null,
       10 + i,
-      "/tmp/open-hooks-test",
+      "/tmp/hooks-test",
       JSON.stringify({ index: i }),
     );
   }

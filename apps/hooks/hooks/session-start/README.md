@@ -6,7 +6,7 @@ This hook is OSS-safe: optional Hasna CLIs are best-effort and missing CLIs fail
 
 ## Install for Codewith
 
-Prefer renderer-managed configuration through open-configs. @hasna/hooks can emit the TOML fragment:
+Prefer renderer-managed configuration through configs. @hasna/hooks can emit the TOML fragment:
 
 ```bash
 hooks install session-start --target codewith

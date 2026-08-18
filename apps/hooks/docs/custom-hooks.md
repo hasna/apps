@@ -217,7 +217,7 @@ hooks remove <name>
 ```
 
 Unregisters the hook from the agent settings (Claude/Gemini; Codewith
-removal is a no-op — its TOML config is managed by open-configs, so installs
+removal is a no-op — its TOML config is managed by configs, so installs
 emit fragments instead). It does not delete the custom directory or the lock
 entry, and it does not remove event history (`hook_events` rows are
 retained).

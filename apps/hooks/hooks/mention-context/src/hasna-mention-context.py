@@ -721,7 +721,7 @@ def render_section(t):
         if proj.get("path"):
             L.append(f"  {'':<11} path {sanitize(proj.get('path'), 120)}")
         if isinstance(dups, int) and dups > 1:
-            # Real hazard, not trivia: `open-todos` exists as FIVE project rows
+            # Real hazard, not trivia: `todos` exists as FIVE project rows
             # with task counters 3/50/58/101/150 across three machine_ids, and
             # the BUG rows are spread over all of them. An agent that files
             # against the wrong row files into a fossil nobody reads.
@@ -732,7 +732,7 @@ def render_section(t):
 
     # --- last 3 bugs -------------------------------------------------------
     # Merged across every matching project row, because BUG rows are genuinely
-    # spread across the duplicates: open-todos carries 58 across 5 rows. Scoping
+    # spread across the duplicates: todos carries 58 across 5 rows. Scoping
     # to the primary alone would hide real bugs. The scope is stated on the line
     # so the count is never read as belonging to the single project above.
     bugs = t.get("bugs") or []

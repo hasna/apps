@@ -83,7 +83,7 @@ unwrapped first. See [`hooks/pre-bash/README.md`](hooks/pre-bash/README.md) for
 the full rules, the deliberate exemptions (`${VAR:?}`, bare `"$(cmd)"` with no
 trailing separator), and the recommended safe form.
 
-Apply that fragment through `open-configs` or the managed config renderer. A
+Apply that fragment through `configs` or the managed config renderer. A
 direct write path exists only for explicit local/test use:
 
 ```bash
