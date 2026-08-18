@@ -24,25 +24,18 @@ APP_NAME="HasnaNotes"
 BUNDLE_ID="com.hasna.notes"
 INSTALL_APP="/Applications/$APP_NAME.app"
 
+# Shared deploy logic (stale-install scan, backup-remove) lives in the lib so
+# the regression test can drive the real functions (bug 27c51f16: the inline
+# guard tested -d on Contents/Info.plist — a FILE — so every candidate was
+# skipped and the whole stale-install pass ran vacuous).
+source "$REPO_ROOT/scripts/notes-deploy-lib.sh"
+
 # Stale installs from earlier branding share $BUNDLE_ID under different display
-# names and executables. They are located by bundle id below, never by name:
-# the repo's acceptance gate greps the tree for the retired app name, so no
+# names and executables. They are located by bundle id (read from each
+# candidate's Info.plist via the lib's stale_installs), never by name: the
+# repo's acceptance gate greps the tree for the retired app name, so no
 # legacy-brand token may appear in this file (the README wire-dialect note is
 # the only documented exception, and it is a protocol, not an install path).
-
-# Enumerate stale installs: any app under /Applications whose bundle id matches
-# ours but whose path is not the current install. Matching by bundle id (read
-# from each candidate's Info.plist) finds every historical generation without
-# naming any of them.
-stale_installs() {
-  while IFS= read -r cand; do
-    [[ -n "$cand" && -d "$cand/Contents/Info.plist" ]] || continue
-    cand_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$cand/Contents/Info.plist" 2>/dev/null || true)"
-    if [[ -n "$cand_id" && "$cand_id" == "$BUNDLE_ID" && "$cand" != "$INSTALL_APP" ]]; then
-      printf '%s\n' "$cand"
-    fi
-  done < <(find /Applications -maxdepth 1 -name '*.app' 2>/dev/null)
-}
 
 # Reversible backup home for removed stale bundles.
 BACKUP_HOME="$HOME/Library/Application Support/HasnaNotes"
@@ -90,7 +83,7 @@ osascript -e "tell application id \"$BUNDLE_ID\" to quit" >/dev/null 2>&1 || tru
 # read from each stale bundle's Info.plist, never written out here.
 while IFS= read -r cand; do
   [[ -n "$cand" ]] || continue
-  exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$cand/Contents/Info.plist" 2>/dev/null || true)"
+  exe="$(plist_key "$cand/Contents/Info.plist" CFBundleExecutable)"
   [[ -n "$exe" ]] && { pkill -x "$exe" >/dev/null 2>&1 || true; }
 done < <(stale_installs)
 for _ in $(seq 1 10); do
@@ -108,20 +101,13 @@ ditto "$BUILT_APP" "$INSTALL_APP"
 
 # Back up and remove any stale pre-rename install (same bundle id, older display
 # name). Reversible: each removal is tarred under BACKUP_HOME first, and a stale
-# bundle whose backup came out empty is never removed.
+# bundle whose backup came out empty is never removed (backup_and_remove_stale
+# returns 1 on an empty archive; set -e aborts the deploy).
 STAMP="$(date +%Y%m%d-%H%M%S)"
 while IFS= read -r cand; do
   [[ -n "$cand" ]] || continue
   echo "==> Backing up and removing stale install: $cand"
-  mkdir -p "$BACKUP_HOME"
-  ARCHIVE="$BACKUP_HOME/legacy-backup-$STAMP.tar"
-  tar -C /Applications -rf "$ARCHIVE" "$(basename "$cand")"
-  if [[ -s "$ARCHIVE" ]]; then
-    rm -rf "$cand"
-  else
-    echo "ERROR: backup archive $ARCHIVE is empty; refusing to remove $cand" >&2
-    exit 1
-  fi
+  backup_and_remove_stale "$cand"
 done < <(stale_installs)
 
 echo "==> Launching $INSTALL_APP"
