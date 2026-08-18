@@ -188,7 +188,20 @@ function registryCategories(registry: SkillMeta[]): string[] {
 }
 
 function availableCategories(options: { remote?: boolean }, registry: SkillMeta[]): string[] {
-  return options.remote ? registryCategories(registry) : [...CATEGORIES];
+  // The default read path merges remote rows when the install is configured,
+  // so the categories the union contributes must be filterable — otherwise
+  // `skills categories` lists a category that `list --category` rejects as
+  // "Unknown category". The static CATEGORIES list stays the floor: entries in
+  // it are always valid (even when no skill in the current profile carries
+  // them), and categories the merged registry contributes are appended. A
+  // registry with no remote rows keeps today's exact list (fail-closed R1).
+  if (options.remote) return registryCategories(registry);
+  const hasRemoteRows = registry.some((skill) => skill.source === "remote");
+  if (!hasRemoteRows) return [...CATEGORIES];
+  const extras = Array.from(new Set(registry.map((skill) => skill.category)))
+    .filter((category) => !CATEGORIES.includes(category as (typeof CATEGORIES)[number]))
+    .sort();
+  return [...CATEGORIES, ...extras];
 }
 
 async function handleList(options: any) {

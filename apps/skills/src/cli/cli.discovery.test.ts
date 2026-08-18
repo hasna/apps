@@ -467,6 +467,77 @@ describe("CLI discovery", () => {
       }
     });
 
+    test("default --category filter accepts categories the merged remote registry contributes", async () => {
+      // T5 union coherence: `skills categories` lists "Remote Tools" because the
+      // default read path merges the remote registry, so `list --category` must
+      // be able to filter by it instead of failing with "Unknown category".
+      const server = Bun.serve({
+        port: 0,
+        fetch: (req) => {
+          expect(new URL(req.url).pathname).toBe("/api/v1/skills");
+          expect(req.headers.get("authorization")).toBe("Bearer fixture-default-key");
+          return Response.json({
+            skills: [
+              {
+                name: "remote-only-skill",
+                displayName: "Remote Only",
+                description: "Lives only on the hosted instance",
+                category: "Remote Tools",
+                tags: ["remote"],
+              },
+            ],
+          });
+        },
+      });
+
+      try {
+        const { stdout, stderr, exitCode } = await runCli(
+          ["list", "--all", "--json", "--category", "Remote Tools"],
+          { SKILLS_API_URL: `http://localhost:${server.port}`, SKILLS_API_KEY: "fixture-default-key" },
+        );
+        expect(exitCode).toBe(0);
+        expect(stderr).toBe("");
+        const names = JSON.parse(stdout).map((skill: any) => skill.name);
+        expect(names).toContain("remote-only-skill");
+      } finally {
+        server.stop(true);
+      }
+    }, SLOW_TEST_TIMEOUT);
+
+    test("default search --category accepts categories the merged remote registry contributes", async () => {
+      const server = Bun.serve({
+        port: 0,
+        fetch: (req) => {
+          expect(new URL(req.url).pathname).toBe("/api/v1/skills");
+          expect(req.headers.get("authorization")).toBe("Bearer fixture-default-key");
+          return Response.json({
+            skills: [
+              {
+                name: "remote-only-skill",
+                displayName: "Remote Only",
+                description: "Lives only on the hosted instance",
+                category: "Remote Tools",
+                tags: ["remote"],
+              },
+            ],
+          });
+        },
+      });
+
+      try {
+        const { stdout, stderr, exitCode } = await runCli(
+          ["search", "remote", "--category", "Remote Tools", "--json"],
+          { SKILLS_API_URL: `http://localhost:${server.port}`, SKILLS_API_KEY: "fixture-default-key" },
+        );
+        expect(exitCode).toBe(0);
+        expect(stderr).toBe("");
+        const names = JSON.parse(stdout).map((skill: any) => skill.name);
+        expect(names).toContain("remote-only-skill");
+      } finally {
+        server.stop(true);
+      }
+    }, SLOW_TEST_TIMEOUT);
+
     test("outputs complete full JSON when stdout is piped repeatedly", async () => {
       for (let attempt = 0; attempt < 5; attempt += 1) {
         const { stdout, exitCode } = await runCli(["list", "--all", "--json"]);
