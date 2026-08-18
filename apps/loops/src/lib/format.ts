@@ -16,6 +16,7 @@ import type {
 import { isRedactionPlaceholder, scrubSecrets } from "./redact.js";
 import { publicWorkflowEvent as validatedWorkflowEvent } from "./workflow-events.js";
 import { loopOperationTemplateId, operationTemplateId } from "./operation-contract.js";
+import { commandTargetDigest, publicCommandDescriptor } from "./command-target.js";
 
 const TEXT_OUTPUT_LIMIT = 32 * 1024;
 const SENSITIVE_PAYLOAD_KEYS = new Set(["env", "error", "prompt", "reason", "stderr", "stdout"]);
@@ -71,20 +72,24 @@ function existingOperationTemplateId(target: unknown): string | undefined {
   return typeof value === "string" && value.startsWith("op-template:sha256:") ? value : undefined;
 }
 
-function safeCommandName(command: string): string {
-  const normalized = command.replaceAll("\\", "/");
-  return normalized.slice(normalized.lastIndexOf("/") + 1) || "command";
-}
-
 function publicTarget(
   target: Loop["target"],
   operationTemplateId: string,
 ): Record<string, unknown> {
   const stableTemplateId = existingOperationTemplateId(target) ?? operationTemplateId;
   if (target.type === "command") {
+    // The surface shows the REAL resolved command line the executor will run
+    // (secret-scrubbed and bounded for shell targets), never the placeholder
+    // literal 'shell'. `commandDigest` binds the exact stored bytes — the
+    // executor's own resolved line — so a control-plane reader can prove the
+    // stored target matches an intended candidate, and a one-byte mutation
+    // changes the digest. `commandResolvedFrom` records the provenance: the
+    // command+args of the loop's own stored target.
     return {
       type: "command",
-      command: target.shell ? "shell" : safeCommandName(target.command),
+      command: publicCommandDescriptor(target),
+      commandDigest: commandTargetDigest(target),
+      commandResolvedFrom: "stored-target",
       shell: target.shell,
       timeoutMs: target.timeoutMs,
       idleTimeoutMs: target.idleTimeoutMs,

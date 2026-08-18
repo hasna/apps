@@ -10,6 +10,7 @@ import {
   publicWorkflowStepRun,
   textOutputBlocks,
 } from "./format.js";
+import { verifyCommandDigest } from "./command-target.js";
 
 const j = (...parts: string[]): string => parts.join("");
 const ANT_KEY = j("sk-", "ant-api03-abcDEF123456789_-suffix");
@@ -91,7 +92,7 @@ describe("textOutputBlocks", () => {
     expect(json).toContain("operationTemplateId");
   });
 
-  test("public shell command metadata omits the command body and its arguments", () => {
+  test("public shell command target shows the real resolved command with a digest, never the literal 'shell'", () => {
     const value = publicLoop({
       id: "shell-loop",
       name: "private-shell-command",
@@ -110,12 +111,96 @@ describe("textOutputBlocks", () => {
       leaseMs: 60_000,
       createdAt: "2026-01-01T00:00:00Z",
       updatedAt: "2026-01-01T00:00:00Z",
-    }) as { target: { command: string } };
+    }) as { target: { command: string; commandDigest: string; commandResolvedFrom: string } };
+    expect(value.target.command).not.toBe("shell");
+    // The REAL resolved target is visible (bounded and secret-scrubbed), not a placeholder literal.
+    expect(value.target.command).toStartWith("bash /private/worktree/deploy.sh --recipient private@example.test");
+    // Integrity: the digest binds the exact stored command line the executor will run.
+    expect(value.target.commandDigest).toMatch(/^cmd:sha256:[a-f0-9]{64}$/);
+    expect(verifyCommandDigest(
+      "bash /private/worktree/deploy.sh --recipient private@example.test --capability NON_SECRET_SENTINEL",
+      value.target.commandDigest,
+    )).toBe(true);
+    expect(value.target.commandResolvedFrom).toBe("stored-target");
     const json = JSON.stringify(value);
-    expect(value.target.command).toBe("shell");
-    expect(json).not.toContain("/private/worktree");
-    expect(json).not.toContain("private@example.test");
     expect(json).not.toContain("NON_SECRET_SENTINEL");
+  });
+
+  test("a one-byte mutation of the stored command fails the public digest", () => {
+    const base = {
+      id: "shell-loop-mutation",
+      name: "mutation",
+      status: "active",
+      schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+      catchUp: "latest",
+      catchUpLimit: 1,
+      overlap: "skip",
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 60_000,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+    const intended = publicLoop({
+      ...base,
+      target: { type: "command", command: "bash deploy.sh", shell: true },
+    }) as { target: { commandDigest: string } };
+    const mutated = publicLoop({
+      ...base,
+      target: { type: "command", command: "bash deploy.sH", shell: true },
+    }) as { target: { commandDigest: string } };
+    expect(intended.target.commandDigest).not.toBe(mutated.target.commandDigest);
+    expect(verifyCommandDigest("bash deploy.sH", intended.target.commandDigest)).toBe(false);
+  });
+
+  test("a secret-bearing command target never reveals credential values", () => {
+    const secretCommand = `bash deploy.sh --token ${ANT_KEY} --gh ${GH_PAT}`;
+    const value = publicLoop({
+      id: "shell-loop-secret",
+      name: "secret-shell-command",
+      status: "active",
+      schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+      target: { type: "command", command: secretCommand, shell: true },
+      catchUp: "latest",
+      catchUpLimit: 1,
+      overlap: "skip",
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 60_000,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    }) as { target: { command: string; commandDigest: string } };
+    const json = JSON.stringify(value);
+    expect(json).not.toContain(ANT_KEY);
+    expect(json).not.toContain(GH_PAT);
+    expect(json).not.toContain("sk" + "-ant-");
+    expect(json).not.toContain("ghp" + "_");
+    expect(value.target.command).toContain("[SCRUBBED]");
+    // The digest still binds the exact raw command, so integrity survives scrubbing.
+    expect(verifyCommandDigest(secretCommand, value.target.commandDigest)).toBe(true);
+  });
+
+  test("non-shell command targets keep their command name and gain the digest", () => {
+    const value = publicLoop({
+      id: "exec-loop",
+      name: "exec",
+      status: "active",
+      schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+      target: { type: "command", command: "loops", args: ["routes", "drain", "todos-task", "--json"] },
+      catchUp: "latest",
+      catchUpLimit: 1,
+      overlap: "skip",
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 60_000,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    }) as { target: { command: string; commandDigest: string } };
+    expect(value.target.command).toBe("loops");
+    expect(verifyCommandDigest(
+      "loops 'routes' 'drain' 'todos-task' '--json'",
+      value.target.commandDigest,
+    )).toBe(true);
   });
 
   test("redacts workflow step prompts without leaking a prefix", () => {

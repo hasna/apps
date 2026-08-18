@@ -15,6 +15,7 @@ import {
   publicWorkflowRun,
   publicWorkflowStepRun,
 } from "../lib/format.js";
+import { publicCommandDescriptor } from "../lib/command-target.js";
 import { buildHealthReport, buildHealthScan, classifyRunFailure, expectationForLoop } from "../lib/health.js";
 import { nowIso } from "../lib/ids.js";
 import { LOOP_LABEL_MAX_COUNT, mergeLoopLabels, normalizeLoopLabels, removeLoopLabels } from "../lib/labels.js";
@@ -357,7 +358,10 @@ function scheduleLabel(schedule: ScheduleSpec): string {
 }
 
 function targetLabel(target: LoopTarget): string {
-  if (target.type === "command") return `runs command ${target.command}`;
+  // Command targets use the secret-safe descriptor (bounded + scrubbed for
+  // shell targets) so the default loop description never embeds raw command
+  // text or credential values into the durable store.
+  if (target.type === "command") return `runs command ${publicCommandDescriptor(target)}`;
   if (target.type === "agent") return `runs ${target.provider} agent${target.cwd ? ` in ${target.cwd}` : ""}`;
   return `runs workflow ${target.workflowId}`;
 }

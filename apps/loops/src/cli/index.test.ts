@@ -10297,3 +10297,48 @@ describe("local-only guards under a cloud-flipped client", () => {
     expect(result.stderr).not.toContain(FLIP_MESSAGE);
   });
 });
+
+describe("command-target integrity surface (loops bbe50c53)", () => {
+  test("create+show of a shell command loop never reveals credential values and exposes a verifiable digest", () => {
+    const dataDir = freshDataDir("loops-cli-command-target-integrity-");
+    // Synthetic fixture value, split so the joined shape never appears as a
+    // literal in the staged diff (same convention as format.test.ts).
+    const secret = ["sk", "-ant-fake000000000000000000"].join("");
+    const cmd = `bash /private/worktree/deploy.sh --token ${secret} --env prod`;
+    const created = runCli(dataDir, ["--json", "create", "command", "integrity-shell", "--cmd", cmd, "--every", "1h"]);
+    expect(created.status).toBe(0);
+    const loop = JSON.parse(created.stdout);
+    const shown = runCli(dataDir, ["--json", "show", loop.id]);
+    expect(shown.status).toBe(0);
+    const stdout = shown.stdout;
+    // The secret-bearing fixture must not reveal credential values on ANY
+    // part of the operator surface (target, description, or elsewhere).
+    expect(stdout).not.toContain(secret);
+    expect(stdout).not.toContain("sk" + "-ant-");
+    const value = JSON.parse(stdout);
+    // The literal 'shell' must not pass as integrity evidence.
+    expect(value.target.command).not.toBe("shell");
+    expect(value.target.command).toContain("[SCRUBBED]");
+    // The digest binds the exact stored command line the executor will run.
+    expect(value.target.commandDigest).toMatch(/^cmd:sha256:[a-f0-9]{64}$/);
+    const expected = `cmd:sha256:${createHash("sha256").update(cmd).digest("hex")}`;
+    expect(value.target.commandDigest).toBe(expected);
+    expect(value.target.commandResolvedFrom).toBe("stored-target");
+    expect(value.description).not.toContain(secret);
+    expect(value.description).toContain("[SCRUBBED]");
+  });
+
+  test("one-byte mutation of the stored command changes the digest on the CLI surface", () => {
+    const dataDir = freshDataDir("loops-cli-command-target-mutation-");
+    const created = runCli(dataDir, ["--json", "create", "command", "mutate-shell", "--cmd", "bash deploy.sh", "--every", "1h"]);
+    expect(created.status).toBe(0);
+    const loop = JSON.parse(created.stdout);
+    const shown = runCli(dataDir, ["--json", "show", loop.id]);
+    expect(shown.status).toBe(0);
+    const value = JSON.parse(shown.stdout);
+    expect(value.target.commandDigest).toMatch(/^cmd:sha256:[a-f0-9]{64}$/);
+    expect(value.target.commandDigest).not.toBe(
+      `cmd:sha256:${createHash("sha256").update("bash deploy.sH").digest("hex")}`,
+    );
+  });
+});

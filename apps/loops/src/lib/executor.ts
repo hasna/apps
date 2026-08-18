@@ -25,6 +25,7 @@ import { nowIso } from "./ids.js";
 import { refreshLoopMachine, resolveMachineCommand } from "./machines.js";
 import { processStartTimeMs } from "./process-identity.js";
 import { isRedactionPlaceholder, scrubSecrets } from "./redact.js";
+import { resolvedCommandLine, shellQuote } from "./command-target.js";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
@@ -424,10 +425,6 @@ function notifySpawn(pid: number | undefined, opts: ExecuteOptions): void {
   });
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
 function codewithProfileCandidateFromLine(line: string): string | undefined {
   const trimmed = line.trim();
   if (!trimmed || trimmed === "No auth profiles saved.") return undefined;
@@ -645,8 +642,9 @@ function resolvedMachine(opts: ExecuteOptions): LoopMachineRef | undefined {
 }
 
 function commandForShell(spec: CommandSpec): string {
-  if (!spec.args.length) return spec.command;
-  return [spec.command, ...spec.args.map(shellQuote)].join(" ");
+  // Byte-identical to the control-plane digest's resolved line
+  // (src/lib/command-target.ts): the digest binds exactly what runs.
+  return resolvedCommandLine(spec);
 }
 
 function hereDoc(value: string, destinationVariable = "__OPENLOOPS_STDIN"): string[] {
