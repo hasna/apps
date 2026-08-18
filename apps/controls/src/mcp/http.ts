@@ -1,6 +1,6 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { resolveStorageMode } from "../config.js";
+import { serverBackend } from "../config.js";
 import { authenticateToken, bearerFromHeader, type ApiPrincipal } from "../server/auth.js";
 import { buildServer } from "./index.js";
 
@@ -39,11 +39,11 @@ function isLoopbackHost(host: string): boolean {
 /**
  * MCP HTTP auth (§5.1a). Fail-closed by default: a bearer token is required on
  * every /mcp request unless HASNA_CONTROLS_MCP_AUTH=off is set AND the server is
- * bound to loopback in local mode.
+ * bound to loopback on the SQLite backend.
  */
 export function mcpAuthRequired(host: string): boolean {
   const off = (process.env["HASNA_CONTROLS_MCP_AUTH"] || process.env["CONTROLS_MCP_AUTH"]) === "off";
-  if (off && isLoopbackHost(host) && resolveStorageMode() === "local") return false;
+  if (off && isLoopbackHost(host) && serverBackend() === "sqlite") return false;
   return true;
 }
 

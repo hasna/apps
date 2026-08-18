@@ -5,29 +5,24 @@ import { join } from "node:path";
 /**
  * Canonical Hasna Service Contract v1 storage config for @hasna/controls.
  *
- * Runtime storage modes are `local | cloud` ONLY (Amendment A1, PURE REMOTE):
- *   - local: SQLite at ~/.hasna/controls/controls.db is authoritative.
- *   - cloud: reads AND writes go directly to the app-owned cloud Postgres.
+ * The server has exactly one technical switch: `sqlite | postgresql`.
+ * A configured `HASNA_CONTROLS_DATABASE_URL` (or the `_FILE` variant, or the
+ * short `CONTROLS_DATABASE_URL` alias) selects PostgreSQL; otherwise the
+ * on-box SQLite file at ~/.hasna/controls/controls.db is authoritative.
+ * There is no deployment concept and no client-side PostgreSQL path.
  *
- * The legacy words `remote`, `hybrid`, and `self_hosted` are accepted only as
- * deprecated aliases that normalize to `cloud`.
- *
- * The app NEVER reads a secret VALUE to choose a mode — only the *presence* of
- * a DATABASE_URL / secret-ref. See §2.3/§2.4 of the build spec.
+ * The app NEVER reads a secret VALUE to select a backend — only the *presence*
+ * of a DATABASE_URL / secret-ref (see the server-backend contract).
  */
 export const APP_NAME = "controls";
-export const ENV_TOKEN = "CONTROLS";
+/** Upper-snake env prefix, e.g. CONTROLS in HASNA_CONTROLS_DATABASE_URL. */
+export const ENV_PREFIX = "CONTROLS";
 
-export type StorageMode = "local" | "cloud";
+export type ServerBackend = "sqlite" | "postgresql";
 
-const DEPRECATED_CLOUD_ALIASES = new Set(["remote", "hybrid", "self_hosted"]);
-
-const MODE_KEYS = [`HASNA_${ENV_TOKEN}_STORAGE_MODE`, `${ENV_TOKEN}_STORAGE_MODE`] as const;
-const DB_URL_KEYS = [`HASNA_${ENV_TOKEN}_DATABASE_URL`, `${ENV_TOKEN}_DATABASE_URL`] as const;
-const DB_URL_FILE_KEYS = [`HASNA_${ENV_TOKEN}_DATABASE_URL_FILE`] as const;
-const DB_PATH_KEYS = [`HASNA_${ENV_TOKEN}_DB_PATH`, `${ENV_TOKEN}_DB_PATH`] as const;
-
-export const DATABASE_URL_SECRET_REF = `hasna/oss/${APP_NAME}/database-url`;
+const DB_URL_KEYS = [`HASNA_${ENV_PREFIX}_DATABASE_URL`, `${ENV_PREFIX}_DATABASE_URL`] as const;
+const DB_URL_FILE_KEYS = [`HASNA_${ENV_PREFIX}_DATABASE_URL_FILE`] as const;
+const DB_PATH_KEYS = [`HASNA_${ENV_PREFIX}_DB_PATH`, `${ENV_PREFIX}_DB_PATH`] as const;
 
 type Env = Record<string, string | undefined>;
 
@@ -39,39 +34,18 @@ function firstEnv(env: Env, keys: readonly string[]): string | undefined {
   return undefined;
 }
 
-/** Resolve the storage mode from the environment; defaults to `local`. */
-export function resolveStorageMode(env: Env = process.env): StorageMode {
-  const raw = firstEnv(env, MODE_KEYS);
-  const mode = normalizeMode(raw);
-  // Fail-closed misconfig guard (§2.3): a DATABASE_URL present while mode
-  // resolves to `local` is almost certainly a mis-deploy that would silently
-  // write to SQLite while a cloud DB is configured. Treat it as a hard error.
-  if (mode === "local" && databaseUrlPresent(env)) {
-    throw new Error(
-      `Storage misconfiguration: a ${ENV_TOKEN} DATABASE_URL is present but mode resolved to 'local'. ` +
-        `Set HASNA_${ENV_TOKEN}_STORAGE_MODE=cloud, or unset the DATABASE_URL for local mode.`,
-    );
-  }
-  return mode;
-}
-
-function normalizeMode(raw: string | undefined): StorageMode {
-  if (!raw) return "local";
-  const normalized = raw.toLowerCase().replace(/-/g, "_");
-  if (normalized === "local") return "local";
-  if (normalized === "cloud" || DEPRECATED_CLOUD_ALIASES.has(normalized)) {
-    if (DEPRECATED_CLOUD_ALIASES.has(normalized)) {
-      console.warn(`[controls] storage mode '${raw}' is a deprecated alias; normalizing to 'cloud'.`);
-    }
-    return "cloud";
-  }
-  throw new Error(`Unknown storage mode: ${raw}. Use local or cloud.`);
+/**
+ * The server data backend, selected by environment: a DATABASE_URL (or the
+ * `_FILE` variant) selects PostgreSQL; otherwise SQLite is authoritative.
+ */
+export function serverBackend(env: Env = process.env): ServerBackend {
+  return databaseUrlPresent(env) ? "postgresql" : "sqlite";
 }
 
 /**
- * Whether a cloud database URL is present (presence only — the value is never
- * inspected to choose a mode). Presence is signalled by a `*_DATABASE_URL_FILE`
- * path, an inline `*_DATABASE_URL` env var, or a reachable secret-ref mount.
+ * Whether a PostgreSQL database URL is present (presence only — the value is
+ * never inspected). Presence is signalled by a `*_DATABASE_URL_FILE` path or
+ * an inline `*_DATABASE_URL` env var.
  */
 export function databaseUrlPresent(env: Env = process.env): boolean {
   if (firstEnv(env, DB_URL_FILE_KEYS) !== undefined) return true;
@@ -80,7 +54,7 @@ export function databaseUrlPresent(env: Env = process.env): boolean {
 }
 
 /**
- * Resolve the cloud DSN at startup (§2.4). Order:
+ * Resolve the PostgreSQL DSN at startup. Order:
  *   1. `HASNA_CONTROLS_DATABASE_URL_FILE` (a 0400 path),
  *   2. inline `HASNA_CONTROLS_DATABASE_URL` (local/dev only),
  * The secret-ref (`hasna/oss/controls/database-url`) is fetched by the runtime

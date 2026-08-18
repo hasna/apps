@@ -92,9 +92,9 @@ describe("auth: /v1 deny-by-default over Hono", () => {
   it("keeps system endpoints unauthenticated", async () => {
     const health = await app.fetch(req("GET", "/health"));
     expect(health.status).toBe(200);
-    const body = (await health.json()) as { status: string; version: string; mode: string };
+    const body = (await health.json()) as { status: string; version: string; backend: string };
     expect(body.status).toBe("ok");
     expect(body).toHaveProperty("version");
-    expect(body).toHaveProperty("mode");
+    expect(body).toHaveProperty("backend");
   });
 });

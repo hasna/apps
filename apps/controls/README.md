@@ -5,7 +5,8 @@ is the plane that decides *whether money may move* and issues single-use, signed
 authorization tokens the movers must present — it does not move money itself.
 
 A single package ships the CLI + MCP + serve triad over a Hasna-contract store
-(`bun:sqlite` local, cloud Postgres via the vendored storage-kit).
+(`bun:sqlite`, or PostgreSQL via the vendored storage-kit when a
+`HASNA_CONTROLS_DATABASE_URL` is set).
 
 ## Domain
 
@@ -72,16 +73,17 @@ controls-serve   # GET /health /ready /version + /v1/entities/:entity_id/...
 controls-mcp --http --port 8886
 ```
 
-## Storage & modes
+## Storage
 
-- `local` (default): SQLite at `~/.hasna/controls/controls.db` is authoritative.
-- `cloud` (`HASNA_CONTROLS_STORAGE_MODE=cloud`): PURE REMOTE — reads/writes go to
-  the app's cloud Postgres via the vendored storage-kit (`sslmode=verify-full`).
+The server selects its data backend by environment: SQLite at
+`~/.hasna/controls/controls.db` is authoritative unless
+`HASNA_CONTROLS_DATABASE_URL` (or the `_FILE` variant) is set, which selects
+PostgreSQL via the vendored storage-kit (`sslmode=verify-full`).
 
 ## Security
 
 - Copy-verbatim scope/role/entity-scoping auth stack, deny-by-default, timing-safe
-  bearer compare, expiry + revocation. Auth is decoupled from storage mode and
+  bearer compare, expiry + revocation. Auth is decoupled from the storage backend and
   fails closed on any non-loopback bind.
 - MCP `/mcp` requires a bearer token (§5.1a); `controls`/`access`/`treasury`/`billing`
   bind tokens to distinct credentials so SoD and approval tiers are attributable.

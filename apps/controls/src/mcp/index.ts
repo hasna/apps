@@ -57,7 +57,7 @@ Environment:
   MCP_HTTP=1                  Use Streamable HTTP transport
   MCP_HTTP_PORT=<port>        HTTP port
   CONTROLS_PROFILE=<profile>  Tool profile filter: minimal|standard|full
-  HASNA_CONTROLS_MCP_AUTH=off Disable MCP bearer auth (loopback + local mode only)`);
+  HASNA_CONTROLS_MCP_AUTH=off Disable MCP bearer auth (loopback + SQLite backend only)`);
 }
 
 async function main(): Promise<void> {

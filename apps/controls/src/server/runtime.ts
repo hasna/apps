@@ -1,4 +1,4 @@
-import { resolveStorageMode } from "../config.js";
+import { serverBackend } from "../config.js";
 
 export function getPort(): number {
   const raw = process.env["HASNA_CONTROLS_PORT"] || process.env["CONTROLS_PORT"];
@@ -26,20 +26,20 @@ export function rateLimitMax(): number {
 }
 
 /**
- * Auth is decoupled from storage mode (§6.3). Unauthenticated /v1 is permitted
- * ONLY when bound strictly to loopback AND mode is local. Any non-loopback bind
- * or cloud mode requires auth (fail-closed).
+ * Auth is decoupled from the storage backend. Unauthenticated /v1 is permitted
+ * ONLY when bound strictly to loopback AND on the SQLite backend. Any
+ * non-loopback bind or PostgreSQL backend requires auth (fail-closed).
  */
 export function authRequired(): boolean {
   if (!isLoopbackBind()) return true;
-  return resolveStorageMode() === "cloud";
+  return serverBackend() === "postgresql";
 }
 
-/** Fail-closed startup guard: non-loopback / cloud with no credentials configured. */
+/** Fail-closed startup guard: non-loopback / PostgreSQL with no credentials configured. */
 export function assertServeSafe(authConfigured: boolean): void {
   if (authRequired() && !authConfigured) {
     throw new Error(
-      "Refusing to start: serve is bound to a non-loopback interface or cloud mode without API credentials. " +
+      "Refusing to start: serve is bound to a non-loopback interface or the PostgreSQL backend without API credentials. " +
         "Set HASNA_CONTROLS_API_CREDENTIALS (or HASNA_CONTROLS_API_KEY) before serving /v1.",
     );
   }

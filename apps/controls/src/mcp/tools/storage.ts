@@ -20,7 +20,7 @@ export function registerStorageTools(server: McpServer, principal: ApiPrincipal 
 
   server.tool(
     "controls_storage_status",
-    "Redacted storage status: mode, whether a DSN is present, sqlite path, migrations applied, remote reachability. Never returns secret values.",
+    "Redacted storage status: backend, whether a DSN is present, sqlite path, migrations applied, remote reachability. Never returns secret values.",
     {},
     async () => {
       try {

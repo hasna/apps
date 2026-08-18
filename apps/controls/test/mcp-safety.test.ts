@@ -5,8 +5,8 @@ import { handleMcpHttpRequest } from "../src/mcp/http.js";
 import { createApp } from "../src/server/app.js";
 
 function resetEnv() {
-  delete process.env["HASNA_CONTROLS_STORAGE_MODE"];
   delete process.env["HASNA_CONTROLS_DATABASE_URL"];
+  delete process.env["HASNA_CONTROLS_DATABASE_URL_FILE"];
   delete process.env["HASNA_CONTROLS_API_CREDENTIALS"];
   delete process.env["HASNA_CONTROLS_MCP_AUTH"];
   process.env["HASNA_CONTROLS_DB_PATH"] = ":memory:";
@@ -42,7 +42,6 @@ describe("mcp-safety: storage_status never leaks a DSN (§4.6)", () => {
   it("omits any substring of the configured DATABASE_URL", async () => {
     resetEnv();
     const secret = "postgres://controls:SUPERSECRETPW@db.internal:5432/controls?sslmode=verify-full";
-    process.env["HASNA_CONTROLS_STORAGE_MODE"] = "cloud";
     process.env["HASNA_CONTROLS_DATABASE_URL"] = secret;
     const tools = captureTools();
     const status = (await callTool(tools, "controls_storage_status")) as Record<string, unknown>;

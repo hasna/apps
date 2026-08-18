@@ -2,11 +2,11 @@ import type { Database } from "bun:sqlite";
 import { recordAuditEvent } from "../db/audit.js";
 import { AUDIT_TABLES, SYNCABLE_TABLES } from "../db/schema.js";
 import { getDatabase, migrationsApplied } from "../db/database.js";
-import { databaseUrlPresent, resolveDbPath, resolveStorageMode } from "../config.js";
+import { databaseUrlPresent, resolveDbPath, serverBackend, type ServerBackend } from "../config.js";
 import { PermissionDeniedError } from "../types/index.js";
 
 export interface StorageStatus {
-  mode: "local" | "cloud";
+  backend: ServerBackend;
   dsn_present: boolean;
   sqlite_path: string | null;
   migrations_applied: number;
@@ -16,22 +16,22 @@ export interface StorageStatus {
 /**
  * Redacted storage status (§4.6) — never includes a DSN or secret value.
  *
- * Resolves its own handle: in `local` it counts the SQLite migration ledger; in
- * `cloud` the domain path is fail-closed/pending (see db/database.ts), so it does
- * NOT open a domain DB and reports `migrations_applied: 0`. `remote_reachable`
- * reflects whether a live cloud connection is actually established — it never is
- * today (no live pool is opened), so it is honestly `false`, not a fabricated
- * "reachable".
+ * Resolves its own handle: on the SQLite backend it counts the SQLite migration
+ * ledger; on the PostgreSQL backend the domain path is fail-closed/pending (see
+ * db/database.ts), so it does NOT open a domain DB and reports
+ * `migrations_applied: 0`. `remote_reachable` reflects whether a live remote
+ * connection is actually established — it never is today (no live pool is
+ * opened), so it is honestly `false`, not a fabricated "reachable".
  */
 export function storageStatus(): StorageStatus {
-  const mode = resolveStorageMode();
+  const backend = serverBackend();
   return {
-    mode,
+    backend,
     dsn_present: databaseUrlPresent(),
-    sqlite_path: mode === "local" ? resolveDbPath() : null,
-    migrations_applied: mode === "local" ? migrationsApplied(getDatabase()) : 0,
+    sqlite_path: backend === "sqlite" ? resolveDbPath() : null,
+    migrations_applied: backend === "sqlite" ? migrationsApplied(getDatabase()) : 0,
     // No live remote connection is opened from here; report unreachable rather
-    // than fabricate reachability. A real probe lands with the cloud wiring.
+    // than fabricate reachability. A real probe lands with the Postgres wiring.
     remote_reachable: false,
   };
 }
@@ -50,12 +50,12 @@ export interface StorageSyncResult {
 }
 
 /**
- * Push/pull between local SQLite and cloud Postgres. Gated on storage:admin,
+ * Push/pull between local SQLite and PostgreSQL. Gated on storage:admin,
  * audited, and NEVER touches append-only audit tables (§4.6/§4.7).
  *
- * Real local<->cloud row movement requires the cloud Postgres domain path, which
- * is fail-closed/pending (see db/database.ts getDatabase). Until that is wired,
- * this records an audited plan but performs NO remote I/O and reports
+ * Real SQLite<->PostgreSQL row movement requires the PostgreSQL domain path,
+ * which is fail-closed/pending (see db/database.ts getDatabase). Until that is
+ * wired, this records an audited plan but performs NO remote I/O and reports
  * `performed: false` — it never falsely claims a push/pull "executed".
  */
 export function storageSync(
@@ -81,6 +81,6 @@ export function storageSync(
     tables: effective,
     excluded_audit_tables: excluded,
     performed: false,
-    note: "audited plan only — remote row movement is not yet implemented (cloud Postgres domain path pending).",
+    note: "audited plan only — remote row movement is not yet implemented (PostgreSQL domain path pending).",
   };
 }
