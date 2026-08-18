@@ -3,13 +3,18 @@
 # Amendment A1 pure-remote: the serve talks to cloud Postgres directly.
 
 # ---- builder: install runtime deps + bundle the dist artifacts ----
-FROM --platform=linux/arm64 oven/bun:1.2-alpine AS builder
+# Bun pinned to the monorepo's own version (package.json "packageManager" /
+# CI bun-version 1.3.14): the committed member bun.lock is written by bun
+# 1.3.14, and a frozen install under an older bun rejects it as "changed".
+FROM --platform=linux/arm64 oven/bun:1.3.14-alpine AS builder
+# Assert the base image really is the pinned bun; a digest or tag drift then
+# fails the build instead of producing an image built by a different bun.
+RUN test "$(bun --version)" = "1.3.14"
 WORKDIR /app
 COPY package.json bun.lock ./
-# Production-only install: the sole devDependency that matters for a clean
-# container build (@hasna/mcp-harness) is a `file:../mcps` link that does not
-# exist in the build context, and typescript's `tsc` only emits .d.ts (dead weight
-# in a runtime image). So we install runtime deps and bundle with bun's bundler
+# Production-only install: devDependencies are types/tsc only — typescript
+# emits just .d.ts (dead weight in a runtime image) and the dev types are not
+# needed to run. So we install runtime deps and bundle with bun's bundler
 # directly instead of `bun run build`.
 RUN bun install --frozen-lockfile --production
 COPY . .
@@ -23,7 +28,7 @@ RUN bun build src/serve/index.ts --outdir dist/serve --target bun --external pg 
  && bun build src/index.ts src/project-store.ts --outdir dist --target bun --external pg --external @hasna/contracts --external @hasna/contracts/auth --external @hasna/contracts/schemas
 
 # ---- runtime: production deps + built dist + migrations ----
-FROM --platform=linux/arm64 oven/bun:1.2-alpine AS runtime
+FROM --platform=linux/arm64 oven/bun:1.3.14-alpine AS runtime
 ENV NODE_ENV=production \
     PORT=8080 \
     HOST=0.0.0.0 \

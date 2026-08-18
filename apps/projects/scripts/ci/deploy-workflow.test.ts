@@ -96,6 +96,28 @@ describe("deploy migration failure evidence", () => {
   });
 });
 
+describe("monorepo deploy context (hasna/apps)", () => {
+  test("builds the member image from the monorepo layout, not a repo-root Dockerfile", () => {
+    // The monorepo root has no Dockerfile; the member one lives at
+    // apps/projects/Dockerfile. A deploy step that runs `docker build .` from
+    // the repo root would fail before ECR is ever reached, so the deploy job
+    // must pin the run working-directory to the member directory.
+    expect(workflow).toContain("defaults:");
+    expect(workflow).toContain("run:");
+    expect(workflow).toContain("working-directory: apps/projects");
+  });
+
+  test("resolves scripts/ci helpers from the member directory", () => {
+    // verify-ecs-rollout.sh and redact-log-lines.mjs live under
+    // apps/projects/scripts/ci/ in the monorepo. The workflow invokes them by
+    // their standalone-repo-relative paths (`scripts/ci/...`), which resolve
+    // only when the run working-directory is apps/projects.
+    const scriptsBlock = workflow.slice(workflow.indexOf("working-directory: apps/projects"));
+    expect(scriptsBlock).toContain("bash scripts/ci/verify-ecs-rollout.sh");
+    expect(scriptsBlock).toContain("node scripts/ci/redact-log-lines.mjs");
+  });
+});
+
 describe("deploy rollout verification", () => {
   const expectedTaskDefinition =
     "arn:aws:ecs:us-east-1:123456789012:task-definition/projects-prod:12";

@@ -50,6 +50,14 @@ jobs:
     runs-on: ubuntu-24.04-arm # native arm64 runner — image is built without QEMU
     environment: production # MUST match the OIDC subject repo:hasna/<APP>:environment:production
     timeout-minutes: 45
+    # The monorepo root has no Dockerfile and no scripts/ci dir: this member's
+    # Dockerfile, package.json, bun.lock and scripts/ci helpers all live under
+    # apps/projects. Pinning the run working-directory to the member dir makes
+    # `docker build .` (build context) and the `scripts/ci/...` references
+    # resolve against the member tree instead of the repo root.
+    defaults:
+      run:
+        working-directory: apps/projects
 
     steps:
       - name: Checkout

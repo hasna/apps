@@ -35,6 +35,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `PROJECTS_AGENT_ONLINE_NOTIFICATIONS=0`, remain side-effect-free in dry runs,
   and are not repeated when an existing session is reused.
 
+### Fixed
+
+- Monorepo deploy pipeline: the container image now builds from the
+  `apps/projects` member context with a standalone member `bun.lock` and the
+  monorepo's own bun pin (1.3.14, asserted at build time). Previously the
+  imported standalone-repo Dockerfile pinned bun 1.2 and the member lockfile
+  had gone stale against the member manifest, so the frozen install refused
+  (`lockfile had changes, but lockfile is frozen`) and no image could build
+  from the monorepo. The deploy workflow now runs its build and `scripts/ci`
+  helper steps with `working-directory: apps/projects`, matching the member
+  layout.
+
 ## [0.1.131]
 
 ### Fixed
