@@ -1,6 +1,6 @@
 import { Database as BunDatabase } from "bun:sqlite";
 import type { Changes, SQLQueryBindings, Statement } from "bun:sqlite";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
 
@@ -79,6 +79,15 @@ function coerceBinding(value: unknown): SQLQueryBindings {
   return value as SQLQueryBindings;
 }
 
+/** Resolve the user's home directory: $HOME, then $USERPROFILE (Windows), then the OS user database. */
+function getHomeDir(): string {
+  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+  if (!home || home === "~") {
+    throw new Error("Cannot resolve the home directory: set HOME (or USERPROFILE) and try again");
+  }
+  return home;
+}
+
 export function getDataDir(): string {
   const override = process.env["HASNA_CONTEXT_DATA_DIR"] ?? process.env["CONTEXT_DATA_DIR"];
   if (override) {
@@ -92,59 +101,82 @@ export function getDataDir(): string {
   return newDir;
 }
 
+/** Canonical data root: ~/.hasna/context */
 function getDefaultDataDir(): string {
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
-  return join(home, ".hasna", "apps", "knowledge");
+  return join(getHomeDir(), ".hasna", "context");
 }
 
 function getLegacyDataDirs(): string[] {
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+  const home = getHomeDir();
   return [
-    join(home, ".hasna", "context"),
+    // The wrong default used by previous versions: context data sat inside
+    // the knowledge app's legacy directory (~/.hasna/apps/knowledge).
+    join(home, ".hasna", "apps", "knowledge"),
+    // The oldest legacy store.
     join(home, ".context"),
   ];
 }
 
+/**
+ * One-time migration of context data from a legacy store into the canonical
+ * root (~/.hasna/context). Copies only context-owned files (context.db and
+ * its WAL sidecars) — never the whole legacy directory, which may hold another
+ * app's data. The copy is verified, a receipt is recorded, legacy files are
+ * never deleted, and existing canonical data is never overwritten. Idempotent
+ * and resumable.
+ */
 function migrateLegacyDataDir(newDir: string): void {
+  if (existsSync(join(newDir, DEFAULT_DB_FILENAME))) return;
   for (const oldDir of getLegacyDataDirs()) {
-    if (!existsSync(oldDir)) continue;
-    if (!existsSync(newDir)) {
-      copyDirectory(oldDir, newDir);
-    }
-    migrateLegacyDbFilename(newDir);
-    return;
-  }
-
-  migrateLegacyDbFilename(newDir);
-}
-
-function copyDirectory(source: string, target: string): void {
-  mkdirSync(target, { recursive: true });
-  for (const file of readdirSync(source)) {
-    const sourcePath = join(source, file);
-    const targetPath = join(target, file);
-    const stats = statSync(sourcePath);
-    if (stats.isDirectory()) {
-      copyDirectory(sourcePath, targetPath);
-    } else if (stats.isFile()) {
-      copyFileSync(sourcePath, targetPath);
+    if (!existsSync(oldDir) || !statSync(oldDir).isDirectory()) continue;
+    const source = join(oldDir, DEFAULT_DB_FILENAME);
+    if (!existsSync(source)) continue;
+    if (copyContextDatabase(source, join(newDir, DEFAULT_DB_FILENAME))) {
+      writeMigrationReceipt(oldDir, newDir);
+      return;
     }
   }
 }
 
-function migrateLegacyDbFilename(dataDir: string): void {
-  if (!existsSync(dataDir)) return;
-  const source = join(dataDir, LEGACY_DB_FILENAME);
-  const target = join(dataDir, DEFAULT_DB_FILENAME);
-  if (existsSync(source) && !existsSync(target)) {
-    copyFileSync(source, target);
-  }
-  for (const suffix of ["-shm", "-wal"]) {
-    const sourceSidecar = `${source}${suffix}`;
-    const targetSidecar = `${target}${suffix}`;
-    if (existsSync(sourceSidecar) && !existsSync(targetSidecar)) {
-      copyFileSync(sourceSidecar, targetSidecar);
+function copyContextDatabase(source: string, target: string): boolean {
+  mkdirSync(dirname(target), { recursive: true });
+  copyFileSync(source, target);
+  for (const suffix of ["-wal", "-shm"]) {
+    const sidecar = `${source}${suffix}`;
+    if (existsSync(sidecar)) {
+      try { copyFileSync(sidecar, `${target}${suffix}`); } catch { /* best-effort */ }
     }
+  }
+  try {
+    // Verify the copy is a valid, self-consistent database. The probe opens
+    // the copy read-write so SQLite may recover a copied WAL if needed; the
+    // copy is ours, never user data.
+    const probe = new BunDatabase(target);
+    try {
+      const row = probe.query("PRAGMA integrity_check").get() as { integrity_check: string } | null;
+      if (row === null || row.integrity_check !== "ok") throw new Error("integrity check failed");
+    } finally {
+      probe.close();
+    }
+    return true;
+  } catch {
+    // Our own copy failed verification: remove it and leave the legacy store
+    // untouched for a later attempt.
+    rmSync(target, { force: true });
+    for (const suffix of ["-wal", "-shm"]) rmSync(`${target}${suffix}`, { force: true });
+    return false;
+  }
+}
+
+function writeMigrationReceipt(fromDir: string, toDir: string): void {
+  try {
+    writeFileSync(
+      join(toDir, "migration-receipt.json"),
+      JSON.stringify({ from: fromDir, to: toDir, migratedAt: new Date().toISOString() }, null, 2) + "\n",
+      { flag: "wx" },
+    );
+  } catch {
+    // Best-effort: the migrated database itself is the durable record.
   }
 }
 
@@ -156,12 +188,15 @@ function resolveDbPath(): string {
     return process.env["CONTEXT_DB_PATH"];
   }
 
-  // Walk up from cwd looking for local app data first, then legacy stores.
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+  // Walk up from cwd looking for a repo-local context store first, then
+  // legacy local stores. Home-level legacy stores are excluded so that they
+  // are migrated into the canonical root instead of being selected forever.
+  const home = getHomeDir();
   let dir = process.cwd();
   for (let i = 0; i < 10; i++) {
     const candidates = [
-      join(dir, ".hasna", "apps", "knowledge", DEFAULT_DB_FILENAME),
+      join(dir, ".hasna", "context", DEFAULT_DB_FILENAME),
+      ...(dir === home ? [] : [join(dir, ".hasna", "apps", "knowledge", DEFAULT_DB_FILENAME)]),
       ...(dir === home ? [] : [join(dir, ".context", LEGACY_DB_FILENAME)]),
     ];
     for (const candidate of candidates) {
@@ -172,7 +207,7 @@ function resolveDbPath(): string {
     dir = parent;
   }
 
-  // Default: ~/.hasna/apps/knowledge/context.db
+  // Default: ~/.hasna/context/context.db
   const override = process.env["HASNA_CONTEXT_DATA_DIR"] ?? process.env["CONTEXT_DATA_DIR"];
   return join(override ?? getDefaultDataDir(), DEFAULT_DB_FILENAME);
 }

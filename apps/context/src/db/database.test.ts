@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { Database } from "bun:sqlite";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
-import { mkdtempSync } from "fs";
 import { getDataDir, getDatabase, getDbPath, resetDatabase } from "./database.js";
 
 const oldEnv = new Map<string, string | undefined>();
@@ -32,10 +32,19 @@ afterEach(() => {
   tempRoot = null;
 });
 
+/** A realistic legacy database: a valid SQLite file with data. */
+function makeContextDb(path: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const db = new Database(path);
+  db.exec("CREATE TABLE IF NOT EXISTS legacy_probe (value TEXT)");
+  db.query("INSERT INTO legacy_probe (value) VALUES ('legacy-data')").run();
+  db.close();
+}
+
 describe("database path resolution", () => {
-  it("resolves the knowledge app data path without creating it until the database opens", () => {
+  it("resolves the canonical context data path without creating it until the database opens", () => {
     const root = isolateHome();
-    const expected = join(root, "home", ".hasna", "apps", "knowledge", "context.db");
+    const expected = join(root, "home", ".hasna", "context", "context.db");
 
     expect(getDbPath()).toBe(expected);
     expect(existsSync(dirname(expected))).toBe(false);
@@ -45,18 +54,72 @@ describe("database path resolution", () => {
     expect(existsSync(dirname(expected))).toBe(true);
   });
 
-  it("copies legacy context data into the knowledge app directory", () => {
+  it("migrates context data from the legacy ~/.hasna/apps/knowledge store into the canonical root", () => {
     const root = isolateHome();
-    const legacyDir = join(root, "home", ".hasna", "context");
+    const legacyDir = join(root, "home", ".hasna", "apps", "knowledge");
     mkdirSync(legacyDir, { recursive: true });
-    writeFileSync(join(legacyDir, "context.db"), "legacy-db");
-    writeFileSync(join(legacyDir, "notes.md"), "legacy docs");
+    makeContextDb(join(legacyDir, "context.db"));
+    writeFileSync(join(legacyDir, "notes.md"), "knowledge-owned file");
+    writeFileSync(join(legacyDir, "knowledge.db"), "knowledge-owned database");
+
+    const dataDir = getDataDir();
+    const canonical = join(root, "home", ".hasna", "context");
+
+    expect(dataDir).toBe(canonical);
+    expect(existsSync(join(canonical, "context.db"))).toBe(true);
+    // Only context-owned files travel; knowledge-owned files stay behind.
+    expect(existsSync(join(canonical, "notes.md"))).toBe(false);
+    expect(existsSync(join(canonical, "knowledge.db"))).toBe(false);
+    expect(existsSync(join(legacyDir, "context.db"))).toBe(true); // original preserved
+    const receipt = JSON.parse(readFileSync(join(canonical, "migration-receipt.json"), "utf8")) as { from: string; to: string };
+    expect(receipt).toMatchObject({ from: legacyDir, to: canonical });
+  });
+
+  it("migrates the older ~/.context legacy store when the wrong default has no context data", () => {
+    const root = isolateHome();
+    const legacyDir = join(root, "home", ".context");
+    mkdirSync(legacyDir, { recursive: true });
+    makeContextDb(join(legacyDir, "context.db"));
 
     const dataDir = getDataDir();
 
-    expect(dataDir).toBe(join(root, "home", ".hasna", "apps", "knowledge"));
+    expect(dataDir).toBe(join(root, "home", ".hasna", "context"));
     expect(existsSync(join(dataDir, "context.db"))).toBe(true);
-    expect(existsSync(join(dataDir, "notes.md"))).toBe(true);
+    expect(existsSync(join(dataDir, "migration-receipt.json"))).toBe(true);
+  });
+
+  it("migration is idempotent and does not rewrite the receipt or the data", () => {
+    const root = isolateHome();
+    const legacyDir = join(root, "home", ".hasna", "apps", "knowledge");
+    mkdirSync(legacyDir, { recursive: true });
+    makeContextDb(join(legacyDir, "context.db"));
+
+    getDataDir();
+    const canonical = join(root, "home", ".hasna", "context");
+    const receiptPath = join(canonical, "migration-receipt.json");
+    const firstReceipt = readFileSync(receiptPath, "utf8");
+    const migrated = readFileSync(join(canonical, "context.db"));
+
+    getDataDir();
+
+    expect(readFileSync(receiptPath, "utf8")).toBe(firstReceipt);
+    expect(readFileSync(join(canonical, "context.db"))).toEqual(migrated);
+  });
+
+  it("migration never overwrites existing canonical data", () => {
+    const root = isolateHome();
+    const legacyDir = join(root, "home", ".hasna", "apps", "knowledge");
+    mkdirSync(legacyDir, { recursive: true });
+    makeContextDb(join(legacyDir, "context.db"));
+    const canonical = join(root, "home", ".hasna", "context");
+    mkdirSync(canonical, { recursive: true });
+    writeFileSync(join(canonical, "context.db"), "existing-canonical-data");
+
+    const dataDir = getDataDir();
+
+    expect(dataDir).toBe(canonical);
+    expect(readFileSync(join(canonical, "context.db"), "utf8")).toBe("existing-canonical-data");
+    expect(existsSync(join(legacyDir, "context.db"))).toBe(true);
   });
 
   it("does not select a repo-local knowledge.db owned by another knowledge schema", () => {
@@ -65,7 +128,34 @@ describe("database path resolution", () => {
     mkdirSync(otherDbDir, { recursive: true });
     writeFileSync(join(otherDbDir, "knowledge.db"), "not an open-context database");
 
-    expect(getDbPath()).toBe(join(root, "home", ".hasna", "apps", "knowledge", "context.db"));
+    expect(getDbPath()).toBe(join(root, "home", ".hasna", "context", "context.db"));
+  });
+
+  it("still selects a repo-local canonical context store", () => {
+    const root = isolateHome();
+    const localDir = join(root, ".hasna", "context");
+    mkdirSync(localDir, { recursive: true });
+    makeContextDb(join(localDir, "context.db"));
+
+    expect(getDbPath()).toBe(join(root, ".hasna", "context", "context.db"));
+  });
+
+  it("env overrides still win over the canonical default", () => {
+    const root = isolateHome();
+    process.env.HASNA_CONTEXT_DATA_DIR = join(root, "override-data");
+    expect(getDataDir()).toBe(join(root, "override-data"));
+    process.env.CONTEXT_DB_PATH = join(root, "override.db");
+    expect(getDbPath()).toBe(join(root, "override.db"));
+  });
+
+  it("default never contains a literal ~ or undefined prefix when HOME is unset", () => {
+    isolateHome();
+    delete process.env.HOME;
+    delete process.env.USERPROFILE;
+    const path = getDbPath();
+    expect(path.startsWith("~")).toBe(false);
+    expect(path.startsWith("undefined")).toBe(false);
+    expect(path).toContain(".hasna/context");
   });
 });
 
