@@ -30,12 +30,13 @@
     "build:react": "NODE_ENV=production bun build src/react/index.tsx --outdir dist/react --target bun --external react --external react-dom --external reveal.js --external \"reveal.js/*\"",
     "build:types": "tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "build:dashboard": "cd dashboard && bun run build",
-    "prepack": "bun run build:lib",
+    "prepack": "bun run build:lib && bun run scan:artifact",
     "prepublishOnly": "bun run typecheck && bun test",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:dashboard": "cd dashboard && bun run dev",
-    "postinstall": "mkdir -p $HOME/.hasna/slides 2>/dev/null || true; if test -f dashboard/package.json; then cd dashboard && bun install --frozen-lockfile; fi"
+    "postinstall": "mkdir -p $HOME/.hasna/slides 2>/dev/null || true; if test -f dashboard/package.json; then cd dashboard && bun install --frozen-lockfile; fi",
+    "scan:artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/slides-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan slides-artifact-scan.tgz; rc=$?; rm -f \"$PWD/slides-artifact-scan.tgz\"; exit $rc"
   },
   "keywords": [
     "slides",
