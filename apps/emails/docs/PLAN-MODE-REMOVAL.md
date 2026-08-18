@@ -1,4 +1,4 @@
-# PLAN — Deleting the deployment-mode axis (open-emails)
+# PLAN — Deleting the deployment-mode axis (Hasna Emails)
 
 > Status: IN PROGRESS — phases 1–3 have landed and phase 4 is actively collapsing
 > repository families (verified 2026-07-29). The live ratchet currently reports

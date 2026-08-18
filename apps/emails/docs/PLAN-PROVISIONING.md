@@ -1,12 +1,12 @@
-# PLAN — Automated Domain → Email Address Provisioning (open-emails)
+# PLAN — Automated Domain → Email Address Provisioning (Hasna Emails)
 
 > Status: DESIGN TARGET, NOT IMPLEMENTED (verified 2026-07-29). Owner: agents.
-> Companion plan: `open-domains/docs/PLAN-PROVISIONING.md`.
+> Companion plan: `domains/docs/PLAN-PROVISIONING.md`.
 > No shipped orchestrator, daemon, round-trip runner, or `/v1` provisioning route exists.
 > Some schema/state-machine helpers remain, but no entrypoint drives them.
 > `emails provision *` and the `provision_*` MCP tools fail loud in every mode.
 > The BrandSight/GCD DNS client below was likewise removed (enterprise-contract-only, never reachable).
-> This plan turns open-emails into a system that **gives users and agents real email addresses on
+> This plan turns Hasna Emails into a system that **gives users and agents real email addresses on
 > domains we own**, fully automatically: buy/verify the domain, wire DNS through Cloudflare, set up
 > SES sending + receiving, create addresses, wait until everything is live, and validate by sending
 > mail back and forth.
@@ -74,7 +74,7 @@ daemon can resume after crash/restart):
 ```
 DOMAIN lifecycle:
   requested
-    → (buy-if-needed) purchasing        [open-domains: r53 RegisterDomain, poll GetOperationDetail]
+    → (buy-if-needed) purchasing        [domains: r53 RegisterDomain, poll GetOperationDetail]
     → registered
     → cf_zone_creating                  [Cloudflare: create zone, read NS]
     → ns_delegating                     [registrar: UpdateDomainNameservers → CF NS]
@@ -143,7 +143,7 @@ Postgres migration in `src/server/self-hosted/migrations.ts`.
 ## 8. Live end-to-end test (real domains, real mail)
 
 Gated behind real credentials. Buy **3 real funny 3-word `.com` domains** (availability-checked; buy
-first 3 available from the candidate list in `open-domains` plan §8), then per domain create **3
+first 3 available from the candidate list in `domains` plan §8), then per domain create **3
 addresses** and send **16 emails back and forth per address** to confirm send+receive.
 
 ```
