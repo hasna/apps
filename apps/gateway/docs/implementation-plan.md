@@ -12,7 +12,7 @@ Deliverables:
 
 Acceptance criteria:
 
-- `open-gateway` exists in the open-source workspace.
+- `gateway` exists in the `hasna/apps` open-source monorepo.
 - Docs define product, architecture, API, adapters, routing, security, and release plan.
 - Todos CLI contains a plan and concrete tasks.
 

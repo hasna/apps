@@ -4,7 +4,7 @@
 
 - npm package: `@hasna/gateway`
 - CLI binary: `gateway`
-- GitHub repository: `hasna/open-gateway`
+- GitHub repository: `hasna/apps` (member `apps/gateway`)
 - License: Apache-2.0
 
 ## Public Release Gate

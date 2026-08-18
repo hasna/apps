@@ -8,7 +8,7 @@ This keeps the project trustworthy and useful while preserving the business valu
 
 ## Open Source
 
-The public `open-gateway` repository should own:
+The public gateway core should own:
 
 - Provider adapter contracts.
 - OpenAI-compatible HTTP API.
@@ -47,7 +47,7 @@ The private hosted platform should own:
 - Hosted observability storage.
 - Enterprise policy management.
 
-This private layer can call into the open gateway core as a library or run it as an internal service.
+This private layer can call into the gateway core as a library or run it as an internal service.
 
 ## Boundary Rules
 

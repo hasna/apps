@@ -1,4 +1,4 @@
-# Open Gateway Task Plan
+# Hasna Gateway Task Plan
 
 This file mirrors Todos plan `66caee8d-d526-4fa7-86da-cdfebedc112e`. The Todos CLI is the source of truth.
 
@@ -8,7 +8,7 @@ This file mirrors Todos plan `66caee8d-d526-4fa7-86da-cdfebedc112e`. The Todos C
 - Local verification: passing with 38 unit/integration tests, typecheck, build, built CLI config validation, package dry run, `npm publish --dry-run`, and mock-provider smoke coverage.
 - Live provider smoke: blocked by external credentials. Available OpenAI, DashScope/Qwen, and Moonshot/Kimi keys are rejected by their providers; no DeepSeek, OpenRouter, Z.AI, or SiliconFlow key is set in the environment.
 - Publication: not performed because the release gate requires a passing live smoke check with real provider credentials. npm auth is present (`npm whoami` succeeds), so the remaining blocker is provider credentials, not npm authentication.
-- GitHub: published at `https://github.com/hasna/open-gateway` with `main` pushed.
+- GitHub: hosted in the `hasna/apps` monorepo (member `apps/gateway`); `main` pushed.
 - npm: `npm view @hasna/gateway` currently returns 404. npm publish is intentionally deferred until live provider smoke passes.
 
 ## Milestones

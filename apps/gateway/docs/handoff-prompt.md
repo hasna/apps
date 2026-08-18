@@ -3,7 +3,7 @@
 Use this prompt for the dedicated build agent:
 
 ```text
-You are working in /home/hasna/workspace/hasna/opensource/open-gateway.
+You are working in /home/hasna/workspace/repos/hasna/apps/apps/gateway.
 
 Start a goal for this project: fully build, verify, and publish Hasna Gateway as the open-source AI gateway core. Do not stop at planning. Continue until the app is implemented, working locally, tested, and published or until a real external blocker makes publication impossible.
 
