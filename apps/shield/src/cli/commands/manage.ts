@@ -17,7 +17,7 @@ export function registerManageCommands(program: Command): void {
   program
     .command("init")
     .description("Initialize security for this repository")
-    .option("--install-pre-push", "Install the open-security pre-push hook")
+    .option("--install-pre-push", "Install the shield pre-push hook")
     .option("--force-hook", "Overwrite an existing pre-push hook when installing")
     .action(async (options) => {
       const cwd = process.cwd();
