@@ -1,5 +1,5 @@
 /**
- * Hook system types for open-mementos lifecycle events.
+ * Hook system types for mementos lifecycle events.
  *
  * Blocking hooks: handler returns false → operation is cancelled.
  * Non-blocking hooks: fire-and-forget, never delay the caller.

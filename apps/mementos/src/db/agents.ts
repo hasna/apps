@@ -20,7 +20,7 @@ export interface AgentListFilter {
  * flag. Sources, in order:
  *
  *   1. `MEMENTOS_AGENT` — this package's existing identity convention (already
- *      consumed by `init` and the open-sessions connector).
+ *      consumed by `init` and the sessions connector).
  *   2. `~/.hasna/conversations/agent-id` — the fleet's machine-level identity
  *      surface, written by `conversations agents register`.
  *

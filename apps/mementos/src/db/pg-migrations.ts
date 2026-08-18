@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-mementos remote storage sync.
+ * PostgreSQL migrations for mementos remote storage sync.
  *
  * Equivalent of the SQLite migrations in database.ts, translated for PostgreSQL.
  * Each element is a standalone SQL string that must be executed in order.
