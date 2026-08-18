@@ -48,7 +48,7 @@ describe("local shell executor", () => {
 
       const preview = await client.run({
         actionId: manifest.id,
-        input: { name: "open-actions" },
+        input: { name: "actions" },
         dryRun: true,
       });
       expect(preview.status).toBe("previewed");
@@ -56,11 +56,11 @@ describe("local shell executor", () => {
 
       const executed = await client.run({
         actionId: manifest.id,
-        input: { name: "open-actions" },
+        input: { name: "actions" },
         dryRun: false,
       });
       expect(executed.status).toBe("succeeded");
-      expect(executed.output).toEqual({ message: "OPEN-ACTIONS" });
+      expect(executed.output).toEqual({ message: "ACTIONS" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

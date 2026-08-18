@@ -39,7 +39,7 @@ describe("ActionsClient", () => {
       const client = new ActionsClient({ dataDir: dir });
       await client.register(createTypeScriptAction({
         manifest: manifest({ guardrail: undefined }),
-        execute: async () => ({ updated: true, project: "open-actions" }),
+        execute: async () => ({ updated: true, project: "actions" }),
       }));
 
       expect(existsSync(join(dir, "actions.db"))).toBe(true);
@@ -76,17 +76,17 @@ describe("ActionsClient", () => {
 
       const dryRun = await client.run({
         actionId: "projects.metadata.update",
-        input: { project: "open-actions", metadata: { stage: "active" } },
+        input: { project: "actions", metadata: { stage: "active" } },
         actor: { id: "hasna", type: "human" },
         idempotencyKey: "preview-1",
         dryRun: true,
       });
       expect(dryRun.status).toBe("previewed");
-      expect(dryRun.preview?.changes?.[0]?.target).toBe("open-actions");
+      expect(dryRun.preview?.changes?.[0]?.target).toBe("actions");
 
       const planned = await client.run({
         actionId: "projects.metadata.update",
-        input: { project: "open-actions", metadata: { stage: "active" } },
+        input: { project: "actions", metadata: { stage: "active" } },
         actor: { id: "hasna", type: "human" },
         idempotencyKey: "execute-1",
         dryRun: false,
@@ -102,12 +102,12 @@ describe("ActionsClient", () => {
 
       const executed = await client.execute(planned.id);
       expect(executed.status).toBe("succeeded");
-      expect(executed.output).toEqual({ updated: true, project: "open-actions" });
+      expect(executed.output).toEqual({ updated: true, project: "actions" });
       expect(audit).toContain("action.executed");
 
       const deduped = await client.plan({
         actionId: "projects.metadata.update",
-        input: { project: "open-actions", metadata: { stage: "active" } },
+        input: { project: "actions", metadata: { stage: "active" } },
         idempotencyKey: "execute-1",
       });
       expect(deduped.id).toBe(executed.id);
@@ -152,11 +152,11 @@ describe("ActionsClient", () => {
           idempotency: { supported: true },
           guardrail: undefined,
         }),
-        execute: async () => ({ updated: true, project: "open-actions" }),
+        execute: async () => ({ updated: true, project: "actions" }),
       }));
       const run = await client.run({
         actionId: "role.approved.action",
-        input: { project: "open-actions", metadata: {} },
+        input: { project: "actions", metadata: {} },
         dryRun: false,
       });
       expect(run.status).toBe("awaiting_approval");
