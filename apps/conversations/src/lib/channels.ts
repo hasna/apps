@@ -1,6 +1,7 @@
 import { getDb } from "./db.js";
 import { normalizeChannelName } from "./channel-names.js";
 import { newChannelId } from "./channel-id.js";
+import { WORK_STATUS_CHANNEL } from "./work-status-schema.js";
 import type { Channel, ChannelInfo, ChannelMember } from "../types.js";
 import { CHANNEL_LIST_ORDER, CHANNEL_MEMBER_ORDER, simpleOrderByClause } from "./list-order.js";
 
@@ -296,6 +297,14 @@ export function renameChannel(oldName: string, newName: string, opts: { reparent
 
   if (from === to) {
     return parseChannel(existing);
+  }
+
+  // The work-status channel is the fleet lifecycle stream: its identity is
+  // reserved and stable. Renaming TO it would bulk-move arbitrary messages
+  // into the stream without the write-time gate, and renaming it AWAY would
+  // silently orphan every consumer that reads the stream by its name.
+  if (from === WORK_STATUS_CHANNEL || to === WORK_STATUS_CHANNEL) {
+    throw new Error("Channel #work-status is the reserved lifecycle stream and cannot be renamed.");
   }
 
   const conflict = db.prepare("SELECT name FROM channels WHERE name = ?").get(to);
