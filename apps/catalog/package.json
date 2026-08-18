@@ -7,8 +7,7 @@
   "types": "dist/index.d.ts",
   "bin": {
     "catalog": "dist/cli/index.js",
-    "catalog-mcp": "dist/mcp/index.js",
-    "catalog-serve": "dist/server/index.js"
+    "catalog-mcp": "dist/mcp/index.js"
   },
   "exports": {
     ".": {

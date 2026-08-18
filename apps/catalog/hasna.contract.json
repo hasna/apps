@@ -4,21 +4,17 @@
   "name": "catalog",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.8.3",
+  "kitVersion": "0.11.1",
   "description": "Read-model app catalog for Hasna distribution. Seeds hasna.app.v1 records into a local SQLite catalog, exposes CLI and MCP read surfaces, and can generate a static public catalog site.",
   "bins": [
     "catalog",
-    "catalog-mcp",
-    "catalog-serve"
+    "catalog-mcp"
   ],
   "hosting": [
     "user-hosted"
   ],
-  "deploymentModes": [
-    "local"
-  ],
   "storage": {
-    "mode": "local",
+    "backend": "sqlite",
     "engines": [
       "sqlite"
     ],
@@ -30,20 +26,14 @@
       "kind": "cli",
       "status": "supported",
       "bin": "catalog",
-      "authMode": "local-only",
-      "deploymentModes": [
-        "local"
-      ]
+      "authMode": "local-only"
     },
     {
       "name": "mcp",
       "kind": "mcp",
       "status": "supported",
       "mcpBin": "catalog-mcp",
-      "authMode": "local-only",
-      "deploymentModes": [
-        "local"
-      ]
+      "authMode": "local-only"
     },
     {
       "name": "api",
@@ -57,17 +47,14 @@
         "path": "/health",
         "public": true,
         "description": "Returns { status, service, version, apps }; unauthenticated like the rest of the HTTP surface."
-      },
-      "deploymentModes": [
-        "local"
-      ]
+      }
     }
   ],
   "metadata": {
     "conformance": {
       "waivedStorageEngines": [
         {
-          "engine": "postgres",
+          "engine": "postgresql",
           "reason": "Catalog is currently a local read model backed by SQLite only; PostgreSQL support is not implemented yet."
         }
       ]
