@@ -24,7 +24,7 @@ must not be redirected into `~/.hasna/contracts`.
 
 | Path | Owner and purpose |
 | --- | --- |
-| `.hasna/project/**` | Project metadata defined by the project-manifest schemas. `@hasna/contracts` validates the layout; `open-projects` owns reading and writing it. |
+| `.hasna/project/**` | Project metadata defined by the project-manifest schemas. `@hasna/contracts` validates the layout; `projects` owns reading and writing it. |
 | `src/generated/storage-kit/.storage-kit-manifest.json` | Deterministic `vendor-kit` output tracked in the target repository alongside the generated storage kit. |
 | `.hasna/loops/runs/**` | OpenLoops run artifacts described by the integration contract. They are owned by OpenLoops, not by `@hasna/contracts`. |
 

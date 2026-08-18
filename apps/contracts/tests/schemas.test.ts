@@ -217,9 +217,9 @@ describe("core schemas", () => {
     expect(parsed.credentialPolicy.rawSecretInputsAllowed).toBe(false);
     expect(parsed.credentialPolicy.missingCredentialBehavior).toBe("fail_closed");
     expect(parsed.firstAdoptionTargets.map((target) => target.appId).sort()).toEqual([
-      "open-feedback",
-      "open-mailery",
-      "open-telephony"
+      "feedback",
+      "mailery",
+      "telephony"
     ]);
   });
 
@@ -229,7 +229,7 @@ describe("core schemas", () => {
       operationCards: [
         {
           providerId: "twilio",
-          appId: "open-telephony",
+          appId: "telephony",
           adapterId: "telephony-twilio",
           ownerPackage: "@hasna/telephony",
           modes: ["fixture", "live_mutating"],
@@ -251,8 +251,8 @@ describe("core schemas", () => {
       ],
       firstAdoptionTargets: [
         {
-          appId: "open-telephony",
-          repo: "/home/hasna/workspace/hasna/opensource/open-telephony",
+          appId: "telephony",
+          repo: "/home/hasna/workspace/repos/hasna/telephony",
           priority: "p0",
           requiredEvidence: ["webhook fixture"],
           firstOperations: ["send_sms"]

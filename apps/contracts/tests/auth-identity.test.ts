@@ -614,9 +614,9 @@ describe("resolveTenantOrg (tid -> org)", () => {
 
 describe("identity configuration", () => {
   test("env keys follow the contract's HASNA_<NAME>_* convention", () => {
-    const keys = identityEnvKeys("open-mailery");
-    expect(keys.issuerKeys).toEqual(["HASNA_OPEN_MAILERY_IDENTITY_ISSUER", "OPEN_MAILERY_IDENTITY_ISSUER"]);
-    expect(keys.jwksUriKeys[0]).toBe("HASNA_OPEN_MAILERY_IDENTITY_JWKS_URI");
+    const keys = identityEnvKeys("mailery");
+    expect(keys.issuerKeys).toEqual(["HASNA_MAILERY_IDENTITY_ISSUER", "MAILERY_IDENTITY_ISSUER"]);
+    expect(keys.jwksUriKeys[0]).toBe("HASNA_MAILERY_IDENTITY_JWKS_URI");
   });
 
   test("an empty environment disables the option — there is NO default issuer or JWKS URI", () => {

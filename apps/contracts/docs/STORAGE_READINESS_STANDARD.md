@@ -176,10 +176,10 @@ evidence.
 
 | Domain | First apps | Required emphasis |
 | --- | --- | --- |
-| Data/project | `open-knowledge`, `open-mementos`, `open-projects`, `open-todos`, `open-files` | Local/source drift, migrations, backup/restore, export/delete, sync conflicts, redaction. |
-| Finance | `open-banking`, `open-accounting`, and the internal finance apps | Postgres transactions, outbox, idempotency, immutable posted records, reconciliation, approvals. |
-| Comms/customer | `open-mailery`, `open-telephony`, `open-feedback`, `open-contacts`, `open-calendar`, `open-tickets` | Provider event storage, retention/export/delete, webhooks, tenant/entity boundaries. |
-| Infra/control | `open-backup`, `open-deployment`, `open-domains`, `open-gateway`, `open-machines`, `open-sandboxes`, `open-secrets` | Credential references, RLS where shared, backup restore, operator readiness, deployment-state audit. |
+| Data/project | `knowledge`, `mementos`, `projects`, `todos`, `files` | Local/source drift, migrations, backup/restore, export/delete, sync conflicts, redaction. |
+| Finance | `banking`, `accounting`, and the internal finance apps | Postgres transactions, outbox, idempotency, immutable posted records, reconciliation, approvals. |
+| Comms/customer | `mailery`, `telephony`, `feedback`, `contacts`, `calendar`, `tickets` | Provider event storage, retention/export/delete, webhooks, tenant/entity boundaries. |
+| Infra/control | `backup`, `deployment`, `domains`, `gateway`, `machines`, `sandboxes`, `secrets` | Credential references, RLS where shared, backup restore, operator readiness, deployment-state audit. |
 | Internal data/org | the internal data, access, controls, workforce, companies, and entities apps | Tenant/entity boundaries, access review durability, offboarding fanout, audit export. |
 
 ## Reviewer Mapping

@@ -57,7 +57,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  *
  * `bun.lock` is JSONC: it is written with a trailing comma after the last
  * entry of most objects. Stripping them has to skip string contents, or a
- * `file:../open-cloud` specifier could be mangled.
+ * `file:../cloud-shim` specifier could be mangled.
  */
 export function parseLooseJson(text: string): unknown | null {
   try {
@@ -203,7 +203,7 @@ export function isLinkedResolution(id: string): boolean {
 /**
  * The package name inside a bun lockfile resolution id.
  *
- * Ids look like `pg@8.22.0` or `@hasna/cloud@file:../open-cloud`; the scope
+ * Ids look like `pg@8.22.0` or `@hasna/cloud@file:../cloud-shim`; the scope
  * sigil means the separating `@` is not the first character.
  */
 export function nameFromResolutionId(id: string): string | null {
@@ -219,8 +219,8 @@ export function nameFromResolutionId(id: string): string | null {
  * `file:`, `link:` and `workspace:` name a DIRECTORY and `npm:` names a
  * registry package, so any of them can pull the retired runtime into the tree
  * under a name that is on no list: `bun install` records a dependency on
- * `../open-cloud` declared as `@hasna/legacy` as
- * `@hasna/legacy@file:../open-cloud`, and the key alone says nothing at all.
+ * `../cloud-shim` declared as `@hasna/legacy` as
+ * `@hasna/legacy@file:../cloud-shim`, and the key alone says nothing at all.
  *
  * Returns null for the ordinary case where the id resolves to its own name.
  */
@@ -328,7 +328,7 @@ function installRoots(lock: Record<string, unknown>): InstallRoot[] {
   }
   // The lockfile's OWN top-level sections are install-bearing, and they belong
   // to no workspace record. A `bun install` with an overrides block writes
-  // `"overrides": { "open-cloud": "1.0.0" }` at the top level of `bun.lock` —
+  // `"overrides": { "cloud-shim": "1.0.0" }` at the top level of `bun.lock` —
   // confirmed against a real install, not assumed. Reading only `workspaces`
   // left every one of these invisible, and because the walk still returned a
   // list rather than null, the miss was signed off as a clean verdict instead
@@ -498,8 +498,8 @@ export function lockfileWalk(lockText: string, forbidden: readonly string[]): Lo
     if (known.length > 0 && reachable.length === 0) {
       // A MEASURED clearance, recorded so the caller's text fallback can stay
       // quiet about it. Every identity the dropped nodes could stand for, not
-      // just the first: the entry that clears `@hasna/cloud@file:../open-cloud`
-      // clears the name `open-cloud` it resolves to as well, and reporting one
+      // just the first: the entry that clears `@hasna/cloud@file:../cloud-shim`
+      // clears the name `cloud-shim` it resolves to as well, and reporting one
       // while suppressing the other reads as a finding on a package the walk
       // just proved absent.
       for (const dropped of forbiddenIdentities(current.name, known, forbidden)) clearedByLayout.add(dropped);

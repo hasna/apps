@@ -4,7 +4,7 @@
   "createdAt": "2026-06-28T20:10:00.000Z",
   "subject": {
     "kind": "repo",
-    "id": "open-cloud",
+    "id": "cloud",
     "uri": "git+https://github.com/hasna/cloud.git"
   },
   "packageName": "@hasna/cloud",

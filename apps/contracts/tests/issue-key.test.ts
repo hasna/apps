@@ -29,7 +29,7 @@ async function captureStdout(fn: () => Promise<void>): Promise<string> {
 describe("issue-key env name resolution", () => {
   test("default env names follow the HASNA_<APP>_ convention", () => {
     expect(signingSecretEnvName("todos")).toBe("HASNA_TODOS_API_SIGNING_KEY");
-    expect(signingSecretEnvName("open-brain")).toBe("HASNA_OPEN_BRAIN_API_SIGNING_KEY");
+    expect(signingSecretEnvName("brain")).toBe("HASNA_BRAIN_API_SIGNING_KEY");
     expect(databaseUrlEnvName("todos")).toBe("HASNA_TODOS_DATABASE_URL");
     expect(signingSecretEnvName("todos", "CUSTOM_ENV")).toBe("CUSTOM_ENV");
   });

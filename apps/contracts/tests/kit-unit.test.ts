@@ -188,7 +188,7 @@ function stubExecutor(rowsByCall: Record<string, unknown[]>): PgExecutor {
 }
 
 describe("kit typed query wrapper", () => {
-  test("get returns first row or null (the method open-knowledge dropped)", async () => {
+  test("get returns first row or null (the method knowledge dropped)", async () => {
     const client = wrapExecutor(
       stubExecutor({ "SELECT * FROM t": [{ id: 1 }, { id: 2 }], "SELECT * FROM empty": [] }),
     );

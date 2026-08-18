@@ -76,7 +76,7 @@ environment.
 | `<NAME>_DATABASE_URL` | Optional short alias for the database URL. |
 
 `<NAME>` is the upper-snake form of the app name (e.g. `todos` → `TODOS`,
-`open-mailery` app name `mailery` → `MAILERY`).
+the `mailery` app name → `MAILERY`).
 
 `resolveServerDataBackend` uses the canonical database URL first, then the
 short alias. A non-empty URL selects `postgresql`; otherwise the backend is

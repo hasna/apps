@@ -10,7 +10,7 @@
 /** Minimal process-environment shape shared by backend and transport resolvers. */
 export type Env = Record<string, string | undefined>;
 
-/** Upper-snake env token for an app name, e.g. `open-mailery` -> `OPEN_MAILERY`. */
+/** Upper-snake env token for an app name, e.g. `mailery` -> `MAILERY`. */
 export function envToken(name: string): string {
   return name.toUpperCase().replace(/-/g, "_");
 }

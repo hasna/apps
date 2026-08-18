@@ -277,7 +277,7 @@ describe("the app's own bare alias is policed, because the seam honours it", () 
   });
 
   test("a third-party key wearing the app's name clears with an auditable waiver", () => {
-    // The measured case: open-recordings reads RECORDINGS_API_KEY into
+    // The measured case: recordings reads RECORDINGS_API_KEY into
     // config.openai_api_key. A waiver states that in the report where a
     // reviewer sees it, instead of the class disappearing fleet-wide.
     const result = scan(

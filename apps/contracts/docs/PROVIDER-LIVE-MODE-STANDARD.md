@@ -76,13 +76,13 @@ operator approval and rollback or disable evidence.
 
 ## First Adoption Targets
 
-- `open-mailery`: canonical `open-mailery`/`open-emails` boundary,
+- `mailery`: canonical `mailery`/`emails` boundary,
   single-operator versus server-backed auth model, Postgres/S3/SES readiness, signed
   webhooks, and no-send/domain-change smokes.
-- `open-telephony`: REST auth, Twilio signature and replay validation, toll
+- `telephony`: REST auth, Twilio signature and replay validation, toll
   fraud controls, durable queues, retention, and opt-in sandbox/live provider
   smokes.
-- `open-feedback`: public submit separated from private read/export/triage,
+- `feedback`: public submit separated from private read/export/triage,
   scoped auth, rate/spam limits, durable store, dedupe, and signed forwarding
   webhooks.
 

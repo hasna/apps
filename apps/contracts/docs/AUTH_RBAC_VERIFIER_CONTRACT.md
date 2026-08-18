@@ -13,10 +13,10 @@ auth context and negative-test matrix.
 First adoption targets:
 
 - the internal access app
-- `open-feedback`
-- `open-telephony`
-- `open-contacts`
-- `open-calendar`
+- `feedback`
+- `telephony`
+- `contacts`
+- `calendar`
 - the internal data app
 
 Broader affected packages include finance, customer-data, file/search,
@@ -182,7 +182,7 @@ HMAC path above — and MAY additionally expose an **identity option**: verify
 EdDSA tokens minted by a configured issuer against a configured JWKS, and map
 the token's `tid` onto one of the server's own organizations.
 
-`open-tenants` is the **reference issuer behind this seam, never a dependency**.
+`tenants` is the **reference issuer behind this seam, never a dependency**.
 Nothing in `@hasna/contracts` imports it, and a repo that never configures the
 identity option is fully runnable on its own — which is what R2 and R3 require.
 
@@ -198,7 +198,7 @@ at all.
 
 ### Wire shape
 
-This is the shape `open-tenants` already mints — standardized here, not invented.
+This is the shape `tenants` already mints — standardized here, not invented.
 
 Header: `{ "alg": "EdDSA", "kid": "<key id>", "typ": "at+jwt" }`
 
@@ -473,13 +473,13 @@ redacted evidence.
 
 - The internal access app: should issue and verify shared access tokens,
   revocation events, review state, and offboarding fanout.
-- `open-feedback`: split submit/read/export scopes and fail closed for
+- `feedback`: split submit/read/export scopes and fail closed for
   non-local reads/mutations.
-- `open-telephony`: require API auth, Twilio signature/replay checks, and
+- `telephony`: require API auth, Twilio signature/replay checks, and
   provider-action approval gates.
-- `open-contacts`: enforce export/document controls, tenant/entity predicates,
+- `contacts`: enforce export/document controls, tenant/entity predicates,
   and merge/rollback operator roles.
-- `open-calendar`: enforce calendar roles on sampled routes and provider sync.
+- `calendar`: enforce calendar roles on sampled routes and provider sync.
 - The internal data app: enforce tenant isolation, backup/export/import
   privileges, and PII redaction roles.
 

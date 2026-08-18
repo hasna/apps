@@ -2,7 +2,7 @@
   "schema": "hasna.rollout_record.v1",
   "id": "rollout_open_todos_spark01_0_11_63",
   "createdAt": "2026-07-06T10:00:00.000Z",
-  "appId": "open-todos",
+  "appId": "todos",
   "package": "@hasna/todos",
   "version": "0.11.63",
   "machine": "spark01",
@@ -17,7 +17,7 @@
     {
       "id": "ev_rollout_open_todos_spark01",
       "kind": "command_output",
-      "uri": "artifact://rollouts/open-todos/spark01/install-output.txt"
+      "uri": "artifact://rollouts/todos/spark01/install-output.txt"
     }
   ]
 }

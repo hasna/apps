@@ -1,7 +1,7 @@
 // Migration-ledger helper for the vendored Hasna storage kit.
 //
 // A `schema_migrations` ledger with per-migration sha256 checksums, modeled on
-// open-loops' storage ledger. Guarantees:
+// loops' storage ledger. Guarantees:
 //   - each migration runs at most once (idempotent by id),
 //   - a migration whose SQL changed after being applied is detected as a
 //     checksum mismatch and refuses to proceed (no silent drift),

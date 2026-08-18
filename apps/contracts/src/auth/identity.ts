@@ -4,7 +4,7 @@
 // default (see keys.ts / middleware.ts) and ADDITIONALLY exposes an identity
 // option: verify EdDSA tokens minted by a configured issuer against a
 // configured JWKS, and map the token's `tid` onto one of the server's own
-// organizations. The reference issuer is `open-tenants`. It is a REFERENCE
+// organizations. The reference issuer is `tenants`. It is a REFERENCE
 // BEHIND A SEAM, never a dependency — a self-hoster must be able to run the
 // whole stack from one repo, so nothing here imports it and nothing here
 // requires it to exist.
@@ -17,7 +17,7 @@
 // dereferenced here — refreshing the key set is the operator's job, out of the
 // request path. `tests/auth-identity.test.ts` asserts this structurally.
 //
-// THE WIRE SHAPE IS NOT INVENTED. It is the shape `open-tenants` already mints
+// THE WIRE SHAPE IS NOT INVENTED. It is the shape `tenants` already mints
 // (`src/idp/tokens.ts`): a compact JWS with header `{alg:"EdDSA", kid, typ:
 // "at+jwt"}` over claims `{iss, aud, sub, tid, pt, scope, iat, exp, jti}`. This
 // module standardizes that shape and hardens the checks around it, so six

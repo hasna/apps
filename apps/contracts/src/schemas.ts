@@ -1691,7 +1691,7 @@ export type ScaffoldInstallRecord = z.infer<typeof ScaffoldInstallRecordSchema>;
 // `appId` slug instead of re-declaring identity fields.
 // ---------------------------------------------------------------------------
 
-/** Stable lowercase dashed app identity slug, e.g. `open-todos`. */
+/** Stable lowercase dashed app identity slug, e.g. `todos`. */
 export const AppIdSchema = z
   .string()
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "App ids must be lowercase dashed identifiers");

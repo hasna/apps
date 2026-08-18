@@ -35,7 +35,7 @@ test the machine-readable schemas before any producer may claim conformance.
 | Deployment records in section 4 | Planned | No machine-readable implementation is claimed by this document. |
 | `hasna.service_contract.v2` | Planned | Must coexist with v1 and ship through a separate implementation change. |
 | Deployment operation registry contract | Planned | The registry design is normative; no registry code is added here. |
-| Deployment event envelope | Planned | Domain semantics are defined here; durable delivery remains an OpenEvents responsibility. |
+| Deployment event envelope | Planned | Domain semantics are defined here; durable delivery remains an Events responsibility. |
 
 `@hasna/contracts` is a schema, type, validator, fixture, and conformance
 package. It is not a deployment database, workflow engine, provider adapter,
@@ -715,7 +715,7 @@ manifest in place or claim that a lossy v2-to-v1 conversion is safe.
 
 ### 9.1 Deployment event envelope
 
-Deployment owns domain event meanings. OpenEvents owns durable channels,
+Deployment owns domain event meanings. Events owns durable channels,
 delivery, replay, and subscriber mechanics. The existing comms event envelope
 is not a substitute for a durable deployment-domain event.
 
@@ -844,7 +844,7 @@ Adoption is phased and fail-closed.
 
 - Land this execution-free contract.
 - Reconcile ownership with Projects, app repositories, Factory, Deployment,
-  Billing or Economy, provider adapters, OpenEvents, and infrastructure owners.
+  Billing or Economy, provider adapters, Events, and infrastructure owners.
 - Make no schema or runtime implementation claim from this phase.
 
 Rollback: revert or supersede the document. No runtime or data rollback is
