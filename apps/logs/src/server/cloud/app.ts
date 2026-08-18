@@ -3,11 +3,11 @@
  *
  * Serves the standard operational probes (`/health`, `/ready`, `/version`) and
  * the versioned, API-key-authenticated `/v1` surface backed directly by the
- * shared cloud Postgres. Used when the serve runs in `cloud` storage mode
- * (`HASNA_LOGS_STORAGE_MODE=cloud`), i.e. the deployed ECS service.
+ * shared cloud Postgres. Used when the serve runs on the postgresql backend
+ * (selected by HASNA_LOGS_DATABASE_URL), i.e. the deployed ECS service.
  */
 
-import { hasScope, honoApiKey } from "@hasna/contracts/auth";
+import { hasScope, honoApiKey, type ApiKeyStatus } from "@hasna/contracts/auth";
 import { type Context, Hono, type Next } from "hono";
 import { cors } from "hono/cors";
 import { logsCloudMigrations } from "../../db/pg-migrate.ts";
@@ -26,13 +26,13 @@ export interface CloudAppOptions {
   client: TypedQueryClient;
   version: string;
   signingSecret: string;
-  /** Revocation check (usually ApiKeyStore.isRevoked). */
-  isRevoked?: (kid: string) => boolean | Promise<boolean>;
+  /** Lifecycle lookup for the presented key (ApiKeyStore.keyStatus). Anything other than "active" denies. */
+  keyStatus?: (kid: string) => ApiKeyStatus | Promise<ApiKeyStatus>;
   /** Per-request auth audit hook. */
   audit?: (event: unknown) => void;
 }
 
-const MODE = "cloud";
+const BACKEND = "postgresql";
 
 function isLogLevel(value: unknown): value is LogLevel {
   return (
@@ -58,7 +58,7 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
 
   // --- operational probes (unauthenticated) --------------------------------
   app.get("/version", (c) =>
-    c.json({ status: "ok", version: options.version, mode: MODE }),
+    c.json({ status: "ok", version: options.version, backend: BACKEND }),
   );
 
   app.get("/health", async (c) => {
@@ -67,7 +67,7 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
       {
         status: health.ok ? "ok" : "error",
         version: options.version,
-        mode: MODE,
+        backend: BACKEND,
         db: {
           ok: health.ok,
           latency_ms: health.latencyMs,
@@ -93,7 +93,7 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
         {
           status: ok ? "ok" : "not_ready",
           version: options.version,
-          mode: MODE,
+          backend: BACKEND,
           pending_migrations: pending,
         },
         ok ? 200 : 503,
@@ -103,7 +103,7 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
         {
           status: "not_ready",
           version: options.version,
-          mode: MODE,
+          backend: BACKEND,
           pending_migrations: expectedMigrationIds,
           error: error instanceof Error ? error.message : String(error),
         },
@@ -121,7 +121,7 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
       service: "@hasna/logs",
       status: "ok",
       version: options.version,
-      mode: MODE,
+      backend: BACKEND,
       endpoints: ["/health", "/ready", "/version", "/openapi.json", "/v1"],
     }),
   );
@@ -133,7 +133,7 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
     honoApiKey({
       app: "logs",
       signingSecret: options.signingSecret,
-      ...(options.isRevoked ? { isRevoked: options.isRevoked } : {}),
+      ...(options.keyStatus ? { keyStatus: options.keyStatus } : {}),
       ...(options.audit ? { audit: options.audit as never } : {}),
     }),
   );

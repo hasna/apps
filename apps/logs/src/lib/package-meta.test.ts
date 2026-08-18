@@ -8,7 +8,10 @@ import { readPackageVersion } from "./package-meta.ts";
 const tempRoots: string[] = [];
 
 function createFixture() {
-  const root = mkdtempSync(join(tmpdir(), "logs-package-meta-"));
+  // Nest under a subdir: the walk probes ../../package.json first, which for a
+  // fixture directly under /tmp would land on any stray /tmp/package.json.
+  mkdirSync(join(tmpdir(), "logs-pkgmeta"), { recursive: true });
+  const root = mkdtempSync(join(tmpdir(), "logs-pkgmeta", "logs-package-meta-"));
   tempRoots.push(root);
 
   mkdirSync(join(root, "src/lib"), { recursive: true });

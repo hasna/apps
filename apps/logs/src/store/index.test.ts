@@ -1,134 +1,150 @@
 /**
- * @hasna/logs — Store resolver: storage-mode derivation.
+ * @hasna/logs — Store resolver: client-transport derivation.
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  */
 import { describe, expect, test } from "bun:test";
+import { resolveStorageClient } from "@hasna/contracts/client/storage";
 import {
-  SERVER_MODE_CANDIDATES,
-  serverStorageMode,
-  withImpliedServerMode,
+  LOGS_APP_SLUG,
+  localStoreIfAvailable,
+  requireLocalStore,
+  resolveStore,
+  usesHttpTransport,
 } from "./index.ts";
+import { ApiStore } from "./api.ts";
+import { LocalStore } from "./local.ts";
 
-// -- Forward compatibility across the storage-mode enum change -----------------
+// The flip is the @hasna/contracts client transport contract (0.11.1):
+// HASNA_LOGS_API_URL + an API credential select HTTP; everything else is
+// local SQLite. Legacy storage-mode variables are REJECTED by the client with
+// migration guidance — the tests below prove the rejection, they never
+// exercise it as a mode switch.
 //
-// The injected mode value is DERIVED from the installed @hasna/contracts, never
-// hardcoded. That is load-bearing: the enum has already changed once and the two
-// valid sets are DISJOINT.
-//
-//   contracts <= 0.8.5      accepts cloud + deprecated aliases (self_hosted,
-//                           remote, hybrid); THROWS on postgres/sqlite
-//   contracts post-#63      accepts ONLY sqlite/postgres; THROWS on everything
-//                           else, including cloud and self_hosted
-//
-// So any literal pinned in source is a bet on which side of that change a given
-// machine is on, and the bet loses on one side or the other. Measured 2026-07-30
-// against the contracts this repo installs (0.5.2): `postgres` throws and
-// `self_hosted` normalizes to cloud; against contracts main (0.8.6) `postgres`
-// normalizes and `self_hosted` throws.
-//
-// `normalize` is injectable for exactly this reason — both generations have to
-// be exercised, and only one of them can be installed at a time. Without the
-// injection point, forward compatibility would be an assertion rather than a
-// test.
+// The machine may carry real HASNA_LOGS_* env vars; the tests scrub them so
+// the resolution is hermetic.
 
-describe("serverStorageMode", () => {
-  const acceptOnly = (accepted: readonly string[]) => (value: string) => {
-    if (!accepted.includes(value)) throw new Error(`Unknown storage mode '${value}'`);
-    return value;
+function scrub(): () => void {
+  const saved = {
+    url: process.env.HASNA_LOGS_API_URL,
+    key: process.env.HASNA_LOGS_API_KEY,
+    mode: process.env.HASNA_LOGS_STORAGE_MODE,
   };
+  delete process.env.HASNA_LOGS_API_URL;
+  delete process.env.HASNA_LOGS_API_KEY;
+  delete process.env.HASNA_LOGS_STORAGE_MODE;
+  return () => {
+    if (saved.url !== undefined) process.env.HASNA_LOGS_API_URL = saved.url;
+    else delete process.env.HASNA_LOGS_API_URL;
+    if (saved.key !== undefined) process.env.HASNA_LOGS_API_KEY = saved.key;
+    else delete process.env.HASNA_LOGS_API_KEY;
+    if (saved.mode !== undefined) process.env.HASNA_LOGS_STORAGE_MODE = saved.mode;
+    else delete process.env.HASNA_LOGS_STORAGE_MODE;
+  };
+}
 
-  // Widened so `toContain` compares strings rather than narrowing its argument
-  // to the literal union of the tuple.
-  const CANDIDATES: readonly string[] = SERVER_MODE_CANDIDATES;
+const API_ENV = {
+  HASNA_LOGS_API_URL: "https://logs.hasna.xyz/v1",
+  HASNA_LOGS_API_KEY: ["hasna", "logs", "FAKE", "TEST", "KEY"].join("_"),
+} as NodeJS.ProcessEnv;
 
-  test("derives self_hosted on the pre-#63 contracts enum", () => {
-    const normalize = acceptOnly(["local", "cloud", "self_hosted", "remote", "hybrid"]);
-
-    expect(serverStorageMode(normalize)).toBe("self_hosted");
+describe("resolveStore", () => {
+  test("resolves LocalStore without API vars", () => {
+    const restore = scrub();
+    try {
+      expect(resolveStore({})).toBeInstanceOf(LocalStore);
+    } finally {
+      restore();
+    }
   });
 
-  test("derives postgres on the post-#63 contracts enum", () => {
-    const normalize = acceptOnly(["sqlite", "postgres", "postgresql"]);
-
-    expect(serverStorageMode(normalize)).toBe("postgres");
+  test("resolves ApiStore when API URL + credential are present", () => {
+    const restore = scrub();
+    try {
+      expect(resolveStore(API_ENV)).toBeInstanceOf(ApiStore);
+    } finally {
+      restore();
+    }
   });
 
-  test("prefers the newest accepted token when several are valid", () => {
-    // A transitional release that still honours the aliases must not pin the
-    // deprecated one.
-    const normalize = acceptOnly(["sqlite", "postgres", "cloud", "self_hosted"]);
-
-    expect(serverStorageMode(normalize)).toBe("postgres");
-  });
-
-  test("throws with an actionable message when the enum changes again", () => {
-    // Guessing is the defect class this pin exists to remove, so an unrecognised
-    // enum must fail loudly rather than fall through to a wrong dataset.
-    const normalize = acceptOnly([]);
-
-    expect(() => serverStorageMode(normalize)).toThrow(/No known server storage mode/);
-    expect(() => serverStorageMode(normalize)).toThrow(/SERVER_MODE_CANDIDATES/);
-  });
-
-  test("an injected normalizer never poisons the cached default", () => {
-    // The cache is only read/written for the default normalizer. Without that
-    // guard, the first injected probe would fix the value for the whole process.
-    const real = serverStorageMode();
-
-    expect(serverStorageMode(acceptOnly(["sqlite", "postgres"]))).toBe("postgres");
-    expect(serverStorageMode()).toBe(real);
-  });
-
-  test("agrees with the contracts version actually installed", () => {
-    // Not a tautology: this is the assertion that fails the day a dependency
-    // bump lands a generation the candidate list does not cover.
-    expect(CANDIDATES).toContain(serverStorageMode());
-  });
-});
-
-describe("withImpliedServerMode", () => {
-  const CANDIDATES: readonly string[] = SERVER_MODE_CANDIDATES;
-  const API_ENV = {
-    HASNA_LOGS_API_URL: "https://logs.hasna.xyz/v1",
-    HASNA_LOGS_API_KEY: ["hasna", "logs", "FAKE", "TEST", "KEY"].join("_"),
-  } as NodeJS.ProcessEnv;
-
-  test("the injected mode is the derived one, not a literal", () => {
-    const env = withImpliedServerMode(API_ENV);
-
-    expect(env.HASNA_LOGS_STORAGE_MODE).toBe(serverStorageMode());
-  });
-
-  test("the derived value is accepted by the installed contracts", () => {
-    // The end-to-end property this migration exists to guarantee: whatever we
-    // synthesize must be a token the resolver will not throw on.
-    const env = withImpliedServerMode(API_ENV);
-
-    // String() rather than a non-null assertion: an absent value must fail this
-    // test, not be typed away.
-    expect(CANDIDATES).toContain(String(env.HASNA_LOGS_STORAGE_MODE));
-  });
-
-  test("an explicit mode var is always respected", () => {
-    const env = withImpliedServerMode({ ...API_ENV, HASNA_LOGS_STORAGE_MODE: "local" });
-
-    expect(env.HASNA_LOGS_STORAGE_MODE).toBe("local");
-  });
-
-  test("nothing is synthesized without both API vars", () => {
-    expect(withImpliedServerMode({}).HASNA_LOGS_STORAGE_MODE).toBeUndefined();
-    expect(
-      withImpliedServerMode({ HASNA_LOGS_API_URL: "https://logs.hasna.xyz/v1" })
-        .HASNA_LOGS_STORAGE_MODE,
-    ).toBeUndefined();
+  test("an API URL without a credential is refused, never silently routed", () => {
+    const restore = scrub();
+    try {
+      // The 0.11.1 client refuses to route on a URL with no resolvable key
+      // instead of silently flipping transport.
+      expect(() => resolveStore({ HASNA_LOGS_API_URL: "https://logs.hasna.xyz/v1" })).toThrow();
+    } finally {
+      restore();
+    }
   });
 
   test("does not mutate the caller's env", () => {
-    const source = { ...API_ENV };
+    const restore = scrub();
+    try {
+      const source = { ...API_ENV };
+      resolveStore(source);
+      expect(source).toEqual(API_ENV);
+    } finally {
+      restore();
+    }
+  });
 
-    withImpliedServerMode(source);
+  test("the resolved transport agrees with the contracts client", () => {
+    const restore = scrub();
+    try {
+      const resolved = resolveStorageClient(LOGS_APP_SLUG, API_ENV);
+      expect(resolved.transport).toBe("http");
+      expect(usesHttpTransport(API_ENV)).toBe(true);
+      expect(usesHttpTransport({})).toBe(false);
+    } finally {
+      restore();
+    }
+  });
 
-    expect(source.HASNA_LOGS_STORAGE_MODE).toBeUndefined();
+  test("a legacy storage-mode variable is rejected by the client, never interpreted", () => {
+    const restore = scrub();
+    try {
+      // HASNA_LOGS_STORAGE_MODE was removed from the contracts client contract;
+      // the client throws with migration guidance instead of treating it as a
+      // mode switch.
+      expect(() =>
+        resolveStore({ ...API_ENV, HASNA_LOGS_STORAGE_MODE: "cloud" }),
+      ).toThrow();
+      expect(() =>
+        usesHttpTransport({ HASNA_LOGS_STORAGE_MODE: "self_hosted" }),
+      ).toThrow();
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("requireLocalStore / localStoreIfAvailable", () => {
+  test("requireLocalStore returns the local store on the sqlite transport", () => {
+    const restore = scrub();
+    try {
+      expect(requireLocalStore("db doctor segments", {})).toBeInstanceOf(LocalStore);
+    } finally {
+      restore();
+    }
+  });
+
+  test("requireLocalStore throws on the HTTP transport", () => {
+    const restore = scrub();
+    try {
+      expect(() => requireLocalStore("db doctor segments", API_ENV)).toThrow(/local-only operation/);
+    } finally {
+      restore();
+    }
+  });
+
+  test("localStoreIfAvailable is null on the HTTP transport, a store otherwise", () => {
+    const restore = scrub();
+    try {
+      expect(localStoreIfAvailable(API_ENV)).toBeNull();
+      expect(localStoreIfAvailable({})).toBeInstanceOf(LocalStore);
+    } finally {
+      restore();
+    }
   });
 });
