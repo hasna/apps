@@ -21,7 +21,7 @@ Four surfaces share one core library:
 
 ```bash
 HASNA_SHORTLINKS_STORAGE_MODE=cloud \
-HASNA_SHORTLINKS_DATABASE_URL=postgres://user:pass@host:5432/shortlinks?sslmode=require \
+HASNA_SHORTLINKS_DATABASE_URL=$DATABASE_URL \
 HASNA_SHORTLINKS_API_SIGNING_KEY=... \
 shortlinks-serve            # migrate (idempotent) then serve on :8080
 shortlinks-serve migrate    # one-shot migration task
@@ -230,7 +230,7 @@ The OSS repository is expected to be:
 hasna/shortlinks
 ```
 
-The local workspace folder may still be named `open-shortlinks`; the published package and GitHub repo do not use the `open-` prefix.
+The local workspace folder is named `shortlinks`; the published package and GitHub repo use bare names without the retired `open-` prefix.
 
 ## License
 

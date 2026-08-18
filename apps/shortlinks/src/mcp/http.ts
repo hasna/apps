@@ -2,13 +2,13 @@ import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 
 /**
- * open-shortlinks MCP transport/port boilerplate — self-contained, with NO
+ * shortlinks MCP transport/port boilerplate — self-contained, with NO
  * external harness dependency. The prior version depended on the unpublished
  * `@hasna/mcp-harness` (a `file:` link), which made `shortlinks-mcp`
  * unstartable on a fresh `npm i` / `bun add -g`. This version inlines the tiny
  * amount of transport glue using only the published `@modelcontextprotocol/sdk`
  * and Bun's built-in HTTP server, matching the pattern used by the reference
- * apps (open-conversations, open-mementos).
+ * apps (conversations, mementos).
  *
  * shortlinks builds its MCP server with the low-level `Server`; the WebStandard
  * transport's `.connect()` works identically on `Server` and the high-level

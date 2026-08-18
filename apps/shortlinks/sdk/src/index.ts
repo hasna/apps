@@ -4,7 +4,7 @@
  * Works in Node.js, Bun, Deno, and browser environments.
  *
  * The client below is generated from the serve OpenAPI document
- * (open-shortlinks/src/serve/openapi.ts). Regenerate with `bun run sdk:generate`
+ * (apps/shortlinks/src/serve/openapi.ts). Regenerate with `bun run sdk:generate`
  * in the repo root.
  *
  * Usage:

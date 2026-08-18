@@ -14,7 +14,7 @@ This repo is the OSS package `@hasna/shortlinks`.
 
 - GitHub repo: `hasna/shortlinks`
 - npm package: `@hasna/shortlinks`
-- Local folder: `open-shortlinks`
+- Local folder: `shortlinks`
 
 ## Integrations
 
