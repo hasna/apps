@@ -13,6 +13,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, fchmodSync, mkdtempSync, openSync, rmSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +26,8 @@ export interface CapturedStream {
   bytes: number;
   /** True when the stream exceeded its maxBytes cap. */
   truncated: boolean;
+  /** True only when this capture actually created the file. Cleanup removes exactly these, and nothing else. */
+  created: boolean;
 }
 
 export interface CaptureOptions {
@@ -72,11 +75,21 @@ function makeSpoolDir(provided?: string): { dir: string; owned: boolean } {
   return { dir: mkdtempSync(join(tmpdir(), "monitor-spool-")), owned: true };
 }
 
-function openSpoolFile(spoolDir: string, kind: "stdout" | "stderr", cap: number): StreamSink {
-  const path = join(spoolDir, `${kind}.spool`);
-  const fd = openSync(path, "w", 0o600);
-  // Mode 600 even for an already-existing file: open's mode only applies at
-  // creation, so force it on the descriptor — captured process output is
+function openSpoolFile(
+  spoolDir: string,
+  kind: "stdout" | "stderr",
+  cap: number,
+  token: string
+): StreamSink {
+  // Per-capture name: concurrent captures sharing one caller-provided spool
+  // directory write distinct files and can never read or delete each other's
+  // output. The token also makes the name unpredictable, so a pre-existing
+  // file or symlink planted at it is refused by the exclusive create below
+  // rather than followed or truncated.
+  const path = join(spoolDir, `${token}-${kind}.spool`);
+  const fd = openSync(path, "wx", 0o600);
+  // Mode 600 even when the exclusive create raced: open's mode only applies
+  // at creation, so force it on the descriptor — captured process output is
   // private to the monitor process.
   fchmodSync(fd, 0o600);
   return { kind, fd, path, written: 0, observed: 0, truncated: false, cap };
@@ -105,11 +118,16 @@ function closeSink(sink: StreamSink | null): void {
   }
 }
 
-function emptyCapturedStream(kind: "stdout" | "stderr", spoolDir?: string): CapturedStream {
-  // A synthetic path when setup failed before the file existed; readers treat a
-  // missing file as "no content" (buildStreamEvidence -> omittedReason missing).
-  const path = spoolDir ? join(spoolDir, `${kind}.spool`) : join(tmpdir(), `monitor-${kind}.spool`);
-  return { kind, path, bytes: 0, truncated: false };
+function emptyCapturedStream(kind: "stdout" | "stderr", token: string, spoolDir?: string): CapturedStream {
+  // A synthetic path for the setup-failure case: the file was never created
+  // (created: false), the name embeds the per-capture token so it can never
+  // collide with another capture's file, and cleanup never touches uncreated
+  // streams. Readers treat a missing file as "no content"
+  // (buildStreamEvidence -> omittedReason missing).
+  const path = spoolDir
+    ? join(spoolDir, `${token}-${kind}.spool`)
+    : join(tmpdir(), `monitor-${token}-${kind}.spool`);
+  return { kind, path, bytes: 0, truncated: false, created: false };
 }
 
 function finalizeSink(sink: StreamSink): CapturedStream {
@@ -118,6 +136,7 @@ function finalizeSink(sink: StreamSink): CapturedStream {
     path: sink.path,
     bytes: sink.observed,
     truncated: sink.truncated,
+    created: true,
   };
 }
 
@@ -126,14 +145,17 @@ function finalizeSink(sink: StreamSink): CapturedStream {
  * evidence has been built from the streams; the capture itself keeps the
  * files so `buildStreamEvidence`/`buildRunEvidence` can read them.
  *
- * Only ever removes what this capture created: the two spool files, plus the
- * spool directory when the capture created it. A caller-provided spoolDir —
- * and any unrelated content inside it — is never touched.
+ * Only ever removes what this capture created: the two spool files it opened,
+ * plus the spool directory when the capture created it. A stream marked
+ * `created: false` (a setup failure that never opened a file) is never
+ * touched, a caller-provided spoolDir — and any unrelated content inside it —
+ * is never touched, and a setup-failure result removes nothing at all.
  */
 export function removeCaptureSpool(
   result: Pick<CaptureResult, "stdout" | "stderr" | "spoolDir" | "spoolDirOwned">
 ): void {
   for (const stream of [result.stdout, result.stderr]) {
+    if (!stream.created) continue;
     try {
       rmSync(stream.path, { force: true });
     } catch {
@@ -160,11 +182,11 @@ interface SpoolSetup {
   stderrSink: StreamSink;
 }
 
-function setupSpool(options: CaptureOptions): SpoolSetup {
+function setupSpool(options: CaptureOptions, token: string): SpoolSetup {
   const made = makeSpoolDir(options.spoolDir);
-  const stdoutSink = openSpoolFile(made.dir, "stdout", options.maxStdoutBytes ?? 0);
+  const stdoutSink = openSpoolFile(made.dir, "stdout", options.maxStdoutBytes ?? 0, token);
   try {
-    const stderrSink = openSpoolFile(made.dir, "stderr", options.maxStderrBytes ?? 0);
+    const stderrSink = openSpoolFile(made.dir, "stderr", options.maxStderrBytes ?? 0, token);
     return { spoolDir: made.dir, spoolDirOwned: made.owned, stdoutSink, stderrSink };
   } catch (error) {
     closeSink(stdoutSink);
@@ -178,18 +200,19 @@ export async function captureCommandOutput(
   options: CaptureOptions = {}
 ): Promise<CaptureResult> {
   const startedAt = Date.now();
+  const token = randomUUID();
 
   // Setup failures (missing spoolDir, unwritable spool file) return a typed
   // result with `error` set — they never reject the caller.
   let setup: SpoolSetup;
   try {
-    setup = setupSpool(options);
+    setup = setupSpool(options, token);
   } catch (error) {
     return {
       exitCode: null,
       timedOut: false,
-      stdout: emptyCapturedStream("stdout"),
-      stderr: emptyCapturedStream("stderr"),
+      stdout: emptyCapturedStream("stdout", token),
+      stderr: emptyCapturedStream("stderr", token),
       durationMs: Date.now() - startedAt,
       error: String(error),
     };

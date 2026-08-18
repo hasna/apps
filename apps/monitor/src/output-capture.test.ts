@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { captureCommandOutput, removeCaptureSpool } from "./output-capture.js";
@@ -120,11 +128,11 @@ describe("captureCommandOutput", () => {
     }
   });
 
-  test("forces mode 600 on a pre-existing spool file", async () => {
+  test("never opens pre-existing files at the legacy fixed spool names", async () => {
     const dir = tempDir();
     try {
-      // A caller-provided spoolDir may already hold a stdout.spool/stderr.spool
-      // with permissive permissions; opening must not leave it readable.
+      // A caller-provided spoolDir may hold files at the old shared names; a
+      // capture must never truncate, chmod, or otherwise touch them.
       writeFileSync(join(dir, "stdout.spool"), "old-content", { mode: 0o644 });
       writeFileSync(join(dir, "stderr.spool"), "old-content", { mode: 0o644 });
 
@@ -133,9 +141,89 @@ describe("captureCommandOutput", () => {
       });
 
       expect(result.exitCode).toBe(0);
+      // The capture wrote to its own per-capture files, owner-only.
+      expect(readFileSync(result.stdout.path, "utf8")).toBe("hello\n");
       expect(statSync(result.stdout.path).mode & 0o777).toBe(0o600);
       expect(statSync(result.stderr.path).mode & 0o777).toBe(0o600);
+      // The legacy-named files are untouched: content and mode preserved.
+      expect(readFileSync(join(dir, "stdout.spool"), "utf8")).toBe("old-content");
+      expect(statSync(join(dir, "stdout.spool")).mode & 0o777).toBe(0o644);
+      expect(readFileSync(join(dir, "stderr.spool"), "utf8")).toBe("old-content");
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("concurrent captures in one caller-provided spoolDir use per-capture files and cleanup never removes another capture's output", async () => {
+    const dir = tempDir();
+    try {
+      const first = await captureCommandOutput("bash", ["-c", "echo first"], { spoolDir: dir });
+      const second = await captureCommandOutput("bash", ["-c", "echo second"], { spoolDir: dir });
+
+      // Per-capture spool files: neither capture reused the other's paths.
+      expect(first.stdout.path).not.toBe(second.stdout.path);
+      expect(first.stderr.path).not.toBe(second.stderr.path);
+      expect(readFileSync(first.stdout.path, "utf8")).toBe("first\n");
+      expect(readFileSync(second.stdout.path, "utf8")).toBe("second\n");
+
+      // Cleaning the first capture must not delete the second capture's files.
+      removeCaptureSpool(first);
+      expect(existsSync(first.stdout.path)).toBe(false);
+      expect(existsSync(second.stdout.path)).toBe(true);
+      expect(readFileSync(second.stdout.path, "utf8")).toBe("second\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a pre-existing symlink at a legacy spool name is never followed", async () => {
+    const dir = tempDir();
+    try {
+      const victim = join(dir, "victim.txt");
+      writeFileSync(victim, "precious", { mode: 0o600 });
+      symlinkSync(victim, join(dir, "stdout.spool"));
+
+      const result = await captureCommandOutput("bash", ["-c", "echo hello"], { spoolDir: dir });
+
+      expect(result.exitCode).toBe(0);
+      // The capture wrote its own file; the symlink target was never opened.
+      expect(readFileSync(victim, "utf8")).toBe("precious");
+      expect(readFileSync(result.stdout.path, "utf8")).toBe("hello\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a setup failure returns uncreated per-capture spool paths and cleanup deletes nothing", async () => {
+    const dir = tempDir();
+    let stdoutPath = "";
+    let stderrPath = "";
+    try {
+      const result = await captureCommandOutput("bash", ["-c", "echo hi"], {
+        spoolDir: join(dir, "does-not-exist"),
+      });
+
+      expect(result.error).toBeDefined();
+      expect(result.stdout.created).toBe(false);
+      expect(result.stderr.created).toBe(false);
+      // Never a shared fixed /tmp pattern that another process could own.
+      expect(result.stdout.path).not.toBe(join(tmpdir(), "monitor-stdout.spool"));
+      expect(result.stderr.path).not.toBe(join(tmpdir(), "monitor-stderr.spool"));
+
+      // Sentinels planted at the returned (uncreated) paths must survive
+      // cleanup: nothing this capture did not create may be removed.
+      stdoutPath = result.stdout.path;
+      stderrPath = result.stderr.path;
+      writeFileSync(stdoutPath, "sentinel", { mode: 0o600 });
+      writeFileSync(stderrPath, "sentinel", { mode: 0o600 });
+
+      removeCaptureSpool(result);
+
+      expect(existsSync(stdoutPath)).toBe(true);
+      expect(existsSync(stderrPath)).toBe(true);
+    } finally {
+      rmSync(stdoutPath, { force: true });
+      rmSync(stderrPath, { force: true });
       rmSync(dir, { recursive: true, force: true });
     }
   });

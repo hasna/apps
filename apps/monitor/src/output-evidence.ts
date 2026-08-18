@@ -29,14 +29,25 @@ const SENSITIVE_SEGMENTS = new Set([
   "token",
 ]);
 
-const CREDENTIAL_PREFIX_PATTERN =
-  /\b(sk-ant-[A-Za-z0-9_-]{8,}|sk-proj-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{20,}|npm_[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16}|xai-[A-Za-z0-9_-]{20,}|ctx7sk-[A-Za-z0-9_-]{10,}|AIza[A-Za-z0-9_-]{20,})/g;
+const CREDENTIAL_PREFIX_SOURCE = String.raw`\b(sk-ant-[A-Za-z0-9_-]{8,}|sk-proj-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{20,}|npm_[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16}|xai-[A-Za-z0-9_-]{20,}|ctx7sk-[A-Za-z0-9_-]{10,}|AIza[A-Za-z0-9_-]{20,})`;
+const CREDENTIAL_PREFIX_PATTERN = new RegExp(CREDENTIAL_PREFIX_SOURCE, "g");
+/** Non-global twin used inside predicates; never advances a shared lastIndex. */
+const CREDENTIAL_PREFIX_TEST_PATTERN = new RegExp(CREDENTIAL_PREFIX_SOURCE);
 
 const ASSIGNMENT_PATTERN =
   /(^|\s)([A-Za-z_][A-Za-z0-9_.-]*)(\s*=\s*)("[^"]*"|'[^']*'|[^\s]+)/g;
 
 const LONG_OPTION_PATTERN =
   /(^|\s)(--[A-Za-z0-9][A-Za-z0-9_.-]*)(?:=("[^"]*"|'[^']*'|[^\s]+)|(\s+)(?!--)("[^"]*"|'[^']*'|[^\s]+))/g;
+
+/**
+ * Colon-separated credential forms: HTTP-style headers and prose values, with
+ * an optional `Bearer ` prefix — `Authorization: Bearer <value>`,
+ * `X-Api-Key: <value>`. The value is redacted when the key is sensitive or the
+ * value itself carries a Bearer marker or a known credential prefix.
+ */
+const HEADER_VALUE_PATTERN =
+  /(^|[\n\r]|\s)([A-Za-z_][A-Za-z0-9_.-]*)(\s*:\s*)(Bearer\s+)?("[^"]*"|'[^']*'|[^\s,;]+)/g;
 
 const URL_SCHEME_PATTERN = /\b[A-Za-z][A-Za-z0-9+.-]*:\/\//g;
 
@@ -169,15 +180,46 @@ function findUrlQueryStart(text: string, start: number, end: number): number {
 function redactQuerySection(section: string): string {
   const marker = section[0];
   if (marker !== "?" && marker !== "#") return section;
-  const redactedPairs = section.slice(1).split("&").map((pair) => {
-    const eq = pair.indexOf("=");
-    if (eq === -1) return pair;
-    const key = pair.slice(0, eq);
-    const value = pair.slice(eq + 1);
-    if (value === "" || !isUrlQueryKeySensitive(key)) return pair;
-    return `${key}=${REDACTED}`;
-  });
-  return marker + redactedPairs.join("&");
+  // Split on `&` and `;`: both separate query parameters, and a credential
+  // hidden after a semicolon (`?ok=1;token=...`) must not survive into
+  // evidence. The separator itself is preserved.
+  let redacted = marker;
+  let cursor = 1;
+  for (let i = 1; i < section.length; i++) {
+    if (section[i] !== "&" && section[i] !== ";") continue;
+    redacted += redactQueryPair(section.slice(cursor, i)) + section[i];
+    cursor = i + 1;
+  }
+  return redacted + redactQueryPair(section.slice(cursor));
+}
+
+function redactQueryPair(pair: string): string {
+  const eq = pair.indexOf("=");
+  if (eq === -1) return pair;
+  const key = pair.slice(0, eq);
+  const value = pair.slice(eq + 1);
+  if (value === "" || !isUrlQueryKeySensitive(key)) return pair;
+  return `${key}=${REDACTED}`;
+}
+
+function isHeaderValueSensitive(key: string, value: string, bearer: string | undefined): boolean {
+  if (isAssignmentKeySensitive(key)) return true;
+  if (bearer !== undefined) return true;
+  return CREDENTIAL_PREFIX_TEST_PATTERN.test(value);
+}
+
+/**
+ * Redact colon-separated credential forms. Runs after the assignment and
+ * long-option passes (which own `=` and `--key value` shapes) and before the
+ * prefix pass, so a `Bearer`-prefixed value is removed whole rather than left
+ * as a bare marker.
+ */
+function redactHeaderValues(text: string): string {
+  return text.replace(
+    HEADER_VALUE_PATTERN,
+    (match, leading: string, key: string, colon: string, bearer: string | undefined, value: string) =>
+      isHeaderValueSensitive(key, value, bearer) ? `${leading}${key}${colon}${REDACTED}` : match
+  );
 }
 
 /**
@@ -223,7 +265,8 @@ export function redactOutputText(text: string): { text: string; redacted: boolea
     }
   );
 
-  const withPrefixes = withOptions.replace(CREDENTIAL_PREFIX_PATTERN, REDACTED);
+  const withHeaders = redactHeaderValues(withOptions);
+  const withPrefixes = withHeaders.replace(CREDENTIAL_PREFIX_PATTERN, REDACTED);
   const withUrlCredentials = redactUrlCredentials(withPrefixes);
   const withUrlQueries = redactUrlQueryParameters(withUrlCredentials);
 
