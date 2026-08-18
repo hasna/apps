@@ -23,15 +23,23 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { INSTALLED_SKILLS_DIRNAME, getDataDir } from "./config.js";
+import {
+  INSTALLED_SKILLS_DIRNAME,
+  LAYOUT_MIGRATION_RECORD,
+  SKILLS_CACHE_DIRNAME,
+  getDataDir,
+  isOwnerLayoutMigrated,
+} from "./config.js";
 import { getPortableSkillsRoot, type PortableSkillOptions } from "./portable-skills.js";
 
-/** The canonical corpus cache subfolder of the app folder. */
-export const SKILLS_CACHE_DIRNAME = "skills";
+// The corpus-layout constants and the migration-marker check live in config.ts
+// — the module below both this one and portable-skills.ts — so the canonical
+// corpus resolver can consult the marker without an import cycle. They are
+// re-exported here for callers that have always imported them from this module.
+export { LAYOUT_MIGRATION_RECORD, SKILLS_CACHE_DIRNAME, isOwnerLayoutMigrated } from "./config.js";
+
 export const LOGS_DIRNAME = "logs";
 export const OUTPUTS_DIRNAME = "outputs";
-/** Marker file inside skills/ proving a migration ran; also its record. */
-export const LAYOUT_MIGRATION_RECORD = ".layout-migration.json";
 export const LEGACY_CUSTOM_DIRNAME = "custom";
 
 export interface LayoutMigrationRecord {
@@ -47,28 +55,23 @@ export function layoutMigrationRecordPath(appDir: string): string {
   return join(appDir, SKILLS_CACHE_DIRNAME, LAYOUT_MIGRATION_RECORD);
 }
 
-/** True once the owner layout has been migrated (the record is the authority). */
-export function isOwnerLayoutMigrated(appDir: string): boolean {
-  return existsSync(layoutMigrationRecordPath(appDir));
-}
-
 /**
  * Resolve the corpus the sync/fan-out reads from.
  *
- * Precedence:
+ * The precedence lives in ONE place, getPortableSkillsRoot():
  *   1. options.rootDir — named outright, no suffix (unchanged contract)
  *   2. migrated owner layout — <app folder>/skills when a migration record exists
- *   3. the pre-migration corpus — getPortableSkillsRoot() (installed/, with the
- *      legacy auto-copy migration)
+ *   3. the pre-migration corpus — installed/, with the legacy auto-copy migration
  *
  * The migration record is required: a skills/ directory someone created by hand
  * is not the corpus and never will be treated as one.
+ *
+ * This wrapper exists so pull/agent-sync and any future caller can name the
+ * canonical resolver explicitly; delegating keeps a single implementation for
+ * list/search/info/push/sync alike (bug 170b0e9b was exactly the opposite — a
+ * second resolution that read installed/ while this one read skills/).
  */
 export function resolveCorpusRoot(options: PortableSkillOptions = {}): string {
-  if (options.rootDir) return options.rootDir;
-  const appDir = options.homeDir ? join(options.homeDir, ".hasna", "skills") : getDataDir();
-  const cache = join(appDir, SKILLS_CACHE_DIRNAME);
-  if (isOwnerLayoutMigrated(appDir) && existsSync(cache)) return cache;
   return getPortableSkillsRoot(options);
 }
 

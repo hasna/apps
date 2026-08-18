@@ -10,7 +10,12 @@ import {
 } from "fs";
 import { basename, dirname, isAbsolute, join, normalize } from "path";
 
-import { INSTALLED_SKILLS_DIRNAME, getDataDir } from "./config.js";
+import {
+  INSTALLED_SKILLS_DIRNAME,
+  SKILLS_CACHE_DIRNAME,
+  getDataDir,
+  isOwnerLayoutMigrated,
+} from "./config.js";
 import { SKILLS } from "./registry-data/index.js";
 import type { SkillKind, SkillMeta } from "./registry-types.js";
 import {
@@ -70,11 +75,21 @@ const LEGACY_CUSTOM_DIRNAME = "custom";
 /**
  * Resolve the corpus: the directory holding one folder per installed skill.
  *
+ * THIS IS THE ONE CANONICAL CORPUS RESOLUTION. Every local discovery and
+ * publish path — list, search, info, push, pull, sync, registry — reads the
+ * corpus through this function (directly or via resolveCorpusRoot(), which
+ * delegates here), so a migrated owner layout is never bypassed by a path that
+ * still resolves installed/ (bug 170b0e9b: 'skills list --all' returned 87
+ * entries while the migrated corpus held 688).
+ *
  * Precedence is explicit-over-ambient, most specific first:
- *   1. `options.rootDir`  - the corpus, named outright (no `installed` suffix)
- *   2. `options.homeDir`  - <home>/.hasna/skills/installed
- *   3. `getDataDir()`     - <app folder>/installed, where the app folder is
- *                           $HASNA_SKILLS_DIR, else ~/.hasna/skills
+ *   1. `options.rootDir`      - the corpus, named outright (no suffix)
+ *   2. the migrated owner layout - <app folder>/skills/ when a migration record
+ *      exists there (the record is the authority; a skills/ directory someone
+ *      created by hand is not the corpus)
+ *   3. `getDataDir()`         - <app folder>/installed (pre-migration corpus,
+ *      with the legacy auto-copy migration), where the app folder is
+ *      $HASNA_SKILLS_DIR, else ~/.hasna/skills
  *
  * The app folder holds app data (config.json, skills.db, auth.json); the corpus
  * is a named subfolder of it, matching every sibling Hasna app. One variable
@@ -93,6 +108,8 @@ export function getPortableSkillsRoot(options: PortableSkillOptions = {}): strin
   // exactly that directory.
   if (options.rootDir) return options.rootDir;
   const appDir = options.homeDir ? join(options.homeDir, ".hasna", "skills") : getDataDir();
+  const cache = join(appDir, SKILLS_CACHE_DIRNAME);
+  if (isOwnerLayoutMigrated(appDir) && safeIsDirectory(cache)) return cache;
   const installed = join(appDir, INSTALLED_SKILLS_DIRNAME);
   migrateLegacySkillLayout(appDir, installed);
   return installed;
@@ -400,8 +417,9 @@ export interface WriteCorpusSkillInput {
 }
 
 /**
- * Write a skill fetched from a Skills instance into the local corpus
- * (~/.hasna/skills/installed/<name>/), so loadRegistry() surfaces it to both the CLI
+ * Write a skill fetched from a Skills instance into the local corpus (the
+ * canonical root — installed/ before the layout migration, <app folder>/skills/
+ * after it), so loadRegistry() surfaces it to both the CLI
  * (`skills list --all`) and the MCP (`list_skills`) with no further step — the whole
  * point of the pull: the corpus is already a first-class registry source.
  *

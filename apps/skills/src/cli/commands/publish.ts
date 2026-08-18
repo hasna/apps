@@ -1,9 +1,11 @@
 /**
  * `skills push` - send a skill from this machine's corpus to the configured instance.
  *
- * The corpus is ~/.hasna/skills/installed/<name>/ (getPortableSkillsRoot()). Nothing here
- * writes into an agent's directory or otherwise decides how a skill reaches an agent once
- * it is on a machine: this command's job ends when the server has the bytes.
+ * The corpus is the canonical local root — <app folder>/installed/<name>/ before
+ * the owner-layout migration, <app folder>/skills/<name>/ after it
+ * (getPortableSkillsRoot()). Nothing here writes into an agent's directory or
+ * otherwise decides how a skill reaches an agent once it is on a machine: this
+ * command's job ends when the server has the bytes.
  */
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
@@ -63,7 +65,7 @@ export class PushSkillError extends Error {
 export function registerPublish(parent: Command) {
   parent
     .command("push")
-    .argument("<name>", "Name of a skill in ~/.hasna/skills/installed")
+    .argument("<name>", "Name of a skill in the local corpus (~/.hasna/skills/installed or the migrated ~/.hasna/skills/skills)")
     .option("--version <version>", "Override the version recorded on the instance")
     .option("--dry-run", "Pack and validate without uploading", false)
     .option("--json", "Output result as JSON", false)
