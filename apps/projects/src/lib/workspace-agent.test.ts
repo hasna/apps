@@ -223,12 +223,23 @@ function makeFakeApiStore() {
       source: "agent",
       created_at: "2026-01-01T00:00:00.000Z",
     } as unknown as WorkspaceEvent)),
-    // On-box sub-resource: api mode throws LocalOnlyOperationError instead of
-    // silently writing local sqlite.
-    addLocation: async (...args: unknown[]) => {
-      calls.push({ method: "addLocation", args });
-      throw new Error(`add project location ${LOCAL_ONLY_SENTINEL}`);
-    },
+    // Extra on-disk locations route through the Store in api mode: the hosted
+    // /v1 API carries the write, so the tool registers against the cloud row.
+    addLocation: track("addLocation", () => ({
+      project: makeCloudProject({ primary_path: "/tmp/x" }),
+      location: {
+        id: "loc_cloud",
+        workspace_id: "wks_cloud",
+        path: "/tmp/x",
+        machine_id: "station01",
+        label: "main",
+        kind: "local",
+        is_primary: false,
+        exists_at_create: false,
+        metadata: {},
+        created_at: "2026-01-01T00:00:00.000Z",
+      },
+    })),
   };
   return { store: store as unknown as ProjectStore, calls, project };
 }
@@ -467,15 +478,18 @@ describe("prompt-agent mutations route through the Store in api/cloud mode", () 
     expect((evCall!.args[1] as { event_type?: string }).event_type).toBe("note");
   });
 
-  test("projects_locations_add surfaces the Store's local-only error cleanly (no silent local write)", async () => {
+  test("projects_locations_add registers the location through the Store in api mode", async () => {
     const { store, calls } = makeFakeApiStore();
     const tools = apiTools(store);
     const result = await invoke(tools.projects_locations_add, { project: "cloud-proj", path: "/tmp/x" });
 
-    // The write is attempted through the Store (which throws in api mode) and
-    // the loud failure is returned as a clean tool error, never a local write.
-    expect(calls.some((c) => c.method === "addLocation")).toBe(true);
-    expect(String(result.error)).toContain(LOCAL_ONLY_SENTINEL);
-    expect(result.status).toBeUndefined();
+    // The write routes through the Store to the hosted /v1 API — the cloud row
+    // receives the location; nothing touches local sqlite.
+    const addCall = calls.find((c) => c.method === "addLocation");
+    expect(addCall).toBeDefined();
+    expect((addCall!.args[1] as { path: string }).path).toBe("/tmp/x");
+    expect(result.status).toBe("registered");
+    expect((result.location as { path: string }).path).toBe("/tmp/x");
+    expect(result.error).toBeUndefined();
   });
 });

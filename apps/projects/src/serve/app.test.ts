@@ -44,7 +44,12 @@ function fakeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
 
 /** Minimal fake store — exercises routing/auth without a live Postgres. */
 function fakeStore(): ProjectsPgStore {
-  const created: Workspace[] = [];
+  const created: Workspace[] = [fakeWorkspace({ id: "wks_test1", slug: "demo", name: "Demo" })];
+  const requireCreated = async (id: string): Promise<Workspace> => {
+    const ws = created.find((w) => w.id === id || w.slug === id);
+    if (!ws) throw new NotFoundError(`Workspace not found: ${id}`);
+    return ws;
+  };
   return {
     async ping() {
       return true;
@@ -61,9 +66,7 @@ function fakeStore(): ProjectsPgStore {
       return ws;
     },
     async requireWorkspace(id: string) {
-      const ws = created.find((w) => w.id === id || w.slug === id);
-      if (!ws) throw new NotFoundError(`Workspace not found: ${id}`);
-      return ws;
+      return requireCreated(id);
     },
     async recordEvent(input: { workspace_id?: string; event_type: string; source: string }) {
       return {
@@ -82,6 +85,68 @@ function fakeStore(): ProjectsPgStore {
     },
     async listRoots() {
       return [];
+    },
+    async listWorkspaceLocations(projectId: string) {
+      return created.find((w) => w.id === projectId) ? [] : [];
+    },
+    async addWorkspaceLocation(input: {
+      workspace_id: string;
+      path: string;
+      machine_id?: string;
+      label?: string;
+      kind?: string;
+      is_primary?: boolean;
+      metadata?: Record<string, unknown>;
+    }) {
+      const ws = await requireCreated(input.workspace_id);
+      if (input.is_primary) {
+        Object.assign(ws, { primary_path: input.path });
+      }
+      return {
+        id: "loc_fake",
+        workspace_id: input.workspace_id,
+        path: input.path,
+        machine_id: input.machine_id ?? "machine01",
+        label: input.label ?? "main",
+        kind: input.kind ?? "local",
+        is_primary: Boolean(input.is_primary),
+        exists_at_create: false,
+        metadata: input.metadata ?? {},
+        created_at: "2026-07-06 00:00:00",
+      };
+    },
+    async listWorkspaceAgents(_projectId: string) {
+      return [];
+    },
+    async assignAgentToWorkspace(input: { workspace_id: string; agent_id: string; role?: string; assigned_by?: string; metadata?: Record<string, unknown> }) {
+      await requireCreated(input.workspace_id);
+      return {
+        id: "wa_fake",
+        workspace_id: input.workspace_id,
+        agent_id: input.agent_id,
+        role: input.role ?? "contributor",
+        assigned_by: input.assigned_by ?? null,
+        metadata: input.metadata ?? {},
+        created_at: "2026-07-06 00:00:00",
+        agent: null,
+      };
+    },
+    async listLocks() {
+      return [];
+    },
+    async acquireLock(input: { lock_key: string; workspace_id?: string; agent_id?: string; reason?: string; ttl_seconds?: number }) {
+      return {
+        id: "lk_fake",
+        lock_key: input.lock_key,
+        workspace_id: input.workspace_id ?? null,
+        agent_id: input.agent_id ?? null,
+        reason: input.reason ?? null,
+        created_at: "2026-07-06 00:00:00",
+        expires_at: input.ttl_seconds ? "2026-07-06 00:10:00" : null,
+      };
+    },
+    async releaseLock(_lockKey: string) {
+      return true;
     },
   } as unknown as ProjectsPgStore;
 }
@@ -1632,5 +1697,98 @@ describe("projects-serve list envelope (truncation must be detectable)", () => {
     expect(body.total).toBe(2399);
     expect(body.offset).toBe(2000);
     expect(body.has_more).toBe(false);
+  });
+});
+
+// Local-only-capability removal: the hosted /v1 API must carry the previously
+// on-box writes (project agent assignments, extra disk locations, mutation
+// locks) so a cloud project supports the same operations as a local one.
+describe("projects-serve hosted writes for on-box sub-resources", () => {
+  const writeHeaders = { "x-api-key": keyWith(["projects:*"]) };
+
+  test("POST /v1/projects/:id/locations registers an extra folder location", async () => {
+    const res = await handler()(
+      new Request("http://x/v1/projects/wks_test1/locations", {
+        method: "POST",
+        headers: { ...writeHeaders, "content-type": "application/json" },
+        body: JSON.stringify({ path: "/extra/disk", machine_id: "station01", label: "archive", kind: "local" }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { location?: { path: string; machine_id: string; label: string } };
+    expect(body.location).toMatchObject({ path: "/extra/disk", machine_id: "station01", label: "archive" });
+  });
+
+  test("POST /v1/projects/:id/locations with a primary path updates the workspace primary_path", async () => {
+    const store = fakeStore();
+    await handler(store)(new Request("http://x/v1/projects/wks_test1/locations", {
+      method: "POST",
+      headers: { ...writeHeaders, "content-type": "application/json" },
+      body: JSON.stringify({ path: "/new/primary", is_primary: true }),
+    }));
+    const show = await handler(store)(new Request("http://x/v1/projects/wks_test1", {
+      headers: { "x-api-key": keyWith(["projects:read"]) },
+    }));
+    const body = (await show.json()) as { primary_path?: string };
+    expect(body.primary_path).toBe("/new/primary");
+  });
+
+  test("POST /v1/projects/:id/agents assigns a registered agent to a project role", async () => {
+    const res = await handler()(
+      new Request("http://x/v1/projects/wks_test1/agents", {
+        method: "POST",
+        headers: { ...writeHeaders, "content-type": "application/json" },
+        body: JSON.stringify({ agent_id: "agt_1", role: "owner" }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { assignment?: { agent_id: string; role: string } };
+    expect(body.assignment).toMatchObject({ agent_id: "agt_1", role: "owner" });
+  });
+
+  test("GET /v1/projects/:id/agents lists assignments", async () => {
+    const res = await handler()(
+      new Request("http://x/v1/projects/wks_test1/agents", { headers: { "x-api-key": keyWith(["projects:read"]) } }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { assignments: unknown[]; count: number };
+    expect(Array.isArray(body.assignments)).toBe(true);
+    expect(body.count).toBe(0);
+  });
+
+  test("POST /v1/locks acquires a mutation lock with TTL", async () => {
+    const res = await handler()(
+      new Request("http://x/v1/locks", {
+        method: "POST",
+        headers: { ...writeHeaders, "content-type": "application/json" },
+        body: JSON.stringify({ lock_key: "workspace:wks_test1", workspace_id: "wks_test1", reason: "manual", ttl_seconds: 600 }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { lock?: { lock_key: string; expires_at: string | null } };
+    expect(body.lock).toMatchObject({ lock_key: "workspace:wks_test1" });
+    expect(body.lock?.expires_at).not.toBeNull();
+  });
+
+  test("GET /v1/locks lists active locks", async () => {
+    const res = await handler()(
+      new Request("http://x/v1/locks", { headers: { "x-api-key": keyWith(["projects:read"]) } }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { locks: unknown[]; count: number };
+    expect(Array.isArray(body.locks)).toBe(true);
+    expect(body.count).toBe(0);
+  });
+
+  test("DELETE /v1/locks/:key releases a lock", async () => {
+    const res = await handler()(
+      new Request("http://x/v1/locks/workspace:wks_test1", {
+        method: "DELETE",
+        headers: writeHeaders,
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { released: boolean };
+    expect(body.released).toBe(true);
   });
 });

@@ -458,6 +458,55 @@ async function route(
       const locations = await store.listWorkspaceLocations(ws.id);
       return jsonResponse({ locations, count: locations.length });
     }
+    if (sub === "locations" && method === "POST") {
+      const ws = await store.requireWorkspace(id);
+      const body = await readJsonBody(req);
+      if (typeof body.path !== "string" || !body.path.trim()) {
+        throw new ValidationError("path is required");
+      }
+      const location = await store.addWorkspaceLocation({
+        workspace_id: ws.id,
+        path: body.path,
+        machine_id: typeof body.machine_id === "string" ? body.machine_id : undefined,
+        label: typeof body.label === "string" ? body.label : undefined,
+        kind: typeof body.kind === "string" ? body.kind : undefined,
+        is_primary: typeof body.is_primary === "boolean" ? body.is_primary : undefined,
+        metadata: (body.metadata ?? undefined) as never,
+        agent_id: typeof body.agent_id === "string" ? body.agent_id : undefined,
+        source: "system",
+        command: "POST /v1/projects/:id/locations",
+      });
+      const updated = await store.requireWorkspace(ws.id);
+      return jsonResponse({ project: updated, location }, 201);
+    }
+    if (sub === "agents" && method === "GET") {
+      const ws = await store.requireWorkspace(id);
+      const assignments = await store.listWorkspaceAgents(ws.id);
+      return jsonResponse({ assignments, count: assignments.length });
+    }
+    if (sub === "agents" && method === "POST") {
+      const ws = await store.requireWorkspace(id);
+      const body = await readJsonBody(req);
+      if (typeof body.agent_id !== "string" || !body.agent_id.trim()) {
+        throw new ValidationError("agent_id is required");
+      }
+      const assignment = await store.assignAgentToWorkspace({
+        workspace_id: ws.id,
+        agent_id: body.agent_id,
+        role: typeof body.role === "string" ? body.role : undefined,
+        assigned_by: typeof body.assigned_by === "string" ? body.assigned_by : undefined,
+        metadata: (body.metadata ?? undefined) as never,
+      });
+      await store.recordEvent({
+        workspace_id: ws.id,
+        agent_id: assignment.assigned_by ?? undefined,
+        event_type: "agent_assigned",
+        source: "system",
+        command: "POST /v1/projects/:id/agents",
+        after: { agent_id: assignment.agent_id, role: assignment.role, assignment_id: assignment.id } as never,
+      });
+      return jsonResponse({ assignment }, 201);
+    }
     if (sub === "events" && method === "POST") {
       const ws = await store.requireWorkspace(id);
       const body = await readJsonBody(req);
@@ -527,6 +576,37 @@ async function route(
       const agent = await store.getAgent(id);
       if (!agent) return errorResponse(`Agent not found: ${id}`, 404);
       return jsonResponse(agent);
+    }
+    return errorResponse("Method not allowed", 405);
+  }
+
+  // ---------------- locks ----------------
+  // Project mutation locks were an on-box coordination primitive; the pg
+  // baseline has carried workspace_locks since 0001 and the hosted API now
+  // exposes acquire/list/release so the lock commands work identically on a
+  // cloud project (fleet-visible, not machine-local).
+  if (resource === "locks") {
+    if (method === "GET" && !id) {
+      const locks = await store.listLocks();
+      return jsonResponse({ locks, count: locks.length });
+    }
+    if (method === "POST" && !id) {
+      const body = await readJsonBody(req);
+      if (typeof body.lock_key !== "string" || !body.lock_key.trim()) {
+        throw new ValidationError("lock_key is required");
+      }
+      const lock = await store.acquireLock({
+        lock_key: body.lock_key,
+        workspace_id: typeof body.workspace_id === "string" ? body.workspace_id : undefined,
+        agent_id: typeof body.agent_id === "string" ? body.agent_id : undefined,
+        reason: typeof body.reason === "string" ? body.reason : undefined,
+        ttl_seconds: typeof body.ttl_seconds === "number" ? body.ttl_seconds : undefined,
+      });
+      return jsonResponse({ lock }, 201);
+    }
+    if (method === "DELETE" && id) {
+      const released = await store.releaseLock(decodeURIComponent(id));
+      return jsonResponse({ released });
     }
     return errorResponse("Method not allowed", 405);
   }

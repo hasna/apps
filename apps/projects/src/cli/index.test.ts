@@ -2869,34 +2869,50 @@ describe("project-first CLI surface", () => {
     expect(compactText).toContain("older hidden. Use --limit <n>, --verbose, or --json for details.");
   });
 
-  test("events record gates cleanly as local-only in api/cloud mode instead of leaking a raw 404", () => {
+  test("events record POSTs the event to the hosted /v1 API in api/cloud mode", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-events-cloud-"));
+    const requests: Array<{ method: string; path: string }> = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        requests.push({ method: req.method, path: url.pathname });
+        if (req.method === "POST" && url.pathname === "/v1/projects/wks_evt1/events") {
+          return Response.json({ event: { id: "evt_c1", workspace_id: "wks_evt1", event_type: "custom_event", source: "cli", prompt: null, command: null, before_json: null, after_json: null, metadata: {}, created_at: "2026-08-01 00:00:00" } }, { status: 201 });
+        }
+        if (req.method === "GET" && url.pathname === "/v1/projects/wks_evt1") {
+          return Response.json({ id: "wks_evt1", slug: "evented-app", name: "Evented App", kind: "generic", status: "active", primary_path: null, tags: [], integrations: {}, metadata: {} });
+        }
+        return Response.json({}, { status: 404 });
+      },
+    });
     const env = {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
-      // Force the cloud/self-hosted backend to resolve; the /v1 API exposes no
-      // POST /projects/:id/events route, so recording must fail fast with a
-      // clear local-only message rather than POSTing and leaking a raw 404.
       HASNA_PROJECTS_STORAGE_MODE: "self_hosted",
-      HASNA_PROJECTS_API_URL: "https://projects.invalid.hasna.test",
+      HASNA_PROJECTS_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_PROJECTS_API_KEY: "test-key",
     };
+    try {
+      const record = await runProjectsAsync([
+        "events",
+        "record",
+        "wks_evt1",
+        "custom_event",
+        "--prompt",
+        "x",
+        "--json",
+      ], env);
 
-    const record = runProjects([
-      "events",
-      "record",
-      "some-project",
-      "custom_event",
-      "--prompt",
-      "x",
-      "--json",
-    ], env);
-
-    expect(record.exitCode).toBe(1);
-    const stderr = text(record.stderr);
-    expect(stderr).toContain("local-only operation and is not available in api/cloud mode");
-    // Must not leak the raw upstream transport error or hit the network.
-    expect(stderr).not.toContain("Hasna request failed");
-    expect(stderr).not.toContain("404");
+      expect(record.exitCode).toBe(0);
+      const stdout = text(record.stdout);
+      expect(stdout).toContain("custom_event");
+      expect(requests).toEqual([
+        { method: "GET", path: "/v1/projects/wks_evt1" },
+        { method: "POST", path: "/v1/projects/wks_evt1/events" },
+      ]);
+    } finally {
+      server.stop();
+    }
   });
 
   cliProcessTest("project agents can be assigned and shown as project metadata", () => {
@@ -4223,21 +4239,42 @@ describe("project-first CLI surface", () => {
       return { exitCode: proc.exitCode, stdout, stderr };
     };
     try {
-      // 1. Machine-local runtime flags must fail atomically, before any create.
-      const refused = await runCreate([
+      // 1. Machine-local runtime flags must be honored in api/cloud mode: the
+      //    cloud row is created through the Store and the runtime half (mkdir,
+      //    marker, tmux) is applied on the invoking machine, with one
+      //    creation_executed event recorded on the hosted project.
+      const binDir = join(root, "bin");
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(join(binDir, "tmux"), "#!/usr/bin/env bun\n", "utf-8");
+      chmodSync(join(binDir, "tmux"), 0o755);
+      const runtimeEnv = {
+        ...env,
+        PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+      };
+      const runRuntimeCreate = async (args: string[]) => {
+        const proc = Bun.spawn({
+          cmd: ["bun", "run", CLI_PATH, "create", "--name", "Cloud Flag Probe", ...args],
+          stdout: "pipe",
+          stderr: "pipe",
+          env: testSpawnEnv(runtimeEnv),
+        });
+        const stdout = await new Response(proc.stdout).text();
+        const stderr = await new Response(proc.stderr).text();
+        await proc.exited;
+        return { exitCode: proc.exitCode, stdout, stderr };
+      };
+      const applied = await runRuntimeCreate([
         "--path", targetPath,
         "--mkdir",
         "--marker",
         "--tmux-session", "cloud-flag-probe",
         "--json",
       ]);
-      expect(refused.exitCode).toBe(1);
-      expect(refused.stderr).toContain("local-only operation and is not available in api/cloud mode");
-      expect(refused.stderr).toContain("--mkdir");
-      expect(refused.stderr).toContain("--marker");
-      expect(refused.stderr).toContain("--tmux-session");
-      expect(requests.filter((r) => r.method === "POST" && r.path === "/v1/projects")).toHaveLength(0);
-      expect(existsSync(targetPath)).toBe(false);
+      expect(applied.exitCode).toBe(0);
+      expect(requests.filter((r) => r.method === "POST" && r.path === "/v1/projects")).toHaveLength(1);
+      expect(existsSync(join(targetPath, ".project.json"))).toBe(true);
+      expect(requests.some((r) => r.method === "POST" && r.path === "/v1/projects/wks_cloudcreateflags0001/events")).toBe(true);
+      expect(applied.stdout).toContain("cloud-flag-probe");
 
       // 2. Registry-level flags must be forwarded to the cloud create, not dropped.
       const created = await runCreate([
@@ -4253,8 +4290,9 @@ describe("project-first CLI surface", () => {
       ]);
       expect(created.exitCode).toBe(0);
       const creates = requests.filter((r) => r.method === "POST" && r.path === "/v1/projects");
-      expect(creates).toHaveLength(1);
-      const body = creates[0]!.body as {
+      // One create from the runtime-flags run above, one from this run.
+      expect(creates).toHaveLength(2);
+      const body = creates.at(-1)!.body as {
         primary_path?: string;
         git_remote?: string;
         description?: string;

@@ -1521,6 +1521,307 @@ describe("pg-store workspace creation defaults", () => {
   });
 });
 
+// Local-only-capability removal: the pg store must carry the previously on-box
+// sub-resource writes (locations, agent assignments, mutation locks) so the
+// hosted backend supports the same operations as the local one.
+describe("pg-store hosted sub-resource writes", () => {
+  interface Row {
+    id: string;
+    workspace_id: string | null;
+    agent_id: string | null;
+    role: string;
+    assigned_by: string | null;
+    metadata: string;
+    created_at: string;
+    lock_key: string | null;
+    reason: string | null;
+    expires_at: string | null;
+    path: string | null;
+    machine_id: string | null;
+    label: string | null;
+    kind: string | null;
+    is_primary: number;
+    exists_at_create: number;
+  }
+
+  function fixture() {
+    const createdAt = "2026-08-08 00:00:00";
+    const agents: AgentRow[] = [{
+      id: "agt_hosted2",
+      slug: "hosted-agent-2",
+      name: "Hosted Agent 2",
+      kind: "ai",
+      provider: null,
+      model: null,
+      role: null,
+      permissions: "[]",
+      metadata: "{}",
+      created_at: createdAt,
+      updated_at: createdAt,
+    }];
+    const workspaces: WorkspaceRow[] = [{
+      id: "wks_hosted2",
+      slug: "hosted-project-2",
+      name: "Hosted Project 2",
+      description: null,
+      kind: "project",
+      status: "active",
+      root_id: null,
+      recipe_id: null,
+      canonical_machine: null,
+      primary_path: null,
+      git_remote: null,
+      s3_bucket: null,
+      s3_prefix: null,
+      tags: "[]",
+      integrations: "{}",
+      metadata: "{}",
+      last_opened_at: null,
+      created_at: createdAt,
+      updated_at: createdAt,
+      synced_at: null,
+    }];
+    const rows: Row[] = [];
+
+    const get = async <T>(sql: string, params: readonly unknown[] = []): Promise<T | null> => {
+      if (sql.startsWith("SELECT * FROM agents WHERE")) {
+        return (agents.find((agent) => agent.id === params[0] || agent.slug === params[0]) ?? null) as T | null;
+      }
+      if (sql.startsWith("SELECT * FROM workspaces WHERE")) {
+        return (workspaces.find((w) => w.id === params[0] || w.slug === params[0]) ?? null) as T | null;
+      }
+      if (sql.includes("FROM workspace_locations") && sql.includes("WHERE workspace_id = $1 AND path = $2 AND machine_id = $3")) {
+        const row = rows.find((r) => r.workspace_id === params[0] && r.path === params[1] && r.machine_id === params[2]);
+        return (row ?? null) as T | null;
+      }
+      if (sql.includes("FROM workspace_agents") && sql.includes("WHERE wa.workspace_id = $1 AND wa.agent_id = $2 AND wa.role = $3")) {
+        const row = rows.find((r) => r.workspace_id === params[0] && r.agent_id === params[1] && r.role === params[2]);
+        if (!row) return null as T | null;
+        return {
+          ...row,
+          agent_slug: agents.find((a) => a.id === row.agent_id)?.slug ?? null,
+          agent_kind: agents.find((a) => a.id === row.agent_id)?.kind ?? null,
+          agent_name: agents.find((a) => a.id === row.agent_id)?.name ?? null,
+          agent_provider: agents.find((a) => a.id === row.agent_id)?.provider ?? null,
+          agent_model: agents.find((a) => a.id === row.agent_id)?.model ?? null,
+          agent_role: agents.find((a) => a.id === row.agent_id)?.role ?? null,
+          agent_permissions: agents.find((a) => a.id === row.agent_id)?.permissions ?? "[]",
+        } as T;
+      }
+      if (sql.includes("FROM workspace_locks WHERE id = $1")) {
+        const row = rows.find((r) => r.id === params[0]);
+        return (row ?? null) as T | null;
+      }
+      if (sql.includes("FROM workspace_locks WHERE lock_key = $1")) {
+        const row = rows.find((r) => r.lock_key === params[0]);
+        return (row ?? null) as T | null;
+      }
+      throw new Error(`Unexpected get query: ${sql}`);
+    };
+
+    const many = async <T>(sql: string, params: readonly unknown[] = []): Promise<T[]> => {
+      if (sql.includes("FROM workspace_locations") && sql.startsWith("SELECT *")) {
+        return rows
+          .filter((r) => r.workspace_id === params[0])
+          .sort((a, b) => (b.is_primary - a.is_primary) || (a.created_at < b.created_at ? -1 : 1))
+          .map((r) => ({
+            id: r.id,
+            workspace_id: r.workspace_id,
+            path: r.path,
+            machine_id: r.machine_id,
+            label: r.label,
+            kind: r.kind,
+            is_primary: r.is_primary,
+            exists_at_create: r.exists_at_create,
+            metadata: r.metadata,
+            created_at: r.created_at,
+          })) as T[];
+      }
+      if (sql.includes("FROM workspace_agents") && sql.includes("a.slug AS agent_slug")) {
+        return rows
+          .filter((r) => r.workspace_id === params[0])
+          .map((r) => ({
+            id: r.id,
+            workspace_id: r.workspace_id,
+            agent_id: r.agent_id,
+            role: r.role,
+            assigned_by: r.assigned_by,
+            metadata: r.metadata,
+            created_at: r.created_at,
+            agent_slug: agents.find((a) => a.id === r.agent_id)?.slug ?? null,
+            agent_kind: agents.find((a) => a.id === r.agent_id)?.kind ?? null,
+            agent_name: agents.find((a) => a.id === r.agent_id)?.name ?? null,
+            agent_provider: agents.find((a) => a.id === r.agent_id)?.provider ?? null,
+            agent_model: agents.find((a) => a.id === r.agent_id)?.model ?? null,
+            agent_role: agents.find((a) => a.id === r.agent_id)?.role ?? null,
+            agent_permissions: agents.find((a) => a.id === r.agent_id)?.permissions ?? "[]",
+          })) as T[];
+      }
+      if (sql.includes("FROM workspace_locks")) {
+        return rows
+          .filter((r) => r.lock_key !== null)
+          .map((r) => ({
+            id: r.id,
+            lock_key: r.lock_key,
+            workspace_id: r.workspace_id,
+            agent_id: r.agent_id,
+            reason: r.reason,
+            created_at: r.created_at,
+            expires_at: r.expires_at,
+          })) as T[];
+      }
+      throw new Error(`Unexpected many query: ${sql}`);
+    };
+
+    const execute = async (sql: string, params: readonly unknown[] = []): Promise<void> => {
+      if (sql.includes("UPDATE workspace_locations SET is_primary")) {
+        for (const row of rows) {
+          if (row.workspace_id === params[0]) row.is_primary = 0;
+        }
+        return;
+      }
+      if (sql.includes("UPDATE workspaces SET primary_path")) {
+        const ws = workspaces.find((w) => w.id === params[2]);
+        if (ws) ws.primary_path = params[0] as string;
+        return;
+      }
+      if (sql.includes("INSERT INTO workspace_locations")) {
+        rows.push({
+          id: params[0] as string,
+          workspace_id: params[1] as string,
+          path: params[2] as string,
+          machine_id: params[3] as string,
+          label: params[4] as string,
+          kind: params[5] as string,
+          is_primary: params[6] as number,
+          exists_at_create: params[7] as number,
+          metadata: params[8] as string,
+          created_at: params[9] as string,
+          agent_id: null,
+          role: "",
+          assigned_by: null,
+          lock_key: null,
+          reason: null,
+          expires_at: null,
+        });
+        return;
+      }
+      if (sql.includes("INSERT INTO workspace_agents")) {
+        rows.push({
+          id: params[0] as string,
+          workspace_id: params[1] as string,
+          agent_id: params[2] as string,
+          role: params[3] as string,
+          assigned_by: params[4] as string | null,
+          metadata: params[5] as string,
+          created_at: params[6] as string,
+          lock_key: null,
+          reason: null,
+          expires_at: null,
+          path: null,
+          machine_id: null,
+          label: null,
+          kind: null,
+          is_primary: 0,
+          exists_at_create: 0,
+        });
+        return;
+      }
+      if (sql.includes("INSERT INTO workspace_locks")) {
+        rows.push({
+          id: params[0] as string,
+          lock_key: params[1] as string,
+          workspace_id: params[2] as string | null,
+          agent_id: params[3] as string | null,
+          reason: params[4] as string | null,
+          created_at: params[5] as string,
+          expires_at: params[6] as string | null,
+          role: "",
+          assigned_by: null,
+          metadata: "{}",
+          path: null,
+          machine_id: null,
+          label: null,
+          kind: null,
+          is_primary: 0,
+          exists_at_create: 0,
+        });
+        return;
+      }
+      if (sql.includes("DELETE FROM workspace_locks WHERE expires_at")) {
+        const now = params[0] as string;
+        for (let i = rows.length - 1; i >= 0; i -= 1) {
+          if (rows[i].expires_at !== null && rows[i].expires_at! < now) rows.splice(i, 1);
+        }
+        return;
+      }
+      if (sql.includes("DELETE FROM workspace_locks")) {
+        const index = rows.findIndex((r) => r.lock_key === params[0]);
+        if (index >= 0) rows.splice(index, 1);
+        return;
+      }
+      throw new Error(`Unexpected execute query: ${sql}`);
+    };
+
+    const client = { get, many, execute } as unknown as TypedQueryClient;
+    const store = new ProjectsPgStore(client);
+    return { store, workspaces, rows, agents };
+  }
+
+  test("addWorkspaceLocation inserts the location and updates the workspace primary_path when primary", async () => {
+    const { store, workspaces, rows } = fixture();
+    const location = await store.addWorkspaceLocation({
+      workspace_id: "wks_hosted2",
+      path: "/srv/hosted-project-2",
+      machine_id: "station01",
+      label: "canonical",
+      kind: "store",
+      is_primary: true,
+      metadata: { canonical: true },
+      created_at: "2026-08-08 00:00:00",
+    });
+    expect(location).toMatchObject({ path: "/srv/hosted-project-2", machine_id: "station01", label: "canonical", is_primary: true });
+    expect(rows.filter((r) => r.workspace_id === "wks_hosted2")).toHaveLength(1);
+    expect(workspaces[0]!.primary_path).toBe("/srv/hosted-project-2");
+  });
+
+  test("assignAgentToWorkspace inserts the assignment and lists it joined to the agent", async () => {
+    const { store } = fixture();
+    const assignment = await store.assignAgentToWorkspace({
+      workspace_id: "wks_hosted2",
+      agent_id: "agt_hosted2",
+      role: "owner",
+      assigned_by: "agt_hosted2",
+      created_at: "2026-08-08 00:00:00",
+    });
+    expect(assignment).toMatchObject({ role: "owner", agent_id: "agt_hosted2" });
+    expect(assignment.agent?.slug).toBe("hosted-agent-2");
+    const listed = await store.listWorkspaceAgents("wks_hosted2");
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ role: "owner" });
+  });
+
+  test("acquireLock inserts with TTL and conflicts on a held key; release removes it", async () => {
+    const { store, rows } = fixture();
+    const lock = await store.acquireLock({ lock_key: "workspace:wks_hosted2", workspace_id: "wks_hosted2", reason: "manual", ttl_seconds: 600, created_at: "2026-08-08 00:00:00" });
+    expect(lock.lock_key).toBe("workspace:wks_hosted2");
+    expect(lock.expires_at).not.toBeNull();
+    await expect(store.acquireLock({ lock_key: "workspace:wks_hosted2", workspace_id: "wks_hosted2", reason: "again", ttl_seconds: 600, created_at: "2026-08-08 00:00:00" }))
+      .rejects.toThrow(/lock already held/i);
+    expect(await store.releaseLock("workspace:wks_hosted2")).toBe(true);
+    expect(rows.filter((r) => r.lock_key === "workspace:wks_hosted2")).toHaveLength(0);
+    expect(await store.releaseLock("workspace:wks_hosted2")).toBe(false);
+  });
+
+  test("listLocks prunes expired locks", async () => {
+    const { store, rows } = fixture();
+    await store.acquireLock({ lock_key: "expired:1", workspace_id: "wks_hosted2", ttl_seconds: 1, created_at: "2026-08-08 00:00:00" });
+    rows[0]!.expires_at = "2026-08-07 00:00:00";
+    const locks = await store.listLocks();
+    expect(locks).toHaveLength(0);
+  });
+});
+
 // Live CRUD against a real Postgres, gated on PROJECTS_TEST_DATABASE_URL.
 const LIVE_URL = process.env.PROJECTS_TEST_DATABASE_URL;
 

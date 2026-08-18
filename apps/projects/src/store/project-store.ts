@@ -299,9 +299,11 @@ export interface AcquireLockInput {
 }
 
 /**
- * Operations that only exist on-box (agent assignments, extra disk locations,
- * mutation locks). The api transport does not model them; calling a write in
- * api mode throws this rather than silently writing local sqlite (split-brain).
+ * Operations that only exist on-box. Agent assignments, extra disk locations
+ * and mutation locks are now modeled by the hosted /v1 API; project budgets
+ * and spend remain machine-local sub-resources with no hosted routes, so a
+ * write in api mode throws this rather than silently writing local sqlite
+ * (split-brain).
  */
 class LocalOnlyOperationError extends Error {
   constructor(operation: string) {
@@ -1483,14 +1485,29 @@ class ApiProjectStore implements ProjectStore {
     return (raw as { event?: WorkspaceEvent }).event ?? (raw as WorkspaceEvent);
   }
 
-  // Per-project agent assignments remain on-box. Registered locations are
-  // registry data and have a read endpoint so placement queries work remotely.
-  async getProjectAgents(): Promise<WorkspaceAgentAssignment[]> {
-    return [];
+  // Per-project agent assignments and extra disk locations are registry data:
+  // the hosted /v1 API models both (assignments read/write and the location
+  // collection), so both transports serve the same sub-resources.
+  async getProjectAgents(id: string): Promise<WorkspaceAgentAssignment[]> {
+    const raw = await this.client.transport.get<{ assignments?: WorkspaceAgentAssignment[] }>(
+      `/projects/${encodeURIComponent(id)}/agents`,
+    );
+    return raw.assignments ?? [];
   }
 
-  async assignAgent(): Promise<WorkspaceAgentAssignment> {
-    throw new LocalOnlyOperationError("assign agent to project");
+  async assignAgent(idOrSlug: string, input: AssignAgentInput): Promise<WorkspaceAgentAssignment> {
+    const raw = await this.client.transport.post<{ assignment?: WorkspaceAgentAssignment } | WorkspaceAgentAssignment>(
+      `/projects/${encodeURIComponent(idOrSlug)}/agents`,
+      {
+        agent_id: input.agentId,
+        role: input.role,
+        assigned_by: input.assignedBy,
+        metadata: input.metadata,
+      },
+    );
+    const assignment = (raw as { assignment?: WorkspaceAgentAssignment }).assignment ?? (raw as WorkspaceAgentAssignment);
+    if (!assignment) throw new Error(`Agent assignment was not recorded for ${idOrSlug}`);
+    return assignment;
   }
 
   async getProjectLocations(id: string): Promise<WorkspaceLocation[]> {
@@ -1505,22 +1522,52 @@ class ApiProjectStore implements ProjectStore {
     return raw.machines ?? [];
   }
 
-  async addLocation(): Promise<AddLocationResult> {
-    throw new LocalOnlyOperationError("add project location");
+  async addLocation(idOrSlug: string, input: AddLocationInput): Promise<AddLocationResult> {
+    const raw = await this.client.transport.post<{ project?: Workspace; location?: WorkspaceLocation } | AddLocationResult>(
+      `/projects/${encodeURIComponent(idOrSlug)}/locations`,
+      {
+        path: input.path,
+        machine_id: input.machineId,
+        label: input.label,
+        kind: input.kind,
+        is_primary: input.isPrimary,
+        metadata: input.metadata,
+      },
+    );
+    const location = (raw as { location?: WorkspaceLocation }).location ?? (raw as AddLocationResult).location;
+    const project = (raw as { project?: Workspace }).project ?? (raw as AddLocationResult).project;
+    if (!location || !project) throw new Error(`Project location was not recorded for ${idOrSlug}`);
+    return { project, location };
   }
 
-  // Mutation locks are a machine-local coordination primitive; cloud writes are
-  // atomic server-side so there is no shared lock table to expose.
+  // Mutation locks are hosted through the /v1 locks resource so the explicit
+  // lock commands work identically on a cloud project (fleet-visible locks).
   async listLocks(): Promise<WorkspaceLock[]> {
-    return [];
+    const raw = await this.client.transport.get<{ locks?: WorkspaceLock[] }>("/locks");
+    return raw.locks ?? [];
   }
 
-  async acquireLock(): Promise<WorkspaceLock> {
-    throw new LocalOnlyOperationError("acquire project lock");
+  async acquireLock(input: AcquireLockInput): Promise<WorkspaceLock> {
+    const raw = await this.client.transport.post<{ lock?: WorkspaceLock } | WorkspaceLock>(
+      "/locks",
+      {
+        lock_key: input.key,
+        workspace_id: input.workspaceId,
+        agent_id: input.agentId,
+        reason: input.reason,
+        ttl_seconds: input.ttlSeconds,
+      },
+    );
+    const lock = (raw as { lock?: WorkspaceLock }).lock ?? (raw as WorkspaceLock);
+    if (!lock) throw new Error(`Project lock was not acquired: ${input.key}`);
+    return lock;
   }
 
-  async releaseLock(): Promise<boolean> {
-    return false;
+  async releaseLock(key: string): Promise<boolean> {
+    const raw = await this.client.transport.del<{ released?: boolean }>(
+      `/locks/${encodeURIComponent(key)}`,
+    );
+    return Boolean(raw?.released);
   }
 
   async listRoots(): Promise<Root[]> {

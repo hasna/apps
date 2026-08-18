@@ -118,11 +118,15 @@ import type {
   UpdateRootInput,
   UpdateWorkspaceInput,
   Workspace,
+  WorkspaceAgentAssignment,
+  WorkspaceAgentAssignmentRow,
   WorkspaceEvent,
   WorkspaceEventRow,
   WorkspaceIntegrations,
   WorkspaceLocation,
   WorkspaceLocationRow,
+  WorkspaceLock,
+  WorkspaceLockRow,
   WorkspaceKind,
   WorkspaceRow,
   WorkspaceStatus,
@@ -255,6 +259,18 @@ function rowToWorkspaceLocation(row: WorkspaceLocationRow): WorkspaceLocation {
     is_primary: Boolean(row.is_primary),
     exists_at_create: Boolean(row.exists_at_create),
     metadata: parseJson<JsonObject>(row.metadata, {}),
+  };
+}
+
+function rowToWorkspaceLock(row: WorkspaceLockRow): WorkspaceLock {
+  return {
+    id: row.id,
+    lock_key: row.lock_key,
+    workspace_id: row.workspace_id,
+    agent_id: row.agent_id,
+    reason: row.reason,
+    created_at: row.created_at,
+    expires_at: row.expires_at,
   };
 }
 
@@ -672,6 +688,227 @@ export class ProjectsPgStore {
       status: row.status,
       role: row.role as Machine["role"],
     }));
+  }
+
+  // ---- hosted sub-resource writes (formerly on-box only) ----
+  // The pg baseline has carried workspace_locations / workspace_agents /
+  // workspace_locks since 0001; these methods make the hosted backend support
+  // the same project sub-resource writes the local backend always did.
+
+  async addWorkspaceLocation(input: {
+    workspace_id: string;
+    path: string;
+    machine_id?: string;
+    label?: string;
+    kind?: string;
+    is_primary?: boolean;
+    metadata?: JsonObject;
+    agent_id?: string;
+    source?: EventSource;
+    command?: string;
+    created_at?: string;
+  }): Promise<WorkspaceLocation> {
+    const workspace = await this.requireWorkspace(input.workspace_id);
+    const isPrimary = Boolean(input.is_primary);
+    const machineId = input.machine_id?.trim();
+    if (!machineId) throw new ValidationError("location machine must not be empty");
+    const path = input.path.trim();
+    if (!path) throw new ValidationError("location path is required");
+    const id = nanoid(24);
+    const ts = input.created_at ?? nowIso();
+    if (isPrimary) {
+      await this.db.execute("UPDATE workspace_locations SET is_primary = FALSE WHERE workspace_id = $1", [input.workspace_id]);
+    }
+    await this.db.execute(
+      `INSERT INTO workspace_locations (
+        id, workspace_id, path, machine_id, label, kind, is_primary, exists_at_create, metadata, created_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      ON CONFLICT (workspace_id, path, machine_id) DO UPDATE SET
+        label = EXCLUDED.label,
+        kind = EXCLUDED.kind,
+        is_primary = EXCLUDED.is_primary,
+        metadata = EXCLUDED.metadata`,
+      [
+        id,
+        input.workspace_id,
+        path,
+        machineId,
+        input.label ?? "main",
+        input.kind ?? "local",
+        isPrimary,
+        false,
+        json(input.metadata ?? {}),
+        ts,
+      ],
+    );
+    if (isPrimary) {
+      await this.db.execute("UPDATE workspaces SET primary_path = $1, updated_at = $2 WHERE id = $3", [
+        path,
+        nowIso(),
+        input.workspace_id,
+      ]);
+    }
+    if (input.source || input.agent_id || input.command) {
+      await this.recordEvent({
+        workspace_id: input.workspace_id,
+        agent_id: input.agent_id,
+        event_type: "location_added",
+        source: input.source ?? "system",
+        command: input.command,
+        after: { path, label: input.label ?? "main", machine_id: machineId, primary: isPrimary } as unknown as JsonObject,
+      });
+    }
+    const row = await this.db.get<WorkspaceLocationRow>(
+      "SELECT * FROM workspace_locations WHERE workspace_id = $1 AND path = $2 AND machine_id = $3",
+      [input.workspace_id, path, machineId],
+    );
+    if (!row) throw new Error(`Workspace location was not written: ${path}`);
+    return rowToWorkspaceLocation(row);
+  }
+
+  async listWorkspaceAgents(workspaceId: string): Promise<WorkspaceAgentAssignment[]> {
+    await this.requireWorkspace(workspaceId);
+    const rows = await this.db.many<WorkspaceAgentAssignmentRow & {
+      agent_slug: string | null;
+      agent_name: string | null;
+      agent_kind: string | null;
+      agent_provider: string | null;
+      agent_model: string | null;
+      agent_role: string | null;
+      agent_permissions: string | null;
+    }>(
+      `SELECT wa.*, a.slug AS agent_slug, a.name AS agent_name, a.kind AS agent_kind,
+              a.provider AS agent_provider, a.model AS agent_model, a.role AS agent_role,
+              a.permissions AS agent_permissions
+       FROM workspace_agents wa
+       LEFT JOIN agents a ON a.id = wa.agent_id
+       WHERE wa.workspace_id = $1
+       ORDER BY wa.role ASC, wa.created_at ASC, wa.id ASC`,
+      [workspaceId],
+    );
+    return rows.map((row) => this.toWorkspaceAgentAssignment(row));
+  }
+
+  private toWorkspaceAgentAssignment(row: WorkspaceAgentAssignmentRow & {
+    agent_slug: string | null;
+    agent_name: string | null;
+    agent_kind: string | null;
+    agent_provider: string | null;
+    agent_model: string | null;
+    agent_role: string | null;
+    agent_permissions: string | null;
+  }): WorkspaceAgentAssignment {
+    return {
+      id: row.id,
+      workspace_id: row.workspace_id,
+      agent_id: row.agent_id,
+      role: row.role,
+      assigned_by: row.assigned_by,
+      metadata: parseJson(row.metadata, {}),
+      created_at: row.created_at,
+      agent: row.agent_id
+        ? rowToAgent({
+            id: row.agent_id,
+            slug: row.agent_slug ?? "",
+            name: row.agent_name ?? "",
+            kind: row.agent_kind ?? "ai",
+            provider: row.agent_provider,
+            model: row.agent_model,
+            role: row.agent_role,
+            permissions: row.agent_permissions ?? "[]",
+            metadata: "{}",
+            created_at: row.created_at,
+            updated_at: row.created_at,
+          })
+        : null,
+    };
+  }
+
+  async assignAgentToWorkspace(input: {
+    workspace_id: string;
+    agent_id: string;
+    role?: string;
+    assigned_by?: string;
+    metadata?: JsonObject;
+    created_at?: string;
+  }): Promise<WorkspaceAgentAssignment> {
+    await this.requireWorkspace(input.workspace_id);
+    const agent = await this.getAgent(input.agent_id);
+    if (!agent) throw new NotFoundError(`Agent not found: ${input.agent_id}`);
+    const role = input.role ?? "contributor";
+    const id = nanoid(24);
+    const ts = input.created_at ?? nowIso();
+    await this.db.execute(
+      `INSERT INTO workspace_agents (id, workspace_id, agent_id, role, assigned_by, metadata, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (workspace_id, agent_id, role) DO NOTHING`,
+      [id, input.workspace_id, agent.id, role, input.assigned_by ?? null, json(input.metadata ?? {}), ts],
+    );
+    const row = await this.db.get<WorkspaceAgentAssignmentRow & {
+      agent_slug: string | null;
+      agent_name: string | null;
+      agent_kind: string | null;
+      agent_provider: string | null;
+      agent_model: string | null;
+      agent_role: string | null;
+      agent_permissions: string | null;
+    }>(
+      `SELECT wa.*, a.slug AS agent_slug, a.name AS agent_name, a.kind AS agent_kind,
+              a.provider AS agent_provider, a.model AS agent_model, a.role AS agent_role,
+              a.permissions AS agent_permissions
+       FROM workspace_agents wa
+       LEFT JOIN agents a ON a.id = wa.agent_id
+       WHERE wa.workspace_id = $1 AND wa.agent_id = $2 AND wa.role = $3`,
+      [input.workspace_id, agent.id, role],
+    );
+    if (!row) throw new Error(`Workspace agent assignment was not written: ${input.workspace_id}/${agent.id}/${role}`);
+    return this.toWorkspaceAgentAssignment(row);
+  }
+
+  async listLocks(): Promise<WorkspaceLock[]> {
+    await this.pruneExpiredLocks();
+    const rows = await this.db.many<WorkspaceLockRow>(
+      "SELECT * FROM workspace_locks ORDER BY created_at ASC, id ASC",
+    );
+    return rows.map(rowToWorkspaceLock);
+  }
+
+  async acquireLock(input: {
+    lock_key: string;
+    workspace_id?: string;
+    agent_id?: string;
+    reason?: string;
+    ttl_seconds?: number;
+    created_at?: string;
+  }): Promise<WorkspaceLock> {
+    if (!input.lock_key?.trim()) throw new ValidationError("lock_key is required");
+    await this.pruneExpiredLocks();
+    const existing = await this.db.get<WorkspaceLockRow>("SELECT * FROM workspace_locks WHERE lock_key = $1", [input.lock_key]);
+    if (existing) throw new ValidationError(`Workspace lock already held: ${input.lock_key}`);
+    const id = nanoid(24);
+    const ts = input.created_at ?? nowIso();
+    const expiresAt = input.ttl_seconds
+      ? new Date(Date.now() + input.ttl_seconds * 1000).toISOString().replace("T", " ").replace("Z", "")
+      : null;
+    await this.db.execute(
+      `INSERT INTO workspace_locks (id, lock_key, workspace_id, agent_id, reason, created_at, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [id, input.lock_key, input.workspace_id ?? null, input.agent_id ?? null, input.reason ?? null, ts, expiresAt],
+    );
+    const row = await this.db.get<WorkspaceLockRow>("SELECT * FROM workspace_locks WHERE id = $1", [id]);
+    if (!row) throw new Error(`Workspace lock was not written: ${input.lock_key}`);
+    return rowToWorkspaceLock(row);
+  }
+
+  async releaseLock(lockKey: string): Promise<boolean> {
+    const existing = await this.db.get<WorkspaceLockRow>("SELECT * FROM workspace_locks WHERE lock_key = $1", [lockKey]);
+    if (!existing) return false;
+    await this.db.execute("DELETE FROM workspace_locks WHERE lock_key = $1", [lockKey]);
+    return true;
+  }
+
+  private async pruneExpiredLocks(): Promise<void> {
+    await this.db.execute("DELETE FROM workspace_locks WHERE expires_at IS NOT NULL AND expires_at < $1", [nowIso()]);
   }
 
   private async listWorkspaceLocationsBounded(
