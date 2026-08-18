@@ -90,7 +90,7 @@ describe("db migrations", () => {
   });
 
   it("creates private local data directories and database files", () => {
-    const root = mkdtempSync(join(tmpdir(), "open-logs-db-perms-"));
+    const root = mkdtempSync(join(tmpdir(), "logs-db-perms-"));
     const dataDir = join(root, "logs");
     const dbPath = join(dataDir, "logs.db");
     try {
@@ -130,7 +130,7 @@ describe("db migrations", () => {
   });
 
   it("tightens permissions while migrating legacy ~/.logs data", () => {
-    const home = mkdtempSync(join(tmpdir(), "open-logs-legacy-perms-"));
+    const home = mkdtempSync(join(tmpdir(), "logs-legacy-perms-"));
     const oldDir = join(home, ".logs");
     const oldNested = join(oldDir, "segments");
     const newDir = join(home, ".hasna", "logs");

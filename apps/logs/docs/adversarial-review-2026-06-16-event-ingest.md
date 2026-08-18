@@ -6,7 +6,7 @@ Date: 2026-06-16
 
 Rejected by both independent adversarial reviewers.
 
-Open-logs is materially stronger after the event catalog and first universal ingest work, but it is still not robust enough to claim universal telemetry data-substrate status.
+Hasna Logs is materially stronger after the event catalog and first universal ingest work, but it is still not robust enough to claim universal telemetry data-substrate status.
 
 Latest slice re-review after SDK/browser-token event-ingest hardening: both adversarial reviewers accepted the patched slice, but both still rejected the full robustness gate.
 

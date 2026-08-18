@@ -2,7 +2,7 @@
 
 Last updated: 2026-06-17
 
-This document describes the first structured logging compatibility bridge for open-logs.
+This document describes the first structured logging compatibility bridge for logs.
 
 The bridge is intentionally a data-ingest bridge, not an AI workflow. Its job is to accept common JSON logging payloads from existing applications, preserve the original producer payload after redaction, normalize the record into the canonical log model, append it to raw filesystem segments, and index it in SQLite for search, correlation, stream delivery, and rebuild.
 

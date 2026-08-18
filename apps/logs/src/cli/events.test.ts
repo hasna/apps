@@ -24,7 +24,7 @@ function runCli(args: string[], dataDir: string) {
 
 describe("logs events CLI", () => {
   test("pushes a raw-first universal event", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "open-logs-events-push-cli-"));
+    const dataDir = mkdtempSync(join(tmpdir(), "logs-events-push-cli-"));
     try {
       const push = runCli(
         [
@@ -119,7 +119,7 @@ describe("logs events CLI", () => {
 
   test("events push validates before local identity mutation", () => {
     const dataDir = mkdtempSync(
-      join(tmpdir(), "open-logs-events-invalid-identity-cli-"),
+      join(tmpdir(), "logs-events-invalid-identity-cli-"),
     );
     try {
       const push = runCli(
@@ -170,7 +170,7 @@ describe("logs events CLI", () => {
 
   test("events push skips local discovery when explicit identity is supplied", () => {
     const dataDir = mkdtempSync(
-      join(tmpdir(), "open-logs-events-explicit-identity-cli-"),
+      join(tmpdir(), "logs-events-explicit-identity-cli-"),
     );
     try {
       const push = runCli(
@@ -237,7 +237,7 @@ describe("logs events CLI", () => {
 
   test("events push does not pass unknown project IDs into identity upserts", () => {
     const dataDir = mkdtempSync(
-      join(tmpdir(), "open-logs-events-unknown-project-cli-"),
+      join(tmpdir(), "logs-events-unknown-project-cli-"),
     );
     try {
       const push = runCli(
@@ -281,7 +281,7 @@ describe("logs events CLI", () => {
   });
 
   test("lists, gets, and exports raw-backed event catalog records", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "open-logs-events-cli-"));
+    const dataDir = mkdtempSync(join(tmpdir(), "logs-events-cli-"));
     try {
       const push = runCli(
         [
@@ -353,7 +353,7 @@ describe("logs events CLI", () => {
   });
 
   test("queries projected test reports", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "open-logs-test-reports-cli-"));
+    const dataDir = mkdtempSync(join(tmpdir(), "logs-test-reports-cli-"));
     try {
       const push = runCli(
         [
@@ -509,7 +509,7 @@ describe("logs events CLI", () => {
   });
 
   test("watches local event catalog records once as JSON", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "open-logs-events-watch-cli-"));
+    const dataDir = mkdtempSync(join(tmpdir(), "logs-events-watch-cli-"));
     try {
       expect(
         runCli(
@@ -576,7 +576,7 @@ describe("logs events CLI", () => {
 
   test("watches local event catalog records after a last event id", () => {
     const dataDir = mkdtempSync(
-      join(tmpdir(), "open-logs-events-watch-cursor-cli-"),
+      join(tmpdir(), "logs-events-watch-cursor-cli-"),
     );
     try {
       expect(
@@ -641,7 +641,7 @@ describe("logs events CLI", () => {
 
   test("reports an unknown local event catalog watch cursor without replaying history", () => {
     const dataDir = mkdtempSync(
-      join(tmpdir(), "open-logs-events-watch-missing-cursor-cli-"),
+      join(tmpdir(), "logs-events-watch-missing-cursor-cli-"),
     );
     try {
       expect(
@@ -687,7 +687,7 @@ describe("logs events CLI", () => {
 
   test("watches a secured remote event catalog stream once as JSON", async () => {
     const dataDir = mkdtempSync(
-      join(tmpdir(), "open-logs-events-watch-remote-cli-"),
+      join(tmpdir(), "logs-events-watch-remote-cli-"),
     );
     const port = await getFreePort();
     const token = "remote-watch-test-token";
@@ -786,7 +786,7 @@ describe("logs events CLI", () => {
     // requireLocalStore("watch") unconditionally and threw the local-only error
     // before ever reaching the --server branch.
     const dataDir = mkdtempSync(
-      join(tmpdir(), "open-logs-events-watch-apimode-cli-"),
+      join(tmpdir(), "logs-events-watch-apimode-cli-"),
     );
     const port = await getFreePort();
     const token = "remote-watch-apimode-token";
@@ -887,7 +887,7 @@ describe("logs events CLI", () => {
 
   test("retries remote event catalog watch after an initial stream connection failure", async () => {
     const dataDir = mkdtempSync(
-      join(tmpdir(), "open-logs-events-watch-remote-retry-cli-"),
+      join(tmpdir(), "logs-events-watch-remote-retry-cli-"),
     );
     const port = await getFreePort();
     const token = "remote-watch-retry-token";

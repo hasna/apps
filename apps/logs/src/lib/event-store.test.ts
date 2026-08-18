@@ -534,7 +534,7 @@ describe("event store", () => {
         pid: 123,
         ppid: 1,
         command: "bun test",
-        cwd: "/workspace/open-logs",
+        cwd: "/workspace/logs",
         started_at: "2026-06-16T08:00:06.000Z",
         ended_at: "2026-06-16T08:00:07.000Z",
         exit_code: 0,
@@ -778,7 +778,7 @@ describe("event store", () => {
       pid: 123,
       ppid: 1,
       command: "bun test",
-      cwd: "/workspace/open-logs",
+      cwd: "/workspace/logs",
       ended_at: "2026-06-16T08:00:07.000Z",
       exit_code: 0,
     });

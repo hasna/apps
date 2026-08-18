@@ -395,7 +395,7 @@ describe("command runner", () => {
 
   it("discovers build artifacts as raw events and SQLite metadata", async () => {
     const db = createTestDb();
-    const tempDir = mkdtempSync(join(tmpdir(), "open-logs-artifacts-"));
+    const tempDir = mkdtempSync(join(tmpdir(), "logs-artifacts-"));
     const sourceContentCanary =
       "OPENLOGS_SOURCE_MAP_CONTENT_SHOULD_NOT_PERSIST";
     try {
@@ -701,7 +701,7 @@ describe("command runner", () => {
 
   it("sanitizes source-map host paths and links file-field maps", async () => {
     const db = createTestDb();
-    const tempDir = mkdtempSync(join(tmpdir(), "open-logs-sm-file-field-"));
+    const tempDir = mkdtempSync(join(tmpdir(), "logs-sm-file-field-"));
     const sourceContentCanary =
       "OPENLOGS_SOURCE_MAP_FILE_FIELD_CONTENT_SHOULD_NOT_PERSIST";
     try {
@@ -827,7 +827,7 @@ describe("command runner", () => {
 
   it("redacts artifact paths before result and process metadata persistence", async () => {
     const db = createTestDb();
-    const tempDir = mkdtempSync(join(tmpdir(), "open-logs-artifact-redact-"));
+    const tempDir = mkdtempSync(join(tmpdir(), "logs-artifact-redact-"));
     const secret = "OPENLOGS_SECRET_CANARY_ARTIFACT_PATH_12345";
     try {
       const result = await runCommand(new LocalRunSink(db),
@@ -890,7 +890,7 @@ describe("command runner", () => {
 
   it("discovers JUnit test reports as raw-backed run metadata", async () => {
     const db = createTestDb();
-    const tempDir = mkdtempSync(join(tmpdir(), "open-logs-junit-"));
+    const tempDir = mkdtempSync(join(tmpdir(), "logs-junit-"));
     try {
       const result = await runCommand(new LocalRunSink(db),
         [
@@ -1159,7 +1159,7 @@ describe("command runner", () => {
 
   it("redacts JUnit report paths and parsed attributes without storing report bodies", async () => {
     const db = createTestDb();
-    const tempDir = mkdtempSync(join(tmpdir(), "open-logs-junit-redact-"));
+    const tempDir = mkdtempSync(join(tmpdir(), "logs-junit-redact-"));
     const secret = "OPENLOGS_SECRET_CANARY_JUNIT_REPORT_24680";
     try {
       const result = await runCommand(new LocalRunSink(db),
@@ -1233,7 +1233,7 @@ describe("command runner", () => {
 
   it("rejects unsafe JUnit DTD and entity declarations", async () => {
     const db = createTestDb();
-    const tempDir = mkdtempSync(join(tmpdir(), "open-logs-junit-unsafe-"));
+    const tempDir = mkdtempSync(join(tmpdir(), "logs-junit-unsafe-"));
     try {
       const result = await runCommand(new LocalRunSink(db),
         [

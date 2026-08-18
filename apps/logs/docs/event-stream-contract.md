@@ -2,7 +2,7 @@
 
 Last updated: 2026-06-16
 
-This contract defines the first shared real-time telemetry surface for open-logs consumers.
+This contract defines the first shared real-time telemetry surface for logs consumers.
 
 The stream source of truth is the raw-backed `event_records` catalog. Consumers should treat legacy log streams as compatibility paths only.
 

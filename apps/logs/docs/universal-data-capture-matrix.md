@@ -2,7 +2,7 @@
 
 Last updated: 2026-06-16
 
-This matrix defines the data open-logs should eventually capture. It is intentionally broader than Sentry-style error monitoring. The purpose is to preserve enough structured and raw context for other agents to inspect real software behavior.
+This matrix defines the data logs should eventually capture. It is intentionally broader than Sentry-style error monitoring. The purpose is to preserve enough structured and raw context for other agents to inspect real software behavior.
 
 ## Capture Principles
 

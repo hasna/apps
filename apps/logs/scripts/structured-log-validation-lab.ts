@@ -70,7 +70,7 @@ const startedAt = new Date().toISOString();
 const validationId = `structured-log-lab-${Date.now()}`;
 const dataDir = options.dataDir
   ? resolve(options.dataDir)
-  : mkdtempSync(join(tmpdir(), "open-logs-structured-log-lab-"));
+  : mkdtempSync(join(tmpdir(), "logs-structured-log-lab-"));
 const dbPath = join(dataDir, "logs.db");
 const token = `structured-log-token-${Date.now()}`;
 const jsonlFile = join(dataDir, "app.jsonl");

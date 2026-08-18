@@ -219,7 +219,7 @@ Required sync metadata:
 
 ## Sentry Replacement Mapping
 
-| Sentry concept | open-logs architecture object |
+| Sentry concept | logs architecture object |
 | --- | --- |
 | Project | `apps` plus `repos` and environments |
 | Event | raw event envelope plus `events` index row |

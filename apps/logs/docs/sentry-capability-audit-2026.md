@@ -4,7 +4,7 @@ Last checked: 2026-06-16
 
 Purpose: define the current Sentry data and observability surface area so `@hasna/logs` can collect equivalent or richer raw data across apps, repositories, machines, CI jobs, and developer agents.
 
-This audit uses current public Sentry documentation and changelog pages. Sentry is a reference catalog of telemetry categories, not the organizing product architecture for open-logs.
+This audit uses current public Sentry documentation and changelog pages. Sentry is a reference catalog of telemetry categories, not the organizing product architecture for logs.
 
 ## Executive Summary
 
@@ -15,7 +15,7 @@ Replacing the need for Sentry as a data source means collecting these data class
 - Structured logs that correlate with errors, traces, and spans.
 - Session replay for browser and mobile, including console/network/DOM context.
 - Profiling, metrics, uptime monitors, cron monitors, alerts, dashboards, and usage controls.
-- Agent and automation telemetry as data: MCP access, coding-agent setup context, model/tool-call metadata, token/cost/latency fields, and run lineage. Open-logs should collect this evidence for agents; it should not clone Sentry's automated debugging workflows.
+- Agent and automation telemetry as data: MCP access, coding-agent setup context, model/tool-call metadata, token/cost/latency fields, and run lineage. Hasna Logs should collect this evidence for agents; it should not clone Sentry's automated debugging workflows.
 - Integration quality: one-command setup for frameworks like Next.js, source map uploads, OpenTelemetry support, logging library integrations, and CI release automation.
 
 The current `@hasna/logs` codebase is still much smaller than Sentry, but it now has more than SQLite-only logs: raw JSONL event segments with SQLite pointers for supported paths, first-pass raw repair/quarantine for malformed lines and partial tails, first-pass SQLite projection rebuild from raw files for supported event classes, bounded multi-process segment write-lock validation with forced rotation, rebuild locking, and rebuild-from-raw proof, bounded process-level crash/write-error recovery drills, bounded cross-surface redaction canary validation, a first universal event envelope and ingest endpoint, SDK helpers for generic events/exceptions/metrics/spans, browser universal auto-capture, Node/Bun console/process/fetch auto-capture, fetch-native inbound request spans, Hono-style middleware spans, generic Node HTTP capture, Express-style middleware, Fastify-style hooks, scoped browser-token writes to safe universal event types, event catalog search/export/read APIs, MCP event tools, first-pass MCP tool-call and agent-session telemetry, enriched `logs run` build/test/dev-server output summaries with raw stream segments, a first event-catalog SSE stream, dashboard live-tail consumption of that stream, first-pass local machine/repo/app identity attribution for CLI/run/MCP producers, configured-token API auth, scoped browser write tokens, scanner-based page capture, performance snapshots, issues, alerts, and metadata table sync. It still does not have full framework adapter coverage, automatic durable identity attribution across all SDK/browser/server/framework/CI/remote-agent sources, complete model/provider/token/cost/file-edit telemetry, complete trace/span/session/replay/profile/source-map capture, raw segment sync, high-volume stream proof, complete hardening, or multi-machine validation needed for the universal telemetry data-substrate claim.
@@ -25,18 +25,18 @@ The first identity attribution pass intentionally captures useful evidence for a
 ## 2026 Notes That Matter
 
 - Logs are no longer an add-on idea in Sentry. Logs are generally available and are positioned with real-time streaming, log-based alerts, dashboards, and trace/issue context.
-- Sentry announced Application Metrics general availability on May 5, 2026. The important data requirement for open-logs is high-cardinality metric events that keep trace linkage and raw dimensions instead of only pre-aggregated counters.
+- Sentry announced Application Metrics general availability on May 5, 2026. The important data requirement for logs is high-cardinality metric events that keep trace linkage and raw dimensions instead of only pre-aggregated counters.
 - Sentry supports OpenTelemetry traces and logs through OTLP. Current Sentry material says OTLP metric ingestion is not yet supported, while Sentry SDKs provide their own metrics capabilities.
 - Sentry Session Replay is generally available for web and mobile; replay details can include user interactions, console messages, network requests, errors, trace linkage, tags, and Chromium memory data.
 - Sentry profiling captures function-level call stack data across several backend, frontend, mobile, and server runtimes.
 - Sentry's current Next.js setup flow configures browser, server, and edge runtime files and can enable error monitoring, logs, session replay, and tracing.
-- Sentry has AI-assisted product surfaces, but open-logs should only treat them as evidence that agent/model/tool telemetry matters.
-- Sentry is metered across errors, logs, spans/traces, replays, profiling, monitors, attachments, and AI features. Open-logs can compete by keeping the local path predictable and storage-visible.
-- Self-hosted Sentry exists, but the operational model is much heavier than this project should be. Open-logs should keep a single-machine default: one daemon, SQLite, files, and optional central sync.
+- Sentry has AI-assisted product surfaces, but logs should only treat them as evidence that agent/model/tool telemetry matters.
+- Sentry is metered across errors, logs, spans/traces, replays, profiling, monitors, attachments, and AI features. Hasna Logs can compete by keeping the local path predictable and storage-visible.
+- Self-hosted Sentry exists, but the operational model is much heavier than this project should be. Hasna Logs should keep a single-machine default: one daemon, SQLite, files, and optional central sync.
 
 ## Concrete Data Fields To Preserve
 
-Sentry parity at the data layer means open-logs should ingest the evidence below, not just display similar product pages:
+Sentry parity at the data layer means logs should ingest the evidence below, not just display similar product pages:
 
 | Area | Required raw and indexed data |
 | --- | --- |
@@ -56,20 +56,20 @@ Sentry parity at the data layer means open-logs should ingest the evidence below
 
 ## Caveats To Account For
 
-The current Sentry surface includes limitations that should shape open-logs differently:
+The current Sentry surface includes limitations that should shape logs differently:
 
-- OTLP ingest is open beta in current Sentry docs and supports traces/logs, not OTLP metrics. Open-logs should not make metrics depend on OTLP-only support.
-- Some correlation is sampling-dependent. Open-logs should preserve unsampled local raw events by default and record sampling decisions explicitly.
-- Replay is bounded by product retention and recording limits in Sentry. Open-logs should make replay segment retention explicit and local-file-backed.
-- Web Vitals dashboards focus on initial page-load and interaction data; open-logs should preserve route/navigation context separately when apps can emit it.
-- Profiling support varies by runtime. Open-logs should store profile artifacts in a runtime-neutral way and index the runtime/profile format.
-- Uptime response verification and some trace behaviors are gated or early-adopter in Sentry. Open-logs should store raw monitor results and root spans without depending on hosted product state.
-- Source maps now emphasize debug IDs and artifact bundles. Open-logs should keep debug ID, release/dist, and build ID support from the start.
-- Logs search in Sentry has message/full-JSON limits. Open-logs should preserve full raw JSON and index selected fields deliberately.
+- OTLP ingest is open beta in current Sentry docs and supports traces/logs, not OTLP metrics. Hasna Logs should not make metrics depend on OTLP-only support.
+- Some correlation is sampling-dependent. Hasna Logs should preserve unsampled local raw events by default and record sampling decisions explicitly.
+- Replay is bounded by product retention and recording limits in Sentry. Hasna Logs should make replay segment retention explicit and local-file-backed.
+- Web Vitals dashboards focus on initial page-load and interaction data; logs should preserve route/navigation context separately when apps can emit it.
+- Profiling support varies by runtime. Hasna Logs should store profile artifacts in a runtime-neutral way and index the runtime/profile format.
+- Uptime response verification and some trace behaviors are gated or early-adopter in Sentry. Hasna Logs should store raw monitor results and root spans without depending on hosted product state.
+- Source maps now emphasize debug IDs and artifact bundles. Hasna Logs should keep debug ID, release/dist, and build ID support from the start.
+- Logs search in Sentry has message/full-JSON limits. Hasna Logs should preserve full raw JSON and index selected fields deliberately.
 
 ## Capability Matrix
 
-| Sentry capability | Current Sentry behavior | Replacement requirement for open-logs |
+| Sentry capability | Current Sentry behavior | Replacement requirement for logs |
 | --- | --- | --- |
 | Error monitoring | Captures unhandled exceptions and groups similar events into issues. Sentry connects errors to traces, replays, source maps, suspect commits, owners, and releases. | Add a first-class exception event type, deterministic and AI-assisted grouping, stack frame normalization, issue lifecycle, ownership rules, regressions, and release awareness. |
 | Issue grouping and triage | Sentry has mature issue grouping and has recently shipped enhanced AI issue grouping. | Implement stable fingerprinting first, then pluggable grouping rules, stack-aware grouping, regression detection, merge/split, ignore/resolution states, and review queues. |
@@ -87,8 +87,8 @@ The current Sentry surface includes limitations that should shape open-logs diff
 | OpenTelemetry | Sentry supports OTLP for traces and logs, direct SDK export, collector export, and routing from sources such as CloudWatch, Kafka, Nginx, and syslog; OTLP metric ingestion is not currently supported. | Treat OpenTelemetry ingestion/export as a primary compatibility layer, not an afterthought. Support OTLP-compatible envelopes, collector/file import, and export bridges while preserving raw payloads locally. |
 | AI and agents | Sentry has AI product surfaces and agent integrations. The relevant replacement target is not automated debugging; it is the underlying telemetry about agent runs, tools, model calls, context, and decisions. | Make MCP native and data-first: expose log/search/trace/replay/issue tools, agent session tracking, model/tool metadata, token/cost metrics, prompts where permitted, provenance, and run lineage so external agents can reason over local evidence. |
 | Privacy and security | Sentry includes data management, scrubbing, PII controls, replay masking, auth, org/project roles, and usage quotas. | Add auth before wider use, redact before storage, encrypt secrets with generated keys, mark sensitive fields, implement retention, and keep local-first defaults. |
-| Pricing and usage | Sentry meters logs, spans, replays, profiling, monitors, attachments, and Seer. | Open-logs should make local storage cheap and visible: usage stats per app/repo/machine, segment sizes, retention impact, and optional remote sync cost controls. |
-| Self-hosting | Sentry is self-hostable but operationally heavy, using multiple services in the self-hosted stack. | Keep open-logs intentionally smaller: single local daemon plus SQLite and files by default; optional central collector later. |
+| Pricing and usage | Sentry meters logs, spans, replays, profiling, monitors, attachments, and Seer. | Hasna Logs should make local storage cheap and visible: usage stats per app/repo/machine, segment sizes, retention impact, and optional remote sync cost controls. |
+| Self-hosting | Sentry is self-hostable but operationally heavy, using multiple services in the self-hosted stack. | Keep logs intentionally smaller: single local daemon plus SQLite and files by default; optional central collector later. |
 
 ## Highest-priority Replacement Gaps
 
@@ -113,7 +113,7 @@ As checked on 2026-06-16:
 - Sentry docs list 5GB of included logs on all plans and additional log usage at $0.50/GB.
 - Sentry docs list one included cron monitor and one included uptime monitor, then per-monitor PAYG pricing.
 - Sentry retention varies by data type and plan. The current retention table lists logs, spans/transactions, profiles, crons, and many other telemetry categories with default retention periods rather than indefinite storage.
-- Open-logs should make storage cost explicit: segment size by app/repo/machine, retention simulator, compression status, and sync budget controls.
+- Hasna Logs should make storage cost explicit: segment size by app/repo/machine, retention simulator, compression status, and sync budget controls.
 
 ## Sentry Features To Explicitly Match
 

@@ -4,14 +4,14 @@ Last updated: 2026-06-17
 
 ## Corrected Product Direction
 
-Open-logs is not trying to clone Sentry's AI debugging workflows.
+Hasna Logs is not trying to clone Sentry's AI debugging workflows.
 
 The goal is to become an open-source universal telemetry data substrate: collect, preserve, index, correlate, stream, and expose as much useful runtime and development data as possible so humans and other agents can reason from it.
 
 Sentry remains a useful reference for telemetry categories, but the product center is different:
 
 - Sentry is optimized around hosted debugging workflows.
-- Open-logs should be optimized around data completeness, local-first capture, repository and machine context, build and process visibility, and agent access.
+- Hasna Logs should be optimized around data completeness, local-first capture, repository and machine context, build and process visibility, and agent access.
 
 The app is "good" only when it reliably answers:
 
@@ -25,7 +25,7 @@ The app is "good" only when it reliably answers:
 
 ## Product Thesis
 
-Open-logs should become the local telemetry memory layer for software work.
+Hasna Logs should become the local telemetry memory layer for software work.
 
 It should capture data from:
 

@@ -4,11 +4,11 @@
  * Licensed under the Apache License, Version 2.0
  *
  * This is the transport behind `logs watch --server <url>`: a live tail of an
- * OPERATOR-NAMED open-logs server's `/api/events/stream` (Server-Sent Events)
+ * OPERATOR-NAMED logs server's `/api/events/stream` (Server-Sent Events)
  * endpoint. It is deliberately NOT the mode-resolved data-plane {@link Store}:
  *
  *   - The events catalog has no cloud data model (ApiStore surfaces it as
- *     `unsupported`); only a running open-logs HTTP server serves the live bus.
+ *     `unsupported`); only a running logs HTTP server serves the live bus.
  *   - `--server <url>` addresses an explicit server the operator names, not the
  *     tier resolved from HASNA_LOGS_API_URL/KEY, so it can never cause the
  *     split-brain bug (silently reading/writing the wrong tier) the Store
@@ -41,7 +41,7 @@ export interface EventStreamRequest {
 }
 
 /**
- * Connect to a named open-logs server's SSE event stream and yield parsed
+ * Connect to a named logs server's SSE event stream and yield parsed
  * frames. The raw `fetch` for the `--server` tail lives here (a transport),
  * never in a command handler. Throws on a non-OK HTTP response so the caller
  * can surface/reconnect.

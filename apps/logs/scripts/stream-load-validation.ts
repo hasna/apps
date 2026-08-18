@@ -99,7 +99,7 @@ const startedAt = new Date().toISOString();
 const validationId = `stream-load-${Date.now()}`;
 const dataDir = options.dataDir
   ? resolve(options.dataDir)
-  : mkdtempSync(join(tmpdir(), "open-logs-stream-load-"));
+  : mkdtempSync(join(tmpdir(), "logs-stream-load-"));
 const dbPath = join(dataDir, "logs.db");
 const token = `stream-token-${Date.now()}`;
 const commands: CommandResult[] = [];
@@ -665,7 +665,7 @@ async function validateMcpEventWatch(
     env,
   });
   const client = new Client(
-    { name: "open-logs-stream-validation", version: "0.0.0" },
+    { name: "logs-stream-validation", version: "0.0.0" },
     { capabilities: {} },
   );
   try {

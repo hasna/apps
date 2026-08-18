@@ -261,7 +261,7 @@ describe("universal event ingest", () => {
 
   it("sanitizes universal source-map payloads before raw append and rebuild", () => {
     const db = createTestDb();
-    const absoluteRoot = "/tmp/open-logs-universal-source-map-root";
+    const absoluteRoot = "/tmp/logs-universal-source-map-root";
     const sourceContentCanary =
       "OPENLOGS_UNIVERSAL_SOURCE_MAP_CONTENT_SHOULD_NOT_PERSIST";
     const rawJsonCanary = "OPENLOGS_UNIVERSAL_SOURCE_MAP_RAW_JSON";
@@ -1320,7 +1320,7 @@ describe("universal event ingest", () => {
 
   it("sanitizes legacy raw root path-only source-map artifacts during rebuild", () => {
     const db = createTestDb();
-    const absoluteRoot = "/tmp/open-logs-legacy-root-path-only";
+    const absoluteRoot = "/tmp/logs-legacy-root-path-only";
     const cases = [
       {
         eventId: "legacy-root-path-only-attributes",
@@ -1452,13 +1452,13 @@ describe("universal event ingest", () => {
   it("sanitizes source-map identifiers before raw append and rebuild", () => {
     const db = createTestDb();
     const liveAbsoluteId =
-      "/tmp/open-logs-live-source-map-id-path/dist/app.js.map";
+      "/tmp/logs-live-source-map-id-path/dist/app.js.map";
     const legacyAbsoluteId =
-      "/tmp/open-logs-legacy-source-map-id-path/dist/app.js.map";
+      "/tmp/logs-legacy-source-map-id-path/dist/app.js.map";
     const liveJavascriptAbsoluteId =
-      "/tmp/open-logs-live-source-map-id-path/dist/app.js";
+      "/tmp/logs-live-source-map-id-path/dist/app.js";
     const legacyJavascriptAbsoluteId =
-      "/tmp/open-logs-legacy-source-map-id-path/dist/legacy.js";
+      "/tmp/logs-legacy-source-map-id-path/dist/legacy.js";
     const liveEventId = "source-map-id-path-live";
     const legacyEventId = "source-map-id-path-legacy";
     const forbidden = [
@@ -1660,9 +1660,9 @@ describe("universal event ingest", () => {
   it("sanitizes source-map artifact identifiers before raw append and rebuild", () => {
     const db = createTestDb();
     const liveAbsoluteArtifactId =
-      "/tmp/open-logs-live-artifact-id-path/dist/app.js.map";
+      "/tmp/logs-live-artifact-id-path/dist/app.js.map";
     const legacyAbsoluteArtifactId =
-      "/tmp/open-logs-legacy-artifact-id-path/dist/app.js.map";
+      "/tmp/logs-legacy-artifact-id-path/dist/app.js.map";
     const liveEventId = "live-artifact-id-path-source-map";
     const legacyEventId = "legacy-artifact-id-path-source-map";
     const forbidden = [liveAbsoluteArtifactId, legacyAbsoluteArtifactId];
@@ -1812,9 +1812,9 @@ describe("universal event ingest", () => {
   it("uses bounded fallback IDs for source-map artifacts without producer IDs", () => {
     const db = createTestDb();
     const liveEventId =
-      "/tmp/open-logs-event-id-fallback-live\0/dist/app.js.map";
+      "/tmp/logs-event-id-fallback-live\0/dist/app.js.map";
     const legacyEventId =
-      "/tmp/open-logs-event-id-fallback-legacy\0/dist/app.js.map";
+      "/tmp/logs-event-id-fallback-legacy\0/dist/app.js.map";
     const forbidden = [liveEventId, legacyEventId];
     const assertNoForbidden = (value: unknown) => {
       const text = typeof value === "string" ? value : JSON.stringify(value);

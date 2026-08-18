@@ -587,7 +587,7 @@ describe("LogsClient universal event methods", () => {
   });
 
   it("persists structured transport records to a redacted file spool and replays them after restart", async () => {
-    const spoolDirectory = mkdtempSync(join(tmpdir(), "open-logs-sdk-spool-"));
+    const spoolDirectory = mkdtempSync(join(tmpdir(), "logs-sdk-spool-"));
     const basicAuthSecret = "dXNlcjpzdXBlci1zZWNyZXQ=";
     const urlUserinfoPassword = "sdk-url-spool-secret";
     const requests: MockRequest[] = [];
@@ -771,7 +771,7 @@ describe("LogsClient universal event methods", () => {
   });
 
   it("skips malformed structured transport spool lines while replaying valid records", async () => {
-    const spoolDirectory = mkdtempSync(join(tmpdir(), "open-logs-sdk-spool-"));
+    const spoolDirectory = mkdtempSync(join(tmpdir(), "logs-sdk-spool-"));
     const spoolFile = join(spoolDirectory, "manual-structured-spool.jsonl");
     const requests = mockFetch({
       response: { inserted: 1, events: [{ id: "log-spooled-valid-1" }] },
@@ -890,7 +890,7 @@ describe("LogsClient universal event methods", () => {
   });
 
   it("reports load-time structured transport spool overflow drops", async () => {
-    const spoolDirectory = mkdtempSync(join(tmpdir(), "open-logs-sdk-spool-"));
+    const spoolDirectory = mkdtempSync(join(tmpdir(), "logs-sdk-spool-"));
     const spoolFile = join(spoolDirectory, "overflow-structured-spool.jsonl");
     const requests = mockFetch({
       response: { inserted: 2, events: [{ id: "log-overflow-1" }] },
@@ -2645,7 +2645,7 @@ describe("LogsClient universal event methods", () => {
   });
 
   it("serializes browser universal flushes and preserves queued events while a send is in flight", async () => {
-    const spoolKey = "open-logs-test-browser-overlap-spool";
+    const spoolKey = "logs-test-browser-overlap-spool";
     const storage = createMemoryStorage();
     const requests: MockRequest[] = [];
     const resolvers: Array<() => void> = [];
@@ -2738,7 +2738,7 @@ describe("LogsClient universal event methods", () => {
   });
 
   it("keeps a failed in-flight browser flush batch when the spool is at capacity", async () => {
-    const spoolKey = "open-logs-test-browser-failed-inflight-spool";
+    const spoolKey = "logs-test-browser-failed-inflight-spool";
     const storage = createMemoryStorage();
     const requests: MockRequest[] = [];
     const resolvers: Array<() => void> = [];
@@ -2827,7 +2827,7 @@ describe("LogsClient universal event methods", () => {
   });
 
   it("redacts browser retry payloads after a failed live send", async () => {
-    const spoolKey = "open-logs-test-browser-redacted-retry-spool";
+    const spoolKey = "logs-test-browser-redacted-retry-spool";
     const secret = "OPENLOGS_SECRET_CANARY_browser_retry_12345";
     const storage = createMemoryStorage();
     const requests: MockRequest[] = [];
@@ -2898,7 +2898,7 @@ describe("LogsClient universal event methods", () => {
   });
 
   it("persists browser universal telemetry to a redacted localStorage spool and replays it after reload", async () => {
-    const spoolKey = "open-logs-test-browser-spool";
+    const spoolKey = "logs-test-browser-spool";
     const storage = createMemoryStorage();
     const requests: MockRequest[] = [];
     let collectorUp = false;
@@ -2997,8 +2997,8 @@ describe("LogsClient universal event methods", () => {
   });
 
   it("clears corrupt and invalid-only browser universal spools without replaying them", async () => {
-    const corruptKey = "open-logs-test-browser-corrupt-spool";
-    const invalidKey = "open-logs-test-browser-invalid-only-spool";
+    const corruptKey = "logs-test-browser-corrupt-spool";
+    const invalidKey = "logs-test-browser-invalid-only-spool";
     const storage = createMemoryStorage({ [corruptKey]: "{not-json" });
     const requests = mockFetch({
       response: {
@@ -3091,7 +3091,7 @@ describe("LogsClient universal event methods", () => {
   });
 
   it("skips invalid browser universal spool records while replaying valid telemetry", async () => {
-    const spoolKey = "open-logs-test-browser-invalid-spool";
+    const spoolKey = "logs-test-browser-invalid-spool";
     const storage = createMemoryStorage({
       [spoolKey]: JSON.stringify({
         version: 1,

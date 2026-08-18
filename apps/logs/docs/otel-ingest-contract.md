@@ -2,7 +2,7 @@
 
 Status: first-pass JSON OTLP bridge, not full OpenTelemetry Collector parity.
 
-Open-logs accepts OTLP JSON over HTTP and translates it into the shared universal event envelope. The existing universal ingest path then handles redaction, append-only raw segment persistence, SQLite `event_records` indexing, duplicate producer-ID handling, live stream publication, and first-pass compatibility projections.
+Hasna Logs accepts OTLP JSON over HTTP and translates it into the shared universal event envelope. The existing universal ingest path then handles redaction, append-only raw segment persistence, SQLite `event_records` indexing, duplicate producer-ID handling, live stream publication, and first-pass compatibility projections.
 
 ## Endpoints
 
@@ -62,7 +62,7 @@ The bridge supplies deterministic `source_event_id` values:
 
 The universal ingest path derives a stable internal event ID from `source + source_event_id` when no explicit event ID exists, so exporter retries deduplicate instead of appending duplicate raw records.
 
-This first-pass retry model is deterministic for the same OTLP JSON payload ordering. Arbitrary exporter rebatching or record reordering can produce different ordinal-based log or metric IDs until open-logs supports richer exporter-native identity or Collector-level conformance behavior.
+This first-pass retry model is deterministic for the same OTLP JSON payload ordering. Arbitrary exporter rebatching or record reordering can produce different ordinal-based log or metric IDs until logs supports richer exporter-native identity or Collector-level conformance behavior.
 
 ## Known Gaps
 

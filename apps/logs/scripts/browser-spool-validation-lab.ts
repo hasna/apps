@@ -113,12 +113,12 @@ const startedAt = new Date().toISOString();
 const validationId = `browser-spool-lab-${Date.now()}`;
 const dataDir = options.dataDir
   ? resolve(options.dataDir)
-  : mkdtempSync(join(tmpdir(), "open-logs-browser-spool-lab-"));
+  : mkdtempSync(join(tmpdir(), "logs-browser-spool-lab-"));
 const dbPath = join(dataDir, "logs.db");
 const apiToken = `browser-spool-token-${Date.now()}`;
 const secret = `OPENLOGS_SECRET_CANARY_browser_spool_lab_${Date.now()}`;
 const sessionId = `${validationId}-session`;
-const spoolKey = `open-logs-browser-spool-lab:${validationId}`;
+const spoolKey = `logs-browser-spool-lab:${validationId}`;
 const commands: CommandResult[] = [];
 const assertions: string[] = [];
 
@@ -563,9 +563,9 @@ function browserHtml(
   return [
     "<!doctype html>",
     "<html>",
-    '<head><meta charset="utf-8"><title>Open Logs Browser Spool Lab</title></head>',
+    '<head><meta charset="utf-8"><title>Hasna Logs Browser Spool Lab</title></head>',
     "<body>",
-    "<main>Open Logs Browser Spool Lab</main>",
+    "<main>Hasna Logs Browser Spool Lab</main>",
     `<script>window.__OPEN_LOGS_BROWSER_SPOOL_LAB__ = ${JSON.stringify(config)};</script>`,
     '<script type="module" src="/app.js"></script>',
     "</body>",
