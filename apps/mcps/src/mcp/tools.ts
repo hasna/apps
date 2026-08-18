@@ -387,7 +387,7 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
     },
     {
       name: "storage_push",
-      description: "Push local open-mcps registry tables to the configured Postgres database.",
+      description: "Push local mcps registry tables to the configured Postgres database.",
       paramsSchema: {
         tables: z.array(storageTableSchema).optional().describe("Tables to push"),
       },
@@ -397,7 +397,7 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
     },
     {
       name: "storage_pull",
-      description: "Pull open-mcps registry tables from the configured Postgres database.",
+      description: "Pull mcps registry tables from the configured Postgres database.",
       paramsSchema: {
         tables: z.array(storageTableSchema).optional().describe("Tables to pull"),
       },
@@ -407,7 +407,7 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
     },
     {
       name: "storage_sync",
-      description: "Push then pull open-mcps registry tables with the configured Postgres database.",
+      description: "Push then pull mcps registry tables with the configured Postgres database.",
       paramsSchema: {
         tables: z.array(storageTableSchema).optional().describe("Tables to sync"),
       },
