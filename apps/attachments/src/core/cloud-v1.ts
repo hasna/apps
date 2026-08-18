@@ -68,6 +68,8 @@ export interface V1UploadOptions {
   linkType?: "presigned" | "server";
   encrypt?: boolean;
   filename?: string;
+  /** Custom base URL for a server-hosted share link (e.g. an internal/Tailscale address). */
+  baseUrl?: string;
 }
 
 export interface V1ListOptions {
@@ -102,6 +104,7 @@ export interface AttachmentsV1Store {
       maxDownloads?: number;
       linkType?: "presigned" | "server";
       slug?: string;
+      baseUrl?: string;
     },
   ): Promise<{ link: string | null; expires_at: number | null; slug?: string }>;
   download(id: string, output: string | undefined, options?: { password?: string }): Promise<V1DownloadResult>;
@@ -306,6 +309,7 @@ function makeStore(client: HasnaStorageClient, env: NodeJS.ProcessEnv): Attachme
     ...(options.maxDownloads ? { max_downloads: options.maxDownloads } : {}),
     ...(options.linkType ? { link_type: options.linkType } : {}),
     ...(options.encrypt ? { encrypt: true } : {}),
+    ...(options.baseUrl ? { base_url: options.baseUrl } : {}),
   });
 
   const store: AttachmentsV1Store = {
@@ -372,6 +376,7 @@ function makeStore(client: HasnaStorageClient, env: NodeJS.ProcessEnv): Attachme
         max_downloads: options.maxDownloads,
         link_type: options.linkType,
         slug: options.slug,
+        base_url: options.baseUrl,
       });
     },
 

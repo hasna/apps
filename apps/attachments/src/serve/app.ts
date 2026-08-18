@@ -110,6 +110,34 @@ function parseFriendlySlugOr400(slug: string): string {
   }
 }
 
+/**
+ * Validate a client-supplied base URL for a server-hosted share link
+ * (`--internal` / `base_url`). The server mints the link against this address,
+ * which must be the address through which THIS server (and therefore the share
+ * token in its database) is actually reachable. Accepts only a clean absolute
+ * http(s) URL: embedded credentials, query strings or fragments would either
+ * leak into the minted link or make the token path unresolvable.
+ */
+function parseBaseUrlOr400(value: string | undefined): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new BadRequestError("base_url must be an absolute http(s) URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new BadRequestError("base_url must be an absolute http(s) URL");
+  }
+  if (parsed.username || parsed.password) {
+    throw new BadRequestError("base_url must not embed credentials");
+  }
+  if (parsed.search || parsed.hash) {
+    throw new BadRequestError("base_url must not carry a query string or fragment");
+  }
+  return parsed.origin + parsed.pathname.replace(/\/+$/, "");
+}
+
 function isShareTokenConflict(err: unknown): boolean {
   const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
   return (
@@ -315,6 +343,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
       maxDownloads?: number;
       linkType?: "presigned" | "server";
       encrypt?: boolean;
+      baseUrl?: string;
     } = {};
 
     const parseLinkType = (value: string | undefined): "presigned" | "server" | undefined =>
@@ -338,6 +367,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
         maxDownloads: parseCount(parsed.fields["max_downloads"] ?? c.req.query("max_downloads") ?? undefined),
         linkType: parseLinkType(parsed.fields["link_type"] ?? c.req.query("link_type") ?? undefined),
         encrypt: parsed.fields["encrypt"] === "true" || parsed.fields["encrypt"] === "1",
+        baseUrl: parsed.fields["base_url"] ?? c.req.query("base_url") ?? undefined,
       };
     } else if (contentType.includes("application/json")) {
       const body = (await c.req.json().catch(() => null)) as
@@ -350,6 +380,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
             max_downloads?: number;
             link_type?: "presigned" | "server";
             encrypt?: boolean;
+            base_url?: string;
           }
         | null;
       if (!body?.filename || typeof body.content_base64 !== "string") {
@@ -364,6 +395,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
         maxDownloads: body.max_downloads,
         linkType: body.link_type,
         encrypt: body.encrypt === true,
+        baseUrl: body.base_url,
       };
     } else {
       // Raw streaming upload: bytes in the request body.
@@ -385,6 +417,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
           c.req.query("encrypt") === "true" ||
           c.req.query("encrypt") === "1" ||
           c.req.header("x-attachments-encrypt") === "true",
+        baseUrl: c.req.query("base_url") ?? undefined,
       };
     }
 
@@ -413,6 +446,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
     // the object store; the salt/iv/tag ride in the metadata row so the
     // download path re-derives the key from the same password.
     const encryption = opts.encrypt && opts.password ? encryptBuffer(opts.password, buffer) : null;
+    const linkBaseUrl = parseBaseUrlOr400(opts.baseUrl);
 
     const linkType = resolveDeliverableLinkType({
       requested: opts.linkType ?? getLinkType(config),
@@ -458,7 +492,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
         password: opts.password,
         maxUses: opts.maxDownloads ?? null,
       });
-      link = generateShareLink(token, publicBaseUrl, config.server.publicPath);
+      link = generateShareLink(token, linkBaseUrl ?? publicBaseUrl, config.server.publicPath);
       await store.updateLink(id, link, expiresAt);
       attachment.link = link;
     }
@@ -547,9 +581,11 @@ export function createServeApp(deps: ServeAppDeps): Hono {
       max_downloads?: number;
       link_type?: "presigned" | "server";
       slug?: string;
+      base_url?: string;
     };
     try {
       const slug = body.slug ? parseFriendlySlugOr400(body.slug) : undefined;
+      const linkBaseUrl = parseBaseUrlOr400(body.base_url);
       try {
         requireFriendlySlugPassword(slug, body.password);
       } catch (err) {
@@ -589,7 +625,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
           }
           throw err;
         }
-        newLink = generateShareLink(token, publicBaseUrl, config.server.publicPath);
+        newLink = generateShareLink(token, linkBaseUrl ?? publicBaseUrl, config.server.publicPath);
       }
       await store.updateLink(id, newLink, newExpiresAt);
       return c.json({

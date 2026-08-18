@@ -74,6 +74,11 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
             password: { type: "string" },
             max_downloads: { type: "integer" },
             link_type: { type: "string", enum: ["presigned", "server"] },
+            base_url: {
+              type: "string",
+              description:
+                "Custom base URL for a server-hosted share link (e.g. an internal/Tailscale address through which this server is reachable).",
+            },
           },
           required: ["filename", "content_base64"],
         },
@@ -98,6 +103,11 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
               pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
               minLength: 3,
               maxLength: 64,
+            },
+            base_url: {
+              type: "string",
+              description:
+                "Custom base URL for a server-hosted share link (e.g. an internal/Tailscale address through which this server is reachable).",
             },
           },
         },

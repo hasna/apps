@@ -74,6 +74,8 @@ export interface RegenerateLinkOptions {
   maxDownloads?: number;
   linkType?: "presigned" | "server";
   slug?: string;
+  /** Custom base URL for the server-hosted share link (e.g. an internal/Tailscale address). */
+  baseUrl?: string;
 }
 
 /** A single feedback note about the service. */
@@ -150,9 +152,6 @@ function assertApiSupported(options: UploadOptions | undefined): void {
       "email-gated links (--require-email / --allowed-email) are only available in local mode.",
     );
   }
-  if (options.baseUrl) {
-    throw new Error("--internal / custom base URL links are only available in local mode.");
-  }
 }
 
 function toV1UploadOptions(options: UploadOptions = {}): V1UploadOptions {
@@ -164,6 +163,7 @@ function toV1UploadOptions(options: UploadOptions = {}): V1UploadOptions {
     maxDownloads: options.maxDownloads,
     linkType: options.linkType,
     encrypt: options.encrypt,
+    baseUrl: options.baseUrl,
   };
 }
 
@@ -297,7 +297,7 @@ export class LocalStore implements Store {
       });
       link = generateShareLink(
         token,
-        resolveLocalShareBaseUrl(this.config).baseUrl,
+        options.baseUrl ?? resolveLocalShareBaseUrl(this.config).baseUrl,
         this.config.server.publicPath,
       );
     }

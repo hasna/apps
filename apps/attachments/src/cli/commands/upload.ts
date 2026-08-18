@@ -73,9 +73,6 @@ export function registerUpload(program: Command): void {
         const bad = allowedEmails.filter((e) => !isValidEmail(e));
         if (bad.length > 0) exitError(`Invalid --allowed-email value(s): ${bad.join(", ")}`);
       }
-      if (options.internal && cloudMode) {
-        exitError("--internal requires local client mode. Use --client-mode local or set client.mode to local.");
-      }
       // D1(b): an on-box upload whose configured public host is really the remote
       // API would produce a link that can never resolve. core/upload rewrites the
       // base URL; tell the operator, because the link they get is NOT the public
