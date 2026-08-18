@@ -16,10 +16,15 @@ function runCli(args: string[], options: { env?: Record<string, string>; json?: 
       HASNA_SHORTLINKS_DATABASE_URL: "",
       SHORTLINKS_DATABASE_URL: "",
       // Force the on-box LocalStore: neutralize any ambient hosted-API client
-      // env (API_URL + API_KEY) so tests never touch the real shortlinks API
-      // from a machine that has it configured.
+      // config — env (API_URL + API_KEY, canonical and alias prefixes) and the
+      // fleet app-config on disk (HOME pointed at the temp dir) — so tests
+      // never touch the real shortlinks API from a machine that has it
+      // configured.
+      HOME: tempHome,
       HASNA_SHORTLINKS_API_URL: "",
       HASNA_SHORTLINKS_API_KEY: "",
+      SHORTLINKS_API_URL: "",
+      SHORTLINKS_API_KEY: "",
       HASNA_EVENTS_HOME: join(tempHome, "events"),
       ...options.env,
     },

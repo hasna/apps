@@ -40,7 +40,7 @@ function makeApp() {
     version: "test",
     backend: "postgresql",
     signingSecret: "unit-test-signing-secret",
-    keyStatus: async () => "active",
+    keyStatus: async () => "active" as const,
   });
 }
 

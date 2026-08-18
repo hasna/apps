@@ -64,12 +64,13 @@ export class CloudShortlinksStore implements Store {
   }
 
   /**
-   * Resolve a hosted-API store from the environment. Returns the store when the
-   * client env is fully configured (`HASNA_SHORTLINKS_API_URL` +
-   * `HASNA_SHORTLINKS_API_KEY`, or the `SHORTLINKS_*` aliases), else null so
-   * the caller falls back to the local store. Throws when only one of
-   * URL/key is set — a partially configured hosted client must fail loudly,
-   * never silently drift to the local dataset.
+   * Resolve a hosted-API store from the environment. The contracts client
+   * seam (`resolveStorageClient`) decides: an explicit API URL + API key in
+   * the environment selects the hosted client, and the fleet app-config on
+   * disk is the fallback tier; otherwise the caller uses its local store.
+   * Throws when only one of URL/key is set in the environment tier — a
+   * partially configured hosted client must fail loudly, never silently
+   * drift to the local dataset.
    */
   static fromEnv(
     env: Env = process.env,
@@ -77,8 +78,7 @@ export class CloudShortlinksStore implements Store {
   ): CloudShortlinksStore | null {
     const apiUrl = ownEnv(env, ["HASNA_SHORTLINKS_API_URL", "SHORTLINKS_API_URL"]);
     const apiKey = ownEnv(env, ["HASNA_SHORTLINKS_API_KEY", "SHORTLINKS_API_KEY"]);
-    if (!apiUrl && !apiKey) return null;
-    if (!apiUrl || !apiKey) {
+    if (Boolean(apiUrl) !== Boolean(apiKey)) {
       throw new Error(
         "Hosted API client is partially configured: set both HASNA_SHORTLINKS_API_URL " +
           "and HASNA_SHORTLINKS_API_KEY (or neither).",

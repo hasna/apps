@@ -13,6 +13,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { resolveClientTransport } from "@hasna/contracts/client";
 import { resolveStore, type Store } from "../client-store.js";
 import type { TotalStats } from "../store-interface.js";
 import { getConfigPath, getDataDir, getDatabasePath, loadConfig, saveConfig, updateConfig } from "../config.js";
@@ -1116,6 +1117,10 @@ program
   .action(async (opts) => {
     try {
       const dbPath = getDatabasePath(program.opts().db);
+      // Client-credential presence goes through the contracts client seam (the
+      // same resolver that builds the hosted transport), never a hand-rolled
+      // env read of the API key.
+      const clientTransport = resolveClientTransport("shortlinks", process.env);
       const data = await withRuntimeStore(async (store) => ({
         service: "shortlinks",
         ok: true,
@@ -1133,8 +1138,8 @@ program
         },
         environment: {
           // Hosted-API client is bearer-key only — never a DB DSN on the client.
-          api_url_present: Boolean(process.env.HASNA_SHORTLINKS_API_URL),
-          api_key_present: Boolean(process.env.HASNA_SHORTLINKS_API_KEY),
+          api_url_present: Boolean(clientTransport.apiUrlSource),
+          api_key_present: clientTransport.apiKeyPresent,
           cloudflare_api_token_present: Boolean(process.env.CLOUDFLARE_API_TOKEN),
           cloudflare_api_key_present: Boolean(process.env.CLOUDFLARE_API_KEY),
           cloudflare_email_present: Boolean(process.env.CLOUDFLARE_EMAIL),

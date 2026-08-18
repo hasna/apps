@@ -45,11 +45,14 @@
     "sdk:generate": "bun run scripts/generate-sdk.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:pg": "bun scripts/pg-test-gate.ts",
+    "scan:artifact": "bun scripts/scan-artifact.ts",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/serve/index.ts",
     "verify:release": "bun run typecheck && bun run test && bun run build",
-    "prepublishOnly": "bun run verify:release"
+    "prepublishOnly": "bun run verify:release",
+    "prepack": "bun run build && bun run scan:artifact"
   },
   "keywords": [
     "shortlinks",
