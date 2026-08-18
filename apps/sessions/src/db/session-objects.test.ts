@@ -41,8 +41,22 @@ describe("session_objects state", () => {
       size: 42,
     });
     expect(pending.status).toBe("pending");
-    expect(markSessionObjectUploaded(SESSION_ID, "normalized_content", "wrong")).toBe(false);
-    expect(markSessionObjectUploaded(SESSION_ID, "normalized_content", "digest-one")).toBe(true);
+    expect(
+      markSessionObjectUploaded(
+        SESSION_ID,
+        "normalized_content",
+        "wrong",
+        "fixture/pending.json",
+      ),
+    ).toBe(false);
+    expect(
+      markSessionObjectUploaded(
+        SESSION_ID,
+        "normalized_content",
+        "digest-one",
+        "fixture/pending.json",
+      ),
+    ).toBe(true);
     expect(getSessionObject(SESSION_ID, "normalized_content")).toMatchObject({
       status: "uploaded",
       last_error: null,
@@ -52,6 +66,7 @@ describe("session_objects state", () => {
         SESSION_ID,
         "normalized_content",
         "digest-one",
+        "fixture/pending.json",
         "late failure from another worker",
       ),
     ).toBe(false);
@@ -72,6 +87,7 @@ describe("session_objects state", () => {
         SESSION_ID,
         "normalized_content",
         "digest-two",
+        "fixture/failure.json",
         "fixture upload failure",
       ),
     ).toBe(true);
@@ -80,6 +96,60 @@ describe("session_objects state", () => {
       last_error: "fixture upload failure",
     });
     expect(listRetryableSessionObjects()).toHaveLength(1);
+  });
+
+  test("rejects stale-key transitions when same-digest content is re-enqueued", () => {
+    const oldKey = "fixture/prefix-a/content.json";
+    const replacementKey = "fixture/prefix-b/content.json";
+    enqueueSessionObject({
+      session_id: SESSION_ID,
+      object_kind: "normalized_content",
+      object_key: oldKey,
+      source_digest: "same-digest",
+      size: 42,
+    });
+    enqueueSessionObject({
+      session_id: SESSION_ID,
+      object_kind: "normalized_content",
+      object_key: replacementKey,
+      source_digest: "same-digest",
+      size: 42,
+    });
+
+    expect(
+      markSessionObjectUploaded(
+        SESSION_ID,
+        "normalized_content",
+        "same-digest",
+        oldKey,
+      ),
+    ).toBe(false);
+    expect(
+      markSessionObjectFailed(
+        SESSION_ID,
+        "normalized_content",
+        "same-digest",
+        oldKey,
+        "late failure from the stale uploader",
+      ),
+    ).toBe(false);
+    expect(getSessionObject(SESSION_ID, "normalized_content")).toMatchObject({
+      object_key: replacementKey,
+      source_digest: "same-digest",
+      status: "pending",
+      last_error: null,
+    });
+    expect(listRetryableSessionObjects()).toHaveLength(1);
+
+    expect(
+      markSessionObjectUploaded(
+        SESSION_ID,
+        "normalized_content",
+        "same-digest",
+        replacementKey,
+      ),
+    ).toBe(true);
+    expect(getSessionObject(SESSION_ID, "normalized_content")?.status).toBe("uploaded");
   });
 
   test("re-enqueueing changed content resets failed state to pending", () => {
@@ -94,6 +164,7 @@ describe("session_objects state", () => {
       SESSION_ID,
       "normalized_content",
       "old-digest",
+      "fixture/old.json",
       "fixture failure",
     );
 

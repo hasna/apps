@@ -71,6 +71,7 @@ export async function syncRetryableSessionObjects(
           object.session_id,
           object.object_kind,
           object.source_digest,
+          object.object_key,
         )
       ) {
         throw new Error("session object changed before upload acknowledgement was recorded");
@@ -82,6 +83,7 @@ export async function syncRetryableSessionObjects(
         object.session_id,
         object.object_kind,
         object.source_digest,
+        object.object_key,
         message,
       );
       result.failed++;

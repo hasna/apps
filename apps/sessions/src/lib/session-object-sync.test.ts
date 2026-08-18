@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { closeDatabase, resetDatabase } from "../db/database.js";
 import { S3Client, type S3ClientDependencies } from "../db/cloud/s3-client.js";
-import { getSessionObject } from "../db/session-objects.js";
+import { enqueueSessionObject, getSessionObject } from "../db/session-objects.js";
 import { saveParsedSession } from "../db/sessions.js";
 import {
   enqueueStoredSessionObjectIfConfigured,
@@ -19,6 +19,7 @@ class FakeObjectStore {
   readonly objects = new Map<string, StoredObject>();
   failUpload = false;
   headSizeOffset = 0;
+  onHead?: () => void;
 
   async send(command: unknown): Promise<unknown> {
     if (command instanceof PutObjectCommand) {
@@ -34,6 +35,7 @@ class FakeObjectStore {
     if (command instanceof HeadObjectCommand) {
       const object = this.objects.get(command.input.Key ?? "");
       if (!object) throw new Error("fixture object not found");
+      this.onHead?.();
       return {
         ContentLength: object.body.byteLength + this.headSizeOffset,
         ContentType: object.contentType,
@@ -131,6 +133,47 @@ describe("session object enqueue and sync", () => {
       last_error: null,
     });
     expect(store.objects.get(queued!.object_key)?.contentType).toBe("application/json");
+  });
+
+  test("keeps a same-digest replacement pending when a stale key is acknowledged", async () => {
+    const store = new FakeObjectStore();
+    const queued = enqueueStoredSessionObjectIfConfigured(SESSION_ID, {
+      HASNA_SESSIONS_S3_BUCKET: "fixture-sessions",
+      HASNA_SESSIONS_S3_REGION: "fixture-region-1",
+      HASNA_SESSIONS_S3_PREFIX: "prefix-a",
+    });
+    const replacementKey = queued!.object_key.replace("prefix-a/", "prefix-b/");
+    store.onHead = () => {
+      enqueueSessionObject({
+        session_id: queued!.session_id,
+        object_kind: queued!.object_kind,
+        object_key: replacementKey,
+        source_digest: queued!.source_digest,
+        size: queued!.size,
+      });
+    };
+
+    const result = await syncRetryableSessionObjects({
+      objectStore: fakeS3Client(store),
+      sessionId: SESSION_ID,
+    });
+
+    expect(result).toEqual({
+      attempted: 1,
+      uploaded: 0,
+      failed: 1,
+      errors: [
+        `${SESSION_ID}/normalized_content: session object changed before upload acknowledgement was recorded`,
+      ],
+    });
+    expect(store.objects.has(queued!.object_key)).toBe(true);
+    expect(store.objects.has(replacementKey)).toBe(false);
+    expect(getSessionObject(SESSION_ID, "normalized_content")).toMatchObject({
+      object_key: replacementKey,
+      source_digest: queued!.source_digest,
+      status: "pending",
+      last_error: null,
+    });
   });
 
   test("marks a failed upload and retries it successfully", async () => {

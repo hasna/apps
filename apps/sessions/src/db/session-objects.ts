@@ -99,6 +99,7 @@ function transitionSessionObject(
   sessionId: string,
   objectKind: SessionObjectKind,
   expectedDigest: string,
+  expectedKey: string,
   status: "uploaded" | "failed",
   lastError: string | null,
 ): boolean {
@@ -107,9 +108,18 @@ function transitionSessionObject(
       `UPDATE session_objects
        SET status = ?, last_error = ?, updated_at = ?
        WHERE session_id = ? AND object_kind = ? AND source_digest = ?
+         AND object_key = ?
          AND status IN ('pending', 'failed')`,
     )
-    .run(status, lastError, nowIso(), sessionId, objectKind, expectedDigest) as {
+    .run(
+      status,
+      lastError,
+      nowIso(),
+      sessionId,
+      objectKind,
+      expectedDigest,
+      expectedKey,
+    ) as {
       changes?: number;
     };
   return Number(result.changes ?? 0) === 1;
@@ -119,14 +129,23 @@ export function markSessionObjectUploaded(
   sessionId: string,
   objectKind: SessionObjectKind,
   expectedDigest: string,
+  expectedKey: string,
 ): boolean {
-  return transitionSessionObject(sessionId, objectKind, expectedDigest, "uploaded", null);
+  return transitionSessionObject(
+    sessionId,
+    objectKind,
+    expectedDigest,
+    expectedKey,
+    "uploaded",
+    null,
+  );
 }
 
 export function markSessionObjectFailed(
   sessionId: string,
   objectKind: SessionObjectKind,
   expectedDigest: string,
+  expectedKey: string,
   error: string,
 ): boolean {
   const boundedError = error.trim().slice(0, 2_000) || "object upload failed";
@@ -134,6 +153,7 @@ export function markSessionObjectFailed(
     sessionId,
     objectKind,
     expectedDigest,
+    expectedKey,
     "failed",
     boundedError,
   );
