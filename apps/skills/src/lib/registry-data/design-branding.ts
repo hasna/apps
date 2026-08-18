@@ -42,6 +42,6 @@ export const DESIGN_BRANDING_SKILLS: SkillMeta[] = [
     displayName: "Site Analyze",
     description: "Analyze any website's design system — detects shadcn/ui, Tailwind, extracts colors, typography, and components via Playwright + Claude Vision.",
     category: "Design & Branding",
-    tags: ["design", "shadcn", "tailwind", "colors", "typography", "playwright", "analysis", "open-styles"],
+    tags: ["design", "shadcn", "tailwind", "colors", "typography", "playwright", "analysis", "styles"],
   },
 ];
