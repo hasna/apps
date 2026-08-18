@@ -1,7 +1,8 @@
 # Session-Backed Multi-Channel Bridge Plan
 
-This is the working plan for the `0.2.x` bridge release. The repo folder is
-`open-bridge`, the package is `@hasna/bridge`, and the CLI remains `bridge`.
+This is the working plan for the `0.2.x` bridge release. The app lives in the
+`hasna/apps` monorepo at `apps/bridge`, the package is `@hasna/bridge`, and the
+CLI is `bridge`.
 
 ## Goal
 
