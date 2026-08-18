@@ -3,34 +3,132 @@
  */
 
 import { Database } from "bun:sqlite";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { MIGRATIONS } from "./migrations.js";
 
 let _db: Database | null = null;
 
-function getDbPath(): string {
-  if (process.env["DOMAINS_DB_PATH"]) return process.env["DOMAINS_DB_PATH"];
-  if (process.env["HASNA_DOMAINS_DB_PATH"]) return process.env["HASNA_DOMAINS_DB_PATH"];
+function canonicalHome(env: NodeJS.ProcessEnv): string {
+  return env["HOME"] || env["USERPROFILE"] || homedir();
+}
 
-  const explicit = process.env["DOMAINS_DIR"] ?? process.env["HASNA_DOMAINS_DIR"];
+function sha256File(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+export interface LegacyDataDirMigrationReport {
+  dryRun: boolean;
+  wouldCopy: string[];
+  copied: string[];
+}
+
+/**
+ * One-time migration from the previous XDG default data directory
+ * ($XDG_DATA_HOME/open-domains) into the canonical ~/.hasna/domains root.
+ *
+ * Copies (never deletes) the SQLite db plus any WAL/SHM sidecars, verifies the
+ * copy by size and sha256, and records a receipt next to the canonical db.
+ * Idempotent: skipped once the canonical db exists or the receipt is present.
+ * Resumable: a crash after the copy but before the receipt is harmless, because
+ * the next run sees the canonical db and skips. Existing canonical data is
+ * never overwritten. dryRun reports exactly what would be copied and writes
+ * nothing.
+ */
+export function migrateLegacyDataDir(
+  env: NodeJS.ProcessEnv = process.env,
+  dryRun = false,
+): LegacyDataDirMigrationReport {
+  const report: LegacyDataDirMigrationReport = { dryRun, wouldCopy: [], copied: [] };
+  const home = canonicalHome(env);
+  const xdgData = env["XDG_DATA_HOME"]?.trim() || join(home, ".local", "share");
+  const oldDir = join(xdgData, "open-domains");
+  const oldDb = join(oldDir, "domains.db");
+  if (!existsSync(oldDb)) return report;
+
+  const canonicalDir = join(home, ".hasna", "domains");
+  const newDb = join(canonicalDir, "domains.db");
+  if (existsSync(newDb)) return report;
+  if (existsSync(join(canonicalDir, ".migrated-from-xdg.receipt.json"))) return report;
+
+  if (dryRun) {
+    for (const name of ["domains.db", "domains.db-wal", "domains.db-shm"]) {
+      if (existsSync(join(oldDir, name)) && !existsSync(join(canonicalDir, name))) {
+        report.wouldCopy.push(name);
+      }
+    }
+    return report;
+  }
+
+  mkdirSync(canonicalDir, { recursive: true });
+  const copied: Array<{ name: string; bytes: number; sha256: string }> = [];
+  for (const name of ["domains.db", "domains.db-wal", "domains.db-shm"]) {
+    const from = join(oldDir, name);
+    if (!existsSync(from)) continue;
+    const to = join(canonicalDir, name);
+    if (existsSync(to)) continue;
+    copyFileSync(from, to);
+    copied.push({ name, bytes: statSync(to).size, sha256: sha256File(to) });
+    report.copied.push(name);
+  }
+
+  if (statSync(newDb).size !== statSync(oldDb).size || sha256File(newDb) !== sha256File(oldDb)) {
+    throw new Error(
+      `Refusing migration: copied ${newDb} does not byte-match ${oldDb}; the canonical root was not populated.`,
+    );
+  }
+
+  writeFileSync(
+    join(canonicalDir, ".migrated-from-xdg.receipt.json"),
+    `${JSON.stringify(
+      {
+        migratedAt: new Date().toISOString(),
+        from: oldDir,
+        to: canonicalDir,
+        files: copied,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  return report;
+}
+
+/**
+ * The default data root: ~/.hasna/domains. Env overrides
+ * (DOMAINS_DB_PATH / HASNA_DOMAINS_DB_PATH / DOMAINS_DIR / HASNA_DOMAINS_DIR)
+ * are honored unchanged and win over the default.
+ */
+export function getDbPath(env: NodeJS.ProcessEnv = process.env): string {
+  if (env["DOMAINS_DB_PATH"]) return env["DOMAINS_DB_PATH"];
+  if (env["HASNA_DOMAINS_DB_PATH"]) return env["HASNA_DOMAINS_DB_PATH"];
+
+  const explicit = env["DOMAINS_DIR"] ?? env["HASNA_DOMAINS_DIR"];
   if (explicit) {
     return join(explicit, "domains.db");
   }
 
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
-  const legacyDir = join(home, ".hasna", "domains");
-  if (existsSync(legacyDir)) return join(legacyDir, "domains.db");
+  const home = canonicalHome(env);
+  const canonicalDir = join(home, ".hasna", "domains");
 
-  const xdgData = process.env["XDG_DATA_HOME"] || join(home, ".local", "share");
-  const newDir = join(xdgData, "open-domains");
-  migrateDotfile("domains", newDir);
-  return join(newDir, "domains.db");
+  migrateLegacyDataDir(env);
+  migrateDotfile("domains", canonicalDir, env);
+
+  return join(canonicalDir, "domains.db");
 }
 
-function migrateDotfile(name: string, newDir: string): void {
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+function migrateDotfile(name: string, newDir: string, env: NodeJS.ProcessEnv): void {
+  const home = canonicalHome(env);
   const oldDir = join(home, `.${name}`);
   if (!existsSync(oldDir) || existsSync(newDir)) return;
   mkdirSync(newDir, { recursive: true });
