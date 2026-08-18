@@ -4441,32 +4441,14 @@ export class TenantScopedStore {
     if (address.status !== "active") {
       return { allowed: false, code: "sender_inactive", message: "sender address is not active", status: 403 };
     }
-    // OPEN QUESTION — deliberately NOT changed here. Read before "fixing" it.
-    //
-    // This check is strict on the ADDRESS alone. The very next check treats domain
-    // readiness as SUFFICIENT: `!addressReady && !domainReady && !domainProvisioned`
-    // lets a verified, ready domain vouch for an address that has no readiness of its
-    // own. The same row already carries `domain_verified` and `domain_status` (the
-    // LEFT JOIN above selects them), so the data for the same reasoning is in hand
-    // here — and is not used.
-    //
-    // That asymmetry produces a surprising result in practice: on a domain whose
-    // ownership AND DKIM/SPF/DMARC are all verified, and from which a sibling address
-    // sends successfully, a newly added address still defaults to verified = false and
-    // is refused. Provider identity models (SES/Resend domain identities) treat a
-    // verified domain as authorising every local part under it, which is why the
-    // behaviour reads as a bug to operators.
-    //
-    // It is left alone because loosening it is a TENANT-BOUNDARY decision, not a
-    // cleanup: this gate arrived with the tenant mail-boundary work, `verified` may be
-    // intended as a per-mailbox control-proof distinct from domain ownership, and
-    // widening it silently would grant send rights to every address on a verified
-    // domain across every deployment. Whoever resolves it should either implement the
-    // implication explicitly (probably at address creation on a verified domain,
-    // rather than by weakening the gate at send time) or record here why per-address
-    // proof is required. Until then the refusal is at least diagnosable and fixable:
-    // the code reaches the CLI as headers.policy_denial, and `emails address
-    // set-verified <email>` is the supported way to clear it.
+    // RESOLVED 2026-08-18 (bug 4f676ba0) — the implication is implemented AT
+    // ADDRESS CREATION, not here at send time: POST /v1/addresses now defaults
+    // a new address to verified=true when its domain row is verified in this
+    // app's domain registry (audited automatically, actor "system"). This gate
+    // stays strict per-address for anything created before that fix or on an
+    // unverified domain, and explicit verified:false still wins. Per-address
+    // readiness (`provisioning_status`) and domain readiness remain separate
+    // checks below.
     if (!address.verified) {
       return { allowed: false, code: "sender_unverified", message: "sender address is not verified", status: 403 };
     }
