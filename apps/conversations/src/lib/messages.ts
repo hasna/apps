@@ -1,4 +1,4 @@
-import { getDb, getDataDir } from "./db.js";
+import { getDb, getDataDir, type Database } from "./db.js";
 import type {
   Message,
   Attachment,
@@ -32,6 +32,14 @@ import { dirname, join, resolve } from "path";
 import { fireWebhooks } from "./webhooks.js";
 import { normalizeChannelName, unknownChannelMessage } from "./channel-names.js";
 import { markChannelNotificationsRead } from "./channel-notifications.js";
+import {
+  WORK_STATUS_CHANNEL,
+  WORK_STATUS_DUPLICATE_WINDOW_MS,
+  duplicateWorkStatusTransitionViolation,
+  firstLineOf,
+  parseWorkStatusEvent,
+  workStatusEnvelopeViolation,
+} from "./work-status-envelope.js";
 import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, redactSensitiveValue } from "./content-safety.js";
 import { resolveReadLimit, resolveReadWindow } from "./message-window.js";
 import {
@@ -214,6 +222,56 @@ function checkRateLimit(agentId: string): void {
   }
 }
 
+/**
+ * The single `work-status` channel is an append-only lifecycle event stream
+ * (global-work-status-lifecycle): every event's first line MUST be the exact
+ * machine-parseable envelope. A non-reply send to that channel with a first
+ * line that violates the envelope is refused with the reason, so the shapes
+ * measured on the live stream — a JSON document as the message, an empty
+ * event_id, invalid state values, missing fields — cannot reach the stream.
+ * Replies are commentary, not events, and are not envelope-checked.
+ */
+function assertWorkStatusEnvelope(channelName: string | null, requestedReplyUuid: string | null, content: string): void {
+  if (requestedReplyUuid !== null || channelName !== WORK_STATUS_CHANNEL) return;
+  const violation = workStatusEnvelopeViolation(firstLineOf(content));
+  if (violation !== null) {
+    // The violation echoes caller-controlled field values (event_id, scope,
+    // session, ...); redact before throwing so a sensitive value placed in an
+    // envelope field cannot be reflected into the error the CLI prints and
+    // sessions transcribe.
+    throw new Error(redactSensitiveText(`work-status lifecycle event rejected: ${violation}`));
+  }
+}
+
+/**
+ * Refuse a second lifecycle event for the same task in the same state inside
+ * the dedupe window: it is a producer double-fire (measured 96 consecutive
+ * same-state pairs on the live stream), not a real transition, and any
+ * consumer deriving task state from the stream would double-count it. Only the
+ * task's MOST RECENT event decides, so BLOCKED -> RESUMED -> BLOCKED is a real
+ * sequence and is not deduped: the measured defect is consecutive same-state
+ * pairs, and a same-state row that an intervening different state broke is a
+ * genuine re-entry, not a re-post. Runs inside the send transaction, so the
+ * refused duplicate never reaches the stream.
+ */
+function assertNoDuplicateWorkStatusTransition(db: Database, content: string): void {
+  const event = parseWorkStatusEvent(firstLineOf(content));
+  if (event === null) return; // envelope already validated on the send path
+
+  const cutoff = new Date(Date.now() - WORK_STATUS_DUPLICATE_WINDOW_MS).toISOString().replace("Z", "");
+  const recent = db.prepare(
+    `SELECT content FROM messages
+     WHERE channel = ? AND reply_to IS NULL AND created_at >= ?
+     ORDER BY id DESC`,
+  ).all(WORK_STATUS_CHANNEL, cutoff) as Array<{ content: string }>;
+
+  const violation = duplicateWorkStatusTransitionViolation(
+    recent.map((row) => row.content),
+    event,
+  );
+  if (violation !== null) throw new Error(violation);
+}
+
 function assertNoSensitiveSendFields(opts: SendMessageOptions, serializedMetadata: string | null): void {
   assertNoSensitiveContent(opts.content, "Message content");
 
@@ -287,6 +345,7 @@ export function sendMessage(opts: SendMessageOptions): Message {
   if (opts.reply_to_uuid && !requestedReplyUuid) {
     throw new Error("reply_to_uuid must be a valid message UUID.");
   }
+  assertWorkStatusEnvelope(requestedChannel, requestedReplyUuid, opts.content);
   const normalizedPriority = (opts.priority === "low" || opts.priority === "normal" || opts.priority === "high" || opts.priority === "urgent")
     ? opts.priority
     : "normal";
@@ -355,6 +414,11 @@ export function sendMessage(opts: SendMessageOptions): Message {
       }
 
       const toAgent = channelName ?? opts.to;
+
+      if (channelName === WORK_STATUS_CHANNEL && !replyTo) {
+        assertNoDuplicateWorkStatusTransition(db, opts.content);
+      }
+
       const row = db.prepare(`
         INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
