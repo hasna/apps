@@ -4,14 +4,12 @@
 
 // Postgres pool factory for the vendored Hasna storage kit.
 //
-// The single sanctioned way to open a cloud Postgres connection. TLS is
-// resolved through `tls.ts` (one correct approach), and env/mode resolution
-// runs through `mode.ts` (the contract). PURE REMOTE (Amendment A1): a Pool is
-// only ever built for `cloud` mode; there is no local/hybrid Postgres path.
+// NOTE (modes-removal lane): this kit's mode-selection module was removed. The
+// PostgreSQL pool is selected by environment: a configured DATABASE_URL builds
+// a Pool; without one there is no PostgreSQL path (SQLite is authoritative).
 
 import pg from "pg";
 import type { Pool, PoolConfig } from "pg";
-import { resolveStorageMode, resolveDatabaseUrl } from "./mode.js";
 import { resolveTlsConfig, type TlsResolveOptions } from "./tls.js";
 import { createQueryClient, type PoolQueryClient } from "./query.js";
 
@@ -68,18 +66,21 @@ export function createCloudPoolFromEnv(
   options: CreateCloudPoolFromEnvOptions = {},
 ): CloudPoolFromEnv {
   const env = options.env ?? process.env;
-  const resolution = resolveStorageMode(appName, env);
-  if (resolution.mode !== "cloud") {
-    throw new Error(
-      `createCloudPoolFromEnv requires ${appName} storage mode 'cloud', got '${resolution.mode}'. ` +
-        `Set HASNA_${appName.toUpperCase().replace(/-/g, "_")}_STORAGE_MODE=cloud.`,
-    );
+  const token = appName.toUpperCase().replace(/-/g, "_");
+  const keys = [`HASNA_${token}_DATABASE_URL`, `${token}_DATABASE_URL`] as const;
+  let dbHit: { key: string; value: string } | null = null;
+  for (const key of keys) {
+    const value = env[key]?.trim();
+    if (value) {
+      dbHit = { key, value };
+      break;
+    }
   }
-  const connectionString = resolveDatabaseUrl(appName, env);
-  if (!connectionString) {
+  const connectionString = dbHit?.value;
+  if (!dbHit || !connectionString) {
     throw new Error(
-      `cloud mode for ${appName} needs a database URL. Set ` +
-        `HASNA_${appName.toUpperCase().replace(/-/g, "_")}_DATABASE_URL.`,
+      `createCloudPoolFromEnv requires a database URL; a DATABASE_URL selects the PostgreSQL backend. Set ` +
+        `HASNA_${token}_DATABASE_URL.`,
     );
   }
   const pool = createPgPool({
@@ -96,6 +97,6 @@ export function createCloudPoolFromEnv(
   });
   return {
     client: createQueryClient(pool),
-    connectionSource: resolution.databaseUrlSource ?? "unknown",
+    connectionSource: dbHit.key,
   };
 }

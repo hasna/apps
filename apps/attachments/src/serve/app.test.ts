@@ -57,7 +57,6 @@ describe("attachments serve app", () => {
     const body = await res.json();
     expect(body.status).toBe("ok");
     expect(body.version).toBe("test");
-    expect(body.mode).toBe("cloud");
   });
 
   test("GET /health probes the database", async () => {
