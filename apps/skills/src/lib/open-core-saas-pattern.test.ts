@@ -41,4 +41,16 @@ describe("open-core hosted service pattern", () => {
     // reappear.
     expect(content).not.toContain("browse/list) run on this machine and require no API origin");
   });
+
+  test("separates auth logout from API-backed auth commands", () => {
+    // P1 fix (fresh review cycle 0): auth.ts registers logout as local-only
+    // credential removal (clearAuthConfig(), no API call), while login, signup,
+    // and whoami are API-backed. The doc must not group logout with the
+    // remote-client auth commands.
+    expect(content).toContain("auth logout");
+    expect(content).toContain("local credential removal");
+    // Negative control: logout must not be listed among the commands that
+    // "call the configured Skills API".
+    expect(content).not.toContain("`auth login`, `auth logout`, `auth whoami`");
+  });
 });

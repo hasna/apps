@@ -29,9 +29,11 @@ service without making the OSS core depend on one deployment.
 
 Good OSS commands:
 
-- `auth login`, `auth logout`, `auth whoami` — the remote-client commands; they
-  call the configured Skills API, print/open returned URLs, and store scoped
-  local credentials
+- `auth login`, `auth signup`, `auth whoami` — the API-backed auth commands;
+  they call the configured Skills API, print/open returned URLs, and store
+  scoped local credentials
+- `auth logout` — local credential removal (`src/cli/commands/auth.ts`,
+  `clearAuthConfig()`); no API call
 - `run`, `runs list`, `runs show`, `exports open` — local execution and local
   run records (`src/cli/commands/runtime.ts`); they require no API origin
 - `runs status`, `exports download` — the remote-client run subcommands; they
