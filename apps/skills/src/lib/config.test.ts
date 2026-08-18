@@ -1,12 +1,12 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, writeFileSync, mkdirSync, rmSync, readFileSync } from "fs";
+import { existsSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
 
 // We test the module functions by importing them and overriding cwd/homedir behavior
 // via temp directories and direct file manipulation.
 
-import { DATA_DIR_ENV, loadConfig, saveConfig, unsetConfig, getConfigPath, getDataDir, type SkillsConfig, type ConfigScope } from "./config";
+import { DATA_DIR_ENV, loadConfig, loadConfigReadOnly, saveConfig, unsetConfig, getConfigPath, getDataDir, type SkillsConfig, type ConfigScope } from "./config";
 import { useDefaultTestTimeout, withHomeDataDir, withTempHome } from "../test-preload.js";
 import { clearRegistryCache, loadRegistry } from "./registry.js";
 
@@ -178,6 +178,66 @@ describe("config", () => {
       writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ apiUrl: "not a url" }));
       const config = loadConfig();
       expect(config.apiUrl).toBeUndefined();
+    });
+  });
+
+  describe("loadConfigReadOnly (write-free legacy precedence)", () => {
+    test("legacy-only HOME: reads the legacy ~/.skillsrc as the global config", () => {
+      withTempHome((home) => {
+        writeFileSync(join(home, ".skillsrc"), JSON.stringify({ apiUrl: "https://legacy.example.test" }));
+        const config = loadConfigReadOnly();
+        expect(config.apiUrl).toBe("https://legacy.example.test");
+      });
+    });
+
+    test("canonical config.json present: the global config is the canonical file alone — never field-merged with a stale legacy origin", () => {
+      // The write path copies ~/.skillsrc into config.json only when config.json is
+      // absent. When a canonical config exists but omits apiUrl, the read-only path
+      // must NOT inherit a legacy origin: the client sends its stored credential as
+      // Authorization: Bearer to the resolved origin, so a stale legacy origin would
+      // diverge from the real path on a credential-bearing decision.
+      withTempHome((home) => {
+        const appDir = join(home, ".hasna", "skills");
+        mkdirSync(appDir, { recursive: true });
+        writeFileSync(join(appDir, "config.json"), JSON.stringify({ defaultAgent: "codex" }));
+        writeFileSync(join(home, ".skillsrc"), JSON.stringify({ apiUrl: "https://legacy.example.test" }));
+        const config = loadConfigReadOnly();
+        expect(config.defaultAgent).toBe("codex");
+        expect(config.apiUrl).toBeUndefined();
+      });
+    });
+
+    test("data-directory override active: legacy ~/.skillsrc is never read (isolation)", () => {
+      // The write path skips the legacy migration entirely when $HASNA_SKILLS_DIR is
+      // set. The read-only path must mirror that: an override data dir without
+      // config.json has no global config, even when a legacy ~/.skillsrc exists.
+      const previousOverride = process.env[DATA_DIR_ENV];
+      const previousHome = process.env["HOME"];
+      const home = mkdtempSync(join(tmpdir(), "skills-config-home-"));
+      const overrideDir = mkdtempSync(join(tmpdir(), "skills-config-override-"));
+      process.env[DATA_DIR_ENV] = overrideDir;
+      process.env["HOME"] = home;
+      try {
+        writeFileSync(join(home, ".skillsrc"), JSON.stringify({ apiUrl: "https://legacy.example.test" }));
+        const config = loadConfigReadOnly();
+        expect(config.apiUrl).toBeUndefined();
+      } finally {
+        if (previousOverride === undefined) delete process.env[DATA_DIR_ENV];
+        else process.env[DATA_DIR_ENV] = previousOverride;
+        if (previousHome === undefined) delete process.env["HOME"];
+        else process.env["HOME"] = previousHome;
+        rmSync(home, { recursive: true, force: true });
+        rmSync(overrideDir, { recursive: true, force: true });
+      }
+    });
+
+    test("project config still wins over the global read-only config", () => {
+      withTempHome((home) => {
+        writeFileSync(join(home, ".skillsrc"), JSON.stringify({ apiUrl: "https://legacy.example.test" }));
+        writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ apiUrl: "https://project.example.test" }));
+        const config = loadConfigReadOnly();
+        expect(config.apiUrl).toBe("https://project.example.test");
+      });
     });
   });
 

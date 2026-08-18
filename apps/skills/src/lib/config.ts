@@ -250,16 +250,29 @@ export function getConfigPathReadOnly(scope: ConfigScope): string {
  * getDataDir() performs on the write path.
  *
  * The write path folds the legacy ~/.skillsrc into canonical config.json as part of
- * getDataDir()'s migration (copied only when config.json does not exist yet). A
- * read-only path reads the legacy file directly with the same precedence — canonical
- * config.json wins, legacy ~/.skillsrc is the fallback — so a legacy-only HOME
- * resolves the same effective config without copying anything.
+ * getDataDir()'s migration — copied ONLY when canonical config.json is absent, and
+ * the legacy migration is skipped entirely when a data-directory override is active.
+ * This mirrors that FILE-LEVEL precedence, never field-level merging: canonical
+ * config.json, when present, is the whole global config; legacy ~/.skillsrc is read
+ * only in the exact situation the write path would copy it (no canonical file, no
+ * override). Field-level merging would inherit a stale legacy origin beneath a
+ * canonical config that omits apiUrl — and the client sends its stored credential to
+ * whatever origin resolves, so divergence from the write path is credential-bearing.
  */
 export function loadConfigReadOnly(): SkillsConfig {
-  const globalConfig = readConfigFile(getConfigPathReadOnly("global"));
-  const legacyGlobalConfig = readConfigFile(legacyConfigFilePath());
+  const canonicalConfigPath = getConfigPathReadOnly("global");
+  let globalConfig: SkillsConfig;
+  if (existsSync(canonicalConfigPath)) {
+    globalConfig = readConfigFile(canonicalConfigPath);
+  } else if (process.env[DATA_DIR_ENV] !== undefined) {
+    // Override active: the write path skips the legacy migration entirely, so a
+    // data-directory without config.json has no global config.
+    globalConfig = {};
+  } else {
+    globalConfig = readConfigFile(legacyConfigFilePath());
+  }
   const projectConfig = readConfigFile(getConfigPathReadOnly("project"));
-  return { ...legacyGlobalConfig, ...globalConfig, ...projectConfig };
+  return { ...globalConfig, ...projectConfig };
 }
 
 /**
