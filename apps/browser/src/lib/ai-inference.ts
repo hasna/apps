@@ -1,5 +1,5 @@
 /**
- * Unified AI inference layer — single function for all LLM calls in open-browser.
+ * Unified AI inference layer — single function for all LLM calls in browser.
  * Cerebras by default (fastest), Anthropic as fallback.
  */
 

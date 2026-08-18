@@ -1,5 +1,5 @@
 /**
- * open-conversations integration — prevent duplicate scraping across agents.
+ * conversations integration — prevent duplicate scraping across agents.
  * Announces navigation, checks if another agent is already working on a URL.
  */
 

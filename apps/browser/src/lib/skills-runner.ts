@@ -1,5 +1,5 @@
 /**
- * open-skills integration — run pre-built reusable browser interaction patterns.
+ * skills integration — run pre-built reusable browser interaction patterns.
  */
 
 import type { Page } from "playwright";
@@ -119,7 +119,7 @@ export async function runBrowserSkill(
     }
   }
 
-  // Try open-skills SDK
+  // Try skills SDK
   const sdk = await getSkillsSDK();
   if (sdk?.runSkill) {
     try {

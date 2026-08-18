@@ -19,7 +19,7 @@ export async function persistFile(
     type?: string;
   }
 ): Promise<FilePersistResult> {
-  // Try open-files SDK if installed
+  // Try files SDK if installed
   try {
     const mod = await import("@hasna/files" as string);
     if (mod?.saveFile) {

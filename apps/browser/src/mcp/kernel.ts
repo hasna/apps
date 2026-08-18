@@ -49,7 +49,7 @@ export function register(server: McpServer) {
 
   registerTool(server,
     "browser_kernel_session_get",
-    "Get a Kernel browser session by Kernel session id/name or by an open-browser Kernel session id.",
+    "Get a Kernel browser session by Kernel session id/name or by the persisted Kernel browser session id.",
     { session_id: z.string() },
     async ({ session_id }) => {
       try {
@@ -60,7 +60,7 @@ export function register(server: McpServer) {
 
   registerTool(server,
     "browser_kernel_session_delete",
-    "Delete a Kernel browser session by Kernel session id/name or by an open-browser Kernel session id. Deleting persists profile save_changes when enabled.",
+    "Delete a Kernel browser session by Kernel session id/name or by the persisted Kernel browser session id. Deleting persists profile save_changes when enabled.",
     { session_id: z.string() },
     async ({ session_id }) => {
       try {
@@ -93,7 +93,7 @@ export function register(server: McpServer) {
 
   registerTool(server,
     "browser_kernel_file_download",
-    "Download a file from an active Kernel browser filesystem into open-browser downloads.",
+    "Download a file from an active Kernel browser filesystem into the browser downloads directory.",
     { session_id: z.string(), path: z.string(), filename: z.string().optional(), local_session_id: z.string().optional() },
     async ({ session_id, path, filename, local_session_id }) => {
       try {
@@ -115,7 +115,7 @@ export function register(server: McpServer) {
 
   registerTool(server,
     "browser_kernel_computer_screenshot",
-    "Capture an OS-level screenshot from a Kernel browser VM into open-browser downloads.",
+    "Capture an OS-level screenshot from a Kernel browser VM into the browser downloads directory.",
     {
       session_id: z.string(),
       filename: z.string().optional(),
@@ -188,7 +188,7 @@ export function register(server: McpServer) {
 
   registerTool(server,
     "browser_kernel_replay_download",
-    "Download a Kernel replay recording into open-browser downloads.",
+    "Download a Kernel replay recording into the browser downloads directory.",
     { session_id: z.string(), replay_id: z.string(), filename: z.string().optional(), local_session_id: z.string().optional() },
     async ({ session_id, replay_id, filename, local_session_id }) => {
       try {

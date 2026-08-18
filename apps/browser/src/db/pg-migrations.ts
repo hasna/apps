@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-browser storage sync.
+ * PostgreSQL migrations for browser storage sync.
  *
  * Equivalent to the SQLite schema in schema.ts plus lazy tables from
  * SQLite schema migrations translated for PostgreSQL.

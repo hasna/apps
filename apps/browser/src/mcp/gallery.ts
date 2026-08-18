@@ -269,7 +269,7 @@ registerTool(server,
 
 registerTool(server,
   "browser_persist_file",
-  "Persist a file permanently via open-files SDK (or local fallback)",
+  "Persist a file permanently via the @hasna/files SDK (or local fallback)",
   { download_id: z.string().optional(), path: z.string().optional(), project_id: z.string().optional(), tags: z.array(z.string()).optional() },
   async ({ download_id, path: filePath, project_id, tags }) => {
     try {

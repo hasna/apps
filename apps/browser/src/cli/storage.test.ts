@@ -28,7 +28,7 @@ describe("browser storage CLI", () => {
   });
 
   test("storage status reports local mode as JSON", () => {
-    const home = mkdtempSync(join(tmpdir(), "open-browser-storage-cli-"));
+    const home = mkdtempSync(join(tmpdir(), "browser-storage-cli-"));
     try {
       const result = runCli(["storage", "status", "--json"], {
         HOME: home,

@@ -10,7 +10,7 @@ Postiz pattern, clean-room (reuse the pattern, not the AGPL code).
 
 ## (a) Layout
 ```
-open-browser/
+browser/
 ├── extension/                    # NEW — MV3 extension (Vite → extension/dist/)
 │   ├── manifest.json             # MV3; permissions: scripting, tabs, activeTab, storage, alarms;
 │   │                             # host_permissions ["<all_urls>"]; background service_worker (module);

@@ -1,8 +1,8 @@
-# open-browser Architecture
+# Hasna Browser Architecture
 
 ## Overview
 
-open-browser is a browser agent toolkit exposed as a CLI, MCP server, REST
+Hasna Browser is a browser agent toolkit exposed as a CLI, MCP server, REST
 server, and TypeScript SDK. It provides page understanding, bounded page
 actions, evidence capture, storage, recordings, and session cleanup. Reusable
 site or domain behavior belongs in skills or Browser-owned workflow manifests,
@@ -96,7 +96,7 @@ not hardware-level user input.
 ## Package Layout
 
 ```
-open-browser/
+browser/
 ├── src/
 │   ├── cli/                 # browser CLI commands
 │   ├── db/                  # SQLite schema and optional storage sync support
