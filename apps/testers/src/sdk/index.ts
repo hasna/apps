@@ -1,10 +1,10 @@
 /**
- * SDK/Library API for programmatic use of open-testers.
- * Use this as the entry point when integrating open-testers into
+ * SDK/Library API for programmatic use of testers.
+ * Use this as the entry point when integrating testers into
  * Node.js/TypeScript projects without going through the MCP server.
  *
  * ```typescript
- * import { createScenario, listScenarioTemplates, RunOptions } from "open-testers/sdk";
+ * import { createScenario, listScenarioTemplates, RunOptions } from "@hasna/testers/client";
  * ```
  */
 

@@ -1,5 +1,5 @@
 /**
- * Contacts connector — bridges @hasna/contacts with open-testers personas.
+ * Contacts connector — bridges @hasna/contacts with testers personas.
  *
  * Allows importing contacts tagged as test users into the personas table,
  * and linking personas back to their source contact via contact_id metadata.

@@ -49,7 +49,7 @@ testers quick-qa "<url>" --skip perf --skip smoke --json
 Use `testers quick-check` only as an alias for `testers quick-qa`.
 
 If `testers quick-qa` is not available in the installed CLI, update/publish
-`@hasna/testers` from `open-testers` instead of falling back to unrelated
+`@hasna/testers` from the `hasna/apps` monorepo instead of falling back to unrelated
 browser tools.
 
 ## Fix Loop

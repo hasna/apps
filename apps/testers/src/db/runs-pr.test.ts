@@ -14,7 +14,7 @@ describe("PR run metadata (OPE9-00279)", () => {
       prBranch: "feature/login",
       prBaseBranch: "main",
       prCommitSha: "abc123def",
-      prUrl: "https://github.com/hasna/open-testers/pull/42",
+      prUrl: "https://github.com/hasna/apps/pull/42",
       ghAppInstallationId: "install-789",
     });
 
@@ -23,7 +23,7 @@ describe("PR run metadata (OPE9-00279)", () => {
     expect(run.prBranch).toBe("feature/login");
     expect(run.prBaseBranch).toBe("main");
     expect(run.prCommitSha).toBe("abc123def");
-    expect(run.prUrl).toBe("https://github.com/hasna/open-testers/pull/42");
+    expect(run.prUrl).toBe("https://github.com/hasna/apps/pull/42");
     expect(run.ghAppInstallationId).toBe("install-789");
   });
 
@@ -97,7 +97,7 @@ describe("PR run metadata (OPE9-00279)", () => {
       prBranch: "fix/nav",
       prBaseBranch: "develop",
       prCommitSha: "deadbeef",
-      prUrl: "https://github.com/hasna/open-testers/pull/77",
+      prUrl: "https://github.com/hasna/apps/pull/77",
     });
 
     expect(updated.prNumber).toBe(77);
@@ -105,7 +105,7 @@ describe("PR run metadata (OPE9-00279)", () => {
     expect(updated.prBranch).toBe("fix/nav");
     expect(updated.prBaseBranch).toBe("develop");
     expect(updated.prCommitSha).toBe("deadbeef");
-    expect(updated.prUrl).toBe("https://github.com/hasna/open-testers/pull/77");
+    expect(updated.prUrl).toBe("https://github.com/hasna/apps/pull/77");
   });
 
   test("updatePrRunMetadata throws for non-existent run", () => {

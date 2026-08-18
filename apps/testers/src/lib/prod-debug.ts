@@ -557,7 +557,7 @@ export function createProdDebugPlan(input: ProdDebugInput, config?: ProdDebugCon
       });
     } else {
       const reasonText = supportGrant.value
-        ? "An audited support grant was supplied, but open-testers still needs supportUrl/supportUrlRef/supportUrlTemplate or an app adapter to open a scoped browser session."
+        ? "An audited support grant was supplied, but testers still needs supportUrl/supportUrlRef/supportUrlTemplate or an app adapter to open a scoped browser session."
         : "No audited support browser/session grant was supplied. Do not use customer passwords, copied cookies, bearer tokens, or magic links.";
       blocked.push(reasonText);
       checks.push({

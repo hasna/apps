@@ -1,5 +1,5 @@
 /**
- * Bun.WebView engine for open-testers — native zero-dep browser using WKWebView (macOS)
+ * Bun.WebView engine for testers — native zero-dep browser using WKWebView (macOS)
  * or Chrome CDP (Windows/Linux). Available in Bun canary; stable in ~v1.4.0.
  *
  * ~11x faster and ~9x less memory than Playwright/Chrome.

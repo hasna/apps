@@ -29,7 +29,7 @@ const cliArgs = new Set(process.argv.slice(2));
 if (cliArgs.has("--help") || cliArgs.has("-h")) {
   console.log(`Usage: testers-serve [options]
 
-Open Testers HTTP server
+Hasna Testers HTTP server
 
 Options:
   -h, --help       Show this help message
@@ -1201,7 +1201,7 @@ async function handleRequest(req: Request): Promise<Response> {
       return new Response(
         `<!DOCTYPE html>
 <html>
-<head><title>Open Testers</title></head>
+<head><title>Hasna Testers</title></head>
 <body style="font-family: system-ui, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #0a0a0a; color: #fafafa;">
   <div style="text-align: center;">
     <h1>Dashboard not built yet</h1>
@@ -1270,4 +1270,4 @@ const server = Bun.serve({
   },
 });
 
-console.log(`Open Testers server running at http://localhost:${server.port}`);
+console.log(`Hasna Testers server running at http://localhost:${server.port}`);

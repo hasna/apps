@@ -50,7 +50,7 @@ describe("notification integrations (OPE9-00260)", () => {
   describe("formatDiscordPayload", () => {
     test("formats failed run as Discord embed", () => {
       const result = formatDiscordPayload(samplePayload);
-      expect(result.username).toBe("open-testers");
+      expect(result.username).toBe("testers");
       expect(result.embeds).toBeDefined();
       expect(Array.isArray(result.embeds)).toBe(true);
       const embed = result.embeds[0] as Record<string, unknown>;
@@ -75,7 +75,7 @@ describe("notification integrations (OPE9-00260)", () => {
       const embed = result.embeds[0] as Record<string, unknown>;
       expect(embed.timestamp).toBe("2026-04-04T12:00:00.000Z");
       const footer = embed.footer as Record<string, unknown>;
-      expect(footer.text).toBe("open-testers");
+      expect(footer.text).toBe("Hasna Testers");
     });
   });
 

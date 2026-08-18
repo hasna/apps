@@ -43,7 +43,7 @@ export function formatDiscordPayload(payload: WebhookPayload): Record<string, un
   const color = isPassed ? 0x22c55e : 0xef4444;
 
   return {
-    username: "open-testers",
+    username: "testers",
     embeds: [
       {
         title: `Test Run ${payload.run.status.toUpperCase()}`,
@@ -54,7 +54,7 @@ export function formatDiscordPayload(payload: WebhookPayload): Record<string, un
           (payload.run.failed > 0 ? ` (${payload.run.failed} failed)` : "") +
           (payload.schedule ? `\nSchedule: ${payload.schedule.name}` : ""),
         timestamp: payload.timestamp,
-        footer: { text: "open-testers" },
+        footer: { text: "Hasna Testers" },
       },
     ],
   };

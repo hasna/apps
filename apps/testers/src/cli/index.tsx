@@ -2702,7 +2702,7 @@ program
       }
 
       log("");
-      log(chalk.bold("  Open Testers Status"));
+      log(chalk.bold("  Hasna Testers Status"));
       log("");
       log(
         `  Storage mode:      ${isCloud ? chalk.cyan("cloud") : chalk.yellow("local")}` +
@@ -7036,7 +7036,7 @@ program
 
 program
   .command("serve")
-  .description("Start the Open Testers web dashboard")
+  .description("Start the Hasna Testers web dashboard")
   .option("--no-open", "Do not open the browser after starting", false)
   .option("--port <port>", "Port to listen on", "19450")
   .action(async (opts) => {
@@ -7063,7 +7063,7 @@ program
         stderr: "inherit",
       });
 
-      log(chalk.green(`Open Testers dashboard starting at ${url}`));
+      log(chalk.green(`Hasna Testers dashboard starting at ${url}`));
 
       // Wait briefly then open browser
       if (opts.open !== false) {

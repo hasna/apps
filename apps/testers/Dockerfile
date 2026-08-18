@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # =============================================================================
-# open-testers — ARM64 / bun service image (testers-serve + testers CLI/MCP)
+# testers — ARM64 / bun service image (testers-serve + testers CLI/MCP)
 # Amendment A1: serve talks to cloud Postgres directly. No browsers are needed
 # for the HTTP data-plane, so browser downloads are skipped.
 # =============================================================================

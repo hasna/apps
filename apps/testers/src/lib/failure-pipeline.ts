@@ -30,7 +30,7 @@ export async function createFailureTasks(
     return {
       schema_version: TESTERS_ISSUE_REPORT_SCHEMA_VERSION,
       title: `${scenario?.name ?? result.scenarioId} failed`,
-      summary: "Test failure detected by open-testers.",
+      summary: "Test failure detected by Hasna Testers.",
       kind: result.status === "error" ? "runtime_error" : "assertion_failure",
       severity: scenario?.priority ?? "high",
       source: {

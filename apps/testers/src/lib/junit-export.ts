@@ -36,7 +36,7 @@ export async function toJUnitXml(
 
     const testCase: JUnitTestCase = {
       name: scenarioName,
-      classname: `open-testers.${scenarioName}`,
+      classname: `testers.${scenarioName}`,
       time: durationSec,
     };
 
@@ -61,7 +61,7 @@ export async function toJUnitXml(
   const totalTime = results.reduce((sum, r) => sum + (r.durationMs ?? 0), 0) / 1000;
 
   const suite: JUnitTestSuite = {
-    name: `open-testers (${baseUrl})`,
+    name: `testers (${baseUrl})`,
     tests: results.length,
     failures: failed,
     errors,
