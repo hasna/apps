@@ -148,8 +148,8 @@ describe("EventsClient", () => {
       webhook: { url: "https://example.test" },
     });
 
-    const first = await client.emit({ id: "evt_same", source: "repos", type: "repo.synced", dedupeKey: "repos:open-events:synced" });
-    const second = await client.emit({ id: "evt_other", source: "repos", type: "repo.synced", dedupeKey: "repos:open-events:synced" });
+    const first = await client.emit({ id: "evt_same", source: "repos", type: "repo.synced", dedupeKey: "repos:events:synced" });
+    const second = await client.emit({ id: "evt_other", source: "repos", type: "repo.synced", dedupeKey: "repos:events:synced" });
     const third = await client.emit({ id: "evt_same", source: "repos", type: "repo.synced" });
 
     expect(first.deduped).toBe(false);

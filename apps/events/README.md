@@ -137,7 +137,7 @@ const client = new EventsClient({ catalog, validateCatalogTypes: true });
 // Registered type with an invalid payload throws EventValidationError
 // BEFORE the event is stored or delivered.
 await client.emit({
-  source: "open-publish",
+  source: "publish",
   type: "release.published",
   data: { appId: "todos" },
 });

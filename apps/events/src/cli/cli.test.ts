@@ -494,9 +494,9 @@ describe("CLI smoke behavior", () => {
       "--type",
       "task.created",
       "--data",
-      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:open-events\"]}",
+      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:events\"]}",
       "--metadata",
-      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/open-events\",\"route_enabled\":true,\"automation\":{\"no_auto\":false}}",
+      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/events\",\"route_enabled\":true,\"automation\":{\"no_auto\":false}}",
     ]);
     expect(match.exitCode).toBe(0);
     expect(JSON.parse(match.stdout).matched).toBe(true);
@@ -510,9 +510,9 @@ describe("CLI smoke behavior", () => {
       "--type",
       "task.created",
       "--data",
-      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:open-events\"]}",
+      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:events\"]}",
       "--metadata",
-      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/open-events\",\"route_enabled\":true,\"automation.no_auto\":true}",
+      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/events\",\"route_enabled\":true,\"automation.no_auto\":true}",
     ]);
     expect(flatNoAutoDeny.exitCode).toBe(0);
     expect(JSON.parse(flatNoAutoDeny.stdout).matched).toBe(false);
@@ -557,11 +557,11 @@ describe("CLI smoke behavior", () => {
       "--source",
       "todos",
       "--dedupe-key",
-      "todos:task:open-events-contract",
+      "todos:task:events-contract",
       "--data",
-      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:open-events\"]}",
+      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:events\"]}",
       "--metadata",
-      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/open-events\",\"route_enabled\":true,\"automation\":{\"no_auto\":false}}",
+      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/events\",\"route_enabled\":true,\"automation\":{\"no_auto\":false}}",
     ]);
     expect(emitMatch.exitCode).toBe(0);
     expect(JSON.parse(emitMatch.stdout).deliveries).toHaveLength(1);
@@ -573,11 +573,11 @@ describe("CLI smoke behavior", () => {
       "--source",
       "todos",
       "--dedupe-key",
-      "todos:task:open-events-contract",
+      "todos:task:events-contract",
       "--data",
-      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:open-events\"]}",
+      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:events\"]}",
       "--metadata",
-      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/open-events\",\"route_enabled\":true,\"automation\":{\"no_auto\":false}}",
+      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/events\",\"route_enabled\":true,\"automation\":{\"no_auto\":false}}",
     ]);
     expect(emitDuplicate.exitCode).toBe(0);
     const duplicate = JSON.parse(emitDuplicate.stdout);
@@ -605,9 +605,9 @@ describe("CLI smoke behavior", () => {
       "--source",
       "todos",
       "--data",
-      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:open-events\"]}",
+      "{\"priority\":\"001\",\"tags\":[\"auto:route\",\"repo:events\"]}",
       "--metadata",
-      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/open-events\",\"route_enabled\":true,\"automation\":{\"no_auto\":true}}",
+      "{\"project_path\":\"/home/hasna/workspace/hasna/opensource/events\",\"route_enabled\":true,\"automation\":{\"no_auto\":true}}",
     ]);
     expect(emitNoAuto.exitCode).toBe(0);
     expect(JSON.parse(emitNoAuto.stdout).deliveries).toHaveLength(0);

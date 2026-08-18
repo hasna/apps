@@ -35,7 +35,7 @@ function makeCatalog(): EventTypeCatalog {
 }
 
 const releaseData: ReleasePublishedData = {
-  appId: "open-todos",
+  appId: "todos",
   package: "@hasna/todos",
   version: "0.11.63",
   gitSha: "9fceb02d0ae598e95dc970b74767f19372d61af8",
@@ -43,7 +43,7 @@ const releaseData: ReleasePublishedData = {
 };
 
 const rolloutData = {
-  appId: "open-todos",
+  appId: "todos",
   package: "@hasna/todos",
   version: "0.11.63",
   machine: "spark01",
@@ -80,10 +80,10 @@ describe("EventTypeCatalog", () => {
 
   test("validates registered distribution payloads through validateEvent", () => {
     const catalog = makeCatalog();
-    const good = createEvent({ source: "open-publish", type: "release.published", data: releaseData });
+    const good = createEvent({ source: "publish", type: "release.published", data: releaseData });
     expect(catalog.validateEvent(good)).toEqual({ ok: true });
 
-    const bad = createEvent({ source: "open-publish", type: "release.published", data: { appId: "open-todos" } });
+    const bad = createEvent({ source: "publish", type: "release.published", data: { appId: "todos" } });
     const result = catalog.validateEvent(bad);
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -107,19 +107,19 @@ describe("distribution payload validators", () => {
   test("rollout validators require machine and require result on completed/failed", () => {
     expect(validateRolloutData(rolloutData, envelope("release.rollout.started", rolloutData)).ok).toBe(true);
 
-    const noResult = { appId: "open-todos", package: "@hasna/todos", version: "0.11.63", machine: "spark01" };
+    const noResult = { appId: "todos", package: "@hasna/todos", version: "0.11.63", machine: "spark01" };
     expect(validateRolloutData(noResult, envelope("release.rollout.started", noResult)).ok).toBe(true);
     expect(validateRolloutData(noResult, envelope("release.rollout.completed", noResult)).ok).toBe(false);
     expect(validateRolloutData(noResult, envelope("release.rollout.failed", noResult)).ok).toBe(false);
 
-    const noMachine = { appId: "open-todos", package: "@hasna/todos", version: "0.11.63" };
+    const noMachine = { appId: "todos", package: "@hasna/todos", version: "0.11.63" };
     const result = validateRolloutData(noMachine, envelope("release.rollout.started", noMachine));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.issues[0]?.path).toBe("machine");
   });
 
   test("app.installed requires appId/package/version/machine", () => {
-    const good = { appId: "open-todos", package: "@hasna/todos", version: "0.11.63", machine: "spark01" };
+    const good = { appId: "todos", package: "@hasna/todos", version: "0.11.63", machine: "spark01" };
     expect(validateAppInstalledData(good, envelope("app.installed", good)).ok).toBe(true);
     expect(validateAppInstalledData({ ...good, machine: "" }, envelope("app.installed", good)).ok).toBe(false);
   });
@@ -147,11 +147,11 @@ describe("distribution payload validators", () => {
 });
 
 describe("EventsClient emit-time validator hook", () => {
-  const badRelease = { appId: "open-todos" };
+  const badRelease = { appId: "todos" };
 
   test("validation is OFF by default: registered type with bad payload still emits", async () => {
     const client = new EventsClient({ store: new JsonEventsStore(dataDir), catalog: makeCatalog() });
-    const result = await client.emit({ source: "open-publish", type: "release.published", data: badRelease });
+    const result = await client.emit({ source: "publish", type: "release.published", data: badRelease });
     expect(result.deduped).toBe(false);
     expect(await client.listEvents()).toHaveLength(1);
   });
@@ -163,7 +163,7 @@ describe("EventsClient emit-time validator hook", () => {
       validateCatalogTypes: true,
     });
     await expect(
-      client.emit({ source: "open-publish", type: "release.published", data: badRelease }),
+      client.emit({ source: "publish", type: "release.published", data: badRelease }),
     ).rejects.toThrow(EventValidationError);
     expect(await client.listEvents()).toHaveLength(0);
   });
@@ -174,8 +174,8 @@ describe("EventsClient emit-time validator hook", () => {
       catalog: makeCatalog(),
       validateCatalogTypes: true,
     });
-    const result = await client.emit({ source: "open-publish", type: "release.published", data: releaseData });
-    expect(result.event.data.appId).toBe("open-todos");
+    const result = await client.emit({ source: "publish", type: "release.published", data: releaseData });
+    expect(result.event.data.appId).toBe("todos");
     expect(await client.listEvents()).toHaveLength(1);
   });
 
@@ -194,12 +194,12 @@ describe("EventsClient emit-time validator hook", () => {
     const catalog = makeCatalog();
     const offClient = new EventsClient({ store: new JsonEventsStore(dataDir), catalog });
     await expect(
-      offClient.emit({ source: "open-publish", type: "release.published", data: badRelease }, { validate: true }),
+      offClient.emit({ source: "publish", type: "release.published", data: badRelease }, { validate: true }),
     ).rejects.toThrow(EventValidationError);
 
     const onClient = new EventsClient({ store: new JsonEventsStore(dataDir), catalog, validateCatalogTypes: true });
     const result = await onClient.emit(
-      { source: "open-publish", type: "release.published", data: badRelease },
+      { source: "publish", type: "release.published", data: badRelease },
       { validate: false },
     );
     expect(result.deduped).toBe(false);
@@ -209,7 +209,7 @@ describe("EventsClient emit-time validator hook", () => {
     // Even if some other module registered the distribution types on the
     // default catalog, clients that did not enable validation are untouched.
     const client = new EventsClient({ store: new JsonEventsStore(dataDir) });
-    const result = await client.emit({ source: "open-publish", type: "release.published", data: badRelease });
+    const result = await client.emit({ source: "publish", type: "release.published", data: badRelease });
     expect(result.deduped).toBe(false);
   });
 });

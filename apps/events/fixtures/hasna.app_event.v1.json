@@ -3,7 +3,7 @@
   "event_type": "todos.task.completed",
   "schema_version": "hasna.app_event.v1",
   "source": {
-    "app": "open-todos",
+    "app": "todos",
     "version": "0.0.0-fixture",
     "machine": "fixture.local"
   },
@@ -24,7 +24,7 @@
   },
   "actor": {
     "kind": "service",
-    "id": "open-todos",
+    "id": "todos",
     "name": "Todos fixture producer"
   },
   "project_mappings": {

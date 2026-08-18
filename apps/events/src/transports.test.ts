@@ -111,7 +111,7 @@ process.stdin.on("end", () => {
 });
 `);
 
-    const event = createEvent({ id: "evt_command", source: "repos", type: "repo.synced", data: { repo: "open-events" } });
+    const event = createEvent({ id: "evt_command", source: "repos", type: "repo.synced", data: { repo: "events" } });
     const attempt = await dispatchCommand(event, {
       id: "cmd",
       enabled: true,
