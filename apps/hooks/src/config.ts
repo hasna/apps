@@ -6,6 +6,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { resolveCredential } from "@hasna/contracts/client";
 import { join } from "path";
 import { homedir } from "os";
 
@@ -65,12 +66,14 @@ export function resolveApiUrl(): string | undefined {
 }
 
 /**
- * P1-8: the registry API key resolves from the environment ONLY —
- * HASNA_HOOKS_API_KEY / HOOKS_API_KEY. A secret-valued CLI flag is removed
- * (a flag value is visible in process listings and shell history); the
- * vault-key-NAME reference (config api_key_ref) is a name, not a value, and
- * is untouched.
+ * P1-8: the registry API key resolves through the shared client seam, never
+ * by hand — its chain (deliberate override, profile, disk, then the legacy
+ * HASNA_HOOKS_API_KEY / HOOKS_API_KEY env variables) is the single path that
+ * receives credential-resolution fixes. A secret-valued CLI flag stays
+ * removed (a flag value is visible in process listings and shell history);
+ * the vault-key-NAME reference (config api_key_ref) is a name, not a value,
+ * and is untouched.
  */
 export function resolveApiKey(): string | undefined {
-  return process.env.HASNA_HOOKS_API_KEY ?? process.env.HOOKS_API_KEY;
+  return resolveCredential("hooks", process.env)?.apiKey;
 }

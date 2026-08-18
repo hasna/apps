@@ -1020,6 +1020,7 @@
         "hooks-serve": "bin/serve.js",
       },
       "dependencies": {
+        "@hasna/contracts": "0.11.1",
         "@hasna/events": "^0.1.6",
         "@hasna/secrets": "0.3.0",
         "@modelcontextprotocol/sdk": "^1.26.0",
@@ -1035,6 +1036,7 @@
         "zod": "3.25.76",
       },
       "devDependencies": {
+        "@hasna/contracts": "0.11.1",
         "@types/bun": "latest",
         "@types/pg": "^8.15.6",
         "@types/react": "^18.2.0",

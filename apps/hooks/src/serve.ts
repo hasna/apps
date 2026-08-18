@@ -10,8 +10,12 @@ import { HOOKS, type HookEvent } from "./lib/registry.js";
 import { listCustomHooks, shortManifestName } from "./lib/manifest.js";
 import { readLock, sha256File, retrustHook } from "./lib/store.js";
 import { resolveHook } from "./lib/resolve.js";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveApiKey } from "./config.js";
 import { secureEqual } from "./lib/secure-compare.js";
+import { openApiDocument } from "./openapi.js";
 import { SEMVER_PATTERN } from "./lib/semver.js";
 
 // Distinct from the MCP SSE default (39427) so `hooks serve` and
@@ -19,6 +23,15 @@ import { SEMVER_PATTERN } from "./lib/semver.js";
 export const DEFAULT_SERVE_PORT = 39428;
 export const SERVE_HOST = "127.0.0.1";
 export const SERVE_SERVICE_NAME = "hooks-registry";
+
+function packageVersion(): string {
+  try {
+    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "package.json");
+    return JSON.parse(readFileSync(pkgPath, "utf-8")).version || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
 
 export interface CatalogEntry {
   name: string;
@@ -118,6 +131,23 @@ export function handleServeRequest(req: Request, apiKey: string | undefined): Pr
 
   if (url.pathname === "/health" && req.method === "GET") {
     return Promise.resolve(json({ status: "ok", name: SERVE_SERVICE_NAME }));
+  }
+
+  if (url.pathname === "/ready" && req.method === "GET") {
+    try {
+      readLock();
+      return Promise.resolve(json({ status: "ready", name: SERVE_SERVICE_NAME }));
+    } catch {
+      return Promise.resolve(json({ status: "not-ready", name: SERVE_SERVICE_NAME }, 503));
+    }
+  }
+
+  if (url.pathname === "/version" && req.method === "GET") {
+    return Promise.resolve(json({ version: packageVersion() }));
+  }
+
+  if (url.pathname === "/openapi.json" && req.method === "GET") {
+    return Promise.resolve(json(openApiDocument));
   }
 
   if (url.pathname === "/api/v1/catalog" && req.method === "GET") {
