@@ -21,12 +21,12 @@ alert thresholds, and annotations. The fused observability surface is `GET`-only
 
 ## Storage
 
-Two runtime modes (Amendment A1, PURE REMOTE): `local` (bun:sqlite at
-`~/.hasna/fleet/fleet.db`, authoritative) and `cloud` (Postgres via the vendored
-`@hasna/contracts` storage-kit, `sslmode=verify-full`). Mode/DSN resolve from
-`HASNA_FLEET_STORAGE_MODE` / `HASNA_FLEET_DATABASE_URL[_FILE]` (presence only; the
-value is never read to choose a mode, and is scrubbed from the env after connect).
-A DSN present while mode resolves to `local` is a hard startup error (fail-closed).
+One data-backend switch (Amendment A1): `sqlite` (bun:sqlite at
+`~/.hasna/fleet/fleet.db`, authoritative) or `postgres` (Postgres via the
+vendored `@hasna/contracts` storage-kit, `sslmode=verify-full`). The backend is
+derived from `HASNA_FLEET_DATABASE_URL[_FILE]` presence alone; the value is
+scrubbed from the env after connect. A DSN present while the backend resolves
+to `local` is a hard startup error (fail-closed).
 
 ## Interface parity
 

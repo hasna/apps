@@ -4,12 +4,12 @@
  * Resolves the cloud Postgres pool + API-key signing secret from the
  * environment, wires the API-key store (revocation checks against RDS) and
  * returns a Bun server export ({ port, fetch }). Used by `logs-serve` when
- * `HASNA_LOGS_STORAGE_MODE=cloud` (the deployed ECS service). PURE REMOTE
- * (Amendment A1): all reads and writes go straight to RDS.
+ * `HASNA_LOGS_DATABASE_URL` selects the postgresql backend (the deployed ECS
+ * service): all reads and writes go straight to RDS.
  */
 
 import { ApiKeyStore } from "@hasna/contracts/auth";
-import { createCloudPoolFromEnv } from "../../generated/storage-kit/index.ts";
+import { createServerPoolFromEnv } from "../../generated/storage-kit/index.ts";
 import { PACKAGE_VERSION } from "../../lib/package-meta.ts";
 import { buildCloudApp } from "./app.ts";
 
@@ -33,7 +33,7 @@ function resolveSigningSecret(): string {
 }
 
 export function buildCloudServe(port: number): CloudServeExport {
-  const { client } = createCloudPoolFromEnv("logs", {
+  const { client } = createServerPoolFromEnv("logs", {
     applicationName: "logs-serve",
     max: 10,
   });
@@ -42,7 +42,7 @@ export function buildCloudServe(port: number): CloudServeExport {
     client,
     version: PACKAGE_VERSION,
     signingSecret: resolveSigningSecret(),
-    isRevoked: keys.isRevoked,
+    keyStatus: keys.keyStatus,
     audit: (event) => {
       // Structured per-request auth audit line (no secret material).
       console.log(`api_auth ${JSON.stringify(event)}`);

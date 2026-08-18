@@ -86,7 +86,7 @@ describe("hasna.contract.json", () => {
     expect(manifest.schema).toBe("hasna.service_contract.v1");
     expect(manifest.name).toBe("shield");
     expect(manifest.contractVersion).toBe("v1");
-    expect(manifest.kitVersion).toBe("0.8.5");
+    expect(manifest.kitVersion).toBe("0.11.1");
   });
 
   test("declared bins match package.json bin", () => {
@@ -97,7 +97,9 @@ describe("hasna.contract.json", () => {
   test("declares the local SQLite storage boundary shield actually owns", () => {
     const manifest = ServiceContractManifestSchema.parse(rawManifest);
     expect(manifest.class).toBe("cli-with-store");
-    expect(manifest.storage?.mode).toBe("sqlite");
+    // The active server data backend is SQLite; the schema's backend field
+    // replaced the removed `mode` vocabulary.
+    expect(manifest.storage?.backend).toBe("sqlite");
     expect(manifest.storage?.envPrefix).toBe("HASNA_SHIELD_");
     // The schema only checks the `.db` suffix, so a suffix assertion would let
     // any wrong directory ship. Resolve the store the way the CLI does and
@@ -111,10 +113,12 @@ describe("hasna.contract.json", () => {
     const bins = Object.keys(pkg.bin ?? {});
     const exportSubpaths = Object.keys(pkg.exports ?? {});
     const supported = manifest.serviceSurfaces.filter((surface) => surface.status === "supported");
-    // cli, mcp, and sdk are the three surfaces shield ships today; the API
+    // cli and mcp are the surfaces shield ships as supported today; the API
     // surface is declared `deferred` until shield-serve answers the contract
-    // topology, so it is deliberately absent here.
-    expect(supported.map((surface) => surface.kind).sort()).toEqual(["cli", "mcp", "sdk"]);
+    // topology, and the hand-written ./sdk client is `deferred` with it because
+    // it cannot claim generation from an OpenAPI document the server does not
+    // publish — both are deliberately absent here.
+    expect(supported.map((surface) => surface.kind).sort()).toEqual(["cli", "mcp"]);
     for (const surface of supported) {
       if (surface.bin) expect(bins).toContain(surface.bin);
       if (surface.mcpBin) expect(bins).toContain(surface.mcpBin);

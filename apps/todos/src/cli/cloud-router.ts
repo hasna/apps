@@ -33,6 +33,11 @@ import type {
   TodosTaskManifestCompensationResult,
 } from "../task-manifest/index.js";
 import type {
+  TodosTaskSubtreeTransferCapability,
+  TodosTaskSubtreeTransferInspection,
+  TodosTaskSubtreeTransferResult,
+} from "../task-subtree-transfer/index.js";
+import type {
   TodosProjectRegistrationCapability,
   TodosProjectRegistrationInverseVerification,
   TodosProjectRegistrationLookupRequest,
@@ -104,7 +109,7 @@ export type TodosRemoteCommandCapability = "stale-lock-handoff";
 export interface TodosRemoteAuthorityConfigStatus {
   selected: boolean;
   ok: boolean;
-  mode: string;
+  transport: string;
   api_url_configured: boolean;
   api_key_configured: boolean;
   v1_base_url: string | null;
@@ -112,10 +117,8 @@ export interface TodosRemoteAuthorityConfigStatus {
   local_fallback: false;
 }
 
-export interface TodosCliStorageModeResolution {
+export interface TodosCliTransportResolution {
   /** Canonical transport the environment resolved to (`sqlite` | `http`). */
-  mode: TodosCliTransport;
-  /** Same value under its own name; prefer this in new code. */
   transport: TodosCliTransport;
   selected: boolean;
   /** What selected the transport; `default` means the on-box SQLite file. */
@@ -123,55 +126,16 @@ export interface TodosCliStorageModeResolution {
 }
 
 /**
- * The retired storage-mode variables. Any of them being SET — even to a blank
- * value — is an error, never a hint: silently ignoring it would keep the
- * split-brain drift the mode vocabulary caused (owner directive 2026-08-15).
- * The key table matches the shared transport contract used by the other
- * fleet CLIs, so a key renamed there reaches this ratchet in the same change.
+ * Resolve the CLI transport from the environment. Retired storage-mode
+ * variables are inert — never read, never mapped, never a fallback — and the
+ * transport is selected by the API env pair alone: URL set without KEY (or KEY
+ * set without URL) is a hard error naming the missing variable.
  */
-const LEGACY_STORAGE_MODE_KEYS = [
-  "HASNA_TODOS_STORAGE_MODE",
-  "HASNA_TODOS_MODE",
-  "TODOS_STORAGE_MODE",
-  "TODOS_MODE",
-] as const;
-
-/**
- * Throw when a retired storage-mode variable is set. Naming the retired var and
- * the supported switches makes the error actionable without accepting the
- * value. Fires on SET, not on non-blank: a blank leftover variable is still a
- * stale fragment that must be deleted.
- */
-export function assertNoLegacyStorageMode(env: Env = process.env as Env): void {
-  for (const key of LEGACY_STORAGE_MODE_KEYS) {
-    if (Object.hasOwn(env, key) && env[key] !== undefined) {
-      throw new Error(
-        `REMOTE_STORAGE_MODE_REMOVED: ${key} was removed. Deployment modes no longer exist: delete the storage-mode variable. ` +
-          `The client uses the on-box SQLite store, or the HTTP API selected by ` +
-          `HASNA_TODOS_API_URL + HASNA_TODOS_API_KEY. ` +
-          `On the server, set HASNA_TODOS_DATABASE_URL to select the postgresql backend, ` +
-          `or leave it unset for sqlite.`,
-      );
-    }
-  }
-}
-
-/**
- * Resolve the CLI transport from the environment. Never accepts a storage-mode
- * variable, never maps a legacy value, and never falls back to SQLite from a
- * partial cloud configuration: URL set without KEY (or KEY set without URL) is
- * a hard error naming the missing variable.
- */
-export function resolveTodosCliStorageMode(env: Env = process.env as Env): TodosCliStorageModeResolution {
-  // The fail-loud ratchet runs BEFORE anything else: a stale mode variable does
-  // not get rescued by a complete API pair or a local DB path.
-  assertNoLegacyStorageMode(env);
-
+export function resolveTodosCliTransport(env: Env = process.env as Env): TodosCliTransportResolution {
   const urlValue = env.HASNA_TODOS_API_URL?.trim();
   const keyValue = env.HASNA_TODOS_API_KEY?.trim();
   if (urlValue && keyValue) {
     return {
-      mode: "http",
       transport: "http",
       selected: true,
       source: "HASNA_TODOS_API_URL+HASNA_TODOS_API_KEY",
@@ -188,7 +152,6 @@ export function resolveTodosCliStorageMode(env: Env = process.env as Env): Todos
     );
   }
   return {
-    mode: "sqlite",
     transport: "sqlite",
     selected: false,
     source: "default",
@@ -196,7 +159,7 @@ export function resolveTodosCliStorageMode(env: Env = process.env as Env): Todos
 }
 
 function requestedTransport(env: Env): TodosCliTransport {
-  return resolveTodosCliStorageMode(env).transport;
+  return resolveTodosCliTransport(env).transport;
 }
 
 function normalizeRemoteAuthorityUrl(value: string | undefined): string | null {
@@ -244,15 +207,15 @@ function normalizeRemoteAuthorityUrl(value: string | undefined): string | null {
 export function getTodosRemoteAuthorityConfigStatus(
   env: Env = process.env as Env,
 ): TodosRemoteAuthorityConfigStatus {
-  let resolution: TodosCliStorageModeResolution;
+  let resolution: TodosCliTransportResolution;
   try {
-    resolution = resolveTodosCliStorageMode(env);
+    resolution = resolveTodosCliTransport(env);
   } catch (error) {
     const issue = error instanceof Error ? error.message : String(error);
     return {
       selected: true,
       ok: false,
-      mode: "invalid",
+      transport: "invalid",
       api_url_configured: Boolean(env.HASNA_TODOS_API_URL?.trim()),
       api_key_configured: Boolean(env.HASNA_TODOS_API_KEY?.trim()),
       v1_base_url: null,
@@ -260,12 +223,12 @@ export function getTodosRemoteAuthorityConfigStatus(
       local_fallback: false,
     };
   }
-  const { mode, selected } = resolution;
+  const { transport, selected } = resolution;
   if (!selected) {
     return {
       selected: false,
       ok: true,
-      mode,
+      transport,
       api_url_configured: false,
       api_key_configured: false,
       v1_base_url: null,
@@ -296,7 +259,7 @@ export function getTodosRemoteAuthorityConfigStatus(
   return {
     selected: true,
     ok: issues.length === 0,
-    mode,
+    transport,
     api_url_configured: apiUrl !== null,
     api_key_configured: apiKeyConfigured,
     v1_base_url: apiUrl ? `${apiUrl}/v1` : null,
@@ -713,6 +676,20 @@ function unwrapTaskManifestEnvelope<T>(
   return (raw as Record<typeof key, T>)[key];
 }
 
+function unwrapTaskSubtreeTransferEnvelope<T>(
+  raw: unknown,
+  key: "capability" | "inspection" | "result",
+  route: string,
+): T {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || !(key in raw)) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a non-authoritative task-subtree-transfer response envelope; ` +
+        "local SQLite fallback is disabled",
+    );
+  }
+  return (raw as Record<typeof key, T>)[key];
+}
+
 function unwrapProjectRegistrationEnvelope<T>(
   raw: unknown,
   key: "capability" | "receipt" | "record" | "verification" | "page" | "validation",
@@ -924,6 +901,70 @@ export async function cloudMarkTaskManifestOutboxDelivered(
         "local SQLite fallback is disabled",
     );
   }
+}
+
+export async function cloudTaskSubtreeTransferCapability(
+  client: HasnaStorageClient,
+): Promise<TodosTaskSubtreeTransferCapability> {
+  const route = "/v1/task-subtree-transfer/capability";
+  return unwrapTaskSubtreeTransferEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.get<unknown>("/task-subtree-transfer/capability")),
+    "capability",
+    route,
+  );
+}
+
+export async function cloudInspectTaskSubtreeTransfer(
+  client: HasnaStorageClient,
+  input: unknown,
+): Promise<TodosTaskSubtreeTransferInspection> {
+  const route = "/v1/task-subtree-transfer/inspect";
+  return unwrapTaskSubtreeTransferEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/task-subtree-transfer/inspect", input)),
+    "inspection",
+    route,
+  );
+}
+
+export async function cloudApplyTaskSubtreeTransfer(
+  client: HasnaStorageClient,
+  input: unknown,
+): Promise<TodosTaskSubtreeTransferResult> {
+  const route = "/v1/task-subtree-transfer/apply";
+  return unwrapTaskSubtreeTransferEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/task-subtree-transfer/apply", input)),
+    "result",
+    route,
+  );
+}
+
+export async function cloudReadExactTaskSubtreeTransfer(
+  client: HasnaStorageClient,
+  receiptId: string,
+): Promise<TodosTaskSubtreeTransferResult> {
+  const route = "/v1/task-subtree-transfer/read-exact";
+  return unwrapTaskSubtreeTransferEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/task-subtree-transfer/read-exact", { receipt_id: receiptId })),
+    "result",
+    route,
+  );
+}
+
+export async function cloudRollbackTaskSubtreeTransfer(
+  client: HasnaStorageClient,
+  input: unknown,
+): Promise<TodosTaskSubtreeTransferResult> {
+  const route = "/v1/task-subtree-transfer/rollback";
+  return unwrapTaskSubtreeTransferEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/task-subtree-transfer/rollback", input)),
+    "result",
+    route,
+  );
 }
 
 /** Unwrap the `{ task }` envelope the todos `/v1` API returns for single tasks. */

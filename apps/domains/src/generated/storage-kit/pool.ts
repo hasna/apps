@@ -4,16 +4,48 @@
 
 // Postgres pool factory for the vendored Hasna storage kit.
 //
-// The single sanctioned way to open a cloud Postgres connection. TLS is
-// resolved through `tls.ts` (one correct approach), and env/mode resolution
-// runs through `mode.ts` (the contract). PURE REMOTE (Amendment A1): a Pool is
-// only ever built for `cloud` mode; there is no local/hybrid Postgres path.
+// The single sanctioned way to open a PostgreSQL connection for a server.
+// TLS is resolved through `tls.ts` (one correct approach), and the backend is
+// selected by the environment: `HASNA_<NAME>_DATABASE_URL` present means
+// PostgreSQL; absent means SQLite. There is no deployment-mode enum and no
+// local/cloud Postgres branching.
 
 import pg from "pg";
 import type { Pool, PoolConfig } from "pg";
-import { resolveStorageMode, resolveDatabaseUrl } from "./mode.js";
 import { resolveTlsConfig, type TlsResolveOptions } from "./tls.js";
 import { createQueryClient, type PoolQueryClient } from "./query.js";
+
+/** Upper-snake env token for an app name, e.g. `todos` -> `TODOS`. */
+function envToken(name: string): string {
+  return name.toUpperCase().replace(/-/g, "_");
+}
+
+function firstEnv(env: Record<string, string | undefined>, keys: readonly string[]): { key: string; value: string } | null {
+  for (const key of keys) {
+    const value = env[key]?.trim();
+    if (value) return { key, value };
+  }
+  return null;
+}
+
+/** The env keys a server's database URL is read from: canonical then alias. */
+export function databaseUrlEnvKeys(name: string): string[] {
+  const token = envToken(name);
+  return [`HASNA_${token}_DATABASE_URL`, `${token}_DATABASE_URL`];
+}
+
+/**
+ * Resolve the database URL value for an app, honoring the canonical then alias
+ * env keys. Returns `null` when unset. The caller is responsible for never
+ * logging the returned value.
+ */
+export function resolveDatabaseUrl(
+  name: string,
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  const hit = firstEnv(env, databaseUrlEnvKeys(name));
+  return hit ? hit.value : null;
+}
 
 export interface CreatePgPoolOptions extends TlsResolveOptions {
   connectionString: string;
@@ -58,32 +90,28 @@ export interface CloudPoolFromEnv {
 }
 
 /**
- * Resolve mode + database URL from the environment and build a cloud pool.
+ * Resolve the database URL from the environment and build a PostgreSQL pool.
  *
- * Throws when the resolved mode is not `cloud` (PURE REMOTE has no Postgres in
- * `local` mode) or when the database URL is missing. Never logs the URL.
+ * This is the server's PostgreSQL path: it requires
+ * `HASNA_<NAME>_DATABASE_URL` (or the `<NAME>_DATABASE_URL` alias) and throws
+ * when it is missing — fail-closed, because silently serving SQLite where a
+ * PostgreSQL deployment was configured is the defect class this contract
+ * removes. Never logs the URL.
  */
 export function createCloudPoolFromEnv(
   appName: string,
   options: CreateCloudPoolFromEnvOptions = {},
 ): CloudPoolFromEnv {
   const env = options.env ?? process.env;
-  const resolution = resolveStorageMode(appName, env);
-  if (resolution.mode !== "cloud") {
+  const dbHit = firstEnv(env, databaseUrlEnvKeys(appName));
+  if (!dbHit) {
     throw new Error(
-      `createCloudPoolFromEnv requires ${appName} storage mode 'cloud', got '${resolution.mode}'. ` +
-        `Set HASNA_${appName.toUpperCase().replace(/-/g, "_")}_STORAGE_MODE=cloud.`,
-    );
-  }
-  const connectionString = resolveDatabaseUrl(appName, env);
-  if (!connectionString) {
-    throw new Error(
-      `cloud mode for ${appName} needs a database URL. Set ` +
-        `HASNA_${appName.toUpperCase().replace(/-/g, "_")}_DATABASE_URL.`,
+      `createCloudPoolFromEnv requires a database URL for ${appName}. Set ` +
+        `HASNA_${envToken(appName)}_DATABASE_URL.`,
     );
   }
   const pool = createPgPool({
-    connectionString,
+    connectionString: dbHit.value,
     ...(options.ca !== undefined ? { ca: options.ca } : {}),
     ...(options.caCertPath !== undefined ? { caCertPath: options.caCertPath } : {}),
     env,
@@ -96,6 +124,6 @@ export function createCloudPoolFromEnv(
   });
   return {
     client: createQueryClient(pool),
-    connectionSource: resolution.databaseUrlSource ?? "unknown",
+    connectionSource: dbHit.key,
   };
 }

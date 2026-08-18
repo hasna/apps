@@ -173,13 +173,13 @@ const LEGACY_TODOS_API_URL = `TODOS${"_API_URL"}`;
 const LEGACY_TODOS_MODE = `TODOS${"_MODE"}`;
 const LEGACY_TODOS_STORAGE_MODE = `TODOS${"_STORAGE_MODE"}`;
 
-// The retired storage-mode ratchet arrays (REMOVED_STORAGE_MODE_ENV_KEYS,
-// LEGACY_STORAGE_MODE_KEYS, REMOVED_TODOS_ENV_KEYS) all end in the same two quoted
-// entries. Every emitted bundle spells that tail either multi-line (built .js)
-// or single-line (declaration .d.ts), so one occurrence regex matches both emits
-// and nothing else: a live bracket-indexed read of the bare mode key is not
-// preceded by the sibling key, so it survives the strip and still fails the
-// boundary.
+// The test-isolation scrub list (REMOVED_TODOS_ENV_KEYS in src/testing.ts) is
+// the only surviving surface that names the retired storage-mode keys: it must
+// NAME them in order to delete them from a test environment. Its emitted tail
+// spells the sibling-key pair either multi-line (built .js) or single-line
+// (declaration .d.ts), so one occurrence regex matches both emits and nothing
+// else: a live bracket-indexed read of the bare mode key is not preceded by
+// the sibling key, so it survives the strip and still fails the boundary.
 const LEGACY_STORAGE_MODE_RATCHET_TAIL = new RegExp(
   `"${escapeRegExp(LEGACY_TODOS_STORAGE_MODE)}",\\s*"${escapeRegExp(LEGACY_TODOS_MODE)}"`,
   "g",
@@ -234,23 +234,14 @@ const TEXT_BOUNDARY_EXEMPTIONS: { module: string; pattern: RegExp; occurrence: R
       "exemption immediately above for the full explanation and the same occurrence scoping.",
   },
   // —————— retired storage-mode vocabulary (PR #171) ——————
-  // PR #171 removed the storage-mode env selection axis. The removal feature ITSELF must
-  // name the retired keys: the server/client ratchet arrays hard-error on their presence,
-  // the admitted-local redaction blanks the unprefixed alias, and the cutover runbook
-  // documents the retirement. Those names are the deprecation vocabulary, not live reads —
-  // every one of the exemptions below strips only the exact emitted array-tail or
-  // assignment shape, so any OTHER spelling (a bracket-indexed read, a bare token in a
-  // different context, a new env var) survives the strip and still fails the boundary.
-  {
-    module: "dist/cli/index",
-    pattern: /\bTODOS_MODE\b/,
-    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
-    reason:
-      "the CLI bundles both the server-side and client-side ratchet arrays, which must NAME " +
-      "every retired storage-mode variable to hard-error on its presence (owner directive " +
-      "2026-08-15). Scoped to the quoted array-tail pair only: a bracket-indexed live read " +
-      "of the bare mode key is not preceded by the sibling key and would still fail.",
-  },
+  // PR #171 removed the storage-mode env selection axis. Two surfaces must still name
+  // the retired keys: the test-isolation scrub list (which deletes them from test
+  // environments) and the cutover runbook (which documents the retirement). The
+  // admitted-local redaction blanks the unprefixed API-url alias. Those names are
+  // deprecation vocabulary, not live reads — every one of the exemptions below strips
+  // only the exact emitted array-tail or assignment shape, so any OTHER spelling (a
+  // bracket-indexed read, a bare token in a different context, a new env var) survives
+  // the strip and still fails the boundary.
   {
     module: "dist/cli/index",
     pattern: /\bTODOS_API_URL\b/,
@@ -262,85 +253,13 @@ const TEXT_BOUNDARY_EXEMPTIONS: { module: string; pattern: RegExp; occurrence: R
       "empty-string assignment and would still fail.",
   },
   {
-    module: "dist/index",
-    pattern: /\bTODOS_MODE\b/,
-    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
-    reason:
-      "the package index bundles the retired storage-mode ratchet arrays, which must NAME " +
-      "the banned keys to hard-error on their presence. Scoped to the quoted array-tail pair " +
-      "only (see the dist/cli/index entry for the full rationale).",
-  },
-  {
-    module: "dist/mcp/index",
-    pattern: /\bTODOS_MODE\b/,
-    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
-    reason:
-      "the MCP bundle inlines the retired storage-mode ratchet arrays, which must NAME the " +
-      "banned keys to hard-error on their presence. Scoped to the quoted array-tail pair only.",
-  },
-  {
-    module: "dist/server/index",
-    pattern: /\bTODOS_MODE\b/,
-    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
-    reason:
-      "the server bundle inlines the retired storage-mode ratchet array, which must NAME the " +
-      "banned keys so the backend derivation can hard-error on their presence. Scoped to the " +
-      "quoted array-tail pair only.",
-  },
-  {
-    module: "dist/storage",
-    pattern: /\bTODOS_MODE\b/,
-    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
-    reason:
-      "the storage entry point exports the retired storage-mode ratchet array, which must " +
-      "NAME the banned keys to hard-error on their presence. Scoped to the quoted array-tail " +
-      "pair only.",
-  },
-  {
-    module: "dist/storage/config",
-    pattern: /\bTODOS_MODE\b/,
-    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
-    reason:
-      "the storage config declaration ships the retired storage-mode ratchet array, which " +
-      "must NAME the banned keys to hard-error on their presence. Scoped to the quoted " +
-      "array-tail pair only.",
-  },
-  {
-    module: "dist/registry",
-    pattern: /\bTODOS_MODE\b/,
-    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
-    reason:
-      "the registry entry point inlines the retired storage-mode ratchet array, which must " +
-      "NAME the banned keys to hard-error on their presence. Scoped to the quoted array-tail " +
-      "pair only.",
-  },
-  {
-    module: "dist/contracts",
-    pattern: /\bTODOS_MODE\b/,
-    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
-    reason:
-      "the contracts entry point inlines the retired storage-mode ratchet array, which must " +
-      "NAME the banned keys to hard-error on their presence. Scoped to the quoted array-tail " +
-      "pair only.",
-  },
-  {
-    module: "dist/project-registration",
-    pattern: /\bTODOS_MODE\b/,
-    occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
-    reason:
-      "the project-registration entry point inlines the retired storage-mode ratchet array, " +
-      "which must NAME the banned keys to hard-error on their presence. Scoped to the quoted " +
-      "array-tail pair only.",
-  },
-  {
     module: "dist/testing",
     pattern: /\bTODOS_MODE\b/,
     occurrence: LEGACY_STORAGE_MODE_RATCHET_TAIL,
     reason:
       "the test-isolation module ships the retired storage-mode key list it exists to delete, " +
-      "and must NAME the banned keys to do so. Scoped to the quoted array-tail pair only — " +
-      "mirrors the existing API-alias exemption this module already carries for the same " +
-      "reason.",
+      "and must NAME them to do so. Scoped to the quoted array-tail pair only — mirrors the " +
+      "existing API-alias exemption this module already carries for the same reason.",
   },
   {
     module: "docs/CUTOVER-RUNBOOK.md",

@@ -22,6 +22,9 @@ function testEnv(
 ): NodeJS.ProcessEnv {
   return {
     ...process.env,
+      HASNA_LOGS_API_URL: undefined,
+      HASNA_LOGS_API_KEY: undefined,
+    HOME: dataDir,
     HASNA_LOGS_DATA_DIR: dataDir,
     HASNA_LOGS_DB_PATH: join(dataDir, "logs.db"),
     HASNA_LOGS_FSYNC: "0",
@@ -742,5 +745,7 @@ describe("logs doctor CLI", () => {
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
-  });
+    // Ten concurrent bun worker processes + rotation need more than bun's
+    // default 5000ms per-test budget; the assertions are unchanged.
+  }, 60_000);
 });

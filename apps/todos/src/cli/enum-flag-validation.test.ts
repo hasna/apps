@@ -69,7 +69,7 @@ async function runLocal(args: string[], root: string): Promise<CliResult> {
 }
 
 /**
- * Run the CLI in self_hosted (remote) mode against a stub `/v1` authority, and
+ * Run the CLI against a stub hosted `/v1` authority, and
  * report every request it received. A request count of zero proves the CLI
  * rejected the value locally instead of asking the authority to filter on it.
  */

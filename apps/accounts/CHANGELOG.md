@@ -17,6 +17,15 @@ All notable changes to `@hasna/accounts` are documented here. The format is base
   never routes the transport (mode vocabulary stays removed) and is deleted
   from `process.env` before any resolver reads it.
 
+## [0.2.45] - 2026-08-19
+
+### Fixed
+
+- **Fresh Claude profiles provision the installed statusline command at birth.**
+  The provisioner validates the resolved binary path before persisting it, while
+  existing-profile launch, switch, and health paths remain source-driven and do
+  not sweep or rewrite existing profiles.
+
 ## [0.2.44] - 2026-08-15
 
 ## [0.2.43] - 2026-08-10

@@ -49,6 +49,7 @@ export {
   sqliteTodosProjectRegistrationSchemaSql,
 } from "./project-registration/index.js";
 export * from "./task-manifest/index.js";
+export * from "./task-subtree-transfer/index.js";
 export type {
   PostgresTodosProjectRegistrationBackendOptions,
   TodosProjectRegistrationAuthority,
@@ -2501,19 +2502,15 @@ export {
   exportSqliteTodosStorageSnapshot,
   getStorageDatabaseEnv,
   getStorageDatabaseUrl,
-  getStorageMode,
   getTodosStorageDatabaseEnv,
   getTodosStorageDatabaseUrl,
   getTodosStorageEnvName,
   getTodosStorageBackend,
-  getTodosStorageMode,
   importSqliteTodosStorageSnapshot,
   isTodosPostgresBackend,
-  isTodosRemoteStorageEnabled,
   loadStorageConfig,
   loadTodosStorageConfig,
   parseStorageBackend,
-  parseStorageMode,
   planRunArtifactsS3Sync,
   postgresTodosSyncSchemaSql,
   signAwsV4Request,
@@ -2553,7 +2550,6 @@ export type {
   TodosStorageImportResult,
   TodosStorageKind,
   TodosStorageBackend,
-  TodosStorageMode,
   TodosStorageTable,
   TodosStorageSnapshot,
   TodosPostgresStorageConfig,

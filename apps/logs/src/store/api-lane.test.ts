@@ -14,6 +14,9 @@
  * a helper exists.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { createHasnaStorageClient } from "@hasna/contracts/client/storage";
 import { createClientTransport } from "@hasna/contracts/client";
 import { buildCloudApp } from "../server/cloud/app.ts";
@@ -28,6 +31,7 @@ import type { LogEntry } from "../types/index.ts";
 const ORIGINAL_ENV = new Map<string, string | undefined>([
   ["HASNA_LOGS_API_URL", process.env.HASNA_LOGS_API_URL],
   ["HASNA_LOGS_API_KEY", process.env.HASNA_LOGS_API_KEY],
+  ["HOME", process.env.HOME],
 ]);
 
 function buildApiStore(): {
@@ -66,14 +70,15 @@ function buildApiStore(): {
     client: f.client,
     version: "9.9.9",
     signingSecret: SIGNING_SECRET,
+    keyStatus: async (): Promise<"active"> => "active",
   });
-  process.env.HASNA_LOGS_API_URL = "http://127.0.0.1:0/v1";
+  process.env.HASNA_LOGS_API_URL = "http://127.0.0.1:1/v1";
   process.env.HASNA_LOGS_API_KEY = tokenWith(["logs:read", "logs:write"]);
   const transport = createClientTransport("logs", process.env, {
     fetchImpl: async (input, init) =>
       app.fetch(new Request(String(input), init)),
   });
-  if (transport.transport !== "cloud-http") {
+  if (transport.transport !== "http") {
     throw new Error("expected http transport in api-lane tests");
   }
   const client = createHasnaStorageClient("logs", transport.client);
@@ -294,8 +299,11 @@ describe("ApiStore scan port (hosted scan-run surface)", () => {
 });
 
 beforeAll(() => {
-  process.env.HASNA_LOGS_API_URL = "http://127.0.0.1:0/v1";
+  process.env.HASNA_LOGS_API_URL = "http://127.0.0.1:1/v1";
   process.env.HASNA_LOGS_API_KEY = tokenWith(["logs:read", "logs:write"]);
+  // Point the client's disk tier ($HOME credential tier) at a temp dir so
+  // the machine's real cloud config cannot disagree with the test key.
+  process.env.HOME = mkdtempSync(join(tmpdir(), "logs-api-lane-home-"));
 });
 
 afterAll(() => {

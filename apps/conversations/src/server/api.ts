@@ -1160,6 +1160,16 @@ async function handleV1(
     return json(receipt, receipt.outcome === "accepted" ? 201 : 200);
   }
 
+  if (sub === "project-registration/channels/adopt-existing" && method === "POST") {
+    const request = projectChannelRegistrationRequest(await readJson(req));
+    assertProjectChannelRegistrationOperationIntent(request, "adopt_existing");
+    const receipt = await registerProjectChannelPg(
+      client,
+      request,
+    );
+    return json(receipt, receipt.outcome === "accepted" ? 201 : 200);
+  }
+
   if (sub === "project-registration/channels/receipts/terminal" && method === "GET") {
     const maxItems = positiveInteger(url.searchParams.get("max_items"));
     const responseByteLimit = positiveInteger(url.searchParams.get("response_byte_limit"));

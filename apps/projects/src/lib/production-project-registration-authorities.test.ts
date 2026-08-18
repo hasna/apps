@@ -293,6 +293,133 @@ describe("production project registration authorities", () => {
     expect(source).not.toContain("authorities: unavailableProjectRegistrationAuthorities()");
   });
 
+  test("routes pre-bound channel adoption through the shipped Conversations SDK method", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-authority-prebound-sdk-"));
+    const calls: Record<string, unknown>[] = [];
+    const channelId = "chn_1012ddb87c8f033cb40fdead018cdfc8";
+    const projectId = "wks_preboundchannel0001";
+    const zeroDigest = "0".repeat(64);
+    class ConversationsClientFixture {
+      async adoptExistingProjectChannel(body: Record<string, unknown>) {
+        calls.push(body);
+        return {
+          receipt_id: "receipt_prebound_sdk",
+          authority: "conversations",
+          route: "/v1/project-registration/channels",
+          package_version: "fixture-1.0.0",
+          authority_id: "conversations-fixture",
+          tenant_id: "tenant-fixture",
+          corpus_id: "conversations-corpus",
+          operation_id: "op-authority-prebound-sdk",
+          step_id: "conversations_channel",
+          resource_kind: "channel",
+          direction: "forward",
+          idempotency_key: "op-authority-prebound-sdk:forward",
+          request_digest: digest("request"),
+          precondition_digest: digest("precondition"),
+          outcome: "accepted",
+          reason: "adopted_preexisting",
+          target_id: channelId,
+          result_revision: "rev_prebound_channel_001",
+          result_digest: zeroDigest,
+          duplicate_of_receipt_id: null,
+          accepted_receipt_id: null,
+          created_by_operation: false,
+          prior_state: {
+            adoption: true,
+            target_id: channelId,
+            project_id: projectId,
+            revision: "rev_prebound_channel_001",
+            digest: zeroDigest,
+            message_ownership: ownership,
+          },
+          created_at: "2026-08-19T00:00:00.000Z",
+        };
+      }
+      async registerProjectChannel() {
+        throw new Error("create route must not receive pre-bound adoption");
+      }
+    }
+    const authority = productionProjectRegistrationAuthorities({
+      env: {
+        HASNA_CONVERSATIONS_API_URL: "https://conversations.example.test/v1",
+        HASNA_CONVERSATIONS_API_KEY: "fixture-auth",
+      },
+      importModule: async (specifier) => {
+        if (specifier === "@hasna/conversations/sdk") {
+          return { ConversationsClient: ConversationsClientFixture };
+        }
+        throw new Error(`unexpected fixture import: ${specifier}`);
+      },
+    }).conversations;
+    const ownership = {
+      message_count: 0,
+      first_message_id: null,
+      last_message_id: null,
+      message_ids_digest: zeroDigest,
+      message_project_digest: zeroDigest,
+      digest: zeroDigest,
+      preserved_digest: zeroDigest,
+    };
+    const request: ProjectRegistrationAuthorityRequest = {
+      operation_intent: "adopt_existing",
+      operation_id: "op-authority-prebound-sdk",
+      step_id: "conversations_channel",
+      resource_kind: "channel",
+      direction: "forward",
+      authority_route: "/v1/project-registration/channels",
+      package_version: "fixture-1.0.0",
+      authority_id: "conversations-fixture",
+      tenant_id: "tenant-fixture",
+      corpus_id: "conversations-corpus",
+      target_selector: "fleet-resources",
+      idempotency_key: "op-authority-prebound-sdk:forward",
+      request_digest: digest("request"),
+      precondition_digest: digest("precondition"),
+      project_id: projectId,
+      project_slug: "fleet-resources",
+      project_name: "Fleet Resources",
+      desired: {
+        channel: "fleet-resources",
+        project_id: projectId,
+        project_slug: "fleet-resources",
+        project_kind: "work",
+        registration_mode: "adopt_existing",
+        target_id: channelId,
+        expected_project_id: projectId,
+        expected_revision: "rev_prebound_channel_001",
+        expected_digest: zeroDigest,
+        expected_message_ownership: ownership,
+      },
+      adopt_existing: {
+        target_id: channelId,
+        expected_project_id: projectId,
+        expected_revision: "rev_prebound_channel_001",
+        expected_digest: zeroDigest,
+        expected_message_ownership: ownership,
+      },
+      target: ProjectRegistrationPathHandle.fromPath(join(root, "project")),
+      response_byte_limit: 65_536,
+      time_budget_ms: 5_000,
+    };
+    try {
+      await expect(authority.create(request)).resolves.toMatchObject({
+        outcome: "accepted",
+        reason: "adopted_preexisting",
+        target_id: channelId,
+        created_by_operation: false,
+      });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        operation_intent: "adopt_existing",
+        adopt_existing: request.adopt_existing,
+        target_digest: request.target.digest,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("fails closed before imports when neither an API authority nor an explicit local database is configured", async () => {
     let imported = false;
     const report = await preflightProjectRegistrationAuthorities(

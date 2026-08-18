@@ -55,6 +55,10 @@ const expectedExports = {
     types: "./dist/task-manifest.d.ts",
     import: "./dist/task-manifest.js",
   },
+  "./task-subtree-transfer": {
+    types: "./dist/task-subtree-transfer.d.ts",
+    import: "./dist/task-subtree-transfer.js",
+  },
 };
 
 describe("package subpath exports", () => {

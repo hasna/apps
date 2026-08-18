@@ -1,12 +1,13 @@
 /**
  * Versioned /v1 HTTP surface for testers-serve, plus the health/ready/version
- * probes. Backed by cloud Postgres (Amendment A1 pure-remote) and guarded by
- * @hasna/contracts API-key auth. Returns `null` when the request is not one of
- * these routes so the caller can fall through to the legacy dashboard handler.
+ * probes. Backed by Postgres when `HASNA_TESTERS_DATABASE_URL` is configured
+ * (SQLite otherwise) and guarded by @hasna/contracts API-key auth. Returns
+ * `null` when the request is not one of these routes so the caller can fall
+ * through to the legacy dashboard handler.
  */
 import { verifyApiKey, ApiKeyStore, type ApiKeyVerifier } from "@hasna/contracts/auth";
 import pkg from "../../package.json";
-import { getCloudClient, isCloudMode, APP_NAME } from "../db/cloud.js";
+import { getCloudClient, databaseUrlPresent, APP_NAME } from "../db/cloud.js";
 import { getPgMigrations } from "../db/pg-migrate.js";
 import { checkHealth, checkReady } from "../generated/storage-kit/health.js";
 import * as store from "../db/pg-store.js";
@@ -104,47 +105,46 @@ export async function handleV1(
   searchParams: URLSearchParams,
 ): Promise<Response | null> {
   const version = pkg.version;
-  const mode = isCloudMode() ? "cloud" : "local";
+  const dbConfigured = databaseUrlPresent();
 
   // ── Public probes ─────────────────────────────────────────────────────
   if (pathname === "/health" && method === "GET") {
-    return json({ status: "ok", version, mode });
+    return json({ status: "ok", version });
   }
   if (pathname === "/version" && method === "GET") {
-    return json({ status: "ok", version, mode });
+    return json({ status: "ok", version });
   }
   if (pathname === "/openapi.json" && method === "GET") {
     const { buildOpenApiDocument } = await import("./openapi.js");
     return json(buildOpenApiDocument(version));
   }
   if (pathname === "/ready" && method === "GET") {
-    if (mode !== "cloud") {
-      return json({ status: "ok", version, mode, pendingMigrations: [] });
+    if (!dbConfigured) {
+      return json({ status: "ok", version, pendingMigrations: [] });
     }
     try {
       const db = getCloudClient();
       const health = await checkHealth(db);
-      if (!health.ok) return json({ status: "degraded", version, mode, error: health.error }, 503);
+      if (!health.ok) return json({ status: "degraded", version, error: health.error }, 503);
       const ready = await checkReady(db, getPgMigrations());
       return json(
         {
           status: ready.ok ? "ready" : "migrating",
           version,
-          mode,
           pendingMigrations: ready.pendingMigrations,
         },
         ready.ok ? 200 : 503,
       );
     } catch (e) {
-      return json({ status: "degraded", version, mode, error: e instanceof Error ? e.message : String(e) }, 503);
+      return json({ status: "degraded", version, error: e instanceof Error ? e.message : String(e) }, 503);
     }
   }
 
   if (!pathname.startsWith("/v1/")) return null;
 
-  // ── /v1/* requires cloud mode + auth ──────────────────────────────────
-  if (mode !== "cloud") {
-    return err("service not in cloud mode (set HASNA_TESTERS_STORAGE_MODE=cloud with a DATABASE_URL)", 503);
+  // ── /v1/* requires the Postgres backend + auth ────────────────────────
+  if (!dbConfigured) {
+    return err("service has no database configured (set HASNA_TESTERS_DATABASE_URL)", 503);
   }
   const authError = await authenticate(req, method, pathname);
   if (authError) return authError;

@@ -12,7 +12,7 @@ import type { Plan, PlanProjectLinkReceipt, Project, Task } from "../types/index
 import {
   getTodosCloudClient,
   getTodosRemoteAuthorityConfigStatus,
-  resolveTodosCliStorageMode,
+  resolveTodosCliTransport,
   isCloudRouting,
   resetTodosCloudClient,
   cloudListTasks,
@@ -296,19 +296,22 @@ describe("todos client transport resolver (API pair, no storage modes)", () => {
     expect(isCloudRouting(pairOnly)).toBe(true);
   });
 
-  test("any retired storage-mode variable throws, never selects a transport", () => {
-    expect(() => getTodosCloudClient({
+  test("retired storage-mode variables are inert: never read, never selected", () => {
+    // The removal is complete: the mode vocabulary is not read at all. A stale
+    // variable neither selects a transport nor throws — the API env pair is
+    // the sole selector.
+    const withPair = {
       HASNA_TODOS_STORAGE_MODE: "cloud",
       HASNA_TODOS_API_URL: "https://todos.example.com",
       HASNA_TODOS_API_KEY: "hasna_todos_test_key",
-    } as never)).toThrow("REMOTE_STORAGE_MODE_REMOVED");
-    expect(() => resolveTodosCliStorageMode({ HASNA_TODOS_STORAGE_MODE: "remtoe" })).toThrow(
-      "REMOTE_STORAGE_MODE_REMOVED",
-    );
-    expect(() => resolveTodosCliStorageMode({
+    } as never;
+    expect(getTodosCloudClient(withPair)).not.toBeNull();
+    expect(isCloudRouting(withPair)).toBe(true);
+    expect(resolveTodosCliTransport({ HASNA_TODOS_STORAGE_MODE: "remtoe" }).transport).toBe("sqlite");
+    expect(resolveTodosCliTransport({
       HASNA_TODOS_STORAGE_MODE: "local",
       TODOS_STORAGE_MODE: "remote",
-    })).toThrow("REMOTE_STORAGE_MODE_REMOVED");
+    }).transport).toBe("sqlite");
   });
 
   test("KEY without URL refuses with the missing variable named, without local fallback", () => {
@@ -328,13 +331,9 @@ describe("todos client transport resolver (API pair, no storage modes)", () => {
     );
   });
 
-  test("a blank retired storage-mode variable is still a hard error", () => {
-    expect(() => resolveTodosCliStorageMode({
-      HASNA_TODOS_STORAGE_MODE: "   ",
-    })).toThrow("REMOTE_STORAGE_MODE_REMOVED");
-    expect(() => resolveTodosCliStorageMode({
-      HASNA_TODOS_MODE: "",
-    })).toThrow("REMOTE_STORAGE_MODE_REMOVED");
+  test("a blank retired storage-mode variable is inert too", () => {
+    expect(resolveTodosCliTransport({ HASNA_TODOS_STORAGE_MODE: "   " }).transport).toBe("sqlite");
+    expect(resolveTodosCliTransport({ HASNA_TODOS_MODE: "" }).transport).toBe("sqlite");
   });
 
   test.each([
@@ -2776,12 +2775,14 @@ describe("requireTodosRemoteAuthorityEnv", () => {
         HASNA_TODOS_API_URL: "https://todos.example.com",
       }),
     ).toThrow(/REMOTE_API_KEY_MISSING/);
+    // A retired storage-mode variable is inert: the partial API pair still
+    // refuses, naming the missing variable, never the stale fragment.
     expect(() =>
       requireTodosRemoteAuthorityEnv({
         HASNA_TODOS_STORAGE_MODE: "cloud",
         HASNA_TODOS_API_URL: "https://todos.example.com",
       }),
-    ).toThrow(/REMOTE_STORAGE_MODE_REMOVED/);
+    ).toThrow(/REMOTE_API_KEY_MISSING/);
   });
 
   test("passes every other variable through unchanged", () => {

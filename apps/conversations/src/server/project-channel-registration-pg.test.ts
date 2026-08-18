@@ -1119,7 +1119,8 @@ describe("PostgreSQL project channel registration authority", () => {
         },
       },
     });
-    const transition = accepted.prior_state!.message_transition;
+    if (!accepted.prior_state || "adoption" in accepted.prior_state) throw new Error("expected bind prior state");
+    const transition = accepted.prior_state.message_transition;
     expect(transition.first_message_id).toBe(229);
     expect(transition.last_message_id).toBe(229);
     expect(transition.message_ids_digest).toBeString();
@@ -1559,6 +1560,74 @@ describe("PostgreSQL project channel registration authority", () => {
     )).toMatchObject({
       outcome: "duplicate_of_accepted",
       duplicate_of_receipt_id: bound.receipt_id,
+    });
+    const adoptedChannel = client.state.channels.get(existingChannel.name)!;
+    const adoptedRecord = projectChannelRegistrationChannelRecord(adoptedChannel as never);
+    const emptyMessageDigest = projectChannelRegistrationDigest([]);
+    const adoptionOwnership = {
+      message_count: 0,
+      first_message_id: null,
+      last_message_id: null,
+      message_ids_digest: emptyMessageDigest,
+      message_project_digest: emptyMessageDigest,
+      digest: emptyMessageDigest,
+      preserved_digest: emptyMessageDigest,
+    };
+    const adoptDesired = {
+      channel: existingChannel.name,
+      project_id: "wks_ys8tzpsZJMNtx0ORZtLsA",
+      project_slug: existingChannel.name,
+      project_kind: "work",
+      registration_mode: "adopt_existing",
+      target_id: existingChannel.id,
+      expected_project_id: "wks_ys8tzpsZJMNtx0ORZtLsA",
+      expected_revision: adoptedRecord.revision,
+      expected_digest: adoptedRecord.digest,
+      expected_message_ownership: adoptionOwnership,
+    };
+    const adoptBody = {
+      ...bindBody,
+      operation_intent: "adopt_existing",
+      operation_id: "api-adopt-existing",
+      idempotency_key: "api-adopt-existing:forward",
+      request_digest: projectChannelRegistrationDigest(adoptDesired),
+      precondition_digest: projectChannelRegistrationDigest({
+        target_id: existingChannel.id,
+        target_selector: existingChannel.name,
+        expected_project_id: "wks_ys8tzpsZJMNtx0ORZtLsA",
+        expected_revision: adoptedRecord.revision,
+        expected_digest: adoptedRecord.digest,
+        expected_message_ownership: adoptionOwnership,
+        desired_project_id: "wks_ys8tzpsZJMNtx0ORZtLsA",
+      }),
+      desired: adoptDesired,
+      bind_existing: undefined,
+      adopt_existing: {
+        target_id: existingChannel.id,
+        expected_project_id: "wks_ys8tzpsZJMNtx0ORZtLsA",
+        expected_revision: adoptedRecord.revision,
+        expected_digest: adoptedRecord.digest,
+        expected_message_ownership: adoptionOwnership,
+      },
+    };
+    const adopted = await transport.post<Record<string, unknown>>(
+      "project-registration/channels/adopt-existing",
+      adoptBody,
+    );
+    expect(adopted).toMatchObject({
+      outcome: "accepted",
+      reason: "adopted_preexisting",
+      target_id: existingChannel.id,
+      created_by_operation: false,
+      prior_state: { adoption: true },
+    });
+    expect(client.state.channels.get(existingChannel.name)).toEqual(adoptedChannel);
+    expect(await transport.post<Record<string, unknown>>(
+      "project-registration/channels/adopt-existing",
+      adoptBody,
+    )).toMatchObject({
+      outcome: "duplicate_of_accepted",
+      duplicate_of_receipt_id: adopted.receipt_id,
     });
     await expect(transport.post(
       "project-registration/channels",

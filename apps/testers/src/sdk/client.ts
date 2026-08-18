@@ -2,11 +2,11 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Testers API 0.0.78
+// Source: Testers API 0.0.91
 
-export interface Health { "status": string; "version": string; "mode": string }
+export interface Health { "status": string; "version": string }
 
-export interface Ready { "status": string; "version": string; "mode": string; "pendingMigrations"?: Array<string> }
+export interface Ready { "status": string; "version": string; "pendingMigrations"?: Array<string> }
 
 export interface Project { "id"?: string; "name"?: string; "description"?: string; "baseUrl"?: string; "createdAt"?: string; "updatedAt"?: string }
 
@@ -27,6 +27,16 @@ export interface Persona { "id"?: string; "shortId"?: string; "projectId"?: stri
 export interface CreatePersona { "name": string; "role": string; "description"?: string; "instructions"?: string; "traits"?: Array<string>; "goals"?: Array<string>; "projectId"?: string }
 
 export interface DeleteResult { "deleted": boolean }
+
+export interface ScenarioCount { "count": number }
+
+export interface ImportScenario { "id": string; "shortId"?: string; "projectName"?: string; "name": string; "description"?: string; "steps"?: Array<string>; "tags"?: Array<string>; "priority"?: "low" | "medium" | "high" | "critical"; "createdAt"?: string; "updatedAt"?: string }
+
+export interface ImportProject { "name": string; "path"?: string; "scenarioPrefix"?: string; "scenarioCounter"?: number }
+
+export interface ImportScenarios { "projects"?: Array<ImportProject>; "scenarios"?: Array<ImportScenario> }
+
+export interface ImportResult { "projects"?: { "created"?: number; "matched"?: number }; "scenarios": { "inserted"?: number; "updated"?: number; "total"?: number } }
 
 export interface TestersClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
@@ -64,7 +74,14 @@ export class TestersClient {
     const url = new URL(this.baseUrl + path);
     if (opts.query) {
       for (const [key, value] of Object.entries(opts.query)) {
-        if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+        if (value === undefined || value === null) continue;
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item !== undefined && item !== null) url.searchParams.append(key, String(item));
+          }
+        } else {
+          url.searchParams.set(key, String(value));
+        }
       }
     }
     const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };
@@ -228,7 +245,7 @@ export class TestersClient {
     }
 
     /** List scenarios */
-    async listScenarios(query?: { "projectId"?: string; "limit"?: number }, init?: RequestInit): Promise<Array<Scenario>> {
+    async listScenarios(query?: { "projectId"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<Array<Scenario>> {
       return this.request("GET", `/v1/scenarios`, {
         body: undefined,
         query,
@@ -239,6 +256,24 @@ export class TestersClient {
     /** Create scenario */
     async createScenario(body: CreateScenario, init?: RequestInit): Promise<Scenario> {
       return this.request("POST", `/v1/scenarios`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Count all scenarios */
+    async countScenarios(init?: RequestInit): Promise<ScenarioCount> {
+      return this.request("GET", `/v1/scenarios/count`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Idempotent bulk import of scenarios (upsert by id) and their projects (by name) */
+    async importScenarios(body: ImportScenarios, init?: RequestInit): Promise<ImportResult> {
+      return this.request("POST", `/v1/scenarios/import`, {
         body,
         query: undefined,
         init,

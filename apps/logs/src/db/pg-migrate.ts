@@ -19,7 +19,7 @@ import {
   type Migration,
   MigrationLedger,
   type MigrationResult,
-  createCloudPoolFromEnv,
+  createServerPoolFromEnv,
   defineMigration,
 } from "../generated/storage-kit/index.ts";
 import { PG_MIGRATIONS } from "./pg-migrations.ts";
@@ -47,8 +47,8 @@ export interface RunMigrationsOptions {
  * Environment for migrations. Migrations run DDL (CREATE TABLE …), so they need
  * the owning role. When `HASNA_LOGS_OWNER_DATABASE_URL` is set (the ECS
  * migration task injects the owner DSN there) it takes precedence over the
- * least-privileged app DSN the service itself uses. Storage mode is forced to
- * `cloud` for migration runs.
+ * least-privileged app DSN the service itself uses. The owner DSN selects the
+ * postgresql backend for migration runs.
  */
 function migrationEnv(): Record<string, string | undefined> {
   const owner =
@@ -56,7 +56,6 @@ function migrationEnv(): Record<string, string | undefined> {
     process.env.LOGS_OWNER_DATABASE_URL?.trim();
   return {
     ...process.env,
-    HASNA_LOGS_STORAGE_MODE: "cloud",
     ...(owner ? { HASNA_LOGS_DATABASE_URL: owner } : {}),
   };
 }
@@ -68,7 +67,7 @@ function migrationEnv(): Record<string, string | undefined> {
 export async function runLogsCloudMigrations(
   options: RunMigrationsOptions = {},
 ): Promise<MigrationResult> {
-  const { client } = createCloudPoolFromEnv(LOGS_APP_NAME, {
+  const { client } = createServerPoolFromEnv(LOGS_APP_NAME, {
     applicationName: options.applicationName ?? "logs-migrate",
     max: 4,
     env: migrationEnv(),
