@@ -1,16 +1,34 @@
 # Changelog
 
-## [4.3.18] - 2026-06-29
+## [4.3.18] - 2026-08-14
 ### Changed
 - Removed the retired shared cloud MCP helper registration and dependency from
   the terminal package.
 - Replaced the README legacy sync section with the terminal-owned local storage
   boundary.
 - Added source and packed-artifact no-cloud release gates.
+- Fixed secret-scan findings in the imported terminal subtree (credential-pattern
+  hygiene in shipped files and docs).
 
 This is a patch release because the shared cloud helper is being retired across
 the open-source package set; terminal-owned functionality remains local and the
 MCP server still exposes the terminal-native tool groups.
+
+## [4.3.17] - 2026-06-27
+### Changed
+- Migrated terminal legacy files into the existing data directory.
+
+## [4.3.16] - 2026-06-27
+### Changed
+- Migrated the terminal legacy data directory to the canonical `~/.hasna/terminal`
+  location.
+
+## [4.3.15] - 2026-07-07
+### Changed
+- Hardened MCP command timeouts (bounded exec windows with explicit timeouts).
+- Compacted CLI and MCP output defaults — gradual disclosure for list and status
+  commands.
+- Redacted snapshot environment values.
 
 ## [0.7.0] - 2026-03-15
 ### Added
