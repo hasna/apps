@@ -57,6 +57,11 @@
  * member now ships ./sdk, so the recorded exception that passes was a
  * stale-entry failure under the two-sided contract (main-gate repair,
  * todos b66b3f04).
+ * 2026-08-18 (rebase repair, todos b66b3f04): the context and crawl
+ * manifest-missing exception entries DELETED — both members gained
+ * hasna.contract.json in the contracts-align wave 2 merges, so the
+ * recorded exceptions that passed were stale-entry failures under the
+ * two-sided contract.
  * The exception registry is DATA, not prose: every entry
  * is keyed to a measured violation class and carries the reason and the
  * tracked remediation task. When a violation is fixed, DELETE its exception
@@ -303,8 +308,6 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "brains", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "browser", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "computer", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "context", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "crawl", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "evals", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "markdown", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "repos", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
