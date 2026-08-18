@@ -390,7 +390,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "knowledge",
-    cause: "manifest_valid: service-class manifest declares no service surface (service repos must declare at least one).",
+    cause: "storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required; credential_seam_compliance: src/cli.ts reads HASNA_KNOWLEDGE_API_KEY from the process environment. Manifest schema-valid at kit 0.11.1 with all four surfaces declared.",
     task: "todos a8c97621 (contracts task — knowledge)",
   },
   {
