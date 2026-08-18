@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.1
+
+### Patch Changes
+
+- 8de5bb5: Release-line reconciliation: queue the registry release of the absorbed 0.11.0 tree (the registry still holds 0.10.6; the import landed 0.11.0 in-tree ahead of the registry). No functional changes — this patch lets the release lane publish and clears the KNOWN_NPM_DRIFT record (reconcile task 48a6ef7f).
+
 All notable changes to `@hasna/contracts` are documented here.
 
 ## [0.11.0] - unreleased
@@ -21,6 +27,7 @@ absorption lines were previously recorded here. The full set:
   They are recorded under 0.11.0 in git history only. The remaining items
   below are genuine 0.11.0 material: the published tarball predates them and
   carries no `prepare` script.
+
 - Import contracts: mono absorption adaptations — the `prepare` build script
   and `@types/node` — plus the install-gate absorption fix and checklist-9
   redaction.
@@ -123,10 +130,10 @@ received a build predating all of them.
 > the next release. It is recorded here rather than quietly rewritten.
 >
 > The cause is worth keeping, because it is cheap to repeat: the release was
-> *named* for the three commits that motivated it, and the scope was reasoned
+> _named_ for the three commits that motivated it, and the scope was reasoned
 > from those three rather than measured from the last published tree.
 > `git diff --stat v0.10.0 HEAD` before writing the entry — `19 files changed,
-> 4987 insertions(+), 171 deletions(-)`, 15 commits — refutes the "three" in
+4987 insertions(+), 171 deletions(-)`, 15 commits — refutes the "three" in
 > about one second. Found by adversarial review, after merge and after publish.
 >
 > **This matters beyond bookkeeping: the TLS/DSN changes below alter connection
@@ -626,7 +633,7 @@ into every scaffolded repo.
   `.strict()` plus `additionalProperties: false` in both JSON-Schema copies —
   rather than the field being ignored. Both value spellings (`self_hosted`,
   `self-hosted`) are covered, and surface-level `deploymentModes` fails too.
-  Omission now validates (the old schema *required* the field per surface);
+  Omission now validates (the old schema _required_ the field per surface);
   both directions are pinned red-first in `tests/no-deployment-modes.test.ts`.
 - **`STORAGE_MODES` becomes `["sqlite", "postgres"]`** — the SERVER's internal
   storage, matching `STORAGE_ENGINES`. `postgresql` normalizes to `postgres`;
@@ -820,7 +827,7 @@ here, and none flips the other way. Each of the three causes below was
 demonstrated on a running fixture, and every fix is pinned by a test that fails
 on 0.8.1.
 
-Not all fourteen are *executable loads*, and the distinction is recorded rather
+Not all fourteen are _executable loads_, and the distinction is recorded rather
 than smoothed over: some are package resolution without execution, one is a
 capability withdrawal on a shape that does no package resolution at all, and two
 are lockfile text naming the package outside any edge the graph walk can read.
@@ -835,7 +842,7 @@ a planted stub, so 0.8.1's `exit 0` there was a genuine miss.
   `Bun.resolveSync` and `require.resolve` perform package resolution and return a
   path without executing (and throw when the package is absent, so either way
   they are a working presence probe); `new Worker(new URL("…", import.meta.url))`
-  does *not* do package resolution at all — measured, it resolves relative to the
+  does _not_ do package resolution at all — measured, it resolves relative to the
   importing file. The exemption was also claimed by FILENAME at any depth — from
   `dist/`, from the repo root, from `config/` — so shipped build output could
   carry the suppressed name. Now: the path is anchored to exactly
@@ -876,7 +883,7 @@ a planted stub, so 0.8.1's `exit 0` there was a genuine miss.
   reference anywhere". Paths with no source-directory segment (`app/api/…`),
   `tests/` and `test/`, an on-disk `node_modules` copy with no manifest entry,
   `Dockerfile`/`.tf`/extensionless `bin` scripts, assembled (`"@hasna/" +
-  "cloud"`) and escaped (`"\x40hasna/cloud"`) specifiers, and a `git+ssh:`
+"cloud"`) and escaped (`"\x40hasna/cloud"`) specifiers, and a `git+ssh:`
   dependency installing under the package name are all out of scope. Each is
   pinned by a test so closing one cannot happen silently.
 - Schemas, verdict vocabulary and exit-code semantics are unchanged. Repos whose
@@ -889,7 +896,7 @@ a planted stub, so 0.8.1's `exit 0` there was a genuine miss.
 
 - `no-cloud-scan` previously matched its runtime patterns as bare substrings of
   raw file text, so a dependency edge, a string naming a package, and a comment
-  saying the package had been *removed* all scored the same. Already-remediated
+  saying the package had been _removed_ all scored the same. Already-remediated
   repos therefore failed the gate: `@hasna/connectors@1.4.0` reported on a JSDoc
   line recording a removed import and on the boundary guard test that the
   remediation pattern itself mandates.
@@ -897,7 +904,7 @@ a planted stub, so 0.8.1's `exit 0` there was a genuine miss.
   UTF-16 aligned, failing open to the raw text when the parse is detectably
   lost. `.json`, `.jsx` and `.tsx` are never masked, because guessing their
   comment syntax would cost a false negative.
-- The mandated boundary guard test is allowlisted once, for module *mentions*
+- The mandated boundary guard test is allowlisted once, for module _mentions_
   only. Config patterns are never exempt, and any computed `import`/`require` —
   identifier, backtick, template, or concatenation — withdraws the exemption.
 - `registerCloudTools`/`registerCloudCommands` are scoped to bindings imported
@@ -923,7 +930,7 @@ a planted stub, so 0.8.1's `exit 0` there was a genuine miss.
   `{ engine, reason, reviewedBy?, expiresAt? }`, typed and unique per engine
   with a non-empty reason.
 - A waiver-eligible `cli-with-store` repo may now declare `storage.engines:
-  ["sqlite"]` when `postgres` carries a waiver, instead of fabricating
+["sqlite"]` when `postgres` carries a waiver, instead of fabricating
   PostgreSQL support to pass the gate. Only `postgres` is waivable — SQLite
   stays the non-waivable local source of truth.
 - A waiver is refused for every manifest that already claims PostgreSQL is in
@@ -978,13 +985,13 @@ a planted stub, so 0.8.1's `exit 0` there was a genuine miss.
   and gated exactly as in `0.7.1`; every existing check id, status, and pass
   detail is unchanged, verified by a byte-for-byte report comparison against
   `0.7.1` over a no-waiver manifest corpus.
-- Three caveats. The `manifest_valid` *failure* detail for a sqlite-only
+- Three caveats. The `manifest_valid` _failure_ detail for a sqlite-only
   `cli-with-store` now names the waiver mechanism, so a CI job asserting the old
   exact message needs updating. `metadata.conformance` has always carried
   `catchall`, so a repo that already used a `waivedStorageEngines` key with
   different semantics now has it interpreted, failing closed when it is
   ineligible. And, as with `waivedSurfaces`, the field carries `.default([])`,
-  so `ServiceContractMetadata`'s *output* type gains a required
+  so `ServiceContractMetadata`'s _output_ type gains a required
   `waivedStorageEngines` property for TypeScript callers constructing it.
 - Most existing `cli-with-store` repos stay ineligible for now because they ship
   `<name>-serve`. Widening the waiver later is backwards-compatible; narrowing
@@ -1136,17 +1143,17 @@ ground truth:
 
 Annotated tags were created so every published npm version is anchored to a commit:
 
-| npm version | git anchor | note |
-|---|---|---|
-| 0.1.0 | efcdd68 | exact version-bump commit |
-| 0.1.1 | 3ca1644 | exact |
-| 0.2.0 | 42ef93e | exact |
-| 0.2.1 | a531712 | exact |
-| 0.2.2 | e4d5b63 | exact |
-| 0.4.0 | 42a1287 | exact |
-| 0.4.1 | e4baf61 | exact |
-| 0.4.2 | e4baf61 | out-of-band build; content-equivalent to 0.4.1 commit + version bump |
-| 0.5.2 | c61d6b4 | out-of-band build; content-equivalent to main HEAD + version bump; original gitHead orphaned |
+| npm version | git anchor | note                                                                                         |
+| ----------- | ---------- | -------------------------------------------------------------------------------------------- |
+| 0.1.0       | efcdd68    | exact version-bump commit                                                                    |
+| 0.1.1       | 3ca1644    | exact                                                                                        |
+| 0.2.0       | 42ef93e    | exact                                                                                        |
+| 0.2.1       | a531712    | exact                                                                                        |
+| 0.2.2       | e4d5b63    | exact                                                                                        |
+| 0.4.0       | 42a1287    | exact                                                                                        |
+| 0.4.1       | e4baf61    | exact                                                                                        |
+| 0.4.2       | e4baf61    | out-of-band build; content-equivalent to 0.4.1 commit + version bump                         |
+| 0.5.2       | c61d6b4    | out-of-band build; content-equivalent to main HEAD + version bump; original gitHead orphaned |
 
 ### Follow-ups (to prevent silent divergence)
 
