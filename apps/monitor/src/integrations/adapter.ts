@@ -60,6 +60,12 @@ export interface EffectOutcome {
 /**
  * Persisted effect record. Field-for-field the slug_effects row (camelCase);
  * the SQLEffectStore implemented by MON-V2-02/03 will persist the same shape.
+ *
+ * `externalId` is null while the outcome is failed or unknown: no loop is
+ * proven for the CURRENT request digest. An ambiguous prior (timeout) may
+ * still have a committed loop in the surface store — the caller reconciles
+ * by the effect label before creating (adapter contract; never retry by
+ * creating on top of an unconfirmed prior).
  */
 export interface EffectRecord {
   effectKey: string;
