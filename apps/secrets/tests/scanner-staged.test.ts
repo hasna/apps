@@ -11,7 +11,7 @@ const rootDir = join(import.meta.dir, "..");
 let testDir: string;
 
 beforeEach(() => {
-  testDir = join(tmpdir(), `open-secrets-staged-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  testDir = join(tmpdir(), `secrets-staged-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
 });
 
@@ -49,8 +49,8 @@ function git(args: string[], cwd = testDir): void {
 
 function initRepo(): void {
   git(["init"]);
-  git(["config", "user.name", "Open Secrets Test"]);
-  git(["config", "user.email", "open-secrets-test@example.invalid"]);
+  git(["config", "user.name", "Hasna Secrets Test"]);
+  git(["config", "user.email", "secrets-test@example.invalid"]);
 }
 
 function crc32(buffer: Buffer): number {

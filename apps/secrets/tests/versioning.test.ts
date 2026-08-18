@@ -37,7 +37,7 @@ let dbPath: string;
 let keyDir: string;
 
 beforeEach(async () => {
-  testDir = join(tmpdir(), "open-secrets-versioning-test", `vt-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  testDir = join(tmpdir(), "secrets-versioning-test", `vt-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
   dbPath = join(testDir, "vault.db");
   // Pin the local master-key dir so CLI children spawned by value-safety tests

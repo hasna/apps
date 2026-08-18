@@ -13,7 +13,7 @@ const setSecret = _store.setSecret.bind(_store);
 let testDir: string;
 
 beforeEach(async () => {
-  testDir = join(tmpdir(), "open-secrets-status", `os-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  testDir = join(tmpdir(), "secrets-status", `os-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
   process.env.OPEN_SECRETS_DB = join(testDir, "vault.db");
   resetDb();

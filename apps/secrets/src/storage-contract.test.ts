@@ -120,7 +120,7 @@ describe("secrets storage surface contract", () => {
   });
 
   it("LocalStore feedback works on a pre-existing vault missing the category column", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-secrets-fb-"));
+    const dir = mkdtempSync(join(tmpdir(), "secrets-fb-"));
     const dbPath = join(dir, "vault.db");
     // Simulate an OLD vault: feedback table created before `category` existed.
     const seed = new Database(dbPath);
@@ -149,7 +149,7 @@ describe("secrets storage surface contract", () => {
   });
 
   it("keeps MCP scan roots inside the real server working directory", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "open-secrets-mcp-root-"));
+    const tempRoot = mkdtempSync(join(tmpdir(), "secrets-mcp-root-"));
     const cwd = join(tempRoot, "cwd");
     const child = join(cwd, "child");
     const outside = join(tempRoot, "outside");

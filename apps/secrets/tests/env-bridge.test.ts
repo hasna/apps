@@ -14,7 +14,7 @@ let testDir: string;
 let secretsDir: string;
 
 beforeEach(async () => {
-  testDir = join(tmpdir(), `open-secrets-env-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  testDir = join(tmpdir(), `secrets-env-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   secretsDir = join(testDir, ".secrets");
   mkdirSync(secretsDir, { recursive: true });
   process.env.OPEN_SECRETS_DB = join(testDir, "vault.db");
@@ -56,14 +56,14 @@ describe("env-file bridge", () => {
   });
 
   it("exports pr-number env keys with valid env var names", async () => {
-    await setSecret("hasna/xyz/opensource/example/pr-123/database_url", "postgres://preview", "credential");
+    await setSecret("hasna/xyz/opensource/example/pr-123/database_url", "preview", "credential");
 
     await exportEnv({ dir: secretsDir, force: true });
     const envPath = join(secretsDir, "hasna/xyz/opensource/example/pr-123.env");
 
     expect(existsSync(envPath)).toBe(true);
     expect(readFileSync(envPath, "utf-8")).toContain(
-      'HASNA_XYZ_OPENSOURCE_EXAMPLE_PR_123_DATABASE_URL="postgres://preview"'
+      'HASNA_XYZ_OPENSOURCE_EXAMPLE_PR_123_DATABASE_URL="preview"'
     );
   });
 
@@ -72,13 +72,13 @@ describe("env-file bridge", () => {
     mkdirSync(envDir, { recursive: true });
     writeFileSync(
       join(envDir, "pr-123.env"),
-      'HASNA_XYZ_OPENSOURCE_EXAMPLE_PR_123_DATABASE_URL="postgres://preview"\n'
+      'HASNA_XYZ_OPENSOURCE_EXAMPLE_PR_123_DATABASE_URL="preview"\n'
     );
 
     await importEnv({ dir: secretsDir });
 
     expect((await getSecret("hasna/xyz/opensource/example/pr-123/database_url"))!.value).toBe(
-      "postgres://preview"
+      "preview"
     );
   });
 });

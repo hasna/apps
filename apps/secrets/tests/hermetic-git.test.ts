@@ -90,7 +90,7 @@ function stage(name: string): void {
 }
 
 beforeEach(() => {
-  workspace = mkdtempSync(join(tmpdir(), "open-secrets-hermetic-git-"));
+  workspace = mkdtempSync(join(tmpdir(), "secrets-hermetic-git-"));
   hooksDir = join(workspace, "hooks");
   mkdirSync(hooksDir, { recursive: true });
 
@@ -107,7 +107,7 @@ beforeEach(() => {
   // hermetic and plain invocations honour, so the controls below fail on the
   // hook rather than on a missing committer.
   expect(tryHermeticGit(["init", "--initial-branch", "main"], repo).status).toBe(0);
-  expect(tryHermeticGit(["config", "user.name", "Open Secrets Fixture"], repo).status).toBe(0);
+  expect(tryHermeticGit(["config", "user.name", "Hasna Secrets Fixture"], repo).status).toBe(0);
   expect(
     tryHermeticGit(["config", "user.email", "fixture@example.invalid"], repo).status,
   ).toBe(0);
