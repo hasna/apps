@@ -2,13 +2,13 @@
 //
 // Every CLI command, MCP tool, and internal caller talks to a `CalendarStore`.
 // Two transports implement it:
-//   - LocalStore — on-box SQLite (src/db/*), first-class local mode.
-//   - ApiStore   — HTTPS `/v1` + bearer key (self_hosted / cloud), identical
-//                  client code; only URL/key differ (tenancy is server-side).
+//   - LocalStore — on-box SQLite (src/db/*).
+//   - ApiStore   — HTTPS `/v1` + bearer key (the hosted API).
 //
-// The resolver (`getStore`) picks the transport from env. No command reaches
-// SQLite or `fetch` directly — that is the split-brain bug this abstraction
-// eliminates.
+// The resolver (`getStore`) picks the transport from the client env
+// (HASNA_CALENDAR_API_URL + HASNA_CALENDAR_API_KEY both set -> hosted API,
+// otherwise local SQLite). No command reaches SQLite or `fetch` directly —
+// that is the split-brain bug this abstraction eliminates.
 
 import type {
   Org, CreateOrgInput, UpdateOrgInput,
@@ -31,7 +31,7 @@ export interface EventWithAttendees {
 /** The one storage surface shared by LocalStore and ApiStore. */
 export interface CalendarStore {
   /** Which transport backs this store (for diagnostics only). */
-  readonly mode: "local" | "cloud";
+  readonly transport: "local" | "api";
 
   // ── Orgs ──
   listOrgs(): Promise<Org[]>;

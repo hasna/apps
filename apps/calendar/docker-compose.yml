@@ -1,4 +1,4 @@
-# Local development stack for @hasna/calendar in cloud (PURE REMOTE) mode.
+# Local development stack for @hasna/calendar against the postgresql backend.
 #   docker compose run --rm calendar-migrate     # apply schema first
 #   docker compose up --build calendar-serve
 # Auth: mint a key with `contracts issue-key --app calendar --scopes calendar:*`
@@ -22,7 +22,6 @@ services:
     build: .
     command: ["bun", "dist/server/index.js", "migrate"]
     environment:
-      HASNA_CALENDAR_STORAGE_MODE: remote
       HASNA_CALENDAR_DATABASE_URL: postgres://calendar:calendar@postgres:5432/calendar?sslmode=disable
       HASNA_CALENDAR_API_SIGNING_KEY: dev-signing-secret-change-me
     depends_on:
@@ -37,7 +36,6 @@ services:
       PORT: "19428"
       HOST: 0.0.0.0
       CALENDAR_NO_OPEN: "true"
-      HASNA_CALENDAR_STORAGE_MODE: remote
       HASNA_CALENDAR_DATABASE_URL: postgres://calendar:calendar@postgres:5432/calendar?sslmode=disable
       HASNA_CALENDAR_API_SIGNING_KEY: dev-signing-secret-change-me
     depends_on:

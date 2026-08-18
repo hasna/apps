@@ -37,45 +37,33 @@ The database location can be controlled with environment variables:
 The HTTP server uses `CALENDAR_PORT` and defaults to `19428`. The MCP HTTP mode
 uses `MCP_HTTP_PORT` and defaults to `8803`.
 
-### Storage mode
+### Storage
 
-`HASNA_CALENDAR_STORAGE_MODE` accepts exactly three values — there are no aliases:
+There are no deployment modes. The data backend is selected by configuration on
+each side of the wire:
 
-| Mode | Meaning | Store |
-| --- | --- | --- |
-| `local` | this machine | on-box SQLite |
-| `self_hosted` | Hasna-owned infrastructure (ECS + RDS) | `/v1` over HTTP |
-| `cloud` | managed multi-tenant offering | `/v1` over HTTP |
-
-Any other value is a **hard startup failure**. It is never silently downgraded to
-`local`: doing so used to split a single process across two different datasets. In
-particular `remote` is **rejected**, not aliased — set `cloud` instead.
-
-`cloud` is the value the deployed `calendar-prod` service uses, matching every other
-Terraform-managed Hasna app and the `@hasna/contracts` `CONTRACT.md` Amendment A1
-runtime enum. `self_hosted` is still accepted by this package but is a **deprecated
-spelling** of the same hosted posture — prefer `cloud` for new configuration.
-
-**These two modes mean different things on the two sides of the wire — do not mix
-them up:**
-
-- **Client side** (`calendar` CLI, `calendar-mcp`, the SDK): `self_hosted`/`cloud`
-  route `getStore()` at a remote `/v1`, and therefore **do** additionally need
-  `HASNA_CALENDAR_API_URL` (defaults to `https://calendar.hasna.xyz`) and
-  `HASNA_CALENDAR_API_KEY`.
-- **Server side** (`calendar-serve`): `self_hosted`/`cloud` mean *"this process **is**
-  the hosted deployment"*. It talks to Postgres directly via
-  `HASNA_CALENDAR_DATABASE_URL` + `HASNA_CALENDAR_API_SIGNING_KEY`, and needs **neither**
-  `HASNA_CALENDAR_API_URL` **nor** `HASNA_CALENDAR_API_KEY`. `calendar-prod` runs with
-  neither and is correct. Setting the client-flip pair on a serve process points it at
-  *itself* — see the `SPLIT_STORE_PLANE` note under "Auth posture for `/mcp`".
-
-Hosted-deployment detection only considers the app-scoped
-`HASNA_CALENDAR_DATABASE_URL` and `CALENDAR_DATABASE_URL` variables (or an explicit
-hosted storage mode). A generic `DATABASE_URL` from another project does not disable
-the local `/mcp` plane or feed the runtime `/v1` plane unless hosted storage mode is
-explicit. `calendar-serve migrate` still accepts `DATABASE_URL` because migration is
+**Server (`calendar-serve`)** — `HASNA_CALENDAR_DATABASE_URL` (or
+`CALENDAR_DATABASE_URL`) present selects the **PostgreSQL** backend; absent means
+**SQLite**. The serve process talks to Postgres directly via that URL plus
+`HASNA_CALENDAR_API_SIGNING_KEY`, and needs neither `HASNA_CALENDAR_API_URL` nor
+`HASNA_CALENDAR_API_KEY`. A generic `DATABASE_URL` from another project is not
+consulted at runtime; `calendar-serve migrate` accepts it because migration is
 already an explicit database operation.
+
+**Client (`calendar` CLI, `calendar-mcp`, the SDK)** — exactly two connections:
+
+| Configuration | Connection |
+| --- | --- |
+| `HASNA_CALENDAR_API_URL` **and** `HASNA_CALENDAR_API_KEY` (or the `CALENDAR_*` aliases) both set | hosted API — every read/write goes to `<API_URL>/v1` |
+| neither set | local — on-box SQLite |
+
+Setting only **one** of the pair is a **hard failure** (`resolveStorageClient`
+throws): the client refuses to pick a data store the configuration does not
+fully name. There is no default API host and no degraded path — silently
+falling back to a different store is how a single process used to end up
+reading two different datasets.
+
+The client never opens Postgres directly.
 
 ## SDK
 
@@ -370,7 +358,7 @@ resolved **once at startup, before the socket is bound**:
 | Configuration | Posture | `/mcp` | `/v1` | probes |
 | --- | --- | --- | --- | --- |
 | `CALENDAR_SERVE_API_KEY` (or `--api-key`) | `enforce` | credential required | authenticated | public |
-| hosted (an app-scoped database URL, or `HASNA_CALENDAR_STORAGE_MODE=self_hosted`/`cloud`) with no serve key | `local-plane-disabled` | **404 `LOCAL_PLANE_DISABLED`** — not mounted | authenticated | public |
+| hosted (an app-scoped database URL, `HASNA_CALENDAR_DATABASE_URL`) with no serve key | `local-plane-disabled` | **404 `LOCAL_PLANE_DISABLED`** — not mounted | authenticated | public |
 | loopback bind **and** `--allow-anonymous` (or `CALENDAR_ALLOW_ANONYMOUS=1`) | `anonymous-loopback` | anonymous, **loopback peers only** | authenticated | public |
 | anything else | — | **the server refuses to start, exit 1** | — | — |
 
@@ -398,7 +386,7 @@ CALENDAR_SERVE_API_KEY=<key> calendar-serve
 
 # hosted (ECS/RDS): /v1 only, /mcp not served.
 # No HASNA_CALENDAR_API_URL / HASNA_CALENDAR_API_KEY here — those are client-side.
-HASNA_CALENDAR_STORAGE_MODE=cloud HASNA_CALENDAR_DATABASE_URL=<dsn> calendar-serve
+HASNA_CALENDAR_DATABASE_URL=<dsn> calendar-serve
 ```
 
 ```sh

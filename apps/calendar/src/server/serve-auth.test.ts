@@ -30,10 +30,6 @@ const DUMMY_DSN = "postgres://calendar_app@127.0.0.1:1/calendar_test";
 const DUMMY_SIGNING_SECRET = "signing-secret-for-tests-only";
 
 const CLIENT_FLIP_AND_HOSTED_VARS = [
-  "HASNA_CALENDAR_STORAGE_MODE",
-  "HASNA_CALENDAR_MODE",
-  "CALENDAR_STORAGE_MODE",
-  "CALENDAR_MODE",
   "HASNA_CALENDAR_API_URL",
   "CALENDAR_API_URL",
   "HASNA_CALENDAR_API_KEY",
@@ -114,7 +110,6 @@ async function expectProbesPublic(base: string, opts: { ready: boolean }) {
 
 describe("hosted posture (the calendar-prod shape): /mcp is not served at all", () => {
   const hostedEnv = {
-    HASNA_CALENDAR_STORAGE_MODE: "self_hosted",
     HASNA_CALENDAR_DATABASE_URL: DUMMY_DSN,
     HASNA_CALENDAR_API_SIGNING_KEY: DUMMY_SIGNING_SECRET,
   };
@@ -195,11 +190,11 @@ describe("hosted posture (the calendar-prod shape): /mcp is not served at all", 
     await expectProbesPublic(base, { ready: false });
   });
 
-  test("/health reports the canonical mode label, never 'remote'", async () => {
+  test("/health reports the postgres backend label", async () => {
     const base = startServer(hostedEnv);
-    const health = (await (await fetch(`${base}/health`)).json()) as { mode: string; status: string };
+    const health = (await (await fetch(`${base}/health`)).json()) as { backend: string; status: string };
     expect(health.status).toBe("ok");
-    expect(health.mode).toBe("self_hosted");
+    expect(health.backend).toBe("postgres");
   });
 
   test("OPTIONS /mcp is claimed by the guarded route, not the CORS handler", async () => {
@@ -219,63 +214,17 @@ describe("hosted posture (the calendar-prod shape): /mcp is not served at all", 
   });
 });
 
-/**
- * The value that actually ships to calendar-prod via Terraform is `cloud`, not
- * `self_hosted`: `@hasna/contracts` CONTRACT.md Amendment A1 declares the runtime
- * storage enum `local | cloud` and lists `self_hosted` as a deprecated alias, and
- * every other Terraform-managed Hasna app already sets `cloud`. This fences the
- * deployed shape specifically, so the production posture cannot regress behind a
- * suite that only ever exercised `self_hosted`.
- */
-describe("hosted posture via mode=cloud (the value deployed to calendar-prod)", () => {
-  const cloudEnv = {
-    HASNA_CALENDAR_STORAGE_MODE: "cloud",
-    HASNA_CALENDAR_DATABASE_URL: DUMMY_DSN,
-    HASNA_CALENDAR_API_SIGNING_KEY: DUMMY_SIGNING_SECRET,
-  };
-
-  test("anonymous POST /mcp is 404 LOCAL_PLANE_DISABLED and leaks no tool names", async () => {
-    const base = startServer(cloudEnv);
-    const { status, body } = await mcpPost(base);
-    expect(status).toBe(404);
-    expect(body).not.toContain("create_org");
-    expect(JSON.parse(body).code).toBe("LOCAL_PLANE_DISABLED");
+describe("sqlite backend posture: the local plane requires the serve credential", () => {
+  test("no DSN, no credential: the server refuses to start", () => {
+    applyEnv({});
+    expect(() => serve(0, { host: "127.0.0.1" })).toThrow(AuthNotConfiguredError);
   });
 
-  test("anonymous tools/call create_org is refused", async () => {
-    const base = startServer(cloudEnv);
-    const res = await fetch(`${base}/mcp`, {
-      method: "POST",
-      headers: MCP_HEADERS,
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 2,
-        method: "tools/call",
-        params: { name: "create_org", arguments: { name: "pwned" } },
-      }),
-    });
-    expect(res.status).toBe(404);
-    expect(JSON.parse(await res.text()).code).toBe("LOCAL_PLANE_DISABLED");
-  });
-
-  test("/v1 stays authenticated and the probes stay public", async () => {
-    const base = startServer(cloudEnv);
-    expect((await fetch(`${base}/v1/orgs`)).status).toBe(401);
-    await expectProbesPublic(base, { ready: false });
-  });
-
-  test("/health reports mode 'cloud' verbatim", async () => {
-    const base = startServer(cloudEnv);
-    const health = (await (await fetch(`${base}/health`)).json()) as { mode: string; status: string };
+  test("/health reports the sqlite backend label", async () => {
+    const base = startServer({ CALENDAR_SERVE_API_KEY: CREDENTIAL });
+    const health = (await (await fetch(`${base}/health`)).json()) as { backend: string; status: string };
     expect(health.status).toBe("ok");
-    expect(health.mode).toBe("cloud");
-  });
-
-  test("mode=cloud ALONE (no DSN) is enough to disable the local plane", async () => {
-    const base = startServer({ HASNA_CALENDAR_STORAGE_MODE: "cloud" });
-    const { status, body } = await mcpPost(base);
-    expect(status).toBe(404);
-    expect(JSON.parse(body).code).toBe("LOCAL_PLANE_DISABLED");
+    expect(health.backend).toBe("sqlite");
   });
 });
 
@@ -331,13 +280,16 @@ describe("anonymous-loopback posture", () => {
   });
 });
 
-describe("unrecognised storage mode is fatal for the server too", () => {
-  test("serve() throws instead of starting on the live 'remote' value", () => {
-    applyEnv({
-      HASNA_CALENDAR_STORAGE_MODE: "remote",
-      HASNA_CALENDAR_DATABASE_URL: DUMMY_DSN,
-      HASNA_CALENDAR_API_SIGNING_KEY: DUMMY_SIGNING_SECRET,
-    });
-    expect(() => serve(0, { host: "127.0.0.1" })).toThrow(/not a recognised storage mode/);
+describe("split-backend guard: a hosted serve process with an on-box-SQLite client flip is refused", () => {
+  test("serve() throws SplitStorePlaneError when /mcp would hit a different store", () => {
+    // Hosted /v1 (Postgres) + a serve credential, but the client env points
+    // getStore() nowhere (no API URL+key): /mcp would serve on-box SQLite.
+    applyEnv({ HASNA_CALENDAR_DATABASE_URL: DUMMY_DSN });
+    expect(() =>
+      serve(0, {
+        host: "127.0.0.1",
+        apiKey: CREDENTIAL,
+      }),
+    ).toThrow(/two DIFFERENT datasets/);
   });
 });

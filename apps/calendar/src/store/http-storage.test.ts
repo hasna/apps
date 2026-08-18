@@ -1,53 +1,80 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { resolveClientTransport, resolveStorageClient, createHttpTransport, createStorageClient } from "./http-storage.js";
 
-describe("calendar client-flip resolver", () => {
+describe("calendar client transport resolver (env-selection contract)", () => {
   test("defaults to local when no env is set", () => {
     const r = resolveClientTransport("calendar", {});
     expect(r.transport).toBe("local");
     expect(r.baseUrl).toBeNull();
+    expect(r.misconfigured).toBe(false);
+    expect(r.warning).toBeNull();
   });
 
-  test("local mode never routes to cloud even with url+key", () => {
+  test("API URL + API key => http-api at /v1", () => {
     const r = resolveClientTransport("calendar", {
-      HASNA_CALENDAR_STORAGE_MODE: "local",
       HASNA_CALENDAR_API_URL: "https://calendar.hasna.xyz",
       HASNA_CALENDAR_API_KEY: "k",
     });
-    expect(r.transport).toBe("local");
-  });
-
-  test("self_hosted + api url + api key => cloud-http at /v1", () => {
-    const r = resolveClientTransport("calendar", {
-      HASNA_CALENDAR_STORAGE_MODE: "self_hosted",
-      HASNA_CALENDAR_API_URL: "https://calendar.hasna.xyz",
-      HASNA_CALENDAR_API_KEY: "k",
-    });
-    expect(r.transport).toBe("cloud-http");
+    expect(r.transport).toBe("http-api");
     expect(r.baseUrl).toBe("https://calendar.hasna.xyz/v1");
     expect(r.apiKeyPresent).toBe(true);
+    expect(r.apiUrlSource).toBe("HASNA_CALENDAR_API_URL");
+    expect(r.misconfigured).toBe(false);
   });
 
-  test("self_hosted defaults host from app name when API_URL missing", () => {
+  test("the CALENDAR_ alias pair routes to http-api too", () => {
     const r = resolveClientTransport("calendar", {
-      HASNA_CALENDAR_STORAGE_MODE: "self_hosted",
-      HASNA_CALENDAR_API_KEY: "k",
+      CALENDAR_API_URL: "https://calendar.example.com",
+      CALENDAR_API_KEY: "k",
     });
-    expect(r.transport).toBe("cloud-http");
-    expect(r.baseUrl).toBe("https://calendar.hasna.xyz/v1");
+    expect(r.transport).toBe("http-api");
+    expect(r.baseUrl).toBe("https://calendar.example.com/v1");
   });
 
-  test("self_hosted without api key is misconfigured and resolveStorageClient throws", () => {
-    const r = resolveClientTransport("calendar", { HASNA_CALENDAR_STORAGE_MODE: "self_hosted" });
+  test("API URL WITHOUT key is misconfigured and resolveStorageClient throws (fail-closed)", () => {
+    const r = resolveClientTransport("calendar", { HASNA_CALENDAR_API_URL: "https://calendar.hasna.xyz" });
     expect(r.transport).toBe("local");
     expect(r.misconfigured).toBe(true);
-    expect(() => resolveStorageClient("calendar", { HASNA_CALENDAR_STORAGE_MODE: "self_hosted" })).toThrow();
+    expect(r.warning).toContain("no API key");
+    expect(() => resolveStorageClient("calendar", { HASNA_CALENDAR_API_URL: "https://calendar.hasna.xyz" })).toThrow();
+  });
+
+  test("API key WITHOUT URL is misconfigured and resolveStorageClient throws (no default host)", () => {
+    const r = resolveClientTransport("calendar", { HASNA_CALENDAR_API_KEY: "k" });
+    expect(r.transport).toBe("local");
+    expect(r.misconfigured).toBe(true);
+    expect(r.warning).toContain("no API URL");
+    expect(() => resolveStorageClient("calendar", { HASNA_CALENDAR_API_KEY: "k" })).toThrow();
+  });
+
+  test("an invalid API URL is misconfigured and resolveStorageClient throws", () => {
+    const r = resolveClientTransport("calendar", {
+      HASNA_CALENDAR_API_URL: "ftp://calendar.hasna.xyz",
+      HASNA_CALENDAR_API_KEY: "k",
+    });
+    expect(r.transport).toBe("local");
+    expect(r.misconfigured).toBe(true);
+    expect(() =>
+      resolveStorageClient("calendar", {
+        HASNA_CALENDAR_API_URL: "ftp://calendar.hasna.xyz",
+        HASNA_CALENDAR_API_KEY: "k",
+      }),
+    ).toThrow();
   });
 
   test("resolveStorageClient returns local client:null when unset", () => {
     const r = resolveStorageClient("calendar", {});
     expect(r.transport).toBe("local");
     expect(r.client).toBeNull();
+  });
+
+  test("resolveStorageClient returns a ready client when the pair is set", () => {
+    const r = resolveStorageClient("calendar", {
+      HASNA_CALENDAR_API_URL: "https://calendar.hasna.xyz",
+      HASNA_CALENDAR_API_KEY: "k",
+    });
+    expect(r.transport).toBe("http-api");
+    expect(r.client).not.toBeNull();
   });
 });
 

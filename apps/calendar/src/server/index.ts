@@ -10,12 +10,10 @@
  * When PORT is set (container/ECS) it is bound EXACTLY so the ALB health check
  * targets the right port.
  *
- * Startup fails loudly (exit 1) rather than degrading when either
- *   - `HASNA_CALENDAR_STORAGE_MODE` holds a non-canonical value, or
- *   - no auth posture can be resolved without serving `/mcp` anonymously.
+ * Startup fails loudly (exit 1) rather than degrading when no auth posture can
+ * be resolved without serving `/mcp` anonymously.
  */
 import { getPackageVersion } from "./version.js";
-import { UnknownStorageModeError, resolveConfiguredStorageMode } from "../store/storage-mode.js";
 import { AuthNotConfiguredError, SplitStorePlaneError } from "./auth-posture.js";
 
 const DEFAULT_PORT = 19428;
@@ -43,16 +41,6 @@ function parseStringFlag(flag: string): string | undefined {
   return process.argv[idx + 1] || undefined;
 }
 
-/**
- * Validate the storage-mode vocabulary before anything else runs.
- * An unrecognised value is fatal: silently falling back to a different data
- * store is how `/v1` (RDS) and `/mcp` (on-box SQLite) ended up on two different
- * datasets inside one production container.
- */
-export function assertStorageModeValid(env: NodeJS.ProcessEnv = process.env): void {
-  resolveConfiguredStorageMode("calendar", env as Record<string, string | undefined>);
-}
-
 async function runMigrate(): Promise<void> {
   const { ensureCloudSchema, pingCloud, resolveCloudDatabaseUrl, closeCloud } = await import("./cloud.js");
   if (!resolveCloudDatabaseUrl(process.env, { includeGenericDatabaseUrl: true })) {
@@ -74,9 +62,6 @@ async function main() {
     return;
   }
 
-  // Fail loudly on a non-canonical storage mode before any store is resolved.
-  assertStorageModeValid();
-
   if (process.argv.includes("migrate")) {
     await runMigrate();
     return;
@@ -93,8 +78,7 @@ async function main() {
 
 main().catch((e) => {
   if (
-    e instanceof UnknownStorageModeError
-    || e instanceof AuthNotConfiguredError
+    e instanceof AuthNotConfiguredError
     || e instanceof SplitStorePlaneError
   ) {
     // Already an actionable, credential-free multi-line message.

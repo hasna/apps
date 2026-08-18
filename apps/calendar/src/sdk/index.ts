@@ -2,7 +2,7 @@
  * @hasna/calendar SDK — the typed `/v1` client, generated from the serve
  * OpenAPI document (src/server/openapi.ts). Import as `@hasna/calendar/sdk`.
  *
- * Self-hosted usage (client mode = CALENDAR_API_URL + CALENDAR_API_KEY, never a DSN):
+ * Hosted API usage (CALENDAR_API_URL + CALENDAR_API_KEY, never a DSN):
  *
  *   import { CalendarV1Client } from "@hasna/calendar/sdk";
  *   const client = new CalendarV1Client({

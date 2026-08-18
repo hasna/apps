@@ -20,8 +20,8 @@
  *
  * Postures:
  *  - `enforce`              a serve credential exists; `/mcp` requires it.
- *  - `local-plane-disabled` hosted (an app-scoped remote DSN / self_hosted|cloud mode) with
- *                           NO serve credential: `/mcp` is not mounted at all.
+ *  - `local-plane-disabled` hosted (an app-scoped database URL) with NO serve
+ *                           credential: `/mcp` is not mounted at all.
  *                           `/v1` (self-authenticating) and the probes keep
  *                           working, so closing the hole cannot take the hosted
  *                           deployment down.
@@ -146,15 +146,15 @@ export interface AuthPostureInput {
   allowAnonymous: boolean;
   /**
    * Whether this process serves the hosted, self-authenticating `/v1` plane
-   * (an app-scoped remote DSN or a `self_hosted`/`cloud` storage mode). Required: resolved
-   * by the caller via `isCloudModeEnabled()` so this module stays import-free.
+   * (an app-scoped database URL). Required: resolved by the caller via
+   * `hasHostedDatabase()` so this module stays import-free.
    */
   hosted: boolean;
   /**
    * What `getStore()` — the store behind every MCP tool — resolves to. Passed
    * in (rather than resolved here) to keep this module import-free.
    */
-  localPlaneTransport: "local" | "cloud-http";
+  localPlaneTransport: "local" | "http-api";
 }
 
 /** Actionable, credential-free startup error text. */
@@ -168,8 +168,7 @@ export function authNotConfiguredMessage(host: string | undefined): string {
     ``,
     `Fix ONE of the following, then restart:`,
     `  1. Set the serve credential:      export ${SERVE_AUTH_ENV_VARS[0]}=<key>  (or pass --api-key <key>)`,
-    `  2. Run hosted:                    configure HASNA_CALENDAR_DATABASE_URL (or`,
-    `                                    HASNA_CALENDAR_STORAGE_MODE=self_hosted) — /v1 stays`,
+    `  2. Run hosted:                    configure HASNA_CALENDAR_DATABASE_URL — /v1 stays`,
     `                                    authenticated and /mcp is simply not served.`,
     `  3. Local dev only, loopback bind: calendar-serve --allow-anonymous`,
     `                                    (or ${ALLOW_ANONYMOUS_ENV_VAR}=1; refused unless the bind host is loopback)`,

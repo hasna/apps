@@ -1,46 +1,32 @@
-// Self-hosted (cloud-http) storage client for this app's `/v1` API.
+// HTTP `/v1` storage client for this app's hosted API.
 //
-// This is the client-side piece that makes `self_hosted` mode real. When the
-// operator sets the client-flip env for this app:
+// The client has exactly two connections, selected by configuration — there is
+// no deployment-mode variable:
 //
-//   HASNA_<APP>_STORAGE_MODE = self_hosted   (or cloud — both use the ApiStore)
-//   HASNA_<APP>_API_URL      = https://<app>.hasna.xyz   (optional; default host)
-//   HASNA_<APP>_API_KEY      = <bearer key>
+//   hosted API   when BOTH HASNA_<APP>_API_URL and HASNA_<APP>_API_KEY are set
+//   local        otherwise (on-box SQLite)
 //
 // ...the resolver returns a ready HTTP client whose list/get/create/update/delete
-// calls hit `<API_URL>/v1/<resource>` with the API key. Otherwise it returns
-// `{ transport: 'local', client: null }` so the app uses its local SQLite store.
-// Unsetting the env reverts to local — the flip is fully reversible.
+// calls hit `<API_URL>/v1/<resource>` with the API key. With neither variable
+// set it returns `{ transport: 'local', client: null }` so the app uses its
+// local SQLite store. Setting only ONE of the pair is a misconfiguration and
+// FAILS CLOSED (the resolver marks it `misconfigured` and `resolveStorageClient`
+// throws) — silently picking the local store while the operator asked for the
+// hosted API is how a process ended up reading a different dataset than it
+// reported.
 //
 // This module is a repo-local vendoring of the @hasna/contracts client storage
 // kit (createClientTransport + createHasnaStorageClient). It has no EXTERNAL
-// runtime imports (only the sibling `storage-mode` vocabulary module) so the
-// built CLI/MCP/SDK bundle carries the cloud client with zero extra runtime
-// dependencies.
+// runtime imports, so the built CLI/MCP/SDK bundle carries the HTTP client with
+// zero extra runtime dependencies.
 //
 // SAFETY: the API key value is never logged, returned, or embedded anywhere; it
 // lives only inside the transport closure and travels only in request headers.
-
-import { isRemoteMode, parseStorageMode, storageModeEnvKeys } from "./storage-mode.js";
 
 export type Env = Record<string, string | undefined>;
 
 function envToken(name: string): string {
   return name.toUpperCase().replace(/-/g, "_");
-}
-
-/**
- * Map a raw storage-mode string to the client transport it implies.
- * `local` uses the LocalStore; `self_hosted` and `cloud` both use the ApiStore
- * (identical client code — the distinction is server-side tenancy).
- *
- * Anything else THROWS `UnknownStorageModeError`. It deliberately does not
- * return `null` any more: the previous "warn and use local" branch is what let
- * `HASNA_CALENDAR_STORAGE_MODE=remote` silently reroute every `getStore()`
- * caller to an on-box SQLite island while `/v1` kept using Postgres.
- */
-function normalizeMode(value: string, source: string): "local" | "cloud" {
-  return isRemoteMode(parseStorageMode(value, source)) ? "cloud" : "local";
 }
 
 function firstEnv(env: Env, keys: readonly string[]): { key: string; value: string } | null {
@@ -54,14 +40,9 @@ function firstEnv(env: Env, keys: readonly string[]): { key: string; value: stri
 function clientEnvKeys(name: string) {
   const token = envToken(name);
   return {
-    modeKeys: storageModeEnvKeys(name),
     apiUrlKeys: [`HASNA_${token}_API_URL`, `${token}_API_URL`],
     apiKeyKeys: [`HASNA_${token}_API_KEY`, `${token}_API_KEY`],
   };
-}
-
-function defaultCloudBaseUrl(name: string): string {
-  return `https://${name}.hasna.xyz`;
 }
 
 /** Normalize a base URL to `<origin>/v1`. */
@@ -78,71 +59,72 @@ export function toV1BaseUrl(apiUrl: string): string {
   return url.toString().replace(/\/+$/, "");
 }
 
-export type ClientTransportKind = "local" | "cloud-http";
+export type ClientTransportKind = "local" | "http-api";
 
 export interface ClientTransportResolution {
   transport: ClientTransportKind;
-  mode: "local" | "cloud";
-  modeSource: string;
+  /** The env var the API URL came from (null when none is set). */
+  apiUrlSource: string | null;
+  /** The resolved `<origin>/v1` base URL (null when local or misconfigured). */
   baseUrl: string | null;
   apiKeyPresent: boolean;
   apiKeySource: string | null;
+  /** True when the hosted API was requested but is not fully configured. */
   misconfigured: boolean;
   warning: string | null;
 }
 
 /**
- * Decide whether this client should read/write from the cloud API or locally.
- * Cloud-http IFF the resolved mode is cloud/self_hosted AND an API key is set.
- * If cloud is requested but the key is missing/invalid, returns local with
+ * Decide whether this client should read/write from the hosted HTTP API or
+ * locally. Hosted IFF both an API URL and an API key are set. When exactly one
+ * of the pair is set (or the URL is invalid), returns local with
  * `misconfigured: true` so callers can hard-fail instead of drifting.
  *
- * THROWS `UnknownStorageModeError` when a storage-mode env var is set to a
- * non-canonical value. There is no degraded path: picking a different data
- * store because a config string was unrecognised is the bug this replaces.
+ * There is no degraded path: picking a different data store because the
+ * configuration is incomplete is the bug this replaces.
  */
 export function resolveClientTransport(name: string, env: Env = process.env): ClientTransportResolution {
   const keys = clientEnvKeys(name);
-  const modeHit = firstEnv(env, keys.modeKeys);
   const urlHit = firstEnv(env, keys.apiUrlKeys);
   const keyHit = firstEnv(env, keys.apiKeyKeys);
 
-  let mode: "local" | "cloud" = "local";
-  let modeSource = "default";
   const warnings: string[] = [];
 
-  if (modeHit) {
-    mode = normalizeMode(modeHit.value, modeHit.key);
-    modeSource = modeHit.key;
-  } else if (urlHit && keyHit) {
-    // Flip signal: the fleet flip writes exactly HASNA_<APP>_API_URL +
-    // HASNA_<APP>_API_KEY (no explicit STORAGE_MODE). Their joint presence IS the
-    // self_hosted intent, so infer cloud. Unset either var -> back to local.
-    mode = "cloud";
-    modeSource = `${urlHit.key}+${keyHit.key}`;
-  }
-
-  if (mode === "local") {
+  if (urlHit && keyHit) {
+    let baseUrl: string;
+    try {
+      baseUrl = toV1BaseUrl(urlHit.value);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      warnings.push(`Invalid API URL from ${urlHit.key}: ${message}.`);
+      return {
+        transport: "local",
+        apiUrlSource: urlHit.key,
+        baseUrl: null,
+        apiKeyPresent: true,
+        apiKeySource: keyHit.key,
+        misconfigured: true,
+        warning: warnings.join(" "),
+      };
+    }
     return {
-      transport: "local",
-      mode,
-      modeSource,
-      baseUrl: null,
-      apiKeyPresent: Boolean(keyHit),
-      apiKeySource: keyHit ? keyHit.key : null,
+      transport: "http-api",
+      apiUrlSource: urlHit.key,
+      baseUrl,
+      apiKeyPresent: true,
+      apiKeySource: keyHit.key,
       misconfigured: false,
-      warning: warnings.length > 0 ? warnings.join(" ") : null,
+      warning: null,
     };
   }
 
-  if (!keyHit) {
+  if (urlHit) {
     warnings.push(
-      `${modeSource}=self_hosted but no API key is set (${keys.apiKeyKeys[0]}). Refusing to route to cloud; using local store.`,
+      `${urlHit.key} is set but no API key is set (${keys.apiKeyKeys[0]}). Refusing to route to the hosted API; using local store.`,
     );
     return {
       transport: "local",
-      mode,
-      modeSource,
+      apiUrlSource: urlHit.key,
       baseUrl: null,
       apiKeyPresent: false,
       apiKeySource: null,
@@ -151,17 +133,13 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
     };
   }
 
-  const rawUrl = urlHit?.value ?? defaultCloudBaseUrl(name);
-  let baseUrl: string;
-  try {
-    baseUrl = toV1BaseUrl(rawUrl);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    warnings.push(`Invalid API URL from ${urlHit ? urlHit.key : "default"}: ${message}. Using local store.`);
+  if (keyHit) {
+    warnings.push(
+      `${keyHit.key} is set but no API URL is set (${keys.apiUrlKeys[0]}). Refusing to route to the hosted API; using local store.`,
+    );
     return {
       transport: "local",
-      mode,
-      modeSource,
+      apiUrlSource: null,
       baseUrl: null,
       apiKeyPresent: true,
       apiKeySource: keyHit.key,
@@ -171,14 +149,13 @@ export function resolveClientTransport(name: string, env: Env = process.env): Cl
   }
 
   return {
-    transport: "cloud-http",
-    mode,
-    modeSource,
-    baseUrl,
-    apiKeyPresent: true,
-    apiKeySource: keyHit.key,
+    transport: "local",
+    apiUrlSource: null,
+    baseUrl: null,
+    apiKeyPresent: false,
+    apiKeySource: null,
     misconfigured: false,
-    warning: warnings.length > 0 ? warnings.join(" ") : null,
+    warning: null,
   };
 }
 
@@ -405,18 +382,19 @@ export function createStorageClient(name: string, transport: HttpTransport): Sto
 
 export type ResolveStorageClientResult =
   | { transport: "local"; client: null; resolution: ClientTransportResolution }
-  | { transport: "cloud-http"; client: StorageClient; resolution: ClientTransportResolution };
+  | { transport: "http-api"; client: StorageClient; resolution: ClientTransportResolution };
 
 /**
- * The one call the app's storage resolver makes. Reads the client-flip env for
- * `name`; returns a ready cloud client when self_hosted + API key are set, else
- * `{ transport: 'local', client: null }`. Throws if cloud was requested but is
- * misconfigured (so callers never silently read the wrong dataset).
+ * The one call the app's storage resolver makes. Reads the client env for
+ * `name`; returns a ready HTTP client when an API URL + key are set, else
+ * `{ transport: 'local', client: null }`. Throws if the hosted API was
+ * requested but is misconfigured (so callers never silently read the wrong
+ * dataset).
  */
 export function resolveStorageClient(name: string, env: Env = process.env): ResolveStorageClientResult {
   const resolution = resolveClientTransport(name, env);
   if (resolution.misconfigured) {
-    throw new Error(resolution.warning ?? `Client for '${name}' is misconfigured for self_hosted mode.`);
+    throw new Error(resolution.warning ?? `Client for '${name}' is misconfigured for the hosted API.`);
   }
   if (resolution.transport === "local" || !resolution.baseUrl) {
     return { transport: "local", client: null, resolution };
@@ -424,8 +402,8 @@ export function resolveStorageClient(name: string, env: Env = process.env): Reso
   const keys = clientEnvKeys(name);
   const apiKey = firstEnv(env, keys.apiKeyKeys)?.value;
   if (!apiKey) {
-    throw new Error(`Client for '${name}' resolved to cloud-http without an API key.`);
+    throw new Error(`Client for '${name}' resolved to the hosted API without an API key.`);
   }
   const transport = createHttpTransport({ name, baseUrl: resolution.baseUrl, apiKey });
-  return { transport: "cloud-http", client: createStorageClient(name, transport), resolution };
+  return { transport: "http-api", client: createStorageClient(name, transport), resolution };
 }

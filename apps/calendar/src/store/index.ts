@@ -1,14 +1,12 @@
 // The storage resolver for @hasna/calendar.
 //
-// `getStore()` reads the client-flip env (HASNA_CALENDAR_API_URL +
-// HASNA_CALENDAR_API_KEY and/or HASNA_CALENDAR_STORAGE_MODE) exactly once and
-// returns the right transport:
-//   - ApiStore   when the client resolves to cloud-http (self_hosted / cloud).
-//   - LocalStore otherwise (first-class local mode).
+// `getStore()` reads the client env (HASNA_CALENDAR_API_URL +
+// HASNA_CALENDAR_API_KEY) exactly once and returns the right transport:
+//   - ApiStore   when both are set (the hosted `/v1` API).
+//   - LocalStore otherwise (on-box SQLite).
 //
-// It throws if cloud was requested but is misconfigured (URL/key missing or
-// invalid) so a caller never silently reads the wrong dataset. Unsetting the
-// env reverts to local — the flip is fully reversible.
+// It throws when only one of the pair is set (URL/key missing or invalid) so a
+// caller never silently reads the wrong dataset.
 
 import { resolveStorageClient, type Env } from "./http-storage.js";
 import type { CalendarStore } from "./types.js";
@@ -23,7 +21,7 @@ let cached: CalendarStore | undefined;
 export function getStore(env: Env = process.env): CalendarStore {
   if (cached) return cached;
   const resolved = resolveStorageClient(APP_SLUG, env);
-  cached = resolved.transport === "cloud-http" ? new ApiStore(resolved.client) : new LocalStore();
+  cached = resolved.transport === "http-api" ? new ApiStore(resolved.client) : new LocalStore();
   return cached;
 }
 
