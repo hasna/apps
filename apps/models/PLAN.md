@@ -158,7 +158,7 @@ export interface RuntimeAdapter {
 ```
 
 Each runtime adapter should produce a plan first. Applying a setup plan should
-require explicit `--apply --yes`, matching `open-machines`.
+require explicit `--apply --yes`, matching `machines`.
 
 ## CLI shape
 
@@ -324,7 +324,7 @@ the store or runtime layers.
   sizes, gated repos, and revision pinning.
 - Runtime planner tests for CPU-only, NVIDIA GPU, Apple Silicon, and missing
   runtime cases.
-- Machines adapter smoke matching `open-knowledge` style: SDK, CLI, unsupported
+- Machines adapter smoke matching `knowledge` style: SDK, CLI, unsupported
   future contract, no-SDK fallback.
 
 ## Sources checked
