@@ -19,7 +19,7 @@ var __require = import.meta.require;
 // src/serve.ts
 import { readFileSync as readFileSync4 } from "fs";
 
-// ../../node_modules/.bun/@hasna+contracts@0.10.6/node_modules/@hasna/contracts/dist/auth/index.js
+// ../contracts/dist/auth/index.js
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 var MAX_TENANT_ID_LENGTH = 64;
 var TENANT_ID_PATTERN = new RegExp(`^[A-Za-z0-9][A-Za-z0-9._-]{0,${MAX_TENANT_ID_LENGTH - 1}}$`);
