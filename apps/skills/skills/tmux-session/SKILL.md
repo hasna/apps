@@ -68,12 +68,12 @@ tmux select-window -t "${NAME}:${IDX}"
 
 ```bash
 SOURCE="opensourcemaintain"
-BASE="$HOME/workspace/hasna/opensource/opensourcedev"
+BASE="$HOME/workspace/repos/hasna/apps/apps"
 
 WINDOWS=(
   "todos:$BASE/todos"
-  "open-conversations:$BASE/open-conversations"
-  "open-mementos:$BASE/open-mementos"
+  "conversations:$BASE/conversations"
+  "mementos:$BASE/mementos"
 )
 
 tmux new-session -d -s "$SOURCE" -n "todos" -c "$BASE/todos"
@@ -92,7 +92,7 @@ done
 
 ## Naming rules
 
-- OSS project: `open-[name]`
+- OSS project: `[name]`
 - Agent repo: `agent-[name]`
 - Service repo: `service-[name]`
 - Local tool: `local-[name]`
@@ -103,7 +103,7 @@ Always use the full prefixed name for both the window name and the session name.
 ## Verification
 
 ```bash
-tmux display-message -t open-economy -p "#{window_index}:#{window_name} @ #{pane_current_path}"
+tmux display-message -t economy -p "#{window_index}:#{window_name} @ #{pane_current_path}"
 tmux list-sessions | grep "(group opensourcemaintain)"
 tmux list-panes -a -F "#{session_name}:#{window_name} dead=#{pane_dead}" | grep "dead=1"
 ```
