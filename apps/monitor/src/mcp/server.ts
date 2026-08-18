@@ -1025,7 +1025,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "Integration config object. Only required when action='set'. " +
               "Fields: todos (enabled, project_id, base_url?), " +
-              "conversations (enabled, space_id, base_url?), " +
+              "conversations (enabled, space_id, base_url?, api_key?), " +
               "mementos (enabled, base_url?), " +
               "emails (enabled, to, base_url?, from?).",
           },
