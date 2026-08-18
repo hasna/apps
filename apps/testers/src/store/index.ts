@@ -220,10 +220,20 @@ export interface Store {
   // ── local-only maintenance ──
   /**
    * Snapshot the entire local dataset to a standalone SQLite file (used to seed
-   * a sandbox with the on-box state for sandbox-target workflows). LOCAL
-   * transport ONLY — the ApiStore rejects this because a cloud/self_hosted
-   * dataset cannot be dumped to a client-side file; sandbox provisioning in that
-   * mode must hand the sandbox API credentials instead.
+   * a sandbox with the on-box state for sandbox-target workflows).
+   *
+   * LOCAL transport only — recorded strong reason (local-only-capability
+   * removal, 2026-08-18, port lane): the ApiStore rejects this because a
+   * cloud/self_hosted dataset lives on the server and cannot be dumped to a
+   * client-side file — there is no server dump endpoint, and building one would
+   * require a full Postgres→SQLite dataset export (schema translation, blob
+   * handling, 100k-row pagination). The end-to-end capability this feeds —
+   * sandbox-target workflow execution against the dataset — works identically
+   * on the hosted path: `createWorkflowDatabaseBundle` skips the file dump in
+   * cloud mode and `runViaSandbox` provisions the sandbox with API credentials
+   * (HASNA_TESTERS_API_URL/HASNA_TESTERS_API_KEY) instead. `snapshotToFile` is
+   * therefore the LOCAL mechanism of a capability that is ported at the
+   * provisioning layer, not a capability missing from the hosted path.
    */
   snapshotToFile(path: string): Promise<void>;
 }
