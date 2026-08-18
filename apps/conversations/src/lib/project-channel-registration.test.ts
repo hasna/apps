@@ -792,7 +792,7 @@ describe("project channel registration authority", () => {
         target_selector: channel.name,
         expected: "absent",
       }),
-    })).toThrow("create surface rejects reconciliation intent");
+    })).toThrow("create surface rejects bind-existing intent");
 
     const ordinaryCreate = await forwardRequest();
     expect(() => registerProjectChannel({
@@ -1080,6 +1080,11 @@ describe("project channel registration authority", () => {
         expected_message_ownership: ownership,
       },
     } as Partial<ProjectChannelRegistrationRequest>);
+
+    expect(() => registerProjectChannel({
+      ...request,
+      operation_intent: "create",
+    })).toThrow("create surface rejects adopt-existing intent");
 
     const accepted = await registerProjectChannel(request);
     expect(accepted).toMatchObject({

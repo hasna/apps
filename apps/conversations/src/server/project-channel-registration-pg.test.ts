@@ -1272,7 +1272,7 @@ describe("PostgreSQL project channel registration authority", () => {
     await expect(registerProjectChannelPg(conflictClient, {
       ...conflictRequest,
       operation_intent: "create",
-    })).rejects.toThrow("create surface rejects reconciliation intent");
+    })).rejects.toThrow("create surface rejects bind-existing intent");
     expect(await registerProjectChannelPg(conflictClient, conflictRequest)).toMatchObject({
       outcome: "terminal_nonacceptance",
       reason: "bind_message_owner_conflict",

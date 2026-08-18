@@ -967,12 +967,11 @@ export function assertProjectChannelRegistrationOperationIntent(
   const desiredAdopt = request.desired.registration_mode === "adopt_existing";
   const bindShape = request.bind_existing !== undefined || desiredBind;
   const adoptShape = request.adopt_existing !== undefined || desiredAdopt;
-  if (
-    expected === "create"
-    && request.operation_intent === undefined
-    && (bindShape || adoptShape)
-  ) {
-    throw new Error("project channel registration create surface rejects reconciliation intent.");
+  if (expected === "create" && request.operation_intent === undefined && bindShape) {
+    throw new Error("project channel registration create surface rejects bind-existing intent.");
+  }
+  if (expected === "create" && request.operation_intent === undefined && adoptShape) {
+    throw new Error("project channel registration create surface rejects adopt-existing intent.");
   }
   const legacyExpectedAbsentCreate = expected === "create"
     && request.operation_intent === undefined
@@ -987,8 +986,11 @@ export function assertProjectChannelRegistrationOperationIntent(
       `project channel registration ${expected} surface requires operation_intent=${expected}.`,
     );
   }
-  if (expected === "create" && (bindShape || adoptShape)) {
-    throw new Error("project channel registration create surface rejects reconciliation intent.");
+  if (expected === "create" && bindShape) {
+    throw new Error("project channel registration create surface rejects bind-existing intent.");
+  }
+  if (expected === "create" && adoptShape) {
+    throw new Error("project channel registration create surface rejects adopt-existing intent.");
   }
   if (expected === "bind_existing" && (!request.bind_existing || !desiredBind)) {
     throw new Error("project channel registration bind-existing surface requires bind-existing intent.");
