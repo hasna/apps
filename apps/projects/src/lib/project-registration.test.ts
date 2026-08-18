@@ -1012,7 +1012,7 @@ function fakeAuthoritiesWithTransports(
 }
 
 class FakeCloudProjectAuthority {
-  readonly mode = "api" as const;
+  readonly transport = "http" as const;
   readonly baseUrl = "https://projects.example.test/v1";
   project: Workspace | null = null;
   links: ProjectResourceLink[] = [];
@@ -1547,7 +1547,7 @@ describe("full project registration transaction", () => {
       const appliedProject = getWorkspace(projectId, db)!;
       expect(appliedProject.metadata).toEqual(financeMetadata);
       const context = await buildProjectContextBundle({
-        mode: "local",
+        transport: "local",
         getProject: async (id: string) => getWorkspace(id, db),
       } as ProjectStore, projectId, {
         generatedAt: new Date("2026-08-09T00:00:00.000Z"),

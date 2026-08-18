@@ -599,7 +599,7 @@ describe("channel ensure on project create/start", () => {
   });
 });
 
-describe("ensureProjectChannelViaStore (api/cloud mode)", () => {
+describe("ensureProjectChannelViaStore (hosted backend)", () => {
   // Minimal in-memory ProjectChannelStore double. Each hook can be swapped to
   // model an api backend that implements only part of the surface.
   function makeStore(overrides: Partial<ProjectChannelStore> = {}): {
@@ -619,7 +619,7 @@ describe("ensureProjectChannelViaStore (api/cloud mode)", () => {
     } as unknown as Workspace;
     const events: Array<Record<string, unknown>> = [];
     const store: ProjectChannelStore = {
-      mode: "api",
+      transport: "http",
       async recordEvent(_id, input) {
         events.push(input as unknown as Record<string, unknown>);
         return input;
@@ -714,7 +714,7 @@ describe("ensureProjectChannelViaStore (api/cloud mode)", () => {
     // recordEvent. If a future change reintroduces updateProject here, the
     // one-way repoint fixed in this change becomes reachable again.
     const { store } = makeStore();
-    expect(Object.keys(store).sort()).toEqual(["mode", "recordEvent"]);
+    expect(Object.keys(store).sort()).toEqual(["recordEvent", "transport"]);
   });
 
   test("never writes the project record — a derived name is not pinned as a link", async () => {

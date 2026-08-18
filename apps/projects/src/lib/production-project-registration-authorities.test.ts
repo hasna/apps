@@ -556,7 +556,7 @@ describe("production project registration authorities", () => {
         {
           db,
           authorities,
-          projectStore: { mode: "api" } as ProjectStore,
+          projectStore: { transport: "http" } as ProjectStore,
         },
       );
       expect(result).toMatchObject({
@@ -648,7 +648,7 @@ describe("production project registration authorities", () => {
         {
           db,
           authorities,
-          projectStore: { mode: "api" } as ProjectStore,
+          projectStore: { transport: "http" } as ProjectStore,
         },
       );
       expect(result).toMatchObject({

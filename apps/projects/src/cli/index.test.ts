@@ -11,7 +11,7 @@ import { closeDatabase } from "../db/database.js";
 import { deriveWorkspaceRegistryFields } from "../lib/workspace-plan.js";
 import { PROJECT_REGISTRATION_DEPENDENCY_TASKS } from "../lib/project-registration.js";
 import { registerWorkspaceCommands } from "./commands/workspaces.js";
-import { API_MODE_ENV_KEYS, testSpawnEnv } from "../testing/spawn-env.js";
+import { HOSTED_API_ENV_KEYS, testSpawnEnv } from "../testing/spawn-env.js";
 import { __resetProjectStore } from "../store/project-store.js";
 import type { Root, WorkspaceKind } from "../types/workspace.js";
 
@@ -102,7 +102,7 @@ async function runWorkspaceCommandInProcess(args: string[], env: Record<string, 
   // Same reasoning as testSpawnEnv(): an operator shell that exports the cloud
   // selectors would otherwise silently turn these in-process local-store runs
   // into api-mode runs against the real backend.
-  for (const key of API_MODE_ENV_KEYS) {
+  for (const key of HOSTED_API_ENV_KEYS) {
     if (key in env) continue;
     previousEnv.set(key, process.env[key]);
     delete process.env[key];
@@ -114,7 +114,7 @@ async function runWorkspaceCommandInProcess(args: string[], env: Record<string, 
   // resolveProjectStore() memoises the store it built from process.env, and the
   // module registry is shared across test files in one `bun test` run. Clearing
   // the API env vars is therefore not enough: a store another file already
-  // resolved in api mode survives, and these local-store runs then read and
+  // resolved on the hosted backend survives, and these local-store runs then read and
   // report against the REAL production registry. Observed as
   // "top-level list JSON output is not truncated above 64 KiB" returning live
   // rows whenever this file ran alongside src/mcp. Reset on both sides of the
@@ -831,7 +831,7 @@ describe("project-first CLI surface", () => {
     }
   });
 
-  test("resource-link migration CLI preserves producer proof and event bounds in api mode", async () => {
+  test("resource-link migration CLI preserves producer proof and event bounds on the hosted backend", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-resource-link-migration-"));
     const port = reserveFreePort();
     const projectId = "wks_climigrationproof01";
@@ -2869,15 +2869,14 @@ describe("project-first CLI surface", () => {
     expect(compactText).toContain("older hidden. Use --limit <n>, --verbose, or --json for details.");
   });
 
-  test("events record gates cleanly as local-only in api/cloud mode instead of leaking a raw 404", () => {
+  test("events record gates cleanly as local-only on the hosted backend instead of leaking a raw 404", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-events-cloud-"));
     const env = {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
-      // Force the cloud/self-hosted backend to resolve; the /v1 API exposes no
-      // POST /projects/:id/events route, so recording must fail fast with a
-      // clear local-only message rather than POSTing and leaking a raw 404.
-      HASNA_PROJECTS_STORAGE_MODE: "self_hosted",
-      HASNA_PROJECTS_API_URL: "https://projects.invalid.hasna.test",
+      // Resolve the hosted backend; the /v1 API exposes no POST
+      // /projects/:id/events route, so recording must fail fast with a clear
+      // local-only message rather than POSTing and leaking a raw 404.
+      HASNA_PROJECTS_API_URL: "https://projects.example.test",
       HASNA_PROJECTS_API_KEY: "test-key",
     };
 
@@ -2893,7 +2892,7 @@ describe("project-first CLI surface", () => {
 
     expect(record.exitCode).toBe(1);
     const stderr = text(record.stderr);
-    expect(stderr).toContain("local-only operation and is not available in api/cloud mode");
+    expect(stderr).toContain("local-only operation and is not available on the hosted backend");
     // Must not leak the raw upstream transport error or hit the network.
     expect(stderr).not.toContain("Hasna request failed");
     expect(stderr).not.toContain("404");
@@ -3678,9 +3677,9 @@ describe("project-first CLI surface", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test("create --dry-run previews only and never persists in cloud (self_hosted) mode", async () => {
-    // Regression: `projects create --dry-run` in cloud mode used to route
-    // straight to the cloud backend and POST a new project row, persisting a
+  test("create --dry-run previews only and never persists on the hosted backend", async () => {
+    // Regression: `projects create --dry-run` on the hosted backend used to
+    // route straight to the API and POST a new project row, persisting a
     // project despite --dry-run promising a preview-only, no-write run.
     const root = mkdtempSync(join(tmpdir(), "projects-cloud-dryrun-"));
     const port = reserveFreePort();
@@ -3849,7 +3848,7 @@ describe("project-first CLI surface", () => {
         tried: true,
         matched: false,
       });
-      expect(absentPathStep?.detail).toBe("no verified canonical workspace path match in api/cloud mode");
+      expect(absentPathStep?.detail).toBe("no verified canonical workspace path match on the hosted backend");
     } finally {
       server.stop(true);
       rmSync(root, { recursive: true, force: true });
@@ -4045,7 +4044,7 @@ describe("project-first CLI surface", () => {
     }
   }, 30_000);
 
-  test("channel --ensure succeeds in api mode even when the events route 404s, and is idempotent", async () => {
+  test("channel --ensure succeeds on the hosted backend even when the events route 404s, and is idempotent", async () => {
     // Regression (issue #28): `projects channel <p> --ensure` created the
     // conversations channel and persisted `integrations.conversations_channel`,
     // then exited 1 with a raw
@@ -4171,8 +4170,8 @@ describe("project-first CLI surface", () => {
     }
   }, 30000);
 
-  test("create in cloud mode honors registry flags and refuses machine-local runtime flags before creating a row", async () => {
-    // Regression (issue #27): the api/cloud branch of `projects create` passed
+  test("create on the hosted backend honors registry flags and refuses machine-local runtime flags before creating a row", async () => {
+    // Regression (issue #27): the hosted branch of `projects create` passed
     // only a handful of registry fields, so `--path`, `--git-remote` and the
     // management/integration flags were silently dropped, while machine-local
     // runtime flags (`--mkdir`/`--git-init`/`--marker`/`--tmux-*`) were dropped
@@ -4232,7 +4231,7 @@ describe("project-first CLI surface", () => {
         "--json",
       ]);
       expect(refused.exitCode).toBe(1);
-      expect(refused.stderr).toContain("local-only operation and is not available in api/cloud mode");
+      expect(refused.stderr).toContain("local-only operation and is not available on the hosted backend");
       expect(refused.stderr).toContain("--mkdir");
       expect(refused.stderr).toContain("--marker");
       expect(refused.stderr).toContain("--tmux-session");
@@ -4276,10 +4275,10 @@ describe("project-first CLI surface", () => {
     }
   }, 30000);
 
-  test("create in cloud mode derives the same primary_path and channel the dry-run plan promises", async () => {
+  test("create on the hosted backend derives the same primary_path and channel the dry-run plan promises", async () => {
     // Regression: `projects create --dry-run` reported a canonical
     // `primary_path` and a derived `integrations.conversations_channel`, and the
-    // identical real create in api/cloud mode produced `primary_path: null` and
+    // identical real create on the hosted backend produced `primary_path: null` and
     // `integrations: {}` — so the plan promised a project the create did not
     // build, and `projects store inspect` then read primary_is_canonical=false /
     // exists.workspace=false. Five projects were created that way.

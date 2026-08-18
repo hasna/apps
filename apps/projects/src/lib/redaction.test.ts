@@ -45,7 +45,7 @@ describe("project redaction", () => {
       process.env[PROJECTS_DB_PATH_ENV] = ":memory:";
       delete process.env["HASNA_PROJECTS_API_URL"];
       delete process.env["HASNA_PROJECTS_API_KEY"];
-      delete process.env["HASNA_PROJECTS_STORAGE_MODE"];
+      // hosted-api selectors are stripped by testSpawnEnv; no mode variable exists
       closeDatabase();
       __resetProjectStore();
     });

@@ -344,7 +344,7 @@ export async function ensureProjectStoreForTarget(
     timeBudgetMs?: number;
   } = {},
 ): Promise<ProjectStoreEnsureResult> {
-  if (store.mode === "local") {
+  if (store.transport === "local") {
     const project = await store.resolveTarget(target);
     return ensureProjectStore(project, options);
   }

@@ -21,52 +21,37 @@ describe("projects store resolution (client-flip)", () => {
   test("no env -> local store", () => {
     __resetProjectStore();
     const store = resolveProjectStore({});
-    expect(store.mode).toBe("local");
+    expect(store.transport).toBe("local");
     expect(store.baseUrl).toBeNull();
   });
 
-  test("self_hosted + url + key -> api store", () => {
+  // The client has exactly two stores: the on-box local store and the hosted
+  // HTTP API. The hosted route is selected by the joint presence of
+  // HASNA_PROJECTS_API_URL + HASNA_PROJECTS_API_KEY — there is no mode variable.
+  test("url + key -> http store", () => {
     __resetProjectStore();
     const store = resolveProjectStore({
-      HASNA_PROJECTS_STORAGE_MODE: "self_hosted",
-      HASNA_PROJECTS_API_URL: "https://projects.hasna.xyz",
+      HASNA_PROJECTS_API_URL: "https://projects.example.test",
       HASNA_PROJECTS_API_KEY: "k",
     });
-    expect(store.mode).toBe("api");
-    expect(store.baseUrl).toBe("https://projects.hasna.xyz/v1");
+    expect(store.transport).toBe("http");
+    expect(store.baseUrl).toBe("https://projects.example.test/v1");
   });
 
-  // Regression: the fleet flip writes ONLY HASNA_PROJECTS_API_URL +
-  // HASNA_PROJECTS_API_KEY (no STORAGE_MODE). Their joint presence must route to
-  // the api store, otherwise a flipped CLI silently keeps reading local sqlite.
-  test("url + key (no explicit mode) -> api store", () => {
+  test("url without key -> throws (never silently local)", () => {
     __resetProjectStore();
-    const store = resolveProjectStore({
-      HASNA_PROJECTS_API_URL: "https://projects.hasna.xyz",
-      HASNA_PROJECTS_API_KEY: "k",
-    });
-    expect(store.mode).toBe("api");
+    expect(() => resolveProjectStore({ HASNA_PROJECTS_API_URL: "https://projects.example.test" })).toThrow();
   });
 
-  test("cloud requested but no key -> throws (never silently local)", () => {
+  test("key without url -> throws (half-configured pairing)", () => {
     __resetProjectStore();
-    expect(() => resolveProjectStore({ HASNA_PROJECTS_STORAGE_MODE: "self_hosted" })).toThrow();
-  });
-
-  test("cloud alias 'cloud' -> api store", () => {
-    __resetProjectStore();
-    const store = resolveProjectStore({
-      HASNA_PROJECTS_STORAGE_MODE: "cloud",
-      HASNA_PROJECTS_API_URL: "https://projects.hasna.xyz",
-      HASNA_PROJECTS_API_KEY: "k",
-    });
-    expect(store.mode).toBe("api");
+    expect(() => resolveProjectStore({ HASNA_PROJECTS_API_KEY: "k" })).toThrow();
   });
 
   test("baseUrl never embeds the api key", () => {
     __resetProjectStore();
     const store = resolveProjectStore({
-      HASNA_PROJECTS_API_URL: "https://projects.hasna.xyz",
+      HASNA_PROJECTS_API_URL: "https://projects.example.test",
       HASNA_PROJECTS_API_KEY: "super-secret-key",
     });
     expect(store.baseUrl).not.toContain("super-secret-key");
@@ -381,13 +366,13 @@ describe("local Projects production producer verifier", () => {
   });
 });
 
-// Regression for the split-brain the review flagged: in api mode, roots, agents
+// Regression for the split-brain the review flagged: on the hosted backend, roots, agents
 // and recipes MUST route to `<url>/v1/...` over HTTP with the bearer key — never
 // to local sqlite. These drive the ApiProjectStore through a stub fetch and
 // assert both the request path and the response unwrapping.
 describe("projects store api transport (roots/agents/recipes)", () => {
   const CLOUD_ENV = {
-    HASNA_PROJECTS_API_URL: "https://projects.hasna.xyz",
+    HASNA_PROJECTS_API_URL: "https://projects.example.test",
     HASNA_PROJECTS_API_KEY: "secret-key",
   };
 
@@ -459,7 +444,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls.at(-1)).toMatchObject({ method: "DELETE", path: "/v1/roots/r9?detach=true" });
   });
 
-  // Regression for the review's write findings: in api mode an explicit event
+  // Regression for the review's write findings: on the hosted backend an explicit event
   // record MUST POST to the server, and the on-box-only sub-resources (agent
   // assignment, extra locations, mutation locks) MUST NOT silently touch local
   // sqlite — they route through the Store and refuse rather than split-brain.
@@ -473,7 +458,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls.at(-1)).toMatchObject({ method: "POST", path: "/v1/projects/proj1/events", auth: "Bearer secret-key" });
   });
 
-  test("registered locations read from the api endpoint in api mode", async () => {
+  test("registered locations read from the http endpoint", async () => {
     const { store, calls } = stubStore(() => ({
       locations: [{
         id: "loc1",
@@ -503,7 +488,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls).toEqual([{ method: "GET", path: "/v1/projects/p/locations", auth: "Bearer secret-key" }]);
   });
 
-  test("on-box sub-resource reads return empty in api mode (no sqlite)", async () => {
+  test("on-box sub-resource reads return empty on the hosted backend (no sqlite)", async () => {
     const { store, calls } = stubStore(() => ({}));
     expect(await store.getProjectAgents("p")).toEqual([]);
     expect(await store.listLocks()).toEqual([]);
@@ -512,7 +497,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls).toHaveLength(0); // never hit the network or local sqlite
   });
 
-  test("local-only writes throw in api mode instead of writing local sqlite", async () => {
+  test("local-only writes throw on the hosted backend instead of writing local sqlite", async () => {
     const { store } = stubStore(() => ({}));
     await expect(store.assignAgent("p", { agentId: "a" })).rejects.toThrow(/local-only/);
     await expect(store.addLocation("p", { path: "/x" })).rejects.toThrow(/local-only/);
@@ -521,7 +506,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
 
   // Regression for the vacuous-read defect (todos 4c17afb1): the per-project app
   // store is a machine-local sqlite FILE (data/<id>/project.db), and the server
-  // exposes no loop endpoints at all — so in api mode the ApiProjectStore used to
+  // exposes no loop endpoints at all — so on the hosted backend the ApiProjectStore used to
   // answer every app-store read from a hardcoded empty summary. `loops list`
   // returned `loops: []` and `store inspect` reported `exists: false` /
   // `loop_links: 0` against a file that demonstrably held rows, at rc=0.
@@ -534,7 +519,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
   // The `calls` assertion is load-bearing in the other direction: it proves the
   // rows came from the local store rather than from the network, so a stub that
   // merely returned data could not make these pass.
-  describe("machine-local app store resolves in api mode (todos 4c17afb1)", () => {
+  describe("machine-local app store resolves on the hosted backend (todos 4c17afb1)", () => {
     const project: ProjectStoreProject = {
       id: "wks_apiloops",
       name: "Api Loops",
@@ -637,7 +622,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
 
     // The instrument must be able to return a genuine zero, or the tests above
     // only prove it always returns rows. An empty store must still read empty.
-    test("negative control: an empty store still reports 0 links in api mode", async () => {
+    test("negative control: an empty store still reports 0 links on the hosted backend", async () => {
       await withTempHome(async () => {
         ensureProjectStore(project);
 
@@ -650,18 +635,18 @@ describe("projects store api transport (roots/agents/recipes)", () => {
       });
     });
 
-    // Regression for the write half. Making the app store resolve in api mode
+    // Regression for the write half. Making the app store resolve on the hosted backend
     // also made createDataModel / createDataRecord / linkLoop reachable there,
     // and each routes through withLock(project.id, ...). workspace_locks
     // .workspace_id is FK-constrained to the machine-local `workspaces` table,
-    // so an api-created / cloud-only project -- which by definition has no local
+    // so a hosted-created project -- which by definition has no local
     // registry row -- failed with "FOREIGN KEY constraint failed" before ever
     // touching its project.db. The reads this PR fixes were fine; the writes it
     // newly enabled were not.
     //
     // `project` here is deliberately never inserted into the local `workspaces`
-    // table, which is exactly the cloud-only shape.
-    test("api-mode writes succeed for a cloud-only project with no local workspaces row", async () => {
+    // table, which is exactly the hosted-only shape.
+    test("hosted writes succeed for a project with no local workspaces row", async () => {
       await withTempHome(async () => {
         ensureProjectStore(project);
 
@@ -701,7 +686,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
 
   });
 
-  // Regression: resolving "." (or any path/marker target) in api mode must NOT
+  // Regression: resolving "." (or any path/marker target) on the hosted backend must NOT
   // hit the API — the URL parser collapses `/projects/.` to the collection
   // route `/projects/`, returning a LIST payload that then masqueraded as a
   // single project and crashed renderers reading `project.metadata.stage`.
@@ -715,7 +700,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     await expect(store.resolveTarget(".")).rejects.toThrow(/Project not found/);
   });
 
-  test("resolveTarget verifies an existing canonical workspace path against its stable cloud project id", async () => {
+  test("resolveTarget verifies an existing canonical workspace path against its stable hosted project id", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-api-context-path-"));
     const previousHome = process.env[PROJECTS_HOME_ENV];
     process.env[PROJECTS_HOME_ENV] = root;
@@ -1211,7 +1196,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
 // bounded result detectable rather than silent.
 describe("projects list pagination (server row cap)", () => {
   const CLOUD_ENV = {
-    HASNA_PROJECTS_API_URL: "https://projects.hasna.xyz",
+    HASNA_PROJECTS_API_URL: "https://projects.example.test",
     HASNA_PROJECTS_API_KEY: "secret-key",
   };
 

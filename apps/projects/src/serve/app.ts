@@ -37,8 +37,6 @@ export interface ServeAppOptions {
   keyStatus?: (kid: string) => ApiKeyStatus | Promise<ApiKeyStatus>;
   allowUnregisteredKeys?: boolean;
   audit?: AuthAuditHook;
-  /** Reported by the legacy /version and root responses. Defaults to "cloud". */
-  mode?: string;
 }
 
 const READ_SCOPE = "projects:read";
@@ -109,7 +107,6 @@ async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
 export function createFetchHandler(options: ServeAppOptions): (req: Request) => Promise<Response> {
   const { store, version, contacts } = options;
   const appName = options.app ?? "projects";
-  const mode = options.mode ?? "cloud";
   const verifier: ApiKeyVerifier = verifyApiKey({
     app: appName,
     signingSecret: options.signingSecret,
@@ -128,7 +125,7 @@ export function createFetchHandler(options: ServeAppOptions): (req: Request) => 
       return jsonResponse({ status: "ok", version });
     }
     if (path === "/version" && method === "GET") {
-      return jsonResponse({ status: "ok", version, mode });
+      return jsonResponse({ status: "ok", version });
     }
     if (path === "/ready" && method === "GET") {
       try {
@@ -144,7 +141,7 @@ export function createFetchHandler(options: ServeAppOptions): (req: Request) => 
       return jsonResponse(buildOpenApiSpec(version));
     }
     if (path === "/" && method === "GET") {
-      return jsonResponse({ name: `${appName}-serve`, version, mode, openapi: "/openapi.json" });
+      return jsonResponse({ name: `${appName}-serve`, version, openapi: "/openapi.json" });
     }
 
     // --- everything under /v1 requires auth ---

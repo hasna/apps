@@ -581,7 +581,7 @@ function parseNonNegativeNumber(value: string | undefined, label: string): numbe
   return parsed;
 }
 
-// Machine-local mutation lock routed through the Store. In api/cloud mode the
+// Machine-local mutation lock routed through the Store. On the hosted backend the
 // Store cannot hold a local lock (writes are atomic server-side and a local
 // lock would be invisible to the rest of the fleet), so it becomes a no-op.
 async function withWorkspaceLock<T>(
@@ -591,7 +591,7 @@ async function withWorkspaceLock<T>(
   reason: string,
   fn: () => T | Promise<T>,
 ): Promise<T> {
-  if (store.mode !== "local") return fn();
+  if (store.transport !== "local") return fn();
   const key = `workspace:${workspace.id}`;
   try {
     await store.acquireLock({ key, workspaceId: workspace.id, agentId, reason, ttlSeconds: 600 });
@@ -644,23 +644,23 @@ function resolveAgentId(idOrSlug: string | undefined): string {
 
 /**
  * Resolve the attributing agent for a mutation. Local resolves/creates an
- * on-box agent identity; api mode leaves attribution to the server (derived
- * from the bearer key), so we never create a local agent row in api mode.
+ * on-box agent identity; the hosted backend leaves attribution to the server
+ * (derived from the bearer key), so we never create a local agent row there.
  */
 function mutationAgentId(store: ProjectStore, optAgent?: string): string | undefined {
-  if (store.mode !== "local") return undefined;
+  if (store.transport !== "local") return undefined;
   return optAgent ? resolveAgentId(optAgent) : ensureCliAgent().id;
 }
 
 // Guard for writes that only exist on the machine-local sqlite store. When a
-// cloud/self-hosted projects backend is active, the /v1 API exposes no matching
+// hosted projects backend is active, the /v1 API exposes no matching
 // write route (e.g. it serves GET /projects/:id/events but not POST), so calling
 // through would either leak a raw upstream 404 or silently persist to the local
-// store instead of the cloud project. Fail fast with a clear, actionable message
+// store instead of the hosted project. Fail fast with a clear, actionable message
 // that mirrors the sibling registry commands' cloud awareness.
 function assertLocalOnlyWrite(operation: string): void {
-  if (resolveProjectStore().mode !== "local") {
-    throw new Error(`${operation} is a local-only operation and is not available in api/cloud mode.`);
+  if (resolveProjectStore().transport !== "local") {
+    throw new Error(`${operation} is a local-only operation and is not available on the hosted backend.`);
   }
 }
 
@@ -2054,11 +2054,11 @@ function registerProjectCommands(program: Command): void {
         // has no plan/preview endpoint, so when a dry-run is requested we skip
         // the remote create entirely and fall through to the local planner,
         // which builds the plan without writing to any registry (local or cloud).
-        if (store.mode === "api" && !opts.dryRun) {
+        if (store.transport === "http" && !opts.dryRun) {
           // Machine-local runtime (directory/git/marker/tmux) cannot be applied
           // to a remote row, and there is no api-mode command that can apply it
           // afterwards. Refuse BEFORE the create so a rejected request never
-          // leaves a partial, row-only project behind in the cloud registry.
+          // leaves a partial, row-only project behind in the hosted registry.
           const unsupported = [
             opts.mkdir ? "--mkdir" : null,
             opts.gitInit ? "--git-init" : null,
@@ -2069,14 +2069,14 @@ function registerProjectCommands(program: Command): void {
           ].filter((flag): flag is string => Boolean(flag));
           if (unsupported.length) {
             throw new Error(
-              `create with machine-local runtime flags (${unsupported.join(", ")}) is a local-only operation and is not available in api/cloud mode. `
-              + "No project was created. Re-run without those flags (registry fields such as --path, --git-remote, --stage and --priority are honored in api/cloud mode), "
+              `create with machine-local runtime flags (${unsupported.join(", ")}) is a local-only operation and is not available on the hosted backend. `
+              + "No project was created. Re-run without those flags (registry fields such as --path, --git-remote, --stage and --priority are honored on the hosted backend), "
               + "or preview the full local plan with --dry-run.",
             );
           }
           // Cloud project rows are created through the Store. Root/recipe are
           // shared registry resources: resolve slug->id through the Store so the
-          // intent is honored (not silently dropped) in api mode. Agent
+          // intent is honored (not silently dropped) on the hosted backend. Agent
           // attribution stays server-side (see mutationAgentId).
           const root = opts.root ? await resolveRoot(store, opts.root) : null;
           const recipe = opts.recipe ? await resolveRecipe(store, opts.recipe) : null;
@@ -3891,8 +3891,8 @@ function registerProjectCommands(program: Command): void {
       try {
         const store = resolveProjectStore();
         const runDoctor = (project: Workspace) => opts.fix && !opts.dryRun
-          ? withWorkspaceLock(store, project, mutationAgentId(store), "project doctor fix", () => doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun, storageMode: store.mode }))
-          : Promise.resolve(doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun, storageMode: store.mode }));
+          ? withWorkspaceLock(store, project, mutationAgentId(store), "project doctor fix", () => doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun, transport: store.transport }))
+          : Promise.resolve(doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun, transport: store.transport }));
         const json = wantsJson(opts);
         const limit = json ? undefined : parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
         const results = idOrSlug
@@ -3932,7 +3932,7 @@ function registerProjectCommands(program: Command): void {
  * the hosted row has no primary path.
  */
 function assertLocalOnlyStoreOperation(store: ReturnType<typeof resolveProjectStore>, operation: string): void {
-  if (store.mode === "api") {
+  if (store.transport === "http") {
     throw new Error(
       `${operation} is a local-only operation: the canonical on-box store is a machine-local resource the cloud project does not own. Run it in local mode on the machine that holds the files.`,
     );
@@ -4021,8 +4021,8 @@ function registerStoreCommand(program: Command): void {
       try {
         const store = resolveProjectStore();
         const agentId = opts.agent
-          ? (store.mode === "local" ? resolveAgentId(opts.agent) : opts.agent)
-          : (store.mode === "local" ? ensureCliAgent().id : undefined);
+          ? (store.transport === "local" ? resolveAgentId(opts.agent) : opts.agent)
+          : (store.transport === "local" ? ensureCliAgent().id : undefined);
         const common = {
           dryRun: opts.dryRun,
           setPrimaryIfMissing: opts.primary,
@@ -4030,7 +4030,7 @@ function registerStoreCommand(program: Command): void {
           source: "cli" as const,
           command: process.argv.join(" "),
         };
-        const result = store.mode === "local"
+        const result = store.transport === "local"
           ? await (async () => {
               const project = await store.resolveTarget(projectIdOrSlug);
               const ensure = () => ensureCanonicalProjectStore(project, common);
