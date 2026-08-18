@@ -9,18 +9,38 @@
     "draw"
   ],
   "metadata": {
-    "service": {
-      "port": 19460,
-      "healthPath": "/health",
-      "readyPath": "/ready",
-      "versionPath": "/version",
-      "apiVersion": "v1",
-      "auth": "api-key",
-      "signingSecretSecretRef": "hasna/oss/draw/api-key-signing-secret"
+    "conformance": {
+      "waivedSurfaces": [
+        {
+          "kind": "api",
+          "reason": "Draw ships no HTTP API surface: it is a headless board SDK with a CLI and React components; HTTP serve is not part of the shipped v1."
+        },
+        {
+          "kind": "mcp",
+          "reason": "Draw ships no MCP surface: there is no MCP server bin or tools surface in the package."
+        }
+      ]
     },
-    "client": {
-      "apiUrlEnv": "DRAW_API_URL",
-      "apiKeyEnv": "DRAW_API_KEY"
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
     }
-  }
+  },
+  "serviceSurfaces": [
+    {
+      "name": "draw-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "."
+    },
+    {
+      "name": "draw-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "draw",
+      "authMode": "local-only"
+    }
+  ]
 }
