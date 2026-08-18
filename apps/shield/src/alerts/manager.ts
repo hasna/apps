@@ -145,7 +145,7 @@ export class AlertManager {
       advisory,
       iocs,
       detected_at: new Date().toISOString(),
-      source: "open-security",
+      source: "shield",
     };
 
     const results = await Promise.allSettled(

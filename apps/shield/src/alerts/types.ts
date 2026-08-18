@@ -4,7 +4,7 @@ export interface AlertPayload {
   advisory: Advisory;
   iocs: Array<{ type: string; value: string; context: string | null }>;
   detected_at: string;
-  source: string; // e.g. "open-security/lepidus"
+  source: string; // e.g. "shield/lepidus"
 }
 
 export interface AlertResult {

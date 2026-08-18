@@ -22,7 +22,7 @@ describe("git hooks", () => {
     const contents = readFileSync(result.hookPath, "utf-8");
 
     expect(result.installed).toBe(true);
-    expect(contents).toContain("managed-by-open-shield");
+    expect(contents).toContain("managed-by-shield");
     expect(contents).toContain("shield secrets . --format terminal --fail-on high --no-git-history");
     expect(contents).toContain("./node_modules/.bin/shield secrets . --format terminal --fail-on high --no-git-history");
     expect(contents).toContain("security secrets . --format terminal --fail-on high --no-git-history");
@@ -49,7 +49,7 @@ describe("git hooks", () => {
     const result = installPrePushHook(tempDir, { force: true });
     expect(result.installed).toBe(true);
     expect(result.skipped).toBe(false);
-    expect(readFileSync(hookPath, "utf-8")).toContain("managed-by-open-shield");
+    expect(readFileSync(hookPath, "utf-8")).toContain("managed-by-shield");
   });
 
   test("installPrePushHook upgrades a legacy managed hook", () => {
@@ -61,7 +61,7 @@ describe("git hooks", () => {
 
     expect(result.installed).toBe(true);
     expect(result.skipped).toBe(false);
-    expect(contents).toContain("managed-by-open-shield");
+    expect(contents).toContain("managed-by-shield");
     expect(contents).toContain("shield secrets . --format terminal --fail-on high --no-git-history");
   });
 });

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@hasnaxyz/open-security-sdk",
+      "name": "@hasna/shield-sdk",
       "dependencies": {
         "zod": "^3.24.4",
       },

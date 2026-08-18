@@ -32,7 +32,7 @@ export class DiscordChannel implements AlertChannel {
         ...(advisory.threat_actor ? [{ name: "Threat actor", value: advisory.threat_actor, inline: true }] : []),
         ...iocFields,
       ],
-      footer: { text: `open-security advisory • ${advisory.detected_at}` },
+      footer: { text: `shield advisory • ${advisory.detected_at}` },
     };
 
     try {
