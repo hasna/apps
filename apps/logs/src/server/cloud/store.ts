@@ -23,7 +23,12 @@ import type {
   TestReportEntry,
   TestReportQuery,
 } from "../../lib/test-reports.ts";
-import type { Page, PerformanceSnapshot, ScanJob } from "../../types/index.ts";
+import type {
+  Page,
+  PerformanceSnapshot,
+  ScanJob,
+  ScanRun,
+} from "../../types/index.ts";
 
 export const LOG_LEVELS = ["debug", "info", "warn", "error", "fatal"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -496,6 +501,129 @@ export class CloudLogStore {
     return rowToScanJob(row);
   }
 
+  async getJob(id: string): Promise<ScanJob | null> {
+    const row = await this.client.get<ScanJobRow>(
+      `SELECT id, project_id, page_id, schedule, enabled, last_run_at, created_at
+       FROM scan_jobs WHERE id = $1`,
+      [id],
+    );
+    return row ? rowToScanJob(row) : null;
+  }
+
+  async updateJob(
+    id: string,
+    data: { enabled?: boolean; schedule?: string; last_run_at?: string },
+  ): Promise<ScanJob | null> {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (data.enabled !== undefined) {
+      sets.push(`enabled = $${params.length + 1}`);
+      params.push(data.enabled);
+    }
+    if (data.schedule !== undefined) {
+      sets.push(`schedule = $${params.length + 1}`);
+      params.push(data.schedule);
+    }
+    if (data.last_run_at !== undefined) {
+      sets.push(`last_run_at = $${params.length + 1}`);
+      params.push(data.last_run_at);
+    }
+    if (sets.length === 0) return this.getJob(id);
+    params.push(id);
+    const row = await this.client.get<ScanJobRow>(
+      `UPDATE scan_jobs SET ${sets.join(", ")}
+       WHERE id = $${params.length}
+       RETURNING id, project_id, page_id, schedule, enabled, last_run_at, created_at`,
+      params,
+    );
+    return row ? rowToScanJob(row) : null;
+  }
+
+  async createScanRun(input: {
+    job_id: string;
+    page_id?: string;
+  }): Promise<ScanRun> {
+    const row = await this.client.one<ScanRunRow>(
+      `INSERT INTO scan_runs (job_id, page_id) VALUES ($1, $2)
+       RETURNING id, job_id, page_id, started_at, finished_at, status,
+                 logs_collected, errors_found, perf_score`,
+      [input.job_id, input.page_id ?? null],
+    );
+    return rowToScanRun(row);
+  }
+
+  async finishScanRun(
+    id: string,
+    data: {
+      status: "completed" | "failed";
+      logs_collected: number;
+      errors_found: number;
+      perf_score?: number;
+    },
+  ): Promise<ScanRun | null> {
+    const row = await this.client.get<ScanRunRow>(
+      `UPDATE scan_runs SET finished_at = NOW()::text, status = $1,
+        logs_collected = $2, errors_found = $3, perf_score = $4
+       WHERE id = $5
+       RETURNING id, job_id, page_id, started_at, finished_at, status,
+                 logs_collected, errors_found, perf_score`,
+      [
+        data.status,
+        data.logs_collected,
+        data.errors_found,
+        data.perf_score ?? null,
+        id,
+      ],
+    );
+    return row ? rowToScanRun(row) : null;
+  }
+
+  // --- pages ---------------------------------------------------------------
+
+  async getPage(pageId: string): Promise<Page | null> {
+    const row = await this.client.get<PageRow>(
+      `SELECT id, project_id, url, path, name, last_scanned_at, created_at
+       FROM pages WHERE id = $1`,
+      [pageId],
+    );
+    return row ? rowToPage(row) : null;
+  }
+
+  async touchPage(pageId: string, lastScannedAt: string): Promise<Page | null> {
+    const row = await this.client.get<PageRow>(
+      `UPDATE pages SET last_scanned_at = $2
+       WHERE id = $1
+       RETURNING id, project_id, url, path, name, last_scanned_at, created_at`,
+      [pageId, lastScannedAt],
+    );
+    return row ? rowToPage(row) : null;
+  }
+
+  // --- performance ---------------------------------------------------------
+
+  async savePerfSnapshot(
+    data: Omit<PerformanceSnapshot, "id" | "timestamp">,
+  ): Promise<PerformanceSnapshot> {
+    return this.client.one<PerformanceSnapshot>(
+      `INSERT INTO performance_snapshots
+         (project_id, page_id, url, lcp, fcp, cls, tti, ttfb, score, raw_audit)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING *`,
+      [
+        data.project_id,
+        data.page_id ?? null,
+        data.url,
+        data.lcp ?? null,
+        data.fcp ?? null,
+        data.cls ?? null,
+        data.tti ?? null,
+        data.ttfb ?? null,
+        data.score ?? null,
+        data.raw_audit ?? null,
+      ],
+    );
+  }
+
   // --- performance ---------------------------------------------------------
 
   async latestPerfSnapshot(
@@ -809,9 +937,10 @@ export class CloudLogStore {
     const limit = clampInt(query.limit, 100, query.max_limit ?? 1000);
     const offset = Math.max(0, Math.floor(query.offset ?? 0));
     params.push(limit, offset);
+    const ascending = query.order === "asc";
     const rows = await this.client.many<EventRecordRow>(
       `SELECT * FROM event_records ${where}
-       ORDER BY event_time DESC, event_id DESC
+       ORDER BY event_time ${ascending ? "ASC" : "DESC"}, event_id ${ascending ? "ASC" : "DESC"}
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );
@@ -1112,6 +1241,32 @@ function rowToScanJob(row: ScanJobRow): ScanJob {
   };
 }
 
+interface ScanRunRow {
+  id: string;
+  job_id: string;
+  page_id: string | null;
+  started_at: string | Date;
+  finished_at: string | null;
+  status: "running" | "completed" | "failed";
+  logs_collected: number;
+  errors_found: number;
+  perf_score: number | null;
+}
+
+function rowToScanRun(row: ScanRunRow): ScanRun {
+  return {
+    id: row.id,
+    job_id: row.job_id,
+    page_id: row.page_id,
+    started_at: toIso(row.started_at),
+    finished_at: row.finished_at ? toIso(row.finished_at) : null,
+    status: row.status,
+    logs_collected: row.logs_collected,
+    errors_found: row.errors_found,
+    perf_score: row.perf_score,
+  };
+}
+
 interface AlertRuleRow {
   id: string;
   project_id: string;
@@ -1250,6 +1405,14 @@ function buildEventWhere(query: EventCatalogQuery): {
     params.push('%"category":"mcp_tool_call"%');
     conds.push(
       `NOT (event_type = 'agent' AND source = 'mcp' AND metadata ILIKE $${params.length})`,
+    );
+  }
+  if (query.after_time && query.after_id) {
+    // Exclusive (event_time, event_id) cursor — the hosted counterpart of the
+    // local rowid cursor used by the event-catalog live-tail.
+    params.push(query.after_time, query.after_time, query.after_id);
+    conds.push(
+      `(event_time > $${params.length - 2} OR (event_time = $${params.length - 1} AND event_id > $${params.length}))`,
     );
   }
   return {

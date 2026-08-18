@@ -332,6 +332,130 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
     return c.json(job, 201);
   });
 
+  // Scan-run + maintenance surface (hosted equivalents of the local-only
+  // CLI operations: `scan`, `watch --events` runbook support).
+  v1.get("/jobs/:id", requireScope("logs:read"), async (c) => {
+    const job = await store.getJob(c.req.param("id") ?? "");
+    return job ? c.json(job) : c.json({ error: "not found" }, 404);
+  });
+
+  v1.put("/jobs/:id", requireScope("logs:write"), async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const allowed: Record<string, unknown> = {};
+    if (body && typeof body === "object") {
+      for (const key of ["enabled", "schedule", "last_run_at"]) {
+        if (key in (body as Record<string, unknown>))
+          allowed[key] = (body as Record<string, unknown>)[key];
+      }
+    }
+    if (allowed.enabled !== undefined && typeof allowed.enabled !== "boolean") {
+      return c.json({ error: "Field 'enabled' must be a boolean." }, 400);
+    }
+    if (
+      allowed.schedule !== undefined &&
+      typeof allowed.schedule !== "string"
+    ) {
+      return c.json({ error: "Field 'schedule' must be a string." }, 400);
+    }
+    if (
+      allowed.last_run_at !== undefined &&
+      typeof allowed.last_run_at !== "string"
+    ) {
+      return c.json({ error: "Field 'last_run_at' must be a string." }, 400);
+    }
+    const job = await store.updateJob(c.req.param("id") ?? "", {
+      enabled: allowed.enabled as boolean | undefined,
+      schedule: allowed.schedule as string | undefined,
+      last_run_at: allowed.last_run_at as string | undefined,
+    });
+    return job ? c.json(job) : c.json({ error: "not found" }, 404);
+  });
+
+  v1.post("/jobs/:id/runs", requireScope("logs:write"), async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const pageId =
+      body && typeof body.page_id === "string" ? body.page_id : undefined;
+    const run = await store.createScanRun({
+      job_id: c.req.param("id") ?? "",
+      page_id: pageId,
+    });
+    return c.json(run, 201);
+  });
+
+  v1.patch("/jobs/:id/runs/:runId", requireScope("logs:write"), async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (
+      !body ||
+      (body.status !== "completed" && body.status !== "failed") ||
+      typeof body.logs_collected !== "number" ||
+      typeof body.errors_found !== "number"
+    ) {
+      return c.json(
+        {
+          error:
+            "Fields 'status' (completed|failed), 'logs_collected' and 'errors_found' are required.",
+        },
+        400,
+      );
+    }
+    const run = await store.finishScanRun(c.req.param("runId") ?? "", {
+      status: body.status,
+      logs_collected: body.logs_collected,
+      errors_found: body.errors_found,
+      perf_score:
+        typeof body.perf_score === "number" ? body.perf_score : undefined,
+    });
+    return run ? c.json(run) : c.json({ error: "not found" }, 404);
+  });
+
+  // Pages by id (hosted `scan` lookup + last_scanned_at bookkeeping)
+  v1.get("/pages/:id", requireScope("logs:read"), async (c) => {
+    const page = await store.getPage(c.req.param("id") ?? "");
+    return page ? c.json(page) : c.json({ error: "not found" }, 404);
+  });
+
+  v1.patch("/pages/:id", requireScope("logs:write"), async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const lastScannedAt =
+      body && typeof body.last_scanned_at === "string"
+        ? body.last_scanned_at
+        : null;
+    if (lastScannedAt === null) {
+      return c.json({ error: "Field 'last_scanned_at' is required." }, 400);
+    }
+    const page = await store.touchPage(c.req.param("id") ?? "", lastScannedAt);
+    return page ? c.json(page) : c.json({ error: "not found" }, 404);
+  });
+
+  // Performance snapshot writes (hosted `scan` perf bookkeeping)
+  v1.post("/perf/snapshot", requireScope("logs:write"), async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (
+      !body ||
+      typeof body.project_id !== "string" ||
+      typeof body.url !== "string"
+    ) {
+      return c.json(
+        { error: "Fields 'project_id' and 'url' are required." },
+        400,
+      );
+    }
+    const snapshot = await store.savePerfSnapshot({
+      project_id: body.project_id,
+      page_id: typeof body.page_id === "string" ? body.page_id : undefined,
+      url: body.url,
+      lcp: typeof body.lcp === "number" ? body.lcp : undefined,
+      fcp: typeof body.fcp === "number" ? body.fcp : undefined,
+      cls: typeof body.cls === "number" ? body.cls : undefined,
+      tti: typeof body.tti === "number" ? body.tti : undefined,
+      ttfb: typeof body.ttfb === "number" ? body.ttfb : undefined,
+      score: typeof body.score === "number" ? body.score : undefined,
+      raw_audit:
+        typeof body.raw_audit === "string" ? body.raw_audit : undefined,
+    });
+    return c.json(snapshot, 201);
+  });
+
   // Events catalog (raw envelope is local-only)
   // Ingest one universal telemetry event, or a `{ events: [...] }` batch — the
   // data-plane path for `logs run` capture, `events push`, and the SDK/MCP.
@@ -591,6 +715,8 @@ function parseEventQuery(q: Record<string, string>): EventCatalogQuery {
     "since",
     "until",
     "text",
+    "after_time",
+    "after_id",
   ];
   for (const key of scalars) {
     const value = q[key as string];
@@ -601,6 +727,7 @@ function parseEventQuery(q: Record<string, string>): EventCatalogQuery {
   if (q.max_limit) query.max_limit = Number(q.max_limit);
   if (q.exclude_mcp_tool_telemetry === "true")
     query.exclude_mcp_tool_telemetry = true;
+  if (q.order === "asc" || q.order === "desc") query.order = q.order;
   return query;
 }
 

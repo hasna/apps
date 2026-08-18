@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import { streamServerEvents } from "../lib/event-stream-client.ts";
-import type { CliEventWatchFilter, WatchEventRow } from "../lib/event-watch.ts";
+import type { CliEventWatchFilter } from "../lib/event-watch.ts";
 import type { EventCatalogEntry } from "../lib/events.ts";
 import { PACKAGE_VERSION } from "../lib/package-meta.ts";
 import type { StructuredLogFormat } from "../lib/structured-logs.ts";
@@ -12,7 +12,7 @@ import type {
   UniversalEventType,
 } from "../lib/universal-ingest.ts";
 import {
-  type LocalStore,
+  type Store,
   requireLocalStore,
   resolveStore,
 } from "../store/index.ts";
@@ -56,10 +56,12 @@ function colorLevel(level: string): string {
  * routes through this — no per-command `cloud ? : local` branching, no `getDb()`
  * in handlers. Fully reversible: unset HASNA_LOGS_API_URL/KEY -> local.
  *
- * On-box maintenance/compute commands (db repair, subprocess capture, file
- * follow, event-store diagnostics) call `requireLocalStore(cmd)` instead: it
- * returns the concrete LocalStore (throwing in api mode), keeping `getDb()`
- * confined to the store implementation.
+ * The event-catalog maintenance commands (`db doctor segments`,
+ * `db doctor rebuild-index`, `db doctor repair-segments`) call
+ * `requireLocalStore(cmd)` instead: their subject — the raw JSONL segment
+ * files and SQLite projections — exists only on the on-box backend, so they
+ * throw loudly in api mode rather than touch a stale local db (see
+ * src/store/index.ts for the recorded strong reason).
  */
 const store = resolveStore();
 
@@ -1014,18 +1016,17 @@ program
   .option("--job <id>")
   .option("--project <name|id>", "Project name or ID")
   .action(async (opts) => {
-    const local = requireLocalStore("scan");
     if (!opts.job) {
       console.error("--job required");
       process.exit(1);
     }
-    const job = local.getScanJob(opts.job);
+    const job = await store.getScanJob(opts.job);
     if (!job) {
       console.error("Job not found");
       process.exit(1);
     }
     console.log("Running scan...");
-    await local.runScanJob(job.id, job.project_id, job.page_id ?? undefined);
+    await store.runScanJob(job.id, job.project_id, job.page_id ?? undefined);
     console.log("Scan complete.");
   });
 
@@ -1187,11 +1188,12 @@ program
         opts.lastEventId,
     );
     if (useEventCatalog) {
-      // The event-catalog live-tail walks on-box rowid cursors in the local
-      // append-only store (no cloud data model) — require the local store. The
-      // cloud equivalent is `watch --server <url>` (SSE), handled above.
-      const local = requireLocalStore("watch --events");
-      await watchLocalEventCatalog(local, opts, projectId);
+      // The event-catalog live-tail is a mode-resolved data-plane operation:
+      // the local tier walks rowid cursors, the hosted tier walks
+      // (event_time, event_id) cursors — identical `Store.watchEvents`
+      // semantics on both. `watch --server <url>` (SSE) remains available as
+      // an explicit out-of-band tail to any logs server.
+      await watchEventCatalog(store, opts, projectId);
       return;
     }
 
@@ -1510,29 +1512,17 @@ function toWatchFilter(
   };
 }
 
-async function watchLocalEventCatalog(
-  local: LocalStore,
+async function watchEventCatalog(
+  store: Store,
   opts: WatchCommandOptions,
   projectId: string | undefined,
 ): Promise<void> {
   const pollIntervalMs = Math.max(100, Number(opts.interval) || 500);
   const since = parseRelativeTime(opts.since);
   const filter = toWatchFilter(opts, projectId);
-  let cursor = since ? 0 : local.latestWatchEventRowid(filter);
   let lastEventId = opts.lastEventId ?? null;
   let errorCount = 0;
   let warnCount = 0;
-
-  if (opts.lastEventId) {
-    const requestedCursor = local.watchEventRowidForId(opts.lastEventId);
-    if (requestedCursor === null) {
-      writeWatchOverflow("last_event_id_unknown", opts.lastEventId);
-      cursor = local.latestWatchEventRowid(filter);
-      lastEventId = null;
-    } else {
-      cursor = requestedCursor;
-    }
-  }
 
   if (!opts.once && opts.format !== "json") {
     process.stdout.write("\x1b[2J\x1b[H");
@@ -1541,19 +1531,33 @@ async function watchLocalEventCatalog(
     );
   }
 
-  const poll = () => {
-    const rows = local.queryWatchEventRows(filter, cursor, since, 100);
+  const poll = async (): Promise<unknown[]> => {
+    const result = await store.watchEvents({
+      ...filter,
+      since,
+      last_event_id: lastEventId ?? undefined,
+      limit: 100,
+      include_raw: opts.includeRaw === true,
+      include_internal: true,
+      from_start: since ? true : false,
+    });
+    if (result.overflow) {
+      writeWatchOverflow(result.overflow.reason, result.overflow.last_event_id);
+      // The store resets the cursor to the latest event; resume from there so
+      // an unknown anchor never replays history.
+      if (result.cursor) lastEventId = result.cursor;
+    }
+    const rows = result.events;
     if (opts.once && opts.format === "json") {
-      printJson(rows.map(stripWatchRow));
+      printJson(rows);
       return rows;
     }
     for (const row of rows) {
-      cursor = row.rowid;
       lastEventId = row.event_id;
       if (row.severity === "error" || row.severity === "fatal") errorCount += 1;
       if (row.severity === "warn") warnCount += 1;
       if (opts.format === "json") {
-        console.log(JSON.stringify(stripWatchRow(row)));
+        console.log(JSON.stringify(row));
       } else {
         console.log(formatEventWatchRow(row));
       }
@@ -1565,10 +1569,10 @@ async function watchLocalEventCatalog(
     return rows;
   };
 
-  poll();
+  await poll();
   if (opts.once) return;
 
-  const interval = setInterval(poll, pollIntervalMs);
+  const interval = setInterval(() => void poll(), pollIntervalMs);
   process.on("SIGINT", () => {
     clearInterval(interval);
     console.log(
@@ -1719,7 +1723,7 @@ function addQueryParam(
 
 function formatEventWatchRow(
   row: Pick<
-    WatchEventRow,
+    EventCatalogEntry,
     "event_time" | "event_type" | "severity" | "source" | "event_id" | "message"
   >,
 ): string {
@@ -1732,12 +1736,6 @@ function formatEventWatchRow(
   const source = pad(row.source, 8);
   const level = pad(severity.toUpperCase(), 5);
   return `${color}${ts}  ${type}  ${bold}${level}${reset}${color}  ${source}  ${row.message ?? row.event_id}${reset}`;
-}
-
-function stripWatchRow(row: WatchEventRow): EventCatalogEntry {
-  const { rowid, ...event } = row;
-  void rowid;
-  return event;
 }
 
 function parseJson(value: string): unknown {

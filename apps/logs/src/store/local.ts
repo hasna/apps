@@ -414,7 +414,7 @@ export class LocalStore implements Store {
     );
   }
 
-  getScanJob(id: string): ScanJob | null {
+  async getScanJob(id: string): Promise<ScanJob | null> {
     return getJob(getDb(), id);
   }
 
@@ -442,6 +442,11 @@ export class LocalStore implements Store {
 
   // ── event-catalog cursor watch (MCP `event_watch`) ──────
   watchEventsForMcp(args: McpEventWatchArgs): McpEventWatchResult {
+    return watchEventsForMcp(getDb(), args);
+  }
+
+  // ── Store interface: hosted-parity cursor watch ─────────
+  async watchEvents(args: McpEventWatchArgs): Promise<McpEventWatchResult> {
     return watchEventsForMcp(getDb(), args);
   }
 }

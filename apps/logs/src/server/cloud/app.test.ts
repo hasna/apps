@@ -1,204 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { mintApiKey } from "@hasna/contracts/auth";
-import type { QueryResultRow } from "pg";
-import { logsCloudMigrations } from "../../db/pg-migrate.ts";
-import type { TypedQueryClient } from "../../generated/storage-kit/index.ts";
-import { buildCloudApp } from "./app.ts";
 import { buildOpenApiDocument } from "./openapi.ts";
+import { buildCloudApp } from "./app.ts";
+import {
+  SIGNING_SECRET,
+  buildTestCloudApp,
+  fakeClient,
+  mintApiKey,
+  tokenWith,
+} from "./test-helpers.ts";
 
-const SIGNING_SECRET = "test-signing-secret-do-not-use-in-prod";
-
-/**
- * In-memory fake of the vendored kit's TypedQueryClient. Enough to exercise the
- * cloud routes without a live Postgres: it pattern-matches on the SQL text.
- */
-function fakeClient(): {
-  client: TypedQueryClient;
-  state: {
-    logs: Map<string, Record<string, unknown>>;
-    projects: Map<string, Record<string, unknown>>;
-  };
-} {
-  const state = {
-    logs: new Map<string, Record<string, unknown>>(),
-    projects: new Map<string, Record<string, unknown>>(),
-    events: new Map<string, Record<string, unknown>>(),
-    migrations: logsCloudMigrations().map((m) => ({ id: m.id })),
-  };
-
-  const EVENT_COLUMNS = [
-    "event_id",
-    "schema_version",
-    "source_event_id",
-    "event_type",
-    "event_time",
-    "ingest_time",
-    "severity",
-    "source",
-    "project_id",
-    "page_id",
-    "log_id",
-    "machine_id",
-    "repo_id",
-    "app_id",
-    "process_id",
-    "run_id",
-    "trace_id",
-    "span_id",
-    "parent_span_id",
-    "session_id",
-    "release_id",
-    "environment",
-    "artifact_id",
-    "privacy_tier",
-    "segment_id",
-    "segment_path",
-    "byte_offset",
-    "byte_length",
-    "record_hash",
-    "message",
-    "metadata",
-  ];
-
-  async function run<T extends QueryResultRow>(
-    sql: string,
-    params: readonly unknown[] = [],
-  ): Promise<T[]> {
-    const s = sql.replace(/\s+/g, " ").trim();
-    if (s.startsWith("SELECT id FROM schema_migrations")) {
-      return state.migrations as unknown as T[];
-    }
-    if (s.startsWith("SELECT 1 AS ok")) return [{ ok: 1 } as unknown as T];
-    if (s.startsWith("INSERT INTO projects")) {
-      const [id, name] = params as string[];
-      const row = {
-        id,
-        name,
-        github_repo: null,
-        base_url: null,
-        description: null,
-        created_at: new Date().toISOString(),
-      };
-      state.projects.set(id ?? "", row);
-      return [row as unknown as T];
-    }
-    if (
-      s.startsWith(
-        "SELECT id, name, github_repo, base_url, description, created_at FROM projects WHERE name",
-      )
-    ) {
-      return []; // no dup
-    }
-    if (
-      s.startsWith(
-        "SELECT id, name, github_repo, base_url, description, created_at FROM projects WHERE id",
-      )
-    ) {
-      const row = state.projects.get((params as string[])[0] ?? "");
-      return row ? [row as unknown as T] : [];
-    }
-    if (
-      s.startsWith(
-        "SELECT id, name, github_repo, base_url, description, created_at FROM projects",
-      )
-    ) {
-      return [...state.projects.values()] as unknown as T[];
-    }
-    if (s.startsWith("INSERT INTO logs")) {
-      const p = params as unknown[];
-      const row = {
-        id: p[0],
-        timestamp: new Date().toISOString(),
-        project_id: p[2],
-        level: p[3],
-        source: p[4],
-        service: p[5],
-        message: p[6],
-        trace_id: p[7],
-        session_id: p[8],
-        agent: p[9],
-        url: p[10],
-        stack_trace: p[11],
-        metadata: p[12],
-      };
-      state.logs.set(p[0] as string, row);
-      return [row as unknown as T];
-    }
-    if (s.startsWith("DELETE FROM logs WHERE id")) {
-      const id = (params as string[])[0] ?? "";
-      const existed = state.logs.delete(id);
-      return existed ? [{ id } as unknown as T] : [];
-    }
-    if (s.startsWith("SELECT") && s.includes("FROM logs WHERE id")) {
-      const row = state.logs.get((params as string[])[0] ?? "");
-      return row ? [row as unknown as T] : [];
-    }
-    if (s.startsWith("SELECT") && s.includes("FROM logs")) {
-      return [...state.logs.values()] as unknown as T[];
-    }
-    if (s.startsWith("INSERT INTO event_records")) {
-      const p = params as unknown[];
-      const eventId = p[0] as string;
-      if (!state.events.has(eventId)) {
-        const row: Record<string, unknown> = { created_at: new Date().toISOString() };
-        EVENT_COLUMNS.forEach((col, i) => {
-          row[col] = p[i] ?? null;
-        });
-        state.events.set(eventId, row);
-      }
-      return [];
-    }
-    if (s.startsWith("SELECT * FROM event_records WHERE event_id = $1")) {
-      const row = state.events.get((params as string[])[0] ?? "");
-      return row ? [row as unknown as T] : [];
-    }
-    if (s.startsWith("SELECT * FROM event_records")) {
-      return [...state.events.values()] as unknown as T[];
-    }
-    if (s.startsWith("INSERT INTO feedback")) {
-      return [{ id: "fb1" } as unknown as T];
-    }
-    return [];
-  }
-
-  const client: TypedQueryClient = {
-    async query(sql, params) {
-      const rows = await run(sql, params);
-      return { rows, rowCount: rows.length };
-    },
-    many: (sql, params) => run(sql, params),
-    async get(sql, params) {
-      const rows = await run(sql, params);
-      return rows[0] ?? null;
-    },
-    async one(sql, params) {
-      const rows = await run(sql, params);
-      if (rows.length !== 1) throw new Error("expected one row");
-      return rows[0] as T;
-    },
-    async execute(sql, params) {
-      await run(sql, params);
-    },
-  };
-  return { client, state };
-}
-
-function tokenWith(scopes: string[]): string {
-  return mintApiKey({
-    app: "logs",
-    scopes,
-    signingSecret: SIGNING_SECRET,
-    agent: "test",
-  }).token;
-}
-
+/** Alias kept so existing tests read unchanged: the in-memory cloud app. */
 function app() {
-  return buildCloudApp({
-    client: fakeClient().client,
-    version: "9.9.9",
-    signingSecret: SIGNING_SECRET,
-  });
+  return buildTestCloudApp();
 }
+
 
 describe("cloud serve probes", () => {
   test("/version returns status, version, mode", async () => {
@@ -459,6 +274,213 @@ describe("cloud serve data-plane parity (v1 surface)", () => {
     });
     expect(res.status).toBe(201);
     expect((await res.json()).ok).toBe(true);
+  });
+});
+
+describe("cloud serve scan-run + maintenance surface (localonly-logs)", () => {
+  function appWithState() {
+    const f = fakeClient();
+    f.state.projects.set("proj-1", {
+      id: "proj-1",
+      name: "scanproj",
+      github_repo: null,
+      base_url: null,
+      description: null,
+      created_at: new Date().toISOString(),
+    });
+    f.state.pages.set("page-1", {
+      id: "page-1",
+      project_id: "proj-1",
+      url: "https://example.com",
+      path: "/",
+      name: null,
+      last_scanned_at: null,
+      created_at: new Date().toISOString(),
+    });
+    f.state.scanJobs.set("job-1", {
+      id: "job-1",
+      project_id: "proj-1",
+      page_id: null,
+      schedule: "*/30 * * * *",
+      enabled: true,
+      last_run_at: null,
+      created_at: new Date().toISOString(),
+    });
+    const a = buildCloudApp({
+      client: f.client,
+      version: "9.9.9",
+      signingSecret: SIGNING_SECRET,
+    });
+    return { a, f };
+  }
+
+  test("GET /v1/jobs/:id returns the job and 404s for an unknown id", async () => {
+    const { a } = appWithState();
+    const read = { "x-api-key": tokenWith(["logs:read"]) };
+    const got = await a.request("/v1/jobs/job-1", { headers: read });
+    expect(got.status).toBe(200);
+    expect((await got.json() as { id: string }).id).toBe("job-1");
+    const missing = await a.request("/v1/jobs/nope", { headers: read });
+    expect(missing.status).toBe(404);
+  });
+
+  test("PUT /v1/jobs/:id updates last_run_at", async () => {
+    const { a } = appWithState();
+    const write = {
+      "x-api-key": tokenWith(["logs:write"]),
+      "content-type": "application/json",
+    };
+    const res = await a.request("/v1/jobs/job-1", {
+      method: "PUT",
+      headers: write,
+      body: JSON.stringify({ last_run_at: "2026-08-18T00:00:00.000Z" }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).last_run_at).toBe("2026-08-18T00:00:00.000Z");
+    const missing = await a.request("/v1/jobs/nope", {
+      method: "PUT",
+      headers: write,
+      body: JSON.stringify({ last_run_at: "2026-08-18T00:00:00.000Z" }),
+    });
+    expect(missing.status).toBe(404);
+  });
+
+  test("POST /v1/jobs/:id/runs then PATCH finishes the run", async () => {
+    const { a, f } = appWithState();
+    const write = {
+      "x-api-key": tokenWith(["logs:write"]),
+      "content-type": "application/json",
+    };
+    const created = await a.request("/v1/jobs/job-1/runs", {
+      method: "POST",
+      headers: write,
+      body: JSON.stringify({ page_id: "page-1" }),
+    });
+    expect(created.status).toBe(201);
+    const run = (await created.json()) as { id: string; status: string };
+    expect(run.status).toBe("running");
+    expect(f.state.scanRuns.get(run.id)?.job_id).toBe("job-1");
+
+    const finished = await a.request(
+      `/v1/jobs/job-1/runs/${run.id}`,
+      {
+        method: "PATCH",
+        headers: write,
+        body: JSON.stringify({
+          status: "completed",
+          logs_collected: 3,
+          errors_found: 1,
+          perf_score: 88,
+        }),
+      },
+    );
+    expect(finished.status).toBe(200);
+    const done = (await finished.json()) as {
+      status: string;
+      logs_collected: number;
+      finished_at: string | null;
+    };
+    expect(done.status).toBe("completed");
+    expect(done.logs_collected).toBe(3);
+    expect(done.finished_at).not.toBeNull();
+
+    const missing = await a.request("/v1/jobs/job-1/runs/nope", {
+      method: "PATCH",
+      headers: write,
+      body: JSON.stringify({ status: "failed", logs_collected: 0, errors_found: 0 }),
+    });
+    expect(missing.status).toBe(404);
+  });
+
+  test("GET/PATCH /v1/pages/:id and POST /v1/perf/snapshot", async () => {
+    const { a } = appWithState();
+    const read = { "x-api-key": tokenWith(["logs:read"]) };
+    const write = {
+      "x-api-key": tokenWith(["logs:write"]),
+      "content-type": "application/json",
+    };
+    const got = await a.request("/v1/pages/page-1", { headers: read });
+    expect(got.status).toBe(200);
+    expect((await got.json() as { url: string }).url).toBe("https://example.com");
+    expect((await a.request("/v1/pages/nope", { headers: read })).status).toBe(404);
+
+    const touched = await a.request("/v1/pages/page-1", {
+      method: "PATCH",
+      headers: write,
+      body: JSON.stringify({ last_scanned_at: "2026-08-18T01:00:00.000Z" }),
+    });
+    expect(touched.status).toBe(200);
+    expect((await touched.json() as { last_scanned_at: string }).last_scanned_at).toBe("2026-08-18T01:00:00.000Z");
+
+    const perf = await a.request("/v1/perf/snapshot", {
+      method: "POST",
+      headers: write,
+      body: JSON.stringify({
+        project_id: "proj-1",
+        page_id: "page-1",
+        url: "https://example.com",
+        fcp: 12.5,
+        ttfb: 3.1,
+      }),
+    });
+    expect(perf.status).toBe(201);
+    expect((await perf.json() as { fcp: number }).fcp).toBe(12.5);
+  });
+
+  test("GET /v1/events supports the after-cursor ascending tail", async () => {
+    const { a } = appWithState();
+    const write = {
+      "x-api-key": tokenWith(["logs:write"]),
+      "content-type": "application/json",
+    };
+    const read = { "x-api-key": tokenWith(["logs:read"]) };
+    const times = [
+      "2026-08-18T00:00:00.000Z",
+      "2026-08-18T00:00:01.000Z",
+      "2026-08-18T00:00:02.000Z",
+    ];
+    for (const [i, t] of times.entries()) {
+      const res = await a.request("/v1/events", {
+        method: "POST",
+        headers: write,
+        body: JSON.stringify({
+          type: "metric",
+          source: "cli",
+          event_id: `watch-evt-${i + 1}`,
+          event_time: t,
+          message: `watch event ${i + 1}`,
+        }),
+      });
+      expect(res.status).toBe(201);
+    }
+
+    // Default (no cursor) is newest-first.
+    const desc = await a.request("/v1/events", { headers: read });
+    const descEvents = (await desc.json() as { events: Array<{ event_id: string }> }).events;
+    expect(descEvents.map((e) => e.event_id)).toEqual([
+      "watch-evt-3",
+      "watch-evt-2",
+      "watch-evt-1",
+    ]);
+
+    // Ascending tail after the second event returns only the third.
+    const asc = await a.request(
+      "/v1/events?order=asc&after_time=2026-08-18T00%3A00%3A01.000Z&after_id=watch-evt-2",
+      { headers: read },
+    );
+    const ascEvents = (await asc.json() as { events: Array<{ event_id: string }> }).events;
+    expect(ascEvents.map((e) => e.event_id)).toEqual(["watch-evt-3"]);
+
+    // Ascending from the start returns everything oldest-first.
+    const fromStart = await a.request("/v1/events?order=asc", {
+      headers: read,
+    });
+    const startEvents = (await fromStart.json() as { events: Array<{ event_id: string }> }).events;
+    expect(startEvents.map((e) => e.event_id)).toEqual([
+      "watch-evt-1",
+      "watch-evt-2",
+      "watch-evt-3",
+    ]);
   });
 });
 
