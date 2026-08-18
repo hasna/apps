@@ -41,6 +41,9 @@ import {
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { handleMcpHttpRoutes } from "../mcp/http.js";
+import { getStorageDatabaseUrl } from "../db/storage-config.js";
+import { getPackageVersion } from "../version.js";
+import { buildOpenApiDocument } from "./openapi.js";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -398,6 +401,25 @@ export async function handleServerRequest(
       // CORS preflight
       if (req.method === "OPTIONS") {
         return corsPreflight(req);
+      }
+
+      // Contract status surface (hasna.service_contract.v1): liveness,
+      // readiness, version, and the OpenAPI document backing the generated
+      // SDK. /health reports the data backend selected by the environment —
+      // a configured HASNA_SEARCH_DATABASE_URL selects postgresql, otherwise
+      // the on-box SQLite file is authoritative. No deployment-mode vocabulary.
+      if (path === "/health" && req.method === "GET") {
+        const backend = getStorageDatabaseUrl() ? "postgresql" : "sqlite";
+        return json({ status: "ok", version: getPackageVersion(), backend });
+      }
+      if (path === "/ready" && req.method === "GET") {
+        return json({ ready: true });
+      }
+      if (path === "/version" && req.method === "GET") {
+        return json({ name: "search", version: getPackageVersion() });
+      }
+      if (path === "/openapi.json" && req.method === "GET") {
+        return json(buildOpenApiDocument());
       }
 
       // MCP Streamable HTTP (shared long-lived transport)

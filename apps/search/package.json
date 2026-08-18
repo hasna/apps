@@ -35,7 +35,10 @@
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "prepublishOnly": "bun run build",
-    "postinstall": "mkdir -p $HOME/.hasna/search 2>/dev/null || true"
+    "postinstall": "mkdir -p $HOME/.hasna/search 2>/dev/null || true",
+    "test:postgres": "HASNA_SEARCH_REQUIRE_POSTGRES_TEST=1 bun test src/db/postgres.integration.test.ts",
+    "scan:artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/search-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan search-artifact-scan.tgz; rc=$?; rm -f \"$PWD/search-artifact-scan.tgz\"; exit $rc",
+    "prepack": "bun run build && bun run scan:artifact"
   },
   "keywords": [
     "search",
