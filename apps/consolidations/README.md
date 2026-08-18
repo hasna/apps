@@ -3,17 +3,18 @@
 Group financial consolidation as a CLI + MCP + serve triad over a Hasna Service
 Contract v1 store (local SQLite / cloud Postgres).
 
-Pull each entity's GL / trial balance, normalize local charts-of-accounts onto a
-group COA, translate multi-currency balances at period FX rates, net intercompany
-eliminations, and produce consolidated **P&L / Balance Sheet / Cash Flow** on
-demand — deterministic and auditable.
+Ingest per-entity GL / trial-balance data, normalize local charts-of-accounts
+onto a group COA, translate multi-currency balances at period FX rates, net
+intercompany eliminations, and produce consolidated **P&L / Balance Sheet /
+Cash Flow** on demand — deterministic and auditable.
 
 > **Integrator v0 (§1a):** the upstream GL is read through a `src/adapters/`
-> read-adapter interface backed by **fixtures/mocks** for this build. v1 (behind
-> `HASNA_CONSOLIDATIONS_LIVE_UPSTREAM=1`) swaps fixtures for live
-> the live upstream GL (`@hasna/entities`) calls. The app owns its normalized/derived
-> tables (COA maps, FX rates, runs, statements, eliminations); upstream GL is
-> never persisted as source-of-truth.
+> read-adapter interface backed by **fixtures/mocks** in this build. A live
+> upstream GL (`@hasna/entities`) adapter is planned but NOT implemented yet —
+> no environment flag enables it, and the README and package description say
+> nothing that implies live pulling. The app owns its normalized/derived tables
+> (COA maps, FX rates, runs, statements, eliminations); upstream GL is never
+> persisted as source-of-truth.
 
 ## Domain
 
@@ -51,12 +52,14 @@ bun run dev:cli -- --json runs compute <run-id>
 bun run dev:cli -- --json statements list --run-id <run-id>
 ```
 
-## Storage modes
+## Server data backend
 
-`local` (SQLite at `~/.hasna/consolidations/consolidations.db`, authoritative) or
-`cloud` (PURE REMOTE Postgres via the vendored `@hasna/contracts` storage kit,
-`sslmode=verify-full`). Mode is chosen from `HASNA_CONSOLIDATIONS_STORAGE_MODE`
-only; a DSN present with `mode=local` is a hard startup error (fail-closed).
+Exactly one technical switch: **`sqlite` (default) | `postgresql`**. SQLite at
+`~/.hasna/consolidations/consolidations.db` is authoritative unless a
+`HASNA_CONSOLIDATIONS_DATABASE_URL` (or `*_DATABASE_URL_FILE` mount) is set, which
+selects PostgreSQL (via the vendored `@hasna/contracts` storage kit,
+`sslmode=verify-full`). Legacy `HASNA_CONSOLIDATIONS_STORAGE_MODE` variables are
+rejected with migration guidance.
 
 ## Verify
 

@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { Command } from "commander";
 import React from "react";
 import { Box, render, Text } from "ink";
-import { APP_NAME, resolveDbPath, resolveStorageMode } from "../config.js";
+import { APP_NAME, resolveDataBackend, resolveDbPath } from "../config.js";
 import { checkOpenApiDocument, serializeOpenApiDocument, summarizeOpenApiDocument } from "../api/index.js";
 import { healthPayload, readyPayload } from "../server/health.js";
 import { APP_VERSION } from "../version.js";
@@ -60,12 +60,12 @@ openapi
 
 program
   .command("doctor")
-  .description("Show storage mode, database path, and health/readiness")
+  .description("Show data backend, database path, and health/readiness")
   .action(async () => {
     emit({
       app: APP_NAME,
-      mode: resolveStorageMode(),
-      db_path: resolveStorageMode() === "local" ? resolveDbPath() : null,
+      backend: resolveDataBackend(),
+      db_path: resolveDataBackend() === "sqlite" ? resolveDbPath() : null,
       health: healthPayload(),
       ready: await readyPayload(),
     });

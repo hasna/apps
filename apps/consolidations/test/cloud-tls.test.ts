@@ -20,8 +20,8 @@ describe("cloud TLS (sslmode=verify-full)", () => {
     expect(config).toEqual({ rejectUnauthorized: true, ca: expect.any(String) });
   });
 
-  it("never verifies for plain require (downgrade is explicit, not accidental)", () => {
+  it("verifies for plain require (no silent downgrade — the current kit verifies)", () => {
     const config = resolveTlsConfig("postgres://u:p@h/db?sslmode=require", { env: {} });
-    expect(config).toEqual({ rejectUnauthorized: false });
+    expect(config).toEqual({ rejectUnauthorized: true });
   });
 });

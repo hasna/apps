@@ -1,5 +1,5 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { resolveStorageMode } from "../config.js";
+import { resolveDataBackend } from "../config.js";
 import { authenticateRequest, isApiAuthConfigured } from "../server/auth.js";
 import { SYSTEM_PRINCIPAL } from "../services/execute.js";
 import { buildServer, getProfile } from "./index.js";
@@ -34,11 +34,11 @@ export function resolveHttpPort(defaultPort = DEFAULT_MCP_HTTP_PORT): number {
 
 /**
  * Auth is fail-closed: it may only be disabled with HASNA_CONSOLIDATIONS_MCP_AUTH=off
- * AND in local mode (the transport always binds loopback). Any cloud-mode bind
+ * AND on the sqlite backend (the transport always binds loopback). Any postgresql bind
  * keeps auth on regardless of the flag.
  */
 export function authDisabled(): boolean {
-  return process.env["HASNA_CONSOLIDATIONS_MCP_AUTH"] === "off" && resolveStorageMode() === "local";
+  return process.env["HASNA_CONSOLIDATIONS_MCP_AUTH"] === "off" && resolveDataBackend() === "sqlite";
 }
 
 export function healthResponse(name = MCP_HTTP_NAME): Response {

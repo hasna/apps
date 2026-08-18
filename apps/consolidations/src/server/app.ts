@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { serializeOpenApiDocument } from "../api/index.js";
 import { healthPayload, readyPayload, versionPayload } from "./health.js";
 import { checkRateLimit, corsOrigins } from "./request-auth.js";
 import { registerV1Routes } from "./routes/v1.js";
@@ -50,6 +51,11 @@ export function createApp(): Hono {
   app.get("/ready", async (c) => {
     const ready = await readyPayload();
     return ready.ready ? c.json({ status: "ready" }) : c.json({ status: "not-ready" }, 503);
+  });
+
+  app.get("/v1/openapi.json", (c) => {
+    const body = serializeOpenApiDocument();
+    return c.newResponse(body, 200, { "content-type": "application/json" });
   });
 
   registerV1Routes(app);

@@ -42,9 +42,9 @@ function operationFor(op: OpDef): Record<string, unknown> {
 }
 
 const SYSTEM_ENDPOINTS: Array<[string, string, Record<string, unknown>]> = [
-  ["/health", "get", { operationId: "system.health", summary: "Liveness + version + mode.", security: [], responses: { "200": { description: "OK" } } }],
+  ["/health", "get", { operationId: "system.health", summary: "Liveness + version + backend.", security: [], responses: { "200": { description: "OK" } } }],
   ["/ready", "get", { operationId: "system.ready", summary: "Readiness probe.", security: [], responses: { "200": { description: "Ready" }, "503": { description: "Not ready" } } }],
-  ["/version", "get", { operationId: "system.version", summary: "Version + mode.", security: [], responses: { "200": { description: "OK" } } }],
+  ["/version", "get", { operationId: "system.version", summary: "Version + backend.", security: [], responses: { "200": { description: "OK" } } }],
 ];
 
 export function openApiDocument(): Record<string, unknown> {

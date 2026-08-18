@@ -77,6 +77,6 @@ describe("storage_status redaction", () => {
     expect(status.dsn_present).toBe(true);
     // remote_reachable must be probed, not hardcoded true (local => false).
     expect(status.remote_reachable).toBe(false);
-    expect(Object.keys(status).sort()).toEqual(["dsn_present", "migrations_applied", "mode", "remote_reachable", "sqlite_path"]);
+    expect(Object.keys(status).sort()).toEqual(["backend", "dsn_present", "migrations_applied", "remote_reachable", "sqlite_path"]);
   });
 });

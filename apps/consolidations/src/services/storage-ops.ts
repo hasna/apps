@@ -1,4 +1,4 @@
-import { databaseUrlPresent, resolveDbPath, resolveStorageMode } from "../config.js";
+import { databaseUrlPresent, resolveDataBackend, resolveDbPath } from "../config.js";
 import { SqliteStore } from "../db/sqlite-store.js";
 import { DATA_TABLES, type Store } from "../db/store.js";
 import { ValidationError } from "../types/index.js";
@@ -9,7 +9,7 @@ import { ValidationError } from "../types/index.js";
 // storage:admin scope at the op boundary (not by any process env var).
 
 export interface RedactedStorageStatus {
-  mode: "local" | "cloud";
+  backend: "sqlite" | "postgresql";
   dsn_present: boolean;
   sqlite_path: string | null;
   migrations_applied: number;
@@ -18,15 +18,15 @@ export interface RedactedStorageStatus {
 
 /**
  * Status payload with NO DSN/secret material. `remote_reachable` is probed live
- * for cloud mode and is false in local mode — it is never hardcoded true.
+ * for the postgresql backend and is false on sqlite — it is never hardcoded true.
  */
 export async function storageStatus(store: Store): Promise<RedactedStorageStatus> {
-  const mode = store.mode;
-  const remoteReachable = mode === "cloud" ? await store.ping() : false;
+  const backend = store.backend;
+  const remoteReachable = backend === "postgresql" ? await store.ping() : false;
   return {
-    mode,
+    backend,
     dsn_present: databaseUrlPresent(),
-    sqlite_path: mode === "local" ? resolveDbPath() : null,
+    sqlite_path: backend === "sqlite" ? resolveDbPath() : null,
     migrations_applied: await store.migrationsApplied(),
     remote_reachable: remoteReachable,
   };
@@ -106,7 +106,7 @@ export async function storageSync(): Promise<{ direction: "sync"; pushed: Record
   return { direction: "sync", pushed, pulled };
 }
 
-/** Whether the active mode even has a counterpart to sync with. */
+/** Whether the active backend even has a counterpart to sync with. */
 export function syncAvailable(): boolean {
-  return resolveStorageMode() === "cloud" || databaseUrlPresent();
+  return resolveDataBackend() === "postgresql";
 }

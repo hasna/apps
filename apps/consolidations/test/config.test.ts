@@ -1,34 +1,40 @@
 import { describe, expect, it } from "bun:test";
-import { resolveStorageMode } from "../src/config.js";
+import { databaseUrlPresent, resolveDataBackend } from "../src/config.js";
 
-describe("storage mode resolution", () => {
-  it("defaults to local", () => {
-    expect(resolveStorageMode({})).toBe("local");
+describe("server data backend resolution", () => {
+  it("defaults to sqlite", () => {
+    expect(resolveDataBackend({})).toBe("sqlite");
   });
 
-  it("normalizes deprecated aliases to cloud", () => {
-    expect(resolveStorageMode({ HASNA_CONSOLIDATIONS_STORAGE_MODE: "self_hosted" })).toBe("cloud");
-    expect(resolveStorageMode({ HASNA_CONSOLIDATIONS_STORAGE_MODE: "remote" })).toBe("cloud");
-    expect(resolveStorageMode({ HASNA_CONSOLIDATIONS_STORAGE_MODE: "cloud" })).toBe("cloud");
+  it("selects postgresql when a DATABASE_URL is present", () => {
+    expect(resolveDataBackend({ HASNA_CONSOLIDATIONS_DATABASE_URL: "postgres://x/y" })).toBe("postgresql");
   });
 
   it("honors the alias env key", () => {
-    expect(resolveStorageMode({ CONSOLIDATIONS_STORAGE_MODE: "cloud" })).toBe("cloud");
+    expect(resolveDataBackend({ CONSOLIDATIONS_DATABASE_URL: "postgres://x/y" })).toBe("postgresql");
   });
 
-  it("rejects unknown modes", () => {
-    expect(() => resolveStorageMode({ HASNA_CONSOLIDATIONS_STORAGE_MODE: "hybrid-cache" })).toThrow();
+  it("selects postgresql when a DATABASE_URL_FILE mount is present", () => {
+    expect(resolveDataBackend({ HASNA_CONSOLIDATIONS_DATABASE_URL_FILE: "/run/secrets/dsn" })).toBe(
+      "postgresql",
+    );
   });
 
-  it("fails closed when a DSN is present but mode resolves to local (mis-deploy guard)", () => {
+  it("rejects legacy storage-mode variables with migration guidance", () => {
     expect(() =>
-      resolveStorageMode({ HASNA_CONSOLIDATIONS_DATABASE_URL: "postgres://x/y" }),
-    ).toThrow(/present but storage mode is 'local'/);
+      resolveDataBackend({ HASNA_CONSOLIDATIONS_STORAGE_MODE: "cloud" }),
+    ).toThrow(/was removed\. Delete the storage-mode variable/);
     expect(() =>
-      resolveStorageMode({
-        HASNA_CONSOLIDATIONS_STORAGE_MODE: "local",
-        HASNA_CONSOLIDATIONS_DATABASE_URL: "postgres://x/y",
-      }),
-    ).toThrow(/present but storage mode is 'local'/);
+      resolveDataBackend({ HASNA_CONSOLIDATIONS_STORAGE_MODE: "local" }),
+    ).toThrow(/was removed\. Delete the storage-mode variable/);
+    expect(() =>
+      resolveDataBackend({ CONSOLIDATIONS_STORAGE_MODE: "local" }),
+    ).toThrow(/was removed\. Delete the storage-mode variable/);
+  });
+
+  it("databaseUrlPresent detects URL and FILE variants without reading values", () => {
+    expect(databaseUrlPresent({})).toBe(false);
+    expect(databaseUrlPresent({ HASNA_CONSOLIDATIONS_DATABASE_URL: "postgres://x/y" })).toBe(true);
+    expect(databaseUrlPresent({ CONSOLIDATIONS_DATABASE_URL_FILE: "/run/secrets/dsn" })).toBe(true);
   });
 });

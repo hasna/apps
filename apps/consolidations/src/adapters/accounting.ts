@@ -3,8 +3,8 @@ import { FIXTURE_ENTITY_RO, FIXTURE_ENTITY_US } from "./entities.js";
 
 // Read-adapter for the upstream accounting GL / trial-balance source (§1a v0).
 // MOCKED for the build: fixtures return per-entity, per-period trial balances in
-// each entity's functional currency. v1 swaps this for a live accounting adapter
-// behind HASNA_CONSOLIDATIONS_LIVE_UPSTREAM=1.
+// each entity's functional currency. A live accounting adapter is NOT
+// implemented in this build.
 
 export interface TrialBalance {
   entity_id: string;
@@ -55,7 +55,7 @@ export class FixtureGlSource implements GlSource {
   }
 }
 
-/** The active GL source (fixture in v0). Provenance string recorded on imports. */
+/** The active GL source (fixtures only in this build). Provenance string recorded on imports. */
 export function glSource(): { source: GlSource; provenance: string } {
   return { source: new FixtureGlSource(), provenance: "accounting-gl:fixture" };
 }

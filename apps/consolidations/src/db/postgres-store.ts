@@ -7,7 +7,7 @@ import {
 } from "./audit.js";
 import { cloudMigrations } from "./migration-plan.js";
 import type { DataTable, InsertRow, ListFilter, Row, Store } from "./store.js";
-import { createCloudPoolFromEnv } from "../generated/storage-kit/pool.js";
+import { createServerPoolFromEnv } from "../generated/storage-kit/pool.js";
 import { MigrationLedger } from "../generated/storage-kit/migrations.js";
 import type { PoolQueryClient } from "../generated/storage-kit/query.js";
 
@@ -37,12 +37,12 @@ function toRow(raw: RawRow): Row {
  * Genuinely connects and migrates — it NEVER falls back to in-memory storage.
  */
 export class PostgresStore implements Store {
-  readonly mode = "cloud" as const;
+  readonly backend = "postgresql" as const;
   private constructor(private client: PoolQueryClient) {}
 
   /** Connect via the kit, run migrations, and return a live store. Fail-closed. */
   static async connect(): Promise<PostgresStore> {
-    const { client } = createCloudPoolFromEnv("consolidations");
+    const { client } = createServerPoolFromEnv("consolidations");
     const ledger = new MigrationLedger(client, cloudMigrations());
     await ledger.migrate();
     return new PostgresStore(client);
