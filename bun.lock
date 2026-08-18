@@ -498,7 +498,7 @@
     },
     "apps/contracts": {
       "name": "@hasna/contracts",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "bin": {
         "contracts": "dist/cli/index.js",
         "contracts-cli": "dist/cli/contracts-cli.js",
@@ -1329,7 +1329,7 @@
     },
     "apps/notes": {
       "name": "@hasna/notes",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "bin": {
         "notes": "bin/notes.mjs",
         "notes-mcp": "bin/notes-mcp.mjs",
