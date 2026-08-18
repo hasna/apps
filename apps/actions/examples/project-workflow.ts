@@ -65,9 +65,9 @@ export async function demoProjectMetadataWorkflow(): Promise<void> {
   const actor = { id: "operator", type: "human" as const };
   const planned = await client.run({
     actionId: "examples.projects.metadata.update",
-    input: { project: "open-actions", metadata: { stage: "active" } },
+    input: { project: "actions", metadata: { stage: "active" } },
     actor,
-    idempotencyKey: "open-actions-stage-active",
+    idempotencyKey: "actions-stage-active",
     dryRun: false
   });
   await client.approve(planned.id, { actor, decision: "approved", reason: "Preview matches request" });

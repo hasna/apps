@@ -41,7 +41,7 @@ function runRecord(index: number): ActionRun {
     actionVersion: "1.0.0",
     status: "previewed",
     actor: { id: "cli", type: "human" },
-    input: { name: `open-actions-${index}`, payload: longText },
+    input: { name: `actions-${index}`, payload: longText },
     output: { message: longText },
     plan: [{ id: "execute", kind: "execute", title: `Execute with ${longText}`, status: "planned" }],
     riskLevel: "low",
@@ -50,7 +50,7 @@ function runRecord(index: number): ActionRun {
     guardrailResults: [{ decision: "allow" }],
     evidence: [],
     dryRun: true,
-    confirmationSummary: `Uppercase open-actions-${index} ${longText}`,
+    confirmationSummary: `Uppercase actions-${index} ${longText}`,
     rollback: { strategy: "none" },
     events: [{
       id: `event-${index}`,
