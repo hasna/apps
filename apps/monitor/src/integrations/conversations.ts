@@ -5,7 +5,24 @@
  * (the exact published package surface; no direct HTTP, no invented API).
  *
  * Outcome contract (MON-V2-07):
- * - a successful post records the returned message pointer (id + uuid);
+ * - the sender identity (`from`) is REQUIRED and always sent. The hosted /v1
+ *   server rejects a write without a sender ("from, to (or channel), and
+ *   content are required", apps/conversations/src/server/api.ts), and the
+ *   SDK's degraded write-confirmation fallback requires the returned
+ *   `from_agent` to match the submitted `from`. `from` resolves from the
+ *   explicit option, then the app namespace (HASNA_MONITOR_CONVERSATIONS_FROM),
+ *   then the default "monitor".
+ * - idempotency is resolved BEFORE posting, against the adapter's own effect
+ *   ledger. The hosted service (conversations.hasna.xyz, a different
+ *   codebase) drops caller UUIDs, mints its own, and has no
+ *   /v1/messages/by-uuid route (apps/conversations CHANGELOG 0.5.25), so the
+ *   server-side unique-uuid insert cannot deduplicate hosted writes. The
+ *   ledger keys a delivered pointer by the stable effect key (derived from
+ *   channel + from + content) and returns it without a second POST when the
+ *   same effect is submitted again. The ledger is process-lifetime and
+ *   bounded; across restarts the local surface is still deduplicated by the
+ *   server's unique-uuid insert, and the hosted surface has no server-side
+ *   dedup — that residual is documented, not hidden.
  * - a confirmed server error (ApiError) is reconciled by the stable effect
  *   key BEFORE it is reported as a failure: a repeated identical post (or a
  *   racing retry) can be refused by the server's unique-uuid insert while the
@@ -40,6 +57,42 @@ import type { ConversationsIntegrationConfig } from "./index.js";
 const DEFAULT_BASE_URL = "http://localhost:3001";
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_ATTEMPTS = 2;
+/** Sender identity used when none is configured; the hosted /v1 server rejects writes without a sender. */
+const DEFAULT_FROM = "monitor";
+
+/**
+ * Bounded, process-lifetime effect ledger. Keys a delivered message pointer by
+ * its stable effect key so a repeated identical send resolves WITHOUT a second
+ * POST — the only dedup mechanism that works against the hosted service, which
+ * drops caller UUIDs and cannot be queried by them (CHANGELOG 0.5.25). FIFO
+ * eviction at the cap; the same effect resubmitted after eviction is a fresh
+ * send (the local server's unique-uuid insert still deduplicates it).
+ */
+const EFFECT_LEDGER_CAP = 256;
+interface LedgerEntry {
+  messageId: number;
+  messageUuid: string;
+  recordedAt: number;
+}
+const effectLedger = new Map<string, LedgerEntry>();
+
+function recordEffectLedger(effectKey: string, entry: LedgerEntry): void {
+  effectLedger.set(effectKey, entry);
+  while (effectLedger.size > EFFECT_LEDGER_CAP) {
+    const oldest = effectLedger.keys().next();
+    if (oldest.done) break;
+    effectLedger.delete(oldest.value);
+  }
+}
+
+function resolveEffectLedger(effectKey: string): LedgerEntry | null {
+  return effectLedger.get(effectKey) ?? null;
+}
+
+/** Reset the effect ledger (test isolation). */
+export function resetEffectLedgerForTests(): void {
+  effectLedger.clear();
+}
 
 export interface ConversationsSendOptions {
   /** Channel (or space) name to post to. */
@@ -48,9 +101,9 @@ export interface ConversationsSendOptions {
   baseUrl?: string;
   /** API key for the conversations API. Resolved from env HASNA_MONITOR_CONVERSATIONS_API_KEY, then the package contract HASNA_CONVERSATIONS_API_KEY, when absent; never stored or logged. */
   apiKey?: string;
-  /** Sender identity; when absent the server derives it from the authenticated principal. */
+  /** Sender identity, REQUIRED by the hosted /v1 server. Resolved from this option, then HASNA_MONITOR_CONVERSATIONS_FROM, then the default "monitor". */
   from?: string;
-  /** Stable idempotency key; derived deterministically from (channelId, content) when absent. */
+  /** Stable idempotency key; derived deterministically from (channelId, from, content) when absent. Resolved against the effect ledger before any POST. */
   effectKey?: string;
   /** Injectable client for tests; otherwise constructed from the config/env. */
   client?: ConversationsClient;
@@ -98,13 +151,14 @@ function formatAlertMessage(alert: AlertRow): string {
 }
 
 /**
- * Derive a deterministic canonical UUID v5-style effect key from the channel
- * and content, so retries and reconcile probes use one stable identity. The
- * server only accepts canonical UUIDs (version 1-5, variant 8/9/a/b).
+ * Derive a deterministic canonical UUID v5-style effect key from the channel,
+ * sender and content, so retries, the effect ledger and reconcile probes use
+ * one stable identity. The server only accepts canonical UUIDs (version 1-5,
+ * variant 8/9/a/b). `from` participates so two senders never share an effect.
  */
-export function deriveEffectKey(channelId: string, content: string): string {
+export function deriveEffectKey(channelId: string, from: string, content: string): string {
   const digest = createHash("sha256")
-    .update(`${channelId}\n${content}`)
+    .update(`${channelId}\n${from}\n${content}`)
     .digest();
   const bytes = digest.subarray(0, 16);
   bytes[6] = (bytes[6]! & 0x0f) | 0x50; // version 5
@@ -200,10 +254,31 @@ export async function sendConversationMessage(
 ): Promise<ConversationsPostResult> {
   const channelId = options.channelId;
   const client = options.client ?? createConversationsClient(options);
+  // `from` is REQUIRED by the hosted /v1 server; resolve it from the option,
+  // then the app namespace, then the default, and always send it.
+  const from =
+    options.from ??
+    process.env.HASNA_MONITOR_CONVERSATIONS_FROM ??
+    DEFAULT_FROM;
   const effectKey =
-    options.effectKey ?? deriveEffectKey(channelId, message);
+    options.effectKey ?? deriveEffectKey(channelId, from, message);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+
+  // Resolve the effect key against the ledger BEFORE posting. A previously
+  // delivered (or reconciled) pointer for this exact effect returns without a
+  // second POST — the dedup that works even against the hosted service, which
+  // drops caller UUIDs and cannot be queried back by them (CHANGELOG 0.5.25).
+  const prior = resolveEffectLedger(effectKey);
+  if (prior) {
+    return {
+      status: "reconciled",
+      messageId: prior.messageId,
+      messageUuid: prior.messageUuid,
+      reconciled: true,
+      attempts: 0,
+    };
+  }
 
   let lastError = "unknown";
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -214,7 +289,7 @@ export async function sendConversationMessage(
       const body = await client.sendMessage(
         {
           uuid: effectKey,
-          ...(options.from ? { from: options.from } : {}),
+          from,
           // The SDK body type requires `to`; for a channel post the server
           // derives the recipient from `channel` and ignores `to` (the legacy
           // integration used the same channel-shaped message).
@@ -226,6 +301,11 @@ export async function sendConversationMessage(
       );
       const pointer = parseMessagePointer(body);
       if (pointer) {
+        recordEffectLedger(effectKey, {
+          messageId: pointer.id,
+          messageUuid: pointer.uuid,
+          recordedAt: Date.now(),
+        });
         return {
           status: "delivered",
           messageId: pointer.id,
@@ -257,6 +337,11 @@ export async function sendConversationMessage(
         // evidence, and nothing was resent.
       }
       if (duplicate) {
+        recordEffectLedger(effectKey, {
+          messageId: duplicate.id,
+          messageUuid: duplicate.uuid,
+          recordedAt: Date.now(),
+        });
         return {
           status: "reconciled",
           messageId: duplicate.id,
@@ -282,6 +367,11 @@ export async function sendConversationMessage(
       reconcileError = error;
     }
     if (found) {
+      recordEffectLedger(effectKey, {
+        messageId: found.id,
+        messageUuid: found.uuid,
+        recordedAt: Date.now(),
+      });
       return {
         status: "reconciled",
         messageId: found.id,
@@ -332,6 +422,7 @@ export async function postMessageToSpace(
     channelId: config.space_id,
     baseUrl: config.base_url,
     apiKey: config.api_key,
+    from: config.from,
     client: options.client,
   });
   if (result.status === "failed") {

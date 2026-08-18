@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, renameSync, readdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, renameSync, readdirSync, chmodSync } from "fs";
 import { homedir } from "os";
 import { basename, dirname, join, resolve } from "path";
 import { z } from "zod";
@@ -50,8 +50,10 @@ export interface ConversationsIntegrationConfig {
   enabled: boolean;
   space_id: string;
   base_url?: string;
-  /** API key for the conversations /v1 API; falls back to HASNA_MONITOR_CONVERSATIONS_API_KEY, then the package contract HASNA_CONVERSATIONS_API_KEY. Never logged. */
+  /** API key for the conversations /v1 API; falls back to HASNA_MONITOR_CONVERSATIONS_API_KEY, then the package contract HASNA_CONVERSATIONS_API_KEY. Never logged; redacted on every read/echo path. */
   api_key?: string;
+  /** Sender identity for posted messages; falls back to HASNA_MONITOR_CONVERSATIONS_FROM, then "monitor". Required by the hosted /v1 server. */
+  from?: string;
 }
 
 export interface MementosIntegrationConfig {
@@ -167,6 +169,7 @@ const ConversationsIntegrationZSchema = z.object({
   space_id: z.string().min(1),
   base_url: z.string().url().optional(),
   api_key: z.string().min(1).optional(),
+  from: z.string().min(1).optional(),
 });
 
 const MementosIntegrationZSchema = z.object({
@@ -359,7 +362,26 @@ export function saveConfig(config: MonitorConfig): void {
   if (!existsSync(configDir)) {
     mkdirSync(configDir, { recursive: true });
   }
-  writeFileSync(getConfigPath(), JSON.stringify(config, null, 2), "utf-8");
+  // The config may carry credentials (e.g. the conversations api_key), so the
+  // persisted file is owner-only and never world/group readable.
+  writeFileSync(getConfigPath(), JSON.stringify(config, null, 2), { encoding: "utf-8", mode: 0o600 });
+  chmodSync(getConfigPath(), 0o600);
+}
+
+/**
+ * Redact credential-bearing fields on every read/echo path (MCP get/set
+ * responses, `monitor integrations list --json`). The stored config keeps the
+ * real value; only what is returned to a caller is masked. `api_key` is the
+ * only credential field today; a future credential field must be added here.
+ */
+export function redactIntegrationsConfig(integrations: IntegrationsConfig): IntegrationsConfig {
+  const clone: IntegrationsConfig = structuredClone(integrations);
+  for (const section of Object.values(clone)) {
+    if (section && typeof section === "object" && "api_key" in section) {
+      (section as Record<string, unknown>)["api_key"] = "***";
+    }
+  }
+  return clone;
 }
 
 function configBackupTimestamp(date: Date): string {

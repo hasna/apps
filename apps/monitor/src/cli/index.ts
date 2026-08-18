@@ -12,6 +12,7 @@ import {
   initConfig,
   loadConfig,
   migrateConfig,
+  redactIntegrationsConfig,
   restoreConfig,
   saveConfig,
   validateConfig,
@@ -2429,7 +2430,8 @@ integrationsCmd
     const integrations = config.integrations ?? {};
 
     if (opts.json) {
-      console.log(JSON.stringify(integrations, null, 2));
+      // Credential fields (api_key) are redacted on every read/echo path.
+      console.log(JSON.stringify(redactIntegrationsConfig(integrations), null, 2));
       return;
     }
 

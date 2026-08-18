@@ -25,8 +25,10 @@ export interface ConversationsIntegrationConfig {
   space_id: string;
   /** Base URL of the conversations HTTP API. Default: http://localhost:3001 */
   base_url?: string;
-  /** API key for the conversations /v1 API; falls back to HASNA_MONITOR_CONVERSATIONS_API_KEY, then the package contract HASNA_CONVERSATIONS_API_KEY. Never logged. */
+  /** API key for the conversations /v1 API; falls back to HASNA_MONITOR_CONVERSATIONS_API_KEY, then the package contract HASNA_CONVERSATIONS_API_KEY. Never logged; redacted on every read/echo path. */
   api_key?: string;
+  /** Sender identity for posted messages; falls back to HASNA_MONITOR_CONVERSATIONS_FROM, then "monitor". Required by the hosted /v1 server. */
+  from?: string;
 }
 
 export interface MementosIntegrationConfig {

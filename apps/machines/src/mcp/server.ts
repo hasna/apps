@@ -415,7 +415,12 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       agent_name,
       source,
       include_tailscale,
-    }) => ({
+    }) => {
+      // The schema accepts legacy open-* provenance values on read; normalize
+      // them to the canonical NoteMachineContextSource before use.
+      const normalizedSource =
+        source === "open-notes" ? "notes" : source === "open-machines" ? "machines" : source;
+      return {
       content: [{
         type: "text",
         text: JSON.stringify(resolveNoteMachineContext({
@@ -430,11 +435,12 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
             actor_name,
             agent_id,
             agent_name,
-            source,
+            source: normalizedSource,
           },
         }), null, 2),
       }],
-    })
+      };
+    }
   );
   server.tool(
     "machines_notes_trash_policies",

@@ -300,8 +300,6 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "brains", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "browser", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "computer", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "context", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "crawl", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "evals", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "markdown", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "repos", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
@@ -338,11 +336,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "controls",
     cause: "manifest_valid at pinned 0.4.1 (mode-era validator vs backend-era manifest, modes-removal lane): storage.mode Required; storage Unrecognized key(s) in object: 'backend'. The mode vocabulary is removed from the app; the two-backend schema (storage.backend sqlite|postgresql, no mode) ships with the contracts lane, which also must regenerate the vendor-kit without mode.ts.",
     task: "todos reconcile task 'Reconcile @hasna/controls contracts conformance: manifest_valid' (auto-filed by the standard suite; resolves when the contracts lane publishes the two-backend validator and controls re-pins)",
-  },
-  {
-    member: "datasets",
-    cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. Manifest imported via delta (hasna/contracts 0.10.6 pin) from org repo; org repo has no artifact-scan script.",
-    task: "todos 226bfc01-093a-469a-bc94-57491c08fe1b (contracts task — datasets)",
   },
   {
     member: "docs",
@@ -496,6 +489,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
 export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string; pinned: string }> = [
   { member: "accounts", kitVersion: "0.10.6", pinned: "0.5.2" },
   { member: "calendar", kitVersion: "0.8.4", pinned: "0.4.2" },
+  { member: "datasets", kitVersion: "0.11.1", pinned: "0.10.6" },
   { member: "domains", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "files", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "gateway", kitVersion: "0.4.1", pinned: "0.2.2" },
@@ -514,7 +508,9 @@ export const NO_VALIDATOR_PIN: string[] = [
   "catalog",
   "changelog",
   "computers",
+  "context",
   "contracts",
+  "crawl",
   "docs",
   "draw",
   "guardrails",

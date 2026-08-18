@@ -6,7 +6,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { getCollectorForMachine, listKnownMachineIds } from "../collectors/index.js";
 import { ProcessManager, processInfoToRow } from "../process-manager/index.js";
-import { loadConfig, saveConfig } from "../config.js";
+import { loadConfig, saveConfig, redactIntegrationsConfig } from "../config.js";
 import type { IntegrationsConfig } from "../config.js";
 import { runIntegrations } from "../integrations/index.js";
 import {
@@ -1025,7 +1025,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "Integration config object. Only required when action='set'. " +
               "Fields: todos (enabled, project_id, base_url?), " +
-              "conversations (enabled, space_id, base_url?, api_key?), " +
+              "conversations (enabled, space_id, base_url?, api_key?, from?), " +
               "mementos (enabled, base_url?), " +
               "emails (enabled, to, base_url?, from?).",
           },
@@ -1940,7 +1940,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         if (action === "get") {
           const config = loadConfig();
-          return jsonContent({ integrations: config.integrations ?? {} });
+          // Credential fields (api_key) are redacted on every read/echo path.
+          return jsonContent({ integrations: redactIntegrationsConfig(config.integrations ?? {}) });
         }
 
         if (action === "set") {
@@ -1952,7 +1953,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const config = loadConfig();
           config.integrations = integrationsRaw as IntegrationsConfig;
           saveConfig(config);
-          return jsonContent({ ok: true, integrations: config.integrations });
+          // Credential fields (api_key) are redacted on every read/echo path.
+          return jsonContent({ ok: true, integrations: redactIntegrationsConfig(config.integrations) });
         }
 
         return errorContent(`Unknown action: ${action}. Use 'get' or 'set'.`);
