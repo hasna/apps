@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   scanInfraIdentifiers,
   scanRepositoryInfraIdentifiers,
@@ -22,6 +22,17 @@ useDefaultTestTimeout();
 
 const repoRoot = process.cwd();
 
+// The real deploy workflow lives at the MONOREPO root — `.github/workflows/` at
+// the repo root is the only path GitHub Actions discovers (todos 9b1828c9).
+// This suite runs with cwd = the member dir (apps/skills) inside the monorepo,
+// so the monorepo root is two levels up and the member-scoped `git ls-files`
+// cannot see the root workflow.
+const MONOREPO_ROOT = resolve(repoRoot, "..", "..");
+const DEPLOY_WORKFLOW_REL = ".github/workflows/deploy-skills.yml";
+const DEPLOY_WORKFLOW = join(MONOREPO_ROOT, DEPLOY_WORKFLOW_REL);
+
+// Synthetic workflow path used by the rule-fixture helpers below (path shape
+// selects the workflow-only rules); it is not the real workflow location.
 const WORKFLOW = ".github/workflows/deploy.yml";
 
 /**
@@ -65,8 +76,10 @@ describe("R4: vendor infra identifiers live behind one indirection", () => {
   });
 
   test("the scan covers the deploy pipeline itself, not just incidental files", () => {
-    const tracked = listTrackedFiles(repoRoot);
-    expect(tracked).toContain(".github/workflows/deploy.yml");
+    // The ported deploy workflow is tracked at the monorepo root, outside the
+    // member subtree `git ls-files` from cwd sees; list from the monorepo root.
+    const tracked = listTrackedFiles(MONOREPO_ROOT);
+    expect(tracked).toContain(DEPLOY_WORKFLOW_REL);
   });
 
   // -------------------------------------------------------------------------
@@ -229,11 +242,15 @@ describe("R4: vendor infra identifiers live behind one indirection", () => {
     const result = scanRepositoryInfraIdentifiers(repoRoot);
     expect(result.scannedFileCount).toBeGreaterThan(100);
 
-    const { files } = readTrackedFiles(
-      repoRoot,
-      listTrackedFiles(repoRoot).filter((p) => !SELF_EXCLUDED_PATHS.includes(p)),
-    );
-    expect(files.map((f) => f.path)).toContain(".github/workflows/deploy.yml");
+    // The root deploy workflow is outside the member-scoped scan above, so read
+    // it at the monorepo root and assert it is actually READ (not skipped) and
+    // clean under the workflow rules — the same property, against the real
+    // file. (todos 9b1828c9)
+    const { files, skipped } = readTrackedFiles(MONOREPO_ROOT, [DEPLOY_WORKFLOW_REL]);
+    expect(skipped).toEqual([]);
+    expect(files.map((f) => f.path)).toContain(DEPLOY_WORKFLOW_REL);
+    const workflowFindings = scanInfraIdentifiers(files);
+    expect(workflowFindings).toEqual([]);
   });
 
   test("a trailing YAML comment cannot satisfy the substitution requirement", () => {
@@ -376,7 +393,7 @@ describe("R4: vendor infra identifiers live behind one indirection", () => {
   // Semantic inversion: the specific regressions this PR removed must stay gone.
   // -------------------------------------------------------------------------
   test("deploy.yml resolves worker identifiers and the health URL indirectly", () => {
-    const deploy = readFileSync(join(repoRoot, ".github/workflows/deploy.yml"), "utf8");
+    const deploy = readFileSync(DEPLOY_WORKFLOW, "utf8");
 
     for (const key of ["WORKER_SERVICE", "WORKER_FAMILY", "WORKER_CONTAINER", "HEALTH_URL"]) {
       const assignments = [...deploy.matchAll(new RegExp(`^\\s*${key}:\\s*(.+)$`, "gm"))].map((m) => m[1] ?? "");
@@ -388,7 +405,7 @@ describe("R4: vendor infra identifiers live behind one indirection", () => {
   });
 
   test("the health smoke test asserts only the stable /health field", () => {
-    const deploy = readFileSync(join(repoRoot, ".github/workflows/deploy.yml"), "utf8");
+    const deploy = readFileSync(DEPLOY_WORKFLOW, "utf8");
     // `service` is churning with the product rename and `mode` is being removed
     // outright; asserting either couples the pipeline to a moving payload.
     expect(deploy).not.toMatch(/jq -e[^\n]*\.service\s*==/);
