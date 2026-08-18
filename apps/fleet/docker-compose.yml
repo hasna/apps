@@ -17,7 +17,6 @@ services:
     # would run the default CLI bin and treat "fleet-serve" as a bogus argument).
     command: ["bunx", "--package", "@hasna/fleet", "fleet-serve"]
     environment:
-      HASNA_FLEET_STORAGE_MODE: cloud
       HASNA_FLEET_DATABASE_URL_FILE: /run/secrets/database_url
       HASNA_FLEET_PORT: "3485"
       HASNA_FLEET_BIND_HOST: "0.0.0.0"
@@ -32,7 +31,6 @@ services:
     # the CLI and treat "fleet-mcp" as a bogus argument. (BUILD-SPEC §6.4)
     command: ["bunx", "--package", "@hasna/fleet", "fleet-mcp", "--http", "--port", "8889"]
     environment:
-      HASNA_FLEET_STORAGE_MODE: cloud
       HASNA_FLEET_DATABASE_URL_FILE: /run/secrets/database_url
       MCP_HTTP: "1"
       MCP_HTTP_PORT: "8889"
