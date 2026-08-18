@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, spyOn } from "bun:test";
+import { beforeEach, describe, it, expect, mock, spyOn } from "bun:test";
 import {
   fetchTaskMeta,
   fetchTaskHistory,
@@ -17,6 +17,16 @@ import { Command } from "commander";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// The contracts credential chain consults the fleet app-config files under
+// HOME and the preferred HASNA_* env names before the legacy env vars, so a
+// local test must kill the disk tier and clear the fleet-shell key or the real
+// fleet todos credential overrides the fixture.
+beforeEach(() => {
+  process.env.HOME = "";
+  delete process.env.HASNA_TODOS_API_KEY;
+  delete process.env.HASNA_TODOS_API_URL;
+});
 
 function makeFetch(status: number, body: unknown = {}): typeof fetch {
   return mock(async () => ({
@@ -92,15 +102,11 @@ describe("fetchTaskMeta", () => {
       assignee: "aurelius",
       created_at: "2026-03-14T10:23:00Z",
     });
-    // fetchTaskMeta prefers HASNA_TODOS_API_KEY over TODOS_API_KEY
-    // (core/todos.ts); drop the ambient value so this case actually exercises
-    // the TODOS_API_KEY fallback instead of the operator's live key.
-    delete process.env.HASNA_TODOS_API_KEY;
-    process.env["TODOS_API_KEY"] = "remote-key";
+    process.env.TODOS_API_KEY = "rk";
     const meta = await fetchTaskMeta("TASK-001", "http://localhost:3000", fakeFetch);
     delete process.env.TODOS_API_KEY;
     const [, init] = (fakeFetch as ReturnType<typeof mock>).mock.calls[0] as [string, RequestInit];
-    expect(new Headers(init.headers).get("x-api-key")).toBe("remote-key");
+    expect(new Headers(init.headers).get("x-api-key")).toBe("rk");
     expect(meta).not.toBeNull();
     expect(meta?.subject).toBe("Fix auth bug");
     expect(meta?.status).toBe("completed");
@@ -132,11 +138,11 @@ describe("fetchTaskHistory", () => {
       { timestamp: "2026-03-14T10:45:00Z", action: "started", actor: "aurelius" },
       { timestamp: "2026-03-14T11:30:00Z", action: "completed", actor: "aurelius", progress: 100 },
     ]);
-    process.env["HASNA_TODOS_API_KEY"] = "remote-key";
+    process.env.HASNA_TODOS_API_KEY = "rk";
     const history = await fetchTaskHistory("TASK-001", "http://localhost:3000", fakeFetch);
     delete process.env.HASNA_TODOS_API_KEY;
     const [, init] = (fakeFetch as ReturnType<typeof mock>).mock.calls[0] as [string, RequestInit];
-    expect(new Headers(init.headers).get("x-api-key")).toBe("remote-key");
+    expect(new Headers(init.headers).get("x-api-key")).toBe("rk");
     expect(history).toHaveLength(3);
     expect(history[0].action).toBe("created");
     expect(history[0].actor).toBe("julius");
