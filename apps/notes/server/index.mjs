@@ -3,7 +3,9 @@
 // Zero-ops run: `bun server/index.mjs` (repo) or `bunx notes-server`.
 // Two backends, one wire dialect (personalnotes/v1):
 //   HASNA_NOTES_DATABASE_URL present -> PostgreSQL
-//   absent                          -> SQLite (default, ~/.hasna/apps/notes-server/server.db)
+//   absent                          -> SQLite (default, ~/.hasna/notes/server.db;
+//                                        a legacy ~/.hasna/apps/notes-server/
+//                                        server.db is copied forward once)
 // The DSN is never logged. The PostgreSQL schema is applied by
 // scripts/apply-postgres-migrations.mjs (owner role) before first run.
 // Flags: --port <n> --host [addr] --db <path> --auto-approve --dev
@@ -17,6 +19,7 @@
 
 import { openStorage } from './storage.mjs';
 import { createApp, resolveConfig, SERVICE, VERSION } from './app.mjs';
+import { DEFAULT_DB_PATH, LEGACY_DB_PATH, migrateLegacyServerDb } from './paths.mjs';
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
   console.log(`${SERVICE} v${VERSION} — self-hosted Hasna Notes server (personalnotes/v1 dialect)
@@ -25,7 +28,7 @@ Usage: bun index.mjs [--port <n>] [--host [addr]] [--db <path>] [--auto-approve]
 
   --port <n>       listen port (default 8788; env HASNA_NOTES_SERVER_PORT or PORT)
   --host [addr]    bind address (default 127.0.0.1; bare --host binds 0.0.0.0)
-  --db <path>      SQLite file (default ~/.hasna/apps/notes-server/server.db;
+  --db <path>      SQLite file (default ~/.hasna/notes/server.db;
                    PostgreSQL is selected by HASNA_NOTES_DATABASE_URL instead)
   --auto-approve   auto-approve device logins from loopback (single-user convenience)
   --dev            include devCode in OTP login responses (for tests/dev)`);
@@ -33,6 +36,12 @@ Usage: bun index.mjs [--port <n>] [--host [addr]] [--db <path>] [--auto-approve]
 }
 
 const config = resolveConfig(process.env, process.argv.slice(2));
+// One-time copy-forward of a legacy default server DB into the canonical
+// default path. Only runs when the default path is in use (no --db / env
+// override) — an explicit path is the caller's choice, never touched.
+if (config.dbPath === DEFAULT_DB_PATH) {
+  migrateLegacyServerDb(config.dbPath, LEGACY_DB_PATH);
+}
 const store = openStorage(process.env, { sqlitePath: config.dbPath });
 const app = await createApp({ db: store.db, config });
 

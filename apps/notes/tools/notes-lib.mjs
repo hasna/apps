@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { constants as fsConstants, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -11,7 +11,63 @@ import {
 import { hasnaEnv } from './notes-env.mjs';
 
 export function dataRoot() {
-  return hasnaEnv('ROOT') || join(homedir(), '.hasna', 'apps', 'notes');
+  // Fleet law: app data lives at ~/.hasna/<app>/ — never a nested
+  // ~/.hasna/apps/<app> segment. The pre-rename nested root is migrated
+  // forward once (copy-only) unless an explicit HASNA_NOTES_ROOT is in use.
+  // HOME is read directly; homedir() is only the HOME-unset fallback.
+  const explicit = hasnaEnv('ROOT');
+  const root = explicit || join(process.env.HOME || homedir(), '.hasna', 'notes');
+  if (!explicit) migrateLegacyRootOnce(root);
+  return root;
+}
+
+/** The pre-rename nested-apps root this app's data used to live under. */
+export function legacyDataRoot() {
+  return join(process.env.HOME || homedir(), '.hasna', 'apps', 'notes');
+}
+
+const LEGACY_ROOT_MIGRATION_RECEIPT = '.legacy-root-migration.json';
+
+/**
+ * One-time copy-forward from the legacy nested-apps root (~/.hasna/apps/notes)
+ * into the canonical root (~/.hasna/notes). Copy-only: the source is preserved
+ * and never deleted; entries that already exist at the destination are skipped,
+ * which makes the copy resumable and idempotent. Writes a receipt marker when
+ * the copy completes. A no-op when the legacy root is absent, when the receipt
+ * already exists, or when `root` is itself the legacy root.
+ */
+export function migrateLegacyRootOnce(root) {
+  const legacy = legacyDataRoot();
+  if (!root || root === legacy || !existsSync(legacy)) return;
+  if (existsSync(join(root, LEGACY_ROOT_MIGRATION_RECEIPT))) return;
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  for (const entry of readdirSync(legacy)) {
+    copyTreeSync(join(legacy, entry), join(root, entry));
+  }
+  writeFileSync(
+    join(root, LEGACY_ROOT_MIGRATION_RECEIPT),
+    JSON.stringify({ migratedFrom: legacy, migratedAt: new Date().toISOString() }, null, 2),
+    { mode: 0o600 },
+  );
+}
+
+// Merge-copy: directories merge entry-by-entry so a partially-copied
+// destination is completed without touching what already landed; files that
+// already exist at the destination are never overwritten.
+function copyTreeSync(src, dst) {
+  const st = statSync(src);
+  if (st.isDirectory()) {
+    mkdirSync(dst, { recursive: true, mode: 0o700 });
+    for (const entry of readdirSync(src)) copyTreeSync(join(src, entry), join(dst, entry));
+    return;
+  }
+  if (existsSync(dst)) return;
+  try {
+    // COPYFILE_EXCL: never overwrite an entry that raced into existence.
+    copyFileSync(src, dst, fsConstants.COPYFILE_EXCL);
+  } catch (err) {
+    if (err?.code !== 'EEXIST') throw err;
+  }
 }
 
 export function notesDir(root = dataRoot()) {

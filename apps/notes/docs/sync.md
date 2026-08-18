@@ -31,7 +31,7 @@ HASNA_NOTES_API_KEY=pn_...                   # required for server calls
 ## The server (self-hosted)
 
 `bunx notes-server` runs the reference server: Hono + SQLite by default
-(`~/.hasna/apps/notes-server/server.db`); set `HASNA_NOTES_DATABASE_URL` to
+(`~/.hasna/notes/server.db`); set `HASNA_NOTES_DATABASE_URL` to
 run on PostgreSQL instead. The server exposes the `personalnotes/v1` dialect
 surface:
 

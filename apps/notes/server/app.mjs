@@ -7,9 +7,8 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { randomBytes } from 'node:crypto';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { ApiError, errorBody, mapError, bearer, parseLimit } from './http.mjs';
+import { DEFAULT_DB_PATH } from './paths.mjs';
 import { getMeta, setMeta } from './db.mjs';
 import { serverEnv } from './env.mjs';
 import {
@@ -22,7 +21,7 @@ import { createNote, deleteNote, exportNotes, getNote, listNotes, updateNote } f
 export const VERSION = '0.1.0';
 export const SERVICE = 'notes-server';
 export const DEFAULT_PORT = 8788;
-export const DEFAULT_DB_PATH = join(homedir(), '.hasna', 'apps', 'notes-server', 'server.db');
+export { DEFAULT_DB_PATH };
 const REQUEST_MAX_BYTES = 2 * 1024 * 1024;
 
 /** Config from env + argv. Zero-ops defaults: loopback bind, single SQLite file. */

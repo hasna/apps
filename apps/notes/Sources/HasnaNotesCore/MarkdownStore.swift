@@ -1,7 +1,7 @@
 import Foundation
 
 /// Reads and writes notes as Markdown files with YAML frontmatter under
-/// `~/.hasna/apps/notes/notes/<id>.md`. The markdown files are the source of truth.
+/// `~/.hasna/notes/notes/<id>.md`. The markdown files are the source of truth.
 ///
 /// This type is pure (no UI, no Combine) so it can be unit-tested in isolation and is
 /// forward-compatible with the `@hasna/notes` catalog/CLI that indexes the
@@ -15,20 +15,43 @@ public struct MarkdownStore {
     public let rootURL: URL
     public let notesURL: URL
 
-    /// Default data root: `~/.hasna/apps/notes/`. Notes live in `<root>/notes/`.
+    /// Default data root: `~/.hasna/notes/`. Notes live in `<root>/notes/`.
     public init(root: URL? = nil) {
         let resolvedRoot = root ?? FileManager.default
             .homeDirectoryForCurrentUser
             .appendingPathComponent(".hasna", isDirectory: true)
-            .appendingPathComponent("apps", isDirectory: true)
             .appendingPathComponent("notes", isDirectory: true)
         self.rootURL = resolvedRoot
         self.notesURL = resolvedRoot.appendingPathComponent("notes", isDirectory: true)
     }
 
-    /// Ensure the notes directory exists. Safe to call repeatedly.
+    /// The pre-rename nested-apps root this app's data used to live under.
+    public static func legacyRoot() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".hasna", isDirectory: true)
+            .appendingPathComponent("apps", isDirectory: true)
+            .appendingPathComponent("notes", isDirectory: true)
+    }
+
+    /// Ensure the notes directory exists. Safe to call repeatedly. When the
+    /// canonical root is missing entries and the legacy nested-apps root
+    /// exists, the missing entries are copied forward once (source preserved,
+    /// never deleted; existing destination entries are never overwritten).
     public func ensureDirectory() throws {
+        migrateLegacyRootIfNeeded()
         try FileManager.default.createDirectory(at: notesURL, withIntermediateDirectories: true)
+    }
+
+    private func migrateLegacyRootIfNeeded() {
+        let fm = FileManager.default
+        let legacy = Self.legacyRoot()
+        guard fm.fileExists(atPath: legacy.path) else { return }
+        let entries = (try? fm.contentsOfDirectory(at: legacy, includingPropertiesForKeys: nil, options: [])) ?? []
+        for entry in entries {
+            let destination = rootURL.appendingPathComponent(entry.lastPathComponent)
+            if fm.fileExists(atPath: destination.path) { continue }
+            try? fm.copyItem(at: entry, to: destination)
+        }
     }
 
     public func fileURL(for id: UUID) -> URL {

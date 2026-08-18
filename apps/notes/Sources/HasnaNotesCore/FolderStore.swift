@@ -1,13 +1,13 @@
 import Foundation
 
-/// Persists the user's folder list to `~/.hasna/apps/notes/folders.json` so that
+/// Persists the user's folder list to `~/.hasna/notes/folders.json` so that
 /// folders created in the UI — including empty ones with no notes yet — survive
 /// relaunch. Note↔folder assignment itself lives in each note's `folder` frontmatter;
 /// this file only tracks the set of known folder names and their order.
 public struct FolderStore {
     public let fileURL: URL
 
-    /// Defaults to `<root>/folders.json` where root is `~/.hasna/apps/notes/`.
+    /// Defaults to `<root>/folders.json` where root is `~/.hasna/notes/`.
     public init(root: URL? = nil) {
         let resolvedRoot = root ?? FileManager.default
             .homeDirectoryForCurrentUser

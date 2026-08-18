@@ -26,7 +26,7 @@ import Foundation
 /// (`/transcribe`) via the Vercel AI SDK + OpenAI. The host:
 ///   - finds a `node` binary,
 ///   - picks a free loopback TCP port,
-///   - reads the OpenAI key from `OPENAI_API_KEY` (or `~/.hasna/apps/notes/secrets/openai.env`),
+///   - reads the OpenAI key from `OPENAI_API_KEY` (or `~/.hasna/notes/secrets/openai.env`),
 ///   - launches the child with `OPENAI_API_KEY`, `PORT`, and a per-run sidecar token,
 ///   - pipes child stdout/stderr to `NSLog` (prefix `Sidecar:`).
 ///
@@ -88,11 +88,11 @@ final class AISidecar {
         return nil
     }
 
-    /// Optional per-app secrets file: `~/.hasna/apps/notes/secrets/<name>.env`.
+    /// Optional per-app secrets file: `~/.hasna/notes/secrets/<name>.env`.
     /// Lets users hand the shell app a key without exporting env vars globally.
     private static func secretsFile(_ name: String) -> URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".hasna/apps/notes/secrets/\(name).env")
+            .appendingPathComponent(".hasna/notes/secrets/\(name).env")
     }
 
     /// Read the OpenAI `sk-...` key from the process env, else the optional secrets file.
