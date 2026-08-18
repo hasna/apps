@@ -4,8 +4,8 @@
   "name": "signatures",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.8.5",
-  "description": "Open-source agreement and e-signature workflows for Markdown and PDFs: local signing, provider evidence, CLI, MCP, and an HTTP surface over a local SQLite store.",
+  "kitVersion": "0.11.1",
+  "description": "Open-source agreement and e-signature workflows for Markdown and PDFs: local signing, provider evidence, CLI, MCP, and an HTTP surface over a local SQLite store at ~/.hasna/signatures/signatures.db. The server's active data backend is SQLite; PostgreSQL is declared as the forward-looking engine capability with an environment-gated live proof (pgTestGate).",
   "bins": [
     "signatures",
     "signatures-mcp",
@@ -15,13 +15,18 @@
     "user-hosted"
   ],
   "storage": {
-    "mode": "sqlite",
+    "backend": "sqlite",
     "engines": [
-      "sqlite"
+      "sqlite",
+      "postgresql"
     ],
     "envPrefix": "HASNA_SIGNATURES_",
     "aliasEnvPrefix": "SIGNATURES_",
-    "sqlitePath": "~/.hasna/signatures/signatures.db"
+    "sqlitePath": "~/.hasna/signatures/signatures.db",
+    "pgTestGate": {
+      "envVar": "SIGNATURES_TEST_DATABASE_URL",
+      "command": "bun test"
+    }
   },
   "serviceSurfaces": [
     {
@@ -41,9 +46,10 @@
     {
       "name": "signatures-sdk",
       "kind": "sdk",
-      "status": "supported",
+      "status": "deferred",
       "authMode": "none",
-      "exportSubpath": "."
+      "exportSubpath": ".",
+      "deferReason": "The package root export is not generated from an OpenAPI document: the API surface is deferred (signatures-serve does not yet serve GET /ready, GET /version, a /v1 base path, or /openapi.json), so the SDK cannot claim a contract-bound supported status with generatedFrom."
     },
     {
       "name": "signatures-api",
