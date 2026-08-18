@@ -57,7 +57,14 @@ function fakeStore() {
 }
 
 function handler(store = fakeStore()) {
-  const verifier = verifyApiKey({ app: "secrets", signingSecret: SIGNING });
+  // Keys are active only once their tenant assignment is persisted — unknown
+  // kids are denied by the 0.11.1 auth contract.
+  const verifier = verifyApiKey({
+    app: "secrets",
+    signingSecret: SIGNING,
+    keyStatus: async (kid: string) =>
+      persistedTenantByKid.has(kid) ? ("active" as const) : ("unknown" as const),
+  });
   return createHandler({ client: fakeClient(), store, verifier });
 }
 
@@ -153,8 +160,11 @@ describe("secrets serve", () => {
       }),
     );
 
-    expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: "API key has no tenant assignment" });
+    // The 0.11.1 auth contract denies an unknown kid at the middleware (401):
+    // an unpersisted tenant assignment means the key cannot authenticate at
+    // all, so it never reaches the app-level tenant check. Denied before any
+    // write either way.
+    expect(res.status).toBe(401);
     expect(store.tenantWrites).toHaveLength(0);
   });
 

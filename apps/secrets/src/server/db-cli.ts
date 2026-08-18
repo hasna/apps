@@ -7,13 +7,13 @@
  * Lives in the server bundle only — the client `secrets` binary never ships it.
  */
 
-import { createCloudPoolFromEnv } from "../generated/storage-kit/index.js";
+import { createServerPoolFromEnv } from "../generated/storage-kit/index.js";
 import { APP_NAME, bootstrapCloudEnv } from "./cloud-env.js";
 import { createSecretsMigrationLedger } from "./migration-compat.js";
 
 export async function runDbCommand(sub: string | undefined): Promise<void> {
   bootstrapCloudEnv();
-  const { client, connectionSource } = createCloudPoolFromEnv(APP_NAME, { applicationName: "secrets-migrate" });
+  const { client, connectionSource } = createServerPoolFromEnv(APP_NAME, { applicationName: "secrets-migrate" });
   try {
     const ledger = await createSecretsMigrationLedger(client);
     if (sub === "status") {
