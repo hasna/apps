@@ -78,11 +78,6 @@ export function isPostgresBackendConfigured(env: NodeJS.ProcessEnv = process.env
   return Boolean(resolveCloudDatabaseUrl(env));
 }
 
-/** @deprecated Renamed to {@link isPostgresBackendConfigured}. */
-export function isCloudModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return isPostgresBackendConfigured(env);
-}
-
 let cachedClient: TodosCloudQueryClient | null = null;
 let cachedAdapter: TodosStorageAdapter | null = null;
 let cachedStore: ApiKeyStore | null = null;

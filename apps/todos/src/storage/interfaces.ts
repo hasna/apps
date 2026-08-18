@@ -36,7 +36,7 @@ import type { IntegrityReport } from "../lib/integrity.js";
 
 export type MaybePromise<T> = T | Promise<T>;
 
-export type TodosStorageKind = "sqlite" | "postgres" | "remote" | "memory" | (string & {});
+export type TodosStorageKind = "sqlite" | "postgres" | "memory" | (string & {});
 
 export interface TodosStorageContext {
   organizationId?: string;

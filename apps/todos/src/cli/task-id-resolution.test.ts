@@ -3,7 +3,7 @@ import { resolveTaskId } from "./helpers.js";
 
 /**
  * Regression: task-id resolution must be CONSISTENT across commands whether the
- * machine reads its local SQLite island or the shared self_hosted cloud store.
+ * machine reads its local SQLite island or the shared hosted store.
  *
  * The bug (reported): `todos show <8-char-prefix>` said "Task not found" while
  * `todos comment <same-prefix>` resolved it, and resolver-based commands

@@ -104,7 +104,7 @@ export type TodosRemoteCommandCapability = "stale-lock-handoff";
 export interface TodosRemoteAuthorityConfigStatus {
   selected: boolean;
   ok: boolean;
-  mode: string;
+  transport: string;
   api_url_configured: boolean;
   api_key_configured: boolean;
   v1_base_url: string | null;
@@ -112,10 +112,8 @@ export interface TodosRemoteAuthorityConfigStatus {
   local_fallback: false;
 }
 
-export interface TodosCliStorageModeResolution {
+export interface TodosCliTransportResolution {
   /** Canonical transport the environment resolved to (`sqlite` | `http`). */
-  mode: TodosCliTransport;
-  /** Same value under its own name; prefer this in new code. */
   transport: TodosCliTransport;
   selected: boolean;
   /** What selected the transport; `default` means the on-box SQLite file. */
@@ -123,55 +121,16 @@ export interface TodosCliStorageModeResolution {
 }
 
 /**
- * The retired storage-mode variables. Any of them being SET — even to a blank
- * value — is an error, never a hint: silently ignoring it would keep the
- * split-brain drift the mode vocabulary caused (owner directive 2026-08-15).
- * The key table matches the shared transport contract used by the other
- * fleet CLIs, so a key renamed there reaches this ratchet in the same change.
+ * Resolve the CLI transport from the environment. Retired storage-mode
+ * variables are inert — never read, never mapped, never a fallback — and the
+ * transport is selected by the API env pair alone: URL set without KEY (or KEY
+ * set without URL) is a hard error naming the missing variable.
  */
-const LEGACY_STORAGE_MODE_KEYS = [
-  "HASNA_TODOS_STORAGE_MODE",
-  "HASNA_TODOS_MODE",
-  "TODOS_STORAGE_MODE",
-  "TODOS_MODE",
-] as const;
-
-/**
- * Throw when a retired storage-mode variable is set. Naming the retired var and
- * the supported switches makes the error actionable without accepting the
- * value. Fires on SET, not on non-blank: a blank leftover variable is still a
- * stale fragment that must be deleted.
- */
-export function assertNoLegacyStorageMode(env: Env = process.env as Env): void {
-  for (const key of LEGACY_STORAGE_MODE_KEYS) {
-    if (Object.hasOwn(env, key) && env[key] !== undefined) {
-      throw new Error(
-        `REMOTE_STORAGE_MODE_REMOVED: ${key} was removed. Deployment modes no longer exist: delete the storage-mode variable. ` +
-          `The client uses the on-box SQLite store, or the HTTP API selected by ` +
-          `HASNA_TODOS_API_URL + HASNA_TODOS_API_KEY. ` +
-          `On the server, set HASNA_TODOS_DATABASE_URL to select the postgresql backend, ` +
-          `or leave it unset for sqlite.`,
-      );
-    }
-  }
-}
-
-/**
- * Resolve the CLI transport from the environment. Never accepts a storage-mode
- * variable, never maps a legacy value, and never falls back to SQLite from a
- * partial cloud configuration: URL set without KEY (or KEY set without URL) is
- * a hard error naming the missing variable.
- */
-export function resolveTodosCliStorageMode(env: Env = process.env as Env): TodosCliStorageModeResolution {
-  // The fail-loud ratchet runs BEFORE anything else: a stale mode variable does
-  // not get rescued by a complete API pair or a local DB path.
-  assertNoLegacyStorageMode(env);
-
+export function resolveTodosCliTransport(env: Env = process.env as Env): TodosCliTransportResolution {
   const urlValue = env.HASNA_TODOS_API_URL?.trim();
   const keyValue = env.HASNA_TODOS_API_KEY?.trim();
   if (urlValue && keyValue) {
     return {
-      mode: "http",
       transport: "http",
       selected: true,
       source: "HASNA_TODOS_API_URL+HASNA_TODOS_API_KEY",
@@ -188,7 +147,6 @@ export function resolveTodosCliStorageMode(env: Env = process.env as Env): Todos
     );
   }
   return {
-    mode: "sqlite",
     transport: "sqlite",
     selected: false,
     source: "default",
@@ -196,7 +154,7 @@ export function resolveTodosCliStorageMode(env: Env = process.env as Env): Todos
 }
 
 function requestedTransport(env: Env): TodosCliTransport {
-  return resolveTodosCliStorageMode(env).transport;
+  return resolveTodosCliTransport(env).transport;
 }
 
 function normalizeRemoteAuthorityUrl(value: string | undefined): string | null {
@@ -244,15 +202,15 @@ function normalizeRemoteAuthorityUrl(value: string | undefined): string | null {
 export function getTodosRemoteAuthorityConfigStatus(
   env: Env = process.env as Env,
 ): TodosRemoteAuthorityConfigStatus {
-  let resolution: TodosCliStorageModeResolution;
+  let resolution: TodosCliTransportResolution;
   try {
-    resolution = resolveTodosCliStorageMode(env);
+    resolution = resolveTodosCliTransport(env);
   } catch (error) {
     const issue = error instanceof Error ? error.message : String(error);
     return {
       selected: true,
       ok: false,
-      mode: "invalid",
+      transport: "invalid",
       api_url_configured: Boolean(env.HASNA_TODOS_API_URL?.trim()),
       api_key_configured: Boolean(env.HASNA_TODOS_API_KEY?.trim()),
       v1_base_url: null,
@@ -260,12 +218,12 @@ export function getTodosRemoteAuthorityConfigStatus(
       local_fallback: false,
     };
   }
-  const { mode, selected } = resolution;
+  const { transport, selected } = resolution;
   if (!selected) {
     return {
       selected: false,
       ok: true,
-      mode,
+      transport,
       api_url_configured: false,
       api_key_configured: false,
       v1_base_url: null,
@@ -296,7 +254,7 @@ export function getTodosRemoteAuthorityConfigStatus(
   return {
     selected: true,
     ok: issues.length === 0,
-    mode,
+    transport,
     api_url_configured: apiUrl !== null,
     api_key_configured: apiKeyConfigured,
     v1_base_url: apiUrl ? `${apiUrl}/v1` : null,

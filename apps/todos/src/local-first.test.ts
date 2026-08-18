@@ -146,16 +146,13 @@ describe("OSS local-first runtime defaults", () => {
   }, cliSpawnBudgetMs(1));
 
   // Regression for the exact failure class this removal fixes: a retired
-  // storage-mode variable must hard-error, never silently route to local.
-  test("a retired storage-mode variable refuses to boot, never routes", async () => {
+  // storage-mode variable is inert — it never throws at boot and never routes;
+  // with no API pair the CLI boots on the local SQLite store regardless.
+  test("a retired storage-mode variable is inert: the CLI boots local without it", async () => {
     const result = await runCli(["--json", "add", "Banned task"], {
       HASNA_TODOS_STORAGE_MODE: "remote",
-      HASNA_TODOS_API_URL: "https://todos.invalid",
-      HASNA_TODOS_API_KEY: "remote-token",
     });
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("REMOTE_STORAGE_MODE_REMOVED");
-    expect(result.stderr).toContain("Deployment modes no longer exist");
+    expect(result.exitCode).toBe(0);
   }, cliSpawnBudgetMs(1));
 
   // Regression: `--project` is parsed onto the global program opts, so the add

@@ -40,19 +40,15 @@ export {
   isTodosShadowEnabled,
   getStorageDatabaseEnv,
   getStorageDatabaseUrl,
-  getStorageMode,
-  getTodosStorageBackend,
+    getTodosStorageBackend,
   getTodosStorageDatabaseEnv,
   getTodosStorageDatabaseUrl,
   getTodosStorageEnvName,
-  getTodosStorageMode,
-  isTodosPostgresBackend,
-  isTodosRemoteStorageEnabled,
-  loadStorageConfig,
+    isTodosPostgresBackend,
+    loadStorageConfig,
   loadTodosStorageConfig,
   parseStorageBackend,
-  parseStorageMode,
-} from "./config.js";
+  } from "./config.js";
 export type {
   CanonicalTodosRdsConfig,
   TodosPostgresStorageConfig,
@@ -60,7 +56,6 @@ export type {
   TodosStorageBackend,
   TodosStorageConfig,
   TodosStorageEnv,
-  TodosStorageMode,
   TodosStorageTable,
   TodosSyncConfig,
 } from "./config.js";

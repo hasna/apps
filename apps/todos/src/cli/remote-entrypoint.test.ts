@@ -2373,22 +2373,20 @@ describe("remote CLI entrypoint authority boundary", () => {
       expect(requests.some((request) => request.startsWith("POST /v1/tasks/next/claim"))).toBe(true);
       expectNoLocalDatabase(root, localDbPath);
 
-      const bannedMode = await runCli(executable, ["--json", "projects"], {
+      // Retired storage-mode variables are inert: the CLI keeps routing on the
+      // API pair and never reads them.
+      const inertMode = await runCli(executable, ["--json", "projects"], {
         ...env,
         HASNA_TODOS_STORAGE_MODE: "remote",
       }, cwd);
-      expect(bannedMode.exitCode).toBe(1);
-      expect(bannedMode.stderr).toContain("REMOTE_STORAGE_MODE_REMOVED");
-      expect(bannedMode.stderr).toContain("Deployment modes no longer exist");
+      expect(inertMode.exitCode).toBe(0);
       expectNoLocalDatabase(root, localDbPath);
 
       const blankLegacyMode = await runCli(executable, ["--json", "projects"], {
         ...env,
         TODOS_STORAGE_MODE: "",
       }, cwd);
-      expect(blankLegacyMode.exitCode).toBe(1);
-      expect(blankLegacyMode.stderr).toContain("REMOTE_STORAGE_MODE_REMOVED");
-      expect(blankLegacyMode.stderr).toContain("Deployment modes no longer exist");
+      expect(blankLegacyMode.exitCode).toBe(0);
       expectNoLocalDatabase(root, localDbPath);
 
       for (const unsupported of [

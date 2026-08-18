@@ -1,20 +1,18 @@
 /**
- * Storage-backend collapse conformance (owner directive 2026-07-29, knowledge
- * k_ms3e6v41_zbe7m8): the three deployment "modes" (local / self_hosted|remote /
- * hybrid / cloud) collapse into a single two-value data-backend switch —
- * `sqlite | postgres` — for the server-side/native storage tooling. Since
- * 2026-08-15 the storage-mode variables are banned outright: their mere
- * presence is a hard error, and the backend is derived from
- * HASNA_TODOS_DATABASE_URL (set selects postgresql, unset selects sqlite).
- * No deployment-mode word survives in the parsed model or in refusal text.
+ * Storage-backend selection conformance (owner directive 2026-07-29, knowledge
+ * k_ms3e6v41_zbe7m8): the server-side data backend is a single two-value
+ * switch — `sqlite | postgres` — derived from the environment, never selected
+ * by a mode variable. Retired storage-mode variables are inert: the backend is
+ * derived from HASNA_TODOS_DATABASE_URL (set selects postgresql, unset selects
+ * sqlite). No deployment-mode word survives in the parsed model or in refusal
+ * text.
  */
 import { describe, expect, test } from "bun:test";
 import {
   TODOS_STORAGE_ENV,
   createTodosStorageAdapter,
-  isTodosRemoteStorageEnabled,
   loadTodosStorageConfig,
-  parseStorageMode,
+  parseStorageBackend,
 } from "./index.js";
 import type { TodosPostgresQueryClient } from "./postgres-sync.js";
 
@@ -30,26 +28,26 @@ function fakePostgresClient(): TodosPostgresQueryClient {
 
 describe("storage backend collapse (sqlite|postgres)", () => {
   test("default backend is sqlite", () => {
-    expect(parseStorageMode(undefined)).toBe("sqlite");
+    expect(parseStorageBackend(undefined)).toBe("sqlite");
     expect(loadTodosStorageConfig({}).mode).toBe("sqlite");
   });
 
   test("canonical backend tokens are accepted", () => {
-    expect(parseStorageMode("sqlite")).toBe("sqlite");
-    expect(parseStorageMode("postgres")).toBe("postgres");
-    expect(parseStorageMode("postgresql")).toBe("postgres");
+    expect(parseStorageBackend("sqlite")).toBe("sqlite");
+    expect(parseStorageBackend("postgres")).toBe("postgres");
+    expect(parseStorageBackend("postgresql")).toBe("postgres");
   });
 
-  test("deployment-mode tokens are rejected as removed, never normalized", () => {
+  test("legacy placement tokens are invalid backend input, never normalized", () => {
     for (const legacy of ["local", "remote", "hybrid", "self_hosted", "cloud"]) {
-      expect(() => parseStorageMode(legacy)).toThrow(/Deployment modes no longer exist/);
+      expect(() => parseStorageBackend(legacy)).toThrow(/Storage backend must be sqlite or postgres/);
     }
   });
 
   test("an invalid backend refusal names only the two backends, no deployment modes", () => {
     let message = "";
     try {
-      parseStorageMode("bogus-mode");
+      parseStorageBackend("bogus-mode");
     } catch (error) {
       message = (error as Error).message;
     }
@@ -63,10 +61,8 @@ describe("storage backend collapse (sqlite|postgres)", () => {
       [TODOS_STORAGE_ENV.databaseUrl]: DSN,
     });
     expect(config.mode).toBe("postgres");
-    expect(isTodosRemoteStorageEnabled(config)).toBe(true);
     const local = loadTodosStorageConfig({});
     expect(local.mode).toBe("sqlite");
-    expect(isTodosRemoteStorageEnabled(local)).toBe(false);
   });
 
   test("the factory has exactly two arms: a DSN selects the postgres adapter", () => {
@@ -84,13 +80,12 @@ describe("storage backend collapse (sqlite|postgres)", () => {
     expect(adapter.capabilities.localPersistence).toBe(false);
   });
 
-  test("a retired storage-mode variable is a hard error even with a complete DSN", () => {
-    expect(() =>
-      loadTodosStorageConfig({
-        [TODOS_STORAGE_ENV.databaseUrl]: DSN,
-        HASNA_TODOS_STORAGE_MODE: "postgres",
-      }),
-    ).toThrow(/Deployment modes no longer exist/);
+  test("a retired storage-mode variable is inert even with a complete DSN", () => {
+    const config = loadTodosStorageConfig({
+      [TODOS_STORAGE_ENV.databaseUrl]: DSN,
+      HASNA_TODOS_STORAGE_MODE: "postgres",
+    });
+    expect(config.mode).toBe("postgres");
   });
 
   test("the default arm is the local sqlite adapter", async () => {
