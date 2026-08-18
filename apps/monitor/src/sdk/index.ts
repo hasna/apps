@@ -417,6 +417,17 @@ export class MonitorService {
     return this.pm.kill(pid, signal, local ? "local" : id, local ? undefined : collector);
   }
 
+  /**
+   * Whether a machine resolves to the local process table — the same
+   * classification `kill` applies internally (DB machine store first, then
+   * the config file, then the "local" default). Interface layers use this
+   * for self-process protection so their local judgement can never diverge
+   * from the collector resolution.
+   */
+  isLocalMachine(machineId = "local"): boolean {
+    return getCollectorForMachine(machineId) instanceof LocalCollector;
+  }
+
   /** List registered/configured machines, falling back to the config file. */
   machinesList(): MachineListItem[] {
     try {

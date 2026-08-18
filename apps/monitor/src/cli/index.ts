@@ -1251,13 +1251,16 @@ program
     }
 
     // Local-type machines (including "local" itself) kill through the local
-    // process table; this mirrors the classification MonitorService.kill
-    // applies internally.
-    const isLocalMachine =
-      machineId === "local" ||
-      loadConfig().machines.some(
-        (machine) => machine.id === machineId && machine.type === "local"
-      );
+    // process table; this is the classification MonitorService.kill applies
+    // internally, so machines registered through the DB store (`monitor add
+    // <name> --type local`) are local here exactly when the collector
+    // resolves them as local.
+    let isLocalMachine: boolean;
+    try {
+      isLocalMachine = service.isLocalMachine(machineId);
+    } catch {
+      isLocalMachine = machineId === "local";
+    }
     const killMachineId = isLocalMachine ? "local" : machineId;
 
     const selectors = [
