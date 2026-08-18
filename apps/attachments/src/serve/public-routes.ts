@@ -11,16 +11,12 @@
  * against the injected Postgres store. The access policy, the rendered pages and
  * the password throttle are all shared modules — this file only wires them to
  * the async store, it does not restate any rule.
- *
- * Not supported here: email-gated links (`require_email`). The cloud API refuses
- * to create them, so a link that carries the flag can only come from an on-box
- * database; we fail closed with an explicit page instead of serving bytes.
  */
 
 import type { Context, Hono } from "hono";
 import type { Attachment } from "../core/db.js";
 import type { AttachmentsConfig } from "../core/config.js";
-import { normalizePublicPath } from "../core/config.js";
+import { getPublicBaseUrl, normalizePublicPath } from "../core/config.js";
 import { openAttachmentStream } from "../core/download.js";
 import { contentDispositionAttachment } from "../core/security.js";
 import {
@@ -29,6 +25,14 @@ import {
   type AsyncShareAccessSource,
   type ShareAccessResult,
 } from "../core/share.js";
+import {
+  EmailGateError,
+  requestAccessGrantAsync,
+  verifyAccessGrantAsync,
+  type AsyncEmailGateSource,
+  type EmailSender,
+} from "../core/email-gate.js";
+import { resolveEmailSender } from "../core/email-sender.js";
 import {
   PasswordThrottle,
   clientIdentity,
@@ -43,8 +47,11 @@ import {
 } from "../api/public-pages.js";
 import { toWebBody } from "../api/streams.js";
 
+/** The store the public routes need: share-link access plus email-gate grants. */
+export type CloudPublicStore = AsyncShareAccessSource & AsyncEmailGateSource;
+
 export interface CloudPublicRoutesDeps {
-  store: AsyncShareAccessSource;
+  store: CloudPublicStore;
   config: AttachmentsConfig;
   /**
    * Trust `x-forwarded-for` & friends when identifying a caller for throttling.
@@ -60,6 +67,12 @@ export interface CloudPublicRoutesDeps {
    */
   trustedProxies?: readonly string[];
   throttle?: PasswordThrottle;
+  /**
+   * Email sender for email-gated share links. Undefined: resolve from the
+   * environment (ATTACHMENTS_EMAIL_FROM + RESEND/SES) at request time; null:
+   * force the unconfigured path (503 page).
+   */
+  emailSender?: EmailSender | null;
 }
 
 function resolveTrustProxy(explicit: boolean | undefined): boolean {
@@ -81,8 +94,6 @@ function isConfirmedDownloadRequest(c: Context): boolean {
   return c.req.header("x-attachments-download") === "1" || c.req.query("download") === "1";
 }
 
-const EMAIL_GATE_UNSUPPORTED = "Email-gated links are not available on this deployment";
-
 export function registerCloudPublicRoutes(app: Hono, deps: CloudPublicRoutesDeps): void {
   const { store, config } = deps;
   const publicPath = normalizePublicPath(config.server.publicPath);
@@ -90,6 +101,8 @@ export function registerCloudPublicRoutes(app: Hono, deps: CloudPublicRoutesDeps
   const trustedProxies =
     deps.trustedProxies ?? parseTrustedProxies(process.env["ATTACHMENTS_TRUSTED_PROXIES"]);
   const throttle = deps.throttle ?? new PasswordThrottle();
+  const emailSender: EmailSender | null =
+    deps.emailSender !== undefined ? deps.emailSender : resolveEmailSender(process.env);
 
   const identity = (c: Context, token: string) =>
     passwordFailureKey(
@@ -104,7 +117,7 @@ export function registerCloudPublicRoutes(app: Hono, deps: CloudPublicRoutesDeps
     c: Context,
     token: string,
     access: ShareAccessResult,
-    extra: { error?: string; status?: 200 | 401 } = {}
+    extra: { error?: string; status?: 200 | 400 | 401 | 403 | 404 | 410; grantToken?: string; notice?: string } = {}
   ) =>
     c.html(
       renderDownloadPage({
@@ -113,24 +126,37 @@ export function registerCloudPublicRoutes(app: Hono, deps: CloudPublicRoutesDeps
         size: access.attachment.size,
         expiresAt: access.shareLink.expiresAt ?? access.attachment.expiresAt,
         requiresPassword: !!access.shareLink.passwordHash,
+        requiresEmail: access.shareLink.requireEmail,
+        grantToken: extra.grantToken,
         maxUses: access.shareLink.maxUses,
         usedCount: access.shareLink.usedCount,
         publicPath,
         ...(extra.error ? { error: extra.error } : {}),
+        ...(extra.notice ? { notice: extra.notice } : {}),
       }),
       extra.status ?? 200
     );
 
-  const emailGatePage = (c: Context) =>
-    c.html(
-      renderPublicErrorPage({
-        title: "Attachment unavailable",
-        message: EMAIL_GATE_UNSUPPORTED,
-        detail: "Ask the sender for a password-protected or plain link instead.",
-        status: 501,
-      }),
-      501
-    );
+  /**
+   * Email-gate check for a share-link page or download. Returns the verified
+   * grant token, or null when the link is not email-gated or the visitor holds
+   * no (valid) grant.
+   */
+  const resolveGrantToken = async (
+    c: Context,
+    token: string,
+    access: ShareAccessResult
+  ): Promise<string | undefined> => {
+    if (!access.shareLink.requireEmail) return undefined;
+    const grantToken = c.req.query("grant") ?? undefined;
+    if (!grantToken) return undefined;
+    try {
+      await verifyAccessGrantAsync(store, token, grantToken);
+      return grantToken;
+    } catch {
+      return undefined;
+    }
+  };
 
   // Unauthenticated surface: log the detail, never render it back to the visitor.
   function fatal(c: Context, err: unknown) {
@@ -163,8 +189,8 @@ export function registerCloudPublicRoutes(app: Hono, deps: CloudPublicRoutesDeps
         c.header("X-Attachment-Filename", access.attachment.filename);
         return c.body(null, 200);
       }
-      if (access.shareLink.requireEmail) return emailGatePage(c);
-      return downloadPage(c, token, access);
+      const grantToken = await resolveGrantToken(c, token, access);
+      return downloadPage(c, token, access, { grantToken });
     } catch (err) {
       if (err instanceof ShareAccessError) {
         return isHead(c) ? c.body(null, err.status) : errorPage(c, token, err);
@@ -177,8 +203,32 @@ export function registerCloudPublicRoutes(app: Hono, deps: CloudPublicRoutesDeps
   // handlers rather than through a separate registration.
   const isHead = (c: Context) => c.req.raw.method.toUpperCase() === "HEAD";
 
-  async function serveDownload(c: Context, password?: string) {
+  async function serveDownload(c: Context, password?: string, grantToken?: string) {
     const token = c.req.param("token")!;
+    // Email-gated links serve bytes only to a verified emailed grant. Without a
+    // grant the visitor lands on the request-access page; with a bogus or
+    // expired grant they get an explicit error page, never the bytes.
+    const gateLink = await store.findShareLinkByToken(token);
+    if (gateLink?.requireEmail) {
+      const grant = grantToken ?? c.req.query("grant") ?? undefined;
+      if (!grant) {
+        return c.redirect(sharePagePath(token, publicPath), 303);
+      }
+      try {
+        await verifyAccessGrantAsync(store, token, grant);
+      } catch (err) {
+        const status = err instanceof EmailGateError ? err.status : 401;
+        return c.html(
+          renderShareAccessError(
+            token,
+            new ShareAccessError("Invalid or expired access link", status as 401 | 410),
+            publicPath
+          ),
+          status
+        );
+      }
+    }
+
     const key = identity(c, token);
     if (throttle.isLimited(key)) {
       return c.html(
@@ -220,8 +270,6 @@ export function registerCloudPublicRoutes(app: Hono, deps: CloudPublicRoutesDeps
       }
     }
 
-    if (access.shareLink.requireEmail) return emailGatePage(c);
-
     try {
       const result = await openAttachmentStream(access.attachment, {
         config,
@@ -257,7 +305,6 @@ export function registerCloudPublicRoutes(app: Hono, deps: CloudPublicRoutesDeps
         c.header("Content-Length", String(access.attachment.size));
         return c.body(null, 200);
       }
-      if (access.shareLink.requireEmail) return emailGatePage(c);
       // A limited-use link must not be burned by a link preview / prefetch.
       if (access.shareLink.maxUses !== null && !isConfirmedDownloadRequest(c)) {
         return c.redirect(sharePagePath(token, publicPath), 303);
@@ -272,17 +319,82 @@ export function registerCloudPublicRoutes(app: Hono, deps: CloudPublicRoutesDeps
         return isHead(c) ? c.body(null, 500) : fatal(c, err);
       }
     }
-    return serveDownload(c);
+    return serveDownload(c, undefined, c.req.query("grant"));
   });
 
   app.post(`${publicPath}/:token/download`, async (c) => {
     let password: string | undefined;
+    let grantToken: string | undefined;
     try {
       const body = await c.req.parseBody();
       password = typeof body["password"] === "string" ? body["password"] : undefined;
+      grantToken = typeof body["grant"] === "string" ? body["grant"] : undefined;
     } catch {
       password = undefined;
     }
-    return serveDownload(c, password);
+    return serveDownload(c, password, grantToken);
+  });
+
+  // Email-gated links: the visitor submits their address and receives an
+  // emailed one-window grant. Mirrors the on-box requestAccessHandler against
+  // the async store.
+  app.post(`${publicPath}/:token/request-access`, async (c) => {
+    const token = c.req.param("token")!;
+    let email = "";
+    try {
+      const body = await c.req.parseBody();
+      email = typeof body["email"] === "string" ? body["email"] : "";
+    } catch {
+      email = "";
+    }
+    const sender = emailSender;
+    if (!sender) {
+      return c.html(
+        renderPublicErrorPage({
+          title: "Email access unavailable",
+          message:
+            "This link requires email access, but the server is not configured to send email.",
+          detail: "Ask the sender to share the file another way.",
+          status: 503,
+          actionHref: sharePagePath(token, publicPath),
+          actionLabel: "Back to Attachment",
+        }),
+        503
+      );
+    }
+    try {
+      const access = await resolveShareAccessAsync(store, token, { consume: false });
+      await requestAccessGrantAsync({
+        source: store,
+        token,
+        email,
+        sender,
+        filename: access.attachment.filename,
+        buildAccessUrl: (grant) =>
+          `${getPublicBaseUrl(config)}${sharePagePath(token, publicPath)}?grant=${encodeURIComponent(grant)}`,
+      });
+      return downloadPage(c, token, access, {
+        notice: "Check your inbox — we emailed you an access link.",
+      });
+    } catch (err) {
+      if (err instanceof EmailGateError || err instanceof ShareAccessError) {
+        try {
+          const access = await resolveShareAccessAsync(store, token, { consume: false });
+          return downloadPage(c, token, access, {
+            status: err.status,
+            error: err.message,
+          });
+        } catch {
+          return errorPage(
+            c,
+            token,
+            err instanceof ShareAccessError
+              ? err
+              : new ShareAccessError(err.message, err.status as 401 | 404 | 410)
+          );
+        }
+      }
+      return fatal(c, err);
+    }
   });
 }

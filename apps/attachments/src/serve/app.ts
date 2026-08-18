@@ -43,6 +43,8 @@ import {
 } from "../core/friendly-slug.js";
 import { buildOpenApiDocument } from "./openapi.js";
 import { registerCloudPublicRoutes } from "./public-routes.js";
+import type { EmailSender } from "../core/email-gate.js";
+import { isValidEmail } from "../core/security.js";
 
 export interface ServeAppDeps {
   client: PoolQueryClient;
@@ -53,6 +55,13 @@ export interface ServeAppDeps {
   signingSecret: string;
   isRevoked?: (kid: string) => boolean | Promise<boolean>;
   audit?: (event: unknown) => void;
+  /**
+   * Email sender for email-gated share links. When undefined, the public
+   * routes resolve one from the environment (ATTACHMENTS_EMAIL_FROM +
+   * ATTACHMENTS_RESEND_API_KEY or SES creds); pass null explicitly to force
+   * the unconfigured path in tests.
+   */
+  emailSender?: EmailSender | null;
 }
 
 const APP_SLUG = "attachments";
@@ -136,6 +145,45 @@ function parseBaseUrlOr400(value: string | undefined): string | undefined {
     throw new BadRequestError("base_url must not carry a query string or fragment");
   }
   return parsed.origin + parsed.pathname.replace(/\/+$/, "");
+}
+
+function parseBool(value: string | undefined): boolean | undefined {
+  if (value === undefined || value === "") return undefined;
+  return value === "true" || value === "1";
+}
+
+/**
+ * Parse the email-gate upload fields from any transport shape (multipart
+ * string fields, JSON body, query params). `allowed_emails` accepts a
+ * comma-separated string or (JSON bodies) an array. Invalid addresses are a
+ * caller mistake → 400.
+ */
+function parseEmailGateFields(input: {
+  requireEmail?: unknown;
+  allowedEmails?: unknown;
+}): { requireEmail?: boolean; allowedEmails?: string[] | null } {
+  const requireEmail =
+    typeof input.requireEmail === "boolean"
+      ? input.requireEmail
+      : parseBool(typeof input.requireEmail === "string" ? input.requireEmail : undefined);
+  let raw: string[] = [];
+  if (typeof input.allowedEmails === "string") {
+    raw = input.allowedEmails
+      .split(",")
+      .map((e) => e.trim())
+      .filter((e) => e.length > 0);
+  } else if (Array.isArray(input.allowedEmails)) {
+    raw = input.allowedEmails.filter((e): e is string => typeof e === "string");
+  }
+  const bad = raw.filter((e) => !isValidEmail(e));
+  if (bad.length > 0) {
+    throw new BadRequestError(`Invalid allowed_emails value(s): ${bad.join(", ")}`);
+  }
+  const allowedEmails = raw.length > 0 ? raw : null;
+  return {
+    requireEmail: requireEmail === true || allowedEmails !== null,
+    allowedEmails,
+  };
 }
 
 function isShareTokenConflict(err: unknown): boolean {
@@ -261,7 +309,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
 
   // Public share links (`/a/:token`). Registered before /v1 so the service that
   // MINTS these links is also the service that SERVES them (D3).
-  registerCloudPublicRoutes(app, { store, config });
+  registerCloudPublicRoutes(app, { store, config, emailSender: deps.emailSender });
 
   // Authenticate + enforce scopes for a /v1 request. Returns a Response on
   // failure (caller should return it), or null on success.
@@ -344,6 +392,8 @@ export function createServeApp(deps: ServeAppDeps): Hono {
       linkType?: "presigned" | "server";
       encrypt?: boolean;
       baseUrl?: string;
+      requireEmail?: boolean;
+      allowedEmails?: string[] | null;
     } = {};
 
     const parseLinkType = (value: string | undefined): "presigned" | "server" | undefined =>
@@ -368,6 +418,10 @@ export function createServeApp(deps: ServeAppDeps): Hono {
         linkType: parseLinkType(parsed.fields["link_type"] ?? c.req.query("link_type") ?? undefined),
         encrypt: parsed.fields["encrypt"] === "true" || parsed.fields["encrypt"] === "1",
         baseUrl: parsed.fields["base_url"] ?? c.req.query("base_url") ?? undefined,
+        ...parseEmailGateFields({
+          requireEmail: parsed.fields["require_email"] ?? c.req.query("require_email") ?? undefined,
+          allowedEmails: parsed.fields["allowed_emails"] ?? c.req.query("allowed_emails") ?? undefined,
+        }),
       };
     } else if (contentType.includes("application/json")) {
       const body = (await c.req.json().catch(() => null)) as
@@ -381,6 +435,8 @@ export function createServeApp(deps: ServeAppDeps): Hono {
             link_type?: "presigned" | "server";
             encrypt?: boolean;
             base_url?: string;
+            require_email?: boolean;
+            allowed_emails?: string[] | string;
           }
         | null;
       if (!body?.filename || typeof body.content_base64 !== "string") {
@@ -396,6 +452,10 @@ export function createServeApp(deps: ServeAppDeps): Hono {
         linkType: body.link_type,
         encrypt: body.encrypt === true,
         baseUrl: body.base_url,
+        ...parseEmailGateFields({
+          requireEmail: body.require_email,
+          allowedEmails: body.allowed_emails,
+        }),
       };
     } else {
       // Raw streaming upload: bytes in the request body.
@@ -418,6 +478,10 @@ export function createServeApp(deps: ServeAppDeps): Hono {
           c.req.query("encrypt") === "1" ||
           c.req.header("x-attachments-encrypt") === "true",
         baseUrl: c.req.query("base_url") ?? undefined,
+        ...parseEmailGateFields({
+          requireEmail: c.req.query("require_email") ?? undefined,
+          allowedEmails: c.req.query("allowed_emails") ?? undefined,
+        }),
       };
     }
 
@@ -455,6 +519,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
       password: opts.password,
       encrypt: opts.encrypt,
       maxDownloads: opts.maxDownloads,
+      requireEmail: opts.requireEmail,
     });
 
     await uploadBufferToStore(config, objectKey, encryption ? encryption.buffer : buffer, resolvedType);
@@ -491,6 +556,8 @@ export function createServeApp(deps: ServeAppDeps): Hono {
         expiresAt,
         password: opts.password,
         maxUses: opts.maxDownloads ?? null,
+        requireEmail: opts.requireEmail,
+        allowedEmails: opts.allowedEmails,
       });
       link = generateShareLink(token, linkBaseUrl ?? publicBaseUrl, config.server.publicPath);
       await store.updateLink(id, link, expiresAt);

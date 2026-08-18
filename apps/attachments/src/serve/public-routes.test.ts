@@ -16,6 +16,7 @@ import { normalizeConfig, type AttachmentsConfig } from "../core/config.js";
 import type { PoolQueryClient } from "../generated/storage-kit/query.js";
 import type { PgAttachmentsStore } from "../db/pg-store.js";
 import { InMemoryAttachmentsStore, stubQueryClient } from "./serve.test-harness.test";
+import type { EmailSender } from "../core/email-gate.js";
 
 const SIGNING = "test-signing-secret";
 const PUBLIC_BASE = "https://has.na";
@@ -34,7 +35,9 @@ function makeConfig(): AttachmentsConfig {
 
 let store: InMemoryAttachmentsStore;
 
-function makeApp() {
+const sentEmails: Array<{ to: string; subject: string; text: string; html?: string }> = [];
+
+function makeApp(opts?: { emailSender?: EmailSender | null }) {
   store = new InMemoryAttachmentsStore();
   return createServeApp({
     client: stubQueryClient() as PoolQueryClient,
@@ -43,6 +46,14 @@ function makeApp() {
     version: "test",
     mode: "cloud",
     signingSecret: SIGNING,
+    emailSender:
+      opts?.emailSender !== undefined
+        ? opts.emailSender
+        : {
+            send: async (m) => {
+              sentEmails.push(m);
+            },
+          },
   });
 }
 
@@ -245,12 +256,84 @@ describe("cloud public share links", () => {
     expect(res.headers.get("content-disposition")).toContain("raport.pdf");
   });
 
-  test("an email-gated link fails closed instead of serving bytes", async () => {
-    const created = await upload(app, { expiry: "30d", link_type: "server" });
-    store.shareLinks[0]!.requireEmail = true;
-    const page = await app.request(`/a/${tokenOf(created.link)}`);
-    expect(page.status).toBe(501);
-    const download = await app.request(`/a/${tokenOf(created.link)}/download`);
-    expect(download.status).toBe(501);
+  test("upload with require_email mints a server-hosted link (was refused)", async () => {
+    const created = await upload(app, {
+      expiry: "30d",
+      require_email: true,
+      allowed_emails: "dan@bcr.ro,maria@bcr.ro",
+    });
+    expect(created.link.startsWith(`${PUBLIC_BASE}/a/`)).toBe(true);
+    expect(store.shareLinks[0]!.requireEmail).toBe(true);
+    expect(store.shareLinks[0]!.allowedEmails).toEqual(["dan@bcr.ro", "maria@bcr.ro"]);
+  });
+
+  test("GET /a/:token renders the email form for an email-gated link", async () => {
+    const created = await upload(app, { expiry: "30d", require_email: true });
+    const res = await app.request(`/a/${tokenOf(created.link)}`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('name="email"');
+    expect(html).toContain("Enter your email to receive an access link");
+    expect(html).not.toContain(FILE_BODY);
+  });
+
+  test("POST /a/:token/request-access sends the emailed access link and mints a grant", async () => {
+    sentEmails.length = 0;
+    const created = await upload(app, { expiry: "30d", require_email: true, allowed_emails: "dan@bcr.ro" });
+    const res = await app.request(`/a/${tokenOf(created.link)}/request-access`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ email: "dan@bcr.ro" }).toString(),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("Check your inbox");
+    expect(sentEmails).toHaveLength(1);
+    expect(sentEmails[0]!.to).toBe("dan@bcr.ro");
+    expect(sentEmails[0]!.text).toContain(`${PUBLIC_BASE}/a/${tokenOf(created.link)}?grant=`);
+    expect(store.accessGrants).toHaveLength(1);
+  });
+
+  test("request-access from a non-allowlisted address is refused 403", async () => {
+    sentEmails.length = 0;
+    const created = await upload(app, { expiry: "30d", require_email: true, allowed_emails: "dan@bcr.ro" });
+    const res = await app.request(`/a/${tokenOf(created.link)}/request-access`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ email: "stranger@example.com" }).toString(),
+    });
+    expect(res.status).toBe(403);
+    expect(await res.text()).toContain("not authorized");
+    expect(sentEmails).toHaveLength(0);
+  });
+
+  test("download without a grant redirects to the email form", async () => {
+    const created = await upload(app, { expiry: "30d", require_email: true });
+    const res = await app.request(`/a/${tokenOf(created.link)}/download`, { redirect: "manual" });
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toContain(`/a/${tokenOf(created.link)}`);
+  });
+
+  test("download with the emailed grant serves the bytes intact", async () => {
+    const created = await upload(app, { expiry: "30d", require_email: true });
+    const token = tokenOf(created.link);
+    const requestRes = await app.request(`/a/${token}/request-access`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ email: "visitor@example.com" }).toString(),
+    });
+    expect(requestRes.status).toBe(200);
+    const grant = store.accessGrants[0]!.token;
+    const res = await app.request(`/a/${token}/download?grant=${encodeURIComponent(grant)}`);
+    expect(res.status).toBe(200);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(FILE_SHA);
+  });
+
+  test("download with a bogus grant is refused and no bytes are served", async () => {
+    const created = await upload(app, { expiry: "30d", require_email: true });
+    const token = tokenOf(created.link);
+    const res = await app.request(`/a/${token}/download?grant=not-a-real-grant`);
+    expect([401, 410]).toContain(res.status);
+    expect(await res.text()).not.toContain(FILE_BODY);
   });
 });

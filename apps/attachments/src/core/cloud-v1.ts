@@ -67,6 +67,8 @@ export interface V1UploadOptions {
   maxDownloads?: number;
   linkType?: "presigned" | "server";
   encrypt?: boolean;
+  requireEmail?: boolean;
+  allowedEmails?: string[] | null;
   filename?: string;
   /** Custom base URL for a server-hosted share link (e.g. an internal/Tailscale address). */
   baseUrl?: string;
@@ -310,6 +312,10 @@ function makeStore(client: HasnaStorageClient, env: NodeJS.ProcessEnv): Attachme
     ...(options.linkType ? { link_type: options.linkType } : {}),
     ...(options.encrypt ? { encrypt: true } : {}),
     ...(options.baseUrl ? { base_url: options.baseUrl } : {}),
+    ...(options.requireEmail !== undefined ? { require_email: options.requireEmail } : {}),
+    ...(options.allowedEmails && options.allowedEmails.length > 0
+      ? { allowed_emails: options.allowedEmails }
+      : {}),
   });
 
   const store: AttachmentsV1Store = {

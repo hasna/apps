@@ -144,14 +144,9 @@ export interface Store {
   close(): void;
 }
 
-/** Options that ApiStore (self_hosted / cloud) cannot honor client-side. */
+/** All upload options are honored on the hosted /v1 path; kept as the single refusal point for any future option. */
 function assertApiSupported(options: UploadOptions | undefined): void {
   if (!options) return;
-  if (options.requireEmail || (options.allowedEmails && options.allowedEmails.length > 0)) {
-    throw new Error(
-      "email-gated links (--require-email / --allowed-email) are only available in local mode.",
-    );
-  }
 }
 
 function toV1UploadOptions(options: UploadOptions = {}): V1UploadOptions {
@@ -164,6 +159,8 @@ function toV1UploadOptions(options: UploadOptions = {}): V1UploadOptions {
     linkType: options.linkType,
     encrypt: options.encrypt,
     baseUrl: options.baseUrl,
+    requireEmail: options.requireEmail,
+    allowedEmails: options.allowedEmails,
   };
 }
 

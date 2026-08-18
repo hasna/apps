@@ -111,6 +111,24 @@ describe("resolveAttachmentsV1", () => {
     expect(calls[0]!.headers["idempotency-key"]).toBeDefined();
   });
 
+  test("uploadBuffer carries require_email + allowed_emails to /v1 (was local-only)", async () => {
+    const { calls, fetchImpl } = mockFetch((c) => {
+      expect(c.method).toBe("POST");
+      const body = JSON.parse(c.body!);
+      expect(body.require_email).toBe(true);
+      expect(body.allowed_emails).toEqual(["dan@bcr.ro", "maria@bcr.ro"]);
+      return { status: 201, body: { id: "att_gated", filename: "gated.txt", size: 5, link: null } };
+    });
+    const r = resolveAttachmentsV1(cloudEnv, { fetchImpl });
+    if (r.transport !== "cloud-http") throw new Error("expected cloud");
+    const att = await r.store.uploadBuffer("gated.txt", new TextEncoder().encode("hi!"), {
+      requireEmail: true,
+      allowedEmails: ["dan@bcr.ro", "maria@bcr.ro"],
+      linkType: "server",
+    });
+    expect(att.id).toBe("att_gated");
+  });
+
   test("delete DELETEs /v1/attachments/:id and tolerates 404", async () => {
     const { calls, fetchImpl } = mockFetch(() => ({ status: 404, body: { error: "Not found" } }));
     const r = resolveAttachmentsV1(cloudEnv, { fetchImpl });

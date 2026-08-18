@@ -79,6 +79,15 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
               description:
                 "Custom base URL for a server-hosted share link (e.g. an internal/Tailscale address through which this server is reachable).",
             },
+            require_email: {
+              type: "boolean",
+              description: "Gate the link: visitors enter their email and receive a one-time access link.",
+            },
+            allowed_emails: {
+              type: "array",
+              items: { type: "string", format: "email" },
+              description: "Restrict email-gated access to these addresses (comma-separated string also accepted).",
+            },
           },
           required: ["filename", "content_base64"],
         },
