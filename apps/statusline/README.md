@@ -36,7 +36,7 @@ anything that returns `null` or throws. A failed segment never breaks the host U
 | `git-branch` | off | Current Git branch | `git branch --show-current` in `cwd` | outside git or detached | `main` |
 | `commit-age` | on | Time since last commit (compact) | `git log -1` epoch vs now | no commits / not a repo | `12h` |
 | `loc` | on | Lines of code tracked by Git (compact) | `git ls-files` + `wc -l` in repo root | outside git or zero lines | `1.2k` |
-| `current-dir` | off | Current working directory (basename) | `StatusContext.cwd` | never (always renders basename) | `open-statusline` |
+| `current-dir` | off | Current working directory (basename) | `StatusContext.cwd` | never (always renders basename) | `statusline` |
 | `model` | off | Current model name (no context tag) | `StatusContext.model.id` via friendly formatter | no model id | `fable 5` |
 | `model-context` | on | Model name with context-size tag | same formatter, keeps `[tag]` suffix | no model id | `fable 5 [1m]` |
 | `model-with-reasoning` | off | Model name with its reasoning effort | lowercased `model.display_name` (or friendly id) + `effort.level`; falls back to `thinking.enabled` when on | no model | `fable (xhigh)` |
