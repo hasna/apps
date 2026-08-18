@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-recordings storage sync.
+ * PostgreSQL migrations for recordings storage sync.
  *
  * Equivalent to the SQLite schema in database.ts, translated for PostgreSQL.
  */

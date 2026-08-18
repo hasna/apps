@@ -152,7 +152,7 @@ describe("recordings MCP HTTP transport", () => {
   });
 
   test("MCP agent/project pages and model stats enforce output caps", async () => {
-    const tempDir = join(tmpdir(), `open-recordings-mcp-caps-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const tempDir = join(tmpdir(), `recordings-mcp-caps-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const previousStore = process.env.HASNA_RECORDINGS_CLIENT_STORE;
     process.env.HASNA_RECORDINGS_CLIENT_STORE = "sqlite";
     __resetStore();
@@ -248,7 +248,7 @@ describe("recordings MCP HTTP transport", () => {
   });
 
   test("MCP list/search keep full rows bounded and direct detail complete", async () => {
-    const tempDir = join(tmpdir(), `open-recordings-mcp-compact-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const tempDir = join(tmpdir(), `recordings-mcp-compact-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const previousStore = process.env.HASNA_RECORDINGS_CLIENT_STORE;
     process.env.HASNA_RECORDINGS_CLIENT_STORE = "sqlite";
     __resetStore();

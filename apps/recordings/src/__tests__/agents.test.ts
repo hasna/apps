@@ -23,7 +23,7 @@ let db: Database;
 
 beforeEach(() => {
   resetDatabase();
-  tempDir = join(tmpdir(), `open-recordings-test-agents-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  tempDir = join(tmpdir(), `recordings-test-agents-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(tempDir, { recursive: true });
   const dbPath = join(tempDir, "test.db");
   db = getDatabase(dbPath);

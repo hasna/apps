@@ -14,7 +14,7 @@ let tempDir: string;
 
 beforeEach(() => {
   resetDatabase();
-  tempDir = join(tmpdir(), `open-recordings-test-db-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  tempDir = join(tmpdir(), `recordings-test-db-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(tempDir, { recursive: true });
 });
 

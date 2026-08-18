@@ -2184,7 +2184,7 @@ fi
         title: "Recordings — Fn key to toggle recording",
         rules: [
           {
-            description: "Fn key toggles speech recording (open-recordings)",
+            description: "Fn key toggles speech recording (recordings)",
             manipulators: [
               {
                 type: "basic",
