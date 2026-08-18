@@ -205,6 +205,59 @@ describe('CLI note commands over the HTTP transport', () => {
     }
   }, 30000);
 
+  test('notes delete --permanent refuses over the HTTP transport', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { spawnSync } = await import('node:child_process');
+    const repo = join(import.meta.dir, '..');
+    const dir = mkdtempSync(join(tmpdir(), 'notes-cli-perm-'));
+    const proc = Bun.spawn(['bun', join(repo, 'server/index.mjs')], {
+      env: {
+        ...process.env,
+        HASNA_NOTES_SERVER_PORT: '0',
+        HASNA_NOTES_SERVER_DB: join(dir, 'server.db'),
+        HASNA_NOTES_SERVER_AUTO_APPROVE: '1',
+        HASNA_NOTES_SERVER_DEV: '1',
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    try {
+      let out = '';
+      const reader = proc.stdout.getReader();
+      const decoder = new TextDecoder();
+      while (!/listening on (http:\/\/\S+)/.test(out)) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        out += decoder.decode(value);
+      }
+      const url = /listening on (http:\/\/\S+)/.exec(out)?.[1];
+      expect(url).toBeTruthy();
+      const started = await (await fetch(`${url}/api/v1/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'perm@example.test' }),
+      })).json();
+      const verified = await (await fetch(`${url}/api/v1/auth/verify`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'perm@example.test', code: started.devCode }),
+      })).json();
+      const created = spawnSync('bun', [join(repo, 'cli/notes.mjs'), 'create', '--title', 'p', '--json'], {
+        env: { ...process.env, HASNA_NOTES_API_URL: url, HASNA_NOTES_API_KEY: verified.apiKey },
+        encoding: 'utf8',
+      });
+      expect(created.status).toBe(0);
+      const id = JSON.parse(created.stdout).id;
+      const res = spawnSync('bun', [join(repo, 'cli/notes.mjs'), 'delete', id, '--permanent', '--yes', '--json'], {
+        env: { ...process.env, HASNA_NOTES_API_URL: url, HASNA_NOTES_API_KEY: verified.apiKey },
+        encoding: 'utf8',
+      });
+      expect(res.status).toBe(1);
+      expect(`${res.stdout}${res.stderr}`).toMatch(/no permanent delete/);
+    } finally {
+      proc.kill();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
   test('notes --version prints the package version', () => {
     const repo = join(import.meta.dir, '..');
     const res = spawnSync('bun', [join(repo, 'cli/notes.mjs'), '--version'], { encoding: 'utf8' });
@@ -212,3 +265,7 @@ describe('CLI note commands over the HTTP transport', () => {
     expect(res.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
   });
 });
+
+// ── fail-closed verbs over the wire ─────────────────────────────────────────
+// Local-store-only verbs and flags must refuse loudly when the client is
+// configured for the HTTP API, never silently degrade to local semantics.

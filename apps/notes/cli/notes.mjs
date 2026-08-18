@@ -319,6 +319,13 @@ async function commandCreate(opts, http) {
 async function commandDelete(id, opts, http) {
   const noteId = requireArg(id, 'id');
   if (http) {
+    if (opts.permanent) {
+      throw new Error(
+        'notes delete --permanent is a local-store operation; the personalnotes/v1 ' +
+          'dialect has no permanent delete (DELETE soft-deletes via deletedAt). ' +
+          'Unset HASNA_NOTES_API_URL to purge from the local store.',
+      );
+    }
     if (!opts['yes'] && !opts.force) {
       const note = await http.getNote(noteId);
       if (!note) throw new Error('note_not_found');
