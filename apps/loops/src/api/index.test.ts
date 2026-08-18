@@ -5685,3 +5685,87 @@ describe("machine assignment on loop create and claim", () => {
     }
   });
 });
+describe("hosted run-now endpoint (1fb09589)", () => {
+  test("POST /v1/loops/{id}/run-now schedules a paused loop due now for a bound runner", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const input = {
+      name: "api-run-now",
+      schedule: { type: "once", at: "2030-01-01T00:00:00Z" } as const,
+      target: { type: "command", command: "true" } as const,
+    };
+    const created = await storage.createLoop(input, new Date("2025-12-31T00:00:00Z"));
+    await storage.updateLoop(created.id, { status: "paused", nextRunAt: "2030-01-01T00:00:00Z" });
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const before = Date.now();
+      const response = await fetch(apiUrl(server, `/v1/loops/${created.id}/run-now`), { method: "POST" });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        ok: boolean;
+        loop: { id: string; status: string; nextRunAt?: string };
+        scheduledFor: string;
+      };
+      expect(body.ok).toBe(true);
+      expect(body.loop.id).toBe(created.id);
+      expect(body.loop.status).toBe("active");
+      expect(body.scheduledFor).toBeString();
+      const scheduledMs = Date.parse(body.scheduledFor);
+      expect(scheduledMs).toBeGreaterThanOrEqual(before - 5_000);
+      expect(scheduledMs).toBeLessThanOrEqual(Date.now() + 5_000);
+      expect(body.loop.nextRunAt).toBe(body.scheduledFor);
+
+      const stored = await storage.getLoop(created.id);
+      expect(stored?.status).toBe("active");
+      expect(stored?.nextRunAt).toBe(body.scheduledFor);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("POST /v1/loops/{id}/run-now 404s unknown ids and 409s archived loops without mutating", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const input = {
+      name: "api-run-now-archived",
+      schedule: { type: "once", at: "2030-01-01T00:00:00Z" } as const,
+      target: { type: "command", command: "true" } as const,
+    };
+    const archived = await storage.createLoop(input, new Date("2025-12-31T00:00:00Z"));
+    await storage.archiveLoop(archived.id);
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const missing = await fetch(apiUrl(server, "/v1/loops/no-such-loop/run-now"), { method: "POST" });
+      expect(missing.status).toBe(404);
+      expect(await missing.json()).toEqual({ ok: false, error: "loop_not_found" });
+
+      const archivedResponse = await fetch(apiUrl(server, `/v1/loops/${archived.id}/run-now`), { method: "POST" });
+      expect(archivedResponse.status).toBe(409);
+      expect(await archivedResponse.json()).toEqual({ ok: false, error: "loop_archived" });
+
+      const stored = await storage.getLoop(archived.id);
+      expect(stored?.archivedAt).toBeDefined();
+      expect(stored?.nextRunAt).toBe("2030-01-01T00:00:00.000Z");
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("openapi documents the hosted run-now path as a write operation", async () => {
+    const mod = await import("./index.js");
+    const document = mod.openApiDocument() as {
+      paths: Record<string, { post?: Record<string, unknown> }>;
+      components: { schemas: Record<string, unknown> };
+    };
+    const path = document.paths["/v1/loops/{id}/run-now"]?.post;
+    expect(path).toBeDefined();
+    expect(path?.["x-authorization-operation"]).toBe("loops.runNow");
+    expect(path?.["x-required-scopes"]).toEqual(["loops:write"]);
+    expect(path?.["x-risk"]).toBe("write");
+    expect(document.components.schemas.RunNowResponse).toBeDefined();
+  });
+});
