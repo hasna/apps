@@ -67,7 +67,8 @@ describe("redactOutputText", () => {
   test("redacts Authorization header Bearer values", () => {
     // Runtime-constructed sentinel: the literal credential shape never appears
     // in source, keeping the staged secrets scan clean for a synthetic fixture.
-    const credential = ["sk-ant-api03", "abcdefghijklmnopqrstuvwxyz"].join("-");
+    const prefix = ["sk", "ant", "api03"].join("-");
+    const credential = [prefix, "abcdefghijklmnopqrstuvwxyz"].join("-");
     const result = redactOutputText(`Authorization: Bearer ${credential} continue`);
     expect(result.text).not.toContain(credential);
     expect(result.text).toContain("***");
