@@ -37,6 +37,36 @@ export function startServer(): ReturnType<typeof Bun.serve> {
   return server;
 }
 
-if (import.meta.main) {
+function printHelp(): void {
+  console.log(`Usage: treasury-serve [options]
+
+Start the @hasna/treasury HTTP API server.
+
+Options:
+  -V, --version   output the version number
+  -h, --help      display help for command
+
+Environment:
+  HASNA_TREASURY_PORT / TREASURY_PORT       HTTP port to bind (default 3486)
+  HASNA_TREASURY_BIND_HOST / TREASURY_BIND_HOST
+                                            Hostname to bind (default 127.0.0.1)
+  HASNA_TREASURY_API_CREDENTIALS            API credentials (required for
+                                            non-loopback binds or cloud mode)`);
+}
+
+function main(): void {
+  const argv = process.argv.slice(2);
+  if (argv.includes("--version") || argv.includes("-V")) {
+    console.log(APP_VERSION);
+    return;
+  }
+  if (argv.includes("--help") || argv.includes("-h")) {
+    printHelp();
+    return;
+  }
   startServer();
+}
+
+if (import.meta.main) {
+  main();
 }
