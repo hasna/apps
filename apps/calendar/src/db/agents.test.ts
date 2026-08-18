@@ -5,11 +5,11 @@ import { ConflictError, NotFoundError } from "../types/index.js";
 
 describe("agents", () => {
   beforeEach(() => {
-    resetDatabase();
+    resetDatabase(":memory:");
     getDatabase(":memory:");
   });
 
-  afterEach(() => resetDatabase());
+  afterEach(() => resetDatabase(":memory:"));
 
   test("register and get agent", () => {
     const agent = registerAgent({ name: "marcus", description: "Architect", role: "engineer" });

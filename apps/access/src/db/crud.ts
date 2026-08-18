@@ -13,14 +13,16 @@ export function parseJson<T>(value: string | null, fallback: T): T {
 
 export function clampLimit(limit: unknown, def = 50, max = 500): number {
   const n = typeof limit === "number" ? limit : Number.parseInt(String(limit ?? ""), 10);
-  if (!Number.isFinite(n) || n <= 0) return def;
-  return Math.min(n, max);
+  if (!Number.isFinite(n)) return def;
+  const integer = Math.trunc(n);
+  if (integer <= 0) return def;
+  return Math.min(integer, Math.trunc(max));
 }
 
 export function clampOffset(offset: unknown): number {
   const n = typeof offset === "number" ? offset : Number.parseInt(String(offset ?? ""), 10);
-  if (!Number.isFinite(n) || n < 0) return 0;
-  return n;
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.trunc(n));
 }
 
 const ID_TABLES = new Set([
