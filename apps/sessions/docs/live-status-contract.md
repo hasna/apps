@@ -1,7 +1,7 @@
 # Sessions live/status contract
 
 This document defines the JSON contract that orchestration tools such as
-open-dispatch should consume instead of re-discovering tmux panes directly.
+dispatch should consume instead of re-discovering tmux panes directly.
 The contract is intentionally additive to indexed session behavior: existing
 `sessions list`, `sessions indexed-list`, `sessions search`, ingestion, and
 storage sync commands continue to describe durable historical sessions.
@@ -167,9 +167,9 @@ The initial implementation may expose planning and refusal before enabling a
 mutating queue runner. In that mode, `--dry-run` is the supported path for
 mutating actions, and non-dry-run mutation is refused with an explicit reason.
 
-## open-dispatch integration
+## dispatch integration
 
-open-dispatch should call `sessions live --json` or
+dispatch should call `sessions live --json` or
 `sessions bulk status --json` to resolve targets and status. It should not
 parse `tmux list-panes` output independently for Codewith/session discovery.
 
