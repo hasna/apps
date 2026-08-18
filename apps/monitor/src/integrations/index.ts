@@ -78,9 +78,11 @@ export async function runIntegrations(
 
   if (config.todos?.enabled) {
     jobs.push(
-      createTaskForAlert(alert, config.todos).catch((err) =>
-        console.error("[monitor:integrations:todos] error:", err)
-      )
+      createTaskForAlert(alert, config.todos)
+        .then(() => undefined)
+        .catch((err) =>
+          console.error("[monitor:integrations:todos] error:", err)
+        )
     );
   }
 

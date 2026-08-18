@@ -7,11 +7,15 @@
  *
  * Every action is keyed by an `effectKey`. A repeated effect key replays the
  * recorded effect and never calls the client again, so repeated effect keys do
- * not create duplicate tasks (or comments, or completions).
+ * not create duplicate tasks (or comments, or completions). Concurrent calls
+ * with the same key coalesce onto one in-flight client mutation, so the
+ * check-then-act sequence is atomic within the adapter.
  *
  * Failure behaviour: non-required actions record the failure and resolve
  * `ok:false` — the run continues. An action on an adapter created with
- * `required:true` rejects with the recorded failure.
+ * `required:true` rejects with the recorded failure — including replays of a
+ * key whose first attempt failed, so a retried required effect cannot
+ * silently resolve `ok:false`.
  *
  * Effect records are kept in a bounded in-memory store. Durability across
  * processes is owned by the shared effects registry (`effects.ts`, MON-V2-03
@@ -123,6 +127,12 @@ export class TodosAdapter {
   private readonly client: TodosV1Client;
   private readonly store: TodosEffectStore;
   private readonly required: boolean;
+  /**
+   * In-flight effects keyed by effect key. Concurrent calls with the same key
+   * coalesce onto the first call's mutation instead of both observing an empty
+   * store and issuing duplicate client calls.
+   */
+  private readonly inFlight = new Map<string, Promise<TodosEffectResult<unknown>>>();
 
   constructor(options: TodosAdapterOptions) {
     this.client = options.client;
@@ -192,8 +202,40 @@ export class TodosAdapter {
     effectKey: string,
     run: () => Promise<T>
   ): Promise<TodosEffectResult<T>> {
+    // Atomicity: when the same key is already being applied, join the
+    // in-flight effect instead of issuing a second client mutation. The
+    // check-store-then-mutate sequence is only safe once per key, so the
+    // first caller owns it and concurrent callers await its outcome.
+    const pending = this.inFlight.get(effectKey);
+    if (pending !== undefined) {
+      const joined = (await pending) as TodosEffectResult<T>;
+      // The joiner never called the client itself.
+      return { ...joined, applied: false };
+    }
+
+    const task = this.applyOnce(kind, effectKey, run);
+    this.inFlight.set(effectKey, task);
+    try {
+      return await task;
+    } finally {
+      this.inFlight.delete(effectKey);
+    }
+  }
+
+  private async applyOnce<T>(
+    kind: TodosEffectKind,
+    effectKey: string,
+    run: () => Promise<T>
+  ): Promise<TodosEffectResult<T>> {
     const recorded = this.store.get(effectKey);
     if (recorded !== undefined) {
+      if (!recorded.ok && this.required) {
+        // A required effect that already failed must keep rejecting on
+        // replay — resolving ok:false would silently accept the failure.
+        throw new Error(
+          recorded.error ?? `todos effect '${effectKey}' previously failed`
+        );
+      }
       return {
         key: effectKey,
         ok: recorded.ok,
@@ -268,6 +310,18 @@ function taskDescription(alert: AlertRow): string {
   ].join("\n");
 }
 
+export interface TodosAlertOutcome {
+  ok: boolean;
+  error?: string;
+  /** True when creation was skipped because an open task already exists. */
+  skipped?: boolean;
+}
+
+/** Size of one listTasks page while hunting for an open task. */
+const OPEN_TASK_PAGE_SIZE = 50;
+/** Safety bound against a server that never reports its total. */
+const OPEN_TASK_MAX_SCANNED = 10_000;
+
 /**
  * Create a task for the given alert through the native todos client.
  *
@@ -275,12 +329,13 @@ function taskDescription(alert: AlertRow): string {
  * creation when an open (pending/in_progress) task already exists for the same
  * machine + check, and it dedupes repeated processing of the same alert row via
  * a deterministic effect key. The client comes from the config when injected,
- * otherwise from the configured base URL. All failures are non-fatal.
+ * otherwise from the configured base URL. Failures are non-fatal to the run —
+ * the outcome is returned so the CLI integration test can gate on it.
  */
 export async function createTaskForAlert(
   alert: AlertRow,
   config: TodosIntegrationConfig
-): Promise<void> {
+): Promise<TodosAlertOutcome> {
   const client =
     config.client ??
     new TodosV1Client({
@@ -291,26 +346,39 @@ export async function createTaskForAlert(
 
   // Legacy dedup: skip when an open task already exists for machine + check.
   // The search failure path preserves the legacy "better to duplicate than
-  // miss" behaviour.
+  // miss" behaviour. The search is paged by offset until the server-reported
+  // total is exhausted, so a matching task on a later page is not missed.
+  let alreadyOpen = false;
   try {
-    const existing = await client.listTasks({
-      project_id: config.project_id,
-      limit: 50,
-    });
-    const openTasks = Array.isArray(existing?.tasks) ? existing.tasks : [];
     const checkLower = alert.check_name.toLowerCase();
     const machineLower = alert.machine_id.toLowerCase();
-    const alreadyOpen = openTasks.some(
-      (t) =>
-        (t.status === "pending" || t.status === "in_progress") &&
-        String(t.title ?? "").toLowerCase().includes(machineLower) &&
-        String(t.title ?? "").toLowerCase().includes(checkLower)
-    );
+    let offset = 0;
+    let scanned = 0;
+    while (!alreadyOpen && scanned < OPEN_TASK_MAX_SCANNED) {
+      const existing = await client.listTasks({
+        project_id: config.project_id,
+        limit: OPEN_TASK_PAGE_SIZE,
+        offset,
+      });
+      const tasks = Array.isArray(existing?.tasks) ? existing.tasks : [];
+      const total = typeof existing?.total === "number" ? existing.total : -1;
+      alreadyOpen = tasks.some(
+        (t) =>
+          (t.status === "pending" || t.status === "in_progress") &&
+          String(t.title ?? "").toLowerCase().includes(machineLower) &&
+          String(t.title ?? "").toLowerCase().includes(checkLower)
+      );
+      scanned += tasks.length;
+      if (tasks.length === 0 || (total >= 0 && offset + tasks.length >= total)) {
+        break;
+      }
+      offset += tasks.length;
+    }
     if (alreadyOpen) {
       console.error(
         `[monitor:integrations:todos] skipping — open task already exists for ${alert.machine_id}/${alert.check_name}`
       );
-      return;
+      return { ok: true, skipped: true };
     }
   } catch (err) {
     console.error(
@@ -320,9 +388,14 @@ export async function createTaskForAlert(
     );
   }
 
-  // The effect key names this exact alert row, so re-processing the same row
-  // replays the recorded effect instead of creating a second task.
-  const effectKey = `alert:${alert.machine_id}:${alert.check_name}:${alert.id}`;
+  // The effect key names this exact alert occurrence. `alert.id` is not
+  // unique for synthetic alerts (the MCP doctor caller emits every
+  // observation with id: 0), so the key also carries `triggered_at`: two
+  // occurrences of the same machine/check at different times must not replay
+  // each other's recorded effect, or a later incident would be silently
+  // suppressed while its predecessor's task record still exists. Re-processing
+  // the SAME row (same id and triggered_at) still replays.
+  const effectKey = `alert:${alert.machine_id}:${alert.check_name}:${alert.id}:${alert.triggered_at}`;
 
   const out = await adapter.createTask(effectKey, {
     title: taskTitle(alert),
@@ -336,9 +409,10 @@ export async function createTaskForAlert(
     console.error(
       `[monitor:integrations:todos] created task for ${alert.machine_id}/${alert.check_name}`
     );
-  } else {
-    console.error(
-      `[monitor:integrations:todos] failed to create task for ${alert.machine_id}/${alert.check_name}: ${out.error}`
-    );
+    return { ok: true };
   }
+  console.error(
+    `[monitor:integrations:todos] failed to create task for ${alert.machine_id}/${alert.check_name}: ${out.error}`
+  );
+  return { ok: false, error: out.error };
 }
