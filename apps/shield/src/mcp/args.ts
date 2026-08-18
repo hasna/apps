@@ -35,7 +35,7 @@ export function parseMcpArgs(argv: string[], version: string): ParsedMcpArgResul
       text: [
         "Usage: shield-mcp [options]",
         "",
-        "Start the Open Security MCP server (stdio by default).",
+        "Start the shield MCP server (stdio by default).",
         "",
         "Options:",
         "  --http         Serve MCP over Streamable HTTP on 127.0.0.1",

@@ -10,7 +10,7 @@ export function parseServerArgs(argv: string[], version: string): ParsedServerAr
       text: [
         "Usage: shield-serve [options]",
         "",
-        "Start the Open Security dashboard API server.",
+        "Start the shield dashboard API server.",
         "",
         "Environment:",
         "  PORT  Port to bind (default: 19428)",
