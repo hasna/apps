@@ -156,7 +156,7 @@ export function registerReport(program: Command): void {
     .command("report")
     .description("Show attachment activity report for a recent time window")
     .option("--days <n>", "Number of days to look back", "7")
-    .option("--tag <tag>", "Filter by tag (e.g. project:open-attachments)")
+    .option("--tag <tag>", "Filter by tag (e.g. project:attachments)")
     .option("--project <name>", "Shorthand for --tag project:<name>")
     .option(
       "--format <format>",
