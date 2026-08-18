@@ -1371,7 +1371,7 @@ program
       total > 0 ? (((errors + fatals) / total) * 100).toFixed(2) : "0.00";
 
     console.log(
-      `\n${C.bold}Log Volume Stats${C.reset}${opts.project ? ` [${opts.project}]` : ""} ${C.dim}(${store.mode})${C.reset}`,
+      `\n${C.bold}Log Volume Stats${C.reset}${opts.project ? ` [${opts.project}]` : ""}`,
     );
     console.log(`  Total:      ${total.toLocaleString()}`);
     console.log(`  Oldest:     ${oldest?.slice(0, 19) ?? "-"}`);
@@ -1771,10 +1771,10 @@ if (!program.commands.some((command) => command.name() === "events")) {
 }
 
 // Must be parseAsync (not parse): several actions are async — they route reads
-// and writes to the cloud HTTP API in self_hosted mode. With the synchronous
-// program.parse() the bundled binary can exit before an awaited cloud call and
-// its console output complete, silently no-opping cloud writes. parseAsync
-// awaits the action to completion for both sync and async commands.
+// and writes to the hosted HTTP API. With the synchronous program.parse() the
+// bundled binary can exit before an awaited hosted call and its console output
+// complete, silently no-opping hosted writes. parseAsync awaits the action to
+// completion for both sync and async commands.
 //
 // A single top-level boundary turns thrown errors (local-only guards, cloud
 // HTTP failures, validation) into a clean one-line message + non-zero exit

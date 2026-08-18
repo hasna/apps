@@ -6,7 +6,6 @@ import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { cors } from "hono/cors";
 import { getDb } from "../db/index.ts";
-import { resolveStorageMode } from "../generated/storage-kit/index.ts";
 import { getBrowserScript } from "../lib/browser-script.ts";
 import { getHealth } from "../lib/health.ts";
 import {
@@ -54,9 +53,17 @@ const PORT = Number(
 );
 const serverDir = dirname(fileURLToPath(import.meta.url));
 
-// PURE REMOTE (Amendment A1): in cloud mode the serve is a stateless API in
-// front of the shared cloud Postgres — no SQLite, no scheduler, API-key auth.
-const cloudMode = resolveStorageMode("logs", process.env).mode === "cloud";
+// The serve selects its backend from the environment: HASNA_LOGS_DATABASE_URL
+// (or LOGS_DATABASE_URL) present -> a stateless API in front of PostgreSQL —
+// no SQLite, no scheduler, API-key auth. Otherwise it serves the local SQLite
+// database.
+const databaseUrlPresent = Boolean(
+  (
+    process.env.HASNA_LOGS_DATABASE_URL ??
+    process.env.LOGS_DATABASE_URL ??
+    ""
+  ).trim(),
+);
 
 function buildLocalServe() {
   const db = getDb();
@@ -101,10 +108,10 @@ function buildLocalServe() {
 
   app.get("/health", (c) => c.json(getHealth(db)));
   app.get("/version", (c) =>
-    c.json({ status: "ok", version: PACKAGE_VERSION, mode: "local" }),
+    c.json({ status: "ok", version: PACKAGE_VERSION }),
   );
   app.get("/ready", (c) =>
-    c.json({ status: "ok", version: PACKAGE_VERSION, mode: "local" }),
+    c.json({ status: "ok", version: PACKAGE_VERSION }),
   );
   app.get("/dashboard", (c) => c.redirect("/dashboard/"));
   app.use(
@@ -138,7 +145,7 @@ function buildLocalServe() {
   return { port: PORT, fetch: app.fetch };
 }
 
-const serveExport = cloudMode ? buildCloudServe(PORT) : buildLocalServe();
+const serveExport = databaseUrlPresent ? buildCloudServe(PORT) : buildLocalServe();
 
 export default serveExport;
 

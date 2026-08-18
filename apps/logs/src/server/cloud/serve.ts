@@ -1,11 +1,11 @@
 /**
- * Cloud serve bootstrap for @hasna/logs.
+ * PostgreSQL serve bootstrap for @hasna/logs.
  *
- * Resolves the cloud Postgres pool + API-key signing secret from the
- * environment, wires the API-key store (revocation checks against RDS) and
- * returns a Bun server export ({ port, fetch }). Used by `logs-serve` when
- * `HASNA_LOGS_STORAGE_MODE=cloud` (the deployed ECS service). PURE REMOTE
- * (Amendment A1): all reads and writes go straight to RDS.
+ * Resolves the Postgres pool + API-key signing secret from the environment,
+ * wires the API-key store (revocation checks against RDS) and returns a Bun
+ * server export ({ port, fetch }). Used by `logs-serve` when
+ * HASNA_LOGS_DATABASE_URL is set (the deployed ECS service): all reads and
+ * writes go straight to PostgreSQL.
  */
 
 import { ApiKeyStore } from "@hasna/contracts/auth";
@@ -25,7 +25,7 @@ function resolveSigningSecret(): string {
     process.env.HASNA_API_SIGNING_KEY?.trim();
   if (!secret) {
     throw new Error(
-      "cloud serve requires an API-key signing secret. Set HASNA_LOGS_API_SIGNING_KEY " +
+      "the PostgreSQL-backed serve requires an API-key signing secret. Set HASNA_LOGS_API_SIGNING_KEY " +
         "(or API_KEY_SIGNING_SECRET).",
     );
   }

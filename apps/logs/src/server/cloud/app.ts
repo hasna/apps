@@ -1,10 +1,10 @@
 /**
- * Cloud (PURE REMOTE, Amendment A1) Hono app for @hasna/logs.
+ * PostgreSQL-backed Hono app for @hasna/logs.
  *
  * Serves the standard operational probes (`/health`, `/ready`, `/version`) and
- * the versioned, API-key-authenticated `/v1` surface backed directly by the
- * shared cloud Postgres. Used when the serve runs in `cloud` storage mode
- * (`HASNA_LOGS_STORAGE_MODE=cloud`), i.e. the deployed ECS service.
+ * the versioned, API-key-authenticated `/v1` surface backed directly by
+ * PostgreSQL. Used when the serve runs with HASNA_LOGS_DATABASE_URL set, i.e.
+ * the deployed ECS service.
  */
 
 import { hasScope, honoApiKey } from "@hasna/contracts/auth";
@@ -32,8 +32,6 @@ export interface CloudAppOptions {
   audit?: (event: unknown) => void;
 }
 
-const MODE = "cloud";
-
 function isLogLevel(value: unknown): value is LogLevel {
   return (
     typeof value === "string" &&
@@ -58,7 +56,7 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
 
   // --- operational probes (unauthenticated) --------------------------------
   app.get("/version", (c) =>
-    c.json({ status: "ok", version: options.version, mode: MODE }),
+    c.json({ status: "ok", version: options.version }),
   );
 
   app.get("/health", async (c) => {
@@ -67,7 +65,6 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
       {
         status: health.ok ? "ok" : "error",
         version: options.version,
-        mode: MODE,
         db: {
           ok: health.ok,
           latency_ms: health.latencyMs,
@@ -93,7 +90,6 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
         {
           status: ok ? "ok" : "not_ready",
           version: options.version,
-          mode: MODE,
           pending_migrations: pending,
         },
         ok ? 200 : 503,
@@ -103,7 +99,6 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
         {
           status: "not_ready",
           version: options.version,
-          mode: MODE,
           pending_migrations: expectedMigrationIds,
           error: error instanceof Error ? error.message : String(error),
         },
@@ -121,7 +116,6 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
       service: "@hasna/logs",
       status: "ok",
       version: options.version,
-      mode: MODE,
       endpoints: ["/health", "/ready", "/version", "/openapi.json", "/v1"],
     }),
   );
