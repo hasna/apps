@@ -183,8 +183,8 @@ export type BuildProvenance = {
 
 export type MacOSArtifactManifest = BuildProvenance & {
   artifact_type: "recordings-macos-app";
-  /// The top-level bundle directory name inside the artifact (Recordings.app for the
-  /// full app, HasnaRecordings.app for the bar variant per the fleet naming rule).
+  /// The top-level bundle directory name inside the artifact (HasnaRecordings.app for
+  /// both the full app and the bar variant per the fleet naming rule).
   bundle_name: string;
   app_sha256: string;
   binding: {
@@ -843,7 +843,7 @@ function manifestVariant(manifest: MacOSArtifactManifest): ArtifactVariant {
 }
 
 function manifestBundleName(manifest: MacOSArtifactManifest): string {
-  return manifest.bundle_name ?? "Recordings.app";
+  return manifest.bundle_name ?? "HasnaRecordings.app";
 }
 
 function manifestTargetIdentityKind(manifest: MacOSArtifactManifest): OperatorTargetIdentityKind {
@@ -1094,23 +1094,23 @@ function assertCanonicalZipEntries(entries: Array<{ name: string; isDirectory: b
     const components = logicalPath.split("/");
     if (
       !logicalPath ||
-      components[0] !== "Recordings.app" ||
+      components[0] !== "HasnaRecordings.app" ||
       components.some((component) => !component || component === "." || component === "..")
     ) {
-      throw new Error("release ZIP contains an entry outside the canonical Recordings.app tree");
+      throw new Error("release ZIP contains an entry outside the canonical HasnaRecordings.app tree");
     }
     const collisionKey = canonicalZipCollisionKey(logicalPath);
     if (logicalPaths.has(collisionKey)) {
       throw new Error("release ZIP contains duplicate, file/directory, case-fold, or Unicode-colliding entries");
     }
     logicalPaths.set(collisionKey, { name: logicalPath, isDirectory: entry.isDirectory });
-    if (logicalPath === "Recordings.app") {
-      if (!entry.isDirectory) throw new Error("release ZIP Recordings.app root is not a directory entry");
+    if (logicalPath === "HasnaRecordings.app") {
+      if (!entry.isDirectory) throw new Error("release ZIP HasnaRecordings.app root is not a directory entry");
       rootDirectoryCount += 1;
     }
   }
   if (rootDirectoryCount !== 1) {
-      throw new Error("release ZIP must contain exactly one canonical Recordings.app root entry");
+      throw new Error("release ZIP must contain exactly one canonical HasnaRecordings.app root entry");
   }
   for (const { name } of logicalPaths.values()) {
     const components = name.split("/");
@@ -1426,7 +1426,7 @@ export function withPrivatelyExtractedArchiveApp<T>(
   operation: (appPath: string) => T,
   platformArchiveTool = "/usr/bin/ditto",
   expectedArchiveSha256?: string,
-  expectedBundleName = "Recordings.app",
+  expectedBundleName = "HasnaRecordings.app",
 ): T {
   const privateRoot = mkdtempSync(join(tmpdir(), "recordings-artifact-extract-"));
   chmodSync(privateRoot, 0o700);
@@ -1751,8 +1751,8 @@ export function assertManifestShape(manifest: MacOSArtifactManifest): void {
     manifest.container?.type !== "zip" ||
     JSON.stringify(manifest.container.install_locations) !== JSON.stringify(
       artifactPolicy === "release"
-        ? ["/Applications/Recordings.app"]
-        : ["~/Applications/Recordings.app"],
+        ? ["/Applications/HasnaRecordings.app"]
+        : ["~/Applications/HasnaRecordings.app"],
     )
   ) {
     throw new Error("manifest has an unexpected container install policy");
@@ -2516,7 +2516,7 @@ export function assertVersionTransition(
   assertManifestShape(manifest);
   if (compareVersions(manifest.bundle_version, installedVersion) < 0) {
     throw new Error(
-      `refusing to downgrade Recordings.app from ${installedVersion} to ${manifest.bundle_version}`,
+      `refusing to downgrade HasnaRecordings.app from ${installedVersion} to ${manifest.bundle_version}`,
     );
   }
   if (compareVersions(manifest.bundle_version, installedVersion) === 0) {
@@ -2983,7 +2983,7 @@ function readJournal(path: string): InstallJournal {
   if (resolve(path) !== resolve(join(expectedParent, ".Recordings-install-transaction.json"))) {
     throw new Error("install transaction journal is outside the expected app parent");
   }
-  if (resolve(journal.app_destination) !== resolve(join(expectedParent, "Recordings.app"))) {
+  if (resolve(journal.app_destination) !== resolve(join(expectedParent, "HasnaRecordings.app"))) {
     throw new Error("install transaction journal has an unexpected app destination");
   }
   const expectedDataDir = resolve(join(dirname(expectedParent), ".hasna", "recordings"));
@@ -3001,7 +3001,9 @@ function readJournal(path: string): InstallJournal {
     return (
       resolved === resolve(journal.app_destination) ||
       resolved === resolve(join(journal.data_dir, "Recordings.app")) ||
-      resolved.startsWith(`${resolve(journal.app_parent)}/Recordings.app.`)
+      resolved === resolve(join(journal.data_dir, "HasnaRecordings.app")) ||
+      resolved.startsWith(`${resolve(journal.app_parent)}/Recordings.app.`) ||
+      resolved.startsWith(`${resolve(journal.app_parent)}/HasnaRecordings.app.`)
     );
   };
   if (!journal.originals.every((entry) => allowedOriginal(entry.path))) {
@@ -3939,7 +3941,7 @@ function openRecoveryCapabilities(
   const homePath = resolve(dirname(appParent));
   if (
     basename(appParent) !== "Applications" ||
-    resolve(journal.app_destination) !== resolve(join(appParent, "Recordings.app")) ||
+    resolve(journal.app_destination) !== resolve(join(appParent, "HasnaRecordings.app")) ||
     resolve(journal.data_dir) !== resolve(join(homePath, ".hasna", "recordings")) ||
     dirname(resolve(journal.transaction_dir)) !== appParent
   ) {
@@ -4342,9 +4344,10 @@ export function publishInstallCandidate(
   const destination = resolve(destinationPath);
   const stagingParentPath = dirname(staging);
   const stagingParentLeaf = basename(stagingParentPath);
+  const bundleLeaf = basename(journal.app_destination);
   if (
     destination !== resolve(journal.app_destination) ||
-    basename(staging) !== "Recordings.app" ||
+    basename(staging) !== bundleLeaf ||
     dirname(stagingParentPath) !== resolve(journal.app_parent) ||
     !/^\.Recordings-install\.[A-Za-z0-9]+$/.test(stagingParentLeaf)
   ) {
@@ -4367,12 +4370,12 @@ export function publishInstallCandidate(
       stagingParent,
       "candidate staging parent",
     );
-    retained = guard.openDirAt(stagingParent, "Recordings.app");
-    assertNativeBinding(guard, stagingParent, "Recordings.app", retained, "staged candidate");
+    retained = guard.openDirAt(stagingParent, bundleLeaf);
+    assertNativeBinding(guard, stagingParent, bundleLeaf, retained, "staged candidate");
     if (nativeTreeDigest(guard, retained) !== expectedDigest) {
       throw new Error("staged candidate does not match durable journal evidence");
     }
-    if (guard.statAt(capabilities.applications, "Recordings.app") !== null) {
+    if (guard.statAt(capabilities.applications, bundleLeaf) !== null) {
       throw new Error("candidate destination already exists");
     }
     fsyncRetainedTree(guard, retained, uid, "staged candidate");
@@ -4384,8 +4387,8 @@ export function publishInstallCandidate(
       stagingParent,
       "candidate staging parent",
     );
-    assertNativeBinding(guard, stagingParent, "Recordings.app", retained, "staged candidate");
-    if (guard.statAt(capabilities.applications, "Recordings.app") !== null) {
+    assertNativeBinding(guard, stagingParent, bundleLeaf, retained, "staged candidate");
+    if (guard.statAt(capabilities.applications, bundleLeaf) !== null) {
       throw new Error("candidate destination appeared before publication");
     }
     installTransitionTestPoint(
@@ -4395,10 +4398,10 @@ export function publishInstallCandidate(
     );
     guard.renameHandleNoReplaceAt(
       stagingParent,
-      "Recordings.app",
+      bundleLeaf,
       retained,
       capabilities.applications,
-      "Recordings.app",
+      bundleLeaf,
     );
     installTransitionTestPoint(
       "publish-candidate",
@@ -4409,11 +4412,11 @@ export function publishInstallCandidate(
     assertNativeBinding(
       guard,
       capabilities.applications,
-      "Recordings.app",
+      bundleLeaf,
       retained,
       "published candidate",
     );
-    if (guard.statAt(stagingParent, "Recordings.app") !== null) {
+    if (guard.statAt(stagingParent, bundleLeaf) !== null) {
       throw new Error("candidate staging leaf was recreated during publication");
     }
     guard.fsyncHandle(capabilities.applications);
@@ -4459,7 +4462,8 @@ function cleanupInstallCandidateStaging(
       staging,
       "candidate staging root",
     );
-    const candidateMetadata = guard.statAt(staging, "Recordings.app");
+    const bundleLeaf = basename(journal.app_destination);
+    const candidateMetadata = guard.statAt(staging, bundleLeaf);
     if (candidateMetadata !== null) {
       if (journal.schema_version !== 9 || !journal.candidate_tree_sha256) {
         throw new Error("legacy journal cannot authenticate candidate staging cleanup");
@@ -4467,7 +4471,7 @@ function cleanupInstallCandidateStaging(
       const candidate = openProvenDirectoryAt(
         guard,
         staging,
-        "Recordings.app",
+        bundleLeaf,
         journal.candidate_tree_sha256,
         "staged candidate",
       );
@@ -4475,7 +4479,7 @@ function cleanupInstallCandidateStaging(
         quarantineRemoveRetainedAt(
           guard,
           staging,
-          "Recordings.app",
+          bundleLeaf,
           candidate,
           "staged candidate",
         );
@@ -4567,14 +4571,20 @@ function originalDestinationCapability(
 ): { parent: NativeHandle; leaf: string } {
   const resolved = resolve(path);
   if (resolved === resolve(journal.app_destination)) {
-    return { parent: capabilities.applications, leaf: "Recordings.app" };
+    return { parent: capabilities.applications, leaf: basename(journal.app_destination) };
   }
-  if (resolved === resolve(join(journal.data_dir, "Recordings.app"))) {
-    return { parent: capabilities.data, leaf: "Recordings.app" };
+  if (
+    dirname(resolved) === resolve(journal.data_dir) &&
+    (basename(resolved) === "Recordings.app" || basename(resolved) === "HasnaRecordings.app")
+  ) {
+    // Install site inside the state data directory: the legacy pre-rename
+    // Recordings.app and the renamed HasnaRecordings.app are both recognized and
+    // preserved, never treated as the canonical Applications destination.
+    return { parent: capabilities.data, leaf: basename(resolved) };
   }
   if (
     dirname(resolved) === resolve(journal.app_parent) &&
-    /^Recordings\.app\.[A-Za-z0-9._-]+$/.test(basename(resolved))
+    /^(?:Hasna)?Recordings\.app\.[A-Za-z0-9._-]+$/.test(basename(resolved))
   ) {
     return { parent: capabilities.applications, leaf: basename(resolved) };
   }
@@ -5005,24 +5015,25 @@ function recoverJournal(path: string): void {
       const canonicalOriginal = journal.originals.find(
         (entry) => resolve(entry.path) === resolve(journal.app_destination),
       );
+      const destinationLeaf = basename(journal.app_destination);
       const canonicalDestinationDigest = canonicalOriginal
-        ? nativeTreeDigestAt(guard, applications, "Recordings.app")
+        ? nativeTreeDigestAt(guard, applications, destinationLeaf)
         : null;
       const canonicalAlreadyRestored = canonicalOriginal !== undefined &&
         canonicalDestinationDigest === canonicalOriginal.sha256;
       if (
         ["candidate-moving", "candidate-installed", "activated", "launching"].includes(journal.phase) &&
-        !canonicalAlreadyRestored && guard.statAt(applications, "Recordings.app") !== null
+        !canonicalAlreadyRestored && guard.statAt(applications, destinationLeaf) !== null
       ) {
         if (journal.schema_version !== 9 || !journal.candidate_tree_sha256) {
           throw new Error("legacy recovery journal cannot prove the uncommitted candidate tree");
         }
-        recoveryTestBarrier("before-candidate-remove", "Recordings.app");
+        recoveryTestBarrier("before-candidate-remove", destinationLeaf);
         assertNativeBinding(guard, capabilities.home, "Applications", applications, "Applications");
         const candidate = openProvenDirectoryAt(
           guard,
           applications,
-          "Recordings.app",
+          destinationLeaf,
           journal.candidate_tree_sha256,
           "uncommitted candidate",
         );
@@ -5030,7 +5041,7 @@ function recoverJournal(path: string): void {
           quarantineRemoveRetainedAt(
             guard,
             applications,
-            "Recordings.app",
+            destinationLeaf,
             candidate,
             "uncommitted candidate",
           );

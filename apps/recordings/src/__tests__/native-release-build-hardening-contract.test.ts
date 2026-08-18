@@ -266,7 +266,7 @@ describe("native release build hardening contract", () => {
     expect(normalizer).toBeDefined();
 
     const root = mkdtempSync(join(tmpdir(), "recordings-bundle-modes-"));
-    const app = join(root, "Recordings.app");
+    const app = join(root, "HasnaRecordings.app");
     const directories = [
       app,
       join(app, "Contents"),

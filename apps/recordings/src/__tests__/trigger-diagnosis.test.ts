@@ -406,9 +406,9 @@ describe("a stored trigger that the running app has not picked up", () => {
 describe("a trigger write that the running app will not pick up", () => {
   test("is not armed while an instance is running, and armed when none is", () => {
     expect(describeTriggerPickup([]).armed).toBe(true);
-    const pickup = describeTriggerPickup(["/Applications/Recordings.app"]);
+    const pickup = describeTriggerPickup(["/Applications/HasnaRecordings.app"]);
     expect(pickup.armed).toBe(false);
-    expect(pickup.runningBundlePaths).toEqual(["/Applications/Recordings.app"]);
+    expect(pickup.runningBundlePaths).toEqual(["/Applications/HasnaRecordings.app"]);
   });
 
   /**
@@ -418,7 +418,7 @@ describe("a trigger write that the running app will not pick up", () => {
    */
   test("recordings shortcut exits non-zero when it writes while an instance runs", () => {
     const home = scratchHome("pickup");
-    const bundle = join(home, "Applications", "Recordings.app");
+    const bundle = join(home, "Applications", "HasnaRecordings.app");
     mkdirSync(join(bundle, "Contents", "MacOS"), { recursive: true });
     writeFileSync(join(bundle, "Contents", "Info.plist"), "<plist/>");
 
@@ -471,21 +471,21 @@ describe("the running-bundle scan does not re-ask questions it has answered", ()
   test("reads each distinct candidate path exactly once across the whole listing", () => {
     const reads: string[] = [];
     const listing = [
-      "/Applications/Recordings.app/Contents/MacOS/Recordings",
+      "/Applications/HasnaRecordings.app/Contents/MacOS/Recordings",
       "/Applications/Safari.app/Contents/MacOS/Safari",
       "/Applications/Mail.app/Contents/MacOS/Mail",
-      "/Applications/Recordings.app/Contents/MacOS/Recordings",
+      "/Applications/HasnaRecordings.app/Contents/MacOS/Recordings",
     ].join("\n");
 
     const found = runningAppBundlePaths({
       listProcesses: () => listing,
       readBundleIdentifier: (path) => {
         reads.push(path);
-        return path === "/Applications/Recordings.app" ? "com.hasna.recordings" : null;
+        return path === "/Applications/HasnaRecordings.app" ? "com.hasna.recordings" : null;
       },
     });
 
-    expect(found).toEqual(["/Applications/Recordings.app"]);
+    expect(found).toEqual(["/Applications/HasnaRecordings.app"]);
     // Each line contributes its own "/..." prefixes; the shared ones must be asked once.
     expect(reads.length).toBe(new Set(reads).size);
     // Without the cache the two Recordings lines and the two decoys re-ask "/Applications"

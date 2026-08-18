@@ -113,14 +113,14 @@ function writeGeneratedPayloadZip(
   const archivePath = join(root, "Recordings.zip");
   const records = [
     {
-      name: "Recordings.app/",
+      name: "HasnaRecordings.app/",
       type: "directory" as const,
       compressedPayload: Buffer.alloc(0),
       crc: 0,
       uncompressedBytes: 0,
     },
     {
-      name: "Recordings.app/Contents/payload",
+      name: "HasnaRecordings.app/Contents/payload",
       type: "file" as const,
       compressedPayload: Buffer.concat([
         options.compressedPayloadTransform?.(deflateRawSync(payload)) ?? deflateRawSync(payload),
@@ -222,10 +222,10 @@ function archiveFixture(mutation = ""): {
   const archivePath = join(root, "Recordings.zip");
   const archiveTool = join(root, "ditto");
   const sourceRoot = join(root, "source");
-  mkdirSync(join(sourceRoot, "Recordings.app", "Contents"), { recursive: true });
-  writeFileSync(join(sourceRoot, "Recordings.app", "Contents", "payload"), "payload");
+  mkdirSync(join(sourceRoot, "HasnaRecordings.app", "Contents"), { recursive: true });
+  writeFileSync(join(sourceRoot, "HasnaRecordings.app", "Contents", "payload"), "payload");
   const zipResult = Bun.spawnSync(
-    ["/usr/bin/zip", "-q", "-r", archivePath, "Recordings.app"],
+    ["/usr/bin/zip", "-q", "-r", archivePath, "HasnaRecordings.app"],
     { cwd: sourceRoot },
   );
   if (zipResult.exitCode !== 0) throw new Error(zipResult.stderr.toString());
@@ -235,8 +235,8 @@ function archiveFixture(mutation = ""): {
 set -euo pipefail
 [ "\${1:-}" = "-x" ] && [ "\${2:-}" = "-k" ]
 destination="\${4}"
-mkdir -p "$destination/Recordings.app/Contents"
-printf payload > "$destination/Recordings.app/Contents/payload"
+mkdir -p "$destination/HasnaRecordings.app/Contents"
+printf payload > "$destination/HasnaRecordings.app/Contents/payload"
 ${mutation}
 `,
   );
@@ -262,7 +262,7 @@ describe("macOS release artifact binding", () => {
       closeSync(outputDescriptor);
       closeSync(archiveDescriptor);
     }
-    expect(readFileSync(join(output, "Recordings.app", "Contents", "payload"), "utf8")).toBe("payload");
+    expect(readFileSync(join(output, "HasnaRecordings.app", "Contents", "payload"), "utf8")).toBe("payload");
   });
 
   test("rejects an over-limit sparse ZIP before allocating or reading its contents", () => {
@@ -369,21 +369,21 @@ describe("macOS release artifact binding", () => {
   test("rejects duplicate, colliding, and noncanonical ZIP entry listings", () => {
     expect(() =>
       assertCanonicalZipEntryListing(
-        "Recordings.app/\nRecordings.app/Contents/\nRecordings.app/Contents/payload\n",
+        "HasnaRecordings.app/\nHasnaRecordings.app/Contents/\nHasnaRecordings.app/Contents/payload\n",
       ),
     ).not.toThrow();
     expect(() =>
       assertCanonicalZipEntryListing(
-        "Recordings.app/\nRecordings.app/Contents/payload\nRecordings.app/Contents/payload\n",
+        "HasnaRecordings.app/\nHasnaRecordings.app/Contents/payload\nHasnaRecordings.app/Contents/payload\n",
       ),
     ).toThrow("duplicate");
     expect(() =>
       assertCanonicalZipEntryListing(
-        "Recordings.app/\nRecordings.app/Contents/../outside\n",
+        "HasnaRecordings.app/\nHasnaRecordings.app/Contents/../outside\n",
       ),
-    ).toThrow("canonical Recordings.app tree");
+    ).toThrow("canonical HasnaRecordings.app tree");
     expect(() => assertCanonicalZipEntryListing("Other.app/\n")).toThrow(
-      "canonical Recordings.app tree",
+      "canonical HasnaRecordings.app tree",
     );
     expect(() =>
       assertRegularZipEntryTypes(
@@ -400,12 +400,12 @@ describe("macOS release artifact binding", () => {
   });
 
   test.each([
-    ["absolute path", ["Recordings.app/", "/Recordings.app/Contents/payload"], "noncanonical"],
-    ["traversal", ["Recordings.app/", "Recordings.app/../payload"], "canonical Recordings.app tree"],
-    ["duplicate", ["Recordings.app/", "Recordings.app/payload", "Recordings.app/payload"], "duplicate"],
-    ["case-fold collision", ["Recordings.app/", "Recordings.app/Payload", "Recordings.app/payload"], "case-fold"],
-    ["Unicode collision", ["Recordings.app/", "Recordings.app/Ｋey", "Recordings.app/Key"], "Unicode-colliding"],
-    ["file/directory collision", ["Recordings.app/", "Recordings.app/item", "Recordings.app/item/"], "file/directory"],
+    ["absolute path", ["HasnaRecordings.app/", "/HasnaRecordings.app/Contents/payload"], "noncanonical"],
+    ["traversal", ["HasnaRecordings.app/", "HasnaRecordings.app/../payload"], "canonical HasnaRecordings.app tree"],
+    ["duplicate", ["HasnaRecordings.app/", "HasnaRecordings.app/payload", "HasnaRecordings.app/payload"], "duplicate"],
+    ["case-fold collision", ["HasnaRecordings.app/", "HasnaRecordings.app/Payload", "HasnaRecordings.app/payload"], "case-fold"],
+    ["Unicode collision", ["HasnaRecordings.app/", "HasnaRecordings.app/Ｋey", "HasnaRecordings.app/Key"], "Unicode-colliding"],
+    ["file/directory collision", ["HasnaRecordings.app/", "HasnaRecordings.app/item", "HasnaRecordings.app/item/"], "file/directory"],
   ])("rejects a ZIP with a canonical-name %s", (_label, names, message) => {
     const archivePath = writeMinimalZip((names as string[]).map((name) => ({ name })));
     expect(() => inspectZipArchive(archivePath)).toThrow(message as string);
@@ -416,17 +416,17 @@ describe("macOS release artifact binding", () => {
     ["special FIFO", "fifo"],
   ] as const)("rejects a ZIP with a %s entry before extraction", (_label, type) => {
     const archivePath = writeMinimalZip([
-      { name: "Recordings.app/", type: "directory" },
-      { name: "Recordings.app/payload", type },
+      { name: "HasnaRecordings.app/", type: "directory" },
+      { name: "HasnaRecordings.app/payload", type },
     ]);
     expect(() => inspectZipArchive(archivePath)).toThrow("symlink, special");
   });
 
   test("rejects conservative entry-count and expansion limits before extraction", () => {
     const tooManyEntries = [
-      { name: "Recordings.app/", type: "directory" as const },
+      { name: "HasnaRecordings.app/", type: "directory" as const },
       ...Array.from({ length: 8192 }, (_, index) => ({
-        name: `Recordings.app/d${index}/`,
+        name: `HasnaRecordings.app/d${index}/`,
         type: "directory" as const,
       })),
     ];
@@ -434,9 +434,9 @@ describe("macOS release artifact binding", () => {
     expect(() =>
       inspectZipArchive(
         writeMinimalZip([
-          { name: "Recordings.app/", type: "directory" },
+          { name: "HasnaRecordings.app/", type: "directory" },
           {
-            name: "Recordings.app/bomb",
+            name: "HasnaRecordings.app/bomb",
             compressedBytes: 1,
             uncompressedBytes: 201,
             method: 8,
@@ -447,9 +447,9 @@ describe("macOS release artifact binding", () => {
     expect(() =>
       inspectZipArchive(
         writeMinimalZip([
-          { name: "Recordings.app/", type: "directory" },
+          { name: "HasnaRecordings.app/", type: "directory" },
           {
-            name: "Recordings.app/huge",
+            name: "HasnaRecordings.app/huge",
             compressedBytes: 2 * 1024 * 1024,
             uncompressedBytes: 256 * 1024 * 1024 + 1,
             method: 8,
@@ -467,9 +467,9 @@ describe("macOS release artifact binding", () => {
       compressedBytes,
       uncompressedBytes,
     }))).toEqual([
-      { name: "Recordings.app/", compressedBytes: 0, uncompressedBytes: 0 },
+      { name: "HasnaRecordings.app/", compressedBytes: 0, uncompressedBytes: 0 },
       {
-        name: "Recordings.app/Contents/payload",
+        name: "HasnaRecordings.app/Contents/payload",
         compressedBytes: deflateRawSync(payload).length,
         uncompressedBytes: payload.length,
       },
@@ -579,10 +579,10 @@ describe("macOS release artifact binding", () => {
     ["an extra top-level entry", 'printf extra > "$destination/extra"', "exactly one top-level"],
     [
       "a symlink",
-      'ln -s "$destination/Recordings.app/Contents/payload" "$destination/Recordings.app/Contents/link"',
+      'ln -s "$destination/HasnaRecordings.app/Contents/payload" "$destination/HasnaRecordings.app/Contents/link"',
       "forbidden symlink",
     ],
-    ["a special entry", 'mkfifo "$destination/Recordings.app/Contents/pipe"', "forbidden special"],
+    ["a special entry", 'mkfifo "$destination/HasnaRecordings.app/Contents/pipe"', "forbidden special"],
   ])("rejects archives containing %s", (_label, mutation, message) => {
     const { archivePath, archiveTool } = archiveFixture(mutation);
     expect(() => withPrivatelyExtractedArchiveApp(archivePath, () => undefined, archiveTool)).toThrow(
@@ -702,7 +702,7 @@ describe("macOS release artifact binding", () => {
     const root = mkdtempSync(join(tmpdir(), "recordings-manifest-consumer-substitution-test-"));
     temporaryDirectories.push(root);
     const manifestPath = join(root, "Recordings.manifest.json");
-    const missingApp = join(root, "Recordings.app");
+    const missingApp = join(root, "HasnaRecordings.app");
     writeFileSync(manifestPath, '{"operator":"authenticated"}\n');
     const authenticatedDigest = sha256File(manifestPath);
     writeFileSync(manifestPath, '{"attacker":"substituted"}\n');

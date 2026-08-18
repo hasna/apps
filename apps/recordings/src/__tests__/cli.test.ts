@@ -219,7 +219,7 @@ describe("recordings CLI", () => {
     expect(status.package_root).toBe(process.cwd());
     expect(status.installer_available).toBe(true);
     expect(status.native_sources_available).toBe(true);
-    expect(status.installed_app_path).toBe(join(home, "Applications", "Recordings.app"));
+    expect(status.installed_app_path).toBe(join(home, "Applications", "HasnaRecordings.app"));
     expect(status.legacy_install_paths).toEqual([]);
     expect(typeof status.ad_hoc_signed).toBe("boolean");
     expect(status.app_code_hash === null || typeof status.app_code_hash === "string").toBe(true);
@@ -709,9 +709,9 @@ describe("recordings CLI", () => {
   test("app status inspects the canonical app and reports legacy duplicates", async () => {
     const home = join(tmpdir(), `recordings-cli-app-layout-${Date.now()}`);
     tempDirs.push(home);
-    const canonical = join(home, "Applications", "Recordings.app");
-    const hiddenLegacy = join(home, ".hasna", "recordings", "Recordings.app");
-    const rollbackLegacy = join(home, "Applications", "Recordings.app.rollback-pre-test");
+    const canonical = join(home, "Applications", "HasnaRecordings.app");
+    const hiddenLegacy = join(home, ".hasna", "recordings", "HasnaRecordings.app");
+    const rollbackLegacy = join(home, "Applications", "HasnaRecordings.app.rollback-pre-test");
     mkdirSync(join(canonical, "Contents", "MacOS"), { recursive: true });
     writeFileSync(join(canonical, "Contents", "MacOS", "Recordings"), "fixture");
     mkdirSync(hiddenLegacy, { recursive: true });
@@ -766,8 +766,8 @@ describe("recordings CLI", () => {
     tempDirs.push(home);
     // No canonical bundle at all — the case that previously suppressed the flag, letting a
     // bundle nobody named answer for the grant holder in silence.
-    const hiddenLegacy = join(home, ".hasna", "recordings", "Recordings.app");
-    const rollbackLegacy = join(home, "Applications", "Recordings.app.prev");
+    const hiddenLegacy = join(home, ".hasna", "recordings", "HasnaRecordings.app");
+    const rollbackLegacy = join(home, "Applications", "HasnaRecordings.app.prev");
     mkdirSync(join(hiddenLegacy, "Contents", "MacOS"), { recursive: true });
     writeFileSync(join(hiddenLegacy, "Contents", "MacOS", "Recordings"), "fixture");
     mkdirSync(rollbackLegacy, { recursive: true });
@@ -916,7 +916,7 @@ describe("recordings CLI", () => {
     ]);
     expect(compactExit).toBe(0);
     expect(compactStderr).toBe("");
-    expect(compactStdout).toContain("Recordings.app");
+    expect(compactStdout).toContain("HasnaRecordings.app");
     expect(compactStdout).toContain("Use --verbose");
     expect(compactStdout).not.toContain(`Package: ${process.cwd()}`);
 

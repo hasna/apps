@@ -802,8 +802,8 @@ const appCommand = program
 
 appCommand
   .command("install")
-  .description("Install a release or explicitly approved local-only Recordings.app artifact")
-  .requiredOption("--artifact <path>", "Finalized Recordings.app ZIP artifact")
+  .description("Install a release or explicitly approved local-only HasnaRecordings.app artifact")
+  .requiredOption("--artifact <path>", "Finalized HasnaRecordings.app ZIP artifact")
   .requiredOption("--manifest <path>", "Artifact provenance manifest")
   .option("--envelope <path>", "Signed release envelope (required for release artifacts)")
   .option("--expected-team-id <team>", "Required Developer ID TeamIdentifier for release artifacts")
@@ -875,7 +875,7 @@ appCommand
     launchTimeout?: string;
   }) => {
     if (process.platform !== "darwin") {
-      console.error(chalk.red("Recordings.app installation is only supported on macOS"));
+      console.error(chalk.red("HasnaRecordings.app installation is only supported on macOS"));
       process.exit(1);
     }
     if (opts.variant !== "full" && opts.variant !== "bar") {
@@ -932,7 +932,7 @@ appCommand
         console.error(chalk.red(error instanceof Error ? error.message : String(error)));
         process.exit(1);
       }
-      const updateClientPath = "/Applications/Recordings.app/Contents/Helpers/recordings-update-client";
+      const updateClientPath = "/Applications/HasnaRecordings.app/Contents/Helpers/recordings-update-client";
       if (!existsSync(updateClientPath)) {
         preparedInputs.cleanup();
         console.error(chalk.red("Root-owned Recordings update broker client is not installed."));
@@ -1057,7 +1057,7 @@ appCommand
 
 appCommand
   .command("status")
-  .description("Show installed Recordings.app status")
+  .description("Show installed HasnaRecordings.app status")
   .option("--verbose", "Show package paths, code hash, and log path")
   .action((opts: { verbose?: boolean }) => {
     const status = getMacOSAppStatus();
@@ -1075,7 +1075,7 @@ appCommand
       return;
     }
 
-    console.log(chalk.bold("Recordings.app"));
+    console.log(chalk.bold("HasnaRecordings.app"));
     console.log(`Installed: ${status.installed ? "yes" : "no"}`);
     console.log(`Executable: ${status.executable ? "available" : "missing"}`);
     console.log(`Installer: ${status.installer_available ? "available" : "missing"}`);
@@ -1110,7 +1110,7 @@ appCommand
 
 appCommand
   .command("permissions")
-  .description("Show macOS permission state for Recordings.app")
+  .description("Show macOS permission state for HasnaRecordings.app")
   .action(() => {
     const status = getMacOSAppStatus();
     const permissions = {
@@ -1157,7 +1157,7 @@ appCommand
 
 appCommand
   .command("reset-permissions")
-  .description("Reset macOS Microphone and Accessibility permissions for Recordings.app")
+  .description("Reset macOS Microphone and Accessibility permissions for HasnaRecordings.app")
   .action(() => {
     if (process.platform !== "darwin") {
       console.error(chalk.red("Permission reset is only available on macOS"));
@@ -1168,7 +1168,7 @@ appCommand
 
 appCommand
   .command("request-permissions")
-  .description("Open Recordings.app and trigger macOS Microphone and Accessibility permission prompts")
+  .description("Open HasnaRecordings.app and trigger macOS Microphone and Accessibility permission prompts")
   .option("--reset", "Reset existing Microphone and Accessibility decisions before requesting")
   .action((opts: { reset?: boolean }) => {
     if (process.platform !== "darwin") {
@@ -1178,7 +1178,7 @@ appCommand
 
     const status = getMacOSAppStatus();
     if (!status.installed) {
-      console.error(chalk.red("Recordings.app is not installed. Run: recordings app install"));
+      console.error(chalk.red("HasnaRecordings.app is not installed. Run: recordings app install"));
       process.exit(1);
     }
 
@@ -1195,7 +1195,7 @@ appCommand
 
 appCommand
   .command("log")
-  .description("Show the Recordings.app diagnostic log")
+  .description("Show the HasnaRecordings.app diagnostic log")
   .option("-n, --lines <lines>", "Number of lines to print", String(DEFAULT_LOG_LINES))
   .action((opts: { lines: string }) => {
     const status = getMacOSAppStatus();
@@ -1229,15 +1229,15 @@ appCommand
 
 appCommand
   .command("open")
-  .description("Open the installed Recordings.app")
+  .description("Open the installed HasnaRecordings.app")
   .action(() => {
     const status = getMacOSAppStatus();
     if (process.platform !== "darwin") {
-      console.error(chalk.red("Recordings.app can only be opened on macOS"));
+      console.error(chalk.red("HasnaRecordings.app can only be opened on macOS"));
       process.exit(1);
     }
     if (!status.installed) {
-      console.error(chalk.red("Recordings.app is not installed. Run: recordings app install"));
+      console.error(chalk.red("HasnaRecordings.app is not installed. Run: recordings app install"));
       process.exit(1);
     }
 
@@ -1535,7 +1535,7 @@ program
       if (!micOk && !micUnreadable) {
         console.log(
           chalk.dim(
-            "  Recordings.app cannot capture audio without this. macOS does not error when it is " +
+            "  HasnaRecordings.app cannot capture audio without this. macOS does not error when it is " +
               "missing — it delivers silent audio. This grant CANNOT be set remotely; it needs a " +
               "human at the keyboard:"
           )
@@ -1780,7 +1780,7 @@ program
   .command("shortcut")
   .description(
     "Show or change the global recording trigger (macOS). Exits non-zero when a change was " +
-      "written while Recordings.app was running, because the running instance keeps the " +
+      "written while HasnaRecordings.app was running, because the running instance keeps the " +
       "trigger it registered with — the write is stored but not armed until it is reopened."
   )
   .option("--set <chord>", 'Set the app hotkey, e.g. "f13" or "ctrl+opt+r"')
@@ -1890,7 +1890,7 @@ program
        * Name the bundle every grant below applies to, and refuse to imply anything about
        * this process. A CLI launched from a terminal inherits the *terminal's* TCC grants,
        * so "Accessibility is allowed" measured here would describe Ghostty or Terminal, not
-       * Recordings.app. Only the bundle that actually runs can hold the app's grant.
+       * HasnaRecordings.app. Only the bundle that actually runs can hold the app's grant.
        */
       function showGrantTargets(): void {
         const running = runningBundles();
@@ -1963,11 +1963,11 @@ program
     function reportPickup(): void {
       const pickup = describeTriggerPickup(runningBundles());
       if (pickup.armed) {
-        console.log(chalk.dim("  Recordings.app is not running; it will register this on next launch."));
+        console.log(chalk.dim("  HasnaRecordings.app is not running; it will register this on next launch."));
         return;
       }
       console.log(
-        chalk.yellow("  Recordings.app is running and still holds the previous trigger.") +
+        chalk.yellow("  HasnaRecordings.app is running and still holds the previous trigger.") +
           "\n  Quit and reopen it to arm this one:",
       );
       for (const path of pickup.runningBundlePaths) console.log(chalk.dim(`    ${path}`));
@@ -2048,7 +2048,7 @@ program
           // The grant keys to a bundle, so name the one that has to appear in that list.
           const target = grantTargetPaths();
           if (target.paths.length === 0) {
-            console.log(chalk.dim("    (no installed Recordings.app found to grant it to)"));
+            console.log(chalk.dim("    (no installed HasnaRecordings.app found to grant it to)"));
           }
           for (const path of target.paths) {
             console.log(
@@ -2094,7 +2094,7 @@ program
 # Toggle recording on/off. Run this from a global hotkey.
 # Each press toggles: start recording -> stop + transcribe + copy to clipboard
 #
-# This is the app-less path. If Recordings.app is running, prefer its own hotkey
+# This is the app-less path. If HasnaRecordings.app is running, prefer its own hotkey
 # ("recordings shortcut --set ..."): the app streams transcription and pastes into
 # the focused field, which this script cannot do.
 set -e
@@ -2790,7 +2790,7 @@ type MacOSAppStatus = {
 function getMacOSAppStatus(): MacOSAppStatus {
   const packageRoot = findPackageRoot();
   const home = process.env.HOME || process.env.USERPROFILE || "";
-  const canonicalAppPath = pathJoin(home, "Applications", "Recordings.app");
+  const canonicalAppPath = pathJoin(home, "Applications", "HasnaRecordings.app");
   const legacyInstallPaths = findLegacyMacOSAppPaths(home, canonicalAppPath);
   // Report on the bundle that is actually on disk. Pinning the canonical path meant that on a
   // machine where the app lives anywhere else, every permission answer described a bundle that
@@ -2861,7 +2861,7 @@ function buildPermissionWarnings(status: MacOSAppStatus): string[] {
   }
   if (status.ambiguous_installations) {
     warnings.push(
-      "more than one Recordings.app is installed, so the states above may describe a bundle "
+      "more than one HasnaRecordings.app is installed, so the states above may describe a bundle "
         + `other than the one macOS granted: reporting on ${status.installed_app_path}, also `
         + `present are ${status.legacy_install_paths.join(", ")}`,
     );
@@ -2895,7 +2895,7 @@ function buildPermissionWarnings(status: MacOSAppStatus): string[] {
 /// Picks the bundle to report on when the canonical install is absent.
 ///
 /// The order is deliberate rather than lexicographic: sorting picked whichever path sorted
-/// first, so `/Applications/Recordings.app` could silently answer for a grant held by the
+/// first, so `/Applications/HasnaRecordings.app` could silently answer for a grant held by the
 /// bundle in `~/.hasna/recordings`. Preference follows the installer's own policy —
 /// `install_macos_app.sh` installs to `$HOME/Applications` and classifies the
 /// `~/.hasna/recordings` copy as a duplicate to archive — so a real install location wins over

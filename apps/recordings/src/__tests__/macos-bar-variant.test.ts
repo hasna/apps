@@ -539,10 +539,10 @@ describe("Developer ID signing support", () => {
 describe("artifact naming per the fleet rule", () => {
   test("the bar artifact is HasnaRecordings.app with the display name 'Hasna Recordings'", () => {
     // Fleet naming rule (knowledge k_msxd5rz3_jfvl3i): Hasna<Name>.app with 'Hasna' at the
-    // beginning. The full app keeps its historical name (its rename is the rule's recorded
-    // follow-up); the bar-only artifact is named per the rule NOW.
-    expect(buildScript).toContain('APP_BUNDLE_NAME="Recordings.app"');
+    // beginning. Both variants (full and bar) build as HasnaRecordings.app; the rename of
+    // the full app was the rule's recorded follow-up decision and is now executed.
     expect(buildScript).toContain('APP_BUNDLE_NAME="HasnaRecordings.app"');
+    expect(buildScript).not.toContain('APP_BUNDLE_NAME="Recordings.app"');
     expect(buildScript).toContain("Set :CFBundleDisplayName Hasna Recordings");
     // The bundle identifier TCC keys on stays com.hasna.recordings.
     expect(infoPlist).toContain("<string>com.hasna.recordings</string>");
@@ -556,11 +556,12 @@ describe("artifact naming per the fleet rule", () => {
   test("the manifest carries the bundle name and the installer adopts it at install time", () => {
     expect(artifactTool).toContain("bundle_name: string;");
     expect(artifactTool).toContain('field === "bundle_name"');
-    // Pre-variant manifests are full builds by definition.
-    expect(artifactTool).toContain('manifest.bundle_name ?? "Recordings.app"');
+    // Pre-variant manifests are full builds by definition; the canonical name is
+    // HasnaRecordings.app for both variants.
+    expect(artifactTool).toContain('manifest.bundle_name ?? "HasnaRecordings.app"');
     // The installer reads the authenticated manifest's bundle name and derives the
-    // install target from it, so a HasnaRecordings.app bar artifact lands under its own
-    // name rather than being forced into Recordings.app.
+    // install target from it, so a HasnaRecordings.app artifact lands under its own
+    // name regardless of variant.
     expect(installScript).toContain('AUTHENTICATED_BUNDLE_NAME="$("$BUN_EXECUTABLE" "$ARTIFACT_TOOL" manifest-get');
     expect(installScript).toContain('STAGED_APP="${STAGING_DIR}/${MANIFEST_BUNDLE_NAME}"');
     expect(installScript).toContain('CANDIDATE_APP="$UNPACK_DIR/${MANIFEST_BUNDLE_NAME}"');

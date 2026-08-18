@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build, sign, notarize, and finalize a Recordings.app artifact.
+# Build, sign, notarize, and finalize a HasnaRecordings.app artifact.
 # Usage: ./build.sh [debug|local] | ./build.sh release <initial-bootstrap|app-update>
 
 set -euo pipefail
@@ -119,16 +119,12 @@ if [ "$VARIANT" = "bar" ]; then
     VARIANT_SWIFT_FLAGS=(-Xswiftc -DRECORDINGS_BAR_ONLY)
 fi
 # Fleet naming rule (knowledge k_msxd5rz3_jfvl3i): every Hasna macOS app is
-# Hasna<Name>.app with 'Hasna' at the beginning. The full app keeps its historical
-# Recordings.app name (its rename is the rule's recorded follow-up decision); the
-# bar-only artifact is named per the rule NOW — HasnaRecordings.app. The 'bar' is the
-# variant, never a separate app name: bundle identifier stays com.hasna.recordings so
-# TCC keeps keying on bundle id + signing identity, and the executable inside the
-# bundle stays "Recordings".
-APP_BUNDLE_NAME="Recordings.app"
-if [ "$VARIANT" = "bar" ]; then
-    APP_BUNDLE_NAME="HasnaRecordings.app"
-fi
+# Hasna<Name>.app with 'Hasna' at the beginning. The bundle is named
+# HasnaRecordings.app for BOTH variants (full and bar); the 'bar' is a variant, never
+# a separate app name. Bundle identifier stays com.hasna.recordings so TCC keeps
+# keying on bundle id + signing identity, and the executable inside the bundle stays
+# "Recordings".
+APP_BUNDLE_NAME="HasnaRecordings.app"
 readonly APP_BUNDLE_NAME
 APP_BASENAME="${APP_BUNDLE_NAME%.app}"
 PLIST_BUDDY="$(select_executable "/usr/libexec/PlistBuddy" "${RECORDINGS_TEST_PLIST_BUDDY_EXECUTABLE:-${PLIST_BUDDY:-}}")"
@@ -1260,7 +1256,7 @@ fi
 
 generate_and_verify_native_fs_guard
 
-echo "Building Recordings.app ($MODE)..."
+echo "Building HasnaRecordings.app ($MODE)..."
 if [ "$MODE" = "release" ]; then
     OUTPUT_BUILD_DIR="$BUILD_ROOT/release-output"
 else
@@ -1426,15 +1422,15 @@ if [ "$MODE" = "release" ] && [ "$HOST_PLATFORM" = "Darwin" ]; then
     fi
 fi
 "$CP_EXECUTABLE" "$SOURCE_NATIVE_DIR/RecordingsLib/Info.plist" "$CONTENTS/Info.plist"
+# Bundle display name per the fleet naming rule (knowledge k_msxd5rz3_jfvl3i):
+# "Hasna Recordings" with 'Hasna' at the beginning, for both variants.
+"$PLIST_BUDDY" -c 'Set :CFBundleDisplayName Hasna Recordings' "$CONTENTS/Info.plist"
 if [ "$VARIANT" = "bar" ]; then
     # The bar is an accessory app: LSUIElement keeps it out of the Dock and the app
     # switcher, and the app's window-declaring control flow (RECORDINGS_BAR_ONLY)
     # keeps the workspace window absent. The bundle identifier stays com.hasna.recordings
-    # so TCC grants continue to key on bundle id + signing identity, and the bundle is
-    # named per the fleet rule (knowledge k_msxd5rz3_jfvl3i) — HasnaRecordings.app with
-    # the display name "Hasna Recordings"; 'Hasna' at the beginning of the name.
+    # so TCC grants continue to key on bundle id + signing identity.
     "$PLIST_BUDDY" -c 'Add :LSUIElement bool true' "$CONTENTS/Info.plist"
-    "$PLIST_BUDDY" -c 'Set :CFBundleDisplayName Hasna Recordings' "$CONTENTS/Info.plist"
 fi
 VERSION="$("$PLIST_BUDDY" -c 'Print :CFBundleShortVersionString' "$CONTENTS/Info.plist")"
 
@@ -1998,7 +1994,7 @@ if [ "$MODE" = "local" ]; then
 fi
 
 verify_signed_code "$HELPERS/recordings" "Companion CLI"
-verify_signed_code "$APP_DIR" "Recordings.app"
+verify_signed_code "$APP_DIR" "HasnaRecordings.app"
 ARTIFACT_BASENAME="${APP_BASENAME}-${VERSION}-macos-${RELEASE_SUBTYPE}"
 NOTARY_ARCHIVE="$OUTPUT_BUILD_DIR/${ARTIFACT_BASENAME}-notarization.zip"
 FINAL_ARCHIVE="$OUTPUT_BUILD_DIR/${ARTIFACT_BASENAME}.zip"
@@ -2050,7 +2046,7 @@ run_xcrun stapler validate "$APP_DIR"
 run_release_sensitive_tool "$SPCTL_EXECUTABLE" --assess --type execute --verbose=2 "$APP_DIR"
 run_release_sensitive_tool "$SYSPOLICY_CHECK_EXECUTABLE" distribution "$APP_DIR"
 verify_signed_code "$HELPERS/recordings" "Companion CLI"
-verify_signed_code "$APP_DIR" "Recordings.app"
+verify_signed_code "$APP_DIR" "HasnaRecordings.app"
 run_codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 
 run_release_sensitive_tool "$DITTO_EXECUTABLE" -c -k --sequesterRsrc --keepParent "$APP_DIR" "$FINAL_ARCHIVE"
