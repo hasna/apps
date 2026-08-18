@@ -37,7 +37,7 @@ if (await runSharedEventCli(args)) process.exit(0);
 // ── Help / Version ───────────────────────────────────────────────────────────
 
 if (args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
-  console.log(`open-terminal — Natural language shell for AI agents and humans
+  console.log(`terminal — Natural language shell for AI agents and humans
 
 USAGE:
   terminal "your request"      NL → AI picks command → runs → smart output
@@ -182,7 +182,7 @@ else if (args[0] === "hook") {
     const npmRoot = execSync("npm root -g", { encoding: "utf8" }).trim();
     const distPath = join(npmRoot, "@hasna/terminal/dist");
     const hookScript = `#!/usr/bin/env bash
-# open-terminal PostToolUse hook — compresses Bash output
+# terminal PostToolUse hook — compresses Bash output
 # Installed by: t hook install --claude
 # Docs: https://github.com/hasna/terminal
 
@@ -611,7 +611,7 @@ else if (args.length > 0) {
   const shortcut = getPromptShortcut(prompt);
   const learned = getLearned(prompt);
   if (learned && !offlineMode) {
-    console.error(`[open-terminal] cached: $ ${learned}`);
+    console.error(`[terminal] cached: $ ${learned}`);
   }
 
   // Step 1: Determine command — either direct passthrough or AI translation
@@ -624,7 +624,7 @@ else if (args.length > 0) {
     command = prompt;
   } else if (offlineMode) {
     // Offline: treat prompt as literal command
-    console.error("[open-terminal] offline mode (no API key) — running as literal command");
+    console.error("[terminal] offline mode (no API key) — running as literal command");
     command = prompt;
   } else if (learned) {
     command = learned;
@@ -697,7 +697,7 @@ else if (args.length > 0) {
   const validation = validateCommand(command, process.cwd());
   if (!validation.valid) {
     // Auto-retry: re-translate with simpler constraints
-    console.error(`[open-terminal] invalid command detected: ${validation.issues.join(", ")}`);
+    console.error(`[terminal] invalid command detected: ${validation.issues.join(", ")}`);
     try {
       const retryCommand = await translateToCommand(
         `${prompt} (Previous command had issues: ${validation.issues.join(", ")}. Fix those specific issues. Keep the approach but correct the errors.)`,
@@ -707,14 +707,14 @@ else if (args.length > 0) {
         const retryValidation = validateCommand(retryCommand, process.cwd());
         if (retryValidation.valid || retryValidation.issues.length < validation.issues.length) {
           command = retryCommand;
-          console.error(`[open-terminal] retried: $ ${command}`);
+          console.error(`[terminal] retried: $ ${command}`);
         } else {
           // Retry also invalid — use the simpler of the two
           const retryPipes = (retryCommand.match(/\|/g) || []).length;
           const origPipes = (command.match(/\|/g) || []).length;
           if (retryPipes < origPipes) {
             command = retryCommand;
-            console.error(`[open-terminal] retried (simpler): $ ${command}`);
+            console.error(`[terminal] retried (simpler): $ ${command}`);
           }
         }
       }
@@ -729,11 +729,11 @@ else if (args.length > 0) {
   // Step 3: Rewrite for optimization
   const rw = rewriteCommand(command);
   const actualCmd = rw.changed ? rw.rewritten : command;
-  if (rw.changed) console.error(`[open-terminal] optimized: ${actualCmd}`);
+  if (rw.changed) console.error(`[terminal] optimized: ${actualCmd}`);
 
   // Loop detection
   const loop = detectLoop(actualCmd);
-  if (loop.detected) console.error(`[open-terminal] loop #${loop.iteration}${loop.suggestedNarrow ? ` — try: ${loop.suggestedNarrow}` : ""}`);
+  if (loop.detected) console.error(`[terminal] loop #${loop.iteration}${loop.suggestedNarrow ? ` — try: ${loop.suggestedNarrow}` : ""}`);
 
   // Step 3: Execute
   try {
@@ -771,7 +771,7 @@ else if (args.length > 0) {
           if (manifestPath) console.log(formatManifestHint(manifestPath));
         }
         if (process.env.TERMINAL_SHOW_SAVINGS === "1" && processed.tokensSaved > 10) {
-          console.error(`[open-terminal] ${rawTokens} -> ${rawTokens - processed.tokensSaved} tokens (saved ${processed.tokensSaved})`);
+          console.error(`[terminal] ${rawTokens} -> ${rawTokens - processed.tokensSaved} tokens (saved ${processed.tokensSaved})`);
         }
         process.exit(0);
       }
@@ -791,7 +791,7 @@ else if (args.length > 0) {
     const saved = rawTokens - estimateTokens(clean);
     if (saved > 10) {
       recordSaving("compressed", saved);
-      if (process.env.TERMINAL_SHOW_SAVINGS === "1") console.error(`[open-terminal] saved ${saved} tokens`);
+      if (process.env.TERMINAL_SHOW_SAVINGS === "1") console.error(`[terminal] saved ${saved} tokens`);
     }
   } catch (e: any) {
     // Empty result (grep exit 1 = no matches) — not a real error
@@ -806,7 +806,7 @@ else if (args.length > 0) {
             perms, []
           );
           if (broaderCmd && !isIrreversible(broaderCmd) && !checkPermissions(broaderCmd, perms)) {
-            console.error(`[open-terminal] broadening search...`);
+            console.error(`[terminal] broadening search...`);
             const broaderResult = execSync(broaderCmd + " #(broadened)", { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, cwd: process.cwd() });
             const broaderClean = stripNoise(stripAnsi(broaderResult)).cleaned;
             if (broaderClean.trim()) {
@@ -835,7 +835,7 @@ else if (args.length > 0) {
           const retryCmd = await translateToCommand(retryStrategies[attempt], perms, []);
           if (!retryCmd || retryCmd === actualCmd || isIrreversible(retryCmd) || checkPermissions(retryCmd, perms)) continue;
 
-          console.error(`[open-terminal] retry ${attempt + 2}/3: $ ${retryCmd}`);
+          console.error(`[terminal] retry ${attempt + 2}/3: $ ${retryCmd}`);
           const retryResult = execSync(retryCmd + ` #(retry${attempt + 2})`, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, cwd: process.cwd() });
           const retryClean = stripNoise(stripAnsi(retryResult)).cleaned;
           if (retryClean.length > 5) {
