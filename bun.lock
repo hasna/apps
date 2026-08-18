@@ -705,6 +705,7 @@
         "@hasna/events": "^0.1.16",
         "@hasna/files": "0.3.16",
         "@hasna/hooks": "^0.7.0",
+        "@hasna/knowledge": "^0.2.106",
         "@hasna/mementos": "0.14.85",
         "@hasna/skills": "0.1.59",
         "@modelcontextprotocol/sdk": "^1.0.0",
