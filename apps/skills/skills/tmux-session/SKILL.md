@@ -25,7 +25,7 @@ Examples:
 
 ```text
 workspace/repos/hasna/apps/apps/todos
-workspace/hasna/opensource/opensourcedev/open-conversations
+workspace/repos/hasna/apps/apps/conversations
 workspace/hasnaxyz/agent/agentdev/agent-claude
 workspace/hasnaxyz/service/servicedev/service-chat
 workspace/hasnastudio/hasnastudio-alumia/platform/platform-alumia
@@ -38,13 +38,13 @@ Local tools live under `~/local/local-[name]/`.
 
 - A source session owns the windows.
 - Named sessions join that source session and lock onto one window index.
-- `tmux attach -t open-economy` should land in the `open-economy` window without manual switching.
+- `tmux attach -t economy` should land in the `economy` window without manual switching.
 
 ## When to open a session
 
 | Work type | Source session | Session/window naming |
 |-----------|----------------|-----------------------|
-| Multiple OSS repos | `opensourcemaintain` | `open-[name]` |
+| Multiple OSS repos | `opensourcemaintain` | `[name]` |
 | Multiple agent repos | `agentdev` | `agent-[name]` |
 | Multiple local tools | `local` | `local-[name]` |
 | Multiple workers on one project | project name | `[project]-01`, `[project]-02`, ... |
@@ -55,8 +55,8 @@ Rule: tmux groups live at the area/team level, not the individual repo level.
 
 ```bash
 SOURCE="opensourcemaintain"
-NAME="open-economy"
-DIR="$HOME/workspace/hasna/opensource/opensourcedev/open-economy"
+NAME="economy"
+DIR="$HOME/workspace/repos/hasna/apps/apps/economy"
 
 tmux new-window -t "$SOURCE" -n "$NAME" -c "$DIR"
 IDX=$(tmux list-windows -t "$SOURCE" -F "#{window_index}:#{window_name}" | grep ":${NAME}$" | cut -d: -f1)
