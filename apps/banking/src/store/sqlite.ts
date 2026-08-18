@@ -1,4 +1,7 @@
 import { Database } from "bun:sqlite";
+import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import type { ApprovalRecord } from "../core/approvals.ts";
 import type { AuditEvent } from "../core/audit.ts";
 import type { IdempotencyFingerprint, IdempotencyReplayDecision } from "../core/idempotency.ts";
@@ -10,8 +13,28 @@ export interface SqliteDevStoreOptions {
   readonly path?: string;
 }
 
+/**
+ * The package-owned data root for @hasna/banking. Fleet law: app data lives at
+ * ~/.hasna/<app>/ — never a hidden dot-dir, never a config/local-state dir, and
+ * never cwd-relative. HASNA_BANKING_HOME overrides the root (the default is
+ * what must stay canonical; the override is honored).
+ */
+export function bankingDataRoot(): string {
+  const home = process.env["HOME"] || homedir();
+  return process.env["HASNA_BANKING_HOME"] || join(home, ".hasna", "banking");
+}
+
+/** The default dev-store database path beneath the canonical data root. */
+export function defaultDevStorePath(): string {
+  return join(bankingDataRoot(), "banking.db");
+}
+
 export function createSqliteDevStore(options: SqliteDevStoreOptions = {}): DevOnlyStore {
-  const db = new Database(options.path ?? ":memory:");
+  const dbPath = options.path ?? defaultDevStorePath();
+  if (dbPath !== ":memory:" && !dbPath.startsWith("file::memory:")) {
+    mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
+  }
+  const db = new Database(dbPath);
   db.exec("pragma foreign_keys = on;");
   db.exec(SQLITE_SCHEMA);
 

@@ -20,7 +20,7 @@ const approver: ActorRef = { id: "finance-reviewer", type: "human" };
 
 describe("dev safety store", () => {
   test("reserves idempotency, persists intents, and detects conflicts", async () => {
-    const store = createSqliteDevStore();
+    const store = createSqliteDevStore({ path: ":memory:" });
     const envelope = createBankingClient().createPaymentRequest({
       providerId: "mercury",
       requester,
@@ -45,7 +45,7 @@ describe("dev safety store", () => {
   });
 
   test("stores approvals, audit events, reconciliation records, and outbox entries", async () => {
-    const store = createSqliteDevStore();
+    const store = createSqliteDevStore({ path: ":memory:" });
     const client = createBankingClient();
     const envelope = client.createPaymentRequest({
       providerId: "mercury",
@@ -111,7 +111,7 @@ describe("dev safety store", () => {
   });
 
   test("dev store rejects immutable overwrites and invalid outbox transitions", async () => {
-    const store = createSqliteDevStore();
+    const store = createSqliteDevStore({ path: ":memory:" });
     const envelope = createBankingClient().createPaymentRequest({
       providerId: "mercury",
       requester,
