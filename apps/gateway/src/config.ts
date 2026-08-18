@@ -1,4 +1,5 @@
 import { GatewayHttpError } from "./errors";
+import { resolveDefaultConfigPath } from "./config-path";
 import { modelPresets, providerPresets } from "./presets";
 import { providerCredentialEnv, providerRequiresCredential } from "./provider-config";
 import { resolveRoute } from "./router";
@@ -716,16 +717,17 @@ export function validateConfig(input: GatewayConfigInput): GatewayConfigValidati
   return errors.length > 0 ? { ok: false, errors, warnings } : { ok: true, config, warnings };
 }
 
-export async function loadGatewayConfig(path = "gateway.config.json"): Promise<GatewayConfig> {
+export async function loadGatewayConfig(path?: string): Promise<GatewayConfig> {
+  const resolvedPath = path ?? resolveDefaultConfigPath();
   let raw: string;
   try {
-    raw = await Bun.file(path).text();
+    raw = await Bun.file(resolvedPath).text();
   } catch (error) {
     throw new GatewayHttpError({
       status: 500,
       type: "gateway_config_error",
       code: "config_not_found",
-      message: `Could not read config file '${path}'.`,
+      message: `Could not read config file '${resolvedPath}'.`,
       raw: error,
     });
   }
@@ -738,7 +740,7 @@ export async function loadGatewayConfig(path = "gateway.config.json"): Promise<G
       status: 500,
       type: "gateway_config_error",
       code: "config_invalid_json",
-      message: `Config file '${path}' is not valid JSON.`,
+      message: `Config file '${resolvedPath}' is not valid JSON.`,
       raw: error,
     });
   }

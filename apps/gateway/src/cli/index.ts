@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { lstat, unlink } from "node:fs/promises";
 import { loadGatewayConfig, validateConfig, validateRuntimeSecrets } from "../config";
+import { resolveDefaultConfigPath } from "../config-path";
 import { getBudgetStatuses } from "../budget";
 import { GatewayHttpError } from "../errors";
 import { toCapabilityCards, toCostEstimate, toDecisionEnvelope } from "../lib/contracts";
@@ -134,7 +135,7 @@ Usage:
 
 export async function runCli(argv = process.argv.slice(2)): Promise<void> {
   const parsed = parseArgs(argv);
-  const configPath = flagString(parsed.flags, "config", "gateway.config.json");
+  const configPath = flagString(parsed.flags, "config", resolveDefaultConfigPath());
 
   if (parsed.command === "help" || parsed.command === "--help" || parsed.flags.help) {
     console.log(help());
