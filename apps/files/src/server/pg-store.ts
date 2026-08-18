@@ -55,11 +55,15 @@ export function getCloudClient(): TypedQueryClient {
   return cached.client;
 }
 
-/** True when the service is configured for Postgres (`HASNA_FILES_DATABASE_URL` set). */
-export function cloudEnabled(): boolean {
-  const token = "FILES";
-  const url = process.env[`HASNA_${token}_DATABASE_URL`] ?? process.env[`${token}_DATABASE_URL`];
-  return Boolean(url);
+/**
+ * True when the service is configured for the PostgreSQL backend. The backend
+ * is selected by HASNA_FILES_DATABASE_URL / FILES_DATABASE_URL alone; the
+ * retired storage-mode variables are refused by the contracts resolver and
+ * must not be a live configuration surface here.
+ */
+export function postgresBackendEnabled(): boolean {
+  const url = process.env["HASNA_FILES_DATABASE_URL"] ?? process.env["FILES_DATABASE_URL"];
+  return Boolean(url?.trim());
 }
 
 function parseJson<T>(raw: unknown, fallback: T): T {
