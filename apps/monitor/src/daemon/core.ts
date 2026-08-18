@@ -13,6 +13,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import type { Clock } from "./clock.js";
+import { validateSlugDefinition } from "./definition-schema.js";
 
 // ── Row types ─────────────────────────────────────────────────────────────────
 
@@ -143,6 +144,14 @@ export function registerSlug(
   clock: Clock,
   input: { name: string; definition: unknown; createdBy?: string }
 ): RegisteredSlug {
+  // The daemon path validates every definition against the MON-V2-01
+  // definition contract (CommandSpec argv commands; no shell strings, no
+  // shell mode, no interpolation). An invalid definition is refused here so
+  // it can never reach the executor or the store.
+  const validated = validateSlugDefinition(input.definition);
+  if (!validated.ok) {
+    throw new Error(`registerSlug: invalid definition: ${validated.errors.join("; ")}`);
+  }
   const now = clock.now();
   const definitionJson = JSON.stringify(input.definition);
   const digest = sha256Hex(definitionJson);
@@ -167,7 +176,8 @@ export function registerSlug(
   const slugId = newId();
   db.run(
     "INSERT INTO slugs (id, name, description, desired_state, execution_epoch, created_at, updated_at) VALUES (?, ?, ?, 'stopped', 0, ?, ?)",
-    [slugId, input.name, null, now, now]
+    // description is NOT NULL DEFAULT '' under migration 008.
+    [slugId, input.name, "", now, now]
   );
   const revision = createRevision(db, clock, slugId, definitionJson, digest, now, input.createdBy);
   db.run("UPDATE slugs SET active_revision_id = ? WHERE id = ?", [revision.id, slugId]);
@@ -189,7 +199,8 @@ function createRevision(
   const revision = newId();
   db.run(
     "INSERT INTO slug_revisions (id, slug_id, revision, definition_json, definition_digest, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    [revision, slugId, row.n, definitionJson, digest, now, createdBy ?? null]
+    // created_by is NOT NULL DEFAULT '' under migration 008.
+    [revision, slugId, row.n, definitionJson, digest, now, createdBy ?? ""]
   );
   return getRevision(db, revision)!;
 }
@@ -234,21 +245,34 @@ export function setSlugDesiredState(
   return getSlug(db, slugId)!;
 }
 
-/** Retry policy from the immutable revision a run was admitted against. */
+/**
+ * Retry policy from the immutable revision a run was admitted against,
+ * read from the MON-V2-01 `execution` shape (maxAttempts, retryBackoffSeconds).
+ * maxAttempts 1 (the schema default) means no retries; each further attempt
+ * adds one retry after a failure.
+ */
 export function getRetryPolicy(db: Database, run: RunRow): RetryPolicy {
   const revision = getRevision(db, run.revision_id);
-  let retry: { maxRetries?: number; retryDelayMs?: number } = {};
+  let execution: { maxAttempts?: number; retryBackoffSeconds?: number[] } = {};
   if (revision) {
     try {
-      const def = JSON.parse(revision.definition_json) as { retry?: { maxRetries?: number; retryDelayMs?: number } };
-      retry = def.retry ?? {};
+      const def = JSON.parse(revision.definition_json) as {
+        execution?: { maxAttempts?: number; retryBackoffSeconds?: number[] };
+      };
+      execution = def.execution ?? {};
     } catch {
-      retry = {};
+      execution = {};
     }
   }
+  const maxAttempts =
+    typeof execution.maxAttempts === "number" ? Math.max(1, Math.floor(execution.maxAttempts)) : 1;
+  const backoff =
+    Array.isArray(execution.retryBackoffSeconds) && execution.retryBackoffSeconds.length > 0
+      ? Math.max(0, execution.retryBackoffSeconds[0] ?? 0)
+      : 0;
   return {
-    maxRetries: typeof retry.maxRetries === "number" ? Math.max(0, Math.floor(retry.maxRetries)) : 0,
-    retryDelayMs: typeof retry.retryDelayMs === "number" ? Math.max(0, retry.retryDelayMs) : 0,
+    maxRetries: maxAttempts - 1,
+    retryDelayMs: backoff * 1000,
   };
 }
 
@@ -573,7 +597,7 @@ function insertReceipt(
 ): ReceiptRow {
   const receiptId = newId();
   const info = db
-    .query<{ changes: number }, [string, string, string | null, string | null, number | null, string, string | null, string | null, number]>(
+    .query<{ changes: number }, [string, string, string | null, string | null, number, string, string, string, number]>(
       "INSERT OR IGNORE INTO receipts (id, run_id, attempt_id, lease_id, lease_generation, state, reason, result_digest, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .run(
@@ -581,10 +605,13 @@ function insertReceipt(
       input.run.id,
       input.attempt?.id ?? null,
       input.lease?.id ?? null,
-      input.lease?.generation ?? null,
+      // lease_generation is NOT NULL under migration 008; the skipped and
+      // cancelled-before-claim paths have no lease, so a neutral 0 is stored.
+      input.lease?.generation ?? 0,
       input.state,
-      input.reason,
-      input.resultDigest,
+      // reason and result_digest are NOT NULL DEFAULT '' under migration 008.
+      input.reason ?? "",
+      input.resultDigest ?? "",
       clock.now()
     );
   if (Number(info.changes) === 0) {

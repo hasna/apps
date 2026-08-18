@@ -21,8 +21,7 @@
     "monitor-mcp": "./bins/monitor-mcp.js",
     "monitor-daemon": "./bins/monitor-daemon.js",
     "monitor-server": "./bins/monitor-server.js",
-    "monitor-web": "./bins/monitor-web.js",
-    "monitor-daemon": "./bins/monitor-daemon.ts"
+    "monitor-web": "./bins/monitor-web.js"
   },
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -51,8 +50,7 @@
     "monitor": "bun run ./bins/monitor.ts",
     "monitor-mcp": "bun run ./bins/monitor-mcp.ts",
     "monitor-server": "bun run ./bins/monitor-server.ts",
-    "monitor-web": "bun run ./bins/monitor-web.ts",
-    "monitor-daemon": "bun run ./bins/monitor-daemon.ts"
+    "monitor-web": "bun run ./bins/monitor-web.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch": "^3.600.0",

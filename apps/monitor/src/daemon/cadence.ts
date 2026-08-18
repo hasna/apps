@@ -1,10 +1,12 @@
 /**
  * Cadence parsing and next-due computation for slug definitions.
  *
- * Supports interval cadences ("30s", "5m", "1h", "1d") and cron expressions
- * (5-field, via cron-parser — the same vocabulary node-cron uses elsewhere
- * in this package). All computations are pure functions of the clock, so
- * fake-clock tests stay deterministic.
+ * Accepts the MON-V2-01 definition cadence shapes: interval cadences in
+ * seconds (`{ type: "interval", seconds }`) and cron expressions with an
+ * IANA timezone (`{ type: "cron", expression, timezone }`). The legacy
+ * string-unit interval shape (`{ type: "interval", every: "5m" }`) is not
+ * part of the v2 definition schema and is rejected. All computations are
+ * pure functions of the clock, so fake-clock tests stay deterministic.
  */
 
 import { CronExpressionParser } from "cron-parser";
@@ -23,25 +25,7 @@ function normalizeCron(expression: string): string {
 
 export type Cadence =
   | { type: "interval"; everyMs: number }
-  | { type: "cron"; expression: string };
-
-const INTERVAL_UNITS: Record<string, number> = {
-  s: 1_000,
-  m: 60_000,
-  h: 3_600_000,
-  d: 86_400_000,
-};
-
-/** Parse "30s" | "5m" | "1h" | "1d" into milliseconds. Null on any malformed input. */
-export function parseIntervalMs(every: string): number | null {
-  const m = /^(\d+)\s*(s|m|h|d)$/.exec(every.trim());
-  if (!m) return null;
-  const n = Number(m[1]);
-  if (!Number.isSafeInteger(n) || n <= 0) return null;
-  const unit = INTERVAL_UNITS[m[2] as keyof typeof INTERVAL_UNITS];
-  if (unit === undefined) return null;
-  return n * unit;
-}
+  | { type: "cron"; expression: string; timezone?: string };
 
 /**
  * Parse a cadence object from a slug definition. Returns null when the
@@ -51,19 +35,19 @@ export function parseIntervalMs(every: string): number | null {
 export function parseCadence(def: unknown): Cadence | null {
   if (typeof def !== "object" || def === null) return null;
   const d = def as Record<string, unknown>;
-  if (d.type === "interval" && typeof d.every === "string") {
-    const everyMs = parseIntervalMs(d.every);
-    if (everyMs === null) return null;
-    return { type: "interval", everyMs };
+  if (d.type === "interval" && typeof d.seconds === "number") {
+    if (!Number.isSafeInteger(d.seconds) || d.seconds <= 0) return null;
+    return { type: "interval", everyMs: d.seconds * 1000 };
   }
   if (d.type === "cron" && typeof d.expression === "string") {
+    const timezone = typeof d.timezone === "string" && d.timezone.length > 0 ? d.timezone : undefined;
     const normalized = normalizeCron(d.expression);
     try {
-      CronExpressionParser.parse(normalized);
+      CronExpressionParser.parse(normalized, timezone ? { tz: timezone } : undefined);
     } catch {
       return null;
     }
-    return { type: "cron", expression: normalized };
+    return { type: "cron", expression: normalized, timezone };
   }
   return null;
 }
@@ -86,6 +70,7 @@ export function nextDueAt(cadence: Cadence, afterMs: number, _nowMs: number): nu
   }
   const expr = CronExpressionParser.parse(cadence.expression, {
     currentDate: new Date(afterMs),
+    ...(cadence.timezone ? { tz: cadence.timezone } : {}),
   });
   return expr.next().getTime();
 }

@@ -1,17 +1,25 @@
 /**
- * Minimal shell executor for the daemon bin.
+ * Check executor for the daemon bin.
  *
- * Executes the slug's configured check commands with a bounded capture and a
- * per-check timeout. Output is size-bounded and reduced to a digest by the
- * worker; full outputs belong to the output-spool lane (MON-V2-13). Exit 0
- * is success, non-zero is failure — the pass/fail predicates over outputs
- * are the slug-schema lane's concern.
+ * Executes the slug's configured check commands as structured argv only
+ * (MON-V2-01 CommandSpec: `{ executable, args }`) through Bun.spawn with an
+ * argv array — never through a shell. Shell strings, `sh -c` mode, and shell
+ * interpolation are not part of the v2 definition schema; a stored command
+ * that is not a valid CommandSpec is refused with a check failure rather than
+ * executed (the definition validation at registration is the primary gate;
+ * this refusal is the defensive gate for revisions stored before the schema
+ * applied).
+ *
+ * Output is size-bounded and reduced to a digest by the worker; full outputs
+ * belong to the output-spool lane (MON-V2-13). Exit 0 is success, non-zero is
+ * failure — the pass/fail predicates over outputs are the slug-schema lane's
+ * concern.
  */
 
-import { execFile } from "node:child_process";
 import type { Database } from "bun:sqlite";
 import { getRevision, getRun } from "./core.js";
 import type { ExecContext, ExecResult } from "./worker.js";
+import { CommandSpecSchema, type CommandSpec } from "./definition-schema.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -25,10 +33,10 @@ function truncate(s: string): string {
 
 interface CheckDef {
   id?: string;
-  command?: string;
+  command?: unknown;
 }
 
-export class ShellCheckExecutor {
+export class CommandCheckExecutor {
   constructor(
     private readonly db: Database,
     private readonly timeoutMs: number = DEFAULT_TIMEOUT_MS
@@ -55,12 +63,22 @@ export class ShellCheckExecutor {
     const stderrParts: string[] = [];
     let overallExit = 0;
     for (const check of checks) {
-      const command = check.command ?? "";
-      if (!command) continue;
-      const result = await this.runOne(command);
-      stdoutParts.push(`[${check.id ?? "check"} exit=${result.exitCode}]`);
+      const label = check.id ?? "check";
+      const parsed = CommandSpecSchema.safeParse(check.command);
+      if (!parsed.success) {
+        // Never shell a stored command. A command that is not a CommandSpec
+        // (a shell string, sh -c mode, interpolation) is refused.
+        const reason = parsed.error.issues.map((i) => i.message).join("; ");
+        stderrParts.push(
+          `[${label}] refused: command is not a valid CommandSpec (shell strings, sh -c, and shell interpolation are not part of the v2 definition schema): ${reason}`
+        );
+        if (overallExit === 0) overallExit = 2;
+        continue;
+      }
+      const result = await this.runOne(parsed.data);
+      stdoutParts.push(`[${label} exit=${result.exitCode}]`);
       if (result.stdout) stdoutParts.push(result.stdout);
-      if (result.stderr) stderrParts.push(`[${check.id ?? "check"}] ${result.stderr}`);
+      if (result.stderr) stderrParts.push(`[${label}] ${result.stderr}`);
       if (result.exitCode !== 0 && overallExit === 0) overallExit = result.exitCode;
     }
     return {
@@ -70,20 +88,33 @@ export class ShellCheckExecutor {
     };
   }
 
-  private runOne(command: string): Promise<ExecResult> {
-    return new Promise<ExecResult>((resolve) => {
-      execFile(
-        "/bin/sh",
-        ["-c", command],
-        { timeout: this.timeoutMs, maxBuffer: MAX_OUTPUT_BYTES },
-        (error, stdout, stderr) => {
-          const exitCode =
-            error === null ? 0 : typeof (error as { code?: number }).code === "number"
-              ? (error as { code?: number }).code!
-              : 1;
-          resolve({ exitCode, stdout: truncate(stdout), stderr: truncate(stderr) });
-        }
-      );
+  /** Spawn one CommandSpec via argv with a bounded capture and per-command timeout. */
+  private async runOne(command: CommandSpec): Promise<ExecResult> {
+    const timeoutMs =
+      typeof command.timeoutSeconds === "number"
+        ? Math.max(1, command.timeoutSeconds) * 1000
+        : this.timeoutMs;
+    const proc = Bun.spawn([command.executable, ...command.args], {
+      ...(command.cwd ? { cwd: command.cwd } : {}),
+      stdout: "pipe",
+      stderr: "pipe",
     });
+    const stdoutPromise = new Response(proc.stdout).text();
+    const stderrPromise = new Response(proc.stderr).text();
+    const killer = setTimeout(() => {
+      try {
+        proc.kill();
+      } catch {
+        // already exited
+      }
+    }, timeoutMs);
+    let exitCode: number;
+    try {
+      exitCode = await proc.exited;
+    } finally {
+      clearTimeout(killer);
+    }
+    const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+    return { exitCode, stdout: truncate(stdout), stderr: truncate(stderr) };
   }
 }

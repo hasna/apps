@@ -36,20 +36,28 @@ const MINUTE = 60_000;
 
 function intervalDefinition(overrides: Record<string, unknown> = {}) {
   return {
+    schemaVersion: 2,
     name: "pulse",
-    cadence: { type: "interval", every: "5m" },
-    retry: { maxRetries: 0, retryDelayMs: 0 },
-    checks: [{ id: "c1", command: "echo ok" }],
+    cadence: { type: "interval", seconds: 300 },
+    execution: { maxAttempts: 1 },
+    checks: [
+      { id: "c1", command: { executable: "echo", args: ["ok"], timeoutSeconds: 30 }, expect: { exit: 0 } },
+    ],
+    checksAggregate: { mode: "all" },
     ...overrides,
   };
 }
 
 function cronDefinition(overrides: Record<string, unknown> = {}) {
   return {
+    schemaVersion: 2,
     name: "pulse",
-    cadence: { type: "cron", expression: "*/5 * * * *" },
-    retry: { maxRetries: 0, retryDelayMs: 0 },
-    checks: [{ id: "c1", command: "echo ok" }],
+    cadence: { type: "cron", expression: "*/5 * * * *", timezone: "UTC" },
+    execution: { maxAttempts: 1 },
+    checks: [
+      { id: "c1", command: { executable: "echo", args: ["ok"], timeoutSeconds: 30 }, expect: { exit: 0 } },
+    ],
+    checksAggregate: { mode: "all" },
     ...overrides,
   };
 }
@@ -123,7 +131,7 @@ function registerRunningSlug(definition: Record<string, unknown>) {
 
 describe("cadence", () => {
   it("parses interval cadences and computes the next due time", () => {
-    const c = parseCadence({ type: "interval", every: "5m" });
+    const c = parseCadence({ type: "interval", seconds: 300 });
     expect(c).not.toBeNull();
     if (!c) return;
     expect(c.type).toBe("interval");
@@ -134,9 +142,10 @@ describe("cadence", () => {
     );
   });
 
-  it("rejects malformed interval units", () => {
-    expect(parseCadence({ type: "interval", every: "5x" })).toBeNull();
-    expect(parseCadence({ type: "interval", every: "abc" })).toBeNull();
+  it("rejects malformed interval shapes", () => {
+    expect(parseCadence({ type: "interval", seconds: 0 })).toBeNull();
+    expect(parseCadence({ type: "interval", seconds: -5 })).toBeNull();
+    expect(parseCadence({ type: "interval", every: "5m" })).toBeNull();
     expect(parseCadence({ type: "cron", expression: "not a cron" })).toBeNull();
   });
 
@@ -257,7 +266,7 @@ describe("bounded retries", () => {
     const executor = scriptedExecutor([failResult, failResult, okResult]);
     const daemon = makeDaemon({ workerCapacity: 1, executor });
     registerRunningSlug(
-      intervalDefinition({ retry: { maxRetries: 2, retryDelayMs: 1_000 } })
+      intervalDefinition({ execution: { maxAttempts: 3, retryBackoffSeconds: [1] } })
     );
     await daemon.start();
 
@@ -289,7 +298,7 @@ describe("bounded retries", () => {
     const executor = scriptedExecutor([failResult, failResult, failResult]);
     const daemon = makeDaemon({ workerCapacity: 1, executor });
     registerRunningSlug(
-      intervalDefinition({ retry: { maxRetries: 2, retryDelayMs: 0 } })
+      intervalDefinition({ execution: { maxAttempts: 3, retryBackoffSeconds: [0] } })
     );
     await daemon.start();
 
@@ -361,7 +370,7 @@ describe("lease expiry and stale-worker rejection", () => {
       executor,
     });
     registerRunningSlug(
-      intervalDefinition({ retry: { maxRetries: 1, retryDelayMs: 0 } })
+      intervalDefinition({ execution: { maxAttempts: 2, retryBackoffSeconds: [0] } })
     );
     await daemon.start();
 
@@ -754,7 +763,7 @@ describe("replacement", () => {
       executor,
     });
     registerRunningSlug(
-      intervalDefinition({ retry: { maxRetries: 1, retryDelayMs: 0 } })
+      intervalDefinition({ execution: { maxAttempts: 2, retryBackoffSeconds: [0] } })
     );
     await daemon.start();
     const epochBefore = getDaemonState(db, "test-daemon")!.leader_epoch;
