@@ -326,7 +326,6 @@
       "bin": {
         "catalog": "dist/cli/index.js",
         "catalog-mcp": "dist/mcp/index.js",
-        "catalog-serve": "dist/server/index.js",
       },
       "dependencies": {
         "@modelcontextprotocol/sdk": "1.29.0",

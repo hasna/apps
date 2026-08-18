@@ -196,6 +196,7 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "banking", reason: "Client-shaped (bank data access); no server surface." },
   { member: "bridge", reason: "Client-shaped (bridge to other tools); no server surface." },
   { member: "contracts", reason: "Library-shaped (manifest validator kit); no server surface." },
+  { member: "catalog", reason: "Local read model; the HTTP read API is a documented local dev convenience bound to loopback (README 'Security and deployment scope'), not a supported service surface — the manifest declares the api surface deferred with that reason." },
   { member: "datasets", reason: "CLI-only member; no server surface." },
   { member: "dispatch", reason: "Dispatch daemon surface only; no HTTP serve bin." },
   { member: "docs", reason: "Docs renderer; no server surface." },
@@ -332,11 +333,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "calendar",
     cause: "manifest_valid at pinned 0.4.2 (mode-era schema vs mixed-era manifest): storage.mode Invalid enum value. Expected 'local' | 'cloud', received 'sqlite'; storage Unrecognized key(s) in object: 'engines', 'pgTestGate'; <root> Unrecognized key(s) in object: 'hosting', 'serviceSurfaces'. The earlier mode_enum_compliance env-var cause no longer fires.",
     task: "todos a967c9bd (contracts task — calendar)",
-  },
-  {
-    member: "catalog",
-    cause: "kitVersion 0.8.3 does not exist on npm and no @hasna/contracts dep is pinned; validated at latest, manifest is pre-backend-schema era: storage.backend Required; storage Unrecognized key(s) in object: 'mode'; serviceSurfaces.* Unrecognized key(s) in object: 'deploymentModes'; metadata.conformance.waivedStorageEngines.0.engine Invalid enum value. Expected 'postgresql', received 'postgres'; <root> Unrecognized key(s) in object: 'deploymentModes'.",
-    task: "todos e4d8cd62 (contracts task — catalog)",
   },
   {
     member: "conversations",
