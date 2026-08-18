@@ -49,15 +49,12 @@ export function registerUpload(program: Command): void {
     .option("--brief", "Compact one-line output")
     .option("--stdin", "Read file content from stdin instead of a file path")
     .option("--filename <name>", "Filename to use when uploading from stdin")
-    .option("--client-mode <mode>", "Override client mode for this upload: local or cloud")
     .option("--internal", "Generate a local-network/Tailscale server link")
-    .action(async (files: string[], options: { expiry?: string; linkType?: "presigned" | "server"; tag?: string; password?: string; encrypt?: boolean; maxDownloads?: string; requireEmail?: boolean; allowedEmail?: string[]; format?: string; copy?: boolean; brief?: boolean; stdin?: boolean; filename?: string; clientMode?: string; internal?: boolean }) => {
+    .action(async (files: string[], options: { expiry?: string; linkType?: "presigned" | "server"; tag?: string; password?: string; encrypt?: boolean; maxDownloads?: string; requireEmail?: boolean; allowedEmail?: string[]; format?: string; copy?: boolean; brief?: boolean; stdin?: boolean; filename?: string; internal?: boolean }) => {
       const config = getConfig();
-      if (options.clientMode && options.clientMode !== "local" && options.clientMode !== "cloud") {
-        exitError("--client-mode must be local or cloud");
-      }
-      // Env drives self_hosted/cloud vs local; `--client-mode local` pins on-box.
-      const store = resolveStore(process.env, { forceLocal: options.clientMode === "local" });
+      // Env selects the backend: both HASNA_ATTACHMENTS_API_URL and
+      // HASNA_ATTACHMENTS_API_KEY set -> hosted API; otherwise local.
+      const store = resolveStore(process.env);
       const cloudMode = store.transport === "cloud-http";
 
       const maxDownloads = options.maxDownloads ? parseInt(options.maxDownloads, 10) : undefined;
@@ -74,10 +71,10 @@ export function registerUpload(program: Command): void {
         if (bad.length > 0) exitError(`Invalid --allowed-email value(s): ${bad.join(", ")}`);
       }
       if (options.internal && cloudMode) {
-        exitError("--internal requires local client mode. Use --client-mode local or set client.mode to local.");
+        exitError("--internal is only available with the local backend (it needs the on-box serve API).");
       }
       if (cloudMode && options.encrypt) {
-        exitError("--encrypt is not supported in self_hosted/cloud mode. Use --client-mode local to encrypt at rest.");
+        exitError("--encrypt is not supported with the hosted API backend. Use the local backend to encrypt at rest.");
       }
       // D1(b): an on-box upload whose configured public host is really the remote
       // API would produce a link that can never resolve. core/upload rewrites the
@@ -89,7 +86,7 @@ export function registerUpload(program: Command): void {
           process.stderr.write(
             `! Local upload: ${resolved.rejectedBaseUrl} is the remote attachments API, not this machine.\n` +
               `  Share links will point at ${resolved.baseUrl} (served by \`attachments serve\`).\n` +
-              `  Drop --client-mode local to upload to ${resolved.rejectedBaseUrl} instead.\n`,
+              `  Use the hosted API (both HASNA_ATTACHMENTS_API_URL and HASNA_ATTACHMENTS_API_KEY set) to upload to ${resolved.rejectedBaseUrl} instead.\n`,
           );
         }
       }

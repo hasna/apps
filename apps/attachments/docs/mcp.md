@@ -54,7 +54,7 @@ verbose attachment-workflow schemas on demand.
 | `get_link` | `id` | Gets or regenerates a link |
 | `upload_attachments` | `paths` | Batch uploads and reports per-file failures inline |
 | `configure_s3` | `bucket`, `region` | Saves S3 config; explicit credentials are optional as a pair |
-| `presign_upload` | `filename` | Creates a direct-to-S3 PUT URL in local mode |
+| `presign_upload` | `filename` | Creates a direct-to-S3 PUT URL with the local backend |
 | `complete_presigned_upload` | `id` | Finalizes direct upload and creates a share link |
 | `report_stats` | — | Returns recent attachment activity |
 | `describe_tools` | — | Returns verbose schemas for one or all workflow tools |

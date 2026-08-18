@@ -17,7 +17,7 @@ The package installs three binaries:
 
 - `attachments` — local-first CLI and REST server
 - `attachments-mcp` — MCP server over Streamable HTTP or stdio
-- `attachments-serve` — self-hosted Postgres + S3 service
+- `attachments-serve` — Postgres + S3 service
 
 ## Quick Start
 
@@ -100,13 +100,12 @@ The attachment API supports JSON/base64, raw-body, multipart form, multipart
 S3 upload, presigned upload completion, listing, metadata, deletion, downloads,
 and link regeneration.
 
-## Self-Hosted Service
+## Hosted Service
 
 `attachments-serve` is the hosted API. It reads and writes Postgres and object
-storage directly; there is no local/cloud sync engine or cache mode.
+storage directly; there is no sync engine.
 
 ```bash
-export HASNA_ATTACHMENTS_STORAGE_MODE=cloud
 export HASNA_ATTACHMENTS_DATABASE_URL=postgres://...
 export HASNA_ATTACHMENTS_API_SIGNING_KEY=replace-me
 export ATTACHMENTS_S3_BUCKET=my-bucket

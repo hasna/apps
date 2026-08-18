@@ -131,8 +131,6 @@ function captureOutput() {
 function useApiConnectionEnv(): void {
   process.env["HASNA_ATTACHMENTS_API_URL"] = "https://attachments.example.test";
   process.env["HASNA_ATTACHMENTS_API_KEY"] = "test-only";
-  delete process.env["HASNA_ATTACHMENTS_STORAGE_MODE"];
-  delete process.env["HASNA_ATTACHMENTS_MODE"];
 }
 
 function expectApiConnectionWording(output: string): void {

@@ -61,7 +61,7 @@ S3-compatible storage. It does not use local SQLite.
 |--------|------|----------------|
 | `GET` | `/health` | Public liveness/database probe |
 | `GET` | `/ready` | Public migration readiness probe |
-| `GET` | `/version` | Public version and mode |
+| `GET` | `/version` | Public version |
 | `GET` | `/openapi.json` | Public OpenAPI 3.1 document |
 | `GET`, `POST` | `/v1/attachments` | API key |
 | `GET`, `DELETE` | `/v1/attachments/:id` | API key |

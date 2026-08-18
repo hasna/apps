@@ -580,13 +580,13 @@ export function getToolsForProfile(
 // Tool handler helpers
 // ---------------------------------------------------------------------------
 
-/** Presigned direct-to-S3 upload needs on-box S3 creds; self_hosted uses upload_attachment. */
+/** Presigned direct-to-S3 upload needs on-box S3 creds; the hosted API uses upload_attachment. */
 function requireLocalStore(): LocalStore {
   const store = resolveStore();
   if (!(store instanceof LocalStore)) {
     store.close();
     throw new Error(
-      "presigned direct upload is only available in local mode (needs on-box S3 credentials). In self_hosted/cloud mode use the upload_attachment tool.",
+      "presigned direct upload is only available with the local backend (needs on-box S3 credentials). With the hosted API backend use the upload_attachment tool.",
     );
   }
   return store;
@@ -1040,7 +1040,7 @@ function getMcpVersion(): string {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     return (require("../../package.json") as { version: string }).version;
   } catch {
-    return process.env.npm_package_version ?? "1.0.0";
+    return "1.0.0";
   }
 }
 

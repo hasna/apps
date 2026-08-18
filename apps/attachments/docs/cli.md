@@ -22,7 +22,6 @@ Uploads paths, or one stdin file with `--stdin --filename <name>`.
 | `--format <fmt>` | `human` (default) or `json` |
 | `--copy`, `--brief` | Copies the link or prints compact output |
 | `--stdin`, `--filename <name>` | Uploads stdin with the supplied filename |
-| `--client-mode <mode>` | Uses `local` or `cloud` for this upload |
 | `--internal` | Generates a local-network/Tailscale server link |
 
 Invalid modes/formats, non-positive download limits, and `--encrypt` without a

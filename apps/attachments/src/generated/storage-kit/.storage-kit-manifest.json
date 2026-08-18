@@ -1,14 +1,14 @@
 {
   "generator": "@hasna/contracts vendor-kit",
-  "kitVersion": "0.8.2",
+  "kitVersion": "0.8.7",
   "files": {
-    "mode.ts": "sha256:455046e716cc6840fd4fed7de2a47c11fab63164b132f251d035e83d6712c108",
-    "tls.ts": "sha256:2c5c733bd5c080d2a767e02f8fe27e0de580be42945c2070c9f0356b3a391a5e",
-    "query.ts": "sha256:13606bc6e8dca6d9b9ffc93c71010a85dffd38ce19f8ff38ef58363272624bb3",
-    "pool.ts": "sha256:db574c288ecaeacf9eebfef2600e4e0b44212fe674faea4e6627f02b7e1e7f0c",
-    "migrations.ts": "sha256:a39c1ed8e78cf50f3b74ba0270d974ff62373a4756521550ddfb7729d3efcbaf",
-    "health.ts": "sha256:7c7abf2b8765bd503f59d11e5e99a0bda5839c2f16d94728253bf672bfb2adf4",
-    "index.ts": "sha256:e03b32fee3df31f707840847f8f1fc58c388c7d90663cfb4946c536161055197",
-    "README.md": "sha256:0886dbdf751597bfc8f23d2e72f233d6c3516b478925c8118b93d9d06a4eaa66"
+    "backend.ts": "sha256:8ede2166ea884a885925164caba1e1e15f32c22e2f63c5851a28052ef83e6735",
+    "tls.ts": "sha256:b4756a361309c3d490c1dce5d68359b3c010dfbb611cbec12a4d420e33dd89ce",
+    "query.ts": "sha256:df6bd69234d4718b460427496f9f7a088303d8c4915425390cd38c95b022b04d",
+    "pool.ts": "sha256:4920e15691ac342661065915537b453cb4d83695d5ca0a9f0da440031465c520",
+    "migrations.ts": "sha256:c4f2eaf5a7b2325fa6bba9a6b1cc8b6f350f8046b4eea98767ede3f41854e4cc",
+    "health.ts": "sha256:33574d3f8a72a05cf1e384c71bebaa26caad54350a5967bdd6fa963e849fdd1b",
+    "index.ts": "sha256:9052376af01eab75fa633704c5f218adb3384b30d6f9de1c37c5285711d14ff5",
+    "README.md": "sha256:d07a75e2884a5f81c421e4ee1d938ff8746bcf06ae1a37663da3d76af3dd0a5a"
   }
 }

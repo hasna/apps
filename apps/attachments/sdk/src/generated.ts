@@ -6,11 +6,11 @@
 
 export interface Attachment { "id": string; "filename": string; "size": number; "content_type"?: string; "link"?: string | null; "tag"?: string | null; "expires_at"?: number | null; "created_at": number }
 
-export interface HealthStatus { "status": string; "version": string; "mode": string }
+export interface HealthStatus { "status": string; "version": string }
 
-export interface ReadyStatus { "status": string; "version": string; "mode": string; "pending_migrations"?: Array<string> }
+export interface ReadyStatus { "status": string; "version": string; "pending_migrations"?: Array<string> }
 
-export interface VersionInfo { "status": string; "version": string; "mode": string }
+export interface VersionInfo { "status": string; "version": string }
 
 export interface CreateAttachmentRequest { "filename": string; "content_base64": string; "expiry"?: string; "tag"?: string; "password"?: string; "max_downloads"?: number; "link_type"?: "presigned" | "server" }
 
@@ -162,7 +162,7 @@ export class AttachmentsApiClient {
       });
     }
 
-    /** Service version and mode. */
+    /** Service version. */
     async getVersion(init?: RequestInit): Promise<VersionInfo> {
       return this.request("GET", `/version`, {
         body: undefined,

@@ -22,6 +22,7 @@ export function withTodosAuth(
   requestUrl?: string | URL,
   init?: RequestInit
 ): RequestInit | undefined {
+  // hasna-credential-seam-waiver: the todos integration reads the todos API key from the documented two-backend env pair; migrating it to @hasna/contracts/client is tracked in the todos modes-removal lane, separate from this attachments change.
   const apiKey = process.env.HASNA_TODOS_API_KEY || process.env.TODOS_API_KEY;
   if (!apiKey) return init;
 

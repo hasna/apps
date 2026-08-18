@@ -3,13 +3,13 @@ import { getConfig, parseExpiryStrict } from "../../core/config";
 import { LocalStore, resolveStore } from "../../core/store";
 import { formatExpiry, exitError } from "../utils";
 
-/** Presigned direct-to-S3 upload is a local/S3 capability; self_hosted uses `upload`. */
+/** Presigned direct-to-S3 upload is a local/S3 capability; the hosted API uses `upload`. */
 function requireLocalStore(): LocalStore {
   const store = resolveStore();
   if (!(store instanceof LocalStore)) {
     store.close();
     exitError(
-      "presign is only available in local mode (it needs on-box S3 credentials). In self_hosted/cloud mode use `attachments upload`, which streams via the /v1 API.",
+      "presign is only available with the local backend (it needs on-box S3 credentials). With the hosted API backend use `attachments upload`, which streams via the /v1 API.",
     );
   }
   return store;

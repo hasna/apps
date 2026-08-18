@@ -32,20 +32,22 @@ describe("resolveAttachmentsV1", () => {
     expect(r.store).toBeNull();
   });
 
-  test("returns local when only URL set (key missing)", () => {
-    const r = resolveAttachmentsV1({ HASNA_ATTACHMENTS_API_URL: BASE } as NodeJS.ProcessEnv);
-    expect(r.transport).toBe("local");
-  });
-
-  test("returns cloud-http when URL+KEY set (mode implied self_hosted)", () => {
+  test("returns cloud-http when URL+KEY are both set", () => {
     const r = resolveAttachmentsV1(cloudEnv);
     expect(r.transport).toBe("cloud-http");
     if (r.transport === "cloud-http") expect(r.store.baseUrl).toBe(`${BASE}/v1`);
   });
 
-  test("explicit STORAGE_MODE=local forces local even with URL+KEY", () => {
-    const r = resolveAttachmentsV1({ ...cloudEnv, HASNA_ATTACHMENTS_STORAGE_MODE: "local" } as NodeJS.ProcessEnv);
-    expect(r.transport).toBe("local");
+  test("throws when only URL is set (key missing) — fail-closed", () => {
+    expect(() => resolveAttachmentsV1({ HASNA_ATTACHMENTS_API_URL: BASE } as NodeJS.ProcessEnv)).toThrow(
+      /Misconfigured hosted client/,
+    );
+  });
+
+  test("throws when only KEY is set (URL missing) — fail-closed", () => {
+    expect(() => resolveAttachmentsV1({ HASNA_ATTACHMENTS_API_KEY: KEY } as NodeJS.ProcessEnv)).toThrow(
+      /Misconfigured hosted client/,
+    );
   });
 
   test("list routes GET /v1/attachments with bearer key and maps the envelope", async () => {
