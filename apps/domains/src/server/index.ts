@@ -1,20 +1,21 @@
 #!/usr/bin/env bun
 /**
- * domains-serve — standalone HTTP API server (self_hosted / cloud).
+ * domains-serve — standalone HTTP API server.
  *
  * Usage: domains-serve [--port 8080] [--host 0.0.0.0]
  *
  * PURE REMOTE (Amendment A1): talks to the app's cloud Postgres directly via
  * the vendored storage kit. Requires:
- *   HASNA_DOMAINS_DATABASE_URL      app-role DSN (RDS)
- *   HASNA_DOMAINS_STORAGE_MODE      "cloud"
+ *   HASNA_DOMAINS_DATABASE_URL      app-role DSN (RDS); selects the postgresql
+ *                                   server data backend (the kit rejects
+ *                                   legacy storage-mode variables)
  *   HASNA_DOMAINS_API_SIGNING_KEY   HMAC signing secret for API keys
  * Falls back to the generic DATABASE_URL / API_KEY_SIGNING_SECRET env names the
  * hasna-app Terraform module injects.
  */
 
 import { ApiKeyStore } from "@hasna/contracts/auth";
-import { createCloudPoolFromEnv } from "../generated/storage-kit/index.js";
+import { createServerPoolFromEnv } from "../generated/storage-kit/index.js";
 import { getPackageVersion } from "../lib/version.js";
 import { createServeApp } from "./app.js";
 
@@ -30,9 +31,6 @@ export const SIGNING_KEY_ENVS = [
 export function normalizeEnv(env: NodeJS.ProcessEnv = process.env): void {
   if (!env["HASNA_DOMAINS_DATABASE_URL"] && env["DATABASE_URL"]) {
     env["HASNA_DOMAINS_DATABASE_URL"] = env["DATABASE_URL"];
-  }
-  if (!env["HASNA_DOMAINS_STORAGE_MODE"] && env["HASNA_DOMAINS_DATABASE_URL"]) {
-    env["HASNA_DOMAINS_STORAGE_MODE"] = "cloud";
   }
 }
 
@@ -64,7 +62,7 @@ async function main(): Promise<void> {
   const version = getPackageVersion();
   const signingSecret = resolveSigningSecret();
 
-  const { client, connectionSource } = createCloudPoolFromEnv("domains", {
+  const { client, connectionSource } = createServerPoolFromEnv("domains", {
     applicationName: "domains-serve",
     max: 5,
   });
@@ -79,7 +77,10 @@ async function main(): Promise<void> {
     db: client,
     signingSecret,
     version,
-    mode: process.env["HASNA_APP_MODE"] ?? "self_hosted",
+    // PURE REMOTE: createServerPoolFromEnv throws without a DATABASE_URL, so
+    // the served backend is always postgresql — the health/version label is
+    // the app's existing surface, fixed at the cloud value.
+    mode: "cloud",
     isRevoked: store.isRevoked,
     audit: (e) => {
       if (e.outcome === "deny") {

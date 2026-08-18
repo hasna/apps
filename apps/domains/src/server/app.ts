@@ -79,7 +79,7 @@ function json(data: unknown, status = 200): Response {
 
 export function createServeApp(options: ServeAppOptions): ServeApp {
   const { db, version } = options;
-  const mode = options.mode ?? "self_hosted";
+  const mode = options.mode ?? "cloud";
   const repo = new DomainsRepo(db);
   const migrationIds = buildMigrations().map((m) => m.id);
   const spec = buildOpenApiSpec(version);

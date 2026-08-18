@@ -97,7 +97,7 @@ describe("domains-serve app", () => {
   test("GET /version returns {status,version,mode}", async () => {
     const { app } = appWithKey(["domains:*"]);
     const body = (await (await app.handle(new Request("http://x/version"))).json()) as Record<string, unknown>;
-    expect(body).toEqual({ status: "ok", version: "9.9.9", mode: "self_hosted" });
+    expect(body).toEqual({ status: "ok", version: "9.9.9", mode: "cloud" });
   });
 
   test("GET /openapi.json exposes the /v1 spec", async () => {
