@@ -27,7 +27,7 @@ describe("search storage CLI", () => {
   });
 
   test("storage status reports local mode as JSON", () => {
-    const home = mkdtempSync(join(tmpdir(), "open-search-storage-cli-"));
+    const home = mkdtempSync(join(tmpdir(), "search-storage-cli-"));
     try {
       const result = runCli(["storage", "status", "--json"], {
         HOME: home,

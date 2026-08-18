@@ -1,4 +1,4 @@
-# open-search
+# search
 
 Unified search — local file index (find files by name/path/content) + 12 web providers. CLI + MCP + REST API + Dashboard.
 

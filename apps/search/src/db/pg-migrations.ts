@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-search storage sync.
+ * PostgreSQL migrations for search storage sync.
  *
  * Equivalent to the SQLite schema in migrations.ts, translated for PostgreSQL.
  * FTS5 virtual tables and triggers are omitted (use pg_trgm / tsvector instead).
