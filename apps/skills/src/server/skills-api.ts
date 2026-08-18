@@ -15,10 +15,11 @@ import { createHash } from "node:crypto";
 import { ownBytes, type OwnedBytes } from "../lib/skill-bundle.js";
 import type { SkillMeta } from "../lib/registry-types.js";
 import { mergeSkillRegistryLists } from "../lib/registry-merge.js";
+import { REVISION_ID_PATTERN } from "../lib/revision.js";
 import type { ArtifactStorage } from "./artifact-storage.js";
 import type { SkillsServerConfig } from "./config.js";
 import { getServerSkill, getServerSkillMd, listServerSkills } from "./registry.js";
-import type { ApiPrincipal, PublishSkillInput, ServerPin, ServerSkillRecord, SkillsProductStore } from "./types.js";
+import { SkillRevisionConflictError, type ApiPrincipal, type PublishSkillInput, type ServerPin, type ServerSkillRecord, type SkillsProductStore } from "./types.js";
 
 /**
  * Slug grammar, matching normalizePortableSkillName() in src/lib/portable-skills.ts.
@@ -95,6 +96,77 @@ export function publishedPayload(record: ServerSkillRecord): Record<string, unkn
     ...(record.bundleSha256 ? { bundleSha256: record.bundleSha256, bundleByteSize: record.bundleByteSize } : {}),
     publishedAt: record.createdAt,
     updatedAt: record.updatedAt,
+    // Revision identity (todos d061fcda): revisionId is the ETag value, revisionNumber
+    // the per-slug write counter. A client that pushed or pulled the skill can prove
+    // which revision it holds, and a guarded write names one of these.
+    revisionId: record.revisionId,
+    revisionNumber: record.revisionNumber,
+  };
+}
+
+/**
+ * The HTTP ETag for a published row: the revision id, quoted exactly as RFC 9110 wants.
+ * The quotes are load-bearing — a client that echoes the whole header value back as
+ * If-Match must send the quotes too.
+ */
+export function revisionEtag(revisionId: string): string {
+  return `"${revisionId}"`;
+}
+
+/**
+ * Parse an If-Match header value into the revision id it names.
+ *
+ * Accepts the quoted form the server itself issues (RFC 9110) and a bare id for
+ * tolerance. `*` is refused: "any revision" would license exactly the silent overwrite
+ * the optimistic-concurrency guard exists to refuse. Malformed values are a 400
+ * statement about the request, never a fallback to "no guard".
+ */
+export function parseIfMatch(value: string | null): string | undefined {
+  if (value === null || value.trim() === "") return undefined;
+  const trimmed = value.trim();
+  if (trimmed === "*") {
+    throw new SkillRequestError(400, "INVALID_IF_MATCH", "If-Match must name the exact revision id (the ETag of the current revision); '*' is not accepted");
+  }
+  const unquoted = trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"') ? trimmed.slice(1, -1) : trimmed;
+  if (!REVISION_ID_PATTERN.test(unquoted)) {
+    throw new SkillRequestError(400, "INVALID_IF_MATCH", "If-Match must carry a revision id: a 64-character lowercase hex sha-256, quoted as the server's ETag");
+  }
+  return unquoted;
+}
+
+/**
+ * Resolve a stored row that may be a tombstone (todos d061fcda).
+ *
+ * A tombstoned row answers 410 with the marker while its window is open, so a client's
+ * pull can reconcile (remove the local copy). Once the window has passed the tombstone
+ * is purged and the slug is simply gone (404). Returns "purged" when the caller should
+ * answer 404, a tombstone payload when it should answer 410, or "live" for a live row.
+ *
+ * Purging drops the store's bundle row and, for every purged record, the S3 object
+ * behind it — the same getSkillBundle-then-delete dance the publish/delete paths use,
+ * so an object whose digest another row still references survives.
+ */
+export async function tombstoneStatus(
+  store: SkillsProductStore,
+  artifactStorage: ArtifactStorage,
+  principal: ApiPrincipal,
+  record: ServerSkillRecord,
+): Promise<"live" | "purged" | Record<string, unknown>> {
+  if (!record.tombstonedAt) return "live";
+  if (record.tombstonePurgeAfter && record.tombstonePurgeAfter <= new Date().toISOString()) {
+    const purged = await store.purgeExpiredTombstones(principal);
+    for (const removed of purged) {
+      if (removed.bundleSha256) await discardCollectedObject(store, artifactStorage, principal, removed.bundleSha256);
+    }
+    return "purged";
+  }
+  return {
+    slug: record.slug,
+    deleted: true,
+    code: "TOMBSTONED",
+    tombstonedAt: record.tombstonedAt,
+    tombstonePurgeAfter: record.tombstonePurgeAfter,
+    revisionId: record.revisionId,
   };
 }
 
@@ -122,29 +194,59 @@ export async function listMergedSkills(store: SkillsProductStore, principal: Api
   });
 }
 
+/**
+ * What a read of one slug resolves to: the org's published row (live or tombstoned) or
+ * nothing. The bundled-corpus fallback is the callers' decision, not this resolver's —
+ * a tombstoned slug must answer 410 even when a bundled skill of the same name exists,
+ * because the caller asked for the skill this instance serves under that slug.
+ */
+export type SkillReadResolution =
+  | { kind: "published"; record: ServerSkillRecord }
+  | { kind: "tombstone"; payload: Record<string, unknown> }
+  | { kind: "absent" };
+
+export async function resolvePublishedSkill(
+  store: SkillsProductStore,
+  artifactStorage: ArtifactStorage,
+  principal: ApiPrincipal,
+  slug: string,
+): Promise<SkillReadResolution> {
+  const record = await store.getSkill(principal, slug);
+  if (!record) return { kind: "absent" };
+  const status = await tombstoneStatus(store, artifactStorage, principal, record);
+  if (status === "purged") return { kind: "absent" };
+  if (status !== "live") return { kind: "tombstone", payload: status as Record<string, unknown> };
+  return { kind: "published", record };
+}
+
 export async function getMergedSkill(
   store: SkillsProductStore,
+  artifactStorage: ArtifactStorage,
   principal: ApiPrincipal,
   slug: string,
 ): Promise<Record<string, unknown> | null> {
-  const record = await store.getSkill(principal, slug);
-  if (record) return publishedPayload(record);
+  const resolved = await resolvePublishedSkill(store, artifactStorage, principal, slug);
+  if (resolved.kind === "tombstone") return resolved.payload;
+  if (resolved.kind === "published") return publishedPayload(resolved.record);
   const bundled = getServerSkill(slug);
   return bundled ? (bundled as unknown as Record<string, unknown>) : null;
 }
 
+/**
+ * The SKILL.md document for one slug, or null when nothing is served under it.
+ *
+ * A tombstoned slug returns null here; the caller that needs the 410 marker resolves
+ * the tombstone itself via resolvePublishedSkill before calling.
+ */
 export async function getMergedSkillMd(
   store: SkillsProductStore,
+  artifactStorage: ArtifactStorage,
   principal: ApiPrincipal,
   slug: string,
 ): Promise<string | null> {
-  const record = await store.getSkill(principal, slug);
-  if (record?.skillMd) return record.skillMd;
-  // A published skill with no SKILL.md must not fall through to a bundled skill of the
-  // same name: the caller asked for the document belonging to the skill this instance
-  // serves under that slug, and answering with a different skill's instructions is worse
-  // than answering with nothing.
-  if (record) return null;
+  const resolved = await resolvePublishedSkill(store, artifactStorage, principal, slug);
+  if (resolved.kind === "tombstone") return null;
+  if (resolved.kind === "published") return resolved.record.skillMd ?? null;
   return getServerSkillMd(slug);
 }
 
@@ -256,9 +358,17 @@ export async function storePublishedSkill(
   artifactStorage: ArtifactStorage,
   principal: ApiPrincipal,
   parsed: ParsedPublish,
+  expectedRevisionId?: string,
 ): Promise<ServerSkillRecord> {
   const superseded = (await store.getSkill(principal, parsed.input.slug))?.bundleSha256;
-  let input: PublishSkillInput = { ...parsed.input, principal };
+  let input: PublishSkillInput = {
+    ...parsed.input,
+    principal,
+    // Optimistic-concurrency guard (todos d061fcda): carried into the store so a publish
+    // against an existing, live row is refused with a conflict unless it names the
+    // row's current revision. First publishes and revives over a tombstone need no guard.
+    ...(expectedRevisionId ? { expectedRevisionId } : {}),
+  };
   if (parsed.bundleBytes && input.bundle) {
     const placement = await artifactStorage.putBundle(
       principal.orgId,
@@ -276,21 +386,20 @@ export async function storePublishedSkill(
 }
 
 /**
- * Delete a published skill, and the stored object behind it when nothing else needs it.
+ * Tombstone a published skill (todos d061fcda): the row survives with a tombstone
+ * marker for `tombstoneWindowMs`, so reads answer 410 and a pulling client can
+ * reconcile, and the bundle is retained until the purge. The stored object is NOT
+ * discarded here — the tombstoned row still references it; the purge discards it.
+ * Returns the tombstoned record, or null when the org has no row by that slug.
  */
 export async function deletePublishedSkill(
   store: SkillsProductStore,
   artifactStorage: ArtifactStorage,
   principal: ApiPrincipal,
   slug: string,
-): Promise<boolean> {
-  const record = await store.getSkill(principal, slug);
-  if (!record) return false;
-  const deleted = await store.deleteSkill(principal, slug);
-  if (deleted && record.bundleSha256) {
-    await discardCollectedObject(store, artifactStorage, principal, record.bundleSha256);
-  }
-  return deleted;
+  tombstoneWindowMs: number,
+): Promise<ServerSkillRecord | null> {
+  return store.deleteSkill(principal, slug, tombstoneWindowMs);
 }
 
 /**

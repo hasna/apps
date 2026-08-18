@@ -144,6 +144,12 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
     );
   }
 
+  // Optimistic concurrency (todos d061fcda): read the revision this instance currently
+  // serves for the slug, and name it in If-Match. A first publish (no remote row) needs
+  // no guard; a re-push that races a newer remote revision is refused with 409 instead
+  // of silently overwriting it.
+  const current = await client.getSkill(skill.name);
+  const ifMatch = current && typeof current.revisionId === "string" && current.revisionId ? current.revisionId : undefined;
   const response = await client.publishSkill(
     {
       slug: skill.name,
@@ -163,13 +169,25 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
       ...(skillMd ? { skillMd } : {}),
     },
     packed.bytes,
+    ifMatch,
   );
 
   const payload = await readBody(response);
   if (!response.ok) {
+    const code = typeof payload === "object" && payload && "code" in payload ? String((payload as { code: unknown }).code) : undefined;
+    if (response.status === 409 || code === "REVISION_CONFLICT") {
+      throw new PushSkillError(
+        `Publishing '${skill.name}' failed: the instance serves a NEWER revision of this skill. ` +
+          "Your push would silently overwrite it, so it was refused.",
+        [
+          `code: REVISION_CONFLICT`,
+          "Reconcile first: pull the current revision (skills pull <name>), merge your changes, then push again.",
+        ],
+      );
+    }
     throw new PushSkillError(
       `Publishing '${skill.name}' failed: ${response.status} ${describeError(payload)}`,
-      typeof payload === "object" && payload && "code" in payload ? [`code: ${String((payload as { code: unknown }).code)}`] : undefined,
+      code ? [`code: ${code}`] : undefined,
     );
   }
 

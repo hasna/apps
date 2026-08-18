@@ -11,16 +11,19 @@ import {
   getMergedSkill,
   getMergedSkillMd,
   listMergedSkills,
+  parseIfMatch,
   parsePublishRequest,
   pinMetadataField,
   pinPayload,
   readPublishedBundle,
+  resolvePublishedSkill,
+  revisionEtag,
   storePublishedSkill,
   deletePublishedSkill,
   publishedPayload,
 } from "./skills-api.js";
 import { createStore, type MemorySkillsStore } from "./store.js";
-import type { ApiPrincipal, ServerRunRecord, SkillsProductStore } from "./types.js";
+import { SkillRevisionConflictError, type ApiPrincipal, type ServerRunRecord, type SkillsProductStore } from "./types.js";
 
 export interface SkillsServerOptions {
   config?: Partial<SkillsServerConfig>;
@@ -108,6 +111,21 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
       if (error instanceof SkillRequestError) {
         return json({ error: error.message, code: error.code }, { status: error.status });
       }
+      // The optimistic-concurrency refusal (todos d061fcda): a write raced a newer
+      // revision. 409 is the contract's answer — the caller must re-read and retry
+      // with the current revision — never the generic 500 a conflict would otherwise
+      // read as.
+      if (error instanceof SkillRevisionConflictError) {
+        return json(
+          {
+            error: error.message,
+            code: "REVISION_CONFLICT",
+            slug: error.slug,
+            ...(error.currentRevisionId ? { currentRevisionId: error.currentRevisionId } : {}),
+          },
+          { status: 409 },
+        );
+      }
       return json({ error: "internal server error", detail: (error as Error).message }, { status: 500 });
     }
   };
@@ -165,24 +183,39 @@ async function handleApiV1(
   if (resource === "skills") {
     if (request.method === "GET" && !id) return json(await listMergedSkills(store, principal));
 
-    // Publish. The only route that reads config.skillBundleLimitBytes.
+    // Publish. The only route that reads config.skillBundleLimitBytes. Guarded by the
+    // optimistic-concurrency contract (todos d061fcda): a publish against a slug this
+    // org already has live must carry If-Match naming the current revision, or the
+    // write is refused with 409 - never a silent overwrite.
     if (request.method === "POST" && !id) {
+      const expectedRevisionId = parseIfMatch(request.headers.get("if-match"));
       const parsed = await parsePublishRequest(request, config);
-      const record = await storePublishedSkill(store, artifactStorage, principal, parsed);
-      return json(publishedPayload(record), { status: 201 });
+      const record = await storePublishedSkill(store, artifactStorage, principal, parsed, expectedRevisionId);
+      return json(publishedPayload(record), { status: 201, headers: { ETag: revisionEtag(record.revisionId) } });
     }
 
     if (request.method === "GET" && id && subresource === "skill.md") {
       // Traversal defence for this route lives at the router boundary (segmentEscapesPath,
       // #65) and inside the getServerSkillMd() fallback getMergedSkillMd() delegates to;
       // no per-route slug assertion is re-applied here.
-      const docs = await getMergedSkillMd(store, principal, id);
+      const resolved = await resolvePublishedSkill(store, artifactStorage, principal, id);
+      if (resolved.kind === "tombstone") {
+        return json({ error: "skill was deleted", ...resolved.payload }, { status: 410 });
+      }
+      const docs = await getMergedSkillMd(store, artifactStorage, principal, id);
       return docs
         ? new Response(docs, { headers: { "Content-Type": "text/markdown; charset=utf-8", "Cache-Control": "no-store" } })
         : json({ error: "skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
     }
 
     if (request.method === "GET" && id && subresource === "bundle") {
+      const resolved = await resolvePublishedSkill(store, artifactStorage, principal, id);
+      if (resolved.kind === "tombstone") {
+        return json({ error: "skill was deleted", ...resolved.payload }, { status: 410 });
+      }
+      if (resolved.kind === "absent") {
+        return json({ error: "skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
+      }
       const { record, bytes } = await readPublishedBundle(store, artifactStorage, principal, id);
       const headers: Record<string, string> = {
         "Content-Type": "application/gzip",
@@ -191,6 +224,12 @@ async function handleApiV1(
         // The digest a client should verify against, so an intermediary cannot swap the
         // body without the client being able to notice.
         "X-Skill-Bundle-Sha256": record.bundleSha256 ?? "",
+        // Revision identity (todos d061fcda): the same ETag GET /skills/:slug issues,
+        // so a pull can prove WHICH revision the bytes belong to and record it in its
+        // marker. Also the plain ETag, for generic HTTP caching semantics.
+        "X-Skill-Revision-Id": record.revisionId,
+        "X-Skill-Revision-Number": String(record.revisionNumber),
+        ETag: revisionEtag(record.revisionId),
         "Cache-Control": "no-store",
       };
       // Sign the exact bytes being served so a client holding the same key can tell this
@@ -203,24 +242,37 @@ async function handleApiV1(
     }
 
     if (request.method === "GET" && id && !subresource) {
-      const skill = await getMergedSkill(store, principal, id);
+      const resolved = await resolvePublishedSkill(store, artifactStorage, principal, id);
+      if (resolved.kind === "tombstone") {
+        return json({ error: "skill was deleted", ...resolved.payload }, { status: 410 });
+      }
+      if (resolved.kind === "published") {
+        return json(publishedPayload(resolved.record), { headers: { ETag: revisionEtag(resolved.record.revisionId) } });
+      }
+      // Absent from this org's registry: the bundled corpus may still serve the slug.
+      const skill = await getMergedSkill(store, artifactStorage, principal, id);
       return skill ? json(skill) : json({ error: "skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
     }
 
     if ((request.method === "PUT" || request.method === "PATCH") && id && !subresource) {
+      const expectedRevisionId = parseIfMatch(request.headers.get("if-match"));
       const body = await readJson(request, config.requestBodyLimitBytes);
-      const updated = await store.updateSkill(principal, id, skillPatch(body));
+      const updated = await store.updateSkill(principal, id, skillPatch(body), expectedRevisionId);
       // 404 rather than an implicit create: PUT against a slug this org has not published
       // would otherwise silently mint a bundle-less skill from a typo'd name.
       return updated
-        ? json(publishedPayload(updated))
+        ? json(publishedPayload(updated), { headers: { ETag: revisionEtag(updated.revisionId) } })
         : json({ error: "published skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
     }
 
     if (request.method === "DELETE" && id && !subresource) {
-      const removed = await deletePublishedSkill(store, artifactStorage, principal, id);
+      const removed = await deletePublishedSkill(store, artifactStorage, principal, id, config.tombstoneWindowMs);
       return removed
-        ? json({ deleted: true, slug: id })
+        ? json({
+            deleted: true,
+            slug: id,
+            ...(removed.tombstonedAt ? { tombstonedAt: removed.tombstonedAt, tombstonePurgeAfter: removed.tombstonePurgeAfter } : {}),
+          })
         : json({ error: "published skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
     }
   }

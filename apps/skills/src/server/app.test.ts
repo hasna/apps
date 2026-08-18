@@ -414,15 +414,18 @@ for (const backend of backends) {
       try {
         const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
         const bundle = fixtureBundle("alpha");
-        await client.publishSkill(manifestFor("team-runbook", "alpha", bundle.skillMd, bundle.sha256), bundle.bytes);
+        const published = await client.publishSkill(manifestFor("team-runbook", "alpha", bundle.skillMd, bundle.sha256), bundle.bytes);
+        expect(published.status).toBe(201);
+        const firstPayload = await published.json();
         expect((await client.downloadSkillBundle("team-runbook")).status).toBe(200);
 
         // POST with JSON and no bundle part. This used to take the upsert path with a
         // NULL digest, hand the old digest to orphan collection, and delete the tarball -
         // so a metadata edit silently 404ed the bundle for every client, irreversibly.
+        // The write is guarded: it names the revision the client read (If-Match).
         const metadataOnly = await fetch(`${ctx.baseUrl}/api/v1/skills`, {
           method: "POST",
-          headers: { authorization: "Bearer sk_test_org_a", "content-type": "application/json" },
+          headers: { authorization: "Bearer sk_test_org_a", "content-type": "application/json", "if-match": firstPayload.revisionId },
           body: JSON.stringify({ slug: "team-runbook", description: "just fixing a typo" }),
         });
         expect(metadataOnly.status).toBe(201);
@@ -536,21 +539,37 @@ for (const backend of backends) {
         const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
         const bundle = fixtureBundle("alpha");
         await client.publishSkill(manifestFor("team-runbook", "alpha", bundle.skillMd, bundle.sha256), bundle.bytes);
+        const current = await client.getSkill("team-runbook");
 
+        // The update is guarded like every write to a live row: If-Match carries the
+        // revision id the client read (the ETag value the server issued).
         const patched = await fetch(`${ctx.baseUrl}/api/v1/skills/team-runbook`, {
           method: "PATCH",
-          headers: { authorization: "Bearer sk_test_org_a", "content-type": "application/json" },
+          headers: { authorization: "Bearer sk_test_org_a", "content-type": "application/json", "if-match": current.revisionId },
           body: JSON.stringify({ description: "now with more detail" }),
         });
         expect(patched.status).toBe(200);
-        expect(await patched.json()).toMatchObject({
+        const patchedPayload = await patched.json();
+        expect(patchedPayload).toMatchObject({
           description: "now with more detail",
           // Untouched by a patch that did not mention them.
           version: "1.2.3",
           displayName: "alpha Runbook",
           bundleSha256: bundle.sha256,
         });
+        // The revision advanced with the write and is echoed in the ETag.
+        expect(patchedPayload.revisionId).not.toBe(current.revisionId);
+        expect(patched.headers.get("etag")).toBe(`"${patchedPayload.revisionId}"`);
         expect((await client.downloadSkillBundle("team-runbook")).status).toBe(200);
+
+        // A stale guard is refused with 409, never applied.
+        const stale = await fetch(`${ctx.baseUrl}/api/v1/skills/team-runbook`, {
+          method: "PATCH",
+          headers: { authorization: "Bearer sk_test_org_a", "content-type": "application/json", "if-match": current.revisionId },
+          body: JSON.stringify({ description: "replayed write" }),
+        });
+        expect(stale.status).toBe(409);
+        expect(await stale.json()).toMatchObject({ code: "REVISION_CONFLICT" });
 
         // A patch against a slug this org never published is a 404, not an implicit create.
         const missing = await fetch(`${ctx.baseUrl}/api/v1/skills/never-published`, {
@@ -559,6 +578,121 @@ for (const backend of backends) {
           body: JSON.stringify({ description: "x" }),
         });
         expect(missing.status).toBe(404);
+      } finally {
+        await ctx.stop();
+      }
+    });
+
+    test("a second publish of the same slug without If-Match gets 409 and the first survives", async () => {
+      const ctx = await testServer(backend);
+      try {
+        const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
+        const alpha = fixtureBundle("alpha");
+        const beta = fixtureBundle("beta");
+        const first = await client.publishSkill(manifestFor("team-runbook", "alpha", alpha.skillMd, alpha.sha256), alpha.bytes);
+        expect(first.status).toBe(201);
+        const firstPayload = await first.json();
+
+        // Same slug, different bytes, no If-Match: refused, never a silent overwrite.
+        const second = await client.publishSkill(manifestFor("team-runbook", "beta", beta.skillMd, beta.sha256), beta.bytes);
+        expect(second.status).toBe(409);
+        expect(await second.json()).toMatchObject({ code: "REVISION_CONFLICT", slug: "team-runbook" });
+
+        // A stale If-Match is refused identically.
+        const stale = await client.publishSkill(manifestFor("team-runbook", "beta", beta.skillMd, beta.sha256), beta.bytes, "0".repeat(64));
+        expect(stale.status).toBe(409);
+
+        // A guarded publish with the current revision lands.
+        const guarded = await client.publishSkill(manifestFor("team-runbook", "beta", beta.skillMd, beta.sha256), beta.bytes, firstPayload.revisionId);
+        expect(guarded.status).toBe(201);
+
+        // The first publish's bytes were overwritten only by the guarded write: the
+        // unguarded and stale attempts changed nothing in between.
+        const download = await client.downloadSkillBundle("team-runbook");
+        expect(download.status).toBe(200);
+        expect(Array.from(new Uint8Array(await download.arrayBuffer()))).toEqual(Array.from(beta.bytes));
+      } finally {
+        await ctx.stop();
+      }
+    });
+
+    test("GET returns the ETag and the bundle carries the revision headers", async () => {
+      const ctx = await testServer(backend);
+      try {
+        const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
+        const bundle = fixtureBundle("alpha");
+        const published = await client.publishSkill(manifestFor("team-runbook", "alpha", bundle.skillMd, bundle.sha256), bundle.bytes);
+        expect(published.status).toBe(201);
+        expect(published.headers.get("etag")).toBeTruthy();
+
+        const get = await fetch(`${ctx.baseUrl}/api/v1/skills/team-runbook`, { headers: { authorization: "Bearer sk_test_org_a" } });
+        expect(get.status).toBe(200);
+        const etag = get.headers.get("etag");
+        expect(etag).toBeTruthy();
+        const payload = await get.json();
+        expect(payload.revisionId).toBeTruthy();
+        expect(payload.revisionNumber).toBeGreaterThanOrEqual(1);
+        // The ETag IS the revision id, quoted exactly as RFC 9110 wants.
+        expect(etag).toBe(`"${payload.revisionId}"`);
+
+        const download = await client.downloadSkillBundle("team-runbook");
+        expect(download.status).toBe(200);
+        expect(download.headers.get("x-skill-revision-id")).toBe(payload.revisionId);
+        expect(download.headers.get("x-skill-revision-number")).toBe(String(payload.revisionNumber));
+        expect(download.headers.get("etag")).toBe(etag);
+      } finally {
+        await ctx.stop();
+      }
+    });
+
+    test("If-Match '*' is refused as a statement about the request, not a pass", async () => {
+      const ctx = await testServer(backend);
+      try {
+        const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
+        const bundle = fixtureBundle("alpha");
+        await client.publishSkill(manifestFor("team-runbook", "alpha", bundle.skillMd, bundle.sha256), bundle.bytes);
+
+        const wildcard = await client.publishSkill(manifestFor("team-runbook", "alpha", bundle.skillMd, bundle.sha256), bundle.bytes, "*");
+        expect(wildcard.status).toBe(400);
+        expect(await wildcard.json()).toMatchObject({ code: "INVALID_IF_MATCH" });
+      } finally {
+        await ctx.stop();
+      }
+    });
+
+    test("delete tombstones the slug: 410 with the marker while the window is open, 404 after expiry", async () => {
+      const ctx = await testServer(backend, { tombstoneWindowMs: 500 });
+      try {
+        const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
+        const bundle = fixtureBundle("alpha");
+        await client.publishSkill(manifestFor("team-runbook", "alpha", bundle.skillMd, bundle.sha256), bundle.bytes);
+
+        const deleted = await client.deleteSkill("team-runbook");
+        expect(deleted.status).toBe(200);
+        const deletedPayload = await deleted.json();
+        expect(deletedPayload).toMatchObject({ deleted: true, slug: "team-runbook" });
+        expect(deletedPayload.tombstonedAt).toBeTruthy();
+        expect(deletedPayload.tombstonePurgeAfter).toBeTruthy();
+
+        // Every read route answers 410 with the marker while the window is open.
+        const get = await fetch(`${ctx.baseUrl}/api/v1/skills/team-runbook`, { headers: { authorization: "Bearer sk_test_org_a" } });
+        expect(get.status).toBe(410);
+        expect(await get.json()).toMatchObject({ deleted: true, code: "TOMBSTONED", slug: "team-runbook" });
+
+        const md = await fetch(`${ctx.baseUrl}/api/v1/skills/team-runbook/skill.md`, { headers: { authorization: "Bearer sk_test_org_a" } });
+        expect(md.status).toBe(410);
+
+        const dl = await fetch(`${ctx.baseUrl}/api/v1/skills/team-runbook/bundle`, { headers: { authorization: "Bearer sk_test_org_a" } });
+        expect(dl.status).toBe(410);
+
+        // The slug is hidden from listings.
+        expect((await client.listSkills()).some((skill: { name: string }) => skill.name === "team-runbook")).toBe(false);
+
+        // After the window expires, the next read purges and the slug is simply gone.
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        const gone = await fetch(`${ctx.baseUrl}/api/v1/skills/team-runbook`, { headers: { authorization: "Bearer sk_test_org_a" } });
+        expect(gone.status).toBe(404);
+        expect((await client.downloadSkillBundle("team-runbook")).status).toBe(404);
       } finally {
         await ctx.stop();
       }

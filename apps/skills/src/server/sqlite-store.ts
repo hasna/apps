@@ -36,7 +36,8 @@ import type {
   StoreBackendInfo,
   UpdateSkillPatch,
 } from "./types.js";
-import { StaleLeaseGenerationError } from "./types.js";
+import { SkillRevisionConflictError, StaleLeaseGenerationError } from "./types.js";
+import { revisionIdOfRecord } from "../lib/revision.js";
 
 export interface SqliteStoreOptions {
   /** Apply pending migrations on open. Default true - it is what makes zero-config work. */
@@ -70,6 +71,13 @@ export interface SqliteStoreOptions {
 const CLAIM_ATTEMPTS = 8;
 
 const CLAIMABLE_STATUSES = ["queued", "retrying"] as const;
+
+/**
+ * A value no real revision id can equal, substituted for an absent If-Match in the
+ * upsert guard. See the same constant in store.ts: keeps the SQL WHERE from ever
+ * matching a legacy '' marker row if the JS pre-read and the SQL guard ever diverge.
+ */
+const NO_REVISION_SENTINEL = "0000000000000000000000000000000000000000000000000000000000000000";
 
 /** How stale api_keys.last_used_at is allowed to get before authentication refreshes it. */
 const LAST_USED_RESOLUTION_MS = 60_000;
@@ -111,12 +119,33 @@ export class SqliteSkillsStore implements SkillsProductStore {
     if (options.migrate !== false) {
       applySqliteMigrations(this.db, options.migrationsDir);
     }
+    this.backfillLegacyRevisions();
 
     this.backend = {
       kind: "sqlite",
       durable: !inMemory,
       label: inMemory ? "sqlite (in-memory)" : `sqlite (${path})`,
     };
+  }
+
+  /**
+   * Give rows written before migration 0004 a real content revision id.
+   *
+   * The migration adds revision_id with DEFAULT '', which would make If-Match vacuous
+   * for legacy rows (every stale client matches the same empty string). This replaces
+   * the marker with a content sha, idempotently: new code always writes a full id, so
+   * the marker never reappears. Mirrors PostgresSkillsStore.backfillLegacyRevisions.
+   */
+  private backfillLegacyRevisions(): void {
+    const rows = this.all("SELECT * FROM skills_registry WHERE revision_id = ''", []);
+    for (const row of rows) {
+      const record = rowToSkill(row);
+      this.db.run("UPDATE skills_registry SET revision_id = ? WHERE org_id = ? AND slug = ?", [
+        revisionIdOfRecord(record),
+        record.orgId,
+        record.slug,
+      ]);
+    }
   }
 
   /** Escape hatch for tests and for tooling that needs raw SQL against the same handle. */
@@ -475,8 +504,40 @@ export class SqliteSkillsStore implements SkillsProductStore {
     return this.db.transaction(() => {
       // Read the outgoing digest before overwriting it, so the bundle it pointed at can
       // be collected if this republish leaves it referenced by nothing.
-      const previous = this.get("SELECT bundle_sha256 FROM skills_registry WHERE org_id = ? AND slug = ?", [orgId, input.slug]);
+      const previous = this.get(
+        "SELECT revision_id, revision_number, bundle_sha256, bundle_byte_size, tombstoned_at FROM skills_registry WHERE org_id = ? AND slug = ?",
+        [orgId, input.slug],
+      );
       const previousSha = typeof previous?.bundle_sha256 === "string" ? previous.bundle_sha256 : null;
+      const previousRevisionId = typeof previous?.revision_id === "string" && previous.revision_id ? previous.revision_id : null;
+      const tombstoned = previous?.tombstoned_at != null;
+      // A live existing row requires If-Match naming its current revision. The pre-read
+      // is only for the carried-forward bundle and the revision number: the ACTUAL guard
+      // is the WHERE clause on the upsert below, evaluated against the row as it stands
+      // at write time. SQLite has one writer (BEGIN IMMEDIATE), so the read-then-write
+      // race the Postgres guard closes cannot happen here; the SQL guard is kept anyway
+      // so the two backends enforce the same contract in the same place.
+      if (previous && !tombstoned && input.expectedRevisionId !== previousRevisionId) {
+        throw new SkillRevisionConflictError(input.slug, input.expectedRevisionId, previousRevisionId);
+      }
+      const carriedSha = input.bundle?.sha256 ?? previousSha;
+      // The carried size travels with the carried digest into the revision hash: the row
+      // keeps its old size on a metadata-only re-publish, and a client recomputing the
+      // revision id from the payload (which carries both) must get the same value.
+      const carriedSize = input.bundle?.byteSize ?? (previous?.bundle_byte_size == null ? null : Number(previous.bundle_byte_size));
+      const revisionId = revisionIdOfRecord({
+        slug: input.slug,
+        displayName: input.displayName,
+        description: input.description,
+        category: input.category,
+        tags: input.tags,
+        source: input.source,
+        kind: input.kind,
+        ...(input.version ? { version: input.version } : {}),
+        ...(input.skillMd ? { skillMd: input.skillMd } : {}),
+        ...(carriedSha ? { bundleSha256: carriedSha } : {}),
+        ...(carriedSize === null || carriedSize === undefined ? {} : { bundleByteSize: carriedSize }),
+      });
 
       if (input.bundle) {
         // Content-addressed: an identical digest is identical bytes, so re-uploading the
@@ -505,8 +566,8 @@ export class SqliteSkillsStore implements SkillsProductStore {
 
       const row = this.get(
         `INSERT INTO skills_registry (org_id, slug, display_name, description, category, tags_json, source, kind, version, skill_md,
-                                      bundle_sha256, bundle_byte_size, published_by_user_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                      bundle_sha256, bundle_byte_size, published_by_user_id, revision_id, revision_number, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
          ON CONFLICT (org_id, slug) DO UPDATE SET
            display_name = excluded.display_name,
            description = excluded.description,
@@ -524,7 +585,16 @@ export class SqliteSkillsStore implements SkillsProductStore {
            bundle_sha256 = COALESCE(excluded.bundle_sha256, skills_registry.bundle_sha256),
            bundle_byte_size = COALESCE(excluded.bundle_byte_size, skills_registry.bundle_byte_size),
            published_by_user_id = excluded.published_by_user_id,
+           revision_id = excluded.revision_id,
+           -- Current + 1, not the inserted 1: on the update path the ACTUAL row's
+           -- counter is the truth (it may have advanced since the pre-read, which is
+           -- exactly what the WHERE guard below detects).
+           revision_number = skills_registry.revision_number + 1,
+           tombstoned_at = NULL,
+           tombstone_purge_after = NULL,
            updated_at = excluded.updated_at
+         WHERE skills_registry.tombstoned_at IS NOT NULL
+            OR skills_registry.revision_id = ?
          RETURNING *`,
         [
           orgId,
@@ -540,10 +610,19 @@ export class SqliteSkillsStore implements SkillsProductStore {
           input.bundle?.sha256 ?? null,
           input.bundle?.byteSize ?? null,
           input.principal.userId,
+          revisionId,
           now,
           now,
+          input.expectedRevisionId ?? NO_REVISION_SENTINEL,
         ],
       );
+      if (!row) {
+        // WHERE matched nothing: the row is live and its revision moved on (or no guard
+        // was supplied). Re-read for the truthful current id to report.
+        const current = this.get("SELECT revision_id FROM skills_registry WHERE org_id = ? AND slug = ?", [orgId, input.slug]);
+        const currentId = typeof current?.revision_id === "string" ? current.revision_id : null;
+        throw new SkillRevisionConflictError(input.slug, input.expectedRevisionId, currentId);
+      }
       // Only when this publish actually replaced the bundle. `input.bundle` being
       // absent now means "unchanged", so there is nothing superseded to collect.
       if (previousSha && input.bundle && previousSha !== input.bundle.sha256) this.collectOrphanBundle(orgId, previousSha);
@@ -552,8 +631,9 @@ export class SqliteSkillsStore implements SkillsProductStore {
   }
 
   async listSkills(principal: ApiPrincipal): Promise<ServerSkillRecord[]> {
+    await this.purgeExpiredTombstones(principal);
     return this.all(
-      "SELECT * FROM skills_registry WHERE org_id = ? ORDER BY slug ASC",
+      "SELECT * FROM skills_registry WHERE org_id = ? AND tombstoned_at IS NULL ORDER BY slug ASC",
       [principal.orgId],
     ).map(rowToSkill);
   }
@@ -563,14 +643,19 @@ export class SqliteSkillsStore implements SkillsProductStore {
     return row ? rowToSkill(row) : null;
   }
 
-  async updateSkill(principal: ApiPrincipal, slug: string, patch: UpdateSkillPatch): Promise<ServerSkillRecord | null> {
+  async updateSkill(principal: ApiPrincipal, slug: string, patch: UpdateSkillPatch, expectedRevisionId?: string): Promise<ServerSkillRecord | null> {
     const current = await this.getSkill(principal, slug);
-    if (!current) return null;
+    if (!current || current.tombstonedAt) return null;
+    if (expectedRevisionId !== current.revisionId) {
+      throw new SkillRevisionConflictError(slug, expectedRevisionId, current.revisionId);
+    }
     const next = { ...current, ...patch };
+    const revisionId = revisionIdOfRecord(next);
     const row = this.get(
       `UPDATE skills_registry
-       SET display_name = ?, description = ?, category = ?, tags_json = ?, kind = ?, version = ?, skill_md = ?, updated_at = ?
-       WHERE org_id = ? AND slug = ?
+       SET display_name = ?, description = ?, category = ?, tags_json = ?, kind = ?, version = ?, skill_md = ?,
+           revision_id = ?, revision_number = revision_number + 1, updated_at = ?
+       WHERE org_id = ? AND slug = ? AND tombstoned_at IS NULL AND revision_id = ?
        RETURNING *`,
       [
         next.displayName,
@@ -580,21 +665,53 @@ export class SqliteSkillsStore implements SkillsProductStore {
         next.kind,
         next.version ?? null,
         next.skillMd ?? null,
+        revisionId,
         nowIso(),
         principal.orgId,
         slug,
+        current.revisionId,
       ],
     );
     return row ? rowToSkill(row) : null;
   }
 
-  async deleteSkill(principal: ApiPrincipal, slug: string): Promise<boolean> {
+  async deleteSkill(principal: ApiPrincipal, slug: string, tombstoneWindowMs: number): Promise<ServerSkillRecord | null> {
     return this.db.transaction(() => {
-      const existing = this.get("SELECT bundle_sha256 FROM skills_registry WHERE org_id = ? AND slug = ?", [principal.orgId, slug]);
-      if (!existing) return false;
-      this.db.run("DELETE FROM skills_registry WHERE org_id = ? AND slug = ?", [principal.orgId, slug]);
-      if (typeof existing.bundle_sha256 === "string") this.collectOrphanBundle(principal.orgId, existing.bundle_sha256);
-      return true;
+      const existing = this.get("SELECT tombstoned_at FROM skills_registry WHERE org_id = ? AND slug = ?", [principal.orgId, slug]);
+      if (!existing) return null;
+      if (existing.tombstoned_at != null) {
+        // Idempotent re-delete: keep the original tombstone (the window is not extended).
+        const row = this.get("SELECT * FROM skills_registry WHERE org_id = ? AND slug = ? LIMIT 1", [principal.orgId, slug]);
+        return rowToSkill(row!);
+      }
+      const tombstonedAt = nowIso();
+      const purgeAfter = new Date(Date.now() + tombstoneWindowMs).toISOString();
+      const row = this.get(
+        `UPDATE skills_registry
+         SET tombstoned_at = ?, tombstone_purge_after = ?, updated_at = ?
+         WHERE org_id = ? AND slug = ?
+         RETURNING *`,
+        [tombstonedAt, purgeAfter, tombstonedAt, principal.orgId, slug],
+      );
+      return rowToSkill(row!);
+    })();
+  }
+
+  async purgeExpiredTombstones(principal: ApiPrincipal): Promise<ServerSkillRecord[]> {
+    return this.db.transaction(() => {
+      const now = nowIso();
+      const expired = this.all(
+        "SELECT * FROM skills_registry WHERE org_id = ? AND tombstoned_at IS NOT NULL AND tombstone_purge_after <= ?",
+        [principal.orgId, now],
+      );
+      const purged: ServerSkillRecord[] = [];
+      for (const row of expired) {
+        const record = rowToSkill(row);
+        this.db.run("DELETE FROM skills_registry WHERE org_id = ? AND slug = ?", [principal.orgId, record.slug]);
+        if (record.bundleSha256) this.collectOrphanBundle(principal.orgId, record.bundleSha256);
+        purged.push(record);
+      }
+      return purged;
     })();
   }
 
