@@ -1263,8 +1263,8 @@ export function countPullRequests(opts: ListPullRequestOptions = {}): number {
  * simply carry null gate data.
  */
 export type PullRequestInput =
-  Omit<PullRequest, "id" | "head_sha" | "mergeable" | "merge_state_status" | "ci_state" | "is_draft" | "review_decision">
-  & Partial<Pick<PullRequest, "head_sha" | "mergeable" | "merge_state_status" | "ci_state" | "is_draft" | "review_decision">>;
+  Omit<PullRequest, "id" | "head_sha" | "base_ref_oid" | "mergeable" | "merge_state_status" | "ci_state" | "ci_contexts_json" | "is_draft" | "review_decision">
+  & Partial<Pick<PullRequest, "head_sha" | "base_ref_oid" | "mergeable" | "merge_state_status" | "ci_state" | "ci_contexts_json" | "is_draft" | "review_decision">>;
 
 export function bulkInsertPullRequests(prs: PullRequestInput[]): number {
   const db = getDb();
@@ -1274,8 +1274,9 @@ export function bulkInsertPullRequests(prs: PullRequestInput[]): number {
   const stmt = db.query(`INSERT INTO pull_requests
     (repo_id, number, title, state, author, created_at, updated_at, merged_at, closed_at, url,
      base_branch, head_branch, additions, deletions, changed_files,
-     head_sha, mergeable, merge_state_status, ci_state, is_draft, review_decision, gh_owner, gh_repo)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     head_sha, base_ref_oid, mergeable, merge_state_status, ci_state, ci_contexts_json,
+     is_draft, review_decision, gh_owner, gh_repo)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(repo_id, number) DO UPDATE SET
       title = excluded.title, state = excluded.state, author = excluded.author,
       created_at = excluded.created_at, updated_at = excluded.updated_at,
@@ -1283,8 +1284,10 @@ export function bulkInsertPullRequests(prs: PullRequestInput[]): number {
       base_branch = excluded.base_branch, head_branch = excluded.head_branch,
       additions = excluded.additions, deletions = excluded.deletions,
       changed_files = excluded.changed_files,
-      head_sha = excluded.head_sha, mergeable = excluded.mergeable,
+      head_sha = excluded.head_sha, base_ref_oid = excluded.base_ref_oid,
+      mergeable = excluded.mergeable,
       merge_state_status = excluded.merge_state_status, ci_state = excluded.ci_state,
+      ci_contexts_json = excluded.ci_contexts_json,
       is_draft = excluded.is_draft, review_decision = excluded.review_decision,
       gh_owner = excluded.gh_owner, gh_repo = excluded.gh_repo`);
   // Resolving a row with an unusable URL needs its owning repo's remote, so
@@ -1311,8 +1314,9 @@ export function bulkInsertPullRequests(prs: PullRequestInput[]): number {
         pr.repo_id, pr.number, pr.title, pr.state, pr.author, pr.created_at, pr.updated_at,
         pr.merged_at, pr.closed_at, pr.url, pr.base_branch, pr.head_branch,
         pr.additions, pr.deletions, pr.changed_files,
-        pr.head_sha ?? null, pr.mergeable ?? null, pr.merge_state_status ?? null,
-        pr.ci_state ?? null, pr.is_draft ? 1 : 0, pr.review_decision ?? null,
+        pr.head_sha ?? null, pr.base_ref_oid ?? null, pr.mergeable ?? null,
+        pr.merge_state_status ?? null, pr.ci_state ?? null, pr.ci_contexts_json ?? null,
+        pr.is_draft ? 1 : 0, pr.review_decision ?? null,
         origin.org, origin.repo,
       );
       count++;

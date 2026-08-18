@@ -56,6 +56,7 @@ import {
 } from "../lib/checkout-health.js";
 import { printError, printJson, printJsonLine, printLine } from "./stdout.js";
 import { syncGithubPRs, syncAllGithubPRs, fetchRepoMetadata } from "../lib/github.js";
+import { runPrMonitor } from "../lib/pr-monitor-run.js";
 import { enumerateGithubRepoCatalog } from "../lib/github-catalog.js";
 import { getActivityHeatmap, getContributorStats, getStaleRepos, getRecentActivity } from "../lib/analytics.js";
 import { buildGraph, queryNode, queryRelated, findPath, getDeps, getCrossOrgAuthors, getGraphStats } from "../lib/graph.js";
@@ -1465,6 +1466,83 @@ program
         detail: `${total} match this filter. Filter with --org, --repo, --repo-name, --state, --author, --mine, or --review`,
       });
     }
+  });
+
+program
+  .command("pr-monitor")
+  .description("Classify open pull requests and emit state/event deltas (pr-monitor watch)")
+  .option("--org <org>", "Scope to one GitHub owner")
+  .option("--repo <repo>", "Scope to one local repo record")
+  .option("-n, --limit <n>", "Max PRs to classify", "500")
+  // Two separate options, both writing the `sync` attribute. Commander 13's
+  // combined "--sync, --no-sync" form treats the positive flag as an alias of
+  // the negated one (measured: --sync sets sync=false), so it cannot express
+  // the design's loop call `repos pr-monitor --sync --org hasna --json`.
+  .option("--sync", "Sync GitHub PR metadata first (default)")
+  .option("--no-sync", "Read last synced state only")
+  .option("--baseline", "First-run mode: record watch state, emit a baseline summary, no per-PR NEW events")
+  .option("--verbose", "Include per-PR input detail (verdicts, failing checks)")
+  .option("--json", "Output machine-readable envelope (required by the loop)")
+  .addHelpText("after", "\nLoop use: repos pr-monitor --sync --org hasna --json. Events[] is the only section the loop posts; a quiet run emits events: [] with a count heartbeat.")
+  .action((opts: {
+    org?: string;
+    repo?: string;
+    limit: string;
+    sync?: boolean;
+    baseline?: boolean;
+    verbose?: boolean;
+    json?: boolean;
+  }) => {
+    let envelope;
+    try {
+      // Commander negation: `--no-sync` sets `opts.sync = false` (true by
+      // default); the flag name carries the negation, not the property.
+      envelope = runPrMonitor({
+        sync: opts.sync !== false,
+        org: opts.org,
+        repo: opts.repo,
+        limit: parseIntOption(opts.limit, "-n/--limit", 1),
+        baseline: Boolean(opts.baseline),
+      });
+    } catch (err: any) {
+      printError(`pr-monitor: ${err.message}`);
+      process.exit(1);
+    }
+    const hadErrors = envelope.errors.length > 0 || (envelope.synced?.errors.length ?? 0) > 0;
+
+    if (opts.json) {
+      printJson(envelope);
+      if (hadErrors) process.exitCode = 1;
+      return;
+    }
+
+    const { summary } = envelope;
+    console.log(chalk.bold(`PR monitor: ${summary.open} open, ${summary.events} events${envelope.baseline ? chalk.dim(" (baseline)") : ""}`));
+    for (const event of envelope.events) {
+      console.log(`[PR-MONITOR] ${event.class} ${event.owner}/${event.repo}#${event.number} — ${event.title}${event.head_sha ? ` @ ${event.head_sha.slice(0, 7)}` : ""} — ${event.detail}`);
+    }
+    if (opts.verbose) {
+      for (const row of envelope.state) {
+        const cls = row.class ?? "-";
+        const verdict = row.verdict.value
+          ? `verdict ${row.verdict.value}${row.verdict.reviewer ? ` by ${row.verdict.reviewer}` : ""}`
+          : "no verdict";
+        const base = row.current_main_sha && row.base_ref_oid
+          ? (row.current_main_sha === row.base_ref_oid ? "base fresh" : "base moved")
+          : "base unknown";
+        console.log(chalk.dim(`  ${row.owner}/${row.repo}#${row.number} ${row.state} ${cls} @ ${row.head_sha?.slice(0, 7) ?? "-"} — ${verdict} — ${base}${row.ci_state ? ` ci=${row.ci_state}` : ""}`));
+      }
+    }
+    const byClass = Object.entries(summary.by_class)
+      .filter(([, count]) => count > 0)
+      .map(([cls, count]) => `${cls}:${count}`)
+      .join(" ") || "none";
+    console.log(chalk.dim(`  state: ${envelope.state.length} PRs — ${byClass}`));
+    if (envelope.synced) {
+      console.log(chalk.dim(`  synced: repos=${envelope.synced.repos_synced}/${envelope.synced.repos_checked} prs=${envelope.synced.total_synced} truncated=${envelope.synced.truncated ? "yes" : "no"} skipped=${envelope.synced.skipped.length} errors=${envelope.synced.errors.length}`));
+    }
+    for (const err of envelope.errors) console.log(chalk.red(`  error: ${err}`));
+    if (hadErrors) process.exitCode = 1;
   });
 
 // ── Search ──

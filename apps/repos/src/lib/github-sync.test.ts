@@ -32,10 +32,11 @@ function ghPr(number: number, overrides: Partial<GraphqlPr> = {}): GraphqlPr {
     deletions: 2,
     changedFiles: 3,
     headRefOid: `sha-${number}`,
+    baseRefOid: `main-sha-${number}`,
     mergeable: "MERGEABLE",
     mergeStateStatus: "CLEAN",
     reviewDecision: null,
-    commits: { nodes: [{ commit: { statusCheckRollup: { state: "SUCCESS" } } }] },
+    commits: { nodes: [{ commit: { statusCheckRollup: { state: "SUCCESS", contexts: { nodes: [] } } } }] },
     ...overrides,
   };
 }
@@ -255,6 +256,52 @@ describe("sync reconciliation", () => {
     expect(row.is_draft).toBe(true);
     expect(row.org).toBe("hasna");
     expect(row.repo).toBe("codewith");
+  });
+
+  it("stores baseRefOid from the GraphQL connection for the BASE_MOVED class", () => {
+    upsertRepo({ path: "/w/codewith", name: "codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
+    const client = stubClient({
+      open: [ghPr(424, { baseRefOid: "main-sha-424" })],
+    });
+    syncRemotePullRequests("github.com/hasna/codewith", "hasna/codewith", { client });
+
+    const row = listPullRequests({ state: "open" })[0]!;
+    expect(row.base_ref_oid).toBe("main-sha-424");
+  });
+
+  it("captures status check contexts from the rollup for the CI_FAILING detail", () => {
+    upsertRepo({ path: "/w/codewith", name: "codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
+    const client = stubClient({
+      open: [ghPr(424, {
+        commits: { nodes: [{ commit: { statusCheckRollup: {
+          state: "FAILURE",
+          contexts: { nodes: [
+            { name: "bun test", status: "COMPLETED", conclusion: "FAILURE" },
+            { name: "lint", status: "COMPLETED", conclusion: "SUCCESS" },
+          ] },
+        } } }] },
+      })],
+    });
+    syncRemotePullRequests("github.com/hasna/codewith", "hasna/codewith", { client });
+
+    const row = listPullRequests({ state: "open" })[0]!;
+    expect(row.ci_state).toBe("FAILURE");
+    expect(JSON.parse(row.ci_contexts_json!)).toEqual([
+      { name: "bun test", conclusion: "FAILURE" },
+      { name: "lint", conclusion: "SUCCESS" },
+    ]);
+  });
+
+  it("tolerates a rollup whose contexts are absent", () => {
+    upsertRepo({ path: "/w/codewith", name: "codewith", org: "hasna", remote_url: "github.com/hasna/codewith" });
+    const client = stubClient({
+      open: [ghPr(1, { commits: { nodes: [{ commit: { statusCheckRollup: { state: "PENDING", contexts: null } } }] } })],
+    });
+    syncRemotePullRequests("github.com/hasna/codewith", "hasna/codewith", { client });
+
+    const row = listPullRequests({ state: "open" })[0]!;
+    expect(row.ci_state).toBe("PENDING");
+    expect(row.ci_contexts_json).toBeNull();
   });
 
   it("records a merged PR returned by the closed-history fetch as merged", () => {

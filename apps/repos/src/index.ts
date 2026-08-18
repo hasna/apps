@@ -219,3 +219,70 @@ export type {
   UpsertTaskSeedsOptions,
   UpsertTaskSeedsResult,
 } from "./lib/ops-loop-tasks.js";
+export {
+  DEFAULT_MONITOR_LIMIT,
+  PR_MONITOR_SCHEMA,
+  runPrMonitor,
+} from "./lib/pr-monitor-run.js";
+export type {
+  PrMonitorEnvelope,
+  PrMonitorFilters,
+  PrMonitorSyncedSection,
+  RunPrMonitorOptions,
+} from "./lib/pr-monitor-run.js";
+export {
+  DEFAULT_PRUNE_OLDER_THAN_DAYS,
+  advanceCommentCursor,
+  computeEventFingerprint,
+  listWatchState,
+  markEventEmitted,
+  normalizePrKey,
+  pruneWatchState,
+  readCommentCursor,
+  readLastEmittedFingerprint,
+  readWatchState,
+  readWatchStateByPr,
+  upsertWatchState,
+  watchStateKey,
+} from "./lib/pr-monitor-state.js";
+export type {
+  CommentCursor,
+  PrMonitorWatchRow,
+  PruneResult,
+  PruneWatchStateOptions,
+  WatchStateObservation,
+} from "./lib/pr-monitor-state.js";
+export {
+  parseVerdictLine,
+  parseVerdictsFromBody,
+  resolveVerdictAtHead,
+} from "./lib/verdict-parser.js";
+export type {
+  ParsedVerdict,
+  VerdictValue,
+} from "./lib/verdict-parser.js";
+export {
+  classifyPullRequest,
+  leaseMatchesPr,
+  probeMergeTree,
+} from "./lib/pr-monitor-classify.js";
+export type {
+  ClassifyPrInput,
+  MergeTreeProbe,
+  MonitorCommentMeta,
+  MonitorLeaseInput,
+  PrClassification,
+  PrClassificationEvent,
+  PrMonitorClass,
+  PrMonitorSubject,
+} from "./lib/pr-monitor-classify.js";
+export {
+  emitMonitorDelta,
+} from "./lib/pr-monitor-emit.js";
+export type {
+  DeltaEmissionResult,
+  EmitDeltaOptions,
+  EmitPrInput,
+  EmittedEvent,
+  MonitorStateEntry,
+} from "./lib/pr-monitor-emit.js";

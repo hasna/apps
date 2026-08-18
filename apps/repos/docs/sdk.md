@@ -43,11 +43,47 @@ not listed here are not part of the package-root API.
 | Loop producers | `buildPrQueue`, `runGlobalCliSmoke`, `inspectPackageHygiene`, `buildReleaseCandidates`, `buildDocsRulesDrift`, `buildDependencyRefresh`, `buildWorkspaceWorktreeHygiene`, `buildTaskRouteHealth`, `buildProtectedRelease`, `buildReleasePipelineParity` |
 | Loop artifacts | `upsertTaskSeeds`, `writeLoopReport` |
 | Account path | `resolveTrustedAccountHome` |
+| PR monitor | `PR_MONITOR_SCHEMA`, `DEFAULT_MONITOR_LIMIT`, `runPrMonitor`, `watchStateKey`, `normalizePrKey`, `readWatchState`, `readWatchStateByPr`, `listWatchState`, `upsertWatchState`, `readCommentCursor`, `advanceCommentCursor`, `computeEventFingerprint`, `readLastEmittedFingerprint`, `markEventEmitted`, `pruneWatchState`, `DEFAULT_PRUNE_OLDER_THAN_DAYS`, `parseVerdictLine`, `parseVerdictsFromBody`, `resolveVerdictAtHead`, `leaseMatchesPr`, `classifyPullRequest`, `probeMergeTree`, `emitMonitorDelta` |
 
 Core entity types (`Repo`, `Commit`, `Branch`, `Tag`, `Remote`, `PullRequest`,
 `PullRequestRecord`, `Agent`, `ScanResult`, `SearchResult`, `RepoStats`, and
 `ListOptions`) plus request/result/error types for the typed APIs are exported
 from the same entry point.
+
+## PR monitor
+
+`runPrMonitor` runs one monitor pass — the same build half as the
+`repos pr-monitor` CLI verb — and returns the `open-repos.pr-monitor.v1`
+envelope: `summary` counts, `events[]` (new state only, fingerprint-deduped),
+a full per-PR `state` view, and explicit `errors`. Sync is on by default; pass
+`sync: false` to read the last synced registry only. `org`/`repo` scope the
+run; `baseline: true` records watch state without emitting per-PR NEW events.
+GitHub reads go through the injectable `MonitorClient` seam, so the engine is
+driven entirely from fixtures in tests.
+
+```typescript
+import { runPrMonitor } from "@hasna/repos";
+
+const envelope = runPrMonitor({ sync: false, org: "hasna", limit: 200 });
+console.log(envelope.summary.by_class);
+for (const event of envelope.events) console.log(`${event.class} ${event.owner}/${event.repo}#${event.number}`);
+```
+
+The state accessors (`readWatchState`, `upsertWatchState`, `listWatchState`,
+`advanceCommentCursor`, `computeEventFingerprint`, `markEventEmitted`,
+`pruneWatchState`, …) operate on the `pr_monitor_state` table — the monitor's
+per-machine watch state (comment cursors, last emitted fingerprint, verdict
+history). The table is local-only by design and is never synced to the shared
+Postgres mirror. `pruneWatchState` deletes rows whose PR is terminal and older
+than `DEFAULT_PRUNE_OLDER_THAN_DAYS` (30).
+
+The classification surface (`classifyPullRequest`, `leaseMatchesPr`,
+`probeMergeTree`) and the verdict parser (`parseVerdictsFromBody`,
+`resolveVerdictAtHead`) implement the design's §2.4 decision table: one class
+per PR per run with precedence NEW > NO_GO_OPEN > CI_FAILING > BASE_MOVED >
+READY_TO_MERGE > REVIEW_NEEDED > NEW_COMMENT, plus the STALE_WORKTREE
+merged-domain class. `emitMonitorDelta` applies baseline mode and the event
+fingerprint dedupe; a re-run against unchanged state emits `events: []`.
 
 ## Database lifetime
 

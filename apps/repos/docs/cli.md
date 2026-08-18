@@ -48,6 +48,7 @@ print unusable registry rows but exit non-zero unless
 | `repos branches` | Filter with `--repo`, `--remote`, or `--local`; pagination, `--verbose`, `--json` |
 | `repos tags` | `--repo`, pagination, `--verbose`, `--json` |
 | `repos prs` | `--repo`, `--org`, `--repo-name`, `--state`, `--author`, `--mine`, `--review`, `--duplicates`, pagination, `--verbose`, `--json` |
+| `repos pr-monitor` | PR monitor: syncs GitHub PR metadata first (default), classifies every open PR into NEW, CI_FAILING, REVIEW_NEEDED, NO_GO_OPEN, READY_TO_MERGE, BASE_MOVED, STALE_WORKTREE, or NEW_COMMENT, and emits only changed state; `--org <org>`, `--repo <repo>`, `-n/--limit <n>` (default 500), `--sync` (default), `--no-sync`, `--baseline`, `--verbose`, `--json` |
 | `repos search <query>` | Unified repo/commit/PR search; `-n/--limit`, `--verbose`, `--json` |
 | `repos stats` | Global totals and activity summaries; `--json` |
 | `repos status` | Stable metadata-only inventory contract with no names, paths, branches, messages, or remote URLs; `--json` |
@@ -66,6 +67,15 @@ print unusable registry rows but exit non-zero unless
 The `--mine` and `--review` PR filters call `gh`. Stored PR listings are
 de-duplicated by PR identity by default; `--duplicates` restores one row per
 local checkout.
+
+`repos pr-monitor` syncs before classifying (`--sync` is the default; `--no-sync`
+reads the last synced state, which is how a second run proves idempotency).
+Events are emitted only when the state fingerprint changes, so an unchanged
+re-run reports `events: []`. `--baseline` records watch state on first run and
+emits a baseline summary instead of a per-PR NEW storm. Loop use:
+`repos pr-monitor --sync --org hasna --json`; `events[]` is the only section
+the loop posts, and the JSON envelope carries a `summary` with per-class
+counts plus the full per-PR `state` read.
 
 ## Checkout and repository health
 

@@ -31,7 +31,7 @@ repos-serve  # http://localhost:19450
 
 - [Complete CLI and executable reference](docs/cli.md)
 - [Configuration, database selection, and automatic indexing](docs/configuration.md)
-- [MCP transports and all 36 tools](docs/mcp.md)
+- [MCP transports and all 37 tools](docs/mcp.md)
 - [HTTP API and dashboard](docs/http-api.md)
 - [TypeScript SDK](docs/sdk.md)
 
@@ -559,7 +559,7 @@ repos-mcp          # Streamable HTTP on 127.0.0.1:8874
 repos-mcp --stdio  # stdio transport for an owning MCP client
 ```
 
-36 tools available for AI agents:
+37 tools available for AI agents:
 
 - `list_repos`, `get_repo`, `search_repos`
 - `list_commits`, `search_commits`
@@ -570,6 +570,7 @@ repos-mcp --stdio  # stdio transport for an owning MCP client
 - `scan_repos`
 - `get_stats`, `get_repo_stats`
 - `sync_github_prs`, `sync_all_github_prs`, `fetch_repo_metadata`
+- `pr_monitor` (open-PR classification and state/event deltas)
 - `graph_build`, `graph_query`, `graph_related`, `graph_path`, `graph_deps`, `graph_stats`
 - `package_health`, `package_drift`, `package_resolve_bin`
 - `ports_scan`, `triage_branches`, `triage_prs`

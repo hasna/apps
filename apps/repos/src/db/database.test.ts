@@ -112,7 +112,7 @@ describe("database", () => {
       const migrated = getDb(path);
       expect(migrated).toBe(raw);
       expect(migrated.query("SELECT version FROM migrations ORDER BY version").all())
-        .toEqual([1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14].map((version) => ({ version })));
+        .toEqual([1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((version) => ({ version })));
       expect(getDb(path)).toBe(migrated);
       expect(migrated.query("SELECT count(*) AS count FROM migrations WHERE version = 9").get())
         .toEqual({ count: 1 });
@@ -199,7 +199,7 @@ describe("database", () => {
     const db = getDb(":memory:");
     const migrations = db.query("SELECT version FROM migrations ORDER BY version").all() as { version: number }[];
     expect(migrations.length).toBeGreaterThanOrEqual(5);
-    expect(migrations.map((row) => row.version)).toEqual([1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+    expect(migrations.map((row) => row.version)).toEqual([1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
   });
 
   it("migrates existing branch uniqueness to include remote classification", () => {
@@ -345,7 +345,7 @@ describe("database", () => {
       expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='worktree_leases'").get()).toBeTruthy();
       expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='repo_relocation_audit'").get()).toBeTruthy();
       expect((db.query("SELECT version FROM migrations ORDER BY version").all() as { version: number }[])
-        .map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+        .map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       closeDb();
@@ -862,9 +862,139 @@ describe("database", () => {
       const results = await Promise.all(children.map(({ completed }) => completed));
       expect(results).toEqual(Array.from({ length: 8 }, () => ({
         code: 0,
-        stdout: JSON.stringify([1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14].map((version) => ({ version }))),
+        stdout: JSON.stringify([1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((version) => ({ version }))),
         stderr: "",
       })));
+    } finally {
+      closeDb();
+      rmSync(dir, { recursive: true, force: true });
+      process.env["HASNA_REPOS_DB_PATH"] = ":memory:";
+      getDb(":memory:");
+    }
+  });
+
+  it("migrates a fresh database to v15 with pr_monitor_state and pull_requests.base_ref_oid", () => {
+    const db = getDb(":memory:");
+    const versions = (db.query("SELECT version FROM migrations ORDER BY version").all() as { version: number }[])
+      .map((row) => row.version);
+    expect(versions).toEqual([1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+
+    expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='pr_monitor_state'").get()).toBeTruthy();
+
+    const columns = new Set(
+      (db.query("PRAGMA table_info(pr_monitor_state)").all() as Array<{ name: string }>).map((column) => column.name),
+    );
+    for (const column of [
+      "pr_key", "gh_owner", "gh_repo", "number", "first_seen_at", "last_seen_at",
+      "last_observed_state", "last_head_sha", "last_updated_at", "last_seen_comment_id",
+      "last_seen_comment_at", "last_classification", "last_classification_at",
+      "last_emitted_fingerprint", "verdict_json", "ci_failing_json", "base_ref_oid",
+      "current_main_sha",
+    ]) {
+      expect(columns.has(column)).toBe(true);
+    }
+
+    const prColumns = new Set(
+      (db.query("PRAGMA table_info(pull_requests)").all() as Array<{ name: string }>).map((column) => column.name),
+    );
+    expect(prColumns.has("base_ref_oid")).toBe(true);
+
+    for (const index of ["idx_prs_base_ref_oid", "idx_pr_monitor_state_owner", "idx_pr_monitor_state_class"]) {
+      expect(db.query("SELECT name FROM sqlite_master WHERE type='index' AND name = ?").get(index)).toEqual({ name: index });
+    }
+
+    expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+
+  it("enforces pr_monitor_state identity uniqueness and the comment cursor default", () => {
+    const db = getDb(":memory:");
+    const insert = db.query(`INSERT INTO pr_monitor_state
+      (pr_key, gh_owner, gh_repo, number, last_seen_at, last_observed_state)
+      VALUES (?, ?, ?, ?, datetime('now'), 'open')`);
+    insert.run("https://github.com/hasna/apps/pull/1", "hasna", "apps", 1);
+    // Same pr_key is the primary key.
+    expect(() => insert.run("https://github.com/hasna/apps/pull/1", "hasna", "apps", 1))
+      .toThrow("UNIQUE constraint failed");
+    // Same (gh_owner, gh_repo, number) with a different pr_key is the identity UNIQUE.
+    expect(() => insert.run("https://github.com/hasna/other/pull/1", "hasna", "apps", 1))
+      .toThrow("UNIQUE constraint failed");
+    const row = db.query("SELECT last_seen_comment_id, first_seen_at FROM pr_monitor_state WHERE pr_key = ?")
+      .get("https://github.com/hasna/apps/pull/1") as { last_seen_comment_id: number; first_seen_at: string };
+    expect(row.last_seen_comment_id).toBe(0);
+    expect(row.first_seen_at).toBeTruthy();
+  });
+
+  it("upgrades an existing v14 database to v15 in place, preserving pull_request rows", () => {
+    closeDb();
+    const dir = mkdtempSync(join(tmpdir(), "repos-v15-upgrade-"));
+    const path = join(dir, "repos.db");
+    const seed = new Database(path);
+    seed.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE migrations (
+        id INTEGER PRIMARY KEY,
+        version INTEGER NOT NULL UNIQUE,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO migrations (version) VALUES (1), (2), (3), (4), (6), (7), (8), (9), (10), (11), (12), (13), (14);
+      CREATE TABLE repos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        path TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL
+      );
+      INSERT INTO repos (id, path, name) VALUES (1, '/tmp/v15', 'v15');
+      CREATE TABLE pull_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+        number INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'open',
+        author TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        merged_at TEXT,
+        closed_at TEXT,
+        url TEXT,
+        base_branch TEXT,
+        head_branch TEXT,
+        additions INTEGER NOT NULL DEFAULT 0,
+        deletions INTEGER NOT NULL DEFAULT 0,
+        changed_files INTEGER NOT NULL DEFAULT 0,
+        head_sha TEXT,
+        mergeable TEXT,
+        merge_state_status TEXT,
+        ci_state TEXT,
+        is_draft INTEGER NOT NULL DEFAULT 0,
+        review_decision TEXT,
+        gh_owner TEXT,
+        gh_repo TEXT,
+        UNIQUE(repo_id, number)
+      );
+      INSERT INTO pull_requests (
+        id, repo_id, number, title, state, author, created_at, url,
+        base_branch, head_branch, head_sha, gh_owner, gh_repo
+      ) VALUES (
+        1, 1, 42, 'existing pr', 'open', 'tester', '2026-08-01T00:00:00.000Z',
+        'https://github.com/hasna/apps/pull/42', 'main', 'feature/x', '${"a".repeat(40)}', 'hasna', 'apps'
+      );
+    `);
+    seed.close();
+    try {
+      const db = getDb(path);
+      expect(db.query("SELECT version FROM migrations WHERE version = 15").get()).toEqual({ version: 15 });
+      expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='pr_monitor_state'").get()).toBeTruthy();
+      expect(db.query("SELECT number, title, base_ref_oid FROM pull_requests WHERE id = 1").get()).toEqual({
+        number: 42,
+        title: "existing pr",
+        base_ref_oid: null,
+      });
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+      closeDb();
+
+      const reopened = getDb(path);
+      expect(reopened.query("SELECT count(*) AS count FROM migrations WHERE version = 15").get()).toEqual({ count: 1 });
+      expect(reopened.query("SELECT name FROM sqlite_master WHERE type='index' AND name = 'idx_prs_base_ref_oid'").get())
+        .toEqual({ name: "idx_prs_base_ref_oid" });
     } finally {
       closeDb();
       rmSync(dir, { recursive: true, force: true });

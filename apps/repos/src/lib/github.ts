@@ -58,6 +58,17 @@ function isUnsupportedFieldError(message: string): boolean {
  */
 const MERGE_INFO_PREVIEW = "Accept: application/vnd.github.merge-info-preview+json";
 
+/**
+ * One status-check context inside a `statusCheckRollup`, captured at sync time
+ * so the monitor's CI_FAILING class can name the failing check without a
+ * per-PR call (pr-monitor design §1.5/§2.4).
+ */
+export interface GraphqlCheckContext {
+  name: string;
+  status: string;
+  conclusion: string | null;
+}
+
 export interface GraphqlPr {
   number: number;
   title: string;
@@ -75,10 +86,12 @@ export interface GraphqlPr {
   deletions: number;
   changedFiles: number;
   headRefOid: string | null;
+  /** Tip commit of the base ref — the BASE_MOVED freshness input. */
+  baseRefOid: string | null;
   mergeable: string | null;
   mergeStateStatus?: string | null;
   reviewDecision: string | null;
-  commits?: { nodes: Array<{ commit: { statusCheckRollup: { state: string } | null } }> };
+  commits?: { nodes: Array<{ commit: { statusCheckRollup: { state: string; contexts?: { nodes: Array<GraphqlCheckContext> } | null } | null } }> };
 }
 
 function pullRequestFields(withMergeState: boolean): string {
@@ -86,8 +99,8 @@ function pullRequestFields(withMergeState: boolean): string {
     number title state isDraft author { login }
     createdAt updatedAt mergedAt closedAt url
     baseRefName headRefName additions deletions changedFiles
-    headRefOid mergeable reviewDecision${withMergeState ? "\n    mergeStateStatus" : ""}
-    commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }`;
+    headRefOid baseRefOid mergeable reviewDecision${withMergeState ? "\n    mergeStateStatus" : ""}
+    commits(last: 1) { nodes { commit { statusCheckRollup { state contexts { nodes { name status conclusion } } } } } }`;
 }
 
 function graphql(query: string, variables: Record<string, string>, withMergeState: boolean): any {
@@ -293,6 +306,19 @@ export function fetchPullRequestStates(
   return result;
 }
 
+/**
+ * Serialize the status-check contexts at the head sha into the registry
+ * `[{name, conclusion}]` shape the monitor stores per PR. The rollup is
+ * already scoped to the head commit by the query (`commits(last: 1)`), so no
+ * further per-PR call is owed; the classification layer filters the list down
+ * to the failing checks (§2.4 CI_FAILING).
+ */
+function serializeCheckContexts(pr: GraphqlPr): string | null {
+  const contexts = pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes;
+  if (!contexts || contexts.length === 0) return null;
+  return JSON.stringify(contexts.map(({ name, conclusion }) => ({ name, conclusion })));
+}
+
 function toPullRequestInput(repoId: number, pr: GraphqlPr): PullRequestInput {
   return {
     repo_id: repoId,
@@ -311,9 +337,11 @@ function toPullRequestInput(repoId: number, pr: GraphqlPr): PullRequestInput {
     deletions: pr.deletions || 0,
     changed_files: pr.changedFiles || 0,
     head_sha: pr.headRefOid || null,
+    base_ref_oid: pr.baseRefOid || null,
     mergeable: pr.mergeable || null,
     merge_state_status: pr.mergeStateStatus ?? null,
     ci_state: pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? null,
+    ci_contexts_json: serializeCheckContexts(pr),
     is_draft: Boolean(pr.isDraft),
     review_decision: pr.reviewDecision || null,
   };
@@ -334,6 +362,129 @@ export interface SyncPullRequestsResult {
   checkouts: number;
   merge_state_available: boolean;
 }
+
+// ── pr-monitor fetch layer (design section 2.5) ─────────────────────────────
+//
+// The comment/verdict fetch and the current-main fetch are the monitor's only
+// GitHub reads beyond the sync itself, injected through the MonitorClient seam
+// so the classification flow is testable against fixtures without the live
+// API — the same shape as GithubPullRequestClient above.
+
+/** One PR comment as the monitor's comment-cursor and verdict inputs need it. */
+export interface MonitorComment {
+  /**
+   * Integer comment id (GraphQL `databaseId`). The GraphQL `id` is an opaque
+   * base64 GlobalID, which the INTEGER `last_seen_comment_id` cursor column
+   * cannot store; `databaseId` is the stable per-issue monotonic integer the
+   * design's cursor semantics require.
+   */
+  id: number;
+  createdAt: string | null;
+  author: string | null;
+  body: string;
+}
+
+/**
+ * The GitHub reads the pr-monitor run performs beyond the sync. Injectable so
+ * the run orchestration is testable against fixtures (design section 2.5).
+ */
+export interface MonitorClient {
+  /**
+   * Batched comment fetch per PR number. Every requested number receives an
+   * entry — `[]` when GitHub returned none — so a number ABSENT from the map
+   * means its batch failed outright and the caller reports it in `errors`
+   * rather than guessing.
+   */
+  fetchComments(ghRepo: string, numbers: number[]): Map<number, MonitorComment[]>;
+  /** Base-branch head sha; null when the fetch failed or no branch was given. */
+  fetchCurrentMainSha(ghRepo: string, baseBranch: string): string | null;
+}
+
+/** Comment window bound, per design section 6: last 20 comments per PR. */
+const MONITOR_COMMENT_WINDOW = 20;
+const MONITOR_COMMENT_BATCH = 50;
+
+/**
+ * Fetch the last {@link MONITOR_COMMENT_WINDOW} comments per PR, aliased and
+ * batched exactly like `fetchPullRequestStates` (batch 50). A batch that
+ * fails outright leaves its numbers unresolved — the caller excludes those
+ * PRs from classification and reports the failure rather than guessing.
+ */
+export function fetchMonitorComments(ghRepo: string, numbers: number[]): Map<number, MonitorComment[]> {
+  const [owner, name] = ghRepo.split("/");
+  const result = new Map<number, MonitorComment[]>();
+  if (!owner || !name || numbers.length === 0) return result;
+
+  // Only well-formed positive integers become aliases. The values come from an
+  // INTEGER column today, but a malformed one would otherwise be interpolated
+  // straight into the query and fail the whole batch.
+  const safeNumbers = numbers.filter((n) => Number.isSafeInteger(n) && n > 0);
+
+  for (let i = 0; i < safeNumbers.length; i += MONITOR_COMMENT_BATCH) {
+    const batch = safeNumbers.slice(i, i + MONITOR_COMMENT_BATCH);
+    const aliases = batch
+      .map((n) => `pr${n}: pullRequest(number: ${n}) { number comments(last: ${MONITOR_COMMENT_WINDOW}) { nodes { databaseId createdAt author { login } body } } }`)
+      .join("\n");
+    let data: any;
+    try {
+      data = graphql(
+        `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${aliases} } }`,
+        { owner, name },
+        false,
+      );
+    } catch {
+      // A batch that fails outright leaves its numbers unresolved; the caller
+      // reports them rather than guessing. Continuing keeps one bad batch
+      // from abandoning the rest of the repository.
+      continue;
+    }
+    const repository = data?.repository ?? {};
+    for (const n of batch) {
+      const node = repository[`pr${n}`];
+      const nodes = node?.comments?.nodes;
+      const comments: MonitorComment[] = [];
+      if (Array.isArray(nodes)) {
+        for (const raw of nodes) {
+          if (!raw || typeof raw !== "object") continue;
+          const id = (raw as any).databaseId;
+          if (typeof id !== "number" || id <= 0) continue;
+          comments.push({
+            id,
+            createdAt: typeof (raw as any).createdAt === "string" ? (raw as any).createdAt : null,
+            author: typeof (raw as any).author?.login === "string" ? (raw as any).author.login : null,
+            body: typeof (raw as any).body === "string" ? (raw as any).body : "",
+          });
+        }
+      }
+      result.set(n, comments);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * The base-branch head sha, one REST call per distinct repository per run
+ * (design section 2.4 BASE_MOVED/READY_TO_MERGE). A non-40-hex response or a
+ * failed request returns null — the caller reports the failure and the
+ * classification degrades to the stored base_ref_oid comparison.
+ */
+export function fetchCurrentMainSha(ghRepo: string, baseBranch: string): string | null {
+  if (!baseBranch) return null;
+  try {
+    const output = gh(["api", `repos/${ghRepo}/commits/heads/${baseBranch}`, "--jq", ".sha"]);
+    const sha = (output ?? "").trim();
+    return /^[0-9a-f]{40}$/i.test(sha) ? sha : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The live MonitorClient: everything goes through the existing gh() helper. */
+export const liveMonitorClient: MonitorClient = {
+  fetchComments: fetchMonitorComments,
+  fetchCurrentMainSha,
+};
 
 export function parseGithubRemote(remoteUrl: string | null | undefined): string | null {
   if (!remoteUrl) return null;

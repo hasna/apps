@@ -67,7 +67,7 @@ describe("documentation parity", () => {
     const source = readFileSync(resolve(ROOT, "src/mcp/server.ts"), "utf8");
     const tools = Array.from(source.matchAll(/server\.tool\("([^"]+)"/g), (match) => match[1]!);
 
-    expect(tools).toHaveLength(36);
+    expect(tools).toHaveLength(37);
     expect(new Set(tools).size).toBe(tools.length);
     for (const tool of tools) expect(MCP_DOCS).toContain(`\`${tool}\``);
     expect(README).toContain(`${tools.length} tools available`);
