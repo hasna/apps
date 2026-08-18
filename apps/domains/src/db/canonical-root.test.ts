@@ -32,7 +32,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDbPath, migrateLegacyDataDir } from "./database.js";
-import { getConfigPath, loadConfig, saveConfig } from "../lib/config.js";
+import { getConfigPath, loadConfig, migrateLegacyConfig, saveConfig } from "../lib/config.js";
 
 interface FakeEnv {
   HOME: string;
@@ -202,6 +202,43 @@ describe("one-time migration from the previous XDG default", () => {
 
       migrateLegacyDataDir(env);
       expect(readFileSync(join(canonicalDir, "domains.db")).toString()).toBe("canonical-wins");
+    } finally {
+      rmHome(env);
+    }
+  });
+
+  test("dry-run reports what would be copied and writes nothing", () => {
+    const env = fakeHomeEnv();
+    try {
+      const oldDir = join(env.HOME, ".local", "share", "open-domains");
+      mkdirSync(oldDir, { recursive: true });
+      writeFileSync(join(oldDir, "domains.db"), "dry-run-me");
+
+      const report = migrateLegacyDataDir(env, true);
+
+      expect(report.dryRun).toBe(true);
+      expect(report.wouldCopy).toContain("domains.db");
+      expect(report.copied).toEqual([]);
+      expect(existsSync(join(env.HOME, ".hasna", "domains"))).toBe(false);
+      expect(existsSync(join(env.HOME, ".hasna", "domains", "domains.db"))).toBe(false);
+    } finally {
+      rmHome(env);
+    }
+  });
+
+  test("dry-run on the config migration writes nothing", () => {
+    const env = fakeHomeEnv();
+    try {
+      const oldDir = join(env.HOME, ".config", "open-domains");
+      mkdirSync(oldDir, { recursive: true });
+      writeFileSync(join(oldDir, "config.json"), JSON.stringify({ default_registrar: "namecheap" }));
+
+      const report = migrateLegacyConfig(env, true);
+
+      expect(report.dryRun).toBe(true);
+      expect(report.wouldCopy).toBe(true);
+      expect(report.copied).toBe(false);
+      expect(existsSync(join(env.HOME, ".hasna", "domains", "config.json"))).toBe(false);
     } finally {
       rmHome(env);
     }

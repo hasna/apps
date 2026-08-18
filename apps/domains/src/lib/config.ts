@@ -51,23 +51,36 @@ function canonicalHome(env: NodeJS.ProcessEnv): string {
   return env["HOME"] || env["USERPROFILE"] || homedir();
 }
 
+export interface LegacyConfigMigrationReport {
+  dryRun: boolean;
+  wouldCopy: boolean;
+  copied: boolean;
+}
+
 /**
  * One-time migration from the previous XDG config default
  * ($XDG_CONFIG_HOME/open-domains/config.json) into the canonical
  * ~/.hasna/domains/config.json. Copies, verifies by size and sha256, records a
  * receipt, never deletes the source, never overwrites existing canonical data,
- * and is idempotent (receipt + canonical file both skip it).
+ * and is idempotent (receipt + canonical file both skip it). dryRun reports
+ * whether the config would be copied and writes nothing.
  */
-export function migrateLegacyConfig(env: NodeJS.ProcessEnv = process.env): void {
+export function migrateLegacyConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  dryRun = false,
+): LegacyConfigMigrationReport {
+  const report: LegacyConfigMigrationReport = { dryRun, wouldCopy: false, copied: false };
   const home = canonicalHome(env);
   const canonicalDir = join(home, ".hasna", "domains");
   const newPath = join(canonicalDir, "config.json");
-  if (existsSync(newPath)) return;
-  if (existsSync(join(canonicalDir, ".migrated-from-xdg-config.receipt.json"))) return;
+  if (existsSync(newPath)) return report;
+  if (existsSync(join(canonicalDir, ".migrated-from-xdg-config.receipt.json"))) return report;
 
   const xdgConfig = env["XDG_CONFIG_HOME"]?.trim() || join(home, ".config");
   const oldPath = join(xdgConfig, "open-domains", "config.json");
-  if (!existsSync(oldPath)) return;
+  if (!existsSync(oldPath)) return report;
+  report.wouldCopy = true;
+  if (dryRun) return report;
 
   mkdirSync(canonicalDir, { recursive: true });
   copyFileSync(oldPath, newPath);
@@ -92,6 +105,8 @@ export function migrateLegacyConfig(env: NodeJS.ProcessEnv = process.env): void 
       2,
     )}\n`,
   );
+  report.copied = true;
+  return report;
 }
 
 /**

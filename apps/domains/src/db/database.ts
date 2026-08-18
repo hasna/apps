@@ -27,6 +27,12 @@ function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+export interface LegacyDataDirMigrationReport {
+  dryRun: boolean;
+  wouldCopy: string[];
+  copied: string[];
+}
+
 /**
  * One-time migration from the previous XDG default data directory
  * ($XDG_DATA_HOME/open-domains) into the canonical ~/.hasna/domains root.
@@ -36,19 +42,33 @@ function sha256File(path: string): string {
  * Idempotent: skipped once the canonical db exists or the receipt is present.
  * Resumable: a crash after the copy but before the receipt is harmless, because
  * the next run sees the canonical db and skips. Existing canonical data is
- * never overwritten.
+ * never overwritten. dryRun reports exactly what would be copied and writes
+ * nothing.
  */
-export function migrateLegacyDataDir(env: NodeJS.ProcessEnv = process.env): void {
+export function migrateLegacyDataDir(
+  env: NodeJS.ProcessEnv = process.env,
+  dryRun = false,
+): LegacyDataDirMigrationReport {
+  const report: LegacyDataDirMigrationReport = { dryRun, wouldCopy: [], copied: [] };
   const home = canonicalHome(env);
   const xdgData = env["XDG_DATA_HOME"]?.trim() || join(home, ".local", "share");
   const oldDir = join(xdgData, "open-domains");
   const oldDb = join(oldDir, "domains.db");
-  if (!existsSync(oldDb)) return;
+  if (!existsSync(oldDb)) return report;
 
   const canonicalDir = join(home, ".hasna", "domains");
   const newDb = join(canonicalDir, "domains.db");
-  if (existsSync(newDb)) return;
-  if (existsSync(join(canonicalDir, ".migrated-from-xdg.receipt.json"))) return;
+  if (existsSync(newDb)) return report;
+  if (existsSync(join(canonicalDir, ".migrated-from-xdg.receipt.json"))) return report;
+
+  if (dryRun) {
+    for (const name of ["domains.db", "domains.db-wal", "domains.db-shm"]) {
+      if (existsSync(join(oldDir, name)) && !existsSync(join(canonicalDir, name))) {
+        report.wouldCopy.push(name);
+      }
+    }
+    return report;
+  }
 
   mkdirSync(canonicalDir, { recursive: true });
   const copied: Array<{ name: string; bytes: number; sha256: string }> = [];
@@ -59,6 +79,7 @@ export function migrateLegacyDataDir(env: NodeJS.ProcessEnv = process.env): void
     if (existsSync(to)) continue;
     copyFileSync(from, to);
     copied.push({ name, bytes: statSync(to).size, sha256: sha256File(to) });
+    report.copied.push(name);
   }
 
   if (statSync(newDb).size !== statSync(oldDb).size || sha256File(newDb) !== sha256File(oldDb)) {
@@ -80,6 +101,7 @@ export function migrateLegacyDataDir(env: NodeJS.ProcessEnv = process.env): void
       2,
     )}\n`,
   );
+  return report;
 }
 
 /**
