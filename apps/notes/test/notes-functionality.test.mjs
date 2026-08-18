@@ -28,6 +28,7 @@ import {
   loadSettings,
   markdownPlainText,
   markdownSafeText,
+  normalizeLabels,
   migrateNoteTextToV2,
   migrateStoreToV2,
   moveNoteToMachine,
@@ -3125,4 +3126,36 @@ test('bounded recording emits error instead of complete when transcription reque
   ]);
   assert.equal(windowTarget.HasnaNotes.recording.state().status, 'error');
   assert.equal(statuses.includes('complete'), false);
+});
+
+test('label normalization trims values and deduplicates case-insensitively while preserving first spelling', () => {
+  assert.deepEqual(
+    normalizeLabels([' Work ', 'work', '', null, 'Research', 'research', 42]),
+    ['Work', 'Research', '42'],
+  );
+  assert.deepEqual(normalizeLabels(undefined), []);
+});
+
+test('plain-text markdown removes markup without losing code content', () => {
+  const markdown = [
+    '# Heading',
+    '<script>alert("ignored")</script>',
+    'before `inline` after',
+    '```js',
+    'const value = "kept";',
+    '```',
+    '[label](https://example.test)',
+  ].join('\n');
+
+  assert.equal(
+    markdownPlainText(markdown),
+    'Heading before inline after const value = "kept"; label',
+  );
+});
+
+test('markdown-safe text escapes punctuation that could create formatting or links', () => {
+  assert.equal(
+    markdownSafeText('a [link](https://example.test) + *bold* # heading'),
+    'a \\[link\\]\\(https://example\\.test\\) \\+ \\*bold\\* \\# heading',
+  );
 });
