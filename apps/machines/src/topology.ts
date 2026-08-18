@@ -436,7 +436,7 @@ export interface MachineListPagination {
 export type MachineRouteKind = "local" | "lan" | "tailscale" | "ssh" | "unknown";
 export type MachineRouteConfidence = "exact" | "high" | "medium" | "low" | "none";
 export type MachineResolverAuthority =
-  | "open-machines"
+  | "machines"
   | "manifest"
   | "manifest_metadata"
   | "live_topology"
@@ -1110,7 +1110,7 @@ function routeAuthority(input: {
   if (input.selectedHint?.kind === "local") return "live_topology";
   if (input.selectedHint?.kind === "tailscale" || input.machine.tailscale.online !== null) return "live_topology";
   if (input.machine.manifest_declared) return "manifest";
-  return "open-machines";
+  return "machines";
 }
 
 function workspaceAuthority(paths: MachineWorkspaceResolution["paths"]): MachineResolverAuthority {
@@ -1120,7 +1120,7 @@ function workspaceAuthority(paths: MachineWorkspaceResolution["paths"]): Machine
   if (sources.some((source) => source === "manifest")) return "manifest";
   if (sources.some((source) => source === "inferred")) return "inferred";
   if (sources.every((source) => source === "unresolved")) return "unresolved";
-  return "open-machines";
+  return "machines";
 }
 
 function cacheability(input: {

@@ -137,7 +137,7 @@ function fallbackAdapterCheck(domain: DoctorOptionalAdapterDomain): DoctorCheck 
     `No ${domain} adapter configured; skipped optional private integration check.`,
     {
       optional: true,
-      source: "open-machines",
+      source: "machines",
       data: { configured: false, fallback: true },
     },
   );

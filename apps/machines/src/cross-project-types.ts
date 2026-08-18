@@ -1,11 +1,11 @@
 /**
- * Shared cross-project types for open-knowledge, open-crm, open-projects, and open-machines.
+ * Shared cross-project types for knowledge, crm, projects, and machines.
  *
  * Each project vendors this file. Keep it small — add fields only when all three
  * projects need them.
  */
 
-export type ProjectName = "open-knowledge" | "open-crm" | "open-projects" | "open-machines";
+export type ProjectName = "knowledge" | "crm" | "projects" | "machines";
 
 /**
  * A reference from a record in one project to a record in another.

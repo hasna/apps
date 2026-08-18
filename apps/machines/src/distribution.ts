@@ -104,8 +104,8 @@ export function isValidAppId(value: string): boolean {
 
 /**
  * Derive the distribution appId (hasna.app.v1 join key) for an npm package.
- * `@hasna/todos` maps to the `open-todos` repo folder convention; other names
- * are slugified. An explicit `appId` in the manifest always wins.
+ * `@hasna/todos` maps to the bare `todos` app id; other names are slugified.
+ * An explicit `appId` in the manifest always wins.
  */
 export function defaultAppIdForPackage(packageName: string): string {
   const scoped = packageName.match(/^@([^/]+)\/(.+)$/);
@@ -114,9 +114,6 @@ export function defaultAppIdForPackage(packageName: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  if (scoped && scoped[1] === "hasna" && !slug.startsWith("open-")) {
-    return `open-${slug}`;
-  }
   return slug || "unknown";
 }
 

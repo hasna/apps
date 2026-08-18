@@ -82,7 +82,7 @@ describe("machine details consumer contract", () => {
           online: true,
         },
         source: {
-          authority: "open-machines",
+          authority: "machines",
           metadata_source: "manifest_metadata",
           manifest_declared: true,
           heartbeat_present: true,

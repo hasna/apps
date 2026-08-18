@@ -179,10 +179,10 @@ describe("machines consumer SDK", () => {
         metadata: {
           auth_status: "authenticated",
           workspace_paths: {
-            "open-knowledge": "/srv/open-knowledge",
+            "knowledge": "/srv/knowledge",
           },
           open_files_roots: {
-            "open-knowledge": "/srv/open-files",
+            "knowledge": "/srv/open-files",
           },
         },
       }],
@@ -191,8 +191,8 @@ describe("machines consumer SDK", () => {
     const route = resolveMachineRoute("demo-node-01", { topology, now });
     const workspace = resolveMachineWorkspace({
       machineId: "demo-node-01",
-      projectId: "open-knowledge",
-      repoName: "open-knowledge",
+      projectId: "knowledge",
+      repoName: "knowledge",
       topology,
       now,
     });

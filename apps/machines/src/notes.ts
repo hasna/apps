@@ -18,7 +18,10 @@ export const MACHINE_TRASH_POLICIES_KIND = "machine_trash_policies";
 
 export type NoteMachineRole = "origin" | "source" | "target" | "sync_target" | "trash_owner";
 export type NoteActorType = "human" | "agent" | "system" | "unknown";
-export type NoteMachineContextSource = "open-notes" | "agent" | "sync" | "import" | "open-machines" | "unknown";
+export type NoteMachineContextSource = "notes" | "agent" | "sync" | "import" | "machines" | "unknown";
+/** Legacy stored values accepted on read until records are migrated. */
+export const LEGACY_NOTE_CONTEXT_SOURCES = ["notes", "machines"] as const;
+export type LegacyNoteContextSource = (typeof LEGACY_NOTE_CONTEXT_SOURCES)[number];
 export type MachineTrashPolicySource = "manifest_metadata" | "default";
 
 export interface NoteMachineReference {
@@ -107,7 +110,7 @@ export interface MachineTrashPolicies {
 }
 
 const NOTE_ACTOR_TYPES = new Set<NoteActorType>(["human", "agent", "system", "unknown"]);
-const NOTE_CONTEXT_SOURCES = new Set<NoteMachineContextSource>(["open-notes", "agent", "sync", "import", "open-machines", "unknown"]);
+const NOTE_CONTEXT_SOURCES = new Set<NoteMachineContextSource | LegacyNoteContextSource>([...LEGACY_NOTE_CONTEXT_SOURCES, "notes", "agent", "sync", "import", "machines", "unknown"]);
 
 function packageInfo(): MachinesContractPackage {
   return {

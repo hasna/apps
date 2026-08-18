@@ -38,15 +38,15 @@ describe("workspace resolver CLI", () => {
 
       const preview = repairWorkspaceManifestMappings({
         machineId: "demo-node-01",
-        projectId: "open-knowledge",
-        repoName: "open-knowledge",
+        projectId: "knowledge",
+        repoName: "knowledge",
         includeTailscale: false,
       });
       expect(preview.ok).toBe(true);
       expect(preview.applied).toBe(false);
       expect(preview.patches.map((patch) => patch.status)).toEqual(["would_write", "would_write"]);
-      expect(preview.warnings).toContain("project_root_inferred:open-knowledge");
-      expect(preview.warnings).toContain("open_files_root_inferred:open-knowledge");
+      expect(preview.warnings).toContain("project_root_inferred:knowledge");
+      expect(preview.warnings).toContain("open_files_root_inferred:knowledge");
       expect(preview.resolution.diagnostics).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: "project_root", status: "inferred", severity: "warn" }),
         expect.objectContaining({ id: "open_files_root", status: "inferred", severity: "warn" }),
@@ -58,8 +58,8 @@ describe("workspace resolver CLI", () => {
 
       const applied = repairWorkspaceManifestMappings({
         machineId: "demo-node-01",
-        projectId: "open-knowledge",
-        repoName: "open-knowledge",
+        projectId: "knowledge",
+        repoName: "knowledge",
         includeTailscale: false,
         apply: true,
       });
@@ -70,25 +70,25 @@ describe("workspace resolver CLI", () => {
       const machine = readManifest().machines[0];
       expect(machine.metadata).toMatchObject({
         workspace_paths: {
-          "open-knowledge": "/home/operator/workspace/hasna/opensource/open-knowledge",
+          "knowledge": "/home/operator/workspace/hasna/opensource/knowledge",
         },
         open_files_roots: {
-          "open-knowledge": "/home/operator/workspace/hasna/opensource/open-files",
+          "knowledge": "/home/operator/workspace/hasna/opensource/open-files",
         },
       });
 
       const resolved = resolveMachineWorkspace({
         machineId: "demo-node-01",
-        projectId: "open-knowledge",
-        repoName: "open-knowledge",
+        projectId: "knowledge",
+        repoName: "knowledge",
         includeTailscale: false,
       });
       expect(resolved.paths.project_root.source).toBe("manifest_metadata");
-      expect(resolved.paths.project_root.path).toBe("/home/operator/workspace/hasna/opensource/open-knowledge");
+      expect(resolved.paths.project_root.path).toBe("/home/operator/workspace/hasna/opensource/knowledge");
       expect(resolved.paths.open_files_root.source).toBe("manifest_metadata");
       expect(resolved.paths.open_files_root.path).toBe("/home/operator/workspace/hasna/opensource/open-files");
-      expect(resolved.warnings).not.toContain("project_root_inferred:open-knowledge");
-      expect(resolved.warnings).not.toContain("open_files_root_inferred:open-knowledge");
+      expect(resolved.warnings).not.toContain("project_root_inferred:knowledge");
+      expect(resolved.warnings).not.toContain("open_files_root_inferred:knowledge");
       expect(resolved.repair_hints).toEqual([]);
       expect(resolved.diagnostics.filter((entry) => entry.severity !== "ok")).toEqual([]);
     } finally {
@@ -113,8 +113,8 @@ describe("workspace resolver CLI", () => {
 
       const resolved = resolveMachineWorkspace({
         machineId: "demo-node-01",
-        projectId: "open-knowledge",
-        repoName: "open-knowledge",
+        projectId: "knowledge",
+        repoName: "knowledge",
         includeTailscale: false,
       });
       expect(resolved.ok).toBe(true);
@@ -130,9 +130,9 @@ describe("workspace resolver CLI", () => {
         "--machine",
         "demo-node-01",
         "--project",
-        "open-knowledge",
+        "knowledge",
         "--repo",
-        "open-knowledge",
+        "knowledge",
         "--open-files-repo",
         "open-files",
         "--json",
@@ -141,8 +141,8 @@ describe("workspace resolver CLI", () => {
 
       const blockedApply = repairWorkspaceManifestMappings({
         machineId: "demo-node-01",
-        projectId: "open-knowledge",
-        repoName: "open-knowledge",
+        projectId: "knowledge",
+        repoName: "knowledge",
         includeTailscale: false,
         apply: true,
       });
@@ -162,8 +162,8 @@ describe("workspace resolver CLI", () => {
 
       const resolved = resolveMachineWorkspace({
         machineId: "missing-machine",
-        projectId: "open-knowledge",
-        repoName: "open-knowledge",
+        projectId: "knowledge",
+        repoName: "knowledge",
         includeTailscale: false,
       });
       expect(resolved.ok).toBe(false);
@@ -190,7 +190,7 @@ describe("workspace resolver CLI", () => {
         workspacePath: "/home/operator/workspace",
         metadata: {
           workspace_paths: {
-            "open-knowledge": "/srv/open-knowledge",
+            "knowledge": "/srv/knowledge",
           },
           open_files_root: "/srv/open-files",
           trusted: true,
@@ -205,9 +205,9 @@ describe("workspace resolver CLI", () => {
         "--machine",
         "demo-node-01",
         "--project",
-        "open-knowledge",
+        "knowledge",
         "--repo",
-        "open-knowledge",
+        "knowledge",
         "--no-tailscale",
         "--json",
       ], {
@@ -220,7 +220,7 @@ describe("workspace resolver CLI", () => {
       const output = JSON.parse(result.stdout);
       expect(output.ok).toBe(true);
       expect(output.machine_id).toBe("demo-node-01");
-      expect(output.paths.project_root.path).toBe("/srv/open-knowledge");
+      expect(output.paths.project_root.path).toBe("/srv/knowledge");
       expect(output.paths.open_files_root.path).toBe("/srv/open-files");
       expect(output.machine.trust_status).toBe("trusted");
       expect(output.diagnostics).toEqual(expect.arrayContaining([
@@ -253,9 +253,9 @@ describe("workspace resolver CLI", () => {
         "--machine",
         "demo-node-01",
         "--project",
-        "open-knowledge",
+        "knowledge",
         "--repo",
-        "open-knowledge",
+        "knowledge",
         "--no-tailscale",
         "--json",
       ], {
@@ -303,9 +303,9 @@ describe("workspace resolver CLI", () => {
         "--machine",
         "demo-node-01",
         "--project",
-        "open-knowledge",
+        "knowledge",
         "--repo",
-        "open-knowledge",
+        "knowledge",
         "--no-tailscale",
         "--apply",
         "--json",
@@ -328,9 +328,9 @@ describe("workspace resolver CLI", () => {
         "--machine",
         "demo-node-01",
         "--project",
-        "open-knowledge",
+        "knowledge",
         "--repo",
-        "open-knowledge",
+        "knowledge",
         "--no-tailscale",
         "--json",
       ], {
@@ -343,8 +343,8 @@ describe("workspace resolver CLI", () => {
       const resolved = JSON.parse(resolve.stdout);
       expect(resolved.paths.project_root.source).toBe("manifest_metadata");
       expect(resolved.paths.open_files_root.source).toBe("manifest_metadata");
-      expect(resolved.warnings).not.toContain("project_root_inferred:open-knowledge");
-      expect(resolved.warnings).not.toContain("open_files_root_inferred:open-knowledge");
+      expect(resolved.warnings).not.toContain("project_root_inferred:knowledge");
+      expect(resolved.warnings).not.toContain("open_files_root_inferred:knowledge");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

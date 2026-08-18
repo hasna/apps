@@ -87,8 +87,8 @@ function collectEmitter() {
 }
 
 describe("distribution mirrors", () => {
-  test("derives appIds aligned with the open- repo convention", () => {
-    expect(defaultAppIdForPackage("@hasna/todos")).toBe("open-todos");
+  test("derives bare appIds", () => {
+    expect(defaultAppIdForPackage("@hasna/todos")).toBe("todos");
     expect(defaultAppIdForPackage("@hasna/open-chrome")).toBe("open-chrome");
     expect(defaultAppIdForPackage("left-pad")).toBe("left-pad");
     expect(defaultAppIdForPackage("@scope/Weird_Name")).toBe("weird-name");
@@ -120,7 +120,7 @@ describe("distribution mirrors", () => {
       verifiedBy: { cliVersion: "1.0.0", mcpHealth: "not_checked" },
     });
     expect(record.schema).toBe("hasna.rollout_record.v1");
-    expect(record.appId).toBe("open-todos");
+    expect(record.appId).toBe("todos");
     expect(record.evidenceRefs).toEqual([]);
   });
 });
@@ -153,7 +153,7 @@ describe("desired state and installed parsing", () => {
     ]);
     const todos = desired.find((entry) => entry.name === "@hasna/todos")!;
     expect(todos.version).toBe("2.0.0");
-    expect(todos.appId).toBe("open-todos");
+    expect(todos.appId).toBe("todos");
     expect(todos.bin).toBe("todos");
     const events = desired.find((entry) => entry.name === "@hasna/events")!;
     expect(events.bin).toBe("hasna-events");
@@ -434,7 +434,7 @@ describe("reconcile execution", () => {
     expect(types).toContain(DISTRIBUTION_EVENT_TYPES.appInstalled);
     const completed = events.find((event) => event.type === DISTRIBUTION_EVENT_TYPES.rolloutCompleted)!;
     expect(completed.data).toMatchObject({
-      appId: "open-todos",
+      appId: "todos",
       package: "@hasna/todos",
       version: "2.0.0",
       machine: "demo-node-01",
@@ -603,7 +603,7 @@ describe("release.published trigger", () => {
     expect(releaseEventTrigger({ type: "release.published", data: { package: "@hasna/knowledge" } })).toBeNull();
     expect(releaseEventTrigger({
       type: "release.published",
-      data: { appId: "open-knowledge", package: "@hasna/knowledge", version: "1.0.0" },
+      data: { appId: "knowledge", package: "@hasna/knowledge", version: "1.0.0" },
     })).toEqual({
       packageFilter: "@hasna/knowledge",
       eventVersions: { "@hasna/knowledge": "1.0.0" },
@@ -619,7 +619,7 @@ describe("release.published trigger", () => {
     const { emitter, events } = collectEmitter();
     const result = await reconcileFromReleaseEvent({
       type: "release.published",
-      data: { appId: "open-knowledge", package: "@hasna/knowledge", version: "1.0.0", publishPath: "skill" },
+      data: { appId: "knowledge", package: "@hasna/knowledge", version: "1.0.0", publishPath: "skill" },
     }, {
       manifest: manifestFixture(),
       machineId: "demo-node-01",
@@ -701,7 +701,7 @@ describe("machines reconcile CLI", () => {
       id: "evt-1",
       source: "releases",
       type: "release.published",
-      data: { appId: "open-knowledge", package: "@hasna/knowledge", version: "1.0.0" },
+      data: { appId: "knowledge", package: "@hasna/knowledge", version: "1.0.0" },
     }), "utf8");
     const result = runCli([
       "reconcile", "--dry-run", "--event-json", eventPath, "--installed-json", installedPath, "--json",

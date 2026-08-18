@@ -89,13 +89,13 @@ describe("machine compatibility checks", () => {
       runner: fakeRunner({
         "cmd='bun'": "path=/usr/bin/bun\nversion=1.3.13\n",
         "cmd='knowledge'": "path=/home/operator/.bun/bin/knowledge\nversion=@hasna/knowledge 0.2.29\n",
-        "path='/repo/open-knowledge'": "exists=yes\npackage_json=yes\npackage_name=@hasna/knowledge\nversion=0.2.29\n",
+        "path='/repo/knowledge'": "exists=yes\npackage_json=yes\npackage_name=@hasna/knowledge\nversion=0.2.29\n",
       }),
       commands: [{ command: "bun", expectedVersion: "1.3.13" }],
       packages: [{ name: "@hasna/knowledge", command: "knowledge", expectedVersion: "0.2.29" }],
       workspaces: [{
-        label: "open-knowledge",
-        path: "/repo/open-knowledge",
+        label: "knowledge",
+        path: "/repo/knowledge",
         expectedPackageName: "@hasna/knowledge",
         expectedVersion: "0.2.29",
       }],
@@ -109,7 +109,7 @@ describe("machine compatibility checks", () => {
     expect(report.source).toBe("tailscale");
     expect(report.summary.fail).toBe(0);
     expect(report.checks.map((check) => check.id)).toContain("package:@hasna/knowledge:version");
-    expect(report.checks.map((check) => check.id)).toContain("workspace:open-knowledge:package-name");
+    expect(report.checks.map((check) => check.id)).toContain("workspace:knowledge:package-name");
   });
 
   test("fails required version mismatches and missing workspaces", () => {
@@ -117,16 +117,16 @@ describe("machine compatibility checks", () => {
       machineId: "demo-node-01",
       runner: fakeRunner({
         "cmd='knowledge'": "path=/home/operator/.bun/bin/knowledge\nversion=@hasna/knowledge 0.2.28\n",
-        "path='/repo/open-knowledge'": "exists=no\npackage_json=no\n",
+        "path='/repo/knowledge'": "exists=no\npackage_json=no\n",
       }),
       commands: [],
       packages: [{ name: "@hasna/knowledge", command: "knowledge", expectedVersion: "0.2.29" }],
-      workspaces: [{ label: "open-knowledge", path: "/repo/open-knowledge" }],
+      workspaces: [{ label: "knowledge", path: "/repo/knowledge" }],
     });
 
     expect(report.ok).toBe(false);
     expect(report.summary.fail).toBe(2);
     expect(report.checks.find((check) => check.id === "package:@hasna/knowledge:version")?.actual).toBe("0.2.28");
-    expect(report.checks.find((check) => check.id === "workspace:open-knowledge:path")?.status).toBe("fail");
+    expect(report.checks.find((check) => check.id === "workspace:knowledge:path")?.status).toBe("fail");
   });
 });
