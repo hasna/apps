@@ -392,7 +392,7 @@ knowledge storage status --scope project --json
 
 # Inspect optional machine topology for future sync
 knowledge machines topology --scope project --json
-knowledge machines preflight linux-node-a --workspace /workspace/open-knowledge --scope project --json
+knowledge machines preflight linux-node-a --workspace /workspace/knowledge --scope project --json
 
 # Inspect and record knowledge-aware sync ledger state
 knowledge sync status --scope project
@@ -401,7 +401,7 @@ knowledge sync snapshot --scope project --no-tailscale --json
 knowledge sync conflicts --scope project --json
 knowledge sync dry-run --peer-workspace /path/to/peer/repo --scope project --json
 knowledge sync push --peer-workspace /path/to/peer/repo --scope project --json
-knowledge sync dry-run --machine linux-node-a --peer-workspace /workspace/open-knowledge --scope project --json
+knowledge sync dry-run --machine linux-node-a --peer-workspace /workspace/knowledge --scope project --json
 
 # Inspect environment-selected client transport and remote contracts
 HASNA_KNOWLEDGE_API_URL=https://knowledge.md HASNA_KNOWLEDGE_API_KEY='<api-key>' knowledge transport --json
@@ -422,14 +422,14 @@ knowledge wiki compile "handbook policy" --title "Handbook Policy" --scope proje
 knowledge wiki file-answer "How do we cite policy?" --content "Use cited source context." --approve-write --scope project --json
 knowledge wiki lint --scope project --json
 
-# Ingest an open-files source manifest into the project SQLite catalog
-knowledge ingest manifest ./open-files-manifest.jsonl --scope project --json
+# Ingest a files source manifest into the project SQLite catalog
+knowledge ingest manifest ./files-manifest.jsonl --scope project --json
 
 # Ingest one read-only source ref directly
 knowledge ingest source file:///absolute/path/to/handbook.md --purpose knowledge_index --scope project --json
 
-# Consume open-files change events and invalidate stale source chunks
-knowledge reindex outbox ./open-files-outbox.jsonl --scope project --json
+# Consume files change events and invalidate stale source chunks
+knowledge reindex outbox ./files-outbox.jsonl --scope project --json
 
 # Inspect and refresh the embedding queue after source changes
 knowledge reindex status --scope project --json
@@ -480,7 +480,7 @@ export records require an explicit machine-readable mode such as
 ## Guides
 
 - [Company wiki workflow](docs/examples/company-wiki-workflow.md): an end-to-end
-  local workflow for open-files manifests, search, prompt runs, cited wiki
+  local workflow for files manifests, search, prompt runs, cited wiki
   pages, linting, reindexing, MCP, and optional S3 artifact storage.
 - [App project wiki standard](docs/examples/app-project-wiki-standard.md):
   SDK/CLI workflow for scoped app notes, source refs, and guarded global writes.
@@ -778,7 +778,7 @@ Show the storage contract for filesystem or S3-backed generated artifacts. Files
 uses `~/.hasna/knowledge` (global scope) or `~/.hasna/knowledge/projects/<key>`
 (project scope) for config, SQLite, indexes, wiki artifacts, logs,
 runs, and exports. S3 mode stores generated artifacts under the configured
-knowledge bucket/prefix while `open-files` remains the source of truth for raw
+knowledge bucket/prefix while `files` remains the source of truth for raw
 source bytes. The command also reports artifact classes, allowed source ref
 schemes, and warnings for non-scalable or unsafe config.
 

@@ -12,7 +12,7 @@ import {
 
 const repoRoot = resolve(import.meta.dir, '..');
 const script = join(repoRoot, 'scripts', 'smoke-machine-sync-release.mjs');
-const openFilesBoundaryScript = join(repoRoot, 'scripts', 'smoke-open-files-installed-boundary.mjs');
+const openFilesBoundaryScript = join(repoRoot, 'scripts', 'smoke-files-installed-boundary.mjs');
 
 /**
  * `node` as well as `process.execPath`.
@@ -224,7 +224,7 @@ describe('machine sync release smoke script', () => {
   });
 });
 
-describe('installed open-files boundary smoke script', () => {
+describe('installed files boundary smoke script', () => {
   test('prints help without requiring installed files or knowledge commands', () => {
     const result = spawnSync(process.execPath, [openFilesBoundaryScript, '--help'], {
       cwd: repoRoot,
@@ -233,8 +233,8 @@ describe('installed open-files boundary smoke script', () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe('');
-    expect(result.stdout).toContain('smoke-open-files-installed-boundary.mjs');
-    expect(result.stdout).toContain('installed open-files to open-knowledge source-boundary smoke');
+    expect(result.stdout).toContain('smoke-files-installed-boundary.mjs');
+    expect(result.stdout).toContain('installed files to knowledge source-boundary smoke');
     expect(result.stdout).toContain('scan both knowledge SQLite stores and artifacts');
   });
 

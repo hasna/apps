@@ -24,7 +24,7 @@ const publicScripts = [
   'scripts/live-private-query.mjs',
   'scripts/smoke-machine-sync-release.mjs',
   'scripts/smoke-machines-adapter.mjs',
-  'scripts/smoke-open-files-installed-boundary.mjs',
+  'scripts/smoke-files-installed-boundary.mjs',
   'scripts/strip-generated-trailing-whitespace.mjs',
   'scripts/verify-generated-artifacts.mjs',
 ].sort();

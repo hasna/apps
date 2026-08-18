@@ -22,7 +22,7 @@ The open source package owns:
 - Provider/runtime contracts for local BYOK agent workflows.
 - Hosted-aware client contracts that can talk to a future SaaS wrapper.
 
-`open-files` owns:
+`files` owns:
 
 - Raw source bytes and snapshots.
 - Local, S3, Google Drive, and future connector-backed source storage.
@@ -53,7 +53,7 @@ the hosted web UI.
 Multi-machine sync is specified in
 [`machine-sync-schema.md`](./machine-sync-schema.md). The sync contract keeps
 machine discovery optional through `@hasna/machines`, stores scalable sync state
-in SQLite/Postgres/object storage, and keeps raw source bytes in `open-files`.
+in SQLite/Postgres/object storage, and keeps raw source bytes in `files`.
 
 The client uses the on-box store by default. `HASNA_KNOWLEDGE_API_URL` plus
 `HASNA_KNOWLEDGE_API_KEY` selects the HTTP API, and

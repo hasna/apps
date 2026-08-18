@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a bug in open-knowledge
+description: Report a bug in knowledge
 labels: [bug]
 body:
   - type: markdown
@@ -39,7 +39,7 @@ body:
     id: version
     attributes:
       label: Version
-      description: Output of `open-knowledge --version`
+      description: Output of `knowledge --version`
   - type: dropdown
     id: os
     attributes:
