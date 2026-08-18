@@ -44,7 +44,7 @@ notice line. Set the package manifest license field to `FSL-1.1-Apache-2.0`
 ## 2. Existing OSS repositories keep their current license
 
 Repositories that already exist under `hasna/opensource/open-*` (for example
-`open-contracts`, currently Apache-2.0) **keep their current license**. There is
+`contracts`, currently Apache-2.0) **keep their current license**. There is
 **no bulk relicense**. Any move from Apache-2.0 to FSL for an existing repo is a
 per-repo decision recorded separately, because relicensing already-published
 Apache-2.0 code does not retroactively restrict versions already released under
