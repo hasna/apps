@@ -58,8 +58,17 @@ function normalizeClientStore(value: string, sourceEnvKey: string, replacementEn
   throw new Error(`Unknown client store: ${value}. Use sqlite or http.`);
 }
 
+/**
+ * Fallback API base URL when the client store resolves to `http` and no
+ * `HASNA_<APP>_API_URL` is set. It points at the app's own server on the same
+ * machine (`recordings-serve`'s default port — see DEFAULT_PORT in
+ * src/server/index.ts). This default deliberately contains no internal-infra
+ * hostname: a remote deployment sets `HASNA_<APP>_API_URL` explicitly. The
+ * `name` argument is retained for signature compatibility with the public
+ * `@hasna/recordings/storage` surface; it no longer derives a hostname.
+ */
 export function defaultApiBaseUrl(name: string): string {
-  return `https://${name}.hasna.xyz`;
+  return `http://localhost:8874`;
 }
 
 interface EnvKeys {

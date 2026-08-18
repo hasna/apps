@@ -5,7 +5,7 @@ All notable changes to `@hasna/recordings` are documented here.
 This project is pre-1.0. Following semver's pre-1.0 convention, a **minor** bump
 (`0.x.0`) signals a breaking change; patch bumps (`0.x.y`) do not.
 
-## 0.3.1 — unreleased
+## 0.3.2 — unreleased
 
 ## 0.3.0 — unreleased
 
