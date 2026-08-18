@@ -2292,6 +2292,26 @@ export async function cloudAddPlanComment(
   return { ...normalized, content: redactEvidenceText(normalized.content) };
 }
 
+/**
+ * True when a transport failure means "this route does not exist on the
+ * authority", as opposed to a genuine server/network failure. Detected from
+ * the `HasnaHttpError` status (typed `.status`) or its message, walking the
+ * cause chain because remote classification wraps transport errors in a
+ * wrapper that carries the original as `.cause`.
+ */
+function isPlanCommentsRouteAbsent(error: unknown): boolean {
+  const seen = new Set<object>();
+  let current = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    if ((current as { status?: unknown }).status === 404) return true;
+    const message = (current as { message?: unknown }).message;
+    if (typeof message === "string" && message.includes("404")) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 /** List plan comments through `/v1/plans/:id/comments`. */
 export async function cloudListPlanComments(
   client: HasnaStorageClient,
@@ -2300,7 +2320,21 @@ export async function cloudListPlanComments(
   // Direct transport path: `client.get(resource, id)` builds the path via
   // entityPath, which encodeURIComponent's the WHOLE id — a "/comments" suffix
   // would be encoded into %2F and never reach the plan comment route.
-  const raw = await client.transport.get<unknown>(`/plans/${encodeURIComponent(planId)}/comments`);
+  let raw: unknown;
+  try {
+    raw = await client.transport.get<unknown>(`/plans/${encodeURIComponent(planId)}/comments`);
+  } catch (error) {
+    // The comments list is an ADDITIVE surface on the plan row. A hosted API
+    // that predates /v1/plans/:id/comments answers 404, and `plans --show`
+    // must keep working against it (two-backend contract: the CLI works
+    // against the local store AND the hosted API, old and new). Degrade to an
+    // empty list — the same shape the local path returns for a plan with no
+    // comments — instead of failing the whole command. Any OTHER failure
+    // (5xx, network, auth) still surfaces. The WRITE path (cloudAddPlanComment)
+    // stays strict: commenting on a plan genuinely requires the new route.
+    if (!isPlanCommentsRouteAbsent(error)) throw error;
+    return [];
+  }
   const comments = raw && typeof raw === "object" && Array.isArray((raw as { comments?: unknown }).comments)
     ? (raw as { comments: unknown[] }).comments
     : Array.isArray(raw) ? raw : [];
