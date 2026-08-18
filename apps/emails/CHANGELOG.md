@@ -51,6 +51,12 @@ All notable changes to `@hasna/emails` are documented here.
 - perf(cli): `emails domain warm-list` reads the sent-mail ledger **once per page** instead of once per row, via a new `getTodaySentCountsByDomain`. In self-hosted mode each read is a synchronous `curl` spawn over today's messages, so a default 20-row page cost 20 identical requests.
 - refactor(warming): ramp position (`current_day`, `total_days`, `progress_percent`, `today_limit`, `today_sent`) is computed once in `describeWarmingProgress` and shared by the CLI, the MCP tools, the local `GET /api/warming/:domain` route, and `formatWarmingStatus` — replacing four copies of the same date math, one of which had already drifted from the server. `formatWarmingStatus` and `describeWarmingProgress` accept precomputed inputs so a single command does not read the sent-mail ledger more than once.
 
+## [1.3.16] - 2026-08-18
+
+- **fix(send): the address record's display name now reaches the provider From header.** The send path passed only the canonical address to the provider; the address record's `display_name` (set via `address add --name`, e.g. "Hasna Accounting") was never read, so mail went out with a bare From. The provider call is now decorated with the RFC 5322 quoted-string form (`"Hasna Accounting" <accounting@…>`), quoted because real values contain parentheses; the ledger `from_addr`, the idempotency payload hash and the outbound policy gate keep the canonical address. A display name carrying control characters (CR/LF header injection) is rejected and the send falls back to the bare canonical address.
+- **fix(addresses): an address on a domain whose identity is verified in the app's domain registry is now sendable immediately.** Previously every `address add` created the address pending (`verified=false`) regardless of domain state, so a fresh address on a verified domain was refused at the send gate (`sender_unverified`) until an explicit operator `set-verified`. Creation on a verified domain now defaults `verified=true` with an automatic audit record (actor `system`, reason `domain verified`, written before the address becomes verified so an audit failure leaves it safely unverified); an explicit `verified: false` still wins and unverified domains still yield pending addresses.
+- **fix(status): the user-visible mode label no longer uses the retired placement-axis vocabulary.** `emails status` printed `Mode: self_hosted (Self-hosted)`; the human label is now `Server API` (the mode is the client talking to a server's HTTP API). The machine enum value `self_hosted`, the env contract (`EMAILS_SELF_HOSTED_URL` etc.) and the JSON status contract are unchanged.
+
 ## 1.3.15 (2026-08-14)
 
 - Release-line reconciliation: main is bumped to the registry-latest 1.3.15 (published by the release lane 2026-08-14T11:48:46Z ahead of main; the release commit did not land on main). No functional changes to the tree; this entry records the version parity and clears the KNOWN_NPM_DRIFT record (reconcile task 78c66e3c).
@@ -93,12 +99,6 @@ All notable changes to `@hasna/emails` are documented here.
   recipient-less-only trusted S3-key routing fallback.
 - regenerate the canonical `@hasna/emails/selfhost` SDK and align the
   config-driven production cutover requirements through migration 0020.
-
-## [1.3.16] - 2026-08-18
-
-- **fix(send): the address record's display name now reaches the provider From header.** The send path passed only the canonical address to the provider; the address record's `display_name` (set via `address add --name`, e.g. "Hasna Accounting") was never read, so mail went out with a bare From. The provider call is now decorated with the RFC 5322 quoted-string form (`"Hasna Accounting" <accounting@…>`), quoted because real values contain parentheses; the ledger `from_addr`, the idempotency payload hash and the outbound policy gate keep the canonical address. A display name carrying control characters (CR/LF header injection) is rejected and the send falls back to the bare canonical address.
-- **fix(addresses): an address on a domain whose identity is verified in the app's domain registry is now sendable immediately.** Previously every `address add` created the address pending (`verified=false`) regardless of domain state, so a fresh address on a verified domain was refused at the send gate (`sender_unverified`) until an explicit operator `set-verified`. Creation on a verified domain now defaults `verified=true` with an automatic audit record (actor `system`, reason `domain verified`, written before the address becomes verified so an audit failure leaves it safely unverified); an explicit `verified: false` still wins and unverified domains still yield pending addresses.
-- **fix(status): the user-visible mode label no longer uses the retired placement-axis vocabulary.** `emails status` printed `Mode: self_hosted (Self-hosted)`; the human label is now `Server API` (the mode is the client talking to a server's HTTP API). The machine enum value `self_hosted`, the env contract (`EMAILS_SELF_HOSTED_URL` etc.) and the JSON status contract are unchanged.
 
 ## [1.3.0] - 2026-07-25
 
