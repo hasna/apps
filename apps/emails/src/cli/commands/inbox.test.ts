@@ -1656,12 +1656,31 @@ describe("inbox delete / clear", () => {
 
 // ─── server-only subcommands (fail closed) ───────────────────────────────────
 
-describe("inbox open blocks in the self-hosted client", () => {
-  it("fails closed pointing at `inbox read`", async () => {
-    const result = await runInboxCommandExpectingExit(["inbox", "open", "abc123"]);
-    expect(result.error).toBe("process.exit:1");
-    expect(result.stderr).toContain("emails inbox open is not available in the self-hosted client");
-    expect(result.stderr).toContain("emails inbox read <id>");
+describe("inbox open", () => {
+  it("renders a readable HTML view from the /v1 API and writes it locally", async () => {
+    const email = seedEmail({
+      subject: "Open me <&>",
+      text_body: "Rendered body for open",
+    });
+
+    const { data } = await runInboxCommand(["inbox", "open", email.id]);
+    const result = data as { path: string; opened: boolean; method?: string; error?: string };
+    expect(result.path).toContain(tmpdir());
+    const html = readFileSync(result.path, "utf8");
+    expect(html).toContain("Open me &lt;&amp;&gt;");
+    expect(html).toContain("Rendered body for open");
+    // The browser opener is environment-dependent (headless boxes have no
+    // DISPLAY); the contract is that open is attempted and the outcome reported,
+    // never that the CLI fails closed.
+    expect(typeof result.opened).toBe("boolean");
+    rmSync(result.path, { force: true });
+  });
+
+  it("resolves a partial (8-char) id against the /v1 API", async () => {
+    const email = seedEmail({ subject: "Open by prefix" });
+    const { data } = await runInboxCommand(["inbox", "open", email.id.slice(0, 8)]);
+    expect((data as { path: string }).path).toContain("emails-inbox-");
+    rmSync((data as { path: string }).path, { force: true });
   });
 });
 
