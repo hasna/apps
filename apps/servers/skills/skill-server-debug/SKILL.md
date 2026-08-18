@@ -14,7 +14,7 @@ Use this when a dev/app server is down, stale, locked, returning the wrong URL, 
 - CLI fallback: `servers servers:debug`, `servers servers:status`, `servers servers:logs`, `servers operations`, and `servers traces`.
 - Preserve evidence: command, cwd, port, health URL, PID, log path, lock owner, operation ID, and failing output.
 - Do not delete shared tasks or silently bypass locks. If the owning agent is active, communicate.
-- If the `servers` CLI/MCP itself is broken, create a task against `@hasna/servers`, fix it in `open-servers`, test, publish, reinstall, and verify before continuing.
+- If the `servers` CLI/MCP itself is broken, create a task against `@hasna/servers`, fix it in the `servers` package, test, publish, reinstall, and verify before continuing.
 
 ## Workflow
 
