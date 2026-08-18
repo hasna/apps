@@ -90,7 +90,7 @@ export interface NpmTokenAccessMetadata {
 }
 
 /**
- * Handoff contract for open-secrets/@hasna/secrets: access keeps only the
+ * Handoff contract for @hasna/secrets: access keeps only the
  * reference plus metadata. The one-time npm token value must be written by an
  * explicit operator action or secured process outside access logs/storage.
  */
@@ -326,7 +326,7 @@ export function planNpmTokenProvision(
     preview,
     ...(options.approvedRequest?.id ? { approvedRequestId: options.approvedRequest.id } : {}),
     message:
-      "Approved request matched. access still returns a command preview and open-secrets handoff; the token value must be created and stored by a secured operator/provider process.",
+      "Approved request matched. access still returns a command preview and a secrets handoff; the token value must be created and stored by a secured operator/provider process.",
   };
 }
 

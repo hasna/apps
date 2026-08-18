@@ -6,22 +6,22 @@ contract lives in the root README.
 
 ## Operator Flow
 
-1. Identify the requester in `open-identities`.
-   - Use the durable identity reference as the `open-access` `owner_ref`.
+1. Identify the requester in `identities`.
+   - Use the durable identity reference as the `access` `owner_ref`.
    - Keep identity documents, contact data, and instruction sources in
-     `open-identities`.
+     `identities`.
 2. Register or find the local access identity.
    - `entity_id` is the authorization boundary.
    - `kind` should be `agent`, `service`, or `human`.
 3. Decide the current request under the permissive policy.
-   - Today, `open-access` enforces authenticated caller scope and entity reach.
+   - Today, `access` enforces authenticated caller scope and entity reach.
    - It does not yet evaluate declarative provider policies.
    - Record the resulting credential ref, scope grant, pending elevation request,
      token issue, or revocation so the decision is auditable.
 4. Put secret values in the owning system.
-   - Use `@hasna/secrets`/open-secrets for Hasna-managed values.
+   - Use `@hasna/secrets` for Hasna-managed values.
    - Use the provider system when the provider owns the value lifecycle.
-   - Never put raw provider tokens in `open-access`.
+   - Never put raw provider tokens in `access`.
 5. Register only the `secret_ref`.
    - Example reference shape: `hasna/access/npm/publish-token`.
    - Provider reference shape: `provider:npm:automation-token:publish-bot`.
@@ -33,7 +33,7 @@ contract lives in the root README.
      token substitutes.
 7. Review and revoke.
    - Schedule access reviews for durable access.
-   - Revoke both the provider/vault value and the `open-access` record when
+   - Revoke both the provider/vault value and the `access` record when
      offboarding or responding to compromise.
 
 ## Current Policy Boundary
@@ -46,7 +46,7 @@ created or activated.
 
 Until that policy layer exists, reviewers should check:
 
-- requester identity reference resolves in `open-identities`
+- requester identity reference resolves in `identities`
 - `entity_id` matches the intended tenant or home entity
 - `secret_ref` is a reference and not a value
 - provider scopes such as `npm:publish` are least privilege and are not treated
@@ -63,7 +63,7 @@ access identity create \
   --entity-id <home-entity-uuid> \
   --kind agent \
   --name publish-bot \
-  --owner-ref open-identities:agent:publish-bot
+  --owner-ref identities:agent:publish-bot
 
 access credential register \
   --identity-id <access-identity-id> \
@@ -76,7 +76,7 @@ access elevation request --identity-id <access-identity-id> --scope npm:publish 
 ```
 
 The NPM token value is created, rotated, and revoked in NPM and the secrets
-system after approval. `open-access` stores only the reference, safe command
+system after approval. `access` stores only the reference, safe command
 preview, and audit history.
 
 ## Cloud Mode Checks
