@@ -28,25 +28,25 @@ The helper preserves the action payload and also infers common business fields
 such as `amountUsd`, `customerId`, `accountId`, `resource`, and `irreversible`
 into the guardrail `business` context so generic approval policies can match.
 
-## open-dispatch
+## @hasna/dispatch
 
 Use `openDispatchPromptGuardrailInput()` before prompt delivery. A dispatch
 caller should block on `deny`, ask for approval on `approval_required`, display
 warnings on `warn`, and use redacted audit fields when `redact` is returned.
 
-## open-terminal
+## @hasna/terminal
 
 Use `openTerminalCommandGuardrailInput()` before command execution. The starter
 policy approval-gates destructive commands and denies remote-content-to-shell
 patterns.
 
-## open-mcps
+## @hasna/mcps
 
 Use `openMcpsToolCallGuardrailInput()` before tool calls or local stdio server
 registration. Transport, server id, tool name, and arguments are included in the
 policy input.
 
-## open-gateway And open-router
+## @hasna/gateway And @hasna/router
 
 Use `modelRoutingGuardrailInput()` before routing or after candidate selection.
 The starter policy warns on high per-token prices. Gateway/router packages

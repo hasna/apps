@@ -38,7 +38,7 @@ describe("integration input builders", () => {
         traceId: "trace",
         metadata: { dispatch: true },
       }),
-    ).toMatchObject({ subject: "worker", session: { tool: "open-dispatch", traceId: "trace" } });
+    ).toMatchObject({ subject: "worker", session: { tool: "dispatch", traceId: "trace" } });
     expect(promptGuardrailInput({})).toEqual({ operationType: "prompt", session: {}, prompt: {} });
   });
 
@@ -106,7 +106,7 @@ describe("integration input builders", () => {
     expect(terminal).toMatchObject({
       subject: "echo placeholder",
       actor: { id: "actor" },
-      session: { tool: "open-terminal", cwd: "/tmp/placeholder", traceId: "trace" },
+      session: { tool: "terminal", cwd: "/tmp/placeholder", traceId: "trace" },
       shell: {
         command: "echo placeholder",
         args: ["placeholder"],
@@ -133,7 +133,7 @@ describe("integration input builders", () => {
       operationType: "mcp_tool_call",
       subject: "evaluate",
       actor: { id: "actor", type: "agent" },
-      session: { tool: "open-mcps", traceId: "trace" },
+      session: { tool: "mcps", traceId: "trace" },
       mcp: {
         toolName: "evaluate",
         serverId: "placeholder-server",
@@ -162,13 +162,13 @@ describe("integration input builders", () => {
       byokOnly: true,
       regions: ["placeholder-region"],
       capabilities: ["placeholder-capability"],
-      tool: "open-gateway",
+      tool: "gateway",
       actorId: "actor",
       traceId: "trace",
       metadata: { safe: true },
     });
     expect(full.subject).toBe("placeholder-selected");
-    expect(full.session).toEqual({ tool: "open-gateway", traceId: "trace" });
+    expect(full.session).toEqual({ tool: "gateway", traceId: "trace" });
     expect(full.modelRouting).toMatchObject({
       requestedModel: "placeholder-requested",
       selectedModel: "placeholder-selected",
@@ -178,11 +178,11 @@ describe("integration input builders", () => {
     });
     expect(modelRoutingGuardrailInput({ requestedModel: "placeholder-only" })).toMatchObject({
       subject: "placeholder-only",
-      session: { tool: "open-router" },
+      session: { tool: "router" },
     });
     expect(modelRoutingGuardrailInput({})).toEqual({
       operationType: "model_routing",
-      session: { tool: "open-router" },
+      session: { tool: "router" },
       modelRouting: {},
     });
   });
