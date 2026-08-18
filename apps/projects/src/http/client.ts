@@ -33,10 +33,6 @@ function normalizeMode(value: string): { mode: StorageMode; deprecatedAlias: str
   throw new Error(`Unknown storage mode: ${value}. Use local or cloud.`);
 }
 
-export function defaultCloudBaseUrl(name: string): string {
-  return `https://${name}.hasna.xyz`;
-}
-
 interface EnvKeys {
   modeKeys: string[];
   apiUrlKeys: string[];
@@ -130,7 +126,20 @@ export function resolveTransport(name: string, env: Env = process.env): Transpor
     };
   }
 
-  const rawUrl = urlHit?.value ?? defaultCloudBaseUrl(name);
+  if (!urlHit) {
+    return {
+      transport: "local",
+      mode,
+      deprecatedAlias,
+      modeSource,
+      baseUrl: null,
+      apiKeyPresent: true,
+      misconfigured: true,
+      warning: `${modeSource}=cloud but no API URL is set (${keys.apiUrlKeys[0]}). Refusing to route to cloud.`,
+    };
+  }
+
+  const rawUrl = urlHit.value;
   let baseUrl: string;
   try {
     baseUrl = toV1BaseUrl(rawUrl);

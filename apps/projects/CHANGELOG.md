@@ -6,14 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.132]
 
+### Changed
+
+- Cloud mode now requires an explicit API URL: with `HASNA_PROJECTS_STORAGE_MODE=cloud`
+  and an API key but no `HASNA_PROJECTS_API_URL` (or the legacy URL env keys), the
+  client reports a misconfiguration warning naming the missing variable instead of
+  guessing `https://projects.hasna.xyz`. This removes the hardcoded host from the
+  published artifact per the monorepo publish-guard rule; the host must be configured
+  explicitly.
+
 ### Patch
 
 - First release from the hasna/apps monorepo. The package was imported from
   hasna/projects with history preserved (import capsule 86a604070, import merge
-  ff0c8e055); there are no functional changes since 0.1.131 — the delta is the
-  import itself plus the monorepo workspace wiring (tsconfig bun-types→bun, ajv
-  declared as a devDependency, changelog headings reconciled to 0.1.131). This
-  patch establishes version ownership under the monorepo.
+  ff0c8e055); apart from the cloud-mode URL change above there are no functional
+  changes since 0.1.131 — the rest of the delta is the import itself plus the
+  monorepo workspace wiring (tsconfig bun-types→bun, ajv declared as a
+  devDependency, changelog headings reconciled to 0.1.131). This patch establishes
+  version ownership under the monorepo.
 
 ## [Unreleased]
 
