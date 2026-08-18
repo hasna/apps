@@ -750,8 +750,8 @@ Common resource-kind mappings:
 | `mailery` | `email`, `document`, `artifact` |
 | `conversations` | `conversation`, `comment`, `event` |
 | `projects` | `project`, `dashboard`, `render`, `panel`, `integration` |
-| `open-evals` | `eval`, `verification`, `report`, `proof_bundle` |
-| `open-economy` | `cost`, `budget`; budget choices are emitted as `DecisionEnvelope` contracts, not resource kinds |
+| `evals` | `eval`, `verification`, `report`, `proof_bundle` |
+| `economy` | `cost`, `budget`; budget choices are emitted as `DecisionEnvelope` contracts, not resource kinds |
 | `monitor` | `alert`, `incident`, `machine`, `report` |
 
 ## Task-to-PR projection
@@ -953,8 +953,8 @@ helpers. Owning packages still own storage and behavior.
   manifests with `@hasna/contracts`.
 - `mementos` owns memory lifecycle and recall.
 - `reports` owns rendered reports and proof presentation.
-- `open-evals` owns evaluation execution and scored validation results.
-- `open-economy` owns budget, cost, and usage policy decisions.
+- `evals` owns evaluation execution and scored validation results.
+- `economy` owns budget, cost, and usage policy decisions.
 - `monitor` owns fleet health classification and alerting.
 - The internal scaffold package owns scaffold templates, registry behavior,
   install/setup behavior, MCP tools, CLI UX, and private/internal scaffold
@@ -998,10 +998,10 @@ native domain objects immediately.
   promotion decisions as `DecisionEnvelope`.
 - `mementos`: expose memories as `ResourceRef` kind `memento` or
   `knowledge`; reflection runs as `WorkRun`.
-- `open-evals`: map cases/assertions to `ValidationPlan`, runs/results to
+- `evals`: map cases/assertions to `ValidationPlan`, runs/results to
   `ProofBundle`, reports to `EvidenceRef`, and judge/baseline choices to
   `DecisionEnvelope`.
-- `open-economy`: own `CostEstimate` production and emit budget decisions as
+- `economy`: own `CostEstimate` production and emit budget decisions as
   `DecisionEnvelope`.
 - `monitor`: output doctor checks, fleet triage, and alerts as
   `ValidationPlan`, `ProofBundle`, `EvidenceRef`, `alert`, and `incident`
