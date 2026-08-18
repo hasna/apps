@@ -163,6 +163,11 @@ export {
 export {
   RemoteSkillsClient,
   createRemoteSkillsClient,
+  RemoteRouteUnsupportedError,
+  RemoteRequestError,
+  type RemotePin,
+  type RemoteSkillSummary,
+  type UpdatedSincePage,
 } from "./lib/remote-client.js";
 
 export {
