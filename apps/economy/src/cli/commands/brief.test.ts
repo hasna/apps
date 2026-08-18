@@ -9,8 +9,8 @@ function session(overrides: Partial<EconomySession> = {}): EconomySession {
   return {
     id: 'session-1',
     agent: 'claude',
-    project_path: '/home/hasna/workspace/open-economy',
-    project_name: 'open-economy',
+    project_path: '/home/hasna/workspace/economy',
+    project_name: 'economy',
     started_at: now,
     ended_at: now,
     total_cost_usd: 0.01,

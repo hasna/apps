@@ -1,4 +1,4 @@
-# open-economy
+# economy
 
 AI coding cost tracker — `@hasna/economy`
 

@@ -30,14 +30,14 @@ describe('EconomyClient', () => {
     }) as typeof fetch
 
     const client = new EconomyClient({ baseUrl: 'http://economy.test', retries: 0 })
-    await client.getSessions({ agent: 'gemini', search: 'open-economy', account: 'work@example.com', machine: 'spark02', limit: 5 })
+    await client.getSessions({ agent: 'gemini', search: 'economy', account: 'work@example.com', machine: 'spark02', limit: 5 })
 
     const url = new URL(calls[0]!.url)
     expect(url.origin + url.pathname).toBe('http://economy.test/v1/sessions')
     expect(url.searchParams.get('agent')).toBe('gemini')
     expect(url.searchParams.get('account')).toBe('work@example.com')
     expect(url.searchParams.get('machine')).toBe('spark02')
-    expect(url.searchParams.get('search')).toBe('open-economy')
+    expect(url.searchParams.get('search')).toBe('economy')
     expect(url.searchParams.get('limit')).toBe('5')
   })
 
@@ -163,7 +163,7 @@ describe('EconomyClient', () => {
       const responses: Record<string, unknown> = {
         '/v1/budgets': {
           id: 'budget-1',
-          project_path: '/workspace/open-economy',
+          project_path: '/workspace/economy',
           agent: 'codex',
           period: 'weekly',
           limit_usd: 25,
@@ -188,7 +188,7 @@ describe('EconomyClient', () => {
         '/v1/goals': {
           id: 'goal-1',
           period: 'week',
-          project_path: '/workspace/open-economy',
+          project_path: '/workspace/economy',
           agent: 'codex',
           limit_usd: 50,
           created_at: '2026-05-09T00:00:00.000Z',
@@ -205,7 +205,7 @@ describe('EconomyClient', () => {
 
     const client = new EconomyClient({ baseUrl: 'http://economy.test', retries: 0 })
     const budget = await client.createBudget({
-      project_path: '/workspace/open-economy',
+      project_path: '/workspace/economy',
       agent: 'codex',
       period: 'weekly',
       limit_usd: 25,
@@ -220,7 +220,7 @@ describe('EconomyClient', () => {
     const goal = await client.createGoal({
       period: 'week',
       limit_usd: 50,
-      project_path: '/workspace/open-economy',
+      project_path: '/workspace/economy',
       agent: 'codex',
     })
 
@@ -231,7 +231,7 @@ describe('EconomyClient', () => {
     ])
     expect(calls.map(call => call.init?.method)).toEqual(['POST', 'POST', 'POST'])
     expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({
-      project_path: '/workspace/open-economy',
+      project_path: '/workspace/economy',
       agent: 'codex',
       period: 'weekly',
       limit_usd: 25,
@@ -246,7 +246,7 @@ describe('EconomyClient', () => {
     expect(JSON.parse(String(calls[2]!.init?.body))).toEqual({
       period: 'week',
       limit_usd: 50,
-      project_path: '/workspace/open-economy',
+      project_path: '/workspace/economy',
       agent: 'codex',
     })
     expect(budget).toMatchObject({ id: 'budget-1', percent_used: 4 })

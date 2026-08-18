@@ -101,12 +101,12 @@ struct EconomyBarSnapshot {
     ]
     appState.weekAgents = appState.todayAgents
     appState.todayProjects = [
-      ProjectStat(project_path: "/Users/hasna/Workspace/open-economy", project_name: "open-economy", sessions: 6, requests: 356, total_tokens: 110_000_000, cost_usd: 329.73, last_active: nil),
+      ProjectStat(project_path: "/Users/hasna/Workspace/economy", project_name: "economy", sessions: 6, requests: 356, total_tokens: 110_000_000, cost_usd: 329.73, last_active: nil),
       ProjectStat(project_path: "/Users/hasna/Workspace/automation", project_name: "automation", sessions: 2, requests: 232, total_tokens: 43_237_370, cost_usd: 54.95, last_active: nil),
     ]
     appState.weekProjects = appState.todayProjects
     appState.recentSessions = [
-      SessionStat(id: "snapshot-codex-1", agent: "codex", project_path: nil, project_name: "open-economy", total_cost_usd: 82.24, total_tokens: 24_000_000, request_count: 122, started_at: "2026-06-05T13:03:39Z", ended_at: nil),
+      SessionStat(id: "snapshot-codex-1", agent: "codex", project_path: nil, project_name: "economy", total_cost_usd: 82.24, total_tokens: 24_000_000, request_count: 122, started_at: "2026-06-05T13:03:39Z", ended_at: nil),
       SessionStat(id: "snapshot-claude-1", agent: "claude", project_path: nil, project_name: "automation", total_cost_usd: 48.13, total_tokens: 12_000_000, request_count: 64, started_at: "2026-06-05T10:28:21Z", ended_at: nil),
     ]
     appState.topAccounts = [

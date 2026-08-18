@@ -69,7 +69,7 @@ describe('economy-mcp stdio server', () => {
       expect(pricingText).toContain('storage-h')
 
       const budgetSet = await client.callTool(
-        { name: 'set_budget', arguments: { period: 'weekly', limit_usd: 25, project_path: '/workspace/open-economy', agent: 'codex', cost_center_id: 'loop:fleet-evaluator', alert_at_percent: 70 } },
+        { name: 'set_budget', arguments: { period: 'weekly', limit_usd: 25, project_path: '/workspace/economy', agent: 'codex', cost_center_id: 'loop:fleet-evaluator', alert_at_percent: 70 } },
         undefined,
         { timeout: 5_000 },
       )

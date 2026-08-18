@@ -51,8 +51,8 @@ function sampleSession(overrides: Partial<EconomySession> = {}): EconomySession 
   return {
     id: 'session-1',
     agent: 'codex',
-    project_path: '/workspace/hasna/opensource/open-economy',
-    project_name: 'open-economy',
+    project_path: '/workspace/hasna/opensource/economy',
+    project_name: 'economy',
     started_at: NOW,
     ended_at: null,
     total_cost_usd: 1.25,
@@ -110,7 +110,7 @@ describe('gatherTrainingData', () => {
     })
     upsertBudget(db, {
       id: 'budget-1',
-      project_path: '/workspace/hasna/opensource/open-economy',
+      project_path: '/workspace/hasna/opensource/economy',
       agent: 'codex',
       period: 'monthly',
       limit_usd: 5,
@@ -120,7 +120,7 @@ describe('gatherTrainingData', () => {
     })
     upsertGoal(db, {
       id: 'goal-1',
-      project_path: '/workspace/hasna/opensource/open-economy',
+      project_path: '/workspace/hasna/opensource/economy',
       agent: 'codex',
       period: 'month',
       limit_usd: 3,
