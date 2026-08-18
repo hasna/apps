@@ -11,6 +11,7 @@ import { resolveApiUrl } from "./api-url.js";
 import { getApiKey } from "./auth-store.js";
 import { loadConfig, type SkillsConfig } from "./config.js";
 import { sanitizePublicDiscoveryText } from "./discovery.js";
+import { mergeSkillRegistryLists } from "./registry-merge.js";
 import type { SkillMeta } from "./registry.js";
 
 const remoteAvailabilitySchema = z.object({
@@ -214,6 +215,43 @@ export async function loadRemoteRegistry(options: RemoteRegistryOptions = {}): P
 
   const url = buildSkillsApiUrl(apiUrl, options.endpoint);
   return parseRemoteRegistryPayload(await fetchRemoteJson(url, options));
+}
+
+/**
+ * Merge the authenticated remote registry into a local listing, whenever the
+ * install is pointed at a hosted instance.
+ *
+ * This is the fail-closed (R1) default-read merge: a client configured with an
+ * origin sees the folder UNION cloud in the plain `list`/`search` path, while
+ * every other install keeps today's exact local behavior.
+ *
+ *   - No origin configured  -> the local list is returned unchanged and no
+ *     request is attempted. An unconfigured install must stay byte-identical
+ *     to the pre-merge output.
+ *   - Origin configured but no credential -> the local list is returned
+ *     unchanged and nothing throws. Auth-missing must never crash a read.
+ *   - Origin + credential -> the remote registry is fetched and merged under
+ *     the precedence in registry-merge.ts (custom > extension > private >
+ *     private-hosted > remote > upstream > official), remote rows tagged
+ *     `source: "remote"`.
+ *   - A configured, authenticated read that FAILS (auth rejection, HTTP
+ *     error, network failure) throws a clear error rather than silently
+ *     returning the local half — a silent partial listing would report
+ *     success for a union the caller asked to include.
+ *
+ * The explicit `--remote` path stays on loadRemoteRegistry(): an explicit
+ * request has always been fatal on failure, and that contract is unchanged.
+ */
+export async function mergeRemoteRegistry(
+  local: SkillMeta[],
+  options: RemoteRegistryOptions = {},
+): Promise<SkillMeta[]> {
+  const apiUrl = options.apiUrl || getConfiguredApiUrl();
+  if (!apiUrl) return local;
+  const token = options.authToken !== undefined ? options.authToken : getApiKey();
+  if (!token?.trim()) return local;
+  const remote = await loadRemoteRegistry({ ...options, apiUrl, authToken: token });
+  return mergeSkillRegistryLists(local, remote);
 }
 
 export async function loadRemoteSkill(name: string, options: RemoteRegistryOptions = {}): Promise<SkillMeta> {
