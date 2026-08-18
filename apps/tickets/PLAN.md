@@ -1057,9 +1057,9 @@ src/
 
 ---
 
-## 13. Differentiation from open-todos
+## 13. Differentiation from todos
 
-| | open-todos | tickets |
+| | todos | tickets |
 |---|---|---|
 | **Purpose** | Internal dev task management for AI agents | Public issue tracking for products/services |
 | **Who opens** | AI agents building software | Anyone — users, agents, monitoring bots |
