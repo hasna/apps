@@ -1,12 +1,14 @@
 import type {
   Agent,
   CreateCommentInput,
+  CreatePlanCommentInput,
   CreatePlanInput,
   CreateProjectInput,
   CreateTaskInput,
   CreateTaskListInput,
   CreateTemplateInput,
   Plan,
+  PlanComment,
   PlanProjectLinkReceipt,
   PlanProjectLinkRollbackResult,
   PlanProjectLinkResult,
@@ -296,6 +298,21 @@ export interface TodosPlanStore {
     context?: TodosStorageContext,
   ): MaybePromise<TodosPlanCompletionAtRevisionResult>;
   delete(id: string, context?: TodosStorageContext): MaybePromise<boolean>;
+  /**
+   * Plan-row comments (todos task 04ee08fd). Plans previously had no comment
+   * surface, so `todos comment <plan-id>` 404'd with "task not found".
+   * Implementations MUST verify the plan exists and reject a comment on a
+   * missing plan (parity with the task comment store, which throws
+   * TaskNotFoundError). `getComments`/`getCommentsPage` MUST never return task
+   * comments, and the task audit store MUST never return plan comments.
+   */
+  addComment?(input: CreatePlanCommentInput, context?: TodosStorageContext): MaybePromise<PlanComment>;
+  getComments?(planId: string, context?: TodosStorageContext): MaybePromise<PlanComment[]>;
+  getCommentsPage?(
+    planId: string,
+    options: TodosCommentListOptions,
+    context?: TodosStorageContext,
+  ): MaybePromise<PlanComment[]>;
 }
 
 export interface TodosPlanCompletionAtRevisionResult {

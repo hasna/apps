@@ -872,6 +872,25 @@ export function ensureSchema(db: Database): void {
   ensureColumn("task_comments", "type", "TEXT DEFAULT 'comment'");
   ensureColumn("task_comments", "progress_pct", "INTEGER");
 
+  // Plan comments — the plan-row comment surface (todos task 04ee08fd). A
+  // separate table from task_comments so the two surfaces can never leak into
+  // each other's list verbs; the FK keeps plan deletion cascading exactly like
+  // task_comments does for tasks.
+  ensureTable("plan_comments", `
+    CREATE TABLE plan_comments (
+      id TEXT PRIMARY KEY,
+      plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+      agent_id TEXT,
+      session_id TEXT,
+      content TEXT NOT NULL,
+      type TEXT DEFAULT 'comment' CHECK(type IN ('comment', 'progress', 'note')),
+      progress_pct INTEGER CHECK(progress_pct IS NULL OR (progress_pct >= 0 AND progress_pct <= 100)),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      machine_id TEXT,
+      synced_at TEXT
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_plan_comments_plan ON plan_comments(plan_id)");
+
   // Machine tracking — machine_id + synced_at on all entity tables
   ensureColumn("projects", "machine_id", "TEXT");
   ensureColumn("projects", "synced_at", "TEXT");

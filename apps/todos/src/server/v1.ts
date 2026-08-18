@@ -9,7 +9,7 @@
  */
 import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, StaleLockHandoffError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, VersionConflictError, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 import { collapseEnumValues, resolveEnumVocabulary } from "../lib/enum-vocabulary.js";
-import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
+import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, PlanComment, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions, UpdateTemplateInput } from "../storage/interfaces.js";
 import {
   ensureCloudSchema,
@@ -436,6 +436,10 @@ function contextFromPrincipal(principal: { agent: string | null }, body?: { agen
 }
 
 function redactComment(comment: TaskComment): TaskComment {
+  return { ...comment, content: redactEvidenceText(comment.content) };
+}
+
+function redactPlanComment(comment: PlanComment): PlanComment {
   return { ...comment, content: redactEvidenceText(comment.content) };
 }
 
@@ -1388,6 +1392,82 @@ export async function handleV1Request(
           receipt_id: body.receipt_id as string,
           expected_plan_revision: body.expected_plan_revision as string,
         }));
+      }
+      // ── /v1/plans/:id/comments — plan comments (add/list) ──
+      // Plans previously had no comment surface (todos task 04ee08fd): the CLI
+      // `comment` verb only wrote task comments, so a plan id 404'd with "task
+      // not found" and plan-level outcomes could not be recorded on the plan
+      // row. Mirror the task comment route's existence check — a comment on a
+      // missing plan must 404 loudly (parity with local, which throws
+      // PlanNotFoundError) instead of silently writing an orphan row.
+      // NOTE: this must be checked before the bare plan GET below, or
+      // GET /v1/plans/:id/comments would be shadowed by the plan fetch.
+      if (id && action === "comments") {
+        if (!(await store.plans.get(id))) return error(404, "plan not found");
+        if (method === "GET") {
+          if (store.plans.getCommentsPage) {
+            const rawLimit = url.searchParams.get("limit");
+            const cursor = url.searchParams.get("cursor");
+            const limit = rawLimit === null ? DEFAULT_COMMENT_PAGE_SIZE : Number(rawLimit);
+            if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_COMMENT_PAGE_SIZE) {
+              return error(400, `limit must be an integer between 1 and ${MAX_COMMENT_PAGE_SIZE}`);
+            }
+            let before: { created_at: string; id: string } | undefined;
+            if (cursor) {
+              try {
+                before = decodeCommentCursor(cursor);
+              } catch {
+                return error(400, "invalid comment cursor");
+              }
+            }
+            const page = (await store.plans.getCommentsPage(
+              id,
+              { limit: limit + 1, ...(before ? { before } : {}) },
+              contextFromPrincipal(principal),
+            )).map(redactPlanComment);
+            const hasMore = page.length > limit;
+            const comments = hasMore ? page.slice(1) : page;
+            return json({
+              comments,
+              count: comments.length,
+              has_more: hasMore,
+              next_cursor: hasMore && comments[0] ? encodeCommentCursor(comments[0]) : null,
+            });
+          }
+          const comments = ((await store.plans.getComments?.(id, contextFromPrincipal(principal))) ?? [])
+            .map(redactPlanComment);
+          return json({ comments, count: comments.length });
+        }
+        if (method === "POST") {
+          const body = (await readJson<{
+            content?: string;
+            agent_id?: string;
+            session_id?: string;
+            type?: PlanComment["type"];
+            progress_pct?: number;
+          }>(req)) ?? {};
+          if (typeof body.content !== "string" || !body.content.trim()) {
+            return error(400, "content is required");
+          }
+          const target = await store.plans.get(id);
+          if (!target) return error(404, "plan not found");
+          if (!store.plans.addComment) {
+            return error(501, "plan comments are not supported by this storage backend");
+          }
+          const comment = await store.plans.addComment(
+            {
+              plan_id: id,
+              content: body.content,
+              agent_id: body.agent_id ?? principal.agent ?? undefined,
+              session_id: body.session_id,
+              type: body.type,
+              progress_pct: body.progress_pct,
+            },
+            contextFromPrincipal(principal, body),
+          );
+          return json({ comment: redactPlanComment(comment) }, 201);
+        }
+        return error(405, `method ${method} not allowed on /v1/plans/:id/comments`);
       }
       if (id && method === "GET") {
         const plan = await store.plans.get(id);

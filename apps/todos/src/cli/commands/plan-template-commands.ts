@@ -10,8 +10,9 @@ import {
   deletePlan,
 } from "../../db/plans.js";
 import { createTask } from "../../db/tasks.js";
+import { listPlanComments } from "../../db/plan-comments.js";
 import type { TemplatePreview } from "../../db/templates.js";
-import type { Plan, Task, TemplateWithTasks } from "../../types/index.js";
+import type { Plan, PlanComment, Task, TemplateWithTasks } from "../../types/index.js";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import {
   evaluateTemplateCondition,
@@ -37,6 +38,7 @@ import {
   cloudDeletePlan,
   cloudListPlans,
   cloudListTemplates,
+  cloudListPlanComments,
   cloudListPlanTasks,
   cloudApplyPlanProjectLink,
   cloudPlanPlanProjectLink,
@@ -250,6 +252,19 @@ function resolvePlanCliRef(ref: string, projectId: string | undefined): string {
   process.exit(1);
 }
 
+/** Render plan-row comments under `plans --show` (plan comment surface, task 04ee08fd). */
+function printPlanComments(comments: PlanComment[]): void {
+  if (comments.length > 0) {
+    console.log(chalk.bold(`\n  Comments (${comments.length}):`));
+    for (const comment of comments) {
+      const who = comment.agent_id ? `${comment.agent_id} ` : "";
+      console.log(`    ${chalk.dim(comment.created_at)} ${who}${comment.content}`);
+    }
+  } else {
+    console.log(chalk.dim("\n  No comments on this plan."));
+  }
+}
+
 export function registerPlanTemplateCommands(program: Command) {
   // plans
   program
@@ -442,8 +457,9 @@ export function registerPlanTemplateCommands(program: Command) {
             handleError(new Error(`Plan not found: ${opts.show}`));
           }
           const tasks = await cloudListPlanTasks(cloud, plan.id);
+          const comments = await cloudListPlanComments(cloud, plan.id);
           if (globalOpts.json) {
-            output({ plan, tasks, artifact: null }, true);
+            output({ plan, tasks, comments, artifact: null }, true);
             return;
           }
           console.log(chalk.bold("Plan Details:\n"));
@@ -460,6 +476,7 @@ export function registerPlanTemplateCommands(program: Command) {
           } else {
             console.log(chalk.dim("\n  No tasks in this plan."));
           }
+          printPlanComments(comments);
           return;
         }
         const db = getDatabase();
@@ -470,12 +487,14 @@ export function registerPlanTemplateCommands(program: Command) {
         }
         const { listTasks } = require("../../db/tasks.js") as any;
         const tasks = listTasks({ plan_id: resolvedId });
+        const comments = listPlanComments(resolvedId, db);
         const artifact = readPlanArtifact(plan, db);
 
         if (globalOpts.json) {
           output({
             plan,
             tasks,
+            comments,
             artifact: artifact
               ? {
                   path: artifact.path,
@@ -506,6 +525,7 @@ export function registerPlanTemplateCommands(program: Command) {
         } else {
           console.log(chalk.dim("\n  No tasks in this plan."));
         }
+        printPlanComments(comments);
         return;
       }
 

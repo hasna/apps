@@ -3,12 +3,14 @@ import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoun
 import type {
   Agent,
   CreateCommentInput,
+  CreatePlanCommentInput,
   CreatePlanInput,
   CreateProjectInput,
   CreateTaskInput,
   CreateTaskListInput,
   CreateTemplateInput,
   Plan,
+  PlanComment,
   PlanProjectLinkReceipt,
   PlanProjectLinkResult,
   PlanProjectLinkRollbackResult,
@@ -105,7 +107,7 @@ import {
 } from "./audit-history-import.js";
 import { deterministicUuid } from "../task-manifest/canonical.js";
 
-type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks" | "plan_project_link_receipts" | "plan_project_link_rollback_receipts";
+type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "plan_comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks" | "plan_project_link_receipts" | "plan_project_link_rollback_receipts";
 
 export interface CreatePostgresTodosStorageAdapterOptions {
   client: TodosPostgresQueryClient;
@@ -208,6 +210,27 @@ export function createPostgresTodosStorageAdapter(
       completeAtRevision: (id, expectedUpdatedAt, context) =>
         store.completePlanAtRevision(id, expectedUpdatedAt, context),
       delete: (id, context) => store.deletePlan(id, context),
+      addComment: (input, context) => addPlanComment(input, store, context),
+      getComments: async (planId) => {
+        const pages: PlanComment[][] = [];
+        let before: TodosCommentListOptions["before"];
+        while (true) {
+          const page = await store.listPlanComments(planId, { limit: 1_000, ...(before ? { before } : {}) });
+          if (page.length === 0) break;
+          pages.unshift(page);
+          if (page.length < 1_000) break;
+          const oldest = page[0]!;
+          before = { created_at: oldest.created_at, id: oldest.id };
+        }
+        return pages.flat()
+          .map(redactPlanComment)
+          .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+      },
+      getCommentsPage: async (planId, options) => {
+        return (await store.listPlanComments(planId, options))
+          .map(redactPlanComment)
+          .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+      },
     },
     planProjectLinks: {
       apply: (input, context) => store.applyPlanProjectLink(input, context),
@@ -464,6 +487,31 @@ class PostgresJsonRecordStore {
       params,
     );
     return result.rows.map((row) => payloadRecord<TaskComment>(row.payload)).reverse();
+  }
+
+  async listPlanComments(planId: string, options: TodosCommentListOptions = {}): Promise<PlanComment[]> {
+    await this.ensureSchema();
+    const limit = options.limit ?? 100;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_001) {
+      throw new Error("Postgres plan comment limit must be an integer between 1 and 1001");
+    }
+    const params: unknown[] = [this.service, planId];
+    let cursorPredicate = "";
+    if (options.before) {
+      params.push(options.before.created_at, options.before.id);
+      cursorPredicate = `AND (payload->>'created_at', object_id) < ($3, $4)`;
+    }
+    params.push(limit);
+    const result = await this.options.client.query<{ payload: unknown }>(
+      `/* todos:list-plan-comments */ SELECT payload FROM ${this.tableName}
+       WHERE service = $1 AND object_type = 'plan_comments' AND deleted_at IS NULL
+         AND payload->>'plan_id' = $2
+         ${cursorPredicate}
+       ORDER BY payload->>'created_at' DESC, object_id DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+    return result.rows.map((row) => payloadRecord<PlanComment>(row.payload)).reverse();
   }
 
   async listRecords<T>(type: RemoteObjectType): Promise<RemoteRecord<T>[]> {
@@ -2058,6 +2106,15 @@ class PostgresJsonRecordStore {
         WHERE r.service = $1 AND r.object_type = 'tasks' AND r.deleted_at IS NULL
           AND r.payload->>'plan_id' = $2 AND EXISTS (SELECT 1 FROM target)
         RETURNING 1
+      ), deleted_plan_comments AS (
+        UPDATE ${this.tableName} r SET
+          deleted_at = $3::timestamptz,
+          updated_at = $3::timestamptz,
+          source_machine_id = COALESCE($4, r.source_machine_id),
+          version = COALESCE(r.version, 0) + 1
+        WHERE r.service = $1 AND r.object_type = 'plan_comments' AND r.deleted_at IS NULL
+          AND r.payload->>'plan_id' = $2 AND EXISTS (SELECT 1 FROM target)
+        RETURNING 1
       ), deleted_plan AS (
         UPDATE ${this.tableName} r SET
           deleted_at = $3::timestamptz,
@@ -3205,6 +3262,30 @@ async function addComment(input: CreateCommentInput, store: PostgresJsonRecordSt
 }
 
 function redactComment(comment: TaskComment): TaskComment {
+  return { ...comment, content: redactEvidenceText(comment.content) };
+}
+
+/**
+ * Plan-row comments (todos task 04ee08fd): the plan analogue of addComment.
+ * Stored under object_type 'plan_comments' so the task comment queries — which
+ * filter on payload->>'task_id' and object_type 'comments' — can never see
+ * them, and vice versa.
+ */
+async function addPlanComment(input: CreatePlanCommentInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<PlanComment> {
+  const comment: PlanComment = {
+    id: randomUUID(),
+    plan_id: input.plan_id,
+    agent_id: input.agent_id ?? context?.agentId ?? null,
+    session_id: input.session_id ?? context?.sessionId ?? null,
+    content: redactEvidenceText(input.content),
+    type: input.type ?? "comment",
+    progress_pct: input.progress_pct ?? null,
+    created_at: new Date().toISOString(),
+  };
+  return store.upsert("plan_comments", comment, context);
+}
+
+function redactPlanComment(comment: PlanComment): PlanComment {
   return { ...comment, content: redactEvidenceText(comment.content) };
 }
 

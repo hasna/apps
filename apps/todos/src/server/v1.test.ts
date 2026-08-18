@@ -1309,6 +1309,35 @@ describe("/v1 plan cloud parity", () => {
     expect((await request(`/v1/plans/${createdPlan.id}`, "DELETE"))?.status).toBe(200);
     expect((await request(`/v1/plans/${createdPlan.id}`))?.status).toBe(404);
   });
+
+  test("plans accept comments on /v1/plans/:id/comments and list them back", async () => {
+    const created = await request("/v1/plans", "POST", { name: "Commentable plan" });
+    expect(created?.status).toBe(201);
+    const plan = (await created!.json() as { plan: { id: string } }).plan;
+
+    const added = await request(`/v1/plans/${plan.id}/comments`, "POST", {
+      content: "plan-level outcome",
+      agent_id: "backlog-bugs-execute",
+    });
+    expect(added?.status).toBe(201);
+    const addedBody = await added!.json() as { comment: { plan_id: string; content: string; agent_id: string | null } };
+    expect(addedBody.comment.plan_id).toBe(plan.id);
+    expect(addedBody.comment.content).toBe("plan-level outcome");
+    expect(addedBody.comment.agent_id).toBe("backlog-bugs-execute");
+
+    const listed = await request(`/v1/plans/${plan.id}/comments`);
+    expect(listed?.status).toBe(200);
+    const listedBody = await listed!.json() as { comments: Array<{ content: string }>; count: number };
+    expect(listedBody.count).toBe(1);
+    expect(listedBody.comments.map((comment) => comment.content)).toEqual(["plan-level outcome"]);
+
+    // The task comment surface must not see plan comments and vice versa.
+    const missingContent = await request(`/v1/plans/${plan.id}/comments`, "POST", { content: "  " });
+    expect(missingContent?.status).toBe(400);
+    expect((await request("/v1/plans/missing-plan/comments", "POST", { content: "orphan" }))?.status).toBe(404);
+    expect((await request("/v1/plans/missing-plan/comments"))?.status).toBe(404);
+    expect((await request(`/v1/plans/${plan.id}/comments`, "DELETE"))?.status).toBe(405);
+  });
 });
 
 describe("/v1 reusable template cloud parity", () => {

@@ -11,7 +11,7 @@
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { randomUUID } from "node:crypto";
 import { resolve as resolvePath } from "node:path";
-import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, PlanProjectLinkResult, PlanProjectLinkRollbackResult, Project, ProjectTaskListEnsureResult, ProjectTaskListRollbackResult, RegisterAgentInput, StaleLockHandoffReceipt, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
+import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, PlanComment, PlanProjectLinkResult, PlanProjectLinkRollbackResult, Project, ProjectTaskListEnsureResult, ProjectTaskListRollbackResult, RegisterAgentInput, StaleLockHandoffReceipt, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
 import { isBlockingDependencyStatus } from "../types/index.js";
 import type { TodosTaskFailureResult, UpdateTemplateInput } from "../storage/interfaces.js";
 import { redactEvidenceText } from "../lib/redaction.js";
@@ -2272,6 +2272,44 @@ export async function cloudAddComment(
   return redactComment(normalized);
 }
 
+/**
+ * Add a plan-row comment through `/v1/plans/:id/comments` (todos task
+ * 04ee08fd). Plans previously had no comment surface, so commenting on a plan
+ * 404'd with "task not found" and plan-level outcomes could not be recorded on
+ * the plan row.
+ */
+export async function cloudAddPlanComment(
+  client: HasnaStorageClient,
+  planId: string,
+  input: { content: string; agent_id?: string; session_id?: string; type?: string; progress_pct?: number },
+): Promise<PlanComment> {
+  const raw = await client.transport.post<unknown>(`/plans/${encodeURIComponent(planId)}/comments`, input);
+  const comment = raw && typeof raw === "object" && "comment" in (raw as Record<string, unknown>)
+    ? (raw as { comment: unknown }).comment
+    : raw;
+  const normalized = normalizePlanComment(comment);
+  if (!normalized) throw new Error("Invalid cloud plan comment response");
+  return { ...normalized, content: redactEvidenceText(normalized.content) };
+}
+
+/** List plan comments through `/v1/plans/:id/comments`. */
+export async function cloudListPlanComments(
+  client: HasnaStorageClient,
+  planId: string,
+): Promise<PlanComment[]> {
+  // Direct transport path: `client.get(resource, id)` builds the path via
+  // entityPath, which encodeURIComponent's the WHOLE id — a "/comments" suffix
+  // would be encoded into %2F and never reach the plan comment route.
+  const raw = await client.transport.get<unknown>(`/plans/${encodeURIComponent(planId)}/comments`);
+  const comments = raw && typeof raw === "object" && Array.isArray((raw as { comments?: unknown }).comments)
+    ? (raw as { comments: unknown[] }).comments
+    : Array.isArray(raw) ? raw : [];
+  return comments
+    .map(normalizePlanComment)
+    .filter((comment): comment is PlanComment => comment !== null)
+    .map((comment) => ({ ...comment, content: redactEvidenceText(comment.content) }));
+}
+
 export interface CloudCommentPage {
   /** Oldest-to-newest comments within this bounded page. */
   comments: TaskComment[];
@@ -2412,6 +2450,29 @@ function normalizeTaskComment(value: unknown): TaskComment | null {
   return {
     id: comment["id"],
     task_id: comment["task_id"],
+    agent_id: typeof comment["agent_id"] === "string" ? comment["agent_id"] : null,
+    session_id: typeof comment["session_id"] === "string" ? comment["session_id"] : null,
+    content: comment["content"],
+    type: type === "progress" || type === "note" ? type : "comment",
+    progress_pct: typeof comment["progress_pct"] === "number" ? comment["progress_pct"] : null,
+    created_at: comment["created_at"],
+  };
+}
+
+/** The plan-row analogue of normalizeTaskComment (todos task 04ee08fd). */
+function normalizePlanComment(value: unknown): PlanComment | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const comment = value as Record<string, unknown>;
+  if (typeof comment["id"] !== "string"
+    || typeof comment["plan_id"] !== "string"
+    || typeof comment["content"] !== "string"
+    || typeof comment["created_at"] !== "string") {
+    return null;
+  }
+  const type = comment["type"];
+  return {
+    id: comment["id"],
+    plan_id: comment["plan_id"],
     agent_id: typeof comment["agent_id"] === "string" ? comment["agent_id"] : null,
     session_id: typeof comment["session_id"] === "string" ? comment["session_id"] : null,
     content: comment["content"],
