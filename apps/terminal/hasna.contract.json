@@ -1,0 +1,47 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "terminal",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.11.1",
+  "description": "AI-native interactive terminal (TUI) for Bun/Node: chat-and-execute terminal with session memory, provider/model routing, tool profiles, output compaction and a no-cloud guard wired into prepack. Ships the `terminal` CLI (package.json also exposes `t` as an alias bin, not declareable under the kit 0.11.1 bin allowlist); there is no MCP server, no HTTP server, and no importable package surface (exports is null). Session history is stored in a local SQLite database at ~/.hasna/terminal/sessions.db (HASNA_TERMINAL_DB_PATH / TERMINAL_DB_PATH override), with config at ~/.hasna/terminal/config.json and user profiles under ~/.hasna/terminal/profiles/. The data backend is the only runtime switch.",
+  "bins": [
+    "terminal"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite"
+    ],
+    "envPrefix": "HASNA_TERMINAL_",
+    "aliasEnvPrefix": "TERMINAL_",
+    "sqlitePath": "~/.hasna/terminal/sessions.db"
+  },
+  "serviceSurfaces": [
+    {
+      "name": "terminal-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "terminal",
+      "authMode": "local-only"
+    }
+  ],
+  "metadata": {
+    "conformance": {
+      "waivedStorageEngines": [
+        {
+          "engine": "postgresql",
+          "reason": "PostgreSQL is not implemented: no code path reads a DATABASE_URL or selects a PostgreSQL store; session history uses the SQLite store at ~/.hasna/terminal/sessions.db only."
+        }
+      ]
+    },
+    "release": {
+      "artifactScan": {
+        "script": "no-cloud:pack"
+      }
+    }
+  }
+}

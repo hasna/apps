@@ -1,0 +1,62 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "styles",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.11.1",
+  "description": "Design-system extractor and style manager for AI coding agents: extract tokens from URLs or CSS files, transform to shadcn/Tailwind/CSS-vars/MUI/Radix formats, audit color contrast, and manage style profiles, templates and kits. Ships the `styles` CLI, a `styles-mcp` server, and the package SDK. A local dashboard server runs via `bun run server` (no shipped bin), binds 127.0.0.1 by default on a free port above 7200, serves the built dashboard plus unauthenticated /api/* routes, and reads a local SQLite store at ~/.hasna/styles/styles.db. The data backend is the only runtime switch.",
+  "bins": [
+    "styles",
+    "styles-mcp"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite"
+    ],
+    "sqlitePath": "~/.hasna/styles/styles.db"
+  },
+  "serviceSurfaces": [
+    {
+      "name": "styles-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "styles",
+      "authMode": "local-only"
+    },
+    {
+      "name": "styles-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "styles-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "styles-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "."
+    },
+    {
+      "name": "styles-dashboard-api",
+      "kind": "api",
+      "status": "deferred",
+      "authMode": "none",
+      "deferReason": "The HTTP API ships but is not a supported service surface: it runs only via `bun run server` (package.json declares no styles-serve bin), binds 127.0.0.1 by default on a free port above 7200, and is unauthenticated. It serves the built dashboard plus /api/* routes with no GET /health, no GET /ready, no GET /version and no /openapi.json, so it does not meet the v1 service topology. Binding it to a non-loopback host (STYLES_SERVER_HOST) exposes the store unauthenticated."
+    }
+  ],
+  "metadata": {
+    "conformance": {
+      "waivedStorageEngines": [
+        {
+          "engine": "postgresql",
+          "reason": "PostgreSQL is not implemented at runtime: src/lib/pg-migrations.ts holds a translated schema but no code path reads a DATABASE_URL or selects a PostgreSQL store; server and client both use the SQLite store at ~/.hasna/styles/styles.db."
+        }
+      ]
+    }
+  }
+}
