@@ -29,13 +29,33 @@ service without making the OSS core depend on one deployment.
 
 Good OSS commands:
 
-- `auth login`, `auth logout`, `auth whoami`
-- `billing status`, `billing checkout`, `billing portal`
-- `credits buy`
-- remote registry, quote, run status, logs, and artifact commands
+- `auth login`, `auth signup`, `auth whoami` — the API-backed auth commands;
+  they call the configured Skills API, print/open returned URLs, and store
+  scoped local credentials
+- `auth logout` — local credential removal (`src/cli/commands/auth.ts`,
+  `clearAuthConfig()`); no API call
+- `run`, `runs list`, `runs show`, `exports open` — local execution and local
+  run records (`src/cli/commands/runtime.ts`); they require no API origin
+- `runs status`, `exports download` — the remote-client run subcommands; they
+  require API access
+- `list`/`ls`, `search`/`s`, `categories`, `tags` — the browse surface; the
+  default read path is folder UNION cloud. Whenever an API origin
+  (`SKILLS_API_URL` or the `apiUrl` config key) and a credential are configured,
+  `getBrowseRegistry()` (`src/cli/commands/list.ts`) merges the authenticated
+  remote registry into the local corpus through `mergeRemoteRegistry()`
+  (`src/lib/remote-registry.ts`); an unconfigured or auth-missing install keeps
+  the local corpus (fail closed). `--remote` makes the merge mandatory and
+  errors without a configured origin.
+- `push`, `pull` — send and fetch corpus skills to/from the configured Skills
+  instance (`src/cli/commands/publish.ts`, `src/lib/pull.ts`); they require a
+  configured origin
+- `registry sync` — generates a deterministic registry sync artifact from the
+  local corpus (instance-local)
 
-These commands only call the configured Skills API, print/open returned URLs, and
-store scoped local credentials.
+The CLI ships no billing or credits command namespaces: `no-billing-surface.test.ts`
+pins the CLI `--help` surface, the MCP contract, and the server route table to zero
+billing/payments vocabulary. Billing, credits, checkout, and portal are the hosted
+wrapper's surface, never the OSS package's.
 
 Do not put these in OSS:
 
