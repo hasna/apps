@@ -25,7 +25,7 @@
  * MissingApiUrlError (via getApiUrl() -> requireApiUrl()) rather than inventing a host.
  * There is deliberately no vendor default and no localhost fallback.
  */
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { createRemoteSkillsClient } from "./remote-client.js";
@@ -37,6 +37,7 @@ import {
   type PortableSkillOptions,
 } from "./portable-skills.js";
 import { resolveCorpusRoot } from "./home-migration.js";
+import { revisionIdOf } from "./revision.js";
 import { sha256Hex, type SkillBundleEntry, unpackSkillBundle } from "./skill-bundle.js";
 import { resolveSigningKey, verifyBundleSignature } from "./skill-bundles.js";
 import type { SkillKind } from "./registry-types.js";
@@ -106,6 +107,17 @@ export interface PulledSkillResult {
   tombstoned?: boolean;
   /** With `tombstoned`: true when a local corpus entry existed and was removed. */
   removed?: boolean;
+  /**
+   * With `tombstoned`: true when the local corpus entry was NOT pull-managed (no pull
+   * marker), so it was left in place — a remote 410 never deletes a user-created skill.
+   */
+  leftInPlace?: boolean;
+  /**
+   * True when the instance no longer serves a published revision under this slug (its
+   * tombstone window expired) but the local copy is a revision-marked published install.
+   * Reported instead of silently swapping in a bundled skill of the same name.
+   */
+  purged?: boolean;
   error?: string;
 }
 
@@ -201,6 +213,16 @@ async function pullOne(
     if (bundleResponse.status === 410) {
       return reconcileTombstone(slug, corpusOptions);
     }
+    // 404 with a revision-marked local install: the published row's tombstone window has
+    // expired and the slug is purged. The metadata fallback (if any) would serve a
+    // DIFFERENT skill — the bundled one with the same name — so report the published
+    // slug as purged/absent rather than silently swapping the local install.
+    if (bundleResponse.status === 404) {
+      const marker = readPullMarker(join(getPortableSkillsRoot(corpusOptions), slug));
+      if (marker && typeof marker.revisionId === "string" && marker.revisionId) {
+        return { name: slug, success: true, purged: true, removed: false };
+      }
+    }
     return {
       name: slug,
       success: false,
@@ -228,11 +250,27 @@ async function pullOne(
     return { name: slug, success: false, error: `Skill '${slug}' was not found on the configured Skills instance.` };
   }
 
+  // Bundle-less instance, no declared revision on the served metadata: if the local
+  // copy is a revision-marked published install, the published row is gone (purged) and
+  // what the metadata serves is a different skill — report, do not swap.
+  if (!meta?.revisionId) {
+    const marker = readPullMarker(join(getPortableSkillsRoot(corpusOptions), slug));
+    if (marker && typeof marker.revisionId === "string" && marker.revisionId) {
+      return { name: slug, success: true, purged: true, removed: false };
+    }
+  }
+
+  // A declared revision must be PROVEN against the content actually received: the id is
+  // content-addressed, so recomputing it over the served metadata + this skill's bytes
+  // and comparing is what "pull can prove which revision it installed" means. A declared
+  // id that cannot be recomputed, or that recomputes to something else, fails closed.
+  const provenRevisionId = meta?.revisionId ? provenRevision(meta, slug, {}) : undefined;
+
   const written = writeCorpusSkill({ name: slug, skillMd, meta }, corpusOptions);
   writePullMarker(written.path, {
     skill: slug,
     version: written.manifest.version,
-    ...(meta?.revisionId ? { revisionId: meta.revisionId } : {}),
+    ...(provenRevisionId ? { revisionId: provenRevisionId } : {}),
   });
   return {
     name: slug,
@@ -241,20 +279,82 @@ async function pullOne(
     kind: written.manifest.kind,
     version: written.manifest.version,
     created: written.created,
-    ...(meta?.revisionId ? { revisionId: meta.revisionId } : {}),
+    ...(provenRevisionId ? { revisionId: provenRevisionId } : {}),
   };
+}
+
+/**
+ * Prove a declared revision id against the content a pull actually received.
+ *
+ * The revision id is a sha-256 over a canonical serialisation of the row's published
+ * content (src/lib/revision.ts). The client received that content as the metadata
+ * payload plus the verified bundle bytes, so it can recompute the id and compare.
+ * Equality is the proof "the recorded revision identifies the installed content";
+ * a declared id that cannot be recomputed (missing canonical fields) or that
+ * recomputes to a different value is a broken or lying instance and fails closed.
+ *
+ * `bundle` carries the verified bytes' sha256 and length (or nothing on the
+ * metadata-only path, where the row has no bundle).
+ */
+function provenRevision(meta: CorpusSkillMeta, slug: string, bundle: { sha256?: string; byteSize?: number }): string {
+  const declared = meta.revisionId;
+  if (!declared) return "";
+  const source = meta.publishedSource;
+  const skillMd = meta.skillMd;
+  if (typeof source !== "string" || source.length === 0 || typeof skillMd !== "string" || skillMd.length === 0) {
+    throw new PullSkillError(
+      `Revision proof failed for '${slug}': the instance declared revision '${declared.slice(0, 12)}…' but did not serve the content fields needed to recompute it (publishedSource / skillMd). Nothing was installed.`,
+    );
+  }
+  const recomputed = revisionIdOf({
+    slug,
+    displayName: meta.displayName ?? "",
+    description: meta.description ?? "",
+    category: meta.category ?? "",
+    tags: meta.tags ?? [],
+    source,
+    kind: meta.kind ?? "instruction",
+    ...(meta.version ? { version: meta.version } : {}),
+    skillMd,
+    bundleSha256: bundle.sha256,
+    bundleByteSize: bundle.byteSize,
+  });
+  if (recomputed !== declared) {
+    throw new PullSkillError(
+      `Revision proof failed for '${slug}': the instance declared revision '${declared.slice(0, 12)}…' but the served content recomputes to '${recomputed.slice(0, 12)}…'. The declared revision does not identify the content that was received. Nothing was installed.`,
+    );
+  }
+  return declared;
 }
 
 /**
  * The tombstone reconciliation (todos d061fcda): a 410 answers "this slug was deleted
  * and is still inside its tombstone window — remove the local copy". Success is the
  * reconcile happening, not an install; `removed` records whether anything was there.
+ *
+ * Only a PULL-MANAGED entry is removed: the marker file is the proof this directory was
+ * installed by a pull. An unmanaged or user-created skill with the same slug is never
+ * deleted by a remote 410 — it is reported as left in place instead.
  */
 function reconcileTombstone(slug: string, corpusOptions: PortableSkillOptions): PulledSkillResult {
   const target = join(getPortableSkillsRoot(corpusOptions), slug);
-  const existed = existsSync(target);
-  if (existed) rmSync(target, { recursive: true, force: true });
-  return { name: slug, success: true, tombstoned: true, removed: existed };
+  if (!existsSync(join(target, PULL_MARKER_FILE))) {
+    return { name: slug, success: true, tombstoned: true, removed: false, leftInPlace: true };
+  }
+  rmSync(target, { recursive: true, force: true });
+  return { name: slug, success: true, tombstoned: true, removed: true };
+}
+
+/**
+ * Read a pull marker from a corpus entry, or null when there is none (unmanaged).
+ * The marker is the only proof a directory was installed by a pull.
+ */
+function readPullMarker(dir: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(readFileSync(join(dir, PULL_MARKER_FILE), "utf-8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
 function installVerifiedBundle(
@@ -274,12 +374,24 @@ function installVerifiedBundle(
     }
     const version = str(meta?.version) ?? versionFromEntries(entries) ?? "unknown";
     const sourceCommit = sourceCommitFromEntries(entries);
+    // A declared revision must be PROVEN against the content actually received before it
+    // is recorded: the id is content-addressed, so recomputing it over the served
+    // metadata + the verified bundle bytes and comparing is what "pull can prove which
+    // revision it installed" means. A mismatch (or an id that cannot be recomputed)
+    // fails closed — nothing installed, nothing recorded.
+    const declaredRevision = verified.revisionId ?? meta?.revisionId;
+    if (declaredRevision && meta?.revisionId && verified.revisionId && declaredRevision !== meta.revisionId) {
+      throw new PullSkillError(
+        `Revision proof failed for '${slug}': the bundle header declares '${verified.revisionId.slice(0, 12)}…' but the metadata declares '${meta.revisionId.slice(0, 12)}…'. The instance is inconsistent. Nothing was installed.`,
+      );
+    }
+    const provenRevisionId = declaredRevision ? provenRevision(meta ?? {}, slug, { sha256: verified.contentHash, byteSize: verified.bytes.byteLength }) : undefined;
     const installed = installBundleAtomically(slug, entries, corpusOptions, {
       version,
       contentHash: verified.contentHash,
       ...(sourceCommit ? { sourceCommit } : {}),
       ...(verified.signature ? { signature: verified.signature } : {}),
-      ...(verified.revisionId ? { revisionId: verified.revisionId } : {}),
+      ...(provenRevisionId ? { revisionId: provenRevisionId } : {}),
     });
     return {
       name: slug,
@@ -289,7 +401,7 @@ function installVerifiedBundle(
       version,
       contentHash: verified.contentHash,
       ...(sourceCommit ? { sourceCommit } : {}),
-      ...(verified.revisionId ? { revisionId: verified.revisionId } : {}),
+      ...(provenRevisionId ? { revisionId: provenRevisionId } : {}),
       created: installed.created,
     };
   });
@@ -515,6 +627,15 @@ async function safeMeta(client: SkillPullClient, slug: string): Promise<CorpusSk
     // The revision id the instance serves, carried onto the metadata-only pull path so
     // the marker records it there too (todos d061fcda).
     ...(REVISION_ID_PATTERN.test(str(record.revisionId) ?? "") ? { revisionId: str(record.revisionId)! } : {}),
+    // The canonical content fields a declared revision is computed over. A pull proves
+    // the revision by recomputing the content-addressed id from what it received; both
+    // fields are required for that proof (the payload's own `source` is the client view
+    // "remote", the canonical hash uses the row's stored source).
+    // skillMd is read VERBATIM, never trimmed: it is a document, and the canonical hash
+    // is computed over the exact bytes the row stores (the same reason the server keeps
+    // it verbatim through publish).
+    ...(typeof record.skillMd === "string" && record.skillMd.length > 0 ? { skillMd: record.skillMd } : {}),
+    ...(str(record.publishedSource) ? { publishedSource: str(record.publishedSource)! } : {}),
   };
 }
 

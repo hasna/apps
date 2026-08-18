@@ -671,7 +671,23 @@ export class SqliteSkillsStore implements SkillsProductStore {
         current.revisionId,
       ],
     );
-    return row ? rowToSkill(row) : null;
+    if (!row) {
+      // The WHERE guard matched nothing: between the pre-read above and this UPDATE the
+      // row's revision advanced (a concurrent writer landed) or the row was tombstoned/
+      // purged. A stale write must be a 409 REVISION_CONFLICT, never a 404 that falsely
+      // claims the skill vanished — and never a silent overwrite. The read and UPDATE are
+      // synchronous here, so this is defence for parity with the Postgres twin's race.
+      const nowRow = this.get("SELECT revision_id, tombstoned_at FROM skills_registry WHERE org_id = ? AND slug = ? LIMIT 1", [
+        principal.orgId,
+        slug,
+      ]);
+      if (nowRow && nowRow.tombstoned_at == null) {
+        const currentId = typeof nowRow.revision_id === "string" ? nowRow.revision_id : null;
+        throw new SkillRevisionConflictError(slug, expectedRevisionId, currentId);
+      }
+      return null;
+    }
+    return rowToSkill(row);
   }
 
   async deleteSkill(principal: ApiPrincipal, slug: string, tombstoneWindowMs: number): Promise<ServerSkillRecord | null> {

@@ -71,6 +71,10 @@ export function publishedPayload(record: ServerSkillRecord): Record<string, unkn
     ...publishedSkillMeta(record),
     slug: record.slug,
     publishedSource: record.source,
+    // The row's SKILL.md rides in the metadata so a client can recompute the
+    // content-addressed revision id and prove the declared revision identifies what it
+    // received (todos d061fcda). Without it the client cannot recompute and must refuse.
+    ...(record.skillMd ? { skillMd: record.skillMd } : {}),
     ...(record.bundleSha256 ? { bundleSha256: record.bundleSha256, bundleByteSize: record.bundleByteSize } : {}),
     publishedAt: record.createdAt,
     updatedAt: record.updatedAt,

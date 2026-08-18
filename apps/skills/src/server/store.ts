@@ -329,12 +329,20 @@ export class MemorySkillsStore implements SkillsProductStore {
     if (expectedRevisionId !== current.revisionId) {
       throw new SkillRevisionConflictError(slug, expectedRevisionId, current.revisionId);
     }
+    // Between the read and the write the map can advance (a re-entrant concurrent
+    // writer). The write is based on the LATEST row, and a stale guard is a 409 — the
+    // same contract as the SQL backends' guarded UPDATE.
+    const latest = this.skills.get(skillKey(principal.orgId, slug));
+    if (!latest || latest.tombstonedAt) return null;
+    if (latest.revisionId !== current.revisionId) {
+      throw new SkillRevisionConflictError(slug, expectedRevisionId, latest.revisionId);
+    }
     const next: ServerSkillRecord = {
-      ...current,
+      ...latest,
       ...patch,
       updatedAt: nowIso(),
-      revisionId: revisionIdOfRecord({ ...current, ...patch }),
-      revisionNumber: current.revisionNumber + 1,
+      revisionId: revisionIdOfRecord({ ...latest, ...patch }),
+      revisionNumber: latest.revisionNumber + 1,
     };
     this.skills.set(skillKey(principal.orgId, slug), next);
     return next;
@@ -875,7 +883,21 @@ export class PostgresSkillsStore implements SkillsProductStore {
       WHERE org_id = ${principal.orgId} AND slug = ${slug} AND tombstoned_at IS NULL AND revision_id = ${current.revisionId}
       RETURNING *
     `;
-    return rows[0] ? rowToSkill(rows[0]) : null;
+    if (!rows[0]) {
+      // The WHERE guard matched nothing: between the pre-read above and this UPDATE the
+      // row's revision advanced (a concurrent writer landed) or the row was tombstoned/
+      // purged. A stale write must be a 409 REVISION_CONFLICT, never a 404 that falsely
+      // claims the skill vanished — and never a silent overwrite.
+      const nowRows = await this.sql`
+        SELECT revision_id, tombstoned_at FROM skills_registry WHERE org_id = ${principal.orgId} AND slug = ${slug} LIMIT 1
+      `;
+      if (nowRows[0] && nowRows[0].tombstoned_at == null) {
+        const currentId = String(nowRows[0].revision_id);
+        throw new SkillRevisionConflictError(slug, expectedRevisionId, currentId);
+      }
+      return null;
+    }
+    return rowToSkill(rows[0]!);
   }
 
   async deleteSkill(principal: ApiPrincipal, slug: string, tombstoneWindowMs: number): Promise<ServerSkillRecord | null> {

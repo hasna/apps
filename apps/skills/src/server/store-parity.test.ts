@@ -353,6 +353,48 @@ for (const backend of backends) {
       }
     });
 
+    test("a revision that advances between read and write is a 409, never a silent overwrite", async () => {
+      const fixture = await seeded(backend);
+      try {
+        await fixture.store.publishSkill(publishInput(fixture.principal, "racer", "alpha"));
+        const v1 = await fixture.store.getSkill(fixture.principal, "racer");
+
+        // Simulate the concurrent writer deterministically: the pre-read inside
+        // updateSkill is intercepted once, and a second update lands BEFORE the first
+        // one's guarded UPDATE executes. On Postgres this is the real await-gap race;
+        // on the synchronous backends the same check must hold for parity.
+        const realGetSkill = fixture.store.getSkill.bind(fixture.store);
+        const realUpdateSkill = fixture.store.updateSkill.bind(fixture.store);
+        let armed = true;
+        const interceptingGet = (async (principal: ApiPrincipal, slug: string) => {
+          const record = await realGetSkill(principal, slug);
+          if (armed && record && !record.tombstonedAt && record.slug === "racer") {
+            armed = false;
+            // The concurrent writer: a full guarded update completes before the outer
+            // caller's UPDATE is issued.
+            await realUpdateSkill(principal, slug, { description: "concurrent writer" }, record.revisionId);
+          }
+          return record;
+        }) as typeof fixture.store.getSkill;
+        fixture.store.getSkill = interceptingGet;
+
+        // The outer update held v1's revision; the row moved on underneath it. The
+        // stale write must be refused with REVISION_CONFLICT — a 404 would falsely
+        // claim the skill vanished, and silently landing would destroy the newer write.
+        await expect(fixture.store.updateSkill(fixture.principal, "racer", { description: "stale outer write" }, v1!.revisionId)).rejects.toMatchObject({
+          name: "SkillRevisionConflictError",
+        });
+        fixture.store.getSkill = realGetSkill;
+
+        // The concurrent writer's content survived intact.
+        const after = await fixture.store.getSkill(fixture.principal, "racer");
+        expect(after!.description).toBe("concurrent writer");
+        expect(after!.revisionNumber).toBe(2);
+      } finally {
+        await fixture.close();
+      }
+    });
+
     test("tombstone lifecycle: delete marks, reads still see the marker, purge removes row and bundle", async () => {
       const fixture = await seeded(backend);
       try {
