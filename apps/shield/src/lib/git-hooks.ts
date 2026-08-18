@@ -20,8 +20,9 @@ export interface InstallPrePushHookResult {
   reason?: string;
 }
 
-const HOOK_MARKER = "# managed-by-open-shield";
+const HOOK_MARKER = "# managed-by-shield";
 const LEGACY_HOOK_MARKER = "# managed-by-open-security";
+const LEGACY_OPEN_HOOK_MARKER = "# managed-by-open-shield";
 
 function defaultRunner(command: string, args: string[], options?: RunnerOptions): string {
   return execFileSync(command, args, {
@@ -69,7 +70,7 @@ run_shield() {
     return $?
   fi
 
-  echo "open-shield pre-push hook: shield CLI not found" >&2
+  echo "shield pre-push hook: shield CLI not found" >&2
   exit 1
 }
 
@@ -94,7 +95,7 @@ export function installPrePushHook(
 
   if (existsSync(hookPath)) {
     const existing = readFileSync(hookPath, "utf-8");
-    if (existing.includes(HOOK_MARKER) || existing.includes(LEGACY_HOOK_MARKER)) {
+    if (existing.includes(HOOK_MARKER) || existing.includes(LEGACY_HOOK_MARKER) || existing.includes(LEGACY_OPEN_HOOK_MARKER)) {
       writeFileSync(hookPath, getHookContents(), "utf-8");
       chmodSync(hookPath, 0o755);
       return { hookPath, installed: true, skipped: false };
