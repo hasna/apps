@@ -8,6 +8,12 @@ This is a report-only inventory for the P5 shared-kits workstream. It does not
 publish packages, edit Bun release-age exclusions, migrate consumers, or change
 runtime code.
 
+Naming correction (2026-08-14): the `open-` prefix is retired fleet-wide.
+The `open-loops/` (and sibling `open-*`) paths below are the retired
+pre-monorepo layout; the code now lives in `apps/loops` in the `hasna/apps`
+monorepo. This inventory is a historical point-in-time record and deliberately
+keeps its original paths.
+
 Current-status correction (2026-07-20): the cross-repo observations below
 remain the 2026-07-07 inventory. OpenLoops state normalization landed through
 PR #81 at commit `0acb5e79` and merge commit `6d1e9536`. The current strict
