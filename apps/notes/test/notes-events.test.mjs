@@ -272,7 +272,11 @@ test('corrupt baseline degrades visibly and never silently re-baselines unseen n
   assert.equal(status.seenNotes, 0);
 });
 
-test('strict first-run snapshot never baselines a partial 327-note store', async (t) => {
+// Heavy by design: 327 note writes plus three reconcile passes with injected
+// failures exceed bun's 5000ms default (measured 5005-5138ms on station01).
+// Declare the real cost so the strict assertions always run.
+// node:test options form (second argument); a bare numeric third argument is ignored.
+test('strict first-run snapshot never baselines a partial 327-note store', { timeout: 30_000 }, async (t) => {
   const root = await tempRoot(t);
   const historical = Array.from({ length: 327 }, (_, index) => note({
     id: randomUUID(),
