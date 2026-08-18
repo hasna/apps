@@ -47,3 +47,19 @@ export function canonicalSender(from: string): string | null {
   if (labels.some((label) => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label))) return null;
   return addr.toLowerCase();
 }
+
+/**
+ * Render the RFC 5322 mailbox form `"Display Name" <addr>` for a provider
+ * send call.
+ *
+ * The display name is written as a quoted-string (escaped for `\` and `"`) so
+ * values containing parentheses, commas or other address-syntax characters —
+ * e.g. "Augustus (CEO seat)" — cannot be re-parsed as part of the address.
+ * The returned value MUST only ever reach the provider call; authorization,
+ * ledger and idempotency inputs keep the bare canonical address returned by
+ * `canonicalSender`.
+ */
+export function formatSenderDisplayName(displayName: string, address: string): string {
+  const escaped = displayName.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `"${escaped}" <${address}>`;
+}
