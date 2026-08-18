@@ -6,12 +6,17 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 const roots: string[] = []
+// Storage-mode variables are retired. The fleet shell exports
+// HASNA_ECONOMY_API_URL/KEY and the disk app-config tier derives from HOME, so
+// these tests pin the spawned server to the local backend by clearing both
+// tiers (the contracts 0.11.1 client selects the http transport purely from
+// the API URL/KEY pair; an empty HOME kills the disk tier).
 const localStorageEnv = {
-  HASNA_ACCOUNTS_STORAGE_MODE: 'local',
-  HASNA_ECONOMY_STORAGE_MODE: 'local',
-  HASNA_ECONOMY_MODE: 'local',
-  ECONOMY_STORAGE_MODE: 'local',
-  ECONOMY_MODE: 'local',
+  HOME: '',
+  HASNA_ECONOMY_API_URL: '',
+  HASNA_ECONOMY_API_KEY: '',
+  ECONOMY_API_URL: '',
+  ECONOMY_API_KEY: '',
 } as const
 
 function envWith(overrides: Record<string, string>): Record<string, string> {

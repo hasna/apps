@@ -6,12 +6,20 @@ import { openDatabase, upsertCostCenter, upsertRequest, upsertSession } from '..
 
 const root = new URL('../../', import.meta.url).pathname.replace(/\/$/, '')
 const tempRoots: string[] = []
+// Storage-mode variables are retired. The fleet shell exports
+// HASNA_ECONOMY_API_URL/KEY, so these tests pin the env to the local backend by
+// clearing the API URL/KEY pair (the contracts 0.11.1 client selects the http
+// transport purely from their presence).
 const localStorageEnv = {
-  HASNA_ACCOUNTS_STORAGE_MODE: 'local',
-  HASNA_ECONOMY_STORAGE_MODE: 'local',
-  HASNA_ECONOMY_MODE: 'local',
-  ECONOMY_STORAGE_MODE: 'local',
-  ECONOMY_MODE: 'local',
+  // The contracts 0.11.1 client selects the http transport from the API
+  // URL/KEY pair alone (modes are retired). The fleet shell exports
+  // HASNA_ECONOMY_API_URL/KEY and the disk app-config tier derives from HOME,
+  // so a spawned CLI needs both tiers neutralized to stay on the local store.
+  HOME: '',
+  HASNA_ECONOMY_API_URL: '',
+  HASNA_ECONOMY_API_KEY: '',
+  ECONOMY_API_URL: '',
+  ECONOMY_API_KEY: '',
 } as const
 
 async function runCli(

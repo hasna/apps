@@ -15,16 +15,10 @@ import { gatherTrainingData } from './gatherer.js'
 import type { EconomyRequest, EconomySession } from '../types/index.js'
 
 const NOW = new Date().toISOString()
-const LOCAL_MODE_ENV_KEYS = [
-  'HASNA_ECONOMY_STORAGE_MODE',
-  'HASNA_ECONOMY_MODE',
-  'ECONOMY_STORAGE_MODE',
-  'ECONOMY_MODE',
-] as const
 
 let root: string
 let originalDbPath: string | undefined
-let originalModeEnv: Map<(typeof LOCAL_MODE_ENV_KEYS)[number], string | undefined>
+let originalHome: string | undefined
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name]
@@ -34,15 +28,21 @@ function restoreEnv(name: string, value: string | undefined): void {
 beforeEach(() => {
   root = join(tmpdir(), `economy-gatherer-test-${Date.now()}-${Math.random().toString(16).slice(2)}`)
   originalDbPath = process.env['HASNA_ECONOMY_DB_PATH']
-  originalModeEnv = new Map(LOCAL_MODE_ENV_KEYS.map(key => [key, process.env[key]]))
+  originalHome = process.env['HOME']
+  // Storage-mode variables are retired. The contracts 0.11.1 client selects the
+  // http transport from the API URL/KEY pair alone — from the environment and,
+  // when the environment is silent, from the fleet app-config files under HOME —
+  // so a local test clears both tiers (empty HOME kills the disk tier).
+  delete process.env['HASNA_ECONOMY_API_URL']
+  delete process.env['HASNA_ECONOMY_API_KEY']
+  process.env['HOME'] = ''
   process.env['HASNA_ECONOMY_DB_PATH'] = join(root, 'economy.db')
-  for (const key of LOCAL_MODE_ENV_KEYS) process.env[key] = 'local'
   resetEconomyCloudStorageCache()
 })
 
 afterEach(() => {
   restoreEnv('HASNA_ECONOMY_DB_PATH', originalDbPath)
-  for (const key of LOCAL_MODE_ENV_KEYS) restoreEnv(key, originalModeEnv.get(key))
+  restoreEnv('HOME', originalHome)
   resetEconomyCloudStorageCache()
   if (existsSync(root)) rmSync(root, { recursive: true, force: true })
 })
