@@ -168,7 +168,7 @@ test("download rejects remote paths that escape install root", async () => {
     }],
     totalBytes: 1,
     unknownSizeFiles: [],
-    destinationRoot: "/tmp/open-models-test-root",
+    destinationRoot: "/tmp/models-test-root",
     exceedsMaxBytes: false,
     maxBytes: 10,
   })).rejects.toThrow("Unsafe remote file path");
@@ -192,7 +192,7 @@ test("download rejects dot-segment remote paths", async () => {
     }],
     totalBytes: 1,
     unknownSizeFiles: [],
-    destinationRoot: "/tmp/open-models-test-root",
+    destinationRoot: "/tmp/models-test-root",
     exceedsMaxBytes: false,
     maxBytes: 10,
   })).rejects.toThrow("Unsafe remote file path");
@@ -509,7 +509,7 @@ test("download plan rejects remote paths that escape install root", async () => 
   try {
     await expect(createDownloadPlan({
       ref: { provider: "huggingface", entityKind: "model", repoId: "owner/repo", revision: "main" },
-      destinationRoot: "/tmp/open-models-test-root",
+      destinationRoot: "/tmp/models-test-root",
     })).rejects.toThrow("Unsafe remote file path");
   } finally {
     globalThis.fetch = originalFetch;
@@ -525,7 +525,7 @@ test("download plan rejects dot-segment remote paths", async () => {
   try {
     await expect(createDownloadPlan({
       ref: { provider: "huggingface", entityKind: "model", repoId: "owner/repo", revision: "main" },
-      destinationRoot: "/tmp/open-models-test-root",
+      destinationRoot: "/tmp/models-test-root",
     })).rejects.toThrow("Unsafe remote file path");
   } finally {
     globalThis.fetch = originalFetch;
@@ -543,7 +543,7 @@ test("download plan rejects separator alias remote paths", async () => {
 
       await expect(createDownloadPlan({
         ref: { provider: "huggingface", entityKind: "model", repoId: "owner/repo", revision: "main" },
-        destinationRoot: "/tmp/open-models-test-root",
+        destinationRoot: "/tmp/models-test-root",
       })).rejects.toThrow("Unsafe remote file path");
     }
   } finally {
@@ -561,7 +561,7 @@ test("download plan rejects duplicate destination paths", async () => {
   try {
     await expect(createDownloadPlan({
       ref: { provider: "huggingface", entityKind: "model", repoId: "owner/repo", revision: "main" },
-      destinationRoot: "/tmp/open-models-test-root",
+      destinationRoot: "/tmp/models-test-root",
     })).rejects.toThrow("same destination");
   } finally {
     globalThis.fetch = originalFetch;

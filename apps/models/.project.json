@@ -6,7 +6,7 @@
   "kind": "open-source",
   "root_id": "root_28xtmiu5mi8j",
   "recipe_id": null,
-  "primary_path": "/home/hasna/workspace/hasna/opensource/open-models",
+  "primary_path": "/home/hasna/workspace/repos/hasna/apps/models",
   "git_remote": "https://github.com/hasna/models.git",
   "tags": [
     "hasna",
