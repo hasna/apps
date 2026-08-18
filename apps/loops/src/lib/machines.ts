@@ -102,7 +102,25 @@ export function resolveLoopMachine(machineId: string): LoopMachineRef {
 }
 
 export function resolveMachineCommand(machineId: string, command: string): MachineCommandPlan {
-  return machinesConsumer().resolveMachineCommand(machineId, command);
+  const consumer = machinesConsumer();
+  const route = consumer.resolveMachineRoute(machineId);
+  if (!route.ok || !route.machine_id) {
+    // Fail closed through the canonical route. The machines package's own
+    // resolveMachineCommand degrades an unresolvable id to `ssh <machine-id>`,
+    // which for canonical machine names (e.g. the apple03 -> station03 alias)
+    // fails DNS instead of reporting the route problem. Every preflight and
+    // execution path funnels through this wrapper, so the route is the only
+    // resolution the loop ever performs.
+    throw new Error(`OpenMachines route not found for machine: ${machineId}`);
+  }
+  if (route.local) {
+    return { command: "bash", args: ["-c", command], source: "local" };
+  }
+  const target = route.command_target ?? route.target;
+  if (!target) {
+    throw new Error(`OpenMachines route not found for machine: ${machineId}`);
+  }
+  return { command: "ssh", args: [target, command], source: route.route };
 }
 
 export function refreshLoopMachine(machine: LoopMachineRef): LoopMachineRef {
