@@ -19,5 +19,5 @@ export const html = (d: Data) => `
   <h2 style="margin:8px 0"><a href="${BASE_URL}/tickets/${d.short_id}" style="color:#2563eb;text-decoration:none">[${d.short_id}] ${d.title}</a></h2>
   ${d.resolution ? `<p style="color:#6b7280">Resolution: <strong>${d.resolution}</strong></p>` : ""}
   <a href="${BASE_URL}/tickets/${d.short_id}" style="display:inline-block;background:#2563eb;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;margin-top:16px">View Ticket</a>
-  <p style="color:#9ca3af;font-size:12px;margin-top:24px">open-tickets</p>
+  <p style="color:#9ca3af;font-size:12px;margin-top:24px">tickets</p>
 </div>`.trim();

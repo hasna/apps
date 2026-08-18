@@ -22,5 +22,5 @@ export const html = (d: Data) => `
     <tr><td style="color:#6b7280;padding:6px 0">Value</td><td style="font-family:monospace;font-weight:bold;word-break:break-all">${d.txt_record_value}</td></tr>
   </table>
   <p style="color:#6b7280;font-size:14px;margin-top:16px">Then run <code>tickets domain verify ${d.domain}</code> to complete verification.<br>DNS changes may take up to 48 hours to propagate.</p>
-  <p style="color:#9ca3af;font-size:12px;margin-top:24px">open-tickets</p>
+  <p style="color:#9ca3af;font-size:12px;margin-top:24px">tickets</p>
 </div>`.trim();

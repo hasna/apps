@@ -1,7 +1,7 @@
 {
   "name": "@hasna/tickets-sdk",
   "version": "0.1.0",
-  "description": "HTTP client SDK for open-tickets",
+  "description": "HTTP client SDK for tickets",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

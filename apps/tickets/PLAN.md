@@ -1,4 +1,4 @@
-# open-tickets — Architecture & Implementation Plan
+# tickets — Architecture & Implementation Plan
 
 > **What it is:** Open-source ticketing system where people and AI agents can open, triage,
 > and resolve tickets for any product, service, or app. Think GitHub Issues + Linear + Sentry
@@ -8,7 +8,7 @@
 
 ## 1. Product Vision
 
-`open-tickets` is the issue tracker in the `open-*` ecosystem. It is distinct from `open-todos`
+`tickets` is the issue tracker in the Hasna ecosystem. It is distinct from `todos`
 (internal AI agent task management) — this is the **public-facing layer** where:
 
 - End users report bugs and request features
@@ -30,22 +30,22 @@ The system exposes four independent surfaces sharing a single SQLite database:
 
 ## 2. Tech Stack
 
-Same foundation as the `open-*` ecosystem:
+Same foundation as the Hasna ecosystem:
 
 | Layer | Choice | Rationale |
 |-------|--------|-----------|
 | Runtime | **Bun** | Fast startup, native SQLite, TypeScript-first |
 | Language | **TypeScript** (strict) | Consistent with ecosystem |
-| Database | **SQLite** (bun:sqlite, WAL) | Zero-dependency, portable, proven in open-todos |
-| CLI | **Commander.js + React/Ink** | Interactive TUI, matches open-todos pattern |
-| Web UI | **Vite + React 19 + TailwindCSS 4 + Radix UI** | Matches open-todos dashboard |
+| Database | **SQLite** (bun:sqlite, WAL) | Zero-dependency, portable, proven in todos |
+| CLI | **Commander.js + React/Ink** | Interactive TUI, matches todos pattern |
+| Web UI | **Vite + React 19 + TailwindCSS 4 + Radix UI** | Matches todos dashboard |
 | API | **Hono** (HTTP, port 19428) | Lightweight, TypeScript-native |
-| MCP | **@modelcontextprotocol/sdk** | stdio transport, same as open-todos |
+| MCP | **@modelcontextprotocol/sdk** | stdio transport, same as todos |
 | Validation | **Zod** | Schema validation for all inputs |
 | Search | **SQLite FTS5** | Full-text search, no extra service |
 | Auth | **API Key + Bearer token** | Simple, agent-friendly |
 
-Port: **19428** (open-todos is 19427)
+Port: **19428** (todos is 19427)
 
 ---
 
@@ -631,14 +631,14 @@ CREATE TABLE email_queue (id, provider, to_addresses, from_address, subject, htm
 CREATE VIRTUAL TABLE tickets_fts USING fts5(title, description, content=tickets, content_rowid=rowid);
 ```
 
-Migrations tracked in `_migrations` table (same pattern as open-todos).
+Migrations tracked in `_migrations` table (same pattern as todos).
 
 ---
 
 ## 10. Key Design Decisions
 
 ### SQLite vs PostgreSQL
-**Decision: SQLite** — consistent with the `open-*` ecosystem, zero-dependency deploy, sufficient for self-hosted use cases. The architecture is designed to support a PostgreSQL adapter in the future (swap `db/database.ts`).
+**Decision: SQLite** — consistent with the Hasna ecosystem, zero-dependency deploy, sufficient for self-hosted use cases. The architecture is designed to support a PostgreSQL adapter in the future (swap `db/database.ts`).
 
 ### Multi-tenancy
 **Decision: Single database, workspace/project scoped** — all queries include `workspace_id` or `project_id` filter. Simple for self-hosted, extensible if needed.
@@ -653,7 +653,7 @@ Migrations tracked in `_migrations` table (same pattern as open-todos).
 **Decision: SQLite FTS5 for v1** — full-text similarity search via BM25 ranking. Good enough for "did you mean?" before ticket creation. Vector embeddings (semantic search) as v2 enhancement.
 
 ### Port Assignment
-**Decision: 19428** — continues the open-* sequence (open-todos is 19427).
+**Decision: 19428** — continues the port sequence (todos is 19427).
 
 ---
 
@@ -715,7 +715,7 @@ Migrations tracked in `_migrations` table (same pattern as open-todos).
 ## 12. Package Structure
 
 ```
-open-tickets/
+tickets/
 ├── src/
 │   ├── types/
 │   │   └── index.ts          # Enums, interfaces, error classes
@@ -900,7 +900,7 @@ SES_INBOUND_SNS_TOPIC=arn:aws:sns:...   # for receiving email
 **Inbound SES flow:**
 ```
 Email arrives → SES receives it → SNS notification → POST /email/inbound/ses
-→ open-tickets parses raw MIME → creates ticket or adds comment
+→ tickets parses raw MIME → creates ticket or adds comment
 ```
 
 SES stores raw email in S3 → SNS fires webhook with S3 key → server fetches from S3 → parses.
@@ -917,7 +917,7 @@ RESEND_INBOUND_WEBHOOK_SECRET=...   # for verifying inbound webhooks
 **Inbound Resend flow:**
 ```
 Email arrives → Resend parses it → POST /email/inbound/resend (webhook)
-→ open-tickets processes payload → creates ticket or adds comment
+→ tickets processes payload → creates ticket or adds comment
 ```
 Resend is simpler than SES for inbound — no S3, no SNS, just a webhook.
 
@@ -1057,9 +1057,9 @@ src/
 
 ---
 
-## 13. Differentiation from open-todos
+## 13. Differentiation from todos
 
-| | open-todos | open-tickets |
+| | todos | tickets |
 |---|---|---|
 | **Purpose** | Internal dev task management for AI agents | Public issue tracking for products/services |
 | **Who opens** | AI agents building software | Anyone — users, agents, monitoring bots |
@@ -1071,8 +1071,8 @@ src/
 | **npm** | @hasna/todos | @hasna/tickets |
 | **Bin** | todos, todos-mcp, todos-serve | tickets, tickets-mcp, tickets-serve |
 
-Both systems can integrate: completing a dev ticket in `open-todos` can automatically close the
-corresponding user-facing ticket in `open-tickets` via the SDK or webhook.
+Both systems can integrate: completing a dev ticket in `todos` can automatically close the
+corresponding user-facing ticket in `tickets` via the SDK or webhook.
 
 ---
 

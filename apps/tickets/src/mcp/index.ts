@@ -22,7 +22,7 @@ import { getPackageVersion } from "../lib/package-info";
 
 export function buildServer() {
 const server = new Server(
-  { name: "open-tickets", version: getPackageVersion() },
+  { name: "tickets", version: getPackageVersion() },
   { capabilities: { tools: {}, resources: {} } }
 );
 
