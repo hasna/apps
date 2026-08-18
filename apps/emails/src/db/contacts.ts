@@ -48,7 +48,7 @@
 //     sink records the delivery event and states that incrementing
 //     `contacts.bounce_count` / `complaint_count` and setting `contacts.suppressed` is
 //     "a separate, still-open defect and is deliberately NOT done here"
-//     (src/server/self-hosted/webhooks.ts). So an API-configured client's counters
+//     (src/server/api/webhooks.ts). So an API-configured client's counters
 //     silently froze at zero and three bounces never suppressed anybody. The counters
 //     below are ONE read-modify-write implementation through the seam for both stores,
 //     auto-suppression included. If the service ever closes its own defect, the
@@ -97,7 +97,7 @@ import { safeOffset, safeOptionalLimit } from "./pagination.js";
 // Value coercion only. These are pure functions that turn one store's JSON-typed column
 // into the other's TEXT-encoded one; the module they live in is named for the axis being
 // deleted, and relocating them belongs to that deletion rather than to this collapse.
-import { cbool, cnum, cstr, cstrOrNull } from "./self-hosted-resource.js";
+import { cbool, cnum, cstr, cstrOrNull } from "./api-resource.js";
 import { enumerateStoreRows, type StoreEnumeration } from "../lib/status-facts-enumeration.js";
 import { createConfiguredEmailStore } from "../store-resolution.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";

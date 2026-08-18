@@ -1,7 +1,7 @@
-// Self-hosted-ONLY.
+// API-only.
 //
 // Reading and cancelling the schedule, and running diagnostics, are NOT
-// server-only: `GET/PATCH /v1/scheduled` exists and src/db/scheduled.remote.ts
+// server-only: `GET/PATCH /v1/scheduled` exists and src/db/scheduled.api.ts
 // is a complete client for it (the MCP `list_scheduled` / `cancel_scheduled`
 // tools already take exactly that path), and src/lib/doctor.ts reads its facts
 // through whichever store the configuration names. Those commands are driven
@@ -18,7 +18,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { Command } from "commander";
 import { startV1Stub, type V1Stub, type V1StubResources } from "../../test-support/v1-stub.js";
-import { registerMiscCommands, runSchedulerTick } from "./misc.remote.js";
+import { registerMiscCommands, runSchedulerTick } from "./misc.api.js";
 
 let stub: V1Stub;
 
@@ -156,7 +156,7 @@ describe("schedule list routes to /v1/scheduled", () => {
       expect(output).toContain("Sooner");
       expect(output).toContain("Later");
       // The whole point of the change: no refusal on the success path.
-      expect(output).not.toContain("not available in the self-hosted client");
+      expect(output).not.toContain("not available in the api client");
     });
 
     it(`\`${namespace} list --status\` filters server-side without inventing rows`, async () => {
@@ -249,13 +249,13 @@ describe("doctor runs the diagnostics against the configured store", () => {
     expect(named("Store")?.message).toContain("A read was served by");
     // The deleted arms' checks are gone, along with the mode word they reported.
     expect(named("Mode")).toBeUndefined();
-    expect(named("Self-hosted API /health")).toBeUndefined();
+    expect(named("Api API /health")).toBeUndefined();
     // What replaced the readiness probe says so instead of vanishing.
     expect(named("Store readiness")).toMatchObject({ status: "unknown" });
     // Real resource reads against the stub, and credential validity reported as unmeasured.
     expect(named("Templates")).toMatchObject({ status: "pass", message: "0 template(s)" });
     expect(named("Provider credentials")).toMatchObject({ status: "unknown" });
-    expect(output).not.toContain("not available in the self-hosted client");
+    expect(output).not.toContain("not available in the api client");
   });
 });
 
@@ -271,19 +271,19 @@ describe("server-only scheduling, batch and diagnostics commands", () => {
   ] as const;
 
   for (const { name, args } of SERVER_ONLY) {
-    it(`blocks emails ${name} in the self-hosted client`, async () => {
+    it(`blocks emails ${name} in the api client`, async () => {
       const errors = await runMiscCommandExpectingExit(args as unknown as string[]);
       expect(errors).toContain(`emails ${name}`);
-      expect(errors).toContain("is not available in the self-hosted client");
-      expect(errors).toContain("it runs on the self-hosted server");
+      expect(errors).toContain("is not available in the api client");
+      expect(errors).toContain("it runs on the API server");
     });
   }
 });
 
 describe("runSchedulerTick", () => {
-  it("is server-only in the self-hosted client", async () => {
+  it("is server-only in the api client", async () => {
     await expect(runSchedulerTick()).rejects.toThrow(
-      "emails schedule run is not available in the self-hosted client; it runs on the self-hosted server.",
+      "emails schedule run is not available in the api client; it runs on the API server.",
     );
   });
 });

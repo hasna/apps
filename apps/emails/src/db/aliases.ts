@@ -20,8 +20,8 @@
 //
 // EVERY OPERATION HAS A STORE EQUIVALENT. Unlike `src/db/forwarding.ts`, nothing in this
 // family is local-only: `src/store/repositories.ts` publishes `AliasesRepository` over the
-// `aliases` table, `/v1/aliases` serves it (`src/server/self-hosted/resources.ts`), and the
-// self-hosted Postgres schema has the table (`src/server/self-hosted/migrations.ts`). So no
+// `aliases` table, `/v1/aliases` serves it (`src/server/api/resources.ts`), and the
+// api Postgres schema has the table (`src/server/api/migrations.ts`). So no
 // export here requires a `Database`, and none of them needs a seam widening.
 //
 // ─── WHY THE TWO ARMS DID NOT AGREE, MEASURED RATHER THAN ASSUMED ────────────────────────
@@ -33,7 +33,7 @@
 //     answered `resolveAlias`, `getGlobalCatchAll`, `listAliases`, `listAliasesByTargets` and
 //     BOTH upsert dedup reads (`createAlias`/`createCatchAll`/`setGlobalCatchAll` and
 //     `ensureDefaultCatchAll`) out of a single `list({ limit: 1000 })` — which the service
-//     CLAMPS to 500 (`src/server/self-hosted/service.ts`) and which the SQLite resource path
+//     CLAMPS to 500 (`src/server/api/service.ts`) and which the SQLite resource path
 //     clamps to 500 as well (`src/store-sqlite/resources.ts`, `MAX_PAGE`). Above 500 aliases
 //     that arm reported "this recipient has no alias" and "there is no global catch-all" for
 //     rows that exist, and turned an upsert into an INSERT that both schemas' uniqueness
@@ -65,7 +65,7 @@
 //  4. UNDECLARED WRITE COLUMNS. The deleted HTTP arm sent `id`, `created_at` and `updated_at`
 //     on create and `updated_at` on update. `/v1/aliases` declares FOUR writable columns —
 //     `domain`, `local_part`, `target_address`, `protected` — and its request schema is
-//     `additionalProperties: false` (`src/server/self-hosted/openapi.ts`), so the real
+//     `additionalProperties: false` (`src/server/api/openapi.ts`), so the real
 //     `HttpEmailStore` REFUSES all four of those writes; the deleted `curl` bridge did not
 //     validate them. Nothing below sends a column the resource does not have. The id and both
 //     timestamps come from whichever store performed the write, and both stores stamp
@@ -79,14 +79,14 @@
 //     between the global catch-all and a delete that drops every unmatched recipient's mail;
 //     guessing it is not acceptable.
 //  6. ABSENT IS NOT `now()`. The deleted HTTP arm read both timestamps through the shared
-//     ISO coercion in `src/db/self-hosted-resource.ts`, which returns
+//     ISO coercion in `src/db/api-resource.ts`, which returns
 //     `new Date().toISOString()` when the value is MISSING — so a row whose `created_at` could
 //     not be read was reported as having been created at the moment it was read. Both columns
 //     are `NOT NULL` in both schemas and projected by both read paths, so an absent one means
 //     the store answered with something that is not an alias. That is a fault here.
 //  7. `target_address` IS ALLOWED TO BE EMPTY AND NOT ALLOWED TO BE ABSENT, and the two are
 //     not the same fact. The global catch-all's target is `''` by design — "keep everything, no
-//     rewrite" — and the self-hosted migration sets that same text default. So an empty value
+//     rewrite" — and the api migration sets that same text default. So an empty value
 //     is a VALUE. A missing KEY is not: a store that stopped projecting the column would make
 //     every alias resolve as "no forward", silently, and both deleted mappers (a string
 //     coercion of `undefined` remotely, a bare property read locally) turned it into exactly
@@ -94,7 +94,7 @@
 //  8. THE STORES DISAGREE ABOUT WHETHER A GLOBAL CATCH-ALL EXISTS AT ALL, and that is a STORE
 //     fact this module deliberately does not paper over. The SQLite migration SEEDS a protected
 //     global catch-all (`INSERT OR IGNORE ... 'global-catch-all', '*', '*', ''`); the
-//     self-hosted schema seeds nothing. So `getGlobalCatchAll()` answers non-null on a freshly
+//     api schema seeds nothing. So `getGlobalCatchAll()` answers non-null on a freshly
 //     migrated local installation and null on a fresh API-backed one. Manufacturing the row
 //     here to make the two look alike would be this module inventing storage state, and hiding
 //     it would be worse: `ensureDefaultCatchAll` is exactly the operation a caller uses to stop
@@ -119,7 +119,7 @@
 // IT IS PRESERVED, NOT FIXED, and the reason is scope rather than doubt: BOTH arms behaved
 // identically, so there is no divergence to resolve toward a stronger arm, and changing what a
 // published write does to a column the caller did not name is a product decision rather than a
-// mode-axis refactor — the line `src/db/address-lifecycle.ts` drew. The fix is one field on the
+// selector-removal refactor — the line `src/db/address-lifecycle.ts` drew. The fix is one field on the
 // update patch (`protected: true`, a writable column on both stores) and belongs to whoever
 // owns that decision. `src/db/aliases.test.ts` pins the current behaviour under a name that
 // says it is a defect, so nobody can change it silently in either direction.
@@ -649,7 +649,7 @@ export async function listAliases(
   // `undefined` instead made `listAliases("")` filter on an empty domain and answer `[]`,
   // reachable through `emails alias list --domain ""` and the MCP tool. The two arms AGREED here,
   // so there is no stronger arm to resolve toward and changing it would have been a product
-  // decision smuggled into a mode-axis refactor. Found by adversarial review.
+  // decision smuggled into a selector-removal refactor. Found by adversarial review.
   const wanted = domain ? domain.toLowerCase() : undefined;
   const aliases = await readAliases(
     storeFor(store),

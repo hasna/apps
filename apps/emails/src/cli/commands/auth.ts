@@ -1,8 +1,8 @@
 // `emails auth …` — user accounts, sessions, and tenant-scoped API keys for the
-// self-hosted service (multi-tenancy design §5/§7 + Addendum).
+// api service (multi-tenancy design §5/§7 + Addendum).
 //
 // Every command is a plain HTTP call to the operator's /v1 API through the
-// shared self-hosted transport. The client NEVER sends a tenant — the server
+// shared api transport. The client NEVER sends a tenant — the server
 // derives it from the credential. On login/switch-tenant the returned session
 // token is persisted to the vault entry behind EMAILS_CLIENT_ENV_SECRET (and the
 // in-process env) so subsequent commands are authed. The token is never printed
@@ -16,7 +16,7 @@ import {
   persistClientEnvSessionToken,
   type SessionTokenPersistResult,
 } from "../../lib/client-env.js";
-import { resetSelfHostedConfigCache, selfHostedApiRequest } from "../../db/self-hosted-store.js";
+import { resetApiConfigCache, apiRequest } from "../../db/api-store.js";
 import { describeIdentity, fetchIdentity } from "../../lib/whoami.js";
 import { handleError } from "../utils.js";
 
@@ -140,7 +140,7 @@ function handleSignup(output: OutputFn) {
       if (opts.name?.trim()) body["name"] = opts.name.trim();
       if (opts.tenantSlug?.trim()) body["tenant_slug"] = opts.tenantSlug.trim();
 
-      const { status, json } = selfHostedApiRequest("POST", "/auth/signup", body, { requireCredential: false });
+      const { status, json } = apiRequest("POST", "/auth/signup", body, { requireCredential: false });
       if (status === 403) {
         return handleError(new Error("Signup is restricted to the email domains this deployment allows (server: EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS)."));
       }
@@ -183,7 +183,7 @@ function loginSuccess(output: OutputFn, json: unknown): void {
     return handleError(new Error("Login response did not include a session token."));
   }
   const persist = persistClientEnvSessionToken(token);
-  resetSelfHostedConfigCache();
+  resetApiConfigCache();
   const email = fieldString(asObject(json)["user"], "email") ?? "you";
   const org = tenantLabel(json);
   const role = fieldString(json, "role") ?? fieldString(asObject(json)["membership"], "role");
@@ -213,7 +213,7 @@ function handleLogin(output: OutputFn) {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const body: Record<string, unknown> = { email, password };
         if (tenantSlug) body["tenant_slug"] = tenantSlug;
-        const { status, json } = selfHostedApiRequest("POST", "/auth/login", body, { requireCredential: false });
+        const { status, json } = apiRequest("POST", "/auth/login", body, { requireCredential: false });
 
         if (status === 401) return handleError(new Error("Invalid email or password."));
         if (status === 429) {
@@ -287,12 +287,12 @@ function handleLogout(output: OutputFn) {
     try {
       // Best-effort server-side revoke; the local session is cleared regardless.
       try {
-        selfHostedApiRequest("POST", "/auth/logout");
+        apiRequest("POST", "/auth/logout");
       } catch {
         // ignore — proceed to clear the local session
       }
       const cleared = clearClientEnvSessionToken();
-      resetSelfHostedConfigCache();
+      resetApiConfigCache();
       output(
         { logged_out: true, cleared: cleared.scope },
         chalk.green("✓ Signed out."),
@@ -334,7 +334,7 @@ function handleSwitchTenant(output: OutputFn) {
     try {
       const tenantSlug = slug.trim();
       if (!tenantSlug) return handleError(new Error("A tenant slug is required."));
-      const { status, json } = selfHostedApiRequest("POST", "/auth/switch-tenant", { tenant_slug: tenantSlug });
+      const { status, json } = apiRequest("POST", "/auth/switch-tenant", { tenant_slug: tenantSlug });
       if (status === 401) return handleError(new Error("Not signed in. Run: emails auth login"));
       if (status === 403 || status === 404) {
         return handleError(new Error(`You are not a member of '${tenantSlug}'.`));
@@ -345,7 +345,7 @@ function handleSwitchTenant(output: OutputFn) {
       const token = fieldString(json, "session_token", "token");
       if (!token) return handleError(new Error("Switch response did not include a session token."));
       const persist = persistClientEnvSessionToken(token);
-      resetSelfHostedConfigCache();
+      resetApiConfigCache();
       const org = tenantLabel(json) || tenantSlug;
       output(
         { switched: true, tenant: asObject(json)["tenant"] ?? { slug: tenantSlug }, persisted: persist.scope },
@@ -362,7 +362,7 @@ function handleVerifyEmail(output: OutputFn) {
     try {
       if (opts.resend) {
         const email = await resolveEmail(opts.email);
-        const { status, json } = selfHostedApiRequest(
+        const { status, json } = apiRequest(
           "POST",
           "/auth/verify-email/resend",
           { email },
@@ -377,7 +377,7 @@ function handleVerifyEmail(output: OutputFn) {
         );
       }
       const value = (token ?? "").trim() || (await promptText("Verification token: "));
-      const { status, json } = selfHostedApiRequest(
+      const { status, json } = apiRequest(
         "POST",
         "/auth/verify-email",
         { token: value },
@@ -406,14 +406,14 @@ function handleBootstrap(output: OutputFn) {
       const password = await resolvePassword(opts.password);
       const body: Record<string, unknown> = { email, password };
       if (opts.name?.trim()) body["name"] = opts.name.trim();
-      // API-key auth: uses the operator's existing EMAILS_SELF_HOSTED_API_KEY.
-      const { status, json } = selfHostedApiRequest("POST", "/auth/bootstrap-owner", body);
+      // API-key auth: uses the operator's existing HASNA_EMAILS_API_KEY.
+      const { status, json } = apiRequest("POST", "/auth/bootstrap-owner", body);
       if (status === 403 && bodyReason(json) === "email_not_allowed") {
         return handleError(new Error("The owner email must be in a domain this deployment allows (server: EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS)."));
       }
       if (status === 401 || status === 403) {
         return handleError(
-          new Error("Bootstrap requires the operator API key (EMAILS_SELF_HOSTED_API_KEY)."),
+          new Error("Bootstrap requires the operator API key (HASNA_EMAILS_API_KEY)."),
         );
       }
       if (status === 409) {
@@ -444,7 +444,7 @@ function keysAdminError(): Error {
 function handleKeysList(output: OutputFn) {
   return async () => {
     try {
-      const { status, json } = selfHostedApiRequest("GET", "/keys");
+      const { status, json } = apiRequest("GET", "/keys");
       if (status === 401 || status === 403) return handleError(keysAdminError());
       if (status < 200 || status >= 300) return handleError(new Error(bodyError(json, `List keys failed (HTTP ${status}).`)));
       const obj = asObject(json);
@@ -470,7 +470,7 @@ function handleKeysCreate(output: OutputFn) {
       const body: Record<string, unknown> = { scopes: opts.scope };
       body["ttl_days"] = opts.expiry === false ? null : Number(opts.ttlDays);
       if (opts.agent?.trim()) body["agent"] = opts.agent.trim();
-      const { status, json } = selfHostedApiRequest("POST", "/keys", body);
+      const { status, json } = apiRequest("POST", "/keys", body);
       if (status === 401 || status === 403) return handleError(keysAdminError());
       if (status < 200 || status >= 300) return handleError(new Error(bodyError(json, `Create key failed (HTTP ${status}).`)));
       const token = fieldString(json, "token");
@@ -495,7 +495,7 @@ function handleKeysRevoke(output: OutputFn) {
   return async (kid: string) => {
     try {
       const target = kid.trim();
-      const { status, json } = selfHostedApiRequest("DELETE", `/keys/${encodeURIComponent(target)}`);
+      const { status, json } = apiRequest("DELETE", `/keys/${encodeURIComponent(target)}`);
       if (status === 401 || status === 403) return handleError(keysAdminError());
       if (status === 404) return handleError(new Error(`API key not found in this org: ${target}`));
       if (status < 200 || status >= 300) return handleError(new Error(bodyError(json, `Revoke failed (HTTP ${status}).`)));
@@ -509,7 +509,7 @@ function handleKeysRevoke(output: OutputFn) {
 // ── registration ────────────────────────────────────────────────────────────
 
 export function registerAuthCommands(program: Command, output: OutputFn): void {
-  const auth = program.command("auth").description("User accounts, sessions, and tenant sign-in for the self-hosted service");
+  const auth = program.command("auth").description("User accounts, sessions, and tenant sign-in for the API service");
 
   auth
     .command("signup")

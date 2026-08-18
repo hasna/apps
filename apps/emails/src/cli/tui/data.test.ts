@@ -1,4 +1,4 @@
-// Self-hosted-ONLY: the TUI data layer (src/cli/tui/data.ts) presents a unified
+// API-only: the TUI data layer (src/cli/tui/data.ts) presents a unified
 // mail view over the operator `/v1` API. There is no local SQLite anymore, so
 // these tests drive the REAL data functions against an out-of-process /v1 stub
 // (see src/test-support/v1-stub.ts). The old SQL-internal assertions (query
@@ -164,7 +164,7 @@ describe("tui data — mailboxes", () => {
     expect(listMailbox("inbox", { limit: Number.POSITIVE_INFINITY, offset: Number.POSITIVE_INFINITY }).length).toBe(2);
   });
 
-  it("reports a single self-hosted mailbox source with folder counts", () => {
+  it("reports a single api mailbox source with folder counts", () => {
     seed("one");
     seed("two", { read: true });
 
@@ -175,7 +175,7 @@ describe("tui data — mailboxes", () => {
     expect(sources).toHaveLength(1);
     expect(sources[0]).toMatchObject({ id: "all", total: 2, unread: 1 });
 
-    expect(listSources()[0]?.label).toContain("Self-hosted Emails");
+    expect(listSources()[0]?.label).toContain("Api Emails");
   });
 });
 
@@ -342,7 +342,7 @@ describe("tui data — addresses / senders / domains", () => {
 
   it("summarizes domains from /v1", async () => {
     await stub.seed({
-      domains: [{ id: "dom-1", domain: "acme.com", provider: "self_hosted", status: "verified", verified: true, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }],
+      domains: [{ id: "dom-1", domain: "acme.com", provider: "server", status: "verified", verified: true, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }],
     });
 
     const summaries = await listDomainSummaries();
@@ -350,7 +350,7 @@ describe("tui data — addresses / senders / domains", () => {
   });
 });
 
-describe("tui data — settings (self-hosted)", () => {
+describe("tui data — settings (api)", () => {
   it("returns default TUI settings and refuses local settings writes", () => {
     expect(getSettings()).toEqual({
       autoPull: false,
@@ -360,6 +360,6 @@ describe("tui data — settings (self-hosted)", () => {
       defaultFrom: null,
       theme: "light",
     });
-    expect(() => setSetting("theme", "dark")).toThrow(/self_hosted API-only mode/);
+    expect(() => setSetting("theme", "dark")).toThrow(/API-only mode/);
   });
 });

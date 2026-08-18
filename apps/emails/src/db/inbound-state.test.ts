@@ -1,4 +1,4 @@
-// Self-hosted-ONLY: inbound read/star/archive/label state mutations routed to
+// API-only: inbound read/star/archive/label state mutations routed to
 // the /v1 `messages` resource. Exercises the REAL synchronous curl transport
 // against an out-of-process /v1 stub (see src/test-support/v1-stub.ts).
 //
@@ -79,7 +79,7 @@ describe("inbound read-state", () => {
 
   it("throws on unknown id", () => {
     expect(() => setInboundRead("nope", true)).toThrow(
-      /^Self-hosted PATCH \/messages\/nope failed: HTTP 404$/,
+      /^Api PATCH \/messages\/nope failed: HTTP 404$/,
     );
   });
 

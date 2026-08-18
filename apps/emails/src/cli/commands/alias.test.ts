@@ -20,7 +20,7 @@
 // depends on. `src/test-support/v1-store-api.ts` translates HTTP into the same store seam
 // instead, so a mis-mapped field fails rather than being handed back.
 //
-// THE SQLITE MIGRATION SEEDS A PROTECTED GLOBAL CATCH-ALL and the self-hosted schema does not.
+// THE SQLITE MIGRATION SEEDS A PROTECTED GLOBAL CATCH-ALL and the api schema does not.
 // Here both variants read one SQLite database — the API variant reaches it over HTTP — so the
 // seeded row is present either way, and `alias list` calls `ensureDefaultCatchAll()` itself.
 

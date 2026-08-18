@@ -31,7 +31,7 @@
 //  2. THE TWO STORES ORDER THIS TABLE DIFFERENTLY, AND `ListOptions` ADMITS NO
 //     ORDERING. Both deleted arms promised newest-CREATED first; the SQLite store's
 //     generic list orders by `updated_at DESC` and the service by `created_at DESC`
-//     (src/server/self-hosted/resources.ts). A windowed read taken from either
+//     (src/server/api/resources.ts). A windowed read taken from either
 //     store's own order is a plausible, silently wrong page against the other. Every
 //     list here sorts the enumerated set itself and windows locally, so both stores
 //     answer the same question.
@@ -86,7 +86,7 @@ import { safeOffset, safeOptionalLimit } from "./pagination.js";
 // column into the other's TEXT-encoded one; the module they live in is named for the
 // axis being deleted, and relocating them belongs to that deletion rather than to
 // this collapse.
-import { cobj, cstr, cstrOrNull } from "./self-hosted-resource.js";
+import { cobj, cstr, cstrOrNull } from "./api-resource.js";
 import { enumerateStoreRows, type StoreEnumeration } from "../lib/status-facts-enumeration.js";
 import { createConfiguredEmailStore } from "../store-resolution.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
@@ -131,7 +131,7 @@ export type TemplateStore = EmailStore | Database;
  * THE INJECTABLE ACCEPTS BOTH SHAPES, and that is a published-surface obligation
  * rather than a convenience: every export here has always taken an optional
  * `Database` meaning "scope this to the database I own", and the local scheduler
- * still passes exactly that (src/cli/commands/misc.local.ts). A `Database` becomes a
+ * still passes exactly that (src/cli/commands/misc.sqlite.ts). A `Database` becomes a
  * SQLite store BOUND TO THAT HANDLE — which is stronger than what the deleted facade
  * did with it (the handle's PRESENCE picked an arm) — and an `EmailStore` is used as
  * handed in.

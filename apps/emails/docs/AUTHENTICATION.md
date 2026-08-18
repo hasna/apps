@@ -1,29 +1,29 @@
-# Self-hosted authentication
+# Api authentication
 
-Authentication applies to the operator-owned self-hosted `/v1` service. The
+Authentication applies to the operator-owned /v1 API service. The
 local SQLite dashboard has a separate loopback-oriented trust boundary and does
 not use these accounts.
 
 ## Client configuration
 
-A self-hosted client sets the service URL and one bearer credential:
+A api client sets the service URL and one bearer credential:
 
 ```bash
-export EMAILS_SELF_HOSTED_URL="https://emails.example.com"
-export EMAILS_SELF_HOSTED_API_KEY="..."   # operator or tenant API key
+export HASNA_EMAILS_API_URL="https://emails.example.com"
+export HASNA_EMAILS_API_KEY="..."   # operator or tenant API key
 ```
 
 Setting the service URL is what selects the hosted client store; there is no
-separate deployment-mode variable.
+separate selector variable.
 
 The accepted credential variables, in precedence order, are:
 
 1. `EMAILS_SESSION_TOKEN` — an opaque user session created by `emails auth login`;
 2. `EMAILS_IDP_TOKEN` — an access token from the configured identity provider;
-3. `EMAILS_SELF_HOSTED_API_KEY` — an HMAC application or tenant API key.
+3. `HASNA_EMAILS_API_KEY` — an HMAC application or tenant API key.
 
 `EMAILS_CLIENT_ENV_SECRET` may point to a `secrets` vault entry containing
-`EMAILS_SELF_HOSTED_URL` and any one of those credentials.
+`HASNA_EMAILS_API_URL` and any one of those credentials.
 `emails auth login`, `logout`, and `switch-tenant` update that entry when the
 pointer is configured. Without it, a login token exists only in the current CLI
 process and is not durable across later invocations.
@@ -57,7 +57,7 @@ matching the email alone is not authorization.
 
 These similarly named commands manage different key classes:
 
-- `emails self-hosted key create/list/rotate/revoke` runs on the operator host
+- `emails server key create/list/rotate/revoke` runs on the operator host
   against Postgres and manages application keys used to establish the service.
 - `emails keys create/list/revoke` calls `/v1/keys` as an owner/admin session and
   manages tenant-scoped keys for the active organization. A new plaintext token

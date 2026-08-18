@@ -37,7 +37,7 @@
 //     ORDERING. The SQLite store's generic list orders by the table's time column
 //     (`created_at DESC, id DESC`) or bare id; the service orders `sequences` by
 //     `created_at DESC`, `sequence-steps` by `step_number ASC` and
-//     `sequence-enrollments` by `enrolled_at DESC` (src/server/self-hosted/resources.ts).
+//     `sequence-enrollments` by `enrolled_at DESC` (src/server/api/resources.ts).
 //     So a windowed read taken from either store's own order is a plausible, silently
 //     wrong page against the other. Every list here sorts the enumerated set itself and
 //     windows locally, so both stores answer the same question.
@@ -105,7 +105,7 @@ import { now } from "./runtime.js";
 // Value coercion only. These are pure functions that turn one store's JSON-typed column
 // into the other's TEXT-encoded one; the module they live in is named for the axis being
 // deleted, and relocating them belongs to that deletion rather than to this collapse.
-import { cnum, cstr, cstrOrNull } from "./self-hosted-resource.js";
+import { cnum, cstr, cstrOrNull } from "./api-resource.js";
 import { enumerateStoreRows, type StoreEnumeration } from "../lib/status-facts-enumeration.js";
 import { createConfiguredEmailStore } from "../store-resolution.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
@@ -206,7 +206,7 @@ const MAX_SEQUENCE_PAGES = 200;
  * THE INJECTABLE ACCEPTS BOTH SHAPES, and that is a published-surface obligation rather
  * than a convenience: every export here has always taken an optional `Database` meaning
  * "scope this to the database I own", and the local scheduler still passes exactly that
- * (src/cli/commands/misc.local.ts). A `Database` becomes a SQLite store BOUND TO THAT
+ * (src/cli/commands/misc.sqlite.ts). A `Database` becomes a SQLite store BOUND TO THAT
  * HANDLE — which is stronger than what the deleted facade did with it (the handle's
  * PRESENCE picked an arm) — and an `EmailStore` is used as handed in.
  *

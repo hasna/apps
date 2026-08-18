@@ -43,7 +43,7 @@
 // bound and every consumer reads it as `?? 0` on the way to a readiness verdict.
 // `getProvisioningWorkSummary` REPORTS the bound, because its shape carries a
 // `StatusAvailability` and its one consumer renders `≥N`. There is a case for each, and the
-// renderer itself is pinned in `src/cli/commands/daemon.local.test.ts`.
+// renderer itself is pinned in `src/cli/commands/daemon.sqlite.test.ts`.
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
@@ -179,7 +179,7 @@ function storeWith(patch: {
 /**
  * A store that serves addresses in the SERVER's order rather than SQLite's.
  *
- * `src/server/self-hosted/store.ts` orders `listAddresses` `created_at DESC, id ASC`; the
+ * `src/server/api/store.ts` orders `listAddresses` `created_at DESC, id ASC`; the
  * SQLite store orders it `created_at DESC, id DESC`. The `/v1` fixture translates HTTP into
  * the SQLite seam, so neither store variant above reproduces the server's tie order — which is
  * exactly why the address `id` tiebreaker survived mutation and why claiming it redundant
@@ -546,7 +546,7 @@ describe.each(STORE_VARIANTS)("inventories through the %s", (_label, makeStore) 
 
   it("keys the NAMED addresses' provisioning state by id, and only those", async () => {
     // This export was reached by exactly one assertion — with an EMPTY argument. It is live in
-    // `src/mcp/resources.local.ts`, and its domain twin has four cases.
+    // `src/mcp/resources.sqlite.ts`, and its domain twin has four cases.
     const first = seedAddress("first@example.com");
     const second = seedAddress("second@example.com");
     seedAddress("third@example.com");
@@ -1134,7 +1134,7 @@ describe("the event log's order is this module's, not the store's", () => {
     // backwards, and a client that trusted it would print an entity's history in reverse.
     //
     // ONLY THE SQLITE SIDE IS ASSERTED. The service's spec orders the same resource
-    // `created_at ASC` (`src/server/self-hosted/resources.ts`), but
+    // `created_at ASC` (`src/server/api/resources.ts`), but
     // `src/test-support/v1-store-api.ts` translates HTTP into the SEAM rather than running the
     // service's own ordering, so over the HTTP fixture both sides come back in SQLite's order.
     // That is why this module sorts rather than trusting either.
@@ -1585,7 +1585,7 @@ describe("the two arms are gone", () => {
     expect(source.length).toBeGreaterThan(4000);
     expect(source).toContain("store-resolution.js");
 
-    expect(existsSync(join(here, "provisioning.local.ts"))).toBe(false);
-    expect(existsSync(join(here, "provisioning.remote.ts"))).toBe(false);
+    expect(existsSync(join(here, "provisioning.sqlite.ts"))).toBe(false);
+    expect(existsSync(join(here, "provisioning.api.ts"))).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-// Self-hosted-ONLY: `emails auth …` and `emails keys …` are plain /v1 HTTP calls.
+// API-only: `emails auth …` and `emails keys …` are plain /v1 HTTP calls.
 // These tests drive the REAL command against an out-of-process /v1 stub (see
 // src/test-support/v1-stub.ts, extended with /v1/auth/*, /v1/me, /v1/keys).
 //
@@ -9,7 +9,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { Command } from "commander";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
-import { resetSelfHostedConfigCache } from "../../db/self-hosted-store.js";
+import { resetApiConfigCache } from "../../db/api-store.js";
 import { registerAuthCommands } from "./auth.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
@@ -60,7 +60,7 @@ async function runAuthExpectingExit(args: string[]) {
 
 function clearSessionEnv(): void {
   delete process.env["EMAILS_SESSION_TOKEN"];
-  resetSelfHostedConfigCache();
+  resetApiConfigCache();
 }
 
 beforeAll(async () => {
@@ -87,7 +87,7 @@ async function signupAndVerify(email: string, password: string, org: string, slu
   clearSessionEnv();
 }
 
-describe("auth CLI — self-hosted /v1", () => {
+describe("auth CLI — api /v1", () => {
   it("signup creates an unverified account, issues a verify token, persists no session", async () => {
     const { data } = await runAuth([
       "auth", "signup",

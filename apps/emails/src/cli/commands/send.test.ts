@@ -1,9 +1,9 @@
-// Self-hosted-ONLY: `emails send` routes through the mail-data-source seam to the
+// API-only: `emails send` routes through the mail-data-source seam to the
 // server send API (POST /v1/messages/send). There is no local provider path or
 // local sent ledger anymore. These tests drive the REAL command in-process
 // against an out-of-process /v1 stub (see src/test-support/v1-stub.ts): a real
 // send records an outbound message, a dry-run records nothing, and the
-// self-hosted-unsupported path (scheduling) fails loud. `--to-group` is NOT in
+// api-unsupported path (scheduling) fails loud. `--to-group` is NOT in
 // that category and has its own two-mode suite (send-group.test.ts).
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { Command } from "commander";
@@ -118,24 +118,24 @@ describe("emails send — dry-run previews without sending", () => {
       "--schedule", "2030-01-01T00:00:00Z", "--dry-run",
     ]);
 
-    expect(result.consoleOutput).toContain("the self-hosted server does not accept a scheduled send");
+    expect(result.consoleOutput).toContain("the api server does not accept a scheduled send");
     expect(await stub.list("messages")).toHaveLength(0);
   });
 
   // --dry-run exists to PREDICT the send. It had no mode branch, so in LOCAL
-  // mode it announced "(self-hosted)", quoted the server's attachment caps and
+  // mode it announced "(api)", quoted the server's attachment caps and
   // predicted a scheduling failure that does not happen locally.
   it("labels the preview with the mode that would actually run the send", async () => {
     const result = await runSendCommand([
       "send", "--from", "agent@acme.com", "--to", "dest@ext.com", "--subject", "Hi", "--body", "x", "--dry-run",
     ]);
 
-    expect(result.consoleOutput).toContain("[DRY RUN] Would send (self-hosted):");
+    expect(result.consoleOutput).toContain("[DRY RUN] Would send (API client):");
     expect(result.consoleOutput).not.toContain("Would send (local)");
   });
 });
 
-describe("emails send — self-hosted-unsupported paths fail loud", () => {
+describe("emails send — api-unsupported paths fail loud", () => {
   // `--to-group` used to live here as an unconditional refusal. It is a real
   // command now — group expansion is a client-side lookup over the routed
   // groups repo, needing no server route — and is covered in both modes by

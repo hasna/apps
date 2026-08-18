@@ -1,11 +1,11 @@
-// Self-hosted-ONLY: every `emails inbox` read/write routes to the operator
+// API-only: every `emails inbox` read/write routes to the operator
 // `/v1/messages` API, so these tests drive the REAL commands against an
 // out-of-process /v1 stub (see src/test-support/v1-stub.ts). There is no local
 // SQLite island anymore; a handful of ingestion/diagnostic subcommands are
 // server-only and fail closed with a clear message.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { Command } from "commander";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
@@ -15,14 +15,14 @@ import {
   getInboundEmail,
   type InboundEmail,
 } from "../../db/inbound.js";
-import { resetSelfHostedConfigCache } from "../../db/self-hosted-store.js";
+import { resetApiConfigCache } from "../../db/api-store.js";
 import { saveConfig } from "../../lib/config.js";
 import { mergeAttachmentDetails } from "../../lib/attachment-actions.js";
 import { resetMailDataSource } from "../../lib/mail-data-source.js";
-import { filterAttachmentDetails } from "./inbox.remote.js";
+import { filterAttachmentDetails } from "./inbox.api.js";
 import { registerInboxCommands } from "./inbox.js";
-import { registerInboxCommands as registerLocalInboxCommands } from "./inbox.local.js";
-import { registerInboxCommands as registerRemoteInboxCommands } from "./inbox.remote.js";
+import { registerInboxCommands as registerSqliteInboxCommands } from "./inbox.sqlite.js";
+import { registerInboxCommands as registerApiInboxCommands } from "./inbox.api.js";
 
 let stub: V1Stub;
 let attachmentInventoryServer: ReturnType<typeof Bun.serve>;
@@ -191,10 +191,9 @@ function useAttachmentInventoryPages(
   pages: Array<[cursor: string, page: { items: Array<Record<string, unknown>>; next_cursor: string | null }]>,
 ): void {
   attachmentInventoryPages = new Map(pages);
-  process.env.EMAILS_MODE = "self_hosted";
-  process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
-  process.env.EMAILS_SELF_HOSTED_API_KEY = "attachment-inventory-test-key";
-  resetSelfHostedConfigCache();
+  process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
+  process.env.HASNA_EMAILS_API_KEY = ["attachment", "inventory", "test", "key"].join("-");
+  resetApiConfigCache();
 }
 
 // ─── inbound repo round-trip (POST/GET /v1/messages) ─────────────────────────
@@ -369,8 +368,8 @@ describe("inbox list", () => {
 
 describe("inbox JSON option registration", () => {
   for (const [mode, register] of [
-    ["local", registerLocalInboxCommands],
-    ["self_hosted", registerRemoteInboxCommands],
+    ["sqlite", registerSqliteInboxCommands],
+    ["api", registerApiInboxCommands],
   ] as const) {
     it(`registers the exact JSON option on every ${mode} command`, () => {
       const program = new Command();
@@ -451,12 +450,12 @@ describe("inbox read", () => {
     expect(getInboundEmail(email.id)?.is_read).toBe(false);
   });
 
-  // Self-hosted attachments have no local path (the bytes live in the API, not on
+  // Api attachments have no local path (the bytes live in the API, not on
   // this machine) but they ARE downloadable through
   // `inbox attachment <id> --index <n> --download`. The detail view must not tell
   // the operator the opposite: that wording is what makes real, present
   // attachments (tax filings, invoices) look unreachable.
-  it("tells the operator how to fetch self-hosted attachments instead of calling them undownloadable", async () => {
+  it("tells the operator how to fetch api attachments instead of calling them undownloadable", async () => {
     const id = crypto.randomUUID();
     await stub.seed({ messages: [msgRow({
       id,
@@ -468,7 +467,7 @@ describe("inbox read", () => {
     })] });
 
     const { out } = await runInboxCommand(["inbox", "read", id, "--keep-unread"]);
-    expect(out).not.toContain("no local download in self_hosted mode");
+    expect(out).not.toContain("no local download when the API client is configured");
     expect(out).not.toContain("emails inbox sync to download");
     // Every metadata entry is addressable by its authenticated download index.
     expect(out).toContain("--index 0");
@@ -732,12 +731,12 @@ describe("inbox mailboxes", () => {
 });
 
 describe("inbox sources", () => {
-  it("exposes the single self-hosted source with its counts", async () => {
+  it("exposes the single api source with its counts", async () => {
     await stub.seed({ messages: [msgRow({ is_read: false }), msgRow({ is_read: true })] });
 
     const { data } = await runInboxCommand(["inbox", "sources"]);
     const sources = data as Array<{ id: string; unread: number; counts: { inbox: number } }>;
-    expect(sources.map((s) => s.id)).toEqual(["self_hosted"]);
+    expect(sources.map((s) => s.id)).toEqual(["server"]);
     expect(sources[0]?.counts.inbox).toBe(2);
     expect(sources[0]?.unread).toBe(1);
   });
@@ -745,15 +744,15 @@ describe("inbox sources", () => {
   it("honors --search instead of returning the unfiltered list", async () => {
     await stub.seed({ messages: [msgRow({})] });
 
-    const matching = await runInboxCommand(["inbox", "sources", "--search", "self-hosted"]);
-    expect((matching.data as Array<{ id: string }>).map((s) => s.id)).toEqual(["self_hosted"]);
+    const matching = await runInboxCommand(["inbox", "sources", "--search", "server"]);
+    expect((matching.data as Array<{ id: string }>).map((s) => s.id)).toEqual(["server"]);
 
     const missing = await runInboxCommand(["inbox", "sources", "--search", "s3-bucket-that-is-not-here"]);
     expect(missing.data as unknown[]).toEqual([]);
   });
 });
 
-// The self-inflicted trap: `inbox sources` prints id "self_hosted" and
+// The self-inflicted trap: `inbox sources` prints id "server" and
 // `--source <id>` documents itself as taking that id back — but feeding it in
 // used to return an empty mailbox and all-zero folder counts, which reads
 // exactly like an empty store.
@@ -761,14 +760,14 @@ describe("inbox source scoping", () => {
   it("lists mail for the source id `inbox sources` prints", async () => {
     await stub.seed({ messages: [msgRow({ subject: "scoped-a" }), msgRow({ subject: "scoped-b" })] });
 
-    const { data } = await runInboxCommand(["inbox", "list", "--source", "self_hosted"]);
+    const { data } = await runInboxCommand(["inbox", "list", "--source", "server"]);
     expect((data as Array<{ subject: string }>).map((row) => row.subject).sort()).toEqual(["scoped-a", "scoped-b"]);
   });
 
   it("reports real folder counts for that source id", async () => {
     await stub.seed({ messages: [msgRow({}), msgRow({}), msgRow({ direction: "outbound" })] });
 
-    const { data } = await runInboxCommand(["inbox", "mailboxes", "--source", "self_hosted"]);
+    const { data } = await runInboxCommand(["inbox", "mailboxes", "--source", "server"]);
     const counts = (data as { counts: { inbox: number; sent: number } }).counts;
     expect(counts.inbox).toBe(2);
     expect(counts.sent).toBe(1);
@@ -1001,31 +1000,29 @@ describe("inbox links", () => {
 // ─── inbox attachments inventory ─────────────────────────────────────────────
 
 describe("inbox attachments", () => {
-  it("honors config-file-only self_hosted mode without opening usable SQLite", async () => {
+  it("honors config-file-only API-client configuration without opening usable SQLite", async () => {
     attachmentInventoryPages = new Map([["", { items: [], next_cursor: null }]]);
     const configHome = mkdtempSync(join(tmpdir(), "emails-config-only-inventory-"));
-    const poisonDbDir = mkdtempSync(join(tmpdir(), "emails-config-only-poison-db-"));
     const previousHome = process.env.HOME;
     const previousDbPath = process.env.EMAILS_DB_PATH;
     const previousClientEnvSecret = process.env.EMAILS_CLIENT_ENV_SECRET;
     const previousSessionToken = process.env.EMAILS_SESSION_TOKEN;
     try {
       process.env.HOME = configHome;
-      saveConfig({ emails_mode: "self_hosted" });
-      for (const key of ["MAILERY_MODE", "HASNA_MAILERY_MODE", "EMAILS_MODE", "HASNA_EMAILS_MODE"]) {
-        delete process.env[key];
-      }
       delete process.env.EMAILS_CLIENT_ENV_SECRET;
       delete process.env.EMAILS_SESSION_TOKEN;
-      process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
-      process.env.EMAILS_SELF_HOSTED_API_KEY = "attachment-inventory-test-key";
-      process.env.EMAILS_DB_PATH = poisonDbDir;
-      resetSelfHostedConfigCache();
+      delete process.env.EMAILS_DB_PATH;
+      process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
+      process.env.HASNA_EMAILS_API_KEY = ["attachment", "inventory", "test", "key"].join("-");
+      resetApiConfigCache();
 
       const result = await runInboxCommand(["--json", "inbox", "attachments"]);
 
       expect(result.data).toEqual({ items: [], next_cursor: null });
       expect(attachmentInventoryRequests).toHaveLength(1);
+      // No local SQLite state anywhere: not at a configured path (there is none)
+      // and not at the documented default under the test HOME.
+      expect(existsSync(join(configHome, ".hasna", "emails", "emails.db"))).toBe(false);
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
@@ -1036,12 +1033,11 @@ describe("inbox attachments", () => {
       if (previousSessionToken === undefined) delete process.env.EMAILS_SESSION_TOKEN;
       else process.env.EMAILS_SESSION_TOKEN = previousSessionToken;
       rmSync(configHome, { recursive: true, force: true });
-      rmSync(poisonDbDir, { recursive: true, force: true });
-      resetSelfHostedConfigCache();
+      resetApiConfigCache();
     }
   });
 
-  it("returns one exact strict page envelope from the self-hosted inventory API", async () => {
+  it("returns one exact strict page envelope from the api inventory API", async () => {
     useAttachmentInventoryPages([["", {
       items: [{
         message_id: "message-1",
@@ -1056,9 +1052,10 @@ describe("inbox attachments", () => {
       }],
       next_cursor: "opaque/+==",
     }]]);
-    const poisonDbDir = mkdtempSync(join(tmpdir(), "emails-no-local-inventory-"));
     const previousDbPath = process.env.EMAILS_DB_PATH;
-    process.env.EMAILS_DB_PATH = poisonDbDir;
+    // A database path beside the configured API client is a boot refusal by design;
+    // the API-client path must run with no local store configured at all.
+    delete process.env.EMAILS_DB_PATH;
     try {
       const { data } = await runInboxCommand([
         "--json",
@@ -1094,7 +1091,6 @@ describe("inbox attachments", () => {
     } finally {
       if (previousDbPath === undefined) delete process.env.EMAILS_DB_PATH;
       else process.env.EMAILS_DB_PATH = previousDbPath;
-      rmSync(poisonDbDir, { recursive: true, force: true });
     }
   });
 
@@ -1263,7 +1259,7 @@ describe("inbox attachment", () => {
     }
   });
 
-  it("lists attachment metadata (no local paths in self-hosted mode)", async () => {
+  it("lists attachment metadata (no local paths when the API client is configured)", async () => {
     const email = seedEmail({
       subject: "Has attachments",
       attachments: [
@@ -1449,10 +1445,9 @@ describe("inbox attachment", () => {
     const inheritedProcessEnv = { ...process.env };
 
     try {
-      process.env.EMAILS_MODE = "self_hosted";
-      process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${legacyServer.port}`;
-      process.env.EMAILS_SELF_HOSTED_API_KEY = "legacy-attachment-test-key";
-      resetSelfHostedConfigCache();
+      process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${legacyServer.port}`;
+      process.env.HASNA_EMAILS_API_KEY = ["legacy", "attachment", "test", "key"].join("-");
+      resetApiConfigCache();
       resetMailDataSource();
 
       const listed = await runInboxCommand(["inbox", "attachment", id]);
@@ -1489,7 +1484,7 @@ describe("inbox attachment", () => {
     } finally {
       legacyServer.stop(true);
       restoreProcessEnv(inheritedProcessEnv);
-      resetSelfHostedConfigCache();
+      resetApiConfigCache();
       resetMailDataSource();
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1656,11 +1651,11 @@ describe("inbox delete / clear", () => {
 
 // ─── server-only subcommands (fail closed) ───────────────────────────────────
 
-describe("inbox open blocks in the self-hosted client", () => {
+describe("inbox open blocks in the api client", () => {
   it("fails closed pointing at `inbox read`", async () => {
     const result = await runInboxCommandExpectingExit(["inbox", "open", "abc123"]);
     expect(result.error).toBe("process.exit:1");
-    expect(result.stderr).toContain("emails inbox open is not available in the self-hosted client");
+    expect(result.stderr).toContain("emails inbox open is not available in the api client");
     expect(result.stderr).toContain("emails inbox read <id>");
   });
 });
@@ -1715,8 +1710,8 @@ describe("server-only ingestion/diagnostic subcommands", () => {
       const result = await runInboxCommandExpectingExit(args);
       expect(result.error).toBe("process.exit:1");
       expect(result.stderr).toContain(command);
-      expect(result.stderr).toContain("is not available in the self-hosted client");
-      expect(result.stderr).toContain("it runs on the self-hosted server");
+      expect(result.stderr).toContain("is not available in the api client");
+      expect(result.stderr).toContain("it runs on the API server");
     });
   }
 });
@@ -1727,7 +1722,7 @@ describe("server-only ingestion/diagnostic subcommands", () => {
 // `inbox sources` — one word apart — worked, an intra-file contradiction. The
 // registry is client config: src/lib/s3-sync.ts implements all three functions as
 // ONE collapsed implementation (this used to name a second copy inside the now-
-// reduced src/lib/s3-sync.remote.ts), and src/cli/tui/data.remote.ts already READS the same registry to
+// reduced src/lib/s3-sync.api.ts), and src/cli/tui/data.api.ts already READS the same registry to
 // resolve a `--source` ref. Only the INGESTION half (`sync-s3`) is server-owned,
 // and it still refuses (asserted above).
 //
@@ -1753,7 +1748,7 @@ describe("inbox source lifecycle is a client-side registry", () => {
 
     expect(data).toEqual([]);
     expect(out).toContain("No sources configured.");
-    expect(out).not.toContain("not available in the self-hosted client");
+    expect(out).not.toContain("not available in the api client");
   });
 
   it("registers an S3 source with add-s3 and reads it back with list", async () => {

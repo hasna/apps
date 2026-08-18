@@ -1973,7 +1973,7 @@ const MIGRATIONS = [
 
   // Migration 45: per-domain readiness lifecycle and provider/DNS snapshots.
   `
-  ALTER TABLE domains ADD COLUMN domain_type TEXT NOT NULL DEFAULT 'self_hosted' CHECK(domain_type IN ('system','tenant','self_hosted','local_only'));
+  ALTER TABLE domains ADD COLUMN domain_type TEXT NOT NULL DEFAULT 'self-hosted' CHECK(domain_type IN ('system','tenant','self-hosted','local_only'));
   ALTER TABLE domains ADD COLUMN source_of_truth TEXT NOT NULL DEFAULT 'local' CHECK(source_of_truth IN ('local','postgres','cloud'));
   ALTER TABLE domains ADD COLUMN ownership_status TEXT NOT NULL DEFAULT 'pending' CHECK(ownership_status IN ('pending','verified','failed'));
   ALTER TABLE domains ADD COLUMN inbound_status TEXT NOT NULL DEFAULT 'pending' CHECK(inbound_status IN ('pending','ready','disabled','failed'));
@@ -2001,7 +2001,7 @@ const MIGRATIONS = [
   `
   ${RETIRED_LEGACY_INBOUND_BRIDGE_SQL}
 
-  UPDATE domains SET domain_type = 'self_hosted' WHERE domain_type = 'tenant';
+  UPDATE domains SET domain_type = 'self-hosted' WHERE domain_type = 'tenant';
   UPDATE domains SET source_of_truth = 'postgres' WHERE source_of_truth = 'cloud';
 
   CREATE TABLE IF NOT EXISTS webhook_receipts (
@@ -2077,7 +2077,84 @@ const MIGRATIONS = [
     ON mailbox_filters(tenant_id, updated_at DESC);
   INSERT OR IGNORE INTO _migrations (id) VALUES (50);
   `,
-];
+
+  // Migration 51: the deployment-mode domain_type value is retired. The released
+  // CHECK constraint (migration 45) admitted 'system','tenant','self-hosted',
+  // 'local_only'; the mode-free contract admits 'system','server','local_only'.
+  // SQLite cannot alter a column CHECK, so the table is rebuilt and every row is
+  // mapped ('tenant' and the retired 'self-hosted' value both mean server-owned;
+  // the retired 'cloud' source-of-truth value is likewise gone from the new
+  // CHECK). Retry-safe: a partial rebuild table is dropped first and the live
+  // domains table is touched only at the final swap.
+  `
+  DROP TABLE IF EXISTS domains_modefree_new;
+  CREATE TABLE domains_modefree_new (
+    id TEXT PRIMARY KEY,
+    provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    domain TEXT NOT NULL,
+    dkim_status TEXT NOT NULL DEFAULT 'pending' CHECK(dkim_status IN ('pending','verified','failed')),
+    spf_status TEXT NOT NULL DEFAULT 'pending' CHECK(spf_status IN ('pending','verified','failed')),
+    dmarc_status TEXT NOT NULL DEFAULT 'pending' CHECK(dmarc_status IN ('pending','verified','failed')),
+    verified_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    provisioning_status TEXT NOT NULL DEFAULT 'none',
+    purchase_provider TEXT,
+    dns_provider TEXT NOT NULL DEFAULT 'cloudflare',
+    send_provider TEXT,
+    cf_zone_id TEXT,
+    registrar TEXT,
+    nameservers_json TEXT NOT NULL DEFAULT '[]',
+    mail_from_domain TEXT,
+    last_error TEXT,
+    next_check_at TEXT,
+    domain_type TEXT NOT NULL DEFAULT 'server' CHECK(domain_type IN ('system','server','local_only')),
+    source_of_truth TEXT NOT NULL DEFAULT 'local' CHECK(source_of_truth IN ('local','postgres')),
+    ownership_status TEXT NOT NULL DEFAULT 'pending' CHECK(ownership_status IN ('pending','verified','failed')),
+    inbound_status TEXT NOT NULL DEFAULT 'pending' CHECK(inbound_status IN ('pending','ready','disabled','failed')),
+    outbound_status TEXT NOT NULL DEFAULT 'pending' CHECK(outbound_status IN ('pending','ready','disabled','failed')),
+    monitoring_status TEXT NOT NULL DEFAULT 'none' CHECK(monitoring_status IN ('none','monitoring','clean','risky')),
+    dns_records_json TEXT NOT NULL DEFAULT '{}',
+    provider_metadata_json TEXT NOT NULL DEFAULT '{}',
+    last_dns_check_at TEXT,
+    last_inbound_check_at TEXT,
+    last_outbound_check_at TEXT,
+    last_monitored_at TEXT,
+    restricted_at TEXT,
+    suspended_at TEXT
+  );
+  INSERT INTO domains_modefree_new (
+    id, provider_id, domain, dkim_status, spf_status, dmarc_status, verified_at,
+    created_at, updated_at, provisioning_status, purchase_provider, dns_provider,
+    send_provider, cf_zone_id, registrar, nameservers_json, mail_from_domain,
+    last_error, next_check_at, domain_type, source_of_truth, ownership_status,
+    inbound_status, outbound_status, monitoring_status, dns_records_json,
+    provider_metadata_json, last_dns_check_at, last_inbound_check_at,
+    last_outbound_check_at, last_monitored_at, restricted_at, suspended_at
+  )
+  SELECT
+    id, provider_id, domain, dkim_status, spf_status, dmarc_status, verified_at,
+    created_at, updated_at, provisioning_status, purchase_provider, dns_provider,
+    send_provider, cf_zone_id, registrar, nameservers_json, mail_from_domain,
+    last_error, next_check_at,
+    CASE WHEN domain_type IN ('tenant','self-hosted') THEN 'server' ELSE domain_type END,
+    source_of_truth, ownership_status, inbound_status, outbound_status,
+    monitoring_status, dns_records_json, provider_metadata_json, last_dns_check_at,
+    last_inbound_check_at, last_outbound_check_at, last_monitored_at, restricted_at,
+    suspended_at
+  FROM domains;
+  DROP TABLE domains;
+  ALTER TABLE domains_modefree_new RENAME TO domains;
+  CREATE INDEX IF NOT EXISTS idx_domains_provider ON domains(provider_id);
+  CREATE INDEX IF NOT EXISTS idx_domains_domain ON domains(domain);
+  CREATE INDEX IF NOT EXISTS idx_domains_domain_nocase ON domains(domain COLLATE NOCASE);
+  CREATE INDEX IF NOT EXISTS idx_domains_provider_domain_nocase ON domains(provider_id, domain COLLATE NOCASE);
+  CREATE INDEX IF NOT EXISTS idx_domains_provstatus ON domains(provisioning_status);
+  CREATE INDEX IF NOT EXISTS idx_domains_type ON domains(domain_type);
+  CREATE INDEX IF NOT EXISTS idx_domains_source_truth ON domains(source_of_truth);
+  CREATE INDEX IF NOT EXISTS idx_domains_readiness ON domains(ownership_status, inbound_status, outbound_status);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (51);
+  `,];
 
 let _db: Database | null = null;
 
@@ -2298,7 +2375,7 @@ function ensureSchema(db: Database): void {
   ensureColumn("ALTER TABLE domains ADD COLUMN next_check_at TEXT");
 
   // Migration 45 idempotent guarantee: per-domain readiness lifecycle.
-  ensureColumn("ALTER TABLE domains ADD COLUMN domain_type TEXT NOT NULL DEFAULT 'self_hosted'");
+  ensureColumn("ALTER TABLE domains ADD COLUMN domain_type TEXT NOT NULL DEFAULT 'server'");
   ensureColumn("ALTER TABLE domains ADD COLUMN source_of_truth TEXT NOT NULL DEFAULT 'local'");
   ensureColumn("ALTER TABLE domains ADD COLUMN ownership_status TEXT NOT NULL DEFAULT 'pending'");
   ensureColumn("ALTER TABLE domains ADD COLUMN inbound_status TEXT NOT NULL DEFAULT 'pending'");
@@ -2783,7 +2860,7 @@ function ensureSchema(db: Database): void {
   // ADOPT THE OLD S3 DEDUP KEY AS THE NEW FENCE. Without this, collapsing `src/lib/s3-sync`
   // onto the store seam would have RE-INGESTED EVERY MESSAGE ALREADY PULLED FROM S3.
   //
-  // The deleted `s3-sync.local.ts` deduplicated by SELECTing `raw_s3_url`, a column the seam
+  // The deleted `s3-sync.sqlite.ts` deduplicated by SELECTing `raw_s3_url`, a column the seam
   // does not expose. The seam's idempotency fence is `upsertMessage`'s `source_id`, added
   // NULLABLE just above with no backfill — so on any database populated before that collapse
   // every S3-sourced row has `raw_s3_url` set and `source_id` NULL, the fence matches nothing,

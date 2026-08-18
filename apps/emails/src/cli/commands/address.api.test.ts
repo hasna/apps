@@ -1,0 +1,239 @@
+// Api (api) routing for the address CLI. With the client pointed
+// at the operator's `/v1` API, `emails addresses` must READ from that HTTP API
+// (there is no local SQLite island anymore). This locks in the mission-alignment
+// fix where `addresses` used to show empty LOCAL state when the API client is configured.
+//
+// The api store performs its HTTP call with a SYNCHRONOUS `curl`
+// (spawnSync), which blocks Bun's event loop — so the stand-in for the operator
+// `/v1` API runs OUT OF PROCESS (an in-process server would deadlock). See
+// src/test-support/v1-stub.ts. No module mocks are used, so the real transport
+// path is exercised.
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { Command } from "commander";
+import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
+import { registerAddressCommands } from "./address.js";
+
+let stub: V1Stub;
+
+async function runAddressCommand(args: string[]) {
+  const program = new Command();
+  program.exitOverride();
+  let data: unknown;
+  const out: string[] = [];
+  registerAddressCommands(program, (d, formatted) => {
+    data = d;
+    out.push(String(formatted ?? ""));
+  });
+  await program.parseAsync(["node", "emails", ...args]);
+  return { data, out: out.join("\n") };
+}
+
+// Server-only subcommands fail loud: handleError() logs to console.error then
+// process.exit(1). Stub both so the exit is observable.
+async function runAddressCommandExpectingExit(args: string[]) {
+  const originalExit = process.exit;
+  const originalError = console.error;
+  const errors: string[] = [];
+  console.error = ((message?: unknown) => { errors.push(String(message ?? "")); }) as typeof console.error;
+  process.exit = ((code?: number) => {
+    throw new Error(`process.exit:${code ?? 0}`);
+  }) as typeof process.exit;
+  try {
+    await runAddressCommand(args);
+    throw new Error("Expected command to exit");
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e), stderr: errors.join("\n") };
+  } finally {
+    process.exit = originalExit;
+    console.error = originalError;
+  }
+}
+
+beforeAll(async () => {
+  // `openapi: true` because the collapsed owners family serves the `address owner`
+  // detail (its audit-trail read pushes an address_id filter down through the REAL
+  // HTTP store, which reads the service's published contract first).
+  stub = await startV1Stub({ openapi: true });
+});
+afterAll(() => stub.stop());
+beforeEach(async () => {
+  await stub.reset();
+  stub.applyEnv();
+});
+afterEach(() => stub.clearEnv());
+
+describe("address CLI — api (/v1) routing", () => {
+  it("`addresses` reads from the /v1 API", async () => {
+    await stub.seed({
+      addresses: [
+        { id: crypto.randomUUID(), email: "cloud-a@example.com", status: "active", verified: false, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" },
+        { id: crypto.randomUUID(), email: "cloud-b@example.com", status: "active", verified: false, created_at: "2026-01-02T00:00:00.000Z", updated_at: "2026-01-02T00:00:00.000Z" },
+      ],
+    });
+
+    const { data } = await runAddressCommand(["addresses"]);
+    const addresses = data as Array<{ email: string }>;
+    expect(addresses.map((a) => a.email).sort()).toEqual(["cloud-a@example.com", "cloud-b@example.com"]);
+  });
+
+  it("reports an empty configuration when the /v1 API has no addresses", async () => {
+    const { data, out } = await runAddressCommand(["addresses"]);
+    expect((data as Array<{ email: string }>) ?? []).toEqual([]);
+    expect(out).toContain("No addresses configured.");
+  });
+
+  it("refuses address provisioning without inventing a server route for it", async () => {
+    for (const args of [
+      ["address", "provision", "agent@example.com", "--provider", "prov-1"],
+    ]) {
+      const result = await runAddressCommandExpectingExit(args);
+      expect(result.error).toBe("process.exit:1");
+      expect(result.stderr).toContain("emails address provision is not implemented in this build");
+      // `/v1` carries plain CRUD for addresses and no provisioning route, so the
+      // old "it runs on the API server" pointed at nothing — and this is
+      // the arm where it was most plausible.
+      expect(result.stderr).not.toContain("runs on the api server");
+      expect(result.stderr).toContain("emails address add <email> --provider <id>");
+    }
+  });
+
+  it("`address owner` answers from /v1 instead of refusing", async () => {
+    const addressId = crypto.randomUUID();
+    const ownerId = crypto.randomUUID();
+    await stub.seed({
+      addresses: [{
+        id: addressId,
+        email: "agent@example.com",
+        status: "active",
+        verified: true,
+        owner_id: ownerId,
+        administrator_id: ownerId,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      }],
+      owners: [{
+        id: ownerId,
+        type: "agent",
+        name: "ops-bot",
+        contact_email: null,
+        external_id: null,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      }],
+    });
+
+    const { data, out } = await runAddressCommand(["address", "owner", "agent@example.com"]);
+
+    expect(out).toContain("Owner:    ops-bot (agent)");
+    expect(data).toMatchObject({
+      address: { email: "agent@example.com", owner: { id: ownerId, name: "ops-bot" } },
+      ownership: { owner_id: ownerId, owner_type: "agent", administrator_id: ownerId },
+    });
+  });
+
+  it("`addresses` surfaces the owner recorded on the /v1 record", async () => {
+    const ownerId = crypto.randomUUID();
+    await stub.seed({
+      addresses: [{
+        id: crypto.randomUUID(),
+        email: "owned@example.com",
+        status: "active",
+        verified: true,
+        owner_id: ownerId,
+        administrator_id: ownerId,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      }],
+      owners: [{
+        id: ownerId,
+        type: "agent",
+        name: "ops-bot",
+        contact_email: null,
+        external_id: null,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      }],
+    });
+
+    const { data, out } = await runAddressCommand(["addresses"]);
+
+    expect(out).toContain("ops-bot");
+    expect(data).toMatchObject([{ email: "owned@example.com", owner: { id: ownerId, name: "ops-bot" } }]);
+  });
+
+  it("persists the requested provider through create and exact filtered readback", async () => {
+    const providerId = "a6ac055d-df08-4577-acba-b5de1addc732";
+    await stub.seed({
+      addresses: [{
+        id: crypto.randomUUID(),
+        email: "provider-control@example.com",
+        provider_id: providerId,
+        status: "active",
+        verified: false,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      }],
+    });
+
+    // Positive control: the same provider-filtered probe can find a row that
+    // already carries provider_id in the server response.
+    const control = await runAddressCommand(["address", "list", "--provider", providerId]);
+    expect(control.data).toEqual([
+      expect.objectContaining({ email: "provider-control@example.com", provider_id: providerId }),
+    ]);
+
+    const created = await runAddressCommand([
+      "address",
+      "add",
+      "packages@example.test",
+      "--provider",
+      providerId,
+    ]);
+    // Before the fix, the immediate create response overlaid the request field
+    // locally; this assertion preserves the regression's positive control.
+    expect(created.data).toMatchObject({
+      email: "packages@example.test",
+      provider_id: providerId,
+    });
+
+    const duplicate = await runAddressCommand([
+      "address",
+      "add",
+      "packages@example.test",
+      "--provider",
+      providerId,
+    ]);
+    expect(duplicate.data).toMatchObject({
+      email: "packages@example.test",
+      provider_id: providerId,
+      id: created.data.id,
+    });
+
+    const alternateProviderId = "0df88cb6-a671-48d6-a01d-04516e2af958";
+    const alternate = await runAddressCommand([
+      "address",
+      "add",
+      "packages@example.test",
+      "--provider",
+      alternateProviderId,
+    ]);
+    expect(alternate.data).toMatchObject({
+      email: "packages@example.test",
+      provider_id: alternateProviderId,
+    });
+
+    const readback = await runAddressCommand(["address", "list", "--provider", providerId]);
+    expect(readback.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ email: "packages@example.test", provider_id: providerId }),
+    ]));
+    const alternateReadback = await runAddressCommand(["address", "list", "--provider", alternateProviderId]);
+    expect(alternateReadback.data).toEqual([
+      expect.objectContaining({ email: "packages@example.test", provider_id: alternateProviderId }),
+    ]);
+    const stored = (await stub.list("addresses")).filter((address) => address.email === "packages@example.test");
+    expect(stored).toHaveLength(2);
+    expect(stored.map((address) => address.provider_id).sort()).toEqual(
+      [providerId, alternateProviderId].sort(),
+    );
+  });
+});

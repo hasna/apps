@@ -3,7 +3,6 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
-import { normalizeEmailsMode } from "./lib/mode.js";
 import {
   BOUNDARY_SCOPES,
   boundaryPatternTable,
@@ -121,7 +120,7 @@ describe("no hosted control plane", () => {
   it("shares one ban list with the packed-artifact scanner", () => {
     // Both guards read scripts/no-cloud-scan-lib.mjs, so the lists cannot drift.
     // Every pattern is enforced on BOTH surfaces; nothing is exempted wholesale.
-    expect(boundaryPatternTable.length).toBe(16);
+    expect(boundaryPatternTable.length).toBe(15);
     expect(sourceBoundaryPatterns.length).toBe(boundaryPatternTable.length);
     for (const entry of boundaryPatternTable) {
       // Order-independent, and correct if a third surface is ever added.
@@ -139,7 +138,6 @@ describe("no hosted control plane", () => {
       "hosted triage surface",
       "legacy hosted environment",
       "private deployment marker",
-      "removed mode in configuration",
       "retired inbound bucket prefix",
       "typo-squat package name",
       // Operator-neutrality rules. They are in the SHARED table on purpose: an
@@ -172,7 +170,7 @@ describe("no hosted control plane", () => {
       // Product code is never allowed — the whole point of a path allowance is that
       // it does not cover the code that ships. (`isSourceAllowed` is also asserted
       // against these paths at import time.)
-      for (const productPath of ["src/index.ts", "src/server/index.ts", "src/lib/mode.ts", "package.json", "Dockerfile"]) {
+      for (const productPath of ["src/index.ts", "src/server/index.ts", "src/storage.ts", "package.json", "Dockerfile"]) {
         expect(isSourceAllowed(entry, productPath)).toBe(false);
       }
     }
@@ -379,12 +377,15 @@ describe("no hosted control plane", () => {
     expect(lockName).toBe(pkg.name);
   });
 
-  it("ships exactly local and self_hosted without hosted aliases", () => {
-    expect(normalizeEmailsMode("local")).toBe("local");
-    expect(normalizeEmailsMode("self_hosted")).toBe("self_hosted");
-    for (const value of ["cloud", "remote", "hybrid", "self-hosted", "selfhosted"]) {
-      expect(() => normalizeEmailsMode(value)).toThrow();
-    }
+  it("has no selector module left behind", () => {
+    expect(existsSync(join(root, "src/lib/mode.ts"))).toBe(false);
+    const selectors = /^(?:getEmailsMode|resolveEmailsMode|resolveEmailsModeSelection|normalizeEmailsMode|assertNoLegacyHostedEnvironment)/;
+    const carrying = trackedFiles().filter((path) => {
+      if (!path.endsWith(".ts") && !path.endsWith(".js")) return false;
+      const text = readFileSync(join(root, path), "utf8");
+      return selectors.test(text);
+    });
+    expect(carrying).toEqual([]);
   });
 
   it("has no hosted client, command, export, package bin, or environment loader", () => {

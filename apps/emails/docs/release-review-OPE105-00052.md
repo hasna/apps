@@ -102,7 +102,7 @@ passes; neither track changed external or repository state.
    declares 0020 the latest cutover and allows only 0020-compatible recovery
    (`docs/DEPLOYMENT_CUTOVER.md:46-60`), but the migration list appends
    `0021_idp_principal_tenants`
-   (`src/server/self-hosted/migrations.ts:2680-2708,2730-2737`). The migration
+   (`src/server/api/migrations.ts:2680-2708,2730-2737`). The migration
    ledger rejects an applied row unknown to an older binary
    (`src/storage-kit/migrations.ts:130-136`), so a 0020-only image is not a
    valid post-0021 restart or rollback target.
@@ -110,15 +110,15 @@ passes; neither track changed external or repository state.
 6. **Migration 0021's dedicated real-Postgres proof is not run by the
    real-Postgres CI job.** `idp.integration.test.ts` is gated on
    `EMAILS_TEST_POSTGRES_URL` and explicitly owns the 0021 real-SQL proof, but
-   the `selfhost-postgres` invocation omits it
+   the `api-postgres` invocation omits it
    (`.github/workflows/ci.yml:170-204`). Collection in the ordinary hermetic
    suite skips those cases and cannot replace the missing database run.
 
 7. **Delivery events do not close the outbound suppression loop.** The
-   self-hosted webhook records bounce/complaint events but deliberately does
+   api webhook records bounce/complaint events but deliberately does
    not update contact bounce/complaint counters or suppression, even though
    that suppression is what outbound policy reads
-   (`src/server/self-hosted/webhooks.ts:184-192`). A recipient can therefore
+   (`src/server/api/webhooks.ts:184-192`). A recipient can therefore
    continue past the central gate after provider complaint/bounce evidence
    unless an operator suppresses it separately.
 

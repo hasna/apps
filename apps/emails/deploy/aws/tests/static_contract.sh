@@ -7,47 +7,47 @@ cd "$root"
 dockerfile="$repo/Dockerfile"
 
 if ! grep -Fq 'ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0' "$dockerfile"; then
-  echo "self-hosted container must pin the Alpine Bun image digest" >&2
+  echo "api container must pin the Alpine Bun image digest" >&2
   exit 1
 fi
 
 if grep -Eiq '(^|[[:space:]])(apt-get|\bdpkg\b|\bglibc\b|\bperl\b|\bsqlite\b|OPENSSL_VERSION)' "$dockerfile"; then
-  echo "self-hosted container contract forbids Debian package tooling and legacy runtime dependencies" >&2
+  echo "api container contract forbids Debian package tooling and legacy runtime dependencies" >&2
   exit 1
 fi
 
 if ! grep -Fxq 'FROM scratch' "$dockerfile"; then
-  echo "self-hosted container must end in a scratch runtime" >&2
+  echo "api container must end in a scratch runtime" >&2
   exit 1
 fi
 
 if grep -Eq '^FROM[[:space:]]+base[[:space:]]+AS[[:space:]]+runtime[[:space:]]*$' "$dockerfile"; then
-  echo "self-hosted runtime must not keep a non-scratch intermediate final runtime stage" >&2
+  echo "api runtime must not keep a non-scratch intermediate final runtime stage" >&2
   exit 1
 fi
 
 if grep -Fq 'locale-archive' "$dockerfile"; then
-  echo "self-hosted container may not include locale fallback copy steps" >&2
+  echo "api container may not include locale fallback copy steps" >&2
   exit 1
 fi
 
 if grep -Fq '|| true' "$dockerfile"; then
-  echo "self-hosted container may not contain permissive fallback copy commands" >&2
+  echo "api container may not contain permissive fallback copy commands" >&2
   exit 1
 fi
 
 if ! grep -Fq 'PATH=/usr/local/bin' "$dockerfile"; then
-  echo "self-hosted runtime must include /usr/local/bin on PATH" >&2
+  echo "api runtime must include /usr/local/bin on PATH" >&2
   exit 1
 fi
 
 if ! grep -Fq 'ln -sf bun /runtime/usr/local/bin/bunx' "$dockerfile"; then
-  echo "self-hosted runtime must expose bunx shim" >&2
+  echo "api runtime must expose bunx shim" >&2
   exit 1
 fi
 
 if ! grep -Fq 'ln -sf bun /runtime/usr/local/bin/node' "$dockerfile"; then
-  echo "self-hosted runtime must expose node shim" >&2
+  echo "api runtime must expose node shim" >&2
   exit 1
 fi
 
@@ -132,7 +132,7 @@ for runtime_identity in \
 done
 
 if ! grep -Fq 'chmod 1777 /runtime/tmp' "$dockerfile" || ! grep -Fq 'chmod 0700 /runtime/home/bun/.hasna/emails' "$dockerfile"; then
-  echo "self-hosted runtime must harden tmp and private state permissions" >&2
+  echo "api runtime must harden tmp and private state permissions" >&2
   exit 1
 fi
 
@@ -142,12 +142,12 @@ if ! grep -Fq 'VOLUME ["/tmp"]' "$dockerfile"; then
 fi
 
 if ! grep -Fq 'chown -R 1000:1000 /runtime/home/bun /runtime/home/bun/.hasna/emails /runtime/app /runtime/app/data' "$dockerfile"; then
-  echo "self-hosted runtime must chown runtime ownership for bun home and app data" >&2
+  echo "api runtime must chown runtime ownership for bun home and app data" >&2
   exit 1
 fi
 
 if ! grep -Fq 'USER 1000:1000' "$dockerfile"; then
-  echo "self-hosted container must run as numeric user 1000:1000" >&2
+  echo "api container must run as numeric user 1000:1000" >&2
   exit 1
 fi
 
@@ -611,11 +611,11 @@ release_132_section="$(
 expected_release_132_section='## 1.3.2 (2026-07-26)
 
 - fail closed on malformed JSON, wrong response envelopes, and missing required
-  fields from successful self-hosted API responses before repositories, mailbox
+  fields from successful API responses before repositories, mailbox
   status/context/sync projections, or the generated SDK can synthesize empty
   rows, lists, or counts.
 - share one config-driven wire validator across the synchronous resource store,
-  asynchronous inbox data source, and generated `@hasna/emails/selfhost` client;
+  asynchronous inbox data source, and generated `@hasna/emails/api` client;
   validation errors identify the endpoint and invalid field without including
   credentials or response-body contents.'
 unreleased_line="$(grep -Fn '## [Unreleased]' "$changelog" | cut -d: -f1)"
@@ -803,7 +803,7 @@ for source_contract in \
   'pending: string[]' \
   'const ledger = new MigrationLedger(client, migrations)' \
   'const result = await ledger.migrate({ dryRun: opts.dryRun === true })'; do
-  grep -Fq "$source_contract" "$repo/src/server/self-hosted/migrate.ts" || {
+  grep -Fq "$source_contract" "$repo/src/server/api/migrate.ts" || {
     echo "db status source contract missing '$source_contract'" >&2
     exit 1
   }
@@ -1207,7 +1207,7 @@ if grep -Eiq 'keep (the )?(existing|old|pre-0020).*(task|worker|API).*(running|l
   exit 1
 fi
 
-maintenance_source="$repo/src/server/self-hosted/attachment-repair-maintenance.ts"
+maintenance_source="$repo/src/server/api/attachment-repair-maintenance.ts"
 for maintenance_contract in \
   'EMAILS_ATTACHMENT_REPAIR_MANIFEST' \
   'EMAILS_IMAGE_REVISION' \
@@ -1235,7 +1235,7 @@ if grep -Eiq '@aws-sdk/client-ses|ses:SendEmail|ses:SendRawEmail|ListObjects|Lis
   exit 1
 fi
 grep -Fq 'args[0] === "attachment-repair-ledger"' "$repo/src/server/index.ts" || {
-  echo "self-hosted image entrypoint must expose attachment-repair-ledger" >&2
+  echo "api image entrypoint must expose attachment-repair-ledger" >&2
   exit 1
 }
 
@@ -1464,4 +1464,4 @@ repair_gate_must_fail \
   "$repair_image_digest" "$repair_image_revision" "$repair_manifest_sha" \
   "$repair_run_id"
 
-echo "static self-hosting contract: pass"
+echo "static server contract: pass"

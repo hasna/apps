@@ -2,7 +2,7 @@
  * Provider webhook receivers — ONE implementation, mounted twice.
  *
  * Inbound mail and delivery events arrive as provider HTTP callbacks. Both the
- * local dashboard (`POST /webhook/*`, SQLite) and the self-hosted service
+ * local dashboard (`POST /webhook/*`, SQLite) and the api service
  * (`POST /v1/webhooks/*`, operator-owned Postgres) mount THESE functions, so
  * there is exactly one SNS signature check, one Svix signature check, one set of
  * notification parsers and one idempotency protocol across every deployment
@@ -42,7 +42,7 @@ import { readBoundedRequestText, RouteBodyTooLargeError } from "../routes/reques
 /** Local dashboard mount points. */
 export const SES_INBOUND_WEBHOOK_PATH = "/webhook/ses-inbound";
 export const RESEND_INBOUND_WEBHOOK_PATH = "/webhook/resend-inbound";
-/** Self-hosted (`/v1`) mount points. */
+/** Api (`/v1`) mount points. */
 export const SES_INBOUND_V1_WEBHOOK_PATH = "/v1/webhooks/ses-inbound";
 export const RESEND_INBOUND_V1_WEBHOOK_PATH = "/v1/webhooks/resend-inbound";
 
@@ -74,7 +74,7 @@ export function isAwsSnsUrl(url: string): boolean {
  * Trusted envelope evidence that selects the destination scope.
  *
  * `addresses` are envelope addresses whose DOMAIN selects the scope. In local
- * mode there is a single store so this is informational; in self-hosted mode it
+ * mode there is a single store so this is informational; when the API client is configured it
  * resolves the tenant through the global physical domain map. It is never read
  * from a header or body field a caller could point at another tenant.
  */

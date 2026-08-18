@@ -25,7 +25,7 @@
 //             `rows` is empty because nothing was read.
 //   answered  rows were read. `complete` then says whether they are ALL of them.
 //
-// This is the store-seam counterpart of src/db/self-hosted-page.ts, and the
+// This is the store-seam counterpart of src/db/api-page.ts, and the
 // duplicate/shift accounting below is taken from it deliberately rather than
 // reinvented: that module's header records a production measurement — 3899 rows
 // returned across 8 pages, 426 of them duplicates, 3473 distinct published as an

@@ -27,8 +27,8 @@
 // FIVE OF THE TEN OPERATIONS HAVE A DIRECT STORE EQUIVALENT. `src/store/repositories.ts`
 // publishes `SendKeysRepository` with `mintSendKey`, `getSendKey`, `verifySendKey`,
 // `revokeSendKey` and `listSendKeys`; `/v1/send-keys` plus the two bespoke routes serve them
-// (`src/server/self-hosted/resources.ts`, `src/server/self-hosted/service.ts`) and the
-// self-hosted Postgres schema has the table. The exceptions are the two owner-filtered
+// (`src/server/api/resources.ts`, `src/server/api/service.ts`) and the
+// api Postgres schema has the table. The exceptions are the two owner-filtered
 // listings and the two by-owner-set listings, which the seam cannot filter (note 4) — and
 // the authorization question, whose seam operation EXISTS and cannot be used (note 1).
 //
@@ -59,7 +59,7 @@
 //     1000 })` and filtered the answer client-side; the two owner-filtered listings asked
 //     for `max(1000, limit + offset)` and did the same. Whichever store answers, a page of
 //     this family is capped at 500: `MAX_PAGE` in `src/store-sqlite/send-keys.ts` when
-//     SQLite answers, `clampLimit` in `src/server/self-hosted/store.ts` when the service
+//     SQLite answers, `clampLimit` in `src/server/api/store.ts` when the service
 //     does. Above 500 keys those four listings silently omitted an owner's keys — an owner
 //     whose keys happened to sort past the clamp got an EMPTY list, indistinguishable from
 //     "this owner has no keys", which for a revocation review is the most dangerous empty
@@ -69,7 +69,7 @@
 //     and nothing else — so it admits no ordering, and the two stores order this family
 //     differently in the TIEBREAK DIRECTION. `src/store-sqlite/send-keys.ts` selects
 //     `ORDER BY created_at DESC, id DESC`. The service's spec field reads `created_at
-//     DESC`, but `resourceListOrderBy` (`src/server/self-hosted/resources.ts`) APPENDS the
+//     DESC`, but `resourceListOrderBy` (`src/server/api/resources.ts`) APPENDS the
 //     primary key when the clause does not already name it, so what it emits is `created_at
 //     DESC, id ASC` — total, like SQLite's, and opposite on a tie. So NOTHING pushes a
 //     `limit`/`offset` down: the first N rows of a store's order, re-sorted here, is a
@@ -123,7 +123,7 @@
 //     their own sibling owners arm, so the answer followed whichever module was imported
 //     rather than the configured store. It is read through `EmailStore.owners` here, so the
 //     key and its owner come from ONE dataset. The remaining split this note used to record —
-//     `src/cli/commands/sendkey.ts` resolving an owner NAME through a deployment-word-routed
+//     `src/cli/commands/sendkey.ts` resolving an owner NAME through a selector-routed
 //     `src/db/owners.ts` while the keys came from the configured store — CLOSED when the
 //     owners family collapsed onto the same seam: both now resolve from storage
 //     configuration, so the name and the key cannot come from different datasets.

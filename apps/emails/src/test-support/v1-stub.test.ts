@@ -1,13 +1,13 @@
 // Proves the reusable /v1 stub helper works against the REAL client transport:
-//  - the synchronous curl-backed resource store (src/db/self-hosted-store.ts), and
-//  - the async fetch-backed SelfHostedMailDataSource (src/lib/self-hosted-mail-data-source.ts).
+//  - the synchronous curl-backed resource store (src/db/api-store.ts), and
+//  - the async fetch-backed ApiMailDataSource (src/lib/api-mail-data-source.ts).
 // This doubles as the reference pattern for the fan-out migration.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { startV1Stub, type V1Stub } from "./v1-stub.js";
-import { selfHostedStoreFor } from "../db/self-hosted-store.js";
-import { resolveSelfHostedMailDataSource } from "../lib/self-hosted-mail-data-source.js";
-import { SELF_HOSTED_RESOURCES } from "../server/self-hosted/resources.js";
+import { apiStoreFor } from "../db/api-store.js";
+import { resolveApiMailDataSource } from "../lib/api-mail-data-source.js";
+import { API_RESOURCES } from "../server/api/resources.js";
 
 let stub: V1Stub;
 
@@ -39,13 +39,13 @@ describe("v1-stub — generic resource CRUD over the synchronous curl store", ()
   });
 
   it("serves the initial seed and round-trips create/get/delete", () => {
-    const store = selfHostedStoreFor("domains");
+    const store = apiStoreFor("domains");
 
     // Seeded row is visible.
     expect(store.list().map((r) => r["domain"])).toEqual(["seed.example.com"]);
 
     // Create routes to the stub and echoes the entity with an id.
-    const created = store.create({ domain: "new.example.com", provider: "selfHosted" });
+    const created = store.create({ domain: "new.example.com", provider: "api" });
     expect(created["domain"]).toBe("new.example.com");
     expect(String(created["id"]).length).toBeGreaterThan(0);
 
@@ -63,7 +63,7 @@ describe("v1-stub — generic resource CRUD over the synchronous curl store", ()
   });
 
   it("reset() restores the initial seed between tests (no cross-test leakage)", async () => {
-    const store = selfHostedStoreFor("domains");
+    const store = apiStoreFor("domains");
     // The previous test's create/delete left only the seed; a fresh create here...
     store.create({ domain: "leaky.example.com" });
     expect(store.list()).toHaveLength(2);
@@ -74,10 +74,10 @@ describe("v1-stub — generic resource CRUD over the synchronous curl store", ()
 
   it("seed() replaces the whole store for a resource the test cares about", async () => {
     await stub.seed({ contacts: [{ id: "c1", email: "a@x.com" }, { id: "c2", email: "b@x.com" }] });
-    const store = selfHostedStoreFor("contacts");
+    const store = apiStoreFor("contacts");
     expect(store.list().map((r) => r["email"]).sort()).toEqual(["a@x.com", "b@x.com"]);
     // The domains resource is now empty (seed replaced everything).
-    expect(selfHostedStoreFor("domains").list()).toEqual([]);
+    expect(apiStoreFor("domains").list()).toEqual([]);
   });
 
   it("enforces bearer auth (list back via the control dump helper)", async () => {
@@ -121,13 +121,13 @@ describe("v1-stub — generic resource CRUD over the synchronous curl store", ()
 
   it("normalizes every registered resource seed to a complete server row", async () => {
     await stub.seed(Object.fromEntries(
-      SELF_HOSTED_RESOURCES.map((spec) => [
+      API_RESOURCES.map((spec) => [
         spec.path,
         [{ ...(spec.idColumn ? { [spec.idColumn]: `fixture-${spec.path}` } : {}) }],
       ]),
     ));
 
-    for (const spec of SELF_HOSTED_RESOURCES) {
+    for (const spec of API_RESOURCES) {
       const response = await fetch(`${stub.baseUrl}/v1/${spec.path}`, {
         headers: { authorization: `Bearer ${stub.apiKey}` },
       });
@@ -170,7 +170,7 @@ describe("v1-stub — messages semantics over the async mail data source", () =>
   });
 
   it("lists the inbox newest-first and computes counts", async () => {
-    const ds = resolveSelfHostedMailDataSource();
+    const ds = resolveApiMailDataSource();
     expect(ds).not.toBeNull();
     const inbox = await ds!.listMailbox("inbox");
     expect(inbox.map((m) => m.id)).toEqual(["m2", "m1"]);
@@ -233,7 +233,7 @@ describe("v1-stub — messages semantics over the async mail data source", () =>
   });
 
   it("sends via POST /v1/messages/send and persists the outbound row", async () => {
-    const ds = resolveSelfHostedMailDataSource();
+    const ds = resolveApiMailDataSource();
     const res = await ds!.send({ to: "d@x.com", from: "me@x.com", subject: "new", body: "body", markdown: false });
     expect(String(res.id).length).toBeGreaterThan(0);
     const stored = await stub.list("messages");

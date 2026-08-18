@@ -2,7 +2,7 @@
 //
 // This family used to be three files: a facade that picked an implementation from the
 // process-wide deployment read, a local arm that did the whole diagnosis against SQLite
-// through five other families' `*.local.*` arms, and an HTTP arm that threw for both
+// through five other families' `*.sqlite.*` arms, and an HTTP arm that threw for both
 // entrypoints and carried a BYTE-FOR-BYTE COPY of the report formatter. The two arms did
 // not disagree about what "diagnose inbound delivery for this address" MEANS; they
 // disagreed about who was running. That is the switch the mode-removal program deletes,

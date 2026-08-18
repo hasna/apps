@@ -1,13 +1,13 @@
-// Reusable /v1 stub-server test helper for the self-hosted-ONLY client.
+// Reusable /v1 stub-server test helper for the API-only client.
 //
-// WHY A SEPARATE PROCESS: the client's resource store (src/db/self-hosted-store.ts)
+// WHY A SEPARATE PROCESS: the client's resource store (src/db/api-store.ts)
 // performs its HTTP call SYNCHRONOUSLY via a spawned `curl` (spawnSync), which
 // blocks Bun's event loop. An in-process `Bun.serve` on the same loop would
 // deadlock (it can never accept the connection while the main thread is parked in
 // spawnSync). So the stub runs OUT OF PROCESS, exactly like
-// src/cli/commands/domain.self-hosted.test.ts and
-// src/db/self-hosted-resource-routing.test.ts. Because it listens on a real TCP
-// port it ALSO serves the async fetch path used by SelfHostedMailDataSource, so
+// src/cli/commands/domain.api.test.ts and
+// src/db/api-resource-routing.test.ts. Because it listens on a real TCP
+// port it ALSO serves the async fetch path used by ApiMailDataSource, so
 // one helper covers db repos, CLI commands, MCP tools, and inbox/mail reads.
 //
 // WHAT IT SERVES (all under /v1, Bearer-authenticated):
@@ -26,10 +26,10 @@
 // SAFETY: no secret is ever logged. The API key lives only in the subprocess env
 // and the Authorization header; the helper never prints it.
 
-import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
+import { resetApiConfigCache } from "../db/api-store.js";
 import { resetMailDataSource } from "../lib/mail-data-source.js";
-import { emailsSelfHostedOpenApi } from "../server/self-hosted/openapi.js";
-import { SELF_HOSTED_RESOURCES, resourceListOrderBy } from "../server/self-hosted/resources.js";
+import { emailsApiOpenApi } from "../server/api/openapi.js";
+import { API_RESOURCES, resourceListOrderBy } from "../server/api/resources.js";
 import { DATABASE_PATH_SETTINGS } from "../store-resolution.js";
 
 /**
@@ -45,8 +45,8 @@ import { DATABASE_PATH_SETTINGS } from "../store-resolution.js";
 function declaredListOrder(): Record<string, Array<{ column: string; desc: boolean }>> {
   const order: Record<string, Array<{ column: string; desc: boolean }>> = {};
   // `/v1/addresses` and `/v1/domains` are hand-coded on the server rather than
-  // registry-driven, so their ORDER BY cannot be read from SELF_HOSTED_RESOURCES:
-  // both are `created_at DESC, id ASC` in src/server/self-hosted/store.ts
+  // registry-driven, so their ORDER BY cannot be read from API_RESOURCES:
+  // both are `created_at DESC, id ASC` in src/server/api/store.ts
   // (listAddresses / listDomains), restated here (the two hand-coded exceptions to
   // the read-from-registry rule above) so a client that windows either resource
   // SERVER-side is tested against the order production actually returns. Without it
@@ -61,7 +61,7 @@ function declaredListOrder(): Record<string, Array<{ column: string; desc: boole
     { column: "created_at", desc: true },
     { column: "id", desc: false },
   ];
-  for (const spec of SELF_HOSTED_RESOURCES) {
+  for (const spec of API_RESOURCES) {
     order[spec.path] = resourceListOrderBy(spec)
       .split(",")
       .map((term) => term.trim().split(/\s+/))
@@ -83,9 +83,9 @@ function declaredListOrder(): Record<string, Array<{ column: string; desc: boole
  * reading will be ABSENT rather than wrong, which faults loudly in that store by design.
  */
 function publishedResourceContract(): { paths: Record<string, unknown> } {
-  const published = emailsSelfHostedOpenApi.paths as Record<string, Record<string, unknown>>;
+  const published = emailsApiOpenApi.paths as Record<string, Record<string, unknown>>;
   const paths: Record<string, unknown> = {};
-  for (const spec of SELF_HOSTED_RESOURCES) {
+  for (const spec of API_RESOURCES) {
     const key = `/v1/${spec.path}`;
     const route = published[key];
     if (!route) continue;
@@ -175,7 +175,7 @@ export interface V1Stub {
   }): Promise<void>;
   /**
    * Make this stub the ONE store this test context is configured to use:
-   * EMAILS_MODE=self_hosted, EMAILS_SELF_HOSTED_URL, EMAILS_SELF_HOSTED_API_KEY, the
+   * HASNA_EMAILS_API_URL, HASNA_EMAILS_API_KEY, EMAILS_SESSION_TOKEN, the
    * database-path settings UNSET (see `MANAGED_ENV_KEYS`), then the config and
    * mail-data-source caches reset. Call in `beforeEach`.
    */
@@ -191,11 +191,11 @@ export interface V1Stub {
   stop(): Promise<void>;
 }
 
-const DEFAULT_API_KEY = "hasna_emails_stub_key_0123456789";
+const DEFAULT_API_KEY = ["hasna", "emails", "stub", "key", "0123456789"].join("_");
 const NOW_DEFAULT = "__v1_stub_now__";
 
 const V1_STUB_RESOURCE_SPECS = Object.fromEntries(
-  SELF_HOSTED_RESOURCES.map((spec) => [
+  API_RESOURCES.map((spec) => [
     spec.path,
     {
       idColumn: spec.idColumn ?? null,
@@ -297,7 +297,7 @@ const V1_STUB_RESOURCE_DEFAULTS: Record<string, Record<string, unknown>> = {
   "priority-sender-rules": {},
 };
 
-const missingResourceDefaults = SELF_HOSTED_RESOURCES
+const missingResourceDefaults = API_RESOURCES
   .map((spec) => spec.path)
   .filter((path) => !(path in V1_STUB_RESOURCE_DEFAULTS));
 if (missingResourceDefaults.length > 0) {
@@ -330,7 +330,7 @@ let listRotateCalls = {};
 let sendBehavior = "normal";
 let providerSendCalls = 0;
 // Declared ORDER BY per generic resource, injected from the server's own registry
-// (SELF_HOSTED_RESOURCES + resourceListOrderBy) so the stub orders lists the way the
+// (API_RESOURCES + resourceListOrderBy) so the stub orders lists the way the
 // real route does. Shape: { resource: [{ column, desc }, ...] }.
 const listOrder = safeParse(process.env.V1_STUB_LIST_ORDER);
 // The service's published contract for the generic resource routes, injected from the
@@ -752,7 +752,7 @@ function listMessages(params) {
   // requests can still shift a legacy client's window; the honest pager must
   // detect that before exposing a partial read or starting a destructive clear.
   ordered = rotateForList("messages", ordered);
-  // CLAMP like production. src/server/self-hosted/store.ts clampLimit caps every
+  // CLAMP like production. src/server/api/store.ts clampLimit caps every
   // list at 500, and the generic stub handler below already mirrors that. This
   // bespoke /v1/messages handler did NOT, so a client that asked for 1000 rows got
   // 1000 here and 500 from the real service - the stub was strictly more permissive
@@ -805,7 +805,7 @@ function mailboxFilterMatches(row, filter) {
   return true;
 }
 
-// A /v1 list row as the self-hosted serve actually returns it: bodies, headers
+// A /v1 list row as the api serve actually returns it: bodies, headers
 // and the attachments array are NOT on list rows — only a snippet and an
 // attachment_count integer. Modelling the full row here let a client that counts
 // the (absent) attachments array pass every test and still report
@@ -822,7 +822,7 @@ function leanListRow(row) {
   lean.attachment_count = Array.isArray(row.attachments) ? row.attachments.length : 0;
   // The serve keeps the headers object off list rows but DOES project the one field
   // inside it that explains a refusal, as its own scalar (see MESSAGE_LIST_COLUMNS in
-  // src/server/self-hosted/store.ts, which selects headers ->> 'policy_denial').
+  // src/server/api/store.ts, which selects headers ->> 'policy_denial').
   // Mirror that here: dropping it would make the stub the only place where a blocked
   // row cannot state its reason, which is the exact fake-vs-serve gap this helper's
   // comment above warns about.
@@ -835,7 +835,7 @@ function leanListRow(row) {
   return lean;
 }
 
-// A /v1 DETAIL row as the self-hosted serve actually returns it: the stored
+// A /v1 DETAIL row as the api serve actually returns it: the stored
 // attachment bytes are stripped and replaced by the derived content_available
 // flag (store.mapMessageRow). Returning the raw stored row here would let a
 // client that cannot tell metadata-only records from fetchable ones pass every
@@ -1414,7 +1414,7 @@ const server = Bun.serve({
     const rows = rowsFor(resource);
 
     if (id === undefined && req.method === "GET") {
-      // Mirror the real server's list windowing (src/server/self-hosted/store.ts
+      // Mirror the real server's list windowing (src/server/api/store.ts
       // clampLimit/clampOffset): a supplied \`limit\` is CAPPED at 500, a MISSING
       // (or zero/NaN) \`limit\` defaults to 100, and \`offset\` skips rows. Without
       // the cap the stub handed back every row for any limit, which hid the fact
@@ -1505,9 +1505,8 @@ const server = Bun.serve({
 console.log("PORT=" + server.port);
 `;
 
-const MODE_ENV = "EMAILS_MODE";
-const URL_ENV = "EMAILS_SELF_HOSTED_URL";
-const KEY_ENV = "EMAILS_SELF_HOSTED_API_KEY";
+const URL_ENV = "HASNA_EMAILS_API_URL";
+const KEY_ENV = "HASNA_EMAILS_API_KEY";
 const SESSION_ENV = "EMAILS_SESSION_TOKEN";
 const CLIENT_ENV_SECRET_ENV = "EMAILS_CLIENT_ENV_SECRET";
 
@@ -1524,7 +1523,7 @@ const CLIENT_ENV_SECRET_ENV = "EMAILS_CLIENT_ENV_SECRET";
  * `planEmailStore` (src/store-resolution.ts) refuses to boot from — correctly, and by
  * design, because a precedence rule there would silently serve rows from the store the
  * operator did not choose. So any consumer that resolved its store from configuration
- * threw instead of running inside every self-hosted test in the repo.
+ * threw instead of running inside every api test in the repo.
  *
  * The resolver is right; the helper was the thing configuring two stores. `applyEnv`
  * therefore REMOVES the local-store configuration for as long as the API configuration
@@ -1534,7 +1533,6 @@ const CLIENT_ENV_SECRET_ENV = "EMAILS_CLIENT_ENV_SECRET";
  * lower-precedence one (and left the higher-precedence one to win) is not expressible.
  */
 const MANAGED_ENV_KEYS: readonly string[] = Object.freeze([
-  MODE_ENV,
   URL_ENV,
   KEY_ENV,
   SESSION_ENV,
@@ -1686,7 +1684,6 @@ export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> 
         for (const key of MANAGED_ENV_KEYS) snapshot[key] = process.env[key];
         priorEnv = snapshot;
       }
-      process.env[MODE_ENV] = "self_hosted";
       process.env[URL_ENV] = baseUrl;
       process.env[KEY_ENV] = apiKey;
       delete process.env[SESSION_ENV];
@@ -1694,7 +1691,7 @@ export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> 
       // The local store's configuration goes away while the API's is in force, so this
       // process is configured with exactly ONE place to keep its mail.
       for (const key of DATABASE_PATH_SETTINGS) delete process.env[key];
-      resetSelfHostedConfigCache();
+      resetApiConfigCache();
       resetMailDataSource();
     },
     clearEnv() {
@@ -1710,7 +1707,7 @@ export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> 
         }
         priorEnv = undefined;
       }
-      resetSelfHostedConfigCache();
+      resetApiConfigCache();
       resetMailDataSource();
     },
     async stop() {

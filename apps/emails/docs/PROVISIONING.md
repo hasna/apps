@@ -42,7 +42,7 @@ emails inbox mailboxes
 ```
 
 Both `domain adopt` and `aws setup-inbound` mutate the AWS account selected by
-the executing machine's profile/credentials. In a self-hosted client they are
+the executing machine's profile/credentials. In an API client they are
 still operator-side infrastructure commands; the `/v1` server does not perform
 that work. Run them only from an operator-controlled machine against the
 intended account.
@@ -67,7 +67,7 @@ Local mode also exposes direct, operator-credentialed infrastructure tools:
 - `setup_ses_inbound` creates the S3 bucket and SES receipt rules.
 
 These are one-shot infrastructure helpers, not the missing resumable
-`provision_*` workflow. They are refused in `self_hosted` mode because otherwise
+`provision_*` workflow. They are refused in `api` mode because otherwise
 they would mutate infrastructure using the client machine's ambient cloud
 credentials while recording state in the operator's shared service.
 

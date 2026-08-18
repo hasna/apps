@@ -1,6 +1,6 @@
 // Live end-to-end proof that the six `emails domain warm*` commands actually
 // work. Every one of them used to be an unconditional `throw` claiming warming
-// "is not available in the self-hosted client; it runs on the self-hosted
+// "is not available in the api client; it runs on the api
 // server" — a refusal that fired in EVERY configuration even though the warming
 // repository (src/db/warming.ts), the `warming_schedules` table, and the
 // /v1/warming routes all existed.
@@ -18,11 +18,10 @@ import { join } from "node:path";
 
 // Anything that could point the process at a real endpoint or account.
 const SCRUBBED_ENV_KEYS = [
-  "EMAILS_MODE", "HASNA_EMAILS_MODE", "EMAILS_DB_PATH", "HASNA_EMAILS_DB_PATH",
-  "EMAILS_SELF_HOSTED_URL", "EMAILS_SELF_HOSTED_API_KEY", "EMAILS_SESSION_TOKEN",
+  "EMAILS_DB_PATH", "HASNA_EMAILS_DB_PATH",
+  "HASNA_EMAILS_API_URL", "HASNA_EMAILS_API_KEY", "EMAILS_SESSION_TOKEN",
   "EMAILS_CLIENT_ENV_SECRET", "EMAILS_DATABASE_URL", "HASNA_EMAILS_DATABASE_URL",
-  "EMAILS_STORAGE_MODE", "HASNA_EMAILS_STORAGE_MODE",
-  "MAILERY_MODE", "HASNA_MAILERY_MODE", "MAILERY_STORAGE_MODE", "HASNA_MAILERY_STORAGE_MODE",
+    "MAILERY_MODE", "HASNA_MAILERY_MODE", "MAILERY_STORAGE_MODE", "HASNA_MAILERY_STORAGE_MODE",
   "MAILERY_API_URL", "MAILERY_API_KEY", "HASNA_MAILERY_API_URL", "HASNA_MAILERY_API_KEY",
   "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE",
   "RESEND_API_KEY",
@@ -102,10 +101,10 @@ interface WarmStatusPayload {
 }
 
 // The exact refusal these commands used to emit. It was false in BOTH
-// directions (local and self-hosted), so no warming surface may reproduce it.
+// directions (local and api), so no warming surface may reproduce it.
 const RETIRED_REFUSALS = [
-  "not available in the self-hosted client",
-  "it runs on the self-hosted server",
+  "not available in the api client",
+  "it runs on the API server",
 ];
 
 function expectNoRetiredRefusal(text: string): void {
@@ -144,7 +143,7 @@ describe("emails domain warm* (live, temp SQLite)", () => {
     });
     expect(created.schedule.id).toBeTruthy();
     // Exact, in every timezone: the ramp is anchored on the UTC calendar date,
-    // the same anchor the self-hosted server enforces the cap with.
+    // the same anchor the api server enforces the cap with.
     expect(created.current_day).toBe(7);
     expect(created.total_days).toBe(15);
     expect(created.final_day).toBe(15);
@@ -194,7 +193,7 @@ describe("emails domain warm* (live, temp SQLite)", () => {
     expect(paused).toMatchObject({ domain: "ramp.example.com", status: "paused" });
     const pausedStatus = runJson<WarmStatusPayload>(["domain", "warm-status", "ramp.example.com"], env);
     expect(pausedStatus.schedule.status).toBe("paused");
-    // A paused schedule imposes no limit (send.local.ts keys off exactly this).
+    // A paused schedule imposes no limit (send.sqlite.ts keys off exactly this).
     expect(pausedStatus.today_limit).toBeNull();
 
     const pausedOnly = runJson<WarmingSchedulePayload[]>(["domain", "warm-list", "--status", "paused"], env);

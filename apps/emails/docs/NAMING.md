@@ -80,8 +80,8 @@ Renaming any of these breaks deployed systems, so they are frozen:
 
 | Reference | Where | What breaks if renamed |
 | --- | --- | --- |
-| Migration IDs `0001_mailery_selfhosted_core` .. `0005_mailery_selfhosted_resources` | `src/server/self-hosted/migrations.ts` | Migration IDs are immutable ledger entries. Renaming them makes deployed databases re-run applied migrations. |
-| API key alias slug `"mailery"` | `hasna.contract.json` (`apiKeyAppAliases`), `src/server/self-hosted/{keys,api-key-verifier,serve}.ts` | API keys already minted under the `mailery` slug stop verifying — this revokes live credentials. |
+| Migration IDs `0001_mailery_api_core` .. `0005_mailery_api_resources` | `src/server/api/migrations.ts` | Migration IDs are immutable ledger entries. Renaming them makes deployed databases re-run applied migrations. |
+| API key alias slug `"mailery"` | `hasna.contract.json` (`apiKeyAppAliases`), `src/server/api/{keys,api-key-verifier,serve}.ts` | API keys already minted under the `mailery` slug stop verifying — this revokes live credentials. |
 | `legacy-inbound@local.mailery` | `src/db/database.ts` | A retired synthetic inbound identity present in deployed SQLite databases. Renaming orphans real rows. |
 | `LEGACY_MAILERY_EVENT_SOURCE` / `mailery.v1` | `src/lib/emails-events.ts` | Wire compatibility for events emitted by older versions. |
 | `mailery_mode` config key migration | `src/lib/config.ts` | The forward-migration path for existing on-disk config. |
@@ -90,7 +90,7 @@ Renaming any of these breaks deployed systems, so they are frozen:
 
 `MAILERY_*` and `HASNA_MAILERY_*` environment variables are **banned
 selectors**, not aliases — `src/lib/mode.ts` and
-`src/server/self-hosted/env.ts` reject them loudly rather than honoring them.
+`src/server/api/env.ts` reject them loudly rather than honoring them.
 The canonical prefix is `EMAILS_*`. The names must remain listed in order to be
 refused with a useful error.
 
@@ -112,7 +112,7 @@ adversarial reviewer read it and concluded — wrongly — that the two products
 are coupled.
 
 The practical consequence for this repo: **`@hasna/emails` has no hosted
-counterpart.** Its deployment modes are operator-owned. Do not describe
+counterpart.** Its deployment configurations are operator-owned. Do not describe
 `mailery.co` as the hosted version of this package, and do not add a client for
 it here.
 
@@ -131,7 +131,7 @@ Outside those three groups there are exactly three remaining prose uses, all
 reviewed and all deliberately kept, because each describes a historical fact
 rather than naming the product:
 
-- `README.md` and `docs/SELF_HOSTED_RUNTIME.md` — "the active Mailery-era key",
+- `README.md` and `docs/API_RUNTIME.md` — "the active Mailery-era key",
   meaning the key minted under the `mailery` alias slug. Renaming the phrase
   would obscure which key an operator has to rotate.
 - `docs/DEPLOYMENT_CUTOVER.md` — "released Mailery migration ids/checksums",

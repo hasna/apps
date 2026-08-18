@@ -3,10 +3,10 @@
 // THE DEFECT. The flag was advertised in `--help` ("Send to all members of a
 // recipient group") and its action was an unconditional throw:
 //
-//   --to-group is not available in the self-hosted client without a self-hosted
+//   --to-group is not available in the api client without a api
 //   group-members send API. Pass explicit --to recipients.
 //
-// Wrong twice. It fired in LOCAL mode, where nothing about a "self-hosted
+// Wrong twice. It fired in LOCAL mode, where nothing about a "api
 // client" applies; and no send API is needed at all — group fan-out is a
 // CLIENT-side recipient lookup that ends in the same `to:` field an explicit
 // `--to` fills. `src/db/groups.ts` is a routed facade whose reads resolve to
@@ -14,14 +14,14 @@
 // `emails group members <name>` has been printing exactly this list in both
 // configurations the whole time.
 //
-// Both arms are covered because the refusal named self-hosted while breaking
+// Both arms are covered because the refusal named api while breaking
 // local: a test in one mode alone would leave the other half unproven.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { Command } from "commander";
 import { closeDatabase, resetDatabase } from "../../db/database.js";
-import { resetSelfHostedConfigCache } from "../../db/self-hosted-store.js";
+import { resetApiConfigCache } from "../../db/api-store.js";
 import { addMember, createGroup } from "../../db/groups.js";
-import { createProvider } from "../../db/providers.local.js";
+import { createProvider } from "../../db/providers.sqlite.js";
 import { listSandboxEmails } from "../../db/sandbox.js";
 import { resetMailDataSource } from "../../lib/mail-data-source.js";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
@@ -86,17 +86,17 @@ describe("emails send --to-group (local)", () => {
   beforeEach(async () => {
     captureInheritedProcessEnv();
     // Local is the DEFAULT resolution (src/lib/mode.ts), and the hermetic runner
-    // selects it explicitly, so this arm only has to make sure no self-hosted
+    // selects it explicitly, so this arm only has to make sure no api
     // selector is left over from a sibling suite. Naming the mode variable here
-    // would add to a tree-wide count that the mode-axis ratchet holds at a
+    // would add to a tree-wide count that the selector-removal guard holds at a
     // ceiling, and this file has no business raising it.
     for (const key of [
-      "EMAILS_SELF_HOSTED_URL",
-      "EMAILS_SELF_HOSTED_API_KEY",
+      "HASNA_EMAILS_API_URL",
+      "HASNA_EMAILS_API_KEY",
       "EMAILS_SESSION_TOKEN",
       "EMAILS_CLIENT_ENV_SECRET",
     ]) delete process.env[key];
-    resetSelfHostedConfigCache();
+    resetApiConfigCache();
     process.env["EMAILS_DB_PATH"] = ":memory:";
     resetDatabase();
     resetMailDataSource();
@@ -109,7 +109,7 @@ describe("emails send --to-group (local)", () => {
   afterEach(() => {
     closeDatabase();
     resetMailDataSource();
-    resetSelfHostedConfigCache();
+    resetApiConfigCache();
     delete process.env["EMAILS_DB_PATH"];
     restoreInheritedProcessEnv();
   });
@@ -123,7 +123,7 @@ describe("emails send --to-group (local)", () => {
     expect(result.exited).toBe(false);
     expect(result.consoleOutput).toContain("Email sent to one@ext.com, two@ext.com");
     // The refusal that shipped, in the mode it was most obviously wrong about.
-    expect(result.errorOutput).not.toContain("not available in the self-hosted client");
+    expect(result.errorOutput).not.toContain("not available in the api client");
     const sent = await listSandboxEmails(providerId, 10);
     expect(sent).toHaveLength(1);
     // One message carrying BOTH members, which is what `--to a@x b@y` produces
@@ -167,7 +167,7 @@ describe("emails send --to-group (local)", () => {
     expect(result.exited).toBe(true);
     expect(result.errorOutput).toContain("Group not found: nope");
     expect(result.errorOutput).toContain("emails group list");
-    expect(result.errorOutput).not.toContain("self-hosted");
+    expect(result.errorOutput).not.toContain("server");
     expect(await listSandboxEmails(providerId, 10)).toHaveLength(0);
   });
 
@@ -196,9 +196,9 @@ describe("emails send --to-group (local)", () => {
   });
 });
 
-// ---- self-hosted -------------------------------------------------------------
+// ---- api -------------------------------------------------------------
 
-describe("emails send --to-group (self-hosted)", () => {
+describe("emails send --to-group (api)", () => {
   let stub: V1Stub;
 
   // `openapi: true` because the collapsed family pushes its membership filters down,
@@ -250,7 +250,7 @@ describe("emails send --to-group (self-hosted)", () => {
 
     expect(result.exited).toBe(true);
     expect(result.errorOutput).toContain("Group not found: nope");
-    expect(result.errorOutput).not.toContain("self-hosted");
+    expect(result.errorOutput).not.toContain("server");
     expect(await stub.list("messages")).toHaveLength(0);
   });
 });

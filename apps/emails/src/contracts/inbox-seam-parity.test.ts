@@ -2,10 +2,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
 import { resetMailDataSource } from "../lib/mail-data-source.js";
 
-// CLI <-> MCP inbox parity in the self-hosted-ONLY client: both the CLI (`inbox
+// CLI <-> MCP inbox parity in the API-only client: both the CLI (`inbox
 // list`/`inbox read`) and the MCP tool (`list_inbound_emails`) read the SAME
 // inbound mail over the /v1 API, so they must return equivalent data. (The
-// previous local-SQLite "local mode" parity validated removed behavior.)
+// previous local-SQLite "local SQLite client" parity validated removed behavior.)
 
 const { runInboxTool } = await import("../mcp/tools/inbox-impl.js");
 
@@ -70,7 +70,7 @@ async function mcpList(): Promise<Array<{ id: string; subject: string }>> {
   return parsed.items;
 }
 
-describe("inbox CLI<->MCP parity — self-hosted /v1", () => {
+describe("inbox CLI<->MCP parity — api /v1", () => {
   it("CLI inbox list and MCP list_inbound_emails return equivalent /v1 data", async () => {
     const cli = await runCli(["inbox", "list", "--limit", "25"]);
     expect(cli.code).toBe(0);

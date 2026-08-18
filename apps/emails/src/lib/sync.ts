@@ -64,7 +64,7 @@
 
 import { getDatabase, runInTransaction, now, uuid } from "../db/database.js";
 import { withExplicitDatabaseRoute } from "../db/database-routing.js";
-import { getProviderWithCredentials, listActiveProviderSummaries } from "../db/providers.local.js";
+import { getProviderWithCredentials, listActiveProviderSummaries } from "../db/providers.sqlite.js";
 import { incrementBounceCounts, incrementComplaintCounts } from "../db/contacts.js";
 import { getAdapter } from "../providers/index.js";
 import { getLocalStats } from "./stats.js";
@@ -425,7 +425,7 @@ export async function syncAll(db?: Database): Promise<Record<string, number>> {
   const d = db ?? configuredDeliveryEventLedger();
   // NOT wrapped in the explicit-handle scope, and the absence is measured rather than
   // an oversight: this callee reads the handed-in handle directly and consults no
-  // routing of its own (src/db/providers.local.ts), so a scope here is dead code — a
+  // routing of its own (src/db/providers.sqlite.ts), so a scope here is dead code — a
   // mutation run proved its removal unobservable. The scoped calls in `syncProvider`
   // are the ones whose callees do interrogate routing.
   const providers = listActiveProviderSummaries(undefined, d);

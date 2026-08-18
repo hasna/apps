@@ -17,7 +17,7 @@ export interface MailboxFilterCriteria {
 }
 export interface MailboxFilter {
   id: string;
-  /** Present on self-hosted responses; local SQLite is implicitly tenant-scoped. */
+  /** Present on api responses; local SQLite is implicitly tenant-scoped. */
   tenant_id?: string;
   name: string;
   normalized_name: string;

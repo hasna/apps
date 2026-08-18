@@ -3,7 +3,7 @@
 //
 // WHAT THIS FILE USED TO BE. A 28-line facade whose dispatch helper read the
 // process-wide deployment word and handed each of SIX exports to one of two sibling
-// modules — `email-digests.local.ts` (202 lines, SQLite) and `email-digests.remote.ts`
+// modules — `email-digests.sqlite.ts` (202 lines, SQLite) and `email-digests.api.ts`
 // (186 lines, the curl bridge). Neither arm decided anything about what a digest row
 // MEANS; they decided who ran the SQL.
 //
@@ -32,7 +32,7 @@
 //      list whose contract is "newest first".
 //   3. The four JSON columns — the HTTP arm handed the service PRE-SERIALIZED JSON
 //      strings. The service's generic writer JSON-encodes a `json: true` column itself
-//      and binds it with a `::jsonb` cast (`src/server/self-hosted/store.ts`,
+//      and binds it with a `::jsonb` cast (`src/server/api/store.ts`,
 //      `encodeColumn` and `createResource`), so those four columns landed in Postgres as
 //      jsonb STRING SCALARS rather than as an array and an object. They round-tripped
 //      back through that arm's own parser by luck; nothing else could read them as JSON.
@@ -49,7 +49,7 @@
 //     implementations genuinely disagree: the SQLite resource path orders these rows by
 //     `created_at DESC, id DESC` (`src/store-sqlite/resources.ts`, `describeTable` —
 //     SQLite's `email_digests` has no `updated_at`) and the service orders them by
-//     `completed_at DESC` (`src/server/self-hosted/resources.ts`, the `email-digests`
+//     `completed_at DESC` (`src/server/api/resources.ts`, the `email-digests`
 //     spec — its table DOES have `updated_at`). So "newest" and "newest first" are
 //     decided HERE, on `completed_at`, with `id` as the tiebreaker. That is what the
 //     deleted arms' `ORDER BY completed_at DESC` meant, plus a tiebreaker they did not
@@ -74,8 +74,8 @@
 // THE ENUM VALUES ARE VALIDATED ON THE WAY IN, which is new and is a divergence being
 // CLOSED rather than one being introduced. SQLite's `email_digests` carries
 // `CHECK` constraints on `period`, `provider` and `status` (`src/db/database.ts`); the
-// self-hosted Postgres migration DROPS all three
-// (`src/server/self-hosted/migrations.ts`). So an out-of-enum value was refused by one
+// api Postgres migration DROPS all three
+// (`src/server/api/migrations.ts`). So an out-of-enum value was refused by one
 // store and accepted by the other — and both deleted arms' read mappers then threw on
 // the row they had just successfully written, leaving a table row no reader could
 // return. Validating here makes both stores answer the same way, and makes the answer
@@ -387,7 +387,7 @@ async function readDigestRows(
  *     deleted HTTP arm's client-side uuid was already being discarded and its returned row
  *     already carried the server's. `/v1`'s published request schema is
  *     `additionalProperties: false` over the fifteen declared columns
- *     (`src/server/self-hosted/openapi.ts`), so naming `id` here would make the HTTP store
+ *     (`src/server/api/openapi.ts`), so naming `id` here would make the HTTP store
  *     REFUSE the write outright rather than have it accepted and dropped.
  *   * `created_at` is likewise not a declared column, so the store stamps it with its own
  *     clock. Both deleted arms set it equal to `completed_at`. The two now differ when a

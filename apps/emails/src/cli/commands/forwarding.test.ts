@@ -11,7 +11,7 @@
 // write column against.
 //
 // `forwarding run` NO LONGER ASSERTS A LOUD FAILURE, and that is a strengthening rather
-// than a removal. The old assertion was that the pipeline refuses in the self-hosted client;
+// than a removal. The old assertion was that the pipeline refuses in the api client;
 // what is asserted now is that the pipeline RUNS against local storage and reaches the
 // collapsed `listPendingForwarding` / `recordForwardingDelivery` through the facade — the
 // consumer swap this collapse required, end to end.
@@ -54,7 +54,7 @@ function configureLocalStore(): void {
 function configureApiStore(): void {
   clearStoreSettings();
   process.env[API_BASE_URL_SETTING] = api.baseUrl;
-  process.env["EMAILS_SELF_HOSTED_API_KEY"] = api.apiKey;
+  process.env["HASNA_EMAILS_API_KEY"] = api.apiKey;
 }
 
 beforeEach(() => {

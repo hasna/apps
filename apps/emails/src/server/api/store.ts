@@ -1,0 +1,5211 @@
+// Postgres repository for the Emails api service.
+//
+// Amendment A1 (PURE REMOTE): every method reads/writes the api Postgres
+// directly through the product-owned storage utilities' typed query client. No cache, no
+// local mirror.
+
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import type { QueryResult, TypedQueryClient, PoolQueryClient } from "../../storage-kit/index.js";
+import type { QueryResultRow } from "pg";
+import type { ApiResourceSpec, ResourceColumn } from "./resources.js";
+import { resourceKeyColumn, resourceListOrderBy } from "./resources.js";
+import { canonicalSender } from "../../lib/email-address.js";
+import {
+  MAX_ATTACHMENT_DOWNLOAD_BYTES,
+  decodeAttachmentPayload,
+  validateAttachmentMetadata,
+} from "../../lib/attachment-download.js";
+import {
+  MailboxFilterConflictError,
+  MailboxFilterNotFoundError,
+  normalizeMailboxFilterInput,
+  type MailboxFilter,
+  type MailboxFilterInput,
+} from "../../lib/mailbox-filters.js";
+
+/** A live pool exposes `transaction()`; an in-memory unit-test shim does not. */
+function isTransactional(client: TypedQueryClient): client is PoolQueryClient {
+  return typeof (client as Partial<PoolQueryClient>).transaction === "function";
+}
+
+/**
+ * Wrap a query client so EVERY operation runs inside its own short transaction
+ * that first sets the `app.current_tenant` GUC (design §6 Layer 2 / adversarial
+ * fixes H3, M1). This is the per-operation counterpart the Postgres Row-Level
+ * Security policy (migration 0013) reads:
+ *
+ *   USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+ *
+ * Why `set_config(..., is_local=true)` INSIDE a transaction (never a bare `SET`):
+ * the value is transaction-local, so it is auto-reset on COMMIT/ROLLBACK and can
+ * NEVER bleed onto the next borrower of a pooled connection (design §12 "pooled
+ * SET LOCAL leakage").
+ *
+ * Why PER-OPERATION and not per-request (H3): `/v1/messages/send` is a deliberate
+ * multi-commit, exactly-once state machine (reserve -> claim -> provider HTTP ->
+ * complete). Each store call being its own transaction keeps every mutation
+ * atomic AND releases the pooled connection between calls, so nothing is ever held
+ * across the provider network hop (pool exhaustion / lost exactly-once on
+ * rollback). It is Layer 2's belt to Layer 1's braces — the scoped store already
+ * injects `tenant_id` into every query, so this adds the DB-enforced backstop.
+ *
+ * A non-transactional client (the hermetic in-memory test shims) is returned
+ * unchanged: RLS is a Postgres construct with no meaning for an in-memory fake,
+ * and the GUC round-trip would have nothing to talk to.
+ */
+function tenantScopedClient(client: TypedQueryClient, tenantId: string): TypedQueryClient {
+  if (!isTransactional(client)) return client;
+  const pool = client;
+  const withTenant = <T>(fn: (tx: TypedQueryClient) => Promise<T>): Promise<T> =>
+    pool.transaction(async (tx) => {
+      await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [tenantId]);
+      return fn(tx);
+    });
+  return {
+    query<T extends QueryResultRow>(sql: string, params?: readonly unknown[]): Promise<QueryResult<T>> {
+      return withTenant((tx) => tx.query<T>(sql, params));
+    },
+    many<T extends QueryResultRow>(sql: string, params?: readonly unknown[]): Promise<T[]> {
+      return withTenant((tx) => tx.many<T>(sql, params));
+    },
+    get<T extends QueryResultRow>(sql: string, params?: readonly unknown[]): Promise<T | null> {
+      return withTenant((tx) => tx.get<T>(sql, params));
+    },
+    one<T extends QueryResultRow>(sql: string, params?: readonly unknown[]): Promise<T> {
+      return withTenant((tx) => tx.one<T>(sql, params));
+    },
+    execute(sql: string, params?: readonly unknown[]): Promise<void> {
+      return withTenant((tx) => tx.execute(sql, params));
+    },
+  };
+}
+
+export interface DomainRecord {
+  id: string;
+  domain: string;
+  status: string;
+  provider: string | null;
+  verified: boolean;
+  notes: string | null;
+  // Provisioning lifecycle state (mirrors the local domains provisioning
+  // columns). Present once migration 0010 has run; optional so older/fake rows
+  // still satisfy the type.
+  provisioning_status?: string;
+  purchase_provider?: string | null;
+  dns_provider?: string;
+  send_provider?: string | null;
+  cf_zone_id?: string | null;
+  registrar?: string | null;
+  nameservers_json?: string[];
+  mail_from_domain?: string | null;
+  last_error?: string | null;
+  next_check_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Writable domain provisioning fields (a PATCH may set any subset). */
+export interface DomainProvisioningPatch {
+  provisioning_status?: string;
+  purchase_provider?: string | null;
+  dns_provider?: string;
+  send_provider?: string | null;
+  cf_zone_id?: string | null;
+  registrar?: string | null;
+  nameservers_json?: string[];
+  mail_from_domain?: string | null;
+  last_error?: string | null;
+  next_check_at?: string | null;
+}
+
+export interface AddressRecord {
+  id: string;
+  email: string;
+  domain: string | null;
+  display_name: string | null;
+  status: string;
+  verified: boolean;
+  daily_quota: number | null;
+  /** Provider binding. Nullable for legacy/direct API clients that omit it. */
+  provider_id?: string | null;
+  // Ownership (migration 0011). An address is owned by a human OR agent owner and
+  // administered by an agent. Optional so older/fake rows still satisfy the type.
+  owner_id?: string | null;
+  administrator_id?: string | null;
+  // Provisioning lifecycle state (mirrors the local addresses provisioning
+  // columns). Present once migration 0010 has run; optional so older/fake rows
+  // still satisfy the type.
+  domain_id?: string | null;
+  receive_strategy?: string | null;
+  forward_to?: string | null;
+  routing_rule_id?: string | null;
+  provisioning_status?: string;
+  last_validated_at?: string | null;
+  last_error?: string | null;
+  next_check_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Writable address provisioning fields (a PATCH may set any subset). */
+export interface AddressProvisioningPatch {
+  domain_id?: string | null;
+  receive_strategy?: string | null;
+  forward_to?: string | null;
+  routing_rule_id?: string | null;
+  provisioning_status?: string;
+  last_validated_at?: string | null;
+  last_error?: string | null;
+  next_check_at?: string | null;
+}
+
+/** Writable address ownership fields (a PATCH may set either; null clears). */
+export interface AddressOwnershipPatch {
+  owner_id?: string | null;
+  administrator_id?: string | null;
+}
+
+/** Non-secret projection of a scoped send key (never carries the key hash). */
+export interface SendKeyRecord {
+  id: string;
+  owner_id: string | null;
+  prefix: string | null;
+  label: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InboundRouteGroup {
+  tenantId: string;
+  recipients: string[];
+}
+
+export interface InboundRouteResolution {
+  groups: InboundRouteGroup[];
+  unresolved: string[];
+}
+
+export type OutboundPolicyCode =
+  | "sender_not_registered"
+  | "sender_inactive"
+  | "sender_unverified"
+  | "sender_not_ready"
+  | "send_key_required"
+  | "send_key_invalid"
+  | "send_key_forbidden"
+  | "recipient_suppressed"
+  | "address_quota_exceeded"
+  | "warming_limit_exceeded";
+
+export type OutboundPolicyDecision =
+  | { allowed: true }
+  | { allowed: false; code: OutboundPolicyCode; message: string; status: 403 | 409 | 429 };
+
+export interface MessageRecord {
+  id: string;
+  direction: string;
+  from_addr: string;
+  to_addrs: string[];
+  cc_addrs: string[];
+  subject: string | null;
+  body_text: string | null;
+  body_html: string | null;
+  status: string;
+  provider_message_id: string | null;
+  message_id: string | null;
+  in_reply_to: string | null;
+  received_at: string | null;
+  is_read: boolean;
+  is_starred: boolean;
+  labels: string[];
+  headers: Record<string, unknown>;
+  attachments: unknown[];
+  source_id: string | null;
+  idempotency_key: string | null;
+  send_payload_hash: string | null;
+  send_state: string;
+  send_started_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MessageListRecord
+  extends Omit<
+    MessageRecord,
+    "body_text" | "body_html" | "idempotency_key" | "send_payload_hash" | "headers" | "attachments"
+  > {
+  snippet: string | null;
+  /** Count only — full attachment metadata stays on the single-message read. */
+  attachment_count: number;
+  /**
+   * WHY headers.policy_denial is projected as its own scalar on LIST rows.
+   *
+   * `send_state = 'blocked'` says a send was refused; it does not say why. The
+   * reason is written by markSendBlocked() into headers.policy_denial, and full
+   * `headers` are deliberately stripped from list rows (they and the bodies were
+   * ~73% of a 459KB page — see MESSAGE_LIST_COLUMNS). So a list consumer could see
+   * `blocked` and had no way at all to learn the cause: `emails log` and
+   * `emails email list` rendered the bare word.
+   *
+   * That cost five days on 2026-07-22 — an outbound customs-document email for a
+   * held shipment was refused with sender_unverified, read as an unremarkable
+   * "blocked", and the shipment was returned to its shipper while the reason sat
+   * unread in a jsonb column (2026-07-27).
+   *
+   * Projecting the whole headers object would undo the payload decision; a single
+   * short code does not. Null whenever the row was not policy-refused.
+   */
+  policy_denial: string | null;
+}
+
+/** One keyset page of the message list. */
+export interface MessageListPage {
+  items: MessageListRecord[];
+  /** Opaque cursor for the next page, or null when this page is the last. */
+  next_cursor: string | null;
+}
+
+/**
+ * One machine-readable attachment-metadata row in the inventory. NEVER carries
+ * content_base64 (payload bytes come from GET /v1/messages/{id}/attachments/{index}).
+ * `attachment_index` is the 0-based position in the message's attachments array
+ * — the stable id accepted by the attachment-content endpoint.
+ */
+export interface AttachmentInventoryItem {
+  message_id: string;
+  attachment_index: number;
+  filename: string | null;
+  content_type: string | null;
+  size_bytes: number | null;
+  sha256: string | null;
+  /**
+   * Whether valid stored payload bytes exist for this row — i.e. whether
+   * GET /v1/messages/{id}/attachments/{index} can return content or will answer
+   * 409 attachment_content_unavailable. Metadata alone is NOT proof of content:
+   * the legacy import backfilled filename/content_type/size for messages whose
+   * bytes were never carried over. Without this discriminator a cataloging
+   * client has to attempt a download per row to learn the difference (#36).
+   */
+  content_available: boolean;
+  direction: string | null;
+  received_at: string | null;
+}
+
+/** Per-message attachment metadata for the batch-by-ids mode (message_id is the key). */
+export interface AttachmentMeta {
+  attachment_index: number;
+  filename: string | null;
+  content_type: string | null;
+  size_bytes: number | null;
+  sha256: string | null;
+  /** See AttachmentInventoryItem.content_available — same meaning, same source. */
+  content_available: boolean;
+}
+
+/** One keyset page of the attachment inventory. */
+export interface AttachmentInventoryPage {
+  items: AttachmentInventoryItem[];
+  /** Opaque cursor for the next page, or null when this page is the last. */
+  next_cursor: string | null;
+}
+
+export interface ListAttachmentsOptions {
+  limit?: number;
+  cursor?: string;
+  direction?: "inbound" | "outbound";
+  since?: string;
+}
+
+/**
+ * Bounded batch size for POST /v1/attachments/batch. The MP-00034 scan carries
+ * an explicit 3,334-ID list; at 200 IDs/batch that checkpoints in 17 batches,
+ * each a single `id = ANY($2)` probe. Oversized batches are rejected (400).
+ */
+export const MAX_ATTACHMENT_BATCH_IDS = 200;
+export const MAX_ATTACHMENT_REPAIR_MANIFEST_ITEMS = 200;
+export const MAX_ATTACHMENT_REPAIR_PAGE_ITEMS = 25;
+export const MAX_ATTACHMENT_REPAIR_ATTEMPTS = 3;
+export const MAX_ATTACHMENT_REPAIR_SOURCE_BYTES = 128 * 1024 * 1024;
+export const ATTACHMENT_REPAIR_LEASE_MS = 15 * 60 * 1000;
+const ATTACHMENT_REPAIR_RETRY_BASE_MS = 5_000;
+const ATTACHMENT_REPAIR_RETRY_MAX_MS = 5 * 60 * 1000;
+
+export interface AttachmentRepairPolicy {
+  maxActiveRunsPerTenant: number;
+  maxLedgerRunsPerTenant: number;
+  maxLedgerEntriesPerTenant: number;
+  runByteBudget: number;
+  runTimeBudgetMs: number;
+}
+
+export const DEFAULT_ATTACHMENT_REPAIR_POLICY: Readonly<AttachmentRepairPolicy> = Object.freeze({
+  maxActiveRunsPerTenant: 2,
+  maxLedgerRunsPerTenant: 100,
+  maxLedgerEntriesPerTenant: 20_000,
+  runByteBudget: 512 * 1024 * 1024,
+  runTimeBudgetMs: 60 * 60 * 1000,
+});
+
+function attachmentRepairPolicy(
+  overrides: Partial<AttachmentRepairPolicy> | undefined,
+): AttachmentRepairPolicy {
+  const policy = { ...DEFAULT_ATTACHMENT_REPAIR_POLICY, ...overrides };
+  for (const [key, value] of Object.entries(policy)) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new RangeError(`attachment repair policy ${key} must be a positive safe integer`);
+    }
+  }
+  if (policy.maxActiveRunsPerTenant > policy.maxLedgerRunsPerTenant) {
+    throw new RangeError("attachment repair active-run quota cannot exceed the run-ledger quota");
+  }
+  return policy;
+}
+
+export interface AttachmentRepairManifestEntry {
+  object_key: string;
+  recipients: string[];
+  canary_message_ids: string[];
+}
+
+export interface AttachmentRepairCanarySnapshot {
+  tenant_id: string;
+  message_id: string;
+  object_key: string;
+  attachments: readonly unknown[];
+}
+
+export function normalizeAttachmentRepairManifestEntries(
+  values: readonly AttachmentRepairManifestEntry[],
+): AttachmentRepairManifestEntry[] {
+  if (values.length === 0 || values.length > MAX_ATTACHMENT_REPAIR_MANIFEST_ITEMS) {
+    throw new RangeError(
+      `attachment repair manifest must contain 1-${MAX_ATTACHMENT_REPAIR_MANIFEST_ITEMS} entries`,
+    );
+  }
+  const objectKeys = new Set<string>();
+  const messageIds = new Set<string>();
+  return values.map((entry) => {
+    if (!entry || typeof entry !== "object") {
+      throw new RangeError("attachment repair manifest entries must be objects");
+    }
+    const allowed = new Set(["object_key", "recipients", "canary_message_ids"]);
+    const unsupported = Object.keys(entry).filter((key) => !allowed.has(key));
+    if (unsupported.length > 0) {
+      throw new RangeError(
+        `attachment repair manifest contains unsupported fields: ${unsupported.join(", ")}`,
+      );
+    }
+    if (!Array.isArray(entry.recipients)
+      || entry.recipients.some((value) => typeof value !== "string" || !value.trim())) {
+      throw new RangeError("attachment repair recipients must contain only non-empty strings");
+    }
+    if (!Array.isArray(entry.canary_message_ids)
+      || entry.canary_message_ids.some((value) => typeof value !== "string" || !value.trim())) {
+      throw new RangeError("attachment repair canary_message_ids must contain only non-empty strings");
+    }
+    const objectKey = typeof entry.object_key === "string" ? entry.object_key.trim() : "";
+    const recipients = [...new Set(entry.recipients.map((value) => value.trim()))];
+    const canaryMessageIds = entry.canary_message_ids.map((value) => value.trim());
+    if (!objectKey || recipients.length === 0 || canaryMessageIds.length === 0) {
+      throw new RangeError(
+        "each attachment repair entry requires an object_key, recipients, and canary_message_ids",
+      );
+    }
+    if (objectKeys.has(objectKey)) {
+      throw new RangeError("attachment repair manifest rejects duplicate object_key values");
+    }
+    objectKeys.add(objectKey);
+    for (const messageId of canaryMessageIds) {
+      if (messageIds.has(messageId)) {
+        throw new RangeError("attachment repair manifest rejects duplicate canary message ids");
+      }
+      messageIds.add(messageId);
+    }
+    return {
+      object_key: objectKey,
+      recipients,
+      canary_message_ids: canaryMessageIds,
+    };
+  });
+}
+
+export type AttachmentRepairLedgerEntryStatus =
+  | "pending"
+  | "would_repair"
+  | "repaired"
+  | "unavailable";
+
+export interface AttachmentRepairLedgerEntry {
+  tenant_id: string;
+  run_id: string;
+  position: number;
+  object_key: string;
+  recipients: string[];
+  canary_message_ids: string[];
+  attachment_count: number;
+  status: AttachmentRepairLedgerEntryStatus;
+  operator_action: boolean;
+  attempts: number;
+  last_error_code: string | null;
+  last_attempt_at: string | null;
+  next_attempt_at: string;
+  claim_token: string | null;
+  lease_expires_at: string | null;
+  /** Durable per-attempt byte reservation charged before external source I/O. */
+  source_byte_limit: number;
+}
+
+export interface AttachmentRepairLedgerRun {
+  id: string;
+  tenant_id: string;
+  apply: boolean;
+  status: "pending" | "completed";
+  entry_total: number;
+  inventory_total: number;
+  repaired: number;
+  would_repair: number;
+  unavailable: number;
+  operator_action: number;
+  pending: number;
+  retrying: number;
+  entry_repaired: number;
+  entry_would_repair: number;
+  entry_unavailable: number;
+  entry_operator_action: number;
+  entry_pending: number;
+  entry_retrying: number;
+  attempts: number;
+  checkpoint: number;
+  byte_budget: number;
+  bytes_consumed: number;
+  time_budget_ms: number;
+  deadline_at: string;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export class AttachmentRepairIdempotencyConflictError extends Error {
+  constructor() {
+    super("attachment repair idempotency key was already used for a different manifest");
+    this.name = "AttachmentRepairIdempotencyConflictError";
+  }
+}
+
+export type AttachmentRepairQuotaCode =
+  | "active_runs"
+  | "ledger_runs"
+  | "ledger_entries";
+
+export class AttachmentRepairQuotaExceededError extends Error {
+  constructor(
+    public readonly code: AttachmentRepairQuotaCode,
+    public readonly retryable: boolean,
+  ) {
+    super(`attachment repair ${code.replaceAll("_", " ")} quota exceeded`);
+    this.name = "AttachmentRepairQuotaExceededError";
+  }
+}
+
+/** Fields a caller may supply when writing a message (outbound or inbound). */
+export interface MessageInput {
+  from_addr: string;
+  to_addrs: string[];
+  cc_addrs?: string[];
+  subject?: string | null;
+  body_text?: string | null;
+  body_html?: string | null;
+  status?: string;
+  provider_message_id?: string | null;
+  direction?: string;
+  message_id?: string | null;
+  in_reply_to?: string | null;
+  received_at?: string | null;
+  is_read?: boolean;
+  is_starred?: boolean;
+  labels?: string[];
+  headers?: Record<string, unknown>;
+  attachments?: unknown[];
+  /** Stable upstream id; when set, writes upsert on it (idempotent re-runs). */
+  source_id?: string | null;
+  idempotency_key?: string | null;
+  send_payload_hash?: string | null;
+  send_state?: string;
+  send_started_at?: string | null;
+}
+
+export interface MessageContentPatch {
+  body_text: string | null;
+  body_html: string | null;
+  headers: Record<string, unknown>;
+}
+
+/** Delivery/engagement event persisted by a provider webhook. */
+export interface WebhookDeliveryEventInput {
+  email_id: string | null;
+  type: string;
+  recipient: string | null;
+  metadata: Record<string, unknown>;
+  occurred_at: string;
+}
+
+/** Columns selected for a message row (explicit so new columns are intentional). */
+const MESSAGE_COLUMNS =
+  "id, direction, from_addr, to_addrs, cc_addrs, subject, body_text, body_html, status, " +
+  "provider_message_id, message_id, in_reply_to, received_at, is_read, is_starred, labels, " +
+  "headers, attachments, source_id, idempotency_key, send_payload_hash, send_state, send_started_at, " +
+  "created_at, updated_at";
+
+/** List snippet budget. 140 chars keeps a 100-row page well under 100KB. */
+const MESSAGE_SNIPPET_CHARS = 140;
+
+// List rows are projected AFTER the LIMIT (the m-aliased outer select joins
+// back on the id page), so the snippet regex runs on <= limit rows instead of
+// every tenant row (measured ~870ms of a 954ms cold page on 168k rows).
+// `headers` and attachment bodies are deliberately absent from list rows —
+// they were ~73% of a 459KB page payload; the detail read keeps them.
+const MESSAGE_LIST_COLUMNS =
+  "m.id, m.direction, m.from_addr, m.to_addrs, m.cc_addrs, m.subject, m.status, " +
+  "m.provider_message_id, m.message_id, m.in_reply_to, m.received_at, m.is_read, m.is_starred, m.labels, " +
+  "m.source_id, m.send_state, m.send_started_at, m.created_at, m.updated_at, " +
+  `NULLIF(left(regexp_replace(COALESCE(m.body_text, ''), '\\s+', ' ', 'g'), ${MESSAGE_SNIPPET_CHARS}), '') AS snippet, ` +
+  "CASE WHEN jsonb_typeof(m.attachments) = 'array' THEN jsonb_array_length(m.attachments) ELSE 0 END AS attachment_count, " +
+  // One short text, not the whole headers object: a blocked row must be able to
+  // state its reason without re-adding the payload the column list exists to
+  // avoid. See MessageListRecord.policy_denial.
+  "m.headers->>'policy_denial' AS policy_denial, " +
+  "to_char(m.sort_ts AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS cursor_ts";
+
+// ---- list ordering + folder predicates --------------------------------------
+// The ORDER BY column and every folder predicate below are index-backed
+// (migration 0019). sort_ts is the STORED GENERATED mirror of
+// COALESCE(received_at, created_at) — a plain column, because under FORCE RLS
+// Postgres demotes CoalesceExpr quals to per-row filters (leak-safety), which
+// would turn keyset seeks into O(depth) scans. Folder predicate SQL must stay
+// byte-identical to the partial index definitions (implication is textual).
+const MESSAGE_TS_EXPR = "sort_ts";
+const NOT_OUTBOUND_SQL = "lower(COALESCE(direction, '')) <> 'outbound'";
+const OUTBOUND_SQL = "lower(COALESCE(direction, '')) = 'outbound'";
+const ARCHIVED_SQL = `labels @> '["archived"]'::jsonb`;
+const SPAM_SQL = `(labels @> '["spam"]'::jsonb OR lower(COALESCE(status, '')) = 'spam')`;
+const TRASH_SQL = `labels @> '["trash"]'::jsonb`;
+// Inbound MIME rows preserve the display-name form of From (for example,
+// `Alice <alice@example.com>`). Keep server-side counts aligned with the
+// SQLite/TUI matcher, which extracts the angle-bracket address before matching.
+const SENDER_EMAIL_SQL = "lower(COALESCE(substring(from_addr FROM '<([^<>]+)>'), btrim(from_addr)))";
+
+const FOLDER_PREDICATES: Record<MessageFolder, readonly string[]> = {
+  inbox: [NOT_OUTBOUND_SQL, `NOT (${ARCHIVED_SQL})`, `NOT ${SPAM_SQL}`, `NOT (${TRASH_SQL})`],
+  starred: [
+    "is_starred = true",
+    NOT_OUTBOUND_SQL,
+    `NOT (${ARCHIVED_SQL})`,
+    `NOT ${SPAM_SQL}`,
+    `NOT (${TRASH_SQL})`,
+  ],
+  sent: [OUTBOUND_SQL],
+  archived: [ARCHIVED_SQL, NOT_OUTBOUND_SQL, `NOT ${SPAM_SQL}`, `NOT (${TRASH_SQL})`],
+  spam: [SPAM_SQL, NOT_OUTBOUND_SQL],
+  trash: [TRASH_SQL, NOT_OUTBOUND_SQL],
+};
+
+export class IdempotencyKeyConflictError extends Error {
+  constructor() {
+    super("idempotency key was already used for a different send payload");
+    this.name = "IdempotencyKeyConflictError";
+  }
+}
+
+export class SendIntentTombstonedError extends Error {
+  constructor(public readonly record: MessageRecord | null = null) {
+    super("send intent is cancelled and cannot be sent");
+    this.name = "SendIntentTombstonedError";
+  }
+}
+
+export class SendIntentAtomicityUnavailableError extends Error {
+  constructor() {
+    super("send-intent recovery requires a transactional store");
+    this.name = "SendIntentAtomicityUnavailableError";
+  }
+}
+
+export class SendIntentDeletionForbiddenError extends Error {
+  constructor(public readonly record: MessageRecord) {
+    super("send-intent ledger rows cannot be deleted because their idempotency fence is durable");
+    this.name = "SendIntentDeletionForbiddenError";
+  }
+}
+
+export interface SendIntentLookupResult {
+  found: boolean;
+  tombstoned: boolean;
+  reconciliation_required: boolean;
+  message: MessageRecord | null;
+}
+
+export interface SendIntentCancellationResult {
+  outcome: "tombstoned" | "cancelled" | "reconciliation_required";
+  tombstoned: true;
+  reconciliation_required: boolean;
+  message: MessageRecord | null;
+}
+
+/** Cap on the operator evidence note stored with a reconciliation. */
+const SEND_RECONCILIATION_EVIDENCE_MAX_CHARS = 1000;
+
+function sendIntentRequiresReconciliation(sendState: string): boolean {
+  // `failed` is a DEFINITIVE provider reject: the provider refused the request,
+  // so nothing was sent and there is nothing to reconcile — the intent is safe
+  // to re-attempt (see rearmFailedSendIntent).
+  return !["cancelled", "blocked", "pending", "failed"].includes(sendState);
+}
+
+export interface ListOptions {
+  limit?: number;
+  offset?: number;
+}
+
+/** Server-side folder names; predicates mirror messageCounts() exactly. */
+export type MessageFolder = "inbox" | "starred" | "sent" | "archived" | "spam" | "trash";
+
+export const MESSAGE_FOLDERS: readonly MessageFolder[] = [
+  "inbox",
+  "starred",
+  "sent",
+  "archived",
+  "spam",
+  "trash",
+];
+
+export interface ListMessagesOptions extends ListOptions {
+  direction?: "inbound" | "outbound";
+  to?: string;
+  from?: string;
+  subject?: string;
+  address?: string;
+  search?: string;
+  since?: string;
+  until?: string;
+  read?: boolean;
+  unread?: boolean;
+  starred?: boolean;
+  archived?: boolean;
+  label?: string;
+  /** Opaque keyset cursor (from a previous page's next_cursor). Wins over offset. */
+  cursor?: string;
+  /** Only messages whose sender or a to/cc recipient is at one of these domains (lowercased). */
+  domains?: string[];
+  /** Server-side folder filter; same semantics as the folder counts. */
+  folder?: MessageFolder;
+  /** Internal apply-only ceiling; ordinary message lists remain capped at 500. */
+  maxLimit?: number;
+}
+
+/**
+ * Keyset cursor codec. The timestamp is captured in SQL at full microsecond
+ * fidelity (a JS Date would truncate to ms and skip same-ms neighbours).
+ */
+export function encodeMessagesCursor(ts: string, id: string): string {
+  return Buffer.from(JSON.stringify({ ts, id }), "utf8").toString("base64url");
+}
+
+// Exactly the shape encodeMessagesCursor mints (SQL to_char with microsecond
+// precision). Date.parse is NOT sufficient here: it accepts strings ("1",
+// "2026", "+010000-…") that Postgres rejects at the ::timestamptz cast, which
+// would surface as a 500 instead of the contract's 400.
+const CURSOR_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+
+export function decodeMessagesCursor(raw: string): { ts: string; id: string } | null {
+  if (raw.length === 0 || raw.length > 512) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as {
+      ts?: unknown;
+      id?: unknown;
+    };
+    if (typeof parsed.ts !== "string" || typeof parsed.id !== "string" || parsed.id === "") return null;
+    if (!CURSOR_TS_RE.test(parsed.ts) || !Number.isFinite(Date.parse(parsed.ts))) return null;
+    return { ts: parsed.ts, id: parsed.id };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Attachment-inventory keyset cursor. Extends the message cursor with the
+ * attachment ordinal so the total order is (sort_ts DESC, message_id DESC,
+ * attachment_index ASC) — one attachment row is the finest resumable unit, so
+ * an interrupted scan resumes at the exact next attachment, never re-emitting or
+ * skipping one. `idx` is the 0-based array position (the same index accepted by
+ * GET /v1/messages/{id}/attachments/{index}).
+ */
+export function encodeAttachmentsCursor(ts: string, id: string, idx: number): string {
+  return Buffer.from(JSON.stringify({ ts, id, idx }), "utf8").toString("base64url");
+}
+
+export function decodeAttachmentsCursor(
+  raw: string,
+): { ts: string; id: string; idx: number } | null {
+  if (raw.length === 0 || raw.length > 512) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as {
+      ts?: unknown;
+      id?: unknown;
+      idx?: unknown;
+    };
+    if (typeof parsed.ts !== "string" || typeof parsed.id !== "string" || parsed.id === "") return null;
+    if (!CURSOR_TS_RE.test(parsed.ts) || !Number.isFinite(Date.parse(parsed.ts))) return null;
+    if (typeof parsed.idx !== "number" || !Number.isInteger(parsed.idx) || parsed.idx < 0) return null;
+    return { ts: parsed.ts, id: parsed.id, idx: parsed.idx };
+  } catch {
+    return null;
+  }
+}
+
+export interface MessageCountsRecord {
+  inbox: number;
+  unread: number;
+  priority: number;
+  starred: number;
+  sent: number;
+  archived: number;
+  spam: number;
+  trash: number;
+  total: number;
+  latest_received_at: string | null;
+}
+
+export interface StoredAttachment {
+  filename: string;
+  content_type: string;
+  size: number;
+  content_base64: string;
+}
+
+export type StoredAttachmentLookup =
+  | { state: "available"; attachment: StoredAttachment }
+  | {
+      state: "content_unavailable";
+      attachment: {
+        filename: string;
+        content_type: string;
+        size: number | null;
+      };
+    }
+  | { state: "invalid"; reason: string };
+
+export interface InboundSourceProvenance {
+  tenant_id: string;
+  message_id: string;
+  bucket: string;
+  object_key: string;
+  raw_sha256: string;
+  established_via: "normal_ingest" | "canonical_replay" | "gmail_replay";
+}
+
+/** Complete tenant/message state bound to one persisted inbound object key. */
+export interface InboundAttachmentRepairBinding {
+  tenantId: string;
+  messageId: string;
+  attachments: unknown[];
+  provenance: InboundSourceProvenance;
+}
+
+/**
+ * One attachment-only compare-and-swap within a complete object repair.
+ */
+export interface InboundAttachmentRepairUpdate {
+  tenantId: string;
+  messageId: string;
+  expected: unknown[];
+  replacement: unknown[];
+}
+
+/**
+ * A legacy-inbound message whose attachment rows carry metadata with no
+ * payload bytes (migration 0007 imported the legacy Gmail-synced store). There
+ * is no `inbound_message_sources` row for these messages, so the canonical S3
+ * replay path cannot bind them; recovery is a bounded Gmail re-fetch keyed by
+ * the retained provider/message id (issue hasna/emails#52).
+ */
+export interface LegacyInboundPayloadRow {
+  tenant_id: string;
+  message_id: string;
+  provider_message_id: string | null;
+  message_id_column: string | null;
+  attachments: unknown[];
+}
+
+/** Bounded page of legacy-inbound payload-missing rows, keyset on (tenant, id). */
+export interface LegacyInboundPayloadPage {
+  rows: LegacyInboundPayloadRow[];
+  has_more: boolean;
+}
+
+/** Privacy-safe aggregate result for the post-fence, all-tenant S3 audit. */
+export interface InboundProvenanceAuditResult {
+  since: string;
+  tenants_scanned: number;
+  candidate_messages: number;
+  valid_provenance: number;
+  missing_provenance: number;
+  invalid_provenance: number;
+}
+
+export type RecordInboundSourceProvenanceResult =
+  | "recorded"
+  | "existing_match"
+  | "conflict"
+  | "not_found";
+
+/** One subject-rolled-up conversation for the threads mail-view. */
+export interface ThreadRollup {
+  /** Normalized (Re:/Fwd:-stripped, lowercased) subject key that groups the thread. */
+  thread_key: string;
+  subject: string | null;
+  message_count: number;
+  unread_count: number;
+  last_message_at: string | null;
+  first_message_at: string | null;
+  participants: string[];
+}
+
+/** One mailbox (a registered address) with its inbound folder rollup. */
+export interface MailboxRollup {
+  id: string;
+  address: string;
+  display_name: string | null;
+  status: string;
+  total: number;
+  unread: number;
+}
+
+/** Reconstructed raw MIME for a stored message. */
+export interface MessageRaw {
+  raw: string;
+  message_id: string | null;
+}
+
+/** Assemble a minimal RFC 5322 message from a stored row (no original bytes kept). */
+function buildRawMime(rec: MessageRecord): string {
+  const h = rec.headers ?? {};
+  const lines: string[] = [];
+  const push = (name: string, value: unknown) => {
+    const v = value === null || value === undefined ? "" : String(value);
+    if (v.trim()) lines.push(`${name}: ${v.replace(/[\r\n]+/g, " ")}`);
+  };
+  push("Date", (h["Date"] as string) ?? rec.received_at ?? rec.created_at);
+  push("From", (h["From"] as string) ?? rec.from_addr);
+  push("To", (h["To"] as string) ?? rec.to_addrs.join(", "));
+  if (rec.cc_addrs.length) push("Cc", (h["Cc"] as string) ?? rec.cc_addrs.join(", "));
+  push("Subject", (h["Subject"] as string) ?? rec.subject);
+  push("Message-ID", rec.message_id ?? (h["Message-ID"] as string));
+  if (rec.in_reply_to) push("In-Reply-To", rec.in_reply_to);
+  const isHtml = !rec.body_text && !!rec.body_html;
+  push("Content-Type", isHtml ? "text/html; charset=utf-8" : "text/plain; charset=utf-8");
+  const body = rec.body_text ?? rec.body_html ?? "";
+  return `${lines.join("\r\n")}\r\n\r\n${body}`;
+}
+
+function clampLimit(limit: number | undefined, max = 500): number {
+  if (!limit || Number.isNaN(limit)) return 100;
+  return Math.min(Math.max(1, Math.floor(limit)), max);
+}
+
+function clampOffset(offset: number | undefined): number {
+  if (!offset || Number.isNaN(offset) || offset < 0) return 0;
+  // OFFSET walks (and discards) every skipped index entry, so an unbounded
+  // client-supplied value is a self-DoS knob. Deep paging belongs to cursors.
+  return Math.min(Math.floor(offset), 100_000);
+}
+
+/**
+ * LIKE metacharacters (`\ % _`), escaped so a caller-supplied string is matched
+ * as the LITERAL text the caller typed. Pair every use with `ESCAPE '\'`.
+ */
+function escapeLikeMetacharacters(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
+}
+
+/**
+ * A caller-supplied filter term as a case-folded LITERAL substring pattern.
+ *
+ * The escape is load-bearing, not hygiene. `_` and `%` are LIKE wildcards, so an
+ * unescaped term silently means something wider than the caller typed: `inv_ice`
+ * matched "invoice", and `invoic%` matched every subject starting "invoic". That
+ * costs twice, and the second is the expensive one:
+ *
+ *  1. CORRECTNESS — the API answers with rows that do not contain the term.
+ *  2. A HANG on every API-store client — the CLI re-checks each returned row with
+ *     a LITERAL JS `includes()` (lib/api-mail-data-source.ts), so a
+ *     wildcard term makes this query match rows the client then rejects, pays one
+ *     extra per-row hydration request for each, and never fills its page.
+ *     Measured on installed 1.3.9 against this store: `--search invoice` returned
+ *     in 11.5s; `--search inv_ice` was still running when a 400s cap killed it.
+ *
+ * Postgres already defaults its LIKE escape to backslash, so `ESCAPE '\'` is
+ * explicit rather than strictly required here — it is written anyway to match
+ * resolveMessageId() and because the sibling SQLite store has NO default and
+ * genuinely requires it.
+ */
+function likeContains(value: string): string {
+  return `%${escapeLikeMetacharacters(value.trim().toLowerCase())}%`;
+}
+
+/** Normalize a possibly-string JSONB column into a string[]. */
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((v) => String(v));
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.map((v) => String(v)) : [];
+    } catch {
+      return value.trim() ? [value.trim()] : [];
+    }
+  }
+  return [];
+}
+
+/** Normalize a possibly-string JSONB array column into a plain array. */
+function toArray(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+/** Normalize a possibly-string JSONB object column into a plain object. */
+function toObject(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right));
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function attachmentMetadataOnly(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(attachmentMetadataOnly);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => key !== "content_base64")
+      .map(([key, item]) => [key, attachmentMetadataOnly(item)]),
+  );
+}
+
+export function attachmentRepairRequestHash(
+  canonicalBucket: string,
+  normalizedEntries: readonly AttachmentRepairManifestEntry[],
+  apply: boolean,
+  canarySnapshot: readonly AttachmentRepairCanarySnapshot[] = [],
+): string {
+  return createHash("sha256")
+    .update(canonicalJson({
+      apply,
+      canonical_bucket: canonicalBucket,
+      entries: normalizedEntries,
+      canary_attachment_state: canarySnapshot.map((snapshot) => ({
+        tenant_id: snapshot.tenant_id,
+        message_id: snapshot.message_id,
+        object_key: snapshot.object_key,
+        attachments: snapshot.attachments.map((attachment, attachmentIndex) => ({
+          attachment_index: attachmentIndex,
+          metadata: attachmentMetadataOnly(attachment),
+        })),
+      })),
+    }), "utf8")
+    .digest("hex");
+}
+
+function repairBindingSnapshot(bindings: readonly InboundAttachmentRepairBinding[]): string {
+  return canonicalJson([...bindings]
+    .sort((left, right) => `${left.tenantId}\0${left.messageId}`.localeCompare(`${right.tenantId}\0${right.messageId}`))
+    .map((binding) => ({
+      tenantId: binding.tenantId,
+      messageId: binding.messageId,
+      attachments: binding.attachments,
+      provenance: binding.provenance,
+    })));
+}
+
+class AttachmentRepairConcurrentChangeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AttachmentRepairConcurrentChangeError";
+  }
+}
+
+export class AttachmentRepairReviewMismatchError extends Error {
+  constructor() {
+    super("attachment repair reviewed dry-run proof does not match");
+    this.name = "AttachmentRepairReviewMismatchError";
+  }
+}
+
+function isSerializationFailure(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error
+    && (error as { code?: unknown }).code === "40001");
+}
+
+async function listAttachmentRepairBindingsInTransaction(
+  client: TypedQueryClient,
+  bucket: string,
+  objectKey: string,
+): Promise<InboundAttachmentRepairBinding[]> {
+  const tenants = await client.many<{ id: string }>(`SELECT id::text AS id FROM tenants ORDER BY id`);
+  const bindings: InboundAttachmentRepairBinding[] = [];
+  for (const tenant of tenants) {
+    await client.execute(`SELECT set_config('app.current_tenant', $1, true)`, [tenant.id]);
+    const rows = await client.many<{
+      tenant_id: string;
+      message_id: string;
+      source_tenant_id: string | null;
+      source_message_id: string | null;
+      bucket: string | null;
+      object_key: string | null;
+      raw_sha256: string | null;
+      established_via: "normal_ingest" | "canonical_replay" | "gmail_replay" | null;
+      attachments: unknown;
+    }>(
+      `SELECT m.tenant_id::text AS tenant_id, m.id AS message_id, m.attachments,
+              s.tenant_id::text AS source_tenant_id, s.message_id AS source_message_id,
+              s.bucket, s.object_key, s.raw_sha256, s.established_via
+       FROM messages m
+       LEFT JOIN inbound_message_sources s
+         ON s.tenant_id = m.tenant_id AND s.message_id = m.id
+       WHERE m.tenant_id = $1::uuid AND (m.source_id = $2 OR m.message_id = $2)
+       ORDER BY m.id`,
+      [tenant.id, objectKey],
+    );
+    for (const row of rows) {
+      if (row.source_tenant_id !== row.tenant_id
+        || row.source_message_id !== row.message_id
+        || row.bucket !== bucket
+        || row.object_key !== objectKey
+        || !row.raw_sha256
+        || !/^[0-9a-f]{64}$/.test(row.raw_sha256)
+        || !row.established_via) {
+        throw new Error("attachment repair complete binding provenance is missing or conflicts with the canonical object");
+      }
+      const attachments = typeof row.attachments === "string"
+        ? JSON.parse(row.attachments) as unknown
+        : row.attachments;
+      bindings.push({
+        tenantId: row.tenant_id,
+        messageId: row.message_id,
+        attachments: Array.isArray(attachments) ? attachments : [],
+        provenance: {
+          tenant_id: row.tenant_id,
+          message_id: row.message_id,
+          bucket: row.bucket,
+          object_key: row.object_key,
+          raw_sha256: row.raw_sha256,
+          established_via: row.established_via,
+        },
+      });
+    }
+  }
+  return bindings;
+}
+
+/** Normalize a TIMESTAMPTZ column (Date or string from the driver) to ISO 8601. */
+function toIso(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) return value.toISOString();
+  const d = new Date(String(value));
+  return Number.isNaN(d.getTime()) ? String(value) : d.toISOString();
+}
+
+/** Coerce a raw DB row into a fully-typed MessageRecord (JSONB columns parsed). */
+function mapMessageRow(row: Record<string, unknown>): MessageRecord {
+  const attachments = toArray(row["attachments"]).map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      // Preserve the authenticated array position, but never let a malformed
+      // scalar become a client placeholder with unknown/fetchable availability.
+      return { content_available: false };
+    }
+    const { content_base64: _content, ...metadata } = item as Record<string, unknown>;
+    // `content_available` is DERIVED here, never echoed from the stored JSON: it
+    // is exactly the predicate getMessageAttachment uses to decide between
+    // serving bytes and answering 409 attachment_content_unavailable. Metadata
+    // is not proof of content (legacy imports carry metadata only), so a reader
+    // must be able to tell the two apart without attempting a download (#36).
+    return { ...metadata, content_available: attachmentContentAvailable(item, index) };
+  });
+  return {
+    ...(row as unknown as MessageRecord),
+    to_addrs: toStringArray(row["to_addrs"]),
+    cc_addrs: toStringArray(row["cc_addrs"]),
+    labels: toStringArray(row["labels"]),
+    attachments,
+    headers: toObject(row["headers"]),
+    is_read: Boolean(row["is_read"]),
+    is_starred: Boolean(row["is_starred"]),
+    received_at: toIso(row["received_at"]),
+    send_started_at: toIso(row["send_started_at"]),
+    created_at: toIso(row["created_at"]) ?? "",
+    updated_at: toIso(row["updated_at"]) ?? "",
+  };
+}
+
+function mapMessageListRow(row: Record<string, unknown>): MessageListRecord {
+  const full = mapMessageRow({
+    ...row,
+    body_text: null,
+    body_html: null,
+    idempotency_key: null,
+    send_payload_hash: null,
+  });
+  const {
+    body_text: _bodyText,
+    body_html: _bodyHtml,
+    idempotency_key: _key,
+    send_payload_hash: _hash,
+    headers: _headers,
+    attachments: _attachments,
+    // internal cursor column (mapMessageRow spreads the raw row) — must not
+    // leak into API items
+    cursor_ts: _cursorTs,
+    ...safe
+  } = full as MessageRecord & { cursor_ts?: string };
+  const rawSnippet = typeof row["snippet"] === "string"
+    ? row["snippet"]
+    : typeof row["body_text"] === "string"
+      ? row["body_text"]
+      : "";
+  const snippet = rawSnippet.replace(/\s+/g, " ").trim().slice(0, MESSAGE_SNIPPET_CHARS);
+  const count = Number(row["attachment_count"]);
+  return {
+    ...safe,
+    snippet: snippet || null,
+    attachment_count: Number.isFinite(count) ? count : 0,
+    // Explicit rather than left to the raw-row spread: the field is part of the
+    // published list contract, so an absent/odd column must normalize to null
+    // instead of leaking `undefined` (which JSON.stringify would drop, making a
+    // required response property vanish).
+    policy_denial: policyDenialOf(row["policy_denial"]),
+  };
+}
+
+/**
+ * Normalize a policy-denial code to a non-empty string or null.
+ * Shared by the list projection and the API item projection so both paths agree
+ * on the same emptiness rule.
+ */
+export function policyDenialOf(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * Normalize a machine-readable byte count to a non-negative integer.
+ * Human-readable legacy values ("12 KB", blank/unknown) deliberately stay null;
+ * interpreting them as bytes would manufacture false precision.
+ */
+function toSizeBytes(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+/** Read one attachment-metadata field as a string, else null (never throws on malformed elements). */
+function attField(item: unknown, key: string): string | null {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+  const value = (item as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : value == null ? null : String(value);
+}
+
+/** True only when the authenticated download endpoint can return these exact bytes. */
+function attachmentContentAvailable(item: unknown, index: number): boolean {
+  const attachment = item && typeof item === "object" && !Array.isArray(item)
+    ? item as Record<string, unknown>
+    : null;
+  const size = toSizeBytes(attachment?.["size"]);
+  if (!attachment || size === null || typeof attachment["content_base64"] !== "string") return false;
+  try {
+    return decodeAttachmentPayload({
+      attachment: { ...attachment, size },
+    }, index, MAX_ATTACHMENT_DOWNLOAD_BYTES).state === "available";
+  } catch {
+    return false;
+  }
+}
+
+/** Project one attachment array element into batch metadata (content_base64 excluded). */
+function attachmentMetaOf(item: unknown, index: number): AttachmentMeta {
+  const record = item && typeof item === "object" && !Array.isArray(item)
+    ? (item as Record<string, unknown>)
+    : undefined;
+  return {
+    attachment_index: index,
+    filename: attField(item, "filename"),
+    content_type: attField(item, "content_type"),
+    size_bytes: toSizeBytes(record?.["size"]),
+    sha256: attField(item, "sha256"),
+    content_available: attachmentContentAvailable(item, index),
+  };
+}
+
+/** Map one lateral inventory row (SQL already unnested + projected) into an item. */
+function mapAttachmentInventoryRow(row: Record<string, unknown>): AttachmentInventoryItem {
+  const idx = Number(row["attachment_index"]);
+  const filename = typeof row["filename"] === "string" ? row["filename"] : null;
+  const contentType = typeof row["content_type"] === "string" ? row["content_type"] : null;
+  const sizeBytes = toSizeBytes(row["size_raw"]);
+  let metadataValid = false;
+  try {
+    validateAttachmentMetadata({
+      // `->>` converts any JSON scalar to text; preserve the authenticated
+      // download boundary's string-only contract with the SQL type flags.
+      filename: row["filename_is_string"] === false ? null : filename,
+      content_type: row["content_type_is_string"] === false ? null : contentType,
+      size: sizeBytes,
+    });
+    metadataValid = true;
+  } catch {
+    // The inventory intentionally reports malformed metadata but never promises
+    // a successful authenticated download for it.
+  }
+  return {
+    message_id: String(row["message_id"]),
+    attachment_index: Number.isFinite(idx) ? idx : 0,
+    filename,
+    content_type: contentType,
+    // `size_raw` is the JSONB `size` as text (SQL `->>`); the SQL projection
+    // preserves the original JSON type so only numeric safe integers and
+    // canonical integer strings survive here.
+    size_bytes: sizeBytes,
+    sha256: typeof row["sha256"] === "string" ? (row["sha256"] as string) : null,
+    // SQL already applied the strict canonical-base64, byte-limit, and declared
+    // size predicate without projecting payload bytes. Reuse the strict metadata
+    // validator used by authenticated download, so this is a truthful prediction.
+    content_available: row["content_available"] === true && metadataValid,
+    direction: typeof row["direction"] === "string" ? (row["direction"] as string) : null,
+    received_at: toIso(row["received_at"]),
+  };
+}
+
+const ATTACHMENT_REPAIR_RUN_COLUMNS =
+  "id::text AS id, tenant_id::text AS tenant_id, apply, status, entry_total, inventory_total, " +
+  "repaired, would_repair, unavailable, operator_action, pending, retrying, " +
+  "entry_repaired, entry_would_repair, entry_unavailable, entry_operator_action, " +
+  "entry_pending, entry_retrying, attempts, " +
+  "checkpoint, byte_budget, bytes_consumed, time_budget_ms, deadline_at, " +
+  "created_at, updated_at, completed_at";
+
+function mapAttachmentRepairRun(row: Record<string, unknown>): AttachmentRepairLedgerRun {
+  const number = (value: unknown): number => {
+    const parsed = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  return {
+    id: String(row["id"]),
+    tenant_id: String(row["tenant_id"]),
+    apply: row["apply"] === true,
+    status: row["status"] === "completed" ? "completed" : "pending",
+    entry_total: number(row["entry_total"]),
+    inventory_total: number(row["inventory_total"]),
+    repaired: number(row["repaired"]),
+    would_repair: number(row["would_repair"]),
+    unavailable: number(row["unavailable"]),
+    operator_action: number(row["operator_action"]),
+    pending: number(row["pending"]),
+    retrying: number(row["retrying"]),
+    entry_repaired: number(row["entry_repaired"]),
+    entry_would_repair: number(row["entry_would_repair"]),
+    entry_unavailable: number(row["entry_unavailable"]),
+    entry_operator_action: number(row["entry_operator_action"]),
+    entry_pending: number(row["entry_pending"]),
+    entry_retrying: number(row["entry_retrying"]),
+    attempts: number(row["attempts"]),
+    checkpoint: number(row["checkpoint"]),
+    byte_budget: number(row["byte_budget"]),
+    bytes_consumed: number(row["bytes_consumed"]),
+    time_budget_ms: number(row["time_budget_ms"]),
+    deadline_at: toIso(row["deadline_at"]) ?? String(row["deadline_at"] ?? ""),
+    created_at: toIso(row["created_at"]) ?? String(row["created_at"] ?? ""),
+    updated_at: toIso(row["updated_at"]) ?? String(row["updated_at"] ?? ""),
+    completed_at: toIso(row["completed_at"]),
+  };
+}
+
+function mapAttachmentRepairEntry(row: Record<string, unknown>): AttachmentRepairLedgerEntry {
+  const status = row["status"];
+  const normalizedStatus: AttachmentRepairLedgerEntryStatus =
+    status === "would_repair" || status === "repaired" || status === "unavailable"
+      ? status
+      : "pending";
+  return {
+    tenant_id: String(row["tenant_id"]),
+    run_id: String(row["run_id"]),
+    position: Number(row["position"]),
+    object_key: String(row["object_key"]),
+    recipients: toArray(row["recipients"]).filter((value): value is string => typeof value === "string"),
+    canary_message_ids: toArray(row["canary_message_ids"]).filter(
+      (value): value is string => typeof value === "string",
+    ),
+    attachment_count: Number(row["attachment_count"]),
+    status: normalizedStatus,
+    operator_action: row["operator_action"] === true,
+    attempts: Number(row["attempts"]),
+    last_error_code: typeof row["last_error_code"] === "string" ? row["last_error_code"] : null,
+    last_attempt_at: toIso(row["last_attempt_at"]),
+    next_attempt_at: toIso(row["next_attempt_at"]) ?? String(row["next_attempt_at"] ?? ""),
+    claim_token: typeof row["claim_token"] === "string" ? row["claim_token"] : null,
+    lease_expires_at: toIso(row["lease_expires_at"]),
+    source_byte_limit: Number(row["reserved_bytes"] ?? 0),
+  };
+}
+
+async function reconcileAttachmentRepairRun(
+  client: TypedQueryClient,
+  tenantId: string,
+  runId: string,
+): Promise<void> {
+  await client.execute(
+    `WITH totals AS (
+       SELECT
+         COALESCE(sum(attachment_count) FILTER (WHERE status = 'repaired'), 0)::int AS repaired,
+         COALESCE(sum(attachment_count) FILTER (WHERE status = 'would_repair'), 0)::int AS would_repair,
+         COALESCE(sum(attachment_count) FILTER (WHERE status = 'unavailable'), 0)::int AS unavailable,
+         COALESCE(sum(attachment_count) FILTER (WHERE operator_action), 0)::int AS operator_action,
+         COALESCE(sum(attachment_count) FILTER (WHERE status = 'pending'), 0)::int AS pending,
+         COALESCE(sum(attachment_count) FILTER (
+           WHERE status = 'pending' AND attempts > 0
+         ), 0)::int AS retrying,
+         count(*) FILTER (WHERE status = 'repaired')::int AS entry_repaired,
+         count(*) FILTER (WHERE status = 'would_repair')::int AS entry_would_repair,
+         count(*) FILTER (WHERE status = 'unavailable')::int AS entry_unavailable,
+         count(*) FILTER (WHERE operator_action)::int AS entry_operator_action,
+         count(*) FILTER (WHERE status = 'pending')::int AS pending_entries,
+         count(*) FILTER (WHERE status = 'pending' AND attempts > 0)::int AS entry_retrying,
+         COALESCE(sum(attempts), 0)::int AS attempts,
+         min(position) FILTER (WHERE status = 'pending') AS first_pending
+       FROM attachment_repair_entries
+       WHERE tenant_id = $1::uuid AND run_id = $2::uuid
+     )
+     UPDATE attachment_repair_runs r
+     SET repaired = totals.repaired,
+         would_repair = totals.would_repair,
+         unavailable = totals.unavailable,
+         operator_action = totals.operator_action,
+         pending = totals.pending,
+         retrying = totals.retrying,
+         entry_repaired = totals.entry_repaired,
+         entry_would_repair = totals.entry_would_repair,
+         entry_unavailable = totals.entry_unavailable,
+         entry_operator_action = totals.entry_operator_action,
+         entry_pending = totals.pending_entries,
+         entry_retrying = totals.entry_retrying,
+         attempts = totals.attempts,
+         checkpoint = COALESCE(totals.first_pending, r.entry_total),
+         status = CASE WHEN totals.pending_entries = 0 THEN 'completed' ELSE 'pending' END,
+         completed_at = CASE
+           WHEN totals.pending_entries = 0 THEN COALESCE(r.completed_at, now())
+           ELSE NULL
+         END,
+         updated_at = now()
+     FROM totals
+     WHERE r.tenant_id = $1::uuid AND r.id = $2::uuid`,
+    [tenantId, runId],
+  );
+}
+
+// ---- shared, tenant-agnostic query helpers (module scope) -------------------
+// Extracted from the store classes so the unscoped base and the TenantScopedStore
+// share ONE implementation of encoding/SQL-shaping (no duplication drift).
+
+/** 23-column message insert list (tenant_id is appended by the scoped variant). */
+const MESSAGE_INSERT_COLS =
+  "id, direction, from_addr, to_addrs, cc_addrs, subject, body_text, body_html, status, " +
+  "provider_message_id, message_id, in_reply_to, received_at, is_read, is_starred, labels, " +
+  "headers, attachments, source_id, idempotency_key, send_payload_hash, send_state, send_started_at";
+
+const MESSAGE_INSERT_VALUES =
+  "$1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, " +
+  "$16::jsonb, $17::jsonb, $18::jsonb, $19, $20, $21, $22, $23";
+
+/** Positional insert params (23) shared by createMessage/upsertMessage/reserveSendIntent. */
+function messageInsertParams(input: MessageInput): unknown[] {
+  return [
+    randomUUID(),
+    (input.direction ?? "outbound").trim() || "outbound",
+    input.from_addr.trim(),
+    JSON.stringify(input.to_addrs ?? []),
+    JSON.stringify(input.cc_addrs ?? []),
+    input.subject ?? null,
+    input.body_text ?? null,
+    input.body_html ?? null,
+    input.status ?? "queued",
+    input.provider_message_id ?? null,
+    input.message_id ?? null,
+    input.in_reply_to ?? null,
+    input.received_at ?? null,
+    input.is_read ?? false,
+    input.is_starred ?? false,
+    JSON.stringify(input.labels ?? []),
+    JSON.stringify(input.headers ?? {}),
+    JSON.stringify(input.attachments ?? []),
+    input.source_id ?? null,
+    input.idempotency_key ?? null,
+    input.send_payload_hash ?? null,
+    input.send_state ?? "none",
+    input.send_started_at ?? null,
+  ];
+}
+
+function hashSendToken(token: string): string {
+  return createHash("sha256").update(token, "utf8").digest("hex");
+}
+
+/** Extract the bare, lowercased address from a From value (drops display name). */
+function canonicalAddress(from: string): string {
+  return canonicalSender(from) ?? "";
+}
+
+function warmingLimit(target: number, startDate: string | null, now = new Date()): number | null {
+  if (!startDate || !Number.isFinite(target) || target < 0) return null;
+  const start = new Date(startDate);
+  if (!Number.isFinite(start.getTime())) return null;
+  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const startUtc = Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate());
+  const day = Math.floor((todayUtc - startUtc) / 86_400_000) + 1;
+  if (day < 1) return 0;
+  let limit = 50;
+  for (let currentDay = 1; currentDay < day && limit < target; currentDay++) {
+    if (currentDay % 2 === 0) limit = Math.round(limit * 2);
+  }
+  return Math.min(limit, target);
+}
+
+/** Coerce/encode a request value for a generic-resource column per its kind. */
+function encodeColumn(col: ResourceColumn, value: unknown): unknown {
+  if (value === undefined) return null;
+  if (col.json) return JSON.stringify(value ?? null);
+  if (col.bool) {
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === "false" || normalized === "0") return false;
+      if (normalized === "true" || normalized === "1") return true;
+    }
+    return Boolean(value);
+  }
+  if (col.int) {
+    const n = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(n) ? Math.trunc(n) : 0;
+  }
+  if (col.num) {
+    const n = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return value ?? null;
+}
+
+/**
+ * Primary-key column for a spec (a server-minted `id` unless overridden).
+ * Re-exported from the registry so the key used for addressing a row and the key
+ * used as the list ORDER BY tiebreaker can never drift apart.
+ */
+const keyColumn = resourceKeyColumn;
+
+/**
+ * Strip a spec's `redactColumns` from a returned row IN PLACE. The generic read
+ * path is `SELECT *`, so a legacy/secret column the physical table happens to
+ * carry (e.g. the drifted `send_keys.key_hash`) would otherwise leak into the API
+ * response. A no-op for every resource that declares no redactColumns.
+ */
+function redactResourceRow<T extends Record<string, unknown> | null>(
+  spec: ApiResourceSpec,
+  row: T,
+): T {
+  if (!row || !spec.redactColumns?.length) return row;
+  for (const col of spec.redactColumns) {
+    if (col in row) delete (row as Record<string, unknown>)[col];
+  }
+  return row;
+}
+
+/**
+ * Raised when a request body references, by id, a row that belongs to a DIFFERENT
+ * tenant (design adversarial fix M4). Stamping `tenant_id` on the new row does
+ * NOT stop a cross-tenant FK reference, so the scoped store rejects it before the
+ * insert. The service maps this to a 404 (the id "does not exist" for this
+ * tenant — no cross-tenant existence is revealed).
+ */
+export class CrossTenantReferenceError extends Error {
+  constructor(public readonly column: string) {
+    super(`referenced ${column} does not belong to this tenant`);
+    this.name = "CrossTenantReferenceError";
+  }
+}
+
+/** Raised when an address create names no provider in the caller's tenant. */
+export class AddressProviderNotFoundError extends Error {
+  constructor() {
+    super("address provider not found");
+    this.name = "AddressProviderNotFoundError";
+  }
+}
+
+/** A receive-ready physical domain may be claimed by exactly one tenant. */
+export class InboundDomainRouteConflictError extends Error {
+  constructor(public readonly domain: string) {
+    super(`inbound route for ${domain} is already claimed`);
+    this.name = "InboundDomainRouteConflictError";
+  }
+}
+
+/**
+ * Census scan for legacy-inbound messages whose attachment rows carry metadata
+ * but no payload bytes (issue hasna/emails#52). Exported so the FORCE RLS
+ * integration test executes the EXACT production query shape.
+ *
+ * The query is subject to the fail-closed tenant policy (migration 0013):
+ * with the `app.current_tenant` GUC unset the policy is `tenant_id = NULL` and
+ * the census returns a confident zero. Every caller MUST set the GUC to the
+ * tenant being scanned; `listLegacyInboundMissingPayloadBindings` does, exactly
+ * like the replay lookup.
+ */
+export const LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL = `SELECT m.id AS message_id, m.provider_message_id, m.message_id AS message_id_column,
+                  m.attachments
+           FROM messages m
+           WHERE m.tenant_id = $1::uuid
+             AND m.source_id LIKE 'legacy:inbound_emails:%'
+             AND ($2::text IS NULL OR m.id > $2)
+             AND jsonb_typeof(COALESCE(m.attachments, '[]'::jsonb)) = 'array'
+             AND EXISTS (
+               SELECT 1 FROM jsonb_array_elements(COALESCE(m.attachments, '[]'::jsonb)) AS a(item)
+               WHERE jsonb_typeof(a.item -> 'content_base64') IS DISTINCT FROM 'string'
+             )
+           ORDER BY m.id
+           LIMIT $3`;
+
+/**
+ * Unscoped root store. Holds `forTenant()` plus global pre-tenant resolution
+ * primitives for inbound routing. It deliberately exposes NO
+ * tenant-scoped data CRUD: a request handler is only ever handed a
+ * {@link TenantScopedStore}, so forgetting the tenant is a COMPILE error rather
+ * than a silent cross-tenant leak.
+ */
+export class EmailsApiStore {
+  constructor(
+    private readonly client: TypedQueryClient,
+    private readonly options: {
+      allowUnsafeTestTransactions?: boolean;
+      attachmentRepairPolicy?: Partial<AttachmentRepairPolicy>;
+    } = {},
+  ) {}
+
+  /**
+   * Enter a tenant scope. Every data-CRUD method lives on the returned type and
+   * injects `tenant_id` into every read/write (Layer 1, the primary isolation
+   * guarantee — design §6). This is the ONLY way a handler reaches tenant data.
+   */
+  forTenant(tenantId: string): TenantScopedStore {
+    if (!tenantId) throw new Error("forTenant requires a tenant id");
+    // Hand the scoped store a client that sets `app.current_tenant` per operation
+    // (Layer 2 RLS backstop). Layer 1 (the AND tenant_id = $tenant in every query)
+    // still holds unconditionally; this makes forgetting it a DB-enforced failure.
+    return new TenantScopedStore(
+      tenantScopedClient(this.client, tenantId),
+      tenantId,
+      isTransactional(this.client) ? this.client : undefined,
+      this.options.allowUnsafeTestTransactions === true,
+      attachmentRepairPolicy(this.options.attachmentRepairPolicy),
+    );
+  }
+
+  // ---- global inbound resolution (before a tenant is known) -----------------
+
+  /**
+   * Resolve ONLY trusted SMTP/SES envelope recipients through the global physical
+   * domain map. Header recipients are intentionally not accepted here. A route is
+   * returned only for active tenants; everything else is explicitly unresolved.
+   */
+  async resolveInboundRecipients(envelopeRecipients: string[]): Promise<InboundRouteResolution> {
+    const normalized = [...new Set(envelopeRecipients.map(canonicalAddress).filter(Boolean))];
+    const byDomain = new Map<string, string[]>();
+    const unresolved: string[] = [];
+    for (const recipient of normalized) {
+      const at = recipient.lastIndexOf("@");
+      if (at <= 0 || at === recipient.length - 1) {
+        unresolved.push(recipient);
+        continue;
+      }
+      const domain = recipient.slice(at + 1);
+      const values = byDomain.get(domain) ?? [];
+      values.push(recipient);
+      byDomain.set(domain, values);
+    }
+    const domains = [...byDomain.keys()];
+    const routes = domains.length
+      ? await this.client.many<{ domain: string; tenant_id: string }>(
+        `SELECT r.domain, r.tenant_id
+         FROM inbound_domain_routes r
+         JOIN tenants t ON t.id = r.tenant_id
+         WHERE lower(r.domain) = ANY($1::text[]) AND t.status = 'active'`,
+        [domains],
+      )
+      : [];
+    const routeByDomain = new Map(routes.map((row) => [row.domain.toLowerCase(), row.tenant_id]));
+    const grouped = new Map<string, string[]>();
+    for (const [domain, recipients] of byDomain) {
+      const tenantId = routeByDomain.get(domain);
+      if (!tenantId) {
+        unresolved.push(...recipients);
+        continue;
+      }
+      const current = grouped.get(tenantId) ?? [];
+      current.push(...recipients);
+      grouped.set(tenantId, current);
+    }
+    return {
+      groups: [...grouped].map(([tenantId, recipients]) => ({ tenantId, recipients })),
+      unresolved,
+    };
+  }
+
+  /** Record an unroutable event without storing raw MIME or any credential. */
+  async quarantineInbound(input: {
+    sourceId: string;
+    bucket: string;
+    objectKey: string;
+    envelopeRecipients: string[];
+    reason: string;
+    detail?: string | null;
+  }): Promise<void> {
+    await this.client.execute(
+      `INSERT INTO inbound_quarantine (
+         source_id, bucket, object_key, envelope_recipients, reason, detail
+       ) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+       ON CONFLICT (source_id) DO UPDATE SET
+         envelope_recipients = EXCLUDED.envelope_recipients,
+         reason = EXCLUDED.reason,
+         detail = EXCLUDED.detail,
+         updated_at = now()`,
+      [
+        input.sourceId,
+        input.bucket,
+        input.objectKey,
+        JSON.stringify(input.envelopeRecipients),
+        input.reason,
+        input.detail ?? null,
+      ],
+    );
+  }
+
+  /**
+   * Read the COMPLETE persisted tenant/message binding set for one object key.
+   * FORCE RLS stays enabled: the transaction deliberately visits every tenant
+   * scope instead of using a bypass-RLS role or trusting envelope recipients as
+   * a proxy for persisted state.
+   */
+  async listAttachmentRepairBindings(bucket: string, objectKey: string): Promise<InboundAttachmentRepairBinding[]> {
+    if (!bucket || !objectKey || !isTransactional(this.client)) {
+      throw new Error("global attachment binding discovery requires a transactional store");
+    }
+    return this.client.transaction(async (tx) => {
+      await tx.execute(`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`);
+      return listAttachmentRepairBindingsInTransaction(tx, bucket, objectKey);
+    });
+  }
+
+  /**
+   * Capture a cutover fence from PostgreSQL's own clock. This query deliberately
+   * depends on no post-0016 table, so an exact 1.2.4 task can run it before the
+   * 0017 ledger advance while old writers are still live.
+   */
+  async captureInboundProvenanceFence(): Promise<string> {
+    if (!isTransactional(this.client)) {
+      throw new Error("inbound provenance fence requires a transactional store");
+    }
+    return this.client.transaction(async (tx) => {
+      await tx.execute(`SET TRANSACTION READ ONLY`);
+      const row = await tx.one<{ fence_at: Date | string }>(
+        `SELECT clock_timestamp() AS fence_at`,
+      );
+      const fenceAt = toIso(row.fence_at);
+      if (!fenceAt) throw new Error("PostgreSQL did not return a valid provenance fence timestamp");
+      return fenceAt;
+    });
+  }
+
+  /**
+   * Audit every tenant for S3-shaped inbound rows written at or after a cutover
+   * fence. FORCE RLS remains active: one read-only transaction visits each
+   * tenant scope and returns aggregate counts only. No tenant, message, object,
+   * address, subject, attachment, or raw-hash identity leaves this method.
+   */
+  async auditInboundSourceProvenance(input: {
+    since: string;
+    canonicalBucket: string;
+  }): Promise<InboundProvenanceAuditResult> {
+    const since = new Date(input.since);
+    if (!input.since || Number.isNaN(since.getTime()) || !input.canonicalBucket) {
+      throw new Error("inbound provenance audit requires a valid cutoff and canonical bucket");
+    }
+    if (!isTransactional(this.client)) {
+      throw new Error("all-tenant inbound provenance audit requires a transactional store");
+    }
+    return this.client.transaction(async (tx) => {
+      await tx.execute(`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`);
+      const tenants = await tx.many<{ id: string }>(`SELECT id::text AS id FROM tenants ORDER BY id`);
+      const result: InboundProvenanceAuditResult = {
+        since: since.toISOString(),
+        tenants_scanned: tenants.length,
+        candidate_messages: 0,
+        valid_provenance: 0,
+        missing_provenance: 0,
+        invalid_provenance: 0,
+      };
+      for (const tenant of tenants) {
+        await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [tenant.id]);
+        const row = await tx.one<{
+          candidate_messages: number;
+          valid_provenance: number;
+          missing_provenance: number;
+          invalid_provenance: number;
+        }>(
+          `WITH candidates AS (
+             SELECT m.id, m.source_id, s.message_id AS source_message_id,
+                    s.bucket, s.object_key, s.raw_sha256
+             FROM messages m
+             LEFT JOIN inbound_message_sources s
+               ON s.tenant_id = m.tenant_id AND s.message_id = m.id
+             WHERE m.tenant_id = $1::uuid
+               AND lower(COALESCE(m.direction, '')) <> 'outbound'
+               AND m.source_id IS NOT NULL AND m.source_id <> ''
+               AND m.message_id = m.source_id
+               AND m.created_at >= $2::timestamptz
+           )
+           SELECT
+             count(*)::int AS candidate_messages,
+             count(*) FILTER (
+               WHERE source_message_id IS NOT NULL
+                 AND bucket = $3
+                 AND object_key = source_id
+                 AND raw_sha256 ~ '^[0-9a-f]{64}$'
+             )::int AS valid_provenance,
+             count(*) FILTER (WHERE source_message_id IS NULL)::int AS missing_provenance,
+             count(*) FILTER (
+               WHERE source_message_id IS NOT NULL
+                 AND NOT (
+                   bucket = $3
+                   AND object_key = source_id
+                   AND raw_sha256 ~ '^[0-9a-f]{64}$'
+                 )
+             )::int AS invalid_provenance
+           FROM candidates`,
+          [tenant.id, result.since, input.canonicalBucket],
+        );
+        result.candidate_messages += Number(row.candidate_messages);
+        result.valid_provenance += Number(row.valid_provenance);
+        result.missing_provenance += Number(row.missing_provenance);
+        result.invalid_provenance += Number(row.invalid_provenance);
+      }
+      return result;
+    });
+  }
+
+  /**
+   * Recheck the complete object binding set and apply every permitted attachment
+   * CAS in ONE serializable transaction. Any changed/missing row throws inside
+   * the transaction, so the caller receives false and zero rows commit.
+   */
+  async replaceAttachmentPayloadsAtomically(
+    expectedBindings: readonly InboundAttachmentRepairBinding[],
+    updates: readonly InboundAttachmentRepairUpdate[],
+  ): Promise<boolean> {
+    if (expectedBindings.length === 0 || !isTransactional(this.client)) return false;
+    const objectKey = expectedBindings[0]!.provenance.object_key;
+    const bucket = expectedBindings[0]!.provenance.bucket;
+    const expectedById = new Set(expectedBindings.map((binding) => `${binding.tenantId}\0${binding.messageId}`));
+    const updateById = new Set(updates.map((update) => `${update.tenantId}\0${update.messageId}`));
+    if (expectedById.size !== expectedBindings.length
+      || expectedBindings.some((binding) => binding.provenance.object_key !== objectKey)
+      || expectedBindings.some((binding) => binding.provenance.bucket !== bucket)
+      || updateById.size !== updates.length
+      || updateById.size !== expectedById.size
+      || [...expectedById].some((identity) => !updateById.has(identity))) {
+      return false;
+    }
+    try {
+      return await this.client.transaction(async (tx) => {
+        await tx.execute(`SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`);
+        // PostgreSQL text cannot contain NUL. Keep the exact, unambiguous
+        // bucket\0object-key byte identity as bytea, then hash its lossless hex
+        // representation for the transaction-scoped advisory lock.
+        const objectIdentity = Buffer.from(`${bucket}\0${objectKey}`, "utf8");
+        await tx.execute(
+          `SELECT pg_advisory_xact_lock(hashtextextended(encode($1::bytea, 'hex'), 0))`,
+          [objectIdentity],
+        );
+        const current = await listAttachmentRepairBindingsInTransaction(tx, bucket, objectKey);
+        if (repairBindingSnapshot(current) !== repairBindingSnapshot(expectedBindings)) {
+          throw new AttachmentRepairConcurrentChangeError("attachment binding set changed concurrently");
+        }
+        for (const update of updates) {
+          const binding = expectedBindings.find((candidate) =>
+            candidate.tenantId === update.tenantId && candidate.messageId === update.messageId);
+          if (!binding) throw new Error("attachment repair update is outside the expected binding set");
+          if (canonicalJson(update.expected) === canonicalJson(update.replacement)) continue;
+          await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [update.tenantId]);
+          const result = await tx.query<{ id: string }>(
+            `UPDATE messages SET attachments = $1::jsonb
+             WHERE id = $2 AND tenant_id = $3::uuid
+               AND (source_id = $4 OR message_id = $4)
+               AND attachments = $5::jsonb
+               AND EXISTS (
+                 SELECT 1 FROM inbound_message_sources s
+                 WHERE s.tenant_id = $3::uuid AND s.message_id = $2
+                   AND s.bucket = $6 AND s.object_key = $4 AND s.raw_sha256 = $7
+               )
+             RETURNING id`,
+            [
+              JSON.stringify(update.replacement),
+              update.messageId,
+              update.tenantId,
+              objectKey,
+              JSON.stringify(update.expected),
+              binding.provenance.bucket,
+              binding.provenance.raw_sha256,
+            ],
+          );
+          if (result.rowCount !== 1) {
+            throw new AttachmentRepairConcurrentChangeError("attachment row changed concurrently");
+          }
+        }
+        return true;
+      });
+    } catch (error) {
+      if (error instanceof AttachmentRepairConcurrentChangeError || isSerializationFailure(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Read-only keyset-paged scan of legacy-inbound messages whose attachment
+   * rows carry metadata but no payload bytes (issue hasna/emails#52). FORCE RLS
+   * stays enabled: one read-only transaction visits each tenant scope, setting
+   * `app.current_tenant` per tenant exactly like the replay lookup — with the
+   * GUC unset the policy (migration 0013) is `tenant_id = NULL` and this census
+   * would return a confident zero. Rows carry identifiers and attachment
+   * METADATA only — payload bytes never leave the store through this method.
+   */
+  async listLegacyInboundMissingPayloadBindings(
+    cursor: { tenantId: string; messageId: string } | null,
+    limit: number,
+  ): Promise<LegacyInboundPayloadPage> {
+    if (!Number.isSafeInteger(limit) || limit <= 0) {
+      throw new Error("legacy payload scan requires a positive page limit");
+    }
+    if (!isTransactional(this.client)) {
+      throw new Error("legacy payload scan requires a transactional store");
+    }
+    const page: LegacyInboundPayloadRow[] = [];
+    let hasMore = false;
+    await this.client.transaction(async (tx) => {
+      await tx.execute(`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`);
+      const tenants = await tx.many<{ id: string }>(`SELECT id::text AS id FROM tenants ORDER BY id`);
+      for (const tenant of tenants) {
+        if (cursor && tenant.id < cursor.tenantId) continue;
+        await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [tenant.id]);
+        const rows = await tx.many<{
+          message_id: string;
+          provider_message_id: string | null;
+          message_id_column: string | null;
+          attachments: unknown;
+        }>(
+          LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL,
+          [tenant.id, cursor && tenant.id === cursor.tenantId ? cursor.messageId : null, limit - page.length],
+        );
+        for (const row of rows) {
+          if (page.length >= limit) {
+            hasMore = true;
+            break;
+          }
+          const attachments = typeof row.attachments === "string"
+            ? JSON.parse(row.attachments)
+            : row.attachments;
+          if (!Array.isArray(attachments)) continue;
+          page.push({
+            tenant_id: tenant.id,
+            message_id: row.message_id,
+            provider_message_id: row.provider_message_id,
+            message_id_column: row.message_id_column,
+            attachments,
+          });
+        }
+        if (page.length >= limit) {
+          hasMore = true;
+          break;
+        }
+      }
+    });
+    return { rows: page, has_more: hasMore };
+  }
+
+  /**
+   * Exact message-id lookup of every legacy-inbound payload-missing row across
+   * tenants (FORCE RLS: each tenant scope is visited separately). More than one
+   * row is ambiguous and reported as such by the replay caller.
+   */
+  async getLegacyInboundPayloadBindings(
+    messageId: string,
+  ): Promise<LegacyInboundPayloadRow[]> {
+    if (!messageId) return [];
+    if (!isTransactional(this.client)) {
+      throw new Error("legacy payload lookup requires a transactional store");
+    }
+    const bindings: LegacyInboundPayloadRow[] = [];
+    await this.client.transaction(async (tx) => {
+      await tx.execute(`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`);
+      const tenants = await tx.many<{ id: string }>(`SELECT id::text AS id FROM tenants ORDER BY id`);
+      for (const tenant of tenants) {
+        await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [tenant.id]);
+        const row = await tx.get<{
+          message_id: string;
+          provider_message_id: string | null;
+          message_id_column: string | null;
+          attachments: unknown;
+        }>(
+          `SELECT m.id AS message_id, m.provider_message_id, m.message_id AS message_id_column,
+                  m.attachments
+           FROM messages m
+           WHERE m.tenant_id = $1::uuid AND m.id = $2
+             AND m.source_id LIKE 'legacy:inbound_emails:%'
+             AND jsonb_typeof(COALESCE(m.attachments, '[]'::jsonb)) = 'array'
+             AND EXISTS (
+               SELECT 1 FROM jsonb_array_elements(COALESCE(m.attachments, '[]'::jsonb)) AS a(item)
+               WHERE jsonb_typeof(a.item -> 'content_base64') IS DISTINCT FROM 'string'
+             )`,
+          [tenant.id, messageId],
+        );
+        if (!row) continue;
+        const attachments = typeof row.attachments === "string"
+          ? JSON.parse(row.attachments)
+          : row.attachments;
+        if (!Array.isArray(attachments)) continue;
+        bindings.push({
+          tenant_id: tenant.id,
+          message_id: row.message_id,
+          provider_message_id: row.provider_message_id,
+          message_id_column: row.message_id_column,
+          attachments,
+        });
+      }
+    });
+    return bindings;
+  }
+
+  /**
+   * Attachment-only compare-and-swap for ONE legacy-inbound message, with the
+   * immutable Gmail-replay provenance row established in the SAME serializable
+   * transaction. The advisory lock and the `attachments = expected` predicate
+   * make a concurrent change fail closed; the legacy source_id predicate keeps
+   * the CAS scoped to the population this path may touch.
+   */
+  async replaceLegacyAttachmentPayloadAndProvenance(input: {
+    tenantId: string;
+    messageId: string;
+    expectedAttachments: unknown[];
+    replacementAttachments: unknown[];
+    provenance: {
+      bucket: string;
+      objectKey: string;
+      rawSha256: string;
+      establishedVia: "gmail_replay";
+    };
+  }): Promise<boolean> {
+    if (!input.messageId
+      || !input.tenantId
+      || !input.provenance.bucket
+      || !input.provenance.objectKey
+      || !/^[0-9a-f]{64}$/.test(input.provenance.rawSha256)) {
+      return false;
+    }
+    if (canonicalJson(input.expectedAttachments) === canonicalJson(input.replacementAttachments)) {
+      return false;
+    }
+    if (!isTransactional(this.client)) {
+      throw new Error("legacy payload replacement requires a transactional store");
+    }
+    try {
+      return await this.client.transaction(async (tx) => {
+        await tx.execute(`SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`);
+        await tx.execute(
+          `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+          [Buffer.from(`legacy-gmail-replay\0${input.tenantId}\0${input.messageId}`, "utf8")],
+        );
+        await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [input.tenantId]);
+        const current = await tx.get<{ attachments: unknown }>(
+          `SELECT m.attachments
+           FROM messages m
+           WHERE m.tenant_id = $1::uuid AND m.id = $2
+             AND m.source_id LIKE 'legacy:inbound_emails:%'`,
+          [input.tenantId, input.messageId],
+        );
+        if (!current) return false;
+        const attachments = typeof current.attachments === "string"
+          ? JSON.parse(current.attachments)
+          : current.attachments;
+        if (!Array.isArray(attachments)
+          || canonicalJson(attachments) !== canonicalJson(input.expectedAttachments)) {
+          return false;
+        }
+        const updated = await tx.query<{ id: string }>(
+          `UPDATE messages SET attachments = $1::jsonb
+           WHERE tenant_id = $2::uuid AND id = $3
+             AND source_id LIKE 'legacy:inbound_emails:%'
+             AND attachments = $4::jsonb
+           RETURNING id`,
+          [
+            JSON.stringify(input.replacementAttachments),
+            input.tenantId,
+            input.messageId,
+            JSON.stringify(input.expectedAttachments),
+          ],
+        );
+        if (updated.rowCount !== 1) return false;
+        const provenance = await tx.query<{ message_id: string }>(
+          `INSERT INTO inbound_message_sources (
+             tenant_id, message_id, bucket, object_key, raw_sha256, established_via
+           )
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (tenant_id, message_id) DO NOTHING
+           RETURNING message_id`,
+          [
+            input.tenantId,
+            input.messageId,
+            input.provenance.bucket,
+            input.provenance.objectKey,
+            input.provenance.rawSha256,
+            input.provenance.establishedVia,
+          ],
+        );
+        if (provenance.rowCount !== 1) {
+          throw new AttachmentRepairConcurrentChangeError("legacy message already has provenance");
+        }
+        return true;
+      });
+    } catch (error) {
+      if (error instanceof AttachmentRepairConcurrentChangeError || isSerializationFailure(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+}
+
+/**
+ * The columns an UPSERT-onto-an-existing-row writes: ONLY the ones the input carries.
+ *
+ * This is not an optimisation, and the previous unconditional list was a bug. Writing
+ * the whole insert set on the conflict path meant a re-imported message had its read
+ * flag, star, labels and `received_at` reset from `messageInsertParams`' DEFAULTS —
+ * `is_read ?? false`, `labels ?? []` — rather than from anything the caller said. So
+ * re-running an importer marked the whole mailbox unread, dropped every label and
+ * re-sorted the message to the import instant, on an operation whose entire contract is
+ * that a replay changes nothing it was not told about. The SQLite store found and fixed
+ * exactly this (src/store-sqlite/messages.ts, `updateValues`); this is the same fix on
+ * the Postgres side, so the two implementations of the seam finally agree.
+ *
+ * `from_addr` and `to_addrs` are unconditional because `MessageInput` requires them, so
+ * a caller always states them. `created_at`, `source_id` and the four send-ledger
+ * columns are never in the set: the first is the row's identity, the second is the
+ * conflict key, and the last four belong to the send path.
+ *
+ * One consequence worth stating: the statement TEXT now varies with the shape of the
+ * input, so a plan cache keyed on SQL text holds one entry per combination of named
+ * columns rather than one. The set of shapes real callers produce is small (each write
+ * site passes a fixed field list), and correctness is not negotiable against a cache
+ * hit rate.
+ */
+function messageUpsertAssignments(input: MessageInput): string {
+  const assignments = ["from_addr = EXCLUDED.from_addr", "to_addrs = EXCLUDED.to_addrs"];
+  const whenGiven: Array<[string, unknown]> = [
+    ["direction", input.direction],
+    ["cc_addrs", input.cc_addrs],
+    ["subject", input.subject],
+    ["body_text", input.body_text],
+    ["body_html", input.body_html],
+    ["status", input.status],
+    ["provider_message_id", input.provider_message_id],
+    ["message_id", input.message_id],
+    ["in_reply_to", input.in_reply_to],
+    ["received_at", input.received_at],
+    ["is_read", input.is_read],
+    ["is_starred", input.is_starred],
+    ["labels", input.labels],
+    ["headers", input.headers],
+    ["attachments", input.attachments],
+  ];
+  for (const [column, value] of whenGiven) {
+    if (value !== undefined) assignments.push(`${column} = EXCLUDED.${column}`);
+  }
+  assignments.push("updated_at = now()");
+  return assignments.join(",\n         ");
+}
+
+/**
+ * A store already bound to a single `tenantId`. EVERY method injects the tenant:
+ * reads gain `AND tenant_id = $tenant`, writes stamp it, and cross-tenant id
+ * references (M4) are rejected while RLS is off/bypassed (see assertNotOtherTenant
+ * for the Layer-1/Layer-2 handoff). This is design §6 Layer 1 — the isolation that
+ * holds unconditionally (no RLS dependency). Obtain one via `store.forTenant()`,
+ * which also binds a per-operation `app.current_tenant` GUC for the Layer-2 RLS
+ * backstop (migration 0013).
+ */
+/**
+ * A fully-formed message id (a bare UUID, the shape `messages.id` is generated as).
+ * A value that matches is used verbatim; anything shorter is treated as a PREFIX
+ * to resolve (the 8-char short id `inbox list` prints).
+ */
+const FULL_MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export class TenantScopedStore {
+  constructor(
+    private readonly client: TypedQueryClient,
+    private readonly tenantId: string,
+    private readonly atomicClient?: PoolQueryClient,
+    private readonly allowUnsafeTestTransactions = false,
+    private readonly repairPolicy: AttachmentRepairPolicy = attachmentRepairPolicy(undefined),
+  ) {}
+
+  private sendIntentKeyDigest(key: string): string {
+    return createHash("sha256")
+      .update("emails:send-intent:v1\0", "utf8")
+      .update(this.tenantId, "utf8")
+      .update("\0", "utf8")
+      .update(key, "utf8")
+      .digest("hex");
+  }
+
+  private assertSafeSendIntentKey(key: string): void {
+    if (!key || key.length > 200 || key !== key.trim() || /[\x00-\x1F\x7F]/.test(key)) {
+      throw new RangeError("idempotency key must be 1-200 safe characters");
+    }
+    for (let index = 0; index < key.length; index++) {
+      const code = key.charCodeAt(index);
+      if (code >= 0xD800 && code <= 0xDBFF) {
+        const next = key.charCodeAt(index + 1);
+        if (!(next >= 0xDC00 && next <= 0xDFFF)) {
+          throw new RangeError("idempotency key must be 1-200 safe characters");
+        }
+        index++;
+      } else if (code >= 0xDC00 && code <= 0xDFFF) {
+        throw new RangeError("idempotency key must be 1-200 safe characters");
+      }
+    }
+  }
+
+  private async withSendIntentKeyLock<T>(
+    key: string,
+    action: (client: TypedQueryClient, digest: string) => Promise<T>,
+  ): Promise<T> {
+    this.assertSafeSendIntentKey(key);
+    const digest = this.sendIntentKeyDigest(key);
+    if (!this.atomicClient) {
+      if (!this.allowUnsafeTestTransactions) throw new SendIntentAtomicityUnavailableError();
+      return action(this.client, digest);
+    }
+    return this.atomicClient.transaction(async (tx) => {
+      await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [this.tenantId]);
+      // The digest, not the possibly-sensitive caller key, enters the advisory
+      // lock namespace. Hash collisions only serialize unrelated operations.
+      await tx.execute(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`${this.tenantId}:${digest}`]);
+      return action(tx, digest);
+    });
+  }
+
+  /**
+   * Commit a provider delivery event and its idempotency receipt together.
+   *
+   * The unique event key is also the recovery path for two concurrent webhook
+   * requests that both miss the receipt pre-check: the loser reuses the event
+   * row selected by (tenant_id, provider_event_id), then ensures the receipt in
+   * the same transaction. A receipt can therefore never acknowledge a missing
+   * event, and a committed event can never be left without its receipt.
+   */
+  async createWebhookDeliveryEvent(
+    provider: string,
+    eventId: string,
+    input: WebhookDeliveryEventInput,
+  ): Promise<{ id: string }> {
+    if (!this.atomicClient) {
+      throw new Error("webhook delivery-event persistence requires a transactional store");
+    }
+    return this.atomicClient.transaction(async (tx) => {
+      await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [this.tenantId]);
+      const inserted = await tx.get<{ id: string }>(
+        `INSERT INTO events (
+           id, tenant_id, email_id, provider_event_id, type, recipient, metadata, occurred_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+         ON CONFLICT (tenant_id, provider_event_id) WHERE provider_event_id IS NOT NULL
+         DO NOTHING
+         RETURNING id`,
+        [
+          randomUUID(),
+          this.tenantId,
+          input.email_id,
+          eventId,
+          input.type,
+          input.recipient,
+          JSON.stringify(input.metadata),
+          input.occurred_at,
+        ],
+      );
+      const event = inserted ?? await tx.one<{ id: string }>(
+        `SELECT id FROM events WHERE tenant_id = $1 AND provider_event_id = $2`,
+        [this.tenantId, eventId],
+      );
+      await tx.execute(
+        `INSERT INTO webhook_receipts (
+           id, tenant_id, provider, event_id, resource_id
+         ) VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (tenant_id, provider, event_id) DO NOTHING`,
+        [randomUUID(), this.tenantId, provider, eventId, event.id],
+      );
+      return event;
+    });
+  }
+
+  /**
+   * Reject a body-supplied FK id that resolves to a row in ANOTHER tenant
+   * (design M4). Semantics: if the referenced row does not exist ANYWHERE we
+   * ALLOW it (the schema deliberately permits dangling/denormalized refs such as
+   * a free-text `provider_id="ses"` slug); we reject ONLY when the id names a real
+   * row owned by a different tenant — precisely the cross-tenant hole, without
+   * breaking loose references.
+   *
+   * TWO-LAYER HANDOFF (important): this is a Layer-1 (application) control and is
+   * ACTIVE whenever RLS is off or bypassed — i.e. exactly when Layer 1 is the sole
+   * guarantee (pre-0013, or a misconfigured DB). Under enforced FORCE RLS (Layer 2,
+   * the prod posture), the probe below runs with the caller's `app.current_tenant`
+   * GUC set, so the RLS policy makes a foreign-tenant row INVISIBLE — this check
+   * then cannot fire. That is not a leak: RLS supersedes M4 here. A cross-tenant FK
+   * value can no longer create a cross-tenant *reference* — the new row is stamped
+   * (and WITH CHECK-verified) with the CALLER's tenant, and every read that would
+   * dereference the id is itself RLS-scoped, so no other-tenant data is ever
+   * exposed; the id simply becomes a harmless same-tenant dangling reference. (The
+   * probe cannot be made to see across tenants without a BYPASSRLS role, which we
+   * deliberately do not have — see serve.ts:assertServingRoleCannotBypassRls.) The
+   * observable change under RLS is only 404→201 for such a body; isolation is
+   * unaffected and is proven at the DB layer in rls.integration.test.ts.
+   */
+  private async assertNotOtherTenant(
+    table: string,
+    id: unknown,
+    column: string,
+    idColumn = "id",
+  ): Promise<void> {
+    if (id === undefined || id === null || id === "") return;
+    const row = await this.client.get<{ tenant_id: string }>(
+      `SELECT tenant_id FROM ${table} WHERE ${idColumn} = $1`,
+      [String(id)],
+    );
+    if (row && row.tenant_id !== this.tenantId) throw new CrossTenantReferenceError(column);
+  }
+
+  // ---- domains ------------------------------------------------------------
+  async listDomains(opts: ListOptions = {}): Promise<DomainRecord[]> {
+    return this.client.many<DomainRecord>(
+      // `created_at DESC` alone is not unique, and a non-total sort makes LIMIT/OFFSET
+      // paging return duplicates while skipping rows (see resourceListOrderBy).
+      `SELECT * FROM domains WHERE tenant_id = $1 ORDER BY created_at DESC, id ASC LIMIT $2 OFFSET $3`,
+      [this.tenantId, clampLimit(opts.limit), clampOffset(opts.offset)],
+    );
+  }
+
+  async getDomain(id: string): Promise<DomainRecord | null> {
+    return this.client.get<DomainRecord>(`SELECT * FROM domains WHERE id = $1 AND tenant_id = $2`, [
+      id,
+      this.tenantId,
+    ]);
+  }
+
+  /**
+   * Look up a domain by name WITHIN the tenant (design M3 leak point): the POST
+   * 409 pre-check must be tenant-scoped, or it both leaks another tenant's domain
+   * and wrongly blocks per-tenant registration of the same name.
+   */
+  async getDomainByName(domain: string): Promise<DomainRecord | null> {
+    return this.client.get<DomainRecord>(`SELECT * FROM domains WHERE domain = $1 AND tenant_id = $2`, [
+      domain.trim().toLowerCase(),
+      this.tenantId,
+    ]);
+  }
+
+  async createDomain(input: {
+    domain: string;
+    status?: string;
+    provider?: string | null;
+    verified?: boolean;
+    notes?: string | null;
+  }): Promise<DomainRecord> {
+    const id = randomUUID();
+    const domain = input.domain.trim().toLowerCase();
+    const status = input.status ?? "pending";
+    const verified = input.verified ?? false;
+    const row = await this.client.get<DomainRecord>(
+      `WITH route_claim AS (
+         INSERT INTO inbound_domain_routes (domain, tenant_id)
+         SELECT $2, $7::uuid
+          WHERE $5::boolean = true AND $3::text IN ('active','verified','ready','inbound_ready')
+         ON CONFLICT (domain) DO UPDATE SET domain = EXCLUDED.domain
+           WHERE inbound_domain_routes.tenant_id = EXCLUDED.tenant_id
+         RETURNING domain
+       )
+       INSERT INTO domains (id, domain, status, provider, verified, notes, tenant_id)
+       SELECT $1, $2, $3, $4, $5, $6, $7::uuid
+        WHERE NOT ($5::boolean = true AND $3::text IN ('active','verified','ready','inbound_ready'))
+           OR EXISTS (SELECT 1 FROM route_claim)
+       RETURNING *`,
+      [id, domain, status, input.provider ?? null, verified, input.notes ?? null, this.tenantId],
+    );
+    if (!row) throw new InboundDomainRouteConflictError(domain);
+    return row;
+  }
+
+  async updateDomain(
+    id: string,
+    patch: { status?: string; provider?: string | null; verified?: boolean; notes?: string | null },
+  ): Promise<DomainRecord | null> {
+    const result = await this.client.one<{
+      record: DomainRecord | null;
+      route_conflict: boolean;
+    }>(
+      `WITH target AS (
+         SELECT d.*,
+                COALESCE($2::text, d.status) AS next_status,
+                COALESCE($4::boolean, d.verified) AS next_verified
+           FROM domains d WHERE d.id = $1 AND d.tenant_id = $6::uuid FOR UPDATE
+       ), route_claim AS (
+         INSERT INTO inbound_domain_routes (domain, tenant_id)
+         SELECT domain, tenant_id FROM target
+          WHERE next_verified = true AND next_status IN ('active','verified','ready','inbound_ready')
+         ON CONFLICT (domain) DO UPDATE SET domain = EXCLUDED.domain
+           WHERE inbound_domain_routes.tenant_id = EXCLUDED.tenant_id
+         RETURNING domain
+       ), route_release AS (
+         DELETE FROM inbound_domain_routes r USING target t
+          WHERE r.domain = t.domain AND r.tenant_id = t.tenant_id
+            AND NOT (t.next_verified = true AND t.next_status IN ('active','verified','ready','inbound_ready'))
+         RETURNING r.domain
+       ), updated AS (
+         UPDATE domains d SET
+           status   = t.next_status,
+           provider = COALESCE($3, d.provider),
+           verified = t.next_verified,
+           notes    = COALESCE($5, d.notes),
+           updated_at = now()
+          FROM target t
+          WHERE d.id = t.id AND d.tenant_id = t.tenant_id
+            AND (NOT (t.next_verified = true AND t.next_status IN ('active','verified','ready','inbound_ready'))
+                 OR EXISTS (SELECT 1 FROM route_claim))
+          RETURNING d.*
+       )
+       SELECT
+         (SELECT to_jsonb(updated) FROM updated) AS record,
+         EXISTS (
+           SELECT 1 FROM target
+            WHERE next_verified = true AND next_status IN ('active','verified','ready','inbound_ready')
+              AND NOT EXISTS (SELECT 1 FROM route_claim)
+         ) AS route_conflict`,
+      [
+        id,
+        patch.status ?? null,
+        patch.provider ?? null,
+        patch.verified ?? null,
+        patch.notes ?? null,
+        this.tenantId,
+      ],
+    );
+    if (result.route_conflict) {
+      const current = await this.getDomain(id);
+      throw new InboundDomainRouteConflictError(current?.domain ?? "requested domain");
+    }
+    return result.record;
+  }
+
+  async deleteDomain(id: string): Promise<boolean> {
+    const result = await this.client.one<{ deleted: boolean }>(
+      `WITH deleted AS (
+         DELETE FROM domains WHERE id = $1 AND tenant_id = $2 RETURNING domain
+       ), route_release AS (
+         DELETE FROM inbound_domain_routes r USING deleted d
+          WHERE r.domain = d.domain AND r.tenant_id = $2
+         RETURNING r.domain
+       )
+       SELECT EXISTS (SELECT 1 FROM deleted) AS deleted`,
+      [id, this.tenantId],
+    );
+    return result.deleted;
+  }
+
+  /**
+   * Apply a subset of domain provisioning fields (migration 0010 columns). Only
+   * keys PRESENT in `patch` are written, so a null is an explicit clear while an
+   * absent key is left untouched. `nameservers_json` is a JSONB array.
+   */
+  async applyDomainProvisioning(id: string, patch: DomainProvisioningPatch): Promise<DomainRecord | null> {
+    const sets: string[] = [];
+    const params: unknown[] = [id, this.tenantId];
+    const set = (name: string, value: unknown, jsonb = false) => {
+      params.push(jsonb ? JSON.stringify(value ?? null) : value ?? null);
+      sets.push(jsonb ? `${name} = $${params.length}::jsonb` : `${name} = $${params.length}`);
+    };
+    if ("provisioning_status" in patch) set("provisioning_status", patch.provisioning_status);
+    if ("purchase_provider" in patch) set("purchase_provider", patch.purchase_provider);
+    if ("dns_provider" in patch) set("dns_provider", patch.dns_provider);
+    if ("send_provider" in patch) set("send_provider", patch.send_provider);
+    if ("cf_zone_id" in patch) set("cf_zone_id", patch.cf_zone_id);
+    if ("registrar" in patch) set("registrar", patch.registrar);
+    if ("nameservers_json" in patch) set("nameservers_json", patch.nameservers_json ?? [], true);
+    if ("mail_from_domain" in patch) set("mail_from_domain", patch.mail_from_domain);
+    if ("last_error" in patch) set("last_error", patch.last_error);
+    if ("next_check_at" in patch) set("next_check_at", patch.next_check_at);
+    if (sets.length === 0) return this.getDomain(id);
+    sets.push("updated_at = now()");
+    return this.client.get<DomainRecord>(
+      `UPDATE domains SET ${sets.join(", ")} WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+      params,
+    );
+  }
+
+  // ---- addresses ----------------------------------------------------------
+  async listAddresses(opts: ListOptions = {}): Promise<AddressRecord[]> {
+    return this.client.many<AddressRecord>(
+      // Total order (see listDomains): the id tiebreaker keeps offset paging stable.
+      `SELECT * FROM addresses WHERE tenant_id = $1 ORDER BY created_at DESC, id ASC LIMIT $2 OFFSET $3`,
+      [this.tenantId, clampLimit(opts.limit), clampOffset(opts.offset)],
+    );
+  }
+
+  async getAddress(id: string): Promise<AddressRecord | null> {
+    return this.client.get<AddressRecord>(`SELECT * FROM addresses WHERE id = $1 AND tenant_id = $2`, [
+      id,
+      this.tenantId,
+    ]);
+  }
+
+  /**
+   * Look up an address by canonical email WITHIN the tenant. Used at send time
+   * to read the address record's display name for the provider call — a null
+   * result means the sender is not registered and the policy gate will refuse
+   * it; the provider call simply stays on the bare canonical address.
+   */
+  async getAddressByEmail(email: string): Promise<AddressRecord | null> {
+    return this.client.get<AddressRecord>(
+      `SELECT * FROM addresses WHERE lower(email) = $1 AND tenant_id = $2`,
+      [email.trim().toLowerCase(), this.tenantId],
+    );
+  }
+
+  async createAddress(input: {
+    email: string;
+    display_name?: string | null;
+    status?: string;
+    verified?: boolean;
+    daily_quota?: number | null;
+    provider_id?: string | null;
+  }): Promise<AddressRecord> {
+    const id = randomUUID();
+    const email = input.email.trim().toLowerCase();
+    const domain = email.includes("@") ? email.slice(email.indexOf("@") + 1) : null;
+    const providerId = input.provider_id?.trim() || null;
+    if (providerId) {
+      await this.assertNotOtherTenant("server_providers", providerId, "provider_id");
+      const provider = await this.client.get<{ id: string }>(
+        `SELECT id FROM server_providers WHERE id = $1 AND tenant_id = $2`,
+        [providerId, this.tenantId],
+      );
+      if (!provider) throw new AddressProviderNotFoundError();
+    }
+    return this.client.one<AddressRecord>(
+      `INSERT INTO addresses (id, email, domain, display_name, status, verified, daily_quota, provider_id, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [
+        id,
+        email,
+        domain,
+        input.display_name ?? null,
+        input.status ?? "active",
+        input.verified ?? false,
+        input.daily_quota ?? null,
+        providerId,
+        this.tenantId,
+      ],
+    );
+  }
+
+  async updateAddress(
+    id: string,
+    // `dailyQuotaSet` distinguishes "not provided" (keep existing) from an
+    // explicit clear (`daily_quota: null`, the CLI's `quota <id> none`). COALESCE
+    // alone cannot clear a column to NULL, so quota uses a CASE gated on the flag.
+    patch: {
+      display_name?: string | null;
+      status?: string;
+      verified?: boolean;
+      dailyQuotaSet?: boolean;
+      daily_quota?: number | null;
+    },
+  ): Promise<AddressRecord | null> {
+    return this.client.get<AddressRecord>(
+      `UPDATE addresses SET
+         display_name = COALESCE($2, display_name),
+         status       = COALESCE($3, status),
+         verified     = COALESCE($4, verified),
+         daily_quota  = CASE WHEN $5 THEN $6 ELSE daily_quota END,
+         updated_at   = now()
+       WHERE id = $1 AND tenant_id = $7
+       RETURNING *`,
+      [
+        id,
+        patch.display_name ?? null,
+        patch.status ?? null,
+        patch.verified ?? null,
+        patch.dailyQuotaSet ?? false,
+        patch.dailyQuotaSet ? patch.daily_quota ?? null : null,
+        this.tenantId,
+      ],
+    );
+  }
+
+  async deleteAddress(id: string): Promise<boolean> {
+    const rows = await this.client.many<{ id: string }>(
+      `DELETE FROM addresses WHERE id = $1 AND tenant_id = $2 RETURNING id`,
+      [id, this.tenantId],
+    );
+    return rows.length > 0;
+  }
+
+  /**
+   * Apply a subset of address provisioning fields (migration 0010 columns).
+   * Only keys PRESENT in `patch` are written (null clears, absent leaves as-is).
+   */
+  async applyAddressProvisioning(id: string, patch: AddressProvisioningPatch): Promise<AddressRecord | null> {
+    const sets: string[] = [];
+    const params: unknown[] = [id, this.tenantId];
+    const set = (name: string, value: unknown) => {
+      params.push(value ?? null);
+      sets.push(`${name} = $${params.length}`);
+    };
+    if ("domain_id" in patch) set("domain_id", patch.domain_id);
+    if ("receive_strategy" in patch) set("receive_strategy", patch.receive_strategy);
+    if ("forward_to" in patch) set("forward_to", patch.forward_to);
+    if ("routing_rule_id" in patch) set("routing_rule_id", patch.routing_rule_id);
+    if ("provisioning_status" in patch) set("provisioning_status", patch.provisioning_status);
+    if ("last_validated_at" in patch) set("last_validated_at", patch.last_validated_at);
+    if ("last_error" in patch) set("last_error", patch.last_error);
+    if ("next_check_at" in patch) set("next_check_at", patch.next_check_at);
+    if (sets.length === 0) return this.getAddress(id);
+    sets.push("updated_at = now()");
+    return this.client.get<AddressRecord>(
+      `UPDATE addresses SET ${sets.join(", ")} WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+      params,
+    );
+  }
+
+  /**
+   * Apply address ownership fields (migration 0011). Only keys PRESENT in
+   * `patch` are written, so `null` explicitly clears (the client's unassign) while
+   * an absent key is left untouched. Owner/administrator ids that reference another
+   * tenant's owner are rejected (M4).
+   */
+  async applyAddressOwnership(id: string, patch: AddressOwnershipPatch): Promise<AddressRecord | null> {
+    if ("owner_id" in patch) await this.assertNotOtherTenant("owners", patch.owner_id, "owner_id");
+    if ("administrator_id" in patch) await this.assertNotOtherTenant("owners", patch.administrator_id, "administrator_id");
+    const sets: string[] = [];
+    const params: unknown[] = [id, this.tenantId];
+    const set = (name: string, value: unknown) => {
+      params.push(value ?? null);
+      sets.push(`${name} = $${params.length}`);
+    };
+    if ("owner_id" in patch) set("owner_id", patch.owner_id);
+    if ("administrator_id" in patch) set("administrator_id", patch.administrator_id);
+    if (sets.length === 0) return this.getAddress(id);
+    sets.push("updated_at = now()");
+    return this.client.get<AddressRecord>(
+      `UPDATE addresses SET ${sets.join(", ")} WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+      params,
+    );
+  }
+
+  // ---- messages (outbound ledger + inbound mail) -------------------------
+  //
+  // Ordering is by original receipt time when known, else insertion time, so an
+  // imported inbox reads in true chronological order rather than import order.
+  async listMessages(opts: ListMessagesOptions = {}): Promise<MessageListPage> {
+    const where: string[] = ["tenant_id = $1"];
+    const params: unknown[] = [this.tenantId];
+    if (opts.direction === "inbound") where.push(NOT_OUTBOUND_SQL);
+    if (opts.direction === "outbound") where.push(OUTBOUND_SQL);
+    if (opts.folder) for (const predicate of FOLDER_PREDICATES[opts.folder]) where.push(predicate);
+    if (opts.to?.trim()) {
+      params.push(likeContains(opts.to));
+      where.push(`lower(to_addrs::text) LIKE $${params.length} ESCAPE '\\'`);
+    }
+    if (opts.from?.trim()) {
+      params.push(likeContains(opts.from));
+      where.push(`lower(COALESCE(from_addr, '')) LIKE $${params.length} ESCAPE '\\'`);
+    }
+    if (opts.subject?.trim()) {
+      params.push(likeContains(opts.subject));
+      where.push(`lower(COALESCE(subject, '')) LIKE $${params.length} ESCAPE '\\'`);
+    }
+    if (opts.address?.trim()) {
+      params.push(likeContains(opts.address));
+      where.push(`(lower(COALESCE(from_addr, '')) LIKE $${params.length} ESCAPE '\\' OR lower(to_addrs::text) LIKE $${params.length} ESCAPE '\\')`);
+    }
+    if (opts.search?.trim()) {
+      params.push(likeContains(opts.search));
+      // Stays a scan by design: all text-search operators are non-LEAKPROOF,
+      // so under FORCE RLS (0013) no trigram/FTS index can serve this — see
+      // the measured note in migration 0019.
+      //
+      // Attachment metadata (filename + content_type) is part of the match
+      // surface: a message whose ONLY occurrence of the term is an attachment
+      // name (e.g. "invoice-Q3.pdf") must still be found. Before this, search
+      // covered only from/to/subject/body_text, so attachment-only signals were
+      // silently missed and the result set under-reported attachment-bearing
+      // mail (MP-00034). content_base64 is deliberately excluded — matching
+      // decoded payload bytes would be both meaningless and a false-positive
+      // firehose. The correlated jsonb scan runs per surviving row inside the
+      // already-tenant-scoped (tenant_id = $1) query, so it adds no leak surface.
+      where.push(
+        `(lower(concat_ws(' ', COALESCE(from_addr, ''), COALESCE(to_addrs::text, ''), COALESCE(subject, ''), COALESCE(body_text, ''))) LIKE $${params.length} ESCAPE '\\'
+          OR EXISTS (
+            SELECT 1 FROM jsonb_array_elements(
+              CASE WHEN jsonb_typeof(messages.attachments) = 'array' THEN messages.attachments ELSE '[]'::jsonb END
+            ) AS att
+            WHERE lower(concat_ws(' ', COALESCE(att ->> 'filename', ''), COALESCE(att ->> 'content_type', ''))) LIKE $${params.length} ESCAPE '\\'
+          ))`,
+      );
+    }
+    if (opts.since?.trim()) {
+      params.push(opts.since.trim());
+      where.push(`${MESSAGE_TS_EXPR} >= $${params.length}::timestamptz`);
+    }
+    if (opts.until?.trim()) {
+      params.push(opts.until.trim());
+      where.push(`${MESSAGE_TS_EXPR} <= $${params.length}::timestamptz`);
+    }
+    if (opts.read === true) where.push("(is_read = true OR lower(COALESCE(direction, '')) = 'outbound')");
+    if (opts.unread === true) where.push("is_read = false AND lower(COALESCE(direction, '')) <> 'outbound'");
+    if (opts.starred === true) where.push("is_starred = true");
+    if (opts.archived === true) where.push(ARCHIVED_SQL);
+    if (opts.label?.trim()) {
+      params.push(opts.label.trim().toLowerCase());
+      where.push(`EXISTS (
+        SELECT 1 FROM jsonb_array_elements_text(
+          CASE WHEN jsonb_typeof(labels) = 'array' THEN labels ELSE '[]'::jsonb END
+        ) AS saved_filter_label(value)
+        WHERE lower(saved_filter_label.value) = $${params.length}
+      )`);
+    }
+    const domains = (opts.domains ?? []).map((d) => d.trim().toLowerCase()).filter(Boolean);
+    if (domains.length > 0) {
+      params.push(domains);
+      // Parity with the SQLite-local store (from OR recipients): message_recipients
+      // carries only to/cc rows, so the sender domain must be matched against
+      // from_addr directly or a SENDER-only domain criterion silently drops the
+      // row (the local matcher also re-checks from/to/cc, so this pushdown may
+      // return a superset but never a subset of the criteria match).
+      where.push(
+        `(emails_extract_domain(from_addr) = ANY($${params.length})
+          OR EXISTS (SELECT 1 FROM message_recipients r WHERE r.tenant_id = messages.tenant_id AND r.message_id = messages.id AND r.domain = ANY($${params.length})))`,
+      );
+    }
+    // Keyset cursor: strictly-before in (ts DESC, id DESC) order, served by
+    // messages_tenant_ts_id_idx so a deep page costs the same as page one
+    // (measured 0.3ms / 19 buffers at 60% depth under RLS). Two clauses on
+    // purpose: quals on plain columns are leak-safe, but the planner is only
+    // OBLIGED to seek on the simple `<=` OpExpr — on PG16 the row comparison
+    // also lands in the Index Cond, and where it does not, the `<=` bound
+    // still positions the scan and the row-compare merely filters rows tied
+    // on the cursor timestamp. (Quals on the COALESCE expression itself are
+    // demoted to per-row filters under FORCE RLS — that is why sort_ts is a
+    // real column; see migration 0019.)
+    const cursor = opts.cursor ? decodeMessagesCursor(opts.cursor) : null;
+    if (cursor) {
+      params.push(cursor.ts);
+      const tsIndex = params.length;
+      params.push(cursor.id);
+      where.push(`${MESSAGE_TS_EXPR} <= $${tsIndex}::timestamptz`);
+      where.push(`(${MESSAGE_TS_EXPR}, id) < ($${tsIndex}::timestamptz, $${params.length})`);
+    }
+    const whereSql = `WHERE ${where.join(" AND ")}`;
+    const limit = clampLimit(opts.limit, opts.maxLimit);
+    params.push(limit);
+    const limitIndex = params.length;
+    params.push(cursor ? 0 : clampOffset(opts.offset));
+    const offsetIndex = params.length;
+    // Inner query pages ids in index order; the outer select projects (snippet
+    // regex, attachment count) only the surviving rows.
+    const rows = await this.client.many<Record<string, unknown>>(
+      `SELECT ${MESSAGE_LIST_COLUMNS}
+       FROM (
+         SELECT id FROM messages ${whereSql}
+         ORDER BY ${MESSAGE_TS_EXPR} DESC, id DESC LIMIT $${limitIndex} OFFSET $${offsetIndex}
+       ) page
+       JOIN messages m ON m.tenant_id = $1 AND m.id = page.id
+       ORDER BY m.sort_ts DESC, m.id DESC`,
+      params,
+    );
+    const last = rows.length === limit ? rows[rows.length - 1] : undefined;
+    const nextCursor =
+      last && typeof last["cursor_ts"] === "string" && typeof last["id"] === "string"
+        ? encodeMessagesCursor(last["cursor_ts"], last["id"])
+        : null;
+    return { items: rows.map(mapMessageListRow), next_cursor: nextCursor };
+  }
+
+  private mailboxFilterFromRow(row: Record<string, unknown>): MailboxFilter {
+    const criteria = typeof row["criteria"] === "string"
+      ? JSON.parse(row["criteria"] as string)
+      : row["criteria"];
+    return {
+      id: String(row["id"] ?? ""),
+      tenant_id: String(row["tenant_id"] ?? this.tenantId),
+      name: String(row["name"] ?? ""),
+      normalized_name: String(row["normalized_name"] ?? ""),
+      mailbox: String(row["mailbox"] ?? "inbox") as MailboxFilter["mailbox"],
+      criteria: criteria as MailboxFilter["criteria"],
+      created_at: toIso(row["created_at"]) ?? "",
+      updated_at: toIso(row["updated_at"]) ?? "",
+    };
+  }
+
+  async listMailboxFilters(opts: ListOptions & {
+    filters?: { normalized_name?: string; mailbox?: string };
+  } = {}): Promise<MailboxFilter[]> {
+    const filters = opts.filters ?? {};
+    const params: unknown[] = [this.tenantId];
+    const where = ["tenant_id = $1"];
+    if (filters.normalized_name !== undefined) {
+      params.push(filters.normalized_name);
+      where.push(`normalized_name = $${params.length}`);
+    }
+    if (filters.mailbox !== undefined) {
+      params.push(filters.mailbox);
+      where.push(`mailbox = $${params.length}`);
+    }
+    const limitIndex = params.push(clampLimit(opts.limit));
+    const offsetIndex = params.push(clampOffset(opts.offset));
+    const rows = await this.client.many<Record<string, unknown>>(
+      `SELECT id, tenant_id, name, normalized_name, mailbox, criteria, created_at, updated_at
+         FROM mailbox_filters WHERE ${where.join(" AND ")}
+        ORDER BY updated_at DESC, id ASC LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
+      params,
+    );
+    return rows.map((row) => this.mailboxFilterFromRow(row));
+  }
+
+  async getMailboxFilter(identifier: string): Promise<MailboxFilter | null> {
+    const value = identifier.trim();
+    if (!value) return null;
+    let normalized = value.toLowerCase().replace(/\s+/g, "-").replaceAll("_", "-").slice(0, 64);
+    try { normalized = normalizeMailboxFilterInput({ name: value, mailbox: "inbox" }).normalized_name; } catch { /* id lookup may still succeed */ }
+    // `id` is a uuid column; binding a non-UUID identifier (every filter NAME)
+    // to `id = $2` raises 22P02 before the name branch runs and turns a missing
+    // name into a 500. The id branch is therefore guarded to UUID-shaped values
+    // only and compared via `id::text`, which can never throw; names resolve
+    // through normalized_name and a missing name is a plain not-found.
+    const row = await this.client.get<Record<string, unknown>>(
+      `SELECT id, tenant_id, name, normalized_name, mailbox, criteria, created_at, updated_at
+         FROM mailbox_filters
+        WHERE tenant_id = $1
+          AND (($2 ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' AND id::text = $2)
+               OR normalized_name = $3)
+        LIMIT 1`,
+      [this.tenantId, value, normalized],
+    );
+    return row ? this.mailboxFilterFromRow(row) : null;
+  }
+
+  async createMailboxFilter(input: MailboxFilterInput): Promise<MailboxFilter> {
+    const normalized = normalizeMailboxFilterInput(input);
+    try {
+      const row = await this.client.one<Record<string, unknown>>(
+        `INSERT INTO mailbox_filters (id, tenant_id, name, normalized_name, mailbox, criteria)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb) RETURNING id, tenant_id, name, normalized_name, mailbox, criteria, created_at, updated_at`,
+        [randomUUID(), this.tenantId, normalized.name, normalized.normalized_name, normalized.mailbox, JSON.stringify(normalized.criteria)],
+      );
+      return this.mailboxFilterFromRow(row);
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505") throw new MailboxFilterConflictError(normalized.name);
+      throw error;
+    }
+  }
+
+  async updateMailboxFilter(
+    identifier: string,
+    input: Partial<MailboxFilterInput>,
+    options: { replaceCriteria?: boolean } = {},
+  ): Promise<MailboxFilter> {
+    const current = await this.getMailboxFilter(identifier);
+    if (!current) throw new MailboxFilterNotFoundError(identifier);
+    const normalized = normalizeMailboxFilterInput({
+      name: input.name ?? current.name,
+      mailbox: input.mailbox ?? input.folder ?? current.mailbox,
+      criteria: options.replaceCriteria
+        ? (input.criteria ?? {})
+        : { ...current.criteria, ...(input.criteria ?? {}) },
+    });
+    try {
+      const row = await this.client.get<Record<string, unknown>>(
+        `UPDATE mailbox_filters
+            SET name = $1, normalized_name = $2, mailbox = $3, criteria = $4::jsonb, updated_at = now()
+          WHERE tenant_id = $5 AND id = $6
+        RETURNING id, tenant_id, name, normalized_name, mailbox, criteria, created_at, updated_at`,
+        [normalized.name, normalized.normalized_name, normalized.mailbox, JSON.stringify(normalized.criteria), this.tenantId, current.id],
+      );
+      if (!row) throw new MailboxFilterNotFoundError(identifier);
+      return this.mailboxFilterFromRow(row);
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505") throw new MailboxFilterConflictError(normalized.name);
+      throw error;
+    }
+  }
+
+  async deleteMailboxFilter(identifier: string): Promise<boolean> {
+    const current = await this.getMailboxFilter(identifier);
+    if (!current) return false;
+    const rows = await this.client.many<{ id: string }>(
+      "DELETE FROM mailbox_filters WHERE tenant_id = $1 AND id = $2 RETURNING id",
+      [this.tenantId, current.id],
+    );
+    return rows.length > 0;
+  }
+
+  async applyMailboxFilter(identifier: string, opts: ListOptions = {}): Promise<{
+    filter: Pick<MailboxFilter, "name" | "criteria">;
+    page: MessageListPage;
+    limit: number;
+    offset: number;
+  }> {
+    const filter = await this.getMailboxFilter(identifier);
+    if (!filter) throw new MailboxFilterNotFoundError(identifier);
+    const limit = Math.min(1000, Math.max(1, Math.floor(opts.limit ?? 100)));
+    const offset = clampOffset(opts.offset);
+    const folder = filter.mailbox === "unread" ? "inbox" : filter.mailbox as MessageFolder;
+    const page = await this.listMessages({
+      limit: limit + 1,
+      maxLimit: 1001,
+      offset,
+      folder,
+      search: filter.criteria.search,
+      from: filter.criteria.from,
+      to: filter.criteria.to,
+      address: filter.criteria.address,
+      subject: filter.criteria.subject,
+      domains: filter.criteria.domain ? [filter.criteria.domain] : undefined,
+      since: filter.criteria.since,
+      until: filter.criteria.until,
+      label: filter.criteria.label,
+      read: filter.criteria.read,
+      unread: filter.criteria.unread || filter.mailbox === "unread",
+      starred: filter.criteria.starred,
+      archived: filter.criteria.archived,
+    });
+    return { filter: { name: filter.name, criteria: filter.criteria }, page, limit, offset };
+  }
+
+  /**
+   * Read-only, tenant-scoped attachment-metadata INVENTORY (MP-00034). Expands
+   * every message's `attachments` JSONB array into one row per attachment via a
+   * lateral `jsonb_array_elements … WITH ORDINALITY`, keyset-paginated over the
+   * stable total order (sort_ts DESC, message_id DESC, attachment_index ASC).
+   *
+   * Correct-by-construction: it reads the SAME `attachments` column the per-ID
+   * detail read maps, so it can never drift below the per-message truth. It is
+   * exact-once and resumable — the cursor pins the last emitted (ts, id, idx),
+   * and the disjoint keyset predicate re-enters at the very next attachment, so
+   * no attachment is duplicated or skipped across pages.
+   *
+   * Exact-once holds across concurrent whole-row INSERTs/DELETEs (they land
+   * ahead of the scan — already passed — or behind it — picked up later — the
+   * same guarantee as the #47 message keyset). It assumes each message's
+   * attachments array is stable in LENGTH/ORDER during a scan, because
+   * `attachment_index` is positional: mutating an array mid-scan (inserting or
+   * removing an element) would shift indices. The only write path that touches a
+   * stored attachments array — `replaceAttachmentPayloadsAtomically` — is a
+   * same-shape compare-and-swap that preserves length and order, so it does not
+   * break this; the batch-by-ids endpoint is the fixed-ID exact-once path when a
+   * caller needs a snapshot immune to reordering. content_base64 is never projected.
+   */
+  async listAttachments(opts: ListAttachmentsOptions = {}): Promise<AttachmentInventoryPage> {
+    const where: string[] = ["m.tenant_id = $1"];
+    const params: unknown[] = [this.tenantId];
+    if (opts.direction === "inbound") where.push("lower(COALESCE(m.direction, '')) <> 'outbound'");
+    if (opts.direction === "outbound") where.push("lower(COALESCE(m.direction, '')) = 'outbound'");
+    if (opts.since?.trim()) {
+      params.push(opts.since.trim());
+      where.push(`m.sort_ts >= $${params.length}::timestamptz`);
+    }
+    const cursor = opts.cursor ? decodeAttachmentsCursor(opts.cursor) : null;
+    if (cursor) {
+      params.push(cursor.ts);
+      const tsIndex = params.length;
+      params.push(cursor.id);
+      const idIndex = params.length;
+      params.push(cursor.idx);
+      const idxIndex = params.length;
+      // "Strictly after" the cursor in (sort_ts DESC, id DESC, attachment_index
+      // ASC). The leading `<=` bound lets the ts index position the scan; the
+      // three-way disjunction is the exact tie-break (mixed sort directions rule
+      // out a single row-comparison operator).
+      where.push(`m.sort_ts <= $${tsIndex}::timestamptz`);
+      where.push(
+        `(m.sort_ts < $${tsIndex}::timestamptz
+          OR (m.sort_ts = $${tsIndex}::timestamptz AND m.id < $${idIndex})
+          OR (m.sort_ts = $${tsIndex}::timestamptz AND m.id = $${idIndex} AND (att.ord - 1) > $${idxIndex}))`,
+      );
+    }
+    const limit = clampLimit(opts.limit);
+    params.push(limit);
+    const limitIndex = params.length;
+    const rows = await this.client.many<Record<string, unknown>>(
+      `SELECT
+         m.id AS message_id,
+         (att.ord - 1)::int AS attachment_index,
+         att.value ->> 'filename' AS filename,
+         jsonb_typeof(att.value -> 'filename') = 'string' AS filename_is_string,
+         att.value ->> 'content_type' AS content_type,
+         jsonb_typeof(att.value -> 'content_type') = 'string' AS content_type_is_string,
+         normalized.size_bytes AS size_raw,
+         att.value ->> 'sha256' AS sha256,
+         CASE
+           WHEN normalized.size_bytes IS NOT NULL
+             AND normalized.size_bytes <= ${MAX_ATTACHMENT_DOWNLOAD_BYTES}
+             AND normalized.payload IS NOT NULL
+             AND length(normalized.payload) <= ${Math.ceil(MAX_ATTACHMENT_DOWNLOAD_BYTES / 3) * 4}
+             AND normalized.payload ~ '^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$'
+           THEN octet_length(decode(normalized.payload, 'base64')) = normalized.size_bytes
+             AND replace(encode(decode(normalized.payload, 'base64'), 'base64'), E'\\n', '') = normalized.payload
+           ELSE false
+         END AS content_available,
+         m.direction AS direction,
+         m.received_at AS received_at,
+         to_char(m.sort_ts AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_ts
+       FROM messages m
+       CROSS JOIN LATERAL jsonb_array_elements(
+         CASE WHEN jsonb_typeof(m.attachments) = 'array' THEN m.attachments ELSE '[]'::jsonb END
+       ) WITH ORDINALITY AS att(value, ord)
+       CROSS JOIN LATERAL (
+         SELECT
+           CASE
+             WHEN jsonb_typeof(att.value -> 'size') = 'number'
+               AND (att.value ->> 'size') ~ '^(?:0|[1-9][0-9]*)$'
+               AND (att.value ->> 'size')::numeric <= 9007199254740991
+             THEN (att.value ->> 'size')::bigint
+             WHEN jsonb_typeof(att.value -> 'size') = 'string'
+               AND (att.value ->> 'size') ~ '^(?:0|[1-9][0-9]*)$'
+               AND (att.value ->> 'size')::numeric <= 9007199254740991
+             THEN (att.value ->> 'size')::bigint
+             ELSE NULL
+           END AS size_bytes,
+           CASE
+             WHEN jsonb_typeof(att.value -> 'content_base64') = 'string'
+             THEN att.value ->> 'content_base64'
+             ELSE NULL
+           END AS payload
+       ) AS normalized
+       WHERE ${where.join(" AND ")}
+       ORDER BY m.sort_ts DESC, m.id DESC, (att.ord - 1) ASC
+       LIMIT $${limitIndex}`,
+      params,
+    );
+    const items = rows.map((row) => mapAttachmentInventoryRow(row));
+    const last = rows.length === limit ? rows[rows.length - 1] : undefined;
+    const nextCursor =
+      last && typeof last["cursor_ts"] === "string" && typeof last["message_id"] === "string"
+        ? encodeAttachmentsCursor(
+            last["cursor_ts"] as string,
+            last["message_id"] as string,
+            Number(last["attachment_index"]),
+          )
+        : null;
+    return { items, next_cursor: nextCursor };
+  }
+
+  /**
+   * Batch attachment-metadata read for an explicit, bounded list of message IDs
+   * (MP-00034 checkpointing). Tenant-scoped: only rows in this tenant surface;
+   * every requested id that does not resolve here (nonexistent OR belonging to
+   * another tenant) is reported in `unknown_ids` — a foreign id NEVER leaks even
+   * its existence. Content bytes are excluded; the shape mirrors the per-ID truth.
+   */
+  async listAttachmentsForMessageIds(
+    ids: readonly string[],
+  ): Promise<{ by_message_id: Record<string, AttachmentMeta[]>; unknown_ids: string[] }> {
+    const unique = [...new Set(ids.map((id) => String(id)))];
+    if (unique.length === 0) return { by_message_id: {}, unknown_ids: [] };
+    const rows = await this.client.many<{ id: string; attachments: unknown }>(
+      `SELECT id, attachments FROM messages WHERE tenant_id = $1 AND id = ANY($2)`,
+      [this.tenantId, unique],
+    );
+    const byId: Record<string, AttachmentMeta[]> = {};
+    for (const row of rows) {
+      byId[row.id] = toArray(row.attachments).map((item, index) => attachmentMetaOf(item, index));
+    }
+    const found = new Set(rows.map((r) => r.id));
+    const unknown = unique.filter((id) => !found.has(id));
+    return { by_message_id: byId, unknown_ids: unknown };
+  }
+
+  private async withAttachmentRepairLedgerLock<T>(
+    lockDigests: readonly string[],
+    action: (client: TypedQueryClient) => Promise<T>,
+  ): Promise<T> {
+    if (!this.atomicClient) {
+      if (!this.allowUnsafeTestTransactions) {
+        throw new Error("attachment repair ledger requires a transactional store");
+      }
+      return action(this.client);
+    }
+    return this.atomicClient.transaction(async (tx) => {
+      await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [this.tenantId]);
+      for (const digest of [...new Set(lockDigests)].sort()) {
+        await tx.execute(
+          `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+          [`${this.tenantId}:attachment-repair:${digest}`],
+        );
+      }
+      return action(tx);
+    });
+  }
+
+  private async prepareAttachmentRepairManifest(
+    client: TypedQueryClient,
+    canonicalBucket: string,
+    entries: readonly AttachmentRepairManifestEntry[],
+    lockRows: boolean,
+  ): Promise<{
+    ledgerEntries: Array<AttachmentRepairManifestEntry & {
+      position: number;
+      attachment_count: number;
+    }>;
+    canarySnapshot: AttachmentRepairCanarySnapshot[];
+  }> {
+    const objectKeys = entries.map((entry) => entry.object_key);
+    const messageIds = entries.flatMap((entry) => entry.canary_message_ids);
+    if (lockRows) {
+      await client.many(
+        `SELECT id
+         FROM messages
+         WHERE tenant_id = $1::uuid AND id = ANY($2::text[])
+         ORDER BY id
+         FOR SHARE`,
+        [this.tenantId, messageIds],
+      );
+      await client.many(
+        `SELECT m.id
+         FROM messages m
+         JOIN inbound_message_sources s
+           ON s.tenant_id = m.tenant_id AND s.message_id = m.id
+         WHERE m.tenant_id = $1::uuid
+           AND s.bucket = $2
+           AND s.object_key = ANY($3::text[])
+         ORDER BY m.id
+         FOR SHARE OF m, s`,
+        [this.tenantId, canonicalBucket, objectKeys],
+      );
+    }
+    const inventoryRows = await client.many<{
+      id: string;
+      object_key: string;
+      attachments_state: unknown;
+      attachment_count: number;
+      metadata_valid: boolean;
+      repairable: boolean;
+    }>(
+      `SELECT m.id, s.object_key,
+              COALESCE(
+                jsonb_agg(
+                  CASE
+                    WHEN jsonb_typeof(att.value) = 'object'
+                      THEN att.value - 'content_base64'
+                    ELSE att.value
+                  END
+                  ORDER BY att.ord
+                ) FILTER (WHERE att.ord IS NOT NULL),
+                '[]'::jsonb
+              ) AS attachments_state,
+              count(att.value) FILTER (
+                WHERE att.value IS NOT NULL
+                  AND jsonb_typeof(att.value -> 'content_base64') IS DISTINCT FROM 'string'
+              )::int AS attachment_count,
+              COALESCE(bool_and(
+                CASE
+                  WHEN att.value IS NULL OR jsonb_typeof(att.value) <> 'object' THEN false
+                  WHEN jsonb_typeof(att.value -> 'filename') IS DISTINCT FROM 'string'
+                    OR jsonb_typeof(att.value -> 'content_type') IS DISTINCT FROM 'string'
+                    OR jsonb_typeof(att.value -> 'size') IS DISTINCT FROM 'number' THEN false
+                  ELSE (att.value ->> 'size')::numeric >= 0
+                    AND (att.value ->> 'size')::numeric <= 9007199254740991
+                    AND mod((att.value ->> 'size')::numeric, 1) = 0
+                END
+              ), false) AS metadata_valid,
+              COALESCE(bool_or(
+                att.value IS NOT NULL
+                AND jsonb_typeof(att.value -> 'content_base64') IS DISTINCT FROM 'string'
+              ), false) AS repairable
+       FROM messages m
+       JOIN inbound_message_sources s
+         ON s.tenant_id = m.tenant_id AND s.message_id = m.id
+       LEFT JOIN LATERAL jsonb_array_elements(
+         CASE WHEN jsonb_typeof(m.attachments) = 'array'
+           THEN m.attachments ELSE '[]'::jsonb END
+       ) WITH ORDINALITY AS att(value, ord) ON true
+       WHERE m.tenant_id = $1::uuid
+         AND s.bucket = $2
+         AND s.object_key = ANY($3::text[])
+       GROUP BY m.id, s.object_key`,
+      [this.tenantId, canonicalBucket, objectKeys],
+    );
+    const ledgerEntries = entries.map((entry, position) => {
+      const rows = inventoryRows.filter((row) => row.object_key === entry.object_key);
+      const actualIds = new Set(rows.map((row) => row.id));
+      const exactCanary = actualIds.size === rows.length
+        && actualIds.size === entry.canary_message_ids.length
+        && entry.canary_message_ids.every((messageId) => actualIds.has(messageId));
+      if (!exactCanary) {
+        throw new RangeError(
+          "attachment repair canaries must exactly match tenant-scoped canonical object bindings",
+        );
+      }
+      if (rows.some((row) =>
+        Number(row.attachment_count) <= 0 || row.metadata_valid !== true || row.repairable !== true)) {
+        throw new RangeError(
+          "each attachment repair canary must have a repairable attachment inventory",
+        );
+      }
+      return {
+        ...entry,
+        position,
+        attachment_count: rows.reduce(
+          (total, row) => total + Number(row.attachment_count),
+          0,
+        ),
+      };
+    });
+    const rowByIdentity = new Map(
+      inventoryRows.map((row) => [`${row.object_key}\0${row.id}`, row]),
+    );
+    const canarySnapshot = entries.flatMap((entry) =>
+      entry.canary_message_ids.map((messageId) => {
+        const row = rowByIdentity.get(`${entry.object_key}\0${messageId}`);
+        if (!row) {
+          throw new RangeError(
+            "attachment repair canaries must exactly match tenant-scoped canonical object bindings",
+          );
+        }
+        return {
+          tenant_id: this.tenantId,
+          message_id: messageId,
+          object_key: entry.object_key,
+          attachments: toArray(row.attachments_state),
+        };
+      }));
+    return { ledgerEntries, canarySnapshot };
+  }
+
+  /**
+   * Create one immutable, bounded repair manifest or return its idempotent
+   * replay. The caller key is hashed and never stored. Repairable-payload
+   * inventory totals are captured from this tenant's current message rows in
+   * the same transaction; already-present payloads are not reported as work.
+   */
+  async createOrGetAttachmentRepairRun(input: {
+    idempotencyKey: string;
+    canonicalBucket: string;
+    apply?: boolean;
+    reviewedDryRunId?: string;
+    entries: readonly AttachmentRepairManifestEntry[];
+  }): Promise<AttachmentRepairLedgerRun> {
+    this.assertSafeSendIntentKey(input.idempotencyKey);
+    const canonicalBucket = input.canonicalBucket.trim();
+    if (!canonicalBucket) {
+      throw new RangeError("attachment repair requires the deployment canonical bucket");
+    }
+    const entries = normalizeAttachmentRepairManifestEntries(input.entries);
+    const apply = input.apply === true;
+    const reviewedDryRunId = input.reviewedDryRunId?.trim().toLowerCase();
+    if (apply && !reviewedDryRunId) {
+      throw new AttachmentRepairReviewMismatchError();
+    }
+    const idempotencyDigest = createHash("sha256")
+      .update("emails:attachment-repair:idempotency:v1\0", "utf8")
+      .update(this.tenantId, "utf8")
+      .update("\0", "utf8")
+      .update(input.idempotencyKey, "utf8")
+      .digest("hex");
+    const manifestLockDigest = attachmentRepairRequestHash(
+      canonicalBucket,
+      entries,
+      apply,
+    );
+
+    return this.withAttachmentRepairLedgerLock(
+      ["tenant-quota", idempotencyDigest, manifestLockDigest],
+      async (client) => {
+      const { ledgerEntries, canarySnapshot } =
+        await this.prepareAttachmentRepairManifest(
+          client,
+          canonicalBucket,
+          entries,
+          true,
+        );
+      const requestHash = attachmentRepairRequestHash(
+        canonicalBucket,
+        entries,
+        apply,
+        canarySnapshot,
+      );
+      if (apply) {
+        const reviewedRequestHash = attachmentRepairRequestHash(
+          canonicalBucket,
+          entries,
+          false,
+          canarySnapshot,
+        );
+        const reviewed = await client.get<{ matches: boolean }>(
+          `SELECT EXISTS (
+             SELECT 1
+             FROM attachment_repair_runs
+             WHERE tenant_id = $1::uuid
+               AND id = $2::uuid
+               AND request_hash = $3
+               AND apply = false
+               AND status = 'completed'
+           ) AS matches`,
+          [this.tenantId, reviewedDryRunId, reviewedRequestHash],
+        );
+        if (reviewed?.matches !== true) {
+          throw new AttachmentRepairReviewMismatchError();
+        }
+      }
+      // Use `INSERT ... ON CONFLICT ... DO UPDATE ... WHERE` so a reinsert of the
+      // same key cannot clobber a row unless it is already the same request/run.
+      // The immediate persisted-row comparison is the final guardrail: it turns any
+      // concurrent replay that loses the conflict race into a deterministic
+      // ownership/idempotency conflict, instead of silently returning the wrong
+      // row binding.
+      const bindAlias = async (runId: string, boundRequestHash: string): Promise<void> => {
+        const alias = await client.get<{ request_hash: string; run_id: string }>(
+          `INSERT INTO attachment_repair_idempotency_keys (
+             tenant_id, idempotency_key_hash, request_hash, run_id
+           )
+           VALUES (
+             $1::uuid, $2, $3, $4::uuid
+           )
+           ON CONFLICT (tenant_id, idempotency_key_hash)
+           DO UPDATE SET
+             request_hash = attachment_repair_idempotency_keys.request_hash,
+             run_id = attachment_repair_idempotency_keys.run_id
+             WHERE attachment_repair_idempotency_keys.request_hash = $3
+               AND attachment_repair_idempotency_keys.run_id = $4::uuid
+           RETURNING request_hash, run_id::text AS run_id`,
+          [this.tenantId, idempotencyDigest, boundRequestHash, runId],
+        );
+        if (!alias || alias.request_hash !== boundRequestHash || alias.run_id !== runId) {
+          const persistedAlias = await client.get<{ request_hash: string; run_id: string }>(
+            `SELECT request_hash, run_id::text AS run_id
+             FROM attachment_repair_idempotency_keys
+             WHERE tenant_id = $1::uuid AND idempotency_key_hash = $2`,
+            [this.tenantId, idempotencyDigest],
+          );
+          if (!persistedAlias
+            || persistedAlias.request_hash !== boundRequestHash
+            || persistedAlias.run_id !== runId
+          ) {
+            throw new AttachmentRepairIdempotencyConflictError();
+          }
+        }
+      };
+      const alias = await client.get<{ request_hash: string; run_id: string }>(
+        `SELECT request_hash, run_id::text AS run_id
+         FROM attachment_repair_idempotency_keys
+         WHERE tenant_id = $1::uuid AND idempotency_key_hash = $2`,
+        [this.tenantId, idempotencyDigest],
+      );
+      if (alias) {
+        if (alias.request_hash !== requestHash) {
+          throw new AttachmentRepairIdempotencyConflictError();
+        }
+        const fromAlias = await client.get<Record<string, unknown>>(
+          `SELECT ${ATTACHMENT_REPAIR_RUN_COLUMNS}, request_hash
+           FROM attachment_repair_runs
+           WHERE tenant_id = $1::uuid AND id = $2::uuid`,
+          [this.tenantId, alias.run_id],
+        );
+        if (fromAlias && fromAlias.request_hash === requestHash) {
+          return mapAttachmentRepairRun(fromAlias);
+        }
+      }
+
+      const existing = await client.get<Record<string, unknown>>(
+        `SELECT ${ATTACHMENT_REPAIR_RUN_COLUMNS}, request_hash
+         FROM attachment_repair_runs
+         WHERE tenant_id = $1::uuid AND idempotency_key_hash = $2`,
+        [this.tenantId, idempotencyDigest],
+      );
+      if (existing) {
+        if (existing["request_hash"] !== requestHash) {
+          throw new AttachmentRepairIdempotencyConflictError();
+        }
+        await bindAlias(String(existing["id"]), String(existing["request_hash"]));
+        return mapAttachmentRepairRun(existing);
+      }
+
+      const duplicateRequest = await client.get<Record<string, unknown>>(
+        `SELECT ${ATTACHMENT_REPAIR_RUN_COLUMNS}
+         FROM attachment_repair_runs
+         WHERE tenant_id = $1::uuid AND request_hash = $2`,
+        [this.tenantId, requestHash],
+      );
+      if (duplicateRequest) {
+        await bindAlias(String(duplicateRequest["id"]), requestHash);
+        return mapAttachmentRepairRun(duplicateRequest);
+      }
+
+      const expiredRuns = await client.many<{ id: string }>(
+        `SELECT id::text AS id
+         FROM attachment_repair_runs
+         WHERE tenant_id = $1::uuid
+           AND status = 'pending'
+           AND deadline_at <= now()
+         FOR UPDATE`,
+        [this.tenantId],
+      );
+      for (const expired of expiredRuns) {
+        await client.execute(
+          `UPDATE attachment_repair_entries
+           SET status = 'unavailable',
+               operator_action = true,
+               last_error_code = 'run_time_budget_exhausted',
+               claim_token = NULL,
+               lease_expires_at = NULL,
+               reserved_bytes = 0,
+               updated_at = now()
+           WHERE tenant_id = $1::uuid
+             AND run_id = $2::uuid
+             AND status = 'pending'
+             AND (claim_token IS NULL OR lease_expires_at <= now())`,
+          [this.tenantId, expired.id],
+        );
+        await reconcileAttachmentRepairRun(client, this.tenantId, expired.id);
+      }
+
+      const quota = await client.one<{
+        active_runs: number;
+        ledger_runs: number;
+        ledger_entries: number;
+      }>(
+        `SELECT
+           count(*) FILTER (WHERE status = 'pending')::int AS active_runs,
+           count(*)::int AS ledger_runs,
+           COALESCE(sum(entry_total), 0)::int AS ledger_entries
+         FROM attachment_repair_runs
+         WHERE tenant_id = $1::uuid`,
+        [this.tenantId],
+      );
+      if (Number(quota.active_runs) >= this.repairPolicy.maxActiveRunsPerTenant) {
+        throw new AttachmentRepairQuotaExceededError("active_runs", true);
+      }
+      if (Number(quota.ledger_runs) >= this.repairPolicy.maxLedgerRunsPerTenant) {
+        throw new AttachmentRepairQuotaExceededError("ledger_runs", false);
+      }
+      if (Number(quota.ledger_entries) + entries.length
+        > this.repairPolicy.maxLedgerEntriesPerTenant) {
+        throw new AttachmentRepairQuotaExceededError("ledger_entries", false);
+      }
+
+      const inventoryTotal = ledgerEntries.reduce(
+        (total, entry) => total + entry.attachment_count,
+        0,
+      );
+      const runId = randomUUID();
+      const inserted = await client.get<Record<string, unknown>>(
+        `INSERT INTO attachment_repair_runs (
+           tenant_id, id, idempotency_key_hash, request_hash, apply, status,
+           entry_total, inventory_total, pending, entry_pending,
+           byte_budget, time_budget_ms, deadline_at
+         ) VALUES (
+           $1::uuid, $2::uuid, $3, $4, $5, 'pending', $6, $7, $7, $6,
+           $8::bigint, $9::bigint, now() + ($9::bigint * interval '1 millisecond')
+         )
+         ON CONFLICT DO NOTHING
+         RETURNING ${ATTACHMENT_REPAIR_RUN_COLUMNS}`,
+        [
+          this.tenantId,
+          runId,
+          idempotencyDigest,
+          requestHash,
+          apply,
+          ledgerEntries.length,
+          inventoryTotal,
+          this.repairPolicy.runByteBudget,
+          this.repairPolicy.runTimeBudgetMs,
+        ],
+      );
+      if (!inserted) {
+        const raced = await client.get<Record<string, unknown>>(
+          `SELECT ${ATTACHMENT_REPAIR_RUN_COLUMNS}, request_hash
+           FROM attachment_repair_runs
+           WHERE tenant_id = $1::uuid
+             AND (idempotency_key_hash = $2 OR request_hash = $3)
+           ORDER BY (request_hash = $3) DESC
+           LIMIT 1`,
+          [this.tenantId, idempotencyDigest, requestHash],
+        );
+        if (!raced || raced["request_hash"] !== requestHash) {
+          throw new AttachmentRepairIdempotencyConflictError();
+        }
+        await bindAlias(String(raced["id"]), requestHash);
+        return mapAttachmentRepairRun(raced);
+      }
+      await bindAlias(runId, requestHash);
+
+      await client.execute(
+        `INSERT INTO attachment_repair_entries (
+           tenant_id, run_id, position, object_key, recipients,
+           canary_message_ids, attachment_count, status
+         )
+         SELECT $1::uuid, $2::uuid, item.position, item.object_key,
+                item.recipients, item.canary_message_ids,
+                item.attachment_count, 'pending'
+         FROM jsonb_to_recordset($3::jsonb) AS item(
+           position integer,
+           object_key text,
+           recipients jsonb,
+           canary_message_ids jsonb,
+           attachment_count integer
+         )`,
+        [this.tenantId, runId, JSON.stringify(ledgerEntries)],
+      );
+      return mapAttachmentRepairRun(inserted);
+    });
+  }
+
+  async attachmentRepairRunMatchesManifest(
+    runId: string,
+    input: {
+      canonicalBucket: string;
+      apply?: boolean;
+      entries: readonly AttachmentRepairManifestEntry[];
+    },
+  ): Promise<boolean> {
+    const canonicalBucket = input.canonicalBucket.trim();
+    if (!canonicalBucket) {
+      throw new RangeError("attachment repair requires the deployment canonical bucket");
+    }
+    const entries = normalizeAttachmentRepairManifestEntries(input.entries);
+    const apply = input.apply === true;
+    const manifestLockDigest = attachmentRepairRequestHash(
+      canonicalBucket,
+      entries,
+      apply,
+    );
+    return this.withAttachmentRepairLedgerLock(
+      [`review:${runId}`, manifestLockDigest],
+      async (client) => {
+        let canarySnapshot: AttachmentRepairCanarySnapshot[];
+        try {
+          ({ canarySnapshot } = await this.prepareAttachmentRepairManifest(
+            client,
+            canonicalBucket,
+            entries,
+            true,
+          ));
+        } catch (error) {
+          if (error instanceof RangeError) return false;
+          throw error;
+        }
+        const requestHash = attachmentRepairRequestHash(
+          canonicalBucket,
+          entries,
+          apply,
+          canarySnapshot,
+        );
+        const row = await client.get<{ matches: boolean }>(
+          `SELECT EXISTS (
+             SELECT 1
+             FROM attachment_repair_runs
+             WHERE tenant_id = $1::uuid
+               AND id = $2::uuid
+               AND request_hash = $3
+               AND apply = $4
+           ) AS matches`,
+          [this.tenantId, runId, requestHash, apply],
+        );
+        return row?.matches === true;
+      },
+    );
+  }
+
+  async getAttachmentRepairRun(runId: string): Promise<AttachmentRepairLedgerRun | null> {
+    const row = await this.client.get<Record<string, unknown>>(
+      `SELECT ${ATTACHMENT_REPAIR_RUN_COLUMNS}
+       FROM attachment_repair_runs
+       WHERE tenant_id = $1::uuid AND id = $2::uuid`,
+      [this.tenantId, runId],
+    );
+    return row ? mapAttachmentRepairRun(row) : null;
+  }
+
+  async listPendingAttachmentRepairEntries(
+    runId: string,
+    limit: number,
+  ): Promise<AttachmentRepairLedgerEntry[]> {
+    if (!Number.isSafeInteger(limit) || limit <= 0 || limit > MAX_ATTACHMENT_REPAIR_PAGE_ITEMS) {
+      throw new RangeError(
+        `attachment repair page limit must be between 1 and ${MAX_ATTACHMENT_REPAIR_PAGE_ITEMS}`,
+      );
+    }
+    const rows = await this.client.many<Record<string, unknown>>(
+      `SELECT tenant_id::text AS tenant_id, run_id::text AS run_id, position,
+              object_key, recipients, canary_message_ids, attachment_count, status,
+              operator_action, attempts, last_error_code, last_attempt_at,
+              next_attempt_at, claim_token::text AS claim_token, lease_expires_at
+       FROM attachment_repair_entries
+       WHERE tenant_id = $1::uuid AND run_id = $2::uuid AND status = 'pending'
+       ORDER BY next_attempt_at ASC, attempts ASC, position ASC
+       LIMIT $3`,
+      [this.tenantId, runId, limit],
+    );
+    return rows.map(mapAttachmentRepairEntry);
+  }
+
+  /**
+   * Atomically lease one eligible entry. The transaction ends before the
+   * caller performs S3 or MIME work; concurrent resumptions therefore observe
+   * the lease and cannot duplicate the same external attempt. Expired claims
+   * remain reclaimable, while exhausted expired claims become an aggregate-only
+   * operator-action terminal outcome.
+   */
+  async claimAttachmentRepairEntry(
+    runId: string,
+    leaseMs = ATTACHMENT_REPAIR_LEASE_MS,
+  ): Promise<AttachmentRepairLedgerEntry | null> {
+    if (!Number.isSafeInteger(leaseMs) || leaseMs <= 0 || leaseMs > 24 * 60 * 60 * 1000) {
+      throw new RangeError("attachment repair lease must be between 1 millisecond and 24 hours");
+    }
+    return this.withAttachmentRepairLedgerLock([runId], async (client) => {
+      const run = await client.get<{
+        id: string;
+        status: "pending" | "completed";
+        byte_budget: number;
+        bytes_consumed: number;
+        deadline_at: string;
+      }>(
+        `SELECT id::text AS id, status, byte_budget, bytes_consumed, deadline_at
+         FROM attachment_repair_runs
+         WHERE tenant_id = $1::uuid AND id = $2::uuid
+         FOR UPDATE`,
+        [this.tenantId, runId],
+      );
+      if (!run || run.status === "completed") return null;
+
+      if (Date.parse(String(run.deadline_at)) <= Date.now()) {
+        await client.execute(
+          `UPDATE attachment_repair_entries
+           SET status = 'unavailable',
+               operator_action = true,
+               last_error_code = 'run_time_budget_exhausted',
+               claim_token = NULL,
+               lease_expires_at = NULL,
+               reserved_bytes = 0,
+               updated_at = now()
+           WHERE tenant_id = $1::uuid
+             AND run_id = $2::uuid
+             AND status = 'pending'
+             AND (claim_token IS NULL OR lease_expires_at <= now())`,
+          [this.tenantId, runId],
+        );
+        await reconcileAttachmentRepairRun(client, this.tenantId, runId);
+        return null;
+      }
+
+      await client.execute(
+        `UPDATE attachment_repair_entries
+         SET status = 'unavailable',
+             operator_action = true,
+             last_error_code = 'retry_exhausted',
+             claim_token = NULL,
+             lease_expires_at = NULL,
+             reserved_bytes = 0,
+             updated_at = now()
+         WHERE tenant_id = $1::uuid
+           AND run_id = $2::uuid
+           AND status = 'pending'
+           AND attempts >= $3
+           AND (claim_token IS NULL OR lease_expires_at <= now())`,
+        [this.tenantId, runId, MAX_ATTACHMENT_REPAIR_ATTEMPTS],
+      );
+
+      const remainingBytes = Number(run.byte_budget) - Number(run.bytes_consumed);
+      if (!Number.isSafeInteger(remainingBytes) || remainingBytes <= 0) {
+        await client.execute(
+          `UPDATE attachment_repair_entries
+           SET status = 'unavailable',
+               operator_action = true,
+               last_error_code = 'run_byte_budget_exhausted',
+               claim_token = NULL,
+               lease_expires_at = NULL,
+               reserved_bytes = 0,
+               updated_at = now()
+           WHERE tenant_id = $1::uuid
+             AND run_id = $2::uuid
+             AND status = 'pending'
+             AND (claim_token IS NULL OR lease_expires_at <= now())`,
+          [this.tenantId, runId],
+        );
+        await reconcileAttachmentRepairRun(client, this.tenantId, runId);
+        return null;
+      }
+
+      const selected = await client.get<{ position: number }>(
+        `SELECT position
+         FROM attachment_repair_entries
+         WHERE tenant_id = $1::uuid
+           AND run_id = $2::uuid
+           AND status = 'pending'
+           AND attempts < $3
+           AND next_attempt_at <= now()
+           AND (claim_token IS NULL OR lease_expires_at <= now())
+         ORDER BY next_attempt_at ASC, attempts ASC, position ASC
+         FOR UPDATE SKIP LOCKED
+         LIMIT 1`,
+        [this.tenantId, runId, MAX_ATTACHMENT_REPAIR_ATTEMPTS],
+      );
+      if (!selected) {
+        await reconcileAttachmentRepairRun(client, this.tenantId, runId);
+        return null;
+      }
+
+      const claimToken = randomUUID();
+      const reservation = Math.min(MAX_ATTACHMENT_REPAIR_SOURCE_BYTES, remainingBytes);
+      await client.execute(
+        `UPDATE attachment_repair_runs
+         SET bytes_consumed = bytes_consumed + $3,
+             updated_at = now()
+         WHERE tenant_id = $1::uuid
+           AND id = $2::uuid
+           AND bytes_consumed + $3 <= byte_budget`,
+        [this.tenantId, runId, reservation],
+      );
+      const claimed = await client.get<Record<string, unknown>>(
+        `UPDATE attachment_repair_entries
+         SET attempts = attempts + 1,
+             last_attempt_at = now(),
+             claim_token = $4::uuid,
+             lease_expires_at = now() + ($5::double precision * interval '1 millisecond'),
+             reserved_bytes = $6,
+             updated_at = now()
+         WHERE tenant_id = $1::uuid
+           AND run_id = $2::uuid
+           AND position = $3
+         RETURNING tenant_id::text AS tenant_id, run_id::text AS run_id, position,
+                   object_key, recipients, canary_message_ids, attachment_count, status,
+                   operator_action, attempts, last_error_code, last_attempt_at,
+                   next_attempt_at, claim_token::text AS claim_token, lease_expires_at,
+                   reserved_bytes`,
+        [this.tenantId, runId, selected.position, claimToken, leaseMs, reservation],
+      );
+      await reconcileAttachmentRepairRun(client, this.tenantId, runId);
+      return claimed ? mapAttachmentRepairEntry(claimed) : null;
+    });
+  }
+
+  /**
+   * Checkpoint one bounded entry. Terminal entries are immutable/idempotent.
+   * Totals are recomputed from the item ledger under the run-row lock so
+   * repaired + would_repair + unavailable + pending always equals inventory,
+   * with retrying retained as a visible subset of pending work.
+   */
+  async recordAttachmentRepairEntryOutcome(
+    runId: string,
+    position: number,
+    claimToken: string,
+    status: AttachmentRepairLedgerEntryStatus,
+    errorCode: string | null = null,
+    sourceBytes?: number,
+  ): Promise<void> {
+    if (!Number.isSafeInteger(position) || position < 0) {
+      throw new RangeError("attachment repair position must be a non-negative integer");
+    }
+    if (!["pending", "would_repair", "repaired", "unavailable"].includes(status)) {
+      throw new RangeError("invalid attachment repair entry status");
+    }
+    if (errorCode !== null && !/^[a-z][a-z0-9_]{0,63}$/.test(errorCode)) {
+      throw new RangeError("invalid attachment repair error code");
+    }
+    if (status === "pending" && errorCode === null) {
+      throw new RangeError("retryable attachment repair outcomes require an error code");
+    }
+    if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(claimToken)) {
+      throw new RangeError("attachment repair claim token must be a UUID");
+    }
+    await this.withAttachmentRepairLedgerLock([runId], async (client) => {
+      const run = await client.get<{ id: string; deadline_at: Date | string }>(
+        `SELECT id::text AS id, deadline_at
+         FROM attachment_repair_runs
+         WHERE tenant_id = $1::uuid AND id = $2::uuid
+         FOR UPDATE`,
+        [this.tenantId, runId],
+      );
+      if (!run) return;
+      const entry = await client.get<{
+        status: AttachmentRepairLedgerEntryStatus;
+        attempts: number;
+        claim_token: string | null;
+        reserved_bytes: number;
+      }>(
+        `SELECT status, attempts, claim_token::text AS claim_token, reserved_bytes
+         FROM attachment_repair_entries
+         WHERE tenant_id = $1::uuid AND run_id = $2::uuid AND position = $3
+         FOR UPDATE`,
+        [this.tenantId, runId, position],
+      );
+      if (!entry || entry.status !== "pending" || entry.claim_token !== claimToken) return;
+      const reservedBytes = Number(entry.reserved_bytes);
+      const validSourceAccounting = sourceBytes === undefined
+        || (Number.isSafeInteger(sourceBytes) && sourceBytes >= 0 && sourceBytes <= reservedBytes);
+      const accountedSourceBytes = sourceBytes === undefined || !validSourceAccounting
+        ? reservedBytes
+        : sourceBytes;
+      const refundBytes = reservedBytes - accountedSourceBytes;
+      const deadlineExpired = Date.parse(String(run.deadline_at)) <= Date.now();
+      const exhausted = !deadlineExpired && validSourceAccounting && status === "pending"
+        && Number(entry.attempts) >= MAX_ATTACHMENT_REPAIR_ATTEMPTS;
+      const finalStatus: AttachmentRepairLedgerEntryStatus = !validSourceAccounting || deadlineExpired || exhausted
+        ? "unavailable"
+        : status;
+      const finalErrorCode = !validSourceAccounting
+        ? "invalid_source_byte_accounting"
+        : deadlineExpired
+          ? "run_time_budget_exhausted"
+          : exhausted
+            ? "retry_exhausted"
+            : errorCode;
+      const operatorAction = !validSourceAccounting
+        || deadlineExpired
+        || exhausted
+        || finalErrorCode === "run_byte_budget_exhausted"
+        || finalErrorCode === "run_time_budget_exhausted";
+      const retryDelayMs = Math.min(
+        ATTACHMENT_REPAIR_RETRY_MAX_MS,
+        ATTACHMENT_REPAIR_RETRY_BASE_MS * 2 ** Math.max(0, Number(entry.attempts) - 1),
+      );
+      if (refundBytes > 0) {
+        await client.execute(
+          `UPDATE attachment_repair_runs
+           SET bytes_consumed = GREATEST(0, bytes_consumed - $3),
+               updated_at = now()
+           WHERE tenant_id = $1::uuid AND id = $2::uuid`,
+          [this.tenantId, runId, refundBytes],
+        );
+      }
+      await client.execute(
+        `UPDATE attachment_repair_entries
+         SET status = $4,
+             operator_action = $5,
+             last_error_code = $6,
+             next_attempt_at = CASE
+               WHEN $4 = 'pending'
+               THEN now() + ($7::double precision * interval '1 millisecond')
+               ELSE next_attempt_at
+             END,
+             claim_token = NULL,
+             lease_expires_at = NULL,
+             reserved_bytes = 0,
+             updated_at = now()
+         WHERE tenant_id = $1::uuid
+           AND run_id = $2::uuid
+           AND position = $3
+           AND claim_token = $8::uuid`,
+        [
+          this.tenantId,
+          runId,
+          position,
+          finalStatus,
+          operatorAction,
+          finalErrorCode,
+          retryDelayMs,
+          claimToken,
+        ],
+      );
+      await reconcileAttachmentRepairRun(client, this.tenantId, runId);
+    });
+  }
+
+  /**
+   * Folder counts. The un-scoped read is O(1) from `message_counters`
+   * (trigger-maintained, migration 0019) instead of the previous full tenant
+   * scan; `latest_received_at` is one probe of the ts index endpoint. With
+   * `domains`, counts are a per-message rollup of `message_recipients`
+   * (index-only over (tenant_id, domain, message_id) — streamed, not sorted).
+   */
+  async messageCounts(opts: { domains?: string[] } = {}): Promise<MessageCountsRecord> {
+    const number = (value: unknown): number => {
+      const parsed = typeof value === "number" ? value : Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    const toLatest = (latest: unknown): string | null =>
+      latest instanceof Date ? latest.toISOString() : latest ? String(latest) : null;
+
+    const domains = (opts.domains ?? []).map((d) => d.trim().toLowerCase()).filter(Boolean);
+    const priorityRow = await this.client.get<{ priority: unknown }>(
+      `SELECT count(*)::int AS priority
+         FROM messages m
+        WHERE m.tenant_id = $1
+          AND ${NOT_OUTBOUND_SQL.replaceAll("direction", "m.direction")}
+          AND NOT (${ARCHIVED_SQL.replaceAll("labels", "m.labels")})
+          AND NOT ${SPAM_SQL.replaceAll("labels", "m.labels").replaceAll("status", "m.status")}
+          AND NOT (${TRASH_SQL.replaceAll("labels", "m.labels")})
+          AND EXISTS (
+            SELECT 1
+              FROM priority_sender_rules r
+             WHERE r.tenant_id = m.tenant_id
+               AND ((r.kind = 'address' AND rtrim(${SENDER_EMAIL_SQL.replaceAll("from_addr", "m.from_addr")}, '.') = r.value)
+                 OR (r.kind = 'domain' AND rtrim(split_part(${SENDER_EMAIL_SQL.replaceAll("from_addr", "m.from_addr")}, '@', 2), '.') = r.value))
+          )
+          ${domains.length > 0 ? "AND EXISTS (SELECT 1 FROM message_recipients mr WHERE mr.tenant_id = m.tenant_id AND mr.message_id = m.id AND mr.domain = ANY($2))" : ""}`,
+      domains.length > 0 ? [this.tenantId, domains] : [this.tenantId],
+    );
+    const priority = number(priorityRow?.priority);
+    if (domains.length > 0) {
+      // Single domain (the native client's case): the write-time
+      // first_for_domain marker guarantees one row per message, so this is a
+      // flat aggregate over one index range — no GROUP BY, O(1) memory.
+      // Multiple domains need the per-message rollup below to avoid counting
+      // a message once per matching domain; note its hash aggregate sizes
+      // with the domain's message count (~27MB for a 128k-row domain), so
+      // dominant multi-domain combinations want work_mem >= 32MB.
+      const sql =
+        domains.length === 1
+          ? `SELECT
+               count(*) FILTER (WHERE is_out) AS sent,
+               count(*) FILTER (WHERE NOT is_out AND NOT is_arch AND NOT is_spam AND NOT is_trash) AS inbox,
+               count(*) FILTER (WHERE NOT is_out AND NOT is_arch AND NOT is_spam AND NOT is_trash AND NOT is_read) AS unread,
+               count(*) FILTER (WHERE NOT is_out AND is_starred AND NOT is_arch AND NOT is_spam AND NOT is_trash) AS starred,
+               count(*) FILTER (WHERE NOT is_out AND is_arch AND NOT is_spam AND NOT is_trash) AS archived,
+               count(*) FILTER (WHERE NOT is_out AND is_spam) AS spam,
+               count(*) FILTER (WHERE NOT is_out AND is_trash) AS trash,
+               count(*) AS total,
+               max(sort_ts) FILTER (WHERE NOT is_out) AS latest_received_at
+             FROM message_recipients
+             WHERE tenant_id = $1 AND domain = ANY($2) AND first_for_domain`
+          : `WITH per_message AS (
+               SELECT message_id,
+                      bool_or(is_out) AS is_out, bool_or(is_read) AS is_read,
+                      bool_or(is_starred) AS is_starred, bool_or(is_arch) AS is_arch,
+                      bool_or(is_spam) AS is_spam, bool_or(is_trash) AS is_trash,
+                      max(sort_ts) AS ts
+                 FROM message_recipients
+                WHERE tenant_id = $1 AND domain = ANY($2) AND first_for_domain
+                GROUP BY message_id
+             )
+             SELECT
+               count(*) FILTER (WHERE is_out) AS sent,
+               count(*) FILTER (WHERE NOT is_out AND NOT is_arch AND NOT is_spam AND NOT is_trash) AS inbox,
+               count(*) FILTER (WHERE NOT is_out AND NOT is_arch AND NOT is_spam AND NOT is_trash AND NOT is_read) AS unread,
+               count(*) FILTER (WHERE NOT is_out AND is_starred AND NOT is_arch AND NOT is_spam AND NOT is_trash) AS starred,
+               count(*) FILTER (WHERE NOT is_out AND is_arch AND NOT is_spam AND NOT is_trash) AS archived,
+               count(*) FILTER (WHERE NOT is_out AND is_spam) AS spam,
+               count(*) FILTER (WHERE NOT is_out AND is_trash) AS trash,
+               count(*) AS total,
+               max(ts) FILTER (WHERE NOT is_out) AS latest_received_at
+             FROM per_message`;
+      const row = await this.client.get<Record<string, unknown>>(sql, [this.tenantId, domains]);
+      return {
+        inbox: number(row?.["inbox"]), unread: number(row?.["unread"]), priority, starred: number(row?.["starred"]),
+        sent: number(row?.["sent"]), archived: number(row?.["archived"]), spam: number(row?.["spam"]),
+        trash: number(row?.["trash"]), total: number(row?.["total"]),
+        latest_received_at: toLatest(row?.["latest_received_at"]),
+      };
+    }
+
+    const rows = await this.client.many<{ key: string; value: unknown }>(
+      `SELECT key, value FROM message_counters WHERE tenant_id = $1`,
+      [this.tenantId],
+    );
+    const counters = new Map(rows.map((r) => [r.key, number(r.value)]));
+    const latestRow = await this.client.get<{ ts: unknown }>(
+      `SELECT ${MESSAGE_TS_EXPR} AS ts FROM messages
+        WHERE tenant_id = $1 AND ${NOT_OUTBOUND_SQL}
+        ORDER BY ${MESSAGE_TS_EXPR} DESC, id DESC LIMIT 1`,
+      [this.tenantId],
+    );
+    return {
+      inbox: counters.get("inbox") ?? 0,
+      unread: counters.get("unread") ?? 0,
+      priority,
+      starred: counters.get("starred") ?? 0,
+      sent: counters.get("sent") ?? 0,
+      archived: counters.get("archived") ?? 0,
+      spam: counters.get("spam") ?? 0,
+      trash: counters.get("trash") ?? 0,
+      total: counters.get("total") ?? 0,
+      latest_received_at: toLatest(latestRow?.["ts"]),
+    };
+  }
+
+  /**
+   * Per-recipient unread inbox counts — the server side of the native client's
+   * `inbox unread-count --by-address`. Mirrors the local SQLite rollup over
+   * `inbound_recipients` exactly: count each inbound message once per `to`
+   * recipient (cc is not tracked locally), excluding sent/read/archived only —
+   * spam/trash are NOT excluded, matching the local query's predicate. The
+   * rollup covers every parsed recipient address, not just registered addresses,
+   * which is what separates it from `listMailboxes()`.
+   */
+  async unreadByAddress(opts: { limit?: number; offset?: number } = {}): Promise<Array<{ address: string; unread: number }>> {
+    const rows = await this.client.many<Record<string, unknown>>(
+      `SELECT email AS address, count(*)::int AS unread
+         FROM message_recipients
+        WHERE tenant_id = $1
+          AND kind = 'to'
+          AND NOT is_out
+          AND NOT is_read
+          AND NOT is_arch
+          AND position('@' in email) > 1
+        GROUP BY email
+        ORDER BY unread DESC, email ASC
+        LIMIT $2 OFFSET $3`,
+      [this.tenantId, clampLimit(opts.limit), clampOffset(opts.offset)],
+    );
+    const number = (value: unknown): number => {
+      const parsed = typeof value === "number" ? value : Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    return rows.map((row) => ({
+      address: String(row["address"] ?? ""),
+      unread: number(row["unread"]),
+    }));
+  }
+
+  /**
+   * Resolve a full message id OR a unique id PREFIX (the short id `inbox list`
+   * prints) to a full row id, tenant-scoped. A full UUID is returned verbatim with
+   * NO DB round-trip, so exact-id behavior is unchanged (a non-existent full id
+   * still 404s downstream when the row is fetched). Otherwise the prefix is matched
+   * against the indexed `(id)::text` expression (migration 0014, text_pattern_ops)
+   * WITHIN the tenant (Layer-1 `tenant_id` filter + Layer-2 RLS via the scoped
+   * client): 0 rows -> null (not found), exactly 1 -> `{ id }`, 2+ ->
+   * `{ ambiguous: true }`. `LIMIT 2` is enough to distinguish unique from ambiguous.
+   */
+  async resolveMessageId(idOrPrefix: string): Promise<{ id: string } | { ambiguous: true } | null> {
+    const value = idOrPrefix.trim();
+    if (!value) return null;
+    if (FULL_MESSAGE_ID_RE.test(value)) return { id: value };
+    // Escape LIKE metacharacters (% _ \) so the prefix stays an anchored,
+    // index-served range scan: an unescaped % / _ would otherwise broaden the
+    // match within the tenant, and a leading wildcard would force a non-indexable
+    // scan (adversarial review). Escaping — not a hex-charset reject — keeps
+    // legacy non-UUID message ids (e.g. "legacy-import-…") resolvable by prefix.
+    const likePrefix = escapeLikeMetacharacters(value);
+    const rows = await this.client.many<{ id: string }>(
+      `SELECT id FROM messages WHERE (id)::text LIKE $1 || '%' ESCAPE '\\' AND tenant_id = $2 ORDER BY id LIMIT 2`,
+      [likePrefix, this.tenantId],
+    );
+    if (rows.length === 0) return null;
+    if (rows.length > 1) return { ambiguous: true };
+    return { id: rows[0]!.id };
+  }
+
+  async getMessage(id: string): Promise<MessageRecord | null> {
+    const row = await this.client.get<Record<string, unknown>>(
+      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = $1 AND tenant_id = $2`,
+      [id, this.tenantId],
+    );
+    return row ? mapMessageRow(row) : null;
+  }
+
+  async getMessageAttachment(id: string, index: number, maxBytes = MAX_ATTACHMENT_DOWNLOAD_BYTES): Promise<StoredAttachmentLookup | null> {
+    if (!Number.isInteger(index) || index < 0) return null;
+    const row = await this.client.get<{ attachment: unknown }>(
+      `SELECT attachments -> $2::int AS attachment FROM messages WHERE id = $1 AND tenant_id = $3`,
+      [id, index, this.tenantId],
+    );
+    const value = row?.attachment;
+    let attachment: unknown;
+    try { attachment = typeof value === "string" ? JSON.parse(value) : value; } catch { return { state: "invalid", reason: "attachment JSON is malformed" }; }
+    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) return null;
+    const record = attachment as Record<string, unknown>;
+    const metadata = {
+      filename: record["filename"],
+      content_type: record["content_type"],
+      size: record["size"],
+    };
+    if (typeof record["content_base64"] !== "string") {
+      try {
+        const size = toSizeBytes(record["size"]);
+        // Reuse the strict filename/content-type validation while substituting a
+        // validation-only size for legacy metadata whose byte count is unknown.
+        // The response preserves that uncertainty as null.
+        const unavailable = decodeAttachmentPayload({
+          code: "attachment_content_unavailable",
+          attachment: { ...metadata, size: size ?? 0 },
+        }, index, maxBytes);
+        if (unavailable.state !== "content_unavailable") throw new Error("unexpected attachment state");
+        return {
+          state: "content_unavailable",
+          attachment: {
+            filename: unavailable.filename,
+            content_type: unavailable.content_type,
+            size,
+          },
+        };
+      } catch (error) {
+        return { state: "invalid", reason: error instanceof Error ? error.message : "attachment metadata is invalid" };
+      }
+    }
+    try {
+      const size = toSizeBytes(record["size"]);
+      if (size === null) throw new Error("attachment size must be a non-negative safe integer");
+      const normalized = { ...record, size };
+      const available = decodeAttachmentPayload({ attachment: normalized }, index, maxBytes);
+      if (available.state !== "available") throw new Error("unexpected attachment state");
+      return {
+        state: "available",
+        attachment: {
+          filename: available.filename,
+          content_type: available.content_type,
+          size: available.bytes,
+          content_base64: record["content_base64"],
+        },
+      };
+    } catch (error) {
+      return { state: "invalid", reason: error instanceof Error ? error.message : "attachment content is invalid" };
+    }
+  }
+
+  async getInboundSourceProvenance(id: string): Promise<InboundSourceProvenance | null> {
+    if (!id) return null;
+    return this.client.get<InboundSourceProvenance>(
+      `SELECT tenant_id, message_id, bucket, object_key, raw_sha256, established_via
+       FROM inbound_message_sources WHERE tenant_id = $1 AND message_id = $2`,
+      [this.tenantId, id],
+    );
+  }
+
+  /**
+   * Establish immutable provenance only for an exact tenant/message/source-key
+   * row. Conflicting provenance is never overwritten.
+   */
+  async recordInboundSourceProvenance(input: {
+    messageId: string;
+    bucket: string;
+    objectKey: string;
+    rawSha256: string;
+    establishedVia: "normal_ingest" | "canonical_replay" | "gmail_replay";
+  }): Promise<RecordInboundSourceProvenanceResult> {
+    if (!input.messageId || !input.bucket || !input.objectKey || !/^[0-9a-f]{64}$/.test(input.rawSha256)) {
+      return "not_found";
+    }
+    const inserted = await this.client.get<InboundSourceProvenance>(
+      `INSERT INTO inbound_message_sources (
+         tenant_id, message_id, bucket, object_key, raw_sha256, established_via
+       )
+       SELECT $1, m.id, $3, $4, $5, $6
+       FROM messages m
+       WHERE m.tenant_id = $1 AND m.id = $2 AND (m.source_id = $4 OR m.message_id = $4)
+       ON CONFLICT DO NOTHING
+       RETURNING tenant_id, message_id, bucket, object_key, raw_sha256, established_via`,
+      [
+        this.tenantId,
+        input.messageId,
+        input.bucket,
+        input.objectKey,
+        input.rawSha256,
+        input.establishedVia,
+      ],
+    );
+    if (inserted) return "recorded";
+    const existing = await this.getInboundSourceProvenance(input.messageId);
+    if (!existing) return "not_found";
+    return existing.bucket === input.bucket
+      && existing.object_key === input.objectKey
+      && existing.raw_sha256 === input.rawSha256
+      ? "existing_match"
+      : "conflict";
+  }
+
+  /** Exact tenant + message-id + source-key lookup for attachment-only repair. */
+  async getAttachmentRepairState(id: string, sourceKey: string): Promise<{
+    attachments: unknown[];
+    provenance: InboundSourceProvenance | null;
+  } | null> {
+    if (!id || !sourceKey) return null;
+    const row = await this.client.get<{
+      attachments: unknown;
+      source_tenant_id: string | null;
+      source_message_id: string | null;
+      bucket: string | null;
+      object_key: string | null;
+      raw_sha256: string | null;
+      established_via: "normal_ingest" | "canonical_replay" | "gmail_replay" | null;
+    }>(
+      `SELECT m.attachments,
+              s.tenant_id AS source_tenant_id, s.message_id AS source_message_id,
+              s.bucket, s.object_key, s.raw_sha256, s.established_via
+       FROM messages m
+       LEFT JOIN inbound_message_sources s
+         ON s.tenant_id = m.tenant_id AND s.message_id = m.id
+       WHERE m.id = $1 AND m.tenant_id = $2 AND (m.source_id = $3 OR m.message_id = $3)`,
+      [id, this.tenantId, sourceKey],
+    );
+    if (!row) return null;
+    const raw = row.attachments;
+    try {
+      const attachments = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (!Array.isArray(attachments)) return null;
+      const provenance = row.source_tenant_id && row.source_message_id && row.bucket
+        && row.object_key && row.raw_sha256 && row.established_via
+        ? {
+            tenant_id: row.source_tenant_id,
+            message_id: row.source_message_id,
+            bucket: row.bucket,
+            object_key: row.object_key,
+            raw_sha256: row.raw_sha256,
+            established_via: row.established_via,
+          }
+        : null;
+      return { attachments, provenance };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Compare-and-swap ONLY the attachment JSON. `updated_at` and every message /
+   * mailbox field are intentionally untouched.
+   */
+  async replaceAttachmentPayload(
+    id: string,
+    sourceKey: string,
+    provenance: InboundSourceProvenance,
+    expected: unknown[],
+    replacement: unknown[],
+  ): Promise<boolean> {
+    if (!id || !sourceKey) return false;
+    const row = await this.client.get<{ id: string }>(
+      `UPDATE messages SET attachments = $1::jsonb
+       WHERE id = $2 AND tenant_id = $3 AND (source_id = $4 OR message_id = $4)
+         AND EXISTS (
+           SELECT 1 FROM inbound_message_sources s
+           WHERE s.tenant_id = $3 AND s.message_id = $2
+             AND s.bucket = $5 AND s.object_key = $4 AND s.raw_sha256 = $6
+         )
+         AND attachments = $7::jsonb
+       RETURNING id`,
+      [
+        JSON.stringify(replacement), id, this.tenantId, sourceKey,
+        provenance.bucket, provenance.raw_sha256, JSON.stringify(expected),
+      ],
+    );
+    return Boolean(row);
+  }
+
+  /**
+   * Look up an existing message by a stable upstream key (source_id OR message_id)
+   * WITHIN the tenant (design M3 leak point). Returns the row id, or null.
+   */
+  async findMessageIdByKey(key: string): Promise<string | null> {
+    if (!key) return null;
+    const row = await this.client.get<{ id: string }>(
+      `SELECT id FROM messages WHERE (source_id = $1 OR message_id = $1) AND tenant_id = $2 LIMIT 1`,
+      [key, this.tenantId],
+    );
+    return row ? row.id : null;
+  }
+
+  async createMessage(input: MessageInput): Promise<MessageRecord> {
+    const row = await this.client.one<Record<string, unknown>>(
+      `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
+       VALUES (${MESSAGE_INSERT_VALUES}, $24)
+       RETURNING ${MESSAGE_COLUMNS}`,
+      [...messageInsertParams(input), this.tenantId],
+    );
+    return mapMessageRow(row);
+  }
+
+  /**
+   * Insert a new inbound row (or observe a concurrent exact-source insert) and
+   * establish immutable provenance in the SAME database transaction. A source
+   * conflict aborts the transaction, so an unprovenanced new message cannot leak.
+   */
+  async createInboundMessageWithProvenance(
+    input: MessageInput,
+    provenance: {
+      bucket: string;
+      objectKey: string;
+      rawSha256: string;
+      establishedVia: "normal_ingest";
+    },
+  ): Promise<{
+    record: MessageRecord;
+    inserted: boolean;
+    provenance: "recorded" | "existing_match";
+  }> {
+    if (!input.source_id || input.source_id !== provenance.objectKey
+      || !provenance.bucket || !/^[0-9a-f]{64}$/.test(provenance.rawSha256)
+      || !this.atomicClient) {
+      throw new Error("atomic inbound message provenance requires an exact source and transactional store");
+    }
+    return this.atomicClient.transaction(async (tx) => {
+      await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [this.tenantId]);
+      const insertedRow = await tx.get<Record<string, unknown>>(
+        `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
+         VALUES (${MESSAGE_INSERT_VALUES}, $24)
+         ON CONFLICT (tenant_id, source_id) WHERE source_id IS NOT NULL DO NOTHING
+         RETURNING ${MESSAGE_COLUMNS}`,
+        [...messageInsertParams(input), this.tenantId],
+      );
+      const row = insertedRow ?? await tx.get<Record<string, unknown>>(
+        `SELECT ${MESSAGE_COLUMNS} FROM messages
+         WHERE tenant_id = $1::uuid AND source_id = $2
+         FOR UPDATE`,
+        [this.tenantId, provenance.objectKey],
+      );
+      if (!row || (row["source_id"] !== provenance.objectKey && row["message_id"] !== provenance.objectKey)) {
+        throw new Error("could not bind inbound message to the exact source object");
+      }
+      const messageId = String(row["id"]);
+      const insertedSource = await tx.get<InboundSourceProvenance>(
+        `INSERT INTO inbound_message_sources (
+           tenant_id, message_id, bucket, object_key, raw_sha256, established_via
+         ) VALUES ($1::uuid, $2, $3, $4, $5, $6)
+         ON CONFLICT DO NOTHING
+         RETURNING tenant_id::text AS tenant_id, message_id, bucket, object_key, raw_sha256, established_via`,
+        [
+          this.tenantId,
+          messageId,
+          provenance.bucket,
+          provenance.objectKey,
+          provenance.rawSha256,
+          provenance.establishedVia,
+        ],
+      );
+      let sourceState: "recorded" | "existing_match" = "recorded";
+      if (!insertedSource) {
+        const existing = await tx.get<InboundSourceProvenance>(
+          `SELECT tenant_id::text AS tenant_id, message_id, bucket, object_key, raw_sha256, established_via
+           FROM inbound_message_sources WHERE tenant_id = $1::uuid AND message_id = $2`,
+          [this.tenantId, messageId],
+        );
+        if (!existing || existing.bucket !== provenance.bucket
+          || existing.object_key !== provenance.objectKey
+          || existing.raw_sha256 !== provenance.rawSha256) {
+          throw new Error("inbound source provenance conflicts with the exact object");
+        }
+        sourceState = "existing_match";
+      }
+      return {
+        record: mapMessageRow(row),
+        inserted: Boolean(insertedRow),
+        provenance: sourceState,
+      };
+    });
+  }
+
+  /** Return an existing tenant-scoped send intent without exposing another tenant. */
+  async getSendIntentByIdempotencyKey(key: string): Promise<MessageRecord | null> {
+    const row = await this.client.get<Record<string, unknown>>(
+      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE idempotency_key = $1 AND tenant_id = $2`,
+      [key, this.tenantId],
+    );
+    return row ? mapMessageRow(row) : null;
+  }
+
+  /** Non-sending tenant-scoped recovery lookup. The key is never returned. */
+  async lookupSendIntent(key: string): Promise<SendIntentLookupResult> {
+    return this.withSendIntentKeyLock(key, async (client, digest) => {
+      const row = await client.get<Record<string, unknown>>(
+        `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE idempotency_key = $1 AND tenant_id = $2`,
+        [key, this.tenantId],
+      );
+      const tombstone = await client.get<{ found: boolean }>(
+        `SELECT true AS found FROM send_intent_tombstones
+         WHERE tenant_id = $1 AND idempotency_key_hash = $2`,
+        [this.tenantId, digest],
+      );
+      const record = row ? mapMessageRow(row) : null;
+      return {
+        found: record !== null,
+        tombstoned: tombstone !== null || record?.send_state === "cancelled",
+        reconciliation_required: record !== null && sendIntentRequiresReconciliation(record.send_state),
+        message: record,
+      };
+    });
+  }
+
+  /**
+   * Durable stop-before-send primitive. The tenant/key advisory lock serializes
+   * this with first reservation, while the message row lock serializes it with a
+   * concurrent claim. Once this returns, every later reservation/claim observes
+   * the tombstone before a provider call.
+   */
+  async cancelSendIntent(key: string): Promise<SendIntentCancellationResult> {
+    return this.withSendIntentKeyLock(key, async (client, digest) => {
+      await client.execute(
+        `INSERT INTO send_intent_tombstones (tenant_id, idempotency_key_hash)
+         VALUES ($1, $2)
+         ON CONFLICT (tenant_id, idempotency_key_hash) DO NOTHING`,
+        [this.tenantId, digest],
+      );
+      const existing = await client.get<Record<string, unknown>>(
+        `SELECT ${MESSAGE_COLUMNS} FROM messages
+         WHERE tenant_id = $1 AND idempotency_key = $2
+         FOR UPDATE`,
+        [this.tenantId, key],
+      );
+      if (!existing) {
+        return {
+          outcome: "tombstoned",
+          tombstoned: true,
+          reconciliation_required: false,
+          message: null,
+        };
+      }
+      let record = mapMessageRow(existing);
+      if (record.send_state === "pending" || record.send_state === "blocked" || record.send_state === "failed") {
+        const cancelled = await client.get<Record<string, unknown>>(
+          `UPDATE messages
+           SET send_state = 'cancelled', status = 'cancelled', updated_at = now()
+           WHERE id = $1 AND tenant_id = $2 AND send_state IN ('pending', 'blocked', 'failed')
+           RETURNING ${MESSAGE_COLUMNS}`,
+          [record.id, this.tenantId],
+        );
+        if (cancelled) record = mapMessageRow(cancelled);
+      }
+      const reconciliationRequired = sendIntentRequiresReconciliation(record.send_state);
+      return {
+        outcome: reconciliationRequired ? "reconciliation_required" : "cancelled",
+        tombstoned: true,
+        reconciliation_required: reconciliationRequired,
+        message: record,
+      };
+    });
+  }
+
+  /**
+   * Central outbound policy gate. It runs after the durable pending intent is
+   * reserved, so that denials are auditable and quota counts include the current
+   * attempt. No provider side effect may happen before this returns allowed.
+   */
+  async evaluateOutboundPolicy(input: {
+    from: string;
+    recipients: string[];
+    sendKeyToken?: string | null;
+    /** API keys and tenant owner/admin sessions carry explicit tenant-wide send authority. */
+    allowTenantWideSend?: boolean;
+  }): Promise<OutboundPolicyDecision> {
+    const from = canonicalAddress(input.from);
+    const address = await this.client.get<{
+      id: string;
+      email: string;
+      status: string;
+      verified: boolean;
+      daily_quota: number | null;
+      owner_id: string | null;
+      administrator_id: string | null;
+      provisioning_status: string | null;
+      domain: string | null;
+      domain_status: string | null;
+      domain_verified: boolean | null;
+      domain_provisioning_status: string | null;
+    }>(
+      `SELECT a.id, a.email, a.status, a.verified, a.daily_quota,
+              a.owner_id, a.administrator_id, a.provisioning_status,
+              COALESCE(a.domain, d.domain) AS domain,
+              d.status AS domain_status, d.verified AS domain_verified,
+              d.provisioning_status AS domain_provisioning_status
+       FROM addresses a
+       LEFT JOIN domains d
+         ON d.tenant_id = a.tenant_id
+        AND (d.id::text = a.domain_id OR (a.domain_id IS NULL AND lower(d.domain) = split_part(lower(a.email), '@', 2)))
+       WHERE lower(a.email) = $1 AND a.tenant_id = $2
+       ORDER BY (d.id::text = a.domain_id) DESC NULLS LAST
+       LIMIT 1`,
+      [from, this.tenantId],
+    );
+    if (!address) {
+      return { allowed: false, code: "sender_not_registered", message: "sender address is not registered", status: 403 };
+    }
+    if (address.status !== "active") {
+      return { allowed: false, code: "sender_inactive", message: "sender address is not active", status: 403 };
+    }
+    // RESOLVED 2026-08-18 (bug 4f676ba0) — the implication is implemented AT
+    // ADDRESS CREATION, not here at send time: POST /v1/addresses now defaults
+    // a new address to verified=true when its domain row is verified in this
+    // app's domain registry (audited automatically, actor "system"). This gate
+    // stays strict per-address for anything created before that fix or on an
+    // unverified domain, and explicit verified:false still wins. Per-address
+    // readiness (`provisioning_status`) and domain readiness remain separate
+    // checks below.
+    if (!address.verified) {
+      return { allowed: false, code: "sender_unverified", message: "sender address is not verified", status: 403 };
+    }
+    const addressReady = ["ready", "active", "verified"].includes(address.provisioning_status ?? "");
+    const domainReady = address.domain_verified === true && ["active", "verified", "ready"].includes(address.domain_status ?? "");
+    const domainProvisioned = ["ready", "active", "verified"].includes(address.domain_provisioning_status ?? "");
+    if (!addressReady && !domainReady && !domainProvisioned) {
+      return { allowed: false, code: "sender_not_ready", message: "sender domain is not ready for outbound mail", status: 403 };
+    }
+
+    if (!input.sendKeyToken && !input.allowTenantWideSend) {
+      return { allowed: false, code: "send_key_required", message: "a sender-scoped send key is required", status: 403 };
+    }
+    if (input.sendKeyToken) {
+      const key = await this.verifySendKey(input.sendKeyToken);
+      if (!key) return { allowed: false, code: "send_key_invalid", message: "send key is invalid or revoked", status: 403 };
+      if (!key.owner_id || (key.owner_id !== address.owner_id && key.owner_id !== address.administrator_id)) {
+        return { allowed: false, code: "send_key_forbidden", message: "send key is not authorized for this sender", status: 403 };
+      }
+    }
+
+    const recipients = [...new Set(input.recipients.map(canonicalAddress).filter(Boolean))];
+    const suppressed = recipients.length
+      ? await this.client.get<{ email: string }>(
+        `SELECT email FROM contacts
+         WHERE tenant_id = $1 AND suppressed = true AND lower(email) = ANY($2::text[])
+         LIMIT 1`,
+        [this.tenantId, recipients],
+      )
+      : null;
+    if (suppressed) {
+      return { allowed: false, code: "recipient_suppressed", message: "one or more recipients are suppressed", status: 409 };
+    }
+
+    const usage = await this.client.one<{ address_count: number; domain_count: number }>(
+      `SELECT
+         count(*) FILTER (WHERE lower(from_addr) = $2)::int AS address_count,
+         count(*) FILTER (WHERE split_part(lower(from_addr), '@', 2) = $3)::int AS domain_count
+       FROM messages
+       WHERE tenant_id = $1
+         AND direction = 'outbound'
+         AND send_state IN ('pending', 'sending', 'sent')
+         AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`,
+      [this.tenantId, from, address.domain ?? from.split("@")[1] ?? ""],
+    );
+    if (address.daily_quota !== null && Number(usage.address_count) > address.daily_quota) {
+      return { allowed: false, code: "address_quota_exceeded", message: "sender daily quota has been reached", status: 429 };
+    }
+
+    if (address.domain) {
+      const warming = await this.client.get<{ target_daily_volume: number; start_date: string | null; status: string }>(
+        `SELECT target_daily_volume, start_date, status FROM warming_schedules
+         WHERE tenant_id = $1 AND lower(domain) = lower($2) AND status = 'active' LIMIT 1`,
+        [this.tenantId, address.domain],
+      );
+      if (warming) {
+        const limit = warmingLimit(Number(warming.target_daily_volume), warming.start_date);
+        if (limit !== null && Number(usage.domain_count) > limit) {
+          return { allowed: false, code: "warming_limit_exceeded", message: "domain warming limit has been reached", status: 429 };
+        }
+      }
+    }
+    return { allowed: true };
+  }
+
+  /**
+   * Persist a unique outbound intent before any provider side effect. Conflict
+   * target + fallback select are tenant-scoped (`(tenant_id, idempotency_key)`),
+   * so two tenants never observe each other's send-intent replay (design M3).
+   */
+  async reserveSendIntent(
+    input: MessageInput & { idempotency_key: string; send_payload_hash: string },
+  ): Promise<{ record: MessageRecord; created: boolean }> {
+    return this.withSendIntentKeyLock(input.idempotency_key, async (client, digest) => {
+      const tombstone = await client.get<{ found: boolean }>(
+        `SELECT true AS found FROM send_intent_tombstones
+         WHERE tenant_id = $1 AND idempotency_key_hash = $2`,
+        [this.tenantId, digest],
+      );
+      if (tombstone) {
+        const record = await client.get<Record<string, unknown>>(
+          `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE idempotency_key = $1 AND tenant_id = $2`,
+          [input.idempotency_key, this.tenantId],
+        );
+        throw new SendIntentTombstonedError(record ? mapMessageRow(record) : null);
+      }
+      const inserted = await client.get<Record<string, unknown>>(
+        `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
+         VALUES (${MESSAGE_INSERT_VALUES}, $24)
+         ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+         RETURNING ${MESSAGE_COLUMNS}`,
+        [...messageInsertParams({ ...input, direction: "outbound", status: "queued", send_state: "pending" }), this.tenantId],
+      );
+      if (inserted) return { record: mapMessageRow(inserted), created: true };
+      const existing = await client.get<Record<string, unknown>>(
+        `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE idempotency_key = $1 AND tenant_id = $2`,
+        [input.idempotency_key, this.tenantId],
+      );
+      if (!existing) throw new Error("send intent conflict could not be reconciled");
+      const record = mapMessageRow(existing);
+      if (record.send_state === "cancelled") throw new SendIntentTombstonedError(record);
+      if (record.send_payload_hash !== input.send_payload_hash) throw new IdempotencyKeyConflictError();
+      return { record, created: false };
+    });
+  }
+
+  async claimSendIntent(id: string): Promise<MessageRecord | null> {
+    const claim = async (client: TypedQueryClient): Promise<MessageRecord | null> => {
+      const pending = await client.get<{ idempotency_key: string | null }>(
+        `SELECT idempotency_key FROM messages
+         WHERE id = $1 AND tenant_id = $2 AND send_state = 'pending'`,
+        [id, this.tenantId],
+      );
+      if (!pending?.idempotency_key) return null;
+      const digest = this.sendIntentKeyDigest(pending.idempotency_key);
+      if (this.atomicClient) {
+        await client.execute(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`${this.tenantId}:${digest}`]);
+      }
+      const locked = await client.get<{ idempotency_key: string | null }>(
+        `SELECT idempotency_key FROM messages
+         WHERE id = $1 AND tenant_id = $2 AND send_state = 'pending'
+         FOR UPDATE`,
+        [id, this.tenantId],
+      );
+      if (locked?.idempotency_key !== pending.idempotency_key) return null;
+      const tombstone = await client.get<{ found: boolean }>(
+        `SELECT true AS found FROM send_intent_tombstones
+         WHERE tenant_id = $1 AND idempotency_key_hash = $2`,
+        [this.tenantId, digest],
+      );
+      if (tombstone) return null;
+      const row = await client.get<Record<string, unknown>>(
+        `UPDATE messages SET send_state = 'sending', send_started_at = now(), updated_at = now()
+         WHERE id = $1 AND tenant_id = $2 AND send_state = 'pending'
+         RETURNING ${MESSAGE_COLUMNS}`,
+        [id, this.tenantId],
+      );
+      return row ? mapMessageRow(row) : null;
+    };
+    if (!this.atomicClient) {
+      if (!this.allowUnsafeTestTransactions) throw new SendIntentAtomicityUnavailableError();
+      return claim(this.client);
+    }
+    return this.atomicClient.transaction(async (tx) => {
+      await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [this.tenantId]);
+      return claim(tx);
+    });
+  }
+
+  async completeSendIntent(id: string, providerMessageId: string): Promise<MessageRecord> {
+    const row = await this.client.get<Record<string, unknown>>(
+      `UPDATE messages SET send_state = 'sent', status = 'sent', provider_message_id = $2, updated_at = now()
+       WHERE id = $1 AND tenant_id = $3 RETURNING ${MESSAGE_COLUMNS}`,
+      [id, providerMessageId, this.tenantId],
+    );
+    if (!row) throw new Error("send intent disappeared during completion");
+    return mapMessageRow(row);
+  }
+
+  /**
+   * Record a DEFINITIVE provider reject: the provider answered 4xx, so nothing
+   * was sent. Unlike `uncertain`, a failed intent needs no reconciliation and
+   * may be re-attempted (rearmFailedSendIntent). The provider's error name is
+   * kept on the row for audit.
+   */
+  async markSendFailed(id: string, reason: string): Promise<MessageRecord | null> {
+    const row = await this.client.get<Record<string, unknown>>(
+      `UPDATE messages SET
+         send_state = 'failed', status = 'failed',
+         headers = COALESCE(headers, '{}'::jsonb) || jsonb_build_object('send_failure', $2::text),
+         updated_at = now()
+       WHERE id = $1 AND tenant_id = $3 AND send_state = 'sending'
+       RETURNING ${MESSAGE_COLUMNS}`,
+      [id, reason.slice(0, 600), this.tenantId],
+    );
+    return row ? mapMessageRow(row) : null;
+  }
+
+  /**
+   * Re-arm a definitively failed intent for another attempt on the SAME ledger
+   * row. Guarded on send_state = 'failed', so it can never resurrect a sent,
+   * cancelled, or uncertain intent; claimSendIntent then re-checks the
+   * tombstone before any provider call.
+   */
+  async rearmFailedSendIntent(id: string): Promise<MessageRecord | null> {
+    const row = await this.client.get<Record<string, unknown>>(
+      `UPDATE messages SET send_state = 'pending', status = 'queued', send_started_at = NULL, updated_at = now()
+       WHERE id = $1 AND tenant_id = $2 AND send_state = 'failed'
+       RETURNING ${MESSAGE_COLUMNS}`,
+      [id, this.tenantId],
+    );
+    return row ? mapMessageRow(row) : null;
+  }
+
+  /**
+   * Park an intent whose provider outcome could not be recorded.
+   *
+   * `providerMessageId` is supplied ONLY on the one path where the provider
+   * demonstrably accepted the message and the ledger write afterwards failed.
+   * It must survive on the row: it is the sole evidence that the message left,
+   * and `reconcileUncertainSendIntent` refuses an outcome of `sent` without it.
+   * Discarding it here is what would strand a delivered message with no way to
+   * close it out except by asserting `not_sent` — i.e. filing a delivered
+   * message as failed, the exact inversion this whole change exists to prevent.
+   */
+  async markSendUncertain(id: string, providerMessageId?: string | null): Promise<MessageRecord | null> {
+    const evidence = providerMessageId?.trim() || null;
+    const row = await this.client.get<Record<string, unknown>>(
+      `UPDATE messages SET
+         send_state = 'uncertain', status = 'uncertain',
+         provider_message_id = COALESCE($3::text, provider_message_id),
+         headers = CASE WHEN $3::text IS NULL THEN headers
+           ELSE COALESCE(headers, '{}'::jsonb) || jsonb_build_object(
+             'send_uncertain_reason',
+             'the provider ACCEPTED this message (provider_message_id is present, so it was sent) but the ledger write that records it failed; reconcile as sent'
+           )
+         END,
+         updated_at = now()
+       WHERE id = $1 AND tenant_id = $2 AND send_state <> 'sent'
+       RETURNING ${MESSAGE_COLUMNS}`,
+      [id, this.tenantId, evidence],
+    );
+    return row ? mapMessageRow(row) : null;
+  }
+
+  /**
+   * Every send intent whose provider outcome was never established, oldest
+   * first (the order an operator reconciles them in). `uncertain` is the ONLY
+   * state that needs this: `failed` is a proven non-send and `sent` is a proven
+   * send.
+   */
+  async listUncertainSendIntents(opts: ListOptions = {}): Promise<MessageRecord[]> {
+    const limit = clampLimit(opts.limit);
+    const offset = clampOffset(opts.offset);
+    const rows = await this.client.many<Record<string, unknown>>(
+      `SELECT ${MESSAGE_COLUMNS} FROM messages
+       WHERE tenant_id = $1 AND send_state = 'uncertain'
+       ORDER BY created_at ASC, id ASC
+       LIMIT $2 OFFSET $3`,
+      [this.tenantId, limit, offset],
+    );
+    return rows.map(mapMessageRow);
+  }
+
+  /**
+   * Close out ONE uncertain send intent against operator-supplied evidence.
+   *
+   * Deliberately narrow:
+   *  • guarded on `send_state = 'uncertain'`, so it can never rewrite a proven
+   *    outcome, resurrect a cancelled intent, or race a live send;
+   *  • one row per call — bulk-marking a batch of unknown outcomes is how the
+   *    2026-07-25 messages became indistinguishable in the first place;
+   *  • the evidence string and the resolving principal are persisted on the row,
+   *    so a later reader can see WHY the state was asserted;
+   *  • `sent` requires a provider message id — the evidence that it left.
+   *
+   * Returns null when the row is absent or is no longer uncertain (the caller
+   * distinguishes the two by re-reading).
+   */
+  async reconcileUncertainSendIntent(
+    id: string,
+    resolution: {
+      outcome: "sent" | "not_sent";
+      providerMessageId?: string | null;
+      evidence: string;
+      resolvedBy?: string | null;
+    },
+  ): Promise<MessageRecord | null> {
+    const evidence = resolution.evidence.trim().slice(0, SEND_RECONCILIATION_EVIDENCE_MAX_CHARS);
+    if (!evidence) throw new Error("reconciliation requires a non-empty evidence note");
+    const resolvedAt = new Date().toISOString();
+    const resolvedBy = (resolution.resolvedBy ?? "").slice(0, 200) || null;
+    if (resolution.outcome === "sent") {
+      const providerMessageId = (resolution.providerMessageId ?? "").trim();
+      if (!providerMessageId) {
+        throw new Error("reconciling an uncertain intent as sent requires the provider message id that proves it");
+      }
+      const row = await this.client.get<Record<string, unknown>>(
+        `UPDATE messages SET
+           send_state = 'sent', status = 'sent',
+           provider_message_id = $2,
+           headers = COALESCE(headers, '{}'::jsonb) || jsonb_build_object(
+             'send_reconciliation', jsonb_build_object(
+               'outcome', 'sent', 'evidence', $3::text, 'resolved_at', $4::text, 'resolved_by', $5::text
+             )
+           ),
+           updated_at = now()
+         WHERE id = $1 AND tenant_id = $6 AND send_state = 'uncertain'
+         RETURNING ${MESSAGE_COLUMNS}`,
+        [id, providerMessageId.slice(0, 998), evidence, resolvedAt, resolvedBy, this.tenantId],
+      );
+      return row ? mapMessageRow(row) : null;
+    }
+    const row = await this.client.get<Record<string, unknown>>(
+      `UPDATE messages SET
+         send_state = 'failed', status = 'failed',
+         headers = COALESCE(headers, '{}'::jsonb) || jsonb_build_object(
+           'send_failure', 'reconciled_not_sent',
+           'send_reconciliation', jsonb_build_object(
+             'outcome', 'not_sent', 'evidence', $2::text, 'resolved_at', $3::text, 'resolved_by', $4::text
+           )
+         ),
+         updated_at = now()
+       WHERE id = $1 AND tenant_id = $5 AND send_state = 'uncertain'
+       RETURNING ${MESSAGE_COLUMNS}`,
+      [id, evidence, resolvedAt, resolvedBy, this.tenantId],
+    );
+    return row ? mapMessageRow(row) : null;
+  }
+
+  async markSendBlocked(id: string, reason: OutboundPolicyCode): Promise<MessageRecord | null> {
+    const row = await this.client.get<Record<string, unknown>>(
+      `UPDATE messages SET
+         send_state = 'blocked', status = 'blocked',
+         headers = COALESCE(headers, '{}'::jsonb) || jsonb_build_object('policy_denial', $2::text),
+         updated_at = now()
+       WHERE id = $1 AND tenant_id = $3 AND send_state = 'pending'
+       RETURNING ${MESSAGE_COLUMNS}`,
+      [id, reason, this.tenantId],
+    );
+    return row ? mapMessageRow(row) : null;
+  }
+
+  /**
+   * Idempotent write keyed on `(tenant_id, source_id)`: inserts a new row, or
+   * updates the existing row with the same source_id within this tenant (so
+   * re-running an import never duplicates and never touches another tenant's row).
+   *
+   * The conflict path writes only the columns the input carries — see
+   * `messageUpsertAssignments` for why writing all of them broke the very property
+   * "idempotent" names.
+   */
+  async upsertMessage(input: MessageInput): Promise<{ record: MessageRecord; inserted: boolean }> {
+    if (!input.source_id) {
+      throw new Error("upsertMessage requires a source_id");
+    }
+    const row = await this.client.one<Record<string, unknown>>(
+      `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
+       VALUES (${MESSAGE_INSERT_VALUES}, $24)
+       ON CONFLICT (tenant_id, source_id) WHERE source_id IS NOT NULL DO UPDATE SET
+         ${messageUpsertAssignments(input)}
+       RETURNING ${MESSAGE_COLUMNS}, (xmax = 0) AS inserted`,
+      [...messageInsertParams(input), this.tenantId],
+    );
+    const inserted = Boolean(row["inserted"]);
+    return { record: mapMessageRow(row), inserted };
+  }
+
+  async updateMessageStatus(
+    id: string,
+    patch: {
+      status?: string;
+      provider_message_id?: string | null;
+      is_read?: boolean;
+      is_starred?: boolean;
+      archived?: boolean;
+      add_label?: string;
+      remove_label?: string;
+    },
+  ): Promise<MessageRecord | null> {
+    const current = await this.getMessage(id);
+    if (!current) return null;
+    const labels = new Map(current.labels.map((label) => [label.toLowerCase(), label]));
+    if (patch.archived === true) labels.set("archived", "archived");
+    if (patch.archived === false) labels.delete("archived");
+    if (patch.add_label?.trim()) labels.set(patch.add_label.trim().toLowerCase(), patch.add_label.trim());
+    if (patch.remove_label?.trim()) labels.delete(patch.remove_label.trim().toLowerCase());
+    const row = await this.client.get<Record<string, unknown>>(
+      `UPDATE messages SET
+         status              = COALESCE($2, status),
+         provider_message_id = COALESCE($3, provider_message_id),
+         is_read             = COALESCE($4, is_read),
+         is_starred          = COALESCE($5, is_starred),
+         labels              = $6::jsonb,
+         updated_at          = now()
+       WHERE id = $1 AND tenant_id = $7
+       RETURNING ${MESSAGE_COLUMNS}`,
+      [
+        id,
+        patch.status ?? null,
+        patch.provider_message_id ?? null,
+        patch.is_read ?? null,
+        patch.is_starred ?? null,
+        JSON.stringify([...labels.values()]),
+        this.tenantId,
+      ],
+    );
+    return row ? mapMessageRow(row) : null;
+  }
+
+  async updateMessageContent(id: string, patch: MessageContentPatch): Promise<MessageRecord | null> {
+    const row = await this.client.get<Record<string, unknown>>(
+      `UPDATE messages SET
+         body_text  = $2,
+         body_html  = $3,
+         headers    = $4::jsonb,
+         updated_at = now()
+       WHERE id = $1 AND tenant_id = $5
+       RETURNING ${MESSAGE_COLUMNS}`,
+      [id, patch.body_text, patch.body_html, JSON.stringify(patch.headers), this.tenantId],
+    );
+    return row ? mapMessageRow(row) : null;
+  }
+
+  async deleteMessage(id: string): Promise<boolean> {
+    const current = await this.getMessage(id);
+    if (!current) return false;
+    if (current.idempotency_key) throw new SendIntentDeletionForbiddenError(current);
+    const rows = await this.client.many<{ id: string }>(
+      `DELETE FROM messages
+       WHERE id = $1 AND tenant_id = $2 AND idempotency_key IS NULL
+       RETURNING id`,
+      [id, this.tenantId],
+    );
+    if (rows.length > 0) return true;
+    // The idempotency key is immutable, but fail closed if a non-conforming
+    // concurrent writer attached one between the read and conditional delete.
+    const raced = await this.getMessage(id);
+    if (raced?.idempotency_key) throw new SendIntentDeletionForbiddenError(raced);
+    return false;
+  }
+
+  // ---- mail-views (threads / mailboxes / raw) ----------------------------
+  //
+  // The api `messages` table is a single unified inbound+outbound
+  // ledger, so these are read-only rollups over it (not simple CRUD). Threads
+  // are grouped by a normalized (Re:/Fwd:-stripped) subject key — the server
+  // keeps no thread_id column. Every rollup filters by tenant (design M3).
+
+  /** Subject-rolled-up conversation list, newest activity first. */
+  async listThreads(opts: ListOptions = {}): Promise<ThreadRollup[]> {
+    const rows = await this.client.many<Record<string, unknown>>(
+      `WITH t AS (
+         SELECT
+           NULLIF(btrim(regexp_replace(lower(COALESCE(subject, '')), '^(\\s*(re|fwd|fw)\\s*:\\s*)+', '', 'g')), '') AS thread_key,
+           subject, from_addr, is_read, direction,
+           COALESCE(received_at, created_at) AS ts
+         FROM messages
+         WHERE tenant_id = $1
+       )
+       SELECT
+         COALESCE(thread_key, '(no subject)') AS thread_key,
+         max(subject) AS subject,
+         count(*) AS message_count,
+         count(*) FILTER (WHERE is_read = false AND lower(COALESCE(direction, '')) <> 'outbound') AS unread_count,
+         max(ts) AS last_message_at,
+         min(ts) AS first_message_at,
+         array_agg(DISTINCT from_addr) AS participants
+       FROM t
+       GROUP BY COALESCE(thread_key, '(no subject)')
+       ORDER BY max(ts) DESC
+       LIMIT $2 OFFSET $3`,
+      [this.tenantId, clampLimit(opts.limit), clampOffset(opts.offset)],
+    );
+    const num = (v: unknown): number => {
+      const n = typeof v === "number" ? v : Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+    return rows.map((row) => ({
+      thread_key: String(row["thread_key"] ?? ""),
+      subject: row["subject"] === null || row["subject"] === undefined ? null : String(row["subject"]),
+      message_count: num(row["message_count"]),
+      unread_count: num(row["unread_count"]),
+      last_message_at: toIso(row["last_message_at"]),
+      first_message_at: toIso(row["first_message_at"]),
+      participants: toStringArray(row["participants"]),
+    }));
+  }
+
+  /**
+   * Registered addresses as mailboxes, each with an inbound folder rollup, plus
+   * the global folder counts. Both the address list AND the joined message counts
+   * are tenant-scoped (design M3), so a mailbox never counts another tenant's mail.
+   */
+  async listMailboxes(): Promise<{ mailboxes: MailboxRollup[]; counts: MessageCountsRecord }> {
+    // Rolls up the parsed `message_recipients` table (migration 0019) instead
+    // of the previous `LIKE '%email%'` join over to_addrs::text, which was
+    // O(addresses x messages) — measured ~68s on 317 addresses x 168k rows
+    // (the /v1/mailboxes 502). kind = 'to' preserves the old semantics of
+    // counting only to-recipiency; parsing (vs substring match) also counts
+    // the `Display Name <email>` recipient forms correctly.
+    const rows = await this.client.many<Record<string, unknown>>(
+      `SELECT
+         a.id AS id,
+         a.email AS address,
+         a.display_name AS display_name,
+         a.status AS status,
+         COALESCE(p.total, 0) AS total,
+         COALESCE(p.unread, 0) AS unread
+       FROM addresses a
+       LEFT JOIN (
+         SELECT email,
+                count(*) FILTER (WHERE kind = 'to' AND NOT is_out) AS total,
+                count(*) FILTER (WHERE kind = 'to' AND NOT is_out AND NOT is_read) AS unread
+           FROM message_recipients
+          WHERE tenant_id = $1
+          GROUP BY email
+       ) p ON p.email = lower(a.email)
+       WHERE a.tenant_id = $1
+       ORDER BY a.email ASC`,
+      [this.tenantId],
+    );
+    const num = (v: unknown): number => {
+      const n = typeof v === "number" ? v : Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const mailboxes: MailboxRollup[] = rows.map((row) => ({
+      id: String(row["id"] ?? ""),
+      address: String(row["address"] ?? ""),
+      display_name: row["display_name"] === null || row["display_name"] === undefined ? null : String(row["display_name"]),
+      status: String(row["status"] ?? ""),
+      total: num(row["total"]),
+      unread: num(row["unread"]),
+    }));
+    const counts = await this.messageCounts();
+    return { mailboxes, counts };
+  }
+
+  /** Reconstruct a minimal raw MIME representation for a stored message. */
+  async getMessageRaw(id: string): Promise<MessageRaw | null> {
+    const rec = await this.getMessage(id);
+    if (!rec) return null;
+    return { raw: buildRawMime(rec), message_id: rec.message_id };
+  }
+
+  // ---- generic resources (contacts/providers/templates/groups/…) ----------
+  //
+  // Table + column names come from the trusted API_RESOURCES registry (never
+  // user input); all VALUES are bound parameters. Every query filters/stamps
+  // `tenant_id` (Layer 1 across all 24 registry resources at one chokepoint).
+
+  async listResource(
+    spec: ApiResourceSpec,
+    opts: ListOptions & { filters?: Record<string, unknown> } = {},
+  ): Promise<Record<string, unknown>[]> {
+    const params: unknown[] = [this.tenantId];
+    const where: string[] = ["tenant_id = $1"];
+    for (const key of spec.filters ?? []) {
+      const raw = opts.filters?.[key];
+      if (raw === undefined) continue;
+      const col = spec.columns.find((c) => c.name === key);
+      params.push(encodeColumn(col ?? { name: key }, raw));
+      where.push(`${key} = $${params.length}`);
+    }
+    const whereSql = `WHERE ${where.join(" AND ")}`;
+    params.push(clampLimit(opts.limit), clampOffset(opts.offset));
+    const rows = await this.client.many<Record<string, unknown>>(
+      `SELECT * FROM ${spec.table} ${whereSql} ORDER BY ${resourceListOrderBy(spec)} LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params,
+    );
+    return rows.map((row) => redactResourceRow(spec, row));
+  }
+
+  async getResource(spec: ApiResourceSpec, id: string): Promise<Record<string, unknown> | null> {
+    const key = keyColumn(spec);
+    const row = await this.client.get<Record<string, unknown>>(
+      `SELECT * FROM ${spec.table} WHERE ${key} = $1 AND tenant_id = $2`,
+      [id, this.tenantId],
+    );
+    return redactResourceRow(spec, row);
+  }
+
+  async createResource(spec: ApiResourceSpec, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    // M4: a body-supplied FK id must not reference another tenant's row.
+    for (const fk of spec.foreignKeys ?? []) {
+      await this.assertNotOtherTenant(fk.table, body[fk.column], fk.column, fk.idColumn ?? "id");
+    }
+    const key = keyColumn(spec);
+    const cols: string[] = [];
+    const placeholders: string[] = [];
+    const params: unknown[] = [];
+    // A UUID-keyed resource mints its own `id`. A natural-key resource (idColumn
+    // set) takes the key value from the body — it is not server-generated.
+    if (spec.idColumn === undefined) {
+      params.push(randomUUID());
+      cols.push("id");
+      placeholders.push("$1");
+    }
+    // tenant_id is always stamped from the caller's scope, never from the body.
+    params.push(this.tenantId);
+    cols.push("tenant_id");
+    placeholders.push(`$${params.length}`);
+    for (const col of spec.columns) {
+      if (col.readOnly) continue;
+      if (!(col.name in body)) continue;
+      params.push(encodeColumn(col, body[col.name]));
+      cols.push(col.name);
+      placeholders.push(col.json ? `$${params.length}::jsonb` : `$${params.length}`);
+    }
+    const insertHead = `INSERT INTO ${spec.table} (${cols.join(", ")}) VALUES (${placeholders.join(", ")})`;
+    // UUID-keyed: a plain insert always returns exactly one row (unchanged path).
+    if (spec.idColumn === undefined) {
+      return redactResourceRow(spec, await this.client.one<Record<string, unknown>>(`${insertHead} RETURNING *`, params));
+    }
+    // Natural-key: upsert-on-conflict so create is an idempotent "ensure". DO
+    // NOTHING can return zero rows, so read (not one()) and fall back to select.
+    // A tenant-scoped natural key (email-agents) conflicts on (tenant_id, key).
+    const conflictTarget = spec.compositeKey ? `tenant_id, ${key}` : key;
+    const inserted = await this.client.get<Record<string, unknown>>(
+      `${insertHead} ON CONFLICT (${conflictTarget}) DO NOTHING RETURNING *`,
+      params,
+    );
+    if (inserted) return redactResourceRow(spec, inserted);
+    const existing = await this.getResource(spec, String(body[key] ?? ""));
+    if (existing) return existing;
+    throw new Error(`create on ${spec.path} produced no row`);
+  }
+
+  async updateResource(
+    spec: ApiResourceSpec,
+    id: string,
+    body: Record<string, unknown>,
+  ): Promise<Record<string, unknown> | null> {
+    const key = keyColumn(spec);
+    const sets: string[] = [];
+    const params: unknown[] = [id, this.tenantId];
+    for (const col of spec.columns) {
+      if (col.readOnly) continue;
+      if (!(col.name in body)) continue;
+      if (col.name === key) continue; // never rewrite the primary key
+      params.push(encodeColumn(col, body[col.name]));
+      sets.push(col.json ? `${col.name} = $${params.length}::jsonb` : `${col.name} = $${params.length}`);
+    }
+    if (sets.length === 0) return this.getResource(spec, id);
+    sets.push("updated_at = now()");
+    return redactResourceRow(
+      spec,
+      await this.client.get<Record<string, unknown>>(
+        `UPDATE ${spec.table} SET ${sets.join(", ")} WHERE ${key} = $1 AND tenant_id = $2 RETURNING *`,
+        params,
+      ),
+    );
+  }
+
+  async deleteResource(spec: ApiResourceSpec, id: string): Promise<boolean> {
+    const key = keyColumn(spec);
+    const rows = await this.client.many<{ id: string }>(
+      `DELETE FROM ${spec.table} WHERE ${key} = $1 AND tenant_id = $2 RETURNING ${key} AS id`,
+      [id, this.tenantId],
+    );
+    return rows.length > 0;
+  }
+
+  // ---- scoped send keys (mint / verify / authorization) -------------------
+  //
+  // A send key authorizes sending only from addresses its owner OWNS or
+  // ADMINISTERS. The secret material is a token shown ONCE at mint time; only its
+  // SHA-256 hash is persisted, in the dedicated `send_key_secrets` table that is
+  // NOT a generic /v1 resource — so no resource read path can ever return a hash.
+  // The `send_keys` table (a generic resource) stays summary-only. All reads are
+  // tenant-scoped: a caller can only mint/verify/authorize keys in their own tenant.
+
+  /**
+   * Mint a scoped send key for an owner IN THIS TENANT. Returns the one-time token
+   * (never stored) plus the non-secret summary row. Also writes the non-RLS
+   * `send_key_tenants` resolution map (design §6 H2) so P4 RLS can resolve the
+   * tenant from the token without reading the RLS-forced send_keys table.
+   */
+  async mintSendKey(input: { owner_id: string; label?: string | null }): Promise<{ token: string; key: SendKeyRecord }> {
+    // M4: owner_id must not reference another tenant's owner.
+    await this.assertNotOtherTenant("owners", input.owner_id, "owner_id");
+    const token = `esk_${randomBytes(24).toString("base64url")}`;
+    const prefix = token.slice(0, 12);
+    const keyHash = hashSendToken(token);
+    const id = randomUUID();
+    const key = await this.client.one<SendKeyRecord>(
+      `INSERT INTO send_keys (id, owner_id, prefix, label, tenant_id)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, owner_id, prefix, label, last_used_at, revoked_at, created_at, updated_at`,
+      [id, input.owner_id, prefix, input.label ?? null, this.tenantId],
+    );
+    await this.client.execute(
+      `INSERT INTO send_key_secrets (id, send_key_id, key_hash) VALUES ($1, $2, $3)`,
+      [randomUUID(), id, keyHash],
+    );
+    await this.client.execute(
+      `INSERT INTO send_key_tenants (send_key_id, tenant_id) VALUES ($1, $2) ON CONFLICT (send_key_id) DO NOTHING`,
+      [id, this.tenantId],
+    );
+    return { token, key };
+  }
+
+  /**
+   * Resolve a token to its (non-revoked) send key WITHIN this tenant, stamping
+   * `last_used_at`. The `send_key_secrets` hash lookup is global (the token IS the
+   * credential), but the resolved `send_keys` row must belong to this tenant — a
+   * token minted for another tenant returns null (fail closed).
+   */
+  async verifySendKey(token: string): Promise<SendKeyRecord | null> {
+    const value = token.trim();
+    if (!value) return null;
+    const keyHash = hashSendToken(value);
+    const secret = await this.client.get<{ send_key_id: string }>(
+      `SELECT send_key_id FROM send_key_secrets WHERE key_hash = $1`,
+      [keyHash],
+    );
+    if (!secret) return null;
+    const key = await this.client.get<SendKeyRecord>(
+      `SELECT id, owner_id, prefix, label, last_used_at, revoked_at, created_at, updated_at
+       FROM send_keys WHERE id = $1 AND tenant_id = $2`,
+      [secret.send_key_id, this.tenantId],
+    );
+    if (!key || key.revoked_at) return null;
+    const stamped = await this.client.get<SendKeyRecord>(
+      `UPDATE send_keys SET last_used_at = now(), updated_at = now()
+       WHERE id = $1 AND tenant_id = $2
+       RETURNING id, owner_id, prefix, label, last_used_at, revoked_at, created_at, updated_at`,
+      [key.id, this.tenantId],
+    );
+    return stamped ?? key;
+  }
+
+  /** Whether `ownerId` may send from `fromEmail` (owns or administers a tenant address). */
+  async isOwnerAuthorizedFrom(ownerId: string, fromEmail: string): Promise<boolean> {
+    if (!ownerId) return false;
+    const email = canonicalAddress(fromEmail);
+    if (!email) return false;
+    const row = await this.client.get<{ one: number }>(
+      `SELECT 1 AS one FROM addresses
+       WHERE lower(email) = $1 AND (owner_id = $2 OR administrator_id = $2) AND tenant_id = $3
+       LIMIT 1`,
+      [email, ownerId, this.tenantId],
+    );
+    return row !== null;
+  }
+}

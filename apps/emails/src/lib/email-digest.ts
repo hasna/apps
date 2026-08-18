@@ -6,10 +6,10 @@
 // via the dispatcher at the old `email-digest.ts:7-14`) and handed each of four exports
 // to one of two sibling modules:
 //
-//   * `email-digest.local.ts` (329 lines) held the real implementation — one SQLite
+//   * `email-digest.sqlite.ts` (329 lines) held the real implementation — one SQLite
 //     SELECT over `inbound_emails` with four correlated sub-selects into
 //     `email_agent_runs`, plus the summarising and the row write;
-//   * `email-digest.remote.ts` (107 lines) held a SECOND COPY of the two PURE functions
+//   * `email-digest.api.ts` (107 lines) held a SECOND COPY of the two PURE functions
 //     (`resolveEmailDigestWindow`, `formatEmailDigest`), byte-for-byte identical to the
 //     first, a `loadEmailDigest` that duplicated the cache-then-generate control flow,
 //     and a `generateEmailDigest` that threw.
@@ -597,7 +597,7 @@ function toEmailDigest(row: ResourceRow): EmailDigest {
  * NEITHER STORE'S LIST ORDER CAN ANSWER THIS, and that is why the whole set is read
  * rather than the first row. The SQLite resource path orders these rows by `created_at`
  * (`src/store-sqlite/resources.ts`, `describeTable`) and the service orders them by
- * `completed_at` (`src/server/self-hosted/resources.ts`, the `email-digests` spec), and
+ * `completed_at` (`src/server/api/resources.ts`, the `email-digests` spec), and
  * neither ordering is part of the seam's contract for
  * `ResourceRepository.list`. "Newest" is decided here, on `completed_at`, which is what
  * the deleted arms' `ORDER BY completed_at DESC` meant.

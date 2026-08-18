@@ -2,15 +2,15 @@
 //
 // There are exactly two fail-closed backends:
 //   • SqliteMailDataSource — local SQLite, with no network/Postgres dependency.
-//   • SelfHostedMailDataSource — authenticated operator-owned /v1 HTTP API.
+//   • ApiMailDataSource — authenticated operator-owned /v1 HTTP API.
 //
 // The seam speaks the client's existing domain language (TuiMessage / Folder /
 // MailboxCounts / MessageBody / …) so callers stay independent of the backend.
 
-import { getEmailsMode, type EmailsMode } from "./mode.js";
+import { isApiClientConfigured } from "../store-resolution.js";
 import { getDatabase, resolvePartialIdOrThrow } from "../db/database.js";
 import { sqlEmailAddress } from "../db/email-address-sql.js";
-import { SelfHostedMailDataSource, resolveSelfHostedMailDataSource } from "./self-hosted-mail-data-source.js";
+import { ApiMailDataSource, resolveApiMailDataSource } from "./api-mail-data-source.js";
 import {
   addInboundLabelSummary,
   clearInboundEmails,
@@ -23,7 +23,7 @@ import {
   setInboundArchivedFlag,
   setInboundReadFlag,
   setInboundStarredFlag,
-} from "../db/inbound.local.js";
+} from "../db/inbound.sqlite.js";
 import {
   getConversation as localGetConversation,
   getConversationBodies as localGetConversationBodies,
@@ -34,7 +34,7 @@ import {
   listMailboxStatus as localListMailboxStatus,
   mailboxCounts as localMailboxCounts,
   sendComposed as localSendComposed,
-} from "../cli/tui/data.local.js";
+} from "../cli/tui/data.sqlite.js";
 import {
   applyMailboxFilter as localApplyMailboxFilter,
   createMailboxFilter as localCreateMailboxFilter,
@@ -42,7 +42,7 @@ import {
   getMailboxFilter as localGetMailboxFilter,
   listMailboxFilters as localListMailboxFilters,
   updateMailboxFilter as localUpdateMailboxFilter,
-} from "../db/mailbox-filters.local.js";
+} from "../db/mailbox-filters.sqlite.js";
 import { MailboxFilterNotFoundError, type MailboxFilter, type MailboxFilterInput } from "./mailbox-filters.js";
 import { listPrioritySenderRulesLocal } from "../db/priority-senders.js";
 import { priorityRuleMatchesSender } from "./priority-senders.js";
@@ -85,7 +85,13 @@ import { basename } from "node:path";
 
 // ── seam-level DTOs (backend-agnostic) ───────────────────────────────────────
 
-export type MailDataSourceMode = EmailsMode;
+/**
+ * Which of the two client backends a data source talks to. The same vocabulary
+ * as the store seam's `StorePlan.store`: a local SQLite file, or a client of an
+ * Emails `/v1` API. The selector labels this field used to carry
+ * (`"local" | "server"`) are gone with the concept they named.
+ */
+export type MailDataSourceBackend = "sqlite" | "api";
 
 export interface MailInsertionsQuery {
   /**
@@ -137,7 +143,7 @@ export interface MailboxFilterApplyResult {
   truncated: boolean;
 }
 
-/** A base64 inline attachment for local/provider or bounded self-hosted send. */
+/** A base64 inline attachment for local/provider or bounded api send. */
 export interface MailSendAttachment {
   filename: string;
   /** base64-encoded content. */
@@ -159,7 +165,7 @@ export interface MailSendInput {
    */
   html?: string;
   markdown?: boolean;
-  /** local outbound provider id; self-hosted resolves the sender server-side. */
+  /** local outbound provider id; api resolves the sender server-side. */
   providerId?: string;
   /** sending mailbox id (else resolved from `from`). */
   mailboxId?: string;
@@ -167,15 +173,15 @@ export interface MailSendInput {
   replyToId?: string;
   /** Reply-To header address(es), comma-separated. */
   replyTo?: string;
-  /** File attachments. Self-hosted JSON send enforces its documented caps. */
+  /** File attachments. Api JSON send enforces its documented caps. */
   attachments?: MailSendAttachment[];
-  /** ISO-8601 schedule time. Self-hosted send rejects this (no server-side scheduling). */
+  /** ISO-8601 schedule time. Api send rejects this (no server-side scheduling). */
   scheduledAt?: string;
-  /** Stable caller-provided key used to make self-hosted sends retry-safe. */
+  /** Stable caller-provided key used to make api sends retry-safe. */
   idempotencyKey?: string;
   /**
    * RFC 8058 one-click unsubscribe target: local providers inject the
-   * List-Unsubscribe / List-Unsubscribe-Post header pair. The self-hosted send
+   * List-Unsubscribe / List-Unsubscribe-Post header pair. The api send
    * contract cannot carry it, so that backend REFUSES rather than mailing
    * without the headers.
    */
@@ -200,7 +206,7 @@ export interface MailSendResult {
 
 /** Scope for a clear (bulk delete): local optionally scopes by provider. */
 export interface MailClearFilter {
-  /** Local provider filter; self-hosted resolves this to a mailbox-id scope. */
+  /** Local provider filter; api resolves this to a mailbox-id scope. */
   providerId?: string;
   /** Folder scope (defaults to inbox). */
   mailbox?: Mailbox;
@@ -213,7 +219,7 @@ export interface MailClearResult {
 }
 
 export interface MailDataSource {
-  readonly mode: MailDataSourceMode;
+  readonly backend: MailDataSourceBackend;
 
   /**
    * Resolve a possibly-partial id to a full id in the selected backend only.
@@ -336,7 +342,7 @@ const LOCAL_BULK_FLAG_ACTIONS: Record<string, LocalFlagSetter> = {
 };
 
 export class SqliteMailDataSource implements MailDataSource {
-  readonly mode = "local" as const;
+  readonly backend = "sqlite" as const;
 
   async resolveId(id: string): Promise<string> {
     return resolvePartialIdOrThrow(getDatabase(), "inbound_emails", id);
@@ -574,40 +580,45 @@ export class SqliteMailDataSource implements MailDataSource {
 // ── resolver (memoized per process) ───────────────────────────────────────────
 
 export interface ResolveMailDataSourceOptions {
-  mode?: MailDataSourceMode;
-  selfHosted?: SelfHostedMailDataSource;
+  backend?: MailDataSourceBackend;
+  api?: ApiMailDataSource;
 }
 
-let memoized: { mode: MailDataSourceMode; source: MailDataSource } | null = null;
+let memoized: { backend: MailDataSourceBackend; source: MailDataSource } | null = null;
 
 /**
- * Resolve exactly one process-wide backend. Self-hosted never falls through to
- * SQLite; local never consults URL/API-key configuration.
+ * Resolve exactly one process-wide backend. The API client never falls through
+ * to SQLite; the SQLite client never consults URL/credential configuration.
+ * The backend follows the client storage contract (`HASNA_EMAILS_API_URL` plus
+ * a credential names the API client; anything else names SQLite), resolved by
+ * the store seam's `isApiClientConfigured` — there is no selector
+ * variable to select it any more.
  */
 export function resolveMailDataSource(opts: ResolveMailDataSourceOptions = {}): MailDataSource {
-  const override = Boolean(opts.mode || opts.selfHosted);
-  const mode = opts.mode ?? getEmailsMode();
-  if (!override && memoized?.mode === mode) {
+  const override = Boolean(opts.backend || opts.api);
+  const backend = opts.backend ?? (isApiClientConfigured() ? "api" : "sqlite");
+  if (!override && memoized?.backend === backend) {
     return memoized.source;
   }
   let source: MailDataSource;
-  if (mode === "self_hosted") {
-    const selfHosted = opts.selfHosted ?? resolveSelfHostedMailDataSource();
-    if (!selfHosted) {
+  if (backend === "api") {
+    const api = opts.api ?? resolveApiMailDataSource();
+    if (!api) {
       throw new Error(
-        "Emails self-hosted mode requires EMAILS_SELF_HOSTED_URL and EMAILS_SELF_HOSTED_API_KEY " +
-          "(or EMAILS_CLIENT_ENV_SECRET). No hosted endpoint is inferred.",
+        "The Emails API client requires HASNA_EMAILS_API_URL and a credential " +
+          "(HASNA_EMAILS_API_KEY, EMAILS_SESSION_TOKEN or EMAILS_IDP_TOKEN), or EMAILS_CLIENT_ENV_SECRET. " +
+          "No hosted endpoint is inferred.",
       );
     }
-    source = selfHosted;
+    source = api;
   } else {
     source = new SqliteMailDataSource();
   }
-  if (!override) memoized = { mode, source };
+  if (!override) memoized = { backend, source };
   return source;
 }
 
-/** Clear the memoized data source (tests / after a mode change). */
+/** Clear the memoized data source (tests / after a backend change). */
 export function resetMailDataSource(): void {
   memoized = null;
 }

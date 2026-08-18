@@ -4,12 +4,12 @@
 // WHAT THIS FILE WAS. A 14-line facade whose one export was handed to one of two siblings
 // according to the process-wide deployment word:
 //
-//   * `webhook.local.ts` (159 lines) — the receiver itself. A `Bun.serve` listener on a
+//   * `webhook.sqlite.ts` (159 lines) — the receiver itself. A `Bun.serve` listener on a
 //     caller-chosen port that bounds and reads the request body, verifies a Resend svix
 //     signature or an SNS envelope against an allowlist, parses the payload into a
 //     `WebhookEvent`, and PERSISTS it into the local SQLite `events` table through an
 //     idempotency-fenced upsert.
-//   * `webhook.remote.ts` (23 lines) — a stub that THREW, plus a byte-identical re-export
+//   * `webhook.api.ts` (23 lines) — a stub that THREW, plus a byte-identical re-export
 //     of the four pure parsers/verifiers.
 //
 // So the two arms did not disagree about what "receive a provider callback" means. One
@@ -57,7 +57,7 @@
 //
 // 2. THE DURABLE RECEIVER ALREADY EXISTS ON THE OTHER SIDE, and says so in writing.
 //    `src/server/webhooks/receivers.ts:1-19` is "ONE implementation, mounted twice" — the
-//    local dashboard at `POST /webhook/*` over SQLite and the self-hosted service at
+//    local dashboard at `POST /webhook/*` over SQLite and the api service at
 //    `POST /v1/webhooks/*` over the operator's Postgres — and states its invariant as "when
 //    we host it, inbound mail AND delivery events are pulled into the storage the operator
 //    defines." So on an API-configured installation, delivery-event ingestion is the
@@ -82,7 +82,7 @@
 //      `(provider_id, provider_event_id)` and a `/v1` route that reports whether the row was
 //      newly created — note the service ALREADY has an idempotency ledger of this exact
 //      shape (`webhook_receipts`, keyed on `(provider, event_id)`,
-//      `src/server/self-hosted/webhooks.ts`), so the fence exists on that side; what is
+//      `src/server/api/webhooks.ts`), so the fence exists on that side; what is
 //      missing is a client-facing operation that exposes it;
 //   c. a capability, because a store that cannot fence must refuse the write rather than
 //      duplicate it.
@@ -143,7 +143,7 @@
 // twice: storage resolves to a LOCAL DATABASE while the deployment word claims a server-side
 // deployment. In 21 of the 24 that local database is EXPLICITLY configured, so this is not
 // merely "nothing was set". Two things about it. First, main's refusal there does NOT come from
-// the deleted arm at all — the mode read itself throws ("the self-hosted client is not
+// the deleted arm at all — the mode read itself throws ("the api client is not
 // configured") before any arm is chosen, so main never reached the stub. Second, running is the
 // correct answer: the storage settings say local SQLite, which is where the events would go, and
 // the word that disagreed is the axis being deleted. This class disappears with it.
@@ -180,14 +180,14 @@
 // landed where nothing reads it. Both are pinned by cases in the suite.
 //
 // WHAT THE CONSUMERS DO WITH THE REFUSAL, checked rather than assumed. `emails webhook
-// listen` (`src/cli/commands/email-log.local.ts`) already wraps the call and surfaces it
+// listen` (`src/cli/commands/email-log.sqlite.ts`) already wraps the call and surfaces it
 // through `handleError`, which exits non-zero. `emails serve --webhook-port` / `--all`
-// (`src/cli/commands/serve.local.ts`) did NOT, and an unhandled rejection there would have
+// (`src/cli/commands/serve.sqlite.ts`) did NOT, and an unhandled rejection there would have
 // taken down an HTTP server that had already bound successfully — so that one call is
 // wrapped, reports the reason, and marks the process failed while leaving the listeners that
 // DID start running. `src/index.ts` re-exports the function transparently and the break is
-// recorded at the export site. Neither `*.remote.*` CLI arm reaches this module at all:
-// `serve.remote.ts` has no webhook option, and `email-log.remote.ts:624` refuses
+// recorded at the export site. Neither `*.api.*` CLI arm reaches this module at all:
+// `serve.api.ts` has no webhook option, and `email-log.api.ts:624` refuses
 // `emails webhook listen` through its own server-side guard.
 //
 // ─── HOW THIS WRITE NAMES ITS STORE, NOW THAT `src/db/events` HAS COLLAPSED ────────────
@@ -215,7 +215,7 @@
 //
 // ─── MUTATION SURVIVORS, EACH NAMED ───────────────────────────────────────────────────
 //
-// 51 mutants over this module and `src/cli/commands/serve.local.ts`, reverted one at a time:
+// 51 mutants over this module and `src/cli/commands/serve.sqlite.ts`, reverted one at a time:
 // 42 killed, 9 survived. SIX of the nine are here and three are recorded in that file, and none
 // of them is "the test suite is thin" — each is a specific, stated reason.
 //

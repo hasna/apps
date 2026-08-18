@@ -1,7 +1,7 @@
-// Self-hosted-ONLY end-to-end CLI contracts. These spawn the REAL `emails` CLI
+// API-only end-to-end CLI contracts. These spawn the REAL `emails` CLI
 // (bun src/cli/index.tsx) as a subprocess pointed at an out-of-process /v1 stub
 // (see src/test-support/v1-stub.ts) — the stub listens on TCP, so the spawned
-// process reaches it over HTTP/curl exactly like a real self-hosted server.
+// process reaches it over HTTP/curl exactly like a real api server.
 // The deleted commands (config, sandbox, refresh) and the old local-SQLite mode
 // are gone, so their contracts are gone; what remains is verified against /v1.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
@@ -15,8 +15,8 @@ let stub: V1Stub;
 const tempDirs: string[] = [];
 
 const LEGACY_ENV_KEYS = [
-  "HASNA_EMAILS_DATABASE_URL", "EMAILS_DATABASE_URL", "EMAILS_STORAGE_MODE", "EMAILS_DB_PATH",
-  "HASNA_EMAILS_DB_PATH", "HASNA_EMAILS_MODE", "EMAILS_CLIENT_ENV_SECRET",
+  "HASNA_EMAILS_DATABASE_URL", "EMAILS_DATABASE_URL", "EMAILS_DB_PATH",
+  "HASNA_EMAILS_DB_PATH", "EMAILS_CLIENT_ENV_SECRET",
   "MAILERY_MODE", "HASNA_MAILERY_MODE", "MAILERY_STORAGE_MODE", "HASNA_MAILERY_STORAGE_MODE",
   "MAILERY_API_URL", "MAILERY_API_KEY", "HASNA_MAILERY_API_URL", "HASNA_MAILERY_API_KEY",
 ] as const;
@@ -30,9 +30,8 @@ function cliEnv(): NodeJS.ProcessEnv {
   for (const key of LEGACY_ENV_KEYS) delete base[key];
   return {
     ...base,
-    EMAILS_MODE: "self_hosted",
-    EMAILS_SELF_HOSTED_URL: stub.baseUrl,
-    EMAILS_SELF_HOSTED_API_KEY: stub.apiKey,
+    HASNA_EMAILS_API_URL: stub.baseUrl,
+    HASNA_EMAILS_API_KEY: stub.apiKey,
     HOME: homePath,
     NO_COLOR: "1",
   };
@@ -73,11 +72,11 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-describe("CLI JSON contracts (self-hosted /v1)", () => {
+describe("CLI JSON contracts (api /v1)", () => {
   it("prints valid credential-free JSON for provider CRUD routed to /v1", () => {
     const env = cliEnv();
 
-    // Credentials cannot be stored by the self-hosted server, so the command
+    // Credentials cannot be stored by the api server, so the command
     // must REFUSE them (and never echo them) rather than accept the flags and
     // silently drop the values on the wire.
     const refused = runCli([
@@ -202,11 +201,11 @@ describe("CLI JSON contracts (self-hosted /v1)", () => {
     expect(stderr).not.toContain("API_KEY");
   }, 15_000);
 
-  it("prints self-hosted agent context as stable redacted JSON", () => {
-    const parsed = expectCliJsonOk<{ status: { mode: { current: string } } }>(
+  it("prints api agent context as stable redacted JSON", () => {
+    const parsed = expectCliJsonOk<{ status: { backend: string } }>(
       runCli(["--json", "agent", "context"], cliEnv()),
     );
-    expect(parsed.status.mode.current).toBe("self_hosted");
+    expect(parsed.status.backend).toBe("api");
   });
 
   it("prints valid JSON for inbox list, read, and links routed to /v1", async () => {
@@ -245,8 +244,8 @@ describe("CLI JSON contracts (self-hosted /v1)", () => {
   it("prints valid JSON for domains list routed to /v1", async () => {
     await stub.seed({
       domains: [
-        { id: "dom-1", domain: "one.example.com", provider: "self_hosted", verified: true },
-        { id: "dom-2", domain: "two.example.com", provider: "self_hosted", verified: false },
+        { id: "dom-1", domain: "one.example.com", provider: "server", verified: true },
+        { id: "dom-2", domain: "two.example.com", provider: "server", verified: false },
       ],
     });
     const rows = expectCliJsonOk<Array<{ domain: string }>>(

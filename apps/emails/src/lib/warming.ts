@@ -44,8 +44,8 @@ export function generateWarmingPlan(targetDailyVolume: number): { day: number; l
 /**
  * 1-based day index of the ramp, anchored on the UTC calendar date.
  *
- * UTC, not local time, on purpose: the self-hosted server enforces the limit
- * with `warmingLimit()` in src/server/self-hosted/store.ts, which anchors on
+ * UTC, not local time, on purpose: the api server enforces the limit
+ * with `warmingLimit()` in src/server/api/store.ts, which anchors on
  * `Date.UTC(...getUTCFullYear/Month/Date)`, and `getTodaySentCountsByDomain`
  * below counts sent mail over a UTC day window. Normalizing to LOCAL midnight
  * here (as this math used to) put the client one day ahead of the server for
@@ -141,7 +141,7 @@ export interface WarmingProgress {
  * Single source of truth for "where is this domain in its ramp" — shared by the
  * CLI (`emails domain warm*`), the MCP warming tools, the local REST warming
  * route, and the terminal formatter, so they all report the same numbers, and
- * the same numbers the self-hosted server enforces.
+ * the same numbers the api server enforces.
  *
  * `todaySent` lets a caller listing many schedules pass a count it already
  * batched via getTodaySentCountsByDomain instead of paying one ledger read

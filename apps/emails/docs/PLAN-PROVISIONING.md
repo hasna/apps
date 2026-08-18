@@ -106,8 +106,8 @@ Every transition is idempotent and re-entrant. Each state records `attempts`, `l
 - New table **`provisioning_events`**: append-only audit (`entity_type`, `entity_id`, `from_state`,
   `to_state`, `detail_json`, `created_at`) — powers `emails provision status` and the dashboard.
 
-Add a SQLite migration in `src/db/database.ts` and a matching self-hosted
-Postgres migration in `src/server/self-hosted/migrations.ts`.
+Add a SQLite migration in `src/db/database.ts` and a matching api
+Postgres migration in `src/server/api/migrations.ts`.
 
 ## 6. New / changed code modules
 

@@ -1,8 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Database } from "../db/database.js";
-import { getEmailsMode } from "../lib/mode.js";
-import * as local from "./resources.local.js";
-import * as remote from "./resources.remote.js";
+import { isApiClientConfigured } from "../store-resolution.js";
+import * as local from "./resources.sqlite.js";
+import * as remote from "./resources.api.js";
 
 export const domainsResourcePayload = local.domainsResourcePayload;
 export const addressesResourcePayload = local.addressesResourcePayload;
@@ -15,41 +15,41 @@ export const recentErrorsResourcePayload = local.recentErrorsResourcePayload;
 // publish a function whose return type depends on the deployment word — a promise in one
 // configuration and a value in the other — which is the split this programme removes.
 export async function domainsResourcePayloadForRuntime(db?: Database): Promise<Record<string, unknown>> {
-  return getEmailsMode() === "self_hosted"
+  return isApiClientConfigured()
     ? remote.domainsResourcePayloadForRuntime()
     : local.domainsResourcePayload(db);
 }
 
 export async function addressesResourcePayloadForRuntime(db?: Database): Promise<Record<string, unknown>> {
-  return getEmailsMode() === "self_hosted"
+  return isApiClientConfigured()
     ? remote.addressesResourcePayloadForRuntime()
     : local.addressesResourcePayload(db);
 }
 
 export async function agentContextResourcePayload(db?: Database): Promise<Record<string, unknown>> {
-  return getEmailsMode() === "self_hosted"
+  return isApiClientConfigured()
     ? remote.agentContextResourcePayload()
     : local.agentContextResourcePayload(db);
 }
 
 export async function mailboxesResourcePayloadForRuntime(db?: Database): Promise<Record<string, unknown>> {
-  return getEmailsMode() === "self_hosted"
+  return isApiClientConfigured()
     ? remote.mailboxesResourcePayloadForRuntime()
     : local.mailboxesResourcePayloadForRuntime(db);
 }
 
 export async function sourcesResourcePayloadForRuntime(db?: Database): Promise<Record<string, unknown>> {
-  return getEmailsMode() === "self_hosted"
+  return isApiClientConfigured()
     ? remote.sourcesResourcePayloadForRuntime()
     : local.sourcesResourcePayloadForRuntime(db);
 }
 
 export function recentErrorsResourcePayloadForRuntime(db?: Database): Record<string, unknown> {
-  return getEmailsMode() === "self_hosted"
+  return isApiClientConfigured()
     ? remote.recentErrorsResourcePayloadForRuntime()
     : local.recentErrorsResourcePayload(db);
 }
 
 export function registerEmailResources(server: McpServer): void {
-  return (getEmailsMode() === "self_hosted" ? remote.registerEmailResources : local.registerEmailResources)(server);
+  return (isApiClientConfigured() ? remote.registerEmailResources : local.registerEmailResources)(server);
 }

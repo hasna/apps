@@ -15,19 +15,21 @@ async function toolError(error: unknown): Promise<ToolResult> {
   return { content: [{ type: "text", text: `Error: ${formatError(error)}` }], isError: true };
 }
 
-async function isSelfHostedRuntimeMode(): Promise<boolean> {
-  const { resolveEmailsMode } = await import("../../lib/mode.js");
-  return resolveEmailsMode().mode === "self_hosted";
+async function isApiClientRuntime(): Promise<boolean> {
+  const { isApiClientConfigured } = await import("../../store-resolution.js");
+  return isApiClientConfigured();
 }
 
-async function assertSelfHostedApiRouteReady(toolName: string): Promise<void> {
-  if (!(await isSelfHostedRuntimeMode())) return;
-  const { isSelfHostedMode } = await import("../../db/self-hosted-store.js");
-  if (!isSelfHostedMode()) {
-    throw new Error(
-      `MCP tool ${toolName} is API-backed in self_hosted mode and requires EMAILS_MODE=self_hosted with ` +
-        "EMAILS_SELF_HOSTED_URL and EMAILS_SELF_HOSTED_API_KEY. Set EMAILS_MODE=local only for an explicit local group store.",
-    );
+async function assertApiApiRouteReady(toolName: string): Promise<void> {
+  if (!(await isApiClientRuntime())) return;
+  // The API-backed route requires the API client's strict configuration
+  // (HASNA_EMAILS_API_URL plus a credential); resolveApiConfig refuses
+  // with the config-help message when it is missing.
+  try {
+    const { resolveApiConfig } = await import("../../db/api-store.js");
+    resolveApiConfig();
+  } catch (error) {
+    throw new Error(`MCP tool ${toolName} is API-backed: ${(error as Error).message}`);
   }
 }
 
@@ -43,7 +45,7 @@ export function registerMiscOpsTools(server: McpServer): void {
   },
   async ({ limit, offset }) => {
     try {
-      await assertSelfHostedApiRouteReady("list_groups");
+      await assertApiApiRouteReady("list_groups");
       const { listGroups, getMemberCounts } = await import('../../db/groups.js');
       const groups = await listGroups({ limit: limit ?? 100, offset: offset ?? 0 });
       // Uniform in every configuration now that counts are exact over the store seam.
@@ -70,7 +72,7 @@ export function registerMiscOpsTools(server: McpServer): void {
   },
   async ({ name, description }) => {
     try {
-      await assertSelfHostedApiRouteReady("create_group");
+      await assertApiApiRouteReady("create_group");
       const { createGroup } = await import('../../db/groups.js');
       const group = await createGroup(name, description);
       return { content: [{ type: "text", text: JSON.stringify(group, null, 2) }] };
@@ -88,7 +90,7 @@ export function registerMiscOpsTools(server: McpServer): void {
   },
   async ({ name }) => {
     try {
-      await assertSelfHostedApiRouteReady("delete_group");
+      await assertApiApiRouteReady("delete_group");
       const { getGroupByName, deleteGroup } = await import('../../db/groups.js');
       const group = await getGroupByName(name);
       if (!group) throw new Error(`Group not found: ${name}`);
@@ -101,7 +103,7 @@ export function registerMiscOpsTools(server: McpServer): void {
   );
 
   // Group MEMBERS are a repository resource in every configuration (local SQLite
-  // `group_members`, `/v1/group-members` on the self-hosted server), and the
+  // `group_members`, `/v1/group-members` on the api server), and the
   // collapsed `src/db/groups.ts` reaches both through the store seam. The four
   // member tools below therefore carry no mode guard — they are the MCP twins of
   // `emails group add|remove-member|members|show`, which already perform the same
@@ -390,7 +392,7 @@ export function registerMiscOpsTools(server: McpServer): void {
     return {
       content: [{
         type: "text",
-        text: "Error: batch_send is not available in the self-hosted client; template-driven batch sending runs on the self-hosted server. Use send_email for individual sends.",
+        text: "Error: batch_send is not available in the api client; template-driven batch sending runs on the API server. Use send_email for individual sends.",
       }],
       isError: true,
     };

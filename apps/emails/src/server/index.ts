@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import pkg from "../../package.json" with { type: "json" };
-import { assertNoLegacyHostedEnvironment } from "../lib/mode.js";
 import { resolveServerBindOptions } from "./bind-options.js";
 import { resolveServerStorageBackend } from "./storage-backend.js";
 
@@ -17,15 +16,15 @@ Runs the Emails HTTP service (or a background worker).
 Commands:
   (default)          Run the HTTP service. Which one follows the internal store
                      this server is configured with, and nothing else:
-                       - PostgreSQL (EMAILS_DATABASE_URL +
+                       - PostgreSQL (HASNA_EMAILS_DATABASE_URL +
                          EMAILS_API_SIGNING_KEY): the operator-owned Postgres API
                          (GET /health, /ready, /version and the API-key
                          authenticated /v1 surface), binding 0.0.0.0.
-                       - SQLite (EMAILS_DATABASE_URL unset): the SQLite
+                       - SQLite (HASNA_EMAILS_DATABASE_URL unset): the SQLite
                          dashboard on 127.0.0.1.
   ingest-worker      Run the SES-inbound ingestion worker: long-poll the SQS
                      queue (EMAILS_INGEST_QUEUE_URL), fetch each archived raw
-                     message from S3, and write it to self-hosted Postgres.
+                     message from S3, and write it to api Postgres.
   ingest-s3-backfill One-shot repair/backfill: list EMAILS_INGEST_S3_BUCKET /
                      EMAILS_INGEST_S3_PREFIX and ingest existing raw objects.
   attachment-repair-canary
@@ -72,15 +71,11 @@ Options:
   process.exit(0);
 }
 
-// EVERY command fails closed on a removed hosted/legacy variable, ahead of dispatch.
-// This is deliberately eager while the storage resolution below is lazy: the legacy
-// variables configure a runtime that no longer exists, so honouring one for a worker
-// while refusing it for the service would be a silent difference between two entry
-// points of the same binary. The STORE, by contrast, is resolved only by the branches
-// that actually open one — the workers and one-shot commands validate their own
-// PostgreSQL, signing and AWS requirements after dispatch, and must be able to report a
-// bad flag without a database being configured at all.
-assertNoLegacyHostedEnvironment();
+// The STORE is resolved only by the branches that actually open one — the workers and
+// one-shot commands validate their own PostgreSQL, signing and AWS requirements after
+// dispatch, and must be able to report a bad flag without a database being configured
+// at all. Legacy selector variables are gone: nothing in this entrypoint reads one,
+// and a leftover value neither selects a store nor stops startup.
 
 function repeated(flag: string): string[] {
   const values: string[] = [];
@@ -98,19 +93,19 @@ if (args[0] === "ingest-worker") {
   if (args.includes("--bucket")) {
     throw new Error("ingest worker does not accept --bucket; EMAILS_INGEST_S3_BUCKET is the only canonical source");
   }
-  const { runIngestWorker } = await import("./self-hosted/ingest-worker.js");
+  const { runIngestWorker } = await import("./api/ingest-worker.js");
   await runIngestWorker();
 } else if (args[0] === "ingest-s3-backfill") {
   if (args.includes("--bucket")) {
     throw new Error("ingest S3 backfill does not accept --bucket; EMAILS_INGEST_S3_BUCKET is the only canonical source");
   }
-  const { runIngestS3Backfill } = await import("./self-hosted/ingest-worker.js");
+  const { runIngestS3Backfill } = await import("./api/ingest-worker.js");
   await runIngestS3Backfill();
 } else if (args[0] === "attachment-repair-canary") {
   if (args.includes("--bucket")) {
     throw new Error("attachment repair does not accept --bucket; immutable stored provenance selects the canonical bucket");
   }
-  const { runAttachmentRepairCanary } = await import("./self-hosted/ingest-worker.js");
+  const { runAttachmentRepairCanary } = await import("./api/ingest-worker.js");
   await runAttachmentRepairCanary({
     region: option("--region"),
     objectKeys: repeated("--object-key"),
@@ -120,13 +115,13 @@ if (args[0] === "ingest-worker") {
   });
 } else if (args[0] === "attachment-repair-ledger") {
   const { runAttachmentRepairMaintenanceCommand } =
-    await import("./self-hosted/attachment-repair-maintenance.js");
+    await import("./api/attachment-repair-maintenance.js");
   await runAttachmentRepairMaintenanceCommand(args.slice(1));
 } else if (args[0] === "gmail-recovery-reconcile") {
   if (args.includes("--apply") || args.includes("--message-id")) {
     throw new Error("gmail recovery reconcile is read-only and accepts only --ids and --limit");
   }
-  const { runGmailRecoveryReconcile } = await import("./self-hosted/gmail-recovery.js");
+  const { runGmailRecoveryReconcile } = await import("./api/gmail-recovery.js");
   const limitValues = repeated("--limit");
   const limit = limitValues.length === 0
     ? 500
@@ -135,7 +130,7 @@ if (args[0] === "ingest-worker") {
       : NaN;
   await runGmailRecoveryReconcile({ emitIds: args.includes("--ids"), limit });
 } else if (args[0] === "gmail-recovery-replay") {
-  const { runGmailRecoveryReplay } = await import("./self-hosted/gmail-recovery.js");
+  const { runGmailRecoveryReplay } = await import("./api/gmail-recovery.js");
   const limitValues = repeated("--limit");
   const limit = limitValues.length === 0
     ? 25
@@ -153,13 +148,13 @@ if (args[0] === "ingest-worker") {
   if (args.length !== 3 || args[1] !== "--since" || sinceValues.length !== 1) {
     throw new Error("inbound provenance audit requires exactly one --since <ISO8601> and accepts no other options");
   }
-  const { runInboundProvenanceAudit } = await import("./self-hosted/ingest-worker.js");
+  const { runInboundProvenanceAudit } = await import("./api/ingest-worker.js");
   await runInboundProvenanceAudit({ since: sinceValues[0]! });
 } else if (args[0] === "inbound-provenance-fence") {
   if (args.length !== 1) {
     throw new Error("inbound provenance fence accepts no options");
   }
-  const { runInboundProvenanceFence } = await import("./self-hosted/ingest-worker.js");
+  const { runInboundProvenanceFence } = await import("./api/ingest-worker.js");
   await runInboundProvenanceFence();
 } else {
   // The `switch` is exhaustive over `ServerStorageBackend`, so a third backend arm would
@@ -168,8 +163,8 @@ if (args[0] === "ingest-worker") {
   const { port, host } = resolveServerBindOptions(args, process.env, backend);
   switch (backend) {
     case "postgresql": {
-      const { startSelfHostedServer } = await import("./self-hosted/serve.js");
-      await startSelfHostedServer(pkg.version, port, host);
+      const { startApiServer } = await import("./api/serve.js");
+      await startApiServer(pkg.version, port, host);
       break;
     }
     case "sqlite": {

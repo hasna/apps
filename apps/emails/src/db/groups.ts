@@ -39,7 +39,7 @@
 //     ORDERING. The SQLite store's generic list orders by the table's time column
 //     (`updated_at DESC` for groups) or bare rowid (members); the service orders
 //     `groups` by `name ASC` and `group-members` by `added_at ASC, email ASC`
-//     (src/server/self-hosted/resources.ts). So a windowed read taken from either
+//     (src/server/api/resources.ts). So a windowed read taken from either
 //     store's own order is a plausible, silently wrong page against the other. Every
 //     list here sorts the enumerated set itself and windows locally, so both stores
 //     answer the same question.
@@ -103,7 +103,7 @@ import { now } from "./runtime.js";
 // column into the other's TEXT-encoded one; the module they live in is named for the
 // axis being deleted, and relocating them belongs to that deletion rather than to this
 // collapse.
-import { cobj, cstr, cstrOrNull } from "./self-hosted-resource.js";
+import { cobj, cstr, cstrOrNull } from "./api-resource.js";
 import { enumerateStoreRows, type StoreEnumeration } from "../lib/status-facts-enumeration.js";
 import { createConfiguredEmailStore } from "../store-resolution.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";

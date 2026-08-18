@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
 import { resolveId } from "./helpers.js";
 
-// Self-hosted-ONLY: resolveId resolves partial ids against the /v1 resource store
+// API-only: resolveId resolves partial ids against the /v1 resource store
 // (no local SQLite). Table names still map to /v1 resources via helpers.resolveId.
 
 let stub: V1Stub;
@@ -22,7 +22,7 @@ afterEach(() => {
   stub.clearEnv();
 });
 
-describe("mcp/helpers resolveId (self-hosted /v1)", () => {
+describe("mcp/helpers resolveId (api /v1)", () => {
   it("returns full id for exact match", async () => {
     const id = "abc11111-1111-1111-1111-111111111111";
     await stub.seed({ providers: [{ id, name: "p1", type: "sandbox" }] });

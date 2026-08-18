@@ -9,9 +9,9 @@
 //
 // WHERE THE COLUMN LIST COMES FROM, and why it is not written down here: the service
 // PUBLISHES it. `GET /v1/openapi.json` is generated from the same
-// `SELF_HOSTED_RESOURCES` registry the router dispatches on, and each resource's
+// `API_RESOURCES` registry the router dispatches on, and each resource's
 // request schema carries `additionalProperties: false` with the exact writable column
-// set (src/server/self-hosted/openapi.ts:1628-1631). So this store reads the
+// set (src/server/api/openapi.ts:1628-1631). So this store reads the
 // authority rather than copying it. A hand-written column table here would be a
 // SECOND source of truth for the same list, going stale silently the first time a
 // column is added server-side — which is the failure the seam's own records.ts

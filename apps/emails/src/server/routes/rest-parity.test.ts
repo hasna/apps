@@ -1,13 +1,13 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { createAddress } from "../../db/addresses.local.js";
+import { createAddress } from "../../db/addresses.sqlite.js";
 import { suppressContact, upsertContact } from "../../db/contacts.js";
 import { closeDatabase, getDatabase, resetDatabase } from "../../db/database.js";
-import { createDomain, updateDnsStatus, updateDomainReadiness } from "../../db/domains.local.js";
-import { createSentEmailLedger } from "../../lib/sent-ledger.local.js";
+import { createDomain, updateDnsStatus, updateDomainReadiness } from "../../db/domains.sqlite.js";
+import { createSentEmailLedger } from "../../lib/sent-ledger.sqlite.js";
 import { createEvent } from "../../db/events.js";
 import { addMember, createGroup } from "../../db/groups.js";
-import { storeInboundEmail } from "../../db/inbound.local.js";
-import { createProvider } from "../../db/providers.local.js";
+import { storeInboundEmail } from "../../db/inbound.sqlite.js";
+import { createProvider } from "../../db/providers.sqlite.js";
 import { createScheduledEmail, markSent } from "../../db/scheduled.js";
 import { storeSandboxEmail } from "../../db/sandbox.js";
 import { createSequence, enroll, unenroll } from "../../db/sequences.js";
@@ -165,14 +165,14 @@ describe("emails serve REST parity smoke", () => {
     expect(stored.criteria).toEqual({ from: "other@example.com" });
   });
 
-  it("rejects non-object JSON bodies on mailbox-filter writes with 400 invalid_input (self-hosted parity)", async () => {
+  it("rejects non-object JSON bodies on mailbox-filter writes with 400 invalid_input (api parity)", async () => {
     const created = await json<{ id: string; name: string }>(
       "/api/mailbox-filters",
       postJson("/api/mailbox-filters", { name: "object-only", mailbox: "inbox", criteria: { subject: "x" } }),
     );
 
     // Primitive bodies used to TypeError into a 500 (PUT) or a silent no-op
-    // (PATCH); the self-hosted server rejects them with 400 invalid_input.
+    // (PATCH); the api server rejects them with 400 invalid_input.
     const stringPut = await call(`/api/mailbox-filters/${created.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },

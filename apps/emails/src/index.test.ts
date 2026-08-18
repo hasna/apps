@@ -107,20 +107,18 @@ describe("public package entrypoint", () => {
     }
   });
 
-  it("exposes Emails mode and first-class local SQLite helpers from the storage subpath", async () => {
+  it("exposes the client backend selection and first-class local SQLite helpers from the storage subpath", async () => {
     const storage = await import("./storage.js");
 
-    expect(typeof storage.getEmailsMode).toBe("function");
-    expect(typeof storage.resolveEmailsMode).toBe("function");
-    expect(typeof storage.normalizeEmailsMode).toBe("function");
-    expect(typeof storage.labelForEmailsMode).toBe("function");
+    expect(typeof storage.isApiClientConfigured).toBe("function");
+    expect(typeof storage.planEmailStore).toBe("function");
     expect(typeof storage.getDatabase).toBe("function");
     expect(typeof storage.closeDatabase).toBe("function");
     expect(typeof storage.resetDatabase).toBe("function");
     expect(typeof storage.runInTransaction).toBe("function");
     expect(typeof storage.resolvePartialId).toBe("function");
 
-    // The self-hosted PostgreSQL/S3 mirror surface is gone; the storage subpath
+    // The api PostgreSQL/S3 mirror surface is gone; the storage subpath
     // must not resurrect any of the removed sync internals.
     for (const removed of ["PG_MIGRATIONS", "PgAdapterAsync", "getStorageStatus", "storagePush", "storagePull", "storageSync"]) {
       expect((storage as Record<string, unknown>)[removed]).toBeUndefined();
@@ -131,13 +129,12 @@ describe("public package entrypoint", () => {
     emails.closeDatabase();
     const db = emails.getDatabase(":memory:");
     const savedClientEnv = new Map(
-      ["EMAILS_MODE", "EMAILS_SELF_HOSTED_URL", "EMAILS_SELF_HOSTED_API_KEY", "EMAILS_SESSION_TOKEN"]
+      ["HASNA_EMAILS_API_URL", "HASNA_EMAILS_API_KEY", "EMAILS_SESSION_TOKEN"]
         .map((key) => [key, process.env[key]] as const),
     );
     try {
-      process.env["EMAILS_MODE"] = "self_hosted";
-      delete process.env["EMAILS_SELF_HOSTED_URL"];
-      delete process.env["EMAILS_SELF_HOSTED_API_KEY"];
+      delete process.env["HASNA_EMAILS_API_URL"];
+      delete process.env["HASNA_EMAILS_API_KEY"];
       delete process.env["EMAILS_SESSION_TOKEN"];
 
       const provider = emails.runInTransaction(db, () =>
@@ -265,7 +262,7 @@ void getEmail("message-id", 42 as unknown as string);
     ].filter((command) => command.includes("bun build"));
     const tuiRuntimeBuild = scripts["build:tui-runtime"] ?? "";
 
-    // pg-migrations was removed with the self-hosted PostgreSQL mirror subsystem.
+    // pg-migrations was removed with the api PostgreSQL mirror subsystem.
     expect(scripts["build:pg-migrations"]).toBeUndefined();
     expect(buildCommands).toHaveLength(4);
     expect(buildCommands.every((command) => command.includes("--packages external"))).toBe(true);
@@ -303,7 +300,7 @@ void getEmail("message-id", 42 as unknown as string);
         expect(rootEntry).not.toContain(storageInternal);
       }
       const storageEntry = readFileSync(join(rootDir, "storage.js"), "utf8");
-      expect(storageEntry).toContain("labelForEmailsMode");
+      expect(storageEntry).toContain("isApiClientConfigured");
       expect(storageEntry).not.toContain("var PG_MIGRATIONS");
       for (const removed of ["PgAdapterAsync", "storagePush", "storagePull", "storageSync"]) {
         expect(storageEntry).not.toContain(removed);

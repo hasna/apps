@@ -6,7 +6,7 @@ import { getProvider } from '../../db/providers.js';
 import { getAdapter } from '../../providers/index.js';
 import { AGENT_WRITABLE_CONFIG_KEYS, loadConfig, getConfigValue, setAgentConfigValue } from '../../lib/config.js';
 import { normalizeRoute53RegistrationContact } from '../../lib/route53-contact.js';
-import { resolveEmailsMode } from '../../lib/mode.js';
+import { isApiClientConfigured } from '../../store-resolution.js';
 import { formatError, resolveId, ProviderNotFoundError } from '../helpers.js';
 
 const MAX_MCP_S3_SYNC_LIMIT = 10000;
@@ -15,10 +15,10 @@ const MAX_MCP_PROVISION_INTERVAL_SECONDS = 60;
 const MAX_DOMAIN_REGISTRATION_YEARS = 10;
 
 /**
- * Refuse SES/DNS/S3-mutating provisioning tools in self_hosted mode.
+ * Refuse SES/DNS/S3-mutating provisioning tools when the API client is configured.
  *
- * In self_hosted mode `getProvider` returns a row whose secrets are nulled by
- * policy (`db/providers.remote.ts`), so the SES adapter resolves credentials
+ * In API-client configuration `getProvider` returns a row whose secrets are nulled by
+ * policy (`db/providers.api.ts`), so the SES adapter resolves credentials
  * from the ambient `AWS_*` environment of the CLIENT machine
  * (`providers/ses.ts`) and Cloudflare falls back to this client's token. A
  * tenant member can therefore stand up a SES identity in their own AWS account,
@@ -39,28 +39,28 @@ const MAX_DOMAIN_REGISTRATION_YEARS = 10;
  *
  * SCOPE WARNING — this does NOT close the class. The CLI twin `emails domain
  * adopt` performs the same `addDomain` + `createDomain` + `setupInboundEmail`
- * sequence in self_hosted mode with no mode guard (`cli/commands/domain.ts`),
+ * sequence when the API client is configured with no mode guard (`cli/commands/domain.ts`),
  * and is deliberately kept live there. Closing that requires pushing the policy
  * down into `lib/aws-inbound.ts` / `lib/cloudflare-dns.ts` and the
  * `adapter.addDomain` call sites, which is a separate change.
  *
- * The self-hosted server exposes no route that performs provisioning, so this
- * refuses instead of claiming the work happens server-side. Local mode still
+ * The api server exposes no route that performs provisioning, so this
+ * refuses instead of claiming the work happens server-side. The local SQLite client still
  * runs the real thing.
  *
  * The wording deliberately avoids the words "credential", "auth" and
  * "provider": `mcp/contracts.ts` classifies error codes and fix_commands by
- * regex over the message, and those words would mislabel a mode refusal as an
+ * regex over the message, and those words would mislabel a refusal as an
  * `auth_error` whose remedy points at provider credentials.
  */
 function assertProvisioningInfraAllowed(toolName: string): void {
-  if (resolveEmailsMode().mode !== "self_hosted") return;
+  if (!isApiClientConfigured()) return;
   throw new Error(
-    `MCP tool ${toolName} is disabled in self_hosted mode: it would mutate cloud infrastructure ` +
+    `MCP tool ${toolName} is disabled for the API client: it would mutate cloud infrastructure ` +
       "(SES identity, Cloudflare DNS records, SES receipt rules) using the ambient AWS/Cloudflare " +
       "environment of this client machine while recording the result in the operator's shared " +
-      "domain state, and the self-hosted server exposes no route that performs provisioning. " +
-      "Run it in local mode (EMAILS_MODE=local) against cloud accounts this machine owns.",
+      "domain state, and the api server exposes no route that performs provisioning. " +
+      "Run it against the local SQLite client with cloud accounts this machine owns.",
   );
 }
 
@@ -345,10 +345,11 @@ export function registerInfrastructureTools(server: McpServer): void {
 
   // The writable set is an ALLOWLIST (see lib/config.ts). `key: z.string()` used
   // to accept any key in the config file, and `saveConfig` re-seeds the in-process
-  // cache so the write took effect immediately — including `emails_mode`, which
-  // switches the datastore this process talks to mid-session, and every
-  // credential-bearing key. The enum also publishes the permitted set in the tool
-  // schema, so a client is told up front rather than by a rejection.
+  // cache so the write took effect immediately — including the retired
+  // datastore-selection key, which switched the datastore this process talks to
+  // mid-session, and every credential-bearing key. The enum also publishes the
+  // permitted set in the tool schema, so a client is told up front rather than by
+  // a rejection.
   server.tool(
   "set_config",
   `Set a configuration value. Writable keys: ${AGENT_WRITABLE_CONFIG_KEYS.join(", ")}`
@@ -398,9 +399,9 @@ export function registerInfrastructureTools(server: McpServer): void {
   },
   async () => {
     // Feedback was written to a local SQLite table with no /v1 equivalent in the
-    // self-hosted client. Fail loud (rule 6).
+    // api client. Fail loud (rule 6).
     return {
-      content: [{ type: "text" as const, text: "Error: send_feedback is not available in the self-hosted client; feedback is collected by the self-hosted server." }],
+      content: [{ type: "text" as const, text: "Error: send_feedback is not available in the api client; feedback is collected by the api server." }],
       isError: true,
     };
   },
@@ -420,10 +421,10 @@ export function registerInfrastructureTools(server: McpServer): void {
     },
     async () => {
       // No provisioning orchestrator ships in ANY mode: the local one was
-      // unreachable dead code and has been removed, and the self-hosted server
+      // unreachable dead code and has been removed, and the api server
       // exposes no /v1 provisioning route. Fail loud with the truth (rule 6).
       return {
-        content: [{ type: "text" as const, text: "Error: provision_domain is not implemented in this build: there is no local provisioning orchestrator and the self-hosted server exposes no provisioning route. Register an already-verified domain with `emails domain adopt <domain> --provider <id>` and create the SES inbound bucket and receipt rules with `emails aws setup-inbound`." }],
+        content: [{ type: "text" as const, text: "Error: provision_domain is not implemented in this build: there is no local provisioning orchestrator and the api server exposes no provisioning route. Register an already-verified domain with `emails domain adopt <domain> --provider <id>` and create the SES inbound bucket and receipt rules with `emails aws setup-inbound`." }],
         isError: true,
       };
     },
@@ -449,7 +450,7 @@ export function registerInfrastructureTools(server: McpServer): void {
       // No provisioning orchestrator ships in ANY mode (see provision_domain).
       // Fail loud with the truth (rule 6).
       return {
-        content: [{ type: "text" as const, text: "Error: provision_address is not implemented in this build: there is no local provisioning orchestrator and the self-hosted server exposes no provisioning route. Create the address with `emails address add <email> --provider <id>`." }],
+        content: [{ type: "text" as const, text: "Error: provision_address is not implemented in this build: there is no local provisioning orchestrator and the api server exposes no provisioning route. Create the address with `emails address add <email> --provider <id>`." }],
         isError: true,
       };
     },
@@ -539,7 +540,7 @@ export function registerInfrastructureTools(server: McpServer): void {
       // No provisioning orchestrator ships in ANY mode (see provision_domain).
       // Fail loud with the truth (rule 6).
       return {
-        content: [{ type: "text" as const, text: "Error: provision_status is not implemented in this build: there is no local provisioning orchestrator and the self-hosted server exposes no provisioning route. List what is registered with `emails domain list --json` and `emails address list --json`." }],
+        content: [{ type: "text" as const, text: "Error: provision_status is not implemented in this build: there is no local provisioning orchestrator and the api server exposes no provisioning route. List what is registered with `emails domain list --json` and `emails address list --json`." }],
         isError: true,
       };
     },

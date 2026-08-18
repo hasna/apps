@@ -109,7 +109,7 @@ docker run --rm --platform "$platform" --read-only \
     }
     for (const path of [
       "/app/src/server/index.ts",
-      "/app/src/server/self-hosted/migrate.ts",
+      "/app/src/server/api/migrate.ts",
       "/app/node_modules",
       "/opt/emails/certs/aws-rds-global-bundle.pem",
     ]) await access(path);

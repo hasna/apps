@@ -13,7 +13,7 @@ import {
   resolveId,
 } from "./utils.js";
 
-// Self-hosted-ONLY: id resolution routes through the operator /v1 API, so the
+// API-only: id resolution routes through the operator /v1 API, so the
 // resolveId test drives the REAL command against an out-of-process /v1 stub.
 let stub: V1Stub;
 

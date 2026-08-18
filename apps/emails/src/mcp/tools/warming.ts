@@ -5,7 +5,7 @@ import { describeWarmingProgress, generateWarmingPlan } from "../../lib/warming.
 import { formatError } from "../helpers.js";
 
 // Warming schedules are a repository resource in every configuration (local
-// SQLite `warming_schedules`, `/v1/warming` on the self-hosted server), so these
+// SQLite `warming_schedules`, `/v1/warming` on the api server), so these
 // tools call the collapsed warming family (src/db/warming.ts) directly — one
 // async implementation over the store seam, resolved from storage configuration.
 // They are the MCP twins of `emails domain warm*`.

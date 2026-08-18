@@ -1,7 +1,7 @@
 # Feature conventions for agents
 
 Use this checklist when adding behavior to `@hasna/emails`. The project is a
-CLI, MCP server, local dashboard API, self-hosted `/v1` service, and public
+CLI, MCP server, local dashboard API, api `/v1` service, and public
 library. Storage behavior may need both the local SQLite store and the HTTP/
 Postgres path, so new behavior should land at the shared store seam where
 possible and get regression coverage at each exposed layer.
@@ -10,8 +10,8 @@ possible and get regression coverage at each exposed layer.
 
 1. Add local schema in `src/db/database.ts` and idempotent `ensureSchema`
    coverage for the same table, columns, and indexes.
-2. If the feature is self-hosted, add an immutable migration in
-   `src/server/self-hosted/migrations.ts` and tenant/RLS coverage where the row
+2. If the feature is api, add an immutable migration in
+   `src/server/api/migrations.ts` and tenant/RLS coverage where the row
    is tenant-scoped.
 3. Put shared operations on the relevant `src/store/` repository and implement
    them for SQLite and HTTP, or document a typed capability refusal.
@@ -53,8 +53,8 @@ Regression examples: `src/mcp/http.test.ts` and
 ## REST endpoint
 
 1. Add local dashboard routes in `src/server/routes/*.ts`, keeping `serve.ts`
-   thin. Add self-hosted `/v1` behavior to the service/store and its OpenAPI
-   contract in `src/server/self-hosted/`.
+   thin. Add api `/v1` behavior to the service/store and its OpenAPI
+   contract in `src/server/api/`.
 2. Redact provider credentials before returning provider-shaped objects.
 3. Prefer route-dispatcher tests for fast API parity coverage.
 

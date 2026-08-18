@@ -5,47 +5,31 @@
 // 1. THE COUNT. A stale explicit local-mode selector shadowed the
 //    EMAILS_CLIENT_ENV_SECRET pointer, so this renderer printed
 //    "Local inbox: 0 total, 0 unread" against a deployment holding ~170,000 messages.
-//    It read as an empty mailbox, not as a misconfiguration — the mode resolution
-//    carried a note (see src/lib/mode.ts) and this renderer never printed it.
-//
-// What the note SAYS is asserted in src/lib/mode.test.ts, next to the code that
-// builds it. What this file asserts is that the renderer prints it at all, and prints
-// it BEFORE the numbers it invalidates.
+//    It read as an empty mailbox, not as a misconfiguration. The selector is gone:
+//    a pointer-configured client loads the pointer unconditionally (fail-closed),
+//    and this renderer states the backend ABOVE the first count, so a silent
+//    wrong-database read cannot present a confident zero any more.
 //
 // 2. THE HINT. It printed "Pull now: emails refresh", and `emails refresh` is not a
-//    registered command in any mode ("error: unknown command 'refresh'"). The
-//    per-mode filter could not save it, because the entry sat only under
-//    SELF_HOSTED_REFUSED_COMMANDS, so local mode printed the dead verb happily. A
-//    operator followed the hint and hit the dead end.
+//    registered command ("error: unknown command 'refresh'"). The per-backend
+//    filter could not save it, because the entry sat only under API_REFUSED_COMMANDS,
+//    so the local SQLite client printed the dead verb happily. An operator
+//    followed the hint and hit the dead end.
 
 import { describe, expect, it } from "bun:test";
 import { formatInboxSyncStatus } from "./inbox-sync-status-format.js";
 import { statusAvailable, statusUnavailable } from "./status-availability.js";
 import type { EmailSystemStatus } from "./status-types.js";
 
-// The mode block is declared inline on EmailSystemStatus, so name it from there
-// rather than restating its shape — a hand-copied duplicate would drift silently.
-type ModeStatus = EmailSystemStatus["mode"];
+// The backend is a plain discriminated field on EmailSystemStatus.
+type StatusBackend = EmailSystemStatus["backend"];
 
-const POINTER = "hasna/xyz/opensource/emails/prod/client-env";
-
-function localMode(warning: string | null): ModeStatus {
-  return {
-    current: "local",
-    label: "Local",
-    // `kind: "env"` with no name: this renderer never reads the source, and naming
-    // the mode variable here would push the mode-axis ratchet up for nothing.
-    source: { kind: "env", name: null, value: "local" },
-    warning,
-  };
-}
-
-/** A status shaped like the one the blinded local read actually produced: zeroes. */
-function emptyLocalStatus(mode: ModeStatus): EmailSystemStatus {
+/** A status shaped like the blinded local read: zeroes, for the given backend. */
+function emptyLocalStatus(backend: StatusBackend): EmailSystemStatus {
   const available = statusAvailable("local_database", "client_enumeration");
   return {
     generated_at: "2026-07-27T13:00:00.000Z",
-    mode,
+    backend,
     degraded: false,
     limited: false,
     unavailable: [],
@@ -92,53 +76,44 @@ function emptyLocalStatus(mode: ModeStatus): EmailSystemStatus {
   };
 }
 
-describe("formatInboxSyncStatus — a shadowed pointer invalidates the counts", () => {
-  // An opaque sentinel, not the real message: this test asserts the renderer passes
-  // the note through verbatim, so a fixture that duplicated the wording would only
-  // re-test src/lib/mode.ts and would drift from it.
-  const warning = `the configured EMAILS_CLIENT_ENV_SECRET pointer '${POINTER}' was overridden`;
-  const rendered = formatInboxSyncStatus(emptyLocalStatus(localMode(warning)));
+describe("formatInboxSyncStatus — the client backend is stated above the counts", () => {
+  const rendered = formatInboxSyncStatus(emptyLocalStatus("sqlite"));
 
-  it("prints the mode note verbatim", () => {
-    expect(rendered).toContain("Mode note:");
-    expect(rendered).toContain(warning);
-  });
-
-  it("prints it ABOVE the inbox count", () => {
-    // Order is the whole point: a caveat printed after "0 total, 0 unread" is read
-    // after the reader has already concluded the mailbox is empty.
-    const noteAt = rendered.indexOf("Mode note:");
+  it("prints the backend ABOVE the inbox count", () => {
+    // Order is the whole point: which store these numbers describe must be visible
+    // before the first count is read. The mode-shadowing note this line replaced
+    // is gone with the selector variable that could shadow a configured
+    // client-env pointer.
+    const backendAt = rendered.indexOf("Backend:");
     const countAt = rendered.indexOf("Local inbox:");
-    expect(noteAt).toBeGreaterThan(-1);
+    expect(backendAt).toBeGreaterThan(-1);
     expect(countAt).toBeGreaterThan(-1);
-    expect(noteAt).toBeLessThan(countAt);
+    expect(backendAt).toBeLessThan(countAt);
   });
 
-  it("stays silent when there is nothing being shadowed", () => {
-    const clean = formatInboxSyncStatus(emptyLocalStatus(localMode(null)));
-    expect(clean).not.toContain("Mode note:");
-    // …but still renders the ordinary payload, so silence is not emptiness.
-    expect(clean).toContain("Local inbox: 0 total, 0 unread");
+  it("still renders the ordinary payload", () => {
+    expect(rendered).toContain("Local inbox: 0 total, 0 unread");
+  });
+
+  it("prints no mode note of any kind", () => {
+    // The shadowed-pointer caveat is gone with the selector that could shadow:
+    // a pointer-configured client loads it unconditionally, so there is nothing
+    // left to caveat. Asserting absence pins the renderer to the current design.
+    expect(rendered).not.toContain("Mode note:");
+    expect(rendered).not.toContain("was overridden");
   });
 });
 
 describe("formatInboxSyncStatus — the pull hint names a real command", () => {
-  const rendered = formatInboxSyncStatus(emptyLocalStatus(localMode(null)));
+  const rendered = formatInboxSyncStatus(emptyLocalStatus("sqlite"));
 
   it("suggests `emails pull`, never `emails refresh`", () => {
     expect(rendered).toContain("Pull now: emails pull");
     expect(rendered).not.toContain("emails refresh");
   });
 
-  it("omits the pull hint in self_hosted, where the server owns ingestion", () => {
-    const selfHosted = emptyLocalStatus({
-      current: "self_hosted",
-      label: "Server API",
-      source: { kind: "env", name: "EMAILS_CLIENT_ENV_SECRET", value: POINTER },
-      warning: null,
-    });
-
-    const out = formatInboxSyncStatus(selfHosted);
+  it("omits the pull hint for the API client, where the server owns ingestion", () => {
+    const out = formatInboxSyncStatus(emptyLocalStatus("api"));
     expect(out).not.toContain("emails pull");
     expect(out).not.toContain("emails refresh");
   });

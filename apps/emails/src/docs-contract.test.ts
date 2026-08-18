@@ -54,7 +54,7 @@ describe("agent documentation contract", () => {
     const cutover = readFileSync(join(root, "docs", "DEPLOYMENT_CUTOVER.md"), "utf8");
 
     expect(readme).not.toContain("emails config            #");
-    for (const command of ["emails send-intent", "emails self-hosted key", "emails auth", "emails keys"]) {
+    for (const command of ["emails send-intent", "emails server key", "emails auth", "emails keys"]) {
       expect(readme).toContain(command);
     }
 
@@ -63,7 +63,7 @@ describe("agent documentation contract", () => {
       "`domain`",
       "`inbox`",
       "`send-intent`",
-      "`self-hosted`",
+      "`api`",
       "`auth`",
       "`keys`",
     ]) {
@@ -74,7 +74,7 @@ describe("agent documentation contract", () => {
 
     expect(auth).toContain("EMAILS_SESSION_TOKEN");
     expect(auth).toContain("EMAILS_IDP_TOKEN");
-    expect(auth).toContain("EMAILS_SELF_HOSTED_API_KEY");
+    expect(auth).toContain("HASNA_EMAILS_API_KEY");
     expect(auth).toContain("0021_idp_principal_tenants");
 
     expect(provisioning).toContain("the stateful provisioning workflow is not implemented");
@@ -87,11 +87,11 @@ describe("agent documentation contract", () => {
   });
 
   it("keeps station-local retirement behind the two-station backup and rollback gate", () => {
-    const runtime = readFileSync(join(root, "docs", "SELF_HOSTED_RUNTIME.md"), "utf8");
+    const runtime = readFileSync(join(root, "docs", "API_RUNTIME.md"), "utf8");
     const retirement = readFileSync(join(root, "docs", "STATION_LOCAL_RETIREMENT.md"), "utf8");
-    const smoke = readFileSync(join(root, "scripts", "self-hosted-client-smoke.sh"), "utf8");
+    const smoke = readFileSync(join(root, "scripts", "api-client-smoke.sh"), "utf8");
 
-    expect(runtime).toContain("./scripts/self-hosted-client-smoke.sh");
+    expect(runtime).toContain("./scripts/api-client-smoke.sh");
     expect(runtime).toContain("STATION_LOCAL_RETIREMENT.md");
     for (const phrase of [
       "Two-station pre-stop barrier",

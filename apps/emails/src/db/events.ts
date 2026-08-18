@@ -25,14 +25,14 @@
 //     lost between the find and the create) is answered by re-reading the winner
 //     rather than surfaced as a failure. A store that cannot filter on
 //     `provider_event_id` (a service older than the filter's declaration in
-//     src/server/self-hosted/resources.ts) is REFUSED by the HTTP store's contract
+//     src/server/api/resources.ts) is REFUSED by the HTTP store's contract
 //     check, and that refusal surfaces here: deduplication it cannot express is not
 //     deduplication this function may silently skip. That is the "preserve on both
 //     stores or refuse" ruling, implemented.
 //  2. WHAT THE UNIQUE KEY GUARANTEES DIFFERS BY STORE, AND THAT IS NAMED RATHER THAN
 //     GLOSSED. The SQLite schema carries the partial unique index, so its generic
 //     create refuses the losing side of a race with a typed `conflict`. The service
-//     schema does NOT yet hold that key (src/server/self-hosted/migrations.ts
+//     schema does NOT yet hold that key (src/server/api/migrations.ts
 //     declares no unique on events), so two CONCURRENT upserts of the same delivery
 //     against an Emails API can still both insert — exactly the deleted second arm's
 //     own exposure, minus its one-page blindness. Closing it needs the tenant-scoped
@@ -54,7 +54,7 @@
 //     binds objects as JSON text, the service casts to jsonb).
 //  5. THE TWO STORES ORDER THE TABLE DIFFERENTLY, AND `ListOptions` ADMITS NO
 //     ORDERING. The service's declared order is `occurred_at DESC, id ASC`
-//     (src/server/self-hosted/resources.ts); the SQLite store's generic list derives
+//     (src/server/api/resources.ts); the SQLite store's generic list derives
 //     `created_at DESC, id DESC` (events has no `updated_at`). `occurred_at` is the
 //     provider's clock and `created_at` is the ingestion clock, and a backfilled sync
 //     interleaves them differently — so neither generic order is the `occurred_at
@@ -115,7 +115,7 @@ import { safeOffset, safeOptionalLimit } from "./pagination.js";
 // column into the other's TEXT-encoded one; the module they live in is named for the
 // axis being deleted, and relocating them belongs to that deletion rather than to
 // this collapse.
-import { cobj, cstr, cstrOrNull } from "./self-hosted-resource.js";
+import { cobj, cstr, cstrOrNull } from "./api-resource.js";
 import { enumerateStoreRows, type StoreEnumeration } from "../lib/status-facts-enumeration.js";
 import { createConfiguredEmailStore } from "../store-resolution.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";

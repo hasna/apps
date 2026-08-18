@@ -5,11 +5,11 @@ import type { MxAssessment } from "../../lib/mx-ownership.js";
 // Automated provisioning (SES identity/MAIL FROM, Cloudflare DNS, S3 inbound
 // receipt rules, the reconciler daemon and round-trip acceptance tests) does not
 // ship in ANY mode of this package. The local orchestrator was unreachable dead
-// code and has been removed; the self-hosted server exposes no /v1 provisioning
+// code and has been removed; the API server exposes no /v1 provisioning
 // route and its container runs no reconciler. The commands stay registered so
 // scripts and `--help` get a truthful, actionable answer instead of a bare
-// "unknown command" — but the previous "it runs on the self-hosted server" text
-// was false in BOTH local and self_hosted mode and is gone.
+// "unknown command" — but the previous "it runs on the API server" text
+// was false in BOTH local and API-client configuration and is gone.
 //
 // The supported path is manual: `emails domain adopt` registers an
 // already-verified domain and wires SES inbound, and `emails aws setup-inbound`
@@ -17,7 +17,7 @@ import type { MxAssessment } from "../../lib/mx-ownership.js";
 function notImplementedAnywhere(command: string): never {
   throw new Error(
     `${command} is not implemented in this build: there is no local provisioning ` +
-      `orchestrator and the self-hosted server exposes no provisioning route. ` +
+      `orchestrator and the api server exposes no provisioning route. ` +
       `Register an already-verified domain with 'emails domain adopt <domain> --provider <id>' ` +
       `and create the SES inbound bucket and receipt rules with 'emails aws setup-inbound'.`,
   );

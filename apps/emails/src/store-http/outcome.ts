@@ -81,7 +81,7 @@ export function unavailable(capability: CapabilityKey): Refusal {
  * repository here is still a plain typed object literal with no parent and no supplied
  * body. This is an error type: it declares no store operation, nothing implements it,
  * and subclassing `Error` is how the rest of the repository spells a typed fault (see
- * the eight in src/server/self-hosted/store.ts). `src/store-sqlite/` has no classes
+ * the eight in src/server/api/store.ts). `src/store-sqlite/` has no classes
  * because it needs none — it lets database errors propagate unwrapped — whereas a
  * transport has to distinguish "the API declined" from "the call never landed", and
  * `instanceof` is what lets a caller and a test do that without matching on a string.
@@ -99,7 +99,7 @@ export class EmailsApiFault extends Error {
 /**
  * The API's own error text, if it sent any.
  *
- * The self-hosted service answers with a FLAT `{ error, reason?, code? }` — not the
+ * The api service answers with a FLAT `{ error, reason?, code? }` — not the
  * nested `{ error: { code, message } }` shape a reader might assume — so this reads
  * the flat form and falls back to the status when the body is not that shape at all
  * (an HTML error page from a proxy in front of the service, most likely).
@@ -129,7 +129,7 @@ export function apiErrorReason(body: unknown): string | null {
  * status is a fault rather than a decision (RULE 1).
  *
  * The status set is not a guess: it is the uniform set the service documents and
- * answers with (src/server/self-hosted/service.ts:1979-2000 and the parity block in
+ * answers with (src/server/api/service.ts:1979-2000 and the parity block in
  * openapi.ts). 400 and 413 map to `invalid_input`/422 because `RefusalStatus` has no
  * 400 — deliberately, per outcome.ts: a refusal that cannot decide between two
  * statuses has not been thought through, and the seam's answer for "well-formed but
@@ -147,7 +147,7 @@ export function refusalForStatus(status: number, body: unknown, what: string): R
       // NOT EVERY 403 IS A DECISION ABOUT THIS REQUEST, and an earlier version of this
       // arm treated them all as refusals — which broke RULE 1 in the one way that hurts
       // most. A credential with no tenant mapping answers 403 `no_tenant` on EVERY data
-      // route (src/server/self-hosted/auth/service.ts, and there is an integration test
+      // route (src/server/api/auth/service.ts, and there is an integration test
       // pinning it), so a store built with such a key refused every operation it was ever
       // asked to perform, uniformly, with a plausible-looking typed refusal. That is
       // precisely the misconfigured-store-indistinguishable-from-a-declining-one failure

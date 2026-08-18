@@ -1,8 +1,8 @@
 // App-level inbound FORWARDING has one implementation, and the five rule operations reach
 // storage through the store seam.
 //
-// The family used to be a facade over `forwarding.local.ts` (SQLite) and
-// `forwarding.remote.ts` (the `curl` bridge), with a compatibility shim in the middle
+// The family used to be a facade over `forwarding.sqlite.ts` (SQLite) and
+// `forwarding.api.ts` (the `curl` bridge), with a compatibility shim in the middle
 // because the two arms did not even agree on the ARGUMENT ORDER of
 // `listPendingForwarding`. Where the arms disagreed about behaviour — and it was not only
 // about who ran the SQL — is what this suite is built around:
@@ -26,7 +26,7 @@
 //     create and `updated_at` on update; `/v1/forwarding` declares six writable columns
 //     behind `additionalProperties: false`, so the real HTTP store refuses all four. A
 //     recording-store case pins exactly which columns this implementation sends.
-//   * ONLY SQLITE CONSTRAINS `mode`. The self-hosted migration drops
+//   * ONLY SQLITE CONSTRAINS `mode`. The api migration drops
 //     `forwarding_rules_mode_check`, so an out-of-enum mode was refused by one store and
 //     accepted by the other — and both arms then CAST it into a field the CLI prints. It is
 //     refused on the way in and faulted on the way out here.
@@ -47,7 +47,7 @@
 // THE TWO LOCAL-ONLY OPERATIONS are tested against SQLite and only SQLite, because that is
 // the only place their data exists: `forwarding_deliveries` and the pending-forward join
 // over `inbound_recipients` / `inbound_emails` have no seam repository, no `/v1` route and
-// no table in the self-hosted Postgres schema. Their `Database` parameter is REQUIRED, so
+// no table in the api Postgres schema. Their `Database` parameter is REQUIRED, so
 // "an API-configured installation reads an empty local file and is told its inbox is fully
 // forwarded" is a compile error rather than a test case.
 
@@ -302,7 +302,7 @@ describe("createForwardingRule", () => {
   });
 
   it("refuses an out-of-enum mode before any store is touched", async () => {
-    // ONLY SQLITE CONSTRAINS THIS COLUMN — the self-hosted migration DROPS
+    // ONLY SQLITE CONSTRAINS THIS COLUMN — the api migration DROPS
     // `forwarding_rules_mode_check` — so without this the same input is a refusal on one
     // store and an accepted, unreadable row on the other. No store is passed: the refusal
     // must not depend on having one.
@@ -876,7 +876,7 @@ async function seedRule(source: string, createdAt: string, opts: { enabled?: boo
 /**
  * Force a value into `forwarding_rules` that its CHECK constraint forbids.
  *
- * This is how the SERVICE's side of the asymmetry is reproduced locally: the self-hosted
+ * This is how the SERVICE's side of the asymmetry is reproduced locally: the api
  * Postgres migration DROPS `forwarding_rules_mode_check`, so a row the SQLite writer can
  * never produce is an ordinary row over there. Suspending the constraint is the only way to
  * put such a row in front of this module's read path without standing up Postgres.
@@ -1030,7 +1030,7 @@ describe("recordForwardingDelivery (local storage only)", () => {
     // two concurrent runs can, and any direct caller of the export can.
     //
     // It is inherited rather than fixed because changing what a published write does with an
-    // already-successful delivery is a product decision, not a mode-axis refactor; the fix
+    // already-successful delivery is a product decision, not a selector-removal refactor; the fix
     // belongs in the idempotency-fenced ledger the seam widening would bring, where `sent` is
     // TERMINAL for a pair. WIDENING THE JOIN INSTEAD WOULD BE WRONG: it would strand every
     // genuine retry, which the case above this one exists to protect.
@@ -1128,23 +1128,23 @@ describe("the collapsed module", () => {
   const dbDir = import.meta.dir;
 
   it("has no arm modules left", () => {
-    expect(existsSync(join(dbDir, "forwarding.local.ts"))).toBe(false);
-    expect(existsSync(join(dbDir, "forwarding.remote.ts"))).toBe(false);
+    expect(existsSync(join(dbDir, "forwarding.sqlite.ts"))).toBe(false);
+    expect(existsSync(join(dbDir, "forwarding.api.ts"))).toBe(false);
     // The floor: the facade itself is still there under the same name, so consumers' import
     // paths did not move.
     expect(existsSync(join(dbDir, "forwarding.ts"))).toBe(true);
   });
 
-  it("reads no deployment-mode variable and imports no routing helper", () => {
+  it("reads no selector variable and imports no routing helper", () => {
     const source = readFileSync(join(dbDir, "forwarding.ts"), "utf8");
     // Comments in this module discuss the axis by role, so the check is on IMPORTS and CALLS
     // rather than on prose.
     for (const forbidden of [
-      /from "\.\/self-hosted-store\.js"/,
-      /from "\.\/self-hosted-resource\.js"/,
+      /from "\.\/api-store\.js"/,
+      /from "\.\/api-resource\.js"/,
       /from "\.\/database-routing\.js"/,
       /from "\.\/forwarding\.(local|remote)\.js"/,
-      /selfHostedResource\(/,
+      /apiResource\(/,
       /process\.env\[/,
     ]) {
       expect(forbidden.test(source), `forwarding.ts still matches ${String(forbidden)}`).toBe(false);
@@ -1156,13 +1156,13 @@ describe("the collapsed module", () => {
 
   it("leaves the forwarding pipeline importing the facade rather than a deleted arm", () => {
     // THE PATH MOVED, and the guard did not weaken. When this was written the pipeline was
-    // `src/lib/forwarding.local.ts`, an arm of a family that had not collapsed yet; that family
+    // `src/lib/forwarding.sqlite.ts`, an arm of a family that had not collapsed yet; that family
     // has since collapsed too, so the module that must not import a deleted arm is the ONE
     // implementation at `src/lib/forwarding.ts`. Both assertions still hold against it and both
     // still mean what they meant.
     const pipeline = readFileSync(join(dbDir, "..", "lib", "forwarding.ts"), "utf8");
     expect(pipeline).toContain('from "../db/forwarding.js"');
-    expect(pipeline).not.toContain('from "../db/forwarding.local.js"');
+    expect(pipeline).not.toContain('from "../db/forwarding.sqlite.js"');
     // Positive control that the file really was read, so a path that stops resolving cannot
     // satisfy the negative assertion by handing back an empty string.
     expect(pipeline.length).toBeGreaterThan(4000);

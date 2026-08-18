@@ -7,12 +7,11 @@
 // terminal. A guard whose oracle is the thing under test proves nothing.
 //
 // `serverOnly()` / `notImplementedAnywhere()` are defined per command module and
-// always throw. A refusal in a SHARED module (not `*.remote.ts` / `*.local.ts`,
+// always throw. A refusal in a SHARED module (not `*.api.ts` / `*.sqlite.ts`,
 // which src/cli/index.tsx loads in both modes) therefore refuses in every mode.
 
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import type { EmailsMode } from "../lib/mode.js";
 
 const COMMANDS_DIR = join(import.meta.dir, "..", "cli", "commands");
 
@@ -23,7 +22,7 @@ const COMMANDS_DIR = join(import.meta.dir, "..", "cli", "commands");
  * assert EACH shape is still observed, and so the regex below cannot drift from
  * the list. Deleting one alternative from the old combined regex made the oracle
  * half-blind with the entire suite green: all 17 `serverOnly(...)` call sites live
- * in `*.remote.ts`, so once `src/cli/commands/domain.ts` stopped using that helper
+ * in `*.api.ts`, so once `src/cli/commands/domain.ts` stopped using that helper
  * nothing asserted the `serverOnly` arm at all. See `refusalHelpersObserved()`.
  */
 export const REFUSAL_HELPERS = ["serverOnly", "notImplementedAnywhere"] as const;
@@ -64,7 +63,7 @@ export function scanCliRefusals(): CliRefusal[] {
       found.push({
         command,
         file: entry.name,
-        shared: !entry.name.endsWith(".remote.ts") && !entry.name.endsWith(".local.ts"),
+        shared: !entry.name.endsWith(".api.ts") && !entry.name.endsWith(".sqlite.ts"),
         helper,
       });
     }
@@ -87,22 +86,22 @@ export function refusalHelpersObserved(): Record<RefusalHelper, number> {
   return counts;
 }
 
-/** Command prefixes that throw in `mode`, according to the CLI source. */
-export function cliRefusedPrefixes(mode: EmailsMode): string[] {
+/** Command prefixes that throw for that client backend, according to the CLI source. */
+export function cliRefusedPrefixes(backend: "sqlite" | "api"): string[] {
   return scanCliRefusals()
-    .filter((refusal) => refusal.shared || mode === "self_hosted")
+    .filter((refusal) => refusal.shared || backend === "api")
     .map((refusal) => refusal.command);
 }
 
 /**
- * The refusal a command would hit in `mode`, or null if it runs.
+ * The refusal a command would hit for that backend, or null if it runs.
  *
  * Deliberately independent of src/lib/status-commands.ts: this is the oracle, and
  * that registry is what is being tested.
  */
-export function cliRefusalFor(command: string, mode: EmailsMode): string | null {
+export function cliRefusalFor(command: string, backend: "sqlite" | "api"): string | null {
   const normalized = command.trim();
-  for (const prefix of cliRefusedPrefixes(mode)) {
+  for (const prefix of cliRefusedPrefixes(backend)) {
     if (normalized === prefix || normalized.startsWith(`${prefix} `)) return prefix;
   }
   return null;

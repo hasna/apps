@@ -93,7 +93,7 @@ export {
 //    back. A local installation still records a send through `createSentEmailLedger`.
 //  * THREE FIELDS ON `Email` ARE NULLABLE now — `provider_id`, `bcc_addresses` and `tags` —
 //    because no message projection on the seam publishes them, and `null` there means "this
-//    store does not record it" rather than the `"self_hosted"` / `[]` / `{}` the deleted HTTP
+//    store does not record it" rather than the `"server"` / `[]` / `{}` the deleted HTTP
 //    arm invented. A consumer that renders `bcc_addresses.length` or spreads `tags` breaks at
 //    compile time, which is the point. `listEmails` also REFUSES a `provider_id` filter for
 //    the same reason, rather than ignoring it and returning another provider's mail.
@@ -221,7 +221,7 @@ export type {
 //     `await`, so it is named first and named loudly.
 //  2. `SendKey` NO LONGER CARRIES `key_hash`, and `SendKeySummary` is now an alias of it. The
 //     field held the real SHA-256 on a local installation and a fabricated `""` on a
-//     self-hosted one; the seam's record has no hash at all and the service redacts the
+//     api one; the seam's record has no hash at all and the service redacts the
 //     column, so reading `.key_hash` is now a compile error rather than a comparison that
 //     silently never matches. `owner_id` and `prefix` are `string | null` (the seam's
 //     nullability — a key outlives a deleted owner), and `updated_at` is new.
@@ -279,9 +279,9 @@ export type { SendKey, SendKeySummary } from "./db/send-keys.js";
 //    is required. The pre-#125 published module was the routing barrel
 //    (`4691c5d^1:src/db/forwarding.ts`), whose `localCompat` shim was literally
 //    `listPendingForwarding: (limit, opts) => local.listPendingForwarding(limit, undefined, opts)`.
-//    That shim served every non-self-hosted caller that did not pass a handle, and the barrel's
+//    That shim served every non-api caller that did not pass a handle, and the barrel's
 //    `as typeof remote` cast meant the PUBLISHED TYPE was the remote arm's signature, not the
-//    local arm's. Verifying this block against `forwarding.local.ts` instead of that barrel is
+//    local arm's. Verifying this block against `forwarding.sqlite.ts` instead of that barrel is
 //    how the break was missed the first time.
 //
 // All of it needs a MAJOR version at release. The version is deliberately not bumped in the
@@ -326,7 +326,7 @@ export {
 
 // Runtime utilities and first-class local SQLite lifecycle.
 export { uuid, now } from "./db/runtime.js";
-export { resolveResourceId, resolveResourceIdOrThrow, listResourceIdMatches } from "./db/self-hosted-store.js";
+export { resolveResourceId, resolveResourceIdOrThrow, listResourceIdMatches } from "./db/api-store.js";
 export {
   closeDatabase,
   databaseFileExists,
@@ -587,7 +587,7 @@ export type { WarmingSchedule, WarmingDay, WarmingProgress } from "./lib/warming
 // rather than by the deployment word, and the two do not agree everywhere. Five configurations
 // answer differently, enumerated in `src/lib/forwarding.ts`'s header; four newly refuse (API
 // storage with no deployment word, a stale client-secret pointer, two database paths at once, a
-// refused data directory) and ONE newly RUNS (deployment word self-hosted with no storage setting
+// refused data directory) and ONE newly RUNS (deployment word api with no storage setting
 // naming anything). A consumer that called this on an API-configured installation and read
 // `attempted: 0` as "nothing to forward" now gets a thrown refusal instead — which is the point,
 // because that zero was a claim about mail this side never looked at.

@@ -19,7 +19,7 @@
 //    "accepted and dropped" class this seam exists to remove.
 //
 // 3. THE ROUTES ARE REAL. The fixture could serve anything, so the route table is
-//    checked against `emailsSelfHostedOpenApi` — the service's own document, generated
+//    checked against `emailsApiOpenApi` — the service's own document, generated
 //    from the same resource registry its router dispatches on. That check is what makes
 //    the capability declaration evidence rather than assertion, and it is deliberately
 //    independent of the fixture: it would keep working if the fixture were deleted.
@@ -27,9 +27,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { closeDatabase, getDatabase, resetDatabase, type Database } from "./db/database.js";
 import { uuid } from "./db/runtime.js";
-import { EMAILS_SELF_HOSTED_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "./lib/client-env.js";
-import { emailsSelfHostedOpenApi } from "./server/self-hosted/openapi.js";
-import { SELF_HOSTED_RESOURCES } from "./server/self-hosted/resources.js";
+import { HASNA_EMAILS_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "./lib/client-env.js";
+import { emailsApiOpenApi } from "./server/api/openapi.js";
+import { API_RESOURCES } from "./server/api/resources.js";
 import { CAPABILITY_KEYS, capabilityRefusal, isCapabilityRefusal } from "./store/capabilities.js";
 import {
   CONFORMANCE_CASES,
@@ -219,7 +219,7 @@ describe("HttpEmailStore conformance", () => {
     expect(families.map(([family]) => family).sort()).toEqual([...RESOURCE_FAMILIES].sort());
     // And each path is a resource the SERVICE actually registers — the check that
     // catches `sandbox` being served at `sandbox-emails` rather than `sandbox`.
-    const registered = new Set(SELF_HOSTED_RESOURCES.map((resource) => resource.path));
+    const registered = new Set(API_RESOURCES.map((resource) => resource.path));
     for (const [family, path] of Object.entries(RESOURCE_PATHS)) {
       expect(registered.has(path), `${family} is mapped to /v1/${path}, which the service does not register`).toBe(
         true,
@@ -578,7 +578,7 @@ describe("the HTTP transport's bounds", () => {
       credential: "session-token-placeholder",
       credentialSetting: EMAILS_SESSION_TOKEN_ENV,
       credentialFallbacks: [
-        { setting: EMAILS_SELF_HOSTED_API_KEY_ENV, value: "api-key-placeholder" },
+        { setting: HASNA_EMAILS_API_KEY_ENV, value: "api-key-placeholder" },
       ],
       fetchImpl,
     });
@@ -667,7 +667,7 @@ describe("the /v1 routes this store depends on", () => {
     // The check that makes the capability declaration evidence: the document is
     // generated from the same registry the router dispatches on, so a route missing
     // here is a route the service does not serve — independently of the test fixture.
-    const paths = emailsSelfHostedOpenApi.paths as Record<string, Record<string, unknown>>;
+    const paths = emailsApiOpenApi.paths as Record<string, Record<string, unknown>>;
     const absent: string[] = [];
     for (const route of ROUTES) {
       const operations = paths[route.template];
@@ -682,7 +682,7 @@ describe("the /v1 routes this store depends on", () => {
   it("proves the OpenAPI check can fail", () => {
     // Positive control. Without it, a document that stopped parsing — or a path table
     // read from the wrong property — would make the assertion above pass over nothing.
-    const paths = emailsSelfHostedOpenApi.paths as Record<string, Record<string, unknown>>;
+    const paths = emailsApiOpenApi.paths as Record<string, Record<string, unknown>>;
     expect(paths["/v1/messages"]).toBeDefined();
     expect(paths["/v1/messages/i-do-not-exist"]).toBeUndefined();
     expect("delete" in (paths["/v1/messages"] ?? {})).toBe(false);
@@ -765,7 +765,7 @@ describe("the /v1 routes this store depends on", () => {
     expect(refusedByImport.status, "POST /v1/messages must keep refusing an outbound write").toBe(409);
     // The service's own document still declares that 409, so this is not a fixture-only
     // property.
-    const paths = emailsSelfHostedOpenApi.paths as Record<string, Record<string, Record<string, unknown>>>;
+    const paths = emailsApiOpenApi.paths as Record<string, Record<string, Record<string, unknown>>>;
     expect(Object.keys(paths["/v1/messages"]?.["post"]?.["responses"] as object)).toContain("409");
     // And the record route is the service's, not the fixture's invention.
     expect(paths["/v1/messages/record"]?.["post"]).toBeDefined();
@@ -780,7 +780,7 @@ describe("the /v1 routes this store depends on", () => {
     // claiming "at the service". The fixture imports the service's own
     // `SEND_LEDGER_FIELDS`, so the LIST is the server's — but the refusal executing here
     // is the fixture's. The real service's own refusal is asserted directly in
-    // src/server/self-hosted/message-record-route.test.ts.
+    // src/server/api/message-record-route.test.ts.
     for (const field of ["idempotency_key", "send_payload_hash", "send_state", "send_started_at"]) {
       const answer = await fetch(`${api.baseUrl}/v1/messages/record`, {
         method: "POST",

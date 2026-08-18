@@ -9,7 +9,7 @@ import {
   sourcesResourcePayloadForRuntime,
 } from "./resources.js";
 
-// Self-hosted-ONLY: every MCP resource payload routes through the /v1 API (via the
+// API-only: every MCP resource payload routes through the /v1 API (via the
 // resource repositories + mail data-source seam). There is no local SQLite island,
 // so all fixtures are seeded on the /v1 stub.
 
@@ -32,8 +32,8 @@ afterEach(() => {
   stub.clearEnv();
 });
 
-describe("MCP resource payloads (self-hosted /v1)", () => {
-  it("routes the domain resource through the self-hosted API", async () => {
+describe("MCP resource payloads (api /v1)", () => {
+  it("routes the domain resource through the api API", async () => {
     await stub.seed({
       domains: [
         { id: "domain-1", domain: "example.com", status: "ready", provider: "ses", verified: true, notes: null, created_at: NOW, updated_at: NOW },
@@ -43,13 +43,13 @@ describe("MCP resource payloads (self-hosted /v1)", () => {
 
     const domains = await domainsResourcePayloadForRuntime() as {
       domains: Array<{ id: string; domain: string; provisioning: unknown; readiness: unknown }>;
-      mode: string;
+      backend: string;
       source: string;
       note?: string;
     };
 
-    expect(domains.mode).toBe("self_hosted");
-    expect(domains.source).toBe("self_hosted_api");
+    expect(domains.backend).toBe("api");
+    expect(domains.source).toBe("api");
     expect(domains.note).toBeUndefined();
     expect(domains.domains.map((domain) => domain.domain)).toEqual(["example.com", "pending.example.com"]);
     expect(domains.domains[0]).toHaveProperty("readiness");
@@ -59,7 +59,7 @@ describe("MCP resource payloads (self-hosted /v1)", () => {
     expect(domains.domains[0]?.provisioning).toMatchObject({ provisioning_status: "none" });
   });
 
-  it("routes the address resource through the self-hosted API", async () => {
+  it("routes the address resource through the api API", async () => {
     await stub.seed({
       addresses: [
         { id: "addr-1", email: "ops@example.com", domain: "example.com", status: "active", verified: true, created_at: NOW, updated_at: NOW },
@@ -69,13 +69,13 @@ describe("MCP resource payloads (self-hosted /v1)", () => {
 
     const addresses = await addressesResourcePayloadForRuntime() as {
       addresses: Array<{ id: string; email: string; provisioning: unknown }>;
-      mode: string;
+      backend: string;
       source: string;
       note?: string;
     };
 
-    expect(addresses.mode).toBe("self_hosted");
-    expect(addresses.source).toBe("self_hosted_api");
+    expect(addresses.backend).toBe("api");
+    expect(addresses.source).toBe("api");
     expect(addresses.note).toBeUndefined();
     expect(addresses.addresses.map((address) => address.email)).toEqual(["ops@example.com", "pending@example.com"]);
     expect(addresses.addresses[0]?.provisioning).toBeNull();
@@ -84,20 +84,20 @@ describe("MCP resource payloads (self-hosted /v1)", () => {
   it("reports recent-error resource as API-only with no local state read", () => {
     const recentErrors = recentErrorsResourcePayloadForRuntime() as {
       errors: unknown[];
-      mode: string;
+      backend: string;
       source: string;
       note: string;
     };
 
     expect(recentErrors).toMatchObject({
       errors: [],
-      mode: "self_hosted",
-      source: "self_hosted_api",
+      backend: "api",
+      source: "api",
     });
     expect(recentErrors.note).toContain("no local database or config state was read");
   });
 
-  it("routes runtime mailboxes and sources through the self-hosted API", async () => {
+  it("routes runtime mailboxes and sources through the api API", async () => {
     await stub.seed({
       messages: [
         { id: "m1", direction: "inbound", from_addr: "a@x.com", to_addrs: ["me@x.com"], subject: "hello", body_text: "hi", status: "received", is_read: false, is_starred: false, labels: [], received_at: "2026-06-02T00:00:00.000Z" },
@@ -111,8 +111,8 @@ describe("MCP resource payloads (self-hosted /v1)", () => {
 
     expect(mailboxes.counts).toMatchObject({ inbox: 2, unread: 1, sent: 1 });
     expect(sources.sources[0]).toMatchObject({
-      id: "self_hosted",
-      badges: ["self_hosted"],
+      id: "server",
+      badges: ["server"],
       total: 2,
       unread: 1,
     });

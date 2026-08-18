@@ -31,7 +31,7 @@ The renderer uses an alternate screen, mouse input, Kitty keyboard support,
   composer, and dialogs.
 - `src/cli/tui-solid/context/` owns state, commands, keymaps, themes, dialogs,
   and toasts.
-- `src/cli/tui/data.ts` routes the shared data API to local or self-hosted
+- `src/cli/tui/data.ts` routes the shared data API to local or api
   implementations; formatting, clipboard handling, auto-pull, and settings
   remain under `src/cli/tui/`.
 
@@ -46,7 +46,7 @@ persistent mailbox/sidebar region and a workspace for mailbox lists, reader,
 and domains. It supports address and source selection, search/filter/grouping,
 labels and categories, digests, attachment/link/raw dialogs, compose/reply/
 forward, settings, light/dark/auto themes, background refresh, and both local
-and self-hosted mail data sources.
+and api mail data sources.
 
 Valid startup mailbox values are `inbox`, `unread`, `starred`, `sent`,
 `archived`, `spam`, and `trash`. For a non-interactive workflow use the commands

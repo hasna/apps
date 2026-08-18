@@ -17,16 +17,16 @@
 // reason the module exists. A precedence rule answers "which one wins?" when the
 // question the operator actually asked was "which one did you mean?" — and it answers
 // it SILENTLY. Two configured sources with a documented winner is not a safer design
-// than a deployment switch; it *is* a deployment switch, with the switch position
-// inferred instead of declared, and the failure mode is mail written to, or read from,
-// the store the operator did not mean. The only honest answer to a contradiction is to
-// refuse to start and name both settings.
+// than a switch; it *is* a switch, with the switch position inferred instead of
+// declared, and the failure mode is mail written to, or read from, the store the
+// operator did not mean. The only honest answer to a contradiction is to refuse to
+// start and name both settings.
 //
-// WHAT THIS MODULE DELIBERATELY DOES NOT READ: any deployment-mode variable, and any
-// module that resolves one. Selection here is a fact about STORAGE configuration. A
-// resolver that consulted a deployment word would re-create the coupling that the
+// WHAT THIS MODULE DELIBERATELY DOES NOT READ: any selector variable, and any module
+// that resolves one. Selection here is a fact about STORAGE configuration. A
+// resolver that consulted a selector word would re-create the coupling that the
 // store seam exists to remove, and would make this file depend on a module that is
-// scheduled for deletion. Grep this file for a mode read and you will find none;
+// scheduled for deletion. Grep this file for a selector read and you will find none;
 // that absence is asserted by src/store-resolution.test.ts.
 //
 // CONSTRUCTION IS THE ONLY PLACE THE ANSWER IS VISIBLE. `StorePlan` is a two-arm
@@ -39,7 +39,9 @@
 import { defaultDatabasePath } from "./db/database.js";
 import {
   CLIENT_ENV_CREDENTIAL_SELECTION_KEYS,
+  EMAILS_API_URL_ENV,
   EMAILS_CLIENT_ENV_SECRET_ENV,
+  loadEmailsClientEnvSecret,
   resolveEmailsClientCredentialCandidates,
   type EmailsClientCredentialSetting,
 } from "./lib/client-env.js";
@@ -56,14 +58,19 @@ import { createSqliteEmailStore } from "./store-sqlite/index.js";
  */
 export const DATABASE_PATH_SETTINGS = Object.freeze(["HASNA_EMAILS_DB_PATH", "EMAILS_DB_PATH"] as const);
 
-/** The setting that names an Emails API origin. */
-export const API_BASE_URL_SETTING = "EMAILS_SELF_HOSTED_URL";
+/**
+ * The setting that names an Emails API origin. Defined in src/lib/client-env.ts
+ * beside the credential settings and re-exported here under the role name the
+ * resolution uses; the earlier api-URL spelling is gone with the
+ * selector that carried it.
+ */
+export const API_BASE_URL_SETTING = EMAILS_API_URL_ENV;
 
 /**
  * The settings that carry the API credential, in precedence order: an explicit user
  * session first, then the caller's own identity token — ADR-0002, an agent uses ITS
  * identity even when an operator key is also present in the env — then the operator
- * API key. The same order the existing client applies (src/db/self-hosted-store.ts,
+ * API key. The same order the existing client applies (src/db/api-store.ts,
  * `sessionToken || idpToken || apiKey`), so the two paths cannot disagree about
  * which credential a mixed environment means.
  */
@@ -188,7 +195,7 @@ function credentialFreeOrigin(value: string): string {
     return reject(`must be an http or https URL (it parsed as the "${parsed.protocol}" scheme)`);
   }
   // PLAINTEXT IS REFUSED EXCEPT ON LOOPBACK, and the refusal repeats the legacy
-  // client's sentence (src/db/self-hosted-store.ts) so operators meet ONE message on
+  // client's sentence (src/db/api-store.ts) so operators meet ONE message on
   // both paths. The store built from this origin puts the bearer credential in an
   // Authorization header on every request; over plaintext http to a non-loopback host
   // that is the credential on the wire for anything along the route. The allowed set
@@ -331,4 +338,30 @@ export function createConfiguredEmailStore(): EmailStore {
         credentialFallbacks: resolveEmailsClientCredentialCandidates(process.env).slice(1),
       });
   }
+}
+
+/**
+ * True when the operator's environment selects the hosted API client.
+ *
+ * This is the one "which client is this?" question the rest of the codebase may
+ * ask. It is answered by STORAGE configuration and by nothing else: an API
+ * origin plus a credential names the API client; anything else names the local
+ * SQLite client. There is no selector variable any more, and this module
+ * never read one — the retired selector module that used to answer this
+ * question is deleted, and every call site that asked it now asks the seam
+ * instead.
+ *
+ * A configured client-env vault pointer is loaded first (idempotent per
+ * process), because a pointer is a DELIVERY mechanism for the two settings the
+ * plan decides from — refusing to load it here would silently answer "local"
+ * for an operator who configured an API. Fail-closed: a configuration the plan
+ * refuses (both backends configured, an API origin without a credential, a
+ * pointer whose payload cannot be loaded) THROWS `StoreConfigurationError`
+ * rather than guessing.
+ */
+export function isApiClientConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (configured(env, API_SETTINGS_POINTER) !== null) {
+    loadEmailsClientEnvSecret(env);
+  }
+  return planEmailStore(env).store === "api";
 }

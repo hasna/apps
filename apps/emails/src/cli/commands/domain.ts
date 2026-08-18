@@ -11,22 +11,22 @@ import { describeWarmingProgress, formatWarmingStatus, generateWarmingPlan, getT
 import { colorDnsStatus, tableRow, truncate } from "../../lib/format.js";
 import { confirmDestructiveAction, formatListHint, handleError, isCliVerboseOutput, parseCliListPage, resolveId } from "../utils.js";
 import { normalizeRoute53RegistrationContact } from "../../lib/route53-contact.js";
-import { resolveEmailsMode } from "../../lib/mode.js";
+import { isApiClientConfigured } from "../../store-resolution.js";
 import { now } from "../../db/runtime.js";
 
 // Every domain command below used to throw one sentence — "… is not available
-// in the self-hosted client; it runs on the self-hosted server" — from a single
+// in the api client; it runs on the API server" — from a single
 // `serverOnly()` helper, and the sentence was false in both halves:
 //
 //   * It fired UNCONDITIONALLY. `emails domain check example.com` printed it in
 //     LOCAL mode, naming a client the operator was not running.
-//   * There is no self-hosted server route behind any of them. `openapi.ts`
+//   * There is no api server route behind any of them. `openapi.ts`
 //     defines plain CRUD for `/v1/domains` and `/v1/addresses` and nothing else
 //     for this surface: no verify route, no DNS route, no readiness route, no
 //     provisioning orchestrator. Pointing at a server was pointing at nothing.
 //
 // So a refusal here now says what is MISSING and what to run instead, and never
-// names a deployment mode. `emails provision *` was fixed to this shape first;
+// names a selection. `emails provision *` was fixed to this shape first;
 // this table is the same contract for the domain surface, and it is a table
 // rather than one string because the commands are in different situations and a
 // single sentence could only be true of one of them.
@@ -150,9 +150,9 @@ async function expectedDnsRecords(
   // and `providerDnsPublishing()` is the only producer of one.
   //
   // `getAdapter` throws when the row cannot configure an adapter, and one such
-  // row is NOT an operator error: `apiToProvider` in src/db/providers.remote.ts
+  // row is NOT an operator error: `apiToProvider` in src/db/providers.api.ts
   // maps every credential column to null on purpose — provider secrets are never
-  // distributed to a client — so in self_hosted mode EVERY Resend provider hits
+  // distributed to a client — so when the API client is configured EVERY Resend provider hits
   // `assertProviderConfig`'s "Resend provider requires an API key". Letting that
   // escape turned a read-only question into an exit-1 whose suggested fix was to
   // go configure a client-side key that structurally cannot live there.
@@ -178,11 +178,11 @@ async function expectedDnsRecords(
 function normalizeDomainType(value: string | undefined): DomainType | undefined {
   if (!value) return undefined;
   const normalized = value.trim().toLowerCase().replace(/-/g, "_");
-  if (["system", "self_hosted", "local_only"].includes(normalized)) return normalized as DomainType;
-  handleError(new Error(`Invalid domain type '${value}'. Use system, self_hosted, or local_only.`));
+  if (["system", "server", "local_only"].includes(normalized)) return normalized as DomainType;
+  handleError(new Error(`Invalid domain type '${value}'. Use system, api, or local_only.`));
 }
 
-function resolveSelfHostedDomainId(ref: string): string {
+function resolveApiDomainId(ref: string): string {
   const exact = getDomain(ref);
   if (exact) return exact.id;
   // Matches the domain NAME as well as an id prefix: every sibling domain verb
@@ -351,8 +351,8 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
       // setup-inbound step nothing enforced, and SES 550-bounced every message
       // for a domain that looked "added".)
       const existing = getDomainByName(opts.provider, domain);
-      const mode = resolveEmailsMode();
-      const domainType = normalizeDomainType(opts.domainType) ?? "self_hosted";
+      const backend = isApiClientConfigured() ? "api" : "sqlite";
+      const domainType = normalizeDomainType(opts.domainType) ?? "server";
       const { getInboundConfig } = await import("../../lib/config.js");
       const inboundConfig = getInboundConfig();
       const bucket = opts.bucket ?? inboundConfig.bucket;
@@ -363,7 +363,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
           dry_run: true,
           domain,
           provider_id: opts.provider,
-          mode: mode.mode,
+          backend,
           provider: null,
           // Not selectable: a domain created through this client is owned by the
           // app's `/v1` database, and both domain mappers report `postgres`
@@ -518,7 +518,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
     .command("add <domain>")
     .description("Add a domain and provision its SES inbound receipt rule (use --send-only to deliberately skip inbound)")
     .requiredOption("--provider <id>", "Provider ID")
-    .option("--domain-type <type>", "Domain type: system, self_hosted, or local_only")
+    .option("--domain-type <type>", "Domain type: system, api, or local_only")
     .option("--send-only", "Register the domain WITHOUT inbound: deliberately skip the SES receipt rule (mail to the domain will not be received)")
     .option("--bucket <name>", "Inbound S3 bucket (default: config inbound_s3_bucket / EMAILS_INBOUND_S3_BUCKET)")
     .option("--region <region>", "AWS region for SES/S3 inbound (default: config inbound_s3_region or us-east-1)")
@@ -529,7 +529,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
     .command("connect <domain>")
     .description("Connect an already-owned domain and generate DNS readiness tasks (NOT IMPLEMENTED in this build)")
     .requiredOption("--provider <id>", "Provider ID")
-    .option("--domain-type <type>", "Domain type: system, self_hosted, or local_only")
+    .option("--domain-type <type>", "Domain type: system, api, or local_only")
     .option("--dns-provider <provider>", "DNS provider label: manual, cloudflare, or route53", "manual")
     .option("--no-register-provider", "Do not call the mail provider to register the domain")
     .option("--dry-run", "Show the connection plan without calling the provider or writing to the DB")
@@ -577,7 +577,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
     .command("add <domain>")
     .description("Add a domain and provision its SES inbound receipt rule (use --send-only to deliberately skip inbound)")
     .requiredOption("--provider <id>", "Provider ID")
-    .option("--domain-type <type>", "Domain type: system, self_hosted, or local_only")
+    .option("--domain-type <type>", "Domain type: system, api, or local_only")
     .option("--send-only", "Register the domain WITHOUT inbound: deliberately skip the SES receipt rule (mail to the domain will not be received)")
     .option("--bucket <name>", "Inbound S3 bucket (default: config inbound_s3_bucket / EMAILS_INBOUND_S3_BUCKET)")
     .option("--region <region>", "AWS region for SES/S3 inbound (default: config inbound_s3_region or us-east-1)")
@@ -648,7 +648,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
     .command("connect <domain>")
     .description("Connect an already-owned domain and generate DNS readiness tasks (NOT IMPLEMENTED in this build)")
     .requiredOption("--provider <id>", "Provider ID")
-    .option("--domain-type <type>", "Domain type: system, self_hosted, or local_only")
+    .option("--domain-type <type>", "Domain type: system, api, or local_only")
     .option("--dns-provider <provider>", "DNS provider label: manual, cloudflare, or route53", "manual")
     .option("--no-register-provider", "Do not call the mail provider to register the domain")
     .option("--dry-run", "Show the connection plan without calling the provider or writing to the DB")
@@ -912,7 +912,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
     .option("--yes", "Skip confirmation prompt")
     .action(async (id: string, opts: { yes?: boolean }) => {
       try {
-        const resolvedId = resolveSelfHostedDomainId(id);
+        const resolvedId = resolveApiDomainId(id);
         const domain = getDomain(resolvedId);
         if (!domain) handleError(new Error(`Domain not found: ${id}`));
         await confirmDestructiveAction(`Remove domain ${domain.domain}?`, opts.yes);
@@ -944,7 +944,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
 
   // ─── DOMAIN WARMING ────────────────────────────────────────────────────────
   // Warming schedules are a first-class repository resource (`warming_schedules`
-  // in SQLite, `/v1/warming` on the self-hosted server), so these commands call
+  // in SQLite, `/v1/warming` on the api server), so these commands call
   // the collapsed warming family (src/db/warming.ts) — one implementation over
   // the store seam, async, resolved from storage configuration. The MCP tools in
   // src/mcp/tools/warming.ts are the same calls over a different transport.
@@ -1057,7 +1057,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
           return;
         }
         // One ledger read for the whole page instead of one per row: in
-        // self-hosted mode each read is a synchronous curl spawn over today's
+        // API-client configuration each read is a synchronous curl spawn over today's
         // messages, so a 20-row page used to cost 20 identical requests.
         const sentByDomain = await getTodaySentCountsByDomain(schedules.map((schedule) => schedule.domain));
         const lines: string[] = [""];

@@ -24,7 +24,7 @@
 // the generic ones), status codes (201 on insert, 200 on an upsert match, 404
 // `{error:"<name> not found"}`, 409 with a flat `reason`) and the flat
 // `{ error, reason?, code? }` error body are all taken from
-// src/server/self-hosted/service.ts. `src/store-http/routes.test.ts` checks the routes
+// src/server/api/service.ts. `src/store-http/routes.test.ts` checks the routes
 // this fixture and the client agree on against the service's OWN OpenAPI document, so
 // the contract is pinned to the server rather than to this file.
 //
@@ -40,7 +40,7 @@
 // The fixture was modelling a route the service did not have. That route now exists
 // (`POST /v1/messages/record`), this fixture serves it, and `POST /v1/messages` here
 // answers the same 409 the service does — so the divergence was closed by building the
-// missing surface, not by relaxing the fixture. `src/server/self-hosted/store-conformance.integration.test.ts`
+// missing surface, not by relaxing the fixture. `src/server/api/store-conformance.integration.test.ts`
 // runs the same suite against the REAL service over HTTP, which is the check that keeps
 // this list honest from now on.
 //
@@ -72,12 +72,12 @@
 //    stops guarding repeat revokes FAILS here instead of being handed idempotence it
 //    does not have.
 
-import { emailsSelfHostedOpenApi } from "../server/self-hosted/openapi.js";
-import { SELF_HOSTED_RESOURCES } from "../server/self-hosted/resources.js";
+import { emailsApiOpenApi } from "../server/api/openapi.js";
+import { API_RESOURCES } from "../server/api/resources.js";
 // The service's OWN list, imported rather than copied: a second literal here could drift
 // out of step with the route it claims to model, and this fixture's whole value is that
 // its contract is the server's.
-import { SEND_LEDGER_FIELDS } from "../server/self-hosted/service.js";
+import { SEND_LEDGER_FIELDS } from "../server/api/service.js";
 import type { EmailStore } from "../store/email-store.js";
 import type { Outcome } from "../store/outcome.js";
 import type {
@@ -110,7 +110,7 @@ export interface V1StoreApiOptions {
   apiKey?: string;
 }
 
-const DEFAULT_API_KEY = "hasna_emails_store_api_fixture_key";
+const fixtureStoreApiKey = "fixture.store.api-key";
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -153,7 +153,7 @@ function notFound(name: string): Response {
  * The message projection the service publishes: `idempotency_key` and
  * `send_payload_hash` removed, and NOTHING ELSE.
  *
- * Field-for-field `publicMessage` in src/server/self-hosted/service.ts, which destructures
+ * Field-for-field `publicMessage` in src/server/api/service.ts, which destructures
  * exactly those two keys away and returns the rest untouched.
  *
  * An earlier version of this function ALSO re-projected each attachment — stripping
@@ -242,7 +242,7 @@ function rawMime(record: MessageRecord): string {
 
 /** The writable columns of one generic resource, from the service's own registry. */
 function resourceColumns(path: string): Set<string> | null {
-  const spec = SELF_HOSTED_RESOURCES.find((resource) => resource.path === path);
+  const spec = API_RESOURCES.find((resource) => resource.path === path);
   if (!spec) return null;
   return new Set(spec.columns.map((column) => column.name));
 }
@@ -391,7 +391,7 @@ async function handleGenericResource(context: RouteContext, path: string, id: st
 
   if (method === "GET" && id === null) {
     const filters: Record<string, string> = {};
-    const spec = SELF_HOSTED_RESOURCES.find((resource) => resource.path === path);
+    const spec = API_RESOURCES.find((resource) => resource.path === path);
     for (const filter of spec?.filters ?? []) {
       const value = url.searchParams.get(filter);
       if (value !== null) filters[filter] = value;
@@ -873,7 +873,7 @@ async function route(context: RouteContext): Promise<Response> {
   if (path === "/v1/openapi.json") {
     // The REAL document, so a client validating against the published contract is
     // validating against the service's own generated schema.
-    return json(200, emailsSelfHostedOpenApi);
+    return json(200, emailsApiOpenApi);
   }
 
   if (path === "/v1/messages") return handleMessageCollection(context);
@@ -1006,7 +1006,7 @@ async function route(context: RouteContext): Promise<Response> {
  * of storing things.
  */
 export function startV1StoreApi(options: V1StoreApiOptions): V1StoreApi {
-  const apiKey = options.apiKey ?? DEFAULT_API_KEY;
+  const apiKey = options.apiKey ?? fixtureStoreApiKey;
   let served = 0;
   // Per-fixture, not per-request: the client-written revocation instant has to survive
   // across calls to be readable back, exactly as the service's column does.

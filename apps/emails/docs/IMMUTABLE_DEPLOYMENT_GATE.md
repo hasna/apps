@@ -107,12 +107,12 @@ integrity, then installs both candidate and rollback packages into fresh private
 prefixes. It pulls both immutable images and checks their registry digest and
 OCI revision/version labels.
 
-The clean-installed candidate CLI must then pass self-hosted status, list,
+The clean-installed candidate CLI must then pass api status, list,
 search, exact read and body hash, offset pagination, cursor-based attachment
 inventory, authenticated attachment download and byte hash, unauthenticated
 denial, cross-tenant HTTP and CLI denial, and the configured per-probe latency
 budget. The process receives an empty HOME plus a poison `EMAILS_DB_PATH`; status
-must say `self_hosted`, expose no local data directory, and leave the poison
+must say `api`, expose no local data directory, and leave the poison
 directory untouched. This makes a silent ambient SQLite fallback a hard failure.
 
 For database compatibility, the gate takes a private custom-format backup,

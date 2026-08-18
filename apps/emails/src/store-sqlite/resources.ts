@@ -6,7 +6,7 @@
 // read out of SQLite with `PRAGMA table_info`, which IS the source of truth for
 // what a table holds. Copying the server's spec would have created a second
 // source of truth for a different physical schema — the server's `groups` live in
-// `contact_groups` and its providers in `self_hosted_providers` — and a hand
+// `contact_groups` and its providers in `server_providers` — and a hand
 // written list here would go stale silently the first time a migration adds a
 // column.
 //
@@ -124,7 +124,7 @@ const SERVER_OWNED_COLUMNS = Object.freeze(["id", "created_at", "updated_at"]);
 /**
  * The published contract's own exceptions: stamped-when-absent columns it declares
  * CALLER-WRITABLE, which this arm must keep accepting for the same parity reason it
- * refuses the rest. Three exist (src/server/self-hosted/resources.ts): a sandbox
+ * refuses the rest. Three exist (src/server/api/resources.ts): a sandbox
  * capture and a sequence step both carry a caller-supplied `created_at`, because it
  * is an ordering fact of the thing captured rather than of the row's insertion; and
  * the append-only address-ownership audit trail declares BOTH `id` and `created_at`

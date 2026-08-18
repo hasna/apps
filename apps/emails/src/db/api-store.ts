@@ -1,0 +1,596 @@
+// Api HTTP storage bridge. It is selected by the client storage
+// contract alone — an API origin (HASNA_EMAILS_API_URL) plus a credential. The
+// selector variable that used to select it is gone and never read.
+//
+//   list   -> GET    /v1/<resource>            -> { <resource>: [...] }
+//   get    -> GET    /v1/<resource>/<id>       -> { <singular>: <entity> } | 404
+//   create -> POST   /v1/<resource>            -> { <singular>: <entity> }
+//   update -> PATCH  /v1/<resource>/<id>       -> { <singular>: <entity> }
+//   delete -> DELETE /v1/<resource>/<id>       -> void (200/204/404 => ok)
+//
+// The repository functions are synchronous (CLI, MCP and serve all call them
+// without an await), so this bridge performs the HTTP call synchronously via a
+// spawned `curl`. Bun has no synchronous `fetch`.
+//
+// SAFETY: the credential and request body are NEVER placed on process argv or in
+// local temp files. They are passed to `curl -K -` over stdin, and the credential value
+// is never logged or embedded in an error.
+
+import { spawnSync } from "node:child_process";
+import {
+  CLIENT_ENV_CREDENTIAL_SELECTION_KEYS,
+  EMAILS_API_URL_ENV,
+  EMAILS_IDP_TOKEN_ENV,
+  HASNA_EMAILS_API_KEY_ENV,
+  EMAILS_SESSION_TOKEN_ENV,
+  loadEmailsClientEnvSecret,
+  resolveEmailsClientCredentialCandidates,
+  type EmailsClientCredentialCandidate,
+  type EmailsClientCredentialSetting,
+} from "../lib/client-env.js";
+import {
+  parseApiErrorJson,
+  parseApiSuccessJson,
+  projectApiErrorBody,
+  ApiResponseSizeError,
+  validateApiSdkSuccessResponse,
+} from "../lib/api-wire.js";
+
+const APP = "emails";
+
+export class ApiHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly method: string,
+    readonly path: string,
+  ) {
+    super(`Api ${method} ${path} failed: HTTP ${status}`);
+    this.name = "ApiHttpError";
+  }
+}
+
+export interface ApiConfig {
+  baseUrl: string; // `<origin>/v1`
+  /**
+   * Bearer credential threaded into BOTH transports. A user session token
+   * (emss_…) when present, otherwise the next configured credential. The client never
+   * sends a tenant — the server derives it from this credential.
+   */
+  credential: string;
+  /** Which setting supplied `credential`; safe to report. */
+  credentialSetting?: EmailsClientCredentialSetting;
+  /** Later credentials in the same source-of-truth order; values are secrets. */
+  credentialFallbacks?: readonly EmailsClientCredentialCandidate[];
+}
+
+function toV1BaseUrl(apiUrl: string): string {
+  const url = new URL(apiUrl);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("API URL must use http or https.");
+  }
+  const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "::1";
+  if (url.protocol !== "https:" && !loopback) {
+    throw new Error(`${EMAILS_API_URL_ENV} must use https except for a loopback development URL.`);
+  }
+  let path = url.pathname.replace(/\/+$/, "");
+  if (path.endsWith("/v1")) path = path.slice(0, -"/v1".length);
+  url.pathname = `${path}/v1`;
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/+$/, "");
+}
+
+let _cachedSignature: string | null = null;
+let _cachedConfig: ApiConfig | null = null;
+
+const CONFIG_HELP =
+  "Configure the client via EMAILS_CLIENT_ENV_SECRET (an encrypted client env file), " +
+  `or set ${EMAILS_API_URL_ENV} with ${CLIENT_ENV_CREDENTIAL_SELECTION_KEYS.join(" or ")}.`;
+
+/**
+ * Resolve strict api client configuration. The client storage contract
+ * selects the API client — this function is only called once that selection has
+ * been made, and it validates that the configured API origin and credential are
+ * complete. A configured client-env vault pointer is loaded first (idempotent
+ * per process) so the URL and credential it delivers are visible here.
+ */
+export function resolveApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
+  loadEmailsClientEnvSecret(env);
+  const apiUrl = env[EMAILS_API_URL_ENV]?.trim();
+  const candidates = resolveEmailsClientCredentialCandidates(env);
+  // Credential precedence: an explicit user session first, then the caller's
+  // own idp identity token (ADR-0002 — an agent uses ITS identity even when
+  // an operator API key is also present in the env), then the operator key.
+  // The server maps whichever credential to its tenant; the client never sends one.
+  const signature = `${apiUrl ?? ""}|${credentialSettingsSignature(candidates)}`;
+  if (signature === _cachedSignature && _cachedConfig) return _cachedConfig;
+
+  const config = computeConfig(apiUrl, candidates);
+  _cachedSignature = signature;
+  _cachedConfig = config;
+  return config;
+}
+
+function credentialSettingsSignature(candidates: readonly EmailsClientCredentialCandidate[]): string {
+  const markers: Record<EmailsClientCredentialSetting, string> = {
+    [EMAILS_SESSION_TOKEN_ENV]: "s",
+    [EMAILS_IDP_TOKEN_ENV]: "f",
+    [HASNA_EMAILS_API_KEY_ENV]: "k",
+  };
+  return candidates.map((candidate) => markers[candidate.setting]).join("");
+}
+
+function computeConfig(
+  apiUrl: string | undefined,
+  candidates: readonly EmailsClientCredentialCandidate[],
+): ApiConfig {
+  if (!apiUrl || candidates.length === 0) {
+    const missing = [
+      !apiUrl ? EMAILS_API_URL_ENV : null,
+      candidates.length === 0 ? CLIENT_ENV_CREDENTIAL_SELECTION_KEYS.join(", or ") : null,
+    ].filter(Boolean).join(" and ");
+    throw new Error(
+      `${APP}: the api client is not configured (${missing} missing). ${CONFIG_HELP}`,
+    );
+  }
+  const [primary, ...fallbacks] = candidates;
+  return {
+    baseUrl: toV1BaseUrl(apiUrl),
+    credential: primary!.value,
+    credentialSetting: primary!.setting,
+    credentialFallbacks: fallbacks,
+  };
+}
+
+/**
+ * Resolve the `<origin>/v1` base URL WITHOUT requiring a credential. Used only
+ * by the unauthenticated auth endpoints (signup/login), where the caller may not
+ * hold a credential yet. A vault load failure caused solely by a missing
+ * credential is tolerated as long as the URL is present.
+ */
+function resolveApiBaseUrlLenient(env: NodeJS.ProcessEnv = process.env): string {
+  let loadError: unknown;
+  try {
+    loadEmailsClientEnvSecret(env);
+  } catch (error) {
+    loadError = error;
+  }
+  const apiUrl = env[EMAILS_API_URL_ENV]?.trim();
+  if (!apiUrl) {
+    if (loadError) throw loadError;
+    throw new Error(
+      `${APP}: the api client is not configured (${EMAILS_API_URL_ENV} missing). ${CONFIG_HELP}`,
+    );
+  }
+  return toV1BaseUrl(apiUrl);
+}
+
+/** Reset the memoized config (tests flip env between cases). */
+export function resetApiConfigCache(): void {
+  _cachedSignature = null;
+  _cachedConfig = null;
+}
+
+interface CurlResult {
+  status: number;
+  body: string;
+}
+
+// Bounded timeouts so a slow/unreachable operator endpoint fails fast.
+function positiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw.trim(), 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+// Resolved per-call so an env override always applies (and tests can shorten it).
+function connectTimeoutSeconds(): number { return positiveIntEnv("EMAILS_API_HTTP_CONNECT_TIMEOUT", 10); }
+function maxTimeSeconds(): number { return positiveIntEnv("EMAILS_API_HTTP_TIMEOUT", 30); }
+function maxResponseBytes(): number {
+  return positiveIntEnv("EMAILS_API_HTTP_MAX_RESPONSE_BYTES", 8 * 1024 * 1024);
+}
+
+/**
+ * Thrown when the curl transport itself fails (DNS/connect failure or a timeout)
+ * — i.e. NO HTTP status was received. Distinct from ApiHttpError (a real HTTP
+ * status the server returned). Never carries the API key.
+ */
+export class ApiTransportError extends Error {
+  constructor(readonly method: string, readonly path: string, detail: string) {
+    super(`Cannot reach the Emails api service for ${method} ${path}: ${detail}`);
+    this.name = "ApiTransportError";
+  }
+}
+
+function curlConfigValue(value: string): string {
+  return JSON.stringify(value);
+}
+
+const CURL_ENV_ALLOWLIST = [
+  "PATH",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
+  "CURL_CA_BUNDLE",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+] as const;
+
+function curlProcessEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of CURL_ENV_ALLOWLIST) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
+function credentialsForConfig(config: ApiConfig): readonly EmailsClientCredentialCandidate[] {
+  return [
+    {
+      setting: config.credentialSetting ?? HASNA_EMAILS_API_KEY_ENV,
+      value: config.credential,
+    },
+    ...(config.credentialFallbacks ?? []),
+  ];
+}
+
+function errorReason(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    if (parsed && typeof parsed === "object") {
+      const fields = parsed as { reason?: unknown; code?: unknown };
+      if (typeof fields.reason === "string") return fields.reason;
+      if (typeof fields.code === "string") return fields.code;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function shouldTryNextCredential(candidate: EmailsClientCredentialCandidate, result: CurlResult): boolean {
+  return candidate.setting === EMAILS_SESSION_TOKEN_ENV
+    && result.status === 401
+    && errorReason(result.body) === "reauthenticate";
+}
+
+function httpRequest(config: ApiConfig, method: string, path: string, body?: unknown): CurlResult {
+  const candidates = credentialsForConfig(config);
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index]!;
+    const result = httpRequestOnce({ ...config, credential: candidate.value }, method, path, body);
+    if (index < candidates.length - 1 && shouldTryNextCredential(candidate, result)) continue;
+    return result;
+  }
+  return httpRequestOnce(config, method, path, body);
+}
+
+function httpRequestOnce(config: ApiConfig, method: string, path: string, body?: unknown): CurlResult {
+  const url = `${config.baseUrl}${path}`;
+  const connectTimeout = connectTimeoutSeconds();
+  const maxTime = maxTimeSeconds();
+  const responseLimit = maxResponseBytes();
+  const lines = [
+    `url = ${curlConfigValue(url)}`,
+    `request = ${curlConfigValue(method)}`,
+    `header = ${curlConfigValue("Accept: application/json")}`,
+    // Bounded, fail-loud transport (never hang indefinitely).
+    `connect-timeout = ${connectTimeout}`,
+    `max-time = ${maxTime}`,
+    `max-filesize = ${responseLimit}`,
+    `silent`,
+    `show-error`,
+  ];
+  // Omit the Authorization header entirely when no credential is available (the
+  // unauthenticated /v1/auth/signup|login path); never send an empty Bearer.
+  if (config.credential) {
+    lines.push(`header = ${curlConfigValue(`Authorization: Bearer ${config.credential}`)}`);
+  }
+  if (body !== undefined) {
+    lines.push(`header = ${curlConfigValue("Content-Type: application/json")}`);
+    lines.push(`data-binary = ${curlConfigValue(JSON.stringify(body))}`);
+  }
+
+  const proc = spawnSync("curl", ["-q", "-K", "-", "-w", "\n%{http_code}"], {
+    encoding: "utf-8",
+    env: curlProcessEnv(),
+    input: lines.join("\n"),
+    maxBuffer: responseLimit + 64 * 1024,
+    // Hard ceiling in case curl itself wedges: kill just past its own max-time.
+    timeout: (maxTime + connectTimeout + 5) * 1000,
+  });
+  if (proc.error) {
+    if ((proc.error as NodeJS.ErrnoException).code === "ENOBUFS") {
+      throw new ApiResponseSizeError(method, path, responseLimit);
+    }
+    // spawnSync's own timeout (ETIMEDOUT) or a spawn failure — surface as a
+    // transport error, not a mysterious throw.
+    throw new ApiTransportError(method, path, (proc.error as Error).message || "curl could not run");
+  }
+  if (proc.status === 63) {
+    throw new ApiResponseSizeError(method, path, responseLimit);
+  }
+  const out = proc.stdout ?? "";
+  const nl = out.lastIndexOf("\n");
+  const statusStr = nl >= 0 ? out.slice(nl + 1).trim() : out.trim();
+  const bodyText = nl >= 0 ? out.slice(0, nl) : "";
+  const status = Number.parseInt(statusStr, 10);
+  // http_code 000 (or unparseable) means curl never got an HTTP response:
+  // connect failure or the connect/max-time budget elapsed. Fail LOUD so a
+  // read never silently degrades to an empty list with a success exit code.
+  if (!Number.isFinite(status) || status === 0) {
+    const stderr = (proc.stderr || "").trim();
+    const detail = proc.status === 28
+      ? `timed out after ${maxTime}s`
+      : (stderr || `curl exited ${proc.status ?? "unknown"}`);
+    throw new ApiTransportError(method, path, detail);
+  }
+  return { status, body: bodyText };
+}
+
+function extractValidatedList(raw: unknown, resource: string): Record<string, unknown>[] {
+  const obj = raw as Record<string, unknown>;
+  const rows = obj[resource] ?? obj["items"];
+  return rows as Record<string, unknown>[];
+}
+
+/**
+ * Unwrap a single-entity response. The emails API wraps entities as
+ * `{ <singular>: entity }` (e.g. `{ domain: {...} }`); other apps return the
+ * entity directly. Handles both.
+ */
+function unwrapSingle(raw: unknown, singular: string): Record<string, unknown> | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  const wrapped = obj[singular];
+  if (wrapped && typeof wrapped === "object") return wrapped as Record<string, unknown>;
+  // Fall back: single-key envelope wrapping an object with an id.
+  const keys = Object.keys(obj);
+  if (keys.length === 1) {
+    const val = obj[keys[0]!];
+    if (val && typeof val === "object" && !Array.isArray(val) && "id" in (val as object)) {
+      return val as Record<string, unknown>;
+    }
+  }
+  return obj;
+}
+
+function singularOf(resource: string): string {
+  const r = resource.replace(/^\/+|\/+$/g, "");
+  return r.endsWith("es") && (r.endsWith("sses") || r.endsWith("ches") || r.endsWith("xes"))
+    ? r.slice(0, -2)
+    : r.endsWith("s")
+      ? r.slice(0, -1)
+      : r;
+}
+
+function validateNotFoundResponse(method: "GET" | "DELETE", path: string, body: string): void {
+  projectApiErrorBody(
+    method,
+    path,
+    404,
+    parseApiErrorJson(body, { status: 404, method, path }),
+  );
+}
+
+export interface ApiResourceStore {
+  readonly resource: string;
+  readonly baseUrl: string;
+  list(query?: Record<string, string | number | boolean | undefined>): Record<string, unknown>[];
+  get(id: string): Record<string, unknown> | null;
+  create(body: unknown): Record<string, unknown>;
+  update(id: string, patch: unknown, method?: "PATCH" | "PUT"): Record<string, unknown>;
+  /** Delete by id. Returns true if the entity existed (2xx), false on 404. */
+  del(id: string): boolean;
+}
+
+function encodeQuery(query?: Record<string, string | number | boolean | undefined>): string {
+  if (!query) return "";
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(query)) {
+    if (v === undefined) continue;
+    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+  }
+  return parts.length ? `?${parts.join("&")}` : "";
+}
+
+/**
+ * Return a store for the api client path. Missing or invalid client
+ * configuration throws before any request is attempted.
+ */
+export function apiStoreFor(resource: string): ApiResourceStore {
+  const config = resolveApiConfig();
+  const clean = resource.replace(/^\/+|\/+$/g, "");
+  const base = `/${clean}`;
+  const singular = singularOf(clean);
+
+  return {
+    resource: clean,
+    baseUrl: config.baseUrl,
+    list(query) {
+      const path = `${base}${encodeQuery(query)}`;
+      const { status, body } = httpRequest(config, "GET", path);
+      if (status < 200 || status >= 300) throw new ApiHttpError(status, "GET", base);
+      const raw = parseApiSuccessJson(body, { status, method: "GET", path });
+      validateApiSdkSuccessResponse("GET", path, status, raw);
+      return extractValidatedList(raw, clean);
+    },
+    get(id) {
+      const path = `${base}/${encodeURIComponent(id)}`;
+      const { status, body } = httpRequest(config, "GET", path);
+      if (status === 404) {
+        validateNotFoundResponse("GET", path, body);
+        return null;
+      }
+      if (status < 200 || status >= 300) throw new ApiHttpError(status, "GET", path);
+      const raw = parseApiSuccessJson(body, { status, method: "GET", path });
+      validateApiSdkSuccessResponse("GET", path, status, raw);
+      return unwrapSingle(raw, singular)!;
+    },
+    create(body) {
+      const res = httpRequest(config, "POST", base, body);
+      if (res.status < 200 || res.status >= 300) throw new ApiHttpError(res.status, "POST", base);
+      const raw = parseApiSuccessJson(res.body, { status: res.status, method: "POST", path: base });
+      validateApiSdkSuccessResponse("POST", base, res.status, raw);
+      return (unwrapSingle(raw, singular) ?? raw) as Record<string, unknown>;
+    },
+    update(id, patch, method = "PATCH") {
+      const path = `${base}/${encodeURIComponent(id)}`;
+      const res = httpRequest(config, method, path, patch);
+      if (res.status < 200 || res.status >= 300) {
+        throw new ApiHttpError(res.status, method, path);
+      }
+      const raw = parseApiSuccessJson(res.body, { status: res.status, method, path });
+      validateApiSdkSuccessResponse(method, path, res.status, raw);
+      return unwrapSingle(raw, singular)!;
+    },
+    del(id) {
+      const path = `${base}/${encodeURIComponent(id)}`;
+      const { status, body } = httpRequest(config, "DELETE", path);
+      if (status === 404) {
+        validateNotFoundResponse("DELETE", path, body);
+        return false;
+      }
+      if (status < 200 || status >= 300) throw new ApiHttpError(status, "DELETE", path);
+      const raw = parseApiSuccessJson(body, { status, method: "DELETE", path });
+      validateApiSdkSuccessResponse("DELETE", path, status, raw);
+      return true;
+    },
+  };
+}
+
+// ---- bespoke /v1 endpoints (auth, keys, me) -------------------------------
+//
+// Auth/session/key-management endpoints are NOT generic CRUD resources: they
+// return status-dependent shapes (401/403, needs_tenant, unverified, a token
+// shown once) that the CLI must branch on. This helper performs a single
+// authenticated (or, for signup/login, unauthenticated) call and returns the
+// raw status + parsed JSON. The Bearer credential is threaded from
+// resolveApiConfig and never logged.
+
+export interface ApiResult {
+  status: number;
+  json: unknown;
+}
+
+export interface ApiRequestOptions {
+  /**
+   * When false, resolve only the base URL and send no Authorization header —
+   * for the unauthenticated auth endpoints (signup/login). Defaults to true.
+   */
+  requireCredential?: boolean;
+}
+
+export function apiRequest(
+  method: string,
+  path: string,
+  body?: unknown,
+  options: ApiRequestOptions = {},
+): ApiResult {
+  const requireCredential = options.requireCredential !== false;
+  let config: ApiConfig;
+  if (requireCredential) {
+    config = resolveApiConfig();
+  } else {
+    // Base URL discovery may load a client-env vault entry, but public auth
+    // requests must remain credentialless even when that load populates an
+    // operator key or a prior user session in process.env.
+    const baseUrl = resolveApiBaseUrlLenient();
+    config = { baseUrl, credential: "" };
+  }
+  const { status, body: text } = httpRequest(config, method, path, body);
+  const contractPath = `/v1${path}`;
+  const json = status >= 200 && status < 300
+    ? parseApiSuccessJson(text, { status, method, path: contractPath })
+    : projectApiErrorBody(
+      method,
+      contractPath,
+      status,
+      parseApiErrorJson(text, { status, method, path: contractPath }),
+    );
+  if (status >= 200 && status < 300) {
+    validateApiSdkSuccessResponse(method, contractPath, status, json);
+  }
+  return { status, json };
+}
+
+/**
+ * Probe an ORIGIN-level operational route (`/health`, `/ready`, `/version`).
+ *
+ * These live at the service root, NOT under `/v1`, so they cannot be reached via
+ * apiRequest (whose base URL already ends in `/v1`). Read-only and
+ * bounded by the same curl timeouts as every other call. The credential
+ * fallback loop applies unchanged: an expired session token that the server
+ * answers `reauthenticate` to must not shadow a valid API key here either.
+ */
+export function apiProbe(path: string): ApiResult {
+  const config = resolveApiConfig();
+  const origin = config.baseUrl.replace(/\/v1$/, "");
+  const { status, body } = httpRequest({ ...config, baseUrl: origin }, "GET", path);
+  const json = status >= 200 && status < 300
+    ? parseApiSuccessJson(body, { status, method: "GET", path })
+    : projectApiErrorBody(
+      "GET",
+      path,
+      status,
+      parseApiErrorJson(body, { status, method: "GET", path }),
+    );
+  if (status >= 200 && status < 300) {
+    validateApiSdkSuccessResponse("GET", path, status, json);
+  }
+  return { status, json };
+}
+
+// ---- id resolution (api) ------------------------------------------
+//
+// Replaces the deleted local resolvePartialId family. A full 36-char id is
+// verified with a single GET; a shorter prefix is matched against a bounded
+// recent scan of the resource. All resolution routes to the /v1 API — never a
+// local island.
+
+const RESOLVE_SCAN_CAP = 1000;
+
+export function resolveResourceId(resource: string, partialId: string): string | null {
+  const value = partialId.trim();
+  if (!value) return null;
+  const store = apiStoreFor(resource);
+  if (value.length >= 36) {
+    return store.get(value) ? value : null;
+  }
+  const matches = store
+    .list({ limit: RESOLVE_SCAN_CAP })
+    .map((row) => String((row as { id?: unknown }).id ?? ""))
+    .filter((id) => id.startsWith(value));
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+export function listResourceIdMatches(resource: string, partialId: string, limit = 6): string[] {
+  const value = partialId.trim();
+  const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 6;
+  const store = apiStoreFor(resource);
+  return store
+    .list({ limit: RESOLVE_SCAN_CAP })
+    .map((row) => String((row as { id?: unknown }).id ?? ""))
+    .filter((id) => id.startsWith(value))
+    .slice(0, safeLimit);
+}
+
+export function resolveResourceIdOrThrow(resource: string, partialId: string): string {
+  const value = partialId.trim();
+  if (!value) throw new Error(`Missing ID for resource '${resource}'.`);
+  const id = resolveResourceId(resource, value);
+  if (id) return id;
+  const matches = listResourceIdMatches(resource, value, 6);
+  if (matches.length === 0) {
+    throw new Error(`Could not resolve ID '${value}' in resource '${resource}'.`);
+  }
+  const preview = matches.slice(0, 5).join(", ");
+  const count = matches.length >= 6 ? "at least 6" : String(matches.length);
+  throw new Error(`Ambiguous ID '${value}' in resource '${resource}' (${count} matches): ${preview}`);
+}

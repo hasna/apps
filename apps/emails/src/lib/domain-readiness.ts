@@ -15,7 +15,7 @@ export interface DomainReadiness {
   inbound_evidence_ready: boolean;
   ready_addresses: number;
   inbound_evidence: {
-    mode?: "local" | "self_hosted";
+    backend?: "sqlite" | "api";
     source_of_truth?: DomainSourceOfTruth;
     inbound_status?: DomainRouteStatus;
     live_s3_sources: number;
@@ -27,7 +27,8 @@ export interface DomainReadiness {
 
 export interface DomainReadinessSignals {
   ready_addresses?: number;
-  mode?: "local" | "self_hosted";
+  /** Which client backend produced these signals: the local SQLite file or the `/v1` API. */
+  backend?: "sqlite" | "api";
   source_of_truth?: DomainSourceOfTruth;
   inbound_status?: DomainRouteStatus;
   live_s3_sources?: number;
@@ -52,19 +53,19 @@ export function assessDomainReadiness(
   const readyAddresses = signals.ready_addresses ?? 0;
   const inboundStatus = signals.inbound_status ?? domain.inbound_status;
   const sourceOfTruth = signals.source_of_truth ?? domain.source_of_truth;
-  const mode = signals.mode;
+  const backend = signals.backend;
   const liveS3Sources = signals.live_s3_sources ?? 0;
   const inboundBuckets = signals.inbound_buckets ?? 0;
-  const selfHostedSource = sourceOfTruth === "postgres" || (mode === "self_hosted" && sourceOfTruth !== "local");
-  const inboundEvidenceReady = selfHostedSource ? liveS3Sources > 0 : true;
+  const apiSource = sourceOfTruth === "postgres" || (backend === "api" && sourceOfTruth !== "local");
+  const inboundEvidenceReady = apiSource ? liveS3Sources > 0 : true;
   const inboundLifecycleReady = inboundStatus === "ready";
   const provisioningReceiveReady = provisioning?.provisioning_status === "ready" || provisioning?.provisioning_status === "inbound_ready";
 
   if (!ok(domain.dkim_status)) issues.push(`DKIM ${domain.dkim_status}`);
   if (!ok(domain.spf_status)) issues.push(`SPF ${domain.spf_status}`);
   if (!ok(domain.dmarc_status)) issues.push(`DMARC ${domain.dmarc_status}`);
-  if (selfHostedSource && !inboundLifecycleReady) issues.push(`Inbound ${inboundStatus ?? "pending"}`);
-  if (selfHostedSource && !inboundEvidenceReady) issues.push("No live SES/S3 inbound source");
+  if (apiSource && !inboundLifecycleReady) issues.push(`Inbound ${inboundStatus ?? "pending"}`);
+  if (apiSource && !inboundEvidenceReady) issues.push("No live SES/S3 inbound source");
   if (bad(domain.dkim_status) || bad(domain.spf_status) || provisioning?.last_error) {
     if (provisioning?.last_error) issues.push(provisioning.last_error);
     fix_commands.push(`emails domain check ${domain.domain}`);
@@ -72,11 +73,11 @@ export function assessDomainReadiness(
     return {
       state: "broken",
       send_ready: false,
-      receive_ready: selfHostedSource ? inboundLifecycleReady && inboundEvidenceReady : readyAddresses > 0,
+      receive_ready: apiSource ? inboundLifecycleReady && inboundEvidenceReady : readyAddresses > 0,
       inbound_evidence_ready: inboundEvidenceReady,
       ready_addresses: readyAddresses,
       inbound_evidence: {
-        mode,
+        backend,
         source_of_truth: sourceOfTruth,
         inbound_status: inboundStatus,
         live_s3_sources: liveS3Sources,
@@ -88,7 +89,7 @@ export function assessDomainReadiness(
   }
 
   const sendReady = ok(domain.dkim_status) && ok(domain.spf_status);
-  const receiveReady = selfHostedSource
+  const receiveReady = apiSource
     ? inboundLifecycleReady && inboundEvidenceReady
     : inboundLifecycleReady || readyAddresses > 0 || provisioningReceiveReady;
 
@@ -97,7 +98,7 @@ export function assessDomainReadiness(
     fix_commands.push(`emails domain verify ${domain.domain}`);
   }
   if (!receiveReady) {
-    if (selfHostedSource && !inboundEvidenceReady) {
+    if (apiSource && !inboundEvidenceReady) {
       fix_commands.push(`emails domain adopt ${domain.domain} --provider <provider>`);
       fix_commands.push(`emails inbox sync-s3 --source <source-id>`);
     } else {
@@ -119,7 +120,7 @@ export function assessDomainReadiness(
     inbound_evidence_ready: inboundEvidenceReady,
     ready_addresses: readyAddresses,
     inbound_evidence: {
-      mode,
+      backend,
       source_of_truth: sourceOfTruth,
       inbound_status: inboundStatus,
       live_s3_sources: liveS3Sources,

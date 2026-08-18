@@ -18,7 +18,7 @@
 //     schedule past the clamp — which made `domain warm` CREATE A SECOND SCHEDULE for
 //     an already-warming domain (its duplicate guard is this read), made warm-status/
 //     pause/resume/complete/delete answer "not found" for a schedule that exists, and
-//     made the SEND GATE (assertWarmingLimit in src/lib/send.local.ts) skip the daily
+//     made the SEND GATE (assertWarmingLimit in src/lib/send.sqlite.ts) skip the daily
 //     cap entirely — a full-volume send from a mid-ramp domain, presented as
 //     compliant. `listWarmingSchedules` returned the clamp as the whole table, with
 //     the status filter applied AFTER the truncation. Every read below enumerates the
@@ -27,7 +27,7 @@
 //  2. THE TWO STORES ORDER THE TABLE DIFFERENTLY, AND `ListOptions` ADMITS NO
 //     ORDERING. The SQLite store's generic list orders by `updated_at DESC, id DESC`
 //     (its derived time order), the service by `created_at DESC, id ASC`
-//     (src/server/self-hosted/resources.ts). Both DELETED arms promised newest-first
+//     (src/server/api/resources.ts). Both DELETED arms promised newest-first
 //     by `created_at` — one via SQL with no tiebreaker, one by sorting with
 //     `localeCompare`, so the order it presented moved with the machine's locale. And
 //     the generic orders diverge OBSERVABLY: a pause or resume touches `updated_at`,
@@ -106,7 +106,7 @@ import { safeOffset, safeOptionalLimit } from "./pagination.js";
 // column into the other's TEXT-encoded one; the module they live in is named for the
 // axis being deleted, and relocating them belongs to that deletion rather than to
 // this collapse.
-import { cnum, cstr, cstrOrNull } from "./self-hosted-resource.js";
+import { cnum, cstr, cstrOrNull } from "./api-resource.js";
 import { enumerateStoreRows, type StoreEnumeration } from "../lib/status-facts-enumeration.js";
 import type { WarmingSchedule } from "../lib/warming.js";
 import { createConfiguredEmailStore } from "../store-resolution.js";

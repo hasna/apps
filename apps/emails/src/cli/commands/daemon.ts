@@ -1,8 +1,8 @@
 import type { Command } from "commander";
-import { getEmailsMode } from "../../lib/mode.js";
-import { registerDaemonCommands as registerLocal } from "./daemon.local.js";
-import { registerDaemonCommands as registerRemote } from "./daemon.remote.js";
+import { isApiClientConfigured } from "../../store-resolution.js";
+import { registerDaemonCommands as registerSqlite } from "./daemon.sqlite.js";
+import { registerDaemonCommands as registerApi } from "./daemon.api.js";
 
 export function registerDaemonCommands(program: Command, output: (data: unknown, formatted: string) => void): void {
-  return (getEmailsMode() === "self_hosted" ? registerRemote : registerLocal)(program, output);
+  return (isApiClientConfigured() ? registerApi : registerSqlite)(program, output);
 }

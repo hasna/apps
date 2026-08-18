@@ -21,13 +21,13 @@ Canonical package: `@hasna/emails`. Projects project: `emails`. GitHub repositor
 
 ## 1. Current architecture (grounded)
 
-Self-hosted-ONLY. A Bun `Bun.serve` process (`src/server/self-hosted/serve.ts`) exposes:
+Server-only. A Bun `Bun.serve` process (`src/server/api/serve.ts`) exposes:
 
 - Probes `/health` `/ready` `/version` `/openapi.json` (unauthenticated).
 - `/v1/*` — authenticated CRUD. Auth is a single Hasna API key verified by
   `@hasna/contracts/auth` (`verifyApiKey`), scoped to `emails:read` / `emails:write` /
   `emails:*`. `service.ts::authenticate()` (lines 306-324) gates every route.
-- Data access via `EmailsSelfHostedStore` (`store.ts`) over a `pg.Pool`-backed
+- Data access via `EmailsApiStore` (`store.ts`) over a `pg.Pool`-backed
   `PoolQueryClient` (has `.transaction()`), reading/writing operator-owned Postgres.
 
 Two data-access shapes in the store:
@@ -35,7 +35,7 @@ Two data-access shapes in the store:
    state machine), mail-views (threads/mailboxes/raw), and scoped **send keys**
    (`mintSendKey`/`verifySendKey`/`isOwnerAuthorizedFrom`).
 2. **Generic resource layer** — `listResource/getResource/createResource/
-   updateResource/deleteResource` driven by the trusted `SELF_HOSTED_RESOURCES`
+   updateResource/deleteResource` driven by the trusted `API_RESOURCES`
    registry (`resources.ts`, **24 resources**: contacts, providers, templates, groups,
    sequences, owners, send-keys, scheduled, aliases, forwarding, warming, triage,
    provisioning, sources, events, email-agents, email-agent-runs, email-digests,
@@ -61,13 +61,13 @@ a table we own.
 
 Client (`CLI/MCP/TUI`) talks only to `/v1` through **two** HTTP chokepoints, both
 sending `Authorization: Bearer <cred>`, both fed by one config resolver:
-- Sync resources: `httpRequest()` — `src/db/self-hosted-store.ts:179` (curl/spawnSync).
-- Async mail/inbox: `SelfHostedMailDataSource.request()` — `src/lib/self-hosted-mail-data-source.ts:322` (fetch).
-- Config: `resolveSelfHostedConfig()` — `src/db/self-hosted-store.ts:70` → `{baseUrl, apiKey}`.
+- Sync resources: `httpRequest()` — `src/db/api-store.ts:179` (curl/spawnSync).
+- Async mail/inbox: `ApiMailDataSource.request()` — `src/lib/api-mail-data-source.ts:322` (fetch).
+- Config: `resolveApiConfig()` — `src/db/api-store.ts:70` → `{baseUrl, apiKey}`.
 - Env (via `src/lib/client-env.ts`): vault pointer `EMAILS_CLIENT_ENV_SECRET` →
-  the deployment-mode selector, `EMAILS_SELF_HOSTED_URL`, `EMAILS_SELF_HOSTED_API_KEY`.
+  the selector selector, `HASNA_EMAILS_API_URL`, `HASNA_EMAILS_API_KEY`.
 
-The code runs on a **single DB DSN** (`EMAILS_DATABASE_URL`, `env.ts`) used by both
+The code runs on a **single DB DSN** (`HASNA_EMAILS_DATABASE_URL`, `env.ts`) used by both
 `migrate.ts` and `serve.ts`. A least-privilege app role is only *aspirational* (a comment
 at `service.ts:41`), not wired. The RLS backstop (§6 Layer 2) therefore **requires new
 infra** — a separate `NOBYPASSRLS` serving role/DSN — and until that lands, Layer 1 (the
@@ -178,7 +178,7 @@ Decisions & rationale:
   for human-readable audit, but the mapping table is the source of truth. **Fail closed**:
   a verified key with no mapping row → 403.
 - Identity tables hold secrets (`password_hash`, `token_hash`) and are **deliberately
-  absent from `SELF_HOSTED_RESOURCES`** — no generic `SELECT *` path can ever reach them,
+  absent from `API_RESOURCES`** — no generic `SELECT *` path can ever reach them,
   exactly as `send_key_secrets` is handled today.
 
 ### 3.2 `tenant_id` on every existing data table
@@ -187,7 +187,7 @@ Add to all 27 data tables: `tenant_id UUID NOT NULL REFERENCES tenants(id)` + `I
 (tenant_id)`. Tables:
 
 ```
-domains, addresses, messages, contacts, self_hosted_providers, templates,
+domains, addresses, messages, contacts, api_providers, templates,
 contact_groups, sequences, owners, send_keys, scheduled_emails, aliases,
 forwarding_rules, warming_schedules, email_triage, provisioning_events,
 mailbox_sources, events, email_agent_settings, email_agent_runs, email_digests,
@@ -349,7 +349,7 @@ All under `/v1`. Auth endpoints are unauthenticated except where noted. JSON in/
 - `POST /v1/auth/switch-tenant` — session-auth; `{tenant_slug}`; if the user is a member,
   mint a new session bound to that tenant (old session optionally revoked). Returns new token.
 - `POST /v1/auth/password/forgot` — `{email}`; always 200 (no enumeration); creates a
-  reset token and **emails it through the app's own sender** (self-hosted eating its own
+  reset token and **emails it through the app's own sender** (the server eating its own
   dog food) or logs it if no sender configured.
 - `POST /v1/auth/password/reset` — `{token, new_password}`; consumes token, rehashes,
   revokes all sessions.
@@ -373,7 +373,7 @@ All under `/v1`. Auth endpoints are unauthenticated except where noted. JSON in/
 
 ### 5.3 Tenant-scoped API keys (session-auth to manage)
 Replaces the operator-global key flow (`keys.ts`) with tenant-scoped issuance:
-- `POST /v1/keys` — session-auth (admin/owner); mint via `issueSelfHostedApiKey`, then
+- `POST /v1/keys` — session-auth (admin/owner); mint via `issueApiKey`, then
   insert `api_key_tenants(kid, tenant_id=ctx.tenant, created_by_user_id)`. Return token
   once. Key scopes still restricted to `emails:read|write|*`.
 - `GET /v1/keys` — list keys for `ctx.tenant` (join `api_keys` ⨝ `api_key_tenants`).
@@ -402,7 +402,7 @@ Role → scope mapping for downstream checks (keeps existing read/write scope ga
 Three independent layers; any one alone would isolate, together they are belt-and-braces.
 
 ### Layer 1 (primary) — a tenant-scoped store, enforced by the type system
-`EmailsSelfHostedStore.forTenant(tenantId): TenantScopedStore`. Handlers are **only ever**
+`EmailsApiStore.forTenant(tenantId): TenantScopedStore`. Handlers are **only ever**
 handed a `TenantScopedStore`; the data-CRUD methods live on that type, so a handler that
 forgets tenant context is a *compile error*, not a runtime leak. Every method injects
 `tenant_id`:
@@ -416,7 +416,7 @@ forgets tenant context is a *compile error*, not a runtime leak. Every method in
   deleteResource` add `AND tenant_id = $tenant`; `createResource` includes `tenant_id`;
   natural-key upserts (`email-agents`) use conflict target `(tenant_id, agent_key)`.
 
-The unscoped base `EmailsSelfHostedStore` retains ONLY identity/system methods (used by the
+The unscoped base `EmailsApiStore` retains ONLY identity/system methods (used by the
 auth resolver and background workers) + `forTenant()`.
 
 ### Layer 2 (backstop) — Postgres Row-Level Security — **CONDITIONAL; requires new infra**
@@ -473,9 +473,9 @@ before the tenant is known is therefore **excluded from tenant RLS**:
 
 **Role model — this is NEW infra, not existing (H1).** The first draft claimed the server
 "already assumes a two-role model." It does **not**: `migrate.ts` and `serve.ts` both use
-the single `EMAILS_DATABASE_URL` (`env.ts`); the only "role" reference is a comment
+the single `HASNA_EMAILS_DATABASE_URL` (`env.ts`); the only "role" reference is a comment
 (`service.ts:41`). If that single DSN is a superuser or has `BYPASSRLS` (common for a
-self-hosted operator's master DSN), `FORCE ROW LEVEL SECURITY` is **silently ignored** and
+api operator's master DSN), `FORCE ROW LEVEL SECURITY` is **silently ignored** and
 Layer 2 provides zero isolation. Therefore RLS is **contingent on introducing**:
 1. a migration/owner role (has `CREATE`; owns tables; runs 0012/0013), and
 2. a **separate serving DSN** (`EMAILS_APP_DATABASE_URL`) whose role is non-owner and
@@ -527,10 +527,10 @@ Minimal, because both chokepoints already send `Authorization: Bearer <cred>` an
 read one config object.
 
 - **Config**: add `EMAILS_SESSION_TOKEN` to `CLIENT_ENV_KEYS`
-  (`src/lib/client-env.ts`) and to `SelfHostedConfig`. `resolveSelfHostedConfig`
-  (`src/db/self-hosted-store.ts:70`) prefers a session token when present, else the API
-  key, and threads whichever into `SelfHostedConfig.credential`. Both chokepoints
-  (`httpRequest` `:186`, `SelfHostedMailDataSource.request` `:324`) put `credential` in the
+  (`src/lib/client-env.ts`) and to `ApiConfig`. `resolveApiConfig`
+  (`src/db/api-store.ts:70`) prefers a session token when present, else the API
+  key, and threads whichever into `ApiConfig.credential`. Both chokepoints
+  (`httpRequest` `:186`, `ApiMailDataSource.request` `:324`) put `credential` in the
   Bearer slot — no per-callsite change beyond reading the new field. Tenant is *never* sent
   by the client (no client-side tenant spoofing surface).
 - **CLI** (`src/cli/commands/auth.ts`, new): `emails auth signup`, `emails auth login`
@@ -541,7 +541,7 @@ read one config object.
   becomes tenant-scoped (must be logged in as admin/owner).
 - **MCP/TUI**: no protocol change — they use the same config/chokepoints. Surface tenant +
   identity via a `whoami`/context call so the TUI header can show the active org.
-- **Back-compat**: an operator who keeps using only `EMAILS_SELF_HOSTED_API_KEY` continues
+- **Back-compat**: an operator who keeps using only `HASNA_EMAILS_API_KEY` continues
   to work unchanged — their key maps to the default tenant (§9 backfill). Sessions are
   additive.
 
@@ -553,7 +553,7 @@ read one config object.
   any resource projection, never in `/v1/me`.
 - **Sessions/tokens/keys**: 256-bit random; store only `sha256` hash; constant-time lookup
   via unique index; bearer over TLS only; `token_hash`/`password_hash`/`key_hash` tables
-  excluded from `SELF_HOSTED_RESOURCES`.
+  excluded from `API_RESOURCES`.
 - **Tenant isolation**: three layers (§6); RLS fail-closed backstop; `FORCE ROW LEVEL
   SECURITY`; tenant derived from credential, never from client input.
 - **Enumeration & timing**: login/reset return generic messages; login always performs an
@@ -561,7 +561,7 @@ read one config object.
   password/forgot always 200. Public signup with an existing email → generic response +
   "you already have an account" email (or 409 for invite-only/internal deployments —
   configurable).
-- **Rate limiting** (`src/server/self-hosted/auth/rate-limit.ts`, new): in-process
+- **Rate limiting** (`src/server/api/auth/rate-limit.ts`, new): in-process
   sliding-window keyed by `(route, ip)` and `(route, email)` for login/signup/forgot
   (e.g. login 5/15min per ip+email; signup 3/hour per ip). Durable per-account lockout via
   `users.failed_login_count` + `users.locked_until` with escalating backoff. Optional
@@ -579,7 +579,7 @@ read one config object.
 
 ## 9. Migration sketch
 
-Two new migrations, appended in `emailsSelfHostedMigrations()` after
+Two new migrations, appended in `emailsApiMigrations()` after
 `PARITY_RESOURCE_SCHEMA_2` (0011). Ids ≤0011 are frozen.
 
 ### `0012_emails_tenancy_identity_and_backfill` (additive, safe, zero-downtime)
@@ -697,7 +697,7 @@ ingest/webhook path resolves tenant before writing (§6 cross-cutting).
    (scoped store, `resolveRequestContext`, api_key_tenants lookup, auth endpoints). Boot
    runs 0012: identity tables created, all rows + all existing keys backfilled to the
    default tenant, transitional DEFAULT in place. The operator's existing
-   `EMAILS_SELF_HOSTED_API_KEY` keeps working (its `kid` now maps to default tenant); all
+   `HASNA_EMAILS_API_KEY` keeps working (its `kid` now maps to default tenant); all
    existing data is visible under the default tenant. Sessions become available; operator
    runs `emails auth bootstrap` to create their owner user.
 2. **Verify in prod**: existing key reads/writes work; all data under default tenant; new
@@ -717,16 +717,16 @@ deployed operator.
 Sole-owner files are noted to avoid merge conflicts across build agents.
 
 **Phase 0 — foundations (blocking).**
-- **WI-0a Auth primitives.** New `src/server/self-hosted/auth/password.ts` (argon2id
+- **WI-0a Auth primitives.** New `src/server/api/auth/password.ts` (argon2id
   hash/verify/needsRehash + dummy-hash for timing) and `auth/tokens.ts` (mint/hash/
   compare opaque `emss_`/reset/invite tokens). Owner A. No deps. + unit tests.
-- **WI-0b Migration 0012.** Append to `src/server/self-hosted/migrations.ts` (identity
+- **WI-0b Migration 0012.** Append to `src/server/api/migrations.ts` (identity
   tables, tenant_id on all 27, unique swaps, PK change, backfill, api_key_tenants
   backfill, transitional default). Owner B (sole writer of migrations.ts this phase).
   Deps: none. This is the schema spine.
 
 **Phase 1 — server tenant scoping (dep: 0b).**
-- **WI-1a Scoped store.** `src/server/self-hosted/store.ts` — add `forTenant()` +
+- **WI-1a Scoped store.** `src/server/api/store.ts` — add `forTenant()` +
   `TenantScopedStore`; inject `tenant_id` into all hand-written queries + the generic
   resource layer; tenant-scope send-intent conflict targets + mail-views. Move
   data-CRUD onto the scoped type. Owner C (**sole writer of store.ts**).
@@ -740,31 +740,31 @@ Sole-owner files are noted to avoid merge conflicts across build agents.
   and generic `createResource` FKs (`group_id`/`sequence_id`/`address_id`/`provider_id`)
   must be verified to belong to `ctx.tenant` before insert — stamping `tenant_id` alone
   does not stop a cross-tenant reference.
-- **WI-1b Resource registry metadata.** `src/server/self-hosted/resources.ts` — annotate
+- **WI-1b Resource registry metadata.** `src/server/api/resources.ts` — annotate
   the composite key for `email-agents` and confirm all resources are tenant-scoped. Small;
   Owner C (bundle with 1a — tightly coupled).
 
 **Phase 2 — auth service + endpoints (dep: 0a, 0b; parallel with Phase 1).**
-- **WI-2a Auth store.** New `src/server/self-hosted/auth/store.ts` — CRUD for tenants/
+- **WI-2a Auth store.** New `src/server/api/auth/store.ts` — CRUD for tenants/
   users/memberships/sessions/api_key_tenants/invites/reset; **transactional signup**;
   `resolveSessionContext`/`resolveApiKeyContext`. Owner D.
-- **WI-2b Auth handlers + resolver.** New `src/server/self-hosted/auth/service.ts` —
+- **WI-2b Auth handlers + resolver.** New `src/server/api/auth/service.ts` —
   `/v1/auth/*`, `/v1/me`, `/v1/tenants*`, `/v1/memberships*`, `/v1/keys*`, and
   `resolveRequestContext()`. Owner D (coordinates with 2a).
-- **WI-2c Rate limiter.** New `src/server/self-hosted/auth/rate-limit.ts` + account
+- **WI-2c Rate limiter.** New `src/server/api/auth/rate-limit.ts` + account
   lockout. Owner D.
-- **WI-2d Integration seam.** `src/server/self-hosted/service.ts` — replace
+- **WI-2d Integration seam.** `src/server/api/service.ts` — replace
   `authenticate()` with `resolveRequestContext()`, route `/v1/auth/*` (+ mgmt) before the
   resource matcher, wrap authenticated routes in the `SET LOCAL` transaction, hand every
   route a `forTenant` store. Owner E (**sole writer of service.ts**). Dep: 1a (`forTenant`)
   + 2b (`resolveRequestContext`) — sequence last among server WIs.
-- **WI-2e Keys module.** `src/server/self-hosted/keys.ts` — issuance also writes
+- **WI-2e Keys module.** `src/server/api/keys.ts` — issuance also writes
   `api_key_tenants`; list/revoke scoped by tenant. Owner D.
 
 **Phase 3 — client wiring (dep: 2b API contract; can start against the contract).**
 - **WI-3a Client credential.** `src/lib/client-env.ts` (+`EMAILS_SESSION_TOKEN`),
-  `src/db/self-hosted-store.ts` (`resolveSelfHostedConfig`, `httpRequest` credential),
-  `src/lib/self-hosted-mail-data-source.ts` (`request` credential). Owner F.
+  `src/db/api-store.ts` (`resolveApiConfig`, `httpRequest` credential),
+  `src/lib/api-mail-data-source.ts` (`request` credential). Owner F.
 - **WI-3b CLI auth.** New `src/cli/commands/auth.ts` (signup/login/logout/whoami/
   switch-tenant/bootstrap) + persist session token to the vault entry; tenant-scope
   `keys` command. Owner G.
@@ -773,11 +773,11 @@ Sole-owner files are noted to avoid merge conflicts across build agents.
 **Phase 4 — RLS seal (dep: Phase 1 verified in prod; H1/H2/H3).**
 - **WI-4a-0 Serving role + DSN (PREREQUISITE, H1).** Introduce a non-owner `NOBYPASSRLS`
   serving role + `EMAILS_APP_DATABASE_URL`; point `serve.ts` request handling at it
-  (keep `EMAILS_DATABASE_URL` for `migrate.ts`); add a boot assertion that the serving
+  (keep `HASNA_EMAILS_DATABASE_URL` for `migrate.ts`); add a boot assertion that the serving
   role is genuinely under RLS. Owner I. **RLS must not be enabled until this lands.**
 - **WI-4a Migration 0013 + system writers.** Append 0013 (drop transitional default,
   enable+FORCE RLS with the `NULLIF(...set_config...)` policy). Update ingest worker
-  (`src/server/self-hosted/ingest-worker.ts`) to route from the **SES envelope recipient**
+  (`src/server/api/ingest-worker.ts`) to route from the **SES envelope recipient**
   via `inbound_domain_routes`, resolve tenant off non-RLS tables, then `set_config` +
   scoped writes; quarantine unresolved/ambiguous (C1/H2). Owner B (migrations) + I
   (ingest). Must land only after Phase 1 verified.
@@ -875,13 +875,13 @@ by envelope-only routing through a global single-tenant domain map.
 
 ## 15. Implementation reconciliation (v3)
 
-The implementation now has exactly two deployment modes: local SQLite and
-operator-owned `self_hosted` PostgreSQL. It has no hosted SaaS control plane and
-no hybrid synchronization mode. Passing an explicit Bun `Database` handle to
+The implementation now has exactly two deployment configurations: local SQLite and
+operator-owned PostgreSQL. It has no hosted SaaS control plane and
+no synchronization between the two backends. Passing an explicit Bun `Database` handle to
 the public library always selects that caller-owned SQLite database, even when
-the process is otherwise configured as a self-hosted client.
+the process is otherwise configured as an API client.
 
-The self-hosted schema is additive through migrations 0012–0021:
+The api schema is additive through migrations 0012–0021:
 
 - 0012 adds tenant/identity/session/membership/API-key binding and tenant-scopes
   existing resources with a default-tenant backfill;
@@ -924,7 +924,7 @@ pre-0021 image rollback.
 Required release evidence is: full local suite, real PostgreSQL migration +
 multi-tenancy + RLS + message-ID suites, generated SDK sync, public package
 identity/contents, staged secret scan, immutable image scan, primary-super-admin
-idempotency/DB/API proof, local SQLite smoke, and self-hosted HTTPS smoke.
+idempotency/DB/API proof, local SQLite smoke, and api HTTPS smoke.
 
 ---
 
@@ -943,7 +943,7 @@ domain**. This package is deployed by operators other than its publisher, so a
 built-in domain list would lock the auth surface to one organisation and reject
 every other operator's own staff behind the deliberately opaque 403, while a
 permit-all fallback would silently widen an existing deployment's signup surface
-on upgrade. `buildSelfHostedService` therefore asserts the variable at boot and
+on upgrade. `buildApiService` therefore asserts the variable at boot and
 refuses to start without it, naming it in the error. Applies to invitations too
 (cannot invite an address outside the allowlist).
 
@@ -952,7 +952,7 @@ Signup creates the user `unverified`; login is refused until verified. On signup
 (and a `/v1/auth/verify-email/resend`), send a confirmation email containing a
 single-use, short-TTL, hashed-at-rest email-verification token (reuse the
 `emiv_`/token pattern) with a verify link → `/v1/auth/verify-email` marks the
-user verified. Send via the app's existing sender (`SelfHostedSender`), which
+user verified. Send via the app's existing sender (`ApiSender`), which
 signs with `EMAILS_SES_ACCESS_KEY_ID`/`EMAILS_SES_SECRET_ACCESS_KEY` when both
 are present and otherwise with the deployment IAM role of whichever account the
 process runs in — there is no cross-account assume-role in this codebase, so

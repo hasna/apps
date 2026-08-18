@@ -87,7 +87,7 @@ function escapeLike(value: string): string {
  *
  *  1. CORRECTNESS — this store answers with rows the term does not contain.
  *  2. A HANG on the API store — the CLI re-checks every returned row with a
- *     LITERAL JS `includes()` (self-hosted-mail-data-source.ts), so a wildcard
+ *     LITERAL JS `includes()` (api-mail-data-source.ts), so a wildcard
  *     term makes the server match rows the client then rejects, one extra
  *     per-row HTTP hydration each, and the walk never fills. Measured on
  *     installed 1.3.9: `--search invoice` 11.5s, `--search inv_ice` still

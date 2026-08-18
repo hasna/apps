@@ -1,5 +1,5 @@
 /**
- * Integration smoke — exercises the self-hosted-ONLY flow end to end against the
+ * Integration smoke — exercises the API-only flow end to end against the
  * /v1 API (via the out-of-process stub). It covers the pieces that still run
  * client-side (sandbox capture, contacts/templates/sequences CRUD, pure warming
  * math) and asserts that the operations that moved server-side (provider-adapter
@@ -101,7 +101,7 @@ describe("outbound sending is server-side", () => {
     const provider = createProvider({ name: "dev", type: "sandbox" });
     await expect(
       sendWithFailover(provider.id, { from: "a@example.com", to: "b@test.com", subject: "x", text: "y" }),
-    ).rejects.toThrow(/not available in the self-hosted client/);
+    ).rejects.toThrow(/not available in the api client/);
   });
 });
 

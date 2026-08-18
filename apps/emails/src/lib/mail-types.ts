@@ -1,7 +1,7 @@
 // Shared mail domain types + PURE helpers.
 //
 // Extracted from src/cli/tui/data.ts (and AttachmentPath from src/db/inbound.ts)
-// so the self-hosted mail data source, the CLI/MCP inbox layer, and the TUI can
+// so the api mail data source, the CLI/MCP inbox layer, and the TUI can
 // share one pure, storage-independent vocabulary. NOTHING here touches a
 // database, the filesystem, config, S3, or the network — it is safe to import
 // from anywhere.
@@ -16,17 +16,17 @@ export type Mailbox = Folder;
 export const FOLDERS: Folder[] = ["inbox", "priority", "unread", "starred", "sent", "archived", "spam", "trash"];
 
 /**
- * Refusal text for a provider-scoped clear against the self-hosted store.
+ * Refusal text for a provider-scoped clear against the api store.
  *
  * A `/v1` message row has no provider dimension, so the scope is unexpressible.
  * Both the `/v1` data-source seam and the routed repository raise THIS message
  * rather than quietly dropping the scope: silently widening a destructive call
  * from "one provider" to "the whole store" — while reporting a plausible count —
  * is the failure mode this constant exists to prevent. Shared so the two
- * self-hosted paths cannot drift.
+ * api paths cannot drift.
  */
-export const SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED =
-  "Self-hosted mail is one shared store with no provider provenance on its messages, "
+export const API_PROVIDER_CLEAR_UNSUPPORTED =
+  "Api mail is one shared store with no provider provenance on its messages, "
   + "so a provider-scoped clear cannot be expressed. Refusing rather than clearing the "
   + "whole store. To delete specific mail, delete the messages individually "
   + "(`emails inbox delete <id>`). Dropping --provider would clear the ENTIRE store, "
@@ -42,7 +42,7 @@ export function normalizeMailbox(value: unknown): Mailbox {
  * them. `unread` and `starred` are deliberately absent — they are subsets of
  * `inbox`, so including them would double-count.
  *
- * Derived from the folderMatch predicate in the self-hosted data source:
+ * Derived from the folderMatch predicate in the api data source:
  *   inbox    = !outbound && !archived && !spam && !trash
  *   sent     =  outbound
  *   archived = !outbound &&  archived && !spam && !trash
@@ -134,7 +134,7 @@ export interface TuiMessage {
   is_priority?: boolean;
   /** Ledger status (e.g. sent | failed | uncertain); undefined when unreported. */
   status?: string;
-  /** Send-intent state (self-hosted ledger); undefined when unreported. */
+  /** Send-intent state (api ledger); undefined when unreported. */
   send_state?: string;
   /**
    * Why an outbound policy gate refused this message (e.g. `sender_unverified`);
@@ -168,7 +168,7 @@ export interface AttachmentInfo {
   location?: string; // local path or s3:// url, if downloaded
   /**
    * Whether the backing store holds payload bytes. `undefined` = not reported
-   * (local mode, or a self-hosted serve predating the content_available
+   * (local SQLite client, or an API serve predating the content_available
    * contract) and must never be rendered as "unavailable".
    */
   content_available?: boolean;
@@ -316,7 +316,7 @@ export interface ListMailboxSourcesOptions {
   limit?: number;
   search?: string;
   /**
-   * Include each source's latest-received timestamp. In self_hosted mode this costs
+   * Include each source's latest-received timestamp. In API-client configuration this costs
    * an extra HTTP round-trip PER source, so the status path (which only shows the
    * aggregate latest) passes `false` to avoid the N+1 timeout. Defaults to true.
    */

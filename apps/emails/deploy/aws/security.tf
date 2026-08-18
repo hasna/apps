@@ -94,7 +94,7 @@ data "aws_iam_policy_document" "kms" {
 }
 
 resource "aws_kms_key" "this" {
-  description             = "Emails self-hosted data encryption"
+  description             = "Emails api data encryption"
   deletion_window_in_days = 30
   enable_key_rotation     = true
   policy                  = data.aws_iam_policy_document.kms.json

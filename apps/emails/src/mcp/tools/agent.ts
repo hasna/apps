@@ -9,7 +9,7 @@ function json(data: unknown) {
 export function registerAgentTools(server: McpServer): void {
   server.tool(
     "prepare_inbox",
-    "Prepare or diagnose an inbox address. Inbox address preparation, provisioning, and ownership run on the self-hosted server.",
+    "Prepare or diagnose an inbox address. Inbox address preparation, provisioning, and ownership run on the API server.",
     {
       email: z.string().describe("Inbox email address to prepare"),
       provider_id: z.string().optional().describe("Provider ID or prefix to use when creating a missing address"),
@@ -21,12 +21,12 @@ export function registerAgentTools(server: McpServer): void {
     },
     async () => {
       // Inbox preparation orchestrates address/provisioning/ownership state that
-      // is owned by the self-hosted server; there is no local store to prepare
+      // is owned by the API server; there is no local store to prepare
       // and no client-side /v1 preparation endpoint. Fail loud (rule 6).
       return {
         content: [{
           type: "text" as const,
-          text: "Error: prepare_inbox is not available in the self-hosted client; inbox address preparation, provisioning, and ownership run on the self-hosted server.",
+          text: "Error: prepare_inbox is not available in the api client; inbox address preparation, provisioning, and ownership run on the API server.",
         }],
         isError: true,
       };

@@ -1,4 +1,4 @@
-// Self-hosted-ONLY: `status` and `agent context` read mailbox counts/sources
+// API-only: `status` and `agent context` read mailbox counts/sources
 // over the operator `/v1` API and never touch a local database. These tests
 // drive the REAL commands against an out-of-process /v1 stub (see
 // src/test-support/v1-stub.ts) seeded with messages that produce known counts.
@@ -47,7 +47,7 @@ beforeEach(async () => {
 });
 afterEach(() => stub.clearEnv());
 
-describe("self-hosted status CLI commands", () => {
+describe("api status CLI commands", () => {
   it("prints a compact agent context by default and full JSON in verbose mode", async () => {
     const compact = await runStatusCommand(["agent", "context"]);
     expect(compact.formatted).toContain("Agent context summary");
@@ -65,10 +65,10 @@ describe("self-hosted status CLI commands", () => {
     await expect(runStatusCommand(["agent", "run", "categorizer"])).rejects.toThrow(/unknown command/);
   });
 
-  it("reports self-hosted status with inbox counts sourced from /v1", async () => {
+  it("reports api status with inbox counts sourced from /v1", async () => {
     const result = await runStatusCommand(["status"]);
     expect(result.data).toMatchObject({
-      mode: { current: "self_hosted" },
+      backend: "api",
       database: { data_dir: null },
       inbox: {
         total: 3,
@@ -76,7 +76,7 @@ describe("self-hosted status CLI commands", () => {
         latest_received_at: LATEST,
       },
     });
-    expect(result.formatted).toContain("Mode:       self_hosted");
+    expect(result.formatted).toMatch(/Backend:\s+api/);
   });
 
   // G5: the operator-facing path end to end. `emails status --json` must carry
@@ -131,11 +131,11 @@ describe("self-hosted status CLI commands", () => {
     expect(result.formatted).toContain("Data gaps");
   });
 
-  it("reports self-hosted inbox counts inside agent context", async () => {
+  it("reports api inbox counts inside agent context", async () => {
     const result = await runStatusCommand(["agent", "context"]);
     expect(result.data).toMatchObject({
       status: {
-        mode: { current: "self_hosted" },
+        backend: "api",
         database: { data_dir: null },
         inbox: { total: 3, unread: 1 },
       },

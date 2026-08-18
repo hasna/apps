@@ -5,13 +5,13 @@ import {
   getMailboxFilter,
   listMailboxFilters,
   updateMailboxFilter,
-} from "../../db/mailbox-filters.local.js";
+} from "../../db/mailbox-filters.sqlite.js";
 import type { MailboxFilterInput } from "../../lib/mailbox-filters.js";
 import { MailboxFilterInputError } from "../../lib/mailbox-filters.js";
 import { badRequest, internalError, json, parseBody, queryPage } from "./helpers.js";
 
 // A JSON primitive body must fail with 400 invalid_input, matching the
-// self-hosted server's readJsonBody object gate — `field in body` on a string
+// api server's readJsonBody object gate — `field in body` on a string
 // or number would otherwise TypeError into a 500 (PUT) or a silent no-op
 // (PATCH).
 async function parseObjectBody(req: Request): Promise<Record<string, unknown>> {

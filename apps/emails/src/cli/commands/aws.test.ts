@@ -1,10 +1,10 @@
 // `emails aws` talks to the operator's OWN AWS account in every configuration —
 // SES receipt rules and S3 buckets live in AWS, not behind `/v1`, and the
-// self-hosted server exposes no inbound-setup route for a client to call. Both
+// api server exposes no inbound-setup route for a client to call. Both
 // subcommands therefore get a positive test against the mocked SDKs.
 //
-// `setup-inbound` used to throw "is not available in the self-hosted client; it
-// runs on the self-hosted server" UNCONDITIONALLY — false in local mode, where
+// `setup-inbound` used to throw "is not available in the api client; it
+// runs on the api server" UNCONDITIONALLY — false for the local SQLite client, where
 // the very same `setupInboundEmail` + `registerS3Source` path already ran under
 // `emails domain adopt`, and false about the server, which has no such route.
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
@@ -128,7 +128,7 @@ function sentCommandNames(spy: typeof mockSesSend | typeof mockS3Send): string[]
 }
 
 describe("aws setup-inbound command", () => {
-  // THE REGRESSION. This threw unconditionally, so it refused in local mode too,
+  // THE REGRESSION. This threw unconditionally, so it refused for the local SQLite client too,
   // and the reason it gave named a server route that does not exist. Worse, it is
   // the command `emails provision *` and the MCP provisioning tools name as THE
   // supported alternative — an honest refusal pointing at a dishonest one.
@@ -151,8 +151,8 @@ describe("aws setup-inbound command", () => {
     expect(out).toContain("MX  example.com");
     expect(out).toContain("emails inbox sync-s3 --source");
     // The specific falsehoods that shipped.
-    expect(out).not.toContain("not available in the self-hosted client");
-    expect(out).not.toContain("runs on the self-hosted server");
+    expect(out).not.toContain("not available in the api client");
+    expect(out).not.toContain("runs on the api server");
   });
 
   it("registers the bucket so inbound sync can find the mail it just routed", async () => {
@@ -175,7 +175,7 @@ describe("aws setup-inbound command", () => {
     expect(result.stderr).toContain("EMAILS_INBOUND_S3_BUCKET");
     expect(result.stderr).not.toContain("emails config set");
     // Says what is missing, not which mode the operator is in.
-    expect(result.stderr).not.toContain("self-hosted");
+    expect(result.stderr).not.toContain("server");
     expect(mockSesSend).not.toHaveBeenCalled();
     expect(mockS3Send).not.toHaveBeenCalled();
   });

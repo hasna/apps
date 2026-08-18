@@ -1,4 +1,4 @@
-// Self-hosted-ONLY: the domains repo routes every read/write to the /v1
+// API-only: the domains repo routes every read/write to the /v1
 // `domains` API. This exercises the REAL synchronous curl transport against an
 // out-of-process /v1 stub (see src/test-support/v1-stub.ts).
 //
@@ -32,7 +32,7 @@ import {
   deleteDomain,
   updateDnsStatus,
 } from "./domains.js";
-import { SELF_HOSTED_ENUMERATION_PAGE_BUDGET, SELF_HOSTED_SERVER_PAGE_MAX } from "./self-hosted-page.js";
+import { API_ENUMERATION_PAGE_BUDGET, API_SERVER_PAGE_MAX } from "./api-page.js";
 import { DomainNotFoundError } from "../types/index.js";
 
 let stub: V1Stub;
@@ -98,7 +98,7 @@ describe("createDomain", () => {
     expect(d.dkim_status).toBe("pending");
     expect(d.spf_status).toBe("pending");
     expect(d.dmarc_status).toBe("pending");
-    expect(d.domain_type).toBe("self_hosted");
+    expect(d.domain_type).toBe("server");
     expect(d.source_of_truth).toBe("postgres");
     expect(d.ownership_status).toBe("pending");
     expect(d.inbound_status).toBe("pending");
@@ -233,7 +233,7 @@ describe("listUsableDomains / countUsableDomains", () => {
 
     expect(countUsableDomains({ provider_id: "p1" })).toBe(2);
     expect(countUsableDomains()).toBe(3);
-    // send/receive options do not change the usable set in the self-hosted model.
+    // send/receive options do not change the usable set in the API-client configurationl.
     expect(countUsableDomains({ provider_id: "p1", send: true })).toBe(2);
     expect(countUsableDomains({ provider_id: "p1", receive: true })).toBe(2);
 
@@ -253,9 +253,9 @@ describe("listUsableDomains / countUsableDomains", () => {
   });
 
   it("serves a bounded usable page when the table exceeds the enumeration budget", async () => {
-    const scanCap = SELF_HOSTED_ENUMERATION_PAGE_BUDGET * SELF_HOSTED_SERVER_PAGE_MAX;
+    const scanCap = API_ENUMERATION_PAGE_BUDGET * API_SERVER_PAGE_MAX;
     await stub.seed({
-      domains: domainRows(scanCap + SELF_HOSTED_SERVER_PAGE_MAX, (index) => ({ verified: index === 0 })),
+      domains: domainRows(scanCap + API_SERVER_PAGE_MAX, (index) => ({ verified: index === 0 })),
     });
 
     expect(listUsableDomains({ limit: 1 }).map((domain) => domain.id)).toEqual(["domain-000000"]);

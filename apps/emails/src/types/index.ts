@@ -137,7 +137,7 @@ export interface CreateMailboxSourceInput {
 
 // Domain types
 export type DnsStatus = "pending" | "verified" | "failed";
-export type DomainType = "system" | "self_hosted" | "local_only";
+export type DomainType = "system" | "server" | "local_only";
 export type DomainSourceOfTruth = "local" | "postgres";
 export type DomainOwnershipStatus = "pending" | "verified" | "failed";
 export type DomainRouteStatus = "pending" | "ready" | "disabled" | "failed";
@@ -286,12 +286,12 @@ export interface SendEmailOptions {
  *   * THE FIVE the local SQLite ledger accepts are its own CHECK constraint —
  *     `CHECK(status IN ('sent','delivered','bounced','complained','failed'))`
  *     (src/db/database.ts). Nothing else can be written there.
- *   * THE THREE the SELF-HOSTED service can additionally PRODUCE are the outbound send
+ *   * THE THREE the API service can additionally PRODUCE are the outbound send
  *     lifecycle. `messages.status` is `TEXT NOT NULL DEFAULT 'queued'`
- *     (src/server/self-hosted/migrations.ts) and the send path writes `queued` on every
+ *     (src/server/api/migrations.ts) and the send path writes `queued` on every
  *     reservation and re-arm, `blocked` when an outbound policy gate refuses, and `uncertain`
  *     when a provider call's outcome could not be established
- *     (src/server/self-hosted/store.ts).
+ *     (src/server/api/store.ts).
  *
  * SO `queued` IS THE ORDINARY STATE OF A MESSAGE THAT HAS BEEN RESERVED AND NOT YET SENT on
  * an API-configured installation, and any read that refuses it takes `emails log list`, the
@@ -309,11 +309,11 @@ export type EmailStatus =
   | "bounced"
   | "complained"
   | "failed"
-  /** Reserved for sending and not yet handed to a provider. Self-hosted service only. */
+  /** Reserved for sending and not yet handed to a provider. Api service only. */
   | "queued"
-  /** Refused by an outbound policy gate before any provider was called. Self-hosted only. */
+  /** Refused by an outbound policy gate before any provider was called. Api only. */
   | "blocked"
-  /** The provider call's outcome could not be established. Self-hosted only. */
+  /** The provider call's outcome could not be established. Api only. */
   | "uncertain";
 
 /**
@@ -337,8 +337,8 @@ export const WRITABLE_EMAIL_STATUSES: readonly EmailStatus[] = [
  * fact from the value being empty. The store seam's message projections
  * (`MessageRecord` / `MessageListRecord`, src/store/records.ts) carry no `provider_id`, no
  * `bcc_addrs` and no `tags`, so `src/db/emails.ts` answers `null` for all three rather than
- * the `"self_hosted"` / `[]` / `{}` the deleted HTTP arm invented — three comfortable
- * values indistinguishable from three real ones. `src/lib/sent-ledger.local.ts`, which
+ * the `"server"` / `[]` / `{}` the deleted HTTP arm invented — three comfortable
+ * values indistinguishable from three real ones. `src/lib/sent-ledger.sqlite.ts`, which
  * writes the `emails` table directly, fills all three.
  *
  * `reply_to` was already nullable and is the one field where "there is no reply-to" and

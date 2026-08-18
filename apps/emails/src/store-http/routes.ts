@@ -4,7 +4,7 @@
 // claim about what the API offers, and a claim that lives in twenty template
 // literals cannot be checked. Because it is one exported table, a test asserts every
 // entry EXISTS with that method in the service's own OpenAPI document
-// (`emailsSelfHostedOpenApi`), which is generated from the same resource registry
+// (`emailsApiOpenApi`), which is generated from the same resource registry
 // the router dispatches on. So the route surface this client depends on is verified
 // against the SERVER, not against the test fixture it happens to run under — the
 // difference between evidence and circular reasoning.

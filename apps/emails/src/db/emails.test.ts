@@ -56,7 +56,7 @@ import {
   searchEmails,
   updateEmailStatus,
 } from "./emails.js";
-import { createSentEmailLedger } from "../lib/sent-ledger.local.js";
+import { createSentEmailLedger } from "../lib/sent-ledger.sqlite.js";
 import { EmailNotFoundError, type EmailStatus } from "../types/index.js";
 import { createHttpEmailStore } from "../store-http/index.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
@@ -569,7 +569,7 @@ for (const [label, makeStore] of STORE_VARIANTS) {
       });
 
       it("reports the fields the seam does not publish as null, not as empty", async () => {
-        // Divergence 2. The deleted HTTP arm filled these with `"self_hosted"`, `[]` and `{}` —
+        // Divergence 2. The deleted HTTP arm filled these with `"server"`, `[]` and `{}` —
         // three comfortable values indistinguishable from three real ones. The columns below
         // are POPULATED in the table, which is the point: the seam does not project them, so
         // this family cannot see them and must not pretend the absence is an emptiness.
@@ -596,12 +596,12 @@ for (const [label, makeStore] of STORE_VARIANTS) {
         expect(email?.idempotency_key ?? null).toBeNull();
       });
 
-      // THE SELF-HOSTED SERVICE'S OWN SEND STATES, which are NOT the local ledger's five.
+      // THE API SERVICE'S OWN SEND STATES, which are NOT the local ledger's five.
       //
       // `messages.status` is `TEXT NOT NULL DEFAULT 'queued'` on the service
-      // (src/server/self-hosted/migrations.ts) and its send path writes `queued` on every
+      // (src/server/api/migrations.ts) and its send path writes `queued` on every
       // reservation and re-arm, `blocked` on a policy refusal and `uncertain` when a provider
-      // call's outcome could not be established (src/server/self-hosted/store.ts). A read that
+      // call's outcome could not be established (src/server/api/store.ts). A read that
       // refused those would take `emails log list`, the export and `GET /api/emails` down on
       // every reserved-but-unsent message — the rows an operator most wants to see. This is a
       // schema divergence the TypeScript types cannot show (`MessageRecord.status` is a bare
@@ -961,7 +961,7 @@ describe("the sent ledger refuses what it cannot answer", () => {
   // tie in id-DESCENDING order (`src/store-sqlite/messages-sql.ts`), and `Array.prototype.sort`
   // is stable, so the store's order survived the sort and happened to be the answer.
   //
-  // THE SERVER ORDERS THE SAME TIE THE OTHER WAY. `src/server/self-hosted/store.ts` orders its
+  // THE SERVER ORDERS THE SAME TIE THE OTHER WAY. `src/server/api/store.ts` orders its
   // message list `id ASC` within a timestamp, so against a real service the mutant reverses
   // three rows that a caller is told are newest-first. The store below serves exactly that
   // order — a CONSISTENT TOTAL order applied before the window, so it pages cleanly and trips

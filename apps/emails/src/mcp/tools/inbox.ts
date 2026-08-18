@@ -186,7 +186,7 @@ export function registerInboxTools(server: McpServer): void {
 
   server.tool(
     "clear_inbound_emails",
-    "Delete all inbound emails, optionally filtered by provider. In self-hosted mode a provider-scoped clear is REFUSED (messages carry no provider provenance) rather than widened to the whole store.",
+    "Delete all inbound emails, optionally filtered by provider. In API-client configuration a provider-scoped clear is REFUSED (messages carry no provider provenance) rather than widened to the whole store.",
     {
       provider_id: z.string().optional().describe("Only clear emails for this provider"),
     },
@@ -236,7 +236,7 @@ export function registerInboxTools(server: McpServer): void {
 
   server.tool(
     "list_attachments",
-    "List one checkpointable page of self-hosted attachment metadata. Returns {items,next_cursor,cli_equivalent}; items contain message_id, attachment_index, filename, content_type, size_bytes, sha256, content_available, direction, and received_at, never attachment content. Pass next_cursor back as cursor to resume.",
+    "List one checkpointable page of api attachment metadata. Returns {items,next_cursor,cli_equivalent}; items contain message_id, attachment_index, filename, content_type, size_bytes, sha256, content_available, direction, and received_at, never attachment content. Pass next_cursor back as cursor to resume.",
     {
       limit: z.number().int().positive().max(MAX_ATTACHMENT_INVENTORY_LIMIT).optional()
         .describe(`Attachments per page (default ${DEFAULT_ATTACHMENT_INVENTORY_LIMIT}, max ${MAX_ATTACHMENT_INVENTORY_LIMIT})`),

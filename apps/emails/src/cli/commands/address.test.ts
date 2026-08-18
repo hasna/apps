@@ -1,4 +1,4 @@
-// Self-hosted-ONLY for the address repo: it routes every read/write to
+// API-only for the address repo: it routes every read/write to
 // `/v1/addresses`, so these tests drive the REAL command against an out-of-process
 // /v1 stub (see src/test-support/v1-stub.ts). No local SQLite exists anymore.
 // Ownership is served by the COLLAPSED owners family, which resolves the same stub
@@ -34,7 +34,7 @@ async function runAddressCommand(args: string[]) {
   }
 }
 
-// Some address subcommands are owned by the self-hosted server and fail loud in
+// Some address subcommands are owned by the API server and fail loud in
 // the client. handleError() logs to console.error then process.exit(1); stub both
 // so the exit becomes observable instead of tearing down the test runner.
 async function runAddressCommandExpectingExit(args: string[]) {
@@ -298,9 +298,9 @@ describe("address server-only lifecycle commands still block", () => {
       expect(result.stderr).toContain(`${label} is not implemented in this build`);
       expect(result.stderr).toContain("emails address add <email> --provider <id>");
       // The message that shipped named a server route that does not exist, and
-      // named it unconditionally — so it lied in local mode too.
-      expect(result.stderr).not.toContain("not available in the self-hosted client");
-      expect(result.stderr).not.toContain("runs on the self-hosted server");
+      // named it unconditionally — so it lied for the local SQLite client too.
+      expect(result.stderr).not.toContain("not available in the api client");
+      expect(result.stderr).not.toContain("runs on the api server");
     });
   }
 });

@@ -1,4 +1,4 @@
-// Pure, storage-independent runtime helpers shared by local and self-hosted
+// Pure, storage-independent runtime helpers shared by local and api
 // resource repositories.
 
 export function now(): string {

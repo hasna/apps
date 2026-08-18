@@ -119,7 +119,7 @@ describe("generateWarmingPlan", () => {
 });
 
 // The ramp is anchored on the UTC calendar date, matching warmingLimit() in
-// src/server/self-hosted/store.ts (the code that actually enforces the cap) and
+// src/server/api/store.ts (the code that actually enforces the cap) and
 // the UTC day window getTodaySentCountsByDomain counts over. A local-midnight
 // anchor put the client a day ahead of the server at every non-zero UTC offset.
 describe("warmingDayIndex", () => {
@@ -301,7 +301,7 @@ describe("describeWarmingProgress", () => {
   });
 
   it("reports day 1 with a zero limit for an unusable start date", async () => {
-    // Reachable in self-hosted mode: the Postgres schema relaxed start_date to
+    // Reachable when the API client is configured: the Postgres schema relaxed start_date to
     // nullable and the /v1 client coerces null to "". NaN must not reach output,
     // and an unknown start must not read as "full volume allowed".
     for (const start_date of ["", "not-a-date"]) {

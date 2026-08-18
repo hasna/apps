@@ -9,13 +9,13 @@ import { formatThreadLabel } from "../tui/format.js";
  * Refuse a send whose recipients include a suppressed contact.
  *
  * `forward` and `reply` reach `ds.send` exactly like `emails send` does, and in
- * local mode nothing further down the chain consults `contacts` — so without
+ * local SQLite client nothing further down the chain consults `contacts` — so without
  * this they mail a hard-bounced/complained/unsubscribed address. `reply --all`
  * is the sharpest case: it fans out to every recipient on the parent, so a
  * suppressed address is mailed without the operator ever typing it.
  *
  * Neither command takes `--force`: there is no "send anyway" story for a reply
- * to a suppressed address, and the self-hosted server refuses it regardless
+ * to a suppressed address, and the api server refuses it regardless
  * (409 recipient_suppressed). Unsuppressing is the only path.
  */
 async function assertNoSuppressedRecipients(recipients: string[], command: string): Promise<void> {
@@ -47,7 +47,7 @@ export function registerReplyCommand(program: Command, output: (data: unknown, f
     .action(async (id: string, opts: { to: string[]; from: string; body?: string; provider?: string }) => {
       try {
         // Read the source message through the mail data source seam and forward
-        // via the server send API (self-hosted-only client).
+        // via the server send API (api-only client).
         const ds = resolveMailDataSource();
         const msg = await ds.getMessage(id);
         if (!msg) return handleError(new Error(`Email not found: ${id}`));
@@ -106,7 +106,7 @@ export function registerReplyCommand(program: Command, output: (data: unknown, f
           replyToId: id,
         });
         const threadId = msg.thread_id ?? null;
-        // Not a fixed 8-char slice: in self_hosted mode the thread id is the
+        // Not a fixed 8-char slice: when the API client is configured the thread id is the
         // server's conversation key (a normalized subject), not a uuid.
         const suffix = threadId ? ` (thread${formatThreadLabel(threadId)})` : "";
         output({ id: result.id, thread_id: threadId, to: toArr, subject: defaults.subject },

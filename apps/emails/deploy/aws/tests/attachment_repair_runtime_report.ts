@@ -7,8 +7,8 @@ import {
   executeAttachmentRepairMaintenance,
   type AttachmentRepairMaintenanceDeps,
   type AttachmentRepairMaintenanceOptions,
-} from "../../../src/server/self-hosted/attachment-repair-maintenance.js";
-import type { AttachmentRepairLedgerRun } from "../../../src/server/self-hosted/store.js";
+} from "../../../src/server/api/attachment-repair-maintenance.js";
+import type { AttachmentRepairLedgerRun } from "../../../src/server/api/store.js";
 
 export interface AttachmentRepairRuntimeReportInput {
   taskArn: string;
@@ -91,7 +91,7 @@ export async function generateAttachmentRepairRuntimeReport(
   };
   const deps: AttachmentRepairMaintenanceDeps = {
     env: {
-      EMAILS_DATABASE_URL: "postgresql://redacted",
+      HASNA_EMAILS_DATABASE_URL: "postgresql://redacted",
       EMAILS_INGEST_S3_BUCKET: "canonical-inbound",
       ECS_CONTAINER_METADATA_URI_V4: "http://169.254.170.2/v4/static-contract",
       [ATTACHMENT_REPAIR_IMAGE_REVISION_ENV]: input.imageRevision,

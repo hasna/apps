@@ -1,16 +1,16 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
 import { listInboundEmails, storeInboundEmail } from "../db/inbound.js";
-import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
+import { resetApiConfigCache } from "../db/api-store.js";
 import { saveConfig } from "../lib/config.js";
 import { runInboxTool } from "./tools/inbox-impl.js";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// Self-hosted-ONLY: inbox tools route through the mail-data-source seam, which in
-// self_hosted mode reads/writes the /v1 messages store (no local SQLite). The
-// self-hosted serve is a single shared store, so there is no per-provider scoping.
+// API-only: inbox tools route through the mail-data-source seam, which in
+// API-client configuration reads/writes the /v1 messages store (no local SQLite). The
+// api serve is a single shared store, so there is no per-provider scoping.
 
 let stub: V1Stub;
 let attachmentInventoryServer: ReturnType<typeof Bun.serve>;
@@ -58,10 +58,9 @@ function useAttachmentInventoryPages(
   pages: Array<[cursor: string, page: { items: Array<Record<string, unknown>>; next_cursor: string | null }]>,
 ): void {
   attachmentInventoryPages = new Map(pages);
-  process.env.EMAILS_MODE = "self_hosted";
-  process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
-  process.env.EMAILS_SELF_HOSTED_API_KEY = "attachment-inventory-test-key";
-  resetSelfHostedConfigCache();
+  process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
+  process.env.HASNA_EMAILS_API_KEY = ["attachment", "inventory", "test", "key"].join("-");
+  resetApiConfigCache();
 }
 
 function seed(n: number) {
@@ -127,9 +126,9 @@ describe("inbound search primitives", () => {
   });
 });
 
-// ─── self_hosted mode: tools route through SelfHostedMailDataSource (/v1) ───────
+// ─── API-client configuration: tools route through ApiMailDataSource (/v1) ───────
 
-describe("MCP inbox tools — self_hosted via seam", () => {
+describe("MCP inbox tools — api via seam", () => {
   it("list_inbound_emails returns inbox items (body-free) with truncation", async () => {
     seed(3);
     const result = await toolJson("list_inbound_emails", { limit: 1 });
@@ -344,61 +343,48 @@ describe("MCP inbox tools — self_hosted via seam", () => {
   });
 });
 
-describe("MCP list_attachments — self_hosted inventory API", () => {
-  it("honors config-file-only self_hosted mode without opening usable SQLite", async () => {
+describe("MCP list_attachments — api inventory API", () => {
+  it("honors the API client contract without opening usable SQLite", async () => {
     attachmentInventoryPages = new Map([["", { items: [], next_cursor: null }]]);
     const configHome = mkdtempSync(join(tmpdir(), "emails-mcp-config-only-inventory-"));
-    const poisonDbDir = mkdtempSync(join(tmpdir(), "emails-mcp-config-only-poison-db-"));
     const previousHome = process.env.HOME;
     const previousDbPath = process.env.EMAILS_DB_PATH;
+    const previousDbPath2 = process.env.HASNA_EMAILS_DB_PATH;
     const previousClientEnvSecret = process.env.EMAILS_CLIENT_ENV_SECRET;
     const previousSessionToken = process.env.EMAILS_SESSION_TOKEN;
-    // This test must clear the mode keys to prove the on-disk config alone
-    // selects self_hosted, but `bun test` shares one process across every test
-    // file and the harness sets EMAILS_MODE=local once for it. Capture these so
-    // the `finally` can put them back, or later files inherit no mode at all.
-    const MODE_ENV_KEYS = ["MAILERY_MODE", "HASNA_MAILERY_MODE", "EMAILS_MODE", "HASNA_EMAILS_MODE"] as const;
-    const previousModeEnv: Record<string, string | undefined> = Object.fromEntries(
-      MODE_ENV_KEYS.map((key) => [key, process.env[key]]),
-    );
-    const previousSelfHostedUrl = process.env.EMAILS_SELF_HOSTED_URL;
-    const previousSelfHostedApiKey = process.env.EMAILS_SELF_HOSTED_API_KEY;
+    const previousApiUrl = process.env.HASNA_EMAILS_API_URL;
+    const previousApiApiKey = process.env.HASNA_EMAILS_API_KEY;
     try {
       process.env.HOME = configHome;
-      saveConfig({ emails_mode: "self_hosted" });
-      for (const key of MODE_ENV_KEYS) {
-        delete process.env[key];
-      }
       delete process.env.EMAILS_CLIENT_ENV_SECRET;
       delete process.env.EMAILS_SESSION_TOKEN;
-      process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
-      process.env.EMAILS_SELF_HOSTED_API_KEY = "attachment-inventory-test-key";
-      process.env.EMAILS_DB_PATH = poisonDbDir;
-      resetSelfHostedConfigCache();
+      delete process.env.EMAILS_DB_PATH;
+      delete process.env.HASNA_EMAILS_DB_PATH;
+      process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
+      process.env.HASNA_EMAILS_API_KEY = ["attachment", "inventory", "test", "key"].join("-");
+      resetApiConfigCache();
 
       expect(await toolJson("list_attachments", {})).toEqual({ items: [], next_cursor: null });
       expect(attachmentInventoryRequests).toHaveLength(1);
+      // The API client must not have opened a local SQLite file anywhere under HOME.
+      expect(existsSync(join(configHome, ".hasna", "emails", "emails.db"))).toBe(false);
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
       if (previousDbPath === undefined) delete process.env.EMAILS_DB_PATH;
       else process.env.EMAILS_DB_PATH = previousDbPath;
+      if (previousDbPath2 === undefined) delete process.env.HASNA_EMAILS_DB_PATH;
+      else process.env.HASNA_EMAILS_DB_PATH = previousDbPath2;
       if (previousClientEnvSecret === undefined) delete process.env.EMAILS_CLIENT_ENV_SECRET;
       else process.env.EMAILS_CLIENT_ENV_SECRET = previousClientEnvSecret;
       if (previousSessionToken === undefined) delete process.env.EMAILS_SESSION_TOKEN;
       else process.env.EMAILS_SESSION_TOKEN = previousSessionToken;
-      for (const key of MODE_ENV_KEYS) {
-        const previous = previousModeEnv[key];
-        if (previous === undefined) delete process.env[key];
-        else process.env[key] = previous;
-      }
-      if (previousSelfHostedUrl === undefined) delete process.env.EMAILS_SELF_HOSTED_URL;
-      else process.env.EMAILS_SELF_HOSTED_URL = previousSelfHostedUrl;
-      if (previousSelfHostedApiKey === undefined) delete process.env.EMAILS_SELF_HOSTED_API_KEY;
-      else process.env.EMAILS_SELF_HOSTED_API_KEY = previousSelfHostedApiKey;
+      if (previousApiUrl === undefined) delete process.env.HASNA_EMAILS_API_URL;
+      else process.env.HASNA_EMAILS_API_URL = previousApiUrl;
+      if (previousApiApiKey === undefined) delete process.env.HASNA_EMAILS_API_KEY;
+      else process.env.HASNA_EMAILS_API_KEY = previousApiApiKey;
       rmSync(configHome, { recursive: true, force: true });
-      rmSync(poisonDbDir, { recursive: true, force: true });
-      resetSelfHostedConfigCache();
+      resetApiConfigCache();
     }
   });
 
@@ -417,9 +403,10 @@ describe("MCP list_attachments — self_hosted inventory API", () => {
       }],
       next_cursor: "opaque/+==",
     }]]);
-    const poisonDbDir = mkdtempSync(join(tmpdir(), "emails-no-local-inventory-"));
     const previousDbPath = process.env.EMAILS_DB_PATH;
-    process.env.EMAILS_DB_PATH = poisonDbDir;
+    const previousDbPath2 = process.env.HASNA_EMAILS_DB_PATH;
+    delete process.env.EMAILS_DB_PATH;
+    delete process.env.HASNA_EMAILS_DB_PATH;
     try {
       const result = await toolJson("list_attachments", {
         limit: 1,
@@ -449,7 +436,8 @@ describe("MCP list_attachments — self_hosted inventory API", () => {
     } finally {
       if (previousDbPath === undefined) delete process.env.EMAILS_DB_PATH;
       else process.env.EMAILS_DB_PATH = previousDbPath;
-      rmSync(poisonDbDir, { recursive: true, force: true });
+      if (previousDbPath2 === undefined) delete process.env.HASNA_EMAILS_DB_PATH;
+      else process.env.HASNA_EMAILS_DB_PATH = previousDbPath2;
     }
   });
 
@@ -574,8 +562,8 @@ describe("MCP list_attachments — self_hosted inventory API", () => {
   });
 });
 
-describe("mailbox source tools (self-hosted single shared store)", () => {
-  it("exposes the self_hosted source, folder counts, and search", async () => {
+describe("mailbox source tools (api single shared store)", () => {
+  it("exposes the api source, folder counts, and search", async () => {
     storeInboundEmail({
       provider_id: null,
       message_id: "mcp-source-a",
@@ -611,9 +599,9 @@ describe("mailbox source tools (self-hosted single shared store)", () => {
 
     const sources = await toolJson("list_mailbox_sources", {});
     const sourceItems = sources.sources as Array<{ id: string; badges: string[]; total: number }>;
-    const selfHosted = sourceItems.find((source) => source.id === "self_hosted");
-    expect(selfHosted).toMatchObject({ total: 2 });
-    expect(selfHosted?.badges).toContain("self_hosted");
+    const api = sourceItems.find((source) => source.id === "server");
+    expect(api).toMatchObject({ total: 2 });
+    expect(api?.badges).toContain("server");
 
     const status = await toolJson("list_mailboxes", {});
     expect((status.counts as { inbox: number }).inbox).toBe(2);

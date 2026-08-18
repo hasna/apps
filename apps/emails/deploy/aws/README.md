@@ -1,6 +1,6 @@
 # Emails on operator-owned AWS
 
-This Terraform root configuration deploys the Emails self-hosted service into
+This Terraform root configuration deploys the Emails server into
 an AWS account controlled by the operator. It contains no maintainer account,
 hostname, role, control plane, billing integration, fleet resource, or hosted
 service endpoint.
@@ -27,7 +27,7 @@ bun src/server/index.ts
 bun src/server/index.ts ingest-worker
 bun src/cli/index.tsx db migrate
 
-EMAILS_DATABASE_URL=<Secrets Manager injection; its presence is what selects
+HASNA_EMAILS_DATABASE_URL=<Secrets Manager injection; its presence is what selects
                      the operator /v1 API over the local SQLite dashboard>
 EMAILS_API_SIGNING_KEY=<Secrets Manager injection>
 EMAILS_SEND_PROVIDER=ses
@@ -367,7 +367,7 @@ credential enters Terraform state, the plan output, or the plaintext
 `environment` block. The module injects only
 `EMAILS_SES_ACCESS_KEY_ID`/`EMAILS_SES_SECRET_ACCESS_KEY` from those two ARNs,
 all through the ECS `secrets` block, and extends only the API execution role's
-`secretsmanager:GetSecretValue` grant. The self-hosted sender reads that scoped
+`secretsmanager:GetSecretValue` grant. The server sender reads that scoped
 pair directly.
 
 **Image compatibility:** setting these inputs requires an image implementing

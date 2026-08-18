@@ -20,7 +20,7 @@ import {
 } from "./send-preflight.js";
 import {
   LOCAL_SEND_ATTACHMENT_LIMITS,
-  SELF_HOSTED_SEND_ATTACHMENT_LIMITS,
+  API_SEND_ATTACHMENT_LIMITS,
 } from "./send-attachment-limits.js";
 
 const VERIFIED = { email: "ok@example.com", status: "active", verified: true };
@@ -84,10 +84,10 @@ describe("sender preflight distinguishes the cases the echo could not", () => {
 describe("attachment caps are evaluated, not merely printed", () => {
   const K = 1024;
 
-  it("passes a set inside the self-hosted caps", () => {
+  it("passes a set inside the api caps", () => {
     expect(evaluateAttachmentCaps(
       [{ filename: "a.pdf", bytes: 100 * K }, { filename: "b.pdf", bytes: 100 * K }],
-      SELF_HOSTED_SEND_ATTACHMENT_LIMITS,
+      API_SEND_ATTACHMENT_LIMITS,
     )).toEqual([]);
   });
 
@@ -96,7 +96,7 @@ describe("attachment caps are evaluated, not merely printed", () => {
   // cap, so raising the caps turned every "oversize" fixture into a legal one and
   // the suite asserted the opposite of what it was named for. A fixture that
   // encodes a constant is the same drift this module exists to prevent.
-  const SH = SELF_HOSTED_SEND_ATTACHMENT_LIMITS;
+  const SH = API_SEND_ATTACHMENT_LIMITS;
 
   it("catches a per-file overage that the old preview printed as fine", () => {
     // Still under the much larger local ceiling readSendAttachments enforces, so
@@ -127,9 +127,9 @@ describe("attachment caps are evaluated, not merely printed", () => {
       .toContain("file_count");
   });
 
-  it("applies the LOCAL caps in local mode, not the server's", () => {
-    // A file over the self-hosted per-file cap but inside the local one is
-    // refused self-hosted and fine locally. Predicting the wrong mode's limits is
+  it("applies the LOCAL caps for the local SQLite client, not the server's", () => {
+    // A file over the api per-file cap but inside the local one is
+    // refused api and fine locally. Predicting the wrong mode's limits is
     // the same class of defect as not predicting at all.
     const bytes = SH.maxBytesPerFile + 1;
     expect(bytes).toBeLessThanOrEqual(LOCAL_SEND_ATTACHMENT_LIMITS.maxBytesPerFile);
@@ -149,7 +149,7 @@ describe("attachment caps are evaluated, not merely printed", () => {
 });
 
 describe("the preview states what it did NOT check", () => {
-  it("names the server-side state it cannot read, in self-hosted mode", () => {
+  it("names the server-side state it cannot read, when the API client is configured", () => {
     const note = describeUncheckedSendPolicy(true);
     for (const unchecked of ["send-key", "quota", "warming", "domain readiness", "provider acceptance"]) {
       expect(note.toLowerCase()).toContain(unchecked.toLowerCase());
@@ -158,7 +158,7 @@ describe("the preview states what it did NOT check", () => {
     expect(note).toContain("does not guarantee delivery");
   });
 
-  it("says local mode has no outbound policy gate at all", () => {
+  it("says local SQLite client has no outbound policy gate at all", () => {
     expect(describeUncheckedSendPolicy(false)).toContain("no outbound policy gate");
   });
 });

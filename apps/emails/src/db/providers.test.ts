@@ -1,8 +1,8 @@
-// Self-hosted-ONLY: the providers repo routes every read/write to the /v1
+// API-only: the providers repo routes every read/write to the /v1
 // `providers` API. This exercises the REAL synchronous curl transport against an
 // out-of-process /v1 stub (see src/test-support/v1-stub.ts).
 //
-// Migrated from the deleted local-SQLite pattern. The self-hosted `providers`
+// Migrated from the deleted local-SQLite pattern. The api `providers`
 // resource carries ONLY non-secret metadata (id, name, type, region, active,
 // timestamps): provider credentials are NEVER distributed to or fetched by a
 // client, so api_key/access_key/secret_key/oauth_* always map to null. The old

@@ -1,4 +1,4 @@
-// Self-hosted-ONLY: `reply`/`forward` read the parent through the mail-data-source
+// API-only: `reply`/`forward` read the parent through the mail-data-source
 // seam and re-send via the server send API (POST /v1/messages/send). There is no
 // local SQLite and no `resolveInboundOrSent` local id resolver anymore, so these
 // tests drive the REAL commands against an out-of-process /v1 stub (see
@@ -130,7 +130,7 @@ describe("reply command", () => {
 
     expect(data.subject).toBe("Re: Question");
     expect(data.to).toEqual(["ext@ext.com"]);
-    // The self-hosted store has no thread_id column, but it does have a
+    // The api store has no thread_id column, but it does have a
     // conversation key: the normalized subject GET /v1/messages/threads groups
     // by. Reporting null here told every caller the reply belonged to no thread.
     expect(data.thread_id).toBe("question");

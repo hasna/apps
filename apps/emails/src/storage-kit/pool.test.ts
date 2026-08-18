@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pg, { type Pool } from "pg";
 
-import { closeSelfHostedPool, getSelfHostedPool } from "../server/self-hosted/env.js";
+import { closeApiPool, getApiPool } from "../server/api/env.js";
 import { createPgPool } from "./pool.js";
 
 interface EffectiveConnectionParameters {
@@ -32,7 +32,7 @@ function effectiveConnectionParameters(pool: Pool): EffectiveConnectionParameter
 }
 
 afterEach(async () => {
-  await closeSelfHostedPool();
+  await closeApiPool();
   for (const pool of pools.splice(0)) await pool.end();
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
@@ -80,8 +80,8 @@ describe("effective pg TLS configuration", () => {
   });
 
   test("the shared migration and runtime pool keeps the verified CA effective", () => {
-    const result = getSelfHostedPool({
-      EMAILS_DATABASE_URL: "postgresql://emails:password@db.example/emails?sslmode=require",
+    const result = getApiPool({
+      HASNA_EMAILS_DATABASE_URL: "postgresql://emails:password@db.example/emails?sslmode=require",
       EMAILS_DATABASE_CA_FILE: caFile("RDS CA"),
       EMAILS_API_SIGNING_KEY: "a-signing-key-that-is-at-least-32-characters",
     });

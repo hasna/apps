@@ -489,7 +489,7 @@ for (const [kind, makeStore] of [["SQLite", sqliteStore], ["Emails API", httpSto
       //
       // TRUE OF BOTH VARIANTS HERE, AND WORTH STATING PRECISELY: the `/v1` fixture stores
       // nothing itself, so its list order is the SQLite one too. The REAL service orders
-      // `email-digests` by `completed_at DESC` (`src/server/self-hosted/resources.ts`), so
+      // `email-digests` by `completed_at DESC` (`src/server/api/resources.ts`), so
       // against it taking the first row would happen to be right — which is exactly why
       // "newest" is decided here instead of being trusted to a store's ordering that the
       // seam does not specify. This fixture cannot exercise that divergence; the reason

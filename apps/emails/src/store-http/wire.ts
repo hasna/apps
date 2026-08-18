@@ -20,13 +20,13 @@
 
 import { EmailsApiFault } from "./outcome.js";
 import {
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
+  HASNA_EMAILS_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   type EmailsClientCredentialCandidate,
   type EmailsClientCredentialSetting,
 } from "../lib/client-env.js";
 
-/** The default per-request deadline, matching `EMAILS_SELF_HOSTED_HTTP_TIMEOUT`. */
+/** The default per-request deadline, matching `EMAILS_API_HTTP_TIMEOUT`. */
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /** The default response ceiling, matching the existing async wire's 8 MiB. */
@@ -114,7 +114,7 @@ function buildQuery(query: Record<string, QueryValue> | undefined): string {
 
 function credentialCandidates(options: TransportOptions): readonly EmailsClientCredentialCandidate[] {
   return [
-    { setting: options.credentialSetting ?? EMAILS_SELF_HOSTED_API_KEY_ENV, value: options.credential },
+    { setting: options.credentialSetting ?? HASNA_EMAILS_API_KEY_ENV, value: options.credential },
     ...(options.credentialFallbacks ?? []),
   ];
 }
@@ -175,7 +175,7 @@ async function requestOnce(
   requestOptions: { query?: Record<string, QueryValue>; body?: unknown } | undefined,
 ): Promise<WireResponse> {
   const headers: Record<string, string> = {
-    // Bearer, matching what both existing self-hosted clients send and what the
+    // Bearer, matching what both existing api clients send and what the
     // service's `extractToken` accepts alongside `x-api-key`.
     Authorization: `Bearer ${credential}`,
     Accept: "application/json",

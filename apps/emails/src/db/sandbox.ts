@@ -22,8 +22,8 @@
 //
 // EVERY OPERATION BUT ONE HAS A STORE EQUIVALENT. `src/store/repositories.ts` publishes
 // `SandboxRepository` over the `sandbox_emails` table, `/v1/sandbox-emails` serves it
-// (`src/server/self-hosted/resources.ts`) and the self-hosted Postgres schema has the table
-// (`src/server/self-hosted/migrations.ts`). The exception is the COUNT — see note 8.
+// (`src/server/api/resources.ts`) and the api Postgres schema has the table
+// (`src/server/api/migrations.ts`). The exception is the COUNT — see note 8.
 //
 // ─── THE EIGHT DIVERGENCES, MEASURED RATHER THAN ASSUMED ──────────────────────────────
 //
@@ -32,7 +32,7 @@
 //     `getSandboxCount` out of a single `list({ limit: 1000 })`. Whichever store answers,
 //     a page of one of these families is capped at 500: `MAX_PAGE` in
 //     `src/store-sqlite/resources.ts` when SQLite answers, `clampLimit` in
-//     `src/server/self-hosted/store.ts` when the service does. (The HTTP store itself does
+//     `src/server/api/store.ts` when the service does. (The HTTP store itself does
 //     NOT clamp — it passes the caller's limit through and the service caps it — so there is
 //     exactly one clamp on each path, not two.) Above 500 captured emails that arm listed a
 //     window cut out of the wrong 500 rows, DELETED at most 500 while reporting that number
@@ -48,7 +48,7 @@
 //     resource path derives `created_at DESC, id DESC` from the table's own shape
 //     (`describeTable`; this table has no `updated_at` locally). The service's spec field
 //     reads `created_at DESC`, but `resourceListOrderBy`
-//     (`src/server/self-hosted/resources.ts`) APPENDS the primary key when the clause does
+//     (`src/server/api/resources.ts`) APPENDS the primary key when the clause does
 //     not already name it, so what the service actually emits is `created_at DESC, id ASC`
 //     — total, like SQLite's, and ordered the opposite way on a tie. Both arms published
 //     newest-first. So NOTHING pushes a `limit`/`offset` down: the first N rows of a store's

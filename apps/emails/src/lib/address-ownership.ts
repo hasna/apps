@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { resolveResourceId } from "../db/self-hosted-store.js";
+import { resolveResourceId } from "../db/api-store.js";
 import { findAddressesByEmail, getAddress, listAddresses, type ListAddressOptions } from "../db/addresses.js";
 import { listProviderNamesByIds } from "../db/providers.js";
 import {
@@ -39,7 +39,7 @@ export interface AddressEnrichmentOptions {
  * Resolve an owner reference: exact name, then exact id, then a UNIQUE id prefix.
  *
  * The prefix match enumerates the owners family itself rather than going through the
- * legacy deployment-word resolver (`resolveResourceId`): the owners family has
+ * legacy selector resolver (`resolveResourceId`): the owners family has
  * collapsed onto the store seam, so its references must resolve against the SAME
  * store its reads and writes go to — resolving a prefix against one store and
  * assigning ownership in another is the provenance split the collapse removed. An
