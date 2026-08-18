@@ -307,7 +307,7 @@ describe("evaluateGuardrail", () => {
     const decision = evaluateGuardrail(
       {
         operationType: "prompt",
-        prompt: { text: "Call the API with sk-1234567890abcdef and return JSON." },
+        prompt: { text: "Call the API with sk-12345*****abcdef and return JSON." },
       },
       defaultGuardrailPolicySet,
       { decisionId: "decision-secret", now: new Date("2026-01-01T00:00:00Z") },
@@ -317,7 +317,7 @@ describe("evaluateGuardrail", () => {
     expect(decision.allowed).toBe(true);
     expect(decision.redactions).toHaveLength(1);
     expect(decision.redactions[0]?.path).toBe("prompt.text");
-    expect(JSON.stringify(decision)).not.toContain("sk-1234567890abcdef");
+    expect(JSON.stringify(decision)).not.toContain("sk-12345*****abcdef");
     expect(decision.audit.decisionId).toBe("decision-secret");
   });
 
@@ -406,7 +406,7 @@ describe("evaluateGuardrail", () => {
     expect(decision.approvalRequirements[0]?.ticketRequired).toBe(true);
   });
 
-  test("infers business context from open-actions inputs", () => {
+  test("infers business context from actions inputs", () => {
     const decision = evaluateGuardrail(
       openActionsGuardrailInput({
         phase: "execute",

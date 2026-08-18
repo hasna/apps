@@ -10,7 +10,7 @@ approval-gated.
 ## Status
 
 First useful OSS version: local-first TypeScript SDK, policy evaluator, CLI,
-examples, and integration helper shapes for sibling open-* tools.
+examples, and integration helper shapes for sibling `@hasna/*` tools.
 
 ## Install
 

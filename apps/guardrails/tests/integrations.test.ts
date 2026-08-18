@@ -75,7 +75,7 @@ describe("integration input builders", () => {
     expect(inferred).toMatchObject({
       subject: "Refund placeholder invoice",
       actor: { id: "actor" },
-      session: { tool: "open-actions", traceId: "trace" },
+      session: { tool: "actions", traceId: "trace" },
       action: { phase: "execute" },
       metadata: { test: true },
     });

@@ -1,25 +1,25 @@
 # Boundaries
 
-`open-guardrails` decides whether a proposed operation is allowed, denied,
+`@hasna/guardrails` decides whether a proposed operation is allowed, denied,
 warned, redacted, or approval-gated. It does not execute the operation.
 
-## Relationship To open-actions
+## Relationship To @hasna/actions
 
-`open-actions` should own typed executable contracts: action manifests,
+`@hasna/actions` should own typed executable contracts: action manifests,
 previews, idempotency, execution bindings, rollback shape, and action audit
 events.
 
-`open-guardrails` should evaluate an action preview or execution request before
+`@hasna/guardrails` should evaluate an action preview or execution request before
 the action runs. The guardrail input may reference an action id, action kind,
 phase, resource, preview, and idempotency key, but the action package remains
 the source of truth for what the action means and how it executes.
 
-## Relationship To open-security
+## Relationship To @hasna/security
 
-`open-security` should own repository scans, dependency checks, secret exposure
+`@hasna/security` should own repository scans, dependency checks, secret exposure
 scanning, vulnerability triage, SARIF/report output, and security dashboards.
 
-`open-guardrails` may reuse findings from security scanners as input evidence,
+`@hasna/guardrails` may reuse findings from security scanners as input evidence,
 but it should not become a full scanner. The starter policy includes lightweight
 inline redaction patterns for prompts, tool calls, and audit surfaces because
 that is required at decision time.

@@ -1,10 +1,10 @@
 # Integrations
 
 The SDK exports structural helper functions instead of importing sibling
-packages. This keeps `open-guardrails` generic OSS infrastructure and avoids
-forcing every caller to install every open-* package.
+packages. This keeps `@hasna/guardrails` generic OSS infrastructure and avoids
+forcing every caller to install every `@hasna/*` package.
 
-## open-actions
+## @hasna/actions
 
 Use `openActionsGuardrailInput()` for action preview and execution phases:
 

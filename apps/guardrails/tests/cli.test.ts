@@ -13,7 +13,7 @@ let logSpy: ReturnType<typeof spyOn>;
 let errorSpy: ReturnType<typeof spyOn>;
 
 async function fixture(name: string, value: unknown): Promise<string> {
-  const path = join(tmpdir(), `open-guardrails-cli-${randomUUID()}-${name}.json`);
+  const path = join(tmpdir(), `guardrails-cli-${randomUUID()}-${name}.json`);
   paths.push(path);
   await Bun.write(path, JSON.stringify(value));
   return path;
@@ -43,14 +43,17 @@ describe("CLI", () => {
     expect(logs[0]).toContain("Usage:");
     logs = [];
     await runCli(["ignored", "positional", "--help"]);
-    expect(logs[0]).toContain("open-guardrails");
+    expect(logs[0]).toContain("guardrails");
     logs = [];
     await runCli(["version", "--first", "--second"]);
     expect(logs).toEqual([guardrailsVersion]);
   });
 
   test("emits a parseable decision for evaluate --json without leaking placeholder secret text", async () => {
-    const rawPlaceholderSecret = "sk-PLACEHOLDER0000";
+    // Sentinel shape: matches the redactor's sk- pattern (which allows `*`) but
+    // not the secrets scanner's sk- detector (which does not) — keeps the
+    // staged-secrets commit gate clean while still exercising redaction.
+    const rawPlaceholderSecret = "sk-PLACEHOLDER****a";
     const inputPath = await fixture("input", {
       operationType: "prompt",
       prompt: { text: `Use ${rawPlaceholderSecret}` },
@@ -108,7 +111,7 @@ describe("CLI", () => {
   test("prints redaction counts in human-readable output", async () => {
     const inputPath = await fixture("redaction", {
       operationType: "prompt",
-      prompt: { text: "sk-PLACEHOLDER0000" },
+      prompt: { text: "sk-PLACEHOLDER****a" },
     });
     await runCli(["evaluate", "--input", inputPath]);
     expect(logs.at(-1)).toBe("redactions: 1");

@@ -92,7 +92,7 @@ export function openActionsGuardrailInput(input: {
     ...(subject ? { subject } : {}),
     ...(input.actorId ? { actor: { id: input.actorId, type: "agent" } } : {}),
     session: {
-      tool: "open-actions",
+      tool: "actions",
       ...(input.traceId ? { traceId: input.traceId } : {}),
     },
     action: {

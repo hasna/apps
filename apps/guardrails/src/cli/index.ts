@@ -42,7 +42,7 @@ async function readJsonFromStdin(): Promise<unknown> {
 }
 
 function help(): string {
-  return `open-guardrails ${guardrailsVersion}
+  return `guardrails ${guardrailsVersion}
 
 Usage:
   guardrails evaluate --input request.json [--policy guardrails.policy.json] [--json]
