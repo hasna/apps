@@ -43,13 +43,13 @@ describe("MCP resource payloads (self-hosted /v1)", () => {
 
     const domains = await domainsResourcePayloadForRuntime() as {
       domains: Array<{ id: string; domain: string; provisioning: unknown; readiness: unknown }>;
-      mode: string;
+      backend: string;
       source: string;
       note?: string;
     };
 
-    expect(domains.mode).toBe("self_hosted");
-    expect(domains.source).toBe("self_hosted_api");
+    expect(domains.backend).toBe("api");
+    expect(domains.source).toBe("self-hosted_api");
     expect(domains.note).toBeUndefined();
     expect(domains.domains.map((domain) => domain.domain)).toEqual(["example.com", "pending.example.com"]);
     expect(domains.domains[0]).toHaveProperty("readiness");
@@ -69,13 +69,13 @@ describe("MCP resource payloads (self-hosted /v1)", () => {
 
     const addresses = await addressesResourcePayloadForRuntime() as {
       addresses: Array<{ id: string; email: string; provisioning: unknown }>;
-      mode: string;
+      backend: string;
       source: string;
       note?: string;
     };
 
-    expect(addresses.mode).toBe("self_hosted");
-    expect(addresses.source).toBe("self_hosted_api");
+    expect(addresses.backend).toBe("api");
+    expect(addresses.source).toBe("self-hosted_api");
     expect(addresses.note).toBeUndefined();
     expect(addresses.addresses.map((address) => address.email)).toEqual(["ops@example.com", "pending@example.com"]);
     expect(addresses.addresses[0]?.provisioning).toBeNull();
@@ -84,15 +84,15 @@ describe("MCP resource payloads (self-hosted /v1)", () => {
   it("reports recent-error resource as API-only with no local state read", () => {
     const recentErrors = recentErrorsResourcePayloadForRuntime() as {
       errors: unknown[];
-      mode: string;
+      backend: string;
       source: string;
       note: string;
     };
 
     expect(recentErrors).toMatchObject({
       errors: [],
-      mode: "self_hosted",
-      source: "self_hosted_api",
+      backend: "api",
+      source: "self-hosted_api",
     });
     expect(recentErrors.note).toContain("no local database or config state was read");
   });
@@ -111,8 +111,8 @@ describe("MCP resource payloads (self-hosted /v1)", () => {
 
     expect(mailboxes.counts).toMatchObject({ inbox: 2, unread: 1, sent: 1 });
     expect(sources.sources[0]).toMatchObject({
-      id: "self_hosted",
-      badges: ["self_hosted"],
+      id: "self-hosted",
+      badges: ["self-hosted"],
       total: 2,
       unread: 1,
     });

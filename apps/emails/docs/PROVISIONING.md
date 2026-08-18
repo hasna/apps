@@ -67,7 +67,7 @@ Local mode also exposes direct, operator-credentialed infrastructure tools:
 - `setup_ses_inbound` creates the S3 bucket and SES receipt rules.
 
 These are one-shot infrastructure helpers, not the missing resumable
-`provision_*` workflow. They are refused in `self_hosted` mode because otherwise
+`provision_*` workflow. They are refused in `self-hosted` mode because otherwise
 they would mutate infrastructure using the client machine's ambient cloud
 credentials while recording state in the operator's shared service.
 

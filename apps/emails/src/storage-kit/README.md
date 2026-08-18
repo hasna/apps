@@ -20,7 +20,7 @@ database-URL resolution are NOT part of it — those live in `src/lib/mode.ts` a
 
 ## PURE REMOTE (Amendment A1)
 
-Self-hosted mode = reads **and** writes go directly to self_hosted Postgres. This kit
+Self-hosted mode = reads **and** writes go directly to self-hosted Postgres. This kit
 contains **no sync engine, no cache-as-mode, and no merge logic**. In `local`
 mode there is no Postgres pool at all; SQLite is authoritative.
 

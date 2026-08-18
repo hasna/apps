@@ -115,7 +115,7 @@ describe("provider list command", () => {
   });
 });
 
-describe("provider add credential honesty (self_hosted)", () => {
+describe("provider add credential honesty (self-hosted)", () => {
   // 2026-07-25: `emails provider add --type ses --access-key … --secret-key …`
   // reported "Provider credentials are invalid" and sending kept using the ECS
   // task role. Both statements were false: the credentials were stripped by the

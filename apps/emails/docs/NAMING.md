@@ -112,7 +112,7 @@ adversarial reviewer read it and concluded — wrongly — that the two products
 are coupled.
 
 The practical consequence for this repo: **`@hasna/emails` has no hosted
-counterpart.** Its deployment modes are operator-owned. Do not describe
+counterpart.** Its deployment configurations are operator-owned. Do not describe
 `mailery.co` as the hosted version of this package, and do not add a client for
 it here.
 

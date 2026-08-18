@@ -15,8 +15,8 @@ let stub: V1Stub;
 const tempDirs: string[] = [];
 
 const LEGACY_ENV_KEYS = [
-  "HASNA_EMAILS_DATABASE_URL", "EMAILS_DATABASE_URL", "EMAILS_STORAGE_MODE", "EMAILS_DB_PATH",
-  "HASNA_EMAILS_DB_PATH", "HASNA_EMAILS_MODE", "EMAILS_CLIENT_ENV_SECRET",
+  "HASNA_EMAILS_DATABASE_URL", "EMAILS_DATABASE_URL", "EMAILS_DB_PATH",
+  "HASNA_EMAILS_DB_PATH", "EMAILS_CLIENT_ENV_SECRET",
   "MAILERY_MODE", "HASNA_MAILERY_MODE", "MAILERY_STORAGE_MODE", "HASNA_MAILERY_STORAGE_MODE",
   "MAILERY_API_URL", "MAILERY_API_KEY", "HASNA_MAILERY_API_URL", "HASNA_MAILERY_API_KEY",
 ] as const;
@@ -30,9 +30,8 @@ function cliEnv(): NodeJS.ProcessEnv {
   for (const key of LEGACY_ENV_KEYS) delete base[key];
   return {
     ...base,
-    EMAILS_MODE: "self_hosted",
-    EMAILS_SELF_HOSTED_URL: stub.baseUrl,
-    EMAILS_SELF_HOSTED_API_KEY: stub.apiKey,
+    HASNA_EMAILS_API_URL: stub.baseUrl,
+    HASNA_EMAILS_API_KEY: stub.apiKey,
     HOME: homePath,
     NO_COLOR: "1",
   };
@@ -203,10 +202,10 @@ describe("CLI JSON contracts (self-hosted /v1)", () => {
   }, 15_000);
 
   it("prints self-hosted agent context as stable redacted JSON", () => {
-    const parsed = expectCliJsonOk<{ status: { mode: { current: string } } }>(
+    const parsed = expectCliJsonOk<{ status: { backend: string } }>(
       runCli(["--json", "agent", "context"], cliEnv()),
     );
-    expect(parsed.status.mode.current).toBe("self_hosted");
+    expect(parsed.status.backend).toBe("api");
   });
 
   it("prints valid JSON for inbox list, read, and links routed to /v1", async () => {
@@ -245,8 +244,8 @@ describe("CLI JSON contracts (self-hosted /v1)", () => {
   it("prints valid JSON for domains list routed to /v1", async () => {
     await stub.seed({
       domains: [
-        { id: "dom-1", domain: "one.example.com", provider: "self_hosted", verified: true },
-        { id: "dom-2", domain: "two.example.com", provider: "self_hosted", verified: false },
+        { id: "dom-1", domain: "one.example.com", provider: "self-hosted", verified: true },
+        { id: "dom-2", domain: "two.example.com", provider: "self-hosted", verified: false },
       ],
     });
     const rows = expectCliJsonOk<Array<{ domain: string }>>(

@@ -21,8 +21,8 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { closeDatabase, getDatabase, resetDatabase, type Database } from "../db/database.js";
-import { createProvider } from "../db/providers.local.js";
-import { createSentEmailLedger } from "./sent-ledger.local.js";
+import { createProvider } from "../db/providers.sqlite.js";
+import { createSentEmailLedger } from "./sent-ledger.sqlite.js";
 import { createEvent } from "../db/events.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
 import { createHttpEmailStore } from "../store-http/index.js";
@@ -38,8 +38,8 @@ const DB_PATH_ENV = "EMAILS_DB_PATH";
 const TOUCHED_ENV = [
   DB_PATH_ENV,
   "HASNA_EMAILS_DB_PATH",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
 ] as const;
 
 let saved: Array<readonly [string, string | undefined]> = [];
@@ -421,8 +421,8 @@ describe("a read that did not happen is never published as a zero", () => {
   it("reports a contradictory storage configuration instead of throwing", async () => {
     // `emails stats` must not itself fail while trying to say why it cannot measure.
     process.env["EMAILS_DB_PATH"] = "/tmp/emails-stats-contradiction.db";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://mail.example.test";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "k";
+    process.env["HASNA_EMAILS_API_URL"] = "https://mail.example.test";
+    process.env["HASNA_EMAILS_API_KEY"] = "k";
     const stats = await getLocalStats(undefined, "30d");
     expect(stats.sent).toBeNull();
     expect(stats.delivered).toBeNull();
@@ -430,7 +430,7 @@ describe("a read that did not happen is never published as a zero", () => {
     expect(statusReasonCode(stats.gaps["sent"]?.reason)).toBe("source_unreachable");
     expect(stats.gaps["sent"]?.reason).toContain("store_unresolved");
     // The setting KEYS are named so an operator can act; no value is echoed.
-    expect(stats.gaps["sent"]?.reason).toContain("EMAILS_SELF_HOSTED_URL");
+    expect(stats.gaps["sent"]?.reason).toContain("HASNA_EMAILS_API_URL");
     expect(stats.gaps["sent"]?.reason).not.toContain("mail.example.test");
   });
 });

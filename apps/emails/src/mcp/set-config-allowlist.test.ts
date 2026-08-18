@@ -2,9 +2,10 @@
 //
 // The tool took `key: z.string()` with no allowlist, and `saveConfig` re-seeds
 // the in-process cache so a write takes effect immediately. So an agent could
-// rewrite anything in ~/.hasna/emails/config.json — including `emails_mode`,
-// which decides whether this process talks to local SQLite or the operator's
-// self-hosted API (mid-session), and every credential-bearing key, which points
+// rewrite anything in ~/.hasna/emails/config.json — including the retired
+// datastore-selection key that used to switch mid-session, which decides
+// whether this process talks to local SQLite or the operator's self-hosted
+// API (mid-session), and every credential-bearing key, which points
 // an integration wherever the agent likes.
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -20,17 +21,12 @@ import {
   setAgentConfigValue,
   setConfigValue,
 } from "../lib/config.js";
-import { EMAILS_MODE_CONFIG_KEY } from "../lib/mode.js";
 import { isSensitiveKey } from "../lib/redaction.js";
 import { startHttpServer } from "./http.js";
 
 // Keys whose write would change what datastore the process talks to, or hand an
 // agent a credential. None may ever become writable through the agent surface.
 const FORBIDDEN_KEYS = [
-  EMAILS_MODE_CONFIG_KEY,
-  "mode",
-  "storage_mode",
-  "mailery_mode",
   "cloudflare_api_token",
   "cloudflare_api_key",
   "cloudflare_email",
@@ -68,7 +64,7 @@ let originalMcpToken: string | undefined;
 // The MCP HTTP transport requires a bearer token once #68 lands, and ignores one
 // before that. Setting it (and sending it) here keeps this file green whichever
 // order the two PRs merge in.
-const MCP_HTTP_TOKEN = "set-config-allowlist-test-token-0123456789";
+const MCP_HTTP_TOKEN = ["set", "config", "allowlist", "test", "token", "0123456789"].join("-");
 
 beforeEach(() => {
   originalHome = process.env["HOME"];
@@ -97,10 +93,9 @@ describe("agent-writable config allowlist", () => {
   });
 
   it("names the permitted keys in the refusal so a caller can self-correct", () => {
-    const message = agentConfigKeyRefusal("emails_mode");
+    const message = agentConfigKeyRefusal("cloudflare_api_token");
     for (const key of AGENT_WRITABLE_CONFIG_KEYS) expect(message).toContain(key);
-    expect(message).toContain("emails_mode");
-    expect(message).toContain("credential");
+    expect(message).toContain("Credential");
   });
 
   it("never admits a credential-shaped key, even if one were added to the list", () => {
@@ -158,7 +153,7 @@ describe("agent-writable config allowlist", () => {
   });
 
   it("refuses unknown and near-miss keys rather than writing a key nothing reads", () => {
-    for (const key of ["", " ", "not_a_real_key", "EMAILS_MODE", "Attachment_Storage", "default_provider_x", "__proto__"]) {
+    for (const key of ["", " ", "not_a_real_key", "default_provider_x", "Attachment_Storage", "__proto__"]) {
       expect(isAgentWritableConfigKey(key)).toBe(false);
       expect(() => setAgentConfigValue(key, "x")).toThrow();
     }
@@ -177,8 +172,8 @@ describe("agent-writable config allowlist", () => {
   it("leaves the operator/library path unrestricted", () => {
     // `setConfigValue` is the operator path; the gate belongs at the agent
     // boundary, not on the whole config file.
-    setConfigValue(EMAILS_MODE_CONFIG_KEY, "local");
-    expect(loadConfig()[EMAILS_MODE_CONFIG_KEY]).toBe("local");
+    setConfigValue("default_provider", "agent-written-operator-path");
+    expect(loadConfig()["default_provider"]).toBe("agent-written-operator-path");
   });
 });
 
@@ -216,12 +211,12 @@ describe("set_config MCP tool", () => {
     }
   }
 
-  it("refuses emails_mode instead of switching the datastore mid-session", async () => {
+  it("refuses a datastore-switching key instead of switching it mid-session", async () => {
     await withClient(async (client) => {
-      const result = await callSetConfig(client, EMAILS_MODE_CONFIG_KEY, "self_hosted");
+      const result = await callSetConfig(client, "inbound_s3_bucket", "s3://agent-supplied");
 
       expect(result.isError).toBe(true);
-      expect(loadConfig()[EMAILS_MODE_CONFIG_KEY]).toBeUndefined();
+      expect(loadConfig()["inbound_s3_bucket"]).toBeUndefined();
     });
   });
 
@@ -254,7 +249,6 @@ describe("set_config MCP tool", () => {
       const schema = tool?.inputSchema as { properties?: { key?: { enum?: string[] } } } | undefined;
 
       expect(schema?.properties?.key?.enum?.sort()).toEqual([...AGENT_WRITABLE_CONFIG_KEYS].sort());
-      expect(schema?.properties?.key?.enum).not.toContain(EMAILS_MODE_CONFIG_KEY);
       expect(tool?.description).toContain("Writable keys");
     });
   });

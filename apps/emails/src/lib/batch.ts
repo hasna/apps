@@ -2,11 +2,11 @@
 // installation keeps its mail.
 //
 // WHAT THIS FILE USED TO BE, because the shape is the bug: `batch.ts` was a facade
-// that read the process-wide deployment mode and handed the call to one of two
-// modules. `batch.local.ts` rendered a template per CSV row, checked suppression,
-// sent through the provider adapters and wrote the sent-mail ledger; `batch.remote.ts`
+// that read the process-wide selector and handed the call to one of two
+// modules. `batch.sqlite.ts` rendered a template per CSV row, checked suppression,
+// sent through the provider adapters and wrote the sent-mail ledger; `batch.api.ts`
 // threw. Same name, same signature, opposite meanings — the operation either happened
-// or did not exist, decided by an environment variable. That is the deployment-mode
+// or did not exist, decided by an environment variable. That is the selector
 // axis, and both arms are gone.
 //
 // WHAT REPLACES THE ARM CHOICE. The template this batch renders is read through the
@@ -41,7 +41,7 @@
 //      mailed and for what `{{name}}` means.
 //
 // For (2) and (3) this module imports the FACADE of each family, never an arm. Reaching
-// into a `.local` module — which is what the deleted `batch.local.ts` did for four
+// into a `.local` module — which is what the deleted `batch.sqlite.ts` did for four
 // different families — is how a call ends up serving local rows under a configuration
 // that names something else.
 //
@@ -61,7 +61,7 @@ import type { Provider } from "../types/index.js";
 import { parseCsv } from "./csv.js";
 import { canonicalSender } from "./email-address.js";
 import { assertDomainOutboundReady, sendWithFailover } from "./send.js";
-import { createSentEmailLedger } from "./sent-ledger.local.js";
+import { createSentEmailLedger } from "./sent-ledger.sqlite.js";
 
 export { parseCsv } from "./csv.js";
 

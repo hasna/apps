@@ -16,7 +16,7 @@ const heavyRuntimeImports = [
   "solid-js",
   "../../lib/s3-sync.js",
   "../../lib/sync.js",
-  "../../lib/inbound.local.js",
+  "../../lib/inbound.sqlite.js",
   "../../lib/send.js",
   "../../lib/batch.js",
   "../../lib/completion.js",

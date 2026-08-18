@@ -7,7 +7,7 @@ import { getTemplate, renderTemplate } from "../../db/templates.js";
 import { getGroupByName, listMemberSummaries } from "../../db/groups.js";
 import { suppressedRecipientsAmong } from "../../db/contacts.js";
 import { handleError } from "../utils.js";
-import { getEmailsMode } from "../../lib/mode.js";
+import { isApiClientConfigured } from "../../store-resolution.js";
 import {
   describeSendAttachmentLimits,
   LOCAL_SEND_ATTACHMENT_LIMITS,
@@ -41,7 +41,7 @@ const ATTACHMENT_MIME_TYPES: Record<string, string> = {
  *
  * This used to be an unconditional refusal — "--to-group is not available in
  * the self-hosted client without a self-hosted group-members send API" — which
- * was wrong twice: it fired in local mode too, and no send API is needed. Group
+ * was wrong twice: it fired for the local SQLite client too, and no send API is needed. Group
  * fan-out is a CLIENT-side recipient lookup. `src/db/groups.ts` reads the store
  * seam resolved from storage configuration, and `emails group members <name>`
  * has been printing exactly this list against both stores all along. The
@@ -123,7 +123,7 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
     .option("--provider <id>", "Provider ID (uses first active if not specified)")
     .option("--template <name>", "Use a template by name")
     .option("--vars <json>", "Template variables as JSON string")
-    .option("--force", "Send to recipients marked suppressed (self-hosted mode: honored only with tenant-level send authority — the same authority that can unsuppress a contact)")
+    .option("--force", "Send to recipients marked suppressed (honored on both backends; the API server only with tenant-level send authority — the same authority that can unsuppress a contact)")
     .option("--dry-run", "Preview what would be sent without actually sending")
     .option("--schedule <datetime>", "Schedule email for later (ISO 8601 datetime)")
     .option("--unsubscribe-url <url>", "Inject List-Unsubscribe headers (RFC 8058 one-click)")
@@ -264,14 +264,13 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
         const attachments = readSendAttachments(opts.attachment);
         if (opts.dryRun) {
           // --dry-run PREDICTS the send, so every claim below must be true for the
-          // mode that would actually run it. This block had no mode branch: in
-          // local mode it announced "(self-hosted)", quoted the server's
+          // backend that would actually run it. This block had no branch: in
+          // local SQLite client it announced "(self-hosted)", quoted the server's
           // attachment caps, and predicted that scheduling would fail — none of
           // which applies to a local send, which does support scheduling.
-          const mode = getEmailsMode();
-          const selfHosted = mode === "self_hosted";
-          const limits = selfHosted ? SELF_HOSTED_SEND_ATTACHMENT_LIMITS : LOCAL_SEND_ATTACHMENT_LIMITS;
-          console.log(chalk.bold(`\n[DRY RUN] Would send (${selfHosted ? "self-hosted" : "local"}):`));
+          const apiBacked = isApiClientConfigured();
+          const limits = apiBacked ? SELF_HOSTED_SEND_ATTACHMENT_LIMITS : LOCAL_SEND_ATTACHMENT_LIMITS;
+          console.log(chalk.bold(`\n[DRY RUN] Would send (${apiBacked ? "API client" : "local"}):`));
           console.log(`  ${chalk.dim("From:")}    ${opts.from}`);
           console.log(`  ${chalk.dim("To:")}      ${toAddresses.join(", ")}`);
           // A group expands into ONE message addressed to every member, so the
@@ -285,7 +284,7 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
           if (htmlBody) console.log(`  ${chalk.dim("Body:")}    HTML (${htmlBody.length} chars)`);
           else if (textBody) console.log(`  ${chalk.dim("Body:")}    ${textBody.slice(0, 100)}${textBody.length > 100 ? "..." : ""}`);
           if (attachments.length) {
-            console.log(chalk.dim(`  Attachments: ${attachments.length} inline file(s); ${mode} caps are ${describeSendAttachmentLimits(limits)}`));
+            console.log(chalk.dim(`  Attachments: ${attachments.length} inline file(s); ${apiBacked ? "API-client" : "local"} caps are ${describeSendAttachmentLimits(limits)}`));
           }
 
           // ── the part that makes this a PRECHECK rather than an echo ──────────
@@ -294,7 +293,7 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
           // command produced byte-identical output for a verified sender, an
           // unverified one whose send would be refused, and an address that does
           // not exist at all — while operators used it as a gate before real sends.
-          if (selfHosted) {
+          if (apiBacked) {
             // Read the sender record over /v1/addresses. This creates no message
             // row and sends nothing; it answers the checks the server evaluates
             // first, in the same order, and names the same policy code.
@@ -335,15 +334,15 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
                 console.log(chalk.red(`  Attach:  WOULD BE REFUSED (${finding.rule}) — ${finding.detail}`));
               }
             } else {
-              console.log(chalk.green(`  Attach:  ${files.length} file(s) within the ${mode} caps.`));
+              console.log(chalk.green(`  Attach:  ${files.length} file(s) within the ${apiBacked ? "API-client" : "local"} caps.`));
             }
           }
 
           // Say what this did NOT prove. A preview that stops at its own green lines
           // is read as a guarantee it never made.
-          console.log(chalk.dim(`  Note:    ${describeUncheckedSendPolicy(selfHosted)}`));
+          console.log(chalk.dim(`  Note:    ${describeUncheckedSendPolicy(apiBacked)}`));
           if (opts.schedule) {
-            console.log(selfHosted
+            console.log(apiBacked
               ? chalk.yellow(`  Schedule:    ${opts.schedule} — the self-hosted server does not accept a scheduled send (a real send would fail)`)
               : chalk.dim(`  Schedule:    ${opts.schedule} — a real send enqueues this locally; use \`emails schedule list\` to inspect the queue`));
           }
@@ -361,7 +360,7 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
           markdown: false,
           replyTo: opts.replyTo,
           // `--provider` used to be parsed and then dropped on the floor in BOTH
-          // modes. Thread it through: local honours it, self_hosted refuses it
+          // modes. Thread it through: local honours it, self-hosted refuses it
           // explicitly (the server chooses the sender), so it is never silently
           // ignored again.
           providerId: opts.provider,

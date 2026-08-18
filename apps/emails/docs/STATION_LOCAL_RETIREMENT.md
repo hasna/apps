@@ -54,7 +54,7 @@ release:
 ```bash
 test "${HASNA_EMAILS_DB_PATH+x}" != x
 test "${EMAILS_DB_PATH+x}" != x
-test -n "${EMAILS_CLIENT_ENV_SECRET:-}" || test -n "${EMAILS_SELF_HOSTED_URL:-}"
+test -n "${EMAILS_CLIENT_ENV_SECRET:-}" || test -n "${HASNA_EMAILS_API_URL:-}"
 ./scripts/self-hosted-client-smoke.sh >"$PRIVATE_EVIDENCE_DIR/pre-stop-smoke.json"
 ```
 

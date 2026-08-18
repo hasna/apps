@@ -14,13 +14,13 @@
 // naming the deployment word. Two absences are deliberate and are NOT gaps:
 //
 //   * there is no case that SETS the deployment word to prove it no longer decides. Writing it
-//     here — in any form, including through an exported constant, because the ratchet's env
+//     here — in any form, including through an exported constant, because the source-text guard's env
 //     metric is a substring match — would RAISE a counter that may only fall. The absence of that
-//     read is enforced by `src/mode-axis-ratchet.test.ts` with zero slack, which is the guard
+//     read is enforced by `src/store-resolution.test.ts` with zero slack, which is the guard
 //     designed for it.
 //   * for the same reason there is no assertion that the module text no longer contains the
 //     dispatch helper or the mode read: naming either identifier here would raise its own
-//     counter. The ratchet counts them tree-wide, this file included.
+//     counter. The source-text guard counts them tree-wide, this file included.
 //
 // `HOME` IS REDIRECTED IN EVERY CASE, and that is a safety property rather than tidiness. When no
 // database path is configured the database layer resolves `~/.hasna/emails/emails.db` and CREATES

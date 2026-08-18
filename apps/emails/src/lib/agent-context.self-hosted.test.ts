@@ -180,10 +180,10 @@ describe("self-hosted status reports REAL server inventory (G1)", () => {
       .filter((command): command is string => command !== null);
     expect(proposed.length, "the guard must have commands to check").toBeGreaterThan(0);
     const refused = proposed
-      .map((command) => ({ command, prefix: cliRefusalFor(command, "self_hosted") }))
+      .map((command) => ({ command, prefix: cliRefusalFor(command, "api") }))
       .filter((entry) => entry.prefix !== null)
       .map((entry) => `${entry.command} (refused by ${entry.prefix})`);
-    expect(refused, "next_actions proposes commands that throw in self_hosted mode").toEqual([]);
+    expect(refused, "next_actions proposes commands that throw when the API client is configured").toEqual([]);
   });
 });
 
@@ -442,7 +442,7 @@ describe("honest-unavailable contract (G3)", () => {
   it("reports null (never 0) and a source_unreachable reason when the API cannot be read", async () => {
     // Point the client at a port nothing listens on: the reads MUST fail loudly
     // in the payload rather than degrade to zeros.
-    process.env["EMAILS_SELF_HOSTED_URL"] = "http://127.0.0.1:1";
+    process.env["HASNA_EMAILS_API_URL"] = "http://127.0.0.1:1";
     const { resetSelfHostedConfigCache } = await import("../db/self-hosted-store.js");
     const { resetMailDataSource } = await import("./mail-data-source.js");
     resetSelfHostedConfigCache();

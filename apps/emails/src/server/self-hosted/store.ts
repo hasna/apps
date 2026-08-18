@@ -1,6 +1,6 @@
 // Postgres repository for the Emails self-hosted service.
 //
-// Amendment A1 (PURE REMOTE): every method reads/writes the self_hosted Postgres
+// Amendment A1 (PURE REMOTE): every method reads/writes the self-hosted Postgres
 // directly through the product-owned storage utilities' typed query client. No cache, no
 // local mirror.
 
@@ -2573,9 +2573,9 @@ export class TenantScopedStore {
     const domain = email.includes("@") ? email.slice(email.indexOf("@") + 1) : null;
     const providerId = input.provider_id?.trim() || null;
     if (providerId) {
-      await this.assertNotOtherTenant("self_hosted_providers", providerId, "provider_id");
+      await this.assertNotOtherTenant("server_providers", providerId, "provider_id");
       const provider = await this.client.get<{ id: string }>(
-        `SELECT id FROM self_hosted_providers WHERE id = $1 AND tenant_id = $2`,
+        `SELECT id FROM server_providers WHERE id = $1 AND tenant_id = $2`,
         [providerId, this.tenantId],
       );
       if (!provider) throw new AddressProviderNotFoundError();

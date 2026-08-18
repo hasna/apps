@@ -166,16 +166,17 @@ export async function listSelfHostedAttachments(
   input: AttachmentInventoryQueryInput = {},
 ): Promise<SafeAttachmentInventoryPage> {
   const query = normalizeAttachmentInventoryQuery(input);
-  const [{ resolveSelfHostedConfig }, { resolveEmailsModeSelection }, { EmailsSelfHostClient }] = await Promise.all([
+  const [{ resolveSelfHostedConfig }, { EmailsSelfHostClient }] = await Promise.all([
     import("../db/self-hosted-store.js"),
-    import("./mode.js"),
     import("../selfhost.js"),
   ]);
-  const selectedMode = resolveEmailsModeSelection().mode;
-  if (selectedMode !== "self_hosted") {
-    throw new Error("attachment inventory is available only in self_hosted mode");
+  // The client storage contract selects the API client; this surface is
+  // API-backed and refuses for the local SQLite client.
+  const { isApiClientConfigured } = await import("../store-resolution.js");
+  if (!isApiClientConfigured()) {
+    throw new Error("attachment inventory is available only for the API client");
   }
-  const config = resolveSelfHostedConfig(process.env, { selectedMode });
+  const config = resolveSelfHostedConfig();
   const client = new EmailsSelfHostClient({
     baseUrl: selfHostedClientBaseUrl(config.baseUrl),
     bearerToken: config.credential,

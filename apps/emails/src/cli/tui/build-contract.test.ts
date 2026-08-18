@@ -77,17 +77,17 @@ describe("emails ui build contract", () => {
 
   it("keeps local and self-hosted TUI send graphs isolated behind the mode router", () => {
     const source = readFileSync(join(root, "src", "cli", "tui", "data.ts"), "utf8");
-    const localSource = readFileSync(join(root, "src", "cli", "tui", "data.local.ts"), "utf8");
-    const remoteSource = readFileSync(join(root, "src", "cli", "tui", "data.remote.ts"), "utf8");
+    const localSource = readFileSync(join(root, "src", "cli", "tui", "data.sqlite.ts"), "utf8");
+    const remoteSource = readFileSync(join(root, "src", "cli", "tui", "data.api.ts"), "utf8");
     const offenders = [...source.matchAll(staticImport)]
       .map((match) => match[1] ?? "")
       .filter((specifier) => specifier === "../../lib/send.js" || specifier.startsWith("../../lib/send.js"));
 
     expect(offenders).toEqual([]);
     expect(source).not.toContain('import("../../lib/send.js")');
-    expect(source).toContain('from "./data.local.js"');
-    expect(source).toContain('from "./data.remote.js"');
-    expect(localSource).toContain('import("../../lib/send.local.js")');
+    expect(source).toContain('from "./data.sqlite.js"');
+    expect(source).toContain('from "./data.api.js"');
+    expect(localSource).toContain('import("../../lib/send.sqlite.js")');
     expect(remoteSource).toContain('selfHostedStoreFor("messages/send")');
   });
 });

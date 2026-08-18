@@ -236,7 +236,7 @@ run "dormant_by_default" {
   assert {
     condition = toset([
       for entry in jsondecode(aws_ecs_task_definition.api.container_definitions)[0].secrets : entry.name
-    ]) == toset(["EMAILS_DATABASE_URL", "EMAILS_API_SIGNING_KEY"])
+    ]) == toset(["HASNA_EMAILS_DATABASE_URL", "EMAILS_API_SIGNING_KEY"])
     error_message = "The API must receive only canonical Emails secret environment names."
   }
 
@@ -584,7 +584,7 @@ run "ses_credentials_injected_by_arn_reference_only" {
     condition = toset([
       for entry in jsondecode(aws_ecs_task_definition.api.container_definitions)[0].secrets : entry.name
       ]) == toset([
-      "EMAILS_DATABASE_URL",
+      "HASNA_EMAILS_DATABASE_URL",
       "EMAILS_API_SIGNING_KEY",
       "EMAILS_SES_ACCESS_KEY_ID",
       "EMAILS_SES_SECRET_ACCESS_KEY",

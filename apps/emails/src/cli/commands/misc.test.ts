@@ -1,7 +1,7 @@
 // Self-hosted-ONLY.
 //
 // Reading and cancelling the schedule, and running diagnostics, are NOT
-// server-only: `GET/PATCH /v1/scheduled` exists and src/db/scheduled.remote.ts
+// server-only: `GET/PATCH /v1/scheduled` exists and src/db/scheduled.api.ts
 // is a complete client for it (the MCP `list_scheduled` / `cancel_scheduled`
 // tools already take exactly that path), and src/lib/doctor.ts reads its facts
 // through whichever store the configuration names. Those commands are driven
@@ -18,7 +18,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { Command } from "commander";
 import { startV1Stub, type V1Stub, type V1StubResources } from "../../test-support/v1-stub.js";
-import { registerMiscCommands, runSchedulerTick } from "./misc.remote.js";
+import { registerMiscCommands, runSchedulerTick } from "./misc.api.js";
 
 let stub: V1Stub;
 

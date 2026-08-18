@@ -168,7 +168,7 @@ export interface AttachmentInfo {
   location?: string; // local path or s3:// url, if downloaded
   /**
    * Whether the backing store holds payload bytes. `undefined` = not reported
-   * (local mode, or a self-hosted serve predating the content_available
+   * (local SQLite client, or a self-hosted serve predating the content_available
    * contract) and must never be rendered as "unavailable".
    */
   content_available?: boolean;
@@ -326,7 +326,7 @@ export interface ListMailboxSourcesOptions {
   limit?: number;
   search?: string;
   /**
-   * Include each source's latest-received timestamp. In self_hosted mode this costs
+   * Include each source's latest-received timestamp. In API-client configuration this costs
    * an extra HTTP round-trip PER source, so the status path (which only shows the
    * aggregate latest) passes `false` to avoid the N+1 timeout. Defaults to true.
    */

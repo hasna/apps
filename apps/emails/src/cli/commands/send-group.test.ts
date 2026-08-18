@@ -21,7 +21,7 @@ import { Command } from "commander";
 import { closeDatabase, resetDatabase } from "../../db/database.js";
 import { resetSelfHostedConfigCache } from "../../db/self-hosted-store.js";
 import { addMember, createGroup } from "../../db/groups.js";
-import { createProvider } from "../../db/providers.local.js";
+import { createProvider } from "../../db/providers.sqlite.js";
 import { listSandboxEmails } from "../../db/sandbox.js";
 import { resetMailDataSource } from "../../lib/mail-data-source.js";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
@@ -88,11 +88,11 @@ describe("emails send --to-group (local)", () => {
     // Local is the DEFAULT resolution (src/lib/mode.ts), and the hermetic runner
     // selects it explicitly, so this arm only has to make sure no self-hosted
     // selector is left over from a sibling suite. Naming the mode variable here
-    // would add to a tree-wide count that the mode-axis ratchet holds at a
+    // would add to a tree-wide count that the selector-removal guard holds at a
     // ceiling, and this file has no business raising it.
     for (const key of [
-      "EMAILS_SELF_HOSTED_URL",
-      "EMAILS_SELF_HOSTED_API_KEY",
+      "HASNA_EMAILS_API_URL",
+      "HASNA_EMAILS_API_KEY",
       "EMAILS_SESSION_TOKEN",
       "EMAILS_CLIENT_ENV_SECRET",
     ]) delete process.env[key];

@@ -1,13 +1,13 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { createAddress } from "../../db/addresses.local.js";
+import { createAddress } from "../../db/addresses.sqlite.js";
 import { suppressContact, upsertContact } from "../../db/contacts.js";
 import { closeDatabase, getDatabase, resetDatabase } from "../../db/database.js";
-import { createDomain, updateDnsStatus, updateDomainReadiness } from "../../db/domains.local.js";
-import { createSentEmailLedger } from "../../lib/sent-ledger.local.js";
+import { createDomain, updateDnsStatus, updateDomainReadiness } from "../../db/domains.sqlite.js";
+import { createSentEmailLedger } from "../../lib/sent-ledger.sqlite.js";
 import { createEvent } from "../../db/events.js";
 import { addMember, createGroup } from "../../db/groups.js";
-import { storeInboundEmail } from "../../db/inbound.local.js";
-import { createProvider } from "../../db/providers.local.js";
+import { storeInboundEmail } from "../../db/inbound.sqlite.js";
+import { createProvider } from "../../db/providers.sqlite.js";
 import { createScheduledEmail, markSent } from "../../db/scheduled.js";
 import { storeSandboxEmail } from "../../db/sandbox.js";
 import { createSequence, enroll, unenroll } from "../../db/sequences.js";

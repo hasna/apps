@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { closeDatabase, getDatabase, resetDatabase, type Database } from "./database.js";
-import { storeInboundEmail } from "./inbound.local.js";
+import { storeInboundEmail } from "./inbound.sqlite.js";
 import {
   addPrioritySenderRuleLocal,
   listPrioritySenderRulesLocal,
   removePrioritySenderRuleLocal,
 } from "./priority-senders.js";
-import { listMailbox } from "../cli/tui/data.local.js";
+import { listMailbox } from "../cli/tui/data.sqlite.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
 
 let db: Database;

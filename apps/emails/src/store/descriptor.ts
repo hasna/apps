@@ -4,14 +4,14 @@
 // `MailDataSource.mode` became: it was introduced as a label, it was typed as a
 // two-value union, and because a union narrows so pleasantly it leaked out. Counted
 // precisely rather than approximately: five call sites BRANCH on it —
-// src/cli/commands/send.ts:136 and src/cli/commands/inbox.local.ts:178, 496, 1006, 1011
-// — plus three that pass it through (src/cli/commands/inbox.remote.ts:427, 679 and the
-// TUI state). Every branch is a deployment-mode decision wearing a data-source costume,
+// src/cli/commands/send.ts:136 and src/cli/commands/inbox.sqlite.ts:178, 496, 1006, 1011
+// — plus three that pass it through (src/cli/commands/inbox.api.ts:427, 679 and the
+// TUI state). Every branch is a selector decision wearing a data-source costume,
 // and they are exactly what the store seam exists to delete. A second label with the
 // same shape would rebuild them.
 //
-// (The `mode.mode === "self_hosted"` checks in src/lib/doctor.local.ts are a DIFFERENT
-// thing — they read the deployment-mode variable directly, not this label. Conflating the two
+// (The `mode.mode === "self-hosted"` checks in src/lib/doctor.sqlite.ts are a DIFFERENT
+// thing — they read the selector variable directly, not this label. Conflating the two
 // would overstate the case.)
 //
 // So the shape here is deliberately HOSTILE to branching:

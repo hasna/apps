@@ -1,11 +1,11 @@
-import * as local from "./providers.local.js";
-import * as remote from "./providers.remote.js";
-import { isSelfHostedMode } from "./self-hosted-store.js";
+import * as local from "./providers.sqlite.js";
+import * as remote from "./providers.api.js";
+import { isApiClientConfigured } from "../store-resolution.js";
 import { hasDatabaseArgument, withExplicitDatabaseRoute } from "./database-routing.js";
 import { PROVIDER_SECRET_FIELDS } from "./provider-secrets.js";
 import type { Provider } from "../types/index.js";
 
-export type * from "./providers.local.js";
+export type * from "./providers.sqlite.js";
 
 const localCompat = {
   ...local,
@@ -18,7 +18,7 @@ type RoutedFunction<K extends keyof typeof remote & keyof typeof local> = typeof
 
 function routed<K extends keyof typeof remote & keyof typeof local>(key: K): RoutedFunction<K> {
   return ((...args: unknown[]) => {
-    const implementation = (hasDatabaseArgument(args) ? local : isSelfHostedMode() ? remote : localCompat) as Record<string, unknown>;
+    const implementation = (hasDatabaseArgument(args) ? local : isApiClientConfigured() ? remote : localCompat) as Record<string, unknown>;
     const candidate = implementation[String(key)];
     if (typeof candidate !== "function") throw new Error(`providers.${String(key)} is unavailable in the selected mode.`);
     return withExplicitDatabaseRoute(args, () => (candidate as (...values: unknown[]) => unknown)(...args));
@@ -33,7 +33,7 @@ export const getProvider = routed("getProvider");
 // arm returns the server's credential-free record and ignores the flag, so the
 // remote path is byte-identical to `getProvider`; the local SQLite arm attaches
 // the encrypted secrets it owns. Threading the flag through the existing dispatch
-// keeps the credential path off the deployment-mode table entirely.
+// keeps the credential path off the selector table entirely.
 export const getProviderWithCredentials: typeof local.getProviderWithCredentials = (id, db) =>
   getProvider(id, db, true);
 

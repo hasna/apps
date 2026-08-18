@@ -18,9 +18,9 @@ import { dirname, join } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
-import { createProvider } from "../db/providers.local.js";
-import { createDomain } from "../db/domains.local.js";
-import { createAddress } from "../db/addresses.local.js";
+import { createProvider } from "../db/providers.sqlite.js";
+import { createDomain } from "../db/domains.sqlite.js";
+import { createAddress } from "../db/addresses.sqlite.js";
 import { setDomainProvisioning } from "../db/provisioning.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
 import { collectStatusFacts, type StatusFactsInput } from "./status-facts.js";
@@ -33,8 +33,8 @@ import { emptyMailboxCounts, type MailboxSourceSummary } from "./mail-types.js";
 const HOME_ENV = "HOME";
 const MODE_ENV = ["EMAILS", "MODE"].join("_");
 const DB_PATH_ENV = ["EMAILS", "DB_PATH"].join("_");
-const API_URL_ENV = "EMAILS_SELF_HOSTED_URL";
-const API_KEY_ENV = "EMAILS_SELF_HOSTED_API_KEY";
+const API_URL_ENV = "HASNA_EMAILS_API_URL";
+const API_KEY_ENV = "HASNA_EMAILS_API_KEY";
 const TOUCHED_ENV = [
   HOME_ENV,
   MODE_ENV,

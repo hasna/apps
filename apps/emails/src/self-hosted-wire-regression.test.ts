@@ -24,7 +24,7 @@ import {
   validateSelfHostedSdkSuccessResponse,
 } from "./lib/self-hosted-wire.js";
 import { fetchIdentitySafe } from "./lib/whoami.js";
-import { activeProviderId, sendComposed } from "./cli/tui/data.remote.js";
+import { activeProviderId, sendComposed } from "./cli/tui/data.api.js";
 import { ApiError, EmailsSelfHostClient } from "./selfhost.js";
 
 const RESPONSE_SECRET_MARKER = "credential-like-response-body-must-not-leak";
@@ -581,24 +581,22 @@ async function startLoopbackServer(): Promise<{ server: Subprocess; baseUrl: str
 }
 
 function applySelfHostedEnv(): void {
-  process.env["EMAILS_MODE"] = "self_hosted";
-  process.env["EMAILS_SELF_HOSTED_URL"] = baseUrl;
-  process.env["EMAILS_SELF_HOSTED_API_KEY"] = "loopback-test-key";
+  process.env["HASNA_EMAILS_API_URL"] = baseUrl;
+  process.env["HASNA_EMAILS_API_KEY"] = "loopback-test-key";
   resetSelfHostedConfigCache();
   resetMailDataSource();
 }
 
 // `bun test` shares one process across every test file, and the harness sets
-// local mode exactly once for that process. Deleting these keys rather
+// local SQLite client exactly once for that process. Deleting these keys rather
 // than restoring them leaves every file that runs after this one falling
 // through the mode resolver to EMAILS_CLIENT_ENV_SECRET or the
-// on-disk config, which resolves to self_hosted and fails unrelated suites.
+// on-disk config, which resolves to self-hosted and fails unrelated suites.
 // Restore the values this process started with instead.
-const MODE_ENV_KEY = ["EMAILS", "MODE"].join("_");
+const API_URL_ENV_KEY = ["HASNA", "EMAILS", "API", "URL"].join("_");
 const SELF_HOSTED_ENV_KEYS = [
-  MODE_ENV_KEY,
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "EMAILS_SELF_HOSTED_HTTP_MAX_RESPONSE_BYTES",
 ] as const;
 
@@ -646,22 +644,22 @@ describe("shared-process environment hygiene", () => {
     const unsafe = `
       import { afterEach } from "bun:test";
       afterEach(() => {
-        delete process.env.${MODE_ENV_KEY};
+        delete process.env.${API_URL_ENV_KEY};
       });
     `;
     expect(environmentCleanupFindings(unsafe)).toEqual([
-      { file: "fixture.test.ts", line: 4, target: MODE_ENV_KEY },
+      { file: "fixture.test.ts", line: 4, target: API_URL_ENV_KEY },
     ]);
 
     const safe = `
       import { afterEach, beforeEach } from "bun:test";
       let inherited;
       beforeEach(() => {
-        inherited = process.env.${MODE_ENV_KEY};
+        inherited = process.env.${API_URL_ENV_KEY};
       });
       afterEach(() => {
-        if (inherited === undefined) delete process.env.${MODE_ENV_KEY};
-        else process.env.${MODE_ENV_KEY} = inherited;
+        if (inherited === undefined) delete process.env.${API_URL_ENV_KEY};
+        else process.env.${API_URL_ENV_KEY} = inherited;
       });
     `;
     expect(environmentCleanupFindings(safe)).toEqual([]);
@@ -709,11 +707,11 @@ describe("shared-process environment hygiene", () => {
         Object.assign(process.env, inherited);
       });
       afterAll(() => {
-        delete process.env.${MODE_ENV_KEY};
+        delete process.env.${API_URL_ENV_KEY};
       });
     `;
     expect(environmentCleanupFindings(mixedCleanup)).toEqual([
-      { file: "fixture.test.ts", line: 14, target: MODE_ENV_KEY },
+      { file: "fixture.test.ts", line: 14, target: API_URL_ENV_KEY },
     ]);
   });
 

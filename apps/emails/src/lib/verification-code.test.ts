@@ -159,10 +159,10 @@ function inboundFixture(partial: Partial<InboundEmail>): InboundEmail {
 describe("the verification-code family has one implementation", () => {
   it("ships no second implementation arm beside the facade", () => {
     const siblings = [
-      "verification-code.local.ts",
-      "verification-code.remote.ts",
-      "verification-code.local.tsx",
-      "verification-code.remote.tsx",
+      "verification-code.sqlite.ts",
+      "verification-code.api.ts",
+      "verification-code.sqlite.tsx",
+      "verification-code.api.tsx",
     ];
     expect(siblings.filter((file) => existsSync(join(libDir, file)))).toEqual([]);
     // Positive control for the check itself: the detector must be able to SEE a sibling,
@@ -173,7 +173,7 @@ describe("the verification-code family has one implementation", () => {
 
   /**
    * The one implementation must not reach PAST a facade into one of its arms, and must not
-   * read the deployment-mode module this program is deleting.
+   * read the selector module this program is deleting.
    *
    * "Reaches past a facade" is the hazard, and it is not the same as "imports a suffixed
    * module": a module with no facade and no second arm bypasses no dispatch. So the check
@@ -184,8 +184,8 @@ describe("the verification-code family has one implementation", () => {
    * repo state. A source scan that stops matching passes everything silently, and this
    * repo has already shipped that failure twice.
    */
-  it("reaches past no facade into an arm, and reads no deployment-mode module", () => {
-    const suffixedImport = /from\s+["'](\.[^"']*)\.(?:local|remote)\.js["']/g;
+  it("reaches past no facade into an arm, and reads no selector module", () => {
+    const suffixedImport = /from\s+["'](\.[^"']*)\.(?:sqlite|api)\.js["']/g;
     const modeModuleImport = /from\s+["'][^"']*\/(?:self-hosted-store|mode)\.js["']/g;
 
     const pastFacade = (text: string, dir: string): string[] =>
@@ -196,12 +196,12 @@ describe("the verification-code family has one implementation", () => {
     // Positive controls: another family's arm, and the two this family used to have. The
     // deleted names must still be RECOGNISED by the predicate even though the files are
     // gone, or the check would stop being able to see the very thing it bans.
-    expect(pastFacade('import { x } from "../db/inbound.local.js";', libDir)).toEqual(["../db/inbound"]);
-    expect(pastFacade('import * as local from "./mail-data-source.local.js";', libDir)).toEqual([
+    expect(pastFacade('import { x } from "../db/inbound.sqlite.js";', libDir)).toEqual(["../db/inbound"]);
+    expect(pastFacade('import * as local from "./mail-data-source.sqlite.js";', libDir)).toEqual([
       "./mail-data-source",
     ]);
     // Negative controls: a suffixed module with no facade sibling, and a plain module.
-    expect(pastFacade('import { x } from "./sent-ledger.local.js";', libDir)).toEqual([]);
+    expect(pastFacade('import { x } from "./sent-ledger.sqlite.js";', libDir)).toEqual([]);
     expect(pastFacade('import { safeLimit } from "../db/pagination.js";', libDir)).toEqual([]);
     expect(new RegExp(modeModuleImport.source).test('import { m } from "../db/self-hosted-store.js";')).toBe(true);
     expect(new RegExp(modeModuleImport.source).test('import { safeLimit } from "../db/pagination.js";')).toBe(false);
@@ -225,7 +225,7 @@ describe("the verification-code family has one implementation", () => {
    * Resolving the predicate to "a quoted `.js` specifier" is the honest version: it is the
    * only form that can be imported.
    */
-  const armSpecifier = new RegExp(String.raw`["'][^"']*verification-code\.(?:local|remote)\.js["']`);
+  const armSpecifier = new RegExp(String.raw`["'][^"']*verification-code\.(?:sqlite|api)\.js["']`);
 
   it("no longer reaches into an arm from the local mail data source", () => {
     const source = readFileSync(join(libDir, "mail-data-source.ts"), "utf8");
@@ -245,12 +245,12 @@ describe("the verification-code family has one implementation", () => {
     // the predicate byte-identical to the banned form while the source holds no such text.
     const staticImport = (arm: string): string => `import * as x from "./verification-code.${arm}.js";`;
     const dynamicImport = (arm: string): string => `await import("../../lib/verification-code.${arm}.js")`;
-    expect(armSpecifier.test(staticImport("local"))).toBe(true);
-    expect(armSpecifier.test(staticImport("remote"))).toBe(true);
-    expect(armSpecifier.test(dynamicImport("remote"))).toBe(true);
+    expect(armSpecifier.test(staticImport("sqlite"))).toBe(true);
+    expect(armSpecifier.test(staticImport("api"))).toBe(true);
+    expect(armSpecifier.test(dynamicImport("api"))).toBe(true);
     // Negative controls: the facade, and a prose mention of a deleted FILE.
     expect(armSpecifier.test('import { x } from "./verification-code.js";')).toBe(false);
-    expect(armSpecifier.test("// verification-code.local.ts held the real implementation")).toBe(false);
+    expect(armSpecifier.test("// verification-code.sqlite.ts held the real implementation")).toBe(false);
 
     const tracked = execFileSync("git", ["ls-files", "-z", "*.ts", "*.tsx", "*.mjs", "*.js"], {
       cwd: repoRoot,

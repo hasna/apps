@@ -8,7 +8,7 @@
 // THERE IS NO CLIENT-SIDE POSTGRES STORE, and there will not be one. Postgres is the
 // SERVER's internal storage and is reached only through the API; it is never a client
 // transport. "Local" means SQLite. If a caller means "somewhere else", it means the
-// API. Any third implementation would be a deployment-mode axis growing back under a
+// API. Any third implementation would be a selector axis growing back under a
 // new name.
 //
 // No product code consumes this yet — `src/storage.ts` re-exports the core types and

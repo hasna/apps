@@ -617,7 +617,7 @@ describe("attachment repair runner boundary", () => {
     const run = (extra: string[]) => Bun.spawnSync({
       cmd: [process.execPath, "run", "src/server/index.ts", "attachment-repair-canary", ...extra],
       cwd: process.cwd(),
-      env: { ...process.env, EMAILS_DATABASE_URL: "" },
+      env: { ...process.env, HASNA_EMAILS_DATABASE_URL: "" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -642,7 +642,7 @@ describe("attachment repair runner boundary", () => {
       const canonicalOnly = Bun.spawnSync({
         cmd: [process.execPath, "run", "src/server/index.ts", command, "--bucket", "wrong"],
         cwd: process.cwd(),
-        env: { ...process.env, EMAILS_DATABASE_URL: "", EMAILS_INGEST_S3_BUCKET: "" },
+        env: { ...process.env, HASNA_EMAILS_DATABASE_URL: "", EMAILS_INGEST_S3_BUCKET: "" },
         stdout: "pipe",
         stderr: "pipe",
       });

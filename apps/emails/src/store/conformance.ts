@@ -28,7 +28,7 @@
 // "I lack the capability so I will return early" must not be expressible inside
 // one.
 //
-// Nothing here reads a deployment mode, and nothing branches on
+// Nothing here reads a selection, and nothing branches on
 // `descriptor.kind`. The suite's only inputs are the declared capabilities and
 // the observed answers.
 

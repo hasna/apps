@@ -1,24 +1,24 @@
-// Self-hosted-side SES-inbound ingestion worker for the Emails self_hosted service.
+// Self-hosted-side SES-inbound ingestion worker for the Emails self-hosted service.
 //
-// Runs as a long-lived ECS task alongside the self_hosted API (`emails-serve
+// Runs as a long-lived ECS task alongside the self-hosted API (`emails-serve
 // ingest-worker`). It long-polls a dedicated SQS queue that is fanned out from
 // the shared SES-inbound SNS topic, fetches each archived raw message from the
-// SES→S3 inbound bucket, normalizes it, and writes it to the SAME self_hosted
+// SES→S3 inbound bucket, normalizes it, and writes it to the SAME self-hosted
 // Postgres `messages` table the /v1 API serves — so NEW inbound mail lands in
-// the self_hosted automatically, with no per-machine step.
+// the self-hosted automatically, with no per-machine step.
 //
 // Idempotency / dedup:
 //   - `source_id` = the S3 object key, so redelivery of the same SQS message is
 //     an upsert (never a duplicate).
 //   - Before writing, we also skip anything already present under the same key
-//     in `message_id` (the local→self_hosted history backfill stored the object key
+//     in `message_id` (the local→self-hosted history backfill stored the object key
 //     there), so the live drain never duplicates imported history.
 //
 // Failure handling: any fetch/parse/DB error leaves the message on the queue
 // for SQS redelivery; after the queue's maxReceiveCount it lands in the DLQ
 // (nothing is silently dropped, and the durable copy remains in S3).
 //
-// Amendment A1 (PURE REMOTE): the worker reads/writes the shared self_hosted Postgres
+// Amendment A1 (PURE REMOTE): the worker reads/writes the shared self-hosted Postgres
 // directly via the same store the serve uses. The RDS DSN is a server-side
 // secret (never distributed to clients).
 
@@ -367,7 +367,7 @@ export function validateIngestWorkerConfig(config: {
 }): void {
   if (!config.queueUrl) throw new Error("ingest worker requires EMAILS_INGEST_QUEUE_URL");
   if (!config.bucket) throw new Error("ingest worker requires EMAILS_INGEST_S3_BUCKET");
-  if (!config.databaseUrl) throw new Error("ingest worker requires EMAILS_DATABASE_URL");
+  if (!config.databaseUrl) throw new Error("ingest worker requires HASNA_EMAILS_DATABASE_URL");
 }
 
 export function shouldDeleteIngestResult(result: IngestResult): boolean {
@@ -381,7 +381,7 @@ export function shouldDeleteIngestResult(result: IngestResult): boolean {
  *   EMAILS_INGEST_S3_BUCKET   (required) — operator-owned inbound bucket
  *   EMAILS_INGEST_PREFIX_DOMAIN_MAP — JSON object mapping trusted prefixes to domains
  *   AWS_REGION                 (default us-east-1)
- *   EMAILS_DATABASE_URL        (required) — self-hosted Postgres DSN
+ *   HASNA_EMAILS_DATABASE_URL        (required) — self-hosted Postgres DSN
  */
 export async function runIngestWorker(options: WorkerOptions = {}): Promise<void> {
   const region = options.region ?? process.env["AWS_REGION"] ?? "us-east-1";
@@ -394,7 +394,7 @@ export async function runIngestWorker(options: WorkerOptions = {}): Promise<void
   const waitTimeSeconds = options.waitTimeSeconds ?? 20;
   const visibilityTimeout = options.visibilityTimeout ?? 120;
 
-  validateIngestWorkerConfig({ queueUrl, bucket: defaultBucket, databaseUrl: process.env["EMAILS_DATABASE_URL"] });
+  validateIngestWorkerConfig({ queueUrl, bucket: defaultBucket, databaseUrl: process.env["HASNA_EMAILS_DATABASE_URL"] });
   const configuredQueueUrl = queueUrl!;
   const configuredBucket = defaultBucket!;
 
@@ -529,7 +529,7 @@ export async function runIngestS3Backfill(options: BackfillOptions = {}): Promis
   validateIngestWorkerConfig({
     queueUrl: "backfill",
     bucket,
-    databaseUrl: process.env["EMAILS_DATABASE_URL"],
+    databaseUrl: process.env["HASNA_EMAILS_DATABASE_URL"],
   });
   const configuredBucket = bucket!;
 
@@ -649,7 +649,7 @@ export function finalizeAttachmentRepairCanary(
 export async function runAttachmentRepairCanary(options: AttachmentRepairCanaryOptions): Promise<AttachmentRepairResult[]> {
   const { objectKey } = validateAttachmentRepairCanaryOptions(options);
   const region = options.region ?? process.env["AWS_REGION"] ?? "us-east-1";
-  if (!process.env["EMAILS_DATABASE_URL"]) throw new Error("attachment repair requires EMAILS_DATABASE_URL");
+  if (!process.env["HASNA_EMAILS_DATABASE_URL"]) throw new Error("attachment repair requires HASNA_EMAILS_DATABASE_URL");
   const canonicalBucket = process.env["EMAILS_INGEST_S3_BUCKET"];
   if (!canonicalBucket) throw new Error("attachment repair requires EMAILS_INGEST_S3_BUCKET as the canonical source");
 
@@ -706,7 +706,7 @@ export function redactedInboundProvenanceFenceReport(fenceAt: string): { fence_a
 export async function runInboundProvenanceFence(
   emit: (line: string) => void = (line) => console.log(line),
 ): Promise<string> {
-  if (!process.env["EMAILS_DATABASE_URL"]) throw new Error("inbound provenance fence requires EMAILS_DATABASE_URL");
+  if (!process.env["HASNA_EMAILS_DATABASE_URL"]) throw new Error("inbound provenance fence requires HASNA_EMAILS_DATABASE_URL");
   const { client } = getSelfHostedPool();
   try {
     const fenceAt = await new EmailsSelfHostedStore(client).captureInboundProvenanceFence();
@@ -792,7 +792,7 @@ export async function runInboundProvenanceAudit(
   options: InboundProvenanceAuditOptions,
 ): Promise<InboundProvenanceAuditResult> {
   const { since } = validateInboundProvenanceAuditOptions(options);
-  if (!process.env["EMAILS_DATABASE_URL"]) throw new Error("inbound provenance audit requires EMAILS_DATABASE_URL");
+  if (!process.env["HASNA_EMAILS_DATABASE_URL"]) throw new Error("inbound provenance audit requires HASNA_EMAILS_DATABASE_URL");
   const canonicalBucket = process.env["EMAILS_INGEST_S3_BUCKET"];
   if (!canonicalBucket) throw new Error("inbound provenance audit requires EMAILS_INGEST_S3_BUCKET as the canonical source");
   const { client } = getSelfHostedPool();

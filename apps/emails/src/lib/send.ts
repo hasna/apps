@@ -1,12 +1,12 @@
-import * as local from "./send.local.js";
-import * as remote from "./send.remote.js";
-import { isSelfHostedMode } from "../db/self-hosted-store.js";
+import * as local from "./send.sqlite.js";
+import * as remote from "./send.api.js";
+import { isApiClientConfigured } from "../store-resolution.js";
 
-export type * from "./send.local.js";
+export type * from "./send.sqlite.js";
 
 function routed<K extends keyof typeof local>(key: K): typeof local[K] {
   return ((...args: unknown[]) => {
-    const implementation = (isSelfHostedMode() ? remote : local) as Record<string, unknown>;
+    const implementation = (isApiClientConfigured() ? remote : local) as Record<string, unknown>;
     const candidate = implementation[String(key)];
     if (typeof candidate !== "function") throw new Error(`send.${String(key)} is unavailable in the selected mode.`);
     return (candidate as (...values: unknown[]) => unknown)(...args);

@@ -3,9 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase, resetDatabase } from "../db/database.js";
-import { createProvider } from "../db/providers.local.js";
+import { createProvider } from "../db/providers.sqlite.js";
 import { getSandboxCount } from "../db/sandbox.js";
-import { storeInboundEmail } from "../db/inbound.local.js";
+import { storeInboundEmail } from "../db/inbound.sqlite.js";
 import { resetMailDataSource, resolveMailDataSource, SqliteMailDataSource } from "./mail-data-source.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
@@ -23,17 +23,15 @@ const attachmentDirs: string[] = [];
 
 function clearMailModeEnv(): void {
   for (const key of [
-    "EMAILS_MODE",
     "MAILERY_MODE",
-    "HASNA_EMAILS_MODE",
     "HASNA_MAILERY_MODE",
-    "EMAILS_SELF_HOSTED_URL",
+    "HASNA_EMAILS_API_URL",
     "MAILERY_SELF_HOSTED_URL",
     "HASNA_EMAILS_SELF_HOSTED_URL",
     "HASNA_MAILERY_SELF_HOSTED_URL",
-    "EMAILS_SELF_HOSTED_API_KEY",
+    "HASNA_EMAILS_API_KEY",
     "MAILERY_SELF_HOSTED_API_KEY",
-    "HASNA_EMAILS_SELF_HOSTED_API_KEY",
+    "HASNA_EMAILS_API_KEY",
     "HASNA_MAILERY_SELF_HOSTED_API_KEY",
     "EMAILS_API_KEY",
     "MAILERY_API_KEY",
@@ -49,7 +47,6 @@ function clearMailModeEnv(): void {
 beforeEach(() => {
   captureInheritedProcessEnv();
   clearMailModeEnv();
-  process.env["EMAILS_MODE"] = "local";
   process.env["EMAILS_DB_PATH"] = ":memory:";
   resetDatabase();
   resetMailDataSource();
@@ -141,10 +138,9 @@ function attachmentFile(name: string, content: string): string {
 }
 
 describe("SqliteMailDataSource", () => {
-  it("is selected by explicit local mode and by the safe default", () => {
+  it("is selected by explicit local SQLite client and by the safe default", () => {
     expect(resolveMailDataSource()).toBeInstanceOf(SqliteMailDataSource);
     resetMailDataSource();
-    delete process.env["EMAILS_MODE"];
     expect(resolveMailDataSource()).toBeInstanceOf(SqliteMailDataSource);
   });
 

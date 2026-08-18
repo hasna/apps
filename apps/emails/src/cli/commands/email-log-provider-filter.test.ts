@@ -14,7 +14,7 @@
 //
 // WHY A SUBPROCESS. `handleError` (src/cli/utils.ts) ends in `process.exit(1)`, so an
 // in-process registration cannot observe the error path without killing the test runner — the
-// reason `src/cli/commands/email-log.local.test.ts` has no error cases and
+// reason `src/cli/commands/email-log.sqlite.test.ts` has no error cases and
 // `src/cli/commands/domain.warming.test.ts` spawns the real binary. This file does the same,
 // against a temp SQLite file with a scrubbed environment: no credential, no endpoint, no
 // deployment variable set (the store resolves from storage configuration, which is the whole
@@ -28,7 +28,7 @@ import { join } from "node:path";
 /** Anything that could point the process at a real endpoint, account or second store. */
 const SCRUBBED_ENV_KEYS = [
   "EMAILS_DB_PATH", "HASNA_EMAILS_DB_PATH",
-  "EMAILS_SELF_HOSTED_URL", "EMAILS_SELF_HOSTED_API_KEY", "EMAILS_SESSION_TOKEN",
+  "HASNA_EMAILS_API_URL", "HASNA_EMAILS_API_KEY", "EMAILS_SESSION_TOKEN",
   "EMAILS_CLIENT_ENV_SECRET", "EMAILS_DATABASE_URL", "HASNA_EMAILS_DATABASE_URL",
   "EMAILS_STORAGE_MODE", "HASNA_EMAILS_STORAGE_MODE",
   "MAILERY_API_URL", "MAILERY_API_KEY", "HASNA_MAILERY_API_URL", "HASNA_MAILERY_API_KEY",

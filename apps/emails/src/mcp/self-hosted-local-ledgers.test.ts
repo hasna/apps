@@ -58,8 +58,8 @@ afterEach(() => {
   stub.clearEnv();
 });
 
-describe("MCP self_hosted repository-backed tools", () => {
-  it("lists groups through the self_hosted API with exact member counts", async () => {
+describe("MCP self-hosted repository-backed tools", () => {
+  it("lists groups through the self-hosted API with exact member counts", async () => {
     // This case used to assert `member_count` was ABSENT here: the API-backed variant
     // omitted it because its counts came from one clamped page. The collapsed family
     // counts the whole membership table (or refuses), so the tool is UNIFORM in every
@@ -81,7 +81,7 @@ describe("MCP self_hosted repository-backed tools", () => {
     expect(groups).toEqual([{ ...SEEDED_GROUP, member_count: 2 }]);
   });
 
-  it("runs the warming tools through the self_hosted API instead of refusing", async () => {
+  it("runs the warming tools through the self-hosted API instead of refusing", async () => {
     // The collapsed warming family reaches `/v1` through the REAL HTTP store
     // resolved from this configuration, so these tools are NOT local
     // subledger tools and carry no mode guard — they are the MCP twins of
@@ -127,7 +127,7 @@ describe("MCP self_hosted repository-backed tools", () => {
   it("runs the alias, group-member, and sequence tools through /v1 instead of refusing", async () => {
     // These were called "local subledger" tools and refused. They are not: aliases,
     // group members, sequence steps and sequence enrollments are each a `/v1`
-    // resource with a complete client arm in src/db/*.remote.ts and a working CLI
+    // resource with a complete client arm in src/db/*.api.ts and a working CLI
     // twin. The guard was the only thing refusing, and it is gone.
     // src/mcp/self-hosted-unguarded-tools.test.ts asserts the resulting server rows;
     // here the point is only that no mode check turns them away.

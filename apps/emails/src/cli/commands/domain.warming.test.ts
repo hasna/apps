@@ -18,11 +18,10 @@ import { join } from "node:path";
 
 // Anything that could point the process at a real endpoint or account.
 const SCRUBBED_ENV_KEYS = [
-  "EMAILS_MODE", "HASNA_EMAILS_MODE", "EMAILS_DB_PATH", "HASNA_EMAILS_DB_PATH",
-  "EMAILS_SELF_HOSTED_URL", "EMAILS_SELF_HOSTED_API_KEY", "EMAILS_SESSION_TOKEN",
+  "EMAILS_DB_PATH", "HASNA_EMAILS_DB_PATH",
+  "HASNA_EMAILS_API_URL", "HASNA_EMAILS_API_KEY", "EMAILS_SESSION_TOKEN",
   "EMAILS_CLIENT_ENV_SECRET", "EMAILS_DATABASE_URL", "HASNA_EMAILS_DATABASE_URL",
-  "EMAILS_STORAGE_MODE", "HASNA_EMAILS_STORAGE_MODE",
-  "MAILERY_MODE", "HASNA_MAILERY_MODE", "MAILERY_STORAGE_MODE", "HASNA_MAILERY_STORAGE_MODE",
+    "MAILERY_MODE", "HASNA_MAILERY_MODE", "MAILERY_STORAGE_MODE", "HASNA_MAILERY_STORAGE_MODE",
   "MAILERY_API_URL", "MAILERY_API_KEY", "HASNA_MAILERY_API_URL", "HASNA_MAILERY_API_KEY",
   "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE",
   "RESEND_API_KEY",
@@ -194,7 +193,7 @@ describe("emails domain warm* (live, temp SQLite)", () => {
     expect(paused).toMatchObject({ domain: "ramp.example.com", status: "paused" });
     const pausedStatus = runJson<WarmStatusPayload>(["domain", "warm-status", "ramp.example.com"], env);
     expect(pausedStatus.schedule.status).toBe("paused");
-    // A paused schedule imposes no limit (send.local.ts keys off exactly this).
+    // A paused schedule imposes no limit (send.sqlite.ts keys off exactly this).
     expect(pausedStatus.today_limit).toBeNull();
 
     const pausedOnly = runJson<WarmingSchedulePayload[]>(["domain", "warm-list", "--status", "paused"], env);

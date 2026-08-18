@@ -34,8 +34,8 @@ const STATUS_BUILDERS = [
   "lib/status-availability.ts",
   "lib/inbox-sync-status-format.ts",
   "mcp/resources.ts",
-  "mcp/resources.local.ts",
-  "mcp/resources.remote.ts",
+  "mcp/resources.sqlite.ts",
+  "mcp/resources.api.ts",
   // The enumeration the self-hosted counts are built on: a hardcoded
   // `complete: true` there is the same lie as a hardcoded `total: 0` here — it was
   // how 3473 of 3899 production rows got published as a total.

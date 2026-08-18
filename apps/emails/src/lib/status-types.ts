@@ -1,6 +1,6 @@
 // Shape of the `emails status` / `emails agent context` payload.
 //
-// ONE type, ONE shape, both modes. The self_hosted and local assemblers share
+// ONE type, ONE shape, both modes. The self-hosted and local assemblers share
 // this interface so a script or agent consuming `--json` sees the same keys
 // regardless of mode; a field the running mode cannot answer is `null` and
 // registered in `gaps`, never a plausible-looking zero.
@@ -10,7 +10,6 @@
 
 import type { InboundBucket } from "./config.js";
 import type { EnrichedAddress } from "./address-ownership.js";
-import type { EmailsMode, EmailsModeLabel, EmailsModeSource } from "./mode.js";
 import type { MailboxSourceSummary, MailboxStatusSummary } from "./mail-types.js";
 import type { StatusAvailability } from "./status-availability.js";
 
@@ -20,7 +19,7 @@ import type { StatusAvailability } from "./status-availability.js";
  * `state` / `send_ready` / `receive_ready` are nullable because the self-hosted
  * `/v1` domain entity carries no DKIM/SPF/DMARC evidence and no inbound/outbound
  * route state — only a single `verified` boolean. Deriving three DNS verdicts
- * from that boolean (which src/db/domains.remote.ts apiToDomain does) invents
+ * from that boolean (which src/db/domains.api.ts apiToDomain does) invents
  * evidence, so status reports null + a reason instead.
  */
 export interface DomainStatusRow {
@@ -152,12 +151,13 @@ export interface NextAction {
 
 export interface EmailSystemStatus {
   generated_at: string;
-  mode: {
-    current: EmailsMode;
-    label: EmailsModeLabel;
-    source: EmailsModeSource;
-    warning: string | null;
-  };
+  /**
+   * Which client backend this status describes: the local SQLite file or the
+   * hosted `/v1` API. The selector object this field replaces
+   * (`mode: { current, label, source, warning }`) is gone with the concept it
+   * described — the backend follows the client storage contract and nothing else.
+   */
+  backend: "sqlite" | "api";
   /**
    * true when something went WRONG: a source that should have answered did not
    * (`source_unreachable`), or a count is only a lower bound. It is deliberately

@@ -30,29 +30,27 @@ function restoreInheritedProcessEnv(): void {
 // Use a temp dir unique per test run to isolate from real ~/.hasna/emails
 const TMP_HOME = join("/tmp", `emails-config-test-${process.pid}`);
 
-// These tests keep self-hosted client credentials available while selecting the
-// attachment policy explicitly; credentials alone are now a split-storage error.
+// The client-backend tests set the API credentials explicitly inside the tests
+// that need the API context; everything else runs against the local SQLite
+// default. The selector variable is gone and never read.
 const SELF_HOSTED_URL = "https://emails.config.test";
 const SELF_HOSTED_KEY = "config-test-api-key";
-const MODE_ENV_KEY = ["EMAILS", "MODE"].join("_");
 const SELF_HOSTED_ENV_KEYS = [
-  MODE_ENV_KEY,
-  `HASNA_${MODE_ENV_KEY}`,
   "EMAILS_CLIENT_ENV_SECRET",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "EMAILS_SESSION_TOKEN",
   "EMAILS_IDP_TOKEN",
 ] as const;
 
 beforeEach(() => {
   captureInheritedProcessEnv();
-  mkdirSync(TMP_HOME, { recursive: true });
+  // 0700, not the umask default: the store-seam selection resolves the default
+  // database path under HOME, and the SQLite directory-safety check refuses a
+  // world-writable tmp ancestor.
+  mkdirSync(TMP_HOME, { recursive: true, mode: 0o700 });
   process.env.HOME = TMP_HOME;
   for (const key of SELF_HOSTED_ENV_KEYS) delete process.env[key];
-  process.env[MODE_ENV_KEY] = "local";
-  process.env.EMAILS_SELF_HOSTED_URL = SELF_HOSTED_URL;
-  process.env.EMAILS_SELF_HOSTED_API_KEY = SELF_HOSTED_KEY;
   resetSelfHostedConfigCache();
 });
 
@@ -184,10 +182,12 @@ describe("config", () => {
     });
   });
 
-  it("getInboundAttachmentStorageConfig defaults self-hosted attachments to S3 when a bucket is configured", () => {
-    const previousMode = process.env["EMAILS_MODE"];
+  it("getInboundAttachmentStorageConfig defaults API-client attachments to S3 when a bucket is configured", () => {
+    const previousUrl = process.env["HASNA_EMAILS_API_URL"];
+    const previousKey = process.env["HASNA_EMAILS_API_KEY"];
     try {
-      process.env["EMAILS_MODE"] = "self_hosted";
+      process.env["HASNA_EMAILS_API_URL"] = "https://emails.example.invalid";
+      process.env["HASNA_EMAILS_API_KEY"] = "test-key";
       setConfigValue("inbound_s3_bucket", "self-hosted-inbound");
 
       expect(getInboundAttachmentStorageConfig()).toMatchObject({
@@ -197,15 +197,19 @@ describe("config", () => {
         s3_prefix: "emails",
       });
     } finally {
-      if (previousMode === undefined) delete process.env["EMAILS_MODE"];
-      else process.env["EMAILS_MODE"] = previousMode;
+      if (previousUrl === undefined) delete process.env["HASNA_EMAILS_API_URL"];
+      else process.env["HASNA_EMAILS_API_URL"] = previousUrl;
+      if (previousKey === undefined) delete process.env["HASNA_EMAILS_API_KEY"];
+      else process.env["HASNA_EMAILS_API_KEY"] = previousKey;
     }
   });
 
-  it("getInboundAttachmentStorageConfig avoids local attachment files in self-hosted mode without a bucket", () => {
-    const previousMode = process.env["EMAILS_MODE"];
+  it("getInboundAttachmentStorageConfig avoids local attachment files for the API client without a bucket", () => {
+    const previousUrl = process.env["HASNA_EMAILS_API_URL"];
+    const previousKey = process.env["HASNA_EMAILS_API_KEY"];
     try {
-      process.env["EMAILS_MODE"] = "self_hosted";
+      process.env["HASNA_EMAILS_API_URL"] = "https://emails.example.invalid";
+      process.env["HASNA_EMAILS_API_KEY"] = "test-key";
 
       expect(getInboundAttachmentStorageConfig()).toMatchObject({
         attachment_storage: "none",
@@ -213,15 +217,19 @@ describe("config", () => {
         s3_prefix: "emails",
       });
     } finally {
-      if (previousMode === undefined) delete process.env["EMAILS_MODE"];
-      else process.env["EMAILS_MODE"] = previousMode;
+      if (previousUrl === undefined) delete process.env["HASNA_EMAILS_API_URL"];
+      else process.env["HASNA_EMAILS_API_URL"] = previousUrl;
+      if (previousKey === undefined) delete process.env["HASNA_EMAILS_API_KEY"];
+      else process.env["HASNA_EMAILS_API_KEY"] = previousKey;
     }
   });
 
-  it("getInboundAttachmentStorageConfig does not allow explicit local attachment storage in self-hosted mode", () => {
-    const previousMode = process.env["EMAILS_MODE"];
+  it("getInboundAttachmentStorageConfig does not allow explicit local attachment storage for the API client", () => {
+    const previousUrl = process.env["HASNA_EMAILS_API_URL"];
+    const previousKey = process.env["HASNA_EMAILS_API_KEY"];
     try {
-      process.env["EMAILS_MODE"] = "self_hosted";
+      process.env["HASNA_EMAILS_API_URL"] = "https://emails.example.invalid";
+      process.env["HASNA_EMAILS_API_KEY"] = "test-key";
       setConfigValue("attachment_storage", "local");
       setConfigValue("attachment_s3_bucket", "self-hosted-attachments");
 
@@ -230,8 +238,10 @@ describe("config", () => {
         s3_bucket: "self-hosted-attachments",
       });
     } finally {
-      if (previousMode === undefined) delete process.env["EMAILS_MODE"];
-      else process.env["EMAILS_MODE"] = previousMode;
+      if (previousUrl === undefined) delete process.env["HASNA_EMAILS_API_URL"];
+      else process.env["HASNA_EMAILS_API_URL"] = previousUrl;
+      if (previousKey === undefined) delete process.env["HASNA_EMAILS_API_KEY"];
+      else process.env["HASNA_EMAILS_API_KEY"] = previousKey;
     }
   });
 
@@ -252,14 +262,16 @@ describe("config", () => {
       database: null,
       runtimePath: null,
       env: "HASNA_EMAILS_DATABASE_URL",
-      fallbackEnv: "EMAILS_DATABASE_URL",
+      fallbackEnv: "HASNA_EMAILS_DATABASE_URL",
     });
   });
 
-  it("getInboundAttachmentStorageConfig fails closed for explicit S3 storage without a bucket in self-hosted mode", () => {
-    const previousMode = process.env["EMAILS_MODE"];
+  it("getInboundAttachmentStorageConfig fails closed for explicit S3 storage without a bucket for the API client", () => {
+    const previousUrl = process.env["HASNA_EMAILS_API_URL"];
+    const previousKey = process.env["HASNA_EMAILS_API_KEY"];
     try {
-      process.env["EMAILS_MODE"] = "self_hosted";
+      process.env["HASNA_EMAILS_API_URL"] = "https://emails.example.invalid";
+      process.env["HASNA_EMAILS_API_KEY"] = "test-key";
       setConfigValue("attachment_storage", "s3");
 
       expect(getInboundAttachmentStorageConfig()).toMatchObject({
@@ -268,8 +280,10 @@ describe("config", () => {
         s3_prefix: "emails",
       });
     } finally {
-      if (previousMode === undefined) delete process.env["EMAILS_MODE"];
-      else process.env["EMAILS_MODE"] = previousMode;
+      if (previousUrl === undefined) delete process.env["HASNA_EMAILS_API_URL"];
+      else process.env["HASNA_EMAILS_API_URL"] = previousUrl;
+      if (previousKey === undefined) delete process.env["HASNA_EMAILS_API_KEY"];
+      else process.env["HASNA_EMAILS_API_KEY"] = previousKey;
     }
   });
 

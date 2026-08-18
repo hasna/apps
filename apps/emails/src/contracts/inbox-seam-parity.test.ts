@@ -5,7 +5,7 @@ import { resetMailDataSource } from "../lib/mail-data-source.js";
 // CLI <-> MCP inbox parity in the self-hosted-ONLY client: both the CLI (`inbox
 // list`/`inbox read`) and the MCP tool (`list_inbound_emails`) read the SAME
 // inbound mail over the /v1 API, so they must return equivalent data. (The
-// previous local-SQLite "local mode" parity validated removed behavior.)
+// previous local-SQLite "local SQLite client" parity validated removed behavior.)
 
 const { runInboxTool } = await import("../mcp/tools/inbox-impl.js");
 

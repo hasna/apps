@@ -13,7 +13,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { Command } from "commander";
 import { closeDatabase, getDatabase, resetDatabase } from "../../db/database.js";
-import { createProvider } from "../../db/providers.local.js";
+import { createProvider } from "../../db/providers.sqlite.js";
 import { listSandboxEmails } from "../../db/sandbox.js";
 import { resetMailDataSource } from "../../lib/mail-data-source.js";
 import {

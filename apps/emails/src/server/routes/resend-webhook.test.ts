@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from "bun:test";
 import { closeDatabase, resetDatabase, getDatabase } from "../../db/database.js";
-import { createProvider } from "../../db/providers.local.js";
-import { listInboundEmails } from "../../db/inbound.local.js";
+import { createProvider } from "../../db/providers.sqlite.js";
+import { listInboundEmails } from "../../db/inbound.sqlite.js";
 import { handleResendWebhook } from "./resend-webhook.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;

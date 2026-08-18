@@ -18,7 +18,7 @@
 //     schedule past the clamp — which made `domain warm` CREATE A SECOND SCHEDULE for
 //     an already-warming domain (its duplicate guard is this read), made warm-status/
 //     pause/resume/complete/delete answer "not found" for a schedule that exists, and
-//     made the SEND GATE (assertWarmingLimit in src/lib/send.local.ts) skip the daily
+//     made the SEND GATE (assertWarmingLimit in src/lib/send.sqlite.ts) skip the daily
 //     cap entirely — a full-volume send from a mid-ramp domain, presented as
 //     compliant. `listWarmingSchedules` returned the clamp as the whole table, with
 //     the status filter applied AFTER the truncation. Every read below enumerates the

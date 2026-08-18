@@ -1,0 +1,215 @@
+import { getProvider } from "../db/providers.sqlite.js";
+import { getAdapter } from "../providers/index.js";
+import { getFailoverProviderIds } from "./config.js";
+// The FACADE, not an arm. This module used to import `address-lifecycle.sqlite.js`
+// directly, which pinned the send gate to one arm's dataset regardless of where this
+// installation actually keeps its addresses. That family is collapsed: there is one
+// implementation, it reads through the store seam, and it is async.
+import { getAddressSendability } from "../db/address-lifecycle.js";
+// The FACADE, not an arm, for the same reason as the line above: that family is collapsed,
+// there is one implementation, it reads through the store seam, and it is async.
+import { assertSendAuthorized } from "../db/send-keys.js";
+import { canonicalSender } from "./email-address.js";
+// The FACADE'S SUCCESSOR, not an arm. This module used to import `warming.sqlite.js`
+// directly, which pinned the send cap to one arm's dataset regardless of where this
+// installation actually keeps its schedules. That family is collapsed: there is one
+// implementation, it reads through the store seam, and it is async. The `db` handle
+// this gate already threads is forwarded — the collapsed family binds a SQLite store
+// to exactly that connection — so a local configuration reads exactly the rows it
+// read before; with no handle it resolves the CONFIGURED store, so an installation
+// configured for an API gates sends on the schedules that API holds rather than on a
+// local island holding none.
+import { getWarmingSchedule } from "../db/warming.js";
+import { getDomainByName } from "../db/domains.sqlite.js";
+// NOT an arm reach-past: the sent ledger has no facade and no second implementation —
+// this module IS the local send path, and the fence has to read the same ledger the
+// send it fences writes to.
+import { findSentEmailByIdempotencyKey } from "./sent-ledger.sqlite.js";
+import { isApiClientConfigured } from "../store-resolution.js";
+import { getTodayLimit, getTodaySentCount } from "./warming.js";
+import type { Provider, SendEmailOptions } from "../types/index.js";
+import type { Database } from "../db/database.js";
+
+export const MAX_ATTACHMENT_SIZE_BYTES = 25 * 1024 * 1024;
+export const MAX_ATTACHMENT_COUNT = 10;
+
+export interface SendResult {
+  messageId: string;
+  providerId: string;
+  usedFailover: boolean;
+}
+
+export function getAttachmentDecodedSize(content: string): number {
+  return Buffer.from(content, "base64").byteLength;
+}
+
+export function validateSendAttachments(attachments: SendEmailOptions["attachments"]): void {
+  if (!attachments || attachments.length === 0) return;
+  if (attachments.length > MAX_ATTACHMENT_COUNT) {
+    throw new Error(`Too many attachments: ${attachments.length} (max ${MAX_ATTACHMENT_COUNT})`);
+  }
+  for (const attachment of attachments) {
+    const size = getAttachmentDecodedSize(attachment.content);
+    if (size > MAX_ATTACHMENT_SIZE_BYTES) {
+      throw new Error(`Attachment "${attachment.filename}" is too large: ${(size / 1024 / 1024).toFixed(1)}MB (max 25MB)`);
+    }
+  }
+}
+
+export async function assertWarmingLimit(opts: SendEmailOptions, db?: Database): Promise<void> {
+  if (opts.bypass_warming) return;
+  const fromDomain = canonicalSender(opts.from)?.split("@")[1] ?? opts.from.split("@")[1];
+  if (!fromDomain) return;
+  const warmingSchedule = await getWarmingSchedule(fromDomain, db);
+  if (!warmingSchedule) return;
+  const limit = getTodayLimit(warmingSchedule);
+  if (limit === null) return;
+  const sent = await getTodaySentCount(fromDomain);
+  if (sent >= limit) {
+    throw new Error(`Warming limit reached for ${fromDomain}: ${sent}/${limit} emails sent today. Use bypass_warming for a trusted local override or wait until tomorrow.`);
+  }
+}
+
+function senderDomain(opts: SendEmailOptions): string | null {
+  const sender = canonicalSender(opts.from) ?? opts.from;
+  const domain = sender.split("@")[1]?.trim().toLowerCase();
+  return domain || null;
+}
+
+function providerRef(provider: Provider): string {
+  return `${provider.name} (${provider.id})`;
+}
+
+function domainLifecycleFix(domainName: string, provider: Provider): string {
+  return [
+    `emails domains status ${domainName} --provider ${provider.id}`,
+    `emails domains verify ${domainName} --provider ${provider.id}`,
+    `emails domains enable-outbound ${domainName} --provider ${provider.id}`,
+  ].join(" && ");
+}
+
+export function assertDomainOutboundReady(provider: Provider, opts: SendEmailOptions, db?: Database): void {
+  if (isApiClientConfigured()) {
+    throw new Error(`Self-hosted sends must use the authenticated Emails service endpoint for ${providerRef(provider)}.`);
+  }
+
+  // Sandbox is the explicit local/test provider. It must remain usable in OSS
+  // local tests even when the From domain is not registered for real sending.
+  if (provider.type === "sandbox") return;
+
+  const domainName = senderDomain(opts);
+  if (!domainName) {
+    throw new Error(`Outbound send requires a valid From domain: ${opts.from}`);
+  }
+
+  const domain = getDomainByName(provider.id, domainName, db);
+  if (!domain) {
+    throw new Error(`Outbound send requires domain ${domainName} to be registered for provider ${providerRef(provider)}. Missing: domain registration. Run: emails domains add ${domainName} --provider ${provider.id}`);
+  }
+
+  const missing: string[] = [];
+  if (domain.suspended_at) missing.push(`domain not suspended (current: suspended since ${domain.suspended_at})`);
+  if (domain.restricted_at) missing.push(`domain not restricted (current: restricted since ${domain.restricted_at})`);
+  if (domain.ownership_status !== "verified") missing.push(`ownership_status=verified (current: ${domain.ownership_status})`);
+  if (domain.outbound_status !== "ready") missing.push(`outbound_status=ready (current: ${domain.outbound_status})`);
+  if (domain.dkim_status !== "verified") missing.push(`DKIM verified (current: ${domain.dkim_status})`);
+  if (domain.spf_status !== "verified") missing.push(`SPF verified (current: ${domain.spf_status})`);
+
+  if (missing.length > 0) {
+    throw new Error(`Outbound send requires ${domainName} to be outbound-ready for provider ${providerRef(provider)}. Missing: ${missing.join("; ")}. Run: ${domainLifecycleFix(domainName, provider)}`);
+  }
+}
+
+/**
+ * Send an email with automatic failover.
+ * If the primary provider fails and failover-providers is configured,
+ * retries each failover provider in order.
+ */
+export async function sendWithFailover(
+  primaryProviderId: string,
+  opts: SendEmailOptions,
+  db?: Database,
+): Promise<SendResult> {
+  // Idempotency fence, BEFORE any provider is invoked. `--idempotency-key` promises
+  // "returns existing email if key was used before"; the only fence used to sit inside
+  // `createSentEmailLedger`, which runs AFTER the provider call — so a repeated key
+  // deduplicated the ledger row while the recipient received a second copy, and the
+  // second delivery's provider message id was recorded nowhere. A key whose send is
+  // already ledgered returns that FIRST outcome and touches nothing. Checked ahead of
+  // the warming/lifecycle gates on purpose: a replay sends no new mail, so there is
+  // nothing for those gates to gate.
+  if (opts.idempotency_key) {
+    const existing = findSentEmailByIdempotencyKey(opts.idempotency_key, db);
+    if (existing) {
+      return {
+        // `provider_message_id` can be legitimately NULL on a ledger row; an empty
+        // messageId is "the first send recorded no provider id", never a fabricated one.
+        messageId: existing.provider_message_id ?? "",
+        // The row type declares `provider_id` nullable even though every write path
+        // sets it; the caller's primary id is the only honest stand-in for a row
+        // that somehow lacks one.
+        providerId: existing.provider_id ?? primaryProviderId,
+        usedFailover: false,
+      };
+    }
+  }
+
+  validateSendAttachments(opts.attachments);
+  await assertWarmingLimit(opts, db);
+
+  // Scoped-auth guard: when an auth_token (send key) is supplied, the sender
+  // must own or administer the From address. No token = trusted local caller.
+  //
+  // NO `db` HANDLE IS FORWARDED, for the reason spelled out at the sendability check
+  // below: the collapsed family's injectable is a STORE, not a database handle, and it
+  // defaults to the one this installation's storage configuration names. A send key's
+  // scope is a property of the installation, not of whichever connection a command
+  // happened to open.
+  if (opts.auth_token) {
+    await assertSendAuthorized(opts.auth_token, opts.from);
+  }
+
+  // Lifecycle guard: a suspended or over-quota sender address is blocked before
+  // any provider is touched.
+  if (opts.from) {
+    const senderEmail = canonicalSender(opts.from) ?? opts.from;
+    // NO `db` HANDLE IS FORWARDED, and that is the one behaviour change here. The
+    // collapsed family's injectable is a STORE, not a database handle, and it defaults to
+    // the one this installation's storage configuration names. Every production caller of
+    // `sendWithFailover` passes `getDatabase()` — the same process-wide connection the
+    // SQLite store opens — so a local configuration reads exactly the rows it read before.
+    // A caller that hands in some OTHER database now has its sends gated against the
+    // configured store rather than against that handle, which is the correct answer to
+    // "may this address send": suspension and quota are properties of the installation,
+    // not of whichever connection a command happened to open.
+    const s = await getAddressSendability(senderEmail);
+    if (!s.sendable) throw new Error(`Send blocked: ${s.reason}`);
+  }
+
+  const providerIds = [primaryProviderId, ...getFailoverProviderIds()];
+  const errors: string[] = [];
+
+  for (let i = 0; i < providerIds.length; i++) {
+    const providerId = providerIds[i]!;
+    const provider = getProvider(providerId, db);
+    if (!provider) {
+      errors.push(`Provider not found: ${providerId}`);
+      continue;
+    }
+
+    try {
+      assertDomainOutboundReady(provider, opts, db);
+      const adapter = getAdapter(provider);
+      const messageId = await adapter.sendEmail(opts);
+      return { messageId, providerId, usedFailover: i > 0 };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`[${provider.name}] ${msg}`);
+      if (i < providerIds.length - 1) {
+        process.stderr.write(`\n⚠ Send failed on ${provider.name}, trying failover...\n`);
+      }
+    }
+  }
+
+  throw new Error(`All providers failed:\n${errors.map((e, i) => `  ${i + 1}. ${e}`).join("\n")}`);
+}

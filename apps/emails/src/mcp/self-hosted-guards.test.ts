@@ -34,7 +34,7 @@ afterEach(() => {
   stub.clearEnv();
 });
 
-describe("MCP self_hosted guards", () => {
+describe("MCP self-hosted guards", () => {
   it("routes send_email through the self-hosted API without touching a local DB", async () => {
     const result = await callTool("send_email", {
       from: "ops@example.com",
@@ -205,7 +205,7 @@ describe("MCP self_hosted guards", () => {
     const result = await callTool("pull_events", {});
     expect(result.isError).toBe(true);
     expect(resultText(result)).toContain("ingestion belongs to that service");
-    expect(resultText(result)).toContain("Unset EMAILS_SELF_HOSTED_URL");
+    expect(resultText(result)).toContain("Unset HASNA_EMAILS_API_URL");
   });
 
   it("MEASURES delivery statistics over /v1 instead of refusing them", async () => {
@@ -298,7 +298,7 @@ describe("MCP self_hosted guards", () => {
   });
 
   it("refuses infrastructure-mutating provisioning tools instead of using client cloud credentials", async () => {
-    // In self_hosted mode `getProvider` returns a row whose secrets are nulled by
+    // In API-client configuration `getProvider` returns a row whose secrets are nulled by
     // policy, so the SES adapter would resolve credentials from the CLIENT's
     // ambient AWS_* environment and Cloudflare from the client's token — while
     // `createDomain` writes into the OPERATOR's shared domain state. That lets a
@@ -317,12 +317,11 @@ describe("MCP self_hosted guards", () => {
       // This is the assertion that discriminates: with the guard removed these
       // tools instead fail later, at provider resolution or at the first AWS
       // call, so the refusal text cannot appear by accident.
-      expect(text).toContain(`MCP tool ${name} is disabled in self_hosted mode`);
-      expect(text).toContain("EMAILS_MODE=local");
-      // The refusal must not repeat the false claim that a server route exists.
+      expect(text).toContain(`MCP tool ${name} is disabled for the API client`);
+            // The refusal must not repeat the false claim that a server route exists.
       expect(text).not.toContain("runs on the self-hosted server");
       // ...nor mention credentials: mcp/contracts.ts classifies by regex over the
-      // message and would mislabel a mode refusal as an auth_error whose
+      // message and would mislabel a refusal as an auth_error whose
       // fix_commands point at provider credentials.
       expect(text.toLowerCase()).not.toContain("credential");
       expect((JSON.parse(text) as { error?: { code?: string } }).error?.code).not.toBe("auth_error");

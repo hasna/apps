@@ -3,12 +3,12 @@
 //
 // WHAT THIS FILE USED TO BE, because the shape is the bug: `doctor.ts` was a 23-line
 // facade that read the process-wide deployment word (src/lib/mode.ts) and handed
-// `runDiagnostics` to one of two modules. `doctor.local.ts` (158 lines) opened the local
+// `runDiagnostics` to one of two modules. `doctor.sqlite.ts` (158 lines) opened the local
 // SQLite database and counted providers, domains, addresses, contacts and templates with
-// hand-written `SELECT COUNT(*)`; `doctor.remote.ts` (133 lines) never opened a database
+// hand-written `SELECT COUNT(*)`; `doctor.api.ts` (133 lines) never opened a database
 // and probed the operator service's `/health` and `/ready` instead. Same name, same
 // signature, two different reports — and an environment variable decided which one an
-// operator (or an agent, through MCP) was shown. That is the deployment-mode axis, and
+// operator (or an agent, through MCP) was shown. That is the selector axis, and
 // both arms are gone.
 //
 // WHAT REPLACES THE ARM CHOICE: the store seam (`src/store/`). Every resource fact below
@@ -50,9 +50,9 @@
 //     are summary-only for the same reason). Reporting "credentials invalid" from rows
 //     that never carry credentials would be a fabricated negative, so the check says it
 //     is not observable here and names the command that owns the question.
-//  3. It does not touch the deployment-mode axis module, the dispatch layer, the curl
+//  3. It does not touch the selector axis module, the dispatch layer, the curl
 //     bridge, or any mode-gated branch in another family. Those are phase 9's, and only
-//     once the ratchet in src/mode-axis-ratchet.test.ts reads zero.
+//     once the source-text guard in src/store-resolution.test.ts reads zero.
 //
 // The local machine facts — the config file, the AWS sandbox probe, the provisioning
 // credential scan — are NOT store questions and stay where they were. They are facts
@@ -380,7 +380,7 @@ function capabilitiesCheck(store: EmailStore): DoctorCheck {
  *
  * So the check is `unknown` and names `emails provider status`, which is one command, in
  * one file, in both configurations (src/cli/commands/provider.ts — no arm, no mode gate,
- * and absent from `SELF_HOSTED_REFUSED_COMMANDS` in src/lib/status-commands.ts), and which
+ * and absent from `API_REFUSED_COMMANDS` in src/lib/status-commands.ts), and which
  * DOES perform the live validation. Recommending a command that refuses would be the same
  * defect class as reporting a count nobody measured.
  */

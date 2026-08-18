@@ -54,7 +54,7 @@ describe("unimplemented provisioning commands", () => {
       // Names the two commands that DO work instead of a phantom server.
       expect(result.stderr).toContain("emails domain adopt");
       expect(result.stderr).toContain("emails aws setup-inbound");
-      // The old claims were false in both local and self_hosted mode.
+      // The old claims were false in both local and API-client configuration.
       expect(result.stderr).not.toContain("not available in the self-hosted client");
       expect(result.stderr).not.toContain("runs on the self-hosted server");
     });

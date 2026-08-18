@@ -14,23 +14,13 @@ export interface PullResult { pulled: number; ok: boolean; reason?: string; conf
 export interface PullOpts { s3?: boolean; limit?: number; forwarding?: boolean }
 
 export async function autoPull(opts?: PullOpts): Promise<PullResult> {
-  const explicitMode = process.env["EMAILS_MODE"]?.trim() || process.env["HASNA_EMAILS_MODE"]?.trim();
-  if (explicitMode === "self_hosted") {
+  const { isApiClientConfigured } = await import("../../store-resolution.js");
+  if (isApiClientConfigured()) {
     return {
       pulled: 0,
       ok: true,
       configured: false,
-      reason: "self_hosted API-only mode: local S3 autopull and forwarding are disabled",
-    };
-  }
-
-  const { resolveEmailsMode } = await import("../../lib/mode.js");
-  if (resolveEmailsMode().mode === "self_hosted") {
-    return {
-      pulled: 0,
-      ok: true,
-      configured: false,
-      reason: "self_hosted API-only mode: local S3 autopull and forwarding are disabled",
+      reason: "API-client mode: local S3 autopull and forwarding are disabled",
     };
   }
 

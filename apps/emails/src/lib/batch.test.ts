@@ -117,7 +117,7 @@ describe("parseCsv", () => {
 
 describe("the batch family has one implementation", () => {
   it("ships no second implementation arm beside the facade", () => {
-    const siblings = ["batch.local.ts", "batch.remote.ts", "batch.local.tsx", "batch.remote.tsx"];
+    const siblings = ["batch.sqlite.ts", "batch.api.ts", "batch.sqlite.tsx", "batch.api.tsx"];
     const present = siblings.filter((file) => existsSync(join(libDir, file)));
     expect(present).toEqual([]);
     // Positive control for the check itself: the detector must be able to SEE a
@@ -128,20 +128,20 @@ describe("the batch family has one implementation", () => {
 
   /**
    * The facade must not reach PAST a facade into one of its arms, and must not read
-   * the deployment-mode axis module this program is deleting.
+   * the selector axis module this program is deleting.
    *
    * "Reaches past a facade" is the hazard, and it is not the same as "imports a
-   * `.local` module": `./sent-ledger.local.js` has no facade and no second arm, so
+   * suffixed module": `./sent-ledger.sqlite.js` has no facade and no second arm, so
    * importing it bypasses nothing. So the check resolves each suffixed specifier and
    * asks whether a facade sibling EXISTS — which is the condition under which the
    * import skips a dispatch that other callers go through, and is what the deleted
-   * `batch.local.ts` did to four separate families.
+   * `batch.sqlite.ts` did to four separate families.
    *
    * Both checks carry fixtures. A source scan that stops matching passes everything
    * silently, and this repo has already shipped that failure twice.
    */
-  it("reaches past no facade into an arm, and reads no deployment-mode module", () => {
-    const suffixedImport = /from\s+["'](\.[^"']*)\.(?:local|remote)\.js["']/g;
+  it("reaches past no facade into an arm, and reads no selector module", () => {
+    const suffixedImport = /from\s+["'](\.[^"']*)\.(?:sqlite|api)\.js["']/g;
     const axisImport = /from\s+["'][^"']*\/mode\.js["']/g;
 
     /** Specifiers in `text` whose family also ships a facade, resolved from `dir`. */
@@ -151,11 +151,11 @@ describe("the batch family has one implementation", () => {
         .filter((base) => existsSync(join(dir, `${base}.ts`)) || existsSync(join(dir, `${base}.tsx`)));
 
     // Positive controls, checked against the predicate and not against repo state.
-    expect(pastFacade('import * as local from "./batch.local.js";', libDir)).toEqual(["./batch"]);
-    expect(pastFacade('import * as remote from "./batch.remote.js";', libDir)).toEqual(["./batch"]);
-    expect(pastFacade('import { x } from "../db/contacts.local.js";', libDir)).toEqual(["../db/contacts"]);
+    expect(pastFacade('import * as local from "./batch.sqlite.js";', libDir)).toEqual(["./batch"]);
+    expect(pastFacade('import * as remote from "./batch.api.js";', libDir)).toEqual(["./batch"]);
+    expect(pastFacade('import { x } from "../db/contacts.sqlite.js";', libDir)).toEqual(["../db/contacts"]);
     // Negative controls: no facade sibling, and a plain module.
-    expect(pastFacade('import { x } from "./sent-ledger.local.js";', libDir)).toEqual([]);
+    expect(pastFacade('import { x } from "./sent-ledger.sqlite.js";', libDir)).toEqual([]);
     expect(pastFacade('import { parseCsv } from "./csv.js";', libDir)).toEqual([]);
     expect(new RegExp(axisImport.source).test('import { readTheMode } from "./mode.js";')).toBe(true);
     expect(new RegExp(axisImport.source).test('import { parseCsv } from "./csv.js";')).toBe(false);
@@ -167,9 +167,9 @@ describe("the batch family has one implementation", () => {
   });
 
   it("no longer reaches into an arm from the CLI command that runs a batch", () => {
-    const source = readFileSync(join(repoRoot, "src", "cli", "commands", "misc.local.ts"), "utf8");
+    const source = readFileSync(join(repoRoot, "src", "cli", "commands", "misc.sqlite.ts"), "utf8");
     expect(source).toContain('import("../../lib/batch.js")');
-    expect(source).not.toContain("lib/batch.local.js");
+    expect(source).not.toContain("lib/batch.sqlite.js");
   });
 });
 
@@ -382,7 +382,7 @@ describe("batchSend inherits the storage configuration contract", () => {
   it("refuses to run when the configuration names both a local database and an API", async () => {
     // The URL alone is enough: the contradiction is checked BEFORE the credential, so
     // this case needs no credential setting at all.
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example.test";
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example.test";
     try {
       const failure = batchSend({
         csvPath: "unused.csv",
@@ -394,7 +394,7 @@ describe("batchSend inherits the storage configuration contract", () => {
       });
       await expect(failure).rejects.toThrow(/two configured places to keep its mail/);
     } finally {
-      delete process.env["EMAILS_SELF_HOSTED_URL"];
+      delete process.env["HASNA_EMAILS_API_URL"];
     }
   });
 });

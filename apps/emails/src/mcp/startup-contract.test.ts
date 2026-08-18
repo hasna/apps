@@ -169,11 +169,12 @@ describe("MCP startup contract", () => {
   });
 
   it("keeps sequence implementation dependencies lazy", () => {
-    // Self-hosted-only: sequences route through the /v1 resource store + mode guard.
+    // Self-hosted-only: sequences route through the /v1 resource store + the
+    // client-backend selection.
     const lazyToolDeps = [
       "../../db/self-hosted-store.js",
       "../../db/sequences.js",
-      "../../lib/mode.js",
+      "../../store-resolution.js",
       "../helpers.js",
     ];
     const source = readFileSync(join(toolsDir, "sequences.ts"), "utf8");
@@ -191,15 +192,16 @@ describe("MCP startup contract", () => {
   });
 
   it("keeps miscellaneous operation implementation dependencies lazy", () => {
-    // Self-hosted-only: misc ops route through the /v1 resource store + mode guard;
-    // the remaining heavy libs (analytics/doctor/export/email-verify) stay lazy.
+    // Self-hosted-only: misc ops route through the /v1 resource store + the
+    // client-backend selection; the remaining heavy libs
+    // (analytics/doctor/export/email-verify) stay lazy.
     const lazyToolDeps = [
       "../../db/self-hosted-store.js",
       "../../lib/analytics.js",
       "../../lib/doctor.js",
       "../../lib/export.js",
       "../../lib/email-verify.js",
-      "../../lib/mode.js",
+      "../../store-resolution.js",
       "../helpers.js",
     ];
     const source = readFileSync(join(toolsDir, "misc-ops.ts"), "utf8");

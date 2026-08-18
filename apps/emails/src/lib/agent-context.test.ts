@@ -50,7 +50,7 @@ describe("agent context", () => {
 
     // The row is still published, with its real mail totals, so the view is
     // informative rather than empty — that part is unchanged.
-    expect(status.sources.items[0]).toMatchObject({ id: "self_hosted", total: 6 });
+    expect(status.sources.items[0]).toMatchObject({ id: "self-hosted", total: 6 });
     // The COUNT is what changed, and deliberately. This view publishes exactly one
     // row, `kind: "all"` — an aggregate over the whole shared store, not an ingestion
     // source. The two deleted status modules disagreed about it: one counted the
@@ -93,10 +93,10 @@ describe("agent context", () => {
     expect(status.database.data_dir).toBeNull();
     expect(status.gaps["database.data_dir"]?.reason)
       .toMatch(/^not_applicable:no_local_database_configured/);
-    expect(status.mode.current).toBe("self_hosted");
+    expect(status.backend).toBe("api");
     expect(status.inbox.total).toBe(6);
     expect(status.inbox.unread).toBe(3);
-    expect(status.sources.items[0]).toMatchObject({ id: "self_hosted", total: 6 });
+    expect(status.sources.items[0]).toMatchObject({ id: "self-hosted", total: 6 });
   });
 
   it("suggests wait-code for verification goals", async () => {

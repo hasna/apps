@@ -45,7 +45,6 @@ const boundaryPatterns = [
   // column here and is intentionally NOT flagged.
   { label: "hosted data field", scopes: BOTH, pattern: /\b(?:cloud_api_url|cloud_session_token|cloud_api_key|stripe_customer_id|credit_balance)\b/i },
   { label: "hosted triage surface", scopes: BOTH, pattern: /\/api\/triage\b|register_agent|list_triaged|triage_stats|delete_triage/i },
-  { label: "removed mode in configuration", scopes: BOTH, pattern: /(?:EMAILS|HASNA_EMAILS)_(?:STORAGE_)?MODE\s*[:=]\s*["']?(?:cloud|remote|hybrid)\b/i },
   { label: "cloud ai provider client", scopes: BOTH, pattern: /@ai-sdk\/(?:cerebras|groq)|\b(?:GROQ|CEREBRAS)_API_KEY\b|api\.cerebras\.ai|api\.groq\.com/i },
   { label: "private deployment marker", scopes: BOTH, pattern: /\bhasna-xyz\b|\/hasna\/deploy\/|789877399345/i },
   { label: "retired inbound bucket prefix", scopes: BOTH, pattern: /hasna-emails-prod-inbound/i },
@@ -114,7 +113,7 @@ const boundaryPatterns = [
     label: "legacy hosted environment",
     scopes: BOTH,
     pattern: new RegExp(legacyHostedEnvKeys.join("|"), "i"),
-    // `src/lib/mode.ts` (the rejection list) and `.github/workflows/ci.yml` (`env -u`)
+    // The legacy-key rejection list and `.github/workflows/ci.yml` (`env -u`)
     // are handled by stripExactCompatibilityBridges and need no allowance. What
     // remains is suites that assert the rejection, which must spell the variables
     // out. An EXACT path list was tried first and is wrong: `main` adds such suites
@@ -196,14 +195,14 @@ export const sourceBoundaryPatterns = boundaryPatternsForScope(SOURCE_SCOPE);
 // The retired-name compatibility bridge has one canonical source location. Its
 // body is extracted from that source using unique structural anchors and accepted
 // only when the complete byte range retains this pinned digest. Keeping only the
-// anchors and hash here avoids making the guard another source of deployment-mode
+// anchors and hash here avoids making the guard another source of selector
 // configuration while still failing closed on insertion, reordering, utility
 // changes, duplicate anchors, or movement to another path.
 const exactLegacyHostedEnvUnsetBridgeSpec = {
   path: "scripts/run-hermetic-tests.sh",
   startAnchor: "run_scrubbed() {\n",
   endAnchor: '    "$@"\n',
-  sha256: "bc29232f3acf8d6ef6c0cde33c4b56b43e677403e4f0c23833422de6cc3c4dc9",
+  sha256: "f9a2663fb2e5795700b58c97537c375206510ac91503a8a9b55d4f09dae4068c",
 };
 
 function locateExactLegacyHostedEnvUnsetBridge(content, path) {
@@ -289,9 +288,9 @@ const exactHistoricalHostedVocabularyBridges = new Map([
       content: [
         "## 15. Implementation reconciliation (v3)",
         "",
-        "The implementation now has exactly two deployment modes: local SQLite and",
-        "operator-owned `self_hosted` PostgreSQL. It has no hosted SaaS control plane and",
-        "no hybrid synchronization mode. Passing an explicit Bun `Database` handle to",
+        "The implementation now has exactly two deployment configurations: local SQLite and",
+        "operator-owned `self-hosted` PostgreSQL. It has no hosted SaaS control plane and",
+        "no synchronization between the two backends. Passing an explicit Bun `Database` handle to",
         "the public library always selects that caller-owned SQLite database, even when",
         "the process is otherwise configured as a self-hosted client.",
       ].join("\n") + "\n",
@@ -321,7 +320,7 @@ function stripExactCompatibilityBridges(content, path) {
     scanned = scanned.slice(0, exactBridge.start) + normalizedBridge + scanned.slice(exactBridge.end);
   }
 
-  // The mode resolver must retain these literal names only to reject old
+  // The legacy-key rejection list must retain these literal names only to reject old
   // environments with actionable migration guidance. Do not exempt its file or
   // bundle chunk wholesale: only erase literals inside the named rejection list.
   scanned = scanned.replace(/LEGACY_HOSTED_ENV_KEYS\s*=\s*\[[\s\S]*?\]/g, (block) => {

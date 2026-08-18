@@ -240,7 +240,7 @@ export interface HttpEmailStoreOptions {
    *
    * Not read from the environment here. A store takes its configuration from its
    * caller so a test can point it at a fixture without setting a process-wide variable,
-   * and so nothing in this directory reads a deployment mode.
+   * and so nothing in this directory reads a selection.
    */
   baseUrl: string;
   /** An API key or a session token. Sent as a bearer credential and never logged. */

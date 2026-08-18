@@ -71,7 +71,7 @@ afterEach(() => stub.clearEnv());
 // receipt rule too (and refuses when it cannot) — that contract is covered in
 // domain.inbound-provisioning.test.ts; here the deliberate row-only shape keeps
 // the routing assertions free of AWS concerns.
-describe("domain CLI — self-hosted (self_hosted) /v1 routing", () => {
+describe("domain CLI — self-hosted (self-hosted) /v1 routing", () => {
   it("add writes to the self-hosted API (not a local provider)", async () => {
     const { data } = await runDomainCommand(["domain", "add", "cloudy.example.com", "--provider", "selfHosted", "--send-only"]);
     const entity = data as { id: string; domain: string };
@@ -103,7 +103,7 @@ describe("domain CLI — self-hosted (self_hosted) /v1 routing", () => {
     expect(domains.map((d) => d.domain)).toEqual(["gamma.example.com"]);
   });
 
-  it("domains status <domain> shows the API record in self_hosted", async () => {
+  it("domains status <domain> shows the API record in self-hosted", async () => {
     await runDomainCommand(["domain", "add", "delta.example.com", "--provider", "selfHosted", "--send-only"]);
     const { data } = await runDomainCommand(["domains", "status", "delta.example.com"]);
     const rec = data as { domain: string };

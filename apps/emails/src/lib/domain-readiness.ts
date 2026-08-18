@@ -15,7 +15,7 @@ export interface DomainReadiness {
   inbound_evidence_ready: boolean;
   ready_addresses: number;
   inbound_evidence: {
-    mode?: "local" | "self_hosted";
+    backend?: "sqlite" | "api";
     source_of_truth?: DomainSourceOfTruth;
     inbound_status?: DomainRouteStatus;
     live_s3_sources: number;
@@ -27,7 +27,8 @@ export interface DomainReadiness {
 
 export interface DomainReadinessSignals {
   ready_addresses?: number;
-  mode?: "local" | "self_hosted";
+  /** Which client backend produced these signals: the local SQLite file or the `/v1` API. */
+  backend?: "sqlite" | "api";
   source_of_truth?: DomainSourceOfTruth;
   inbound_status?: DomainRouteStatus;
   live_s3_sources?: number;
@@ -52,10 +53,10 @@ export function assessDomainReadiness(
   const readyAddresses = signals.ready_addresses ?? 0;
   const inboundStatus = signals.inbound_status ?? domain.inbound_status;
   const sourceOfTruth = signals.source_of_truth ?? domain.source_of_truth;
-  const mode = signals.mode;
+  const backend = signals.backend;
   const liveS3Sources = signals.live_s3_sources ?? 0;
   const inboundBuckets = signals.inbound_buckets ?? 0;
-  const selfHostedSource = sourceOfTruth === "postgres" || (mode === "self_hosted" && sourceOfTruth !== "local");
+  const selfHostedSource = sourceOfTruth === "postgres" || (backend === "api" && sourceOfTruth !== "local");
   const inboundEvidenceReady = selfHostedSource ? liveS3Sources > 0 : true;
   const inboundLifecycleReady = inboundStatus === "ready";
   const provisioningReceiveReady = provisioning?.provisioning_status === "ready" || provisioning?.provisioning_status === "inbound_ready";
@@ -76,7 +77,7 @@ export function assessDomainReadiness(
       inbound_evidence_ready: inboundEvidenceReady,
       ready_addresses: readyAddresses,
       inbound_evidence: {
-        mode,
+        backend,
         source_of_truth: sourceOfTruth,
         inbound_status: inboundStatus,
         live_s3_sources: liveS3Sources,
@@ -119,7 +120,7 @@ export function assessDomainReadiness(
     inbound_evidence_ready: inboundEvidenceReady,
     ready_addresses: readyAddresses,
     inbound_evidence: {
-      mode,
+      backend,
       source_of_truth: sourceOfTruth,
       inbound_status: inboundStatus,
       live_s3_sources: liveS3Sources,

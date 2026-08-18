@@ -7,7 +7,7 @@ import { checkProviderHealth, checkAllProviders, formatProviderHealth } from "./
 import type { Provider } from "../types/index.js";
 
 // Provider health metrics route to the /v1 domains + addresses repos. In the
-// self-hosted model: domains carry a provider association (domain counts work),
+// API-client configurationl: domains carry a provider association (domain counts work),
 // addresses do NOT (address counts are always 0), and the per-provider bounce
 // rate is derived from the delivery events table which has no /v1 representation
 // (always 0 here). Credential validation is skipped in the metric tests to avoid

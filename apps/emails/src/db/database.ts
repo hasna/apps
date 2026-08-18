@@ -1973,7 +1973,7 @@ const MIGRATIONS = [
 
   // Migration 45: per-domain readiness lifecycle and provider/DNS snapshots.
   `
-  ALTER TABLE domains ADD COLUMN domain_type TEXT NOT NULL DEFAULT 'self_hosted' CHECK(domain_type IN ('system','tenant','self_hosted','local_only'));
+  ALTER TABLE domains ADD COLUMN domain_type TEXT NOT NULL DEFAULT 'self-hosted' CHECK(domain_type IN ('system','tenant','self-hosted','local_only'));
   ALTER TABLE domains ADD COLUMN source_of_truth TEXT NOT NULL DEFAULT 'local' CHECK(source_of_truth IN ('local','postgres','cloud'));
   ALTER TABLE domains ADD COLUMN ownership_status TEXT NOT NULL DEFAULT 'pending' CHECK(ownership_status IN ('pending','verified','failed'));
   ALTER TABLE domains ADD COLUMN inbound_status TEXT NOT NULL DEFAULT 'pending' CHECK(inbound_status IN ('pending','ready','disabled','failed'));
@@ -2001,7 +2001,7 @@ const MIGRATIONS = [
   `
   ${RETIRED_LEGACY_INBOUND_BRIDGE_SQL}
 
-  UPDATE domains SET domain_type = 'self_hosted' WHERE domain_type = 'tenant';
+  UPDATE domains SET domain_type = 'self-hosted' WHERE domain_type = 'tenant';
   UPDATE domains SET source_of_truth = 'postgres' WHERE source_of_truth = 'cloud';
 
   CREATE TABLE IF NOT EXISTS webhook_receipts (
@@ -2298,7 +2298,7 @@ function ensureSchema(db: Database): void {
   ensureColumn("ALTER TABLE domains ADD COLUMN next_check_at TEXT");
 
   // Migration 45 idempotent guarantee: per-domain readiness lifecycle.
-  ensureColumn("ALTER TABLE domains ADD COLUMN domain_type TEXT NOT NULL DEFAULT 'self_hosted'");
+  ensureColumn("ALTER TABLE domains ADD COLUMN domain_type TEXT NOT NULL DEFAULT 'self-hosted'");
   ensureColumn("ALTER TABLE domains ADD COLUMN source_of_truth TEXT NOT NULL DEFAULT 'local'");
   ensureColumn("ALTER TABLE domains ADD COLUMN ownership_status TEXT NOT NULL DEFAULT 'pending'");
   ensureColumn("ALTER TABLE domains ADD COLUMN inbound_status TEXT NOT NULL DEFAULT 'pending'");
@@ -2783,7 +2783,7 @@ function ensureSchema(db: Database): void {
   // ADOPT THE OLD S3 DEDUP KEY AS THE NEW FENCE. Without this, collapsing `src/lib/s3-sync`
   // onto the store seam would have RE-INGESTED EVERY MESSAGE ALREADY PULLED FROM S3.
   //
-  // The deleted `s3-sync.local.ts` deduplicated by SELECTing `raw_s3_url`, a column the seam
+  // The deleted `s3-sync.sqlite.ts` deduplicated by SELECTing `raw_s3_url`, a column the seam
   // does not expose. The seam's idempotency fence is `upsertMessage`'s `source_id`, added
   // NULLABLE just above with no backfill — so on any database populated before that collapse
   // every S3-sourced row has `raw_s3_url` set and `source_id` NULL, the fence matches nothing,

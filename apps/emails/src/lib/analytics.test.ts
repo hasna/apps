@@ -20,8 +20,8 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
-import { createProvider } from "../db/providers.local.js";
-import { createSentEmailLedger } from "./sent-ledger.local.js";
+import { createProvider } from "../db/providers.sqlite.js";
+import { createSentEmailLedger } from "./sent-ledger.sqlite.js";
 import { createEvent } from "../db/events.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
 import { createHttpEmailStore } from "../store-http/index.js";
@@ -36,8 +36,8 @@ const DB_PATH_ENV = "EMAILS_DB_PATH";
 const TOUCHED_ENV = [
   DB_PATH_ENV,
   "HASNA_EMAILS_DB_PATH",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
 ] as const;
 
 let saved: Array<readonly [string, string | undefined]> = [];

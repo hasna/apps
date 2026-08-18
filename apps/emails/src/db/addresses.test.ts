@@ -4,7 +4,7 @@
 // run in a separate process).
 //
 // Migrated from the deleted local-SQLite pattern. Notes on behavior that changed
-// with the self-hosted model:
+// with the API-client configurationl:
 //   - The /v1 address entity persists provider_id and keys address creation by
 //     provider plus email. Tests that exercise larger provider-filtered datasets
 //     still seed rows directly so their ordering and population remain explicit.

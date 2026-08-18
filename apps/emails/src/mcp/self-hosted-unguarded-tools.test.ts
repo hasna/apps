@@ -10,7 +10,7 @@
 // docblock says why. The discipline below is unchanged for both.
 //
 // WHY THIS FILE EXISTS. Each of these tools already had three of the four pieces it
-// needed in self_hosted mode: a `/v1` route in src/server/self-hosted/resources.ts, a
+// needed when the API client is configured: a `/v1` route in src/server/self-hosted/resources.ts, a
 // client that could reach it (an HTTP arm module at the time, the store seam now), and
 // a CLI twin that performs the SAME operation over the SAME route and succeeds. The fourth piece — the guard —
 // refused before any of it ran. Deleting the guard was the entire fix, so the proof
@@ -85,7 +85,7 @@ function text(result: { content: Array<{ text: string }> }): string {
 
 /** Assert success and return the parsed payload, surfacing the error text on failure. */
 function ok<T>(result: { content: Array<{ text: string }>; isError?: boolean }): T {
-  expect(text(result)).not.toContain("self_hosted API-only mode");
+  expect(text(result)).not.toContain("self-hosted API-only mode");
   expect(result.isError, text(result)).toBeFalsy();
   return JSON.parse(text(result) || "{}") as T;
 }
@@ -127,7 +127,7 @@ afterEach(() => stub.clearEnv());
  * configured throughout: the database path is opened first and then removed from the
  * environment, because a path AND an API together are a hard boot error with no precedence rule.
  */
-describe("MCP alias tools in self_hosted mode (twins of `emails alias …`)", () => {
+describe("MCP alias tools when the API client is configured (twins of `emails alias …`)", () => {
   let db: Database;
   let api: V1StoreApi;
 
@@ -222,7 +222,7 @@ describe("MCP alias tools in self_hosted mode (twins of `emails alias …`)", ()
   });
 });
 
-describe("MCP address-lifecycle tools in self_hosted mode (twins of `emails address …`)", () => {
+describe("MCP address-lifecycle tools when the API client is configured (twins of `emails address …`)", () => {
   async function storedAddress(): Promise<Record<string, unknown> | undefined> {
     return (await stub.list("addresses")).find((row) => row["id"] === "address-1");
   }
@@ -278,7 +278,7 @@ describe("MCP address-lifecycle tools in self_hosted mode (twins of `emails addr
   });
 });
 
-describe("MCP remove_domain in self_hosted mode (twin of `emails domain remove`)", () => {
+describe("MCP remove_domain when the API client is configured (twin of `emails domain remove`)", () => {
   it("deletes the domain row from /v1/domains", async () => {
     const removed = await runDomainTool("remove_domain", { domain_id: "domain-1" });
 
@@ -288,7 +288,7 @@ describe("MCP remove_domain in self_hosted mode (twin of `emails domain remove`)
   });
 });
 
-describe("MCP group-member tools in self_hosted mode (twins of `emails group …`)", () => {
+describe("MCP group-member tools when the API client is configured (twins of `emails group …`)", () => {
   it("add_group_member writes the membership through /v1/group-members", async () => {
     const member = ok<{ email: string; name: string | null; vars: Record<string, string> }>(
       await callTool("add_group_member", { group_name: "beta-testers", email: "ada@acme.example", name: "Ada", vars: { plan: "pro" } }),
@@ -338,13 +338,13 @@ describe("MCP group-member tools in self_hosted mode (twins of `emails group …
   });
 });
 
-describe("MCP list_replies in self_hosted mode (twin of `emails replies <id>`)", () => {
+describe("MCP list_replies when the API client is configured (twin of `emails replies <id>`)", () => {
   // This one refused UNCONDITIONALLY, in every mode, claiming "inbound reply tracking
   // runs on the self-hosted server" and that no API-backed implementation existed.
   // Both halves were false — `src/db/inbound.ts` routes `listReplySummaries` to
-  // `inbound.remote.ts`, which serves it from `/v1/messages`, and `emails replies`
+  // `inbound.api.ts`, which serves it from `/v1/messages`, and `emails replies`
   // has always run there. It is a worse defect than the mode-conditional guards,
-  // which at least told the truth in local mode.
+  // which at least told the truth for the local SQLite client.
   const SENT = { id: "msg-sent-1", direction: "outbound", message_id: "<root@acme.example>", from_addr: "ops@acme.example", to_addrs: ["ada@acme.example"], subject: "Question", body_text: "?", created_at: NOW, updated_at: NOW, received_at: NOW };
   const REPLY = { id: "msg-reply-1", direction: "inbound", message_id: "<reply@acme.example>", in_reply_to: "<root@acme.example>", from_addr: "ada@acme.example", to_addrs: ["ops@acme.example"], subject: "Re: Question", body_text: "the answer", created_at: NOW, updated_at: NOW, received_at: NOW };
 
@@ -372,7 +372,7 @@ describe("MCP list_replies in self_hosted mode (twin of `emails replies <id>`)",
   });
 });
 
-describe("MCP sequence step/enrollment tools in self_hosted mode (twins of `emails sequence …`)", () => {
+describe("MCP sequence step/enrollment tools when the API client is configured (twins of `emails sequence …`)", () => {
   it("add_sequence_step writes the step through /v1/sequence-steps", async () => {
     const step = ok<{ sequence_id: string; step_number: number; template_name: string }>(
       await callTool("add_sequence_step", { sequence_id: "onboarding", step_number: 1, delay_hours: 24, template_name: "welcome" }),

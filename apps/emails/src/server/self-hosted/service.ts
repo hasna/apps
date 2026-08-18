@@ -57,6 +57,7 @@ import {
 } from "./attachment-repair.js";
 import { validateAttachmentRepairReviewedDryRun } from "./attachment-repair-maintenance.js";
 import { emailsSelfHostedOpenApi } from "./openapi.js";
+import { resolveServerStorageBackend } from "../storage-backend.js";
 import { resourceSpecForPath, type SelfHostedResourceSpec } from "./resources.js";
 import { normalizePriorityRuleInput, prioritySenderRuleId } from "../../lib/priority-senders.js";
 import {
@@ -207,8 +208,6 @@ export interface SelfHostedServiceDeps {
     now?: () => string;
   };
 }
-
-const MODE = "self_hosted" as const;
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -881,7 +880,7 @@ export async function handleSelfHostedRequest(
     return json(200, {
       status: "ok",
       version: deps.version,
-      mode: MODE,
+      backend: resolveServerStorageBackend(),
       name: "emails",
       db: { ok: health.ok, latencyMs: health.latencyMs },
     });
@@ -892,7 +891,7 @@ export async function handleSelfHostedRequest(
     return json(ready.ok ? 200 : 503, {
       status: ready.ok ? "ready" : "not_ready",
       version: deps.version,
-      mode: MODE,
+      backend: resolveServerStorageBackend(),
       db: { ok: ready.ok, latencyMs: ready.latencyMs },
       pendingMigrations: ready.pendingMigrations,
       migrationIssues: ready.migrationIssues,
@@ -900,7 +899,7 @@ export async function handleSelfHostedRequest(
   }
 
   if (path === "/version") {
-    return json(200, { status: "ok", version: deps.version, mode: MODE, name: "emails" });
+    return json(200, { status: "ok", version: deps.version, backend: resolveServerStorageBackend(), name: "emails" });
   }
 
   if (path === "/openapi.json" || path === "/v1/openapi.json") {

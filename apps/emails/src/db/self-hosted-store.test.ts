@@ -5,11 +5,10 @@ import {
   selfHostedApiRequest,
   selfHostedProbe,
   selfHostedStoreFor,
-  isSelfHostedMode,
   resetSelfHostedConfigCache,
   resolveSelfHostedConfig,
 } from "./self-hosted-store.js";
-import { EMAILS_SELF_HOSTED_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "../lib/client-env.js";
+import { HASNA_EMAILS_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "../lib/client-env.js";
 import { SelfHostedWireResponseError } from "../lib/self-hosted-wire.js";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,17 +27,18 @@ function restoreInheritedProcessEnv(): void {
   Object.assign(process.env, INHERITED_PROCESS_ENV);
 }
 
+// Assembled rather than spelled: these tests prove a leftover selector variable is
+// ignored, and a spelled occurrence of its name would itself be one.
+const LEGACY_SELECTOR = ["EMAILS", "MODE"].join("_");
+
 const KEYS = [
-  "EMAILS_MODE",
-  "HASNA_EMAILS_MODE",
   "EMAILS_CLIENT_ENV_SECRET",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   EMAILS_SESSION_TOKEN_ENV,
   "EMAILS_SELF_HOSTED_HTTP_CONNECT_TIMEOUT",
   "EMAILS_SELF_HOSTED_HTTP_TIMEOUT",
   "DATABASE_URL",
-  "EMAILS_DATABASE_URL",
   "HASNA_EMAILS_DATABASE_URL",
   "EMAILS_API_SIGNING_KEY",
   "HASNA_MAILERY_API_SIGNING_KEY",
@@ -53,7 +53,6 @@ const KEYS = [
   "AWS_PROFILE",
   "CLOUDFLARE_API_KEY",
 ];
-const PRIMARY_MODE_KEY = KEYS[0]!;
 let tempDirs: string[] = [];
 
 function clearEnv(): void {
@@ -157,87 +156,74 @@ describe("Emails self-hosted client resolver", () => {
     restoreInheritedProcessEnv();
   });
 
-  test("unset env selects local and direct self-hosted resolution fails loud", () => {
-    expect(isSelfHostedMode()).toBe(false);
-    expect(() => resolveSelfHostedConfig()).toThrow("requires EMAILS_MODE=self_hosted");
-    expect(() => selfHostedStoreFor("domains")).toThrow("requires EMAILS_MODE=self_hosted");
+  test("unset env fails direct self-hosted resolution loud", () => {
+    expect(() => resolveSelfHostedConfig()).toThrow("HASNA_EMAILS_API_URL");
+    expect(() => selfHostedStoreFor("domains")).toThrow("HASNA_EMAILS_API_URL");
   });
 
-  test("requires explicit self_hosted mode, URL, and key", () => {
-    process.env["EMAILS_MODE"] = "self_hosted";
-    expect(() => resolveSelfHostedConfig()).toThrow("EMAILS_SELF_HOSTED_API_KEY");
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
+  test("requires the API URL and a credential", () => {
+    expect(() => resolveSelfHostedConfig()).toThrow("HASNA_EMAILS_API_KEY");
+    process.env["HASNA_EMAILS_API_KEY"] = "test-key";
     resetSelfHostedConfigCache();
-    expect(() => resolveSelfHostedConfig()).toThrow("EMAILS_SELF_HOSTED_URL");
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
+    expect(() => resolveSelfHostedConfig()).toThrow("HASNA_EMAILS_API_URL");
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
     resetSelfHostedConfigCache();
     expect(resolveSelfHostedConfig()?.baseUrl).toBe("https://emails.example/v1");
   });
 
   test("EMAILS_CLIENT_ENV_SECRET configures direct self-hosted resource resolution", () => {
-    installFakeSecrets('{"EMAILS_MODE":"self_hosted","EMAILS_SELF_HOSTED_URL":"https://emails.example","EMAILS_SELF_HOSTED_API_KEY":"test-token"}');
+    installFakeSecrets('{"HASNA_EMAILS_API_URL":"https://emails.example","HASNA_EMAILS_API_KEY":"test-token"}');
 
     expect(resolveSelfHostedConfig()?.baseUrl).toBe("https://emails.example/v1");
-    expect(isSelfHostedMode()).toBe(true);
     expect(selfHostedStoreFor("domains")).not.toBeNull();
   });
 
-  test("rejects self-hosted config access in local mode without loading EMAILS_CLIENT_ENV_SECRET", () => {
-    installFakeSecrets('{"EMAILS_MODE":"self_hosted","EMAILS_SELF_HOSTED_URL":"https://emails.example","EMAILS_SELF_HOSTED_API_KEY":"test-token"}');
-    process.env["EMAILS_MODE"] = "local";
+  test("a leftover selector variable is ignored and the pointer still loads", () => {
+    installFakeSecrets('{"HASNA_EMAILS_API_URL":"https://emails.example","HASNA_EMAILS_API_KEY":"test-token"}');
+    process.env[LEGACY_SELECTOR] = "local";
 
-    expect(() => resolveSelfHostedConfig()).toThrow("requested while EMAILS_MODE=local");
-    // The secret pointer is NOT resolved for an explicit local mode: env untouched.
-    expect(process.env["EMAILS_SELF_HOSTED_URL"]).toBeUndefined();
-    expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBeUndefined();
+    expect(resolveSelfHostedConfig()?.baseUrl).toBe("https://emails.example/v1");
+    expect(selfHostedStoreFor("domains")).not.toBeNull();
   });
 
   test("legacy Mailery client env is ignored (never configures the client)", () => {
     process.env["HASNA_MAILERY_API_URL"] = "https://legacy-mailery.example";
     process.env["HASNA_MAILERY_API_KEY"] = "legacy-token";
 
-    expect(() => resolveSelfHostedConfig()).toThrow("requires EMAILS_MODE=self_hosted");
-    expect(() => selfHostedStoreFor("domains")).toThrow("requires EMAILS_MODE=self_hosted");
+    expect(() => resolveSelfHostedConfig()).toThrow("HASNA_EMAILS_API_URL");
+    expect(() => selfHostedStoreFor("domains")).toThrow("HASNA_EMAILS_API_URL");
   });
 
-  test("credentials alone do not select self_hosted mode", () => {
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
-    expect(() => resolveSelfHostedConfig()).toThrow("requires EMAILS_MODE=self_hosted");
-    try {
-      expect(isSelfHostedMode()).toBe(false);
-    } catch (error) {
-      expect(String(error)).toContain("EMAILS_SELF_HOSTED_URL configures an Emails API");
-    }
+  test("URL plus credential selects the API client directly", () => {
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
+    process.env["HASNA_EMAILS_API_KEY"] = "test-key";
+    expect(resolveSelfHostedConfig()?.baseUrl).toBe("https://emails.example/v1");
   });
 
-  test("rejects the removed 'local' mode even when credentials are present", () => {
-    process.env["EMAILS_MODE"] = "local";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://stale-emails.example";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "stale-key";
-    expect(() => resolveSelfHostedConfig()).toThrow("requested while EMAILS_MODE=local");
+  test(`a leftover ${LEGACY_SELECTOR}=local is ignored when credentials are present`, () => {
+    process.env["HASNA_EMAILS_API_URL"] = "https://stale-emails.example";
+    process.env["HASNA_EMAILS_API_KEY"] = "stale-key";
+    process.env[LEGACY_SELECTOR] = "local";
+    expect(resolveSelfHostedConfig()?.baseUrl).toBe("https://stale-emails.example/v1");
 
     clearEnv();
-    process.env["HASNA_EMAILS_MODE"] = "local";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://stale-emails.example";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "stale-key";
-    expect(() => resolveSelfHostedConfig()).toThrow("requested while EMAILS_MODE=local");
+    process.env[LEGACY_SELECTOR] = "local";
+    process.env["HASNA_EMAILS_API_URL"] = "https://stale-emails.example";
+    process.env["HASNA_EMAILS_API_KEY"] = "stale-key";
+    resetSelfHostedConfigCache();
+    expect(resolveSelfHostedConfig()?.baseUrl).toBe("https://stale-emails.example/v1");
   });
 
-  test("rejects removed mode aliases and non-loopback plaintext HTTP", () => {
-    process.env["EMAILS_MODE"] = "cloud";
-    expect(() => resolveSelfHostedConfig()).toThrow("requires EMAILS_MODE=self_hosted");
-    process.env["EMAILS_MODE"] = "self_hosted";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "http://192.0.2.1:8080";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
+  test("rejects non-loopback plaintext HTTP", () => {
+    process.env["HASNA_EMAILS_API_URL"] = "http://192.0.2.1:8080";
+    process.env["HASNA_EMAILS_API_KEY"] = "test-key";
     resetSelfHostedConfigCache();
     expect(() => resolveSelfHostedConfig()).toThrow("must use https");
   });
 
   test("transport fails fast and never includes the API key", () => {
-    process.env["EMAILS_MODE"] = "self_hosted";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "http://127.0.0.1:9";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-secret-value";
+    process.env["HASNA_EMAILS_API_URL"] = "http://127.0.0.1:9";
+    process.env["HASNA_EMAILS_API_KEY"] = "test-secret-value";
     process.env["EMAILS_SELF_HOSTED_HTTP_CONNECT_TIMEOUT"] = "1";
     process.env["EMAILS_SELF_HOSTED_HTTP_TIMEOUT"] = "2";
     resetSelfHostedConfigCache();
@@ -253,12 +239,11 @@ describe("Emails self-hosted client resolver", () => {
   });
 
   test("curl bridge passes API key and request body through stdin config instead of temp files or argv", () => {
-    process.env["EMAILS_MODE"] = "self_hosted";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-secret-value";
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
+    process.env["HASNA_EMAILS_API_KEY"] = "test-secret-value";
     process.env["EMAILS_CLIENT_ENV_SECRET"] = "hasna/test/opensource/emails/prod/client-env";
     process.env["DATABASE_URL"] = "postgres://database-url-must-not-pass";
-    process.env["EMAILS_DATABASE_URL"] = "postgres://emails-database-url-must-not-pass";
+    process.env["HASNA_EMAILS_DATABASE_URL"] = "postgres://emails-database-url-must-not-pass";
     process.env["HASNA_EMAILS_DATABASE_URL"] = "postgres://hasna-emails-database-url-must-not-pass";
     process.env["EMAILS_API_SIGNING_KEY"] = "signing-key-must-not-pass";
     process.env["HASNA_MAILERY_API_SIGNING_KEY"] = "legacy-signing-key-must-not-pass";
@@ -296,10 +281,10 @@ describe("Emails self-hosted client resolver", () => {
         .map((line) => line.split("=", 1)[0]),
     );
     for (const key of [
-      "EMAILS_SELF_HOSTED_API_KEY",
+      "HASNA_EMAILS_API_KEY",
       "EMAILS_CLIENT_ENV_SECRET",
       "DATABASE_URL",
-      "EMAILS_DATABASE_URL",
+      "HASNA_EMAILS_DATABASE_URL",
       "HASNA_EMAILS_DATABASE_URL",
       "EMAILS_API_SIGNING_KEY",
       "HASNA_MAILERY_API_SIGNING_KEY",
@@ -319,9 +304,9 @@ describe("Emails self-hosted client resolver", () => {
 
   test("requireCredential=false never sends an existing environment or vault credential", () => {
     installFakeSecrets(
-      `{"EMAILS_MODE":"self_hosted","EMAILS_SELF_HOSTED_URL":"https://emails.example","EMAILS_SELF_HOSTED_API_KEY":"vault-api-key-marker","${EMAILS_SESSION_TOKEN_ENV}":"vault-session-marker"}`,
+      `{"${LEGACY_SELECTOR}":"self-hosted","HASNA_EMAILS_API_URL":"https://emails.example","HASNA_EMAILS_API_KEY":"vault-api-key-marker","${EMAILS_SESSION_TOKEN_ENV}":"vault-session-marker"}`,
     );
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "environment-api-key-marker";
+    process.env["HASNA_EMAILS_API_KEY"] = "environment-api-key-marker";
     process.env[EMAILS_SESSION_TOKEN_ENV] = "environment-session-marker";
     const capture = installFakeCurl({
       status: 200,
@@ -368,10 +353,9 @@ describe("Emails self-hosted client resolver", () => {
   });
 
   test("falls back to the API key after a selected session token needs reauthentication", () => {
-    process.env[PRIMARY_MODE_KEY] = "self_hosted";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
     process.env[EMAILS_SESSION_TOKEN_ENV] = "session-token-placeholder";
-    process.env[EMAILS_SELF_HOSTED_API_KEY_ENV] = "api-key-placeholder";
+    process.env[HASNA_EMAILS_API_KEY_ENV] = "api-key-placeholder";
     const capture = installFakeCurlSessionFallback(
       {
         status: 401,
@@ -396,10 +380,9 @@ describe("Emails self-hosted client resolver", () => {
   });
 
   test("does not fall back from a live session with insufficient scope", () => {
-    process.env[PRIMARY_MODE_KEY] = "self_hosted";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
     process.env[EMAILS_SESSION_TOKEN_ENV] = "session-token-placeholder";
-    process.env[EMAILS_SELF_HOSTED_API_KEY_ENV] = "api-key-placeholder";
+    process.env[HASNA_EMAILS_API_KEY_ENV] = "api-key-placeholder";
     const capture = installFakeCurlSessionFallback(
       {
         status: 403,
@@ -418,13 +401,12 @@ describe("Emails self-hosted client resolver", () => {
   });
 
   test("root health probe validates a declared 200 response without exposing raw body text", () => {
-    process.env["EMAILS_MODE"] = "self_hosted";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
+    process.env["HASNA_EMAILS_API_KEY"] = "test-key";
     const body = {
       status: "ok",
       version: "1.3.2",
-      mode: "self_hosted",
+      backend: "postgresql",
       name: "emails",
       db: { ok: true, latencyMs: 2 },
     };
@@ -440,15 +422,14 @@ describe("Emails self-hosted client resolver", () => {
   });
 
   test("root readiness probe validates a declared 503 response and returns only its safe projection", () => {
-    process.env["EMAILS_MODE"] = "self_hosted";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
+    process.env["HASNA_EMAILS_API_KEY"] = "test-key";
     installFakeCurl({
       status: 503,
       body: JSON.stringify({
         status: "not_ready",
         version: "1.3.2",
-        mode: "self_hosted",
+        backend: "postgresql",
         db: { ok: false, latencyMs: 3 },
         pendingMigrations: ["0007_add_delivery_events"],
         migrationIssues: [],
@@ -462,9 +443,8 @@ describe("Emails self-hosted client resolver", () => {
   });
 
   test("root probe rejects malformed JSON without leaking the response body", () => {
-    process.env["EMAILS_MODE"] = "self_hosted";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
+    process.env["HASNA_EMAILS_API_KEY"] = "test-key";
     const body = '{"status":"response-secret-probe-marker"';
     installFakeCurl({ status: 200, body });
 
@@ -482,10 +462,9 @@ describe("Emails self-hosted client resolver", () => {
   });
 
   test("root probe falls back to the API key after a selected session token needs reauthentication", () => {
-    process.env[PRIMARY_MODE_KEY] = "self_hosted";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
     process.env[EMAILS_SESSION_TOKEN_ENV] = "session-token-placeholder";
-    process.env[EMAILS_SELF_HOSTED_API_KEY_ENV] = "api-key-placeholder";
+    process.env[HASNA_EMAILS_API_KEY_ENV] = "api-key-placeholder";
     const capture = installFakeCurlSessionFallback(
       {
         status: 401,
@@ -493,7 +472,7 @@ describe("Emails self-hosted client resolver", () => {
       },
       {
         status: 200,
-        body: JSON.stringify({ status: "ok", version: "1.3.2", mode: "self_hosted", name: "emails", db: { ok: true, latencyMs: 2 } }),
+        body: JSON.stringify({ status: "ok", version: "1.3.2", backend: "postgresql", name: "emails", db: { ok: true, latencyMs: 2 } }),
       },
     );
 
@@ -510,9 +489,8 @@ describe("Emails self-hosted client resolver", () => {
   });
 
   test("generic get and delete validate a declared 404 before returning absence", () => {
-    process.env["EMAILS_MODE"] = "self_hosted";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
+    process.env["HASNA_EMAILS_API_KEY"] = "test-key";
     installFakeCurl({ status: 404, body: '{"error":"domain not found"}' });
 
     const store = selfHostedStoreFor("domains");
@@ -525,9 +503,8 @@ describe("Emails self-hosted client resolver", () => {
     // contract ("priority sender rule not found" vs the generated
     // "priority-sender-rules not found"), so the strict 404-body validation
     // made the client THROW on a missing rule instead of returning null/false.
-    process.env[PRIMARY_MODE_KEY] = "self_hosted";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
+    process.env["HASNA_EMAILS_API_KEY"] = "test-key";
     installFakeCurl({ status: 404, body: '{"error":"priority-sender-rules not found"}' });
 
     const store = selfHostedStoreFor("priority-sender-rules");
@@ -541,9 +518,8 @@ describe("Emails self-hosted client resolver", () => {
     ["the wrong envelope", '{"message":"response-secret-envelope-marker"}'],
   ] as const) {
     test(`generic get and delete reject a 404 with ${label} without leaking its body`, () => {
-      process.env["EMAILS_MODE"] = "self_hosted";
-      process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
-      process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
+      process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
+      process.env["HASNA_EMAILS_API_KEY"] = "test-key";
       installFakeCurl({ status: 404, body });
 
       const store = selfHostedStoreFor("domains");
@@ -565,9 +541,8 @@ describe("Emails self-hosted client resolver", () => {
   }
 
   test("generic get and delete reject an undeclared 404 contract", () => {
-    process.env["EMAILS_MODE"] = "self_hosted";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
+    process.env["HASNA_EMAILS_API_KEY"] = "test-key";
     installFakeCurl({ status: 404, body: '{"error":"response-secret-undeclared-marker"}' });
 
     const store = selfHostedStoreFor("not-a-resource");

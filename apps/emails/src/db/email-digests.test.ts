@@ -872,20 +872,20 @@ describe("with no store passed", () => {
 // ---------------------------------------------------------------------------------
 
 describe("the collapsed module", () => {
-  it("names no deployment-mode symbol and reaches into no arm", async () => {
+  it("names no selector symbol and reaches into no arm", async () => {
     const source = await Bun.file(new URL("./email-digests.ts", import.meta.url)).text();
-    // Named indirectly on purpose: this file is inside the ratchet's own scanned corpus.
+    // Named indirectly on purpose: this file is inside the source-text guard's own scanned corpus.
     for (const fragment of [
       ["isSelfHosted", "Mode"].join(""),
       ["get", "EmailsMode"].join(""),
       ["EMAILS", "_MODE"].join(""),
-      ["email-digests", ".local.js"].join(""),
-      ["email-digests", ".remote.js"].join(""),
+      ["email-digests", ".sqlite.js"].join(""),
+      ["email-digests", ".api.js"].join(""),
     ]) {
       expect(source).not.toContain(fragment);
     }
     // And there is exactly one implementation: both arm modules are gone.
-    for (const arm of ["email-digests.local.ts", "email-digests.remote.ts"]) {
+    for (const arm of ["email-digests.sqlite.ts", "email-digests.api.ts"]) {
       expect(await Bun.file(new URL(`./${arm}`, import.meta.url)).exists()).toBe(false);
     }
   });

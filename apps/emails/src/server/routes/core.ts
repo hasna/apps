@@ -1,7 +1,7 @@
 // API route handlers — core.ts
-import { createProvider, listProviderSummaries, deleteProvider, getProvider, updateProvider } from '../../db/providers.local.js';
-import { createDomain, listDomains, deleteDomain, getDomain, updateDnsStatus } from '../../db/domains.local.js';
-import { createAddress, deleteAddress } from '../../db/addresses.local.js';
+import { createProvider, listProviderSummaries, deleteProvider, getProvider, updateProvider } from '../../db/providers.sqlite.js';
+import { createDomain, listDomains, deleteDomain, getDomain, updateDnsStatus } from '../../db/domains.sqlite.js';
+import { createAddress, deleteAddress } from '../../db/addresses.sqlite.js';
 import { listEmails, getEmail, searchEmails } from '../../db/emails.js';
 import { listSandboxEmailSummaries, getSandboxEmail, clearSandboxEmails } from '../../db/sandbox.js';
 import { getDatabase } from '../../db/database.js';
@@ -66,7 +66,7 @@ function objectField(body: Record<string, unknown>, key: string): Record<string,
 
 function domainReadinessMutation(body: Record<string, unknown>): DomainReadinessMutationInput {
   return {
-    domain_type: enumField(body, "domain_type", ["system", "self_hosted", "local_only"] as const),
+    domain_type: enumField(body, "domain_type", ["system", "self-hosted", "local_only"] as const),
     source_of_truth: enumField(body, "source_of_truth", ["local", "postgres"] as const),
     ownership_status: enumField(body, "ownership_status", ["pending", "verified", "failed"] as const),
     inbound_status: enumField(body, "inbound_status", ["pending", "ready", "disabled", "failed"] as const),

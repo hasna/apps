@@ -92,7 +92,7 @@ afterEach(() => {
   stub.clearEnv();
 });
 
-describe("address self-hosted routing (self_hosted)", () => {
+describe("address self-hosted routing (self-hosted)", () => {
   test("listAddresses reads the /v1 dataset", () => {
     expect(listAddresses().map((a) => a.id)).toContain(ID);
   });

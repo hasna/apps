@@ -17,7 +17,7 @@ import {
 
 // `address provision` used to throw "is not available in the self-hosted client;
 // it runs on the self-hosted server". Both halves were false: the throw was
-// unconditional, so it fired in local mode too, and there is no server route for
+// unconditional, so it fired for the local SQLite client too, and there is no server route for
 // it to run on — `openapi.ts` exposes plain CRUD for `/v1/addresses` and no
 // provisioning route, and the container runs no reconciler. The orchestrator
 // this command wrapped was deleted as unreachable dead code, and nothing
@@ -25,7 +25,7 @@ import {
 //
 // So the refusal now says exactly that and names the two commands that DO the
 // work, matching the wording `emails provision *` and the MCP provisioning tools
-// already settled on. It must not name a deployment mode.
+// already settled on. It must not name a selection.
 //
 // Address ownership is NOT in this category: `src/db/owners.ts` has collapsed onto
 // the store seam, so its subcommands read and write whichever store this
@@ -47,11 +47,11 @@ const MAX_OWNER_HISTORY_LIMIT = 100;
 
 /**
  * Provider label for display. Legacy /v1 address rows may omit provider_id,
- * so an empty value is reported as `self_hosted` — the DomainType value it
+ * so an empty value is reported as `self-hosted` — the DomainType value it
  * corresponds to, not a claim about where it is served.
  */
 function providerLabel(address: { provider_name: string | null; provider_id: string }): string {
-  return address.provider_name ?? (address.provider_id || "self_hosted");
+  return address.provider_name ?? (address.provider_id || "self-hosted");
 }
 
 /**

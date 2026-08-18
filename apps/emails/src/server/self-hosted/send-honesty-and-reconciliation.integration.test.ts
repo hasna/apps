@@ -30,7 +30,7 @@ import { testAuthEnv } from "./auth/test-support.js";
 import type { AuthMailerConfig } from "./auth/mailer.js";
 import type { SelfHostedKeyStore } from "./keys.js";
 import type { SelfHostedSender } from "./sender.js";
-import { formatSelfHostedSummaries, toSelfHostedSummary } from "../../cli/commands/email-log.remote.js";
+import { formatSelfHostedSummaries, toSelfHostedSummary } from "../../cli/commands/email-log.api.js";
 import type { TuiMessage } from "../../lib/mail-types.js";
 
 const SIGNING_SECRET = "test-signing-secret-do-not-use-in-prod-0123456789";

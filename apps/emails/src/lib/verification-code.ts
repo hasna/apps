@@ -5,9 +5,9 @@
 // eighteen-line facade that read the process-wide deployment word and handed each of
 // three exports to one of two sibling modules:
 //
-//   * `verification-code.local.ts` held the real implementation — a synchronous SQLite
+//   * `verification-code.sqlite.ts` held the real implementation — a synchronous SQLite
 //     read over `inbound_recipients JOIN inbound_emails`;
-//   * `verification-code.remote.ts` held a SECOND COPY of the two pure functions,
+//   * `verification-code.api.ts` held a SECOND COPY of the two pure functions,
 //     byte-for-byte identical to the first, plus a `listVerificationCodeCandidates`
 //     that threw.
 //

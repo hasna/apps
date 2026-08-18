@@ -34,7 +34,7 @@ afterEach(() => {
   stub.clearEnv();
 });
 
-describe("MCP self_hosted local-state guards", () => {
+describe("MCP self-hosted local-state guards", () => {
   it("refuses prepare_inbox, which really has no route in this client", async () => {
     // Unlike list_replies below, this one is honest: there is no `/v1` provisioning
     // route and `emails address provision` is `serverOnly(...)`.
@@ -46,7 +46,7 @@ describe("MCP self_hosted local-state guards", () => {
   it("no longer refuses list_replies — it serves replies from /v1/messages", async () => {
     // This tool used to refuse UNCONDITIONALLY, in every mode, saying "inbound reply
     // tracking runs on the self-hosted server". It does not: src/db/inbound.ts routes
-    // listReplySummaries to inbound.remote.ts over `/v1/messages`, and the CLI twin
+    // listReplySummaries to inbound.api.ts over `/v1/messages`, and the CLI twin
     // `emails replies <id>` has always worked here. Seeded straight onto the stub so
     // the rows can only have come off the wire.
     await stub.seed({

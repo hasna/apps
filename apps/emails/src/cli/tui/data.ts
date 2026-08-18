@@ -1,6 +1,6 @@
-import * as local from "./data.local.js";
-import * as remote from "./data.remote.js";
-import { isSelfHostedMode } from "../../db/self-hosted-store.js";
+import * as local from "./data.sqlite.js";
+import * as remote from "./data.api.js";
+import { isApiClientConfigured } from "../../store-resolution.js";
 
 export * from "../../lib/mail-types.js";
 export type {
@@ -10,8 +10,8 @@ export type {
   ListInboxAddressOptions,
   InboxSource,
   TuiSettings,
-} from "./data.local.js";
-export type { TenantContext } from "./data.remote.js";
+} from "./data.sqlite.js";
+export type { TenantContext } from "./data.api.js";
 export const ALL_ADDRESSES = local.ALL_ADDRESSES;
 
 const localCompat = {
@@ -21,7 +21,7 @@ const localCompat = {
 
 function routed<K extends keyof typeof remote>(key: K): typeof remote[K] {
   return ((...args: unknown[]) => {
-    const implementation = (isSelfHostedMode() ? remote : localCompat) as Record<string, unknown>;
+    const implementation = (isApiClientConfigured() ? remote : localCompat) as Record<string, unknown>;
     const candidate = implementation[String(key)];
     if (typeof candidate !== "function") throw new Error(`tui.data.${String(key)} is unavailable in the selected mode.`);
     return (candidate as (...values: unknown[]) => unknown)(...args);
@@ -60,8 +60,8 @@ export {
 } from "../../db/priority-senders.js";
 
 export const getTenantContext: typeof remote.getTenantContext = (force = false) =>
-  isSelfHostedMode() ? remote.getTenantContext(force) : { identity: null, label: "Local" };
+  isApiClientConfigured() ? remote.getTenantContext(force) : { identity: null, label: "Local" };
 
 export const resetTenantContextCache: typeof remote.resetTenantContextCache = () => {
-  if (isSelfHostedMode()) remote.resetTenantContextCache();
+  if (isApiClientConfigured()) remote.resetTenantContextCache();
 };

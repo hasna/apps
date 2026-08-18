@@ -119,7 +119,7 @@
 // IT IS PRESERVED, NOT FIXED, and the reason is scope rather than doubt: BOTH arms behaved
 // identically, so there is no divergence to resolve toward a stronger arm, and changing what a
 // published write does to a column the caller did not name is a product decision rather than a
-// mode-axis refactor — the line `src/db/address-lifecycle.ts` drew. The fix is one field on the
+// selector-removal refactor — the line `src/db/address-lifecycle.ts` drew. The fix is one field on the
 // update patch (`protected: true`, a writable column on both stores) and belongs to whoever
 // owns that decision. `src/db/aliases.test.ts` pins the current behaviour under a name that
 // says it is a defect, so nobody can change it silently in either direction.
@@ -649,7 +649,7 @@ export async function listAliases(
   // `undefined` instead made `listAliases("")` filter on an empty domain and answer `[]`,
   // reachable through `emails alias list --domain ""` and the MCP tool. The two arms AGREED here,
   // so there is no stronger arm to resolve toward and changing it would have been a product
-  // decision smuggled into a mode-axis refactor. Found by adversarial review.
+  // decision smuggled into a selector-removal refactor. Found by adversarial review.
   const wanted = domain ? domain.toLowerCase() : undefined;
   const aliases = await readAliases(
     storeFor(store),

@@ -103,12 +103,12 @@ locals {
   )
 
   database_secret = {
-    name      = "EMAILS_DATABASE_URL"
+    name      = "HASNA_EMAILS_DATABASE_URL"
     valueFrom = aws_secretsmanager_secret.database_url.arn
   }
 
   migration_database_secret = {
-    name      = "EMAILS_DATABASE_URL"
+    name      = "HASNA_EMAILS_DATABASE_URL"
     valueFrom = aws_secretsmanager_secret.migration_database_url.arn
   }
 

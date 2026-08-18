@@ -342,7 +342,7 @@ describe("tui data — addresses / senders / domains", () => {
 
   it("summarizes domains from /v1", async () => {
     await stub.seed({
-      domains: [{ id: "dom-1", domain: "acme.com", provider: "self_hosted", status: "verified", verified: true, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }],
+      domains: [{ id: "dom-1", domain: "acme.com", provider: "self-hosted", status: "verified", verified: true, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }],
     });
 
     const summaries = await listDomainSummaries();
@@ -360,6 +360,6 @@ describe("tui data — settings (self-hosted)", () => {
       defaultFrom: null,
       theme: "light",
     });
-    expect(() => setSetting("theme", "dark")).toThrow(/self_hosted API-only mode/);
+    expect(() => setSetting("theme", "dark")).toThrow(/self-hosted API-only mode/);
   });
 });

@@ -382,8 +382,8 @@ describe("domain dns command", () => {
 
   it("answers instead of exiting 1 when the provider row cannot configure an adapter", async () => {
     // `/v1` never distributes provider credentials — `apiToProvider` in
-    // src/db/providers.remote.ts maps every secret column to null on purpose — so in
-    // self_hosted mode EVERY Resend provider makes `getAdapter` throw "Resend
+    // src/db/providers.api.ts maps every secret column to null on purpose — so in
+    // API-client configuration EVERY Resend provider makes `getAdapter` throw "Resend
     // provider requires an API key". That escaped, turning a read-only question into
     // an exit-1 whose fix_commands sent the operator to configure a client-side key
     // that structurally cannot live there.

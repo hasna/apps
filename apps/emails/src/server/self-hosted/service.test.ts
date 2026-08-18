@@ -149,13 +149,17 @@ function attachmentRepairRun(
 }
 
 describe("Emails self-hosted service", () => {
-  test("GET /health returns 200 with status/version/mode", async () => {
+  test("GET /health returns 200 with status/version/backend", async () => {
+    const previousDb = process.env["HASNA_EMAILS_DATABASE_URL"];
+    process.env["HASNA_EMAILS_DATABASE_URL"] = "postgresql://test";
     const res = await handleSelfHostedRequest(deps(), req("GET", "/health"));
     expect(res?.status).toBe(200);
     const body = await res!.json();
     expect(body.status).toBe("ok");
     expect(body.version).toBe("9.9.9");
-    expect(body.mode).toBe("self_hosted");
+    expect(body.backend).toBe("postgresql");
+    if (previousDb === undefined) delete process.env["HASNA_EMAILS_DATABASE_URL"];
+    else process.env["HASNA_EMAILS_DATABASE_URL"] = previousDb;
   });
 
   test("operational probes never expose database error details", async () => {
@@ -220,10 +224,14 @@ describe("Emails self-hosted service", () => {
     expect(res?.status).toBe(200);
   });
 
-  test("GET /version returns the version+mode shape", async () => {
+  test("GET /version returns the version+backend shape", async () => {
+    const previousDb = process.env["HASNA_EMAILS_DATABASE_URL"];
+    process.env["HASNA_EMAILS_DATABASE_URL"] = "postgresql://test";
     const res = await handleSelfHostedRequest(deps(), req("GET", "/version"));
     const body = await res!.json();
-    expect(body).toMatchObject({ status: "ok", version: "9.9.9", mode: "self_hosted", name: "emails" });
+    expect(body).toMatchObject({ status: "ok", version: "9.9.9", backend: "postgresql", name: "emails" });
+    if (previousDb === undefined) delete process.env["HASNA_EMAILS_DATABASE_URL"];
+    else process.env["HASNA_EMAILS_DATABASE_URL"] = previousDb;
   });
 
   test("unknown non-v1 path falls through (null)", async () => {

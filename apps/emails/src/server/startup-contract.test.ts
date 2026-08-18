@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { routeModulesFor } from "./api-routes.js";
-import { RETIRED_SERVER_MODE_SETTINGS } from "./storage-backend.js";
+import { DATABASE_PATH_SETTINGS } from "../store-resolution.js";
 
 const routesDir = join(import.meta.dir, "routes");
 const apiRoutesFile = join(import.meta.dir, "api-routes.ts");
@@ -61,7 +61,7 @@ describe("server startup contract", () => {
     const missingCutoff = Bun.spawnSync({
       cmd: ["bun", "src/server/index.ts", "inbound-provenance-audit"],
       cwd: join(import.meta.dir, "..", ".."),
-      env: { ...process.env, EMAILS_DATABASE_URL: "" },
+      env: { ...process.env, HASNA_EMAILS_DATABASE_URL: "" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -85,7 +85,7 @@ describe("server startup contract", () => {
     const invalid = Bun.spawnSync({
       cmd: ["bun", "src/server/index.ts", "inbound-provenance-fence", "--since", "host-clock"],
       cwd: join(import.meta.dir, "..", ".."),
-      env: { ...process.env, EMAILS_DATABASE_URL: "" },
+      env: { ...process.env, HASNA_EMAILS_DATABASE_URL: "" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -96,22 +96,25 @@ describe("server startup contract", () => {
     expect(combined).not.toContain("ECONNREFUSED");
   });
 
-  it("fails closed on legacy hosted mode variables instead of booting local", () => {
+  it("ignores a leftover legacy variable and still boots from storage configuration", () => {
+    // The entrypoint never refused on legacy variables and does not now — nothing
+    // in the server reads them, so a leftover value must not stop startup. The
+    // version path exits immediately, which makes it the safe live probe: the
+    // process reaches dispatch with the leftover variable present.
     const result = Bun.spawnSync({
-      cmd: ["bun", "src/server/index.ts"],
+      cmd: ["bun", "src/server/index.ts", "--version"],
       cwd: join(import.meta.dir, "..", ".."),
       env: { ...process.env, MAILERY_MODE: "cloud", PORT: "0" },
       stdout: "pipe",
       stderr: "pipe",
     });
     const combined = new TextDecoder().decode(result.stdout) + new TextDecoder().decode(result.stderr);
-    expect(result.exitCode).not.toBe(0);
-    expect(combined).toContain("MAILERY_MODE");
-    expect(combined).toContain("removed hosted/legacy runtime");
+    expect(result.exitCode, combined).toBe(0);
+    expect(combined).not.toContain("removed hosted/legacy runtime");
   });
 
   it("selects the service from storage configuration, never from a deployment word", () => {
-    // The entrypoint used to resolve a deployment mode here. It now resolves the SERVER'S
+    // The entrypoint used to resolve a selector here. It now resolves the SERVER'S
     // INTERNAL STORE, which is the same question asked of the configuration that actually
     // answers it — and it must not reach for a client-credential-dependent resolver to do
     // it, because an operator service has to boot without any client credential at all.
@@ -124,18 +127,18 @@ describe("server startup contract", () => {
   for (const command of ["ingest-worker", "ingest-s3-backfill"] as const) {
     it(`${command} reaches operator validation without a client URL or API/session key`, () => {
       const env = { ...process.env };
-      for (const key of ["EMAILS_SELF_HOSTED_URL", "EMAILS_SELF_HOSTED_API_KEY", "EMAILS_SESSION_TOKEN"]) {
+      for (const key of ["HASNA_EMAILS_API_URL", "HASNA_EMAILS_API_KEY", "EMAILS_SESSION_TOKEN"]) {
         delete env[key];
       }
-      // THE RETIRED DEPLOYMENT SETTINGS GO TOO, and not as tidiness. The hermetic harness
-      // exports the local-store value for every test, and this child configures PostgreSQL —
-      // which is a contradiction the store resolution refuses by design. Without this the
-      // child would fail on the configuration rather than reaching the operator validation
-      // this case is about, and the failure would look like a regression in the worker.
-      // Deleted by ROLE through the owning module's constant, never by spelling the names.
-      for (const key of RETIRED_SERVER_MODE_SETTINGS) delete env[key];
+      // THE LOCAL-STORE SETTINGS GO TOO, and not as tidiness. An ambient database path
+      // beside the PostgreSQL this child configures is a contradiction the store
+      // resolution refuses by design. Without this the child would fail on the
+      // configuration rather than reaching the operator validation this case is about,
+      // and the failure would look like a regression in the worker. Deleted by ROLE
+      // through the owning module's constant, never by spelling the names.
+      for (const key of DATABASE_PATH_SETTINGS) delete env[key];
       Object.assign(env, {
-        EMAILS_DATABASE_URL: "postgres://operator.invalid/emails",
+        HASNA_EMAILS_DATABASE_URL: "postgres://operator.invalid/emails",
       });
       if (command === "ingest-worker") {
         env["EMAILS_INGEST_QUEUE_URL"] = "https://sqs.invalid/operator-queue";
@@ -151,8 +154,8 @@ describe("server startup contract", () => {
       const combined = new TextDecoder().decode(result.stdout) + new TextDecoder().decode(result.stderr);
       expect(result.exitCode).not.toBe(0);
       expect(combined).toContain("EMAILS_INGEST_S3_BUCKET");
-      expect(combined).not.toContain("EMAILS_SELF_HOSTED_URL");
-      expect(combined).not.toContain("EMAILS_SELF_HOSTED_API_KEY");
+      expect(combined).not.toContain("HASNA_EMAILS_API_URL");
+      expect(combined).not.toContain("HASNA_EMAILS_API_KEY");
     });
   }
 

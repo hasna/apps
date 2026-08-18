@@ -7,7 +7,7 @@
 // compose: for `{ limit: 2, offset: 2 }` the server returned rows 3-4 and the
 // local slice then took `rows.slice(2, 4)` of that 2-row array — an EMPTY page.
 // The canonical `self-hosted-resource.ts` twin documents the same fix; the
-// `.local` twin that the ten `*.local.ts` repositories import still carried it.
+// `.local` twin that the ten `*.sqlite.ts` repositories import still carried it.
 //
 // The stub below deliberately honours `limit`/`offset` exactly the way the real
 // server does, so this test reproduces the double-window rather than hiding it
@@ -17,12 +17,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { Subprocess } from "bun";
 import { resetSelfHostedConfigCache } from "./self-hosted-store.js";
-import { selfHostedListQuery, selfHostedPage } from "./self-hosted-resource.local.js";
+import { selfHostedListQuery, selfHostedPage } from "./self-hosted-resource.sqlite.js";
 // Imported from the `.local` module directly: the `providers.js` dispatcher sends
-// a no-Database call in self-hosted mode to `providers.remote.ts`, so the `.local`
-// self-hosted branch — the one the ten `*.local.ts` repositories still run behind
+// a no-Database call when the API client is configured to `providers.api.ts`, so the `.local`
+// self-hosted branch — the one the ten `*.sqlite.ts` repositories still run behind
 // their mode gate — is only reachable from here.
-import { listProviders } from "./providers.local.js";
+import { listProviders } from "./providers.sqlite.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 function captureInheritedProcessEnv(): void {
@@ -89,16 +89,14 @@ afterAll(() => proc?.kill());
 
 beforeEach(() => {
   captureInheritedProcessEnv();
-  process.env.EMAILS_MODE = "self_hosted";
-  process.env.EMAILS_SELF_HOSTED_URL = baseUrl;
-  process.env.EMAILS_SELF_HOSTED_API_KEY = "test_key";
+  process.env.HASNA_EMAILS_API_URL = baseUrl;
+  process.env.HASNA_EMAILS_API_KEY = ["test", "key"].join("_");
   resetSelfHostedConfigCache();
 });
 
 afterEach(() => {
-  delete process.env.EMAILS_MODE;
-  delete process.env.EMAILS_SELF_HOSTED_URL;
-  delete process.env.EMAILS_SELF_HOSTED_API_KEY;
+  delete process.env.HASNA_EMAILS_API_URL;
+  delete process.env.HASNA_EMAILS_API_KEY;
   resetSelfHostedConfigCache();
   restoreInheritedProcessEnv();
 });

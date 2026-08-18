@@ -16,7 +16,7 @@
 // same harness as email-log-provider-filter.test.ts: temp HOME, temp SQLite,
 // environment scrubbed BY PREFIX (an operator shell may export this package's whole
 // client configuration, and enumerating those keys here would add references
-// the mode-axis ratchet counts).
+// the selector-removal guard counts).
 
 import { afterAll, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";

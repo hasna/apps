@@ -23,9 +23,9 @@ CLI with Bun.
 bun install -g @hasna/emails
 ```
 
-## Deployment modes
+## Client backends
 
-Emails has exactly two modes: `local` and `self_hosted`. Local mode keeps SQLite, files, and credentials on the current machine. Self-hosted mode connects to an Emails service deployed in user-owned infrastructure. Provider integrations always use user-supplied credentials; the package has no hosted account or control-plane service.
+The client has exactly two backends, chosen by storage configuration and nothing else: the local SQLite file, or a client of an Emails service deployed in user-owned infrastructure (`HASNA_EMAILS_API_URL` plus a bearer credential). The server selects its internal store the same way: `HASNA_EMAILS_DATABASE_URL` present means operator-owned PostgreSQL behind the /v1 API; unset means the local SQLite dashboard. There is no selector variable, and provider integrations always use user-supplied credentials; the package has no hosted account or control-plane service.
 
 Local provider credentials are envelope-encrypted with a root key kept outside
 SQLite. Rotation, locked-keyring recovery, and backup rebind procedures are in
@@ -69,8 +69,8 @@ emails inbox list --folder unread --source provider:<id>
 emails email list
 
 # Operate a self-hosted PostgreSQL service
-EMAILS_DATABASE_URL=postgres://... EMAILS_API_SIGNING_KEY=... emails db migrate
-EMAILS_DATABASE_URL=postgres://... EMAILS_API_SIGNING_KEY=... emails self-hosted key create
+HASNA_EMAILS_DATABASE_URL=postgres://... EMAILS_API_SIGNING_KEY=... emails db migrate
+HASNA_EMAILS_DATABASE_URL=postgres://... EMAILS_API_SIGNING_KEY=... emails self-hosted key create
 ```
 
 ## Domain Modes
@@ -85,10 +85,10 @@ The source of truth follows the mode; it is not a per-domain choice. A domain
 created or connected through this client is owned by the app's `/v1` database, so
 `source_of_truth` is reported as `postgres` and is not an input.
 
-| Mode | Who owns the mail source of truth |
+| Backend | Who owns the mail source of truth |
 | --- | --- |
-| `local` | The local SQLite/files install |
-| `self_hosted` | Your PostgreSQL/S3/SES or equivalent infrastructure |
+| `sqlite` | The local SQLite/files install |
+| `api` | Your PostgreSQL/S3/SES or equivalent infrastructure |
 
 The domain setup path is the same either way, because none of it is served over
 the wire: `emails domain add` (or `emails domain adopt` for a domain the
@@ -112,13 +112,12 @@ Authentication records are required only for the capability you enable:
   aggregation, but it should be present before production sending and monitored
   before moving from `p=none` to stricter policies.
 
-Self-hosted clients must set `EMAILS_MODE=self_hosted`,
-`EMAILS_SELF_HOSTED_URL`, and one bearer credential:
+API clients must set `HASNA_EMAILS_API_URL` and one bearer credential:
 `EMAILS_SESSION_TOKEN`, `EMAILS_IDP_TOKEN`, or
-`EMAILS_SELF_HOSTED_API_KEY` (in that precedence order). The service uses
-`EMAILS_DATABASE_URL`, `EMAILS_API_SIGNING_KEY`,
+`HASNA_EMAILS_API_KEY` (in that precedence order). The service uses
+`HASNA_EMAILS_DATABASE_URL`, `EMAILS_API_SIGNING_KEY`,
 `EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS`, and `EMAILS_AUTH_FROM`; Postgres is authoritative
-and there is no hybrid SQLite synchronization mode.
+and there is no synchronization between SQLite and the API client.
 
 After applying migrations, issue client keys on the operator host with
 `emails self-hosted key create`. The plaintext token is displayed once and only
@@ -196,7 +195,7 @@ emails analytics         # email analytics
 emails doctor            # system diagnostics
 emails doctor delivery   # diagnose missing inbound mail for one address
 emails provision         # registered but intentionally NOT IMPLEMENTED
-emails serve             # SQLite dashboard or PostgreSQL /v1 service, by EMAILS_DATABASE_URL
+emails serve             # SQLite dashboard or PostgreSQL /v1 service, by HASNA_EMAILS_DATABASE_URL
 emails mcp               # install MCP server
 emails remove            # remove MCP configuration from supported agent clients
 ```
@@ -377,7 +376,7 @@ emails-mcp            # stdio transport (default)
 ## REST API
 
 `emails serve` selects the server by its data backend, derived from
-`EMAILS_DATABASE_URL`: unset or blank means `sqlite`, and a PostgreSQL URL means
+`HASNA_EMAILS_DATABASE_URL`: unset or blank means `sqlite`, and a PostgreSQL URL means
 `postgresql`. There is no separate server selector for this choice.
 
 - With the SQLite backend it exposes the static dashboard and its
@@ -480,9 +479,9 @@ allowlists before it confirms or syncs a notification.
 ## Self-Hosted Runtime (PostgreSQL/S3/SES)
 
 The server uses operator-owned Postgres and provider accounts. A client must
-configure `EMAILS_MODE=self_hosted`, `EMAILS_SELF_HOSTED_URL`, and one of
+configure `HASNA_EMAILS_API_URL` and one of
 `EMAILS_SESSION_TOKEN`, `EMAILS_IDP_TOKEN`, or
-`EMAILS_SELF_HOSTED_API_KEY`. The service requires `EMAILS_DATABASE_URL`,
+`HASNA_EMAILS_API_KEY`. The service requires `HASNA_EMAILS_DATABASE_URL`,
 `EMAILS_API_SIGNING_KEY`, `EMAILS_SEND_PROVIDER=ses|resend`,
 `EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS`, and `EMAILS_AUTH_FROM`. SES uses the
 deployment IAM role; Resend uses `RESEND_API_KEY`. See
@@ -491,7 +490,7 @@ tenant-scoped keys, and optional IdP verification.
 
 `EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS` is the allowlist of email domains that may sign up, log in, or be invited (comma- or space-separated globs, `*` matching one DNS label — e.g. `example.com` or `example.*`), and `EMAILS_AUTH_FROM` is the sender identity for confirmation/reset/invite mail. **Neither has a default and the service refuses to boot without them**: this package ships no domain and no sender of its own, so a default would either lock your auth surface to someone else's organisation or open signup to everyone. See [docs/SELF_HOSTED_RUNTIME.md](docs/SELF_HOSTED_RUNTIME.md).
 
-Self-hosted client commands fail closed when the mode, URL, or selected bearer
+Self-hosted client commands fail closed when the API URL or selected bearer
 credential is missing or invalid. With `--json`, the CLI emits one structured error object on
 stderr, exits nonzero, and leaves stdout empty. It does not open, create, or
 fall back to the local SQLite database.
@@ -566,12 +565,11 @@ never replaced by S3-key fallback. MIME `To`/`Cc` headers are
 sender-controlled and are never used to select a tenant.
 
 ```bash
-export EMAILS_MODE=self_hosted
-export EMAILS_SELF_HOSTED_URL="https://emails.example.com"
-export EMAILS_SELF_HOSTED_API_KEY="..."
+export HASNA_EMAILS_API_URL="https://emails.example.com"
+export HASNA_EMAILS_API_KEY="..."
 
 # On the self-hosted server
-export EMAILS_DATABASE_URL="postgresql://..."
+export HASNA_EMAILS_DATABASE_URL="postgresql://..."
 export EMAILS_API_SIGNING_KEY="..."
 export EMAILS_SEND_PROVIDER=ses
 export EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS="example.com"  # your own signup domains
@@ -580,7 +578,7 @@ emails db migrate
 emails-serve
 ```
 
-There is no hybrid cache or bidirectional database synchronization mode.
+There is no bidirectional database synchronization.
 
 ## Data
 

@@ -24,7 +24,7 @@ export function registerAwsCommands(program: Command, output: (data: unknown, fo
     // Runs against the operator's OWN AWS credentials, exactly like the sibling
     // `aws status` and like the SES/S3 leg of `emails domain adopt` — which has
     // been calling `setupInboundEmail` + `addInboundBucket` + `registerS3Source`
-    // in every configuration all along. There is no deployment mode in which
+    // in every configuration all along. There is no selector in which
     // this needs a server: SES receipt rules live in AWS, not in `/v1`, and
     // `openapi.ts` exposes no inbound-setup route for a server to answer with.
     // The previous unconditional throw therefore refused a capability the

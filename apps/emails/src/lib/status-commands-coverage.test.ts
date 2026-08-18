@@ -1,22 +1,22 @@
 // CLASS-LEVEL guard: the refusal registry is checked against the CLI, not itself.
 //
 // THE DEFECT THIS GUARDS. src/lib/status-commands.ts documented its source of
-// truth as `grep -n 'serverOnly(' src/cli/commands/*.remote.ts`. That glob is
+// truth as `grep -n 'serverOnly(' src/cli/commands/*.api.ts`. That glob is
 // wrong twice over: `serverOnly()` is also defined and called in the SHARED
 // modules src/cli/commands/domain.ts and src/cli/commands/address.ts, and their
-// helper throws UNCONDITIONALLY — there is no mode in which those commands run.
+// helper throws UNCONDITIONALLY — there is no backend in which those commands run.
 // Fifteen refusals were missing from the registry, so `emails status` against a
 // server holding a failed domain emitted
 //
 //   next_actions[0].command = "emails domain status --json"
 //
 // (the deleted HTTP-arm status module's domainFixCommands -> agent-context.ts
-// buildNextActions), and `isCommandAvailableInMode` waved it through. Running it
+// buildNextActions), and `isCommandAvailableForBackend` waved it through. Running it
 // throws "emails domain status is not available in the self-hosted client" — the
 // exact "remedy that refuses" defect the registry was introduced to remove.
 //
-// WHY THE EXISTING TESTS COULD NOT CATCH IT. agent-context.local.test.ts asserted
-// `isCommandAvailableInMode(action.command, "local") === true` — the payload
+// WHY THE EXISTING TESTS COULD NOT CATCH IT. agent-context.sqlite.test.ts asserted
+// `isCommandAvailableForBackend(action.command, "sqlite") === true` — the payload
 // validated against the same registry that filtered it, so a command missing from
 // the registry passes while it throws. A guard whose oracle is the thing under
 // test proves nothing. This file's oracle is the CLI source.
@@ -29,8 +29,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   NEVER_AVAILABLE_COMMANDS,
-  SELF_HOSTED_REFUSED_COMMANDS,
-  isCommandAvailableInMode,
+  API_REFUSED_COMMANDS,
+  isCommandAvailableForBackend,
 } from "./status-commands.js";
 
 const COMMANDS_DIR = join(import.meta.dir, "..", "cli", "commands");
@@ -41,7 +41,7 @@ const REFUSAL_CALL = /(?:serverOnly|notImplementedAnywhere)\(\s*"([^"]+)"\s*\)/g
 interface Refusal {
   command: string;
   file: string;
-  /** true when the module ships in BOTH modes, so the refusal is unconditional. */
+  /** true when the module ships in BOTH backends, so the refusal is unconditional. */
   shared: boolean;
 }
 
@@ -58,7 +58,7 @@ function scanRefusals(): Refusal[] {
       found.push({
         command,
         file: entry.name,
-        shared: !entry.name.endsWith(".remote.ts") && !entry.name.endsWith(".local.ts"),
+        shared: !entry.name.endsWith(".api.ts") && !entry.name.endsWith(".sqlite.ts"),
       });
     }
   }
@@ -82,8 +82,8 @@ describe("refusal registry covers every CLI refusal call site", () => {
     // the whole programme), so a count floor is a countdown to a vacuous guard: the
     // non-shared partition went 21 -> 12 in one change, leaving 2 of margin over a
     // floor of 10, and two more legitimate deletions would have failed this test for
-    // doing the right thing. The mode-axis ratchet already learned this lesson and
-    // records it in src/mode-axis-ratchet.test.ts: prove the counter still FIRES
+    // doing the right thing. The selector-removal guard already learned this lesson and
+    // records it in src/store-resolution.test.ts: prove the counter still FIRES
     // against fixtures, because repo counts are supposed to reach zero.
     //
     // So the emptiness check stays (a scan over nothing must fail), and the real
@@ -117,11 +117,11 @@ describe("refusal registry covers every CLI refusal call site", () => {
     ]) {
       expect(matches(miss).filter((c) => c.startsWith("emails ")), miss).toEqual([]);
     }
-    // The partition rule: only `*.remote.ts` / `*.local.ts` are mode-specific.
+    // The partition rule: only `*.api.ts` / `*.sqlite.ts` are backend-specific.
     for (const [file, shared] of [
-      ["misc.remote.ts", false], ["misc.local.ts", false], ["domain.ts", true], ["provision.ts", true],
+      ["misc.api.ts", false], ["misc.sqlite.ts", false], ["domain.ts", true], ["provision.ts", true],
     ] as const) {
-      expect(!file.endsWith(".remote.ts") && !file.endsWith(".local.ts"), file).toBe(shared);
+      expect(!file.endsWith(".api.ts") && !file.endsWith(".sqlite.ts"), file).toBe(shared);
     }
   });
 
@@ -131,7 +131,7 @@ describe("refusal registry covers every CLI refusal call site", () => {
   // ever appear in `refusals`, so neither is protected by the assertions below.
   // src/lib/status-commands.test.ts pins those by name instead.
   it("declares what the scan cannot see", () => {
-    const inbox = readFileSync(join(COMMANDS_DIR, "inbox.remote.ts"), "utf8");
+    const inbox = readFileSync(join(COMMANDS_DIR, "inbox.api.ts"), "utf8");
     // Real refusals in the file, invisible because the literal omits the `emails ` prefix.
     expect(inbox).toContain('serverOnly("sync-s3")');
     expect(refusals.map((r) => r.command)).not.toContain("emails inbox sync-s3");
@@ -142,7 +142,7 @@ describe("refusal registry covers every CLI refusal call site", () => {
     expect(refusals.map((r) => r.command)).not.toContain("emails inbox unread-count --by-address");
   });
 
-  // The regression, named. These are the call sites the `*.remote.ts` glob missed.
+  // The regression, named. These are the call sites the `*.api.ts` glob missed.
   //
   // `emails domain check` was on this list until it was WIRED UP: its whole
   // implementation already shipped in src/lib/dns-check.ts and no command reached
@@ -166,8 +166,8 @@ describe("refusal registry covers every CLI refusal call site", () => {
       expect(shared, `${wired} refuses again — is that intended?`).not.toContain(wired);
       // And the registry must not still be suppressing them from every
       // suggestion path: the coverage check above only fails in one direction.
-      for (const mode of ["local", "self_hosted"] as const) {
-        expect(isCommandAvailableInMode(`${wired} example.com`, mode), `${wired} in ${mode}`).toBe(true);
+      for (const backend of ["sqlite", "api"] as const) {
+        expect(isCommandAvailableForBackend(`${wired} example.com`, backend), `${wired} in ${backend}`).toBe(true);
       }
     }
   });
@@ -176,35 +176,35 @@ describe("refusal registry covers every CLI refusal call site", () => {
     const missing = refusals
       .filter((r) => r.shared && !covered(r.command, NEVER_AVAILABLE_COMMANDS))
       .map((r) => `${r.file}: ${r.command}`);
-    expect(missing, "these commands throw in EVERY mode but the registry does not "
+    expect(missing, "these commands throw in every backend but the registry does not "
       + "know, so status/next_actions/fix_commands can still propose them — add a "
       + "prefix to NEVER_AVAILABLE_COMMANDS:\n" + missing.join("\n")).toEqual([]);
   });
 
-  it("registers every self-hosted-only refusal in SELF_HOSTED_REFUSED_COMMANDS", () => {
+  it("registers every self-hosted-only refusal in API_REFUSED_COMMANDS", () => {
     const missing = refusals
       .filter((r) => !r.shared)
-      .filter((r) => !covered(r.command, SELF_HOSTED_REFUSED_COMMANDS)
+      .filter((r) => !covered(r.command, API_REFUSED_COMMANDS)
         && !covered(r.command, NEVER_AVAILABLE_COMMANDS))
       .map((r) => `${r.file}: ${r.command}`);
-    expect(missing, "these commands refuse in self_hosted mode but the registry "
+    expect(missing, "these commands refuse when the API client is configured but the registry "
       + "does not know:\n" + missing.join("\n")).toEqual([]);
   });
 
   // The registry exists to be consulted, so assert the consulted ANSWER, not just
-  // list membership: a covered prefix that isCommandAvailableInMode disagrees with
+  // list membership: a covered prefix that isCommandAvailableForBackend disagrees with
   // would be a silent hole.
-  it("answers `unavailable` for every scanned refusal, in the mode that refuses", () => {
+  it("answers `unavailable` for every scanned refusal, in the backend that refuses", () => {
     const wrong: string[] = [];
     for (const refusal of refusals) {
       if (refusal.shared) {
-        for (const mode of ["local", "self_hosted"] as const) {
-          if (isCommandAvailableInMode(refusal.command, mode)) {
-            wrong.push(`${refusal.command} reported available in ${mode} (${refusal.file})`);
+        for (const backend of ["sqlite", "api"] as const) {
+          if (isCommandAvailableForBackend(refusal.command, backend)) {
+            wrong.push(`${refusal.command} reported available in ${backend} (${refusal.file})`);
           }
         }
-      } else if (isCommandAvailableInMode(refusal.command, "self_hosted")) {
-        wrong.push(`${refusal.command} reported available in self_hosted (${refusal.file})`);
+      } else if (isCommandAvailableForBackend(refusal.command, "api")) {
+        wrong.push(`${refusal.command} reported available in the API client (${refusal.file})`);
       }
     }
     expect(wrong).toEqual([]);
@@ -213,7 +213,7 @@ describe("refusal registry covers every CLI refusal call site", () => {
   // Counter-control: the registry must not refuse the commands the payload leans
   // on as remedies, or "never propose a refusal" would be satisfied by proposing
   // nothing at all.
-  it("still reports the real remedies as available in both modes", () => {
+  it("still reports the real remedies as available in both backends", () => {
     for (const command of [
       "emails domain list --json",
       "emails address list --json",
@@ -222,8 +222,8 @@ describe("refusal registry covers every CLI refusal call site", () => {
       "emails status --json",
       "emails inbox sync-status --json",
     ]) {
-      expect(isCommandAvailableInMode(command, "local"), command).toBe(true);
-      expect(isCommandAvailableInMode(command, "self_hosted"), command).toBe(true);
+      expect(isCommandAvailableForBackend(command, "sqlite"), command).toBe(true);
+      expect(isCommandAvailableForBackend(command, "api"), command).toBe(true);
     }
   });
 });

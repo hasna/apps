@@ -3,7 +3,7 @@
 //
 // WHAT THIS FILE USED TO BE. A 28-line facade whose dispatch helper read the
 // process-wide deployment word and handed each of SIX exports to one of two sibling
-// modules — `email-digests.local.ts` (202 lines, SQLite) and `email-digests.remote.ts`
+// modules — `email-digests.sqlite.ts` (202 lines, SQLite) and `email-digests.api.ts`
 // (186 lines, the curl bridge). Neither arm decided anything about what a digest row
 // MEANS; they decided who ran the SQL.
 //

@@ -22,7 +22,7 @@
 // WHY A SUBPROCESS: the error-path cases need `process.exit`; the rest reuse
 // the same harness for uniformity. Environment scrubbed BY PREFIX (an operator
 // shell may export this package's client configuration, and enumerating those
-// keys here would add references the mode-axis ratchet counts).
+// keys here would add references the selector-removal guard counts).
 
 import { afterAll, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";

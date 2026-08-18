@@ -4,10 +4,10 @@
 // WHAT THIS FILE USED TO BE. A 16-line facade whose dispatch helper read the process-wide
 // deployment word and handed its ONE export to one of two sibling modules:
 //
-//   * `forwarding.local.ts` (146 lines) — the whole pipeline: scan the pending-forward
+//   * `forwarding.sqlite.ts` (146 lines) — the whole pipeline: scan the pending-forward
 //     projection, read each inbound body, pick a provider, send a copy, write the sent-mail
 //     ledger and the message body, record the delivery;
-//   * `forwarding.remote.ts` (39 lines) — a stub that THREW, plus BYTE-FOR-BYTE COPIES of
+//   * `forwarding.api.ts` (39 lines) — a stub that THREW, plus BYTE-FOR-BYTE COPIES of
 //     two of the three result interfaces and a fourth, incompatible, declaration of the
 //     options.
 //
@@ -24,7 +24,7 @@
 //   2. the delivery ledger write — `recordForwardingDelivery`;
 //   3. the inbound BODY, read with `getInboundEmail`;
 //   4. the provider choice, read from the local `providers` table;
-//   5. the sent-mail ledger and the sent body, written by `src/lib/sent-ledger.local.ts`.
+//   5. the sent-mail ledger and the sent body, written by `src/lib/sent-ledger.sqlite.ts`.
 //
 // `forwarding_deliveries` EXISTS IN LOCAL SQLITE AND NOWHERE ELSE — not on the seam
 // (`src/store/repositories.ts` publishes one `ForwardingRepository`, over `forwarding_rules`),
@@ -96,10 +96,10 @@
 //
 // 5 IS THE ONE A READER MUST NOT SKIP, AND IT CARRIES A TIME BOMB THAT IS NOT MINE TO DEFUSE.
 // No mail escapes today: `sendWithFailover` reaches `getProvider`, which refuses in that
-// configuration at `src/db/providers.local.ts` — and it refuses there through the shared
-// resource-routing helper (`src/db/self-hosted-resource.local.ts`), which is ONE OF THE 44 CALL
+// configuration at `src/db/providers.sqlite.ts` — and it refuses there through the shared
+// resource-routing helper (`src/db/self-hosted-resource.sqlite.ts`), which is ONE OF THE 44 CALL
 // SITES THE `selfHostedResourceBranches` COUNTER IS DRIVING TO ZERO. (Spelled as a file path
-// rather than as a call, because the ratchet's pattern is that identifier followed by an open
+// rather than as a call, because the source-text guard's pattern is that identifier followed by an open
 // parenthesis and this comment is inside the corpus it scans — writing it out would RAISE a
 // counter that may only fall. That is not a detail: it is how a comment about the guard becomes
 // a reason the guard's own metric moves backwards.) So the only thing standing between
@@ -125,7 +125,7 @@
 //     fenced yesterday.
 //   * NOTHING on this path goes through `upsertMessage` or `source_id`, so the seam's
 //     idempotency fence is not involved at all. The sent-mail ledger row is still written by
-//     `src/lib/sent-ledger.local.ts` → `createEmail` (`src/db/emails.local.ts`), an
+//     `src/lib/sent-ledger.sqlite.ts` → `createEmail` (`src/db/emails.sqlite.ts`), an
 //     UNCOLLAPSED family, as raw SQLite.
 //   * `idempotency_key` (built below) IS NOT A FENCE AND NEVER HAS BEEN — see defect 2.
 //
@@ -162,7 +162,7 @@
 // 2. `idempotency_key` FENCES NOTHING ON THIS PATH. The key built below
 //    (`forward:<rule>:<inbound>`) is handed to `sendWithFailover` and to
 //    `createSentEmailLedger`, and it is consumed only by `createEmail` — AFTER the provider
-//    call. `src/lib/send.local.ts` has no idempotency handling at all, and `createMessage`
+//    call. `src/lib/send.sqlite.ts` has no idempotency handling at all, and `createMessage`
 //    REFUSES an `idempotency_key` on both stores (`src/store-sqlite/messages.ts:283-295`,
 //    `src/store-http/messages.ts:143-152`). So there is no working idempotency fence between
 //    this pipeline and a provider today; the only thing that stops a second copy is the
@@ -173,7 +173,7 @@
 // ─── WHAT THE TWO ARMS DISAGREED ABOUT ───────────────────────────────────────────────
 //
 //  1. `db`. The local arm's options carried `db?: Database`; the stub's did not. The facade
-//     published the LOCAL declaration (`export type * from "./forwarding.local.js"`), so the
+//     published the LOCAL declaration (`export type * from "./forwarding.sqlite.js"`), so the
 //     stub's narrower options were unreachable through the family's own type — a caller could
 //     hand a `Database` to an implementation that had no parameter for it. Resolved toward the
 //     arm that can actually run: `db` stays, and its meaning is now stated.
@@ -188,7 +188,7 @@
 //     definition now. They were identical, so nothing had to be chosen — but two copies of a
 //     published shape are one rename away from two different published shapes.
 //  4. The stub imported `SendResult` from the send FACADE (`./send.js`) while the local arm
-//     imported it from the send ARM (`./send.local.js`). They resolve to the same type today
+//     imported it from the send ARM (`./send.sqlite.js`). They resolve to the same type today
 //     only because the facade re-exports the arm's types; a reader of the two files could not
 //     know that. One import now, from the module whose function is actually called.
 //
@@ -256,10 +256,10 @@ import {
   // pipeline threads, and REQUIRE it — see that module's header for why the pending-forward
   // join and the delivery ledger cannot go through the store seam.
 } from "../db/forwarding.js";
-import { getInboundEmail } from "../db/inbound.local.js";
-import { getLatestActiveProviderId } from "../db/providers.local.js";
-import { sendWithFailover, type SendResult } from "./send.local.js";
-import { createSentEmailLedger, storeSentEmailContent } from "./sent-ledger.local.js";
+import { getInboundEmail } from "../db/inbound.sqlite.js";
+import { getLatestActiveProviderId } from "../db/providers.sqlite.js";
+import { sendWithFailover, type SendResult } from "./send.sqlite.js";
+import { createSentEmailLedger, storeSentEmailContent } from "./sent-ledger.sqlite.js";
 import { readStorageWiring } from "./storage-wiring.js";
 import { API_BASE_URL_SETTING } from "../store-resolution.js";
 
@@ -310,7 +310,7 @@ export interface ForwardingRunResult {
  * The local database this pipeline runs against, or a REFUSAL naming why there is none.
  *
  * Reached only when the caller supplied no `Database`. See the header: every alternative way to
- * answer "can this installation forward its own mail?" is either the deleted deployment axis, a
+ * answer "can this installation forward its own mail?" is either the deleted hosted-API axis, a
  * forbidden branch on the store's identity, or a capability that does not exist — so the answer
  * comes from STORAGE CONFIGURATION, which is the sanctioned source for facts about work this
  * installation performs itself.

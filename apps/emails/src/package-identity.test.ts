@@ -4,7 +4,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 import contract from "../hasna.contract.json" with { type: "json" };
-import { EMAILS_MODE_ENV_KEYS, resolveEmailsModeSelection } from "./lib/mode.js";
 import { emailsSelfHostedOpenApi } from "./server/self-hosted/openapi.js";
 import { SELF_HOSTED_APP, SELF_HOSTED_APP_ALIASES } from "./server/self-hosted/env.js";
 
@@ -92,14 +91,11 @@ describe("MAILERY_* environment surface", () => {
     expect(existsSync(join(root, "src/lib/env-compat.test.ts"))).toBe(false);
   });
 
-  it("selects the mode from EMAILS_* names only", () => {
-    expect([...EMAILS_MODE_ENV_KEYS]).toEqual(["EMAILS_MODE", "HASNA_EMAILS_MODE"]);
-  });
-
-  it("rejects MAILERY_MODE / HASNA_MAILERY_MODE as removed-runtime variables", () => {
-    for (const key of ["MAILERY_MODE", "HASNA_MAILERY_MODE"]) {
-      expect(() => resolveEmailsModeSelection({ [key]: "self_hosted" })).toThrow(/removed hosted\/legacy runtime/);
-    }
+  it("selects the client backend from the storage contract alone", () => {
+    // The selector variables are gone; the contract names the client env
+    // prefix and the two storage kinds, and nothing in the tree resolves a mode.
+    expect(contract.storage.envPrefix).toBe("HASNA_EMAILS_");
+    expect(existsSync(join(root, "src/lib/mode.ts"))).toBe(false);
   });
 });
 
@@ -118,8 +114,11 @@ describe("superseded and dead scaffolding", () => {
     expect(existsSync(join(root, "scripts/docker-prune-file-deps.mjs"))).toBe(false);
   });
 
-  it("has no duplicate storage-mode resolver", () => {
-    // src/lib/mode.ts + src/server/self-hosted/env.ts are the live resolvers.
+  it("has no duplicate storage-backend resolver", () => {
+    // src/server/storage-backend.ts is the server's one resolver, and the client
+    // resolves through src/store-resolution.ts. The selector module that
+    // used to resolve a second one is deleted.
     expect(existsSync(join(root, "src/storage-kit/mode.ts"))).toBe(false);
+    expect(existsSync(join(root, "src/lib/mode.ts"))).toBe(false);
   });
 });

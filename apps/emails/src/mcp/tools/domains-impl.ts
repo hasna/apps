@@ -9,7 +9,7 @@ import { createSendKey, listSendKeySummaries, revokeSendKey, getSendKey, canOwne
 import { getProvider } from '../../db/providers.js';
 import { getAdapter, providerDnsPublishing } from '../../providers/index.js';
 import { assessDomainReadiness } from '../../lib/domain-readiness.js';
-import { resolveEmailsMode } from '../../lib/mode.js';
+import { isApiClientConfigured } from '../../store-resolution.js';
 import { formatError, resolveId, DomainNotFoundError, AddressNotFoundError, ProviderNotFoundError } from '../helpers.js';
 import type { Domain, EmailAddress } from '../../types/index.js';
 
@@ -18,7 +18,7 @@ const SELF_HOSTED_MCP_LIST_LIMIT = 1000;
 
 function selfHostedDomainReadiness(domain: Domain) {
   return assessDomainReadiness(domain, null, {
-    mode: "self_hosted",
+    backend: "api",
     source_of_truth: domain.source_of_truth,
     inbound_status: domain.inbound_status,
     ready_addresses: 0,
@@ -81,22 +81,14 @@ function resolveSelfHostedAddressRef(ref: string): EmailAddress {
 /**
  * Refuse a tool that NO mode can serve, naming the reason.
  *
- * `verify_domain` is the only remaining guard: it calls
- * `getAdapter(provider).verifyDomain`, and in self_hosted mode `getProvider`
- * returns a `/v1/providers` row whose credential columns do not exist
- * server-side (the server schema stores name/type/region/active only — the
- * operator's sending credentials live in the server environment, selected by
- * EMAILS_SEND_PROVIDER). The /v1 service exposes no domain verify route. A
- * client-side adapter call would therefore fall back to the CLIENT's own
- * ambient AWS or Cloudflare credentials — the exact call this guard exists to
- * prevent.
- *
- * `get_dns_records` is only HALF-guarded: its NO-provider path (the generic
- * SPF/DMARC pair from `src/lib/dns.ts`) is pure, credential-free local
- * computation and now runs in both configurations, exactly like its CLI twin
- * `emails domain dns`. The same guard fires only for its provider-scoped half,
- * where the credential reason applies — the call sits after the no-provider
- * return, so the order is the port.
+
+ * The only two left are `get_dns_records` and `verify_domain`. They do not read a
+ * row — they call a provider adapter (`getAdapter(provider).getDnsRecords` /
+ * `.verifyDomain`), and when the API client is configured `getProvider` returns a `/v1/providers`
+ * row whose credential columns do not exist server-side, so the adapter would fall
+ * back to the CLIENT's own ambient AWS or Cloudflare credentials. That credential
+ * fallback is the whole reason, and it stands on its own: neither tool has a `/v1`
+ * route, so this is not a guard in front of a working one.
  *
  * The CLI twins are NOT symmetric with it, and saying so is the point:
  *
@@ -109,15 +101,15 @@ function resolveSelfHostedAddressRef(ref: string): EmailAddress {
  *     command — which is why `cliEquivalentForTool` still maps the tool to it.
  *
  * Every other tool that used to call this (and the alias-specific variant beside
- * it) had a working `/v1` route, a complete client arm in `src/db/*.remote.ts`, and
+ * it) had a working `/v1` route, a complete client arm in `src/db/*.api.ts`, and
  * a CLI twin that already performed the same operation over the same route. Those
  * guards were the only thing refusing and are gone.
  */
 function assertMcpLocalStateAllowed(toolName: string, reason: string): void {
-  if (resolveEmailsMode().mode !== "self_hosted") return;
+  if (!isApiClientConfigured()) return;
   throw new Error(
-    `MCP tool ${toolName} is disabled in self_hosted API-only mode because ${reason}. ` +
-      "Use a self-hosted API-backed operation when it is available, or set EMAILS_MODE=local only for an explicit local store.",
+    `MCP tool ${toolName} is disabled for the API client because ${reason}. ` +
+      "Use a self-hosted API-backed operation when it is available, or run the local SQLite client for an explicit local store.",
   );
 }
 
@@ -145,8 +137,8 @@ export function registerDomainTools(server: McpServer): void {
         limit: pageLimit,
         offset: pageOffset,
         truncated: pageOffset + pageLimit < allDomains.length,
-        mode: "self_hosted",
-        source: "self_hosted_api",
+        backend: "api",
+        source: "self-hosted_api",
         note: "Self-hosted domain listing uses API fields only; provider_id is matched directly and no local provider state was read.",
       }, null, 2) }] };
     } catch (e) {
@@ -184,8 +176,8 @@ export function registerDomainTools(server: McpServer): void {
           limit: pageLimit,
           offset: pageOffset,
           truncated: pageOffset + pageLimit < allDomains.length,
-          mode: "self_hosted",
-          source: "self_hosted_api",
+          backend: "api",
+          source: "self-hosted_api",
           note: "Self-hosted readiness is derived only from API domain fields; no local provider, provisioning, or config state was read.",
           cli_equivalent: `emails domain usable${provider_id ? ` --provider ${provider_id}` : ""}${send ? " --send" : ""}${receive ? " --receive" : ""}${limit !== undefined ? ` --limit ${limit}` : ""}${offset !== undefined ? ` --offset ${offset}` : ""} --json`,
         }, null, 2) }] };
@@ -205,12 +197,11 @@ export function registerDomainTools(server: McpServer): void {
   },
   async ({ provider_id, domain }) => {
     try {
-      // Self-hosted (self_hosted) mode: create the domain directly on the
-      // self-hosted HTTP API. `provider_id` is the server-side providers resource
-      // id (the routed providers arm resolves it over /v1/providers); it is
-      // persisted on the domain row server-side and never resolved against a
-      // client-side provider table or passed to a client-side adapter. Mirrors
-      // the CLI `domain add` self_hosted passthrough.
+
+      // Self-hosted (self-hosted) mode: create the domain directly on the self-hosted HTTP
+      // API. Providers are local-only, so `provider_id` is carried through as a
+      // label rather than resolved against the local providers table or passed
+      // to a provider adapter. Mirrors the CLI `domain add` self-hosted passthrough.
         const existing = getDomainByName(provider_id, domain);
         const d = existing ?? createDomain(provider_id, domain);
         return { content: [{ type: "text", text: JSON.stringify(d, null, 2) }] };
@@ -243,7 +234,7 @@ export function registerDomainTools(server: McpServer): void {
         // No provider resolved: return the generic SPF/DMARC pair. This path is
         // pure local computation (src/lib/dns.ts) and needs no credentials, so it
         // runs in BOTH configurations — the CLI twin `emails domain dns` does the
-        // same. In self_hosted mode the /v1 providers resource carries no
+        // same. In self-hosted mode the /v1 providers resource carries no
         // credential columns, so a provider that fails to resolve here is simply
         // absent server-side, exactly as in local mode.
         const { generateSpfRecord, generateDmarcRecord, formatDnsTable } = await import("../../lib/dns.js");
@@ -379,8 +370,8 @@ export function registerDomainTools(server: McpServer): void {
           limit: pageLimit,
           offset: pageOffset,
           truncated: pageOffset + pageLimit < allAddresses.length,
-          mode: "self_hosted",
-          source: "self_hosted_api",
+          backend: "api",
+          source: "self-hosted_api",
           note: "Self-hosted address enrichment uses only API address fields; no local provider or owner state was read.",
           cli_equivalent: `emails address list${provider_id ? ` --provider ${provider_id}` : ""}${limit !== undefined ? ` --limit ${limit}` : ""}${offset !== undefined ? ` --offset ${offset}` : ""} --json`,
         }, null, 2) }] };
@@ -445,8 +436,8 @@ export function registerDomainTools(server: McpServer): void {
           limit: pageLimit,
           offset: pageOffset,
           truncated: pageOffset + pageLimit < allAddresses.length,
-          mode: "self_hosted",
-          source: "self_hosted_api",
+          backend: "api",
+          source: "self-hosted_api",
           note: "Self-hosted readiness is derived only from API domain/address fields; no local provider, owner, provisioning, or config state was read.",
           cli_equivalent: `emails address list${provider_id ? ` --provider ${provider_id}` : ""}${limit !== undefined ? ` --limit ${limit}` : ""}${offset !== undefined ? ` --offset ${offset}` : ""} --json`,
         }, null, 2) }] };
@@ -463,7 +454,7 @@ export function registerDomainTools(server: McpServer): void {
   // seam: owner rows go through the `owners` repository, owner_id/administrator_id
   // through `addresses`/`addressLifecycle`, and the audit trail through the
   // address-ownership ledger — all against whichever store this installation's
-  // STORAGE configuration names, so they carry no self_hosted guard.
+  // STORAGE configuration names, so they carry no self-hosted guard.
   server.tool(
   "get_address_owner",
   "Show owner and administering agent for an address by email or ID.",
@@ -604,10 +595,10 @@ export function registerDomainTools(server: McpServer): void {
   },
   async ({ provider_id, email, display_name }) => {
     try {
-      // Self-hosted (self_hosted) mode: create the address directly on the self_hosted HTTP
+      // Self-hosted (self-hosted) mode: create the address directly on the self-hosted HTTP
       // API. Providers are local-only, so `provider_id` is carried through as a
       // label rather than resolved against the local providers table or passed
-      // to a provider adapter. Mirrors the CLI `address add` self_hosted passthrough.
+      // to a provider adapter. Mirrors the CLI `address add` self-hosted passthrough.
         const existing = getAddressByEmail(provider_id, email);
         const addr = existing ?? createAddress({ provider_id, email, display_name });
         return { content: [{ type: "text", text: JSON.stringify(addr, null, 2) }] };
@@ -634,8 +625,8 @@ export function registerDomainTools(server: McpServer): void {
               text: JSON.stringify({
                 email: addr.email,
                 verified: Boolean(addr.verified),
-                mode: "self_hosted",
-                source: "self_hosted_api",
+                backend: "api",
+                source: "self-hosted_api",
                 note: "Self-hosted verification status was read from the API address record; no local provider adapter or SQLite state was used.",
               }, null, 2),
             },

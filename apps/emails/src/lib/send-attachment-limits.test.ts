@@ -87,7 +87,7 @@ describe("the caps still bound", () => {
   });
 
   test("the self-hosted caps stay at or below the local ones", () => {
-    // `src/lib/send.local.ts` enforces its own 25MiB ceiling on the local send
+    // `src/lib/send.sqlite.ts` enforces its own 25MiB ceiling on the local send
     // path. If the self-hosted per-file cap ever rose above it, that layer would
     // start rejecting sends the hosted route had just accepted.
     expect(SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxBytesPerFile)

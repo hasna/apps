@@ -165,7 +165,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
   // the full list loads in the post-mount reload, so first paint isn't blocked on it.
   const defaultChoice = settings.defaultAddress ? addressChoiceByAddress(settings.defaultAddress) : ALL_ADDRESSES;
   const initialAddresses = defaultChoice.id === ALL_ADDRESSES.id ? [ALL_ADDRESSES] : [ALL_ADDRESSES, defaultChoice];
-  // The active mail data source: `local` (SQLite) or `self_hosted` (API client). All
+  // The active mail data source: `local` (SQLite) or `self-hosted` (API client). All
   // message reads/writes below flow through this seam so the TUI works in both
   // modes; local-only concepts (domains, address picker, settings, threaded
   // conversation bodies) still read the local store directly.
@@ -219,7 +219,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     return message ? await ds.getMessageBody(message) : null;
   });
   // Thread bodies flow through the seam so the reader's conversation view works in
-  // both modes (self_hosted: listThread + per-message bodies; local: SQLite conversation).
+  // both modes (self-hosted: listThread + per-message bodies; local: SQLite conversation).
   const [conversationResource] = createResource(currentMessage, async (message): Promise<TuiThreadBody[]> => {
     return message ? await ds.getConversationBodies(message, { limit: 12 }) : [];
   });
@@ -341,7 +341,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
 
   // ASYNC BECAUSE `listDomainSummaries` IS: its provisioning columns come through the store
   // seam now, where every operation returns a promise. The address picker deliberately did NOT
-  // move — `resolveAddressChoice` feeds a synchronous memo, which is why `data.local.ts` reads
+  // move — `resolveAddressChoice` feeds a synchronous memo, which is why `data.sqlite.ts` reads
   // `provisioning_status` off the row it already selects instead.
   //
   // THE GENERATION TOKEN IS NOT DECORATION. Under the synchronous call two page-key presses
@@ -701,7 +701,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     async pullNow() {
       // Auto-pull was LOCAL S3->SQLite ingestion. The self-hosted seam exposes only
       // insert-only inventory; edits and deletions require a refresh, so there is nothing to pull.
-      return { pulled: 0, ok: true, configured: false, reason: "self_hosted mode" };
+      return { pulled: 0, ok: true, configured: false, reason: "self-hosted mode" };
     },
   };
 
@@ -735,10 +735,10 @@ function createEmailsStore(initialMailbox?: Mailbox) {
   return {
     state,
     actions,
-    // Resolved data-source mode ("local" | "self_hosted"). Same signal pullNow() gates on
-    // (ds.mode), so UI affordances stay in lockstep with the seam: self_hosted ingestion is
-    // the server's job, so the manual Pull affordance is local-only.
-	    mode: ds.mode,
+    // Resolved data-source backend ("sqlite" | "api"). Same signal pullNow() gates on
+    // (ds.backend), so UI affordances stay in lockstep with the seam: API-client ingestion
+    // is the server's job, so the manual Pull affordance is SQLite-only.
+	    backend: ds.backend,
 	    selectedAddress: currentAddress,
 	    selectedSource: currentSource,
 	    selectedMessage: currentMessage,

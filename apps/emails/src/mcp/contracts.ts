@@ -64,7 +64,7 @@ export function cliEquivalentForTool(name: string, input: unknown): string {
     list_usable_domains: () => `emails domain usable${provider ? ` --provider ${provider}` : ""}${enabled(input, "send")}${enabled(input, "receive")}${flag(input, "limit")}${flag(input, "offset")} --json`,
     add_domain: () => `emails domain add ${domain ?? "<domain>"} --provider ${provider ?? "<provider-id>"} --json`,
     // The note is load-bearing, not decoration. `get_dns_records` is guarded in
-    // self_hosted mode for ONE reason — with a `/v1/providers` row of type `ses` the
+    // API-client configuration for ONE reason — with a `/v1/providers` row of type `ses` the
     // adapter resolves credentials from the CALLER's ambient AWS environment, and an
     // MCP client's environment is not the operator's shell. `emails domain dns` runs,
     // and for a provider-backed domain it takes that same adapter path. Handing an
@@ -202,7 +202,7 @@ function fixCommands(message: string, cliEquivalent: string): string[] {
   // sent the operator to `emails domain list` to debug a bad ALIAS argument. The
   // caller's own command is the fix here, so short-circuit before the keyword scan.
   // (Newly load-bearing: add_alias/add_catch_all only became reachable in
-  // self_hosted mode when their mode guard was deleted.)
+  // API-client configuration when their mode guard was deleted.)
   if (lower.includes("invalid email address")) return [cliEquivalent, "emails alias list --json", "emails address list --json"];
   if (lower.includes("provider")) return ["emails provider list --json", "emails provider add --help", cliEquivalent];
   if (lower.includes("domain")) return ["emails domain list --json", "emails domain add --help", cliEquivalent];

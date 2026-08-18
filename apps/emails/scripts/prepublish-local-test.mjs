@@ -6,19 +6,13 @@ import { spawnSync } from "node:child_process";
 
 const legacyProduct = ["MAIL", "ERY"].join("");
 const legacyKeys = [
-  [legacyProduct, "MODE"],
-  ["HASNA", legacyProduct, "MODE"],
-  [legacyProduct, "STORAGE", "MODE"],
-  ["HASNA", legacyProduct, "STORAGE", "MODE"],
-  [legacyProduct, "API", "URL"],
+          [legacyProduct, "API", "URL"],
   [legacyProduct, "API", "KEY"],
   [legacyProduct, ["CLO", "UD"].join(""), "API", "URL"],
   [legacyProduct, ["CLO", "UD"].join(""), "TOKEN"],
   ["HASNA", legacyProduct, "API", "URL"],
   ["HASNA", legacyProduct, "API", "KEY"],
   ["HASNA", legacyProduct, "ENV", "FILE"],
-  ["EMAILS", "STORAGE", "MODE"],
-  ["HASNA", "EMAILS", "STORAGE", "MODE"],
   // The hosted Emails API env the client reads (src/lib/client-env.ts,
   // src/store-resolution.ts). EMAILS_SELF_HOSTED_URL and
   // EMAILS_CLIENT_ENV_SECRET are the keys that turn "a local database AND an
@@ -39,6 +33,9 @@ const legacyKeys = [
 ];
 
 const scrubbedKeys = legacyKeys.map((parts) => parts.join("_"));
+
+const env = { ...process.env, HOME: tmpHome, EMAILS_DB_PATH: ":memory:" };
+for (const key of legacyKeys) delete env[key.join("_")];
 
 /**
  * The environment the prepublish local-test suite runs in: the process env with

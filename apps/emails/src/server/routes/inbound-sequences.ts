@@ -1,6 +1,6 @@
 // API route handlers — inbound-sequences.ts
-import { listInboundEmailSummaries, getInboundEmail, clearInboundEmails, storeInboundEmail } from '../../db/inbound.local.js';
-import { parseResendInbound, parseMailgunInbound, parseMimeEmail } from '../../lib/inbound.local.js';
+import { listInboundEmailSummaries, getInboundEmail, clearInboundEmails, storeInboundEmail } from '../../db/inbound.sqlite.js';
+import { parseResendInbound, parseMailgunInbound, parseMimeEmail } from '../../lib/inbound.sqlite.js';
 import { createSequence, getSequence, listSequences, deleteSequence, addStep, listSteps, enroll, unenroll, listEnrollments, type EnrollmentStatus } from '../../db/sequences.js';
 import { createSqliteEmailStore } from '../../store-sqlite/index.js';
 import { createWarmingSchedule, getWarmingSchedule, listWarmingSchedules, updateWarmingStatus, deleteWarmingSchedule } from '../../db/warming.js';

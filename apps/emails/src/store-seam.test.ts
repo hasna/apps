@@ -493,7 +493,7 @@ describe("store seam", () => {
   it("keeps the diagnostics descriptor un-narrowable", () => {
     const code = stripComments(readFileSync(join(storeDir, "descriptor.ts"), "utf8"));
     // `kind: string`, never a union of store names. A union narrows, and narrowing is
-    // what turned MailDataSource.mode from a label into ~6 deployment-mode branches.
+    // what turned MailDataSource.mode from a label into ~6 selector branches.
     //
     // Presence of the right declaration is NOT enough: a decoy interface carrying
     // `readonly kind: string` satisfies a bare `toMatch` while the real one takes a
@@ -512,7 +512,7 @@ describe("store seam", () => {
 
     // THE ANTI-VACUITY FLOOR IS ON THE DIRECTORY READ, not on the number of arm files, and
     // that is a correction rather than a relaxation. This test used to discover families by
-    // counting `*.local.ts` modules and required more than twenty of them — which was sound
+    // counting `*.sqlite.ts` modules and required more than twenty of them — which was sound
     // while every family had two arms, and stops being sound the moment a family is
     // collapsed onto the seam: the arm count is SUPPOSED to fall to zero, so a floor under
     // it has to be lowered by every collapse and is then reading a deliberately shrinking
@@ -525,8 +525,8 @@ describe("store seam", () => {
     // surprise: a new family added here with no repository on the seam is the regression
     // this half catches.
     const armFamilies = modules
-      .filter((name) => name.endsWith(".local.ts"))
-      .map((name) => name.slice(0, -".local.ts".length))
+      .filter((name) => name.endsWith(".sqlite.ts"))
+      .map((name) => name.slice(0, -".sqlite.ts".length))
       .sort();
     expect(armFamilies.length, "no local arms were found at all").toBeGreaterThan(0);
 

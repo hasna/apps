@@ -109,7 +109,7 @@ describe("template/contact/sequence parity", () => {
 
     try {
       await client.connect(transport, { timeout: 10_000 });
-      // These MCP tools are API-backed in self_hosted mode and route to /v1.
+      // These MCP tools are API-backed when the API client is configured and route to /v1.
       await callTool(client, "add_template", {
         name: "welcome",
         subject_template: "Welcome {{name}}",
@@ -125,7 +125,7 @@ describe("template/contact/sequence parity", () => {
       // Sequence steps and enrollments are `/v1/sequence-steps` and
       // `/v1/sequence-enrollments`, so writing them over MCP is IN parity: the row
       // the tool creates is the same row the exported library functions read back.
-      // These two calls used to be refused with "disabled in self_hosted API-only
+      // These two calls used to be refused with "disabled in self-hosted API-only
       // mode" while `emails sequence step add` / `emails sequence enroll` wrote the
       // very same rows over the very same route — the guard was the only refusal.
       await callTool(client, "add_sequence_step", {

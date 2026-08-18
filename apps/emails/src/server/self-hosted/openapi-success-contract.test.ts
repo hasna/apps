@@ -533,11 +533,11 @@ describe("self-hosted OpenAPI success-response schemas", () => {
   });
 
   it("publishes exact operational probe shapes", () => {
-    expectRequired("/health", "get", 200, ["status", "version", "mode", "name", "db"]);
+    expectRequired("/health", "get", 200, ["status", "version", "backend", "name", "db"]);
     expectRequired("/ready", "get", 200, [
-      "status", "version", "mode", "db", "pendingMigrations", "migrationIssues",
+      "status", "version", "backend", "db", "pendingMigrations", "migrationIssues",
     ]);
-    expectRequired("/version", "get", 200, ["status", "version", "mode", "name"]);
+    expectRequired("/version", "get", 200, ["status", "version", "backend", "name"]);
     expectRequired("/openapi.json", "get", 200, [
       "openapi", "info", "security", "paths", "components",
     ]);

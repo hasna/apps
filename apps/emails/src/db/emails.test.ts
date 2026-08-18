@@ -56,7 +56,7 @@ import {
   searchEmails,
   updateEmailStatus,
 } from "./emails.js";
-import { createSentEmailLedger } from "../lib/sent-ledger.local.js";
+import { createSentEmailLedger } from "../lib/sent-ledger.sqlite.js";
 import { EmailNotFoundError, type EmailStatus } from "../types/index.js";
 import { createHttpEmailStore } from "../store-http/index.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
@@ -569,7 +569,7 @@ for (const [label, makeStore] of STORE_VARIANTS) {
       });
 
       it("reports the fields the seam does not publish as null, not as empty", async () => {
-        // Divergence 2. The deleted HTTP arm filled these with `"self_hosted"`, `[]` and `{}` —
+        // Divergence 2. The deleted HTTP arm filled these with `"self-hosted"`, `[]` and `{}` —
         // three comfortable values indistinguishable from three real ones. The columns below
         // are POPULATED in the table, which is the point: the seam does not project them, so
         // this family cannot see them and must not pretend the absence is an emptiness.

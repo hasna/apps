@@ -12,8 +12,8 @@
 // naming the deployment word. As in the forwarding suite, two absences are deliberate and
 // are NOT gaps: no case sets the deployment word to prove it no longer decides, and no
 // assertion scans the module text for the dispatch helper or the mode read — naming either
-// here would raise a ratchet counter (`src/mode-axis-ratchet.test.ts`) that may only fall.
-// The ratchet enforces both absences tree-wide, this file included.
+// here would raise a source-text guard (`src/store-resolution.test.ts`) that may only fall.
+// The source-text guard enforces both absences tree-wide, this file included.
 //
 // `HOME` IS REDIRECTED IN EVERY CASE. When no database path is configured the database
 // layer resolves — and CREATES — `~/.hasna/emails/emails.db`, and a case about a refusal
@@ -183,7 +183,7 @@ function emailStatus(id: string): string {
 
 describe("syncProvider storage refusals", () => {
   it("REFUSES on an API-configured installation instead of reporting zero events", async () => {
-    // THE DETECTOR. On the two-arm tree this configuration reached a deployment-word
+    // THE DETECTOR. On the two-arm tree this configuration reached a selector
     // dispatcher; the collapsed pipeline derives the same refusal from storage
     // configuration, in its own words, naming the setting to change.
     closeDatabase();

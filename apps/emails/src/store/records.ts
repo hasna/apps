@@ -5,11 +5,11 @@
 // Postgres store — and not off the SQLite arm.
 //
 // That direction matters more than it looks. The facades carry exactly 30
-// `export type * from "./<family>.local.js"` statements, which makes the SQLite arm — the
+// `export type * from "./<family>.sqlite.js"` statements, which makes the SQLite arm — the
 // less scope-aware of the two — the CONTRACT. A contract taken from an implementation
 // inherits that implementation's blind spots, and this one has no way to express "I
 // cannot do this", so BOTH arms answer with plausible wrong data instead: a stub-return
-// scan finds roughly 47 such returns in `*.local.ts` and 32 in `*.remote.ts`, across the
+// scan finds roughly 47 such returns in `*.sqlite.ts` and 32 in `*.api.ts`, across the
 // 293 exports that are mode-routed today. (A prior audit put it at "39 of 324"; that
 // figure is not reproducible from this tree and is kept here only as provenance.) The fix
 // is not to blame an arm — it is to stop deriving the contract from either one. Deriving
@@ -31,7 +31,7 @@
 // question through `evaluateOutboundPolicy` -> `OutboundPolicyDecision`, so the seam's
 // shape is derived from that decision, NOT from the local arm's `Sendability`. The
 // local one is worth reading as a warning: for an email it has never heard of it
-// returns `{ sendable: true }` (src/db/address-lifecycle.local.ts), i.e. "I know
+// returns `{ sendable: true }` (src/db/address-lifecycle.sqlite.ts), i.e. "I know
 // nothing about this sender, go ahead". That is the plausible-wrong-answer failure in
 // its purest form, and it is why this operation sits behind the `outboundPolicy`
 // capability with a refusal available.

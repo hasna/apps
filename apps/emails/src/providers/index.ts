@@ -92,7 +92,7 @@ function assertProviderConfig(provider: Provider): void {
  * Lives here because this file owns the provider REGISTRY — `assertProviderConfig()`
  * and `getAdapter()` are the two other per-type decisions that every caller
  * inherits rather than restating. (Other files do branch on `provider.type`:
- * `src/lib/send.local.ts`, `src/cli/commands/provider.ts`,
+ * `src/lib/send.sqlite.ts`, `src/cli/commands/provider.ts`,
  * `src/mcp/tools/providers-impl.ts`. Each answers a local question. This one is
  * consumed by anything that renders records, so it belongs with the registry.)
  *

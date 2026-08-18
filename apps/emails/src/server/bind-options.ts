@@ -1,7 +1,7 @@
 import type { ServerStorageBackend } from "./storage-backend.js";
 
 // THE BIND DEFAULTS FOLLOW THE SERVER'S INTERNAL STORE, and the type that used to name a
-// deployment mode here is deleted rather than aliased — an unused alias would keep the
+// selector here is deleted rather than aliased — an unused alias would keep the
 // vocabulary reachable for the next module that imports it.
 //
 // That the defaults follow the store is not a rename: they encode a security property that

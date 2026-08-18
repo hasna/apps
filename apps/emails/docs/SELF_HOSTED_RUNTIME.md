@@ -6,14 +6,13 @@ Emails does not provide or infer a hosted endpoint.
 Client configuration:
 
 ```bash
-export EMAILS_MODE=self_hosted
-export EMAILS_SELF_HOSTED_URL="https://emails.example.com"
-export EMAILS_SELF_HOSTED_API_KEY="..." # or EMAILS_SESSION_TOKEN / EMAILS_IDP_TOKEN
+export HASNA_EMAILS_API_URL="https://emails.example.com"
+export HASNA_EMAILS_API_KEY="..." # or EMAILS_SESSION_TOKEN / EMAILS_IDP_TOKEN
 emails inbox list
 ```
 
 The client chooses `EMAILS_SESSION_TOKEN`, then `EMAILS_IDP_TOKEN`, then
-`EMAILS_SELF_HOSTED_API_KEY` when more than one is present. A client-env vault
+`HASNA_EMAILS_API_KEY` when more than one is present. A client-env vault
 entry referenced by `EMAILS_CLIENT_ENV_SECRET` may carry the URL and any one of
 those credentials. See [AUTHENTICATION.md](AUTHENTICATION.md) for the account,
 tenant-key, and optional IdP flows.
@@ -31,14 +30,13 @@ mutation and emits only an aggregate pass record; command responses stay in a
 private temporary directory. This is the smoke referenced by
 [STATION_LOCAL_RETIREMENT.md](STATION_LOCAL_RETIREMENT.md).
 
-Service configuration. The service has NO deployment mode: setting
-`EMAILS_DATABASE_URL` is what makes `emails-serve` the operator `/v1` API over your
+Service configuration. The service has NO selection: setting
+`HASNA_EMAILS_DATABASE_URL` is what makes `emails-serve` the operator `/v1` API over your
 own PostgreSQL, and leaving it unset is what makes it the local SQLite dashboard.
-`EMAILS_MODE` remains a client selector while the client families still use it;
 do not set it in the service environment.
 
 ```bash
-export EMAILS_DATABASE_URL="postgresql://..."
+export HASNA_EMAILS_DATABASE_URL="postgresql://..."
 export EMAILS_API_SIGNING_KEY="..." # 32+ characters
 export EMAILS_SEND_PROVIDER=ses     # or resend
 export EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS="example.com"   # required; your own domains
@@ -167,8 +165,8 @@ Emails application key but deliberately retains the active Mailery-era key.
 Move clients, verify reads and sends, keep the old key for the agreed rollback
 window, and revoke it explicitly only after rollback is no longer required.
 
-Postgres is authoritative. Local mode uses SQLite. There is no remote, hybrid,
-dual-write or synchronization mode between them.
+Postgres is authoritative. Local mode uses SQLite. There is no in-between
+state between them.
 
 The AWS reference path remains direct and user-owned: SES for sending, S3 for
 raw inbound mail and attachments, SNS/SQS with a DLQ for ingestion, Route53 for

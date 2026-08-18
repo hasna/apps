@@ -470,7 +470,7 @@ describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", ()
     // Guards the hand-maintained table list in migration 0013: a dropped/misspelled
     // entry would leave a table un-forced (a silent hole) with no other failing test.
     const ALL_TENANT_TABLES = [
-      "domains", "addresses", "messages", "contacts", "self_hosted_providers", "templates",
+      "domains", "addresses", "messages", "contacts", "server_providers", "templates",
       "contact_groups", "sequences", "owners", "send_keys", "scheduled_emails", "aliases",
       "forwarding_rules", "warming_schedules", "email_triage", "provisioning_events",
       "mailbox_sources", "events", "email_agent_settings", "email_agent_runs", "email_digests",

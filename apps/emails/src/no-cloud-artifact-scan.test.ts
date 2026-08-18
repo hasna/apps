@@ -22,7 +22,6 @@ const positiveFixtures: Record<string, string> = {
   "hosted billing route": 'router.post("/v1/billing", handler)',
   "hosted data field": "const row = { credit_balance: 0 };",
   "hosted triage surface": 'router.post("/api/triage", handler)',
-  "removed mode in configuration": "EMAILS_MODE=cloud",
   "cloud ai provider client": 'import { groq } from "@ai-sdk/groq";',
   "private deployment marker": "arn:aws:iam::789877399345:role/deploy",
   "retired inbound bucket prefix": 'const bucket = "hasna-emails-prod-inbound-1";',

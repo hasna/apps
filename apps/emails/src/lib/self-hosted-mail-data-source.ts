@@ -12,7 +12,7 @@
 //
 // This backend maps that resource API onto the client's domain language
 // (TuiMessage / MailboxCounts / MessageBody / …) so the CLI/MCP inbox reads the
-// SHARED self_hosted store instead of the machine-local SQLite island.
+// SHARED self-hosted store instead of the machine-local SQLite island.
 //
 // SECRET SAFETY: the bearer credential is resolved from the configured client
 // environment (via resolveSelfHostedConfig) and only ever placed in an
@@ -21,11 +21,11 @@
 
 import { resolveSelfHostedConfig } from "../db/self-hosted-store.js";
 import {
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
+  HASNA_EMAILS_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   type EmailsClientCredentialCandidate,
 } from "./client-env.js";
-import { getEmailsMode } from "./mode.js";
+import { isApiClientConfigured } from "../store-resolution.js";
 import {
   type AttachmentPath,
   type ConversationBodyOptions,
@@ -250,7 +250,7 @@ const SCAN_TTL_MS = 15_000;
 // recent MAX_LABEL_SCAN_REQUESTS pages (newest-first ordering), so on a store
 // larger than that a label's count is a lower bound and a label used only in old
 // mail can be missing entirely. That is a deliberate accuracy trade for sidebar
-// metadata, and it is the same one src/cli/tui/data.remote.ts already makes with
+// metadata, and it is the same one src/cli/tui/data.api.ts already makes with
 // SELF_HOSTED_MAIL_SCAN_CAP=5000.
 const MAX_LABEL_SCAN_REQUESTS = 10;
 // Must exceed the TUI's own sidebar refresh cadence (30s), or every refresh pays
@@ -413,9 +413,9 @@ const MAX_THREAD_CANDIDATE_ROWS = 2_000;
 // The synthetic source id `listMailboxSources()` publishes for the whole shared
 // store. `emails inbox sources` prints it and `--source <id>` must accept it
 // back — the round-trip is the contract, so it lives next to both ends of it.
-export const SELF_HOSTED_SOURCE_ID = "self_hosted";
-// The id local mode uses for the same "no narrowing" scope; accepted as an alias
-// so a script written against local mode keeps working here.
+export const SELF_HOSTED_SOURCE_ID = "self-hosted";
+// The id local SQLite client uses for the same "no narrowing" scope; accepted as an alias
+// so a script written against local SQLite client keeps working here.
 const ALL_SOURCE_ID = "all";
 
 function bareEmail(value: string): string {
@@ -423,7 +423,7 @@ function bareEmail(value: string): string {
   return (angled ? angled[1]! : value).trim().toLowerCase();
 }
 
-/** An RFC 5322 Message-ID without its angle brackets (same rule as db/inbound.remote.ts). */
+/** An RFC 5322 Message-ID without its angle brackets (same rule as db/inbound.api.ts). */
 function bareMessageId(value: string | null | undefined): string {
   return String(value ?? "").replace(/[<>]/g, "").trim();
 }
@@ -850,7 +850,7 @@ function v1AttachmentMetadata(m: V1Message): AttachmentPath[] {
   // `||`, not `??`: inbound MIME parts routinely carry filename="" (unnamed
   // inline parts), and an empty name is dropped by every display merge, which
   // silently shifts the download indexes of everything after it. Placeholder
-  // names keep each entry addressable — same rule as db/inbound.remote.ts.
+  // names keep each entry addressable — same rule as db/inbound.api.ts.
   return metadata.map((attachment, index) => {
     const record = attachmentRecord(attachment);
     return {
@@ -898,7 +898,7 @@ function v1ToThreadMessage(m: V1Message): TuiThreadMessage {
   const outbound = (m.direction ?? "").toLowerCase() === "outbound";
   return {
     kind: outbound ? "sent" : "received",
-    // Same storage mapping local mode uses (data.local getConversation): a sent
+    // Same storage mapping local SQLite client uses (data.local getConversation): a sent
     // message reads back through the sent-mail projection, everything else
     // through the inbound one. Reporting "inbound" for an outbound row made
     // threadItemToMessage() re-label our own sends as received mail.
@@ -968,13 +968,13 @@ function unsupportedScopeSelectors(source: MailboxSource): string[] {
  *
  * A /v1 message row records WHO the mail was addressed to, never which local
  * ingestion stream or provider credential carried it — that provenance only
- * exists in local mode's SQLite. Previously every such scope silently collapsed
+ * exists for the local SQLite client's SQLite. Previously every such scope silently collapsed
  * to "match nothing", so `--provider <id>` printed "No mail found" and
  * `inbox mailboxes --source <id>` printed all-zero folder counts for a store
  * that was full of mail. Both are indistinguishable from a genuinely empty
  * mailbox, so they are refused with a message that says what IS supported.
  *
- * The whole-store ids this backend itself publishes (`self_hosted`, plus local
+ * The whole-store ids this backend itself publishes (`self-hosted`, plus local
  * mode's `all`) resolve to no narrowing, so the id printed by
  * `emails inbox sources` round-trips into `--source`.
  */
@@ -1064,7 +1064,7 @@ export interface SelfHostedMailDataSourceOptions {
 }
 
 export class SelfHostedMailDataSource implements MailDataSource {
-  readonly mode = "self_hosted" as const;
+  readonly backend = "api" as const;
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly credentials: readonly EmailsClientCredentialCandidate[];
@@ -1100,7 +1100,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
     this.apiKey = options.apiKey;
     this.credentials = options.credentials?.length
       ? options.credentials
-      : [{ setting: EMAILS_SELF_HOSTED_API_KEY_ENV, value: options.apiKey }];
+      : [{ setting: HASNA_EMAILS_API_KEY_ENV, value: options.apiKey }];
     this.now = options.now ?? Date.now;
     this.timeoutMs = selfHostedTransportLimit(options.timeoutMs, selfHostedTimeoutMs(), "timeoutMs");
     this.maxResponseBytes = selfHostedTransportLimit(
@@ -1889,7 +1889,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
       id: SELF_HOSTED_SOURCE_ID,
       label: "Self-hosted Emails",
       kind: "all",
-      badges: ["self_hosted"],
+      badges: ["self-hosted"],
       counts,
       // Server-side aggregate — always the exact totals (see listMailboxStatus).
       countsComplete: true,
@@ -1897,7 +1897,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
       unread: counts.unread,
       latestReceivedAt,
     }];
-    // `--search` / `--limit` are honoured over the same fields local mode matches
+    // `--search` / `--limit` are honoured over the same fields local SQLite client matches
     // (data.local listMailboxSources), so a caller that filters gets a filtered
     // list rather than the full one served back unchanged.
     const query = opts?.search?.trim().toLowerCase();
@@ -1940,7 +1940,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
     const m = await this.getRaw(msg.id);
     if (!m) return [];
     const rows = await this.conversationRows(m);
-    // Same windowing as local mode: `limit` keeps the NEWEST N of the thread
+    // Same windowing as local SQLite client: `limit` keeps the NEWEST N of the thread
     // (data.local getConversationBodies), because a conversation is read from
     // its most recent turn backwards.
     const limit = opts?.limit && opts.limit > 0 ? opts.limit : undefined;
@@ -2257,7 +2257,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
       // operator believe mail had been re-routed to another SES account when it
       // had not.
       throw new Error(
-        "--provider is not supported in self_hosted mode: the server selects the outbound provider "
+        "--provider is not supported when the API client is configured: the server selects the outbound provider "
           + "(EMAILS_SEND_PROVIDER) and holds its credentials. Re-run without --provider.",
       );
     }
@@ -2355,10 +2355,11 @@ export class SelfHostedMailDataSource implements MailDataSource {
 
 /**
  * Build the self-hosted data source only from explicit operator configuration.
- * No URL or credential implies a mode, and no package-owned endpoint exists.
+ * The client storage contract decides: an API origin plus a credential names
+ * the API client, and nothing else does.
  */
 export function resolveSelfHostedMailDataSource(fetchImpl?: SelfHostedFetch): SelfHostedMailDataSource | null {
-  if (getEmailsMode() !== "self_hosted") return null;
+  if (!isApiClientConfigured()) return null;
   const config = resolveSelfHostedConfig();
   if (!config) return null;
   // `apiKey` here is the Bearer credential slot — a user session token when
@@ -2367,7 +2368,7 @@ export function resolveSelfHostedMailDataSource(fetchImpl?: SelfHostedFetch): Se
     baseUrl: config.baseUrl,
     apiKey: config.credential,
     credentials: [
-      { setting: config.credentialSetting ?? EMAILS_SELF_HOSTED_API_KEY_ENV, value: config.credential },
+      { setting: config.credentialSetting ?? HASNA_EMAILS_API_KEY_ENV, value: config.credential },
       ...(config.credentialFallbacks ?? []),
     ],
     fetchImpl,

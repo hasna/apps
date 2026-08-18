@@ -131,7 +131,7 @@ export type TemplateStore = EmailStore | Database;
  * THE INJECTABLE ACCEPTS BOTH SHAPES, and that is a published-surface obligation
  * rather than a convenience: every export here has always taken an optional
  * `Database` meaning "scope this to the database I own", and the local scheduler
- * still passes exactly that (src/cli/commands/misc.local.ts). A `Database` becomes a
+ * still passes exactly that (src/cli/commands/misc.sqlite.ts). A `Database` becomes a
  * SQLite store BOUND TO THAT HANDLE — which is stronger than what the deleted facade
  * did with it (the handle's PRESENCE picked an arm) — and an `EmailStore` is used as
  * handed in.

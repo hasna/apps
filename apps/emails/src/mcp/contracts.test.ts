@@ -270,7 +270,7 @@ describe("MCP CLI equivalents", () => {
       // shell comment and is how this map flags a documented inexactness.
       const runnable = (command.split(" # ")[0] ?? command).trim();
       expect(runnable, `${tool} advertises a command with no arguments substituted`).not.toContain("<");
-      expect(cliRefusalFor(runnable, "self_hosted"), `${tool} advertises ${runnable}`).toBeNull();
+      expect(cliRefusalFor(runnable, "self-hosted"), `${tool} advertises ${runnable}`).toBeNull();
     }
   });
 
@@ -328,7 +328,7 @@ describe("MCP CLI equivalents", () => {
     // `list_replies` refused unconditionally while `emails replies <id>` ran fine.
     expect(cliEquivalentForTool("list_replies", { email_id: "msg-1", limit: 5, offset: 1 }))
       .toBe("emails replies msg-1 --limit 5 --offset 1 --json");
-    expect(cliRefusalFor("emails replies msg-1 --json", "self_hosted")).toBeNull();
+    expect(cliRefusalFor("emails replies msg-1 --json", "self-hosted")).toBeNull();
   });
 
   it("still admits that a guarded tool names a refused command", () => {
@@ -338,7 +338,7 @@ describe("MCP CLI equivalents", () => {
     // `emails domain verify` is `notImplementedAnywhere`, because wiring a WRITE to
     // `getAdapter().verifyDomain` behind whatever ambient AWS credentials the calling
     // machine happens to carry is a decision nobody has made.
-    expect(cliRefusalFor(cliEquivalentForTool("verify_domain", { domain: "acme.example" }), "self_hosted"))
+    expect(cliRefusalFor(cliEquivalentForTool("verify_domain", { domain: "acme.example" }), "self-hosted"))
       .toBe("emails domain verify");
   });
 
@@ -353,7 +353,7 @@ describe("MCP CLI equivalents", () => {
     // Before `emails domain dns` was wired up, the old control happened to cover
     // the `serverOnly` arm: `src/cli/commands/domain.ts` used that helper. It now
     // uses `notImplementedAnywhere` exclusively, and all 17 surviving
-    // `serverOnly(...)` call sites sit in `*.remote.ts` where nothing asserted
+    // `serverOnly(...)` call sites sit in `*.api.ts` where nothing asserted
     // them. So this is counted per helper rather than per command: no single
     // command being wired up can silently retire a whole shape again.
     const observed = refusalHelpersObserved();
@@ -366,13 +366,13 @@ describe("MCP CLI equivalents", () => {
     // a scan that populated the count but broke `cliRefusalFor` still fails here.
     const serverOnlyCommand = scanCliRefusals().find((r) => r.helper === "serverOnly")?.command;
     expect(serverOnlyCommand, "no serverOnly refusal to use as a control").toBeTruthy();
-    expect(cliRefusalFor(serverOnlyCommand!, "self_hosted")).toBe(serverOnlyCommand);
+    expect(cliRefusalFor(serverOnlyCommand!, "api")).toBe(serverOnlyCommand);
   });
 
   it("unguards get_dns_records' credential-free half while its CLI twin runs, and advertises the twin", () => {
     // The wholesale `get_dns_records` guard is GONE. Its no-provider path is pure
     // local computation (the generic SPF/DMARC pair from src/lib/dns.ts) and needs
-    // no credentials, so it now runs in self_hosted mode exactly like its CLI twin
+    // no credentials, so it now runs in self-hosted mode exactly like its CLI twin
     // `emails domain dns`. Only the provider-scoped half is refused, in the tool
     // body, for the credential reason documented on `assertMcpLocalStateAllowed`
     // — an MCP client's ambient AWS/Cloudflare environment is not the operator's
@@ -383,7 +383,7 @@ describe("MCP CLI equivalents", () => {
     // and this tool is not in the `unblocked` loop above that bans `<`.
     const runnable = (twin.split(" # ")[0] ?? twin).trim();
     expect(runnable).toBe("emails domain dns acme.example --json");
-    expect(cliRefusalFor(runnable, "self_hosted")).toBeNull();
+    expect(cliRefusalFor(runnable, "self-hosted")).toBeNull();
     // But the command must NOT be advertised bare: for a provider-backed domain it
     // performs the very adapter call the tool refuses to make, with the caller's
     // ambient credentials. An agent handed this has to be told that, or the refusal

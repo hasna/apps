@@ -34,7 +34,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { closeDatabase, getDatabase, resetDatabase, type Database } from "./database.js";
-import { createProvider } from "./providers.local.js";
+import { createProvider } from "./providers.sqlite.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
 import { createHttpEmailStore } from "../store-http/index.js";
 import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
@@ -68,8 +68,8 @@ const DB_PATH_ENV = "EMAILS_DB_PATH";
 const TOUCHED_ENV = [
   DB_PATH_ENV,
   "HASNA_EMAILS_DB_PATH",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "EMAILS_CLIENT_ENV_SECRET",
   "EMAILS_SESSION_TOKEN",
 ] as const;

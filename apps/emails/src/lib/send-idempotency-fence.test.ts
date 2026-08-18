@@ -15,10 +15,10 @@ import {
   API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
 } from "../store-resolution.js";
-import { createProvider } from "../db/providers.local.js";
+import { createProvider } from "../db/providers.sqlite.js";
 import { listSandboxEmails } from "../db/sandbox.js";
-import { sendComposed } from "../cli/tui/data.local.js";
-import { sendWithFailover } from "./send.local.js";
+import { sendComposed } from "../cli/tui/data.sqlite.js";
+import { sendWithFailover } from "./send.sqlite.js";
 
 let db: Database;
 let providerId: string;
@@ -103,7 +103,7 @@ describe("local send idempotency fences the PROVIDER call, not just the ledger r
     };
     const first = await sendWithFailover(providerId, opts, db);
     // Record the first outcome the way every production caller does.
-    const { createSentEmailLedger } = await import("./sent-ledger.local.js");
+    const { createSentEmailLedger } = await import("./sent-ledger.sqlite.js");
     await createSentEmailLedger(first.providerId, opts, first.messageId, db);
 
     const second = await sendWithFailover(providerId, opts, db);
