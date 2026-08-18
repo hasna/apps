@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Zoho Projects connector for the open-connectors monorepo.
+Zoho Projects connector for the connectors monorepo.
 
 ## Overview
 

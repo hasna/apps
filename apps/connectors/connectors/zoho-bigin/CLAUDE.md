@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Zoho Bigin connector for the open-connectors monorepo.
+Zoho Bigin connector for the connectors monorepo.
 
 ## Overview
 

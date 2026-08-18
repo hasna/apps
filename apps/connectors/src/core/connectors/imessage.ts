@@ -208,7 +208,7 @@ const IMESSAGE_DOCS = `# CLAUDE.md
 
 ## Project Overview
 
-connect-imessage is the bridge-first iMessage connector for the one-product open-connectors runtime. It intentionally targets a normalized HTTP bridge contract instead of native macOS automation so the same connector definition can run locally today and back future hosted channel adapters without rewriting the API surface.
+connect-imessage is the bridge-first iMessage connector for the one-product connectors runtime. It intentionally targets a normalized HTTP bridge contract instead of native macOS automation so the same connector definition can run locally today and back future hosted channel adapters without rewriting the API surface.
 
 The connector exposes profile/config management plus normalized health, conversation, and message operations. Inbound message consumption and outbound send/reply are all routed through the same internal connector definition and command runtime.
 

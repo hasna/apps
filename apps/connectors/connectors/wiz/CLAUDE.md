@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for working with the Wiz connector in open-connectors.
+Guidance for working with the Wiz connector in the connectors monorepo.
 
 ## Overview
 

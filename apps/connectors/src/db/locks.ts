@@ -1,5 +1,5 @@
 /**
- * Resource lock helpers for open-connectors.
+ * Resource lock helpers for the connectors monorepo.
  *
  * Same interface as open-mementos src/db/locks.ts — standard pattern across
  * all @hasna apps. Resource types are scoped to what connectors manages:

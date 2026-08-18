@@ -1,6 +1,6 @@
 # AGENTS.md
 
-TomTom maps and routing connector for open-connectors.
+TomTom maps and routing connector for the connectors monorepo.
 
 ## Commands
 
