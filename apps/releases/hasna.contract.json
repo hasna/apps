@@ -3,7 +3,7 @@
   "name": "releases",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.10.6",
+  "kitVersion": "0.11.1",
   "description": "Release ledger, publish receipts, downstream fan-out, and npm reconciliation CLI + MCP server for Hasna-coded apps.",
   "hosting": [
     "user-hosted"
@@ -46,6 +46,11 @@
           "expiresAt": "2027-08-15T00:00:00.000Z"
         }
       ]
+    },
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
     }
   }
 }
