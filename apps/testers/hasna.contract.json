@@ -4,15 +4,94 @@
   "name": "testers",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.4.1",
-  "description": "AI-powered QA testing platform — CLI, MCP, HTTP serve, and generated SDK. serve reads/writes Postgres directly when HASNA_TESTERS_DATABASE_URL is set.",
-  "bins": ["testers", "testers-mcp", "testers-serve"],
+  "kitVersion": "0.11.1",
+  "description": "AI-powered QA testing platform \u2014 CLI, MCP, HTTP serve (testers-serve), and generated SDK. The server's data backend is the local SQLite file by default, or PostgreSQL when a database URL is configured; the service reads and writes the selected backend directly (Amendment A1 \u2014 there is no sync engine or local mirror in the service).",
+  "bins": [
+    "testers",
+    "testers-mcp",
+    "testers-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "envPrefix": "HASNA_TESTERS_",
+    "aliasEnvPrefix": "TESTERS_",
+    "sqlitePath": "~/.hasna/testers/testers.db",
+    "pgTestGate": {
+      "envVar": "TESTERS_TEST_DATABASE_URL",
+      "command": "HASNA_TESTERS_DATABASE_URL=$TESTERS_TEST_DATABASE_URL bun run test:postgres"
+    }
+  },
+  "serviceSurfaces": [
+    {
+      "name": "testers-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "testers-serve",
+      "authMode": "api-key",
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      }
+    },
+    {
+      "name": "testers-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./client",
+      "generatedFrom": "/openapi.json"
+    },
+    {
+      "name": "testers-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "testers-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "testers-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "testers",
+      "authMode": "local-only"
+    }
+  ],
   "metadata": {
-    "healthPath": "/health",
-    "readyPath": "/ready",
-    "versionPath": "/version",
-    "apiBasePath": "/v1",
-    "openapiPath": "/openapi.json",
-    "apiSigningEnv": "HASNA_TESTERS_API_SIGNING_KEY"
+    "service": {
+      "port": 19455,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "openapiPath": "/openapi.json",
+      "apiBasePath": "/v1",
+      "apiVersion": "v1",
+      "auth": "api-key",
+      "apiSigningEnv": "HASNA_TESTERS_API_SIGNING_KEY"
+    },
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    }
   }
 }

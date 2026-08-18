@@ -16,7 +16,8 @@
  * If the hosted API is partially configured, {@link getStore} throws (via the
  * resolver) so a caller can never silently read/write the wrong dataset.
  */
-import { resolveStorageClient, resolveClientTransport, type HasnaStorageClient } from "../generated/storage-client/index.js";
+import { resolveClientTransport } from "@hasna/contracts/client";
+import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 
 import { getDatabase } from "../db/database.js";
 
@@ -72,7 +73,7 @@ type A<F extends (...args: never[]) => unknown> = (...args: Parameters<F>) => Pr
  * async — the ApiStore transport is over HTTP.
  */
 export interface Store {
-  readonly transport: "local" | "cloud-http";
+  readonly transport: "local" | "http";
 
   // ── scenarios ──
   createScenario: A<typeof dbScenarios.createScenario>;
@@ -380,7 +381,7 @@ const CLOUD_MAX_ROWS = 100_000;
 const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
 export class ApiStore implements Store {
-  readonly transport = "cloud-http" as const;
+  readonly transport = "http" as const;
 
   constructor(private readonly c: HasnaStorageClient) {}
 
@@ -898,7 +899,7 @@ let cachedStore: Store | null = null;
 export function getStore(): Store {
   if (cachedStore) return cachedStore;
   const resolved = resolveStorageClient(TESTERS_APP, process.env);
-  const store: Store = resolved.transport === "cloud-http" ? new ApiStore(resolved.client) : new LocalStore();
+  const store: Store = resolved.transport === "http" ? new ApiStore(resolved.client) : new LocalStore();
   cachedStore = store;
   return store;
 }
@@ -910,7 +911,7 @@ export function resetStore(): void {
 
 /** True when the resolved store routes to the cloud `/v1` API. */
 export function isCloudStore(): boolean {
-  return getStore().transport === "cloud-http";
+  return getStore().transport === "http";
 }
 
 /**
@@ -922,7 +923,7 @@ export function isCloudStore(): boolean {
  * it to confirm the hosted API was selected.
  */
 export function storageStatus(): {
-  transport: "local" | "cloud-http";
+  transport: "local" | "http";
   baseUrl: string | null;
   apiKeyPresent: boolean;
   apiKeySource: string | null;
@@ -930,11 +931,13 @@ export function storageStatus(): {
 } {
   const r = resolveClientTransport(TESTERS_APP, process.env);
   const dbPath =
-    r.transport === "cloud-http"
+    r.transport === "http"
       ? null
       : process.env["HASNA_TESTERS_DB_PATH"] || process.env["TESTERS_DB_PATH"] || null;
   return {
-    transport: r.transport,
+    // The seam reports the local transport as "sqlite"; the app's Store
+    // vocabulary is "local".
+    transport: r.transport === "http" ? "http" : "local",
     baseUrl: r.baseUrl,
     apiKeyPresent: r.apiKeyPresent,
     apiKeySource: r.apiKeySource,

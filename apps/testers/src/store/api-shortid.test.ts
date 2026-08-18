@@ -5,8 +5,8 @@
 // never resolved. Both were live failures against the deployed hosted server.
 import { describe, expect, test } from "bun:test";
 import { ApiStore } from "./index.js";
-import { HasnaHttpError } from "../generated/storage-client/index.js";
-import type { HasnaStorageClient } from "../generated/storage-client/index.js";
+import { HasnaHttpError } from "@hasna/contracts/client";
+import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 
 /**
  * A faithful stand-in for the deployed `/v1` server: strict full-id lookups

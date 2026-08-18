@@ -15,6 +15,7 @@ import type {
   WorkflowSandboxCleanup,
   WorkflowSandboxSyncStrategy,
 } from "../types/index.js";
+import { resolveCredential as resolveClientCredential } from "@hasna/contracts/client";
 
 export interface WorkflowRunOptions {
   url: string;
@@ -265,13 +266,13 @@ function resolveCloudSandboxEnv(): Record<string, string> | undefined {
   if (!status.baseUrl) {
     throw new Error("cloud store resolved without a base URL; cannot provision the sandbox");
   }
-  const apiKey = process.env["HASNA_TESTERS_API_KEY"] || process.env["TESTERS_API_KEY"];
-  if (!apiKey) {
+  const credential = resolveClientCredential("testers", process.env);
+  if (!credential) {
     throw new Error(
-      "cloud store resolved but the API key is missing from the environment; cannot provision the sandbox",
+      "cloud store resolved but no API key could be resolved; cannot provision the sandbox",
     );
   }
-  return { HASNA_TESTERS_API_URL: status.baseUrl, HASNA_TESTERS_API_KEY: apiKey };
+  return { HASNA_TESTERS_API_URL: status.baseUrl, HASNA_TESTERS_API_KEY: credential.apiKey };
 }
 
 function buildSandboxPlan(

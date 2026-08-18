@@ -5,11 +5,7 @@
 // (URL without key, or key without URL) fails closed instead of silently
 // serving local data.
 import { describe, expect, test } from "bun:test";
-import {
-  resolveClientTransport,
-  createClientTransport,
-  clientTransportEnvKeys,
-} from "../generated/storage-client/index.js";
+import { resolveClientTransport, createClientTransport, clientTransportEnvKeys } from "@hasna/contracts/client";
 
 const URL_KEY = "HASNA_TESTERS_API_URL";
 const KEY_KEY = "HASNA_TESTERS_API_KEY";
@@ -27,7 +23,7 @@ describe("client transport selection (env contract)", () => {
       [URL_KEY]: "https://testers.example.com",
       [KEY_KEY]: "k-test",
     });
-    expect(r.transport).toBe("cloud-http");
+    expect(r.transport).toBe("http");
     expect(r.misconfigured).toBe(false);
     expect(r.baseUrl).toBe("https://testers.example.com/v1");
     expect(r.apiKeyPresent).toBe(true);
@@ -55,7 +51,7 @@ describe("client transport selection (env contract)", () => {
       [KEY_KEY]: "k-test",
       ...(process.env.TESTERS_PG_POOL_MAX ? {} : {}),
     });
-    expect(wired.transport).toBe("cloud-http");
+    expect(wired.transport).toBe("http");
     expect(wired.client).not.toBeNull();
   });
 

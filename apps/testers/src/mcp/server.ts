@@ -975,7 +975,7 @@ server.tool(
         apiBaseUrl: storage.baseUrl,
         storageApiKey: storage.apiKeyPresent ? "configured" : "not set",
         dbPath:
-          storage.transport === "cloud-http"
+          storage.transport === "http"
             ? null
             : storage.dbPath || `${getTestersDir()}/testers.db`,
         apiKey: hasApiKey ? "configured" : "not set",
