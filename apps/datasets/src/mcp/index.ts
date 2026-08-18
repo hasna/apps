@@ -48,7 +48,7 @@ export function buildServer(): McpServer {
     version: pkg.version,
   });
 
-  registerTool(server, "datasets_storage_status", "Inspect the local open-datasets store", {}, async () => storageStatus());
+  registerTool(server, "datasets_storage_status", "Inspect the local datasets store", {}, async () => storageStatus());
 
   registerTool(server, "datasets_sources_list", "List registered dataset sources", {
     project: z.string().optional().describe("Optional project slug"),
@@ -325,7 +325,7 @@ function statExists(path: string): boolean {
 function printHelp(): void {
   console.log(`Usage: datasets-mcp [options]
 
-Runs the open-datasets MCP server over stdio.
+Runs the datasets MCP server over stdio.
 
 Options:
   --stdio       Run over stdio (default)
