@@ -395,7 +395,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "logs",
-    cause: "manifest_valid: service-class manifest declares no service surface (service repos must declare at least one). Validated at pinned 0.11.1.",
+    cause: "surface_matrix: missing supported sdk surface (no ./sdk export; SDK deferred truthfully); storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required. Manifest schema-valid at kit 0.11.1.",
     task: "todos d166125e (contracts task — logs)",
   },
   {
