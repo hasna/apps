@@ -34,7 +34,7 @@ function stripAnsi(value: string): string {
 
 describe("CLI templates command", () => {
   test("respects --project scope", () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-prompts-cli-"))
+    const dir = mkdtempSync(join(tmpdir(), "prompts-cli-"))
     const dbPath = join(dir, "prompts.db")
 
     const alphaProject = runCli(dbPath, ["--json", "project", "create", "Alpha"])
@@ -62,7 +62,7 @@ describe("CLI templates command", () => {
 
 describe("CLI compact output defaults", () => {
   test("list caps human output and keeps JSON full records explicit", () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-prompts-cli-compact-"))
+    const dir = mkdtempSync(join(tmpdir(), "prompts-cli-compact-"))
     const dbPath = join(dir, "prompts.db")
 
     for (let i = 1; i <= 25; i++) {
@@ -88,7 +88,7 @@ describe("CLI compact output defaults", () => {
   })
 
   test("show is compact by default and verbose discloses the full body", () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-prompts-cli-show-"))
+    const dir = mkdtempSync(join(tmpdir(), "prompts-cli-show-"))
     const dbPath = join(dir, "prompts.db")
     const longBody = `start ${"x".repeat(220)} UNIQUE_VERBOSE_TAIL`
 
@@ -107,7 +107,7 @@ describe("CLI compact output defaults", () => {
   })
 
   test("lint exits nonzero when errors are beyond the displayed page", () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-prompts-cli-lint-"))
+    const dir = mkdtempSync(join(tmpdir(), "prompts-cli-lint-"))
     const dbPath = join(dir, "prompts.db")
 
     expect(runCli(dbPath, ["save", "Hidden Error", "--body", "tiny", "--slug", "hidden-error"]).exitCode).toBe(0)
@@ -124,7 +124,7 @@ describe("CLI compact output defaults", () => {
   })
 
   test("recent supports offset pagination when it prints a next hint", () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-prompts-cli-recent-page-"))
+    const dir = mkdtempSync(join(tmpdir(), "prompts-cli-recent-page-"))
     const dbPath = join(dir, "prompts.db")
 
     for (let i = 1; i <= 11; i++) {
@@ -145,7 +145,7 @@ describe("CLI compact output defaults", () => {
 
 describe("CLI top-level scoped commands", () => {
   test("recent and trending respect --project scope", () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-prompts-cli-scope-"))
+    const dir = mkdtempSync(join(tmpdir(), "prompts-cli-scope-"))
     const dbPath = join(dir, "prompts.db")
 
     const alphaProject = runCli(dbPath, ["--json", "project", "create", "Alpha"])
@@ -184,7 +184,7 @@ describe("CLI top-level scoped commands", () => {
 
 describe("CLI pagination flags", () => {
   test("list/search/templates support --offset", () => {
-    const dir = mkdtempSync(join(tmpdir(), "open-prompts-cli-pagination-"))
+    const dir = mkdtempSync(join(tmpdir(), "prompts-cli-pagination-"))
     const dbPath = join(dir, "prompts.db")
 
     expect(runCli(dbPath, ["save", "One", "--body", "common-token body one", "--slug", "one"]).exitCode).toBe(0)

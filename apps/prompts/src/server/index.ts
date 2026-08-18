@@ -314,4 +314,4 @@ export default {
   },
 }
 
-console.log(`open-prompts API running on http://localhost:${PORT}`)
+console.log(`prompts API running on http://localhost:${PORT}`)
