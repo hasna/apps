@@ -1,5 +1,11 @@
 # Changelog
 
+## [4.3.19] - 2026-08-18
+### Changed
+- Republication past the registry-protected 4.3.18 slot (4.3.18 was published
+  in the standalone-repo era and fully unpublished 2026-08-15, so its npm slot
+  is permanently burned). 4.3.19 carries the identical 4.3.18 changeset.
+
 ## [4.3.18] - 2026-08-14
 ### Changed
 - Removed the retired shared cloud MCP helper registration and dependency from
