@@ -10,7 +10,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { platform } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { AccountsError, type SharedConfigSpec, type ToolDef } from "../types.js";
 import { accountsHome } from "../storage.js";
 import { writeFileAtomic } from "./safe-path.js";
@@ -285,6 +285,63 @@ function hasUnrenderedPlaceholder(value: unknown): boolean {
 }
 
 /**
+ * Characters allowed in a persisted command path. Strict by design: the path is
+ * interpolated into a shell command string that the tool executes at status
+ * refresh, so anything the shell could treat as syntax — whitespace, quotes,
+ * `$()`, backticks, globs, redirections, cmd.exe escapes — is REJECTED rather
+ * than escaped. A quote is not neutralized by another quote class, and `$()`
+ * and backticks expand inside double quotes: that is the P1 that terminated
+ * the prior candidate (hasna/apps#272, 3x NO_GO).
+ */
+function isSafeCommandPath(path: string): boolean {
+  return platform() === "win32"
+    ? /^[A-Za-z0-9_./:\\-]+$/.test(path)
+    : /^[A-Za-z0-9_./-]+$/.test(path);
+}
+
+/**
+ * Resolve the installed statusline binary at provisioning time. The command
+ * belongs to the machine that owns the profile, so the provisioner must not
+ * bake one host's absolute path into the package or depend on shared settings
+ * having been updated by a separate install step.
+ *
+ * Only a resolved path that passes `isSafeCommandPath` is returned: a hostile
+ * or unusual PATH entry is skipped (recorded on the result) and scanning
+ * continues, so a later safe PATH entry can still provision. No candidate that
+ * could parse as anything but plain words ever reaches a profile.
+ */
+function installedStatuslineCommand(result: SharedCapabilitiesResult): string | undefined {
+  const names =
+    platform() === "win32"
+      ? ["statusline.exe", "statusline.cmd", "statusline.bat", "statusline"]
+      : ["statusline"];
+  for (const directory of (process.env.PATH ?? "").split(delimiter)) {
+    if (!directory) continue;
+    for (const name of names) {
+      const candidate = join(directory, name);
+      let usable = false;
+      try {
+        const stats = statSync(candidate);
+        usable = stats.isFile() && (platform() === "win32" || (stats.mode & 0o111) !== 0);
+      } catch {
+        // Try the next PATH entry; an unreadable candidate is not a usable binary.
+      }
+      if (!usable) continue;
+      const resolved = resolve(candidate);
+      if (!isSafeCommandPath(resolved)) {
+        result.skipped.push({
+          entry: "statusLine",
+          reason: `resolved statusline path contains shell metacharacters; refusing to persist (${resolved})`,
+        });
+        continue;
+      }
+      return resolved;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Members are unioned across every source and the first definition of a member
  * name wins, so the tool can list rendered files ahead of raw ones without
  * losing anything only the raw file declares. A member whose definition still
@@ -316,8 +373,35 @@ function readSharedConfig(sharedHome: string, config: SharedConfigSpec): Record<
   return found;
 }
 
-function mergeSharedConfig(ctx: SharedContext, config: SharedConfigSpec, result: SharedCapabilitiesResult): void {
+function mergeSharedConfig(
+  ctx: SharedContext,
+  config: SharedConfigSpec,
+  tool: ToolDef,
+  includeInstalledDefaults: boolean,
+  result: SharedCapabilitiesResult,
+): void {
   const shared = readSharedConfig(ctx.sharedHome, config);
+  if (
+    includeInstalledDefaults &&
+    tool.id === "claude" &&
+    config.keys.includes("statusLine") &&
+    !shared.statusLine
+  ) {
+    // The machine's own shared settings declared no status line; a fresh
+    // profile still gets the installed binary when one resolves safely.
+    const binary = installedStatuslineCommand(result);
+    if (binary) {
+      shared.statusLine = {
+        type: "command",
+        // `binary` passed the metacharacter gate, so it needs no quoting: the
+        // command is plain words, and no quoting could make an unsafe path
+        // safe — which is exactly the defect that terminated the prior
+        // candidate (hasna/apps#272).
+        command: `${binary} render`,
+        padding: 0,
+      };
+    }
+  }
   if (Object.keys(shared).length === 0) return;
 
   const targetPath = join(ctx.profileDir, config.target);
@@ -489,7 +573,11 @@ export function resetCapabilityBaseline(tool: ToolDef): void {
  * it runs on every launch, so a filesystem that refuses a link must not stop the
  * tool from starting. `accounts doctor` reports what is actually on disk.
  */
-export function ensureSharedCapabilities(profileDir: string, tool: ToolDef): SharedCapabilitiesResult {
+export function ensureSharedCapabilities(
+  profileDir: string,
+  tool: ToolDef,
+  options: { freshProfile?: boolean } = {},
+): SharedCapabilitiesResult {
   const result: SharedCapabilitiesResult = {
     supported: toolSharesCapabilities(tool),
     linked: [],
@@ -504,6 +592,25 @@ export function ensureSharedCapabilities(profileDir: string, tool: ToolDef): Sha
   const ctx = resolveContext(profileDir, tool);
   if ("skip" in ctx) {
     result.skipped.push({ entry: "*", reason: ctx.skip });
+    // A missing shared home must not suppress the fresh-profile statusLine
+    // default: there is no corpus to supply it, and the launch/switch/health
+    // paths deliberately never sweep, so this is the only place it lands.
+    // readSharedConfig safely ignores the nonexistent shared sources and only
+    // the installed-binary default is produced; a machine with no installed
+    // binary still writes nothing (the declared-no-statusLine negative control).
+    if (
+      options.freshProfile === true &&
+      tool.id === "claude" &&
+      existsSync(profileDir) &&
+      !existsSync(sharedHomeFor(tool))
+    ) {
+      const statuslineContext: SharedContext = { sharedHome: sharedHomeFor(tool), profileDir: resolve(profileDir) };
+      for (const config of sharedConfigsFor(tool)) {
+        if (config.keys.includes("statusLine")) {
+          mergeSharedConfig(statuslineContext, config, tool, true, result);
+        }
+      }
+    }
     return result;
   }
 
@@ -514,7 +621,9 @@ export function ensureSharedCapabilities(profileDir: string, tool: ToolDef): Sha
       recordCorpusFloor(join(ctx.sharedHome, entry), corpusIsRecursive(tool, entry));
     }
   }
-  for (const config of sharedConfigsFor(tool)) mergeSharedConfig(ctx, config, result);
+  for (const config of sharedConfigsFor(tool)) {
+    mergeSharedConfig(ctx, config, tool, options.freshProfile === true, result);
+  }
   return result;
 }
 

@@ -238,7 +238,9 @@ class ApiStore implements AccountsStore {
     // Keep the hosted transport's machine-local provisioning contract aligned
     // with LocalStore: a profile must be born with the shared Claude settings
     // that the selected machine declares, not repaired by a later sweep.
-    ensureSharedCapabilities(dir, tool);
+    // `freshProfile` allows the same birth-only installed-statusline default
+    // the local path applies.
+    ensureSharedCapabilities(dir, tool, { freshProfile: true });
     if (tool.id === "claude") ensureSharedClaudeSessions(dir);
     const email = opts.email ?? detectEmail(dir, tool) ?? undefined;
     try {
