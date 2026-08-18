@@ -20,7 +20,7 @@ const BASE_REQUEST: NpmTokenRequestPayload = {
   permission: "read-write",
   expiry: "2026-08-08T00:00:00.000Z",
   revision: 3,
-  secretRef: "hasna/npm/tokens/open-access-publish",
+  secretRef: "hasna/npm/tokens/access-publish",
   bypass2fa: true,
 };
 
@@ -127,14 +127,14 @@ describe("npm token provider command preview", () => {
     expect(preview.target).toEqual({ scopes: ["@hasna"], packages: [] });
   });
 
-  it("keeps the open-secrets handoff to secretRef plus metadata only", () => {
+  it("keeps the secrets handoff to secretRef plus metadata only", () => {
     const preview = buildNpmTokenCreateCommandPreview(BASE_REQUEST, { now: NOW });
 
     expect(preview.secretsHandoff.system).toBe("@hasna/secrets");
     expect(preview.secretsHandoff.secretRef).toBe(BASE_REQUEST.secretRef);
     expect(preview.secretsHandoff.accessStores).toBe("secretRef-and-metadata-only");
     expect(preview.secretsHandoff.operatorCommand.args).toEqual(["set", BASE_REQUEST.secretRef]);
-    expect(preview.secretsHandoff.operatorCommand.shell).toBe("secrets set hasna/npm/tokens/open-access-publish");
+    expect(preview.secretsHandoff.operatorCommand.shell).toBe("secrets set hasna/npm/tokens/access-publish");
     expect(preview.secretsHandoff.metadata).toEqual(preview.metadata);
     expect(preview.secretsHandoff.tokenValueHandling).toBe("operator-or-secured-process");
     expect(preview.secretsHandoff).not.toHaveProperty("tokenValue");
