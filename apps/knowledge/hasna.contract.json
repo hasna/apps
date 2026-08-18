@@ -3,17 +3,77 @@
   "name": "knowledge",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.10.6",
+  "kitVersion": "0.11.1",
   "description": "Agent-friendly knowledge store. CLI + MCP + HTTP API (knowledge-serve) + generated SDK. Clients use local SQLite or the HTTP API selected by HASNA_KNOWLEDGE_API_URL; knowledge-serve reads PostgreSQL selected by HASNA_KNOWLEDGE_DATABASE_URL.",
   "bins": [
     "knowledge",
     "knowledge-mcp",
     "knowledge-serve"
   ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "http-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "knowledge-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "package-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/openapi.json"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "knowledge-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "knowledge",
+      "authMode": "local-only"
+    }
+  ],
   "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
     "envPrefix": "HASNA_KNOWLEDGE_",
-    "databaseUrlSecretRef": "hasna/oss/knowledge/database-url",
-    "sqlitePath": "~/.hasna/knowledge/knowledge.db"
+    "aliasEnvPrefix": "KNOWLEDGE_",
+    "sqlitePath": "~/.hasna/knowledge/knowledge.db",
+    "pgTestGate": {
+      "envVar": "HASNA_KNOWLEDGE_TEST_DATABASE_URL",
+      "command": "HASNA_KNOWLEDGE_DATABASE_URL=$HASNA_KNOWLEDGE_TEST_DATABASE_URL bun run test:pg"
+    }
   },
   "metadata": {
     "service": {
@@ -24,16 +84,19 @@
       "openapiPath": "/openapi.json",
       "apiVersion": "v1",
       "auth": "api-key",
-      "signingSecretSecretRef": "hasna/oss/knowledge/api-key-signing-secret",
       "migrationCommand": [
         "bun",
         "scripts/apply-postgres-migrations.mjs"
-      ],
-      "ownerDatabaseUrlSecretRef": "hasna/oss/knowledge/database-url-owner"
+      ]
     },
     "client": {
       "apiUrlEnv": "HASNA_KNOWLEDGE_API_URL",
       "apiKeyEnv": "HASNA_KNOWLEDGE_API_KEY"
+    },
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
     }
   }
 }
