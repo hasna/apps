@@ -124,8 +124,8 @@ describe("serve tier auth (fail-closed, deny-by-default)", () => {
     const app = buildApp({ bindHost: "0.0.0.0" });
     const res = await app.fetch(new Request("http://fleet.local/health"));
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { status: string; version: string; mode: string };
+    const body = (await res.json()) as { status: string; version: string; backend: string };
     expect(body.status).toBe("ok");
-    expect(body.mode).toBe("local");
+    expect(body.backend).toBe("sqlite");
   });
 });

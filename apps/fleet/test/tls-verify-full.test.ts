@@ -22,8 +22,12 @@ describe("cloud TLS config (verify-full)", () => {
     expect(() => resolveTlsConfig(VERIFY_FULL_DSN, { env: {} })).toThrow(/CA bundle/);
   });
 
-  it("require mode does NOT verify the cert (why the fleet mandates verify-full)", () => {
+  it("require mode still verifies the cert when a CA is supplied — verification never downgrades", () => {
+    // The vendored kit (0.11.1) fails closed: sslmode=require no longer
+    // disables verification. That is why the fleet mandates verify-full — only
+    // verify-full demands a pinned CA bundle, while require can no longer
+    // silently downgrade to plaintext.
     const cfg = resolveTlsConfig(REQUIRE_DSN, { ca: FAKE_CA });
-    expect(cfg).toEqual({ rejectUnauthorized: false, ca: FAKE_CA });
+    expect(cfg).toEqual({ rejectUnauthorized: true, ca: FAKE_CA });
   });
 });

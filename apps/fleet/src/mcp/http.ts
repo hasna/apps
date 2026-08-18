@@ -43,13 +43,13 @@ function isLoopback(host: string): boolean {
 
 /**
  * Whether per-caller bearer auth is required on /mcp (§5.1a). Auth may be turned
- * off ONLY when bound to loopback in local mode; any non-loopback bind or cloud
- * mode forces auth on (fail-closed).
+ * off ONLY when bound to loopback on the sqlite backend; any non-loopback bind
+ * or the postgresql backend forces auth on (fail-closed).
  */
 export function mcpAuthRequired(bindHost: string): boolean {
   const authOff = (process.env["HASNA_FLEET_MCP_AUTH"] || process.env["FLEET_MCP_AUTH"])?.toLowerCase() === "off";
-  const local = health().mode === "local";
-  if (authOff && isLoopback(bindHost) && local) return false;
+  const sqliteBackend = health().backend === "sqlite";
+  if (authOff && isLoopback(bindHost) && sqliteBackend) return false;
   return true;
 }
 

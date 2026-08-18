@@ -1,29 +1,29 @@
-import { resolveStorageMode, type StorageMode } from "../config.js";
+import { resolveServerBackend, type ServerDataBackend } from "../config.js";
 import { APP_VERSION } from "../version.js";
 
 /**
- * Health payload in the Hasna Service Contract v1 shape: { status, version, mode }.
+ * Health payload in the Hasna Service Contract v1 shape: { status, version, backend }.
  * GET /health and GET /version both return exactly this (health_shape conformance).
  */
 export interface Health {
   status: "ok" | "degraded" | "unavailable";
   version: string;
-  mode: StorageMode;
+  backend: ServerDataBackend;
 }
 
 export function health(): Health {
   return {
     status: "ok",
     version: APP_VERSION,
-    mode: safeMode(),
+    backend: safeBackend(),
   };
 }
 
-function safeMode(): StorageMode {
+function safeBackend(): ServerDataBackend {
   try {
-    return resolveStorageMode();
+    return resolveServerBackend();
   } catch {
-    // A misconfig (DSN present + local) throws; report cloud so /health still shapes.
-    return "cloud";
+    // A misconfig throws; report postgresql so /health still shapes.
+    return "postgresql";
   }
 }
