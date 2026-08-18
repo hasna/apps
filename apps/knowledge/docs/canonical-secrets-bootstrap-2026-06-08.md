@@ -26,7 +26,7 @@ Legacy master credentials copied for migration are suffixed with
 `legacy-master`. They are deprecation inputs for migration jobs, not the clean
 runtime secret names new app code should read.
 
-## Open Files
+## Hasna Files
 
 Created or verified in AWS Secrets Manager and the local vault:
 
@@ -49,7 +49,7 @@ Meaning:
 The `aws` and `s3` entries are metadata-only. They do not contain access keys or
 tokens.
 
-## Open Knowledge
+## Hasna Knowledge
 
 Created or verified in AWS Secrets Manager and the local vault:
 
