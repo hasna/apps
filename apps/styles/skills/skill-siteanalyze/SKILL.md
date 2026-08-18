@@ -1,6 +1,6 @@
 ---
 name: siteanalyze
-description: Analyze a website's design system — detects shadcn, Tailwind, extracts colors/typography/components. Outputs open-styles compatible profiles.
+description: Analyze a website's design system — detects shadcn, Tailwind, extracts colors/typography/components. Outputs styles compatible profiles.
 ---
 
 # Site Analyze Skill
@@ -16,7 +16,7 @@ skill-siteanalyze analyze --url https://example.com
 # Quick color + typography only (no AI)
 skill-siteanalyze analyze --url https://example.com --quick
 
-# Save as open-styles profile
+# Save as styles profile
 skill-siteanalyze analyze --url https://example.com --output ./profile.json --format profile
 
 # Take screenshot too
@@ -29,7 +29,7 @@ skill-siteanalyze analyze --url https://example.com --screenshot ./screenshot.pn
 - **Colors**: CSS custom properties, computed background/text/border colors, palette
 - **Typography**: font families, sizes, weights, line heights
 - **Components**: detected shadcn component names from CSS classes/data attributes
-- **Style category**: matches against open-styles design profiles
+- **Style category**: matches against styles design profiles
 
 ## Environment Variables
 
@@ -37,4 +37,4 @@ skill-siteanalyze analyze --url https://example.com --screenshot ./screenshot.pn
 
 ## Output
 
-JSON with full analysis + open-styles compatible profile.
+JSON with full analysis + styles compatible profile.

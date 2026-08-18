@@ -583,7 +583,7 @@ const server = Bun.serve({
 });
 
 const url = `http://${hostname === "0.0.0.0" ? "localhost" : hostname}:${port}`;
-console.log(`\n  open-styles server running at ${url}\n`);
+console.log(`\n  styles server running at ${url}\n`);
 
 if (!noOpen) {
   Bun.spawn(["open", url], { stdio: ["ignore", "ignore", "ignore"] });

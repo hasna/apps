@@ -1,4 +1,4 @@
-// Model config for open-styles.
+// Model config for styles.
 // Stores the active fine-tuned model ID in ~/.hasna/styles/config.json.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
