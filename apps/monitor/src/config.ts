@@ -176,6 +176,9 @@ const ConversationsIntegrationZSchema = z.object({
 const MementosIntegrationZSchema = z.object({
   enabled: z.boolean(),
   base_url: z.string().url().optional(),
+  bucket: z.string().min(1).optional(),
+  keyTemplate: z.string().min(1).optional(),
+  required: z.boolean().optional(),
 });
 
 const EmailsIntegrationZSchema = z.object({

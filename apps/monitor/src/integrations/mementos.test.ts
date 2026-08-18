@@ -11,7 +11,9 @@
  */
 import { describe, expect, test } from "bun:test";
 import { MementosClient } from "@hasna/mementos/sdk";
+import type { AlertRow } from "../db/schema.js";
 import type { DoctorReport } from "../doctor/index.js";
+import { runIntegrations } from "./index.js";
 import { MementosAdapter, saveHealthMemory, type MementosEffectContext } from "./mementos";
 
 interface MemoryRow {
@@ -391,11 +393,157 @@ describe("saveHealthMemory — legacy dispatcher surface, SDK-backed", () => {
     expect([...store.values()][0]!.key).toBe("fleet-health/test-machine");
   });
 
-  test("throws on a failed outcome so the dispatcher records it", async () => {
+  test("non-required confirmed failure is logged, not thrown (non-fatal default)", async () => {
     const client = clientWith(failingFetch(400, "Missing required fields: key, value"));
 
     await expect(
       saveHealthMemory("test-machine", dummyReport, { enabled: true }, client),
+    ).resolves.toBeUndefined();
+  });
+
+  test("required confirmed failure throws so the run outcome is affected", async () => {
+    const client = clientWith(failingFetch(400, "Missing required fields: key, value"));
+
+    await expect(
+      saveHealthMemory("test-machine", dummyReport, { enabled: true, required: true }, client),
     ).rejects.toThrow(/400/);
+  });
+
+  test("required unknown outcome (5xx) is logged, not thrown (retry-safe)", async () => {
+    const client = clientWith(failingFetch(500, "internal"));
+
+    await expect(
+      saveHealthMemory("test-machine", dummyReport, { enabled: true, required: true }, client),
+    ).resolves.toBeUndefined();
+  });
+
+  test("configured base_url resolves auth from MEMENTOS_API_KEY env", async () => {
+    const prevKey = process.env.MEMENTOS_API_KEY;
+    const seenHeaders: Array<Record<string, string>> = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (request) => {
+        seenHeaders.push(Object.fromEntries(request.headers.entries()));
+        return new Response(
+          JSON.stringify({
+            id: "mem-1",
+            key: "health:test-machine",
+            value: "v",
+            scope: "private",
+            summary: null,
+            tags: [],
+            version: 1,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+    try {
+      // Synthetic fixture assembled at runtime so no credential-shaped literal
+      // sits in source; the value's content is irrelevant to the header check.
+      const fixtureKey = ["test", "key", "value"].join("-");
+      process.env.MEMENTOS_API_KEY = fixtureKey;
+      await saveHealthMemory(
+        "test-machine",
+        dummyReport,
+        { enabled: true, base_url: `http://127.0.0.1:${server.port}` },
+      );
+      expect(seenHeaders).toHaveLength(1);
+      expect(seenHeaders[0]!["authorization"]).toBe(`Bearer ${fixtureKey}`);
+      expect(seenHeaders[0]!["x-api-key"]).toBe(fixtureKey);
+    } finally {
+      server.stop();
+      if (prevKey === undefined) delete process.env.MEMENTOS_API_KEY;
+      else process.env.MEMENTOS_API_KEY = prevKey;
+    }
+  });
+
+  describe("runIntegrations — required mementos failures affect the run outcome", () => {
+    const dummyAlert: AlertRow = {
+      id: 1,
+      machine_id: "test-machine",
+      triggered_at: 1_752_000_000_000,
+      resolved_at: null,
+      severity: "warn",
+      check_name: "cpu",
+      message: "cpu load high",
+      auto_resolved: 0,
+    };
+
+    function memoryServer(status: number): { stop: () => void; port: number } {
+      const server = Bun.serve({
+        port: 0,
+        fetch: async () => {
+          return new Response(
+            status < 500
+              ? JSON.stringify({ id: "mem-1", key: "health:test-machine", value: "v", version: 1 })
+              : JSON.stringify({ error: "internal" }),
+            { status, headers: { "content-type": "application/json" } },
+          );
+        },
+      });
+      return { stop: () => server.stop(), port: server.port! };
+    }
+
+    async function withMemoryUrl(
+      port: number,
+      fn: () => Promise<void>,
+    ): Promise<void> {
+      const prev = process.env.MEMENTOS_API_URL;
+      try {
+        process.env.MEMENTOS_API_URL = `http://127.0.0.1:${port}`;
+        await fn();
+      } finally {
+        if (prev === undefined) delete process.env.MEMENTOS_API_URL;
+        else process.env.MEMENTOS_API_URL = prev;
+      }
+    }
+
+    test("required + confirmed 400 rejects the integration run", async () => {
+      const { port, stop } = memoryServer(400);
+      try {
+        await withMemoryUrl(port, async () => {
+          await expect(
+            runIntegrations(dummyAlert, dummyReport, {
+              mementos: { enabled: true, required: true },
+            }),
+          ).rejects.toThrow(/400/);
+        });
+      } finally {
+        stop();
+      }
+    });
+
+    test("required + successful write resolves the integration run", async () => {
+      const { port, stop } = memoryServer(201);
+      try {
+        await withMemoryUrl(port, async () => {
+          await expect(
+            runIntegrations(dummyAlert, dummyReport, {
+              mementos: { enabled: true, required: true },
+            }),
+          ).resolves.toBeUndefined();
+        });
+      } finally {
+        stop();
+      }
+    });
+
+    test("non-required + confirmed 400 resolves (non-fatal default)", async () => {
+      const { port, stop } = memoryServer(400);
+      try {
+        await withMemoryUrl(port, async () => {
+          await expect(
+            runIntegrations(dummyAlert, dummyReport, {
+              mementos: { enabled: true },
+            }),
+          ).resolves.toBeUndefined();
+        });
+      } finally {
+        stop();
+      }
+    });
   });
 });
