@@ -1,14 +1,14 @@
-import { resolveStorageMode } from "../config.js";
+import { resolveDataBackend } from "../config.js";
 import { openStore } from "../db/database.js";
 import { APP_VERSION } from "../version.js";
 
-// System endpoints in the contract-mandated { status, version, mode } shape.
+// System endpoints in the contract-mandated { status, version, backend } shape.
 
-export function healthPayload(): { status: "ok"; version: string; mode: "local" | "cloud" } {
-  return { status: "ok", version: APP_VERSION, mode: resolveStorageMode() };
+export function healthPayload(): { status: "ok"; version: string; backend: "sqlite" | "postgresql" } {
+  return { status: "ok", version: APP_VERSION, backend: resolveDataBackend() };
 }
 
-export function versionPayload(): { status: "ok"; version: string; mode: "local" | "cloud" } {
+export function versionPayload(): { status: "ok"; version: string; backend: "sqlite" | "postgresql" } {
   return healthPayload();
 }
 

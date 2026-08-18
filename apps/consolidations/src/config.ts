@@ -1,26 +1,20 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveServerDataBackend, type ServerDataBackend } from "./generated/storage-kit/backend.js";
 
 /**
  * Canonical Hasna Service Contract v1 storage config for consolidations.
  *
- * Runtime storage modes are `local | cloud` ONLY (Amendment A1, PURE REMOTE):
- *   - local: SQLite at ~/.hasna/consolidations/consolidations.db is authoritative.
- *   - cloud: reads AND writes go directly to the app-owned cloud Postgres.
- *
- * The legacy words `remote`, `hybrid`, and `self_hosted` are accepted only as
- * deprecated aliases that normalize to `cloud`. Mode is chosen from the mode env
- * var only; the DSN value is never read to pick a mode (presence only).
+ * A server has exactly one technical switch: `sqlite | postgresql`. SQLite at
+ * ~/.hasna/consolidations/consolidations.db is authoritative by default; a
+ * configured HASNA_CONSOLIDATIONS_DATABASE_URL (or *_DATABASE_URL_FILE mount)
+ * selects PostgreSQL. Legacy storage-mode variables are rejected by the
+ * vendored kit with migration guidance and are never interpreted.
  */
 export const APP_NAME = "consolidations";
 export const ENV_TOKEN = "CONSOLIDATIONS";
 
-export type StorageMode = "local" | "cloud";
-
-const DEPRECATED_CLOUD_ALIASES = new Set(["remote", "hybrid", "self_hosted"]);
-
-const MODE_KEYS = [`HASNA_${ENV_TOKEN}_STORAGE_MODE`, `${ENV_TOKEN}_STORAGE_MODE`] as const;
 const DB_URL_KEYS = [`HASNA_${ENV_TOKEN}_DATABASE_URL`, `${ENV_TOKEN}_DATABASE_URL`] as const;
 const DB_URL_FILE_KEYS = [`HASNA_${ENV_TOKEN}_DATABASE_URL_FILE`, `${ENV_TOKEN}_DATABASE_URL_FILE`] as const;
 const DB_PATH_KEYS = [`HASNA_${ENV_TOKEN}_DB_PATH`, `${ENV_TOKEN}_DB_PATH`] as const;
@@ -35,43 +29,16 @@ function firstEnv(env: Env, keys: readonly string[]): string | undefined {
   return undefined;
 }
 
-/** Resolve the storage mode from the environment; defaults to `local`. */
-export function resolveStorageMode(env: Env = process.env): StorageMode {
-  const raw = firstEnv(env, MODE_KEYS);
-  if (!raw) {
-    // Fail-closed misconfig guard: a DSN present while mode resolves to local is
-    // almost certainly a mis-deploy that would silently write to SQLite while a
-    // cloud DB is configured. Treat it as a hard startup error.
-    if (databaseUrlPresent(env)) {
-      throw new Error(
-        `A ${ENV_TOKEN} DATABASE_URL is present but storage mode is 'local'. This is likely a mis-deploy. ` +
-          `Set ${MODE_KEYS[0]}=cloud, or unset the DATABASE_URL for local mode.`,
-      );
-    }
-    return "local";
-  }
-  const normalized = raw.toLowerCase().replace(/-/g, "_");
-  if (normalized === "local") {
-    if (databaseUrlPresent(env)) {
-      throw new Error(
-        `A ${ENV_TOKEN} DATABASE_URL is present but storage mode is 'local'. This is likely a mis-deploy. ` +
-          `Set ${MODE_KEYS[0]}=cloud, or unset the DATABASE_URL for local mode.`,
-      );
-    }
-    return "local";
-  }
-  if (normalized === "cloud" || DEPRECATED_CLOUD_ALIASES.has(normalized)) {
-    if (DEPRECATED_CLOUD_ALIASES.has(normalized)) {
-      console.warn(`[consolidations] storage mode '${raw}' is a deprecated alias; treating as 'cloud'.`);
-    }
-    if (!databaseUrlPresent(env)) {
-      console.warn(
-        `[consolidations] cloud mode needs ${DB_URL_KEYS[0]} (or *_FILE); PURE REMOTE reads/writes go to cloud Postgres.`,
-      );
-    }
-    return "cloud";
-  }
-  throw new Error(`Unknown storage mode: ${raw}. Use local or cloud.`);
+/**
+ * Resolve the active server data backend from the environment. A DATABASE_URL
+ * (or *_FILE mount) selects `postgresql`; otherwise SQLite is authoritative.
+ * Throws when a legacy storage-mode variable is set (the kit refuses them).
+ */
+export function resolveDataBackend(env: Env = process.env): ServerDataBackend {
+  const resolution = resolveServerDataBackend(APP_NAME, env);
+  if (resolution.backend === "postgresql") return "postgresql";
+  // *_FILE mount variant: presence selects PostgreSQL just like the env var.
+  return firstEnv(env, DB_URL_FILE_KEYS) ? "postgresql" : "sqlite";
 }
 
 /** Whether a cloud database URL is present (presence only — the value is never read here). */
@@ -80,10 +47,9 @@ export function databaseUrlPresent(env: Env = process.env): boolean {
 }
 
 /**
- * Resolve the cloud DSN value for connecting. Precedence: a `0400` file mount
- * (`*_DATABASE_URL_FILE`), then Secrets Manager (not wired in local/dev), then
- * the raw env var (dev/local only). Returns null when none is present. The
- * caller MUST never log the returned value.
+ * Resolve the PostgreSQL DSN value for connecting. Precedence: a `0400` file
+ * mount (`*_DATABASE_URL_FILE`), then the raw env var (dev/local only). Returns
+ * null when none is present. The caller MUST never log the returned value.
  */
 export function resolveDatabaseUrl(env: Env = process.env): string | null {
   const filePath = firstEnv(env, DB_URL_FILE_KEYS);
@@ -97,8 +63,6 @@ export function resolveDatabaseUrl(env: Env = process.env): string | null {
       );
     }
   }
-  // Secrets Manager fetch (hasna/oss/consolidations/database-url) would go here
-  // in cloud runtimes granted access; intentionally not wired for local/dev.
   return firstEnv(env, DB_URL_KEYS) ?? null;
 }
 

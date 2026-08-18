@@ -1,10 +1,10 @@
-import { ENV_TOKEN, resolveStorageMode } from "../config.js";
+import { ENV_TOKEN, resolveDataBackend } from "../config.js";
 import { SYSTEM_PRINCIPAL } from "../services/execute.js";
 import { UnauthorizedError } from "../types/index.js";
 import { authenticateRequest, isApiAuthConfigured, type ApiPrincipal } from "./auth.js";
 
 // Serve-tier request context: bind config, deny-by-default CORS, rate limiting,
-// and principal resolution. Auth is decoupled from storage mode — required
+// and principal resolution. Auth is decoupled from the data backend — required
 // whenever the server binds a non-loopback interface OR credentials are
 // configured; unauthenticated /v1 is permitted only on loopback + local.
 
@@ -36,9 +36,9 @@ export function corsOrigins(): string[] {
     .filter(Boolean);
 }
 
-/** Whether /v1 requires authentication for this bind + mode. */
+/** Whether /v1 requires authentication for this bind + backend. */
 export function authApplies(): boolean {
-  const loopbackLocal = isLoopbackBind() && resolveStorageMode() === "local";
+  const loopbackLocal = isLoopbackBind() && resolveDataBackend() === "sqlite";
   return !loopbackLocal || isApiAuthConfigured();
 }
 

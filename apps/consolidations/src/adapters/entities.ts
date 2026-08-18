@@ -1,8 +1,8 @@
 import type { Entity } from "../types/index.js";
 
 // Read-adapter for the @hasna/entities system-of-record (§1a integrator v0).
-// v0 is backed by fixtures; v1 (HASNA_CONSOLIDATIONS_LIVE_UPSTREAM=1) will call
-// the entities MCP (entity_get), authorized by the caller's scopes.
+// Backed by fixtures only in this build: the live @hasna/entities upstream is
+// NOT implemented yet. Nothing in this package claims otherwise.
 
 export interface EntitySource {
   resolve(entityId: string): Promise<Entity | null>;
@@ -50,12 +50,7 @@ export class FixtureEntitySource implements EntitySource {
   }
 }
 
-/** Whether live upstream integration is enabled (v1). */
-export function liveUpstreamEnabled(): boolean {
-  return process.env["HASNA_CONSOLIDATIONS_LIVE_UPSTREAM"] === "1";
-}
-
-/** The active entity source (fixture in v0). */
+/** The active entity source (fixtures only in this build). */
 export function entitySource(): EntitySource {
   return new FixtureEntitySource();
 }

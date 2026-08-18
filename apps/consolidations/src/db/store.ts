@@ -43,7 +43,7 @@ export interface ListFilter {
 }
 
 export interface Store {
-  readonly mode: "local" | "cloud";
+  readonly backend: "sqlite" | "postgresql";
   insert(table: DataTable, row: InsertRow): Promise<Row>;
   get(table: DataTable, id: string): Promise<Row | null>;
   list(table: DataTable, filter?: ListFilter): Promise<Row[]>;

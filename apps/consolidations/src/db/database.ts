@@ -1,34 +1,33 @@
-import { resolveDbPath, resolveStorageMode, scrubDatabaseUrl, type StorageMode } from "../config.js";
+import { resolveDataBackend, resolveDbPath, scrubDatabaseUrl } from "../config.js";
 import { SqliteStore } from "./sqlite-store.js";
 import type { Store } from "./store.js";
 
 export interface OpenStoreOptions {
-  /** Force a specific SQLite path (tests use ":memory:"). Implies local mode. */
+  /** Force a specific SQLite path (tests use ":memory:"). */
   path?: string;
 }
 
 /**
- * Open the app store for the active runtime mode.
- *   - local: authoritative SQLite (bun:sqlite).
- *   - cloud: PURE-REMOTE Postgres via the vendored kit (genuinely connects +
+ * Open the app store for the active server data backend.
+ *   - sqlite: authoritative SQLite (bun:sqlite) at the canonical path.
+ *   - postgresql: PostgreSQL via the vendored kit (genuinely connects +
  *     migrates; fail-closed on connect error — never falls back to memory).
  *
- * After a successful cloud connect the DSN is scrubbed from process.env so child
- * processes / introspection cannot read it.
+ * After a successful PostgreSQL connect the DSN is scrubbed from process.env so
+ * child processes / introspection cannot read it.
  */
 export async function openStore(options: OpenStoreOptions = {}): Promise<Store> {
   if (options.path !== undefined) {
     return new SqliteStore(options.path);
   }
-  const mode: StorageMode = resolveStorageMode();
-  if (mode === "local") {
+  if (resolveDataBackend() === "sqlite") {
     return new SqliteStore(resolveDbPath());
   }
-  // cloud — genuinely wired, fail-closed.
+  // postgresql — genuinely wired, fail-closed.
   const { PostgresStore } = await import("./postgres-store.js");
   const store = await PostgresStore.connect();
   scrubDatabaseUrl();
   return store;
 }
 
-export { resolveStorageMode };
+export { resolveDataBackend };

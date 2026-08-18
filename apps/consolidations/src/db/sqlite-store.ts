@@ -33,7 +33,7 @@ function toRow(raw: RawRow): Row {
 
 /** Local, authoritative SQLite-backed store. */
 export class SqliteStore implements Store {
-  readonly mode = "local" as const;
+  readonly backend = "sqlite" as const;
   private db: Database;
 
   constructor(path: string) {
