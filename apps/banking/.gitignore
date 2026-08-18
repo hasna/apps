@@ -1,9 +1,0 @@
-node_modules
-dist
-.DS_Store
-.env
-.env.*
-.secrets
-.connect
-*.log
-banking-artifact-scan.tgz

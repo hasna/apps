@@ -1,8 +1,0 @@
-{
-  "ledgerTable": "_pg_migrations",
-  "runner": "economy-serve migrate",
-  "note": "The runtime source of truth is the PG_MIGRATIONS array in src/db/pg-migrations.ts, applied index-wise by applyPgMigrations in src/db/pg-migrate.ts. This directory mirrors that schema for psql/review and ships the @hasna/contracts api_keys table.",
-  "migrations": [
-    { "id": "0001_core_schema", "file": "0001_core_schema.sql", "checksum": "sha256:8d676b454352c6ceb98ca854af992f4a6a92d77b003ed551a9d734c91fda88eb" }
-  ]
-}
