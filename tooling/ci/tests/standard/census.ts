@@ -365,7 +365,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "feedback",
-    cause: "manifest_valid: cli-with-store repos must declare storage; the feedback manifest deliberately declares none (only backend is append-only JSONL; storage.mode admits sqlite|postgres only, so no schema-valid and true block exists — see manifest metadata.conformance.notes and docs/contract-conformance.md). Imported by #164.",
+    cause: "surface_matrix: missing supported api surface (feedback-serve publishes no /ready, /version, or /openapi.json; api surface deferred truthfully); self_host_artifact: no Dockerfile/docker-compose; storage_capabilities: pgTestGate required; service_api_topology: no supported API surface. Manifest schema-valid at kit 0.11.1.",
     task: "todos 5e31148b-6552-44ea-93ba-d7c4e1676079 (contracts task — feedback)",
   },
   {

@@ -3,8 +3,8 @@
   "name": "feedback",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.8.5",
-  "description": "Feedback collection for Hasna-coded apps: a local store, a CLI, an MCP server, an HTTP API, and a TypeScript client.",
+  "kitVersion": "0.11.1",
+  "description": "Feedback collection for Hasna-coded apps: a CLI, an MCP server, an HTTP API, and a TypeScript client. The default store is SQLite at ~/.hasna/feedback/feedback.db; FEEDBACK_CLOUD_DATABASE_URL selects the PostgreSQL store. The legacy append-only JSONL file at ~/.hasna/feedback/feedback.jsonl remains supported for rollback.",
   "bins": [
     "feedback",
     "feedback-mcp",
@@ -31,9 +31,10 @@
     {
       "name": "feedback-sdk",
       "kind": "sdk",
-      "status": "supported",
+      "status": "deferred",
       "authMode": "api-key",
-      "exportSubpath": "."
+      "exportSubpath": ".",
+      "deferReason": "The TypeScript client ships and works against the live /v1 API, but the service contract requires a supported service SDK to be generated from the API's OpenAPI document, and feedback-serve publishes no /openapi.json (see the deferred HTTP API surface)."
     },
     {
       "name": "feedback-http-api",
@@ -47,9 +48,19 @@
         "path": "/health",
         "public": true
       },
-      "deferReason": "The HTTP API ships and serves GET /health plus the /v1 routes, but it does not meet the v1 service topology: there is no GET /ready, no GET /version, and no /openapi.json. GET /health also returns { ok, service, version } rather than the contract's { status, version, mode }, and the mode field cannot be filled truthfully until the store moves onto a contract storage engine. Declaring this surface supported today would assert routes that do not exist."
+      "deferReason": "The HTTP API ships and serves GET /health plus the /v1 routes, but it does not meet the v1 service topology: there is no GET /ready, no GET /version, and no /openapi.json. GET /health also returns { ok, service, version } rather than the contract's { status, version, backend }. Declaring this surface supported today would assert routes that do not exist."
     }
   ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "envPrefix": "HASNA_FEEDBACK_",
+    "aliasEnvPrefix": "FEEDBACK_",
+    "sqlitePath": "~/.hasna/feedback/feedback.db"
+  },
   "metadata": {
     "release": {
       "artifactScan": {
@@ -57,7 +68,7 @@
       }
     },
     "conformance": {
-      "notes": "storage is deliberately absent. The only implemented backend is an append-only JSONL file at ~/.hasna/feedback/feedback.jsonl; storage.mode admits sqlite | postgres only, and this package ships neither a SQLite database nor a PostgreSQL driver. No storage block can be written here that is both schema-valid and true, so this manifest is knowingly non-conformant and repo-conformance reports that as its first failure. The remedy is the storage migration recorded in docs/contract-conformance.md, not an edit to this file."
+      "notes": "The legacy JSONL store (HASNA_FEEDBACK_STORE=jsonl) is not expressible in the contract's storage engine enum; the declared engines are the SQLite default and the FEEDBACK_CLOUD_DATABASE_URL-selected PostgreSQL store."
     }
   }
 }

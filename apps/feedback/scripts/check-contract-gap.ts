@@ -28,26 +28,42 @@
 // add a violation and the set grows and this fails; fix one and the set shrinks
 // and this also fails, forcing the baseline down in the same commit as the fix.
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dir, "..");
 const baselinePath = join(import.meta.dir, "contract-gap-baseline.json");
-const scanner = join(repoRoot, "node_modules", ".bin", "contracts");
 const update = process.argv.includes("--update");
 
-// The probe block is the smallest value that satisfies StorageContractSchema for
-// a cli-with-store repo: `mode` admits only sqlite|postgres, and sqlite mode
-// additionally requires a `.db` sqlitePath. It exists to unblock the early
-// return and for no other purpose.
-const PROBE_STORAGE = { mode: "sqlite", sqlitePath: "~/.hasna/feedback/feedback.db" };
+// Resolve the `contracts` CLI across bun workspace layouts. When @hasna/contracts
+// resolves to a registry copy (version-conflicted, non-hoisted), the bin link
+// lives at <app>/node_modules/.bin/contracts; when it resolves to the workspace
+// member apps/contracts, the link is not created and the member's own built CLI
+// is reachable through <app>/node_modules/@hasna/contracts/dist/cli/index.js.
+const scannerCandidates = [
+  join(repoRoot, "node_modules", ".bin", "contracts"),
+  join(repoRoot, "node_modules", "@hasna", "contracts", "dist", "cli", "index.js"),
+];
+const scannerEntry = scannerCandidates.find((candidate) => existsSync(candidate)) ?? "contracts";
+const scanner = scannerEntry.endsWith(".js") ? ["bun", scannerEntry] : [scannerEntry];
+
+// The probe block is the smallest value that satisfies the contract schema for a
+// cli-with-store repo under the current contracts kit: backend sqlite plus the
+// sqlite/postgresql engine pair the schema requires. It exists to unblock the
+// early return and for no other purpose.
+const PROBE_STORAGE = {
+  backend: "sqlite",
+  engines: ["sqlite", "postgresql"],
+  envPrefix: "HASNA_FEEDBACK_",
+  sqlitePath: "~/.hasna/feedback/feedback.db",
+};
 
 interface ConformanceCheck { id: string; status: string; detail: string }
 interface ConformanceFailure { id: string; detail: string }
 
 function conformance(root: string): ConformanceCheck[] {
-  const result = Bun.spawnSync([scanner, "repo-conformance", root, "--json"], { stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync([...scanner, "repo-conformance", root, "--json"], { stdout: "pipe", stderr: "pipe" });
   const stdout = new TextDecoder().decode(result.stdout).trim();
   if (!stdout) {
     const stderr = new TextDecoder().decode(result.stderr).trim();
