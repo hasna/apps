@@ -223,9 +223,9 @@ export function isDaemonRunning(path: string = pidFilePath()): DaemonRunning {
 
 export interface DaemonStatus extends DaemonRunning {
   health: "alive" | "stale" | "dead";
-  scheduled: number;
+  admitted: number;
   paused: number;
-  fired: number;
+  succeeded: number;
   cancelled: number;
   failed: number;
   recentDispatches: number;
@@ -252,8 +252,8 @@ export interface DaemonQueueItem {
   target: string;
   machine?: string;
   nextRun: string;
-  lastDispatchId?: string;
-  lastFiredAt?: string;
+  lastAttemptId?: string;
+  lastAttemptAt?: string;
   lastFailureAt?: string;
   lastFailureReason?: string;
   failureCount?: number;
@@ -268,8 +268,8 @@ function queueItem(s: ScheduledDispatch): DaemonQueueItem {
     target: s.options.target,
     machine: s.options.machine,
     nextRun: s.nextRun,
-    lastDispatchId: s.lastDispatchId,
-    lastFiredAt: s.lastFiredAt,
+    lastAttemptId: s.lastAttemptId,
+    lastAttemptAt: s.lastAttemptAt,
     lastFailureAt: s.lastFailureAt,
     lastFailureReason: s.lastFailureReason,
     failureCount: s.failureCount,
@@ -307,9 +307,9 @@ export function daemonStatus(
   return {
     ...run,
     health,
-    scheduled: store.countSchedules({ status: "scheduled" }),
+    admitted: store.countSchedules({ status: "admitted" }),
     paused: store.countSchedules({ status: "paused" }),
-    fired: store.countSchedules({ status: "fired" }),
+    succeeded: store.countSchedules({ status: "succeeded" }),
     cancelled: store.countSchedules({ status: "cancelled" }),
     failed: store.countSchedules({ status: "failed" }),
     recentDispatches: store.listDispatches({ limit: 1000 }).length,

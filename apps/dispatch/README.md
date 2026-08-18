@@ -340,7 +340,7 @@ shell chaining, pipes, redirects, command substitution, and background operators
 for the single reviewed form `cd <path> && <allowlisted-command>`. It sends the command
 with tmux `load-buffer` / `paste-buffer -p`, then Enter; it never sends `C-c` unless
 `--force-interrupt` is passed. Exec records appear in `dispatch list` / `dispatch status`
-with command hash, target kind, filter result, and delivered/skipped status. Persisted
+with command hash, target kind, filter result, and succeeded/skipped status. Persisted
 records store redacted command placeholders plus the hash rather than the raw command.
 
 ### Discover targets
@@ -476,7 +476,7 @@ Failure behavior is deliberately conservative:
 
 - one-shot schedules retry failures every 60s and give up after the one-hour retry
   window, then become `failed`;
-- cron schedules and interval loops stay `scheduled` and retry at their next cadence;
+- cron schedules and interval loops stay `admitted` and retry at their next cadence;
 - each failed attempt records `lastFailureAt`, `lastFailureReason`, and `failureCount`;
 - `dispatch daemon status --json` reports `health`, `lastTickAt`, `nextDue`, and
   `recentFailures` without including prompt bodies.
@@ -493,7 +493,7 @@ const rec = await dispatch.send({
   prompt: "Refactor the auth module and add tests",
   machine: "spark01",        // optional; local when omitted
 });
-console.log(rec.status, rec.confirm?.reason); // "delivered", "working/interrupt indicator appeared after submit"
+console.log(rec.status, rec.confirm?.reason); // "succeeded", "working/interrupt indicator appeared after submit"
 
 // schedule + inspect
 const sched = dispatch.schedule({

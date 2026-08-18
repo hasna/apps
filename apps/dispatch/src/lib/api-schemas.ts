@@ -17,8 +17,8 @@ import { z } from "zod";
  * in step when an endpoint's payload changes.
  */
 
-const dispatchStatusSchema = z.enum(["pending", "sending", "delivered", "failed", "scheduled", "cancelled", "skipped"]);
-const scheduleStatusSchema = z.enum(["scheduled", "paused", "fired", "cancelled", "failed"]);
+const dispatchStatusSchema = z.enum(["admitted", "running", "succeeded", "failed", "cancelled", "skipped"]);
+const scheduleStatusSchema = z.enum(["admitted", "paused", "succeeded", "cancelled", "failed"]);
 const captureStatusSchema = z.enum(["captured", "failed"]);
 
 const agentRecoveryActionSchema = z.object({
@@ -54,7 +54,7 @@ export const bulkDispatchResultSchema = z.object({
   source: z.enum(["explicit", "sessions-query"]),
   requested: z.number(),
   planned: z.number(),
-  delivered: z.number(),
+  succeeded: z.number(),
   skipped: z.number(),
   failed: z.number(),
   dryRun: z.boolean(),
@@ -173,9 +173,9 @@ export const daemonStatusSchema = z.object({
   running: z.boolean(),
   stale: z.boolean(),
   health: z.enum(["alive", "stale", "dead"]),
-  scheduled: z.number(),
+  admitted: z.number(),
   paused: z.number(),
-  fired: z.number(),
+  succeeded: z.number(),
   cancelled: z.number(),
   failed: z.number(),
   recentDispatches: z.number(),

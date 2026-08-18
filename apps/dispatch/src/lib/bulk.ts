@@ -31,7 +31,7 @@ function emptyResult(options: BulkDispatchOptions, detail: string): BulkDispatch
     source: options.source ?? "explicit",
     requested: 0,
     planned: 0,
-    delivered: 0,
+    succeeded: 0,
     skipped: 0,
     failed: 0,
     dryRun: options.dryRun === true,
@@ -44,7 +44,7 @@ function emptyResult(options: BulkDispatchOptions, detail: string): BulkDispatch
 }
 
 function summarize(options: BulkDispatchOptions, records: DispatchRecord[], requested: number): BulkDispatchResult {
-  const delivered = records.filter((r) => r.status === "delivered").length;
+  const succeeded = records.filter((r) => r.status === "succeeded").length;
   const skipped = records.filter((r) => r.status === "skipped").length;
   const failed = records.filter((r) => r.status === "failed").length;
   const skippedIsFailure = options.dryRun !== true && skipped > 0;
@@ -53,7 +53,7 @@ function summarize(options: BulkDispatchOptions, records: DispatchRecord[], requ
     source: options.source ?? "explicit",
     requested,
     planned: records.length,
-    delivered,
+    succeeded,
     skipped,
     failed,
     dryRun: options.dryRun === true,

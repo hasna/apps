@@ -7,9 +7,9 @@ describe("DispatchClient", () => {
     const store = new Store(":memory:");
     const client = new DispatchClient({ store });
     // simulate a recorded dispatch directly through the store the client uses
-    const rec = store.createDispatch({ target: "s:w", prompt: "hi", status: "delivered" });
+    const rec = store.createDispatch({ target: "s:w", prompt: "hi", status: "succeeded" });
     expect(client.status(rec.id)!.prompt).toBe("hi");
-    expect(client.list({ status: "delivered" })).toHaveLength(1);
+    expect(client.list({ status: "succeeded" })).toHaveLength(1);
     client.close();
   });
 
@@ -30,9 +30,9 @@ describe("DispatchClient", () => {
       cron: "*/5 * * * *",
       from: new Date("2026-06-17T10:01:00Z"),
     });
-    expect(sched.status).toBe("scheduled");
+    expect(sched.status).toBe("admitted");
     expect(new Date(sched.nextRun).getTime()).toBeGreaterThan(Date.parse("2026-06-17T10:01:00Z"));
-    expect(client.listSchedules({ status: "scheduled" })).toHaveLength(1);
+    expect(client.listSchedules({ status: "admitted" })).toHaveLength(1);
 
     const relative = client.schedule({
       options: { target: "s:w", prompt: "relative" },

@@ -232,7 +232,7 @@ export class DispatchClient {
   cancelSchedule(id: string): boolean {
     if (!this.store) return false;
     const sched = this.store.getSchedule(id);
-    if (!sched || !["scheduled", "paused"].includes(sched.status)) return false;
+    if (!sched || !["admitted", "paused"].includes(sched.status)) return false;
     this.store.updateSchedule(id, { status: "cancelled" });
     return true;
   }
@@ -241,7 +241,7 @@ export class DispatchClient {
   pauseSchedule(id: string): boolean {
     if (!this.store) return false;
     const sched = this.store.getSchedule(id);
-    if (!sched || sched.status !== "scheduled") return false;
+    if (!sched || sched.status !== "admitted") return false;
     this.store.updateSchedule(id, { status: "paused" });
     return true;
   }
@@ -259,7 +259,7 @@ export class DispatchClient {
     } else if (new Date(nextRun).getTime() <= from.getTime()) {
       nextRun = from.toISOString();
     }
-    this.store.updateSchedule(id, { status: "scheduled", nextRun });
+    this.store.updateSchedule(id, { status: "admitted", nextRun });
     return true;
   }
 

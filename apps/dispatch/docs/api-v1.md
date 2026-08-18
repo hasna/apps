@@ -78,16 +78,15 @@ Only required fields are listed. Optional fields from `src/types.ts` may be
 included and are passed through.
 
 **`DispatchRecord`** — `id`, `target`, `machine`, `prompt` (strings), `status`
-(`pending` | `sending` | `delivered` | `failed` | `scheduled` | `cancelled` |
-`skipped`), `createdAt`, `updatedAt` (ISO 8601 strings).
+(`admitted` | `running` | `succeeded` | `failed` | `cancelled` | `skipped`), `createdAt`, `updatedAt` (ISO 8601 strings).
 
 **`ScheduledDispatch`** — `id`, `options` (object with `target` and `prompt`),
-`nextRun`, `status` (`scheduled` | `paused` | `fired` | `cancelled` | `failed`),
+`nextRun`, `status` (`admitted` | `paused` | `succeeded` | `cancelled` | `failed`),
 `createdAt`, `updatedAt`.
 
 **`BulkDispatchResult`** — `status` (`completed` | `failed`), `source`
 (`explicit` | `sessions-query`), the counters `requested`, `planned`,
-`delivered`, `skipped`, `failed`, `maxConcurrency`, `jitterMs`,
+`succeeded`, `skipped`, `failed`, `maxConcurrency`, `jitterMs`,
 `perMachineLimit`, the flag `dryRun`, and `records` (array of `DispatchRecord`).
 
 **`CaptureResult`** — `status` (`captured` | `failed`), `target`, `machine`,
@@ -116,7 +115,7 @@ truncatedChars, redacted, excerptChars }`).
 `excerpt`, `excerptChars`, `excerptTruncated`.
 
 **`DaemonStatus`** — `running`, `stale` (booleans), `health` (`alive` | `stale` |
-`dead`), the counts `scheduled`, `paused`, `fired`, `cancelled`, `failed`,
+`dead`), the counts `admitted`, `paused`, `succeeded`, `cancelled`, `failed`,
 `recentDispatches`, `heartbeatStaleMs`, `recentFailures` (array of items with
 `id`, `status`, `target`, `nextRun`), and the paths `logPath`, `pidPath`,
 `statePath`.

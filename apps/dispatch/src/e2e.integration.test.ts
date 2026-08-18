@@ -70,7 +70,7 @@ d("end-to-end: long multi-paragraph prompt fidelity + delivery", () => {
     const rec = JSON.parse(send.stdout);
 
     // Delivery confirmed.
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.confirm.delivered).toBe(true);
 
     // Give the recorder a moment to flush everything it received.

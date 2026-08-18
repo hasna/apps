@@ -64,7 +64,7 @@ describe("formatters", () => {
       target: "work:agent",
       machine: "local",
       prompt: "do the thing",
-      status: "delivered",
+      status: "succeeded",
       detail: "working detected",
       createdAt: "x",
       updatedAt: "x",
@@ -81,7 +81,7 @@ describe("formatters", () => {
       target: "work:agent",
       machine: "local",
       prompt,
-      status: "delivered",
+      status: "succeeded",
       createdAt: "x",
       updatedAt: "x",
     });
@@ -96,7 +96,7 @@ describe("formatters", () => {
       target: "work:agent",
       machine: "local",
       prompt,
-      status: "delivered",
+      status: "succeeded",
       createdAt: "x",
       updatedAt: "x",
     });
@@ -128,7 +128,7 @@ describe("formatters", () => {
       every: "5m",
       intervalMs: 5 * 60_000,
       nextRun: "2026-06-17T10:05:00.000Z",
-      status: "scheduled" as const,
+      status: "admitted" as const,
       lastFailureAt: "x",
       lastFailureReason: failureReason,
       createdAt: "x",
@@ -147,7 +147,7 @@ describe("formatters", () => {
           target: "work:agent",
           machine: "local",
           prompt: longPrompt,
-          status: "delivered",
+          status: "succeeded",
           createdAt: "x",
           updatedAt: "x",
         },
@@ -178,7 +178,7 @@ describe("formatters", () => {
         target: `s:${i}`,
         machine: "local",
         prompt: `prompt ${i}`,
-        status: "delivered" as const,
+        status: "succeeded" as const,
         createdAt: "x",
         updatedAt: "x",
       })),
@@ -198,7 +198,7 @@ describe("formatters", () => {
       options: { target: "work:agent", prompt: "later" },
       cron: "*/5 * * * *",
       nextRun: "2026-06-17T10:05:00.000Z",
-      status: "scheduled",
+      status: "admitted",
       createdAt: "x",
       updatedAt: "x",
     });
@@ -251,7 +251,7 @@ const codewithComposerCapture = `
 describe("CLI read/schedule commands (in-memory client)", () => {
   test("status: found and not-found", async () => {
     const { store, program, out, err } = runner();
-    const rec = store.createDispatch({ target: "s:w", prompt: "hi", status: "delivered" });
+    const rec = store.createDispatch({ target: "s:w", prompt: "hi", status: "succeeded" });
     await program.parseAsync(["status", rec.id], { from: "user" });
     expect(out.join("\n")).toContain(rec.id);
     expect(out.join("\n")).toContain("dispatch show");
@@ -265,7 +265,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
 
   test("show prints expanded details without requiring raw JSON", async () => {
     const { store, program, out } = runner();
-    const rec = store.createDispatch({ target: "s:w", prompt: "hi", status: "delivered" });
+    const rec = store.createDispatch({ target: "s:w", prompt: "hi", status: "succeeded" });
     await program.parseAsync(["show", rec.id], { from: "user" });
     expect(out.join("\n")).toContain("kind: prompt");
     expect(out.join("\n")).toContain("prompt: \"hi\"");
@@ -277,7 +277,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
       store.createDispatch({
         target: "s:w",
         prompt: `dispatch ${i} ${"x".repeat(120)} END_MARKER_${i}`,
-        status: "delivered",
+        status: "succeeded",
       });
     }
 
@@ -301,7 +301,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
 
   test("list --json returns recorded dispatches", async () => {
     const { store, program, out } = runner();
-    store.createDispatch({ target: "s:w", prompt: "a", status: "delivered" });
+    store.createDispatch({ target: "s:w", prompt: "a", status: "succeeded" });
     store.createDispatch({ target: "s:w", prompt: "b", status: "failed" });
     await program.parseAsync(["list", "--json"], { from: "user" });
     const parsed = JSON.parse(out.join("\n"));
@@ -315,7 +315,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
       { from: "user" },
     );
     const sched = JSON.parse(out.join("\n"));
-    expect(sched.status).toBe("scheduled");
+    expect(sched.status).toBe("admitted");
     out.length = 0;
 
     await program.parseAsync(["schedules", "--json"], { from: "user" });
@@ -333,7 +333,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
       { from: "user" },
     );
     const sched = JSON.parse(out.join("\n"));
-    expect(sched.status).toBe("scheduled");
+    expect(sched.status).toBe("admitted");
     expect(sched.name).toBe("reminder");
     expect(sched.at).toBeDefined();
     expect(sched.cron).toBeUndefined();
@@ -346,7 +346,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
       { from: "user" },
     );
     const loop = JSON.parse(out.join("\n"));
-    expect(loop).toMatchObject({ status: "scheduled", kind: "loop", name: "status-loop", every: "5m" });
+    expect(loop).toMatchObject({ status: "admitted", kind: "loop", name: "status-loop", every: "5m" });
     out.length = 0;
 
     await program.parseAsync(["loops", "--json"], { from: "user" });
@@ -720,7 +720,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
           target: opts.target,
           machine: "local",
           prompt: "/goal Fix native chat",
-          status: "delivered",
+          status: "succeeded",
           createdAt: "x",
           updatedAt: "x",
         };
@@ -749,7 +749,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
           target: opts.target,
           machine: "local",
           prompt: `/goal ${opts.prompt}`,
-          status: "delivered",
+          status: "succeeded",
           createdAt: "x",
           updatedAt: "x",
         };
@@ -1133,7 +1133,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
           target: opts.target,
           machine: "local",
           prompt: "<key:Tab>",
-          status: "delivered",
+          status: "succeeded",
           createdAt: "x",
           updatedAt: "x",
         };
@@ -1272,7 +1272,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
               target: "work:agent",
               machine: "local",
               prompt: "hello",
-              status: "delivered",
+              status: "succeeded",
               createdAt: "x",
               updatedAt: "x",
             },
@@ -1286,7 +1286,7 @@ describe("CLI read/schedule commands (in-memory client)", () => {
             options: body?.options,
             at: body?.at,
             nextRun: "2099-01-01T00:00:00.000Z",
-            status: "scheduled",
+            status: "admitted",
             createdAt: "x",
             updatedAt: "x",
           },
@@ -1323,9 +1323,9 @@ describe("CLI read/schedule commands (in-memory client)", () => {
           running: true,
           stale: false,
           health: "alive",
-          scheduled: 1,
+          admitted: 1,
           paused: 0,
-          fired: 0,
+          succeeded: 0,
           cancelled: 0,
           failed: 0,
           recentDispatches: 1,
@@ -1366,10 +1366,10 @@ describe("CLI read/schedule commands (in-memory client)", () => {
       "GET /v1/daemon/status",
     ]);
     expect(JSON.parse(out[0]!)).toHaveLength(1);
-    expect(JSON.parse(out[1]!)).toMatchObject({ id: "s1", status: "scheduled" });
+    expect(JSON.parse(out[1]!)).toMatchObject({ id: "s1", status: "admitted" });
     expect(JSON.parse(out[2]!)).toEqual([{ target: "work:1.0", window: "agent", active: true }]);
     expect(JSON.parse(out[3]!)).toMatchObject({ schemaVersion: "dispatch.fleet_summary.v1", status: "completed" });
-    expect(JSON.parse(out[4]!)).toMatchObject({ health: "alive", scheduled: 1 });
+    expect(JSON.parse(out[4]!)).toMatchObject({ health: "alive", admitted: 1 });
   });
 
   test("hosted API fails closed on an empty authority response instead of answering from the local box", async () => {

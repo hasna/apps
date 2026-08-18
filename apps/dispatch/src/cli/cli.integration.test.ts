@@ -119,7 +119,7 @@ d("dispatch CLI send (real tmux + fake agent)", () => {
     ]);
     expect(send.status).toBe(0);
     const rec = JSON.parse(send.stdout);
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.confirm.delivered).toBe(true);
     expect(rec.submitDelayMs).toBeGreaterThan(0);
 
@@ -147,7 +147,7 @@ d("dispatch CLI send (real tmux + fake agent)", () => {
     const send = runCli(["send", "--to", SESSION, "--file", f, "--json"]);
     expect(send.status).toBe(0);
     const rec = JSON.parse(send.stdout);
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.confirm.delivered).toBe(true);
   }, 20000);
 });

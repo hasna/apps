@@ -333,7 +333,7 @@ export async function performMosaicDispatch(options: DispatchOptions, deps: Mosa
   const { session, paneId } = parseMosaicTarget(options.target);
 
   let record: DispatchRecord = store
-    ? store.createDispatch({ backend: "mosaic", target: options.target, machine, prompt, status: "sending", dryRun })
+    ? store.createDispatch({ backend: "mosaic", target: options.target, machine, prompt, status: "running", dryRun })
     : {
         id: genId(),
         kind: "prompt",
@@ -341,7 +341,7 @@ export async function performMosaicDispatch(options: DispatchOptions, deps: Mosa
         target: options.target,
         machine,
         prompt,
-        status: "sending",
+        status: "running",
         dryRun,
         createdAt: nowIso(),
         updatedAt: nowIso(),
@@ -354,7 +354,7 @@ export async function performMosaicDispatch(options: DispatchOptions, deps: Mosa
         status: record.status,
         detail: record.detail,
         confirm: record.confirm,
-        deliveredAt: record.deliveredAt,
+        succeededAt: record.succeededAt,
         dryRun: record.dryRun,
         captureBefore: record.captureBefore,
         receipt: record.receipt,
@@ -406,10 +406,10 @@ export async function performMosaicDispatch(options: DispatchOptions, deps: Mosa
         ? `mosaic accepted prompt without submitting${receipt.id ? ` receipt=${receipt.id}` : ""}`
         : `mosaic accepted prompt.send${receipt.id ? ` receipt=${receipt.id}` : ""}`;
     return finish({
-      status: "delivered",
+      status: "succeeded",
       detail: reason,
       confirm: { delivered: true, reason, queued: queued || undefined },
-      deliveredAt: nowIso(),
+      succeededAt: nowIso(),
       receipt,
       captureBefore,
     });

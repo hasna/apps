@@ -20,7 +20,7 @@ describe("Store — dispatches", () => {
     const rec = s.createDispatch({ target: "s:w", prompt: "hi" });
     expect(rec.id).toHaveLength(12);
     expect(rec.machine).toBe("local");
-    expect(rec.status).toBe("pending");
+    expect(rec.status).toBe("admitted");
     expect(s.getDispatch(rec.id)).toEqual(rec);
     s.close();
   });
@@ -30,13 +30,13 @@ describe("Store — dispatches", () => {
     const rec = s.createDispatch({ target: "s:w", prompt: "hi", machine: "spark01" });
     const confirm = { delivered: true, reason: "working detected" };
     const updated = s.updateDispatch(rec.id, {
-      status: "delivered",
+      status: "succeeded",
       confirm,
-      deliveredAt: "2026-01-01T00:00:00.000Z",
+      succeededAt: "2026-01-01T00:00:00.000Z",
     });
-    expect(updated.status).toBe("delivered");
+    expect(updated.status).toBe("succeeded");
     expect(updated.confirm).toEqual(confirm);
-    expect(updated.deliveredAt).toBe("2026-01-01T00:00:00.000Z");
+    expect(updated.succeededAt).toBe("2026-01-01T00:00:00.000Z");
     expect(s.getDispatch(rec.id)!.confirm).toEqual(confirm);
     s.close();
   });
@@ -80,7 +80,7 @@ describe("Store — dispatches", () => {
       kind: "key",
       target: "work:agent",
       prompt: "<key:Tab>",
-      status: "delivered",
+      status: "succeeded",
       detail: "sent key Tab to agent composer",
     });
 
@@ -153,36 +153,36 @@ describe("Store — dispatches", () => {
   test("list filters by status and respects limit + order", () => {
     const s = mem();
     const a = s.createDispatch({ target: "s:w", prompt: "1" });
-    s.updateDispatch(a.id, { status: "delivered" });
+    s.updateDispatch(a.id, { status: "succeeded" });
     s.createDispatch({ target: "s:w", prompt: "2" });
     s.createDispatch({ target: "s:w", prompt: "3" });
-    expect(s.listDispatches({ status: "delivered" })).toHaveLength(1);
-    expect(s.listDispatches({ status: "pending" })).toHaveLength(2);
+    expect(s.listDispatches({ status: "succeeded" })).toHaveLength(1);
+    expect(s.listDispatches({ status: "admitted" })).toHaveLength(2);
     expect(s.listDispatches({ limit: 2 })).toHaveLength(2);
     s.close();
   });
 
-  test("list marks old sending dispatches as failed", () => {
+  test("list marks old running dispatches as failed", () => {
     const s = mem();
-    const rec = s.createDispatch({ target: "s:w", prompt: "stale", status: "sending" });
+    const rec = s.createDispatch({ target: "s:w", prompt: "stale", status: "running" });
     ageDispatch(s, rec.id, "2000-01-01T00:00:00.000Z");
-    expect(s.listDispatches({ status: "sending" })).toHaveLength(0);
+    expect(s.listDispatches({ status: "running" })).toHaveLength(0);
     expect(s.listDispatches({ status: "failed" })[0]).toMatchObject({
       id: rec.id,
       status: "failed",
-      detail: expect.stringContaining("left in sending state"),
+      detail: expect.stringContaining("left in running state"),
     });
     s.close();
   });
 
-  test("get marks old sending dispatches as failed", () => {
+  test("get marks old running dispatches as failed", () => {
     const s = mem();
-    const rec = s.createDispatch({ target: "s:w", prompt: "stale", status: "sending" });
+    const rec = s.createDispatch({ target: "s:w", prompt: "stale", status: "running" });
     ageDispatch(s, rec.id, "2000-01-01T00:00:00.000Z");
     expect(s.getDispatch(rec.id)).toMatchObject({
       id: rec.id,
       status: "failed",
-      detail: expect.stringContaining("left in sending state"),
+      detail: expect.stringContaining("left in running state"),
     });
     s.close();
   });
@@ -196,9 +196,9 @@ describe("Store — schedules", () => {
       at: "2099-01-01T00:00:00.000Z",
       nextRun: "2099-01-01T00:00:00.000Z",
     });
-    expect(sched.status).toBe("scheduled");
+    expect(sched.status).toBe("admitted");
     expect(s.getSchedule(sched.id)!.options.prompt).toBe("later");
-    expect(s.listSchedules({ status: "scheduled" })).toHaveLength(1);
+    expect(s.listSchedules({ status: "admitted" })).toHaveLength(1);
     expect(s.deleteSchedule(sched.id)).toBe(true);
     expect(s.getSchedule(sched.id)).toBeUndefined();
     s.close();
@@ -234,8 +234,8 @@ describe("Store — schedules", () => {
     for (let i = 0; i < 250; i += 1) {
       s.createSchedule({ options: { target: "s:w", prompt: `task ${i}` }, nextRun: "2099-01-01T00:00:00.000Z" });
     }
-    expect(s.listSchedules({ status: "scheduled" })).toHaveLength(200);
-    expect(s.countSchedules({ status: "scheduled" })).toBe(250);
+    expect(s.listSchedules({ status: "admitted" })).toHaveLength(200);
+    expect(s.countSchedules({ status: "admitted" })).toBe(250);
     expect(s.dueSchedules(Date.parse("2100-01-01T00:00:00.000Z"))).toHaveLength(250);
     s.close();
   });
@@ -250,17 +250,17 @@ describe("Store — schedules", () => {
     s.close();
   });
 
-  test("updateSchedule advances next_run and marks fired", () => {
+  test("updateSchedule advances next_run and marks succeeded", () => {
     const s = mem();
     const sched = s.createSchedule({ options: { target: "s:w", prompt: "x" }, nextRun: "2000-01-01T00:00:00.000Z" });
-    const fired = s.updateSchedule(sched.id, {
-      status: "fired",
-      lastDispatchId: "abc123",
-      lastFiredAt: "2026-06-17T00:00:00.000Z",
+    const succeeded = s.updateSchedule(sched.id, {
+      status: "succeeded",
+      lastAttemptId: "abc123",
+      lastAttemptAt: "2026-06-17T00:00:00.000Z",
     });
-    expect(fired.status).toBe("fired");
-    expect(fired.lastDispatchId).toBe("abc123");
-    expect(s.dueSchedules(Date.now())).toHaveLength(0); // no longer "scheduled"
+    expect(succeeded.status).toBe("succeeded");
+    expect(succeeded.lastAttemptId).toBe("abc123");
+    expect(s.dueSchedules(Date.now())).toHaveLength(0); // no longer "admitted"
     s.close();
   });
 

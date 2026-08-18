@@ -87,7 +87,7 @@ describe("Mosaic native CLI adapter", () => {
 
     expect(rec).toMatchObject({
       backend: "mosaic",
-      status: "delivered",
+      status: "succeeded",
       receipt: { id: "mosaic-123", status: "accepted" },
       confirm: { delivered: true },
     });
@@ -126,7 +126,7 @@ describe("Mosaic native CLI adapter", () => {
     );
 
     expect(r.lastArgv()).toContain("--queue");
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.confirm?.queued).toBe(true);
     expect(rec.detail).toMatch(/queued/);
   });
@@ -221,7 +221,7 @@ describe("Mosaic native CLI adapter", () => {
     );
 
     expect(r.lastArgv()).toContain("--no-submit");
-    expect(rec.status).toBe("delivered");
+    expect(rec.status).toBe("succeeded");
     expect(rec.detail).toMatch(/without submitting/);
   });
 

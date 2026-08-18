@@ -213,7 +213,7 @@ function summarizeDispatch(record: AgentRecoveryDispatchSummary): AgentRecoveryD
     status: record.status,
     detail: record.detail,
     targetState: record.targetState,
-    deliveredAt: record.deliveredAt,
+    succeededAt: record.succeededAt,
   };
 }
 
@@ -282,7 +282,7 @@ export async function performAgentRecovery(options: AgentRecoverOptions, deps: A
   return {
     ...base,
     dryRun: false,
-    status: record.status === "delivered" ? "applied" : "failed",
+    status: record.status === "succeeded" ? "applied" : "failed",
     dispatch: summarizeDispatch(record),
     detail: record.detail,
   };
