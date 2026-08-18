@@ -128,6 +128,44 @@ describe("Hasna Notes machine contract", () => {
     }
   });
 
+  test("normalizes legacy open-* actor source aliases to canonical values on read", () => {
+    const dir = setupTemp("machines-notes-legacy-source-");
+    try {
+      const openMachines = resolveNoteMachineContext({
+        originMachineId: "notes-node-00",
+        actor: {
+          actor_type: "human",
+          source: "open-machines",
+        },
+      });
+      expect(openMachines.actor.source).toBe("machines");
+      expect(openMachines.actor.display_name).toBe("machines");
+      expect(validateMachinesConsumerEnvelope("note_machine_context", openMachines)).toMatchObject({ ok: true, errors: [] });
+
+      const openNotes = resolveNoteMachineContext({
+        originMachineId: "notes-node-00",
+        actor: {
+          actor_type: "human",
+          source: "open-notes",
+        },
+      });
+      expect(openNotes.actor.source).toBe("notes");
+      expect(openNotes.actor.display_name).toBe("notes");
+      expect(validateMachinesConsumerEnvelope("note_machine_context", openNotes)).toMatchObject({ ok: true, errors: [] });
+
+      const canonical = resolveNoteMachineContext({
+        originMachineId: "notes-node-00",
+        actor: {
+          actor_type: "human",
+          source: "machines",
+        },
+      });
+      expect(canonical.actor.source).toBe("machines");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("expands paginated topology for explicit note machine ids", () => {
     const dir = setupTemp("machines-notes-context-pagination-");
     try {
