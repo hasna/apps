@@ -63,7 +63,7 @@ describe("execution safety workflow", () => {
   });
 
   test("a rejected approval reports denied, not approved, and queues no outbox", async () => {
-    const store = createSqliteDevStore();
+    const store = createSqliteDevStore({ path: ":memory:" });
     const envelope = paymentEnvelope();
     await submitExecutionRequest({ store, envelope, actor: requester });
 
