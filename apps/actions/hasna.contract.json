@@ -3,7 +3,7 @@
   "name": "actions",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.8.1",
+  "kitVersion": "0.11.1",
   "description": "Local-first action manifests, runs, and audit events exposed through CLI, MCP, and SDK surfaces.",
   "bins": [
     "actions",
@@ -12,43 +12,31 @@
   "hosting": [
     "user-hosted"
   ],
-  "deploymentModes": [
-    "local"
-  ],
   "serviceSurfaces": [
     {
       "name": "actions-cli",
       "kind": "cli",
       "status": "supported",
       "bin": "actions",
-      "authMode": "local-only",
-      "deploymentModes": [
-        "local"
-      ]
+      "authMode": "local-only"
     },
     {
       "name": "actions-mcp",
       "kind": "mcp",
       "status": "supported",
       "mcpBin": "actions-mcp",
-      "authMode": "local-only",
-      "deploymentModes": [
-        "local"
-      ]
+      "authMode": "local-only"
     },
     {
       "name": "actions-sdk",
       "kind": "sdk",
       "status": "supported",
       "authMode": "none",
-      "deploymentModes": [
-        "local"
-      ],
       "exportSubpath": "./sdk"
     }
   ],
   "storage": {
-    "mode": "local",
+    "backend": "sqlite",
     "engines": [
       "sqlite"
     ],
@@ -63,7 +51,7 @@
     "conformance": {
       "waivedStorageEngines": [
         {
-          "engine": "postgres",
+          "engine": "postgresql",
           "reason": "Local-only CLI and stdio MCP package with no service bin, cloud placement, or managed SaaS runtime."
         }
       ]
