@@ -44,6 +44,7 @@ import {
   type TuiMessage,
   type TuiThreadBody,
   type TuiThreadMessage,
+  type UnreadByAddressRow,
   mailboxLabel,
   renderMarkdown,
   SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED,
@@ -1830,6 +1831,34 @@ export class SelfHostedMailDataSource implements MailDataSource {
     // counted client-side, because /v1/messages/counts takes no recipient filter.
     if (!scope) return (await this.serverStats()).counts;
     return this.scopedCounts(scope);
+  }
+
+  async unreadByAddress(opts?: { limit?: number; offset?: number }): Promise<UnreadByAddressRow[]> {
+    // Server-side rollup over parsed recipients, mirroring the local SQLite
+    // query's predicate (count each inbound message once per `to` recipient,
+    // excluding sent/read/archived only). A client-side page walk could not
+    // express this without walking the whole mailbox.
+    const params = new URLSearchParams();
+    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+    if (opts?.offset !== undefined) params.set("offset", String(opts.offset));
+    const query = params.toString();
+    const { status, json } = await this.request("GET", `/messages/unread-by-address${query ? `?${query}` : ""}`);
+    if (status < 200 || status >= 300) {
+      throw new Error(`self-hosted emails: GET /messages/unread-by-address failed (HTTP ${status})`);
+    }
+    const body = (json as { rows?: unknown } | null)?.rows;
+    if (!Array.isArray(body)) {
+      throw new Error("self-hosted emails: GET /messages/unread-by-address returned no rows array");
+    }
+    const rows: UnreadByAddressRow[] = [];
+    for (const raw of body) {
+      const row = (raw ?? {}) as Record<string, unknown>;
+      const address = typeof row["address"] === "string" ? row["address"] : "";
+      if (!address) continue;
+      const unread = typeof row["unread"] === "number" ? row["unread"] : Number(row["unread"]);
+      rows.push({ address, unread: Number.isFinite(unread) ? unread : 0 });
+    }
+    return rows;
   }
 
   async listMailboxStatus(opts?: MailboxStatusOptions): Promise<MailboxStatusSummary> {

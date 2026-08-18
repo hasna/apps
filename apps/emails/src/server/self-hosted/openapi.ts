@@ -3538,6 +3538,41 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
         },
       },
     },
+    "/v1/messages/unread-by-address": {
+      get: {
+        operationId: "getUnreadCountByAddress",
+        summary: "Per-recipient unread inbox counts (the client's `inbox unread-count --by-address`); covers every parsed recipient address, not only registered ones",
+        parameters: [
+          { name: "limit", in: "query", required: false, schema: { type: "integer" }, description: "Maximum grouped addresses to return (server-clamped)" },
+          { name: "offset", in: "query", required: false, schema: { type: "integer" }, description: "Number of grouped addresses to skip" },
+        ],
+        responses: {
+          "200": {
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    rows: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          address: { type: "string" },
+                          unread: { type: "integer" },
+                        },
+                        required: ["address", "unread"],
+                      },
+                    },
+                  },
+                  required: ["rows"],
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     "/v1/messages/threads": {
       get: {
         operationId: "listThreads",

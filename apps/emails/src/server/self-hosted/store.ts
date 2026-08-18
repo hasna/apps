@@ -3990,6 +3990,40 @@ export class TenantScopedStore {
   }
 
   /**
+   * Per-recipient unread inbox counts — the server side of the native client's
+   * `inbox unread-count --by-address`. Mirrors the local SQLite rollup over
+   * `inbound_recipients` exactly: count each inbound message once per `to`
+   * recipient (cc is not tracked locally), excluding sent/read/archived only —
+   * spam/trash are NOT excluded, matching the local query's predicate. The
+   * rollup covers every parsed recipient address, not just registered addresses,
+   * which is what separates it from `listMailboxes()`.
+   */
+  async unreadByAddress(opts: { limit?: number; offset?: number } = {}): Promise<Array<{ address: string; unread: number }>> {
+    const rows = await this.client.many<Record<string, unknown>>(
+      `SELECT email AS address, count(*)::int AS unread
+         FROM message_recipients
+        WHERE tenant_id = $1
+          AND kind = 'to'
+          AND NOT is_out
+          AND NOT is_read
+          AND NOT is_arch
+          AND position('@' in email) > 1
+        GROUP BY email
+        ORDER BY unread DESC, email ASC
+        LIMIT $2 OFFSET $3`,
+      [this.tenantId, clampLimit(opts.limit), clampOffset(opts.offset)],
+    );
+    const number = (value: unknown): number => {
+      const parsed = typeof value === "number" ? value : Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    return rows.map((row) => ({
+      address: String(row["address"] ?? ""),
+      unread: number(row["unread"]),
+    }));
+  }
+
+  /**
    * Resolve a full message id OR a unique id PREFIX (the short id `inbox list`
    * prints) to a full row id, tenant-scoped. A full UUID is returned verbatim with
    * NO DB round-trip, so exact-id behavior is unchanged (a non-existent full id

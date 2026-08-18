@@ -9,6 +9,7 @@
 
 import { getEmailsMode, type EmailsMode } from "./mode.js";
 import { getDatabase, resolvePartialIdOrThrow } from "../db/database.js";
+import { sqlEmailAddress } from "../db/email-address-sql.js";
 import { SelfHostedMailDataSource, resolveSelfHostedMailDataSource } from "./self-hosted-mail-data-source.js";
 import {
   addInboundLabelSummary,
@@ -62,6 +63,7 @@ import type {
   TuiMessage,
   TuiThreadBody,
   TuiThreadMessage,
+  UnreadByAddressRow,
   ComposeInput,
 } from "./mail-types.js";
 import type {
@@ -221,6 +223,13 @@ export interface MailDataSource {
   // reads
   listMailbox(mailbox: Mailbox, opts?: MailboxListOptions): Promise<TuiMessage[]>;
   mailboxCounts(opts?: { source?: MailboxSource }): Promise<MailboxCounts>;
+  /**
+   * Per-recipient unread inbox counts (`inbox unread-count --by-address`).
+   * Same predicate on both backends: count each inbound message once per `to`
+   * recipient, excluding sent/read/archived only. Covers every parsed
+   * recipient address, not just registered ones.
+   */
+  unreadByAddress(opts?: { limit?: number; offset?: number }): Promise<UnreadByAddressRow[]>;
   listMailboxStatus(opts?: MailboxStatusOptions): Promise<MailboxStatusSummary>;
   listMailboxSources(opts?: ListMailboxSourcesOptions): Promise<MailboxSourceSummary[]>;
   listMailboxFilters(options?: { limit?: number; offset?: number }): Promise<MailboxFilter[]>;
@@ -289,6 +298,31 @@ function summaryToTuiMessage(summary: InboundEmailSummary): TuiMessage {
   };
 }
 
+function localUnreadByAddress(opts?: { limit?: number; offset?: number }): UnreadByAddressRow[] {
+  const db = getDatabase();
+  const limit = opts?.limit ?? 50;
+  const offset = opts?.offset ?? 0;
+  const recipientSql = sqlEmailAddress("r.address");
+  const rows = db.query(
+    `SELECT address, unread
+       FROM (
+         SELECT ${recipientSql} AS address, COUNT(*) AS unread
+           FROM inbound_emails e
+           JOIN inbound_recipients r ON r.inbound_email_id = e.id
+          WHERE e.is_sent = 0
+            AND e.is_read = 0
+            AND e.is_archived = 0
+          GROUP BY ${recipientSql}
+       )
+      WHERE instr(address, '@') > 1
+      ORDER BY unread DESC, address ASC
+      LIMIT ? OFFSET ?`,
+  ).all(limit, offset) as Array<{ address: string; unread: unknown }>;
+  return rows
+    .map((row) => ({ address: row.address, unread: Number(row.unread) || 0 }))
+    .filter((row) => row.unread > 0);
+}
+
 const LOCAL_BULK_MAX = 1000;
 type LocalFlagSetter = (id: string) => void;
 const LOCAL_BULK_FLAG_ACTIONS: Record<string, LocalFlagSetter> = {
@@ -314,6 +348,10 @@ export class SqliteMailDataSource implements MailDataSource {
 
   async mailboxCounts(opts?: { source?: MailboxSource }): Promise<MailboxCounts> {
     return localMailboxCounts(opts);
+  }
+
+  async unreadByAddress(opts?: { limit?: number; offset?: number }): Promise<UnreadByAddressRow[]> {
+    return localUnreadByAddress(opts);
   }
 
   async listMailboxStatus(opts?: MailboxStatusOptions): Promise<MailboxStatusSummary> {

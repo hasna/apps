@@ -552,15 +552,22 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--offset <n>", "Number of grouped addresses to skip", "0")
     .action(async (opts: { byAddress?: boolean; limit?: string; offset?: string }) => {
       try {
+        const ds = resolveMailDataSource();
         if (!opts.byAddress) {
-          const counts = await resolveMailDataSource().mailboxCounts();
+          const counts = await ds.mailboxCounts();
           output({ unread: counts.unread }, String(counts.unread));
           return;
         }
-        // --by-address is a per-recipient rollup with no /v1 endpoint; it is
-        // served by the self-hosted server. Fail cleanly.
-        handleError(new Error("`inbox unread-count --by-address` is not available in the self-hosted client; it runs on the self-hosted server. Use `emails inbox unread-count` for the total unread count."));
-        return;
+        // The per-address rollup is served by the self-hosted server
+        // (GET /v1/messages/unread-by-address); the client delegates, so the
+        // capability matches the local backend's semantics.
+        const limit = parsePositiveIntOption(opts.limit, 50);
+        const offset = parseNonNegativeIntOption(opts.offset);
+        const rows = await ds.unreadByAddress({ limit, offset });
+        const formatted = rows.length
+          ? rows.map((row) => `${row.address}\t${row.unread}`).join("\n")
+          : chalk.dim("No unread mail.");
+        output(rows, formatted);
       } catch (e) {
         handleError(e);
       }

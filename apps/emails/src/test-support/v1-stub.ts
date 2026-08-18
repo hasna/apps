@@ -1165,6 +1165,38 @@ const server = Bun.serve({
     if (resource === "messages" && sub === "counts" && req.method === "GET") {
       return json({ counts: messageCounts() });
     }
+    // Mirrors the server's GET /v1/messages/unread-by-address contract: count
+    // each inbound message once per to recipient, excluding sent/read/archived
+    // only (spam/trash NOT excluded — the same predicate the local SQLite rollup
+    // uses, which is what this endpoint ports).
+    if (resource === "messages" && sub === "unread-by-address" && req.method === "GET") {
+      const rawLimit = url.searchParams.get("limit");
+      const rawOffset = url.searchParams.get("offset");
+      const limit = rawLimit && /^\d+$/.test(rawLimit) ? Number(rawLimit) : 50;
+      const offset = rawOffset && /^\d+$/.test(rawOffset) ? Number(rawOffset) : 0;
+      const counts = new Map<string, number>();
+      for (const row of rowsFor("messages")) {
+        if (isOutbound(row)) continue;
+        if (row.is_read === true) continue;
+        if (hasLabel(row, "archived")) continue;
+        const tos = Array.isArray(row.to_addrs) ? row.to_addrs.map(String) : [];
+        for (const to of tos) {
+          const email = String(to).trim().toLowerCase();
+          // Local SQLite predicate: instr(address, '@') > 1 (1-based), i.e. a
+          // non-empty local part. indexOf is 0-based, so '@' must sit at >= 1.
+          if (email.indexOf("@") <= 0) continue;
+          counts.set(email, (counts.get(email) ?? 0) + 1);
+        }
+      }
+      const rows = [...counts.entries()]
+        .map(function (entry) { return { address: entry[0], unread: entry[1] }; })
+        .sort(function (a, b) {
+          if (b.unread !== a.unread) return b.unread - a.unread;
+          return a.address < b.address ? -1 : a.address > b.address ? 1 : 0;
+        })
+        .slice(offset, offset + limit);
+      return json({ rows });
+    }
     if (resource === "messages" && sub === "send" && req.method === "POST") {
       const body = await req.json().catch(function () { return {}; });
       const key = typeof body.idempotency_key === "string" ? body.idempotency_key : "";

@@ -608,6 +608,46 @@ describe("self-hosted Postgres integration", () => {
     await expect(store.updateMailboxFilter("support queue", { mailbox: "inbox" })).rejects.toThrow(/not found/);
   });
 
+  it.skipIf(!client)("unread-by-address rolls up unread counts per to-recipient (SQLite-local parity)", async () => {
+    await resetPublicSchema();
+    await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
+    const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
+
+    await store.createMessage({
+      direction: "inbound", from_addr: "sender@example.test", to_addrs: ["first@example.test", "second@example.test"], subject: "two recipients",
+    });
+    await store.createMessage({
+      direction: "inbound", from_addr: "sender@example.test", to_addrs: ["first@example.test"], subject: "one recipient",
+    });
+    // Read excludes.
+    await store.createMessage({
+      direction: "inbound", from_addr: "sender@example.test", to_addrs: ["first@example.test"], subject: "read", is_read: true,
+    });
+    // Archived excludes (local by-address counts NOT is_sent AND NOT is_read AND NOT is_archived).
+    await store.createMessage({
+      direction: "inbound", from_addr: "sender@example.test", to_addrs: ["archived@example.test"], subject: "archived", labels: ["archived"],
+    });
+    // Outbound excludes.
+    await store.createMessage({
+      direction: "outbound", from_addr: "first@example.test", to_addrs: ["third@example.test"], subject: "sent",
+    });
+    // cc does not count: the local inbound_recipients trigger tracks to_addresses
+    // only, so kind = 'to' is the parity contract.
+    await store.createMessage({
+      direction: "inbound", from_addr: "sender@example.test", to_addrs: ["first@example.test"], cc_addrs: ["cc@example.test"], subject: "cc",
+    });
+
+    const rows = await store.unreadByAddress();
+    expect(rows).toEqual([
+      { address: "first@example.test", unread: 2 },
+      { address: "second@example.test", unread: 1 },
+    ]);
+
+    // unread DESC, address ASC -> first(2), second(1); window [1,2) -> second.
+    const limited = await store.unreadByAddress({ limit: 1, offset: 1 });
+    expect(limited).toEqual([{ address: "second@example.test", unread: 1 }]);
+  });
+
   it.skipIf(!client)("0027 domain criteria match the SENDER domain and to/cc recipient domains (SQLite-local parity)", async () => {
     await resetPublicSchema();
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();

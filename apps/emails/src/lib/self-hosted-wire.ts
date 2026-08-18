@@ -46,6 +46,7 @@ const STATIC_MESSAGE_PATH_SEGMENTS = new Set([
   "send",
   "send-intents",
   "threads",
+  "unread-by-address",
 ]);
 
 function pathOnly(path: string): string {

@@ -1140,6 +1140,25 @@ export async function handleSelfHostedRequest(
       return json(200, await auth.store.messageCounts({ domains: queryDomains(url) }));
     }
 
+    // /v1/messages/unread-by-address — per-recipient unread inbox counts, the
+    // server side of the native client's `inbox unread-count --by-address`.
+    // Handled BEFORE the single-message matcher so "unread-by-address" is not
+    // read as an id. The rollup mirrors the local SQLite query's predicate
+    // (count each inbound message once per `to` recipient, excluding
+    // sent/read/archived only) and covers every parsed recipient address, not
+    // just registered addresses — the difference from /v1/mailboxes.
+    if (path === "/v1/messages/unread-by-address") {
+      if (method !== "GET") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, read);
+      if (!auth.ok) return auth.response;
+      return json(200, {
+        rows: await auth.store.unreadByAddress({
+          limit: queryInt(url, "limit"),
+          offset: queryInt(url, "offset"),
+        }),
+      });
+    }
+
     // /v1/messages/threads — mail-view: subject-rolled-up conversation list.
     // Handled BEFORE the single-message matcher so "threads" is not read as an id.
     if (path === "/v1/messages/threads") {

@@ -109,7 +109,9 @@ export const SELF_HOSTED_REFUSED_COMMANDS: readonly string[] = [
   // lookup (src/cli/commands/send.ts) — and listing a command that runs would
   // suppress a real remedy from every suggestion path, which is the mirror image of
   // the defect this registry exists to prevent. Verify before adding.
-  "emails inbox unread-count --by-address",
+  // `emails inbox unread-count --by-address` is deliberately NOT here either:
+  // it used to refuse in self_hosted and is now served by the /v1 server
+  // endpoint (GET /v1/messages/unread-by-address), so it RUNS in both modes.
   "emails inbox clear --provider",
   "emails monitor",
   "emails provider sync",

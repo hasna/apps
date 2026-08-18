@@ -133,17 +133,25 @@ describe("mode-aware command availability", () => {
 describe("flag-conditional refusals the coverage scan cannot see", () => {
   it("refuses the flag form while keeping the base command available", () => {
     for (const [base, refusedFlagForm] of [
-      ["emails inbox unread-count", "emails inbox unread-count --by-address"],
       ["emails inbox clear", "emails inbox clear --provider p1"],
     ] as const) {
       expect(isCommandAvailableInMode(base, "self_hosted"), base).toBe(true);
       expect(isCommandAvailableInMode(refusedFlagForm, "self_hosted"), refusedFlagForm).toBe(false);
     }
     // Extra flags after the refused one must not smuggle it back in.
-    expect(isCommandAvailableInMode("emails inbox unread-count --by-address --limit 10", "self_hosted")).toBe(false);
+    expect(isCommandAvailableInMode("emails inbox clear --provider p1 --limit 10", "self_hosted")).toBe(false);
     // Local mode serves both from SQL, so both stay available there.
-    expect(isCommandAvailableInMode("emails inbox unread-count --by-address", "local")).toBe(true);
     expect(isCommandAvailableInMode("emails inbox clear --provider p1", "local")).toBe(true);
+  });
+
+  // The mirror-image half: `inbox unread-count --by-address` used to refuse in
+  // self_hosted and now RUNS there (server-side rollup over the /v1 endpoint),
+  // so it must stay OUT of the flag-conditional refusal list — listing a
+  // command that runs suppresses a real remedy from every suggestion path.
+  it("serves unread-count --by-address in both modes", () => {
+    expect(isCommandAvailableInMode("emails inbox unread-count --by-address", "self_hosted")).toBe(true);
+    expect(isCommandAvailableInMode("emails inbox unread-count --by-address --limit 10", "self_hosted")).toBe(true);
+    expect(isCommandAvailableInMode("emails inbox unread-count --by-address", "local")).toBe(true);
   });
 
   // The mirror-image defect: listing a command that RUNS suppresses a real remedy.
