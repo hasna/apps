@@ -1,0 +1,56 @@
+{
+  "$schema": "https://github.com/hasna/contracts/schema/hasna.service_contract.v1.json",
+  "schema": "hasna.service_contract.v1",
+  "name": "brains",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.11.1",
+  "description": "Fine-tuned model tracker and trainer — wraps OpenAI and Thinker Labs, gathers training data from todos/mementos/conversations/sessions. Ships a CLI, an MCP server, and a REST API over a local SQLite store, or PostgreSQL selected by HASNA_BRAINS_DATABASE_URL.",
+  "bins": [
+    "brains",
+    "brains-mcp",
+    "brains-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "brains-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "brains",
+      "authMode": "local-only"
+    },
+    {
+      "name": "brains-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "brains-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "brains-api",
+      "kind": "api",
+      "status": "deferred",
+      "authMode": "api-key",
+      "deferReason": "brains-serve exposes a local REST surface only. It implements GET /health but not GET /ready, GET /version, a /v1 base path, or an OpenAPI document, so declaring the API supported would assert a topology the server does not have."
+    },
+    {
+      "name": "brains-sdk",
+      "kind": "sdk",
+      "status": "deferred",
+      "authMode": "none",
+      "deferReason": "No client SDK is generated while the HTTP API surface is deferred; consumers import ./src/index.ts directly."
+    }
+  ],
+  "storage": {
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "envPrefix": "HASNA_BRAINS_",
+    "sqlitePath": "~/.hasna/brains/brains.db"
+  }
+}
