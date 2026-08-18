@@ -2,9 +2,16 @@ import { join } from "path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { detectAgents, AGENT_DIRS, type AgentName } from "./detect.js";
 
-const HOOK_MARKER = "open-styles-hook";
+const HOOK_MARKER = "styles-hook";
+// Legacy marker persisted into existing hook configs before the open- prefix
+// retirement; still recognized so installs are not duplicated and removals work.
+const LEGACY_HOOK_MARKER = "open-styles-hook";
 const HOOK_COMMAND_TEMPLATE = (fileVar: string) =>
   `styles check-file "${fileVar}" --quiet || true`;
+
+function isHookMarker(marker: unknown): boolean {
+  return marker === HOOK_MARKER || marker === LEGACY_HOOK_MARKER;
+}
 
 export interface InjectResult {
   success: boolean;
@@ -24,7 +31,7 @@ function injectClaudeHook(projectPath: string): InjectResult {
   }
   const hooks = (settings.hooks as Record<string, unknown[]> | undefined) ?? {};
   const preToolUse = (hooks.PreToolUse as unknown[] | undefined) ?? [];
-  const alreadyInstalled = preToolUse.some((h: unknown) => (h as Record<string,unknown>)._marker === HOOK_MARKER);
+  const alreadyInstalled = preToolUse.some((h: unknown) => isHookMarker((h as Record<string,unknown>)._marker));
   if (!alreadyInstalled) {
     preToolUse.push({ matcher: "Write|Edit", type: "command", command: HOOK_COMMAND_TEMPLATE('$CLAUDE_TOOL_INPUT_FILE_PATH'), _marker: HOOK_MARKER });
     settings.hooks = { ...hooks, PreToolUse: preToolUse };
@@ -42,7 +49,7 @@ function injectGeminiHook(projectPath: string): InjectResult {
   }
   const hooks = (settings.hooks as Record<string, unknown[]> | undefined) ?? {};
   const preToolCall = (hooks.preToolCall as unknown[] | undefined) ?? [];
-  const alreadyInstalled = preToolCall.some((h: unknown) => (h as Record<string,unknown>)._marker === HOOK_MARKER);
+  const alreadyInstalled = preToolCall.some((h: unknown) => isHookMarker((h as Record<string,unknown>)._marker));
   if (!alreadyInstalled) {
     preToolCall.push({ match: { tool: "write_file|replace_in_file" }, command: HOOK_COMMAND_TEMPLATE('${filePath}'), _marker: HOOK_MARKER });
     settings.hooks = { ...hooks, preToolCall };
@@ -55,7 +62,7 @@ function injectCodexHook(projectPath: string): InjectResult {
   const configPath = join(projectPath, ".codex", "config.toml");
   mkdirSync(join(projectPath, ".codex"), { recursive: true });
   let content = existsSync(configPath) ? readFileSync(configPath, "utf-8") : "";
-  const alreadyInstalled = content.includes(HOOK_MARKER);
+  const alreadyInstalled = content.includes(HOOK_MARKER) || content.includes(LEGACY_HOOK_MARKER);
   if (!alreadyInstalled) {
     content += `\n[[hooks.pre_exec]]\ncommand = "styles check-file \\"$CODEX_FILE_PATH\\" --quiet || true"\n# ${HOOK_MARKER}\n`;
     writeFileSync(configPath, content);
@@ -71,7 +78,7 @@ function injectOpencodeHook(projectPath: string): InjectResult {
     try { settings = JSON.parse(readFileSync(configPath, "utf-8")); } catch {}
   }
   const hooks = (settings.hooks as Record<string, unknown> | undefined) ?? {};
-  const alreadyInstalled = (hooks.beforeFileWrite as Record<string,unknown> | undefined)?._marker === HOOK_MARKER;
+  const alreadyInstalled = isHookMarker((hooks.beforeFileWrite as Record<string,unknown> | undefined)?._marker);
   if (!alreadyInstalled) {
     settings.hooks = { ...hooks, beforeFileWrite: { command: HOOK_COMMAND_TEMPLATE('${file}'), _marker: HOOK_MARKER } };
     writeFileSync(configPath, JSON.stringify(settings, null, 2));
@@ -87,7 +94,7 @@ function injectPiHook(projectPath: string): InjectResult {
     try { settings = JSON.parse(readFileSync(configPath, "utf-8")); } catch {}
   }
   const hooks = (settings.hooks as Record<string, unknown> | undefined) ?? {};
-  const alreadyInstalled = (hooks.preWrite as Record<string,unknown> | undefined)?._marker === HOOK_MARKER;
+  const alreadyInstalled = isHookMarker((hooks.preWrite as Record<string,unknown> | undefined)?._marker);
   if (!alreadyInstalled) {
     settings.hooks = { ...hooks, preWrite: { command: HOOK_COMMAND_TEMPLATE('${file}'), _marker: HOOK_MARKER } };
     writeFileSync(configPath, JSON.stringify(settings, null, 2));
@@ -123,7 +130,7 @@ export function removeStyleHook(projectPath: string, agent: AgentName = "claude"
     if (!existsSync(p)) return;
     const s = JSON.parse(readFileSync(p, "utf-8"));
     if (s.hooks?.PreToolUse) {
-      s.hooks.PreToolUse = s.hooks.PreToolUse.filter((h: Record<string,unknown>) => h._marker !== HOOK_MARKER);
+      s.hooks.PreToolUse = s.hooks.PreToolUse.filter((h: Record<string,unknown>) => !isHookMarker(h._marker));
     }
     writeFileSync(p, JSON.stringify(s, null, 2));
   } else if (agent === "gemini") {
@@ -131,7 +138,7 @@ export function removeStyleHook(projectPath: string, agent: AgentName = "claude"
     if (!existsSync(p)) return;
     const s = JSON.parse(readFileSync(p, "utf-8"));
     if (s.hooks?.preToolCall) {
-      s.hooks.preToolCall = s.hooks.preToolCall.filter((h: Record<string,unknown>) => h._marker !== HOOK_MARKER);
+      s.hooks.preToolCall = s.hooks.preToolCall.filter((h: Record<string,unknown>) => !isHookMarker(h._marker));
     }
     writeFileSync(p, JSON.stringify(s, null, 2));
   } else if (agent === "codex") {
@@ -143,7 +150,7 @@ export function removeStyleHook(projectPath: string, agent: AgentName = "claude"
     let skip = false;
     for (const line of lines) {
       if (line.trim() === "[[hooks.pre_exec]]") { skip = false; }
-      if (line.includes(HOOK_MARKER)) { skip = true; filtered.pop(); filtered.pop(); continue; }
+      if (line.includes(HOOK_MARKER) || line.includes(LEGACY_HOOK_MARKER)) { skip = true; filtered.pop(); filtered.pop(); continue; }
       if (!skip) filtered.push(line);
     }
     writeFileSync(p, filtered.join("\n"));
@@ -154,7 +161,7 @@ export function removeStyleHook(projectPath: string, agent: AgentName = "claude"
     const p = join(projectPath, dir, "config.json");
     if (!existsSync(p)) return;
     const s = JSON.parse(readFileSync(p, "utf-8"));
-    if (s.hooks?.[key]?._marker === HOOK_MARKER) delete s.hooks[key];
+    if (isHookMarker(s.hooks?.[key]?._marker)) delete s.hooks[key];
     writeFileSync(p, JSON.stringify(s, null, 2));
   }
 }

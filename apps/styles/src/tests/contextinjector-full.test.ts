@@ -117,6 +117,9 @@ describe("injectIntoClaudeMd (legacy)", () => {
     writeFileSync(join(testProjectPath, "CLAUDE.md"), "<!-- open-styles-start -->\nold\n<!-- open-styles-end -->\n", "utf-8");
     const result = injectIntoClaudeMd(testProjectPath, FIXTURE_PROFILE, { theme: "light" });
     expect(result.action).toBe("updated");
+    const content = readFileSync(join(testProjectPath, "CLAUDE.md"), "utf-8");
+    expect(content).toContain("<!-- styles-start -->");
+    expect(content).not.toContain("open-styles-start");
   });
 
   test("returns unchanged when content is identical", () => {
@@ -132,11 +135,12 @@ describe("removeFromAgentMd", () => {
   test("removes section from file", () => {
     injectIntoAgentMd(testProjectPath, "claude", FIXTURE_PROFILE, {});
     const content = readFileSync(join(testProjectPath, "CLAUDE.md"), "utf-8");
-    expect(content).toContain("open-styles-start");
+    expect(content).toContain("styles-start");
 
     const result = removeFromAgentMd(testProjectPath, "claude");
     expect(result.action).toBe("removed");
     const after = readFileSync(join(testProjectPath, "CLAUDE.md"), "utf-8");
+    expect(after).not.toContain("styles-start");
     expect(after).not.toContain("open-styles-start");
   });
 

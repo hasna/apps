@@ -32,8 +32,8 @@ describe("buildContextSection", () => {
   test("includes style display name", () => {
     const section = buildContextSection(FIXTURE_STYLE_META, {});
     expect(section).toContain("Design Style: Minimalist");
-    expect(section).toContain("<!-- open-styles-start -->");
-    expect(section).toContain("<!-- open-styles-end -->");
+    expect(section).toContain("<!-- styles-start -->");
+    expect(section).toContain("<!-- styles-end -->");
   });
 
   test("includes principles when present", () => {
@@ -81,6 +81,6 @@ describe("buildContextSection", () => {
 
   test("includes managed-by note", () => {
     const section = buildContextSection(FIXTURE_STYLE_META, {});
-    expect(section).toContain("Managed by open-styles");
+    expect(section).toContain("Managed by styles");
   });
 });
