@@ -211,20 +211,28 @@ describe("standard-adherence: contracts conformance", () => {
       const apps = path.join(root, "apps");
       fs.mkdirSync(path.join(apps, "good"), { recursive: true });
       fs.mkdirSync(path.join(apps, "bad"), { recursive: true });
-      fs.copyFileSync(path.join(APPS_DIR, "shortlinks", "hasna.contract.json"), path.join(apps, "good", "hasna.contract.json"));
-      fs.copyFileSync(path.join(APPS_DIR, "shortlinks", "package.json"), path.join(apps, "good", "package.json"));
-      // The good fixture is shortlinks (validates clean at 0.5.2); accounts was
+      // The good fixture is shortlinks, validated at its pinned
+      // @hasna/contracts version (0.11.1 as of the modes removal); accounts was
       // the original fixture but #122 moved its manifest to the recorded
       // pre-backend-schema failure class (f6869bad), which would break this
-      // positive control.
-      // A manifest that cannot validate against the 0.5.2 schema: wrong schema id.
+      // positive control. The whole app tree is copied (minus node_modules and
+      // dist) because the 0.11.1 conformance surface_bindings check resolves
+      // SDK export targets against the source tree.
+      fs.cpSync(path.join(APPS_DIR, "shortlinks"), path.join(apps, "good"), {
+        recursive: true,
+        filter: (src) =>
+          !src.includes(`${path.sep}node_modules${path.sep}`) &&
+          !src.includes(`${path.sep}dist${path.sep}`) &&
+          !src.endsWith(`${path.sep}dist`),
+      });
+      // A manifest that cannot validate against the same schema: wrong schema id.
       fs.writeFileSync(path.join(apps, "bad", "hasna.contract.json"), JSON.stringify({ schema: "not.a.known.schema", name: "bad" }, null, 2));
       fs.writeFileSync(path.join(apps, "bad", "package.json"), JSON.stringify({ name: "@hasna/self-test-bad", version: "0.0.0" }, null, 2));
 
       const goodDir = path.relative(REPO_ROOT, path.join(apps, "good"));
       const badDir = path.relative(REPO_ROOT, path.join(apps, "bad"));
-      const good = runConformance(goodDir, "0.5.2");
-      const bad = runConformance(badDir, "0.5.2");
+      const good = runConformance(goodDir, "0.11.1");
+      const bad = runConformance(badDir, "0.11.1");
       expect(good.verdict, `known-good fixture must pass (raw: ${good.raw.slice(0, 200)})`).toBe("ok");
       expect(bad.verdict, `known-bad fixture must fail`).toBe("fail");
     } finally {
