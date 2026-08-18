@@ -36,7 +36,7 @@ export function buildSelfHostedService(version: string): SelfHostedServiceDeps {
   const verifier: ApiKeyVerifier = verifyApiKeyWithAliases(
     {
       signingSecret,
-      isRevoked: keys.statusChecker(),
+      keyStatus: keys.keyStatus,
       audit: (e) => {
         // Structured, secret-free audit line (kid + tenant + outcome only).
         console.log(formatApiAuthAuditLine(e));

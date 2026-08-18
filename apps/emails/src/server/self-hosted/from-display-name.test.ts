@@ -87,7 +87,7 @@ function harness(addressRecord: { display_name: string | null } | null): Harness
   const deps: SelfHostedServiceDeps = {
     client,
     store: selfScopedStore(client),
-    verifier: verifyApiKey({ app: "emails", signingSecret: SIGNING_SECRET }),
+    verifier: verifyApiKey({ app: "emails", signingSecret: SIGNING_SECRET, keyStatus: async () => "active" }),
     sender: {
       provider: "ses",
       send: async (input: { from: string }) => {

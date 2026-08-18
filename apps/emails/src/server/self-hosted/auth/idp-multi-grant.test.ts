@@ -77,7 +77,7 @@ function deps(rows: MappingRow[]): AuthServiceDeps {
   const client = fakeClient(rows);
   return {
     authStore: new AuthStore(client),
-    verifier: verifyApiKey({ app: "emails", signingSecret: "test-signing-secret-do-not-use-in-prod" }),
+    verifier: verifyApiKey({ app: "emails", signingSecret: "test-signing-secret-do-not-use-in-prod", keyStatus: async () => "active" }),
     sender: { provider: "ses", send: async () => "provider-message-id" },
     keyStore: STUB_KEY_STORE,
     signingSecret: "test-signing-secret-do-not-use-in-prod",

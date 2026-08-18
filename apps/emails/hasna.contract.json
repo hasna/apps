@@ -3,8 +3,8 @@
   "name": "emails",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.8.4",
-  "description": "Emails stores in the local SQLite file by default, or in operator-owned PostgreSQL when HASNA_EMAILS_DATABASE_URL is set. Provider credentials stay with the operator.",
+  "kitVersion": "0.11.1",
+  "description": "Emails stores in the local SQLite file by default, or in operator-owned PostgreSQL when EMAILS_DATABASE_URL is set. Provider credentials stay with the operator.",
   "bins": [
     "emails",
     "emails-mcp",
@@ -62,12 +62,13 @@
     }
   ],
   "storage": {
-    "mode": "sqlite",
+    "backend": "sqlite",
     "engines": [
       "sqlite",
-      "postgres"
+      "postgresql"
     ],
     "envPrefix": "HASNA_EMAILS_",
+    "aliasEnvPrefix": "EMAILS_",
     "sqlitePath": "~/.hasna/emails/emails.db",
     "pgTestGate": {
       "envVar": "EMAILS_TEST_DATABASE_URL",
@@ -75,6 +76,11 @@
     }
   },
   "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "no-cloud:pack"
+      }
+    },
     "apiKeyApp": "emails",
     "apiKeyAppAliases": [
       "mailery"
