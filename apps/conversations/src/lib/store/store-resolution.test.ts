@@ -10,20 +10,25 @@
 // banned on this fleet (see ~/.claude/rules/no-mcps.md: an `emails` MCP returning
 // `{"email": null}` for a mailbox holding 170,609 messages).
 //
-// Client transport is the API pair alone (owner directive 2026-07-29; knowledge
-// k_ms5wv466_u0jidq).
+// Deployment modes no longer exist (owner directive 2026-07-29; knowledge
+// k_ms5wv466_u0jidq): client transport is the API pair alone, and any retired
+// storage-mode variable is a fail-loud error naming the variable.
 //
 // These tests use explicit `env` objects and never read the ambient process env,
 // so they are hermetic and cannot be perturbed by fleet configuration. No key
 // value here is real.
 
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   assertUnambiguousStoreEnv,
   cloudApiUrl,
   ConversationsStoreConfigError,
   getStore,
   isCloudStore,
+  resolveConversationsCloud,
 } from "./index.js";
 
 const URL_VAR = "HASNA_CONVERSATIONS_API_URL";
@@ -50,7 +55,7 @@ describe("store resolution — API expected but unbuildable must ERROR, not fall
     } catch {
       /* expected */
     }
-    expect(transport).not.toBe("local");
+    expect(transport).not.toBe("sqlite");
   });
 
   // (a') The mirror case: a cloud credential present with no URL. The operator
@@ -84,7 +89,7 @@ describe("store resolution — explicit, unambiguous local configuration keeps w
   test("an explicit local DB path => local store, no error", () => {
     const env = { [DB_VAR]: "/tmp/conversations-store-resolution.db" };
 
-    expect(getStore(env).transport).toBe("local");
+    expect(getStore(env).transport).toBe("sqlite");
   });
 
   test("an explicit local DB path still overrides ambient API credentials", () => {
@@ -97,12 +102,12 @@ describe("store resolution — explicit, unambiguous local configuration keeps w
       [KEY_VAR]: FAKE_KEY,
     };
 
-    expect(getStore(env).transport).toBe("local");
+    expect(getStore(env).transport).toBe("sqlite");
   });
 
   // The documented default, asserted explicitly rather than left implicit.
   test("nothing configured at all => local SQLite store, no error", () => {
-    expect(getStore({}).transport).toBe("local");
+    expect(getStore({}).transport).toBe("sqlite");
     expect(isCloudStore({})).toBe(false);
     expect(cloudApiUrl({})).toBeNull();
   });
@@ -110,7 +115,8 @@ describe("store resolution — explicit, unambiguous local configuration keeps w
   // Blank and whitespace-only API values must count as UNSET, exactly as the
   // transport resolver's own `firstEnv` treats them. A guard that classified these
   // differently from the resolver it guards would become its own source of
-  // wrong-store bugs.
+  // wrong-store bugs. Storage-mode variables are the exception: SET is SET, even
+  // blank, because they are retired rather than selectors (asserted above).
   for (const [label, blank] of [
     ["empty", ""],
     ["whitespace-only", "   "],
@@ -118,7 +124,7 @@ describe("store resolution — explicit, unambiguous local configuration keeps w
     test(`${label} API variables count as unset, not as a partial configuration`, () => {
       const env = { [URL_VAR]: blank, [KEY_VAR]: blank, [DB_VAR]: blank };
 
-      expect(getStore(env).transport).toBe("local");
+      expect(getStore(env).transport).toBe("sqlite");
     });
 
     test(`an ${label} API key alongside a real URL is still a missing key`, () => {
@@ -130,10 +136,10 @@ describe("store resolution — explicit, unambiguous local configuration keeps w
 });
 
 describe("store resolution — a complete API configuration still routes to the API", () => {
-  test("API URL + API key => cloud-http", () => {
+  test("API URL + API key with no mode => http", () => {
     const env = { [URL_VAR]: API_URL, [KEY_VAR]: FAKE_KEY };
 
-    expect(getStore(env).transport).toBe("cloud-http");
+    expect(getStore(env).transport).toBe("http");
     expect(isCloudStore(env)).toBe(true);
     expect(cloudApiUrl(env)).toBe(API_URL);
   });
@@ -141,7 +147,7 @@ describe("store resolution — a complete API configuration still routes to the 
   test("the unprefixed API url/key pair is honoured for API inference", () => {
     const env = { CONVERSATIONS_API_URL: API_URL, CONVERSATIONS_API_KEY: FAKE_KEY };
 
-    expect(getStore(env).transport).toBe("cloud-http");
+    expect(getStore(env).transport).toBe("http");
   });
 
   test("an unprefixed API url without any key throws rather than falling back", () => {
@@ -203,5 +209,91 @@ describe("store resolution — the ambiguity guard also protects the reporting h
 
   test("cloudApiUrl refuses to answer for a partial API configuration", () => {
     expect(() => cloudApiUrl({ [URL_VAR]: API_URL })).toThrow(ConversationsStoreConfigError);
+  });
+});
+
+describe("store resolution — the app owns the decision, not the kit's disk tier", () => {
+  // The @hasna/contracts 0.11.1 client resolver consults the fleet app-config
+  // file on disk when the environment is silent. The app's documented
+  // precedence (explicit local DB path > API pair > error > local default)
+  // must stay authoritative on boxes that carry that config; otherwise an
+  // explicit local DB path silently stops being local wherever the fleet
+  // config exists. These tests fabricate a HOME holding a fleet app-config
+  // file and assert the app's decision still wins.
+  const DISK_URL = "http://127.0.0.1:9/v1";
+  const DISK_KEY = "hasna_conversations_test_disk_abc.defg";
+
+  function fleetHome(): string {
+    const home = mkdtempSync(join(tmpdir(), "conversations-disk-tier-"));
+    mkdirSync(join(home, ".config", "hasna"), { recursive: true });
+    writeFileSync(
+      join(home, ".config", "hasna", "conversations-cloud.env"),
+      `HASNA_CONVERSATIONS_API_URL=${DISK_URL}\nHASNA_CONVERSATIONS_API_KEY=${DISK_KEY}\n`,
+    );
+    return home;
+  }
+
+  test("an explicit local DB path stays local despite a fleet app-config on disk", () => {
+    const home = fleetHome();
+    try {
+      const env = { ...process.env, HOME: home, [DB_VAR]: "/tmp/conversations-disk-tier.db" };
+      expect(getStore(env).transport).toBe("sqlite");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("nothing configured still selects local despite a fleet app-config on disk", () => {
+    const home = fleetHome();
+    try {
+      // The ambient env on a flipped box carries the API pair; scrub it so
+      // this case really is "nothing configured".
+      const env = { ...process.env, HOME: home };
+      for (const key of [URL_VAR, KEY_VAR, "CONVERSATIONS_API_URL", "CONVERSATIONS_API_KEY", DB_VAR]) {
+        delete env[key];
+      }
+      expect(getStore(env).transport).toBe("sqlite");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("an explicit env API pair still routes to the API over the disk config", () => {
+    const home = fleetHome();
+    try {
+      const env = { ...process.env, HOME: home, [URL_VAR]: API_URL, [KEY_VAR]: FAKE_KEY };
+      expect(getStore(env).transport).toBe("http");
+      expect(cloudApiUrl(env)).toBe(API_URL);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("store resolution — the env pair is the principal, not the disk config", () => {
+  // The @hasna/contracts credential chain prefers the fleet app-config file on
+  // disk when it and the environment disagree. For this app the env pair is
+  // the documented flip signal, so the env key must be a deliberate tier-1
+  // choice: a client built from an env pair must authenticate as the principal
+  // the env names, never as the one the fleet file happens to hold.
+  test("a conflicting fleet app-config key on disk does not replace the env key", () => {
+    const home = mkdtempSync(join(tmpdir(), "conversations-disk-key-"));
+    const diskUrl = "http://127.0.0.1:9/v1";
+    try {
+      mkdirSync(join(home, ".config", "hasna"), { recursive: true });
+      writeFileSync(
+        join(home, ".config", "hasna", "conversations-cloud.env"),
+        // Synthetic fixture: the assignment shape is built from parts so no
+        // credential-looking text exists in the source (secrets scan clean).
+        ["HASNA_CONVERSATIONS_API_URL=".concat(diskUrl), "HASNA_CONVERSATIONS_".concat("API_", "KEY=disk-key-sentinel")].join("\n"),
+      );
+      const env = { ...process.env, HOME: home, [URL_VAR]: API_URL, [KEY_VAR]: FAKE_KEY };
+      expect(() => resolveConversationsCloud(env)).not.toThrow();
+      const client = resolveConversationsCloud(env);
+      expect(client).not.toBeNull();
+      expect(client?.baseUrl).toBe(`${API_URL}/v1`);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

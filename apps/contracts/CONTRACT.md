@@ -193,10 +193,13 @@ The bin allowlist for an app named `<name>` is:
 <name>-doctor     # diagnostics
 ```
 
-Repos **MUST NOT** declare bins outside this allowlist without an explicit
-per-repo waiver recorded in `hasna.contract.json` review. `library` repos
-**MUST NOT** ship a `-serve` or `-mcp` bin. Declared `bins` **MUST** match the
-`bin` map in `package.json`.
+Registered canonical operator entrypoints whose public name intentionally
+differs from the suffix set live in the `CANONICAL_HASNA_BIN_ALIASES` registry
+(today: `hasna-deploy` for the deployment app; `conversations-inbox` and
+`conversations-hook` for the conversations app). Repos **MUST NOT** declare
+bins outside this allowlist without an explicit per-repo waiver recorded in
+`hasna.contract.json` review. `library` repos **MUST NOT** ship a `-serve` or
+`-mcp` bin. Declared `bins` **MUST** match the `bin` map in `package.json`.
 
 ---
 

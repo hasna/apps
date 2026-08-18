@@ -3,12 +3,17 @@
   "name": "conversations",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.10.6",
+  "kitVersion": "0.11.1",
   "description": "Real-time messaging + coordination for AI agents: channels, messages, projects, presence, tasks. CLI + MCP + HTTP API (conversations-serve) + generated SDK. Clients use local SQLite or the HTTP API selected by HASNA_CONVERSATIONS_API_URL; conversations-serve reads PostgreSQL selected by HASNA_CONVERSATIONS_DATABASE_URL. The data backend is the only runtime switch.",
+  "hosting": [
+    "user-hosted"
+  ],
   "bins": [
     "conversations",
+    "conversations-inbox",
     "conversations-mcp",
-    "conversations-serve"
+    "conversations-serve",
+    "conversations-hook"
   ],
   "serviceSurfaces": [
     {
@@ -66,8 +71,11 @@
     ],
     "envPrefix": "HASNA_CONVERSATIONS_",
     "aliasEnvPrefix": "CONVERSATIONS_",
-    "databaseUrlSecretRef": "hasna/oss/conversations/database-url",
-    "sqlitePath": "~/.hasna/conversations/conversations.db"
+    "sqlitePath": "~/.hasna/conversations/conversations.db",
+    "pgTestGate": {
+      "envVar": "CONVERSATIONS_TEST_DATABASE_URL",
+      "command": "bun run test:pg"
+    }
   },
   "metadata": {
     "service": {
@@ -78,12 +86,18 @@
       "openapiPath": "/v1/openapi.json",
       "apiVersion": "v1",
       "auth": "api-key",
-      "signingSecretSecretRef": "hasna/oss/conversations/api-key-signing-secret",
-      "databaseUrlOwnerSecretRef": "hasna/oss/conversations/database-url-owner"
+      "signingSecretEnvVar": "HASNA_CONVERSATIONS_API_SIGNING_KEY",
+      "databaseUrlEnvVar": "HASNA_CONVERSATIONS_DATABASE_URL",
+      "databaseUrlOwnerEnvVar": "HASNA_CONVERSATIONS_DATABASE_URL_OWNER"
     },
     "client": {
       "apiUrlEnv": "HASNA_CONVERSATIONS_API_URL",
       "apiKeyEnv": "HASNA_CONVERSATIONS_API_KEY"
+    },
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
     }
   }
 }

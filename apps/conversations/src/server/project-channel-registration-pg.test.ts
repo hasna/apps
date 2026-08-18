@@ -5,11 +5,11 @@ import type {
   QueryResult,
   TypedQueryClient,
 } from "../generated/storage-kit/query.js";
-import { createHasnaStorageClient } from "../lib/contracts-client/storage.js";
+import { createHasnaStorageClient } from "@hasna/contracts/client/storage";
 import {
   createHasnaHttpTransport,
   HasnaHttpError,
-} from "../lib/contracts-client/transport.js";
+} from "@hasna/contracts/client";
 import { ApiStore } from "../lib/store/api-store.js";
 import {
   createProjectChannelRegistrationAuthority,
@@ -1718,6 +1718,12 @@ describe("PostgreSQL project channel registration authority", () => {
     await expect(authority.lookupReceipt({
       ...lookupRequest,
       target_selector: "wrong-selector",
-    })).rejects.toThrow("does not bind target_selector");
+    })).rejects.toMatchObject({
+      name: "HasnaHttpError",
+      status: 400,
+      // The @hasna/contracts 0.11.1 transport keeps its message byte-stable
+      // (no response-body detail); the server's actionable text is on `body`.
+      body: { error: "lookup precondition_digest does not bind target_selector." },
+    });
   });
 });

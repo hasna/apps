@@ -34,7 +34,7 @@ describe("public API exports", () => {
 
   test("every read/write goes through a Store instance", () => {
     const store = index.getStore({});
-    expect(store.transport).toBe("local");
+    expect(store.transport).toBe("sqlite");
     expect(typeof store.sendMessage).toBe("function");
     expect(typeof store.readMessages).toBe("function");
     expect(typeof store.countMessages).toBe("function");

@@ -5669,9 +5669,18 @@ export const ALLOWED_BIN_SUFFIXES = [
  * Canonical Hasna operator entrypoints whose public name intentionally differs
  * from the package/app name. Keep this registry exact: it is not permission
  * for arbitrary `hasna-*` binaries.
+ *
+ * conversations ships two canonical operator entrypoints outside the suffix
+ * allowlist: `conversations-inbox` (the mandatory session inbox monitor,
+ * operating rule 29, invoked by name from the `inbox` skill and installed to
+ * `$HOME/.hasna/bin`) and `conversations-hook` (the Claude Code PreToolUse
+ * hook for blocking messages, wired by name in hook integrations). Both are
+ * real shipped surfaces of `@hasna/conversations` and must remain installable
+ * bins.
  */
 const CANONICAL_HASNA_BIN_ALIASES: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  deployment: Object.freeze(["hasna-deploy"])
+  deployment: Object.freeze(["hasna-deploy"]),
+  conversations: Object.freeze(["conversations-inbox", "conversations-hook"])
 });
 
 /** All bin names an app named `name` may declare by default. */

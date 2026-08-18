@@ -42,6 +42,11 @@ describe("service contract helpers", () => {
     expect(allowedBinsForName("deployment")).toContain("hasna-deploy");
     expect(allowedBinsForName("deployment")).not.toContain("hasna-deployment");
     expect(allowedBinsForName("todos")).not.toContain("hasna-deploy");
+    // Registered canonical operator entrypoints for the conversations app:
+    // the mandatory session inbox monitor and the Claude Code hook binary.
+    expect(allowedBinsForName("conversations")).toContain("conversations-inbox");
+    expect(allowedBinsForName("conversations")).toContain("conversations-hook");
+    expect(allowedBinsForName("conversations")).not.toContain("conversations-sync");
     expect(databaseUrlSecretRefFor("todos")).toBe("hasna/oss/todos/database-url");
     expect(defaultSqlitePathFor("todos")).toBe("~/.hasna/todos/todos.db");
   });

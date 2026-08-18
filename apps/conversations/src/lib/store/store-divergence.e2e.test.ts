@@ -105,7 +105,7 @@ describe("store divergence — the two stores really do hold different data", ()
     });
 
     expect(exitCode, stderr).toBe(0);
-    expect(result.transport).toBe("local");
+    expect(result.transport).toBe("sqlite");
     expect(result.channels).toBe(LOCAL_CHANNELS);
   });
 
@@ -116,7 +116,7 @@ describe("store divergence — the two stores really do hold different data", ()
     });
 
     expect(exitCode, stderr).toBe(0);
-    expect(result.transport).toBe("cloud-http");
+    expect(result.transport).toBe("http");
     expect(result.channels).toBe(CLOUD_CHANNELS);
     // The whole point: answering from the wrong store is a WRONG ANSWER, not a
     // stylistic difference.
@@ -165,7 +165,7 @@ describe("store divergence — legitimate local use is untouched", () => {
     const { exitCode, result, stderr } = await probe("count", "", {});
 
     expect(exitCode, stderr).toBe(0);
-    expect(result.transport).toBe("local");
+    expect(result.transport).toBe("sqlite");
   });
 
   test("an explicit local DB path still wins over exported cloud credentials", async () => {
@@ -176,7 +176,7 @@ describe("store divergence — legitimate local use is untouched", () => {
     });
 
     expect(exitCode, stderr).toBe(0);
-    expect(result.transport).toBe("local");
+    expect(result.transport).toBe("sqlite");
     expect(result.channels).toBe(LOCAL_CHANNELS);
   });
 });
