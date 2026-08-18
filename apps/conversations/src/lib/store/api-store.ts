@@ -341,7 +341,9 @@ export class ApiStore implements ConversationsStore {
     return this.post(
       request.operation_intent === "bind_existing"
         ? "/project-registration/channels/bind-existing"
-        : "/project-registration/channels",
+        : request.operation_intent === "adopt_existing"
+          ? "/project-registration/channels/adopt-existing"
+          : "/project-registration/channels",
       this.projectChannelRegistrationBody(request),
     ) as never;
   };

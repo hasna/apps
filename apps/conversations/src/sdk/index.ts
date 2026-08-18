@@ -365,6 +365,15 @@ export class ConversationsClient {
       });
     }
 
+    /** Conditionally adopt one exact pre-bound channel without changing its content */
+    async adoptExistingProjectChannel(body: { "operation_intent": "adopt_existing"; "adopt_existing": { "target_id": string; "expected_project_id": string; "expected_revision": string; "expected_digest": string; "expected_message_ownership": { "message_count": number; "first_message_id": number | null; "last_message_id": number | null; "message_ids_digest": string; "message_project_digest": string; "digest": string; "preserved_digest": string } } } & Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/project-registration/channels/adopt-existing`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Conditionally bind one exact existing channel to a Projects workspace */
     async bindExistingProjectChannel(body: { "operation_intent": "bind_existing"; "bind_existing": Record<string, unknown> } & Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/project-registration/channels/bind-existing`, {
@@ -402,7 +411,7 @@ export class ConversationsClient {
     }
 
     /** Bounded exact terminal receipt lookup */
-    async lookupProjectChannelRegistrationReceipt(query?: { "operation_id": string; "step_id": string; "resource_kind": "channel"; "direction": "forward" | "inverse"; "authority": "conversations"; "authority_route": string; "package_version": string; "authority_id": string; "tenant_id": string; "corpus_id": string; "target_selector": string; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "precondition_kind"?: "absent" | "bind_existing"; "target_id"?: string; "max_items": number; "response_byte_limit": number; "time_budget_ms": number; "call_limit": number }, init?: RequestInit): Promise<Record<string, unknown>> {
+    async lookupProjectChannelRegistrationReceipt(query?: { "operation_id": string; "step_id": string; "resource_kind": "channel"; "direction": "forward" | "inverse"; "authority": "conversations"; "authority_route": string; "package_version": string; "authority_id": string; "tenant_id": string; "corpus_id": string; "target_selector": string; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "precondition_kind"?: "absent" | "bind_existing" | "adopt_existing"; "target_id"?: string; "max_items": number; "response_byte_limit": number; "time_budget_ms": number; "call_limit": number }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("GET", `/v1/project-registration/channels/receipts/terminal`, {
         body: undefined,
         query,

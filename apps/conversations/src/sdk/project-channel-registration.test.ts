@@ -85,6 +85,25 @@ describe("generated SDK project-channel registration contract", () => {
         expected_digest: "prior-digest",
       },
     });
+    await client.adoptExistingProjectChannel({
+      ...body,
+      operation_intent: "adopt_existing",
+      adopt_existing: {
+        target_id: "chn_11111111111111111111111111111111",
+        expected_project_id: "wks_ys8tzpsZJMNtx0ORZtLsA",
+        expected_revision: "prior-revision",
+        expected_digest: "a".repeat(64),
+        expected_message_ownership: {
+          message_count: 0,
+          first_message_id: null,
+          last_message_id: null,
+          message_ids_digest: "b".repeat(64),
+          message_project_digest: "c".repeat(64),
+          digest: "d".repeat(64),
+          preserved_digest: "e".repeat(64),
+        },
+      },
+    });
     await client.lookupProjectChannelRegistrationReceipt({
       operation_id: "operation-one",
       step_id: "conversations-channel",
@@ -136,6 +155,7 @@ describe("generated SDK project-channel registration contract", () => {
       { method: "GET", path: "/v1/project-registration/channels/chn_11111111111111111111111111111111/messages" },
       { method: "POST", path: "/v1/project-registration/channels" },
       { method: "POST", path: "/v1/project-registration/channels/bind-existing" },
+      { method: "POST", path: "/v1/project-registration/channels/adopt-existing" },
       { method: "GET", path: "/v1/project-registration/channels/receipts/terminal" },
       { method: "GET", path: "/v1/project-registration/channels/chn_11111111111111111111111111111111" },
       { method: "POST", path: "/v1/project-registration/channels/inverse" },
@@ -157,14 +177,21 @@ describe("generated SDK project-channel registration contract", () => {
         expected_project_id: "legacy-project",
       },
     });
-    const lookupUrl = new URL(calls[5].url);
+    expect(calls[5].body).toMatchObject({
+      operation_intent: "adopt_existing",
+      adopt_existing: {
+        target_id: "chn_11111111111111111111111111111111",
+        expected_project_id: "wks_ys8tzpsZJMNtx0ORZtLsA",
+      },
+    });
+    const lookupUrl = new URL(calls[6].url);
     expect(lookupUrl.searchParams.get("max_items")).toBe("1");
     expect(lookupUrl.searchParams.get("call_limit")).toBe("1");
     expect(lookupUrl.searchParams.get("target_id")).toBe("chn_11111111111111111111111111111111");
     expect(lookupUrl.searchParams.get("precondition_kind")).toBe("bind_existing");
     expect(lookupUrl.searchParams.get("request_digest")).toBe("request-digest");
     expect(lookupUrl.searchParams.get("precondition_digest")).toBe("precondition-digest");
-    const readUrl = new URL(calls[6].url);
+    const readUrl = new URL(calls[7].url);
     expect(readUrl.searchParams.get("target_selector")).toBe("fleet-resources");
     expect(readUrl.searchParams.get("target_digest")).toBe("path-digest");
   });
