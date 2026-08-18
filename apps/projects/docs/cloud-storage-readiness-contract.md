@@ -7,30 +7,39 @@ mutation is allowed by this document.
 
 ## Runtime Selection
 
-Default runtime storage is local.
+The client transport is selected entirely by environment
+(`resolveProjectStore`): cloud when the flip resolves, local otherwise.
 
-| Surface | Local runtime | Remote runtime today | Cloud-backed blocker |
-| --- | --- | --- | --- |
-| Global project registry | `HASNA_PROJECTS_DB_PATH` or `~/.hasna/projects/projects.db` SQLite | PostgreSQL is available only through explicit `projects storage push`, `pull`, and `sync` | Runtime reads/writes still use local SQLite until a future runtime adapter changes that contract |
-| Per-project app store | `$HASNA_PROJECTS_HOME/data/<workspace_id>/project.db` SQLite | Not active | Requires approved Postgres schema, migration plan, and backfill for `project_canvases`, `project_data_models`, `project_data_records`, and `project_loop_links` |
-| Project assets and canvas files | `$HASNA_PROJECTS_HOME/data/<workspace_id>/{assets,canvases}` local files | Not active | Requires approved S3 adapter, key contract, backfill, and rollback plan |
+| Surface | Local runtime | Cloud runtime |
+| --- | --- | --- |
+| Global project registry | `HASNA_PROJECTS_DB_PATH` or `~/.hasna/projects/projects.db` SQLite | Hosted API — every registry read/write routes to `<HASNA_PROJECTS_API_URL>/v1` with the bearer key |
+| Per-project app store | `$HASNA_PROJECTS_HOME/data/<workspace_id>/project.db` SQLite | Not cloud-backed — stays local in both modes |
+| Project assets and canvas files | `$HASNA_PROJECTS_HOME/data/<workspace_id>/{assets,canvases}` local files | Not cloud-backed — stays local in both modes |
 
-`projects storage status --json` exposes this as
-`readiness.cloudBackedRuntimeReady`, `readiness.surfaces`, and per-surface
-`migration` blockers. A configured `HASNA_PROJECTS_DATABASE_URL` means the
-global registry sync target is configured; it does not make `project.db` or
-local asset folders cloud-backed.
+The cloud flip is the joint presence of `HASNA_PROJECTS_API_URL` plus
+`HASNA_PROJECTS_API_KEY`, or an explicit `HASNA_PROJECTS_STORAGE_MODE` of
+`cloud`. The deprecated aliases `self_hosted`, `remote`, and `hybrid` map to
+`cloud`. Both `self_hosted` and `cloud` resolve to the identical API client
+transport; the distinction is server-side tenancy, not the client.
 
 ## Adapter Rules
 
-- Local mode is selected when no remote database URL is configured.
-- Hybrid mode is selected when `HASNA_PROJECTS_DATABASE_URL` or
-  `PROJECTS_DATABASE_URL` is configured without an explicit storage mode.
-- `HASNA_PROJECTS_STORAGE_MODE=remote` records an operator request, but the
-  current runtime still uses local SQLite for project registry operations and
-  local `project.db` for canvas/data/loop-link operations.
-- Remote PostgreSQL writes are limited to explicit storage sync commands and
-  the tables listed by `PROJECTS_STORAGE_TABLES`.
+- Local mode is the default: no API URL/key pair and no explicit mode means the
+  local SQLite registry.
+- Cloud mode routes every registry command through the hosted API. The client
+  carries only the API key (never a database DSN), and the key value is never
+  logged or embedded in output.
+- Misconfiguration is fail-closed: cloud requested without
+  `HASNA_PROJECTS_API_KEY` or without `HASNA_PROJECTS_API_URL` refuses to route,
+  and commands hard-fail rather than silently reading the wrong dataset. An
+  unknown mode value is an error.
+- The flip does not move per-project data: canvases, data records, loop links,
+  and asset files stay in `$HASNA_PROJECTS_HOME/data/<workspace_id>/` in both
+  modes.
+- The server requires PostgreSQL: `projects-serve` fails fast without
+  `HASNA_PROJECTS_DATABASE_URL` (or `PROJECTS_DATABASE_URL` / `DATABASE_URL`).
+  API keys are verified per request and scoped `projects:read` (reads) and
+  `projects:write` (writes).
 - `workspaces.s3_bucket` and `workspaces.s3_prefix` are registry metadata only;
   they do not imply an active S3 asset adapter.
 
@@ -42,7 +51,8 @@ A follow-up approval task is required before any of these actions:
 - backfill real `project.db` data into Postgres
 - create, select, or write production S3 buckets or object prefixes
 - move user project data from local files to cloud storage
-- change runtime reads/writes from local SQLite/local files to remote services
+- change runtime reads/writes of the per-project app store or asset files from
+  local SQLite/local files to remote services
 
 The approval task should include source data inventory, dry-run output, rollback
 steps, read-only smoke evidence, secret provisioning evidence without secret
