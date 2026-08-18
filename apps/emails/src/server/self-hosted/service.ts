@@ -1007,11 +1007,26 @@ export async function handleSelfHostedRequest(
         if (!email || !email.includes("@")) return json(400, { error: "a valid email is required" });
         const quota = parseDailyQuota(body);
         if (quota.error) return json(400, { error: quota.error });
+        // bug 4f676ba0: an address on a domain whose identity is verified in
+        // this app's domain registry is sendable immediately. The caller's
+        // explicit `verified` value wins when present; otherwise a verified
+        // domain vouches for every local part under it (the same model SES and
+        // Resend domain identities use), and the verification is
+        // audit-recorded automatically with actor "system" so the enablement
+        // is never silent.
+        const domain = email.includes("@") ? email.slice(email.indexOf("@") + 1).toLowerCase() : null;
+        const domainRecord = domain ? await auth.store.getDomainByName(domain) : null;
+        const explicitVerified = typeof body.verified === "boolean" ? body.verified : null;
+        const autoVerified = explicitVerified === null && domainRecord?.verified === true;
+        // Event-first ordering, mirroring the CLI's markVerifiedWithAudit
+        // invariant: the audit row is recorded BEFORE the address becomes
+        // verified, so an audit failure leaves the address safely unverified
+        // and a send is never enabled without its record.
         const created = await auth.store.createAddress({
           email,
           display_name: body.display_name === undefined ? undefined : (body.display_name as string | null),
           status: body.status ? String(body.status) : undefined,
-          verified: typeof body.verified === "boolean" ? body.verified : undefined,
+          verified: explicitVerified ?? false,
           daily_quota: quota.provided ? quota.value : undefined,
           provider_id:
             body.provider_id === undefined
@@ -1020,6 +1035,24 @@ export async function handleSelfHostedRequest(
                 ? null
                 : String(body.provider_id),
         });
+        if (autoVerified) {
+          const provisioningSpec = resourceSpecForPath("provisioning");
+          if (!provisioningSpec) throw new Error("provisioning resource spec missing");
+          await auth.store.createResource(provisioningSpec, {
+            entity_type: "address",
+            entity_id: created.id,
+            from_state: "unverified",
+            to_state: "verified",
+            detail_json: {
+              action: "set_verified",
+              actor: "system",
+              reason: "domain verified",
+              source: "domain_identity",
+            },
+          });
+          const verifiedRecord = await auth.store.updateAddress(created.id, { verified: true });
+          return json(201, { address: verifiedRecord ?? created });
+        }
         return json(201, { address: created });
       }
       return json(405, { error: "method not allowed" });
