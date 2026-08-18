@@ -9,6 +9,7 @@ import {
   chmodSync,
   closeSync,
   constants,
+  copyFileSync,
   existsSync,
   fstatSync,
   fsyncSync,
@@ -19,6 +20,7 @@ import {
   renameSync,
   statSync,
   unlinkSync,
+  writeFileSync,
   writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -144,11 +146,114 @@ function configuredKeyringPath(env: NodeJS.ProcessEnv): string | null {
   return null;
 }
 
+/**
+ * The canonical default keyring location: inside the app data root,
+ * ~/.hasna/emails/open-emails-provider-credentials.keyring.json.
+ */
 export function defaultProviderSecretsKeyringPath(env: NodeJS.ProcessEnv = process.env): string {
-  const base = env["XDG_CONFIG_HOME"]?.trim()
-    ? join(resolve(env["XDG_CONFIG_HOME"]!.trim()), "open-emails-secrets")
-    : join(homedir(), ".hasna", "secrets");
-  return join(base, "open-emails-provider-credentials.keyring.json");
+  const home = env["HOME"] || env["USERPROFILE"] || homedir();
+  return join(home, ".hasna", "emails", "open-emails-provider-credentials.keyring.json");
+}
+
+/**
+ * The keyring paths the package previously defaulted to, in the order they are
+ * migrated from. Both sit outside the app data root, which is why they are
+ * legacy: ${XDG_CONFIG_HOME}/open-emails-secrets/... and
+ * ~/.hasna/secrets/open-emails-provider-credentials.keyring.json.
+ */
+export function legacyProviderSecretsKeyringPaths(env: NodeJS.ProcessEnv = process.env): string[] {
+  const paths: string[] = [];
+  const xdg = env["XDG_CONFIG_HOME"]?.trim();
+  if (xdg) {
+    paths.push(join(resolve(xdg), "open-emails-secrets", "open-emails-provider-credentials.keyring.json"));
+  }
+  const home = env["HOME"] || env["USERPROFILE"] || homedir();
+  paths.push(join(home, ".hasna", "secrets", "open-emails-provider-credentials.keyring.json"));
+  return paths;
+}
+
+/**
+ * One-time migration of a legacy keyring file into the canonical root.
+ * Copies (never deletes) the encrypted keyring, enforces mode 0600 on the
+ * copy, verifies it byte-for-byte and that it parses as a valid keyring, and
+ * records a receipt next to the canonical file. Never overwrites an existing
+ * canonical keyring. Idempotent: the receipt or an existing canonical file
+ * skips the copy.
+ */
+export function migrateProviderSecretsKeyring(env: NodeJS.ProcessEnv): void {
+  const canonical = defaultProviderSecretsKeyringPath(env);
+  if (existsSync(canonical)) return;
+  const receiptPath = join(dirname(canonical), ".provider-keyring-migrated.receipt.json");
+  if (existsSync(receiptPath)) return;
+
+  for (const legacy of legacyProviderSecretsKeyringPaths(env)) {
+    if (!existsSync(legacy)) continue;
+    ensurePrivateDirectory(dirname(canonical));
+    copyFileSync(legacy, canonical);
+    chmodSync(canonical, 0o600);
+    const legacyBytes = readFileSync(legacy);
+    const canonicalBytes = readFileSync(canonical);
+    if (!legacyBytes.equals(canonicalBytes)) {
+      throw errorMessage(
+        `Refusing keyring migration: copied ${canonical} does not byte-match ${legacy}; the canonical keyring was not populated.`,
+      );
+    }
+    // Validates format and permissions before the migration is recorded.
+    readKeyringFile(canonical);
+    writeFileSync(
+      receiptPath,
+      `${JSON.stringify(
+        {
+          migratedAt: new Date().toISOString(),
+          from: legacy,
+          to: canonical,
+          bytes: canonicalBytes.byteLength,
+        },
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
+    return;
+  }
+}
+
+/**
+ * Resolves the keyring path for this process:
+ *
+ *   1. an explicit env override (EMAILS_PROVIDER_SECRETS_KEY_FILE / _PATH)
+ *      wins unchanged — the operator opted in, no migration;
+ *   2. the canonical ~/.hasna/emails keyring, if present;
+ *   3. a legacy keyring, if one exists — migrated to the canonical root when
+ *      `create` is true (copy+verify+receipt; on a failed migration the legacy
+ *      path is kept so existing secrets stay accessible and the migration
+ *      retries next run), or used in place when read-only;
+ *   4. otherwise the canonical path (the caller creates it).
+ */
+export function resolveProviderSecretsKeyringPath(
+  env: NodeJS.ProcessEnv = process.env,
+  create: boolean,
+): string {
+  const configured = configuredKeyringPath(env);
+  if (configured) return configured;
+
+  const canonical = defaultProviderSecretsKeyringPath(env);
+  if (existsSync(canonical)) return canonical;
+
+  const hasLegacy = legacyProviderSecretsKeyringPaths(env).some((p) => existsSync(p));
+  if (hasLegacy) {
+    if (!create) return legacyProviderSecretsKeyringPaths(env).find((p) => existsSync(p))!;
+    try {
+      migrateProviderSecretsKeyring(env);
+    } catch {
+      // Keep using the legacy file this run; existing secrets stay accessible
+      // and the migration retries on a later run.
+      return legacyProviderSecretsKeyringPaths(env).find((p) => existsSync(p))!;
+    }
+    return canonical;
+  }
+
+  return canonical;
 }
 
 function ensurePrivateDirectory(path: string): void {
@@ -280,7 +385,7 @@ function rootKeyring(db: Database, create: boolean, env: NodeJS.ProcessEnv = pro
     return created;
   }
 
-  const path = configuredKeyringPath(env) ?? defaultProviderSecretsKeyringPath(env);
+  const path = resolveProviderSecretsKeyringPath(env, create);
   if (!existsSync(path)) {
     if (!create) {
       throw errorMessage(
