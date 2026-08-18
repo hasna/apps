@@ -8,8 +8,10 @@
  * Every action is keyed by an `effectKey`. A repeated effect key replays the
  * recorded effect and never calls the client again, so repeated effect keys do
  * not create duplicate tasks (or comments, or completions). Concurrent calls
- * with the same key coalesce onto one in-flight client mutation, so the
- * check-then-act sequence is atomic within the adapter.
+ * with the same key coalesce onto one in-flight client mutation: the
+ * check-then-act sequence is atomic in the SHARED effect store (`claim`), so
+ * two adapter instances holding the same store cannot both observe an empty
+ * store and both issue the client mutation.
  *
  * Failure behaviour: non-required actions record the failure and resolve
  * `ok:false` — the run continues. An action on an adapter created with
@@ -18,9 +20,9 @@
  * silently resolve `ok:false`.
  *
  * Effect records are kept in a bounded in-memory store. Durability across
- * processes is owned by the shared effects registry (`effects.ts`, MON-V2-03
- * receipts); this adapter accepts any `TodosEffectStore` so the durable store
- * plugs in without changing the action surface.
+ * processes is owned by the shared effects registry (MON-V2-03 receipts);
+ * this adapter accepts any `TodosEffectStore` so the durable store plugs in
+ * without changing the action surface.
  */
 
 import { TodosV1Client } from "@hasna/todos/sdk";
@@ -43,19 +45,45 @@ export interface TodosEffectRecord {
 
 /**
  * Store for effect records. The in-memory implementation is bounded; the
- * future durable effects registry (`effects.ts`) can back this interface
- * without changing the adapter's action surface.
+ * future durable effects registry can back this interface without changing
+ * the adapter's action surface.
  */
 export interface TodosEffectStore {
   get(key: string): TodosEffectRecord | undefined;
   put(record: TodosEffectRecord): void;
+  /**
+   * Atomically claim the right to apply `key`.
+   *
+   * `claim` is synchronous and therefore atomic across adapter instances in
+   * one process: two adapters sharing one store cannot both observe an empty
+   * store and both issue the client mutation. Exactly one caller receives
+   * `claimed`; every other caller either replays a terminal `recorded` result
+   * or joins the `inflight` outcome promise.
+   */
+  claim(key: string): TodosEffectClaim;
 }
+
+export type TodosEffectClaim =
+  | { state: "recorded"; record: TodosEffectRecord }
+  | { state: "inflight"; promise: Promise<TodosEffectResult<unknown>> }
+  | {
+      state: "claimed";
+      /**
+       * Bind the claim owner's outcome promise so concurrent joiners observe
+       * the same result (or the same rejection for a failed required effect).
+       */
+      settle: (outcome: Promise<TodosEffectResult<unknown>>) => void;
+    };
 
 const DEFAULT_STORE_CAP = 10_000;
 
 /** Bounded in-memory effect store with FIFO eviction. */
 export class InMemoryTodosEffectStore implements TodosEffectStore {
   private readonly records = new Map<string, TodosEffectRecord>();
+  private readonly pending = new Map<
+    string,
+    Promise<TodosEffectResult<unknown>>
+  >();
   private readonly cap: number;
 
   constructor(cap = DEFAULT_STORE_CAP) {
@@ -73,6 +101,39 @@ export class InMemoryTodosEffectStore implements TodosEffectStore {
       const oldest = this.records.keys().next().value;
       if (oldest !== undefined) this.records.delete(oldest);
     }
+  }
+
+  claim(key: string): TodosEffectClaim {
+    const recorded = this.records.get(key);
+    if (recorded !== undefined) {
+      return { state: "recorded", record: recorded };
+    }
+    const inflight = this.pending.get(key);
+    if (inflight !== undefined) {
+      return { state: "inflight", promise: inflight };
+    }
+
+    // Install the pending entry in the same synchronous call as the check, so
+    // a concurrent claimer (from any adapter instance) can never observe an
+    // unclaimed key while this caller is about to mutate the client.
+    let settle!: (outcome: Promise<TodosEffectResult<unknown>>) => void;
+    const promise = new Promise<TodosEffectResult<unknown>>((resolve, reject) => {
+      settle = (outcome) => {
+        outcome.then(resolve, reject);
+      };
+    });
+    // A failed required effect rejects the pending promise. With no joiner the
+    // rejection would surface as an unhandled promise rejection — swallow it;
+    // a joiner still observes the rejection through its own await.
+    promise.catch(() => {});
+    // Once the outcome settles, the record is guaranteed to exist (applyOnce
+    // always puts), so the pending entry is no longer needed.
+    promise.then(
+      () => this.pending.delete(key),
+      () => this.pending.delete(key)
+    );
+    this.pending.set(key, promise);
+    return { state: "claimed", settle };
   }
 }
 
@@ -127,12 +188,6 @@ export class TodosAdapter {
   private readonly client: TodosV1Client;
   private readonly store: TodosEffectStore;
   private readonly required: boolean;
-  /**
-   * In-flight effects keyed by effect key. Concurrent calls with the same key
-   * coalesce onto the first call's mutation instead of both observing an empty
-   * store and issuing duplicate client calls.
-   */
-  private readonly inFlight = new Map<string, Promise<TodosEffectResult<unknown>>>();
 
   constructor(options: TodosAdapterOptions) {
     this.client = options.client;
@@ -202,24 +257,42 @@ export class TodosAdapter {
     effectKey: string,
     run: () => Promise<T>
   ): Promise<TodosEffectResult<T>> {
-    // Atomicity: when the same key is already being applied, join the
-    // in-flight effect instead of issuing a second client mutation. The
-    // check-store-then-mutate sequence is only safe once per key, so the
-    // first caller owns it and concurrent callers await its outcome.
-    const pending = this.inFlight.get(effectKey);
-    if (pending !== undefined) {
-      const joined = (await pending) as TodosEffectResult<T>;
-      // The joiner never called the client itself.
+    // Atomicity lives in the shared store, not in this adapter instance:
+    // production callers construct a fresh adapter per call, so a per-adapter
+    // in-flight map cannot serialize two call sites that share only the store.
+    const claim = this.store.claim(effectKey);
+
+    if (claim.state === "recorded") {
+      const recorded = claim.record;
+      if (!recorded.ok && this.required) {
+        // A required effect that already failed must keep rejecting on
+        // replay — resolving ok:false would silently accept the failure.
+        throw new Error(
+          recorded.error ?? `todos effect '${effectKey}' previously failed`
+        );
+      }
+      return {
+        key: effectKey,
+        ok: recorded.ok,
+        applied: false,
+        error: recorded.error,
+        result: recorded.result as T | undefined,
+      };
+    }
+
+    if (claim.state === "inflight") {
+      // The same key is being applied by another adapter instance. Join its
+      // outcome — this caller never touches the client.
+      const joined = (await claim.promise) as TodosEffectResult<T>;
       return { ...joined, applied: false };
     }
 
+    // claimed — this caller is the sole owner of the client mutation for this
+    // key. Concurrent callers (any adapter instance sharing this store) join
+    // the outcome promise instead of issuing a second mutation.
     const task = this.applyOnce(kind, effectKey, run);
-    this.inFlight.set(effectKey, task);
-    try {
-      return await task;
-    } finally {
-      this.inFlight.delete(effectKey);
-    }
+    claim.settle(task);
+    return await task;
   }
 
   private async applyOnce<T>(
@@ -277,9 +350,33 @@ export class TodosAdapter {
 
 /**
  * Shared store for the transitional alert flow so that processing the same
- * alert row twice in one process replays instead of duplicating.
+ * alert row twice in one process replays instead of duplicating. Its `claim`
+ * makes the check-then-create sequence atomic across concurrent dispatches,
+ * each of which constructs its own adapter around this one store.
  */
 const alertEffectStore = new InMemoryTodosEffectStore();
+
+/**
+ * Dummy alert for `monitor integrations test todos`.
+ *
+ * The machine id carries a per-run token, so the open-task dedup can never
+ * short-circuit a later run with the previous run's still-open test task:
+ * every run must reach the create endpoint (and therefore exercise write
+ * authorization) for the self-test to mean anything. A run that somehow skips
+ * creation is a failed test, never a pass.
+ */
+export function makeTestAlert(now: number = Date.now()): AlertRow {
+  return {
+    id: 0,
+    machine_id: `test-machine-${now}`,
+    triggered_at: Math.floor(now / 1000),
+    resolved_at: null,
+    severity: "critical",
+    check_name: "test",
+    message: "This is a test alert from the monitor CLI",
+    auto_resolved: 0,
+  };
+}
 
 const DEFAULT_ALERT_BASE_URL = "http://localhost:3000";
 

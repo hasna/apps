@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import type { SystemSnapshot } from "../collectors/local.js";
-import { formatCompactStatus } from "./index.js";
+import { formatCompactStatus, todosTestFailureReason } from "./index.js";
 
 let configDir: string | undefined;
 
@@ -151,5 +151,108 @@ describe("monitor compare", () => {
     expect(result.status).toBe(0);
     const rows = JSON.parse(result.stdout) as Array<Record<string, unknown>>;
     expect(rows.map((row) => row.machineId)).toEqual(["local-a"]);
+  });
+});
+
+describe("monitor integrations test todos", () => {
+  it("every run exercises the create endpoint — later runs are not short-circuited by an earlier run's open test task", async () => {
+    // Mock todos /v1 server: listTasks returns whatever the mock has
+    // "created" so far, exactly like the real server would after a first
+    // test run. The command is driven in-process through the real commander
+    // action (not a spawned child), so the test is deterministic under load.
+    const created: Array<{ id: string; title: string; status: string }> = [];
+    let creates = 0;
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (req.method === "GET" && url.pathname === "/v1/tasks") {
+          return Response.json({ tasks: created, total: created.length });
+        }
+        if (req.method === "POST" && url.pathname === "/v1/tasks") {
+          creates++;
+          const body = (await req.json()) as { title: string };
+          const task = {
+            id: `mock-${creates}`,
+            title: body.title,
+            status: "pending",
+          };
+          created.push(task);
+          return Response.json({ task }, { status: 201 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const todosConfigDir = mkdtempSync(join(tmpdir(), "monitor-cli-todos-"));
+    try {
+      writeFileSync(
+        join(todosConfigDir, "config.json"),
+        JSON.stringify({
+          machines: [],
+          integrations: {
+            todos: {
+              enabled: true,
+              project_id: "proj-test",
+              base_url: `http://127.0.0.1:${server.port}`,
+            },
+          },
+        })
+      );
+      const previousConfigDir = process.env.MONITOR_CONFIG_DIR;
+      process.env.MONITOR_CONFIG_DIR = todosConfigDir;
+
+      const originalLog = console.log;
+      const originalError = console.error;
+      const output: string[] = [];
+      console.log = (...args: unknown[]) => output.push(args.join(" "));
+      console.error = (...args: unknown[]) => output.push(args.join(" "));
+      try {
+        const { program } = await import("./index.js");
+        for (let run = 0; run < 2; run++) {
+          await program.parseAsync([
+            "node",
+            "monitor",
+            "integrations",
+            "test",
+            "todos",
+          ]);
+        }
+      } finally {
+        console.log = originalLog;
+        console.error = originalError;
+        if (previousConfigDir === undefined) {
+          delete process.env.MONITOR_CONFIG_DIR;
+        } else {
+          process.env.MONITOR_CONFIG_DIR = previousConfigDir;
+        }
+      }
+
+      expect(output.join("\n")).toContain("Integration 'todos' test passed.");
+
+      // The first run left an open test task on the mock server. With a fixed
+      // test identity the second run would be skipped and still report
+      // success — the false-green this regression guards against. Each run
+      // carries its own identity, so the second run must reach the create
+      // endpoint again.
+      expect(creates).toBe(2);
+    } finally {
+      server.stop(true);
+      rmSync(todosConfigDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("todosTestFailureReason", () => {
+  it("reports the error for a confirmed create failure", () => {
+    expect(todosTestFailureReason({ ok: false, error: "boom" })).toBe("boom");
+  });
+
+  it("reports a failure when creation was skipped — a skipped test never reports success", () => {
+    const reason = todosTestFailureReason({ ok: true, skipped: true });
+    expect(reason).toContain("create endpoint was not exercised");
+  });
+
+  it("returns undefined when creation was exercised and succeeded", () => {
+    expect(todosTestFailureReason({ ok: true })).toBeUndefined();
   });
 });

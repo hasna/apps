@@ -14,8 +14,10 @@ import { describe, expect, it } from "bun:test";
 import { TodosV1Client } from "@hasna/todos/sdk";
 import type { AlertRow } from "../db/schema.js";
 import {
+  InMemoryTodosEffectStore,
   TodosAdapter,
   createTaskForAlert,
+  makeTestAlert,
   type TodosAdapterOptions,
   type TodosEffectStore,
 } from "./todos.js";
@@ -265,6 +267,45 @@ describe("TodosAdapter.createTask", () => {
       /boom|500/
     );
     expect(transport.calls).toHaveLength(1);
+  });
+
+  it("two adapter instances sharing one store coalesce concurrent same-key calls onto one client mutation", async () => {
+    let release: ((value: unknown) => void) | undefined;
+    let fetchCount = 0;
+    const gate = new Promise((r) => {
+      release = r;
+    });
+    const fetchImpl: typeof fetch = (async () => {
+      fetchCount++;
+      await gate;
+      return new Response(
+        JSON.stringify({ task: { id: "task-1", title: "X" } }),
+        { status: 201, headers: { "Content-Type": "application/json" } }
+      );
+    }) as unknown as typeof fetch;
+    const client = new TodosV1Client({ baseUrl: "http://todos.test", fetch: fetchImpl });
+    // The production shape: each call site builds its own adapter and only the
+    // effect store is shared. Atomicity must live in the store, not in a
+    // per-adapter in-flight map, or two instances both observe an empty store
+    // and both issue the mutation.
+    const store = new InMemoryTodosEffectStore();
+    const adapterA = makeAdapter(client, store);
+    const adapterB = makeAdapter(client, store);
+
+    const first = adapterA.createTask("run-1:alert:cpu", { title: "X" });
+    const second = adapterB.createTask("run-1:alert:cpu", { title: "X" });
+    // Give both calls time to enter apply() before the transport resolves.
+    await new Promise((r) => setTimeout(r, 10));
+    release!(undefined);
+
+    const [a, b] = await Promise.all([first, second]);
+    expect(fetchCount).toBe(1);
+    expect(a.ok).toBe(true);
+    expect(a.applied).toBe(true);
+    expect(b.ok).toBe(true);
+    // The joiner issued no client call of its own.
+    expect(b.applied).toBe(false);
+    expect(b.result).toEqual(a.result);
   });
 });
 
@@ -562,5 +603,101 @@ describe("createTaskForAlert", () => {
     expect(out.error).toContain("500");
     // The listTasks probe and the create attempt both went out.
     expect(calls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("concurrent createTaskForAlert calls for the same alert row issue exactly one create across adapter instances", async () => {
+    let release: ((value: unknown) => void) | undefined;
+    let creates = 0;
+    const gate = new Promise((r) => {
+      release = r;
+    });
+    const fetchImpl: typeof fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit
+    ) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      await gate;
+      if (method === "POST") {
+        creates++;
+        return new Response(
+          JSON.stringify({ task: { id: "task-1", title: "T" } }),
+          { status: 201, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response(
+        JSON.stringify({ tasks: [], total: 0 }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as unknown as typeof fetch;
+    const client = new TodosV1Client({ baseUrl: "http://todos.test", fetch: fetchImpl });
+    const alert = makeAlert({ id: 30 });
+    const cfg = {
+      enabled: true,
+      project_id: "proj-1",
+      base_url: "http://todos.test",
+      client,
+    };
+
+    // The MCP doctor dispatches are fire-and-forget; two concurrent dispatches
+    // of the same alert row each construct their own adapter, sharing only the
+    // module-level effect store. Atomicity in the store must serialize the
+    // creates — two separate adapter instances must not both issue the POST.
+    const first = createTaskForAlert(alert, cfg);
+    const second = createTaskForAlert(alert, cfg);
+    // Give both calls time to enter the create path before the transport resolves.
+    await new Promise((r) => setTimeout(r, 10));
+    release!(undefined);
+
+    const [a, b] = await Promise.all([first, second]);
+    expect(creates).toBe(1);
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+  });
+
+  it("a later integration-test run is not short-circuited by the previous run's open test task", async () => {
+    // makeTestAlert gives every run its own machine identity, so the open-task
+    // dedup can never match a previous run's task and skip creation — every
+    // `monitor integrations test todos` run must exercise the create endpoint.
+    const run1 = makeTestAlert(1_752_874_000);
+    const run2 = makeTestAlert(1_752_874_600);
+    expect(run2.machine_id).not.toBe(run1.machine_id);
+
+    const transport = makeTransport({
+      "/v1/tasks?project_id=proj-1&limit=50&offset=0": {
+        status: 200,
+        method: "GET",
+        body: {
+          tasks: [
+            {
+              id: "open-test",
+              // The task the FIRST run left behind, still open.
+              title: `ALERT: ${run1.machine_id} ${run1.check_name} — This is a test alert from the monitor CLI`,
+              status: "pending",
+            },
+          ],
+          total: 1,
+        },
+      },
+      "/v1/tasks": {
+        status: 201,
+        method: "POST",
+        body: { task: { id: "task-2", title: "T" } },
+      },
+    });
+    const client = makeClient(transport);
+
+    const out = await createTaskForAlert(run2, {
+      enabled: true,
+      project_id: "proj-1",
+      base_url: "http://todos.test",
+      client,
+    });
+
+    // Run 2 must not skip: creation was exercised and succeeded.
+    expect(out).toEqual({ ok: true });
+    const createCalls = transport.calls.filter(
+      (c) => c.method === "POST" && c.url.includes("/v1/tasks")
+    );
+    expect(createCalls).toHaveLength(1);
   });
 });
