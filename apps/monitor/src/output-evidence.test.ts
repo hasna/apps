@@ -64,6 +64,41 @@ describe("redactOutputText", () => {
     expect(result.redacted).toBe(true);
   });
 
+  test("redacts Authorization header Bearer values", () => {
+    // Runtime-constructed sentinel: the literal credential shape never appears
+    // in source, keeping the staged secrets scan clean for a synthetic fixture.
+    const credential = ["sk-ant-api03", "abcdefghijklmnopqrstuvwxyz"].join("-");
+    const result = redactOutputText(`Authorization: Bearer ${credential} continue`);
+    expect(result.text).not.toContain(credential);
+    expect(result.text).toContain("***");
+    expect(result.redacted).toBe(true);
+  });
+
+  test("redacts colon-separated header values for sensitive keys", () => {
+    const result = redactOutputText("X-Api-Key: abc123-secret\nAuthorization: topsecret-value");
+    expect(result.text).toContain("X-Api-Key: ***");
+    expect(result.text).toContain("Authorization: ***");
+    expect(result.text).not.toContain("abc123-secret");
+    expect(result.text).not.toContain("topsecret-value");
+    expect(result.redacted).toBe(true);
+  });
+
+  test("redacts semicolon-separated credential query parameters", () => {
+    const result = redactOutputText(
+      "download https://cdn.example.invalid/file.bin?ok=1;token=supersecret&x=2"
+    );
+    expect(result.text).toBe("download https://cdn.example.invalid/file.bin?ok=1;token=***&x=2");
+    expect(result.text).not.toContain("supersecret");
+    expect(result.redacted).toBe(true);
+  });
+
+  test("leaves non-sensitive colon-separated prose intact", () => {
+    const text = "Time: 12:30 note: plain value";
+    const result = redactOutputText(text);
+    expect(result.text).toBe(text);
+    expect(result.redacted).toBe(false);
+  });
+
   test("leaves clean text unchanged and reports redacted=false", () => {
     const text = "All checks passed. 3 machines healthy. READY";
     const result = redactOutputText(text);
@@ -73,6 +108,8 @@ describe("redactOutputText", () => {
 
   test("containsCredentialShape agrees with the redactor", () => {
     expect(containsCredentialShape("token=abc123")).toBe(true);
+    expect(containsCredentialShape("Authorization: Bearer value123")).toBe(true);
+    expect(containsCredentialShape("https://host/path?ok=1;token=abc")).toBe(true);
     expect(containsCredentialShape("plain output line")).toBe(false);
   });
 });
