@@ -45,7 +45,7 @@ Same foundation as the `open-*` ecosystem:
 | Search | **SQLite FTS5** | Full-text search, no extra service |
 | Auth | **API Key + Bearer token** | Simple, agent-friendly |
 
-Port: **19428** (open-todos is 19427)
+Port: **19428** (todos is 19427)
 
 ---
 
@@ -631,7 +631,7 @@ CREATE TABLE email_queue (id, provider, to_addresses, from_address, subject, htm
 CREATE VIRTUAL TABLE tickets_fts USING fts5(title, description, content=tickets, content_rowid=rowid);
 ```
 
-Migrations tracked in `_migrations` table (same pattern as open-todos).
+Migrations tracked in `_migrations` table (same pattern as todos).
 
 ---
 
@@ -653,7 +653,7 @@ Migrations tracked in `_migrations` table (same pattern as open-todos).
 **Decision: SQLite FTS5 for v1** — full-text similarity search via BM25 ranking. Good enough for "did you mean?" before ticket creation. Vector embeddings (semantic search) as v2 enhancement.
 
 ### Port Assignment
-**Decision: 19428** — continues the open-* sequence (open-todos is 19427).
+**Decision: 19428** — continues the port sequence (todos is 19427).
 
 ---
 
