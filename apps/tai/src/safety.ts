@@ -40,7 +40,8 @@ const CONFIRM_PATTERNS: Array<[RegExp, string]> = [
 
 const BLOCK_PATTERNS: Array<[RegExp, string]> = [
   [SENSITIVE_PATH_PATTERN, "possible credential disclosure"],
-  [/\b(?:curl|wget)\b.*[?&](?:api[_-]?key|(?:access|auth|refresh|id)[_-]?token|client[_-]?secret|secret[_-]?key|token|secret|password)=/i, "possible credential exfiltration"],
+  [/\b(?:cat|grep|rg|sed|awk|head|tail)\b.*\b(?:access|api|auth|refresh|id|session)[_-](?:token|secret|key)\b/i, "possible credential disclosure"],
+  [/\b(?:curl|wget)\b.*\b(?:api[_-]?key|(?:access|auth|refresh|id)[_-]?token|client[_-]?secret|secret[_-]?key|token|secret|password)\s*=/i, "possible credential exfiltration"],
   [/\$\(|`|<\(|>\(/, "shell expansion can hide side effects"],
   [/\b(?:awk|perl|python|python3|ruby|node|bash|sh|zsh)\b.*\b(?:system|exec|spawn|eval|child_process)\b/i, "interpreter command can execute side effects"],
   [/\bfind\b.*(?:-exec|-delete|-execdir|-ok|-okdir)\b/i, "find action can mutate files or execute commands"],
@@ -64,11 +65,6 @@ export function classifyCommand(command: string): CommandClassification {
     return { risk: "block", reasons, requiresOverride: true };
   }
 
-  const first = firstCommand(trimmed);
-  if (first === "git" && isReadOnlyGit(trimmed)) {
-    return { risk: "allow", reasons: ["read-only git inspection command"], requiresOverride: false };
-  }
-
   for (const [pattern, reason] of CONFIRM_PATTERNS) {
     if (pattern.test(trimmed)) {
       reasons.push(reason);
@@ -77,6 +73,11 @@ export function classifyCommand(command: string): CommandClassification {
 
   if (reasons.length > 0) {
     return { risk: "confirm", reasons, requiresOverride: false };
+  }
+
+  const first = firstCommand(trimmed);
+  if (first === "git" && isReadOnlyGit(trimmed)) {
+    return { risk: "allow", reasons: ["read-only git inspection command"], requiresOverride: false };
   }
 
   if (first && READ_ONLY.has(first) && !/[;&|]\s*(?:rm|mv|cp|curl|wget|chmod|chown|sudo|tee)\b/i.test(trimmed)) {
