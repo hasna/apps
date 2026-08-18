@@ -20,8 +20,12 @@ export interface SkillsServerConfig {
   /**
    * HMAC key for signing served skill bundles. When set, the bundle endpoint adds
    * X-Skill-Bundle-Signature so clients holding the same key can verify that the bytes
-   * they pulled are the bytes this server decided to serve. Read from
-   * HASNA_SKILLS_SIGNING_KEY; never logged or printed.
+   * they pulled are the bytes this server decided to serve. Never logged or printed.
+   *
+   * Canonical env name: HASNA_SKILLS_API_SIGNING_KEY — the name the production deploy
+   * mounts (infra-live hasna-app module, infra/apps/skills/prod/main.tf). The legacy
+   * HASNA_SKILLS_SIGNING_KEY is retained as a backwards-compatible alias; the canonical
+   * name wins when both are set. Decision record: todos ee1904ca, plan 8022d27f.
    */
   bundleSigningKey?: string;
   requestBodyLimitBytes: number;
@@ -73,7 +77,10 @@ export function resolveServerConfig(env: Record<string, string | undefined> = pr
     artifactBucket: env.HASNA_SKILLS_S3_BUCKET || env.SKILLS_S3_BUCKET || undefined,
     artifactPrefix: normalizePrefix(env.HASNA_SKILLS_S3_PREFIX || env.SKILLS_S3_PREFIX || "skills/artifacts"),
     inlineWorker: env.HASNA_SKILLS_INLINE_WORKER === "1",
-    bundleSigningKey: env.HASNA_SKILLS_SIGNING_KEY || undefined,
+    // HASNA_SKILLS_API_SIGNING_KEY is canonical: it is the name the production deploy
+    // mounts (see the doc comment on bundleSigningKey). The legacy name is read only
+    // when the canonical one is unset, so a deploy that mounts both cannot drift.
+    bundleSigningKey: env.HASNA_SKILLS_API_SIGNING_KEY || env.HASNA_SKILLS_SIGNING_KEY || undefined,
     requestBodyLimitBytes: parsePositiveInt(env.HASNA_SKILLS_REQUEST_BODY_LIMIT_BYTES, 1_000_000),
     skillBundleLimitBytes: parsePositiveInt(env.HASNA_SKILLS_BUNDLE_LIMIT_BYTES, 25_000_000),
     // No vendor default: an operator's server advertises either the origin they
