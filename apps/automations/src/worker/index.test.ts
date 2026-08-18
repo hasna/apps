@@ -264,15 +264,15 @@ describe("TypedActionWorker", () => {
       expect(receipt.actions?.[0]?.result?.metadata?.deliveryStatus).toBe("partial");
       expect(receipt.actions?.[0]?.result?.metadata?.deliveryReceipts).toEqual(receipts as unknown as JsonValue);
       const sourceAction = receipt.actions![0]!;
-      const replay = store.requeuePartialAction(sourceAction.id);
-      expect(replay).toMatchObject({ status: "queued", metadata: { partialReplayOf: sourceAction.id } });
-      expect(store.requeuePartialAction(sourceAction.id).id).toBe(replay.id);
+      const replay = store.readmitPartialAction(sourceAction.id);
+      expect(replay).toMatchObject({ status: "admitted", metadata: { partialReplayOf: sourceAction.id } });
+      expect(store.readmitPartialAction(sourceAction.id).id).toBe(replay.id);
       const replayed = await worker.replayPartial(sourceAction.id);
       expect(replayed.status).toBe("succeeded");
       expect(replayed.run?.status).toBe("succeeded");
       expect(primaryEffects).toBe(1);
       expect(secondaryEffects).toBe(2);
-      expect(store.requireQueuedAction(sourceAction.id).result?.metadata?.deliveryReceipts).toEqual(receipts as unknown as JsonValue);
+      expect(store.requireQueueEntry(sourceAction.id).result?.metadata?.deliveryReceipts).toEqual(receipts as unknown as JsonValue);
     } finally {
       store.close();
     }
@@ -292,7 +292,7 @@ describe("TypedActionWorker", () => {
       });
 
       const detached = await worker.run("typed.worker.demo@1.0.0", { detach: true });
-      expect(detached.status).toBe("enqueued");
+      expect(detached.status).toBe("admitted");
       expect(detached.run).toBeUndefined();
       expect(store.requireRun(detached.runId).status).toBe("materialized");
 
@@ -335,11 +335,11 @@ describe("TypedActionWorker", () => {
       });
       const staleRun = staleWorker.run("typed.worker.demo@1.0.0", { leaseMs: 300 });
       await Bun.sleep(450);
-      const claimed = store.listQueuedActions().find((action) => action.status === "claimed" && action.claimedBy === "stale-worker");
+      const claimed = store.listQueueEntries().find((action) => action.status === "leased" && action.leasedBy === "stale-worker");
       expect(claimed).toBeDefined();
-      store.db.query("UPDATE automation_actions SET claimed_by = 'replacement', claim_version = claim_version + 1 WHERE id = $id").run({ $id: claimed!.id });
+      store.db.query("UPDATE automation_actions SET leased_by = 'replacement', lease_generation = lease_generation + 1 WHERE id = $id").run({ $id: claimed!.id });
       await expect(staleRun).rejects.toThrow();
-      expect(store.requireQueuedAction(claimed!.id).status).toBe("claimed");
+      expect(store.requireQueueEntry(claimed!.id).status).toBe("leased");
     } finally {
       store.close();
     }

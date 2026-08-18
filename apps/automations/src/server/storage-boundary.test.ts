@@ -116,7 +116,7 @@ describe("storage loading boundary", () => {
         automationId: "automation-sqlite-fence",
         trigger: { kind: "manual" },
       });
-      const action = await store.enqueueAction({
+      const action = await store.admitAction({
         id: "action-sqlite-fence",
         automationRunId: run.id,
         stepId: "work",
@@ -130,35 +130,35 @@ describe("storage loading boundary", () => {
           requestedAt: "2026-08-11T00:00:00.000Z",
         },
       });
-      const original = await store.claimNextAction({
+      const original = await store.leaseNextAction({
         runnerId: "same-runner",
         now: "2026-08-11T00:00:00.000Z",
         leaseMs: 1_000,
       });
-      const takeover = await store.claimNextAction({
+      const takeover = await store.leaseNextAction({
         runnerId: "same-runner",
         now: "2026-08-11T00:00:01.000Z",
         leaseMs: 10_000,
       });
 
-      expect(original?.fenceToken).toBe(1);
-      expect(takeover?.fenceToken).toBe(2);
+      expect(original?.fencingToken).toBe(1);
+      expect(takeover?.fencingToken).toBe(2);
       await expect(store.renewActionLease({
         actionId: action.id,
         runnerId: "same-runner",
-        fenceToken: original!.fenceToken,
+        fencingToken: original!.fencingToken,
         now: "2026-08-11T00:00:02.000Z",
       })).rejects.toThrow("stale or expired");
       await expect(store.completeActionFenced({
         actionId: action.id,
         runnerId: "same-runner",
-        fenceToken: original!.fenceToken,
+        fencingToken: original!.fencingToken,
         now: "2026-08-11T00:00:02.000Z",
       })).rejects.toThrow("stale or expired");
       await expect(store.failActionFenced({
         actionId: action.id,
         runnerId: "same-runner",
-        fenceToken: original!.fenceToken,
+        fencingToken: original!.fencingToken,
         now: "2026-08-11T00:00:02.000Z",
         error: { code: "STALE", message: "stale" },
       })).rejects.toThrow("stale or expired");
@@ -166,12 +166,12 @@ describe("storage loading boundary", () => {
       expect((await store.completeActionFenced({
         actionId: action.id,
         runnerId: "same-runner",
-        fenceToken: takeover!.fenceToken,
+        fencingToken: takeover!.fencingToken,
         now: "2026-08-11T00:00:02.000Z",
         result: { summary: "done" },
       })).status).toBe("succeeded");
 
-      const retryAction = await store.enqueueAction({
+      const retryAction = await store.admitAction({
         id: "action-sqlite-fenced-failure",
         automationRunId: run.id,
         stepId: "retry-work",
@@ -186,7 +186,7 @@ describe("storage loading boundary", () => {
           requestedAt: "2026-08-11T00:00:03.000Z",
         },
       });
-      const failureClaim = await store.claimNextAction({
+      const failureClaim = await store.leaseNextAction({
         runnerId: "failure-runner",
         now: "2026-08-11T00:00:03.000Z",
         leaseMs: 10_000,
@@ -195,20 +195,20 @@ describe("storage loading boundary", () => {
       expect((await store.renewActionLease({
         actionId: retryAction.id,
         runnerId: "failure-runner",
-        fenceToken: failureClaim!.fenceToken,
+        fencingToken: failureClaim!.fencingToken,
         now: "2026-08-11T00:00:04.000Z",
         leaseMs: 10_000,
       })).leaseExpiresAt).toBe("2026-08-11T00:00:14.000Z");
       expect((await store.failActionFenced({
         actionId: retryAction.id,
         runnerId: "failure-runner",
-        fenceToken: failureClaim!.fenceToken,
+        fencingToken: failureClaim!.fencingToken,
         now: "2026-08-11T00:00:05.000Z",
         retryBackoffMs: 0,
         error: { code: "RETRY", message: "retry", retryable: true },
-      })).status).toBe("retrying");
+      })).status).toBe("admitted");
       console.log(
-        `CONTROL old_fence=${original!.fenceToken} current_fence=${takeover!.fenceToken} public_adapter_bypass=blocked`,
+        `CONTROL old_fence=${original!.fencingToken} current_fence=${takeover!.fencingToken} public_adapter_bypass=blocked`,
       );
     } finally {
       await store.close();

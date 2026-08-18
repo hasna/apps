@@ -143,7 +143,7 @@ export function automationRunToWorkRun(run: AutomationRun, options: AutomationRu
   return parseContract(SCHEMA_IDS.workRun, draft);
 }
 
-export function queuedActionDecisionEnvelopes(actions: QueuedAction[], options: Omit<ApprovalDecisionContractOptions, "action" | "gate"> = {}): DecisionEnvelope[] {
+export function actionDecisionEnvelopes(actions: QueuedAction[], options: Omit<ApprovalDecisionContractOptions, "action" | "gate"> = {}): DecisionEnvelope[] {
   return actions
     .map((action) => action.approvalGate?.decision
       ? approvalDecisionToDecisionEnvelope(action.approvalGate.decision, {

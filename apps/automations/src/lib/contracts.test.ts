@@ -9,7 +9,7 @@ import {
   approvalDecisionToDecisionEnvelope,
   automationRunToWorkRun,
   evidenceRefFromString,
-  queuedActionDecisionEnvelopes,
+  actionDecisionEnvelopes,
 } from "./contracts.js";
 
 const createdAt = "2026-07-07T10:00:00.000Z";
@@ -37,7 +37,7 @@ function queuedApprovalAction(status: "pending" | "approved" | "rejected" | "can
     stepId: "needs-approval",
     actionId: "actions.external-write",
     idempotencyKey: `run_materialized:${status}`,
-    status: status === "pending" ? "waiting_approval" : "queued",
+    status: status === "pending" ? "waiting_approval" : "admitted",
     invocation: {
       id: `inv_${status}`,
       actionId: "actions.external-write",
@@ -100,18 +100,18 @@ describe("contract adapters", () => {
     expect(pendingDecision.evidenceRefs[0]?.uri).toBe("artifact://approvals/decision.txt");
 
     const rejected = queuedApprovalAction("rejected");
-    const rejectedDecision = queuedActionDecisionEnvelopes([rejected])[0]!;
+    const rejectedDecision = actionDecisionEnvelopes([rejected])[0]!;
     expect(rejectedDecision.status).toBe("denied");
     expect(rejectedDecision.obligations).toEqual(["change is not safe"]);
     expect(rejectedDecision.selected).toEqual([]);
 
     const approved = queuedApprovalAction("approved");
-    const approvedDecision = queuedActionDecisionEnvelopes([approved])[0]!;
+    const approvedDecision = actionDecisionEnvelopes([approved])[0]!;
     expect(approvedDecision.status).toBe("allowed");
     expect(approvedDecision.selected[0]).toMatchObject({ kind: "action", id: "action_approved" });
 
     const cancelled = queuedApprovalAction("cancelled");
-    const cancelledDecision = queuedActionDecisionEnvelopes([cancelled])[0]!;
+    const cancelledDecision = actionDecisionEnvelopes([cancelled])[0]!;
     expect(cancelledDecision.status).toBe("skipped");
     expect(cancelledDecision.skipped[0]).toMatchObject({ kind: "action", id: "action_cancelled" });
 
@@ -148,9 +148,9 @@ describe("contract adapters", () => {
         time: createdAt,
         data: {},
       });
-      const waiting = store.listQueuedActions().find((action) => action.stepId === "needs-approval")!;
+      const waiting = store.listQueueEntries().find((action) => action.stepId === "needs-approval")!;
       const approved = store.approveAction(waiting.id, { now: updatedAt, decidedBy: "reviewer" });
-      const decision = queuedActionDecisionEnvelopes([approved])[0]!;
+      const decision = actionDecisionEnvelopes([approved])[0]!;
 
       expect(decision.status).toBe("allowed");
       expect(decision.actor).toMatchObject({ kind: "human", id: "reviewer" });

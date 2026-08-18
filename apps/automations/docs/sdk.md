@@ -44,13 +44,13 @@ Idempotency uses `event.dedupeKey` and falls back to `event.id`. Trigger filters
 perform top-level equality and support `{ "not": value }`; they are not a
 general expression language.
 
-Every matched action step is enqueued. `dependsOn` gates claiming until its
+Every matched action step is admitted to the queue. `dependsOn` gates leasing until its
 dependencies succeed. `AutomationActionStep.when` is advisory metadata and is
 not evaluated. Manual, schedule, and API trigger kinds validate and persist,
 but the current event materializer does not execute them.
 
 `createReplayRequest` persists replay intent for a source run; no current store
-worker consumes those records. Use `requeueDeadAction` or `automations dlq
+worker consumes those records. Use `readmitDeadAction` or `automations dlq
 replay` to move a dead action back to the queue.
 
 ## Contract Adapters
@@ -58,10 +58,10 @@ replay` to move a dead action back to the queue.
 ```ts
 import {
   automationRunToWorkRun,
-  queuedActionDecisionEnvelopes,
+  actionDecisionEnvelopes,
 } from "@hasna/automations/contracts";
 
-const decisions = queuedActionDecisionEnvelopes(actions);
+const decisions = actionDecisionEnvelopes(actions);
 const workRun = automationRunToWorkRun(run, { decisions });
 ```
 
@@ -77,6 +77,6 @@ public ids.
 engagement checks, non-engaged enrollment, and an uptime watch window.
 `writeRecipePack` and `loadRecipeSpecFile` write and validate JSON files.
 
-`listDefaultRuntimeBindings` returns an OpenLoops claim-queue descriptor. It is
+`listDefaultRuntimeBindings` returns an OpenLoops lease-queue descriptor. It is
 metadata only: Automations never invokes agent workflows or owns OpenLoops run
 artifacts.

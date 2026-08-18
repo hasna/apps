@@ -8,7 +8,7 @@ import {
   exampleAutomationSpec,
   listDefaultRuntimeBindings,
   normalizeWebhookRequestToEvent,
-  queuedActionDecisionEnvelopes,
+  actionDecisionEnvelopes,
   validateAutomationSpec,
   type AutomationSpec,
   type EventEnvelopeLike,
@@ -453,20 +453,20 @@ async function runDlqCommand(parsed: ParsedArgs, options: RunAutomationsCliOptio
   const store = new AutomationsStore();
   try {
     if (subcommand === "list") {
-      const dead = store.listDeadActions();
+      const dead = store.listDeadLetterActions();
       output(parsed, dead, () => console.log(JSON.stringify(dead, null, 2)));
       return 0;
     }
     if (subcommand === "replay") {
       const id = parsed.rest[2];
       if (!id) throw new Error("dlq replay requires an action id");
-      const existing = store.requireQueuedAction(id);
+      const existing = store.requireQueueEntry(id);
       if (existing.status === "succeeded" && existing.result?.metadata?.deliveryStatus === "partial") {
         const worker = options.worker ?? createTypedActionWorker({ store, definitions: options.typedActions, authority: options.authority });
         const receipt = await worker.replayPartial(id);
         output(parsed, receipt, () => console.log(JSON.stringify(receipt, null, 2)));
       } else {
-        const action = store.requeueDeadAction(id);
+        const action = store.readmitDeadAction(id);
         output(parsed, action, () => console.log(JSON.stringify(action, null, 2)));
       }
       return 0;
@@ -493,9 +493,9 @@ function runRunsCommand(parsed: ParsedArgs, options: RunAutomationsCliOptions): 
         output(parsed, runs, () => console.log(JSON.stringify(runs, null, 2)));
         return 0;
       }
-      const actions = store.listQueuedActions();
+      const actions = store.listQueueEntries();
       const contracts = runs.map((run) => automationRunToWorkRun(run, {
-        decisions: queuedActionDecisionEnvelopes(actions.filter((action) => action.automationRunId === run.id)),
+        decisions: actionDecisionEnvelopes(actions.filter((action) => action.automationRunId === run.id)),
       }));
       output(parsed, contracts, () => console.log(JSON.stringify(contracts, null, 2)));
       return 0;
@@ -508,7 +508,7 @@ function runRunsCommand(parsed: ParsedArgs, options: RunAutomationsCliOptions): 
         output(parsed, run, () => console.log(JSON.stringify(run, null, 2)));
         return 0;
       }
-      const decisions = queuedActionDecisionEnvelopes(store.listQueuedActions().filter((action) => action.automationRunId === run.id));
+      const decisions = actionDecisionEnvelopes(store.listQueueEntries().filter((action) => action.automationRunId === run.id));
       const contractRun = automationRunToWorkRun(run, { decisions });
       output(parsed, contractRun, () => console.log(JSON.stringify(contractRun, null, 2)));
       return 0;
@@ -527,10 +527,10 @@ function runQueueCommand(parsed: ParsedArgs, options: RunAutomationsCliOptions):
   }
   const store = new AutomationsStore();
   try {
-    if (subcommand === "claim") {
+    if (subcommand === "lease") {
       const args = parsed.rest.slice(2);
       const runnerId = takeOption(args, "--runner") ?? `cli:${process.pid}`;
-      const action = store.claimNextAction({ runnerId });
+      const action = store.leaseNextAction({ runnerId });
       output(parsed, action ?? null, () => console.log(JSON.stringify(action ?? null, null, 2)));
       return 0;
     }
@@ -728,7 +728,7 @@ Usage:
   ${name} [--dir <path>] [--json] runs show <run-id> [--contract]
   ${name} [--dir <path>] [--json] dlq list
   ${name} [--dir <path>] [--json] dlq replay <action-id>
-  ${name} [--dir <path>] [--json] queue claim [--runner <id>]
+  ${name} [--dir <path>] [--json] queue lease [--runner <id>]
   ${name} [--dir <path>] [--json] queue complete <action-id> [--runner <id>] [--result-json <json>]
   ${name} [--dir <path>] [--json] queue fail <action-id> [--runner <id>] [--code <code>] [--message <text>] [--retryable false] [--retry-backoff-ms <ms>]
   ${name} [--dir <path>] [--json] queue approve <action-id>
@@ -825,7 +825,7 @@ function printQueueHelp(options: RunAutomationsCliOptions = {}): void {
   console.log(`${name} queue
 
 Usage:
-  ${name} [--dir <path>] [--json] queue claim [--runner <id>]
+  ${name} [--dir <path>] [--json] queue lease [--runner <id>]
   ${name} [--dir <path>] [--json] queue complete <action-id> [--runner <id>] [--result-json <json>]
   ${name} [--dir <path>] [--json] queue fail <action-id> [--runner <id>] [--code <code>] [--message <text>] [--retryable false] [--retry-backoff-ms <ms>]
   ${name} [--dir <path>] [--json] queue approve <action-id>

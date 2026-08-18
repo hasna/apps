@@ -110,7 +110,7 @@ describe("automations CLI", () => {
 
     const detached = await runCli(["run", "typed.worker.demo@1.0.0", "--detach"]);
     expect(detached.exitCode).toBe(0);
-    expect(JSON.parse(detached.stdout)).toMatchObject({ status: "enqueued", version: "1.0.0" });
+    expect(JSON.parse(detached.stdout)).toMatchObject({ status: "admitted", version: "1.0.0" });
 
     const executed = await runCli(["run", "typed.worker.demo@1.0.0"]);
     expect(executed.exitCode).toBe(0);
@@ -266,13 +266,13 @@ describe("automations CLI", () => {
       status: "pending",
     });
 
-    const claim = await runCli(["queue", "claim", "--runner", "cli-test"]);
+    const claim = await runCli(["queue", "lease", "--runner", "cli-test"]);
     expect(claim.exitCode).toBe(0);
-    expect(JSON.parse(claim.stdout)).toMatchObject({ id: actionId, status: "claimed", claimedBy: "cli-test" });
+    expect(JSON.parse(claim.stdout)).toMatchObject({ id: actionId, status: "leased", leasedBy: "cli-test" });
 
     for (let index = 0; index < 3; index += 1) {
       if (index > 0) {
-        const reclaimed = await runCli(["queue", "claim", "--runner", "cli-test"]);
+        const reclaimed = await runCli(["queue", "lease", "--runner", "cli-test"]);
         expect(reclaimed.exitCode).toBe(0);
       }
       const failed = await runCli(["queue", "fail", actionId, "--runner", "cli-test", "--code", "CLI_FAIL", "--message", "failed", "--retry-backoff-ms", "0"]);
@@ -285,13 +285,13 @@ describe("automations CLI", () => {
 
     const replay = await runCli(["dlq", "replay", actionId]);
     expect(replay.exitCode).toBe(0);
-    expect(JSON.parse(replay.stdout)).toMatchObject({ id: actionId, status: "queued" });
+    expect(JSON.parse(replay.stdout)).toMatchObject({ id: actionId, status: "admitted" });
 
     const runtimes = await runCli(["runtimes"]);
     expect(runtimes.exitCode).toBe(0);
     expect(JSON.parse(runtimes.stdout)[0]).toMatchObject({
       kind: "open-loops",
-      handoff: "claim-queue",
+      handoff: "lease-queue",
       metadata: {
         eventEnvelope: {
           exportCommand: "automations webhooks event <route-id-or-path> --body-json <json>",

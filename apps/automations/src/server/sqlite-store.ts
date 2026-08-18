@@ -1,6 +1,6 @@
 import type { ActionDeadLetter } from "@hasna/actions";
-import type { QueueClaimOptions, QueuedAction } from "../types.js";
-import { AutomationsStore, type AutomationsStoreOptions, type CreateWebhookRouteInput, type EnqueueActionInput } from "../lib/store.js";
+import type { QueueLeaseOptions, QueuedAction } from "../types.js";
+import { AutomationsStore, type AutomationsStoreOptions, type CreateWebhookRouteInput, type AdmitActionInput } from "../lib/store.js";
 import type { CreateReplayRequestInput, CreateRunInput, DaemonHeartbeatInput, DaemonLease, FencedActionCompletionOptions, FencedActionFailureOptions, LeasedQueuedAction, ListPageOptions, RenewActionLeaseOptions, ServerAutomationsStore } from "./store.js";
 
 export class SqliteServerAutomationsStore implements ServerAutomationsStore {
@@ -23,24 +23,24 @@ export class SqliteServerAutomationsStore implements ServerAutomationsStore {
   async createRun(input: CreateRunInput) { return this.#store.createRun(input); }
   async requireRun(id: string) { return this.#store.requireRun(id); }
   async listRuns(options: ListPageOptions = {}) { return pageBy(this.#store.listRuns(), options, "createdAt"); }
-  async enqueueAction(input: EnqueueActionInput) { return this.#store.enqueueAction(input); }
-  async requireQueuedAction(id: string) { return this.#store.requireQueuedAction(id); }
-  async listQueuedActions(options: ListPageOptions = {}) { return pageBy(this.#store.listQueuedActions(), options, "createdAt"); }
-  async listDeadActions(options: ListPageOptions = {}) { return pageBy(this.#store.listDeadActions(), options, "updatedAt"); }
-  async claimNextAction(options: QueueClaimOptions): Promise<LeasedQueuedAction | undefined> {
-    const action = this.#store.claimNextAction(options);
-    return action ? this.withFenceToken(action) : undefined;
+  async admitAction(input: AdmitActionInput) { return this.#store.admitAction(input); }
+  async requireQueueEntry(id: string) { return this.#store.requireQueueEntry(id); }
+  async listQueueEntries(options: ListPageOptions = {}) { return pageBy(this.#store.listQueueEntries(), options, "createdAt"); }
+  async listDeadLetterActions(options: ListPageOptions = {}) { return pageBy(this.#store.listDeadLetterActions(), options, "updatedAt"); }
+  async leaseNextAction(options: QueueLeaseOptions): Promise<LeasedQueuedAction | undefined> {
+    const action = this.#store.leaseNextAction(options);
+    return action ? this.withFencingToken(action) : undefined;
   }
   async renewActionLease(options: RenewActionLeaseOptions): Promise<LeasedQueuedAction> {
     const now = normalizeIso(options.now);
     const expiresAt = new Date(new Date(now).getTime() + (options.leaseMs ?? 30_000)).toISOString();
     const result = this.#store.db.query(`UPDATE automation_actions SET lease_expires_at = $expiresAt, updated_at = $now
-      WHERE id = $id AND status = 'claimed' AND claimed_by = $runnerId
-        AND claim_version = $fenceToken AND lease_expires_at > $now`).run({
-      $id: options.actionId, $runnerId: options.runnerId, $fenceToken: options.fenceToken, $expiresAt: expiresAt, $now: now,
+      WHERE id = $id AND status = 'leased' AND leased_by = $runnerId
+        AND lease_generation = $fencingToken AND lease_expires_at > $now`).run({
+      $id: options.actionId, $runnerId: options.runnerId, $fencingToken: options.fencingToken, $expiresAt: expiresAt, $now: now,
     });
     assertFencedUpdate(result.changes, options.actionId);
-    return this.withFenceToken(this.#store.requireQueuedAction(options.actionId));
+    return this.withFencingToken(this.#store.requireQueueEntry(options.actionId));
   }
   async completeActionFenced(options: FencedActionCompletionOptions) {
     try {
@@ -53,16 +53,16 @@ export class SqliteServerAutomationsStore implements ServerAutomationsStore {
     }
   }
   async failActionFenced(options: FencedActionFailureOptions) {
-    const action = this.#store.requireQueuedAction(options.actionId);
+    const action = this.#store.requireQueueEntry(options.actionId);
     const nextAttempt = action.attempt + 1;
     const retrying = options.error.retryable !== false && nextAttempt < action.maxAttempts;
     const deadLetter: ActionDeadLetter | undefined = retrying ? undefined : {
       reason: nextAttempt >= action.maxAttempts ? "max attempts exceeded" : "non-retryable action error",
       failedAt: normalizeIso(options.now), lastError: options.error, attempts: nextAttempt, replayable: true,
     };
-    return this.writeFencedResult(options, retrying ? "retrying" : "dead", undefined, options.error, nextAttempt, retrying ? (options.retryBackoffMs ?? defaultBackoffMs(nextAttempt)) : undefined, deadLetter);
+    return this.writeFencedResult(options, retrying ? "admitted" : "dead", undefined, options.error, nextAttempt, retrying ? (options.retryBackoffMs ?? defaultBackoffMs(nextAttempt)) : undefined, deadLetter);
   }
-  async requeueDeadAction(id: string, options = {}) { return this.#store.requeueDeadAction(id, options); }
+  async readmitDeadAction(id: string, options = {}) { return this.#store.readmitDeadAction(id, options); }
   async approveAction(id: string, options = {}) { return this.#store.approveAction(id, options); }
   async rejectAction(id: string, options = {}) { return this.#store.rejectAction(id, options); }
   async materializeEvent(event: Parameters<AutomationsStore["materializeEvent"]>[0], options = {}) { return this.#store.materializeEvent(event, options); }
@@ -72,24 +72,24 @@ export class SqliteServerAutomationsStore implements ServerAutomationsStore {
   async heartbeatDaemon(input: DaemonHeartbeatInput = {}): Promise<DaemonLease> { return this.#store.heartbeatDaemon(input); }
   async latestDaemonLease(): Promise<DaemonLease | undefined> { return this.#store.latestDaemonLease(); }
   async status(now = new Date()) { return this.#store.status(now); }
-  private withFenceToken(action: QueuedAction): LeasedQueuedAction {
-    const row = this.#store.db.query("SELECT claim_version FROM automation_actions WHERE id = $id").get({ $id: action.id }) as { claim_version: number };
-    return { ...action, fenceToken: row.claim_version };
+  private withFencingToken(action: QueuedAction): LeasedQueuedAction {
+    const row = this.#store.db.query("SELECT lease_generation FROM automation_actions WHERE id = $id").get({ $id: action.id }) as { lease_generation: number };
+    return { ...action, fencingToken: row.lease_generation };
   }
-  private async writeFencedResult(options: FencedActionCompletionOptions | FencedActionFailureOptions, status: "succeeded" | "retrying" | "dead", result?: unknown, error?: unknown, attempt?: number, retryBackoffMs?: number, deadLetter?: ActionDeadLetter): Promise<QueuedAction> {
+  private async writeFencedResult(options: FencedActionCompletionOptions | FencedActionFailureOptions, status: "succeeded" | "admitted" | "dead", result?: unknown, error?: unknown, attempt?: number, retryBackoffMs?: number, deadLetter?: ActionDeadLetter): Promise<QueuedAction> {
     const now = normalizeIso(options.now);
     const availableAt = new Date(new Date(now).getTime() + (retryBackoffMs ?? 0)).toISOString();
     const update = this.#store.db.query(`UPDATE automation_actions SET status = $status, result_json = $resultJson,
       error_json = $errorJson, dead_letter_json = $deadLetterJson, attempt = COALESCE($attempt, attempt), available_at = $availableAt,
       lease_expires_at = NULL, updated_at = $now
-      WHERE id = $id AND status = 'claimed' AND claimed_by = $runnerId
-        AND claim_version = $fenceToken AND lease_expires_at > $now`).run({
-      $id: options.actionId, $runnerId: options.runnerId, $fenceToken: options.fenceToken, $status: status,
+      WHERE id = $id AND status = 'leased' AND leased_by = $runnerId
+        AND lease_generation = $fencingToken AND lease_expires_at > $now`).run({
+      $id: options.actionId, $runnerId: options.runnerId, $fencingToken: options.fencingToken, $status: status,
       $resultJson: result === undefined ? null : JSON.stringify(result), $errorJson: error === undefined ? null : JSON.stringify(error),
       $deadLetterJson: deadLetter === undefined ? null : JSON.stringify(deadLetter), $attempt: attempt ?? null, $availableAt: availableAt, $now: now,
     });
     assertFencedUpdate(update.changes, options.actionId);
-    return this.#store.requireQueuedAction(options.actionId);
+    return this.#store.requireQueueEntry(options.actionId);
   }
 }
 const DEFAULT_PAGE_LIMIT = 100;

@@ -9,7 +9,7 @@ import {
   POSTGRESQL_READY_CLAIM_CANDIDATES_SQL,
   PostgreSqlServerAutomationsStore,
 } from "./store.js";
-import { AutomationsStore, CLAIM_CANDIDATE_BUDGET } from "../../lib/store.js";
+import { AutomationsStore, LEASE_CANDIDATE_BUDGET } from "../../lib/store.js";
 
 const storage = selectServerStorage();
 const databaseUrl = storage.kind === "postgresql" ? storage.databaseUrl : undefined;
@@ -74,7 +74,7 @@ describe("SqliteServerAutomationsStore fenced settlement", () => {
         automationId: "sqlite-fenced-settlement",
         trigger: { kind: "manual" },
       });
-      const dependent = await store.enqueueAction({
+      const dependent = await store.admitAction({
         id: "sqlite-fenced-settlement-dependent",
         automationRunId: run.id,
         stepId: "dependent",
@@ -82,7 +82,7 @@ describe("SqliteServerAutomationsStore fenced settlement", () => {
         availableAt: BASE_TIME,
         invocation: { id: "sqlite-fenced-settlement-dependent-invocation", actionId: "actions.dependent", manifestVersion: "1.0.0", input: {}, requestedAt: BASE_TIME },
       });
-      const required = await store.enqueueAction({
+      const required = await store.admitAction({
         id: "sqlite-fenced-settlement-required",
         automationRunId: run.id,
         stepId: "required",
@@ -90,15 +90,15 @@ describe("SqliteServerAutomationsStore fenced settlement", () => {
         availableAt: BASE_TIME,
         invocation: { id: "sqlite-fenced-settlement-required-invocation", actionId: "actions.required", manifestVersion: "1.0.0", input: {}, requestedAt: BASE_TIME },
       });
-      const claim = await store.claimNextAction({ runnerId: "sqlite-fenced-settlement-runner", now: "2026-08-11T00:00:01.000Z" });
+      const claim = await store.leaseNextAction({ runnerId: "sqlite-fenced-settlement-runner", now: "2026-08-11T00:00:01.000Z" });
       expect(claim?.id).toBe(required.id);
       await store.completeActionFenced({
         actionId: required.id,
         runnerId: "sqlite-fenced-settlement-runner",
-        fenceToken: claim!.fenceToken,
+        fencingToken: claim!.fencingToken,
         now: "2026-08-11T00:00:02.000Z",
       });
-      expect((await store.claimNextAction({ runnerId: "sqlite-fenced-settlement-runner", now: "2026-08-11T00:00:03.000Z" }))?.id).toBe(dependent.id);
+      expect((await store.leaseNextAction({ runnerId: "sqlite-fenced-settlement-runner", now: "2026-08-11T00:00:03.000Z" }))?.id).toBe(dependent.id);
     } finally {
       await store.close();
     }
@@ -125,7 +125,7 @@ async function enqueueOne(
     automationId: `automation-${id}`,
     trigger: { kind: "manual" },
   });
-  return store.enqueueAction({
+  return store.admitAction({
     id: `action-${id}`,
     automationRunId: run.id,
     stepId: "work",
@@ -150,13 +150,13 @@ async function enqueueOne(
 type IsolatedRunnerConfig =
   | { operation: "claim"; runnerId: string; now?: string; leaseMs?: number; startAtEpochMs?: number }
   | { operation: "claim-and-complete"; runnerId: string; now?: string; leaseMs?: number; startAtEpochMs?: number }
-  | { operation: "renew"; actionId: string; runnerId: string; fenceToken: number; now?: string; leaseMs?: number }
-  | { operation: "complete"; actionId: string; runnerId: string; fenceToken: number; now?: string }
+  | { operation: "renew"; actionId: string; runnerId: string; fencingToken: number; now?: string; leaseMs?: number }
+  | { operation: "complete"; actionId: string; runnerId: string; fencingToken: number; now?: string }
   | {
       operation: "fail";
       actionId: string;
       runnerId: string;
-      fenceToken: number;
+      fencingToken: number;
       now?: string;
       retryBackoffMs?: number;
       retryable?: boolean;
@@ -218,7 +218,7 @@ afterAll(async () => {
 describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
   test("serializes concurrent migration of a blank database", async () => {
     const [left, right] = await connectPair();
-    expect(await left.status()).toMatchObject({ counts: { automations: 0, runs: 0, queuedActions: 0 } });
+    expect(await left.status()).toMatchObject({ counts: { automations: 0, runs: 0, queueDepth: 0 } });
     expect(await right.status()).toMatchObject({ dbPath: "postgresql" });
     const ledger = await admin!.unsafe<[{ id: string }]>("SELECT id FROM hasna_automations_schema_migrations");
     expect(ledger.map((row) => row.id)).toEqual([
@@ -247,7 +247,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
         available_at,created_at,updated_at
       ) VALUES
         ('legacy-required','legacy-edge-run','required','actions.required','legacy-required','succeeded','{}'::jsonb,$1,$1,$1),
-        ('legacy-dependent','legacy-edge-run','dependent','actions.dependent','legacy-dependent','queued','{}'::jsonb,$1,$1,$1)
+        ('legacy-dependent','legacy-edge-run','dependent','actions.dependent','legacy-dependent','admitted','{}'::jsonb,$1,$1,$1)
     `, [BASE_TIME]);
     await admin!.unsafe(
       "INSERT INTO automation_action_dependencies (automation_run_id,action_id,dependency_action_id) VALUES ($1,$2,$3)",
@@ -259,12 +259,12 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
     await admin!.unsafe("DROP TABLE automation_action_step_dependencies");
     await admin!.unsafe(`DROP INDEX
       automation_actions_ready_order_idx,
-      automation_actions_expired_claim_order_idx`);
+      automation_actions_expired_lease_order_idx`);
     await admin!.unsafe(`
       CREATE INDEX automation_actions_ready_order_idx ON automation_actions(available_at,created_at,id)
-        WHERE status IN ('queued','retrying');
-      CREATE INDEX automation_actions_expired_claim_order_idx ON automation_actions(lease_expires_at,available_at,created_at,id)
-        WHERE status='claimed' AND lease_expires_at IS NOT NULL;
+        WHERE status IN ('admitted','admitted');
+      CREATE INDEX automation_actions_expired_lease_order_idx ON automation_actions(lease_expires_at,available_at,created_at,id)
+        WHERE status='leased' AND lease_expires_at IS NOT NULL;
     `);
 
     const upgraded = await PostgreSqlServerAutomationsStore.connect(databaseUrl!);
@@ -279,7 +279,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
       "SELECT indexname FROM pg_indexes WHERE schemaname=current_schema() AND indexname LIKE '%_idx' ORDER BY indexname",
     );
     expect(indexes.map((row) => row.indexname)).toContain("automation_actions_ready_order_idx");
-    expect(indexes.map((row) => row.indexname)).toContain("automation_actions_expired_claim_order_idx");
+    expect(indexes.map((row) => row.indexname)).toContain("automation_actions_expired_lease_order_idx");
     expect(indexes.map((row) => row.indexname)).toContain("automation_action_step_dependencies_lookup_idx");
     expect(indexes.map((row) => row.indexname)).toContain("automations_active_event_sources_gin_idx");
     expect(indexes.map((row) => row.indexname)).toContain("automations_active_event_source_wildcard_idx");
@@ -334,7 +334,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
         INSERT INTO automation_actions (
           id,automation_run_id,step_id,action_id,idempotency_key,status,invocation_json,
           attempt,max_attempts,available_at,created_at,updated_at,
-          claimed_by,claimed_at,lease_expires_at,claim_version
+          leased_by,leased_at,lease_expires_at,lease_generation
         )
         SELECT
           'plan-action-' || lpad(candidate::text,5,'0'),
@@ -342,7 +342,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
           'plan-step-' || candidate::text,
           'actions.plan',
           'plan-key-' || candidate::text,
-          'claimed',
+          'leased',
           '{}'::jsonb,
           0,3,
           $1::timestamptz + candidate * interval '1 millisecond',
@@ -367,7 +367,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
     await admin!.unsafe("ANALYZE automation_actions");
     const smallReadyPlan = await explainClaimCandidatePage(
       POSTGRESQL_READY_CLAIM_CANDIDATES_SQL,
-      [now, CLAIM_CANDIDATE_BUDGET],
+      [now, LEASE_CANDIDATE_BUDGET],
     );
     expectBoundedClaimPagePlan(
       smallReadyPlan,
@@ -376,7 +376,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
     );
     const smallExpiredPlan = await explainClaimCandidatePage(
       POSTGRESQL_EXPIRED_CLAIM_CANDIDATES_SQL,
-      [now, CLAIM_CANDIDATE_BUDGET],
+      [now, LEASE_CANDIDATE_BUDGET],
     );
     expectBoundedClaimPagePlan(
       smallExpiredPlan,
@@ -388,21 +388,21 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
     await admin!.unsafe("DELETE FROM automation_actions");
     await seedClaimedPopulation(10_000, 10_000);
     await admin!.unsafe("ANALYZE automation_actions");
-    const readyPlan = await explainClaimCandidatePage(POSTGRESQL_READY_CLAIM_CANDIDATES_SQL, [now, CLAIM_CANDIDATE_BUDGET]);
+    const readyPlan = await explainClaimCandidatePage(POSTGRESQL_READY_CLAIM_CANDIDATES_SQL, [now, LEASE_CANDIDATE_BUDGET]);
     const readyBuffers = expectBoundedClaimPagePlan(readyPlan, ["automation_actions_ready_order_idx"], 0);
-    const expiredPlan = await explainClaimCandidatePage(POSTGRESQL_EXPIRED_CLAIM_CANDIDATES_SQL, [now, CLAIM_CANDIDATE_BUDGET]);
-    const expiredBuffers = expectBoundedClaimPagePlan(expiredPlan, ["automation_actions_expired_claim_order_idx"], 100);
-    expect(readyBuffers).toBeLessThanOrEqual(CLAIM_CANDIDATE_BUDGET * 3);
-    expect(expiredBuffers).toBeLessThanOrEqual(CLAIM_CANDIDATE_BUDGET * 3);
+    const expiredPlan = await explainClaimCandidatePage(POSTGRESQL_EXPIRED_CLAIM_CANDIDATES_SQL, [now, LEASE_CANDIDATE_BUDGET]);
+    const expiredBuffers = expectBoundedClaimPagePlan(expiredPlan, ["automation_actions_expired_lease_order_idx"], 100);
+    expect(readyBuffers).toBeLessThanOrEqual(LEASE_CANDIDATE_BUDGET * 3);
+    expect(expiredBuffers).toBeLessThanOrEqual(LEASE_CANDIDATE_BUDGET * 3);
 
-    const claim = await store.claimNextAction({ runnerId: "successor", now });
+    const claim = await store.leaseNextAction({ runnerId: "successor", now });
     expect(claim?.id).toBe("plan-action-10001");
   }, 30_000);
 
   test("orders ready and expired claims by the time each became eligible", async () => {
     const [store] = await connectPair();
     const expired = await enqueueOne(store, "mixed-expired");
-    const original = await store.claimNextAction({ runnerId: "expired-owner", now: BASE_TIME, leaseMs: 1_000 });
+    const original = await store.leaseNextAction({ runnerId: "expired-owner", now: BASE_TIME, leaseMs: 1_000 });
     expect(original?.id).toBe(expired.id);
     const ready = await enqueueOne(store, "mixed-ready");
     await admin!.unsafe(
@@ -410,7 +410,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
       [ready.id, "2026-08-11T00:00:00.500Z"],
     );
 
-    const recovered = await store.claimNextAction({
+    const recovered = await store.leaseNextAction({
       runnerId: "successor",
       now: "2026-08-11T00:00:01.000Z",
     });
@@ -448,10 +448,10 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
           requestedAt: BASE_TIME,
         },
       };
-      sqliteStore.enqueueAction({ ...input, id: "sqlite-direct-dependent", automationRunId: sqliteRun.id });
-      await postgresStore.enqueueAction({ ...input, id: "postgres-direct-dependent", automationRunId: postgresRun.id });
-      expect(sqliteStore.claimNextAction({ runnerId: "sqlite", now: BASE_TIME })).toBeUndefined();
-      expect(await postgresStore.claimNextAction({ runnerId: "postgres", now: BASE_TIME })).toBeUndefined();
+      sqliteStore.admitAction({ ...input, id: "sqlite-direct-dependent", automationRunId: sqliteRun.id });
+      await postgresStore.admitAction({ ...input, id: "postgres-direct-dependent", automationRunId: postgresRun.id });
+      expect(sqliteStore.leaseNextAction({ runnerId: "sqlite", now: BASE_TIME })).toBeUndefined();
+      expect(await postgresStore.leaseNextAction({ runnerId: "postgres", now: BASE_TIME })).toBeUndefined();
     } finally {
       sqliteStore.close();
     }
@@ -481,14 +481,14 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
           availableAt: BASE_TIME,
           invocation: { id: `inv-${id}`, actionId: "actions.work", manifestVersion: "1.0.0", input: {}, requestedAt: BASE_TIME },
         };
-        sqliteStore.enqueueAction({ ...input, id, automationRunId: sqliteRun.id });
-        await postgresStore.enqueueAction({ ...input, id, automationRunId: postgresRun.id });
+        sqliteStore.admitAction({ ...input, id, automationRunId: sqliteRun.id });
+        await postgresStore.admitAction({ ...input, id, automationRunId: postgresRun.id });
       }
       const updates = [
-        ["ready-first", "queued", "2026-08-11T00:00:00.500Z", null],
-        ["expired-second", "claimed", BASE_TIME, "2026-08-11T00:00:01.000Z"],
-        ["tie-a", "claimed", "2026-08-11T00:00:02.000Z", "2026-08-11T00:00:02.000Z"],
-        ["tie-b", "queued", "2026-08-11T00:00:02.000Z", null],
+        ["ready-first", "admitted", "2026-08-11T00:00:00.500Z", null],
+        ["expired-second", "leased", BASE_TIME, "2026-08-11T00:00:01.000Z"],
+        ["tie-a", "leased", "2026-08-11T00:00:02.000Z", "2026-08-11T00:00:02.000Z"],
+        ["tie-b", "admitted", "2026-08-11T00:00:02.000Z", null],
       ] as const;
       for (const [id, status, availableAt, leaseExpiresAt] of updates) {
         sqliteStore.db.query(`UPDATE automation_actions
@@ -503,8 +503,8 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
       const sqliteSequence: string[] = [];
       const postgresSequence: string[] = [];
       for (let index = 0; index < actions.length; index += 1) {
-        sqliteSequence.push(sqliteStore.claimNextAction({ runnerId: "sqlite", now: "2026-08-11T00:00:03.000Z" })!.id);
-        postgresSequence.push((await postgresStore.claimNextAction({ runnerId: "postgres", now: "2026-08-11T00:00:03.000Z" }))!.id);
+        sqliteSequence.push(sqliteStore.leaseNextAction({ runnerId: "sqlite", now: "2026-08-11T00:00:03.000Z" })!.id);
+        postgresSequence.push((await postgresStore.leaseNextAction({ runnerId: "postgres", now: "2026-08-11T00:00:03.000Z" }))!.id);
       }
       expect(sqliteSequence).toEqual(["ready-first", "expired-second", "tie-a", "tie-b"]);
       expect(postgresSequence).toEqual(sqliteSequence);
@@ -522,22 +522,22 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
     const firstRun = await store.createRun({ id: "concurrency-first-run", automationId: "claim-concurrency-budget", trigger: { kind: "manual" } });
     const secondRun = await store.createRun({ id: "concurrency-second-run", automationId: "claim-concurrency-budget", trigger: { kind: "manual" } });
     for (const [id, runId] of [["concurrency-first", firstRun.id], ["concurrency-second", secondRun.id]]) {
-      await store.enqueueAction({
+      await store.admitAction({
         id, automationRunId: runId, stepId: "work", actionId: "actions.work", availableAt: BASE_TIME,
         invocation: { id: `inv-${id}`, actionId: "actions.work", manifestVersion: "1.0.0", input: {}, requestedAt: BASE_TIME },
       });
     }
-    const first = await store.claimNextAction({ runnerId: "first", now: BASE_TIME });
+    const first = await store.leaseNextAction({ runnerId: "first", now: BASE_TIME });
     expect(first?.id).toBe("concurrency-first");
-    expect(await store.claimNextAction({ runnerId: "second", now: BASE_TIME })).toBeUndefined();
-    await store.completeActionFenced({ actionId: first!.id, runnerId: "first", fenceToken: first!.fenceToken, now: "2026-08-11T00:00:01.000Z" });
-    expect((await store.claimNextAction({ runnerId: "second", now: "2026-08-11T00:00:01.000Z" }))?.id).toBe("concurrency-second");
+    expect(await store.leaseNextAction({ runnerId: "second", now: BASE_TIME })).toBeUndefined();
+    await store.completeActionFenced({ actionId: first!.id, runnerId: "first", fencingToken: first!.fencingToken, now: "2026-08-11T00:00:01.000Z" });
+    expect((await store.leaseNextAction({ runnerId: "second", now: "2026-08-11T00:00:01.000Z" }))?.id).toBe("concurrency-second");
   });
 
   test("returns after one fixed approval budget and advances on the next poll", async () => {
     const [store] = await connectPair();
     await store.createAutomation(spec("claim-budget", {
-      actions: Array.from({ length: CLAIM_CANDIDATE_BUDGET + 2 }, (_, index) => ({
+      actions: Array.from({ length: LEASE_CANDIDATE_BUDGET + 2 }, (_, index) => ({
         id: `work-${String(index).padStart(3, "0")}`,
         actionId: "actions.work",
       })),
@@ -547,8 +547,8 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
       automationId: "claim-budget",
       trigger: { kind: "manual" },
     });
-    for (let index = 0; index < CLAIM_CANDIDATE_BUDGET + 1; index += 1) {
-      await store.enqueueAction({
+    for (let index = 0; index < LEASE_CANDIDATE_BUDGET + 1; index += 1) {
+      await store.admitAction({
         id: `claim-budget-${String(index).padStart(3, "0")}`,
         automationRunId: run.id,
         stepId: `work-${String(index).padStart(3, "0")}`,
@@ -568,10 +568,10 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
         },
       });
     }
-    const later = await store.enqueueAction({
+    const later = await store.admitAction({
       id: "claim-budget-later",
       automationRunId: run.id,
-      stepId: `work-${String(CLAIM_CANDIDATE_BUDGET + 1).padStart(3, "0")}`,
+      stepId: `work-${String(LEASE_CANDIDATE_BUDGET + 1).padStart(3, "0")}`,
       actionId: "actions.work",
       availableAt: BASE_TIME,
       invocation: {
@@ -582,8 +582,8 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
         requestedAt: BASE_TIME,
       },
     });
-    expect(await store.claimNextAction({ runnerId: "budget-first", now: BASE_TIME })).toBeUndefined();
-    expect((await store.claimNextAction({ runnerId: "budget-second", now: BASE_TIME }))?.id).toBe(later.id);
+    expect(await store.leaseNextAction({ runnerId: "budget-first", now: BASE_TIME })).toBeUndefined();
+    expect((await store.leaseNextAction({ runnerId: "budget-second", now: BASE_TIME }))?.id).toBe(later.id);
   });
 
   test("matches SQLite across persisted method families", async () => {
@@ -622,7 +622,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
         const run = await store.createRun({ id: "run-parity", automationId: automation.id, trigger: { kind: "manual" } });
         expect((await store.requireRun(run.id)).status).toBe("materialized");
         expect(await store.listRuns()).toHaveLength(2);
-        const action = await store.enqueueAction({
+        const action = await store.admitAction({
           id: "action-parity",
           automationRunId: run.id,
           stepId: "work",
@@ -630,20 +630,20 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
           availableAt: BASE_TIME,
           invocation: { id: "invocation-parity", actionId: "actions.work", manifestVersion: "1.0.0", input: {}, requestedAt: BASE_TIME },
         });
-        expect((await store.requireQueuedAction(action.id)).status).toBe("queued");
-        expect(await store.listQueuedActions()).toHaveLength(2);
-        const claim = await store.claimNextAction({ runnerId: "parity", now: "2026-08-11T00:00:01.000Z" });
-        expect(claim?.fenceToken).toBeGreaterThan(0);
-        await store.renewActionLease({ actionId: claim!.id, runnerId: "parity", fenceToken: claim!.fenceToken, now: "2026-08-11T00:00:02.000Z" });
-        expect((await store.completeActionFenced({ actionId: claim!.id, runnerId: "parity", fenceToken: claim!.fenceToken, now: "2026-08-11T00:00:03.000Z", result: { summary: "done" } })).status).toBe("succeeded");
+        expect((await store.requireQueueEntry(action.id)).status).toBe("admitted");
+        expect(await store.listQueueEntries()).toHaveLength(2);
+        const claim = await store.leaseNextAction({ runnerId: "parity", now: "2026-08-11T00:00:01.000Z" });
+        expect(claim?.fencingToken).toBeGreaterThan(0);
+        await store.renewActionLease({ actionId: claim!.id, runnerId: "parity", fencingToken: claim!.fencingToken, now: "2026-08-11T00:00:02.000Z" });
+        expect((await store.completeActionFenced({ actionId: claim!.id, runnerId: "parity", fencingToken: claim!.fencingToken, now: "2026-08-11T00:00:03.000Z", result: { summary: "done" } })).status).toBe("succeeded");
 
         const replay = await store.createReplayRequest({ id: "replay-parity", sourceRunId: run.id, mode: "failed-actions", requestedAt: BASE_TIME });
         expect((await store.requireReplayRequest(replay.id)).mode).toBe("failed-actions");
         const lease = await store.heartbeatDaemon({ leaseId: "daemon:parity", now: new Date(BASE_TIME), ttlMs: 10_000 });
         expect((await store.latestDaemonLease())?.id).toBe(lease.id);
-        expect(await store.listDeadActions()).toHaveLength(0);
+        expect(await store.listDeadLetterActions()).toHaveLength(0);
         expect(await store.status(new Date("2026-08-11T00:00:05.000Z"))).toMatchObject({
-          counts: { automations: 1, runs: 2, queuedActions: 2, deadActions: 0, replayRequests: 1, webhookRoutes: 1 },
+          counts: { automations: 1, runs: 2, queueDepth: 2, admitted: 2, leased: 0, terminal: 0, deadLetter: 0, replayRequests: 1, webhookRoutes: 1 },
           daemon: { active: true, leaseId: "daemon:parity" },
         });
       }
@@ -712,11 +712,11 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
     expect(first[0]?.run.id).toBe(second[0]?.run.id);
     expect(first[0]?.actions.map((action) => action.id)).toEqual(second[0]?.actions.map((action) => action.id));
     expect(await left.listRuns()).toHaveLength(1);
-    expect(await left.listQueuedActions()).toHaveLength(2);
+    expect(await left.listQueueEntries()).toHaveLength(2);
 
     const claims = await Promise.all([
-      left.claimNextAction({ runnerId: "left", now: "2026-08-11T00:00:01.000Z" }),
-      right.claimNextAction({ runnerId: "right", now: "2026-08-11T00:00:01.000Z" }),
+      left.leaseNextAction({ runnerId: "left", now: "2026-08-11T00:00:01.000Z" }),
+      right.leaseNextAction({ runnerId: "right", now: "2026-08-11T00:00:01.000Z" }),
     ]);
     expect(claims.filter(Boolean)).toHaveLength(1);
     expect(claims.find(Boolean)?.stepId).toBe("first");
@@ -738,7 +738,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
       trigger: { kind: "manual" },
     });
     await Promise.all([
-      left.enqueueAction({
+      left.admitAction({
         id: "action-dependency-insert-race-required",
         automationRunId: insertRaceRun.id,
         stepId: "required",
@@ -753,7 +753,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
           requestedAt: BASE_TIME,
         },
       }),
-      right.enqueueAction({
+      right.admitAction({
         id: "action-dependency-insert-race-dependent",
         automationRunId: insertRaceRun.id,
         stepId: "dependent",
@@ -773,7 +773,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
       ["action-dependency-insert-race-dependent"],
     );
     expect(Number(insertRaceCounter[0]?.unmet_dependencies)).toBe(0);
-    expect((await right.claimNextAction({ runnerId: "dependency-insert-race", now: "2026-08-11T00:00:01.000Z" }))?.id)
+    expect((await right.leaseNextAction({ runnerId: "dependency-insert-race", now: "2026-08-11T00:00:01.000Z" }))?.id)
       .toBe("action-dependency-insert-race-dependent");
 
     const completionRaceRun = await left.createRun({
@@ -781,7 +781,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
       automationId: dependencySpec.id,
       trigger: { kind: "manual" },
     });
-    const required = await left.enqueueAction({
+    const required = await left.admitAction({
       id: "action-dependency-completion-race-required",
       automationRunId: completionRaceRun.id,
       stepId: "required",
@@ -795,10 +795,10 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
         requestedAt: BASE_TIME,
       },
     });
-    const claim = await left.claimNextAction({ runnerId: "dependency-completion-race", now: BASE_TIME });
+    const claim = await left.leaseNextAction({ runnerId: "dependency-completion-race", now: BASE_TIME });
     expect(claim?.id).toBe(required.id);
     await Promise.all([
-      right.enqueueAction({
+      right.admitAction({
         id: "action-dependency-completion-race-dependent",
         automationRunId: completionRaceRun.id,
         stepId: "dependent",
@@ -815,7 +815,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
       left.completeActionFenced({
         actionId: required.id,
         runnerId: "dependency-completion-race",
-        fenceToken: claim!.fenceToken,
+        fencingToken: claim!.fencingToken,
         now: "2026-08-11T00:00:02.000Z",
       }),
     ]);
@@ -824,7 +824,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
       ["action-dependency-completion-race-dependent"],
     );
     expect(Number(completionRaceCounter[0]?.unmet_dependencies)).toBe(0);
-    expect((await right.claimNextAction({ runnerId: "dependency-completion-race", now: "2026-08-11T00:00:03.000Z" }))?.id)
+    expect((await right.leaseNextAction({ runnerId: "dependency-completion-race", now: "2026-08-11T00:00:03.000Z" }))?.id)
       .toBe("action-dependency-completion-race-dependent");
   });
 
@@ -852,13 +852,13 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
         .map((result) => result.value)
         .filter((value): value is Record<string, unknown> => value !== undefined);
       expect(completed).toHaveLength(1);
-      expect(completed[0]).toMatchObject({ actionId: action.id, fenceToken: 1, status: "succeeded" });
-      expect(await store.requireQueuedAction(action.id)).toMatchObject({ status: "succeeded", attempt: 0 });
-      const persisted = await admin!.unsafe<[{ claim_version: string }]>(
-        "SELECT claim_version::text FROM automation_actions WHERE id=$1",
+      expect(completed[0]).toMatchObject({ actionId: action.id, fencingToken: 1, status: "succeeded" });
+      expect(await store.requireQueueEntry(action.id)).toMatchObject({ status: "succeeded", attempt: 0 });
+      const persisted = await admin!.unsafe<[{ lease_generation: string }]>(
+        "SELECT lease_generation::text FROM automation_actions WHERE id=$1",
         [action.id],
       );
-      expect(persisted[0]?.claim_version).toBe("1");
+      expect(persisted[0]?.lease_generation).toBe("1");
     }
   }, 60_000);
 
@@ -872,21 +872,21 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
       leaseMs: 1_000,
     });
     expect(originalResult.ok).toBe(true);
-    expect(originalResult.value).toMatchObject({ id: action.id, fenceToken: 1 });
-    const originalFence = Number(originalResult.value?.fenceToken);
+    expect(originalResult.value).toMatchObject({ id: action.id, fencingToken: 1 });
+    const originalFence = Number(originalResult.value?.fencingToken);
 
     const renewed = await runIsolatedRunner({
       operation: "renew",
       actionId: action.id,
       runnerId: "isolated-original",
-      fenceToken: originalFence,
+      fencingToken: originalFence,
       now: "2026-08-11T00:00:00.500Z",
       leaseMs: 2_000,
     });
     expect(renewed.ok).toBe(true);
     expect(renewed.value).toMatchObject({
       id: action.id,
-      fenceToken: originalFence,
+      fencingToken: originalFence,
       leaseExpiresAt: "2026-08-11T00:00:02.500Z",
     });
 
@@ -901,7 +901,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
       operation: "complete",
       actionId: action.id,
       runnerId: "isolated-original",
-      fenceToken: originalFence + 1,
+      fencingToken: originalFence + 1,
       now: "2026-08-11T00:00:01.500Z",
     });
     expect(wrongFence).toMatchObject({ ok: false });
@@ -914,13 +914,13 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
       leaseMs: 10_000,
     });
     expect(takeover.ok).toBe(true);
-    expect(takeover.value).toMatchObject({ id: action.id, fenceToken: originalFence + 1 });
+    expect(takeover.value).toMatchObject({ id: action.id, fencingToken: originalFence + 1 });
 
     const staleCompletion = await runIsolatedRunner({
       operation: "complete",
       actionId: action.id,
       runnerId: "isolated-original",
-      fenceToken: originalFence,
+      fencingToken: originalFence,
       now: "2026-08-11T00:00:03.000Z",
     });
     expect(staleCompletion).toMatchObject({ ok: false });
@@ -930,7 +930,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
       operation: "complete",
       actionId: action.id,
       runnerId: "isolated-takeover",
-      fenceToken: originalFence + 1,
+      fencingToken: originalFence + 1,
       now: "2026-08-11T00:00:03.000Z",
     });
     expect(acceptedCompletion).toMatchObject({ ok: true, value: { id: action.id, status: "succeeded" } });
@@ -939,28 +939,28 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
   test("requires owner and fence, then rejects stale same-runner mutations after takeover", async () => {
     const [left, right] = await connectPair();
     const action = await enqueueOne(left, "fence");
-    const original = await left.claimNextAction({ runnerId: "runner", now: BASE_TIME, leaseMs: 1_000 });
+    const original = await left.leaseNextAction({ runnerId: "runner", now: BASE_TIME, leaseMs: 1_000 });
     expect(original?.id).toBe(action.id);
-    expect(await right.claimNextAction({ runnerId: "runner", now: "2026-08-11T00:00:00.999Z" })).toBeUndefined();
-    await expect(right.renewActionLease({ actionId: action.id, runnerId: "other", fenceToken: original!.fenceToken, now: "2026-08-11T00:00:00.500Z" })).rejects.toThrow("stale or expired");
-    await expect(right.renewActionLease({ actionId: action.id, runnerId: "runner", fenceToken: original!.fenceToken + 1, now: "2026-08-11T00:00:00.500Z" })).rejects.toThrow("stale or expired");
+    expect(await right.leaseNextAction({ runnerId: "runner", now: "2026-08-11T00:00:00.999Z" })).toBeUndefined();
+    await expect(right.renewActionLease({ actionId: action.id, runnerId: "other", fencingToken: original!.fencingToken, now: "2026-08-11T00:00:00.500Z" })).rejects.toThrow("stale or expired");
+    await expect(right.renewActionLease({ actionId: action.id, runnerId: "runner", fencingToken: original!.fencingToken + 1, now: "2026-08-11T00:00:00.500Z" })).rejects.toThrow("stale or expired");
 
-    const takeover = await right.claimNextAction({ runnerId: "runner", now: "2026-08-11T00:00:01.000Z", leaseMs: 10_000 });
-    expect(takeover!.fenceToken).toBeGreaterThan(original!.fenceToken);
-    await expect(left.renewActionLease({ actionId: action.id, runnerId: "runner", fenceToken: original!.fenceToken, now: "2026-08-11T00:00:02.000Z" })).rejects.toThrow("stale or expired");
-    await expect(left.completeActionFenced({ actionId: action.id, runnerId: "runner", fenceToken: original!.fenceToken, now: "2026-08-11T00:00:02.000Z" })).rejects.toThrow("stale or expired");
-    await expect(left.failActionFenced({ actionId: action.id, runnerId: "runner", fenceToken: original!.fenceToken, now: "2026-08-11T00:00:02.000Z", error: { code: "STALE", message: "stale" } })).rejects.toThrow("stale or expired");
-    expect((await right.completeActionFenced({ actionId: action.id, runnerId: "runner", fenceToken: takeover!.fenceToken, now: "2026-08-11T00:00:02.000Z" })).status).toBe("succeeded");
+    const takeover = await right.leaseNextAction({ runnerId: "runner", now: "2026-08-11T00:00:01.000Z", leaseMs: 10_000 });
+    expect(takeover!.fencingToken).toBeGreaterThan(original!.fencingToken);
+    await expect(left.renewActionLease({ actionId: action.id, runnerId: "runner", fencingToken: original!.fencingToken, now: "2026-08-11T00:00:02.000Z" })).rejects.toThrow("stale or expired");
+    await expect(left.completeActionFenced({ actionId: action.id, runnerId: "runner", fencingToken: original!.fencingToken, now: "2026-08-11T00:00:02.000Z" })).rejects.toThrow("stale or expired");
+    await expect(left.failActionFenced({ actionId: action.id, runnerId: "runner", fencingToken: original!.fencingToken, now: "2026-08-11T00:00:02.000Z", error: { code: "STALE", message: "stale" } })).rejects.toThrow("stale or expired");
+    expect((await right.completeActionFenced({ actionId: action.id, runnerId: "runner", fencingToken: takeover!.fencingToken, now: "2026-08-11T00:00:02.000Z" })).status).toBe("succeeded");
   });
 
   test("increments retry exactly once under concurrent failure", async () => {
     const [left, right] = await connectPair();
     const action = await enqueueOne(left, "retry");
-    const claim = await left.claimNextAction({ runnerId: "runner", now: BASE_TIME });
+    const claim = await left.leaseNextAction({ runnerId: "runner", now: BASE_TIME });
     const options = {
       actionId: action.id,
       runnerId: "runner",
-      fenceToken: claim!.fenceToken,
+      fencingToken: claim!.fencingToken,
       now: "2026-08-11T00:00:01.000Z",
       retryBackoffMs: 0,
       error: { code: "RETRY", message: "retry", retryable: true },
@@ -968,18 +968,18 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
     const attempts = await Promise.allSettled([left.failActionFenced(options), right.failActionFenced(options)]);
     expect(attempts.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(attempts.filter((result) => result.status === "rejected")).toHaveLength(1);
-    expect(await left.requireQueuedAction(action.id)).toMatchObject({ status: "retrying", attempt: 1 });
+    expect(await left.requireQueueEntry(action.id)).toMatchObject({ status: "admitted", attempt: 1 });
   });
 
   test("applies one retry transition across isolated runner processes", async () => {
     const [store] = await connectPair();
     const action = await enqueueOne(store, "isolated-retry");
-    const claim = await store.claimNextAction({ runnerId: "isolated-retry-owner", now: BASE_TIME });
+    const claim = await store.leaseNextAction({ runnerId: "isolated-retry-owner", now: BASE_TIME });
     const config = {
       operation: "fail" as const,
       actionId: action.id,
       runnerId: "isolated-retry-owner",
-      fenceToken: claim!.fenceToken,
+      fencingToken: claim!.fencingToken,
       now: "2026-08-11T00:00:01.000Z",
       retryBackoffMs: 0,
       retryable: true,
@@ -988,17 +988,17 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
     expect(results.filter((result) => result.ok)).toHaveLength(1);
     expect(results.filter((result) => !result.ok)).toHaveLength(1);
     expect(results.find((result) => !result.ok)?.error).toContain("stale or expired");
-    expect(await store.requireQueuedAction(action.id)).toMatchObject({ status: "retrying", attempt: 1 });
+    expect(await store.requireQueueEntry(action.id)).toMatchObject({ status: "admitted", attempt: 1 });
   }, 30_000);
 
   test("deduplicates concurrent failed-only replay and performs one dead-action transition", async () => {
     const [left, right] = await connectPair();
     const action = await enqueueOne(left, "replay", { maxAttempts: 1 });
-    const claim = await left.claimNextAction({ runnerId: "runner", now: BASE_TIME });
+    const claim = await left.leaseNextAction({ runnerId: "runner", now: BASE_TIME });
     await left.failActionFenced({
       actionId: action.id,
       runnerId: "runner",
-      fenceToken: claim!.fenceToken,
+      fencingToken: claim!.fencingToken,
       now: "2026-08-11T00:00:01.000Z",
       error: { code: "FAILED", message: "failed", retryable: false },
     });
@@ -1012,12 +1012,12 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
     ]);
 
     const transitions = await Promise.allSettled([
-      left.requeueDeadAction(action.id, { now: "2026-08-11T00:00:02.000Z" }),
-      right.requeueDeadAction(action.id, { now: "2026-08-11T00:00:02.000Z" }),
+      left.readmitDeadAction(action.id, { now: "2026-08-11T00:00:02.000Z" }),
+      right.readmitDeadAction(action.id, { now: "2026-08-11T00:00:02.000Z" }),
     ]);
     expect(transitions.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(transitions.filter((result) => result.status === "rejected")).toHaveLength(1);
-    expect(await left.requireQueuedAction(action.id)).toMatchObject({ status: "queued", attempt: 0 });
+    expect(await left.requireQueueEntry(action.id)).toMatchObject({ status: "admitted", attempt: 0 });
     const deadReplayCount = await admin!.unsafe<[{ count: string }]>("SELECT count(*)::text AS count FROM automation_replay_requests WHERE mode='dead-actions'");
     expect(deadReplayCount[0]?.count).toBe("1");
   });
@@ -1025,11 +1025,11 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
   test("deduplicates replay and dead-action requeue across isolated runner processes", async () => {
     const [store] = await connectPair();
     const action = await enqueueOne(store, "isolated-replay", { maxAttempts: 1 });
-    const claim = await store.claimNextAction({ runnerId: "isolated-replay-owner", now: BASE_TIME });
+    const claim = await store.leaseNextAction({ runnerId: "isolated-replay-owner", now: BASE_TIME });
     await store.failActionFenced({
       actionId: action.id,
       runnerId: "isolated-replay-owner",
-      fenceToken: claim!.fenceToken,
+      fencingToken: claim!.fencingToken,
       now: "2026-08-11T00:00:01.000Z",
       error: { code: "FAILED", message: "failed", retryable: false },
     });
@@ -1063,7 +1063,7 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
     ]);
     expect(requeueResults.filter((result) => result.ok)).toHaveLength(1);
     expect(requeueResults.filter((result) => !result.ok)).toHaveLength(1);
-    expect(await store.requireQueuedAction(action.id)).toMatchObject({ status: "queued", attempt: 0 });
+    expect(await store.requireQueueEntry(action.id)).toMatchObject({ status: "admitted", attempt: 0 });
     const deadReplayCount = await admin!.unsafe<[{ count: string }]>(
       "SELECT count(*)::text AS count FROM automation_replay_requests WHERE mode='dead-actions'",
     );
@@ -1073,14 +1073,14 @@ describePostgreSql("PostgreSqlServerAutomationsStore integration", () => {
   test("recovers an abandoned claim by takeover after expiry", async () => {
     const [crashed, survivor] = await connectPair();
     const action = await enqueueOne(crashed, "crash");
-    const abandoned = await crashed.claimNextAction({ runnerId: "crashed-process", now: BASE_TIME, leaseMs: 1_000 });
+    const abandoned = await crashed.leaseNextAction({ runnerId: "crashed-process", now: BASE_TIME, leaseMs: 1_000 });
     await crashed.close();
     stores = stores.filter((store) => store !== crashed);
 
-    expect(await survivor.claimNextAction({ runnerId: "survivor", now: "2026-08-11T00:00:00.999Z" })).toBeUndefined();
-    const recovered = await survivor.claimNextAction({ runnerId: "survivor", now: "2026-08-11T00:00:01.000Z" });
-    expect(recovered!.fenceToken).toBeGreaterThan(abandoned!.fenceToken);
-    expect((await survivor.completeActionFenced({ actionId: action.id, runnerId: "survivor", fenceToken: recovered!.fenceToken, now: "2026-08-11T00:00:02.000Z" })).status).toBe("succeeded");
+    expect(await survivor.leaseNextAction({ runnerId: "survivor", now: "2026-08-11T00:00:00.999Z" })).toBeUndefined();
+    const recovered = await survivor.leaseNextAction({ runnerId: "survivor", now: "2026-08-11T00:00:01.000Z" });
+    expect(recovered!.fencingToken).toBeGreaterThan(abandoned!.fencingToken);
+    expect((await survivor.completeActionFenced({ actionId: action.id, runnerId: "survivor", fencingToken: recovered!.fencingToken, now: "2026-08-11T00:00:02.000Z" })).status).toBe("succeeded");
   });
 });
 

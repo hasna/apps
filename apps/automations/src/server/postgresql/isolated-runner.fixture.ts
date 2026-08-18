@@ -3,13 +3,13 @@ import { PostgreSqlServerAutomationsStore } from "./store.js";
 type WorkerConfig =
   | { operation: "claim"; runnerId: string; now?: string; leaseMs?: number; startAtEpochMs?: number }
   | { operation: "claim-and-complete"; runnerId: string; now?: string; leaseMs?: number; startAtEpochMs?: number }
-  | { operation: "renew"; actionId: string; runnerId: string; fenceToken: number; now?: string; leaseMs?: number }
-  | { operation: "complete"; actionId: string; runnerId: string; fenceToken: number; now?: string }
+  | { operation: "renew"; actionId: string; runnerId: string; fencingToken: number; now?: string; leaseMs?: number }
+  | { operation: "complete"; actionId: string; runnerId: string; fencingToken: number; now?: string }
   | {
       operation: "fail";
       actionId: string;
       runnerId: string;
-      fenceToken: number;
+      fencingToken: number;
       now?: string;
       retryBackoffMs?: number;
       retryable?: boolean;
@@ -50,13 +50,13 @@ try {
 async function execute(store: PostgreSqlServerAutomationsStore, config: WorkerConfig): Promise<unknown> {
   switch (config.operation) {
     case "claim":
-      return store.claimNextAction({
+      return store.leaseNextAction({
         runnerId: config.runnerId,
         now: config.now,
         leaseMs: config.leaseMs,
       });
     case "claim-and-complete": {
-      const claim = await store.claimNextAction({
+      const claim = await store.leaseNextAction({
         runnerId: config.runnerId,
         now: config.now,
         leaseMs: config.leaseMs,
@@ -65,17 +65,17 @@ async function execute(store: PostgreSqlServerAutomationsStore, config: WorkerCo
       const action = await store.completeActionFenced({
         actionId: claim.id,
         runnerId: config.runnerId,
-        fenceToken: claim.fenceToken,
+        fencingToken: claim.fencingToken,
         now: config.now,
         result: { summary: `completed by ${config.runnerId}` },
       });
-      return { actionId: action.id, fenceToken: claim.fenceToken, status: action.status };
+      return { actionId: action.id, fencingToken: claim.fencingToken, status: action.status };
     }
     case "renew":
       return store.renewActionLease({
         actionId: config.actionId,
         runnerId: config.runnerId,
-        fenceToken: config.fenceToken,
+        fencingToken: config.fencingToken,
         now: config.now,
         leaseMs: config.leaseMs,
       });
@@ -83,7 +83,7 @@ async function execute(store: PostgreSqlServerAutomationsStore, config: WorkerCo
       return store.completeActionFenced({
         actionId: config.actionId,
         runnerId: config.runnerId,
-        fenceToken: config.fenceToken,
+        fencingToken: config.fencingToken,
         now: config.now,
         result: { summary: `completed by ${config.runnerId}` },
       });
@@ -91,7 +91,7 @@ async function execute(store: PostgreSqlServerAutomationsStore, config: WorkerCo
       return store.failActionFenced({
         actionId: config.actionId,
         runnerId: config.runnerId,
-        fenceToken: config.fenceToken,
+        fencingToken: config.fencingToken,
         now: config.now,
         retryBackoffMs: config.retryBackoffMs,
         error: {
@@ -108,7 +108,7 @@ async function execute(store: PostgreSqlServerAutomationsStore, config: WorkerCo
         metadata: config.actionId ? { actionId: config.actionId } : undefined,
       });
     case "requeue-dead":
-      return store.requeueDeadAction(config.actionId, { now: config.now });
+      return store.readmitDeadAction(config.actionId, { now: config.now });
   }
 }
 
