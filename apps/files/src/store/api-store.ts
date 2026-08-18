@@ -321,6 +321,13 @@ export class ApiStore implements FilesStore {
     return this.http.post<ExtractedTextResult>(`/files/${seg(fileId)}/extract-text`, input);
   }
 
+  /** Server-signed S3 download URL for a hosted file (the server owns the
+   *  object-store credentials; the client never touches S3 in api mode). */
+  async signFileDownload(fileId: string, expiresIn = 3600): Promise<string> {
+    const res = await this.http.post<{ url: string }>(`/files/${seg(fileId)}/sign-download`, { expires_in: expiresIn });
+    return res.url;
+  }
+
   // ── tags ─────────────────────────────────────────────────────────────────
   async listTags(): Promise<Tag[]> {
     return (await this.client.list<Tag>("tags")).items;
