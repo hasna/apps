@@ -355,7 +355,7 @@ describe("automations CLI", () => {
       "event",
       "github-main",
       "--body-json",
-      JSON.stringify({ payload: { branch: "main", repository: "open-automations" } }),
+      JSON.stringify({ payload: { branch: "main", repository: "automations" } }),
       "--header",
       "X-GitHub-Delivery:delivery-envelope",
     ]);
@@ -373,7 +373,7 @@ describe("automations CLI", () => {
       "test",
       "github-main",
       "--body-json",
-      JSON.stringify({ payload: { branch: "main", repository: "open-automations" } }),
+      JSON.stringify({ payload: { branch: "main", repository: "automations" } }),
       "--header",
       "X-GitHub-Delivery:delivery-cli",
     ]);
@@ -458,7 +458,7 @@ describe("automations CLI", () => {
       expect(await health.json()).toEqual({ ok: true, service: "automations", mode: "webhooks" });
 
       const url = `${origin}/webhooks/github/daemon`;
-      const body = JSON.stringify({ payload: { branch: "main", repository: "open-automations" } });
+      const body = JSON.stringify({ payload: { branch: "main", repository: "automations" } });
       const signature = createHmac("sha256", "shared-secret").update(body).digest("hex");
       const malformedHexSuffix = await fetch(url, {
         method: "POST",

@@ -310,7 +310,7 @@ describe("AutomationsStore", () => {
         type: "push",
         payload: {
           branch: "main",
-          repository: "open-automations",
+          repository: "automations",
         },
       });
       const materialized = store.materializeWebhookRequest({
@@ -329,7 +329,7 @@ describe("AutomationsStore", () => {
         dedupeKey: "delivery-1",
         data: {
           branch: "main",
-          repository: "open-automations",
+          repository: "automations",
         },
         metadata: {
           provider: "github",
