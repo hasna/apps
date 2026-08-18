@@ -26,7 +26,7 @@ styles --help
 
 ### Compact output by default
 
-Open Styles CLIs are compact by default, including when an agent runs them in a
+Hasna Styles CLIs are compact by default, including when an agent runs them in a
 non-TTY shell. List/status commands show summaries, cap rows, truncate long text,
 and print a hint for the detail path.
 

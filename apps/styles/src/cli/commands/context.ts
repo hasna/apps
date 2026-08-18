@@ -81,7 +81,7 @@ export function registerContextCommands(program: Command) {
 
   program
     .command("init")
-    .description("Initialize open-styles for a project")
+    .description("Initialize styles for a project")
     .option("-p, --project <path>", "Project path (default: cwd)")
     .option("-s, --style <name>", "Style to activate")
     .option("--inject-context", "Inject context into CLAUDE.md even if it does not exist yet")
@@ -137,7 +137,7 @@ export function registerContextCommands(program: Command) {
       if (opts.json) {
         jsonOut({ ok: true, projectPath, style: opts.style ?? null, hooks: hookResults });
       } else {
-        console.log(chalk.green(`✔ Initialized open-styles for: ${projectPath}`));
+        console.log(chalk.green(`✔ Initialized styles for: ${projectPath}`));
         if (opts.style) console.log(chalk.dim(`  Active style: ${opts.style}`));
         if (injectedAgents.length > 0) console.log(chalk.dim(`  Hooks injected for agents: ${injectedAgents.join(", ")}`));
       }

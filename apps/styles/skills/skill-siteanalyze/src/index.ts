@@ -53,7 +53,7 @@ export interface SiteAnalysisResult {
   colors: ExtractedColors;
   typography: ExtractedTypography;
   components: DetectedComponents;
-  styleCategory: string | null; // matched open-styles category
+  styleCategory: string | null; // matched styles category
   styleConfidence: number; // 0-1
   aiAnalysis: string | null; // Claude's full analysis text
   openStylesProfile: {
@@ -392,7 +392,7 @@ export async function analyzeSite(
 - Body font: ${typography.bodyFont}
 
 Determine:
-1. Which open-styles category best matches (minimalist/brutalist/corporate/startup/glassmorphism/editorial/retro/material/neubrutalism/neumorphic)
+1. Which styles category best matches (minimalist/brutalist/corporate/startup/glassmorphism/editorial/retro/material/neubrutalism/neumorphic)
 2. Confidence 0-1
 3. 3 key design principles you observe
 4. Primary color intent

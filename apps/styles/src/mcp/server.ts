@@ -10,7 +10,7 @@ export const MCP_NAME = "styles";
 
 export function buildServer(): McpServer {
   const server = new McpServer({
-    name: "open-styles",
+    name: MCP_NAME,
     version: PACKAGE_VERSION,
   });
 

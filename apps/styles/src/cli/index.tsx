@@ -17,7 +17,7 @@ const program = new Command();
 
 program
   .name("styles")
-  .description("Open Styles — design style management for AI coding agents")
+  .description("Hasna Styles — design style management for AI coding agents")
   .version(PACKAGE_VERSION);
 
 // Register all command groups from separate modules

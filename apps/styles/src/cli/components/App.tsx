@@ -64,7 +64,7 @@ export function App({ styles }: AppProps) {
   return (
     <Box flexDirection="column" padding={1}>
       <Text bold color="cyan">
-        Open Styles — Browse Styles
+        Hasna Styles — Browse Styles
       </Text>
       <Text dimColor>↑↓ navigate  ENTER view details  q quit</Text>
       <Box marginTop={1} flexDirection="column">

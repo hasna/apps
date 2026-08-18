@@ -107,7 +107,7 @@ export async function publishToFigma(
       variables: payload.variables.map((v, i) => ({
         ...v,
         id: `variable-${i}`,
-        description: "Extracted by open-styles",
+        description: "Extracted by Hasna Styles",
       })),
     }),
   });

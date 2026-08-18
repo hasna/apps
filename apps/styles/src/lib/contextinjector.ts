@@ -4,8 +4,37 @@ import { detectAgents, type AgentName } from "./detect.js";
 import type { StyleProfile } from "./profiles.js";
 import type { StyleMeta } from "./registry.js";
 
-const MARKER_START = "<!-- open-styles-start -->";
-const MARKER_END = "<!-- open-styles-end -->";
+const MARKER_START = "<!-- styles-start -->";
+const MARKER_END = "<!-- styles-end -->";
+// Legacy markers persisted into user MD files before the open- prefix retirement;
+// still detected so existing files keep re-injecting/removing correctly.
+const LEGACY_MARKER_START = "<!-- open-styles-start -->";
+const LEGACY_MARKER_END = "<!-- open-styles-end -->";
+
+// Locate the injected section, matching either the current or the legacy marker pair.
+function findSectionBounds(content: string): { start: number; end: number } | null {
+  let start = -1;
+  let startLen = 0;
+  for (const m of [MARKER_START, LEGACY_MARKER_START]) {
+    const i = content.indexOf(m);
+    if (i !== -1 && (start === -1 || i < start)) {
+      start = i;
+      startLen = m.length;
+    }
+  }
+  if (start === -1) return null;
+  let end = -1;
+  let endLen = 0;
+  for (const m of [MARKER_END, LEGACY_MARKER_END]) {
+    const i = content.indexOf(m, start);
+    if (i !== -1 && (end === -1 || i < end)) {
+      end = i;
+      endLen = m.length;
+    }
+  }
+  if (end === -1 || end <= start) return null;
+  return { start, end: end + endLen };
+}
 
 // Agent → MD file mapping
 const AGENT_MD_FILES: Record<AgentName, string> = {
@@ -54,7 +83,7 @@ export function buildContextSection(
     MARKER_START,
     `## Design Style: ${displayName}`,
     "",
-    "> Managed by open-styles. Run `styles inject-context` to update.",
+    "> Managed by styles. Run `styles inject-context` to update.",
     principlesLine,
     antiLine,
     prefLine,
@@ -70,10 +99,9 @@ function injectIntoFile(
   let content = existsSync(filePath) ? readFileSync(filePath, "utf-8") : "";
   const existed = existsSync(filePath);
 
-  if (content.includes(MARKER_START)) {
-    const before = content.slice(0, content.indexOf(MARKER_START));
-    const after = content.slice(content.indexOf(MARKER_END) + MARKER_END.length);
-    content = before + section + after;
+  const bounds = findSectionBounds(content);
+  if (bounds) {
+    content = content.slice(0, bounds.start) + section + content.slice(bounds.end);
   } else {
     content = content + (content.endsWith("\n") ? "" : "\n") + "\n" + section + "\n";
   }
@@ -132,12 +160,11 @@ export function injectIntoClaudeMd(
     existing = readFileSync(claudeMdPath, "utf-8");
   }
 
-  const startIdx = existing.indexOf(MARKER_START);
-  const endIdx = existing.indexOf(MARKER_END);
+  const bounds = findSectionBounds(existing);
 
-  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-    const before = existing.slice(0, startIdx);
-    const after = existing.slice(endIdx + MARKER_END.length);
+  if (bounds) {
+    const before = existing.slice(0, bounds.start);
+    const after = existing.slice(bounds.end);
     const newContent = before + section + after;
 
     if (newContent === existing) {
@@ -159,9 +186,10 @@ export function removeFromAgentMd(projectPath: string, agent: AgentName): { acti
   const filePath = join(projectPath, AGENT_MD_FILES[agent]);
   if (!existsSync(filePath)) return { action: "not-found", path: filePath };
   let content = readFileSync(filePath, "utf-8");
-  if (!content.includes(MARKER_START)) return { action: "not-found", path: filePath };
-  const before = content.slice(0, content.indexOf(MARKER_START));
-  const after = content.slice(content.indexOf(MARKER_END) + MARKER_END.length);
+  const bounds = findSectionBounds(content);
+  if (!bounds) return { action: "not-found", path: filePath };
+  const before = content.slice(0, bounds.start);
+  const after = content.slice(bounds.end);
   writeFileSync(filePath, (before + after).trim() + "\n");
   return { action: "removed", path: filePath };
 }
