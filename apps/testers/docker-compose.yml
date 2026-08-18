@@ -1,5 +1,5 @@
 # =============================================================================
-# open-testers — local docker compose for the cloud (Postgres) service.
+# testers — local docker compose for the cloud (Postgres) service.
 # Runs Postgres + testers-serve in cloud mode, applies migrations, then serves.
 # For production the image is deployed to ECS via the hasna-app Terraform module.
 # =============================================================================

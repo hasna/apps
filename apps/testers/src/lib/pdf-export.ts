@@ -20,7 +20,7 @@ export interface PdfOptions {
   };
 }
 
-const DEFAULT_FOOTER = `<div style="font-size:10px;color:#666;padding:8px 20px;border-top:1px solid #eee;display:flex;justify-content:space-between;width:100%;"><span>open-testers</span><span class="pageNumber"></span></div>`;
+const DEFAULT_FOOTER = `<div style="font-size:10px;color:#666;padding:8px 20px;border-top:1px solid #eee;display:flex;justify-content:space-between;width:100%;"><span>Hasna Testers</span><span class="pageNumber"></span></div>`;
 
 /**
  * Generate a PDF report for a test run.

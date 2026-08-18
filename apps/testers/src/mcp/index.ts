@@ -10,7 +10,7 @@ const cliArgs = new Set(process.argv.slice(2));
 if (cliArgs.has("--help") || cliArgs.has("-h")) {
   console.log(`Usage: testers-mcp [options]
 
-Open Testers MCP server (stdio transport by default)
+Hasna Testers MCP server (stdio transport by default)
 
 Options:
   -h, --help       Show this help message

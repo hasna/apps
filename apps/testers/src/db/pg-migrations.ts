@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-testers remote database mode.
+ * PostgreSQL migrations for testers remote database mode.
  *
  * Equivalent to the SQLite schema in database.ts, translated for PostgreSQL.
  */

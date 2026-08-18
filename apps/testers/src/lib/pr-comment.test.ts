@@ -72,7 +72,7 @@ describe("PR comment formatting (OPE9-00278)", () => {
     const status = formatCommitStatus(sampleRun, sampleResults);
     expect(status).toContain("failure");
     expect(status).toContain("2/3 passed");
-    expect(status).toContain("open-testers/claude-haiku");
+    expect(status).toContain("testers/claude-haiku");
   });
 
   test("formatCommitStatus returns success for all passed", () => {

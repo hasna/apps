@@ -1,5 +1,5 @@
 /**
- * Lightweight credential resolver for open-testers.
+ * Lightweight credential resolver for testers.
  *
  * Supports three value formats in persona/auth-preset credential fields:
  *   @secrets:<key>   — look up from the @hasna/secrets vault (~/.hasna/secrets/vault.db)

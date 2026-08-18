@@ -28,7 +28,7 @@ describe("JUnit XML export (OPE9-00255)", () => {
     expect(xml).toContain('failures="0"');
     expect(xml).toContain('errors="0"');
     expect(xml).toContain('name="Pass Test"');
-    expect(xml).toContain("open-testers");
+    expect(xml).toContain("testers");
     expect(xml).toContain("<testsuites");
     expect(xml).toContain("</testsuites>");
   });

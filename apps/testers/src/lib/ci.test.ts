@@ -295,7 +295,7 @@ describe("postGitHubComment", () => {
 
   it("posts to the correct GitHub API endpoint on success", async () => {
     process.env["GITHUB_TOKEN"] = "ghs_test";
-    process.env["GITHUB_REPOSITORY"] = "hasna/open-testers";
+    process.env["GITHUB_REPOSITORY"] = "hasna/apps";
     process.env["GITHUB_PR_NUMBER"] = "7";
     const fixture = buildFixture();
 
@@ -308,7 +308,7 @@ describe("postGitHubComment", () => {
     const ok = await postGitHubComment(fixture.run, fixture.results);
     expect(ok).toBe(true);
     expect(calls.length).toBe(1);
-    expect(calls[0]!.url).toBe("https://api.github.com/repos/hasna/open-testers/issues/7/comments");
+    expect(calls[0]!.url).toBe("https://api.github.com/repos/hasna/apps/issues/7/comments");
     const body = JSON.parse(String(calls[0]!.init!.body));
     expect(body.body).toContain("AI QA Tests");
     expect(body.body).toContain("1/2 passed");
@@ -319,7 +319,7 @@ describe("postGitHubComment", () => {
 
   it("returns false when fetch throws", async () => {
     process.env["GITHUB_TOKEN"] = "ghs_test";
-    process.env["GITHUB_REPOSITORY"] = "hasna/open-testers";
+    process.env["GITHUB_REPOSITORY"] = "hasna/apps";
     process.env["GITHUB_PR_NUMBER"] = "7";
     const fixture = buildFixture();
 
@@ -333,7 +333,7 @@ describe("postGitHubComment", () => {
 
   it("returns false when GitHub API returns non-2xx", async () => {
     process.env["GITHUB_TOKEN"] = "ghs_test";
-    process.env["GITHUB_REPOSITORY"] = "hasna/open-testers";
+    process.env["GITHUB_REPOSITORY"] = "hasna/apps";
     process.env["GITHUB_PR_NUMBER"] = "7";
     const fixture = buildFixture();
 
@@ -347,7 +347,7 @@ describe("postGitHubComment", () => {
 
   it("resolves PR from GITHUB_REF when GITHUB_PR_NUMBER is absent", async () => {
     process.env["GITHUB_TOKEN"] = "ghs_test";
-    process.env["GITHUB_REPOSITORY"] = "hasna/open-testers";
+    process.env["GITHUB_REPOSITORY"] = "hasna/apps";
     process.env["GITHUB_REF"] = "refs/pull/234/merge";
     const fixture = buildFixture();
 

@@ -39,7 +39,7 @@ identifiers, proposes safe log/API/browser checks, and blocks user-scoped
 browser reproduction unless audited support access is present.
 
 If the CLI cannot produce the needed plan, add the missing capability to
-`open-testers`, test it, publish it, reinstall it, and then rerun the production
+`testers`, test it, publish it, reinstall it, and then rerun the production
 debug plan.
 
 ## Evidence To Capture

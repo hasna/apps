@@ -1,4 +1,4 @@
-// Centralized path resolution for open-testers global data directory.
+// Centralized path resolution for testers global data directory.
 // Migrated from ~/.testers/ to ~/.hasna/testers/ with backward compat.
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
