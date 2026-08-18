@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { captureCommandOutput } from "./output-capture.js";
+import { captureCommandOutput, removeCaptureSpool } from "./output-capture.js";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "monitor-capture-"));
@@ -115,6 +115,65 @@ describe("captureCommandOutput", () => {
       expect(result.exitCode).toBeNull();
       expect(result.timedOut).toBe(false);
       expect(result.error).toBeDefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("forces mode 600 on a pre-existing spool file", async () => {
+    const dir = tempDir();
+    try {
+      // A caller-provided spoolDir may already hold a stdout.spool/stderr.spool
+      // with permissive permissions; opening must not leave it readable.
+      writeFileSync(join(dir, "stdout.spool"), "old-content", { mode: 0o644 });
+      writeFileSync(join(dir, "stderr.spool"), "old-content", { mode: 0o644 });
+
+      const result = await captureCommandOutput("bash", ["-c", "echo hello; echo boom >&2"], {
+        spoolDir: dir,
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(statSync(result.stdout.path).mode & 0o777).toBe(0o600);
+      expect(statSync(result.stderr.path).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("removeCaptureSpool leaves a caller-provided directory and unrelated files intact", async () => {
+    const dir = tempDir();
+    try {
+      const unrelated = join(dir, "keep-me.txt");
+      writeFileSync(unrelated, "unrelated content", { mode: 0o600 });
+
+      const result = await captureCommandOutput("bash", ["-c", "echo hello; echo boom >&2"], {
+        spoolDir: dir,
+      });
+
+      removeCaptureSpool(result);
+
+      // Only the two spool files this capture created may be removed; the
+      // caller's directory and anything else inside it must survive.
+      expect(existsSync(result.stdout.path)).toBe(false);
+      expect(existsSync(result.stderr.path)).toBe(false);
+      expect(existsSync(unrelated)).toBe(true);
+      expect(existsSync(dir)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("returns a typed result when the spool directory does not exist", async () => {
+    const dir = tempDir();
+    try {
+      const result = await captureCommandOutput("bash", ["-c", "echo hi"], {
+        spoolDir: join(dir, "does-not-exist"),
+      });
+
+      expect(result.exitCode).toBeNull();
+      expect(result.timedOut).toBe(false);
+      expect(result.error).toBeDefined();
+      expect(result.error).toContain("spoolDir does not exist");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

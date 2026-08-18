@@ -13,7 +13,7 @@
  * redacted or omitted entirely.
  */
 
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readSync } from "node:fs";
 
 const REDACTED = "***";
 
@@ -119,6 +119,85 @@ function findAuthorityEnd(text: string, start: number, end: number): number {
 }
 
 /**
+ * Redact credential-shaped query/fragment parameters of URLs: `?token=...`,
+ * signed-URL parameters such as `X-Amz-Signature=...`, `#access_token=...`.
+ * The assignment and long-option patterns cannot reach these — there is no
+ * leading whitespace before the key — so they survive into retained evidence
+ * unless handled here.
+ */
+function redactUrlQueryParameters(text: string): string {
+  let redacted = "";
+  let cursor = 0;
+  let lastMatchEnd = 0;
+  URL_SCHEME_PATTERN.lastIndex = 0;
+
+  let match: RegExpExecArray | null;
+  while ((match = URL_SCHEME_PATTERN.exec(text)) !== null) {
+    const schemeStart = match.index;
+    if (schemeStart < lastMatchEnd) {
+      URL_SCHEME_PATTERN.lastIndex = lastMatchEnd;
+      continue;
+    }
+    const authorityStart = schemeStart + match[0].length;
+    const tokenEnd = findUrlTokenEnd(text, authorityStart);
+    const queryStart = findUrlQueryStart(text, authorityStart, tokenEnd);
+    if (queryStart !== -1) {
+      const section = text.slice(queryStart, tokenEnd);
+      const redactedSection = redactQuerySection(section);
+      if (redactedSection !== section) {
+        redacted += text.slice(cursor, queryStart) + redactedSection;
+        cursor = tokenEnd;
+      }
+    }
+    lastMatchEnd = tokenEnd;
+    if (URL_SCHEME_PATTERN.lastIndex < lastMatchEnd) {
+      URL_SCHEME_PATTERN.lastIndex = lastMatchEnd;
+    }
+  }
+
+  return cursor === 0 ? text : redacted + text.slice(cursor);
+}
+
+function findUrlQueryStart(text: string, start: number, end: number): number {
+  for (let i = start; i < end; i++) {
+    const char = text[i];
+    if (char === "?" || char === "#") return i;
+  }
+  return -1;
+}
+
+function redactQuerySection(section: string): string {
+  const marker = section[0];
+  if (marker !== "?" && marker !== "#") return section;
+  const redactedPairs = section.slice(1).split("&").map((pair) => {
+    const eq = pair.indexOf("=");
+    if (eq === -1) return pair;
+    const key = pair.slice(0, eq);
+    const value = pair.slice(eq + 1);
+    if (value === "" || !isUrlQueryKeySensitive(key)) return pair;
+    return `${key}=${REDACTED}`;
+  });
+  return marker + redactedPairs.join("&");
+}
+
+/**
+ * Query/fragment parameter keys whose values are credential-shaped: the global
+ * sensitive-key vocabulary plus the signed-URL parameter family (Signature,
+ * sig). A bare `key` alone stays ambiguous and is not redacted.
+ */
+function isUrlQueryKeySensitive(key: string): boolean {
+  const segments = keySegments(key);
+  const segmentSet = new Set(segments);
+  if (segments.some((segment) => SENSITIVE_SEGMENTS.has(segment) || segment === "sig" || segment === "signature")) {
+    return true;
+  }
+  if (segmentSet.has("api") && segmentSet.has("key")) return true;
+  if (segmentSet.has("access") && segmentSet.has("key")) return true;
+  if (segmentSet.has("private") && segmentSet.has("key")) return true;
+  return false;
+}
+
+/**
  * Redact credential-shaped content in arbitrary output text. Returns the
  * redacted text and whether anything was redacted.
  */
@@ -145,11 +224,12 @@ export function redactOutputText(text: string): { text: string; redacted: boolea
   );
 
   const withPrefixes = withOptions.replace(CREDENTIAL_PREFIX_PATTERN, REDACTED);
-  const withUrls = redactUrlCredentials(withPrefixes);
+  const withUrlCredentials = redactUrlCredentials(withPrefixes);
+  const withUrlQueries = redactUrlQueryParameters(withUrlCredentials);
 
   return {
-    text: withUrls,
-    redacted: withUrls !== text,
+    text: withUrlQueries,
+    redacted: withUrlQueries !== text,
   };
 }
 
@@ -206,6 +286,65 @@ export interface RunEvidence {
 
 const DEFAULT_MAX_EXCERPT_BYTES = 64 * 1024;
 
+/** Extra bytes read beyond the excerpt cap so a URL crossing the boundary is redacted whole. */
+const URL_AUTHORITY_WINDOW_BYTES = 64 * 1024;
+/** Chunk size when extending a window that ends inside a scheme:// token. */
+const URL_WINDOW_EXTEND_CHUNK_BYTES = 64 * 1024;
+/** Hard bound on the total window read for one stream. */
+const URL_WINDOW_HARD_LIMIT_BYTES = 1024 * 1024;
+
+function readBoundedUtf8(path: string, offset: number, length: number): string {
+  const fd = openSync(path, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(length);
+    const bytesRead = readSync(fd, buffer, 0, length, offset);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** The last token of `text` when it is a scheme:// URL token, else null. */
+function openUrlTokenAtEnd(text: string): RegExpMatchArray | null {
+  return text.match(/(?:^|\s)([A-Za-z][A-Za-z0-9+.-]*:\/\/)\S*$/);
+}
+
+/**
+ * Read a bounded evidence window: the excerpt cap plus a margin so a URL whose
+ * authority crosses the cap boundary is redacted as a whole — truncation can
+ * never hide the `@` of a `user:secret@host` authority. If the window still
+ * ends inside a scheme:// token whose authority has not been seen, extend the
+ * read until the token terminates or its `@` is visible; if the hard limit is
+ * hit first, trim the unterminated token so no partial authority is retained.
+ */
+function readEvidenceWindow(path: string, maxExcerptBytes: number): string {
+  let content = readBoundedUtf8(path, 0, maxExcerptBytes + URL_AUTHORITY_WINDOW_BYTES);
+  let byteOffset = Buffer.byteLength(content, "utf8");
+
+  while (byteOffset < URL_WINDOW_HARD_LIMIT_BYTES) {
+    const tail = openUrlTokenAtEnd(content);
+    if (tail === null || tail[0].includes("@")) break;
+    const chunk = readBoundedUtf8(path, byteOffset, URL_WINDOW_EXTEND_CHUNK_BYTES);
+    if (chunk === "") break;
+    content += chunk;
+    byteOffset += Buffer.byteLength(chunk, "utf8");
+  }
+
+  const tail = openUrlTokenAtEnd(content);
+  if (tail !== null && tail.index !== undefined && !tail[0].includes("@")) {
+    // The token may hide a `user:secret@` authority beyond what we read. Keep
+    // it only when a path/query separator proves the authority ended inside the
+    // window (the redactor then covers the whole token); otherwise trim it so
+    // no partial authority can be retained.
+    const rest = tail[0].slice((tail[1] ?? "").length);
+    const authorityTerminated = /[/?#]/.test(rest);
+    if (!authorityTerminated || byteOffset >= URL_WINDOW_HARD_LIMIT_BYTES) {
+      content = content.slice(0, tail.index);
+    }
+  }
+  return content;
+}
+
 export function buildStreamEvidence(options: StreamEvidenceOptions): StreamEvidence {
   const maxExcerptBytes = options.maxExcerptBytes ?? DEFAULT_MAX_EXCERPT_BYTES;
   const redact = options.redact ?? true;
@@ -232,9 +371,10 @@ export function buildStreamEvidence(options: StreamEvidenceOptions): StreamEvide
     };
   }
 
-  let content: string;
+  let windowText: string;
   try {
-    content = readFileSync(options.path, "utf8");
+    // Bounded read: the cap plus a redaction margin, never the whole spool.
+    windowText = readEvidenceWindow(options.path, maxExcerptBytes);
   } catch {
     // Missing evidence never throws: it is represented in the record.
     return {
@@ -247,25 +387,25 @@ export function buildStreamEvidence(options: StreamEvidenceOptions): StreamEvide
     };
   }
 
-  // Bound first, then redact the bounded excerpt (a redacted-then-truncated
-  // buffer could cut a redaction marker).
-  const excerpt = content.slice(0, maxExcerptBytes);
-
+  // Redact the window, then bound the excerpt: a URL whose authority crosses
+  // the cap is redacted as a whole, so truncation can never retain a partial
+  // credential (a redacted-then-truncated marker is cosmetic, not a leak).
   if (redact) {
-    const redacted = redactOutputText(excerpt);
+    const redacted = redactOutputText(windowText);
     return {
       kind: options.kind,
       retained: true,
-      excerpt: redacted.text,
+      excerpt: redacted.text.slice(0, maxExcerptBytes),
       bytes: options.bytes,
       truncated: options.truncated,
       redacted: redacted.redacted,
     };
   }
 
-  // Unredacted retention is refused when the content still carries
-  // credential shape: unrestricted process output never reaches a receipt.
-  if (containsCredentialShape(excerpt)) {
+  // Unredacted retention is refused when the window still carries credential
+  // shape: unrestricted process output never reaches a receipt, and a
+  // credential cut by the excerpt cap must not survive truncation.
+  if (containsCredentialShape(windowText)) {
     return {
       kind: options.kind,
       retained: false,
@@ -279,7 +419,7 @@ export function buildStreamEvidence(options: StreamEvidenceOptions): StreamEvide
   return {
     kind: options.kind,
     retained: true,
-    excerpt,
+    excerpt: windowText.slice(0, maxExcerptBytes),
     bytes: options.bytes,
     truncated: options.truncated,
     redacted: false,

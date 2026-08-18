@@ -13,9 +13,9 @@
  */
 
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, mkdtempSync, openSync, rmSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fchmodSync, mkdtempSync, openSync, rmSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 export interface CapturedStream {
   kind: "stdout" | "stderr";
@@ -48,6 +48,10 @@ export interface CaptureResult {
   durationMs: number;
   /** Present when the spawn failed or the run timed out; absent on a clean exit. */
   error?: string;
+  /** Spool directory the capture wrote into. */
+  spoolDir?: string;
+  /** True when the capture created spoolDir itself (and may remove it). */
+  spoolDirOwned?: boolean;
 }
 
 interface StreamSink {
@@ -60,18 +64,21 @@ interface StreamSink {
   cap: number;
 }
 
-function makeSpoolDir(provided?: string): string {
+function makeSpoolDir(provided?: string): { dir: string; owned: boolean } {
   if (provided) {
     if (!existsSync(provided)) throw new Error(`spoolDir does not exist: ${provided}`);
-    return provided;
+    return { dir: provided, owned: false };
   }
-  return mkdtempSync(join(tmpdir(), "monitor-spool-"));
+  return { dir: mkdtempSync(join(tmpdir(), "monitor-spool-")), owned: true };
 }
 
 function openSpoolFile(spoolDir: string, kind: "stdout" | "stderr", cap: number): StreamSink {
   const path = join(spoolDir, `${kind}.spool`);
-  // Mode 600: captured process output is private to the monitor process.
   const fd = openSync(path, "w", 0o600);
+  // Mode 600 even for an already-existing file: open's mode only applies at
+  // creation, so force it on the descriptor — captured process output is
+  // private to the monitor process.
+  fchmodSync(fd, 0o600);
   return { kind, fd, path, written: 0, observed: 0, truncated: false, cap };
 }
 
@@ -89,12 +96,20 @@ function drain(sink: StreamSink, chunk: Buffer): void {
   }
 }
 
-function closeSink(sink: StreamSink): void {
+function closeSink(sink: StreamSink | null): void {
+  if (sink === null) return;
   try {
     closeSync(sink.fd);
   } catch {
     // Already closed or never opened; spool cleanup is best-effort.
   }
+}
+
+function emptyCapturedStream(kind: "stdout" | "stderr", spoolDir?: string): CapturedStream {
+  // A synthetic path when setup failed before the file existed; readers treat a
+  // missing file as "no content" (buildStreamEvidence -> omittedReason missing).
+  const path = spoolDir ? join(spoolDir, `${kind}.spool`) : join(tmpdir(), `monitor-${kind}.spool`);
+  return { kind, path, bytes: 0, truncated: false };
 }
 
 function finalizeSink(sink: StreamSink): CapturedStream {
@@ -110,20 +125,24 @@ function finalizeSink(sink: StreamSink): CapturedStream {
  * Delete the spool files produced by a capture. Call this once the bounded
  * evidence has been built from the streams; the capture itself keeps the
  * files so `buildStreamEvidence`/`buildRunEvidence` can read them.
+ *
+ * Only ever removes what this capture created: the two spool files, plus the
+ * spool directory when the capture created it. A caller-provided spoolDir —
+ * and any unrelated content inside it — is never touched.
  */
-export function removeCaptureSpool(result: Pick<CaptureResult, "stdout" | "stderr">): void {
-  const dirs = new Set<string>();
+export function removeCaptureSpool(
+  result: Pick<CaptureResult, "stdout" | "stderr" | "spoolDir" | "spoolDirOwned">
+): void {
   for (const stream of [result.stdout, result.stderr]) {
     try {
       rmSync(stream.path, { force: true });
-      dirs.add(dirname(stream.path));
     } catch {
       // Best-effort cleanup.
     }
   }
-  for (const dir of dirs) {
+  if (result.spoolDir && result.spoolDirOwned) {
     try {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(result.spoolDir, { recursive: true, force: true });
     } catch {
       // Best-effort cleanup.
     }
@@ -134,15 +153,48 @@ export function removeCaptureSpool(result: Pick<CaptureResult, "stdout" | "stder
  * Spawn `executable` with a structured argv array and spool both output
  * streams to bounded mode-600 files. Never invokes a shell.
  */
+interface SpoolSetup {
+  spoolDir: string;
+  spoolDirOwned: boolean;
+  stdoutSink: StreamSink;
+  stderrSink: StreamSink;
+}
+
+function setupSpool(options: CaptureOptions): SpoolSetup {
+  const made = makeSpoolDir(options.spoolDir);
+  const stdoutSink = openSpoolFile(made.dir, "stdout", options.maxStdoutBytes ?? 0);
+  try {
+    const stderrSink = openSpoolFile(made.dir, "stderr", options.maxStderrBytes ?? 0);
+    return { spoolDir: made.dir, spoolDirOwned: made.owned, stdoutSink, stderrSink };
+  } catch (error) {
+    closeSink(stdoutSink);
+    throw error;
+  }
+}
+
 export async function captureCommandOutput(
   executable: string,
   args: readonly string[],
   options: CaptureOptions = {}
 ): Promise<CaptureResult> {
   const startedAt = Date.now();
-  const spoolDir = makeSpoolDir(options.spoolDir);
-  const stdoutSink = openSpoolFile(spoolDir, "stdout", options.maxStdoutBytes ?? 0);
-  const stderrSink = openSpoolFile(spoolDir, "stderr", options.maxStderrBytes ?? 0);
+
+  // Setup failures (missing spoolDir, unwritable spool file) return a typed
+  // result with `error` set — they never reject the caller.
+  let setup: SpoolSetup;
+  try {
+    setup = setupSpool(options);
+  } catch (error) {
+    return {
+      exitCode: null,
+      timedOut: false,
+      stdout: emptyCapturedStream("stdout"),
+      stderr: emptyCapturedStream("stderr"),
+      durationMs: Date.now() - startedAt,
+      error: String(error),
+    };
+  }
+  const { spoolDir, spoolDirOwned, stdoutSink, stderrSink } = setup;
 
   // Spool files are deliberately NOT deleted here: the evidence builder reads
   // them after capture. The caller removes them with removeCaptureSpool() once
@@ -203,6 +255,8 @@ export async function captureCommandOutput(
         stderr: finalizeSink(stderrSink),
         durationMs: Date.now() - startedAt,
         error: String(error),
+        spoolDir,
+        spoolDirOwned,
       });
     });
 
@@ -216,6 +270,8 @@ export async function captureCommandOutput(
         error: timedOut
           ? `Command timed out after ${options.timeoutMs}ms`
           : undefined,
+        spoolDir,
+        spoolDirOwned,
       });
     });
   });

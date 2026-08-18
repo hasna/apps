@@ -32,6 +32,29 @@ describe("redactOutputText", () => {
     expect(result.redacted).toBe(true);
   });
 
+  test("redacts credential-shaped query parameters in URLs", () => {
+    const result = redactOutputText(
+      "download https://cdn.example.invalid/file.bin?token=abc123&X-Amz-Signature=deadbeef&x=1"
+    );
+    expect(result.text).toBe(
+      "download https://cdn.example.invalid/file.bin?token=***&X-Amz-Signature=***&x=1"
+    );
+    expect(result.redacted).toBe(true);
+  });
+
+  test("redacts credential-shaped fragment parameters in URLs", () => {
+    const result = redactOutputText("auth https://id.example.invalid/callback#access_token=xyz&type=code");
+    expect(result.text).toBe("auth https://id.example.invalid/callback#access_token=***&type=code");
+    expect(result.redacted).toBe(true);
+  });
+
+  test("leaves benign query parameters intact", () => {
+    const text = "search https://example.invalid/search?q=hello&page=2";
+    const result = redactOutputText(text);
+    expect(result.text).toBe(text);
+    expect(result.redacted).toBe(false);
+  });
+
   test("redacts known credential prefixes", () => {
     // Runtime-constructed sentinel: the literal credential shape never appears
     // in source, keeping the staged secrets scan clean for a synthetic fixture.
@@ -163,6 +186,81 @@ describe("buildStreamEvidence", () => {
 
       expect(evidence.retained).toBe(false);
       expect(evidence.omittedReason).toBe("sensitive");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("redacts a URL whose authority crosses the excerpt cap", async () => {
+    const dir = tempDir();
+    try {
+      // The '@' of the URL sits beyond maxExcerptBytes: a truncated-then-redacted
+      // excerpt would carry the "user:supersecret" prefix verbatim.
+      const path = join(dir, "stdout.spool");
+      writeFileSync(path, "https://user:supersecret@host.example.invalid/path", { mode: 0o600 });
+
+      const evidence = await buildStreamEvidence({
+        kind: "stdout",
+        path,
+        bytes: 47,
+        truncated: true,
+        maxExcerptBytes: 20,
+        redact: true,
+      });
+
+      expect(evidence.retained).toBe(true);
+      expect(evidence.excerpt).not.toContain("user:");
+      expect(evidence.excerpt).not.toContain("supersecret");
+      expect(evidence.excerpt).toContain("***");
+      expect(evidence.excerpt!.length).toBeLessThanOrEqual(20);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses unredacted retention when a credential sits beyond the excerpt cap", async () => {
+    const dir = tempDir();
+    try {
+      const path = join(dir, "stdout.spool");
+      // The credential starts after the excerpt cap, at a token boundary.
+      writeFileSync(path, `${"a".repeat(2048)}\ntoken=sekrit`, { mode: 0o600 });
+
+      const evidence = await buildStreamEvidence({
+        kind: "stdout",
+        path,
+        bytes: 2060,
+        truncated: true,
+        maxExcerptBytes: 1024,
+        redact: false,
+      });
+
+      // The credential is cut by the cap, so the redactor must refuse the
+      // unredacted retention instead of keeping a truncated credential.
+      expect(evidence.retained).toBe(false);
+      expect(evidence.omittedReason).toBe("sensitive");
+      expect(evidence.excerpt).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("bounds the excerpt when the spool is much larger than the cap", async () => {
+    const dir = tempDir();
+    try {
+      const path = join(dir, "stdout.spool");
+      writeFileSync(path, "a".repeat(1024 * 1024), { mode: 0o600 });
+
+      const evidence = await buildStreamEvidence({
+        kind: "stdout",
+        path,
+        bytes: 1024 * 1024,
+        truncated: true,
+        maxExcerptBytes: 1024,
+        redact: true,
+      });
+
+      expect(evidence.retained).toBe(true);
+      expect(evidence.excerpt!.length).toBe(1024);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

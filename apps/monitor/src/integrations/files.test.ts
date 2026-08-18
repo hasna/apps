@@ -22,9 +22,20 @@ function writeFilesStub(dir: string): { binary: string; argsFile: string } {
     `#!/usr/bin/env bash
 set -uo pipefail
 printf '%s\\n' "$@" > "$FILES_STUB_ARGS_FILE"
+# Mirror the package-owned CLI contract: --kind is requiredOption in
+# apps/files/src/cli/evidence.ts, so a caller that omits it must fail.
+if [[ " $* " != *" --kind "* ]]; then
+  echo "error: missing required option '--kind'" >&2
+  exit 2
+fi
 case "$FILES_STUB_MODE" in
   fail)
     echo "upload failed: boom" >&2
+    exit 1
+    ;;
+  failcred)
+    echo "upload failed: token=sekrit-value" >&2
+    echo "signed: https://bucket.example.invalid/ev/asset?X-Amz-Signature=deadbeef123" >&2
     exit 1
     ;;
   badjson)
@@ -112,6 +123,37 @@ describe("uploadEvidenceArtifact (files evidence upload)", () => {
       if (!result.ok) {
         expect(result.code).toBe("upload_failed");
         expect(result.message).toContain("boom");
+        expect(result.exitCode).toBe(1);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("never carries raw stderr into a failed-upload message", async () => {
+    const dir = tempDir();
+    try {
+      const { binary, argsFile } = writeFilesStub(dir);
+      const artifact = join(dir, "run-output.txt");
+      writeFileSync(artifact, "artifact bytes", { mode: 0o600 });
+
+      const result = await uploadEvidenceArtifact(artifact, {
+        org: "hasna",
+        app: "monitor",
+        kind: "run-artifact",
+        binary,
+        env: { ...process.env, FILES_STUB_ARGS_FILE: argsFile, FILES_STUB_MODE: "failcred" },
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.code).toBe("upload_failed");
+        // The clean part of stderr survives; the credential-shaped values are
+        // redacted out of the message before it can flow into logs or receipts.
+        expect(result.message).toContain("upload failed");
+        expect(result.message).not.toContain("sekrit-value");
+        expect(result.message).not.toContain("deadbeef123");
+        expect(result.message).toContain("***");
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
