@@ -36,6 +36,19 @@ The CLI is the primary agent setup and run surface. It should:
 The CLI should not duplicate server billing checks, tenant policy, moderation,
 or execution scheduling.
 
+## Database Boundary
+
+`HASNA_SKILLS_DATABASE_URL` and `DATABASE_URL` are server-only. CLI, MCP, and SDK
+clients reach hosted state only through the Skills HTTP API (`SKILLS_API_URL` plus
+an API key) and never open a database connection — not Postgres, not SQLite.
+Schema and migrations are backend-owned layers; a client that built a database
+connection from the environment would duplicate them and would hold credentials
+the boundary says only the server holds.
+
+The repo-native storage sync (`@hasna/skills/storage`, see the README's Storage
+Boundary) is the deliberate exception: an operator tool that reads the same
+variables by design, not a thin adapter over the Skills API.
+
 ### MCP
 
 MCP tools are agent-native wrappers around the same API contracts. They should:

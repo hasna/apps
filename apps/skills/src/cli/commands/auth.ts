@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { createInterface } from "readline";
-import { getAuthConfig, saveAuthConfig, clearAuthConfig, getApiUrl } from "../../lib/auth-store.js";
+import { getAuthConfig, saveAuthConfig, clearAuthConfig, getApiUrl, getAuthFilePath } from "../../lib/auth-store.js";
 
 const isTTY = process.stdin.isTTY && process.stdout.isTTY;
 const DEFAULT_DEVICE_POLL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -264,7 +264,9 @@ function printLoginSuccess(loginResult: any, json: boolean) {
   console.log(chalk.green(`\n✓ Signed in as ${loginResult.user.email}`));
   console.log(chalk.dim(`  Organization: ${loginResult.organization.name}`));
   if (loginResult.firstLogin) {
-    console.log(chalk.dim(`  API key saved to ~/.hasna/skills/auth.json`));
+    // getAuthFilePath() so the message names the file actually written when
+    // $HASNA_SKILLS_DIR relocates the app folder.
+    console.log(chalk.dim(`  API key saved to ${getAuthFilePath()}`));
   }
 }
 

@@ -170,9 +170,12 @@ export function getDataDir(): string {
   // the variable set, `skills new`/`port` wrote into the override while `skills
   // list` and the config file kept reading $HOME. Those two now agree.
   //
-  // Not yet routed through here, and therefore still $HOME-rooted regardless of
-  // the override: auth-store.ts (paths frozen as import-time constants) and
-  // create-sync-config.ts. Both are tracked as follow-ups.
+  // Every app-root path is now routed through here. auth-store.ts resolves
+  // auth.json through getDataDir() (its own history is documented in that
+  // file), create-sync-config.ts composes from getPortableSkillsRoot() /
+  // getConfigPath(), and the server's default SQLite database resolves through
+  // defaultSqlitePath(). A grep for join(homedir(), ...) in src/ finds no
+  // remaining app-root path composition.
   //
   // NOTE: this also relocates the global config file, since getConfigPath()
   // derives from getDataDir(). See the PR description - it is intentional and

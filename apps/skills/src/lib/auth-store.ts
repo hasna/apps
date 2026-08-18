@@ -1,11 +1,34 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
 import { homedir } from "os";
 import { requireApiUrl } from "./api-url.js";
+import { getDataDir } from "./config.js";
 
-const AUTH_DIR = join(homedir(), ".hasna", "skills");
-const AUTH_FILE = join(AUTH_DIR, "auth.json");
-const LEGACY_AUTH_FILE = join(homedir(), ".skills", "auth.json");
+/**
+ * auth.json lives at the skills app root, beside config.json.
+ *
+ * Resolved through getDataDir() so that $HASNA_SKILLS_DIR relocates the
+ * credential file along with the rest of the app's state. It used to be an
+ * import-time constant composed from homedir(), so with the override set the
+ * CLI stored its API key at ~/.hasna/skills/auth.json while config, corpus,
+ * and database all moved — the same override-only-half-works split getDataDir()
+ * documents for its own history.
+ *
+ * The legacy ~/.skills/auth.json stays a $HOME concern, exactly like
+ * getDataDir()'s legacy merge (which is deliberately skipped for an overridden
+ * dir): it is still read as a fallback and removed by clearAuthConfig(), but
+ * never written when the override is set. Like getDataDir(), the home is read
+ * from the environment at call time — os.homedir() caches its answer after the
+ * first call, so a process that re-points $HOME would keep composing the old
+ * path.
+ */
+export function getAuthFilePath(): string {
+  return join(getDataDir(), "auth.json");
+}
+
+function legacyAuthFilePath(): string {
+  return join(process.env["HOME"] || process.env["USERPROFILE"] || homedir(), ".skills", "auth.json");
+}
 
 /**
  * Stored credentials for a Skills API instance.
@@ -29,7 +52,8 @@ let cachedConfig: AuthConfig | null | undefined;
 export function getAuthConfig(): AuthConfig | null {
   if (cachedConfig !== undefined) return cachedConfig;
   try {
-    const raw = readFileSync(existsSync(AUTH_FILE) ? AUTH_FILE : LEGACY_AUTH_FILE, "utf-8");
+    const file = existsSync(getAuthFilePath()) ? getAuthFilePath() : legacyAuthFilePath();
+    const raw = readFileSync(file, "utf-8");
     const config = JSON.parse(raw) as AuthConfig;
     if (!config.apiKey) {
       cachedConfig = null;
@@ -44,15 +68,20 @@ export function getAuthConfig(): AuthConfig | null {
 }
 
 export function saveAuthConfig(config: AuthConfig): void {
-  mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 });
-  writeFileSync(AUTH_FILE, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+  const file = getAuthFilePath();
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  writeFileSync(file, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
   cachedConfig = config;
 }
 
 export function clearAuthConfig(): void {
-  try { unlinkSync(AUTH_FILE); } catch {}
-  try { unlinkSync(LEGACY_AUTH_FILE); } catch {}
-  cachedConfig = null;
+  try { unlinkSync(getAuthFilePath()); } catch {}
+  try { unlinkSync(legacyAuthFilePath()); } catch {}
+  // Invalidating, not recording "nothing was found": null is the cached answer
+  // for "I read the file and it held nothing", and returning it would make every
+  // subsequent read miss a credential written after the clear. undefined means
+  // "never looked", which is the state a fresh process is in.
+  cachedConfig = undefined;
 }
 
 export function getApiKey(): string | null {
